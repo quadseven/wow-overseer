@@ -318,8 +318,9 @@ class StrategyEngineTest(unittest.TestCase):
         `buff`, `mount` and `emote` in the common block, and `grind`, `lfg`,
         `new rpg` and `bg` in the random-bot one. Only the ones a person
         would plausibly ask for are listed; a strategy genuinely on both
-        engines (`flee`) is deliberately absent, which is what keeps
-        goals.FLEE_STRATEGY's `co +flee` correct.
+        engines (`retreat from danger`, which patch 0007 loads on the
+        non-combat engine and goals.RETREAT_STRATEGY adds on the combat one)
+        is deliberately absent.
         """
         non_combat_only = frozenset(
             {

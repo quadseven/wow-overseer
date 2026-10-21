@@ -28,7 +28,8 @@ time (QUESTS_SQL and its companions), never typed in: a quest is a class quest
 when quest_template_addon.AllowableClasses names one class or its QuestSortID
 is a class sort, and a reward quest when it grants a spell (RewardSpell or
 RewardDisplaySpell). Its chain is the PrevQuestID links back to the first
-quest. A member has a reward when it knows the spell or has been rewarded any
+quest, and a quest no PrevQuestID opens waits on any one of the quests whose
+NextQuestID names it (THE CORE READS NextQuestID TOO). A member has a reward when it knows the spell or has been rewarded any
 quest of the same class and reward.
 
 WHAT IT REFUSES, WITH A NAMED BLOCKER (a member never waits in silence):
@@ -107,6 +108,17 @@ was before. What the verbs do NOT cover stays blocked and named: an item cast
 at nothing in particular, at a spell focus (the warlock's Summoning Circle, a
 water source) or on a corpse nearby, and a creature a script summons that
 no gameobject's use names (THE TARGET IS SUMMONED).
+
+THE CORE READS NextQuestID TOO (#781, 2026-10-20). A quest's NextQuestID adds
+the quest to its next quest's previous quests (ObjectMgr::LoadQuests), and the
+next quest is offered once any one of them is rewarded
+(Player::SatisfyQuestPreviousQuest). The Tome of Divinity a dwarf paladin takes
+from Tiza Battleforge (1647) has no PrevQuestID, yet 1646, 2997, 2999 and 3000
+name it as their next quest, so the world refused every `take quest:1647`
+("not eligible"), and every human's `take quest:1643` alike: no dwarf or human
+paladin reached Redemption. A chain whose first quest such openers hold
+(Quest.after) and the member has rewarded none of starts at the opener the
+member can work, the one in its log first, then the nearest a creature gives.
 
 WHAT A MEMBER OWES (OWED_*). The operator's rule of 2026-10-06 is that every
 class quest is mandatory and comes before anything else, so a member with an
@@ -328,6 +340,12 @@ OWED_HOURS = 6
 # answers a refusal in the row's result: the bridge keeps no catalogue of its
 # own. Overseer.Cross.Enable (default 0) and Overseer.Cross.AtOnce bound it.
 CROSSING_VERB = "cross-to-map"
+# The same-map ride (the Undercity to Grom'gol zeppelin never leaves map 0, so
+# `cross-to-map` has nothing to name): `ride-to-stop map:<id> x:<x> y:<y>`, any
+# point of the stop to reach. The module walks to the berth nearest the member,
+# rides, and walks off at the stop nearest the point, as a crossing does, and
+# answers in the same result.
+RIDE_VERB = "ride-to-stop"
 # The source action of a crossing row (guildjobs.source_for), apart from the
 # class quest's walks so that none of their clocks read it.
 CROSS_ACTION = ACTION + "-cross"
@@ -339,6 +357,20 @@ CROSS_COOLDOWN_MINUTES = 35
 # A refusal the module calls retryable (the realm's crossing cap, a fight, a
 # dead character) is asked again sooner.
 CROSS_RETRY_MINUTES = 10
+# A WALK TO THE BERTH THAT GIVES UP TWICE IS NOT ASKED EVERY TEN MINUTES
+# (#870). The module calls its ground give-up retryable, and it is when a
+# fight or a stuck step ended the walk; but when the road to the berth crosses
+# ground far above the member's level, it gives up the same way every time.
+# Three Alliance questers of level 15 were sent to the Menethil berth for
+# Durotar every ten minutes for 44 hours (2026-10-18 to 2026-10-20), one of
+# them 256 times, and each try took one of the realm's crossings at once. After
+# this many such give-ups to one map, each inside CROSS_GROUND_HOLD_MINUTES of
+# the last, the member is not asked to cross there again until that long after
+# the last one: the module's own campaign crossing hands a dungeon back on the
+# same count and for the same two hours (CrossingAttemptLimits).
+CROSS_GROUND_GAVE_UP = "the walk to the berth gave up on the ground"
+CROSS_GROUND_ATTEMPTS = 2
+CROSS_GROUND_HOLD_MINUTES = 2 * 60
 # The module's refusals that say no crossing will come of asking, in its own
 # words (overseer_decisions.h, CrossRefusal): the verb is switched off, or no
 # transport serves the member's faction between the two maps. The destination
@@ -385,6 +417,13 @@ OVERLEVEL_MAX = 3
 # attempt the quest alone. The solo attempt still goes through the normal
 # hunt: if it stalls, the STALLED blocker (in HELPABLE) asks for help.
 OVERLEVEL_SOLO_GAP = 10
+# AND WAITS FOR THAT HELP AT MOST THIS LONG (#1094). On 2026-10-19 the same
+# paladin, level 29 and 17 over Redemption, asked the guild for it for an hour
+# and more five times in a day after its solo hunt stalled: the stall's
+# hold-off (GIVE_UP_MINUTES) and the run of asks (guildjobs.class_ask_streak)
+# were the only bounds. From this long after the stall the quest yields to
+# levelling until the member may hunt it alone again (guildjobs.outlevel_waits).
+OVERLEVEL_HELP_WAIT_MINUTES = 30
 
 # A SPAWN THE MODULE REFUSED, OR THAT A WALK DID NOT REACH, IS NOT ASKED OF THE
 # SAME MEMBER AGAIN FOR THIS LONG: the member is sent to the next pack of the
@@ -402,6 +441,14 @@ SPAWN_REFUSED_MINUTES = 120
 # ONLY WORDS THAT SAY THE SPAWN OR THE WAY TO IT IS THE TROUBLE ARE HERE. A walk
 # that ran out of time is not (it says the walk was slow, not that the spawn is
 # out of reach), nor is anything that names the member's state.
+#
+# A ROAD THROUGH GROUND FAR ABOVE THE WALKER IS AS DEADLY ON THE NEXT PASS
+# (mod-overseer's FarWalkRoadLimits, SpawnLethalRoad). It was in no list, so a
+# quester was sent down the same road every pass: on 2026-10-20 one quester's
+# walk to Deputy Willem was refused so five times in a row, and over two days
+# the twenty questers' walks were refused 938 times in these words (#1295). It
+# holds until the member has levelled, so it is a lasting refusal.
+LETHAL_ROAD_REASON = "the road to the spawn crosses ground far above its level"
 SPAWN_REFUSALS = frozenset(
     {
         "the first step toward the creature goes over a drop",
@@ -412,6 +459,7 @@ SPAWN_REFUSALS = frozenset(
         "no such spawn in the world",
         "the spawn is on another map than the character",
         "the spawn belongs to a world event that is not running",
+        LETHAL_ROAD_REASON,
     }
 )
 # A stall or a death on the way is a pack to leave for a short while, not two
@@ -554,6 +602,7 @@ QUESTS_SQL = (  # noqa: S608
     "q.MinLevel AS min_level, q.AllowableRaces AS races, "
     "COALESCE(a.AllowableClasses, 0) AS classes, "
     "COALESCE(a.PrevQuestID, 0) AS prev, "
+    "COALESCE(a.NextQuestID, 0) AS next, "
     "COALESCE(a.ExclusiveGroup, 0) AS exclusive, q.RewardSpell AS reward, "
     "q.RewardDisplaySpell AS display, q.SuggestedGroupNum AS grp, "
     + _NPCS
@@ -821,6 +870,10 @@ class Quest:
     sources: tuple = ()
     # The items the item the take hands over holds, opened (HELD_SQL): given too.
     held: tuple = ()
+    # The quests whose NextQuestID names this one, sorted: with no PrevQuestID,
+    # it is offered only once one of them is rewarded (THE CORE READS
+    # NextQuestID TOO).
+    after: tuple = ()
 
     @property
     def spells(self) -> frozenset:
@@ -1269,12 +1322,27 @@ def build(
             if start_rows is not None and _orphan(quest):
                 continue
             quests[_int(r.get("id"))] = quest
+    quests = _with_openers(quests, quest_rows)
     groups = {}
     for q in quests.values():
         if q.rewards:
             groups.setdefault((q.klass, tuple(sorted(q.spells))), []).append(q.id)
     trained = frozenset(_int(r.get("spell")) for r in trained_rows or ())
     return Book(quests, {k: sorted(v) for k, v in groups.items()}, trained)
+
+
+def _with_openers(quests, quest_rows) -> dict:
+    """`quests` with each one's Quest.after: the book's quests whose NextQuestID
+    names it."""
+    after: dict = {}
+    for r in quest_rows or ():
+        qid, nxt = _int(r.get("id")), _int(r.get("next"))
+        if qid in quests and nxt in quests and nxt != qid:
+            after.setdefault(nxt, set()).add(qid)
+    return {
+        i: replace(q, after=tuple(sorted(after[i]))) if i in after else q
+        for i, q in quests.items()
+    }
 
 
 def chain(book: Book, quest_id: int) -> list:
@@ -1416,11 +1484,23 @@ def _across(member, spawns) -> str:
 
 
 def is_cross_row(command) -> bool:
-    return str(command or "").split(" ", 1)[0] == CROSSING_VERB
+    return str(command or "").split(" ", 1)[0] in (CROSSING_VERB, RIDE_VERB)
 
 
 def cross_command(map_id) -> str:
     return "%s map:%d" % (CROSSING_VERB, int(map_id))
+
+
+def ride_command(map_id, x, y) -> str:
+    """The `ride-to-stop` row to the stop nearest (x, y) on `map_id`. The module
+    takes a plain decimal of at most nine characters (no exponent, no trailing
+    dot), so each coordinate is written to a tenth of a yard."""
+    return "%s map:%d x:%s y:%s" % (RIDE_VERB, int(map_id), _tenth(x), _tenth(y))
+
+
+def _tenth(value) -> str:
+    # + 0.0 turns a rounded -0.0 into 0.0.
+    return "%.1f" % (round(float(value), 1) + 0.0)
 
 
 def _block_spawns(quest: Quest, member) -> list:
@@ -1653,9 +1733,10 @@ def _closed_by_sibling(book: Book, member, path) -> bool:
     return False
 
 
-def _variant_move(book: Book, member, reward_id: int):
+def _variant_move(book: Book, member, reward_id: int, seen=frozenset()):
     """The next move along one reward quest's chain, or None when it is not
-    open to this member (race, level)."""
+    open to this member (race, level). A first quest no opener of the member's
+    has opened yet is reached through one (_opener_move)."""
     path = chain(book, reward_id)
     done = member.quests_done
     todo = [q for q in path if q not in done]
@@ -1673,11 +1754,47 @@ def _variant_move(book: Book, member, reward_id: int):
     if _closed_by_sibling(book, member, path):
         return None
     status = _status(member, quest.id)
+    if not status and _unopened(quest, done):
+        return _opener_move(book, member, quest, reward_id, seen)
     if status == STATUS_COMPLETE:
         return TURN_IN, quest, _nearest(member, quest.enders), reward_id
     if status == STATUS_INCOMPLETE:
         return HUNT, quest, None, reward_id
     return TAKE, quest, _nearest(member, quest.starters), reward_id
+
+
+def _unopened(quest: Quest, done) -> bool:
+    """True when the core does not offer `quest` yet: it has no PrevQuestID,
+    other quests' NextQuestID open it (Quest.after), and the member has
+    rewarded none of them."""
+    return not quest.prev and bool(quest.after) and not done.intersection(quest.after)
+
+
+def _opener_move(book: Book, member, quest: Quest, reward_id: int, seen):
+    """The next move toward one of the quests that open `quest`, as
+    _variant_move returns it for the reward `reward_id`, or None when no opener
+    is open to the member. The opener in the log first, then one a creature on
+    the member's map gives (the nearest), then one a creature gives anywhere (a
+    crossing), then the rest (an item start, which no verb takes)."""
+    if quest.id in seen:
+        return None
+    seen = seen | {quest.id}
+    options = [
+        o for o in (_variant_move(book, member, q, seen) for q in quest.after) if o
+    ]
+    if not options:
+        return None
+    kind, opener, spot, _reward = min(
+        options,
+        key=lambda o: (
+            _status(member, o[1].id) == 0,
+            o[2] is None,
+            not o[1].starters,
+            _yards(member, o[2]) if o[2] else 1e12,
+            o[1].id,
+        ),
+    )
+    return kind, opener, spot, reward_id
 
 
 def helpers_for(quest: Quest) -> int:
@@ -1869,7 +1986,7 @@ def within_level(member, spawns) -> tuple:
     return tuple(s for s in spawns if int(s.level) <= top)
 
 
-def _outlevels_for_solo(member, quest) -> bool:
+def outlevels_for_solo(member, quest) -> bool:
     """True when the member is at least OVERLEVEL_SOLO_GAP levels over the
     quest's minimum level (#1094): the member hunts the quest solo instead of
     waiting for guild help."""
@@ -2063,7 +2180,7 @@ def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
     lost = _lost_item_move(member, quest, using, block, why)
     if lost is not None:
         return lost
-    if block == GROUP and _outlevels_for_solo(member, quest):
+    if block == GROUP and outlevels_for_solo(member, quest):
         # #1094: the member so far outlevels the quest that the group blocker
         # is ignored and the quest is hunted solo. If the solo hunt stalls,
         # the STALLED blocker below (in HELPABLE) asks for help.

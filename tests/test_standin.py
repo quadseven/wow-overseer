@@ -9,6 +9,7 @@ pure decisions and drive the bridge's half with its reads stubbed.
 import asyncio
 import contextlib
 import sys
+import time
 import types
 import unittest
 from unittest import mock
@@ -395,23 +396,37 @@ class WhenTheRowEnds(unittest.TestCase):
         self.assertEqual(standin.CLEAR, step.action)
         self.assertIn("met", step.why)
 
-    def test_a_guest_gone_from_the_world_between_runs_clears_it(self):
-        step = standin.step(facts(current=seated(in_name="Gone")))
-        self.assertEqual(standin.CLEAR, step.action)
+    def assertSeatEmptied(self, step):
+        """The guest gives the seat back; Og keeps sitting out with no guest."""
+        self.assertEqual(standin.SEAT, step.action, step.why)
+        self.assertEqual(("Og", ""), (step.seat.out_name, step.seat.in_name))
+        self.assertEqual("dps", step.seat.seat)
+        self.assertIn("Og sits out with no guest", step.why)
 
-    def test_a_guest_in_a_guild_run_between_runs_clears_it(self):
+    def test_a_guest_gone_from_the_world_between_runs_empties_the_seat(self):
+        step = standin.step(facts(current=seated(in_name="Gone")))
+        self.assertSeatEmptied(step)
+
+    def test_a_guest_in_a_guild_run_between_runs_empties_the_seat(self):
         step = standin.step(facts(current=seated(), busy=frozenset({"Locky"})))
-        self.assertEqual(standin.CLEAR, step.action)
+        self.assertSeatEmptied(step)
         self.assertIn("in a guild run", step.why)
 
-    def test_an_offline_guest_between_runs_clears_it(self):
+    def test_an_offline_guest_between_runs_empties_the_seat(self):
         step = standin.step(
             facts(
                 current=seated(), candidates=(member("Locky", 20, WARLOCK, online=0),)
             )
         )
-        self.assertEqual(standin.CLEAR, step.action)
+        self.assertSeatEmptied(step)
         self.assertIn("offline", step.why)
+
+    def test_a_dead_guest_never_sends_og_back_for_one_pass(self):
+        # wow-dev, 2026-10-18 to 2026-10-20: each time Pogg died the row was
+        # cleared, Og rejoined, and the next pass sat him out again; 16 of his
+        # 19 rejoins lasted one minute.
+        step = standin.step(facts(current=seated(), busy=frozenset({"Locky"})))
+        self.assertNotEqual(standin.CLEAR, step.action)
 
     def test_a_free_guest_keeps_the_seat(self):
         self.assertEqual(standin.KEEP, standin.step(facts(current=seated())).action)
@@ -428,6 +443,161 @@ class WhenTheRowEnds(unittest.TestCase):
     def test_never_mid_run(self):
         step = standin.step(facts(current=seated(in_name="Gone"), mid_run=True))
         self.assertEqual(standin.KEEP, step.action)
+
+
+# --- turns: crafting is bounded and alternates with the family's runs -----------
+
+HOUR = 3600
+
+
+def turn(phase, since, out_name="Og"):
+    return standin.Turn(out_name, phase, since)
+
+
+class SittingOutTakesTurnsWithTheFamily(unittest.TestCase):
+    """The operator, 2026-10-20: "why is someone still on craft, it has been
+    DAYS? shouldn't they go between dungeons and crafting?" Og sat out Grug's
+    family's runs from 2026-10-05: the only end was tailoring 300."""
+
+    def test_the_crafting_turn_runs_out_and_og_rejoins_between_runs(self):
+        for current in (seated(), seated(in_name="")):
+            step = standin.step(
+                facts(
+                    current=current,
+                    turn=turn(standin.CRAFT, 0),
+                    now=standin.CRAFT_TURN_SECONDS,
+                )
+            )
+            self.assertEqual(standin.CLEAR, step.action, step.why)
+            self.assertIn("runs with its family", step.why)
+
+    def test_a_crafting_turn_that_runs_out_mid_run_waits_for_the_run(self):
+        step = standin.step(
+            facts(
+                current=seated(),
+                turn=turn(standin.CRAFT, 0),
+                now=standin.CRAFT_TURN_SECONDS + 1,
+                mid_run=True,
+            )
+        )
+        self.assertEqual(standin.KEEP, step.action)
+        self.assertIn("inside", step.why)
+
+    def test_within_the_crafting_turn_the_seat_is_kept(self):
+        step = standin.step(
+            facts(
+                current=seated(),
+                turn=turn(standin.CRAFT, 0),
+                now=standin.CRAFT_TURN_SECONDS - 1,
+            )
+        )
+        self.assertEqual(standin.KEEP, step.action)
+
+    def test_in_the_family_turn_og_is_not_sat_out_again(self):
+        step = standin.step(facts(turn=turn(standin.FAMILY, 0), now=60))
+        self.assertEqual(standin.NONE, step.action)
+        self.assertIn("runs with its family", step.why)
+        self.assertIn("before its next crafting turn", step.why)
+
+    def test_the_family_turn_reason_is_the_same_every_pass(self):
+        # The pass runs every minute; a countdown in the reason was a new log
+        # line every minute of the turn.
+        early = standin.step(facts(turn=turn(standin.FAMILY, 0), now=60))
+        late = standin.step(facts(turn=turn(standin.FAMILY, 0), now=1800))
+        self.assertEqual(early.why, late.why)
+        self.assertIn("until 01:00 UTC", early.why)
+
+    def test_after_the_family_turn_og_sits_out_again(self):
+        step = standin.step(
+            facts(turn=turn(standin.FAMILY, 0), now=standin.FAMILY_TURN_SECONDS)
+        )
+        self.assertEqual(standin.SEAT, step.action)
+
+    def test_a_new_guest_in_a_standing_row_keeps_the_crafting_turn(self):
+        f = facts(current=seated(in_name=""), turn=turn(standin.CRAFT, 5), now=100)
+        step = standin.step(f)
+        self.assertEqual(standin.SEAT, step.action, "Locky takes the empty seat")
+        self.assertIsNone(standin.next_turn(f, step))
+
+    def test_a_row_cleared_in_a_live_family_turn_keeps_it(self):
+        f = facts(current=seated(), turn=turn(standin.FAMILY, 0), now=60)
+        step = standin.step(f)
+        self.assertEqual(standin.CLEAR, step.action)
+        self.assertIsNone(standin.next_turn(f, step))
+
+    def test_a_row_cleared_on_a_stale_family_turn_begins_a_full_one(self):
+        now = standin.FAMILY_TURN_SECONDS + 10
+        f = facts(
+            current=seated(), reagents=stocked(0), turn=turn(standin.FAMILY, 0), now=now
+        )
+        step = standin.step(f)
+        self.assertEqual(standin.CLEAR, step.action)
+        self.assertEqual(turn(standin.FAMILY, now), standin.next_turn(f, step))
+
+    def test_a_stale_crafting_turn_with_no_row_never_keeps_og_in(self):
+        # The row went (deleted outside this pass) while a crafting turn was
+        # recorded: he sits out again and a new crafting turn begins.
+        f = facts(turn=turn(standin.CRAFT, 0), now=3 * standin.CRAFT_TURN_SECONDS)
+        step = standin.step(f)
+        self.assertEqual(standin.SEAT, step.action)
+        self.assertEqual(
+            turn(standin.CRAFT, 3 * standin.CRAFT_TURN_SECONDS),
+            standin.next_turn(f, step),
+        )
+
+    def test_another_members_turn_is_not_ogs(self):
+        step = standin.step(
+            facts(turn=turn(standin.FAMILY, 0, out_name="Bork"), now=60)
+        )
+        self.assertEqual(standin.SEAT, step.action)
+
+    def test_no_clock_judges_no_turn(self):
+        step = standin.step(facts(current=seated(), turn=turn(standin.CRAFT, 0)))
+        self.assertEqual(standin.KEEP, step.action)
+
+    def test_the_turn_recorded_after_each_step(self):
+        new = facts(now=100)
+        self.assertEqual(
+            turn(standin.CRAFT, 100), standin.next_turn(new, standin.step(new))
+        )
+        swap = facts(
+            current=seated(in_name="Gone"), turn=turn(standin.CRAFT, 5), now=100
+        )
+        self.assertIsNone(standin.next_turn(swap, standin.step(swap)))
+        over = facts(
+            current=seated(),
+            turn=turn(standin.CRAFT, 0),
+            now=standin.CRAFT_TURN_SECONDS,
+        )
+        self.assertEqual(
+            turn(standin.FAMILY, standin.CRAFT_TURN_SECONDS),
+            standin.next_turn(over, standin.step(over)),
+        )
+        old_row = facts(current=seated(), now=100)
+        self.assertEqual(
+            turn(standin.CRAFT, 100), standin.next_turn(old_row, standin.step(old_row))
+        )
+        starved = facts(current=seated(), reagents=stocked(0), now=100)
+        self.assertEqual(
+            turn(standin.FAMILY, 100), standin.next_turn(starved, standin.step(starved))
+        )
+
+    def test_og_alternates_over_a_day(self):
+        """Every pass for a day, with the turn the last one recorded."""
+        current, recorded, out_minutes, rejoins = None, None, 0, 0
+        for minute in range(0, 24 * 60, 5):
+            now = minute * 60.0
+            f = facts(current=current, turn=recorded, now=now)
+            step = standin.step(f)
+            recorded = standin.next_turn(f, step) or recorded
+            if step.action == standin.SEAT:
+                current = step.seat
+            elif step.action == standin.CLEAR:
+                current, rejoins = None, rejoins + 1
+            out_minutes += 5 if current is not None else 0
+        self.assertGreaterEqual(rejoins, 10, "he goes back to his family every turn")
+        self.assertLess(out_minutes, 14 * 60, "about half the day, never all of it")
+        self.assertGreater(out_minutes, 10 * 60, "and he still gets his crafting")
 
 
 # --- the contract ---------------------------------------------------------------------
@@ -708,8 +878,13 @@ class TheBridgePass(unittest.TestCase):
         guild_rows=None,
         known=frozenset({3757}),
         reagents=None,
+        turns=None,
+        fetch_turns=None,
+        note_turn=None,
+        said=None,
     ):
         written, jobs_told, lines = [], [], []
+        self.noted = []
         gfacts = _guild_facts()
         if guild_rows is not None:
             gfacts["rows"] = list(guild_rows)
@@ -749,6 +924,14 @@ class TheBridgePass(unittest.TestCase):
                 _standing_jobs=lambda family=None: {"Og": og_job, "Grug": leader_job},
                 _insert_job=lambda name, mode, source: jobs_told.append(
                     (name, mode, source)
+                ),
+                _STANDIN_SAID=said if said is not None else {},
+                _fetch_standin_turns=fetch_turns or (lambda: dict(turns or {})),
+                _note_standin_turn=note_turn
+                or (
+                    lambda family, turn: self.noted.append(
+                        (family, turn.out_name, turn.phase)
+                    )
                 ),
             ),
         ):
@@ -897,6 +1080,77 @@ class TheBridgePass(unittest.TestCase):
         self.assertEqual([("Grug", standin.KEEP, None)], written)
         self.assertNotIn("Og", fams["Grug"]["names"])
         self.assertEqual(frozenset(), bridge._STANDIN_GUESTS)
+
+    def test_og_crafted_his_turn_so_he_rejoins_and_his_family_turn_begins(self):
+        hours_ago = {"Grug": standin.Turn("Og", standin.CRAFT, time.time() - 7200)}
+        fams, written, jobs_told, lines = self.run_pass(
+            rows={"Grug": seated(in_name="Pogg")}, og_job="craft", turns=hours_ago
+        )
+        self.assertEqual([("Grug", standin.CLEAR, None)], written)
+        self.assertIn("Og", fams["Grug"]["names"])
+        self.assertEqual([("Og", "dungeon:deadmines", standin.SOURCE)], jobs_told)
+        self.assertEqual([("Grug", "Og", standin.FAMILY)], self.noted)
+        self.assertTrue(any("Og's family turn begins" in line for line in lines), lines)
+
+    def test_in_his_family_turn_og_runs_with_his_family(self):
+        just_back = {"Grug": standin.Turn("Og", standin.FAMILY, time.time() - 60)}
+        fams, written, jobs_told, _ = self.run_pass(turns=just_back)
+        self.assertEqual([("Grug", standin.NONE, None)], written)
+        self.assertIn("Og", fams["Grug"]["names"])
+        self.assertEqual([], jobs_told)
+        self.assertEqual([], self.noted)
+
+    def test_a_hold_reason_is_logged_once_while_it_stands(self):
+        just_back = {"Grug": standin.Turn("Og", standin.FAMILY, time.time() - 60)}
+        said = {}
+        _, _, _, first = self.run_pass(turns=just_back, said=said)
+        _, _, _, second = self.run_pass(turns=just_back, said=said)
+        held = [line for line in first if "runs with its family until" in line]
+        self.assertEqual(1, len(held), first)
+        self.assertEqual([], [line for line in second if "standin: Grug" in line])
+
+    def test_a_changed_hold_reason_is_logged_again(self):
+        said = {"Grug": "an older reason"}
+        just_back = {"Grug": standin.Turn("Og", standin.FAMILY, time.time() - 60)}
+        _, _, _, lines = self.run_pass(turns=just_back, said=said)
+        self.assertTrue(any("runs with its family until" in line for line in lines))
+
+    def test_a_new_sit_out_begins_his_crafting_turn(self):
+        self.run_pass()
+        self.assertEqual([("Grug", "Og", standin.CRAFT)], self.noted)
+
+    def test_a_dead_guest_leaves_og_out_with_no_job_written(self):
+        dead = row("Locky", 20, WARLOCK, health=0)
+        fams, written, jobs_told, _ = self.run_pass(
+            rows={"Grug": seated()}, og_job="craft", guild_rows=(dead,)
+        )
+        self.assertEqual(
+            [("Grug", standin.SEAT, ("Og", ""))],
+            [(f, a, (s.out_name, s.in_name)) for f, a, s in written],
+        )
+        self.assertNotIn("Og", fams["Grug"]["names"])
+        self.assertEqual([], jobs_told)
+
+    def test_a_turn_store_that_fails_costs_no_pass(self):
+        def boom(*a):
+            raise RuntimeError("memo store gone")
+
+        fams, written, jobs_told, lines = self.run_pass(
+            fetch_turns=boom, note_turn=boom
+        )
+        self.assertEqual(standin.SEAT, written[0][1], "the row is still written")
+        self.assertEqual([("Og", "craft", standin.SOURCE)], jobs_told)
+        self.assertTrue(any("turns could not be read" in line for line in lines), lines)
+        self.assertTrue(any("could not be recorded" in line for line in lines), lines)
+
+    def test_the_turns_read_from_the_memo_store(self):
+        memo = {
+            "Grug": ({"out": "Og", "phase": "family"}, 1000.0),
+            "Zug": ({"out": "Uzza", "phase": "nonsense"}, 5.0),
+        }
+        with mock.patch.object(bridge, "_memo_read", lambda kind: memo):
+            got = bridge._fetch_standin_turns()
+        self.assertEqual({"Grug": standin.Turn("Og", standin.FAMILY, 1000.0)}, got)
 
     def test_the_queue_pass_runs_it_before_anything_drives_a_family(self):
         import ast

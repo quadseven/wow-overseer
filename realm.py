@@ -87,11 +87,16 @@ UPSTREAM_ORDER = (
     "mod-ah-bot-plus",
 )
 
+# The module's own commit, declared by the deployment (mod-overseer#1071).
+# `module` is the VERSION file, which is not raised per change, so it alone
+# read "module 0.1.0" for every build the realm ever ran.
+MODULE_COMMIT = "mod-overseer"
+
 # Rows in overseer_build that are not upstream components. Named so that the
 # component list below is "everything else" and a fact added by a future module
 # version shows up rather than being silently dropped.
 NON_COMPONENT_NAMES = frozenset(
-    {"module", "core", "core_pin", "realm", "realm_kind", "pins"}
+    {"module", "core", "core_pin", "realm", "realm_kind", "pins", MODULE_COMMIT}
 )
 
 # The verdict the module records on whether its declared pins describe the
@@ -306,6 +311,17 @@ def _realm_line(realm: str, realm_source: str) -> str:
     return "this realm has not named itself"
 
 
+def _module_words(module_version: str, module_commit: str) -> str:
+    """ "module dbf7a87e8f89 (0.1.0)" when the commit is reported, else the
+    version alone."""
+    if module_commit:
+        return "module %s (%s)" % (
+            module_commit[:12],
+            module_version or "version not reported",
+        )
+    return "module %s" % (module_version or "not reported")
+
+
 def _build_line(
     reported: bool,
     module_version: str,
@@ -313,6 +329,7 @@ def _build_line(
     core_revision: str,
     upstreams: list[dict],
     pins: str,
+    module_commit: str = "",
 ) -> str:
     if not reported:
         line = (
@@ -328,7 +345,7 @@ def _build_line(
         return line
 
     parts = [
-        "module %s" % (module_version or "not reported"),
+        _module_words(module_version, module_commit),
         "core %s" % (core_revision or core or "not reported"),
     ]
     # Twelve characters, the same abbreviation AzerothCore prints for itself, so
@@ -388,6 +405,7 @@ def build_realm(
     core, core_source = _core(facts, version_rows)
     core_revision = _revision(core)
     module_version = _value(facts, "module")
+    module_commit = _value(facts, MODULE_COMMIT)
     pins = _value(facts, "pins") or (PINS_UNKNOWN if reported else "")
     upstreams = _upstreams(facts)
     warnings = _warnings(kind, reported, pins, facts, core, core_source)
@@ -403,6 +421,10 @@ def build_realm(
         "reported_at": _iso(stamp),
         "reported_seconds": _seconds(stamp, now),
         "module_version": module_version,
+        # The commit the deployment declared for this module, or "" when this
+        # worldserver does not report one. Held to the pin verdict like every
+        # declared commit: `pins` "stale" means it describes another image.
+        "module_commit": module_commit,
         "core": core,
         "core_revision": core_revision,
         "core_source": core_source,
@@ -417,6 +439,12 @@ def build_realm(
         "warning_text": " ".join(warnings),
         "realm_line": _realm_line(realm, realm_source),
         "build_line": _build_line(
-            reported, module_version, core, core_revision, upstreams, pins
+            reported,
+            module_version,
+            core,
+            core_revision,
+            upstreams,
+            pins,
+            module_commit,
         ),
     }

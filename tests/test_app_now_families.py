@@ -1,4 +1,4 @@
-"""Every family's status card on Now is its own card, side by side with the rest.
+"""Every family on Now is one unit: its status card, its live picture and its map.
 
 The old page drew the second family's card inside the first one (the
 container for the other families was a child of the viewed family's card), so
@@ -6,14 +6,19 @@ it came out indented with a second state bar. The app's Now view draws one
 card per family the realm reports. These tests render that view under node
 with three families and check the markup it returns:
 
-- the cards are direct children of the one `.agendas` row, never one inside
-  another, including while a family's read is still loading;
+- each family is one `.fam` unit, a direct child of the one `.families` row,
+  holding its status card, then its live picture, then its map, so what a
+  family is doing, what it looks like and where it is read together;
+- the cards are never one inside another, including while a family's read
+  is still loading;
 - each card says one fact per line (whose family, the headline, the queue,
   the progress, then the stall flag and the last-moved time);
 - a stalled family carries the STALLED tag and its stall sentence, and a
   moving one does not;
 - text from the realm that looks like markup stays text, so it cannot open a
   card inside a card;
+- the page leads with what needs the operator and the families, and the
+  guild ladders come after them; the Watcher placeholder is gone;
 - the row is one column on a 360px phone and the card's foot wraps, so a
   long stall sentence never pushes the page sideways.
 """
@@ -172,6 +177,10 @@ def is_card(n):
     return "agenda" in n.classes or "agenda-wait" in n.classes
 
 
+def units(row):
+    return [c for c in row.children if "fam" in c.classes]
+
+
 @needs_node
 class EachFamilyIsItsOwnCard(unittest.TestCase):
     @classmethod
@@ -182,14 +191,34 @@ class EachFamilyIsItsOwnCard(unittest.TestCase):
                 cls.families, {f: agenda(f, stalled=(f == "Zug")) for f in cls.families}
             )
         )
-        (cls.row,) = cls.tree.find("agendas")
+        (cls.row,) = cls.tree.find("families")
         cls.cards = [n for n in cls.row.walk() if is_card(n)]
 
-    def test_one_card_per_family_all_children_of_the_one_row(self):
+    def test_one_card_per_family_each_in_its_own_unit_of_the_one_row(self):
         self.assertEqual(len(self.cards), len(self.families))
-        for card in self.cards:
-            self.assertIs(card.parent, self.row)
-        self.assertEqual([c for c in self.row.children if is_card(c)], self.cards)
+        self.assertEqual(len(units(self.row)), len(self.families))
+        for unit, card in zip(units(self.row), self.cards, strict=True):
+            self.assertIs(card.parent, unit)
+            self.assertEqual([c for c in unit.children if is_card(c)], [card])
+
+    def test_a_unit_is_the_card_then_the_live_picture_then_the_map(self):
+        for fam, unit in zip(self.families, units(self.row), strict=True):
+            self.assertEqual(unit.attrs.get("data-family"), fam)
+            parts = [c.classes[0] for c in unit.children]
+            self.assertEqual(parts, ["agenda", "fam-live", "minimap"])
+            self.assertEqual(unit.children[2].attrs.get("data-minimap"), fam)
+
+    def test_the_families_lead_and_the_guild_ladders_follow(self):
+        order = [
+            n.classes[0]
+            for n in self.tree.root.walk()
+            if n.classes and n.classes[0] in ("nchips", "families", "nfold", "nr")
+        ]
+        self.assertEqual(order, ["nchips", "families", "nfold", "nr"])
+
+    def test_the_watcher_placeholder_is_gone(self):
+        self.assertFalse(self.tree.find("watcher"))
+        self.assertNotIn("Coming soon", self.tree.root.all_text())
 
     def test_no_card_sits_inside_another(self):
         for card in self.cards:
@@ -228,15 +257,60 @@ class EachFamilyIsItsOwnCard(unittest.TestCase):
             self.assertNotIn("STALLED", by_fam[fam].all_text())
 
 
+# The agenda's stall line as the bridge sends it since #1257: it opens with
+# "STALLED:" and ends with the leader's own reading, which is also sent alone
+# as stall_blocker.
+BLOCKER = "Zug: walking to Razorfen Kraul, waiting for the mage to catch up."
+STALL_LINE = "STALLED: no quest, level or gear change for 2 hours. " + BLOCKER
+
+
+def stalled_card(**fields):
+    """Zug's card, stalled, with these agenda fields over the fixture's."""
+    zug = dict(agenda("Zug", stalled=True), **fields)
+    tree = Tree(render(["Zug"], {"Zug": zug}))
+    (card,) = [n for n in tree.root.walk() if "agenda" in n.classes]
+    return card
+
+
+@needs_node
+class AStalledFamilySaysWhyOnce(unittest.TestCase):
+    def test_stalled_is_said_once_by_the_tag(self):
+        card = stalled_card(stall_line=STALL_LINE, stall_blocker=BLOCKER)
+        self.assertEqual(card.all_text().count("STALLED"), 1)
+        (tag,) = [n for n in card.walk() if "agenda-tag" in n.classes]
+        self.assertEqual(tag.all_text(), "STALLED")
+
+    def test_the_sentence_keeps_the_rest_of_the_line_and_names_the_blocker(self):
+        card = stalled_card(stall_line=STALL_LINE, stall_blocker=BLOCKER)
+        (warn,) = [n for n in card.walk() if "warn" in n.classes]
+        self.assertEqual(
+            warn.all_text(),
+            "No quest, level or gear change for 2 hours. " + BLOCKER,
+        )
+
+    def test_a_blocker_the_line_does_not_carry_is_added(self):
+        card = stalled_card(
+            stall_line="STALLED: no quest, level or gear change for 2 hours.",
+            stall_blocker=BLOCKER,
+        )
+        (warn,) = [n for n in card.walk() if "warn" in n.classes]
+        self.assertTrue(warn.all_text().endswith(BLOCKER), warn.all_text())
+
+    def test_a_line_that_does_not_open_with_the_word_is_left_as_it_is(self):
+        card = stalled_card(stall_line="Held: STALLED: odd, but the realm's words.")
+        (warn,) = [n for n in card.walk() if "warn" in n.classes]
+        self.assertEqual(warn.all_text(), "Held: STALLED: odd, but the realm's words.")
+
+
 @needs_node
 class CardsStaySiblingsInEveryState(unittest.TestCase):
     def test_a_family_still_loading_is_a_sibling_too(self):
         tree = Tree(render(["Grug", "Zug"], {"Zug": agenda("Zug")}))
-        (row,) = tree.find("agendas")
+        (row,) = tree.find("families")
         cards = [n for n in row.walk() if is_card(n)]
         self.assertEqual([c.classes[0] for c in cards], ["agenda-wait", "agenda"])
-        for card in cards:
-            self.assertIs(card.parent, row)
+        for unit, card in zip(units(row), cards, strict=True):
+            self.assertIs(card.parent, unit)
 
     def test_realm_text_that_looks_like_markup_stays_text(self):
         sneaky = '</a><a class="agenda" href="#/x">'
@@ -246,7 +320,7 @@ class CardsStaySiblingsInEveryState(unittest.TestCase):
                 {"Grug": agenda("Grug", headline=sneaky), "Zug": agenda("Zug")},
             )
         )
-        (row,) = tree.find("agendas")
+        (row,) = tree.find("families")
         cards = [n for n in row.walk() if is_card(n)]
         self.assertEqual(len(cards), 2)
         self.assertIn(sneaky, cards[0].all_text())
@@ -260,7 +334,7 @@ class TheRowFitsAPhone(unittest.TestCase):
 
     def test_a_card_never_asks_for_more_than_the_screen(self):
         # A fixed minimum column wider than the phone would scroll sideways.
-        self.assertIn("minmax(min(100%,", self.rule(".agendas").replace(" ", ""))
+        self.assertIn("minmax(min(100%,", self.rule(".families").replace(" ", ""))
 
     def test_the_foot_wraps(self):
         self.assertIn("flex-wrap: wrap", self.rule(".agenda-foot"))

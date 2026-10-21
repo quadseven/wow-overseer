@@ -1,5 +1,11 @@
 /* Now, and what its sub-views share: the kicker headings, the back link,
-   the stream tiles and the world map. */
+   the stream tiles and the world map.
+
+   Now reads top to bottom in the order the operator asks: is the realm up
+   (one line in the head), does anything need me (the chips), what is each
+   family doing (status, live picture and map as one unit), then the runs
+   and campaigns, and last each guild's dungeon ladder. Spacing: 8px inside
+   a unit, 20px between units, 28px or more between sections. */
 
 .kicker { margin: 0; font-size: var(--fs-1); letter-spacing: .08em; text-transform: uppercase; color: var(--color-neutral-500); font-weight: 500; }
 .small { font-size: var(--fs-1); }
@@ -23,36 +29,71 @@
 .nchip[data-tone="stalled"], .nchip[data-tone="stuck"] { box-shadow: inset 0 0 0 1px var(--warn-line); }
 .nchip[data-tone="ghost"] { box-shadow: inset 0 0 0 1px var(--bad-line); }
 .nchip[data-tone="inside"], .nchip[data-tone="new"] { box-shadow: inset 0 0 0 1px var(--color-accent-700); }
+.nchip[data-tone="stalled"]:not([data-quiet]), .nchip[data-tone="stuck"]:not([data-quiet]) { background: color-mix(in srgb, var(--warn) 10%, var(--color-surface)); }
+.nchip[data-tone="ghost"]:not([data-quiet]) { background: color-mix(in srgb, var(--bad) 10%, var(--color-surface)); }
+.nchip[data-quiet] { color: var(--color-neutral-400); background: transparent; box-shadow: inset 0 0 0 1px var(--color-divider); }
+.nchip[data-quiet] i { color: var(--color-neutral-500); }
 
-/* ---- realm strip ---- */
-.rstrip { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; }
-.rcell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+/* ---- the page head: the title, and the realm in one line ---- */
+.now-head { flex-direction: row; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 20px; }
+.realm {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; min-height: 44px; padding: 10px 0 0;
+  text-decoration: none; color: var(--color-text); min-width: 0;
+}
+.realm:hover .rk { color: var(--color-neutral-300); }
+.rcell { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
 .rk { font-size: var(--fs-1); color: var(--color-neutral-500); }
-.rv { display: flex; align-items: center; gap: 6px; font-weight: 500; font-size: var(--fs-3); overflow-wrap: anywhere; }
-.rv .unmeasured { font-weight: 400; font-size: var(--fs-2); }
-.rdot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.rv { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; font-size: var(--fs-2); overflow-wrap: anywhere; }
+.rv .unmeasured, .rv.unmeasured { font-weight: 400; }
+.rcell-build .rv { font-weight: 400; color: var(--color-neutral-300); }
+.rdot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; align-self: center; }
 
-/* ---- agendas ---- */
-.agendas { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 12px; }
+/* A section's heading row: the heading, what it counts, its controls. */
+.sec-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 44px; }
+
+/* ---- the families: one unit each (status card, live picture, map) ---- */
+.fams { display: flex; flex-direction: column; gap: 8px; }
+.families { display: grid; gap: 28px 20px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); align-items: start; }
+.families[data-wall="stacked"] { grid-template-columns: minmax(0, 1fr); }
+.fam { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.fam-live { min-width: 0; }
+/* Side by side, the units share their rows, so a longer status card on one
+   side never pushes that family's picture lower than the other's. */
+@supports (grid-template-rows: subgrid) {
+  .families[data-wall="side"] .fam { display: grid; grid-row: span 3; grid-template-rows: subgrid; row-gap: 8px; }
+}
+.st-wait { height: auto; aspect-ratio: 16 / 9; border-radius: 12px; }
+/* Stacked on a wide screen: the picture leads, the status and the map sit
+   beside it, so each family still reads as one row. */
+@media (min-width: 1200px) {
+  .families[data-wall="stacked"] .fam {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); grid-template-rows: auto 1fr;
+    grid-template-areas: "live card" "live map"; gap: 8px 16px; align-items: start; max-width: 1600px;
+  }
+  .families[data-wall="stacked"] .fam > .agenda, .families[data-wall="stacked"] .fam > .agenda-wait { grid-area: card; }
+  .families[data-wall="stacked"] .fam-live { grid-area: live; }
+  .families[data-wall="stacked"] .minimap { grid-area: map; }
+  .families[data-wall="stacked"] .wm-compact { height: 300px; }
+}
+
 .agenda {
-  display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: 8px;
+  display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: 12px;
   background: var(--color-surface); text-decoration: none; color: var(--color-text);
 }
 .agenda:hover { background: var(--color-neutral-900); color: var(--color-text); }
-.agenda.is-stalled { box-shadow: inset 3px 0 0 var(--warn); }
-.agenda-label { font-size: var(--fs-1); letter-spacing: .08em; text-transform: uppercase; color: var(--color-neutral-500); }
-.agenda-head { font-size: var(--fs-3); font-weight: 500; }
-.agenda-line { color: var(--color-neutral-300); }
+.agenda.is-stalled { background: color-mix(in srgb, var(--warn) 9%, var(--color-surface)); box-shadow: inset 0 0 0 1px var(--warn-line); }
+.agenda.is-stalled:hover { background: color-mix(in srgb, var(--warn) 14%, var(--color-surface)); }
+.agenda-label { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.agenda-fam { font-size: var(--fs-2); font-weight: 600; color: var(--color-neutral-300); }
+.agenda-head { font-size: var(--fs-3); font-weight: 500; text-wrap: pretty; }
+.agenda-line { color: var(--color-neutral-300); text-wrap: pretty; }
 .agenda-foot { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: var(--fs-1); padding-top: 2px; }
-.agenda-tag { font-weight: 500; letter-spacing: .06em; }
+.agenda-tag { font-weight: 600; letter-spacing: .06em; }
 
 /* ---- live ---- */
-.live-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 4px; }
 .live-seg { margin-left: auto; }
 .live-seg > button { font-size: var(--fs-1); }
 .live-seg > [aria-checked="true"] { color: var(--color-accent-300); box-shadow: inset 0 0 0 1px var(--color-accent); }
-.live-tiles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); }
-.live-tiles[data-wall="stacked"] { grid-template-columns: minmax(0, 1fr); max-width: 960px; }
 .st { margin: 0; background: var(--color-surface); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
 .st-slot { position: relative; aspect-ratio: 16 / 9; background: #0e0f18; }
 .st-pic { position: absolute; inset: 0; }
@@ -133,28 +174,71 @@
 /* Held at the foot of the page while the iPhone's own player shows it. */
 .st-pic.is-full:not(:fullscreen) { position: fixed; inset: 0; z-index: 45; background: #000; }
 
-.watcher { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--color-divider); max-width: 640px; }
-.watcher > i { font-size: var(--fs-4); color: var(--color-neutral-500); }
-.watcher > div { display: flex; flex-direction: column; gap: 1px; }
-.watcher-t { font-weight: 500; display: flex; gap: 8px; align-items: center; }
-
-/* The read-only report at the top of Now. */
-.nr { display: flex; flex-direction: column; gap: 10px; }
-.nr-title, .nr-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.nr-title h2 { margin: 3px 0 0; font-size: var(--fs-4); font-weight: 500; }
-.nr-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 12px; }
-.nr-guild { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* ---- guild progress: each guild's dungeon ladder ---- */
+.nr { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
+.nr-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.nr-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 20px; align-items: start; }
+.nr-guild { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 14px 16px; }
 .nr-guild h3 { margin: 0; font-size: var(--fs-3); font-weight: 500; }
-.nr-delta { color: var(--color-accent-300); font-variant-numeric: tabular-nums; }
-.nr-ladder { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.nr-ladder li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: baseline; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--color-divider); font-size: var(--fs-1); }
-.nr-ladder li:last-child { border-bottom: 0; }
-.nr-dungeon { display: flex; flex-wrap: wrap; gap: 8px; }
-.nr-clears { color: var(--color-accent-300); font-variant-numeric: tabular-nums; }
-.nr-blocker, .nr-projection { display: flex; flex-direction: column; gap: 3px; margin: 0; color: var(--color-neutral-200); }
-.nr-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 16px; }
-.nr-summary p { margin: 5px 0 0; color: var(--color-neutral-200); overflow-wrap: anywhere; }
-@media (max-width: 460px) { .nr-ladder li { grid-template-columns: minmax(0, 1fr) auto; } .nr-ladder li > .dim { grid-column: 1 / -1; } }
+.nr-delta { color: var(--color-accent-300); font-variant-numeric: tabular-nums; font-size: var(--fs-1); }
+.nr-facts { display: flex; flex-direction: column; gap: 6px; margin: 0; padding-top: 10px; box-shadow: inset 0 1px 0 var(--color-divider); font-size: var(--fs-1); }
+.nr-facts > div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 10px; }
+.nr-facts dt { color: var(--color-neutral-500); }
+.nr-facts dd { margin: 0; color: var(--color-neutral-200); overflow-wrap: anywhere; }
+/* The level 60 projection: one quiet line at the card's foot. */
+.nr-foot { margin: 0; font-size: var(--fs-1); overflow-wrap: anywhere; }
+
+.lad { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.lad-sum { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 4px; }
+.lad-big { font-size: var(--fs-4); font-weight: 500; line-height: 1; margin-right: 2px; }
+/* One cell per dungeon in level order: filled when cleared, outlined in
+   amber when tried without a clear, a dim track when never tried. The
+   frontier is the cell with the ring. */
+.lad-bar { display: flex; gap: 2px; height: 14px; }
+.lad-step { flex: 1; min-width: 0; border-radius: 3px; background: var(--color-neutral-800); position: relative; }
+.lad-step[data-state="cleared"] { background: var(--color-accent-500); }
+.lad-step[data-state="tried"] { background: color-mix(in srgb, var(--warn) 22%, transparent); box-shadow: inset 0 0 0 1px var(--warn-line); }
+.lad-step[data-frontier] { box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 3.5px var(--color-accent-300); z-index: 1; }
+.lad-step[data-inside]::after { content: ""; position: absolute; left: 50%; bottom: -7px; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: var(--color-accent-300); }
+.lad-axis { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: var(--fs-0); color: var(--color-neutral-500); padding-top: 2px; }
+.lad-key { display: flex; gap: 4px 12px; flex-wrap: wrap; justify-content: center; }
+.lad-key > span { display: inline-flex; align-items: center; gap: 5px; }
+.lad-key i { width: 10px; height: 10px; border-radius: 2px; background: var(--color-neutral-800); }
+.lad-key i[data-state="cleared"] { background: var(--color-accent-500); }
+.lad-key i[data-state="tried"] { background: color-mix(in srgb, var(--warn) 22%, transparent); box-shadow: inset 0 0 0 1px var(--warn-line); }
+.lad-next { color: var(--color-neutral-200); text-wrap: pretty; }
+.lad-head, .lad-row { display: grid; grid-template-columns: minmax(0, 1fr) 64px 92px 44px; gap: 10px; align-items: baseline; }
+.lad-head { font-size: var(--fs-0); padding: 6px 0 2px; }
+.lad-head > :nth-child(2) { grid-column: 3; text-align: right; }
+.lad-head > :nth-child(3) { text-align: right; }
+.lad-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.lad-row { padding: 6px 0; font-size: var(--fs-2); box-shadow: inset 0 -1px 0 var(--color-divider); }
+.lad-row:last-child { box-shadow: none; }
+.lad-row.is-frontier .lad-place { color: var(--color-accent-300); }
+.lad-place { min-width: 0; overflow-wrap: anywhere; }
+.lad-in { color: var(--color-accent-300); margin-right: 5px; }
+.lad-lv { font-size: var(--fs-1); }
+.lad-n, .lad-rate { text-align: right; }
+.lad-rate { color: var(--color-neutral-300); }
+.lad-more > summary {
+  list-style: none; display: flex; align-items: center; gap: 6px; min-height: 44px; cursor: pointer;
+  font-size: var(--fs-1); color: var(--color-neutral-400);
+}
+.lad-more > summary::-webkit-details-marker { display: none; }
+.lad-more > summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform .15s; margin-right: 2px; }
+.lad-more[open] > summary::before { transform: rotate(45deg); }
+.lad-more > summary:hover { color: var(--color-text); }
+.lad-more ul { list-style: none; margin: 0; padding: 0 0 4px; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: 2px 16px; font-size: var(--fs-1); }
+.lad-more li { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; color: var(--color-neutral-300); }
+.lad-more li.is-frontier { color: var(--color-accent-300); }
+.lad-path { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; min-height: 44px; font-size: var(--fs-1); text-decoration: none; }
+@media (max-width: 460px) {
+  .lad-head, .lad-row { grid-template-columns: minmax(0, 1fr) 84px 40px; }
+  .lad-lv { display: none; }
+  .lad-head > :nth-child(2) { grid-column: 2; }
+  .lad-axis { flex-wrap: wrap; }
+  .lad-key { order: 3; width: 100%; justify-content: flex-start; }
+}
 
 /* ---- tile panels (now/panel.js): a sheet on phone, a side panel on desktop ---- */
 :root:has(.np-scrim[data-open]) { overflow: hidden; }
@@ -267,6 +351,7 @@ a.np-row:hover { background: var(--color-neutral-900); color: var(--color-text);
 .np-more > summary::-webkit-details-marker { display: none; }
 
 /* ---- the fold ---- */
+.nfold { padding-top: 8px; }
 .nfold > summary {
   cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; min-height: 44px;
   font-size: var(--fs-1); letter-spacing: .08em; text-transform: uppercase; color: var(--color-neutral-500); font-weight: 500;
@@ -293,8 +378,8 @@ a.np-row:hover { background: var(--color-neutral-900); color: var(--color-text);
 .fold-btns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 
 /* ---- maps ---- */
-.minimaps { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 12px; }
 .minimap { display: flex; flex-direction: column; gap: 6px; text-decoration: none; color: var(--color-text); border-radius: 12px; }
+.minimap-l { font-size: var(--fs-1); color: var(--color-neutral-400); }
 .minimap:hover .wm { box-shadow: inset 0 0 0 1px #6b5530, 0 0 0 2px var(--color-accent-700); }
 .wm {
   position: relative; width: 100%; height: 72vh; border-radius: 12px; overflow: hidden; touch-action: none;
@@ -302,8 +387,8 @@ a.np-row:hover { background: var(--color-neutral-900); color: var(--color-text);
   box-shadow: inset 0 0 0 1px #3a3020, inset 0 0 60px rgba(0, 0, 0, .55); cursor: grab; user-select: none;
 }
 .wm.dragging { cursor: grabbing; }
-.wm-compact { height: 240px; cursor: pointer; touch-action: auto; }
-@media (max-width: 759.98px) { .wm { height: 62vh; } .wm-compact { height: 240px; } }
+.wm-compact { height: 220px; cursor: pointer; touch-action: auto; }
+@media (max-width: 759.98px) { .wm { height: 62vh; } .wm-compact { height: 200px; } }
 .wm-svg { width: 100%; height: 100%; display: block; }
 .wm-zone { stroke: #4a3820; stroke-width: 1.1; stroke-linejoin: round; }
 .wm-zone:hover { fill: #e6d29c; }

@@ -40,11 +40,12 @@ import pathlib
 import re
 import sys
 import unittest
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
-DECISIONS = ROOT / "mod-overseer/src/overseer_decisions.cpp"
-DECISIONS_H = ROOT / "mod-overseer/src/overseer_decisions.h"
+MODULE = modsource.MODULE
+DECISIONS = modsource.DECISIONS
+DECISIONS_H = modsource.DECISIONS_H
 PATCH = ROOT / "patches/mod-playerbots" / "0005-wander-npc-can-be-aimed.patch"
 PINS = ROOT / "UPSTREAM-PINS.env"
 MIGRATION = (
@@ -58,7 +59,7 @@ import travel  # noqa: E402
 
 
 def _source() -> str:
-    return MODULE.read_text(encoding="utf-8")
+    return modsource.read(MODULE, encoding="utf-8")
 
 
 def _function(signature: str) -> str:
@@ -127,7 +128,7 @@ def _grace() -> str:
 def _ratchet() -> str:
     """The backstop's rule, which four drives now share instead of each
     carrying a copy (OverseerDecisions::Ratchet, overseer_decisions.cpp)."""
-    src = DECISIONS.read_text(encoding="utf-8")
+    src = modsource.read(DECISIONS, encoding="utf-8")
     out = []
     for signature in ("bool RatchetProgressed(", "RatchetVerdict Ratchet("):
         start = src.index(signature)
@@ -281,7 +282,7 @@ class TheDeliberateFlightErrandIsSpeltTheSameOnBothSides(unittest.TestCase):
     """
 
     def test_the_prefix_is_the_modules_own_string(self):
-        header = DECISIONS_H.read_text(encoding="utf-8")
+        header = modsource.read(DECISIONS_H, encoding="utf-8")
         match = re.search(r'FLIGHT_MASTER_NODE_AIM_PREFIX\s*=\s*"([^"]+)"', header)
         self.assertIsNotNone(
             match, "the module no longer declares the prefix this side writes"
@@ -311,7 +312,7 @@ class TheDeliberateFlightErrandIsSpeltTheSameOnBothSides(unittest.TestCase):
         """The parser is `ParseFlightMasterNodeAim`, and these are its own
         stated rules: at most ten decimal digits, nothing but 0-9, and node 0
         refused because it "names no row in TaxiNodes.dbc"."""
-        parser = DECISIONS.read_text(encoding="utf-8")
+        parser = modsource.read(DECISIONS, encoding="utf-8")
         body = parser[parser.index("bool ParseFlightMasterNodeAim(") :]
         body = body[: body.index("std::string FlightMasterNodeAim(")]
         self.assertIn("FLIGHT_MASTER_NODE_AIM_PREFIX", body)
@@ -321,7 +322,7 @@ class TheDeliberateFlightErrandIsSpeltTheSameOnBothSides(unittest.TestCase):
         self.assertIn("parsed == 0", body)
 
     def test_the_module_builds_the_same_string_this_side_does(self):
-        parser = DECISIONS.read_text(encoding="utf-8")
+        parser = modsource.read(DECISIONS, encoding="utf-8")
         builder = parser[parser.index("std::string FlightMasterNodeAim(") :]
         builder = builder[: builder.index("}", builder.index("{")) + 1]
         self.assertIn("FLIGHT_MASTER_NODE_AIM_PREFIX", builder)
@@ -1270,21 +1271,21 @@ class TheResolvedSpawnIsPinnedForTheLifeOfTheErrand(unittest.TestCase):
 
 class TheMigrationMatchesWhatTheModuleReads(unittest.TestCase):
     def test_the_migration_exists(self):
-        self.assertTrue(MIGRATION.exists())
+        self.assertTrue(modsource.exists(MIGRATION))
 
     def test_it_adds_the_column_the_module_selects(self):
-        sql = MIGRATION.read_text(encoding="utf-8")
+        sql = modsource.read(MIGRATION, encoding="utf-8")
         self.assertIn("ADD COLUMN `travel_npc`", sql)
 
     def test_the_width_matches_the_python_side(self):
-        sql = MIGRATION.read_text(encoding="utf-8")
+        sql = modsource.read(MIGRATION, encoding="utf-8")
         self.assertIn("VARCHAR(%d)" % travel.COLUMN_WIDTH, sql)
 
     def test_the_cleared_state_is_a_sentinel_and_not_null(self):
         """Every other column on this table uses a sentinel: the module reads
         these with Field::Get and a nullable column would put a NULL check in
         front of every read for no gain."""
-        sql = MIGRATION.read_text(encoding="utf-8")
+        sql = modsource.read(MIGRATION, encoding="utf-8")
         self.assertIn("NOT NULL DEFAULT ''", sql)
         self.assertEqual(travel.NONE, "")
 
@@ -1296,7 +1297,7 @@ class TheMigrationMatchesWhatTheModuleReads(unittest.TestCase):
         CREATE TABLE at length, and an argument is not a statement."""
         sql = "\n".join(
             line
-            for line in MIGRATION.read_text(encoding="utf-8").splitlines()
+            for line in modsource.read(MIGRATION, encoding="utf-8").splitlines()
             if not line.lstrip().startswith("--")
         )
         self.assertIn("ALTER TABLE", sql)

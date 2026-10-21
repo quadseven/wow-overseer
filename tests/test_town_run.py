@@ -26,10 +26,11 @@ import unittest
 import goals
 import jobs
 import townslot
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (ROOT / "bridge.py").read_text(encoding="utf-8")
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+MODULE = modsource.MODULE
 
 
 def _code(name):
@@ -64,9 +65,8 @@ class TownRunIsAMode(unittest.TestCase):
         writes would come back 'unknown job mode'. The drive behind it is
         pinned in mod-overseer's own tests/test_town_hold.cpp, because the
         submodule here predates it."""
-        if not MODULE.exists():
-            self.skipTest("mod-overseer submodule not checked out")
-        source = MODULE.read_text(encoding="utf-8", errors="replace")
+        modsource.require()
+        source = modsource.read(MODULE, encoding="utf-8", errors="replace")
         self.assertIn('"town run", "train", "raid prep"', source)
 
 
@@ -75,13 +75,13 @@ class NobodyWandersInTown(unittest.TestCase):
         got = goals.life_strategies(leads=True, in_town=True)
         self.assertNotIn(goals.LIFE_STRATEGY, got)
         self.assertIn("nc -new rpg", got)
-        self.assertIn(goals.FLEE_STRATEGY, got)
+        self.assertIn(goals.RETREAT_STRATEGY, got)
 
     def test_an_aimed_follower_is_not_handed_it_either(self):
         """drive_quest stays on the rows through the wait and is inert under
         the town job; `aimed` must not turn it back into a traveller."""
         got = goals.life_strategies(leads=False, aimed=True, in_town=True)
-        self.assertEqual(["nc -new rpg", "nc +follow", goals.FLEE_STRATEGY], got)
+        self.assertEqual(["nc -new rpg", "nc +follow", goals.RETREAT_STRATEGY], got)
 
     def test_an_errand_still_walks_the_leader(self):
         self.assertEqual(

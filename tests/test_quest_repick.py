@@ -43,18 +43,16 @@ already being called from this file before #2801. That matters because the
 compiler cannot be run on a PR.
 """
 
-import pathlib
 import re
 import unittest
+import modsource
 
-MODULE = (
-    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
-)
+MODULE = modsource.MODULE
 
 
 def _function(name: str) -> str:
     """The whole of a member function, braces balanced."""
-    src = MODULE.read_text(encoding="utf-8")
+    src = modsource.read(MODULE, encoding="utf-8")
     start = src.index(name)
     depth = 0
     for i in range(src.index("{", start), len(src)):
@@ -222,7 +220,7 @@ class AQuestThatJustFailedIsNotPickedAgain(unittest.TestCase):
         )
 
     def test_there_is_a_named_threshold_rather_than_a_bare_number(self):
-        src = _code(MODULE.read_text(encoding="utf-8"))
+        src = _code(modsource.read(MODULE, encoding="utf-8"))
         self.assertRegex(
             src,
             r"constexpr\s+\w+\s+QUEST_REPICK_STRIKES\s*=",
@@ -314,7 +312,7 @@ class TheStrikeWindowIsWiderThanTheFailurePathsOwnNudge(unittest.TestCase):
     """
 
     def test_the_threshold_clears_the_ten_yard_nudge_by_a_margin(self):
-        src = _code(MODULE.read_text(encoding="utf-8"))
+        src = _code(modsource.read(MODULE, encoding="utf-8"))
         match = re.search(r"QUEST_PROGRESS_YARDS\s*=\s*([0-9.]+)f?;", src)
         self.assertIsNotNone(match, "QUEST_PROGRESS_YARDS must be a literal")
         yards = float(match.group(1) if match else 0)
@@ -326,7 +324,7 @@ class TheStrikeWindowIsWiderThanTheFailurePathsOwnNudge(unittest.TestCase):
         )
 
     def test_the_nudge_is_cited_so_the_number_is_not_mistaken_for_arbitrary(self):
-        src = MODULE.read_text(encoding="utf-8")
+        src = modsource.read(MODULE, encoding="utf-8")
         self.assertRegex(src, r"MoveRandomNear|NewRpgAction\.cpp:342")
 
     def test_the_baseline_is_the_start_of_the_streak_not_the_last_poll(self):
@@ -425,7 +423,7 @@ class TheThresholdsAreSaneAndNotJustPresent(unittest.TestCase):
     """
 
     def test_the_strike_count_is_small_enough_to_notice_a_wedge_quickly(self):
-        src = _code(MODULE.read_text(encoding="utf-8"))
+        src = _code(modsource.read(MODULE, encoding="utf-8"))
         match = re.search(r"QUEST_REPICK_STRIKES\s*=\s*(\d+)", src)
         self.assertIsNotNone(match)
         strikes = int(match.group(1) if match else 0)
@@ -438,7 +436,7 @@ class TheThresholdsAreSaneAndNotJustPresent(unittest.TestCase):
         )
 
     def test_the_cooldown_is_long_enough_to_stop_churn_and_short_enough_to_retry(self):
-        src = _code(MODULE.read_text(encoding="utf-8"))
+        src = _code(modsource.read(MODULE, encoding="utf-8"))
         match = re.search(r"QUEST_GIVE_UP_COOLDOWN_SECONDS\s*=\s*(\d+)", src)
         self.assertIsNotNone(match)
         seconds = int(match.group(1) if match else 0)
@@ -517,7 +515,7 @@ class TheGiveUpExpires(unittest.TestCase):
     """
 
     def test_the_given_up_set_has_a_cooldown(self):
-        src = _code(MODULE.read_text(encoding="utf-8"))
+        src = _code(modsource.read(MODULE, encoding="utf-8"))
         self.assertRegex(
             src,
             r"constexpr\s+\w+\s+QUEST_GIVE_UP_COOLDOWN\w*\s*=",
@@ -624,7 +622,7 @@ class NothingElseWasQuietlyChanged(unittest.TestCase):
         )
 
     def test_the_driver_is_still_on_the_quest_poll(self):
-        src = _code(MODULE.read_text(encoding="utf-8"))
+        src = _code(modsource.read(MODULE, encoding="utf-8"))
         self.assertRegex(src, r"_questTimer\s*>=\s*QUEST_POLL_MS")
         self.assertIn("DriveQuests();", src)
 

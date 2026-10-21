@@ -1282,3 +1282,40 @@ class TheWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheHeldMeeting(unittest.TestCase):
+    def run_(self):
+        return classparty.PartyRun(1, "Bigzug", ("Chill", "Dread"), 2000, "x", SPOT)
+
+    def test_a_held_refusal_is_named(self):
+        self.assertTrue(classparty.held_refusal("character is held by another verb"))
+        self.assertTrue(
+            classparty.held_refusal(
+                "Bigzug cannot walk to the Lizard: character is held by another verb"
+            )
+        )
+
+    def test_other_endings_are_not_held(self):
+        self.assertFalse(classparty.held_refusal("cut off after 2110 seconds"))
+        self.assertFalse(classparty.held_refusal(""))
+        self.assertFalse(classparty.held_refusal(None))
+
+    def test_the_meeting_names_its_held_members_in_order(self):
+        run = self.run_()
+        run.walks["Dread"] = "character is held by another verb"
+        run.walks["Bigzug"] = (
+            "Bigzug cannot walk to the Lizard: character is held by another verb"
+        )
+        run.walks["Chill"] = "cut off after 2110 seconds"
+        self.assertEqual(classparty.meeting_held(run), ("Bigzug", "Dread"))
+
+    def test_a_meeting_with_no_held_walk_names_nobody(self):
+        run = self.run_()
+        run.walks["Bigzug"] = "cut off after 2110 seconds"
+        self.assertEqual(classparty.meeting_held(run), ())
+        self.assertEqual(classparty.meeting_held(self.run_()), ())
+
+    def test_the_held_retry_is_bounded(self):
+        self.assertTrue(classparty.MEET_HELD_RETRIES >= 1)
+        self.assertTrue(classparty.MEET_HELD_WAIT_SECONDS > 0)

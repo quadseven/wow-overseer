@@ -46,9 +46,8 @@ class TheEndpointIsWiredUp(unittest.TestCase):
         handler = self.server[self.server.index("def _agenda") :]
         handler = handler[: handler.index("def do_POST")]
         self.assertIn("self._family_scope(query)", handler)
-        self.assertIn(
-            "agenda.build_agenda(**_fetch_agenda(names), members=names)", handler
-        )
+        self.assertIn("rows = _fetch_agenda(names)", handler)
+        self.assertIn("agenda.build_agenda(**rows, members=names)", handler)
         self.assertNotIn("query.get", handler)
 
     def test_a_failed_query_is_a_503_and_not_an_empty_banner(self):

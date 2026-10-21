@@ -21,9 +21,10 @@ claims it has.
 import pathlib
 import sys
 import unittest
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+MODULE = modsource.MODULE
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -75,7 +76,7 @@ class ThereIsNoHoldsRule(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.cpp = MODULE.read_text(encoding="utf-8", errors="replace")
+        cls.cpp = modsource.read(MODULE, encoding="utf-8", errors="replace")
         cls.source = (pathlib.Path(learnaim.__file__)).read_text(encoding="utf-8")
 
     def test_the_cpp_still_refuses_to_treat_holding_as_finished(self):

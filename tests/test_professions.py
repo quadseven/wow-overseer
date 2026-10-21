@@ -56,6 +56,7 @@ import learnaim
 import professions
 import trainjob
 import travel
+import modsource
 
 SOURCE = pathlib.Path(professions.__file__).read_text(encoding="utf-8")
 
@@ -137,10 +138,7 @@ def _module_function(signature: str) -> str:
     its source text is the only check that runs before a forty-five minute
     build finds out.
     """
-    source = (
-        pathlib.Path(__file__).resolve().parents[1]
-        / "mod-overseer/src/mod_overseer.cpp"
-    ).read_text(encoding="utf-8")
+    source = modsource.read(modsource.MODULE, encoding="utf-8")
     start = source.index(signature)
     depth = 0
     for i in range(source.index("{", start), len(source)):
@@ -979,10 +977,10 @@ class UpstreamWallTest(unittest.TestCase):
     """
 
     ROOT = pathlib.Path(__file__).resolve().parents[1]
-    MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+    MODULE = modsource.MODULE
 
     def test_train_roster_still_calls_initskills(self):
-        source = self.MODULE.read_text(encoding="utf-8")
+        source = modsource.read(self.MODULE, encoding="utf-8")
         self.assertIn("factory.InitSkills();", source)
 
     def test_the_module_grants_no_profession_without_a_trainer(self):
@@ -1001,7 +999,7 @@ class UpstreamWallTest(unittest.TestCase):
         a module could break it are all named below, because a blanket ban on a
         function name is only ever a proxy for the rule it stands in for.
         """
-        source = self.MODULE.read_text(encoding="utf-8")
+        source = modsource.read(self.MODULE, encoding="utf-8")
         # Comments are stripped for the refusals below. Searching the raw text
         # is not a reachability test: this file EXPLAINS both cheats at length,
         # naming InitTradeSkills and learnSpell to say why they are not used,

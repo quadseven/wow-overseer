@@ -17,6 +17,7 @@ import guildjobs
 import guildroute
 import hunterpet
 import member_rungs
+import pvpgear
 
 GRUNTY = dict(
     name="Grunty",
@@ -223,6 +224,83 @@ class FarFromItsBeasts(unittest.TestCase):
     def test_the_bridge_reads_as_far_as_a_far_walk_is_sent(self):
         source = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
         self.assertIn("float(hunterpet.FAR_BEAST_YARDS)", source)
+
+
+# Read on the dev realm on 2026-10-19: Cowpoke (20) knows Tame Beast and has no
+# pet, and took the pet step at 22:03 and 22:34 UTC ("60 tameable beast spawn(s)
+# of level 16 to 20 within 5000 yards"). At 22:49, inside its 20 minute tame
+# cooldown, the same pass had it "queues Warsong Gulch for honor toward
+# Legionnaire's Sword (171 of 300)", and the bg-queue row was delivered.
+SWORD = pvpgear.Aim(
+    "Grunty", "Bonkers", 17, 18838, "Legionnaire's Sword", 300, 171, pvpgear.WSG
+)
+
+
+def queue(said="Grunty queues Warsong Gulch"):
+    return {"Grunty": (SWORD, pvpgear.Move(pvpgear.QUEUE, said))}
+
+
+def pvp_steps(result):
+    return [s for s in result.steps if s.action == pvpgear.ACTION]
+
+
+# The 22:34 pet step, 15 minutes old at the next pass: inside the cooldown.
+TRIED = guildjobs.Recent(
+    "Grunty", hunterpet.ACTION, 15, status="applied", walk=True, spawn=14193
+)
+
+
+class BeforeABattlegroundQueue(unittest.TestCase):
+    def test_a_hunter_without_a_pet_takes_the_pet_step_not_the_queue(self):
+        result = plan([member()], pvp=queue())
+        self.assertEqual(len(pet_steps(result)), 1)
+        self.assertFalse(pvp_steps(result))
+
+    def test_inside_the_tame_cooldown_it_does_not_queue(self):
+        result = plan([member()], pvp=queue(), recent=(TRIED,))
+        self.assertFalse(pet_steps(result))
+        self.assertFalse(pvp_steps(result))
+        self.assertTrue(
+            [n for n in result.notes if "first pet comes before PvP" in n],
+            result.notes,
+        )
+
+    def test_nor_does_it_buy_with_honor(self):
+        buy = {"Grunty": (SWORD, pvpgear.Move(pvpgear.BUY, "buys"))}
+        result = plan([member()], pvp=buy, recent=(TRIED,))
+        self.assertFalse(pvp_steps(result))
+
+    def test_a_hunter_with_a_pet_still_queues(self):
+        result = plan([member()], pets={}, pvp=queue())
+        self.assertFalse(pet_steps(result))
+        self.assertEqual(len(pvp_steps(result)), 1)
+        self.assertIn("bg-queue wsg", pvp_steps(result)[0].rows[0].command)
+
+    def test_with_no_beast_in_reach_it_still_queues(self):
+        result = plan([member(map_id=0)], pvp=queue(), recent=(TRIED,))
+        self.assertEqual(len(pvp_steps(result)), 1)
+
+    def test_with_no_far_slot_free_it_still_queues(self):
+        result = plan(
+            [member(**IN_TOWN)], cap=FAR, far_slots=0, pvp=queue(), recent=(TRIED,)
+        )
+        self.assertEqual(len(pvp_steps(result)), 1)
+
+    def test_with_a_far_slot_free_it_waits_for_its_pet(self):
+        result = plan(
+            [member(**IN_TOWN)], cap=FAR, far_slots=1, pvp=queue(), recent=(TRIED,)
+        )
+        self.assertFalse(pvp_steps(result))
+
+    def test_the_bridge_reads_beasts_inside_the_tame_cooldown(self):
+        source = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
+        start = source.index("async def _job_pet_offers(")
+        body = source[start : source.index("async def ", start + 1)]
+        self.assertNotIn("_cooling(", body)
+
+    def test_the_pet_step_names_its_hunter(self):
+        (step,) = pet_steps(plan([member()]))
+        self.assertTrue(step.said.startswith("Grunty tames a "), step.said)
 
 
 if __name__ == "__main__":

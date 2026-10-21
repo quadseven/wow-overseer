@@ -14,6 +14,7 @@ from bag_pressure import (
     sellable,
     town_run_needed,
     protection_counts,
+    vendor_trip_makes_room,
     vendor_batch,
     vendor_candidates,
     vendor_holders_to_queue,
@@ -594,11 +595,13 @@ class TheTripMakesTheFamilyRoomTests(unittest.TestCase):
 
     FAMILY = {"Bork": 0, "Grog": 0, "Ugga": 0, "Og": 10}
 
-    def test_the_slots_the_trip_frees_are_the_family_s(self):
+    def test_the_slots_the_trip_frees_are_the_floor_s(self):
         # Bork carries 68 stacks no vendor will buy, so he frees nothing;
-        # Grog, Ugga and Og carry two, one and two between them.
+        # Grog and Ugga, at the floor, carry two and one. Og's two are sold
+        # too, but Og has ten free slots: a slot freed in his bags is not one
+        # in anybody's at the floor (#1243).
         self.assertEqual(
-            5,
+            3,
             family_sale_slots(
                 self.FAMILY,
                 {"Bork": 0, "Grog": 2, "Ugga": 1, "Og": 2},
@@ -621,3 +624,42 @@ class TheTripMakesTheFamilyRoomTests(unittest.TestCase):
         self.assertEqual(0, family_sale_slots({}, {"Og": 4}))
         self.assertEqual(0, family_sale_slots({"Og": -1}, {"Og": 4}))
         self.assertEqual(0, family_sale_slots({"Og": None}, {"Og": 4}))
+
+
+class TheTripMakesRoomOnlyAtTheFloorTests(unittest.TestCase):
+    """#1243: a slot freed in one member's bags is not room in another's.
+
+    #1227 summed every member's vendor stacks once anybody sat at the floor.
+    A family held there by a member who carries only what it keeps (Bork's
+    68 stacks no vendor will buy) never stops being at the floor, and its
+    questing members pick up three vendor stacks between them in minutes: the
+    sum re-armed the trip on every pass, the trip took the leader's walk,
+    sold the stacks of members who had room, and left the floor where it was.
+    The dungeon quest pass meanwhile held the family on "waits for bag room;
+    the vendor trip keeps the travel column" for the whole of it.
+    """
+
+    # Bork pinned at the floor by kept stacks; the others questing with room.
+    PINNED = {"Bork": 0, "Grog": 12, "Ugga": 9, "Og": 10}
+    LOOTED = {"Bork": 0, "Grog": 2, "Ugga": 1, "Og": 2}
+
+    def test_stacks_of_members_with_room_free_nothing_at_the_floor(self):
+        self.assertEqual(0, family_sale_slots(self.PINNED, self.LOOTED))
+
+    def test_no_trip_makes_room_for_a_member_pinned_by_kept_stacks(self):
+        self.assertFalse(vendor_trip_makes_room(self.PINNED, self.LOOTED))
+
+    def test_a_trip_that_lifts_one_member_past_the_trigger_makes_room(self):
+        self.assertTrue(vendor_trip_makes_room({"Oz": 0, "Zug": 20}, {"Oz": 4}))
+
+    def test_a_trip_that_frees_the_floor_s_width_between_members_makes_room(self):
+        # #1204's family: Grog and Ugga at the floor, two and one stacks.
+        self.assertTrue(
+            vendor_trip_makes_room(
+                {"Bork": 0, "Grog": 0, "Ugga": 0, "Og": 10},
+                {"Bork": 0, "Grog": 2, "Ugga": 1, "Og": 2},
+            )
+        )
+
+    def test_a_family_with_room_needs_no_trip(self):
+        self.assertFalse(vendor_trip_makes_room({"Oz": 11}, {"Oz": 40}))

@@ -214,6 +214,21 @@ class TheWiring(unittest.TestCase):
         self.assertTrue(classquest.is_cross_row("cross-to-map map:0"))
         self.assertFalse(classquest.is_cross_row("walk-to-spawn creature:1"))
 
+    def test_a_same_map_ride_is_a_ride_to_stop_row_the_module_parses(self):
+        # The module takes an optionally negative decimal of at most nine
+        # characters: no exponent, no trailing dot.
+        self.assertEqual(
+            classquest.ride_command(0, -12409.1796875, 146.29),
+            "ride-to-stop map:0 x:-12409.2 y:146.3",
+        )
+        self.assertEqual(
+            classquest.ride_command(0, -1234, 5), "ride-to-stop map:0 x:-1234.0 y:5.0"
+        )
+        self.assertEqual(
+            classquest.ride_command(1, 1e-7, -0.04), "ride-to-stop map:1 x:0.0 y:0.0"
+        )
+        self.assertTrue(classquest.is_cross_row("ride-to-stop map:0 x:1.0 y:2.0"))
+
 
 if __name__ == "__main__":
     unittest.main()

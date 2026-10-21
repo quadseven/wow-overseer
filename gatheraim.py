@@ -68,7 +68,23 @@ LEVEL_MARGIN = 3
 # holding the travel column the whole walk. A zone is one to three thousand
 # yards across, so three thousand keeps the neighbouring zones and refuses a
 # walk across the continent. Nothing in range is a refusal that says so.
-MAX_YARDS = 3000.0
+#
+# THE BOUND IS THE GATHER LEASE, NOT A GUESS (#76). A gathering aim holds the
+# family's one travel column for `townslot.GATHER_LEASE_SECONDS` (450), and that
+# lease is a walk of 390 seconds plus the one goal interval it takes for the
+# arrival to be SEEN (`flightlearn.ARRIVAL_SEEN_SECONDS`, 60). At mod-overseer's
+# measured 416 yards a minute (`flightlearn.WALK_YARDS_PER_MINUTE`) that walk is
+# 2704 yards. The old hand-picked 3000 needed 493 seconds, so a field near the
+# edge outlived its lease and a starved pass could take the column back before
+# the family got there. The three inputs are repeated rather than imported
+# because this module stays dependency-free (flightlearn pulls in the bridge's
+# core); tests/test_gatheraim.py pins that `flightlearn.lease_for(MAX_YARDS)` is
+# exactly the gather lease, so none of them can drift alone. Both measured trips
+# the lease was dimensioned for (2588 and 2344 yards) still fit.
+GATHER_LEASE_SECONDS = 450.0
+WALK_YARDS_PER_MINUTE = 416.0
+ARRIVAL_SEEN_SECONDS = 60.0
+MAX_YARDS = (GATHER_LEASE_SECONDS - ARRIVAL_SEEN_SECONDS) / 60.0 * WALK_YARDS_PER_MINUTE
 
 # How far below the family's level a field's neighbourhood may top out before
 # it is passed over for one nearer the family's own level (#170). A judgement:

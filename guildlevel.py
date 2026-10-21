@@ -121,9 +121,11 @@ module's `cross-to-map map:<id>` row (`Choice.cross_to`, `Choice.transport`),
 when a hub fits on the ground that ride lands on. The module picks the ride by
 its own price, so the member may land elsewhere on that map; the next pass
 reads where it stands. The Undercity to Grom'gol zeppelin never leaves map 0,
-and `cross-to-map` names only a map, so no row rides it yet (`Transport.rides`):
-a Horde member in the north is offered Kalimdor's hubs before Stranglethorn's,
-and is told so when only Stranglethorn fits.
+so `cross-to-map` has nothing to name: a Horde member in the north whose best
+hub is Grom'gol rides it with the module's `ride-to-stop map:0 x:<x> y:<y>` row
+instead (`Choice.ride_to`), the point being that hub's flight master, and one
+in Stranglethorn rides it back north the same way. A ride no row can take yet
+(`Transport.rides` False) is named when only its far ground fits.
 
 PURE MODULE: rows in, choices and sentences out. No MySQL, no clock.
 """
@@ -282,8 +284,8 @@ WETLANDS, DARKSHORE, DUSTWALLOW = 11, 148, 15
 @dataclass(frozen=True)
 class Transport:
     """A zeppelin or boat: its name, the sides whose crew welcome them, its two
-    ends as (map, zone), and whether a row can ride it (`cross-to-map` takes a
-    member only to another map)."""
+    ends as (map, zone), and whether a row can ride it (`cross-to-map` between
+    two maps, `ride-to-stop` between two stops of one)."""
 
     name: str
     sides: tuple
@@ -306,7 +308,6 @@ TRANSPORTS = (
         "the zeppelin from the Undercity to Grom'gol",
         (levelroute.HORDE,),
         ((0, TIRISFAL), (0, STRANGLETHORN)),
-        rides=False,
     ),
     Transport(
         "the boat from Booty Bay to Ratchet",
@@ -383,8 +384,11 @@ class Choice:
     name the hub it would go to, for the note. `cross_to` set means the member
     first crosses to that map by its side's boat (BOAT_EXITS), or by its orb
     when `orb` is set, or between the two continents by `transport`, with
-    `master` None: `hub` is where it levels once it has landed. `open` is the
-    member's open quests at `hub`, None while they are unread.
+    `master` None: `hub` is where it levels once it has landed. `ride_to` set,
+    as (map, x, y), means the member first rides `transport` between two stops
+    of its own map to the stop nearest that point (`ride-to-stop`), with
+    `master` None too. `open` is the member's open quests at `hub`, None while
+    they are unread.
     """
 
     hub: levelroute.Hub | None = None
@@ -395,6 +399,13 @@ class Choice:
     orb: Orb | None = None
     open: int | None = None
     transport: str = ""
+    ride_to: tuple | None = None
+
+    @property
+    def crosses(self) -> bool:
+        """The member first takes a boat, zeppelin or orb (`cross_to`) or a
+        same-map ride (`ride_to`) on its way to `hub`."""
+        return self.cross_to is not None or self.ride_to is not None
 
     @property
     def place(self) -> str:
@@ -559,6 +570,21 @@ def rides_from(team, map_id, ground, zone_id=None, to_zone=None) -> list:
             out.append((rank, ride, far_map, ground_of(team, far_map, far_zone)))
     out.sort(key=lambda r: r[0])
     return [r[1:] for r in out]
+
+
+def ride_on(team, map_id, ground, far_ground):
+    """`team`'s Transport between two stops of `map_id` that a row rides
+    (`ride-to-stop`) from `ground` to `far_ground`, None for none."""
+    if map_id is None or ground == far_ground:
+        return None
+    for ride in TRANSPORTS:
+        if team not in ride.sides or not ride.rides:
+            continue
+        if any(m != int(map_id) for m, _ in ride.ends):
+            continue
+        if {ground, far_ground} <= {ground_of(team, m, z) for m, z in ride.ends}:
+            return ride
+    return None
 
 
 def unridden_to(team, map_id, ground, far_ground) -> str:
@@ -890,11 +916,21 @@ def _away(team, level, map_id, fitting, orb=None) -> Choice:
 def _across(team, level, map_id, zone_id, fitting) -> Choice:
     """The choice on a continent when no fitting hub stands on the member's own
     ground: its side's zeppelin or boat from that ground to the best hub that
-    fits on the ground it lands on (`rides_from`), or the best hub of all,
-    named and refused."""
+    fits on the ground it lands on, on another map (`rides_from`) or on its
+    own (`ride_on`, to the stop nearest the hub's flight master), or the best
+    hub of all, named and refused."""
     ground = ground_of(team, map_id, zone_id)
     for f in fitting:
-        if map_id is None or f.master.map_id == int(map_id):
+        if map_id is None:
+            continue
+        if f.master.map_id == int(map_id):
+            ride = ride_on(team, map_id, ground, _ground(team, f.hub))
+            if ride is not None:
+                return f.choice(
+                    master=None,
+                    ride_to=(int(map_id), f.master.x, f.master.y),
+                    transport=ride.name,
+                )
             continue
         rides = rides_from(team, map_id, ground, zone_id, f.hub.zone_id)
         for ride, far_map, far_ground in rides:

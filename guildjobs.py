@@ -733,7 +733,8 @@ class Recent:
     entry: int = 0
     kills: int = 0
     loot: int = 0
-    # For a `cross-to-map map:<id>` row, the map id it asked for (0 otherwise).
+    # For a `cross-to-map map:<id>` or `ride-to-stop map:<id> ...` row, the map
+    # id it asked for (0 otherwise).
     dest: int = 0
     # Original command text, needed to distinguish an accepted battleground
     # queue from other PvP work.
@@ -1283,13 +1284,12 @@ def capped_trades(member) -> tuple:
     return tuple(out)
 
 
-def _pvp_holds(m, pvp) -> bool:
-    """Whether PvP holds this member from every other job this pass: inside a
-    battleground or in its queue (_pvp_first's `held`), read without building
-    the PvP step."""
+def _pvp_inside(m, pvp) -> bool:
+    """Whether this member plays inside a battleground this pass, read without
+    building the PvP step. A member only waiting in a queue is not inside."""
     if not pvp or not m.eligible or not m.online:
         return False
-    return bool(pvp[1].holds)
+    return pvp[1].kind == pvpgear.INSIDE
 
 
 def _tier_cap_first(m, pvp, pending, recent, cap):
@@ -1306,13 +1306,23 @@ def _tier_cap_first(m, pvp, pending, recent, cap):
     trade's own (`walk-to-trainer skill:<id>`), and once the rank is bought
     the member's next pass resumes where it left off.
 
-    Never for a member held in a battleground or its queue, never for a
-    summoner a summon waits on (`pending`), never in a fight, never before
-    its natural restart (what it buys would be thrown away with
-    the restart), and a failed walk cools down per skill as the ordinary
-    train step does (_training_cooling).
+    Never for a member inside a battleground, never for a summoner a summon
+    waits on (`pending`), never in a fight, never before its natural restart
+    (what it buys would be thrown away with the restart), and a failed walk
+    cools down per skill as the ordinary train step does (_training_cooling).
+
+    A MEMBER WAITING IN A QUEUE WALKS (2026-10-20, #1116). Read on the dev
+    realm 2026-10-19 12:00 to 2026-10-20 14:40: Flintt (Herbalism 75/75, in
+    the Arathi Basin queue to fill a cohort) and Funkymon (Herbalism and
+    Skinning 75/75, in the Warsong Gulch queue) were named in a queue that
+    never popped on nearly every one of about 107 passes, and neither got a
+    rank walk: each re-ask past pvpgear.WAITING_MINUTES holds the member
+    again, so the queue hold kept the walk off them for good. The module does
+    not refuse a walk for a queued member, and the class quest, food, riding
+    and gear rungs above already walk one. A walk that fails because the
+    queue popped cools down per skill like any failed walk.
     """
-    if not m.eligible or not m.online or m.in_combat or _pvp_holds(m, pvp):
+    if not m.eligible or not m.online or m.in_combat or _pvp_inside(m, pvp):
         return None, ""
     if m.name in (pending or ()):
         return None, ""
@@ -2198,8 +2208,44 @@ def _pet_first(m, beasts, recent, cap, far=None):
     if beasts is None or not m.online or not m.alive or m.in_combat:
         return None, "", ""
     if _cooling(m, hunterpet.ACTION, recent):
+        if pet_due(m, beasts, recent, cap, far):
+            return (
+                None,
+                "",
+                "%s waits out its tame cooldown with a beast in reach, and its "
+                "first pet comes before PvP" % m.name,
+            )
         return None, "", ""
     return pet_step(m, beasts, recent, cap, far)
+
+
+# A PET BEFORE A BATTLEGROUND QUEUE (2026-10-19). The pet step is the rung ahead
+# of PvP, but it has a cooldown (hunterpet.COOLDOWN_MINUTES, 20) longer than a
+# guild jobs pass (about 15 minutes), so every other pass a hunter without a
+# pet fell through to the PvP rung. Read on the dev realm: Cowpoke (20) took
+# the pet step at 22:03 and 22:34 UTC ("60 tameable beast spawn(s) of level 16
+# to 20 within 5000 yards"), and at 22:49, inside its tame cooldown, it
+# "queues Warsong Gulch for honor toward Legionnaire's Sword (171 of 300)" and
+# the bg-queue row was delivered. A pet is a core class tool; honor is
+# optional. So while its tame cooldown runs and a beast is still in reach,
+# with a far walk slot free this pass when the beast is a far walk, a hunter
+# writes no PvP queue or honor buy (_pvp_first). With no beast in reach, or
+# no far slot free, PvP goes on as before.
+def pet_due(m, beasts, recent, cap, far=None) -> bool:
+    """Whether a hunter that knows Tame Beast and has no pet (`beasts` read by
+    the bridge, None otherwise) has a pet walk it could take: a beast in the
+    pass's reach it has not tried lately, and a far walk slot left this pass
+    when that beast is a far walk. Takes no slot."""
+    if beasts is None or not m.online or not m.alive:
+        return False
+    yards = hunterpet.reach(cap)
+    beast = hunterpet.choose(m, beasts, hunterpet.avoided(m.name, recent), yards)
+    if beast is None:
+        return False
+    spot = Spot("creature", beast.guid, beast.map_id, beast.x, beast.y, beast.name)
+    if far is None or far.free is None or not _far_class_walk(m, spot, cap):
+        return True
+    return far.free > 0 or m.name in far.holders
 
 
 def pet_step(m, beasts, recent, cap, far=None):
@@ -2233,7 +2279,11 @@ def pet_step(m, beasts, recent, cap, far=None):
             "",
             "%s waits for a far walk slot on the realm to tame a beast" % m.name,
         )
-    said = "tames a %s (level %d) as its first pet" % (beast.name, beast.level)
+    said = "%s tames a %s (level %d) as its first pet" % (
+        m.name,
+        beast.name,
+        beast.level,
+    )
     step = guildcorps.Step(
         m.name,
         hunterpet.ACTION,
@@ -3434,7 +3484,9 @@ def _member_step(
     step, cap_note = _tier_cap_first(m, pvp, pending, recent, cap)
     if step is not None:
         return step, step.said, supply_note, gear_note
-    step, doing, held = _pvp_first(m, pvp, recent, cap, kept)
+    step, doing, held = _pvp_first(
+        m, pvp, recent, cap, kept, pet_due(m, pet, recent, cap, far)
+    )
     if step is not None or held:
         return step, doing, _join(supply_note, cap_note), gear_note
     supply_note = _join(supply_note, cap_note)
@@ -3526,7 +3578,7 @@ def level_step(m, world, recent, cap):
         return None, "", guildlevel.refused_note(m.name, m.level, why, choice)
     if choice.orb is not None:
         return level_orb_step(m, choice, why, recent, cap)
-    if choice.cross_to is not None:
+    if choice.crosses:
         return level_cross_step(m, choice, why, recent)
     master = choice.master
     if guildlevel.there(m.map_id, m.x, m.y, master):
@@ -3654,12 +3706,22 @@ def level_cross_step(m, choice, why, recent):
     across the water, from map 530 or from the other continent
     (guildlevel.Choice.cross_to): one `cross-to-map map:<id>` row, no walk
     (the module walks to the berth, rides the boat or zeppelin and walks off at
-    the landing). While the member's last crossing
+    the landing). A hub past the other side's ground on the member's own map
+    (guildlevel.Choice.ride_to) is one `ride-to-stop` row instead, held and
+    walled by its map the same way. While the member's last crossing
     is young (crossing_cooling) it is held with no row, saying where it goes,
     so no other job is written over the crossing; a crossing the module
     refused for good (class_walls) is named in the notes and not asked again
     until classquest.CROSS_WALL_MINUTES have passed."""
-    wall = class_walls(m.name, recent).get(int(choice.cross_to))
+    if choice.ride_to is not None:
+        to_map = int(choice.ride_to[0])
+        command = classquest.ride_command(*choice.ride_to)
+        goal = choice.place
+    else:
+        to_map = int(choice.cross_to)
+        command = classquest.cross_command(to_map)
+        goal = classquest.CONTINENTS.get(to_map, "")
+    wall = class_walls(m.name, recent).get(to_map)
     if wall:
         return None, "", guildlevel.walled_note(m.name, m.level, why, choice, wall)
     said = guildlevel.crossing_said(m.name, m.level, why, choice)
@@ -3668,17 +3730,17 @@ def level_cross_step(m, choice, why, recent):
     step = guildcorps.Step(
         m.name,
         guildlevel.ACTION,
-        int(choice.cross_to),
+        to_map,
         said,
         rows=(
             guildcorps.Row(
                 "job",
-                classquest.cross_command(choice.cross_to),
+                command,
                 "",
                 source_for(guildlevel.CROSS_ACTION, m.name),
             ),
         ),
-        goal=classquest.CONTINENTS.get(int(choice.cross_to), ""),
+        goal=goal,
     )
     return step, said, ""
 
@@ -3773,7 +3835,8 @@ def class_owed(m, book, recent=(), hunts=None, now=0.0, asks=()):
         )
     probe = with_walls(probe, recent)
     avoid, off = class_avoid(m, book, recent, hunts, now)
-    return classquest.owed(book, probe, avoid, off, class_ask_held(m.name, asks))
+    yielded = class_ask_held(m.name, asks) | outlevel_waits(m, book, hunts, now)
+    return classquest.owed(book, probe, avoid, off, yielded)
 
 
 def owed_members(
@@ -4096,7 +4159,8 @@ def class_asking(m, book, hunts=None, now=0.0, recent=(), asks=()) -> tuple:
     the member levels until its hunt's hold-off ends, then tries alone again.
     A quest asked for CLASS_ASK_STREAK_MAX times in a row that did not get it
     done (no party, or a party that went and failed) is not asked for either
-    while its hold lasts (class_ask_streak).
+    while its hold lasts (class_ask_streak), nor one the member outlevels and
+    has waited classquest.OVERLEVEL_HELP_WAIT_MINUTES for (outlevel_waits).
 
     A MEMBER IN COMBAT STILL NEEDS ITS HELP (#1001). Read in a fight, the help
     was dropped for the whole of this pass, and the social pass cancelled its
@@ -4112,9 +4176,13 @@ def class_asking(m, book, hunts=None, now=0.0, recent=(), asks=()) -> tuple:
     if move is not None:
         return [], []
     helps, yields = [], []
+    waited = outlevel_waits(m, book, hunts, now)
     for h in classquest.helps(book, m, avoid, off):
         if classquest.no_party_spot(book, h, m):
             yields.append(_no_party_yield(m, h, hunts, now))
+            continue
+        if int(h.quest) in waited:
+            yields.append(_outlevel_yield(m, h, book, hunts, now))
             continue
         left, count, yeses = class_ask_streak(m.name, h.quest, asks)
         if left:
@@ -4146,19 +4214,70 @@ def asking_line(m, asked) -> str:
     return "%s waits for help with %s" % (m.name, titles)
 
 
+def _alone_again_minutes(m, move, hunts, now) -> int:
+    """Minutes until the member tries `move`'s quest alone again: when its
+    hunt's hold-off ends, else after classquest.SPAWN_RETRY_MINUTES (the
+    rolling retry of a tried target)."""
+    hunt = hunts.get(m.name) if hunts is not None else None
+    if hunt is not None and hunt.quest == move.quest and hunt.until is not None:
+        return max(1, math.ceil((hunt.until - now) / 60.0))
+    return classquest.SPAWN_RETRY_MINUTES
+
+
 def _no_party_yield(m, move, hunts, now) -> tuple:
     """(key, line) for a helpable quest no party can help with. The member
-    tries alone again when its hunt's hold-off ends, else after
-    classquest.SPAWN_RETRY_MINUTES (the rolling retry of a tried target)."""
-    hunt = hunts.get(m.name) if hunts is not None else None
-    left = classquest.SPAWN_RETRY_MINUTES
-    if hunt is not None and hunt.quest == move.quest and hunt.until is not None:
-        left = max(1, math.ceil((hunt.until - now) / 60.0))
+    tries alone again when its hunt's hold-off ends (_alone_again_minutes)."""
+    left = _alone_again_minutes(m, move, hunts, now)
     line = (
         "class ask: %s does not ask for %s: %s; it levels for %d minute(s), then "
         "tries alone again" % (m.name, move.title, classquest.no_party_why(move), left)
     )
     return (m.name, move.quest, "nospot", move.blocker), line
+
+
+# AN OVERLEVELLED MEMBER WAITS FOR HELP AT MOST HALF AN HOUR (#1094). A member
+# classquest.OVERLEVEL_SOLO_GAP levels over a quest hunts it alone and asks for
+# help only once that hunt stalls; from classquest.OVERLEVEL_HELP_WAIT_MINUTES
+# after the stall the quest is not asked for and yields to levelling, as one no
+# party can help with does, until the member tries it alone again
+# (_alone_again_minutes). A party already up keeps its own clock
+# (classask._ended). The wait is read from the hunt's clock (classquest.Hunts,
+# which notes when a hunt last stalled or was given up); a restart forgets it,
+# and the member hunts alone first again.
+def outlevel_waits(m, book, hunts, now) -> frozenset:
+    """The quest ids this member outlevels (classquest.outlevels_for_solo) and
+    has waited classquest.OVERLEVEL_HELP_WAIT_MINUTES for since its hunt of it
+    stalled: at most the quest of its one hunt."""
+    hunt = hunts.get(m.name) if hunts is not None else None
+    if hunt is None or book is None:
+        return frozenset()
+    quest = book.quests.get(int(hunt.quest))
+    if quest is None or not classquest.outlevels_for_solo(m, quest):
+        return frozenset()
+    if now - hunt.since < classquest.OVERLEVEL_HELP_WAIT_MINUTES * 60:
+        return frozenset()
+    return frozenset({quest.id})
+
+
+def _outlevel_yield(m, move, book, hunts, now) -> tuple:
+    """(key, line) for a quest the member outlevels and has waited for long
+    enough (outlevel_waits): how far over it is, how long it waited since its
+    hunt stalled, and when it tries alone again."""
+    over = int(m.level) - int(book.quests[int(move.quest)].min_level)
+    waited = int((now - hunts.get(m.name).since) // 60)
+    line = (
+        "class ask: %s stops asking for %s: it is %d levels over the quest and "
+        "has waited %d minute(s) for help; it levels for %d minute(s), then "
+        "tries alone again"
+        % (
+            m.name,
+            move.title,
+            over,
+            waited,
+            _alone_again_minutes(m, move, hunts, now),
+        )
+    )
+    return (m.name, move.quest, "outlevel", move.blocker), line
 
 
 def _streak_yield(m, move, left, count, yeses) -> tuple:
@@ -4329,7 +4448,10 @@ def crossing_cooling(name, recent) -> bool:
     crossing is in flight per member. A refusal the module calls retryable is
     asked again after classquest.CROSS_RETRY_MINUTES, any other row after
     classquest.CROSS_COOLDOWN_MINUTES (over the module's own 30 minute backstop,
-    so a row still crossing is always inside it)."""
+    so a row still crossing is always inside it). A walk to the berth that
+    gave up on the ground classquest.CROSS_GROUND_ATTEMPTS times to the same map,
+    inside classquest.CROSS_GROUND_HOLD_MINUTES of the last, holds it that long
+    after the last."""
     rows = [r for r in recent or () if r.name == name and r.action in CROSS_ACTIONS]
     if not rows:
         return False
@@ -4339,6 +4461,17 @@ def crossing_cooling(name, recent) -> bool:
         if newest.refusal and newest.retryable
         else classquest.CROSS_COOLDOWN_MINUTES
     )
+    if newest.refusal == classquest.CROSS_GROUND_GAVE_UP:
+        gave_up = [
+            r
+            for r in rows
+            if r.refusal == classquest.CROSS_GROUND_GAVE_UP
+            and r.dest == newest.dest
+            and int(r.age_minutes) - int(newest.age_minutes)
+            < classquest.CROSS_GROUND_HOLD_MINUTES
+        ]
+        if len(gave_up) >= classquest.CROSS_GROUND_ATTEMPTS:
+            minutes = classquest.CROSS_GROUND_HOLD_MINUTES
     return int(newest.age_minutes) < minutes
 
 
@@ -5126,8 +5259,13 @@ def pvp_step(m, aim, move, cap, kept=None):
     return None
 
 
-def _pvp_first(m, pvp, recent, cap, kept=None):
+def _pvp_first(m, pvp, recent, cap, kept=None, pet_wanted=False):
     """(step, doing, held): a member playing PvP for an upgrade.
+
+    A hunter with a pet walk due (`pet_wanted`, pet_due) queues for no
+    battleground and buys nothing with honor: its first pet comes first. It
+    is not held, so it goes about its other jobs until the pet step's next
+    pass. Inside a battleground or a queue that has not lapsed it stays held.
 
     Inside a battleground or waiting in its queue the member is HELD: it does
     nothing else this pass. A queue accepted past WAITING_MINUTES is asked
@@ -5143,6 +5281,8 @@ def _pvp_first(m, pvp, recent, cap, kept=None):
     if move.kind in (pvpgear.INSIDE, pvpgear.WAITING):
         return None, aim.line + ": " + move.said, True
     if move.kind not in (pvpgear.QUEUE, pvpgear.BUY) or m.in_combat:
+        return None, "", False
+    if pet_wanted:
         return None, "", False
     if _cooling(m, pvpgear.ACTION, recent):
         return None, "", False
@@ -5962,9 +6102,12 @@ def _spawn_of(command) -> int:
 
 
 def _cross_dest_of(command) -> int:
-    """The map id of a `cross-to-map map:<id>` command, else 0."""
-    found = re.match(r"cross-to-map map:(\d+)\s*$", str(command or ""))
-    return int(found.group(1)) if found else 0
+    """The map id of a `cross-to-map map:<id>` or `ride-to-stop map:<id> ...`
+    command, else 0."""
+    found = re.match(
+        r"(?:cross-to-map map:(\d+)\s*$|ride-to-stop map:(\d+) )", str(command or "")
+    )
+    return int(found.group(1) or found.group(2)) if found else 0
 
 
 def _trainer_skill_id(command) -> int | None:

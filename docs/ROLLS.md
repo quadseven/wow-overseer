@@ -11,8 +11,10 @@ Two things ship, and they have different costs:
 | Bridge and site | `wow-overseer` main (bridge.py, map_server.py, apiv2/, app/) | the `wow-overseer` and `wow-map` deployments | the `ghcr.io/quadseven/wow-overseer` image in the wow-dev kustomization (infra) |
 | Worldserver | mod-overseer, mod-dungeon-clear, core, playerbots, ollama-chat | the `worldserver` deployment (every online bot logs out) | the `ac-playerbots-worldserver` and `ac-playerbots-db-import` images in the same kustomization, plus the source pins |
 
-A bridge ship is cheap and can be batched often. A worldserver roll is expensive: every family and guild run
-inside an instance is lost, so it is rate limited and gated (section 2).
+A bridge ship is cheap and can be batched often. A worldserver roll logs every bot out and ends the family and
+guild runs inside instances. As of 2026-10-20 (operator ruling) neither a roll nor a bridge ship waits for
+families or guild runs to leave their instances, or for an hourly window: reboot as soon as the roll is ready,
+and families and guild runs restart their runs. What still blocks a roll is in section 2.
 
 Merging a PR here deploys nothing. Label a merged-but-not-deployed ticket "merged"; "shipped" means it is on
 the realm and its proof line was seen (section 3).
@@ -24,19 +26,33 @@ the realm and its proof line was seen (section 3).
 1. Confirm the batch is merged to wow-overseer main and nothing else is queued. Read section 2 first.
 2. Find the `build.yml` run for the exact merge commit of main (`gh run list -R quadseven/wow-overseer
    --workflow build.yml --branch main`, match `headSha`). If none exists after 5 minutes, dispatch it. Wait for
-   it to pass; rerun failed jobs up to twice.
-3. Read the digest from that run's log: the line `sha-<first 12 of the SHA>: digest: sha256:<64 hex>`. Do not
-   take a digest from anywhere else.
-4. In infra, branch from `origin/main` (a worktree, never the shared checkout) and edit the one stanza in
-   `production/oke/manifests/wow-dev/kustomization.yaml`:
+   it to pass; rerun failed jobs up to twice. The digest comes only from that run's log line
+   `sha-<first 12 of the SHA>: digest: sha256:<64 hex>`, never from anywhere else.
+3. In infra, branch from `origin/main` (a worktree, never the shared checkout) and run the ship helper with
+   the full 40-character merge SHA:
+
+       python3 .github/scripts/wow_bridge_ship.py --sha <merge sha>               # dry run
+       python3 .github/scripts/wow_bridge_ship.py --sha <merge sha> --write --body-out body.md
+
+   It finds that merge's successful `build.yml` run on main, reads the one digest its log published, rewrites
+   the one stanza in `production/oke/manifests/wow-dev/kustomization.yaml`, writes the Chief-format PR body
+   (the carried commits and their Refs lines) to `body.md`, and prints the PR title. The stanza it writes:
 
        # Published from wow-overseer <what shipped, e.g. #857 and #858>, merge <10 chars>, build run <run id>.
        - name: ghcr.io/quadseven/wow-overseer
          newName: ghcr.io/quadseven/wow-overseer
          digest: sha256:<new digest>
 
-5. Render it (`kubectl kustomize production/oke/manifests/wow-dev`), commit, open the infra PR in Chief format
-   (see the appendix), wait for checks, answer every bot thread, then squash merge.
+   It refuses, and writes nothing, when the merge has no successful `build.yml` run on main, when the log
+   names no digest for the merge or two different ones, when the stanza is missing, doubled or laid out
+   differently, or when the merge is not ahead of the deployed one (a rollback: revert the pin PR instead,
+   section 3). `changed=false` means that digest is already pinned and there is nothing to ship. Do not
+   hand-edit a digest around a refusal; fix its cause.
+4. The body carries a `Pre-ship review verdict: PENDING` line. Run the Pre-roll adversarial review (section 2)
+   on the batch and replace that line with its verdict before the PR merges.
+5. Render it (`kubectl kustomize production/oke/manifests/wow-dev`), commit, open the infra PR with the printed
+   title and `body.md` (Chief format, see the appendix), wait for checks, answer every bot thread, then squash
+   merge.
 6. Merging triggers `sync.k8s-manifests`, which applies the wow-dev directory. Wait for
    `kubectl -n wow-dev rollout status deploy/wow-overseer` and confirm the deployment image equals the new digest.
    `wow-map` runs the same image and rolls with it.
@@ -59,6 +75,11 @@ A roll is five steps that must land as ONE worldserver restart.
    nothing. Run the wow-dev tests, the promotion tests and `python3 .github/scripts/wow_promotion_drift.py`
    ("All four views agree"). Merge it. This merge starts the image build workflow
    (`build.azerothcore-playerbots.yml`).
+   This PR's `check.wow-patches` and that build both run the module patch coverage guard
+   (`production/docker/azerothcore-playerbots/tools/module_patch_coverage.py`): it fails fast when the pinned
+   mod-overseer carries a patch under its `patches/` that infra does not apply, and names the file. A fast
+   failure at that step means a missing patch port to infra's `patches/` tree, not a flake: port the patch, do
+   not rerun.
 3. **Read both digests from the build run's push lines**, each under its own `The push refers to repository
    [ghcr.io/quadseven/<image>]` line: `ac-playerbots-worldserver` and `ac-playerbots-db-import`. A digest read
    from the wrong repository line is the classic mistake.
@@ -71,7 +92,7 @@ A roll is five steps that must land as ONE worldserver restart.
    (`production/oke/manifests/wow-dev/overseer-pin.yaml`), `deployed_dev` in the drift entries and the banner
    test literal in `wow-dev/tests/test_dev_world_isolation.py` to the new SHAs. Pinning one image without the
    other is a binary asking for a table its schema step never created; the drift check fails on it. Run the
-   drift check again, open the PR in Chief format, then merge it ONLY inside the window in section 2.
+   drift check again, open the PR in Chief format, then merge it as soon as the merge bar holds (section 2).
 6. Watch `kubectl -n wow-dev rollout status deploy/worldserver` and confirm the running image equals the new
    worldserver digest. The db-import job runs the module SQL first.
 
@@ -84,36 +105,36 @@ prints the gates it sees and what it would do. Turning the roller on is an opera
 
 ## 2. Before any ship
 
-### Is a family or guild run inside a dungeon?
+### No window (operator ruling, 2026-10-20)
 
-Read the site API from inside the cluster (read-only). From a pod that has `python3` (for example
+A roll or a bridge ship goes out as soon as it is ready. It does not wait for families or guild runs to leave
+their instances, and there is no hourly limit. A restart ends the runs inside instances; families and guild runs
+restart them. Do not title a pin PR "HOLD for window".
+
+Optionally, take a before-roll metrics snapshot for the section 3 comparison. It blocks nothing. Read the site
+API from inside the cluster (read-only). From a pod that has `python3` (for example
 `kubectl -n wow-dev exec deploy/wow-map -- python3 -c ...`):
 
-- Families: `GET /api/family?family=Grug` and `...=Zug` on the map server (port 8080). Count members whose
-  `instance` is set. The hard rule is zero for BOTH families.
-- Guild runs: `GET /api/guildruns`, field `active`. Zero is preferred.
+- Families: `GET /api/family?family=Grug` and `...=Zug` on the map server (port 8080); members whose `instance`
+  is set are the runs the restart will end.
+- Guild runs: `GET /api/guildruns`, field `active`.
 - Cross-check in the database with a SELECT on `acore_characters.overseer_guild_run` (state `inside`) and
   `overseer_dungeon_run` (open runs), as `mysql-0` read-only. Never write.
 
 ### Rules for a worldserver roll
 
-- At most one worldserver roll per hour (measure from the previous roll's pin merge).
-- Never roll while a family member is inside an instance. A family stalled inside a dungeon for hours does not
-  block a roll (operator decision); confirm it is truly stalled (same instance, no kills; #743, #832) before
-  using that exception, and say so in the PR.
-- Prefer zero guild runs inside. Wait up to 60 minutes of open window for them to clear, then roll anyway so a
-  busy guild cannot block every roll. A restart loses a run inside it.
-- Batch changes. Do not roll for a single trivial fix if another is about to merge.
-- A bridge ship needs families out of instances and is best with zero guild runs, but it never restarts the
-  worldserver. Batch bridge ships too: after a restart the passes wait for the passes they depend on, so each
-  restart idles the realm for a cycle or more (the gates open at the latest after 30 minutes of uptime).
+- Batch what is already merged. When several changes are merged and waiting, carry them in one roll rather
+  than one roll each. Never hold a ready roll for a PR that has not merged yet; a later roll takes it.
+- Batch bridge ships the same way. A bridge ship never restarts the worldserver, but after a restart the passes
+  wait for the passes they depend on, so each restart idles the realm for a cycle or more (the gates open at
+  the latest after 30 minutes of uptime).
 
 ### What blocks a roll
 
-Any of: a family member inside an instance (unless stalled, above); a roll in the last 60 minutes; failing
-checks or an unanswered bot thread on the infra PRs; the drift check disagreeing; the prove step missing a
-symbol; a worldserver/db-import pair that does not come from one build; an open pre-roll review finding;
-the operator having said hold.
+Any of: failing checks or an unanswered bot thread on the infra PRs (`Grug - Chief` and `Grug - Elder` must
+conclude success on the head commit); the drift check disagreeing; the prove step missing a symbol; a
+worldserver/db-import pair that does not come from one build; an open pre-roll review finding; the previous
+roll not yet Ready, or under rollback (section 3); the operator having said hold.
 
 ### Pre-roll adversarial review (every worldserver roll and every bridge ship)
 
@@ -149,6 +170,21 @@ metric moved. Name both in the ticket before the roll. Typical proof sources:
 | Site and API | the site API from inside the cluster | the field or view returns the new shape |
 | Progression | `overseer_death`, `overseer_dungeon_run`, `overseer_guild_run`, level counts per guild | deaths down, runs and clears up over the window |
 
+Two read-only helpers in infra, under `production/oke/manifests/realm-log-archive/`, replace reading logs by
+hand:
+
+- `live_since.py <repo> <PR>` (repo is `mod-overseer` or `wow-overseer`; a commit SHA works in place of the PR)
+  answers whether a merge is live on wow-dev and since when. It reads the deploy history from infra's git log
+  (`origin/main`, so fetch first) and prints every window in which the deployed pin contained the merge. Exit 0
+  is live now, 1 is not live (or not merged), 2 is unknown; never read an unknown as "not live". `--time`
+  prints only the start of the current window, for use as SINCE.
+- `realm-logs.sh report <workload> <SINCE> <needle>...` is the windowed proof report: for each needle (the
+  proof line text) it gives the archive coverage, the counts before and inside the window, the first and last
+  match, a count per hour and samples. `<workload>` is `worldserver`, `wow-overseer`, `wow-map`, `authserver` or
+  `mysql`. For example `realm-logs.sh report worldserver "$(live_since.py mod-overseer <PR> --time)" '<proof
+  line>'`. It reads the node log archive, so it needs an operator kubeconfig; the agent identity below cannot
+  run it, so ask the operator for the report or fall back to `kubectl logs`.
+
 The read-only identity for agents is the `wow-agent-reader` ServiceAccount in wow-dev; mint an expiring token
 (`kubectl -n wow-dev create token wow-agent-reader --duration=24h`) instead of keeping a standing one. A
 metrics snapshot per guild (online, median level, count at 20/40/60, runs, clears, class-quest done and
@@ -167,8 +203,10 @@ blocked, ghosts, stuck, deaths in 24 hours, next dungeon) before and after a rol
 - Bridge: revert the infra pin PR (restores the previous `wow-overseer` digest) and let the sync apply it.
 - Worldserver: revert the pin PR (restores BOTH previous digests; they are a pair). Module SQL is forward-only,
   so before a roll that adds schema, confirm the previous binary tolerates the new tables.
-- Roll back on: more than 2 worldserver restarts in 30 minutes, an `ASSERTION FAILED` or segmentation fault in
-  the log, or online bots below half of normal for 10 minutes (the roller's policy).
+- Roll back on: more than 2 worldserver crash restarts of one rollout in 30 minutes (deliberate rolls do not
+  count), an `ASSERTION FAILED` or segmentation fault in the log, or online bots below half of normal for 10
+  minutes (the roller's policy).
+- When rolls come close together, each roll's proof window counts from its own Ready, not from the first roll.
 - After a rollback, hold further rolls until a finding explains the failure.
 
 ## 4. Rules that never break

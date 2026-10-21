@@ -348,10 +348,17 @@ class TheHordeNorthRidesItsZeppelin(unittest.TestCase):
 
     def test_grom_gol_is_never_walked_to_from_the_north(self):
         # At 43 the north's Arathi is worked and the Hinterlands not yet open
-        # enough; Stranglethorn has the most quests but lies past Duskwood.
+        # enough; Stranglethorn has the most quests but lies past Duskwood, so
+        # the member rides the zeppelin there instead of walking.
         done = done_in(HILLSBRAD, ARATHI, SILVERPINE, HINTERLANDS)
         got = self.north(43, done)
-        self.assertNotEqual(got.hub.key, "stranglethorn")
+        self.assertEqual(got.hub.key, "stranglethorn")
+        self.assertIsNone(got.master)
+        self.assertIsNone(got.cross_to)
+        self.assertEqual(got.ride_to[0], EASTERN_KINGDOMS)
+        self.assertEqual(got.transport, "the zeppelin from the Undercity to Grom'gol")
+        # With Stranglethorn worked too, the best hub is across the sea.
+        got = self.north(43, done | done_in(STRANGLETHORN))
         self.assertIsNone(got.master)
         self.assertEqual(got.cross_to, KALIMDOR)
         self.assertEqual(got.transport, "the zeppelin from the Undercity to Orgrimmar")
@@ -366,7 +373,7 @@ class TheHordeNorthRidesItsZeppelin(unittest.TestCase):
                 )
 
     def test_the_crossing_is_one_cross_to_map_row(self):
-        done = done_in(HILLSBRAD, ARATHI, SILVERPINE, HINTERLANDS)
+        done = done_in(HILLSBRAD, ARATHI, SILVERPINE, HINTERLANDS, STRANGLETHORN)
         zug = member(
             "Rotney",
             guild="Bonkers",
@@ -382,14 +389,29 @@ class TheHordeNorthRidesItsZeppelin(unittest.TestCase):
         self.assertEqual(steps[0].rows[0].source, "guildjobs:level-cross:Rotney")
         self.assertIn("the zeppelin from the Undercity to Orgrimmar", steps[0].said)
 
-    def test_only_stranglethorn_left_names_the_zeppelin_no_row_rides(self):
+    def test_a_horde_member_in_tirisfal_rides_the_zeppelin_to_gromgol(self):
         # Every quest but Stranglethorn's done: the north and Kalimdor are dry.
+        # The zeppelin never leaves map 0, so the row names the stop to reach
+        # (`ride-to-stop`): Grom'gol's flight master, on the member's own map.
         done = done_in(*(z for z in RANGES if z != STRANGLETHORN))
-        got = self.north(40, done)
-        self.assertEqual(got.hub.key, "stranglethorn")
-        self.assertIsNone(got.master)
-        self.assertIn("past the other side's ground", got.refused)
-        self.assertIn("the zeppelin from the Undercity to Grom'gol", got.refused)
+        for zone in (TIRISFAL, HILLSBRAD):
+            got = choose(UNDEAD, 40, 0, zone, done)
+            self.assertEqual(got.hub.key, "stranglethorn")
+            self.assertEqual(got.refused, "")
+            self.assertIsNone(got.master)
+            self.assertIsNone(got.cross_to)
+            gromgol = MASTERS["stranglethorn"]
+            self.assertEqual(got.ride_to, (EASTERN_KINGDOMS, gromgol.x, gromgol.y))
+            self.assertEqual(
+                got.transport, "the zeppelin from the Undercity to Grom'gol"
+            )
+
+    def test_a_cross_to_map_ride_never_offers_the_same_map_zeppelin(self):
+        rides = guildlevel.rides_from(levelroute.HORDE, 0, "", TIRISFAL)
+        self.assertNotIn(
+            "the zeppelin from the Undercity to Grom'gol", [r.name for r, _, _ in rides]
+        )
+        self.assertTrue(all(far_map == KALIMDOR for _, far_map, _ in rides))
 
     def test_landed_at_grom_gol_it_works_stranglethorn(self):
         got = choose(UNDEAD, 40, 0, STRANGLETHORN, done_in(STRANGLETHORN, below=36))

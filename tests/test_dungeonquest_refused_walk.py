@@ -56,11 +56,12 @@ class _Pass:
 FREE = {"Zug": 30, "Oz": 30}
 
 
-def run_pass(granted):
+def run_pass(granted, sellable=None):
     fam = {"leader": {"name": "Zug"}, "names": ["Zug", "Oz"]}
     rows = [{"status": campaignqueue.QUEUED, "keyword": "ragefire"}]
     with (
         mock.patch.object(bridge, "_fetch_free_slots", lambda names: FREE),
+        mock.patch.dict(bridge._VENDOR_SELLABLE, sellable or {}, clear=True),
         mock.patch.object(bridge, "_dungeonquest_facts", lambda *a: None),
         mock.patch.object(bridge.dungeonquests, "step", lambda facts: WALK),
         mock.patch.object(bridge.log, "info") as info,
@@ -100,6 +101,61 @@ class WithheldForBagRoomTest(unittest.TestCase):
         self.assertFalse(held)
         self.assertFalse([s for s in said if "walk the family" in s], said)
         self.assertTrue([s for s in said if "waits for bag room" in s], said)
+
+    def test_the_walk_waits_while_a_vendor_trip_can_lift_the_floor(self):
+        held, said = run_pass(True, {"Zug": 0, "Oz": 4})
+        self.assertFalse(held)
+        self.assertTrue([s for s in said if "waits for bag room" in s], said)
+
+
+class NoVendorTripCanMakeTheRoomTest(unittest.TestCase):
+    """#1243: the hold waits on a vendor trip only when one can make room.
+
+    On the dev realm 2026-10-20 Zug's family (Oz, Uzza, Zork, Zrog, Zug) read
+    "waits for bag room; the vendor trip keeps the travel column" for 70
+    minutes, four minutes after #1204's finding cleared. A member at the floor
+    whose stacks no vendor will buy is not lifted by any sale, so no trip the
+    vendor pass takes for bag room ever ends that wait: the walk to the quest
+    giver is the family's way forward, and turning a quest in frees its items.
+    """
+
+    def setUp(self):
+        global FREE
+        self._saved = dict(FREE)
+        FREE["Oz"] = 0
+        self.addCleanup(lambda: (FREE.clear(), FREE.update(self._saved)))
+
+    def test_the_walk_is_taken_when_no_sale_lifts_the_floor(self):
+        held, said = run_pass(True, {"Zug": 5, "Oz": 0})
+        self.assertTrue(held)
+        self.assertFalse([s for s in said if "waits for bag room" in s], said)
+        self.assertTrue([s for s in said if "walk the family" in s], said)
+
+
+class TheVendorPassReadingTest(unittest.TestCase):
+    """What the vendor pass records is what the hold asks of."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(bridge._VENDOR_SELLABLE, {}, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_floor_the_vendor_pass_has_not_read_keeps_the_hold(self):
+        self.assertTrue(
+            bridge._vendor_trip_makes_room(["Zug", "Oz"], {"Zug": 30, "Oz": 0})
+        )
+
+    def test_a_recorded_floor_no_sale_lifts_lets_the_walk_go(self):
+        bridge._note_vendor_sellable(["Zug", "Oz"], {"Zug": 5, "Oz": 0})
+        self.assertFalse(
+            bridge._vendor_trip_makes_room(["Zug", "Oz"], {"Zug": 30, "Oz": 0})
+        )
+
+    def test_a_recorded_floor_a_sale_lifts_keeps_the_hold(self):
+        bridge._note_vendor_sellable(["Zug", "Oz"], {"Zug": 0, "Oz": 4})
+        self.assertTrue(
+            bridge._vendor_trip_makes_room(["Zug", "Oz"], {"Zug": 30, "Oz": 0})
+        )
 
 
 if __name__ == "__main__":

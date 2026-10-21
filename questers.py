@@ -36,9 +36,14 @@ WHAT A QUESTER DOES NEXT (`next_move`), one move a pass, in this order:
      the module's `hunt-spawn` row, as a class hunt does (`step_for`);
   5. with nothing left in reach, go to the next zone (`next_zone`): the zone
      whose band (levelroute.bands, the catalogue's own levels) is lowest of the
-     zones holding a quest in reach for it, the most quests first on a tie.
+     zones holding a quest in reach for it whose giver it can go to (a quest
+     only an item or a gameobject starts takes no one anywhere), the most
+     quests first on a tie.
      The move is the take of that zone's nearest quest; a zone on the other
-     continent is a `cross-to-map` row (classquest.CROSSING_VERB) first.
+     continent is a `cross-to-map` row (classquest.CROSSING_VERB) first. While
+     its last crossing to a continent failed and the crossing clock holds it
+     (`failed_crossings`), a zone only across it is passed over for the best
+     zone it can reach without crossing, when there is one.
 
 The party works together through questshare (the bridge shares among the five
 as it does for the family), and every take, hand-in and drop is the module's
@@ -66,8 +71,15 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
     FAILS_BEFORE_BROKEN times in a day, with its own words appended.
 
 A broken quest the quester holds is dropped (the move in 1 above); one it
-never held (a giver that is not there) is only recorded. The bridge writes
+never held (a giver that is not there) is only recorded, and so is a complete
+one: the module refuses to abandon a complete quest ("it is complete; hand it
+in"), so it is handed in when it can be and otherwise left in the log (#1085). The bridge writes
 each into the quest ledger (questledger.py, #923) with its reason.
+
+A HAND-IN THE WORLD KEEPS REFUSING IS HELD (`turn_in_held`). A complete quest
+whose hand-in was refused FAILS_BEFORE_BROKEN times is not handed in again
+until TURN_IN_RETRY_MINUTES have passed since the last refusal, the hold
+doubling with each refusal past those; then it is tried once more.
 
 PURE MODULE: rows in, moves and verdicts out. No MySQL; the clock is passed in.
 """
@@ -156,6 +168,10 @@ GONE = "no such spawn in the world"
 COMPLETE_HAND_IN = "it is complete; hand it in"
 # A take or a hand-in the world refused this many times in a day is broken.
 FAILS_BEFORE_BROKEN = 3
+# A hand-in the world refused FAILS_BEFORE_BROKEN times is held this long after
+# its last refusal before it is tried once more, the hold doubling with each
+# refusal past those (`turn_in_held`).
+TURN_IN_RETRY_MINUTES = 6 * 60
 # The quest ledger's reason column.
 REASON_WIDTH = 255
 
@@ -535,7 +551,8 @@ def gone_spawns(name, tried) -> frozenset:
 def left_spawns(name, tried) -> frozenset:
     """The spawn ids this quester leaves for now: the gone ones, and those a
     walk was refused for a lasting reason (classquest.SPAWN_REFUSALS: a drop on
-    the way, the other side's ground) inside classquest.SPAWN_REFUSED_MINUTES,
+    the way, the other side's ground, a road through ground far above its
+    level) inside classquest.SPAWN_REFUSED_MINUTES,
     or for a short one (stopped getting nearer, died on the way) inside
     classquest.SPAWN_SHORT_MINUTES. Only the gone ones say the quest is broken:
     the rest say the way there is, for now."""
@@ -552,6 +569,39 @@ def left_spawns(name, tried) -> frozenset:
         if a.age_minutes < hold:
             out.add(a.spawn)
     return frozenset(out)
+
+
+# THE FAR WALK WALLS A QUESTER WAITS OUT (#1295). The module refuses a far walk
+# while the realm has as many under way as it allows, once the bot has started
+# as many this hour as one may, and while another verb holds the character
+# (classquest.REALM_FULL_REASON, BOT_BUDGET_REASON, HELD_REASON). None of these
+# says the giver or the way to it is the trouble, and each lifts on its own
+# clock, so the quester waits the class quest's time for it
+# (classquest.BACKOFF_MINUTES) instead of asking the same walk every pass:
+# from 2026-10-18 to 2026-10-20 the twenty questers' walks were refused 2,276
+# times for the budget and 2,453 times as held, about every two minutes.
+WALK_WALLS = (
+    classquest.REALM_FULL_REASON,
+    classquest.BOT_BUDGET_REASON,
+    classquest.HELD_REASON,
+)
+
+
+def walk_wall(name, tried) -> tuple:
+    """(the wall's words, minutes still to wait) when this quester's newest row
+    was refused for a far walk wall (WALK_WALLS) younger than its
+    classquest.BACKOFF_MINUTES; ("", 0) otherwise. A row of the same minute
+    that was not refused for a wall lifts it."""
+    mine = [a for a in tried or () if a.name == name]
+    if not mine:
+        return "", 0
+    age = min(a.age_minutes for a in mine)
+    newest = [a for a in mine if a.age_minutes == age]
+    if not all(a.failed and a.reason in WALK_WALLS for a in newest):
+        return "", 0
+    reason = newest[0].reason
+    wait = classquest.BACKOFF_MINUTES[reason] - age
+    return (reason, wait) if wait > 0 else ("", 0)
 
 
 def refusals(name, tried) -> dict:
@@ -578,6 +628,38 @@ def _module_complete(name, tried) -> frozenset:
         qid
         for (verb, qid), (_count, words) in refusals(name, tried).items()
         if verb == "abandon" and COMPLETE_HAND_IN in (words or "")
+    )
+
+
+def turn_in_held(name, tried) -> frozenset:
+    """The quest ids whose hand-in this quester leaves for now: the world
+    refused it FAILS_BEFORE_BROKEN times or more, and its last refusal is
+    newer than TURN_IN_RETRY_MINUTES, doubled for each refusal past those.
+
+    A REFUSED HAND-IN WAS ASKED EVERY PASS FOREVER (2026-10-20). A complete
+    quest whose hand-in was refused three times was found broken and its
+    abandon was refused as complete (#1085); the module-complete quest then
+    came back as the nearest hand-in every pass, past the broken skip. Kellan
+    walked to Farmer Saldean and handed in The Killing Fields 216 times in
+    42 hours, Pindle Return to Bellowfiz 511 times, each refused for the same
+    lasting reason ("no taker of that quest in reach"). Asked again only after
+    the hold, the quester gets on with the rest of its zone meanwhile."""
+    count: dict = {}
+    newest: dict = {}
+    for a in tried or ():
+        if a.name != name or not a.failed:
+            continue
+        found = _CHAIN_ROW.match(a.command)
+        if not found or found.group(1) != "turnin":
+            continue
+        qid = int(found.group(2))
+        count[qid] = count.get(qid, 0) + 1
+        newest[qid] = min(newest.get(qid, a.age_minutes), a.age_minutes)
+    return frozenset(
+        qid
+        for qid, times in count.items()
+        if times >= FAILS_BEFORE_BROKEN
+        and newest[qid] < TURN_IN_RETRY_MINUTES * 2 ** (times - FAILS_BEFORE_BROKEN)
     )
 
 
@@ -805,14 +887,76 @@ def _move(kind, member, quest, spot, said, to_map=-1) -> classquest.Move:
     )
 
 
-def next_zone(cat: Catalogue, member, broken=frozenset()):
+def _giver_to_go_to(
+    cat: Catalogue, member, quest_id, gone=frozenset(), unsailed=frozenset()
+) -> bool:
+    """Whether a creature that gives the quest stands where the quester can go
+    and take it: on the quester's own map or on a classic continent it can
+    cross to and has not just failed to cross to (`unsailed`), and not one it
+    leaves for now (`left_spawns`). A quest only an item or a gameobject starts
+    has none: no verb takes it, so it is no reason to go to its zone."""
+    here = int(member.map_id) if member.placed else None
+    return any(
+        s.guid not in gone
+        and (
+            int(s.map_id) == here
+            or (
+                int(s.map_id) in classquest.CONTINENTS and int(s.map_id) not in unsailed
+            )
+        )
+        for s in cat.quest(quest_id).starters
+    )
+
+
+def failed_crossings(name, crossings) -> frozenset:
+    """The maps the quester is not sent across to for now: each map the module
+    refused for good (guildjobs.class_walls, classquest.CROSS_WALL_MINUTES),
+    and the map of its newest crossing row when the module refused that row
+    and the crossing clock still holds it (guildjobs.crossing_cooling,
+    classquest.CROSS_RETRY_MINUTES or CROSS_COOLDOWN_MINUTES). A crossing
+    still under way refused nothing and is not one of these.
+
+    A FAILED CROSSING CHOSE THE SAME ZONE AGAIN (2026-10-19). Alliance
+    questers of 15 and 16 in Dun Morogh had one quest left in reach in
+    Durotar, and its band was the lowest, so `next_zone` chose Durotar every
+    pass. The module's walk to the berth gave up on the ground, the crossing
+    clock held the quester where it stood ("waits on its last crossing"), and
+    when the clock lapsed it chose Durotar and failed again, for hours. While
+    the crossing is held, the quester goes on to the best zone it can reach
+    without it, and only with none is it held as before."""
+    out = set(guildjobs.class_walls(name, crossings))
+    rows = [
+        r
+        for r in crossings or ()
+        if r.name == name and r.action in guildjobs.CROSS_ACTIONS
+    ]
+    if rows and guildjobs.crossing_cooling(name, crossings):
+        newest = min(rows, key=lambda r: int(r.age_minutes))
+        if newest.refusal and (newest.dest or classquest.is_cross_row(newest.command)):
+            out.add(int(newest.dest))
+    return frozenset(out)
+
+
+def next_zone(
+    cat: Catalogue, member, broken=frozenset(), gone=frozenset(), unsailed=frozenset()
+):
     """(zone, its open quest ids) of the zone the quester goes to next, or
     (0, []) when no zone holds a quest in reach for it: the lowest band of
-    its side among those zones, the most quests first on a tie."""
+    its side among those zones, the most quests first on a tie. A quest counts
+    only when a giver of it is one the quester can go to (`_giver_to_go_to`):
+    a zone whose open quests an item or a gameobject starts, or whose givers
+    are all gone or left, is passed over, not chosen and then found to have no
+    way there, pass after pass. A giver on a continent in `unsailed` (the maps
+    its last crossings failed to reach for now, `failed_crossings`) counts only
+    when it stands on the quester's own map."""
     bands = cat.bands.get(side_of(member.race), {})
     best = None
     for zone in sorted({f.zone for f in cat.facts.values()} - {member.zone}):
-        opens = in_reach(cat, member, zone, broken)
+        opens = [
+            qid
+            for qid in in_reach(cat, member, zone, broken)
+            if _giver_to_go_to(cat, member, qid, gone, unsailed)
+        ]
         if not opens:
             continue
         band = bands.get(zone, (0, 0, 0))
@@ -822,11 +966,16 @@ def next_zone(cat: Catalogue, member, broken=frozenset()):
     return (best[1], best[2]) if best else (0, [])
 
 
-def _travel(cat: Catalogue, member, broken, gone):
+def _travel(cat: Catalogue, member, broken, gone, unsailed=frozenset()):
     """The move that takes the quester to the next zone: the take of that
     zone's nearest quest on its map, or a crossing to the continent the zone's
-    quests are on; (None, why) when there is no zone to go to."""
-    zone, opens = next_zone(cat, member, broken)
+    quests are on; (None, why) when there is no zone to go to. A zone across
+    a crossing that just failed (`unsailed`) is passed over while another zone
+    is left; with none, the zone is chosen as before and its crossing waits
+    on the crossing clock (`crossing_held`)."""
+    zone, opens = next_zone(cat, member, broken, gone, unsailed)
+    if not zone and unsailed:
+        zone, opens = next_zone(cat, member, broken, gone)
     if not zone:
         return None, "%s has no quest in reach in any zone" % member.name
     name = levelroute.zone_name(zone)
@@ -848,7 +997,7 @@ def _travel(cat: Catalogue, member, broken, gone):
             int(s.map_id)
             for qid in opens
             for s in cat.quest(qid).starters
-            if int(s.map_id) in classquest.CONTINENTS
+            if int(s.map_id) in classquest.CONTINENTS and s.guid not in gone
         }
     )
     if maps and member.placed and int(member.map_id) not in maps:
@@ -865,23 +1014,41 @@ def _travel(cat: Catalogue, member, broken, gone):
     )
 
 
-def next_move(cat: Catalogue, member, broken=frozenset(), found=(), tried=()):
+def next_move(
+    cat: Catalogue, member, broken=frozenset(), found=(), tried=(), crossings=()
+):
     """(move or None, why there is none, quests found broken that it never
     held): the quester's next move toward every quest in reach.
 
     `broken` is the quest ids already found broken for this quester, `found`
-    this pass's Broken rows for the quests it holds (`failures`)."""
+    this pass's Broken rows for the quests it holds (`failures`), `crossings`
+    the realm's recent crossing rows (`failed_crossings`)."""
     left = left_spawns(member.name, tried)
     # Quests the module told this quester are complete: due a turn-in, never
     # a drop, even when their log row still says otherwise (#1085).
     complete = _module_complete(member.name, tried)
+    # The quests its log holds complete. The module refuses to abandon any of
+    # them ("it is complete; hand it in"), so none is ever dropped, whatever
+    # broke it: a stall the ledger kept from before #1085, a turn-in NPC that
+    # is not there, a hand-in the world keeps refusing (#1085).
+    logged_complete = {
+        qid
+        for qid, status in member.quest_log.items()
+        if int(status) == STATUS_COMPLETE
+    }
     # 1. A broken quest it holds is dropped.
-    move = _drop(cat, member, broken, found, complete)
+    move = _drop(cat, member, broken, found, complete | logged_complete)
     if move is not None:
         return move, "", []
     skip = set(broken) | {b.quest for b in found}
-    # 2. A complete quest, the nearest turn-in NPC first.
-    move = _hand_in(cat, member, skip, left, complete)
+    # 2. A complete quest, the nearest turn-in NPC first. One only the ledger
+    # holds broken is still handed in; one whose turn-in NPC this pass found
+    # missing is left, and so is one whose hand-in the world keeps refusing,
+    # until its hold is over (`turn_in_held`), the module-complete ones too.
+    hand_skip = turn_in_held(member.name, tried) | {
+        b.quest for b in found if b.reason == ENDER_MISSING
+    }
+    move = _hand_in(cat, member, hand_skip, left, complete)
     if move is not None:
         return move, "", []
     # 3. A quest in reach in its zone, the nearest giver first, while the log
@@ -907,7 +1074,8 @@ def next_move(cat: Catalogue, member, broken=frozenset(), found=(), tried=()):
             never_held,
         )
     # 5. Nothing left in reach here: the next zone.
-    move, why = _travel(cat, member, skip, left)
+    unsailed = failed_crossings(member.name, crossings)
+    move, why = _travel(cat, member, skip, left, unsailed)
     return move, why, never_held
 
 
@@ -919,7 +1087,8 @@ def _by_yards(option):
 
 def _drop(cat: Catalogue, member, broken, found, complete=frozenset()):
     """The drop of the first broken quest the quester holds, or None. A quest
-    the module called complete is never dropped (#1085)."""
+    in `complete` (the module called it complete, or the log holds it
+    complete) is never dropped: the module refuses that abandon (#1085)."""
     held_broken = [b for b in found if b.held and b.quest not in complete] + [
         Broken(member.name, q, cat.quest(q).title if cat.quest(q) else "", "", True)
         for q in sorted(member.quest_log)
@@ -950,9 +1119,9 @@ def _held(cat: Catalogue, member, status, skip):
 def _hand_in(cat: Catalogue, member, skip, left, complete=frozenset()):
     """The hand-in of the complete quest whose turn-in NPC is nearest, or
     None. A quest the module called complete is handed in even when its log
-    row still says otherwise (#1085)."""
+    row still says otherwise (#1085); `skip` leaves it as it leaves any other."""
     due = {qid for qid, _quest in _held(cat, member, STATUS_COMPLETE, skip)}
-    due |= {qid for qid in complete if qid in member.quest_log}
+    due |= {qid for qid in complete if qid in member.quest_log and qid not in skip}
     ready = []
     for qid in due:
         quest = cat.quest(qid)
@@ -1139,7 +1308,9 @@ def plan(
     `crossings` is the realm's recent crossing rows (guildjobs.Recent of
     guildjobs.CROSS_ACTIONS): a crossing is held while the member's last one is
     young (guildjobs.crossing_cooling) or the module refused that map for good
-    (guildjobs.class_walls), as the class quest's and the level step's are."""
+    (guildjobs.class_walls), as the class quest's and the level step's are.
+    A move that walks waits while the quester's newest row was refused for a
+    far walk wall (`walk_wall`)."""
     member = settled(member, tried)
     found = failures(cat, member, clock, now, tried, last_quest)
     if not member.online:
@@ -1152,11 +1323,25 @@ def plan(
         return Plan(
             member.name, None, tuple(found), "%s has no fresh position" % member.name
         )
-    move, why, never_held = next_move(cat, member, broken, found, tried)
+    move, why, never_held = next_move(cat, member, broken, found, tried, crossings)
     if move is not None and move.kind == classquest.CROSS:
         held = crossing_held(member.name, move, crossings)
         if held:
             move, why = None, held
+    if move is not None and move.spot is not None:
+        # A move that walks waits out a far walk wall; a drop does not walk.
+        wall, wait = walk_wall(member.name, tried)
+        if wall:
+            move, why = (
+                None,
+                "%s waits %d more minute%s to walk: %s"
+                % (
+                    member.name,
+                    wait,
+                    "" if wait == 1 else "s",
+                    wall,
+                ),
+            )
     return Plan(
         member.name, move, tuple(found) + tuple(never_held), move.said if move else why
     )

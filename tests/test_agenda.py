@@ -118,6 +118,71 @@ class TheOrdinaryCase(unittest.TestCase):
         self.assertNotIn("Ugga", out["roster"])
 
 
+def sitting(in_name="Pogg", out_name="Ugga"):
+    return [{"family": "Og", "out_name": out_name, "in_name": in_name, "seat": "dps"}]
+
+
+def on_runs(**sit):
+    """Og's family on a dungeon job, Ugga on craft, and the stand-in rows."""
+    rows = roster(
+        {n: {"job": "dungeon:scarlet-cathedral"} for n in FAMILY if n != "Ugga"}
+    )
+    rows = [dict(r, job="craft") if r["name"] == "Ugga" else r for r in rows]
+    return agenda.build_agenda(
+        rows,
+        [],
+        [],
+        [],
+        [],
+        [{"kind": "quest_accept", "last_seen": NOW - timedelta(minutes=1)}],
+        {},
+        now=NOW,
+        **sit,
+    )
+
+
+class ASitOutIsNotASplit(unittest.TestCase):
+    """The operator, 2026-10-20: "The family is split: 4 on Scarlet Monastery
+    (the Cathedral) runs, 1 on craft" read like a fault, for days. Og was sat
+    out of his family's runs to craft on purpose (standin.py)."""
+
+    def test_a_member_sitting_out_to_craft_is_said_as_such(self):
+        out = on_runs(standin_rows=sitting())
+        self.assertNotEqual(agenda.SPLIT, out["activity"])
+        self.assertIsNone(out["job_split"])
+        self.assertIn(
+            "Ugga sits out the runs to craft; Pogg takes the dps seat.", out["detail"]
+        )
+        self.assertEqual(
+            [{"name": "Ugga", "guest": "Pogg", "seat": "dps"}], out["sitting_out"]
+        )
+
+    def test_with_no_guest_the_family_runs_short_handed(self):
+        out = on_runs(standin_rows=sitting(in_name=""))
+        self.assertIn(
+            "Ugga sits out the runs to craft; nobody takes the seat, so the "
+            "family runs 4-handed.",
+            out["detail"],
+        )
+
+    def test_without_a_row_it_is_still_a_split(self):
+        out = on_runs()
+        self.assertEqual(agenda.SPLIT, out["activity"])
+        self.assertEqual([], out["sitting_out"])
+
+    def test_a_member_back_on_the_family_job_sits_nobody_out(self):
+        rows = roster({n: {"job": "dungeon:scarlet-cathedral"} for n in FAMILY})
+        out = agenda.build_agenda(
+            rows, [], [], [], [], [], {}, now=NOW, standin_rows=sitting()
+        )
+        self.assertEqual([], out["sitting_out"])
+
+    def test_the_leader_is_never_counted_as_sitting_out(self):
+        out = on_runs(standin_rows=sitting(out_name="Og"))
+        self.assertEqual([], out["sitting_out"])
+        self.assertEqual(agenda.SPLIT, out["activity"])
+
+
 class ASplitPartyIsNeverAveraged(unittest.TestCase):
     """The failure the operator keeps catching by eye, and the one rule this page must
     not break: four against one is reported as four against one."""
@@ -467,6 +532,60 @@ class TheStallSentence(unittest.TestCase):
 
     def test_a_busy_family_has_none(self):
         self.assertEqual(build()["stall_line"], "")
+
+
+def stalled_with(leader_now):
+    """Og's family still for 22 minutes, with the leader's reading handed in."""
+    return agenda.build_agenda(
+        roster(),
+        [],
+        [],
+        [],
+        [],
+        [{"kind": "quest_accept", "last_seen": NOW - timedelta(minutes=22)}],
+        {},
+        now=NOW,
+        leader_now=leader_now,
+    )
+
+
+class AStalledFamilyNamesItsBlocker(unittest.TestCase):
+    """The operator, 2026-10-20: the Now page said Grug's family was STALLED
+    ("no quest, level or gear change for 22 minutes") while its realm report
+    said "No current blocker recorded". A stall names what holds it."""
+
+    def test_the_line_ends_with_the_leaders_hold(self):
+        out = stalled_with(
+            {"doing": "Holding the next dungeon run back", "waiting": "bag room"}
+        )
+        self.assertTrue(out["stalled"])
+        self.assertEqual(
+            out["stall_line"],
+            "STALLED: no quest, level or gear change for 22 minutes. "
+            "Og: Holding the next dungeon run back, waiting for bag room.",
+        )
+        self.assertEqual(
+            out["stall_blocker"],
+            "Og: Holding the next dungeon run back, waiting for bag room.",
+        )
+
+    def test_an_idle_leader_is_said_plainly_and_never_blank(self):
+        out = stalled_with({"doing": "Idle", "waiting": "no errand and no hold found"})
+        self.assertIn("Nothing the bridge recorded says why", out["stall_blocker"])
+        self.assertIn("Og has no errand and no hold", out["stall_line"])
+
+    def test_a_reading_that_failed_is_said_too(self):
+        out = stalled_with(None)
+        self.assertIn("could not be taken", out["stall_blocker"])
+
+    def test_a_doing_with_no_wait_says_none_is_recorded(self):
+        out = stalled_with({"doing": "Questing", "waiting": ""})
+        self.assertEqual(
+            out["stall_blocker"], "Og: Questing, with no reason to wait recorded."
+        )
+
+    def test_a_busy_family_names_no_blocker(self):
+        self.assertEqual(build()["stall_blocker"], "")
 
 
 class TheRunProgressColumnIsNotAProgressSignal(unittest.TestCase):

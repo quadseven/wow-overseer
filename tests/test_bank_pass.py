@@ -7,19 +7,25 @@ every decision about what crosses the counter is bank.py's, and the errand
 that puts a banker within reach is written BEFORE any row that needs one.
 """
 
+import asyncio
 import pathlib
 import re
+import sys
+import types
 import unittest
+from unittest import mock
+import modsource
 
-import bank
-import towntrip
+sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+
+import bank  # noqa: E402
+import bankbags  # noqa: E402
+import towntrip  # noqa: E402
 
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = PACKAGE / "bridge.py"
 DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
-MOD_OVERSEER = (
-    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
-)
+MOD_OVERSEER = modsource.MODULE
 
 
 def _source() -> str:
@@ -382,9 +388,8 @@ class ABankRowIsAnsweredWhereTheCharacterStandsTests(unittest.TestCase):
     """
 
     def setUp(self):
-        if not MOD_OVERSEER.exists():
-            self.skipTest("mod-overseer submodule not checked out")
-        cpp = MOD_OVERSEER.read_text(encoding="utf-8")
+        modsource.require()
+        cpp = modsource.read(MOD_OVERSEER, encoding="utf-8")
         self.cpp = cpp
         start = cpp.index("static char const* DoBank(")
         self.bank = cpp[start : cpp.index("static char const*", start + 10)]
@@ -575,6 +580,124 @@ class TheModuleShips(unittest.TestCase):
 
     def test_the_bridge_imports_it(self):
         self.assertIn("\nimport bank\n", _source())
+
+
+def _import_bridge():
+    stub = types.ModuleType("discord")
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    stub.Client = Client
+    with mock.patch.dict(sys.modules, {"discord": stub}):
+        sys.modules.pop("bridge", None)
+        import bridge
+    return bridge
+
+
+bridge = _import_bridge()
+
+
+class ABankBagStepTakesTheFamilyToABanker(unittest.TestCase):
+    """A buy or place-bag step walks the family to a banker (#625).
+
+    A member that could afford a slot logged "it waits for a banker" every
+    pass and was never walked to one. Only bank.plan's item moves aimed the `banker` errand, and the bag
+    step was asked only by the quick look, which never claims the column.
+    These drive the real `_bank_once` and `_settle_bank_errand` with every
+    read stubbed: no item moves, and Og holds enough for slot 1.
+    """
+
+    NAMES = ["Grug", "Og", "Ugga"]
+
+    def drive(self, at_banker, outstanding=0, seen=()):
+        this = bridge.Bridge.__new__(bridge.Bridge)
+        steps, aims, released, inserted = [], [], [], []
+
+        async def mid_run(names):
+            return False
+
+        async def family_progress(names, leader):
+            return types.SimpleNamespace(readable=True, split=False, split_seconds=0.0)
+
+        async def exit_route(*args):
+            return False
+
+        async def claim(claimant, character, aim, **kwargs):
+            aims.append((character, aim))
+            return True
+
+        settle = this._settle_bank_errand
+
+        async def recording_settle(*args, **kwargs):
+            steps.append(await settle(*args, **kwargs))
+            return steps[-1]
+
+        this._mid_run = mid_run
+        this._bank_family_progress = family_progress
+        this._bank_exit_route = exit_route
+        this._claim_town_slot = claim
+        this._cohort_town_slot = lambda cohort=None: None
+        this._settle_bank_errand = recording_settle
+        quiet = types.SimpleNamespace(
+            info=lambda *a, **k: None,
+            warning=lambda *a, **k: None,
+            debug=lambda *a, **k: None,
+        )
+        bag_facts = [
+            bankbags.Facts(name="Grug", money=0, worn=(6, 6, 6, 6)),
+            bankbags.Facts(name="Og", money=5000, worn=(6, 6, 6, 6)),
+            bankbags.Facts(name="Ugga", money=0, bought=1, worn=(6, 6, 6, 6)),
+        ]
+        with mock.patch.multiple(
+            bridge,
+            log=quiet,
+            _pass_completed=lambda name: True,
+            _family_of=lambda cohort=None: (list(self.NAMES), "Grug"),
+            _plan_bank=lambda names: bank.Plan(),
+            _log_changed=lambda *a, **k: None,
+            _recent_bank_keys=lambda minutes: set(seen),
+            _fetch_positions=lambda names: {
+                n: {"map_id": 1, "pos_x": 0.0, "pos_y": 0.0} for n in names
+            },
+            _fetch_bank_bag_facts=lambda names: list(bag_facts),
+            _fetch_town=lambda name: types.SimpleNamespace(banker=at_banker),
+            _outstanding_bank_moves=lambda names: outstanding,
+            _current_travel_npc=lambda name: "banker" if at_banker else "",
+            _nearest_banker_yards=lambda name: 80.0,
+            _release_trade_errand=lambda name, aim: (
+                released.append((name, aim)) or True
+            ),
+            _insert_bank=lambda move, command: (
+                inserted.append((move.character, command)) or 1
+            ),
+        ):
+            asyncio.run(this._bank_once())
+        return steps, aims, released, inserted
+
+    def test_a_bank_bag_step_alone_aims_the_banker_errand(self):
+        steps, aims, released, inserted = self.drive(at_banker=False)
+        self.assertEqual(steps, [bank.BANK_ERRAND_AIM])
+        self.assertEqual(aims, [("Grug", "banker")], "the leader walks")
+        self.assertEqual((released, inserted), ([], []), "no row before the walk")
+
+    def test_bank_bag_step_row_is_written_at_the_counter_in_the_same_pass(self):
+        steps, aims, released, inserted = self.drive(at_banker=True)
+        self.assertEqual(steps, [bank.BANK_ERRAND_HOLD])
+        self.assertEqual(inserted, [("Og", "buy slot")])
+        self.assertEqual((aims, released), ([], []))
+
+    def test_the_aim_holds_while_the_row_is_unanswered_and_is_then_handed_back(self):
+        asked = {("Og", "buy slot")}
+        steps, _aims, released, inserted = self.drive(
+            at_banker=True, outstanding=1, seen=asked
+        )
+        self.assertEqual((steps, released, inserted), ([bank.BANK_ERRAND_HOLD], [], []))
+        steps, _aims, released, inserted = self.drive(at_banker=True, seen=asked)
+        self.assertEqual(steps, [bank.BANK_ERRAND_RELEASE])
+        self.assertEqual(released, [("Grug", "banker")])
+        self.assertEqual(inserted, [], "an answered step is not asked twice")
 
 
 if __name__ == "__main__":

@@ -428,21 +428,22 @@ def family_town_run_needed(
     return False
 
 
-# THE ROOM A VENDOR TRIP MAKES IS THE FAMILY'S. One walk to a counter sells
-# every holder's stacks, so the slots it frees are the family's and not one
-# member's. The bar is the trigger's own width: a trip that frees fewer slots
-# than the floor is wide leaves the family where it was, and the ordinary sale
-# wait (vendor_wait_trip below) is the route for that.
+# THE ROOM A VENDOR TRIP MAKES AT THE FLOOR IS THE FAMILY'S. One walk to a
+# counter sells every holder's stacks, so the slots it frees for the members
+# at the floor are counted together and not one member at a time. The bar is
+# the trigger's own width: a trip that frees fewer slots than the floor is
+# wide leaves the family where it was, and the ordinary sale wait
+# (vendor_wait_trip below) is the route for that.
 FAMILY_SALE_SLOTS = TOWN_RUN_FREE_SLOTS
 
 
 def family_sale_slots(free_slots: dict, sellable: dict) -> int:
-    """The free slots a vendor trip would free between the family's members.
+    """The free slots a vendor trip would free for the members at the floor.
 
     ONE WALK TO A COUNTER SELLS EVERY HOLDER'S STACKS, so the slots it frees
-    are the family's. `family_town_run_needed` asks a different question -
-    whether selling lifts a member past the trigger, which is what the
-    campaign needs to open - and it asks it of one member at a time, so a
+    at the floor are the family's. `family_town_run_needed` asks a different
+    question - whether selling lifts a member past the trigger, which is what
+    the campaign needs to open - and it asks it of one member at a time, so a
     family whose members at the floor each carry a few stacks, none of them
     enough to clear the trigger alone, never cleared the bar on anybody.
 
@@ -459,6 +460,13 @@ def family_sale_slots(free_slots: dict, sellable: dict) -> int:
     vendor will buy - contributes nothing, which is the half that kept the
     vendor pass off a column it could not use (infra#4190).
 
+    ONLY THE FLOOR'S STACKS COUNT (#1243). A slot freed in the bags of a
+    member with room is not a slot in anybody's at the floor. Counting them
+    re-armed the trip for a family held there by a member who carries only
+    what it keeps: its questing members loot three vendor stacks between them
+    in minutes, so every pass took the leader's walk for a sale that left the
+    floor where it was, and the bag-room hold never ended.
+
     THIS IS NOT THE CAMPAIGN'S QUESTION. Whether the run may open is
     `campaign_resume_short`'s, per member and at the resume floor, and it is
     unchanged: a family whose binding member cannot be lifted still cannot
@@ -466,20 +474,29 @@ def family_sale_slots(free_slots: dict, sellable: dict) -> int:
     goods themselves, and a member at the floor who carries things it cannot
     sell is stuck on exactly that until a vendor takes them.
     """
-    if not free_slots:
-        return 0
-    at_floor = any(
-        isinstance(free, int) and 0 <= free <= TOWN_RUN_FREE_SLOTS
-        for free in free_slots.values()
-    )
-    if not at_floor:
-        return 0
     freed = 0
-    for name in free_slots:
+    for name, free in (free_slots or {}).items():
+        if not (isinstance(free, int) and 0 <= free <= TOWN_RUN_FREE_SLOTS):
+            continue
         offered = (sellable or {}).get(name, 0)
         if isinstance(offered, int) and offered > 0:
             freed += offered
     return freed
+
+
+def vendor_trip_makes_room(free_slots: dict, sellable: dict) -> bool:
+    """Whether a vendor trip would make room for the family at the floor.
+
+    The two bag-room reasons the vendor pass takes a trip for: a sale that
+    lifts one member past the trigger (`family_town_run_needed`), or one that
+    frees the trigger's width between the members at the floor
+    (`family_sale_slots`). The dungeon quest hold asks this before it waits on
+    that trip, so it never waits on a trip that will not go (#1243).
+    """
+    return (
+        family_town_run_needed(free_slots, sellable=sellable)
+        or family_sale_slots(free_slots, sellable) >= FAMILY_SALE_SLOTS
+    )
 
 
 # TOWN FIRST, THEN THE DUNGEON (#265). A campaign that was withheld at

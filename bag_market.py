@@ -54,6 +54,7 @@ from dataclasses import dataclass, replace
 import auction
 import bag_pressure
 import classic
+import travel
 from bag_upgrade import Bag, Member, safe_self_equip_spares
 
 AUCTION = "auction"
@@ -422,6 +423,159 @@ def report(upgrades, budget: int) -> str:
             "%s +%d (%s, %s)" % (u.buyer, u.gain, u.listing.name, u.listing.source)
             for u in upgrades
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# WALKING TO A VENDOR FOR A BIGGER BAG (#1218)
+#
+# Measured on the dev realm, 2026-10-19: the health endpoint read Bork and
+# Ugga stuck following Grug for 4.3 hours on "Bork, Grog at the bag floor and
+# no town pass has made room". Grog, one of the two members the hold names,
+# held 3 free slots, wore an 8-slot bag as its smallest and carried 12.8 gold
+# at level 43: past the slot cap since the floor yields it, an upgrade it can
+# afford, yet no town pass ever walked it to a bag vendor. `_vendor_bag_upgrades`
+# buys only for a member already standing at a vendor that stocks bags, and
+# `bag_pressure.bag_vendor_trip` walks only members with an empty bag
+# position, so a member whose positions are all full never reaches the counter
+# its upgrade is sold at. The walk below is that trip's other half: the
+# nearest vendor on the leader's map at which at least one full-position
+# member at the floor can afford a bigger bag, judged by the same
+# `plan_upgrades` (purse, reserve, family share, and the cap that yields at
+# the floor) against what that vendor stocks.
+
+
+def _standing_map(standing: dict, name: str) -> int | None:
+    """The map `name` stands on, or None when it cannot be read."""
+    spot = (standing or {}).get(name)
+    if spot is None or spot.map_id is None:
+        return None
+    try:
+        return int(spot.map_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _upgrade_walkers(members, free_slots, pending=()) -> tuple:
+    """Full-position members at the floor with room for a bag to land in, by
+    name. An empty position belongs to `bag_pressure.bag_purchases` and its
+    walk; a member with no free slot has nowhere for a vendor's bag to land
+    in, so neither trip is for it; a member in `pending` has a bag on the way
+    and `_vendor_bag_upgrades` would sell it nothing at the counter."""
+    walkers = []
+    for member in sorted(members or (), key=lambda m: m.name):
+        if smallest_worn(member) is None or member.name in pending:
+            continue
+        free = (free_slots or {}).get(member.name)
+        if not cap_yields(free) or int(free) < 1:
+            continue
+        walkers.append(member)
+    return tuple(walkers)
+
+
+def _vendor_listings(vendor) -> list:
+    """What `vendor` stocks, as the listings `plan_upgrades` weighs."""
+    return [
+        Listing(
+            source=VENDOR,
+            key=int(o.entry),
+            entry=int(o.entry),
+            name=o.name,
+            slots=int(o.slots),
+            price=int(o.price),
+        )
+        for o in vendor.offers
+    ]
+
+
+def _upgrade_vendors(vendors, map_id: int, max_yards: float) -> list:
+    """Stocking vendors on the leader's map within the cap, nearest first."""
+    return sorted(
+        (
+            v
+            for v in (vendors or ())
+            if int(v.map_id) == map_id and float(v.yards) <= max_yards and v.offers
+        ),
+        key=lambda v: (float(v.yards), int(v.entry)),
+    )
+
+
+def upgrade_vendor_trip(
+    members,
+    purses: dict,
+    vendors,
+    *,
+    free_slots=None,
+    mailed=None,
+    pending=(),
+    leader: str,
+    standing: dict,
+    in_run: bool = False,
+    max_yards: float = bag_pressure.BAG_VENDOR_MAX_YARDS,
+) -> bag_pressure.BagTrip:
+    """Where to walk the family so a full member can buy a bigger bag.
+
+    `members` wear every position full or not; only the full ones at the bag
+    floor (`cap_yields`) with a free slot for the purchase to land in walk,
+    except a name in `pending`, whose auction bag is still on the way.
+    `vendors` are `bag_pressure.BagVendor` measured from the leader. The
+    nearest vendor within `max_yards` on the leader's map at which
+    `plan_upgrades` serves at least one walker, judged against what that
+    vendor stocks, is chosen; ties go to the lower entry. Never over
+    something more important, the same bar as `bag_pressure.bag_vendor_trip`.
+    """
+    blocked = bag_pressure.trip_blocked(leader, standing, in_run)
+    if blocked:
+        return bag_pressure.BagTrip(why_not=blocked)
+    map_id = int(standing[leader].map_id)
+    walkers = [
+        w
+        for w in _upgrade_walkers(members, free_slots, pending)
+        if _standing_map(standing, w.name) == map_id
+    ]
+    if not walkers:
+        return bag_pressure.BagTrip(
+            why_not="nobody on %s's map wants a bigger bag and has a free "
+            "slot for one to land in" % leader
+        )
+    usable = _upgrade_vendors(vendors, map_id, max_yards)
+    if not usable:
+        return bag_pressure.BagTrip(
+            why_not="no vendor within %d yards of %s on map %d stocks a bag"
+            % (int(max_yards), leader, map_id)
+        )
+    for vendor in usable:
+        entries = frozenset(int(o.entry) for o in vendor.offers)
+        reach = {w.name: entries for w in walkers}
+        upgrades, _notes = plan_upgrades(
+            walkers,
+            purses or {},
+            _vendor_listings(vendor),
+            mailed=mailed,
+            reach=reach,
+            free_slots=free_slots,
+        )
+        served = tuple(u.buyer for u in upgrades)
+        if not served:
+            continue
+        if float(vendor.yards) <= bag_pressure.BAG_VENDOR_HERE_YARDS:
+            return bag_pressure.BagTrip(
+                vendor=vendor,
+                buyers=served,
+                why_not="%s already stands at %s; the upgrade "
+                "waits for the buyers to reach the counter"
+                % (leader, vendor.name or "an unnamed creature (%d)" % vendor.entry),
+            )
+        target = travel.resolve(str(int(vendor.entry)))
+        if not target or len(target) > travel.COLUMN_WIDTH:
+            return bag_pressure.BagTrip(
+                why_not="vendor entry %r cannot be named in travel_npc"
+                % (vendor.entry,)
+            )
+        return bag_pressure.BagTrip(target=target, vendor=vendor, buyers=served)
+    return bag_pressure.BagTrip(
+        why_not="nobody at the floor can spare a bigger bag within %d yards"
+        % int(max_yards)
     )
 
 

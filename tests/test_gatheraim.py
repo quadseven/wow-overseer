@@ -11,8 +11,10 @@ import subprocess
 import sys
 import unittest
 
+import flightlearn
 import gatheraim
 import gatherband
+import townslot
 
 TOOL = (
     pathlib.Path(__file__).resolve().parents[1] / "tools" / "gather_bands_from_dbc.py"
@@ -305,6 +307,39 @@ class TheRealFamilyState(unittest.TestCase):
         self.assertEqual(got.chosen.zone_id, 148)
         self.assertEqual(got.chosen.nodes, 97)
         self.assertIn("surveyed spawn", gatheraim.report(got))
+
+
+class TheReachIsTheLeaseNotAGuess(unittest.TestCase):
+    """wow-overseer#76: the farthest field is one the gather lease covers.
+
+    A gathering aim holds the travel column for `townslot.GATHER_LEASE_SECONDS`
+    and no longer. A field farther than that lease can walk, plus the minute it
+    takes the arrival to be seen, is a trip whose lease ends before anybody
+    notices it arrived, so a starved pass takes the column back mid-walk.
+    """
+
+    def test_the_farthest_field_fits_inside_the_gather_lease(self):
+        self.assertLessEqual(
+            flightlearn.lease_for(gatheraim.MAX_YARDS),
+            townslot.GATHER_LEASE_SECONDS,
+        )
+
+    def test_the_bound_is_the_whole_lease_and_not_less(self):
+        # Derived, not chosen: a shorter bound would refuse fields the lease
+        # can carry, the same "never fires" failure as a bound too long.
+        self.assertAlmostEqual(
+            flightlearn.lease_for(gatheraim.MAX_YARDS),
+            townslot.GATHER_LEASE_SECONDS,
+        )
+
+    def test_a_field_just_past_the_lease_walk_is_refused(self):
+        far = gatheraim.MAX_YARDS + 1.0
+        rows = [spawn(148, COPPER, x=far)]
+        inside, beyond = gatheraim.near_fields(
+            rows, {"Grug": {"mining": 8}}, 1, (0.0, 0.0)
+        )
+        self.assertEqual(inside, [])
+        self.assertEqual(beyond, far)
 
 
 if __name__ == "__main__":

@@ -23,11 +23,12 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import mailrun  # noqa: E402
 import travel  # noqa: E402
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DECISIONS = ROOT / "mod-overseer/src/overseer_decisions.cpp"
-HEADER = ROOT / "mod-overseer/src/overseer_decisions.h"
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+DECISIONS = modsource.DECISIONS
+HEADER = modsource.DECISIONS_H
+MODULE = modsource.MODULE
 
 
 def _row(holder, mail_id, *, money=0, cod=0, delivered=1, expire=0, item=None):
@@ -340,19 +341,19 @@ class TheCommandIsWhatTheDeployedParserAccepts(unittest.TestCase):
         self.assertEqual(mailrun.command(money), "take-money mail:41")
 
     def test_the_verbs_are_the_ones_ParseMailRequest_matches(self):
-        source = DECISIONS.read_text(encoding="utf-8")
+        source = modsource.read(DECISIONS, encoding="utf-8")
         self.assertIn('words[0] == "%s"' % mailrun.TAKE_ITEM, source)
         self.assertIn('words[0] == "%s"' % mailrun.TAKE_MONEY, source)
 
     def test_the_keys_are_the_ones_ParseMailRequest_binds(self):
         """`mail:` and `item:` are the parser's own key names, and anything
         else is answered `malformed mail command` without reaching the world."""
-        source = DECISIONS.read_text(encoding="utf-8")
+        source = modsource.read(DECISIONS, encoding="utf-8")
         self.assertIn('key == "mail"', source)
         self.assertIn('key == "item"', source)
 
     def test_the_grammar_line_in_the_header_still_says_this(self):
-        header = HEADER.read_text(encoding="utf-8")
+        header = modsource.read(HEADER, encoding="utf-8")
         self.assertIn("take-item mail:<mail.id> item:<item_instance.guid>", header)
         self.assertIn("take-money mail:<mail.id>", header)
 
@@ -360,7 +361,7 @@ class TheCommandIsWhatTheDeployedParserAccepts(unittest.TestCase):
         """Each of these is a wall `mailrun.plan` steers around by name. A
         renamed literal on the C++ side would make the steering silently wrong,
         so it fails here instead."""
-        header = HEADER.read_text(encoding="utf-8")
+        header = modsource.read(HEADER, encoding="utf-8")
         for literal in (
             '"mail is cash on delivery"',
             '"mail has not been delivered yet"',
@@ -376,7 +377,8 @@ class TheCommandIsWhatTheDeployedParserAccepts(unittest.TestCase):
         ground aim this package writes would be aiming at nothing."""
         self.assertEqual(travel.MAILBOX_GO_TYPE, 19)
         self.assertIn(
-            "GetGoType() == GAMEOBJECT_TYPE_MAILBOX", MODULE.read_text(encoding="utf-8")
+            "GetGoType() == GAMEOBJECT_TYPE_MAILBOX",
+            modsource.read(MODULE, encoding="utf-8"),
         )
 
     def test_no_role_keyword_can_reach_a_mailbox(self):
@@ -583,9 +585,8 @@ class AMailRowIsAnsweredWhereTheCharacterStandsTests(unittest.TestCase):
     took the push-back-to-`pending` path out of every verb in the module."""
 
     def setUp(self):
-        if not MODULE.exists():
-            self.skipTest("mod-overseer submodule not checked out")
-        cpp = MODULE.read_text(encoding="utf-8")
+        modsource.require()
+        cpp = modsource.read(MODULE, encoding="utf-8")
         start = cpp.index("static char const* DoMail(")
         self.body = cpp[start : cpp.index("\n    static ", start + 1)]
         self.refuse = self.body[self.body.index("auto refuse = [&]") :][:300]
@@ -600,7 +601,7 @@ class AMailRowIsAnsweredWhereTheCharacterStandsTests(unittest.TestCase):
     def test_the_refusal_literal_is_the_one_the_realm_wrote(self):
         """Asked of the constant rather than of a string this file chose, so a
         rename on that side cannot leave this test passing about nothing."""
-        header = HEADER.read_text(encoding="utf-8")
+        header = modsource.read(HEADER, encoding="utf-8")
         self.assertIn('NoMailbox         = "mailbox not in range";', header)
 
     def test_a_refusal_is_terminal_and_carries_no_retry_class(self):

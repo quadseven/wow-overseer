@@ -298,9 +298,11 @@ class TheServer(unittest.TestCase):
         now = (views / "now.js").read_text(encoding="utf-8")
         guild = (views / "guild.js").read_text(encoding="utf-8")
         self.assertIn('"/api/v2/stuck", "/api/v2/roster"', now)
-        # Who is a ghost is the roster model's answer (test_app_models.py).
+        # Who is a ghost is the roster model's answer (test_app_models.py),
+        # read once per draw and handed to both the chip and the Attention
+        # list, so the two say one count (test_app_now_attention.py).
         self.assertEqual(
-            now.count('rosterModel(ctx.get("/api/v2/roster")).ghosts()'), 2
+            now.count('rosterModel(ctx.get("/api/v2/roster")).ghosts()'), 1
         )
         self.assertNotIn("m.ghost === true", now)
         self.assertNotIn(

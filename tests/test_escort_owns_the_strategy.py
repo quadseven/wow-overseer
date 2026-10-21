@@ -48,9 +48,10 @@ import re
 import unittest
 
 import goals
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+MODULE = modsource.MODULE
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 
 
@@ -60,7 +61,7 @@ def _divert_strategies() -> frozenset:
     Parsed rather than copied. The initializer is a plain brace list of string
     literals, so the strings between the braces ARE the set.
     """
-    src = MODULE.read_text(encoding="utf-8")
+    src = modsource.read(MODULE, encoding="utf-8")
     start = src.index("ESCORT_DIVERT_STRATEGIES[] = {")
     end = src.index("};", start)
     return frozenset(re.findall(r'"([^"]+)"', src[start:end]))
@@ -69,7 +70,8 @@ def _divert_strategies() -> frozenset:
 def _granted(commands) -> frozenset:
     """The strategy NAMES a command list turns ON.
 
-    A command is `<engine> <sign><name>`, as in `nc +grind` or `co +flee`.
+    A command is `<engine> <sign><name>`, as in `nc +grind` or
+    `co +retreat from danger`.
     Only `+` counts: `nc -new rpg` takes a strategy off, and taking one off is
     what the module itself does, never a collision.
 
@@ -92,7 +94,7 @@ class TheDivertListIsReadNotRemembered(unittest.TestCase):
     def test_the_module_source_is_actually_vendored(self):
         """A missing submodule would make every assertion below vacuous."""
         self.assertTrue(
-            MODULE.exists(),
+            modsource.exists(MODULE),
             "mod-overseer is not checked out at %s - run "
             "`git submodule update --init` from the repository root. CI does "
             "this for exactly this directory (check.python-units.yml)" % MODULE,
@@ -153,8 +155,9 @@ class TheTravellerKeepsItsLegsAndItsLife(unittest.TestCase):
     """Withholding the whole set would be a worse bug than the one fixed.
 
     The module restores ONLY what it stood down, and it never stands down -
-    and never grants - `new rpg`, `follow` or `flee`. Those exist solely
-    because this loop grants them, and ResetStrategies takes them away on
+    and never grants - `new rpg`, `follow` or `retreat from danger`. Those
+    exist solely because this loop grants them, and ResetStrategies takes
+    them away on
     every relog. A character that relogged mid-errand under a
     withhold-everything scheme would come back with no strategy at all and
     nobody to give it one.
@@ -164,9 +167,9 @@ class TheTravellerKeepsItsLegsAndItsLife(unittest.TestCase):
         commands = goals.life_strategies(leads=True, travelling=True)
         self.assertIn(goals.LIFE_STRATEGY, commands)
 
-    def test_the_travelling_leader_still_gets_flee(self):
+    def test_the_travelling_leader_still_gets_the_retreat(self):
         commands = goals.life_strategies(leads=True, travelling=True)
-        self.assertIn(goals.FLEE_STRATEGY, commands)
+        self.assertIn(goals.RETREAT_STRATEGY, commands)
 
     def test_a_travelling_follower_still_follows(self):
         commands = goals.life_strategies(leads=False, aimed=True, travelling=True)

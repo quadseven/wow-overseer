@@ -30,7 +30,12 @@ THE FLOW, one task per party (the bridge's _run_class_party):
             failed or was cut off) or no helper meeting it fails the meeting,
             which counts as one failure of the ask. Each member that did not
             arrive is named with why its walk ended (walk_why), so a walk the
-            module refused because another verb holds the walker says so.
+            module refused because another verb holds the walker says so. A
+            meeting stopped only by such a hold walks again after
+            MEET_HELD_WAIT_SECONDS, at most MEET_HELD_RETRIES walks: the hold
+            is transient, so failing the ask for it only makes the asker ask
+            again, and nobody's yes is taken back for a walk the meeting
+            retries.
             Log line:
             `class party: <helpers> meet <leader> at <spawn> for <quest>`.
   form      write party-up, read its answer. FORMED goes on. A refusal that names
@@ -116,6 +121,13 @@ MEET_READ_SECONDS = 10.0
 UP_FOLLOW_SECONDS = 90.0
 # Seconds to wait before writing party-up again after the leader was refused.
 LEADER_WAIT_SECONDS = 60.0
+# A meeting walk refused because another verb holds the walker is not a lost
+# member: the hold is transient (classquest backs the same refusal off
+# HELD_BACKOFF_MINUTES), so the meeting walks again after this wait instead of
+# failing the ask (#1275). Bounded by MEET_HELD_RETRIES walks; a hold that
+# outlasts them fails the meeting as before.
+MEET_HELD_WAIT_SECONDS = 60.0
+MEET_HELD_RETRIES = 3
 # Failures of one ask (a helper refused, the leader refused, no answer) before
 # the ask is given up, and how long its asker then does not ask again.
 MAX_FAILURES = 3
@@ -312,6 +324,20 @@ def _lost_words(run, walked, far, stands) -> str:
         for h in far
     ]
     return "; ".join(words)
+
+
+def held_refusal(said) -> bool:
+    """True when a walk's sentence is the worldserver's held-by-another-verb
+    refusal: the walker is held by a verb the module did not write, so the hold
+    is transient (classquest.HELD_REASON) rather than a lost member."""
+    return classquest.HELD_REASON in str(said or "")
+
+
+def meeting_held(run) -> tuple:
+    """The meeting members whose walk ended on the worldserver's
+    held-by-another-verb refusal, in meeting order: their hold may lapse, so
+    the meeting may walk again instead of failing."""
+    return tuple(n for n in run.names() if held_refusal(run.walks.get(n)))
 
 
 def judge_meeting(run, arrived, stands) -> Meeting:

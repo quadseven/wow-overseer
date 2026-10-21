@@ -7,7 +7,8 @@ train step at all (their job is the post and the sale), and the rest reach
 it only as the last rung, behind PvP, the post and the level walk, so a trade
 at its ceiling waited behind every one of them. A trade at its ceiling gains
 nothing until the rank is bought, so the rank walk now comes ahead of those
-rungs, for every role, while the member is not held in a battleground.
+rungs, for every role, while the member is not inside a battleground (a
+member only waiting in a queue walks too).
 
 Pure unit tests against guildjobs.plan.
 """
@@ -87,6 +88,22 @@ class AMemberAtATierCap(unittest.TestCase):
         pvp = {"Funkymon": (aim(), pvpgear.Move(pvpgear.INSIDE, "plays"))}
         result = guildjobs.plan([member()], pvp=pvp)
         self.assertEqual((), result.steps)
+
+    def test_a_member_waiting_in_a_queue_walks_to_its_trainer(self):
+        # Live on wow-dev 2026-10-19/20: Flintt (Arathi Basin, to fill the
+        # cohort) and Funkymon (Warsong Gulch) sat in a PvP queue that never
+        # popped on nearly every pass, and neither got a rank walk. The module
+        # walks a queued member like any other.
+        pvp = {"Funkymon": (aim(), pvpgear.Move(pvpgear.WAITING, "waits"))}
+        result = guildjobs.plan([member()], pvp=pvp)
+        self.assertEqual(1, len(train_steps(result, "Funkymon")), result.notes)
+
+    def test_a_member_asked_to_queue_again_walks_to_its_trainer(self):
+        # A queue accepted past WAITING_MINUTES is asked again (QUEUE, queued).
+        pvp = {"Funkymon": (aim(), pvpgear.Move(pvpgear.QUEUE, "queues", True))}
+        result = guildjobs.plan([member()], pvp=pvp)
+        self.assertEqual(1, len(train_steps(result, "Funkymon")), result.notes)
+        self.assertFalse(any(s.action == "pvp" for s in result.steps))
 
     def test_a_trade_short_of_its_cap_keeps_its_old_place(self):
         # 72 of 75 is within RANK_UP_MARGIN, so the ordinary job buys it; the

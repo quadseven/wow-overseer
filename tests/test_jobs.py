@@ -15,9 +15,10 @@ import unittest
 from unittest import mock
 
 import jobs
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+MODULE = modsource.MODULE
 
 
 class ResolveTest(unittest.TestCase):
@@ -262,12 +263,8 @@ class ImplementedMatchesTheModule(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        if not MODULE.exists():
-            raise unittest.SkipTest(
-                "mod-overseer submodule not checked out; "
-                "check.python-units.yml passes submodules: true for this dir"
-            )
-        cls.source = MODULE.read_text(encoding="utf-8", errors="replace")
+        modsource.require()
+        cls.source = modsource.read(MODULE, encoding="utf-8", errors="replace")
         # The same text with // comments stripped. A pin a comment can satisfy
         # pins nothing (#48): the old dungeon pins survived only inside a
         # comment that said it was kept for these tests.

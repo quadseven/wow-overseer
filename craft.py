@@ -126,15 +126,16 @@ MODE = "craft"
 class Recipe:
     """One craftable recipe: the spell to cast, and the bracket it belongs to.
 
-    `min_skill`/`max_skill` are the skill VALUE range this recipe is worth
-    spamming across - below `min_skill` the character has not learned it yet
-    (a trainer/recipe-vendor problem, not this module's), at or above
-    `max_skill` it stops granting skill-ups at all and a different recipe (or
-    a trainer visit for the next rank) is needed instead. `max_skill` here is
-    deliberately conservative - the real cutoff a recipe stops granting
-    skill-ups at is a grey/green/yellow/orange band the core computes per
-    cast, not a fixed number - so this is "worth aiming at", not "guaranteed
-    to grant a point every time".
+    `min_skill`/`max_skill` are inclusive routing edges for the skill values
+    where this recipe is worth casting. The DBC yellow and grey values can
+    overlap another recipe's route, so they are not necessarily these edges.
+    For example, 2963 routes 1-49 (yellow 25, grey 50), 8776 routes 50-67
+    (yellow 50, grey 85), 2964 routes 68-100 (yellow 90, grey 105), and 3275
+    routes 1-59 (yellow 30, grey 60). Cooking spell 2538 has yellow 45 and
+    grey 85 but has no route until a Cooking Fire can be supplied. Above a
+    route's maximum, another recipe may be preferred even though this one can
+    still grant points. The route means "worth aiming at", not "guaranteed to
+    grant a point every time".
 
     `repeatable` is the TOOL-VS-CONSUMABLE distinction (infra#440's Engineering
     follow-up). Most recipes are worth casting many times in a row - a Bolt of

@@ -499,7 +499,7 @@ class PartyThatTravelsTest(unittest.TestCase):
         self.assertNotIn(task, goals.life_strategies(leads=True, travelling=True))
 
     def test_a_travelling_follower_never_had_the_task_strategy_anyway(self):
-        """The follower branches grant `new rpg`, `follow` and `flee`, none of
+        """The follower branches grant `new rpg`, `follow` and the retreat, none of
         which an escort stands down, so `travelling` is a no-op for them. Worth
         pinning rather than assuming: it is why the fix touches one branch, and
         a reader checking the follower case would otherwise see nothing change
@@ -529,15 +529,18 @@ class PartyThatTravelsTest(unittest.TestCase):
             next(i for i, c in enumerate(cmds) if "+follow" in c),
         )
 
-    def test_fleeing_is_a_combat_strategy(self):
-        """FleeStrategy's triggers are panic and critical health - combat
-        states. On the non-combat engine it reaches something that never sees
-        them, which is the `co +grind` mistake with the channels swapped."""
-        self.assertTrue(goals.FLEE_STRATEGY.startswith("co "), goals.FLEE_STRATEGY)
+    def test_the_retreat_is_a_combat_strategy(self):
+        """Patch 0007 already loads `retreat from danger` on the non-combat
+        engine for every bot. The combat engine, where a bot is losing a
+        fight, is the one nothing else gives it, so `nc` here would add
+        nothing - the `co +grind` mistake with the channels swapped."""
+        self.assertTrue(
+            goals.RETREAT_STRATEGY.startswith("co "), goals.RETREAT_STRATEGY
+        )
 
     def test_everyone_gets_self_preservation(self):
-        """AiFactory adds `flee` for nobody, random bot or not. Without it they
-        fight to zero every time."""
+        """AiFactory adds no retreat to the combat engine, random bot or not.
+        Without it they fight to zero every time."""
         for leads in (True, False):
             # Travelling too: an errand takes the TASK away, never the
             # self-preservation. A traveller that stopped fleeing would be the
@@ -546,7 +549,7 @@ class PartyThatTravelsTest(unittest.TestCase):
             for travelling in (True, False):
                 with self.subTest(leads=leads, travelling=travelling):
                     self.assertIn(
-                        goals.FLEE_STRATEGY,
+                        goals.RETREAT_STRATEGY,
                         goals.life_strategies(leads=leads, travelling=travelling),
                     )
 

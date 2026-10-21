@@ -492,22 +492,60 @@ class ABiggerBagInsideTheBagItReplacesIsMovedOutFirst(unittest.TestCase):
         )
         self.assertEqual(bag_upgrade.self_equips([member]), [])
 
-    def test_a_worn_bag_of_the_same_item_is_never_taken_off_instead(self):
-        """`ue` names an entry and takes an equipped match first."""
-        member = grog_at_the_floor(backpack_free=1)
-        worn = member.worn[:1] + (
-            bag("Large Brown Sack", 10, 1159012, used=10, entry=5576, position=20),
-        )
+    def test_a_worn_bag_of_the_same_item_does_not_stop_the_move_out(self):
+        """#1014 regression, as measured 2026-10-19: Grog wears a Large Brown
+        Sack and carries a second one inside the Red Leather Bag, with one
+        free backpack slot. The bridge refused the move out on every restart
+        because a worn bag was the same item. `ue` cannot reach a worn bag:
+        its item search covers the backpack, the contents of the worn bags
+        and the equipment slots 0-18, never the bag positions 19-22, so the
+        carried sack is the one it moves."""
         member = bag_upgrade.Member(
             "Grog",
             4,
-            worn=worn + member.worn[2:],
-            carried=member.carried,
+            worn=(
+                bag("Red Leather Bag", 8, RED, used=7, position=19),
+                bag("Large Red Sack", 10, 1159012, used=8, entry=857, position=20),
+                bag("Large Brown Sack", 10, 368082, used=8, entry=5576, position=21),
+                bag("Mageweave Bag", 12, 1246251, used=8, position=22),
+            ),
+            carried=(SACK,),
             backpack_free=1,
         )
-        self.assertEqual(bag_upgrade.self_equips([member]), [])
-        (note,) = bag_upgrade.self_equip_notes([member])
-        self.assertIn("a worn bag is the same item", note)
+        (move,) = bag_upgrade.self_equips([member])
+        self.assertEqual(move.command, "ue Hitem:5576:0")
+        self.assertEqual(
+            (move.bag, move.replaces), ("Large Brown Sack", "Red Leather Bag")
+        )
+        self.assertEqual(bag_upgrade.self_equip_notes([member]), [])
+
+    def test_another_carried_copy_found_first_is_not_moved_out_for_it(self):
+        """The verb moves the first carried copy it finds, and the backpack
+        is searched before the worn bags' contents. A copy in the backpack
+        is put on with `e` instead, which finds that same copy first."""
+        loose = bag("Large Brown Sack", 10, 5576002, entry=5576, position=30)
+        member = grog_at_the_floor(backpack_free=1)
+        member = bag_upgrade.Member(
+            "Grog", 4, worn=member.worn, carried=(SACK, loose), backpack_free=1
+        )
+        self.assertIsNone(bag_upgrade.move_out_spare(member))
+        (move,) = bag_upgrade.self_equips([member])
+        self.assertEqual((move.command, move.guid), ("e Hitem:5576:0", loose.guid))
+
+    def test_the_move_out_finds_items_the_way_the_verb_does(self):
+        """Backpack first, then each worn bag's contents in position order."""
+        member = grog_at_the_floor(backpack_free=1)
+        order = bag_upgrade._search_order
+        earlier_bag = bag(
+            "Large Brown Sack", 10, 3, entry=5576, inside=368082, position=9
+        )
+        same_bag_later = bag(
+            "Large Brown Sack", 10, 4, entry=5576, inside=RED, position=5
+        )
+        loose = bag("Large Brown Sack", 10, 5, entry=5576, position=38)
+        self.assertLess(order(member, loose), order(member, earlier_bag))
+        self.assertLess(order(member, earlier_bag), order(member, SACK))
+        self.assertLess(order(member, SACK), order(member, same_bag_later))
 
     def test_no_room_anywhere_is_left_alone_and_says_why(self):
         member = grog_at_the_floor()
