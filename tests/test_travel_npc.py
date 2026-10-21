@@ -258,6 +258,7 @@ class TheVocabularyIsSharedBetweenPythonAndTheModule(unittest.TestCase):
             "banker",
             "guild banker",
             "petitioner",
+            "guild petitioner",
             "tabard designer",
         ):
             self.assertIn(keyword, travel.ROLES, keyword)
@@ -449,7 +450,9 @@ class TheTargetVocabulary(unittest.TestCase):
         self.assertEqual("tabard designer", travel.resolve("  Tabard   Designer "))
 
     def test_the_way_a_person_says_it_resolves(self):
-        self.assertEqual("petitioner", travel.resolve("guild charter"))
+        self.assertEqual("guild petitioner", travel.resolve("guild charter"))
+        self.assertEqual("guild petitioner", travel.resolve("guild master"))
+        self.assertEqual("petitioner", travel.resolve("charter"))
         self.assertEqual("vendor", travel.resolve("merchant"))
         self.assertEqual("banker", travel.resolve("bank"))
         self.assertEqual("auctioneer", travel.resolve("AH"))
