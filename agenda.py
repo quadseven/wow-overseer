@@ -740,10 +740,7 @@ def last_boss_credit(event_rows: list[dict], moved_at: datetime | None) -> str:
     if moved_at is None:
         return ""
     for row in event_rows:
-        if (
-            str(row.get("kind") or "") == BOSS_KIND
-            and row.get("last_seen") == moved_at
-        ):
+        if str(row.get("kind") or "") == BOSS_KIND and row.get("last_seen") == moved_at:
             return str(row.get("detail") or "").split(" (mask")[0].strip()
     return ""
 
@@ -772,9 +769,7 @@ def span(seconds: int) -> str:
     return "%d seconds" % seconds
 
 
-def stall_line(
-    moved_at: datetime | None, now: datetime, credit: str = ""
-) -> str:
+def stall_line(moved_at: datetime | None, now: datetime, credit: str = "") -> str:
     """What STALLED means here, with the real gap in it.
 
     The banner printed "nothing has happened in over 20 minutes" for a family
