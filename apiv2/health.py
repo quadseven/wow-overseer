@@ -38,6 +38,9 @@ THE KINDS:
               (any outcome but dungeonpace.COMPLETE). Keyed by family and map.
               Impact is the failed runs x the run-hours they took. It is gone
               once a run of that map clears or the family runs another map.
+              Its "most often because" is the run row's ended_reason, which
+              for a stall is the cleanup; scripts/diagnose_finding.py prints
+              why each run stopped, from the archived worldserver log.
 
 Read-only, like everything under /api/v2. An empty list means "looked and
 found nothing"; a read that fails is a 503 from the map server, never an empty
