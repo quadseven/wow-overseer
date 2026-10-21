@@ -495,6 +495,54 @@ class Staleness(unittest.TestCase):
         )
         self.assertTrue(out["stalled"])
 
+    def test_a_boss_credit_is_movement_when_the_quests_are_old(self):
+        """A campaign that repeats one dungeon gives no new quest, no level and
+        rarely an equip, so its only honest sign of life is the encounter
+        credit in overseer_dungeon_run_event."""
+        out = build(
+            run_rows=[run_row()],
+            event_rows=[
+                {"kind": "quest_complete", "last_seen": NOW - timedelta(minutes=40)},
+                {
+                    "kind": "boss",
+                    "last_seen": NOW - timedelta(minutes=6),
+                    "detail": "1 encounter credited, 2 in all (mask 1 -> 3)",
+                },
+            ],
+        )
+        self.assertFalse(out["stalled"])
+        self.assertEqual(out["moved_seconds"], 6 * 60)
+
+    def test_phase_changes_and_dc_on_do_not_reset_a_stall_inside_a_dungeon(self):
+        out = build(
+            run_rows=[run_row()],
+            event_rows=[
+                {"kind": "quest_complete", "last_seen": NOW - timedelta(minutes=25)},
+                {"kind": "phase", "last_seen": NOW - timedelta(minutes=1)},
+                {"kind": "dc_on", "last_seen": NOW - timedelta(minutes=2)},
+            ],
+        )
+        self.assertTrue(out["stalled"])
+        self.assertEqual(out["moved_seconds"], 25 * 60)
+
+    def test_the_stall_line_names_the_last_boss_credit_when_it_is_newest(self):
+        out = build(
+            event_rows=[
+                {"kind": "quest_complete", "last_seen": NOW - timedelta(hours=2)},
+                {
+                    "kind": "boss",
+                    "last_seen": NOW - timedelta(minutes=30),
+                    "detail": "1 encounter credited, 2 in all (mask 1 -> 3)",
+                },
+            ]
+        )
+        self.assertTrue(out["stalled"])
+        self.assertEqual(
+            out["stall_line"],
+            "STALLED: no quest, level, gear change or boss credit for 30 minutes"
+            " (last boss credit: 1 encounter credited, 2 in all).",
+        )
+
     def test_a_stalled_run_says_the_heartbeat_proves_nothing(self):
         """quadseven/mod-overseer#171 from outside: the run still reads active
         because last_progress_at is touched for everyone standing inside."""
