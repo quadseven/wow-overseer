@@ -212,7 +212,7 @@ class ASecondaryErrandIsLiftedNotPreserved(unittest.TestCase):
         sql = learnaim.statements(plan)
         self.assertEqual(1, len(sql))
         self.assertIn("learn_skill = 0", sql[0][0])
-        self.assertEqual(("Ugga", FIRST_AID), sql[0][1])
+        self.assertEqual(("Ugga", FIRST_AID, 0), sql[0][1])
 
     def test_a_primary_is_still_left_alone(self):
         """The reversal must not catch mod-overseer#74's case: a character
@@ -382,7 +382,7 @@ class TheStatementsAreBoundAndAreCompareAndSwaps(unittest.TestCase):
         sql, params = learnaim.statements(p)[0]
         self.assertIn("SET learn_skill = 0", sql)
         self.assertIn("WHERE name = %s AND learn_skill = %s", sql)
-        self.assertEqual(("Bork", SKINNING), params)
+        self.assertEqual(("Bork", SKINNING, 0), params)
 
     def test_the_aim_only_lands_on_an_empty_column(self):
         """The same guard _write_trade_errand's ECONOMY_ERRANDS branch applies,
@@ -397,7 +397,7 @@ class TheStatementsAreBoundAndAreCompareAndSwaps(unittest.TestCase):
         self.assertIn("SET travel_npc = %s", sql)
         self.assertIn("AND travel_npc = ''", sql)
         self.assertIn("AND learn_skill = %s", sql)
-        self.assertEqual((learnaim.TRAINER_ROLE, "Grug", TAILORING), params)
+        self.assertEqual((learnaim.TRAINER_ROLE, "Grug", TAILORING, 0), params)
 
     def test_no_name_no_skill_and_no_keyword_is_interpolated(self):
         p = learnaim.plan(

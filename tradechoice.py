@@ -554,11 +554,13 @@ def declarations(members: Sequence, current: Mapping[str, str]) -> list:
     return out
 
 
-def learn_rows(roster, trades, declared: Mapping[str, str], ranks=None) -> list:
+def learn_rows(
+    roster, trades, declared: Mapping[str, str], ranks=None, recipes=None
+) -> list:
     """learnaim.Row for each roster row, with `declared` as its permission.
 
-    `ranks` is name -> the held trades whose next rank is due
-    (guildjobs.ranks_due), which learnaim turns into a rank errand.
+    `ranks` is name -> held trades with a rank due. `recipes` is name ->
+    (trade, spell) pairs whose exact trainer recipes are due.
     """
     traded: dict = {}
     settled: dict = {}
@@ -574,6 +576,7 @@ def learn_rows(roster, trades, declared: Mapping[str, str], ranks=None) -> list:
         learnaim.Row(
             character=str(row["name"]),
             learn_skill=int(row.get("learn_skill") or 0),
+            learn_spell=int(row.get("learn_spell") or 0),
             travel_npc=str(row.get("travel_npc") or ""),
             leads=bool(int(row.get("lead") or 0)),
             wanted=trainjob.parse_wanted(
@@ -582,6 +585,7 @@ def learn_rows(roster, trades, declared: Mapping[str, str], ranks=None) -> list:
             traded=tuple(sorted(traded.get(str(row["name"]), ()))),
             settled=tuple(sorted(settled.get(str(row["name"]), ()))),
             ranks=tuple((ranks or {}).get(str(row["name"]), ())),
+            recipes=tuple((recipes or {}).get(str(row["name"]), ())),
         )
         for row in roster or ()
     ]

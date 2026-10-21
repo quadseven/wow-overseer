@@ -31,7 +31,9 @@ import craft_rhythm  # noqa: E402
 import craft_supply  # noqa: E402
 import guildjobs  # noqa: E402
 import learnaim  # noqa: E402
+import modsource  # noqa: E402
 import standin  # noqa: E402
+import tradechoice  # noqa: E402
 from towntrip import Town  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
@@ -60,6 +62,10 @@ class AFamilyCrafterIsDueATrainerRecipe(unittest.TestCase):
         self.assertEqual(
             (TAILORING,),
             guildjobs.recipes_due(38, 358300, OG_SKILLS, OG_KNOWN, OG_WANTED),
+        )
+        self.assertEqual(
+            ((TAILORING, BOLT_OF_WOOL),),
+            guildjobs.recipe_spells_due(38, 358300, OG_SKILLS, OG_KNOWN, OG_WANTED),
         )
 
     def test_holding_the_rung_is_nothing_due(self):
@@ -162,11 +168,66 @@ class TheLearnErrandCarriesARecipe(unittest.TestCase):
     def test_a_settled_first_learn_does_not_end_it(self):
         self.assertEqual("", learnaim.finished(self.row(learn_skill=TAILORING)))
 
+    def test_the_other_family_gets_the_same_recipe_errand(self):
+        rows = tradechoice.learn_rows(
+            [
+                {
+                    "name": "Oz",
+                    "lead": 1,
+                    "professions": "197,333",
+                    "learn_skill": 0,
+                    "learn_spell": 0,
+                }
+            ],
+            [],
+            {"Oz": "197,333"},
+            recipes={"Oz": ((TAILORING, LINEN_BAG),)},
+        )
+        self.assertEqual(("Oz", TAILORING, LINEN_BAG), learnaim.plan(rows).learn)
+
+    def test_missing_recipe_names_the_exact_spell_and_survives_settled_trade(self):
+        due = self.row(ranks=(), recipes=((TAILORING, BOLT_OF_WOOL),))
+        plan = learnaim.plan([due])
+        self.assertEqual(("Og", TAILORING, BOLT_OF_WOOL), plan.learn)
+        sql, params = learnaim.statements(plan)[0]
+        self.assertIn("learn_spell = %s", sql)
+        self.assertEqual((TAILORING, BOLT_OF_WOOL, "Og"), params)
+        self.assertEqual(
+            "",
+            learnaim.finished(
+                self.row(
+                    learn_skill=TAILORING,
+                    learn_spell=BOLT_OF_WOOL,
+                    ranks=(),
+                    recipes=((TAILORING, BOLT_OF_WOOL),),
+                )
+            ),
+        )
+
+    def test_a_clear_cannot_erase_a_new_recipe_for_the_same_trade(self):
+        row = self.row(
+            learn_skill=TAILORING, learn_spell=BOLT_OF_WOOL, ranks=(), recipes=()
+        )
+        sql, params = learnaim.statements(learnaim.plan([row]))[0]
+        self.assertIn("AND learn_spell = %s", sql)
+        self.assertEqual(("Og", TAILORING, BOLT_OF_WOOL), params)
+
 
 class TheCraftErrandNamesOnlyAHeldRung(unittest.TestCase):
     OG = {"tailoring": 81, "enchanting": 1}
     TRADES = ("tailoring", "enchanting")
     WOOL = {WOOL_CLOTH: 40}
+
+    def test_plain_craft_errand_waits_for_the_recipe_purchase(self):
+        self.assertEqual(
+            0, craft.craft_errand("Og", self.OG, self.TRADES, known=OG_KNOWN)
+        )
+        self.assertEqual(
+            BOLT_OF_WOOL,
+            craft.craft_errand(
+                "Og", self.OG, self.TRADES, known=OG_KNOWN | {BOLT_OF_WOOL}
+            ),
+        )
 
     def test_og_is_not_aimed_at_a_recipe_he_does_not_hold(self):
         chosen = craft_rhythm.errand(
@@ -271,8 +332,19 @@ class VialsForTheHerbsInHand(unittest.TestCase):
 
 
 class TheBridgeWiresIt(unittest.TestCase):
+    def test_arrival_purchases_the_named_recipe_through_the_trainer(self):
+        source = modsource.read(modsource.MODULE, encoding="utf-8")
+        arrival = source[source.index("bool TrainOnArrival(") :]
+        arrival = arrival[
+            : arrival.index("// ------------------------------------- job='craft'")
+        ]
+        self.assertIn("plan.learnSpell", arrival)
+        self.assertIn("trainer->CanTeachSpell(bot, recipe)", source)
+        self.assertIn("trainer->TeachSpell(npc, bot, recipe->SpellId)", source)
+        self.assertIn("bot->HasSpell(recipe->SpellId)", source)
+
     def test_the_learn_rows_carry_recipes_due(self):
-        self.assertTrue("guildjobs.recipes_due(" in BRIDGE, "guildjobs.recipes_due(")
+        self.assertIn("guildjobs.recipe_spells_due(", BRIDGE)
 
     def test_the_craft_pass_reads_the_spellbook(self):
         self.assertTrue("known=known.get(name)" in BRIDGE, "known=known.get(name)")

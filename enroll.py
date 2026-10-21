@@ -123,6 +123,7 @@ ROSTER_DEFAULTS: dict[str, object] = {
     # than observed from `character_skills` is an instruction to buy something
     # the character may already own. 0 is "no errand".
     "learn_skill": 0,
+    "learn_spell": 0,
     "unlearn_skill": 0,
     "unlearn_max": 0,
     # THE ONE VALUE WIRED TO A BEHAVIOUR CHANGE IS THE ONE NOT CHOSEN HERE.
@@ -186,6 +187,7 @@ ROSTER_COLUMNS: tuple[str, ...] = (
     "travel_npc",
     "professions",
     "learn_skill",
+    "learn_spell",
     "unlearn_skill",
     "unlearn_max",
     "job",

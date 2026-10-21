@@ -2406,6 +2406,9 @@ def smelt_errand(name: str, skills: dict, primaries=None) -> int:
 
     `primaries` replaces `professions.assigned(name)` for a character of
     another family (#215); see `held_primaries`.
+
+    `known` is the persisted spellbook. When it is available, a trainer rung
+    waits until that recipe has been bought; None leaves an unread book alone.
     """
     trades = professions.assigned(name) if primaries is None else primaries
     for skill_name in trades:
@@ -2545,7 +2548,7 @@ def holds(spell_id: int, known) -> bool:
     return spell not in TRAINER_RECIPES or spell in known
 
 
-def craft_errand(name: str, skills: dict, primaries=None) -> int:
+def craft_errand(name: str, skills: dict, primaries=None, known=None) -> int:
     """The `craft_spell` this character's roster row should carry, or 0.
 
     `skills` is one character's profession skills as `professions.plan`'s
@@ -2583,7 +2586,11 @@ def craft_errand(name: str, skills: dict, primaries=None) -> int:
         if not value:
             continue  # not learned yet - professions.py's trainer errand owns this
         recipe = recipe_for(SKILL_IDS[skill_name], value)
-        if recipe and (not recipe.focus or recipe.focus in FOCUS_AIMS):
+        if (
+            recipe
+            and holds(recipe.spell_id, known)
+            and (not recipe.focus or recipe.focus in FOCUS_AIMS)
+        ):
             return recipe.spell_id
         # A rung that needs a focus nothing walks to (the eleven Anvil rows,
         # #53) is no errand: DriveCraft casts in place and would be refused

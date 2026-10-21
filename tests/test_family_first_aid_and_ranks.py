@@ -248,7 +248,7 @@ class TheRankErrand(unittest.TestCase):
 class TheBridgeReadsTheRanks(unittest.TestCase):
     def test_both_learn_row_builders_carry_ranks(self):
         self.assertIn("ranks = _ranks_due(cur, roster)", BRIDGE)
-        self.assertIn('ranks=ranks.get(row["name"], ())', BRIDGE)
+        self.assertIn('ranks=ranks.get(row["name"], ((), ()))[0]', BRIDGE)
         self.assertIn('state.get("ranks")', BRIDGE)
 
     def test_the_rank_facts_come_from_the_rank_table(self):
