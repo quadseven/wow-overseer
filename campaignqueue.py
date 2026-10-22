@@ -26,11 +26,13 @@ PURE MODULE: no MySQL, no Discord. Rows in, decisions and sentences out.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import achievements
+import bag_pressure
 import campaignplan
 import council
+import gearup
 import jobs
 import raidrun
 
@@ -608,3 +610,159 @@ def views(queue_rows: list, roster_rows: list) -> dict:
         done = leader.get("dungeon_runs_done")
         out[key] = view(pending.get(key, []), None if done is None else int(done), key)
     return out
+
+
+# ADMISSION: MAY THIS FAMILY ENTER THIS DUNGEON NOW (#738).
+#
+# The bridge answers it with a chain of five gates (town errand, gear, stuck
+# bag hold, near-full bags, town first), each reading its own module-level
+# hold clock and looking its helpers up with globals().get. `decide_admission`
+# is the same question as ONE pure decision: everything the gates read arrives
+# in `Facts` (the clocks as the monotonic time each hold began), and the answer
+# is Admit or a Withhold naming the gate. It runs in SHADOW beside the chain
+# (bridge._admission_shadow) and replaces nothing: the chain still decides, and
+# the log says where the two disagree.
+
+GATE_ERRAND = "town-errand"
+GATE_GEAR = "gear"
+GATE_BAG_STUCK = "bag-hold-stuck"
+GATE_BAG_FULL = "bags-near-full"
+GATE_TOWN_FIRST = "town-first"
+
+GEAR_EMPTY_SLOTS = 6
+GEAR_MIN_PURSE = 20000
+
+
+@dataclass(frozen=True)
+class Admit:
+    """The family may be sent in."""
+
+
+@dataclass(frozen=True)
+class Withhold:
+    """The family waits, and `gate` is the gate that said so."""
+
+    gate: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class Facts:
+    """What the five gates read, as plain values.
+
+    `gear` is name -> the gear-up reader's facts for that member, `mailed` is
+    name -> pieces waiting in the post, `free_slots` is name -> free bag slots.
+    `gear_since` and `town_since` are the monotonic times those holds began
+    (None: not holding), `stall` the seconds the family's queue head has gone
+    without a run, `hold` the previous bag hold reading, `armed` whether any
+    member already carries this dungeon's job.
+    """
+
+    errand_active: bool = False
+    gear: dict | None = None
+    mailed: dict | None = None
+    gear_since: float | None = None
+    free_slots: dict | None = None
+    hold: object = None
+    armed: bool = False
+    town_since: float | None = None
+    stall: float = 0.0
+
+
+def _held(since: float | None, now: float, stall: float) -> float:
+    """How long a hold has stood: its own clock, or the queue's stall if longer."""
+    return max(now - (now if since is None else since), stall)
+
+
+def _errand_gate(facts: Facts):
+    if facts.errand_active:
+        return Withhold(GATE_ERRAND, "the family is on its town errand (#365)")
+    return None
+
+
+def _gear_gaps(facts: Facts) -> list:
+    """The funded members with a gear gap worth holding for."""
+    mailed = facts.mailed or {}
+    short = []
+    for name, character in (facts.gear or {}).items():
+        if not gearup.needs_gear_hold(character, empty_slots=GEAR_EMPTY_SLOTS):
+            continue
+        if character["purse"] >= GEAR_MIN_PURSE or mailed.get(name, 0) > 0:
+            short.append(name)
+    return short
+
+
+def _gear_gate(facts: Facts, now: float):
+    short = _gear_gaps(facts)
+    if not short:
+        return None
+    if _held(facts.gear_since, now, facts.stall) >= (
+        bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS
+    ):
+        return None
+    return Withhold(GATE_GEAR, "gear-up first: " + ", ".join(short))
+
+
+def _bag_stuck_gate(facts: Facts, now: float, free_slots: dict):
+    progress = bag_pressure.bag_hold_progress(
+        facts.hold, free_slots, now, running=facts.errand_active
+    )
+    if progress is None:
+        return None
+    if progress.released and (
+        now - progress.since >= bag_pressure.BAG_HOLD_FORGET_SECONDS
+    ):
+        return None
+    stuck = bag_pressure.bag_hold_stuck(progress)
+    if not stuck:
+        return None
+    return Withhold(
+        GATE_BAG_STUCK,
+        "%s at the bag floor and no town pass has made room" % ", ".join(stuck),
+    )
+
+
+def _town_first_gate(facts: Facts, now: float, free_slots: dict):
+    if facts.armed:
+        return None
+    short = bag_pressure.campaign_resume_short(
+        free_slots, held_seconds=_held(facts.town_since, now, facts.stall)
+    )
+    if not short:
+        return None
+    return Withhold(
+        GATE_TOWN_FIRST,
+        "town first: %s below %d free slots"
+        % (", ".join(short), bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS),
+    )
+
+
+def _near_full_gate(free_slots: dict):
+    if bag_pressure.family_town_run_needed(free_slots):
+        return Withhold(GATE_BAG_FULL, "bags are near full")
+    return None
+
+
+def decide_admission(family, keyword: str, facts: Facts, now: float):
+    """Admit, or the Withhold of the first gate that holds `family` out.
+
+    `family` is the member names, `keyword` the dungeon (for the caller's log),
+    `now` the monotonic time the facts were read at. The gates run in the
+    chain's order, and a gate that releases (a ceiling passed, nothing short)
+    lets the next one speak.
+    """
+    free_slots = facts.free_slots or {}
+    for gate in (
+        _errand_gate(facts),
+        _gear_gate(facts, now),
+        _bag_stuck_gate(facts, now, free_slots),
+        _near_full_gate(free_slots),
+        _town_first_gate(facts, now, free_slots),
+    ):
+        if gate is not None:
+            return replace(
+                gate,
+                reason="dungeon:%s for %d member(s) - %s"
+                % (keyword or "(default)", len(family), gate.reason),
+            )
+    return Admit()
