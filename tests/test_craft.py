@@ -772,6 +772,11 @@ class EngineeringRecipeForTests(unittest.TestCase):
     several entries rather than the trivial single-entry case Tailoring
     covers above."""
 
+    def test_thorium_widget_starts_at_its_trainer_rank(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["engineering"], 260)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 19791)
+
     def test_first_bracket_covers_skill_one(self):
         recipe = craft.recipe_for(goals.SKILL_IDS["engineering"], 1)
         self.assertIsNotNone(recipe)
@@ -807,7 +812,7 @@ class EngineeringRecipeForTests(unittest.TestCase):
         self.assertEqual(recipe.spell_id, 3945)  # Heavy Blasting Powder
 
     def test_the_explosive_sheep_chain_gap_answers_none(self):
-        # 151-174: Whirring Bronze Gizmo / Bronze Framework / Explosive Sheep
+        # 145-174: Whirring Bronze Gizmo / Bronze Framework / Explosive Sheep
         # collide with Heavy Blasting Powder's own skill window and cannot
         # all be stocked by this module's one-recipe-per-bracket model - see
         # craft.py's module-level comment.
@@ -1235,7 +1240,7 @@ class MeasuredCraftBands(unittest.TestCase):
         # can end a recipe before its own grey cutoff. The five gaps below are
         # intentional places where no castable recipe covers the intervening
         # values.
-        gap_starts = {12585: 175, 19791: 261, 3337: 125, 9918: 200, 16641: 250}
+        gap_starts = {12585: 175, 19791: 260, 3337: 125, 9918: 200, 16641: 250}
         for skill_recipes in craft.RECIPES.values():
             for index, recipe in enumerate(skill_recipes):
                 learn_floor, yellow, grey = MEASURED_BANDS[recipe.spell_id]

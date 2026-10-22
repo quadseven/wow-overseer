@@ -96,10 +96,6 @@ class TheLadderGapsAreNamed(unittest.TestCase):
             # Bronze Framework (3953, taught at 145, grey 195) needs no focus
             # but eats two Bronze Bars, and nothing smelts bronze yet.
             (145, 174): "Bronze Framework eats Bronze Bars, which nothing smelts",
-            (
-                260,
-                260,
-            ): "Dense Blasting Powder greys at 260; the next rung is taught at 261",
         },
     }
 
@@ -117,7 +113,7 @@ class TheLadderGapsAreNamed(unittest.TestCase):
             and r.focus
             and r.focus not in craft.FOCUS_AIMS
         )
-        self.assertEqual([(31, 75), (106, 124), (195, 250), (261, 300)], gated)
+        self.assertEqual([(31, 75), (106, 124), (195, 250), (260, 300)], gated)
         self.assertNotIn(1, craft.FOCUS_AIMS)
 
 

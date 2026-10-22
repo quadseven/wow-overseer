@@ -731,6 +731,24 @@ MISNAMED: dict[str, str] = {
 }
 
 
+# Raid crafts whose recipe this realm verifiably does not teach (#774): craft
+# spell -> (product, why). The raid supply card names each one.
+UNOBTAINABLE_RECIPES = {
+    22704: (
+        "Field Repair Bot 74A",
+        "Schematic 18235 has no trainer, vendor, loot or quest source",
+    ),
+}
+
+
+def unobtainable_lines() -> list[str]:
+    """One sentence per raid craft this realm cannot teach."""
+    return [
+        "%s is unobtainable on this realm: %s." % (product, why)
+        for product, why in UNOBTAINABLE_RECIPES.values()
+    ]
+
+
 def by_spell(spell_id: int):
     """The consumable this craft spell makes, or None.
 
@@ -1055,7 +1073,5 @@ def report(names, skills_by_name: dict) -> str:
 # Nothing in raidgoals is edited on the strength of that, because there was
 # nothing to correct - and a note is the honest way to record a check that
 # found nothing, rather than a change that pretends it found something. The
-# eighth recipe, the Engineering Field Repair Bot (22704), was NOT checked:
-# nobody on the roster holds Engineering at a rank that could cast it and it is
-# outside the brief's list, so it stays exactly as unverified as its own page
-# already says it is.
+# The Engineering Field Repair Bot (22704) has a separate source verdict in
+# UNOBTAINABLE_RECIPES. That verdict does not claim its reagents were checked.
