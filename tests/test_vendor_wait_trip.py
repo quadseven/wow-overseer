@@ -94,18 +94,27 @@ class TheTripMakesTheFamilyRoom(unittest.TestCase):
 
     def test_the_trip_goes_when_the_family_frees_room_between_its_members(self):
         # No sustained wait either: the family has not been waiting for a
-        # vendor, its sale is simply spread over three members. No single
-        # member's sale clears the trigger of three free slots (Grog 0 + 2 =
-        # 2, Ugga 0 + 1 = 1), so the trip frees the floor for nobody and Bork
-        # stays pinned at the floor: the pass does not take a trip that cannot
-        # lift the binding member, and the family is not held for it.
+        # vendor, its sale is simply spread over three members. The trip goes
+        # for the sale itself (#1204): one walk to a counter sells every
+        # holder's stacks, and Grog's two and Ugga's one add up to the
+        # trigger's width of three free slots at the floor, so the goods move
+        # and the room is made even though no single member's sale lifts its
+        # seller past the trigger.
         namespace = _vendor_pass_mode({"_fetch_vendor_wait_seconds": lambda names: 0})
         mode = asyncio.run(
             namespace["_vendor_pass_mode"](
                 None, self.NAMES, self.FREE, self.SELLABLE, False
             )
         )
-        self.assertEqual(bag_pressure.VENDOR_MODE_COUNTER, mode)
+        self.assertEqual(bag_pressure.VENDOR_MODE_TRIP, mode)
+
+    def test_the_bag_room_hold_does_not_wait_on_that_trip(self):
+        # #1309's case, unchanged: no single member's sale lifts its seller
+        # past the trigger (Grog 0 + 2 = 2, Ugga 0 + 1 = 1), so the trip
+        # frees the floor for nobody and the hold must not wait on it. The
+        # trip still goes (#1204): the family's goods are what the walk is
+        # for, and the two questions are separate.
+        self.assertFalse(bag_pressure.vendor_trip_makes_room(self.FREE, self.SELLABLE))
 
     def test_no_trip_when_the_family_carries_nothing_a_vendor_would_buy(self):
         # Bork alone at the floor, with 68 kept stacks: the trip cannot help
@@ -117,6 +126,61 @@ class TheTripMakesTheFamilyRoom(unittest.TestCase):
             )
         )
         self.assertEqual(bag_pressure.VENDOR_MODE_COUNTER, mode)
+
+
+class TheSharedSaleCount(unittest.TestCase):
+    """#1204: one walk to a counter sells every holder's stacks.
+
+    The count the vendor pass asks before it takes the shared sale: the slots
+    the walk frees for the members at the floor, counted together and not one
+    member at a time.
+    """
+
+    def test_the_floor_s_stacks_are_counted_together(self):
+        # Bork carries 68 stacks no vendor will buy, so he frees nothing;
+        # Grog and Ugga, at the floor, carry two and one. Og's two are sold
+        # too, but Og has ten free slots: a slot freed in his bags is not one
+        # in anybody's at the floor (#1243).
+        self.assertEqual(
+            3,
+            bag_pressure.family_shared_sale_slots(
+                {"Bork": 0, "Grog": 0, "Ugga": 0, "Og": 10},
+                {"Bork": 0, "Grog": 2, "Ugga": 1, "Og": 2},
+            ),
+        )
+
+    def test_stacks_of_members_with_room_free_nothing_at_the_floor(self):
+        self.assertEqual(
+            0,
+            bag_pressure.family_shared_sale_slots(
+                {"Bork": 0, "Grog": 12, "Ugga": 9, "Og": 10},
+                {"Bork": 0, "Grog": 2, "Ugga": 1, "Og": 2},
+            ),
+        )
+
+    def test_a_family_with_room_frees_nothing(self):
+        self.assertEqual(
+            0,
+            bag_pressure.family_shared_sale_slots({"Bork": 11}, {"Bork": 40}),
+        )
+
+    def test_an_unreadable_count_frees_nothing(self):
+        self.assertEqual(
+            0, bag_pressure.family_shared_sale_slots({"Og": 0}, {"Og": None})
+        )
+        self.assertEqual(0, bag_pressure.family_shared_sale_slots({"Og": 0}, {}))
+        self.assertEqual(
+            0, bag_pressure.family_shared_sale_slots({"Og": 0}, {"Og": -5})
+        )
+
+    def test_an_unknown_family_frees_nothing(self):
+        self.assertEqual(0, bag_pressure.family_shared_sale_slots({}, {"Og": 4}))
+        self.assertEqual(
+            0, bag_pressure.family_shared_sale_slots({"Og": -1}, {"Og": 4})
+        )
+        self.assertEqual(
+            0, bag_pressure.family_shared_sale_slots({"Og": None}, {"Og": 4})
+        )
 
 
 class NoTripForAFloorItCannotLift(unittest.TestCase):

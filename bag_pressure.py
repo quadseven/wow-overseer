@@ -438,14 +438,15 @@ FAMILY_SALE_SLOTS = TOWN_RUN_FREE_SLOTS
 
 
 def family_sale_slots(free_slots: dict, sellable: dict) -> int:
-    """The free slots a vendor trip would free for the members at the floor.
+    """The free slots a vendor trip would free for the members it lifts.
 
-    ONE WALK TO A COUNTER SELLS EVERY HOLDER'S STACKS, so the slots it frees
-    at the floor are the family's. `family_town_run_needed` asks a different
-    question - whether selling lifts a member past the trigger, which is what
-    the campaign needs to open - and it asks it of one member at a time, so a
-    family whose members at the floor each carry a few stacks, none of them
-    enough to clear the trigger alone, never cleared the bar on anybody.
+    THE LIFT, NOT THE COLLECTIVE COUNT (#1309). One walk to a counter sells
+    every holder's stacks, so the slots it frees at the floor are the family's.
+    `family_town_run_needed` asks a different question - whether selling lifts
+    a member past the trigger, which is what the campaign needs to open - and
+    it asks it of one member at a time, so a family whose members at the floor
+    each carry a few stacks, none of them enough to clear the trigger alone,
+    never cleared the bar on anybody.
 
     Measured on the dev realm 2026-10-19: Grog, Og and Ugga, each carrying
     stacks a vendor would buy, and a family held at the floor by Bork, whose
@@ -484,6 +485,11 @@ def family_sale_slots(free_slots: dict, sellable: dict) -> int:
     run. What the trip buys here is the room the goods leave behind and the
     goods themselves, and a member at the floor who carries things it cannot
     sell is stuck on exactly that until a vendor takes them.
+
+    THE COLLECTIVE COUNT IS `family_shared_sale_slots` below, and the two
+    answer different questions: this one asks whether the trip lifts a
+    member off the floor, which is what the bag-room hold asks before it
+    waits on a trip.
     """
     freed = 0
     for name, free in (free_slots or {}).items():
@@ -500,14 +506,59 @@ def family_sale_slots(free_slots: dict, sellable: dict) -> int:
     return freed
 
 
+def family_shared_sale_slots(free_slots: dict, sellable: dict) -> int:
+    """The free slots ONE WALK TO A COUNTER frees for the members at the floor.
+
+    THE COLLECTIVE COUNT (#1204), NOT THE LIFT (#1309). One walk to a counter
+    sells every holder's stacks, so the slots it frees at the floor are the
+    family's, counted together and not one member at a time. A family whose
+    members at the floor each carry a few stacks a vendor would buy - none of
+    them enough to clear the trigger of 3 free slots alone - never clears the
+    bar on anybody, and the vendor pass sat in counter mode writing no sale
+    while every holder with something to sell logged "no vendor within reach"
+    on every pass. Measured on the dev realm 2026-10-19: Grog, Og and Ugga,
+    each carrying stacks a vendor would buy, and a family held at the floor by
+    Bork, whose 68 stacks no vendor will buy at all.
+
+    Only the floor's stacks count (#1243): a slot freed in a bag with room is
+    no slot at the floor. A member nobody can relieve - one who carries
+    nothing a vendor will buy - contributes nothing, which is the half that
+    kept the vendor pass off a column it could not use (infra#4190). A
+    family that is not at the floor frees nothing: there is nothing to
+    relieve then.
+
+    WHY THIS IS NOT `family_sale_slots` (#1309). That one counts the stacks
+    of the members the trip LIFTS off the floor, and that is the question
+    the bag-room HOLD asks before it waits on a trip: a hold that waits on a
+    trip which cannot lift the member that pins the family waits for ever,
+    and Zug's family read "waits for bag room" for 2.2 hours on 2026-10-20.
+    This one asks what the trip is WORTH: the goods it moves and the room it
+    makes for the family. The vendor pass asks both, and the shared sale goes
+    when either answers yes.
+    """
+    freed = 0
+    for name, free in (free_slots or {}).items():
+        if not (isinstance(free, int) and 0 <= free <= TOWN_RUN_FREE_SLOTS):
+            continue
+        offered = (sellable or {}).get(name, 0)
+        if not isinstance(offered, int) or offered <= 0:
+            continue
+        freed += offered
+    return freed
+
+
 def vendor_trip_makes_room(free_slots: dict, sellable: dict) -> bool:
     """Whether a vendor trip would make room for the family at the floor.
 
-    The two bag-room reasons the vendor pass takes a trip for: a sale that
-    lifts one member past the trigger (`family_town_run_needed`), or one that
-    frees the trigger's width between the members at the floor
-    (`family_sale_slots`). The dungeon quest hold asks this before it waits on
-    that trip, so it never waits on a trip that will not go (#1243).
+    The bag-room reason the hold waits on: a sale that lifts one member past
+    the trigger (`family_town_run_needed`, which `family_sale_slots` counts
+    the same way per member). The dungeon quest hold asks this before it
+    waits on that trip, so it never waits on a trip that will not go (#1243).
+
+    NOT THE SHARED SALE (#1204). Whether the trip is worth taking is
+    `family_shared_sale_slots`'s question and the vendor pass's; this one
+    asks whether the trip would lift the member that pins the family, which
+    is the narrower thing the hold needs to know.
     """
     return (
         family_town_run_needed(free_slots, sellable=sellable)
