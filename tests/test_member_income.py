@@ -345,10 +345,10 @@ class ThePurchaseOrder(unittest.TestCase):
     def order(self, money=666, spells=37600, count=9, riding=0, level=25, hungry=False):
         return purse.order("Bonk", level, money, spells, count, riding, hungry)
 
-    def test_the_order_is_spells_riding_gear_food(self):
+    def test_the_order_is_spells_riding_food_gear(self):
         o = self.order()
         self.assertEqual(
-            [purse.SPELLS, purse.RIDING, purse.GEAR, purse.FOOD],
+            [purse.SPELLS, purse.RIDING, purse.FOOD, purse.GEAR],
             [w.kind for w in o.wants],
         )
         self.assertEqual(40000, o.want(purse.RIDING).copper)
@@ -376,7 +376,7 @@ class ThePurchaseOrder(unittest.TestCase):
     def test_the_line_names_the_order_and_what_it_is_short_for(self):
         self.assertEqual(
             "purse: Bonk (25) holds 6s 66c; order: class spells (9 it casts) 3g 76s, "
-            "Apprentice Riding 4g, gear, food and drink; short for: class spells "
+            "Apprentice Riding 4g, food and drink, gear; short for: class spells "
             "(9 it casts) 3g 76s, Apprentice Riding 4g",
             self.order().line,
         )
