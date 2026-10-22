@@ -181,15 +181,20 @@ def may_need(class_id, level, carried) -> bool:
         try:
             if int(item.item_class) != ITEM_CLASS_WEAPON:
                 continue
-            if int(item.subclass) not in learnable:
+            sub = int(item.subclass)
+            if sub not in learnable:
                 continue
-            if int(item.inventory_type) not in WEAPON_SLOT:
+            inv = int(item.inventory_type)
+            if inv not in WEAPON_SLOT:
                 continue
             if int(item.required_level) > lvl:
                 continue
+            # Hunters do not walk to train melee weapons
+            if cls == HUNTER and inv in MELEE_INVENTORY_TYPES:
+                continue
         except (AttributeError, TypeError, ValueError):
             continue
-        if not bot_wont_wear(cls, ITEM_CLASS_WEAPON, item.inventory_type):
+        if not bot_wont_wear(cls, ITEM_CLASS_WEAPON, inv):
             return True
     return False
 
