@@ -11701,7 +11701,7 @@ class Bridge(discord.Client):
             log.info("economy: the family is at the floor and a vendor trip "
                      "would free %d slot(s) between its members at the floor "
                      "(sellable %s), so the trip goes", freed, sellable_counts)
-        if not trip_worth and any(sellable_counts.values()):
+        if not trip_worth and not in_run and any(sellable_counts.values()):
             waited = await asyncio.to_thread(_fetch_vendor_wait_seconds, names)
             if bag_pressure.vendor_wait_trip(waited, sellable_counts, in_run):
                 trip_worth = True
