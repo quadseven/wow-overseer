@@ -91,6 +91,11 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         settle = _code("    async def _settle_town_errand(")
         self.assertIn('self._claim_town_slot("towntrip", leader, "repair",', settle)
 
+    def test_an_unreachable_repairer_does_not_make_the_errand_eligible(self):
+        code = _code("    async def _towntrip_once(")
+        self.assertIn("key[1] != towntrip.REPAIR_COMMAND or town.repairs", code)
+        self.assertIn("town, reachable_unasked", code)
+
     def test_the_leader_is_the_one_sent(self):
         """Only the leader carries `new rpg`; an aimed follower wanders."""
         code = _code("    async def _towntrip_once(self")

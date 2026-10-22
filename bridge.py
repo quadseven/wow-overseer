@@ -19170,7 +19170,10 @@ class Bridge(discord.Client):
         seen = await asyncio.to_thread(_recent_town_keys, GIVE_RETRY_MINUTES)
         unasked = [key for key in towntrip.counter_keys(members, trip)
                    if key not in seen]
-        await self._settle_town_errand(names, leader, town, bool(unasked),
+        reachable_unasked = any(
+            key[1] != towntrip.REPAIR_COMMAND or town.repairs for key in unasked
+        )
+        await self._settle_town_errand(names, leader, town, reachable_unasked,
                                        cohort=_cohort_key(cohort))
 
         if not trip.errands:
