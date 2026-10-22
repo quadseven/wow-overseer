@@ -3342,6 +3342,49 @@ def _gear_campaign_hold(names, keyword, in_run):
     return True
 
 
+def _admission_facts(names, mode: str) -> campaignqueue.Facts:
+    """What the five gates read, taken without touching any hold clock."""
+    key = tuple(sorted(names))
+    gear = _fetch_gearup_facts(names)
+    return campaignqueue.Facts(
+        errand_active=_town_errand_active(names),
+        gear=gear,
+        mailed=_mail_gear_holders(names),
+        gear_since=_GEAR_HOLD_SINCE.get(key),
+        free_slots=_fetch_free_slots(names),
+        hold=_BAG_HOLD.get(key),
+        armed=any(job == mode for job in _jobs_of(names).values()),
+        town_since=_TOWN_FIRST_SINCE.get(key),
+        stall=_queue_stall_floor(names),
+    )
+
+
+def _admission_shadow(keyword: str, mode: str, names):
+    """Shadow campaignqueue.decide_admission beside the gate chain (#738).
+
+    Returns settle(gate): called with the gate the chain stopped at, or None
+    when it let the family in, it logs whether the pure decision agrees. The
+    chain decides; nothing here changes what it does, and a failure in the
+    shadow is logged and ends the comparison, never the drive.
+    """
+    try:
+        now = time.monotonic()
+        verdict = campaignqueue.decide_admission(
+            tuple(names), keyword, _admission_facts(names, mode), now)
+    except Exception:
+        log.exception("admission shadow: could not decide dungeon:%s", keyword)
+        return lambda gate: None
+    shadow_gate = getattr(verdict, "gate", None)
+
+    def settle(gate):
+        level = log.info if gate == shadow_gate else log.warning
+        level("admission shadow: dungeon:%s chain=%s decide=%s (%s)",
+              keyword or "(default)", gate or "admit", shadow_gate or "admit",
+              "agree" if gate == shadow_gate else "DISAGREE")
+
+    return settle
+
+
 def _drive_dungeon(keyword: str, wanted: int, names=None,
                    source: str = "overseer:goal", withheld=None) -> tuple:
     """Turn a decided dungeon goal into the roster writes that actually send
@@ -3400,10 +3443,16 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
         return _withheld(withheld, "no enabled character to send")
 
     # Looked up, not called by name: the campaign tests load this function in
-    # isolation, without the gate beside it.
+    # isolation, without the gate beside it. The shadow decision (#738) is
+    # looked up for the same reason and only ever logs.
+    # The gate names below are campaignqueue.GATE_* (pinned by test_admission).
+    shadow = globals().get("_admission_shadow")
+    settle = shadow(keyword, mode, names) if shadow else (lambda gate: None)
     gear_gate = globals().get("_gear_gate")
     reason = gear_gate(names, keyword) if gear_gate else None
     if reason:
+        settle("gear" if reason.startswith("gear-up")
+               else "town-errand")
         _hand_to_town(keyword, mode, names)
         _keep_in_town(names)
         return _withheld(withheld, reason)
@@ -3418,6 +3467,7 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
     # pass ended. Looked up like the gates above.
     hold_why = globals().get("_bag_hold_why")
     if stuck:
+        settle("bag-hold-stuck")
         globals()["_quest_while_stuck"](names, mode, stuck)
         why = hold_why(names) if hold_why else ""
         return _withheld(withheld, "%s at the bag floor and no town pass has "
@@ -3425,6 +3475,7 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
                          "room" % (", ".join(stuck),
                                    " (%s)" % why if why else ""))
     if bag_pressure.family_town_run_needed(free_slots):
+        settle("bags-near-full")
         log.info(
             "goal: withholding dungeon:%s for %d enabled character(s) - bags "
             "are already near full and a run started now would be evacuated "
@@ -3439,11 +3490,13 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
                          % (" (%s)" % why if why else ""))
     waits = _town_first(mode, names, free_slots)
     if waits:
+        settle("town-first")
         log.info("goal: withholding dungeon:%s for %d enabled character(s) - %s "
                  "(wow-overseer#265)", keyword or "(default)", len(names), waits)
         _keep_in_town(names)
         return _withheld(withheld, waits)
 
+    settle(None)
     jobs_written = _insert_family_jobs(names, mode, source)
 
     campaign_written = 0
