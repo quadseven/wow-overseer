@@ -52,6 +52,22 @@ MASTERS = [
 
 
 class Needs(unittest.TestCase):
+    def test_class_weapon_training_rules(self):
+        self.assertEqual(
+            {
+                1: {0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 13, 15, 16, 18},
+                2: {0, 1, 4, 5, 6, 7, 8},
+                3: {0, 1, 2, 3, 6, 7, 8, 10, 13, 15, 16, 18},
+                4: {2, 3, 4, 7, 13, 15, 16, 18},
+                5: {4, 10, 15},
+                7: {0, 1, 4, 5, 10, 13, 15},
+                8: {7, 10, 15},
+                9: {7, 10, 15},
+                11: {4, 5, 6, 10, 13, 15},
+            },
+            ws.CLASS_WEAPONS,
+        )
+
     def test_the_mage_needs_swords_and_the_warrior_bows(self):
         got = {
             (n.name, n.skill, n.spell, n.entry, n.slot) for n in ws.needs(FACTS, BAGS)
