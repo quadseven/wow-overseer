@@ -78,7 +78,9 @@ its level (campaignplan.RUNS, asked through council.door_refusal_kind as a
 party of one, so the faction, level floor and crossing rules are the family's
 own) and farms near that door's meeting stone, the stone nearest the door's
 entrance (entrances.json) in the world's spawn table. The warlocks are spread
-over the doors that fit, fewest first.
+over the doors that fit, fewest first. On a raid night the family's on-call
+summoner holds the raid door's stone instead (RAID_DOORS: the Blackrock
+Mountain meeting stone for Molten Core).
 
 THE CLOTH TRADES (the operator, 2026-09-29: "those are valuable crafting
 resources for someone"). Every maintenance member also learns First Aid, a
@@ -132,6 +134,7 @@ import mountbuy
 import purse
 import pvpgear
 import raidroles
+import raidrun
 import recipebook
 import restsupply
 import situation
@@ -2573,10 +2576,10 @@ def entrances() -> dict:
 def stone_for(keyword: str, entrances: dict, stones) -> Spot | None:
     """The meeting stone nearest the door's entrance, within STONE_YARDS.
 
-    `entrances` is entrances.json (dungeon map id -> the entrance on its
-    continent); `stones` are the world's meeting stone spawns as Spots.
+    `entrances` is entrances.json (dungeon or raid map id -> the entrance on
+    its continent); `stones` are the world's meeting stone spawns as Spots.
     """
-    map_id = dungeonpath.PORTAL_MAPS.get(keyword)
+    map_id = dungeonpath.PORTAL_MAPS.get(keyword, RAID_MAPS.get(keyword))
     door = (entrances or {}).get(str(map_id)) if map_id is not None else None
     if not door:
         return None
@@ -2608,6 +2611,44 @@ def doors_for(member: Member) -> list:
             continue
         out.append(run)
     return out
+
+
+# THE RAID NIGHT'S STONE (#762). A raid is not in campaignplan.RUNS, so a
+# summoner's dungeon bands never name it; on a night the family is ordered
+# into a raid, its on-call summoner holds the raid door's stone instead, the
+# Blackrock Mountain meeting stone for Molten Core. The floor is the raid's
+# own, which is also about where the mountain's roads stop killing a walker.
+# The summoner is not seated, so the core will not let it summon a raider
+# (IsInSameRaidWith); the raid's own summons are raidrun's gathering.
+RAID_MAPS = {raidrun.MOLTEN_CORE: raidrun.MOLTEN_CORE_MAP}
+
+
+@dataclass(frozen=True)
+class RaidDoor:
+    """A raid door a summoner can hold on a raid night, shaped like a Run."""
+
+    keyword: str
+    place: str
+    floor: int
+    ceiling: int
+
+
+RAID_DOORS = (
+    RaidDoor(
+        raidrun.MOLTEN_CORE,
+        raidrun.BLACKROCK_MOUNTAIN,
+        raidrun.MIN_LEVEL[raidrun.MOLTEN_CORE],
+        classic.MAX_LEVEL,
+    ),
+)
+
+
+def campaign_doors_for(member: Member, campaign_door: str) -> list:
+    """The doors this warlock may hold on call for `campaign_door`: the raid
+    doors its level reaches on a raid night, its dungeon bands otherwise."""
+    if raidrun.is_raid(campaign_door):
+        return [d for d in RAID_DOORS if d.floor <= member.level <= d.ceiling]
+    return doors_for(member)
 
 
 def assign_doors(members, entrances, stones, campaign_door: str = "") -> dict:
@@ -2656,7 +2697,7 @@ def _assign_campaign_door(casters, entrances, stones, campaign_door):
         return None, load, out
     stone = run = on_call = None
     for member in casters:
-        for candidate in doors_for(member):
+        for candidate in campaign_doors_for(member, campaign_door):
             if candidate.keyword != campaign_door:
                 continue
             stone = stone_for(candidate.keyword, entrances, stones)

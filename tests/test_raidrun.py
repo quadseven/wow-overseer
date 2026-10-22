@@ -78,10 +78,10 @@ class TheRunLineSaysWhatShipped(unittest.TestCase):
         self.assertNotIn("clears it with the dungeon brain", line)
         self.assertNotIn("runs back after a wipe", line)
 
-    def test_the_run_line_says_who_is_not_brought(self):
+    def test_the_run_line_says_who_is_summoned(self):
         line = raidrun.run_line()
         self.assertIn("Only the head is walked to the door", line)
-        self.assertIn("not brought there", line)
+        self.assertIn("summoned at the Blackrock Mountain meeting stone", line)
 
     def test_a_module_without_the_clear_is_still_said_plainly(self):
         """The flags are switches pinned to the module, like FORMS and ENTERS.
@@ -268,6 +268,9 @@ def _load_drive_raid(events, members, missing_table=False, missing_duty=False):
         "campaignqueue": campaignqueue,
         "log": Log(),
         "_insert_job": lambda name, mode, by: events.append(("job", name, mode)),
+        "_log_raid_order": lambda family, keyword, seated: events.append(
+            ("order", family, keyword, len(seated))
+        ),
         "_connect": lambda: contextlib.nullcontext(Conn()),
         "pymysql": types.SimpleNamespace(
             err=types.SimpleNamespace(MySQLError=MissingTable)
@@ -302,7 +305,8 @@ class TheBridgeWritesSeatsThenTheJob(unittest.TestCase):
         inserts = [e for e in events if e[0] == "seat" and e[1] == "INSERT"]
         self.assertEqual(1, len(inserts), "the forty seats are one statement")
         self.assertEqual(40, len(inserts[0][2]))
-        self.assertEqual(("job", "Grug", "raid:moltencore"), events[-1])
+        self.assertEqual(("job", "Grug", "raid:moltencore"), events[-2])
+        self.assertEqual(("order", "Grug", "moltencore", 40), events[-1])
         self.assertLess(kinds.index("seat"), kinds.index("job"))
 
     def test_each_seat_carries_its_duty(self):
@@ -320,7 +324,7 @@ class TheBridgeWritesSeatsThenTheJob(unittest.TestCase):
         inserts = [e for e in events if e[0] == "seat" and e[1] == "INSERT"]
         self.assertEqual(1, len(inserts))
         self.assertEqual(5, len(inserts[0][2][0]))
-        self.assertEqual(("job", "Grug", "raid:moltencore"), events[-1])
+        self.assertEqual(("job", "Grug", "raid:moltencore"), events[-2])
 
     def test_no_seat_table_means_no_job(self):
         events = []

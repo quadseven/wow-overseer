@@ -551,7 +551,8 @@ def say(mode: str, place: str | None = None) -> str:
         return (
             "The raid forms, walks to %s and goes in. It does not clear: "
             "inside, the raid holds at the entrance. Only the head is walked "
-            "to the door: a raider who is not near it is not brought there." % where
+            "to the door: a raider too far to walk in behind it is summoned at "
+            "the Blackrock Mountain meeting stone." % where
         )
     if is_dungeon_job(mode):
         text = SAYS["dungeon"]

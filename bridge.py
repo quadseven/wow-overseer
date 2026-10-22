@@ -3690,7 +3690,148 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
              "job row(s) of %d. %s", campaignqueue._family(family), keyword,
              len(seats), len({s[3] for s in seats}), written, len(names),
              lineup.get("roles_line", ""))
+    _log_raid_order(family, keyword, [s[2] for s in seats])
     return written
+
+
+# --- the raid gathering (#762) --------------------------------------------------
+#
+# raidrun.gather decides how a raid night brings its raiders to Blackrock
+# Mountain; these read what it decides on and write the rows it names: a
+# `walk-to-spawn` to the meeting stone for a clicker, and a `kind='summon'`
+# row that mod-overseer drives through the stone and verifies by position.
+
+_RAID_SEATED_SQL = (
+    "SELECT name FROM overseer_raid_seat WHERE family = %s AND keyword = %s"
+)
+# Where each raider stands, fresh within the presence window.
+_RAID_POSITIONS_SQL = (
+    "SELECT name, map_id, pos_x, pos_y FROM overseer_snapshot "
+    "WHERE updated_at > NOW() - INTERVAL %s SECOND AND name IN ({holes})"
+)
+# The head's group: the core summons only a member of the summoner's raid.
+_RAID_GROUP_SQL = (
+    "SELECT c.name FROM group_member gm JOIN characters c ON c.guid = gm.memberGuid "
+    "WHERE gm.guid = (SELECT gm2.guid FROM group_member gm2 JOIN characters c2 "
+    "ON c2.guid = gm2.memberGuid WHERE c2.name = %s LIMIT 1)"
+)
+# The gathering's own rows lately; older ones neither hold nor bar a raider.
+_RAID_GATHER_ROWS_SQL = (
+    "SELECT target_name, kind, command, target_arg, status FROM overseer_command "
+    "WHERE source LIKE %s AND created_at > NOW() - INTERVAL %s MINUTE"
+)
+RAID_GATHER_WINDOW_MINUTES = 10
+# The night's clock starts when the queue started the raid's entry.
+_RAID_ORDERED_SQL = (
+    "SELECT TIMESTAMPDIFF(SECOND, started_at, NOW()) AS seconds "
+    "FROM overseer_dungeon_queue WHERE id = %s"
+)
+# family -> {"why": the last reason said, "inside": (queue id, count inside)},
+# so a pass that changes nothing logs nothing.
+_RAID_GATHER_SAID: dict = {}
+
+
+def _raid_positions(cur, names) -> dict:
+    """name -> {map_id, pos_x, pos_y} for each of `names` the snapshot shows."""
+    if not names:
+        return {}
+    sql = _RAID_POSITIONS_SQL.format(holes=", ".join(["%s"] * len(names)))  # noqa: S608 - placeholders only
+    cur.execute(sql, (v2_presence.FRESH_SECONDS, *names))
+    return {str(r["name"]): dict(r) for r in cur.fetchall()}
+
+
+def _raid_door(keyword: str) -> dict | None:
+    """entrances.json's door for this raid keyword, None when it has none."""
+    return guildjobs.entrances().get(str(guildjobs.RAID_MAPS.get(keyword)))
+
+
+def _log_raid_order(family: str, keyword: str, seated: list) -> None:
+    """Log how each seated raider not at the mountain arrives (raidrun.order_line).
+
+    The order is already written when this runs, so a failed read is logged
+    and costs only the line."""
+    door = _raid_door(keyword)
+    if door is None:
+        log.warning("raid order: %s has no door in entrances.json", keyword)
+        return
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            positions = _raid_positions(cur, seated)
+    except pymysql.err.MySQLError:
+        log.exception("raid order: where %s's raiders stand could not be read",
+                      campaignqueue._family(family))
+        return
+    log.info("%s", raidrun.order_line(campaignqueue._family(family), keyword,
+                                      raidrun.arrivals(seated, positions, door)))
+
+
+def _raid_gather_reads(cur, family, keyword, queue_id, head) -> dict:
+    """Everything one gathering pass decides from."""
+    cur.execute(_RAID_SEATED_SQL, (family, keyword))
+    seated = [str(r["name"]) for r in cur.fetchall()]
+    cur.execute(_RAID_GROUP_SQL, (head,))
+    in_raid = {str(r["name"]) for r in cur.fetchall()}
+    cur.execute(_RAID_GATHER_ROWS_SQL, (raidrun.GATHER_SOURCE + ":%",
+                                        RAID_GATHER_WINDOW_MINUTES))
+    rows = [dict(r) for r in cur.fetchall()]
+    cur.execute(_RAID_ORDERED_SQL, (queue_id,))
+    ordered = cur.fetchone()
+    if not _JOB_STONES:
+        _JOB_STONES.extend(_job_read(cur, "meeting stones", _JOB_STONES_SQL,
+                                     (MEETING_STONE_GO_TYPE,)))
+    return {
+        "seated": seated,
+        "positions": _raid_positions(cur, seated),
+        "in_raid": in_raid,
+        "rows": rows,
+        "seconds": (ordered or {}).get("seconds"),
+        "stone": guildjobs.stone_for(keyword, guildjobs.entrances(),
+                                     guildjobs.spots_from_rows(_JOB_STONES)),
+    }
+
+
+def _raid_gather_write(cur, step, stone) -> list:
+    """Write the step's rows; one log line for each."""
+    said = []
+    for name in step.walks:
+        cur.execute(
+            "INSERT INTO overseer_command (target_name, command, kind, source) "
+            "VALUES (%s, %s, 'job', %s)",
+            (name, stone.command, raidrun.gather_source("walk", name)))
+        said.append("%s walks to the %s meeting stone to click"
+                    % (name, raidrun.BLACKROCK_MOUNTAIN))
+    if step.summon is not None:
+        s = step.summon
+        cur.execute(
+            "INSERT INTO overseer_command "
+            "(target_name, command, kind, target_arg, source) "
+            "VALUES (%s, %s, 'summon', %s, %s)",
+            (s.summoner, s.command, s.helper,
+             raidrun.gather_source("summon", s.target)))
+        said.append("%s summons %s at the %s meeting stone, %s clicking"
+                    % (s.summoner, s.target, raidrun.BLACKROCK_MOUNTAIN, s.helper))
+    return said
+
+
+def _raid_gather_pass(family, keyword, queue_id, head, keep) -> tuple:
+    """One gathering pass: (lines written, why nothing more was, how many are
+    inside, the line that says so)."""
+    door = _raid_door(keyword)
+    if door is None:
+        return [], "%s has no door in entrances.json" % keyword, None, ""
+    with _connect() as conn, conn.cursor() as cur:
+        facts = _raid_gather_reads(cur, family, keyword, queue_id, head)
+        positions = facts["positions"]
+        step = raidrun.gather(
+            raidrun.arrivals(facts["seated"], positions, door), positions,
+            facts["in_raid"], door, facts["stone"], keep=keep,
+            open_rows=raidrun.open_rows(facts["rows"]),
+            tried=raidrun.tried(facts["rows"]))
+        written = _raid_gather_write(cur, step, facts["stone"])
+    count = raidrun.inside(facts["seated"], positions)
+    line = raidrun.gathered_line(campaignqueue._family(family), keyword, count,
+                                 len(facts["seated"]), facts["seconds"])
+    return written, step.why, count, line
 
 
 # --- the campaign queue (#209) ------------------------------------------------
@@ -16355,7 +16496,8 @@ class Bridge(discord.Client):
         admits = any(
             m.role == guildjobs.SUMMONER
             and guildjobs.RITUAL_OF_SUMMONING in m.known
-            and any(r.keyword == campaign_door for r in guildjobs.doors_for(m))
+            and any(r.keyword == campaign_door
+                    for r in guildjobs.campaign_doors_for(m, campaign_door))
             for m in members
         )
         reason = ("no meeting stone is available" if admits
@@ -19964,6 +20106,11 @@ class Bridge(discord.Client):
         move = campaignqueue.step(rows, fam["leader"])
         if not move.writes:
             log.info("queue: %s: %s", campaignqueue._family(key), move.why)
+            # A RAID UNDER WAY GATHERS (#762). Looked up: the queue tests
+            # load this method without the raid helpers.
+            gather = getattr(self, "_raid_gather", None)
+            if gather is not None:
+                await gather(key, rows, fam)
             return
         # A JEV INTERLUDE DELAYS THE NEXT RUN, NEVER THE ORDER (#216). The
         # entries are untouched: the start or re-assert is only held until the
@@ -19987,6 +20134,35 @@ class Bridge(discord.Client):
             # One family's failure must not cost the other its advance.
             log.exception("queue: the pass for %s failed; retrying next cycle",
                           campaignqueue._family(key))
+
+    async def _raid_gather(self, key: str, rows: list, fam: dict) -> None:
+        """One pass of an active raid's gathering (raidrun.gather): walk two
+        raiders to the Blackrock Mountain stone, or ask one summon there, and
+        log how many are inside and how long since the order."""
+        head = rows[0]
+        keyword = str(head.get("keyword") or "")
+        if head.get("status") != campaignqueue.ACTIVE or not raidrun.is_raid(keyword):
+            return
+        try:
+            written, why, count, line = await asyncio.to_thread(
+                _raid_gather_pass, key, keyword, int(head["id"]),
+                str(fam["leader"].get("name") or ""), list(fam["names"]))
+        except pymysql.err.MySQLError:
+            log.exception("raid gather: the pass for %s failed; retrying next "
+                          "cycle", campaignqueue._family(key))
+            return
+        who = campaignqueue._family(key)
+        for said_line in written:
+            log.info("raid gather: %s: %s", who, said_line)
+        said = _RAID_GATHER_SAID.setdefault(key, {})
+        if why and said.get("why") != why:
+            said["why"] = why
+            log.info("raid gather: %s: %s", who, why)
+        # Each change in who is inside is logged with the time since the
+        # order, so the night's last such line is its order-to-inside time.
+        if line and said.get("inside") != (head["id"], count):
+            said["inside"] = (head["id"], count)
+            log.info("%s", line)
 
     async def _standin_pass(self, pending: dict, fams: dict) -> dict:
         """Seat a guildmate for a family member sitting out to craft (standin.py).
@@ -28854,7 +29030,7 @@ def _fetch_job_facts(family_names: list) -> dict:
 
 
 def _guild_campaign_door(cohort=None) -> str:
-    """The family's active dungeon job, or its next queued run keyword."""
+    """The family's active dungeon or raid job, or its next queued keyword."""
     head = cohort.leader if cohort is not None else _head_now()
     family = getattr(cohort, "key", None) or _cohort_of(head) or ""
     roster = campaignqueue.families(_fetch_queue_roster())
@@ -28866,6 +29042,8 @@ def _guild_campaign_door(cohort=None) -> str:
         keyword = job.split(":", 1)[1].strip().lower()
         if keyword in {run.keyword for run in campaignplan.RUNS}:
             return keyword
+    if jobs.is_raid_job(job):
+        return job.split(":", 1)[1].strip().lower()
     queue = campaignqueue.pending_by_family(_fetch_queue_rows()).get(family, ())
     return str(queue[0].get("keyword") or "").strip().lower() if queue else ""
 

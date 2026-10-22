@@ -222,9 +222,9 @@ def _staffing_blockers(
     if runnable and not gathers:
         out.append(
             "Only the head is walked to the Molten Core door. A seated raider "
-            "who is not already near it when the raid forms is never brought "
-            "there (no walk, no crossing, no summon), and the raid goes in "
-            "after the assemble wait with whoever has arrived."
+            "too far to walk in behind it waits on a summon at the Blackrock "
+            "Mountain meeting stone, one at a time, and the raid goes in after "
+            "the assemble wait with whoever has arrived."
         )
     if short["raiders"]:
         out.append(

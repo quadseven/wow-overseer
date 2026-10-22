@@ -230,9 +230,9 @@ class HardBlockers(unittest.TestCase):
 
     def test_a_run_that_does_not_gather_is_a_hard_blocker_said_plainly(self):
         """The raid run clears, but ASSEMBLE walks only the head: a seated
-        raider who is not already near the door is never brought there, and
-        the raid goes in with whoever arrived. A forty-seat one-shot cannot
-        start that way, so the card must not call the guild ready."""
+        raider too far to walk waits on a summon at the stone, and the raid
+        goes in with whoever arrived. Until a live night shows the summons
+        bring the forty, the card must not call the guild ready."""
         rows = _guild("Cave", 23, FULL)
         card = _card(
             rows,

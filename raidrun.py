@@ -21,6 +21,9 @@ nothing that talks to MySQL. bridge.py runs the statements named here.
 
 from __future__ import annotations
 
+import math
+from dataclasses import dataclass
+
 import jobs
 import raidroles
 
@@ -56,10 +59,11 @@ ENTERS = True  # assembles at the door and walks the raid in, head last
 # Molten Core's dungeon-clear behavior belongs to the later clearing slice.
 # Until that slice orders it, the raid run forms and enters but holds inside.
 CLEARS = False
-# ASSEMBLE walks the head alone (StepRaidRun's aimStaging). A seated raider
-# who is not already near the door when the raid forms is not walked there,
-# not ferried across a sea and not summoned, and after the assemble wait the
-# raid goes in with whoever has arrived.
+# ASSEMBLE walks the head alone (StepRaidRun's aimStaging), and after the
+# assemble wait the raid goes in with whoever has arrived. The bridge's
+# gathering (THE GATHERING below) asks for a meeting stone summon for each
+# raider too far to walk; this stays False until a live night shows a
+# summoned raider arrive at the mountain.
 GATHERS = False
 
 # --- the seats -----------------------------------------------------------------
@@ -325,6 +329,266 @@ def attunement(names: list, rewarded: set, in_log: set, fragments: dict) -> dict
     }
 
 
+# --- the gathering (#762) -------------------------------------------------------
+#
+# HOW A RAID NIGHT GATHERS, DECIDED: THE RAID SUMMONS ITSELF AT THE BLACKROCK
+# MOUNTAIN MEETING STONE. Three orders were on the table:
+#
+#   (a) form with fewer than forty, let the guild's summoner warlocks join,
+#       summon and leave, then seat the rest. What players did, but the module
+#       forms the raid from overseer_raid_seat all at once and has no swap.
+#   (b) the raid summons its own, raiders clicking.
+#   (c) release the raiders early enough to walk: a boat, a flight and a walk
+#       from Kalimdor, thirty to sixty minutes a night.
+#
+# (b) is the one the module can carry today, and not through a warlock's
+# ritual: mod-overseer's `kind='summon'` drives the meeting stone (GameObject
+# type 23), which needs no warlock and no Soul Shard, only a summoner standing
+# at the stone and one more raid member clicking the portal, both in the
+# target's raid. The core's IsInSameRaidWith check is the reason it has to be
+# raiders: none of the twenty-one summoners holds a seat.
+#
+# Each seated raider arrives one of three ways, read off where it stands when
+# the raid is ordered: already at the mountain; walking in behind the head,
+# when it is on the door's continent and close enough; or summoned at the
+# stone, from anywhere else, another continent included. A raider the
+# snapshot does not show is said as not in the world: nothing can summon it.
+
+BLACKROCK_MOUNTAIN = "Blackrock Mountain"
+AT_MOUNTAIN = "at Blackrock Mountain"
+WALK = "walk"
+SUMMON = "summon"
+UNSEEN = "not in the world"
+
+# INSIDE THE MOUNTAIN: within these many yards of the Molten Core door on its
+# map. Blackrock Depths' door is 360 yards from it and Lower Blackrock Spire's
+# 200 (entrances.json), so this holds the mountain and no more.
+MOUNTAIN_YARDS = 400.0
+# CLOSE ENOUGH TO WALK: on the door's map within these many yards, which is
+# the Burning Steppes and the Searing Gorge around the mountain. Further than
+# this a summon is quicker than the road, whatever the continent.
+WALK_YARDS = 1500.0
+# HOW CLOSE A CLICKER HAS TO STAND: mod-overseer walks a clicker the last
+# yards to the stone from no further than this (SUMMON_APPROACH_YARDS in
+# mod_overseer.cpp), and refuses one further out.
+STONE_REACH = 40.0
+# The stone's portal wants the summoner and one more clicker.
+CLICKERS = 2
+# ONE RITUAL AT A TIME. Nobody has yet seen two portals at one stone settle
+# apart, so the next summon waits for the last row to finish.
+SUMMONS_AT_ONCE = 1
+
+# The command log's `source` for every row the gathering writes.
+GATHER_SOURCE = "raidgather"
+
+
+def gather_source(action: str, name: str) -> str:
+    return "%s:%s:%s" % (GATHER_SOURCE, action, name)
+
+
+def _yards(position: dict, x: float, y: float) -> float:
+    return math.hypot(float(position["pos_x"]) - x, float(position["pos_y"]) - y)
+
+
+def _on_map(position, map_id) -> bool:
+    try:
+        return position is not None and int(position["map_id"]) == int(map_id)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def arrival(position: dict | None, door: dict) -> str:
+    """How one raider standing at `position` (map_id, pos_x, pos_y; None when
+    the snapshot does not show it) reaches `door` (entrances.json's map, x, y)."""
+    if not position:
+        return UNSEEN
+    if not _on_map(position, door["map"]):
+        return SUMMON
+    yards = _yards(position, float(door["x"]), float(door["y"]))
+    if yards <= MOUNTAIN_YARDS:
+        return AT_MOUNTAIN
+    return WALK if yards <= WALK_YARDS else SUMMON
+
+
+def arrivals(names, positions: dict, door: dict) -> dict:
+    """name -> how it arrives, for every seated raider in `names`."""
+    return {name: arrival(positions.get(name), door) for name in names}
+
+
+def order_line(family: str, keyword: str, ways: dict) -> str:
+    """The order's one log line: how each raider not at the mountain arrives."""
+    said = []
+    for way, label in (
+        (WALK, "walk in behind the head"),
+        (SUMMON, "summoned at the %s meeting stone" % BLACKROCK_MOUNTAIN),
+        (UNSEEN, UNSEEN),
+    ):
+        names = sorted(n for n, w in ways.items() if w == way)
+        if names:
+            said.append("%s %d: %s" % (label, len(names), ", ".join(names)))
+    here = len([w for w in ways.values() if w == AT_MOUNTAIN])
+    return "raid order: %s into %s, %d seated: %d %s%s" % (
+        family,
+        place(keyword),
+        len(ways),
+        here,
+        AT_MOUNTAIN,
+        "".join("; " + s for s in said),
+    )
+
+
+def at_stone(position, stone) -> bool:
+    """Whether `position` stands within STONE_REACH of `stone` (a guildjobs
+    Spot: map_id, x, y)."""
+    if not _on_map(position, stone.map_id):
+        return False
+    return _yards(position, float(stone.x), float(stone.y)) <= STONE_REACH
+
+
+@dataclass(frozen=True)
+class Summon:
+    """One meeting stone summon: who stands at the stone, who is brought, and
+    the second clicker."""
+
+    summoner: str
+    target: str
+    helper: str
+
+    @property
+    def command(self) -> str:
+        # mod-overseer's ParseSummonRequest: `use <name>`.
+        return "use %s" % self.target
+
+
+@dataclass(frozen=True)
+class Gathering:
+    """This pass's step: raiders walked to the stone, or one summon, and why
+    nothing else was written."""
+
+    walks: tuple = ()
+    summon: Summon | None = None
+    why: str = ""
+
+
+def _open_names(open_rows, kind: str) -> set:
+    """Every name an open row of `kind` holds: its actor, its second clicker
+    and, for a summon, the raider it brings."""
+    out = set()
+    for row in open_rows or ():
+        if str(row.get("kind") or "") != kind:
+            continue
+        out.add(str(row.get("target_name") or ""))
+        out.add(str(row.get("target_arg") or ""))
+        command = str(row.get("command") or "")
+        if command.startswith("use "):
+            out.add(command[4:].strip())
+    return out - {""}
+
+
+def _waiting(ways, positions, in_raid, door, tried) -> list:
+    """The raiders a summon still has to bring, in name order: seated, in the
+    raid, not tried lately and still too far to walk."""
+    return sorted(
+        name
+        for name, way in ways.items()
+        if way == SUMMON
+        and name in in_raid
+        and name not in tried
+        and arrival(positions.get(name), door) == SUMMON
+        and not _on_map(positions.get(name), MOLTEN_CORE_MAP)
+    )
+
+
+def _clickers(names, positions, in_raid, stone) -> list:
+    return sorted(
+        n for n in names if n in in_raid and at_stone(positions.get(n), stone)
+    )
+
+
+def _walkers(names, positions, in_raid, stone, door, keep, busy, need) -> tuple:
+    """The `need` raiders at the mountain nearest the stone, to walk to it.
+    `keep` is the family, whose job the walk would replace."""
+    near = [
+        (_yards(positions[n], float(stone.x), float(stone.y)), n)
+        for n in names
+        if n in in_raid
+        and n not in keep
+        and n not in busy
+        and arrival(positions.get(n), door) == AT_MOUNTAIN
+        and not at_stone(positions.get(n), stone)
+    ]
+    return tuple(n for _y, n in sorted(near)[:need])
+
+
+def gather(ways, positions, in_raid, door, stone, *, keep=(), open_rows=(), tried=()):
+    """This pass's gathering step for one raid.
+
+    `ways` is the order's arrivals; `positions` this pass's snapshot;
+    `in_raid` the names in the head's group (the core summons only within the
+    raid); `stone` the Blackrock Mountain meeting stone; `open_rows` this
+    gathering's rows not yet finished; `tried` the raiders whose last summon
+    ended without them arriving, left for a later pass.
+    """
+    if stone is None:
+        return Gathering(why="no meeting stone stands near the door")
+    waiting = _waiting(ways, positions, in_raid, door, set(tried))
+    if not waiting:
+        return Gathering(why="nobody in the raid waits on a summon")
+    summoning = len([r for r in open_rows or () if r.get("kind") == "summon"])
+    if summoning >= SUMMONS_AT_ONCE:
+        return Gathering(why="a summon is under way")
+    clickers = _clickers(ways, positions, in_raid, stone)
+    if len(clickers) >= CLICKERS:
+        return Gathering(summon=Summon(clickers[0], waiting[0], clickers[1]))
+    walking = _open_names(open_rows, "job") - set(clickers)
+    need = CLICKERS - len(clickers) - len(walking)
+    if need <= 0:
+        return Gathering(why="%d raider(s) walk to the stone" % len(walking))
+    walks = _walkers(ways, positions, in_raid, stone, door, set(keep), walking, need)
+    if not walks:
+        return Gathering(
+            why="%d of %d clickers at the stone and nobody at the mountain to "
+            "walk there" % (len(clickers), CLICKERS)
+        )
+    return Gathering(walks=walks)
+
+
+# A gathering row still running, as overseer_command says it.
+OPEN_STATUSES = frozenset({"pending", "claimed", "verifying"})
+
+
+def open_rows(rows) -> list:
+    """The gathering's rows not yet finished."""
+    return [r for r in rows or () if str(r.get("status") or "") in OPEN_STATUSES]
+
+
+def tried(rows) -> set:
+    """The raiders whose summon finished without bringing them ('applied' is
+    the module's only arrival), left out until the rows age past the read."""
+    return {
+        str(r.get("command") or "")[4:].strip()
+        for r in rows or ()
+        if r.get("kind") == "summon"
+        and str(r.get("command") or "").startswith("use ")
+        and str(r.get("status") or "") not in OPEN_STATUSES | {"applied"}
+    }
+
+
+def inside(names, positions: dict) -> int:
+    """How many of `names` the snapshot shows inside Molten Core."""
+    return len([n for n in names if _on_map(positions.get(n), MOLTEN_CORE_MAP)])
+
+
+def gathered_line(family: str, keyword: str, count: int, total: int, seconds) -> str:
+    """How long the night took from the order to `count` of `total` inside."""
+    if seconds is None:
+        since = "since an order whose start is not read"
+    else:
+        since = "%d minute(s) after the order" % (int(seconds) // 60)
+    lead = "all %d" % total if count >= total else "%d of %d" % (count, total)
+    return "raid gather: %s: %s inside %s, %s" % (family, lead, place(keyword), since)
+
+
 # --- what the overseer can and cannot do with the raid ------------------------
 
 DUNGEON_CLEAR_LINE = (
@@ -356,8 +620,9 @@ def run_line() -> str:
         head += " It does not clear: inside, the raid holds at the entrance."
     if not GATHERS:
         head += (
-            " Only the head is walked to the door: a raider who is not near it "
-            "when the raid forms is not brought there, and after the wait the "
-            "raid goes in with whoever has arrived."
+            " Only the head is walked to the door. A raider too far to walk in "
+            "behind it is summoned at the %s meeting stone, two raiders at the "
+            "stone clicking, and after the wait the raid goes in with whoever "
+            "has arrived." % BLACKROCK_MOUNTAIN
         )
     return head
