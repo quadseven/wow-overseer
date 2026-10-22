@@ -76,6 +76,7 @@ class EveryOverseerTableReadIsGuarded(unittest.TestCase):
         for table in (
             "overseer_roster",
             "overseer_dungeon_run",
+            "overseer_dungeon_run_event",
             "overseer_goal",
             "overseer_trade",
             "overseer_event",
