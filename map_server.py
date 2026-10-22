@@ -2049,6 +2049,20 @@ def _ensure_stream_store() -> None:
             cur.execute(sql)
 
 
+def _read_watch_order() -> dict | None:
+    """The Watcher's one order row, or None. A missing `overseer_watch`
+    (1146) is None too: the bridge creates it at start-up, never the site."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(director.READ_SQL)
+            return cur.fetchone()
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] == 1146:
+            log.warning("director: overseer_watch is not created yet; no order")
+            return None
+        raise
+
+
 # --- the guild hand-overs on the Bags tab (#174) ---------------------------
 # The rows the bridge's guild route pass wrote, newest first, and the item
 # names their guids point at. Outside the Wealth and Armory fetch windows on
@@ -6065,13 +6079,12 @@ class Handler(BaseHTTPRequestHandler):
         """GET /api/director - what the Watcher has been told, and what it is doing.
 
         Read-only and open like every other GET here. Only the order (POST) is
-        gated: see _director_post.
+        gated: see _director_post. `overseer_watch` is the bridge's table
+        (bridge._ensure_watch_store, #740): one the bridge has not created
+        yet holds no order, and the site does not create it.
         """
         try:
-            with _connect() as conn, conn.cursor() as cur:
-                cur.execute(director.CREATE_SQL)
-                cur.execute(director.READ_SQL)
-                row = cur.fetchone()
+            row = _read_watch_order()
             active = director.mandate_active(row)
             payload = {
                 "watcher": director.WATCHER_NAME,
@@ -6096,7 +6109,9 @@ class Handler(BaseHTTPRequestHandler):
         value in X-Director-Token (compared in constant time). With no token
         configured the door answers 503, never an open endpoint. The body is
         parsed by director.parse_watch, so no name or text from the request
-        reaches SQL except as a bound, grammar-checked value.
+        reaches SQL except as a bound, grammar-checked value. The bridge owns
+        `overseer_watch` (#740): before it has created the table, the order
+        fails and the door answers 503.
         """
         if not _DIRECTOR_TOKEN:
             self._send(503, "application/json", b'{"error": "the director is not enabled here"}')
@@ -6115,7 +6130,6 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             with _connect() as conn, conn.cursor() as cur:
-                cur.execute(director.CREATE_SQL)
                 if spec.kind == "off":
                     cur.execute(director.CLEAR_SQL)
                 else:

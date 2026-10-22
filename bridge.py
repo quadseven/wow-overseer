@@ -7104,6 +7104,7 @@ class Bridge(discord.Client):
             _ensure_memo_store,
             _ensure_watch_store,
             _ensure_quest_ledger_store,
+            _ensure_now_store,
         ):
             await asyncio.to_thread(ensure)
         owing = self.__dict__.get("_class_owing")
@@ -21046,7 +21047,6 @@ class Bridge(discord.Client):
     async def _now_loop(self) -> None:
         """Store what the characters are doing and waiting for (nowstatus)."""
         await self.wait_until_ready()
-        _ensure_now_store()
         cycle = float(os.environ.get("NOW_CYCLE_SECONDS", "10"))
         log.addHandler(NOW_TAP)
         while not self.is_closed():
