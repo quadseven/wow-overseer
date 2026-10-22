@@ -522,9 +522,9 @@ def family_shared_sale_slots(free_slots: dict, sellable: dict) -> int:
 
     Only the floor's stacks count (#1243): a slot freed in a bag with room is
     no slot at the floor. A member nobody can relieve - one who carries
-    nothing a vendor will buy - contributes nothing, which is the half that
-    kept the vendor pass off a column it could not use (infra#4190). A
-    family that is not at the floor frees nothing: there is nothing to
+    nothing a vendor will buy - contributes nothing, which keeps the vendor
+    pass off a column it could not use. A family that is not at the floor
+    frees nothing: there is nothing to
     relieve then.
 
     WHY THIS IS NOT `family_sale_slots` (#1309). That one counts the stacks
