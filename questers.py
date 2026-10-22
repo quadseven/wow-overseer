@@ -1330,18 +1330,21 @@ def plan(
             move, why = None, held
     if move is not None and move.spot is not None:
         # A move that walks waits out a far walk wall; a drop does not walk.
-        wall, wait = walk_wall(member.name, tried)
-        if wall:
-            move, why = (
-                None,
-                "%s waits %d more minute%s to walk: %s"
-                % (
-                    member.name,
-                    wait,
-                    "" if wait == 1 else "s",
-                    wall,
-                ),
-            )
+        # Only hold for far walks (distance > FAR_WALK_YARDS).
+        spot_distance = _yards(member, move.spot)
+        if spot_distance > guildroute.FAR_WALK_YARDS:
+            wall, wait = walk_wall(member.name, tried)
+            if wall:
+                move, why = (
+                    None,
+                    "%s waits %d more minute%s to walk: %s"
+                    % (
+                        member.name,
+                        wait,
+                        "" if wait == 1 else "s",
+                        wall,
+                    ),
+                )
     return Plan(
         member.name, move, tuple(found) + tuple(never_held), move.said if move else why
     )
