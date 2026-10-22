@@ -34,7 +34,9 @@ What is pinned here, by what the member can do about the world's answer:
   "Waiting for the game to accept it" note. An unknown answer, or the bot not
   putting the piece on, is asked once more, then dropped the same way.
 - A refusal inside the retry window never blocks the retry its hold allows.
-- The make-room step for an upgrade comes ahead of the class quest.
+- The class quest still comes ahead of the make-room step for an upgrade
+  (operator rule, docs/ROLLS.md section 4); the room step runs on a pass
+  the class quest asks nothing.
 - A room shortfall that keeps a member from an upgrade is on the stuck read,
   so a member that waits on bag room is never hidden.
 """
@@ -386,13 +388,18 @@ ROOM = {
 }
 
 
-class TheRoomComesBeforeTheClassQuest(unittest.TestCase):
-    def test_a_full_member_with_a_class_quest_makes_room_first(self):
-        """The red test: on main the class quest's walk came first on every
-        pass, so the room for the upgrade was never made (Cronk, 2026-10-21:
-        no 'makes room ... to put on' line in four hours)."""
+class TheClassQuestComesBeforeTheRoom(unittest.TestCase):
+    def test_a_full_member_with_a_class_quest_takes_the_class_quest(self):
+        """The operator's rule: the class quest is the first rung for every
+        member that has one, ahead of making room for an upgrade."""
         m = who(quests_done=frozenset({1505}), free_slots=0, carried=(grey(1),))
         plan = class_plan([m], equip_room=ROOM)
+        self.assertEqual(room_steps(plan), [])
+        self.assertEqual([s.action for s in plan.steps], ["classquest"])
+
+    def test_with_no_class_quest_the_full_member_makes_room(self):
+        m = who(quests_done=frozenset({1505}), free_slots=0, carried=(grey(1),))
+        plan = class_plan([m], classes=None, equip_room=ROOM)
         (step,) = room_steps(plan)
         self.assertEqual(step.holder, "Bigzug")
         self.assertIn("to put on Odo's Ley Staff", step.said)
@@ -402,6 +409,9 @@ class TheRoomComesBeforeTheClassQuest(unittest.TestCase):
         plan = class_plan([m], equip_room=ROOM)
         self.assertEqual(room_steps(plan), [])
         self.assertTrue(any(s.action == "classquest" for s in plan.steps))
+        # With no class quest either, the note says why nothing is done.
+        plan = class_plan([m], classes=None, equip_room=ROOM)
+        self.assertEqual(room_steps(plan), [])
         self.assertTrue(any("the upgrade stays in its bags" in n for n in plan.notes))
 
 
