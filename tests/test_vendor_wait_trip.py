@@ -51,7 +51,24 @@ class VendorWaitTrip(unittest.TestCase):
     def test_no_trip_without_a_sustained_wait_or_goods(self):
         self.assertFalse(bag_pressure.vendor_wait_trip(29 * 60, {"Leader": 2}, False))
         self.assertFalse(bag_pressure.vendor_wait_trip(30 * 60, {"Leader": 0}, False))
-        self.assertFalse(bag_pressure.vendor_wait_trip(30 * 60, {"Leader": 2}, True))
+        # The wait is not gated on in_run: a member walking to a dungeon door
+        # does not stop the family's sellers from getting their trip. The
+        # banker wait (#872) is not gated this way, and neither is this one.
+        self.assertTrue(bag_pressure.vendor_wait_trip(30 * 60, {"Leader": 2}, True))
+
+    def test_vendor_wait_times_out_into_a_trip_even_in_a_run(self):
+        # A sustained vendor wait trips into an ordinary sale route regardless
+        # of whether a family member is in a dungeon run. The wait does not
+        # sit for ever with no route out.
+        namespace = _vendor_pass_mode(
+            {"_fetch_vendor_wait_seconds": lambda names: 30 * 60}
+        )
+        mode = asyncio.run(
+            namespace["_vendor_pass_mode"](
+                None, ["Leader"], {"Leader": 12}, {"Leader": 2}, True
+            )
+        )
+        self.assertEqual(bag_pressure.VENDOR_MODE_TRIP, mode)
 
     def test_vendor_pass_claims_a_trip_for_an_old_range_wait(self):
         namespace = _vendor_pass_mode()
