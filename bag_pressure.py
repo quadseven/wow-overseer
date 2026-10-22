@@ -721,11 +721,10 @@ def vendor_pass_mode(trip_worth: bool, withheld: bool, in_run: bool) -> str:
     return VENDOR_MODE_NONE
 
 
-# Three stuck reads across 2026-10-19 and 2026-10-20 showed this wait lasting
-# 34 to 79 minutes. The bridge's step store records `no_vendor`, not a vendor
-# creature or distance, so those reads cannot identify which NPC was missing.
-# The code path explains the unbounded town case: only a fresh 30-minute wait
-# with sellable goods can trigger a trip, and an active dungeon owns travel.
+# A sustained vendor wait with no reachable NPC can pin a member at the floor.
+# The bridge records `no_vendor`, not a creature or distance, so the wait has
+# no candidate to time out into another route. A fresh 30-minute wait with
+# sellable goods can trigger a vendor trip, unless an active dungeon owns travel.
 VENDOR_WAIT_TRIP_SECONDS = 30 * 60
 
 
