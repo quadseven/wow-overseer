@@ -29,6 +29,7 @@ def _member(carried, level=17):
         eligible=True,
         skills={
             guildjobs.FIRST_AID: (40, 75),
+            guildjobs.COOKING: (1, 75),
             guildjobs.HERBALISM: (40, 75),
             guildjobs.SKINNING: (1, 75),
         },

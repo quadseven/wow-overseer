@@ -144,6 +144,7 @@ MINING = guildcorps.MINING
 SKINNING = guildcorps.SKINNING
 GATHERING = (HERBALISM, MINING, SKINNING)
 FIRST_AID = 129
+COOKING = guildcorps.COOKING
 TAILORING = guildcorps.TAILORING
 SKILL_NAMES = {
     HERBALISM: "Herbalism",
@@ -261,6 +262,12 @@ RANKS[ALCHEMY] = (
     Rank(2280, 150, 10, 50, 500),
     Rank(3465, 225, 20, 125, 5000),
     Rank(11612, 300, 35, 200, 50000),
+)
+RANKS[COOKING] = (
+    Rank(2550, 75, 5, 0, 10),
+    Rank(3102, 150, 10, 50, 500),
+    Rank(3413, 225, 20, 125, 5000),
+    Rank(18260, 300, 35, 200, 25000),
 )
 # BLACKSMITHING, ENGINEERING AND ENCHANTING, THE SAME FOUR RANKS (#774,
 # 2026-10-10). Without these rows `ranks_due` never wrote a rank errand for a
@@ -1027,6 +1034,30 @@ def choose_alchemists(members, tailors=frozenset(), recent=()) -> frozenset:
     return frozenset(out)
 
 
+def choose_cooks(members, recent=()) -> frozenset:
+    """Choose one maintenance cook per guild, keeping a trainer walk stable."""
+    picked = {
+        r.name for r in recent or () if r.action == "train" and r.skill_id == COOKING
+    }
+    crews = {}
+    for m in members or ():
+        if m.role == MAINTENANCE:
+            crews.setdefault(m.guild, []).append(m)
+    out = set()
+    for crew in crews.values():
+        crew.sort(
+            key=lambda m: (
+                not m.holds(COOKING),
+                m.name not in picked,
+                len(m.primaries),
+                m.name,
+            )
+        )
+        if crew:
+            out.add(crew[0].name)
+    return frozenset(out)
+
+
 def split_trades(members, tailors=frozenset(), alchemists=frozenset()) -> dict:
     """name -> (skill, skill): the two gathering trades each maintenance
     member works, per guild. See TRADE SPLIT in the module docstring. A member
@@ -1072,7 +1103,7 @@ def _fill_gathering(m, counts, tailor, alchemist=False) -> tuple:
     return tuple(wanted)
 
 
-def cloth_trades(trades, tailors, alchemists=frozenset()) -> dict:
+def cloth_trades(trades, tailors, alchemists=frozenset(), cooks=frozenset()) -> dict:
     """`split_trades` with the crafting trades added: Tailoring for a tailor,
     Alchemy for an alchemist, and First Aid, which takes no primary slot, for
     every maintenance member."""
@@ -1080,6 +1111,7 @@ def cloth_trades(trades, tailors, alchemists=frozenset()) -> dict:
         name: tuple(gathering)
         + ((TAILORING,) if name in tailors else ())
         + ((ALCHEMY,) if name in alchemists else ())
+        + ((COOKING,) if name in cooks else ())
         + (FIRST_AID,)
         for name, gathering in (trades or {}).items()
     }
@@ -1402,7 +1434,7 @@ def _open_recipe(member, skill):
     if ceiling <= 0 or value >= ceiling:
         return None
     recipe = craft.recipe_for(skill, value)
-    if recipe is None or recipe.focus:
+    if recipe is None or (recipe.focus and skill != COOKING):
         return None
     if recipe.spell_id not in AUTO_LEARNED and recipe.spell_id not in member.known:
         return None
@@ -1500,6 +1532,18 @@ def _craft_step(member):
             "%s crafts %d %s to raise its %s"
             % (member.name, casts, recipe.name, SKILL_NAMES.get(skill, skill)),
             rows=(
+                *(
+                    (
+                        guildcorps.Row(
+                            "cast",
+                            "818",
+                            "",
+                            source_for("craft", member.name),
+                        ),
+                    )
+                    if skill == COOKING
+                    else ()
+                ),
                 guildcorps.Row(
                     "cast",
                     str(recipe.spell_id),
@@ -1507,7 +1551,7 @@ def _craft_step(member):
                     source_for("craft", member.name),
                 ),
             ),
-            repeat=casts,
+            repeat=1 if skill == COOKING else casts,
         )
     return None
 
@@ -3020,8 +3064,9 @@ def plan(
     pending = {str(n) for n in pending or ()}
     tailors = choose_tailors(members)
     alchemists = choose_alchemists(members, tailors, recent)
+    cooks = choose_cooks(members, recent)
     trades = cloth_trades(
-        split_trades(members, tailors, alchemists), tailors, alchemists
+        split_trades(members, tailors, alchemists), tailors, alchemists, cooks
     )
     trades.update(focus_trades(members, focus))
     tally = _focus_tally(members, focus)
