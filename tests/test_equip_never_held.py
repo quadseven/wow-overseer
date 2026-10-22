@@ -443,9 +443,11 @@ class AFullBackpackAWornShieldAndAWantedTwoHander(unittest.TestCase):
         self.assertIn("needs 1 free bag slot(s) and it has 0", notes[0])
         room = gear.equip_room((HAMMER,), WORN, {"Bonk": 0}, holds, now=NOW)
         self.assertEqual(room, {"Bonk": (1, ROOM_WORDS, 0)})
-        # The guild pass sells the grey for the slot, ahead of the class quest.
+        # On a pass the class quest asks nothing, the guild pass sells the
+        # grey for the slot.
         plan = class_plan(
             [bonk(quests_done=frozenset({1505}), carried=(grey(1),))],
+            classes=None,
             equip_room=room,
         )
         (step,) = room_steps(plan)
@@ -613,7 +615,10 @@ class TheWayOutComesFirstAndNoPassIsLost(unittest.TestCase):
     def test_a_member_stood_still_hearths_before_it_makes_room(self):
         m = bonk(quests_done=frozenset({1505}), carried=(grey(1),))
         plan = class_plan(
-            [m], equip_room={"Bonk": (1, ROOM_WORDS, 0)}, still={"Bonk": 70}
+            [m],
+            classes=None,
+            equip_room={"Bonk": (1, ROOM_WORDS, 0)},
+            still={"Bonk": 70},
         )
         self.assertEqual([s.action for s in plan.steps], ["hearth"])
 
@@ -630,17 +635,27 @@ class TheWayOutComesFirstAndNoPassIsLost(unittest.TestCase):
     def test_three_room_steps_that_freed_nothing_stop_until_the_bags_change(self):
         m = bonk(quests_done=frozenset({1505}), carried=(grey(1),))
         recent = tuple(room_row("Bonk", age) for age in (25, 50, 75))
-        plan = class_plan([m], equip_room={"Bonk": (1, ROOM_WORDS, 80)}, recent=recent)
+        plan = class_plan(
+            [m],
+            classes=None,
+            equip_room={"Bonk": (1, ROOM_WORDS, 80)},
+            recent=recent,
+        )
         self.assertEqual(room_steps(plan), [])
-        self.assertTrue(any(s.action == "classquest" for s in plan.steps))
         self.assertTrue(any("made room 3 time(s)" in n for n in plan.notes))
         # The same steps before the bags last changed do not count.
-        plan = class_plan([m], equip_room={"Bonk": (1, ROOM_WORDS, 20)}, recent=recent)
+        plan = class_plan(
+            [m],
+            classes=None,
+            equip_room={"Bonk": (1, ROOM_WORDS, 20)},
+            recent=recent,
+        )
         self.assertEqual(len(room_steps(plan)), 1)
 
     def test_a_guild_out_of_room_steps_gives_the_rest_their_class_quest(self):
         """The red test: the seventh member's room step was refused by the
-        allowance and it took no step at all."""
+        allowance and it took no step at all. With the class quest first,
+        every member with one takes it and no room step is spent."""
         names = ["Bonk%s" % c for c in "ABCDEFG"]
         members = [
             who(n, free_slots=0, quests_done=frozenset({1505}), carried=(grey(i + 1),))
@@ -648,9 +663,12 @@ class TheWayOutComesFirstAndNoPassIsLost(unittest.TestCase):
         ]
         room = {n: (1, ROOM_WORDS, 0) for n in names}
         plan = class_plan(members, equip_room=room)
+        self.assertEqual(room_steps(plan), [])
+        self.assertTrue(plan.steps)
+        self.assertEqual({s.action for s in plan.steps}, {"classquest"})
+        # With no class quest, the allowance caps the room steps.
+        plan = class_plan(members, classes=None, equip_room=room)
         self.assertEqual(len(room_steps(plan)), guildjobs.ROOM_STEPS_PER_GUILD)
-        last = [s for s in plan.steps if s.holder == names[-1]]
-        self.assertEqual([s.action for s in last], ["classquest"])
 
 
 class TheMaterialSaleSellsOnlyTheShortfall(unittest.TestCase):

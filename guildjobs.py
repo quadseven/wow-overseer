@@ -3352,19 +3352,21 @@ def _room_first(
 ):
     """(the member's step as _member_step returns it, or None; the room note)
     for a member whose upgrade waits on room in its bags (`room`, from
-    gear.equip_room, #1088), ahead of the class quest.
+    gear.equip_room, #1088), once the class quest asks nothing this pass.
 
-    ROOM FOR AN UPGRADE COMES BEFORE THE CLASS QUEST. It is one sale, post or
-    destroy, on its own cooldown and allowance (ROOM_ACTION), and a member
-    that cannot put an upgrade on without it is otherwise never given it:
-    behind the class quest, Bonk and Cronk carried a two-hander they could not
-    wear for 4.8 days and no "makes room ... to put on" step ran in four hours
-    of guild passes (2026-10-21), every one of them a class quest's. Only the
-    two ways out of a spot the member cannot work from come first (a stalled
-    class step's level walk, the stood-still hearth), because a vendor walk
-    from there never finishes either. A room step cooling down, used up for
-    these bags (ROOM_STEPS_PER_STATE) or with nothing to part with takes no
-    pass: the class quest runs, and the note says why."""
+    THE CLASS QUEST STILL COMES FIRST (the operator, 2026-10-06; wow-overseer
+    docs/ROLLS.md section 4). #1342 put this step ahead of the class quest,
+    because behind it Bonk and Cronk carried a two-hander they could not wear
+    for 4.8 days; the pre-ship review of bridge ship c5be54f5 put it back
+    behind. A room wait no longer holds anybody: with no slot freed in
+    gear.ROOM_WAIT_MINUTES the upgrade is settled with a plain reason until the
+    bags change. The room step is one sale, post or destroy, on its own
+    cooldown and allowance (ROOM_ACTION). The two ways out of a spot the member
+    cannot work from (a stalled class step's level walk, the stood-still
+    hearth) still come before it, because a vendor walk from there never
+    finishes either. A room step cooling down, used up for these bags
+    (ROOM_STEPS_PER_STATE) or with nothing to part with takes no pass, and the
+    note says why."""
     if not room:
         return None, ""
     first = stalled_level_first(m, leveling, recent, cap, level_room)
@@ -3409,11 +3411,10 @@ def _member_step(
     equip_room=None,
     mount=None,
 ):
-    """For a member whose upgrade waits on room in its bags, the way out of a
-    spot it cannot work from and then the make-room step (_room_first,
-    #1088); then a class quest, then a hunter's first pet, then a hearth out
-    of a spot it cannot leave, then food for a member with nothing to eat or
-    drink,
+    """A class quest first, then a hunter's first pet, then a hearth out of a
+    spot it cannot leave, then room in the bags for an upgrade the world
+    cannot put on without it (_room_first, #1088), then food for a member
+    with nothing to eat or drink,
     then a sale for bags that leave loot on the corpse (loot_room_short), then
     the inn, then riding, then a mount (`mount`, a mountbuy.Facts), then the
     weapon master for a carried weapon it has no
@@ -3425,9 +3426,8 @@ def _member_step(
     `crafting`), keeping the notes.
 
     THE CLASS QUEST COMES FIRST (the operator, 2026-10-06: the highest-priority
-    job in the guild). It is the first rung of work here, behind only the one
-    make-room step an upgrade waits on, ahead of gear, PvP, post, the
-    level walk and every ordinary job, and it has its own allowance per guild
+    job in the guild). It is the first rung here, ahead of the make-room step
+    for an upgrade, gear, PvP, post, the level walk and every ordinary job, and it has its own allowance per guild
     (CLASSQUEST_STEPS_PER_GUILD), so no other kind of step can use up the
     passes it needs. A member held on a class quest is also kept out of the
     guild's dungeon asks (the bridge's mid_job set).
@@ -3441,21 +3441,6 @@ def _member_step(
     A member that has stood on one spot for standstill.STILL_MINUTES
     (`still_for`) with nothing asked of it hearths home before anything else
     is asked (stood_still_step)."""
-    found, room_note = _room_first(
-        m,
-        equip_room,
-        leveling,
-        recent,
-        cap,
-        level_room,
-        still_for,
-        classes,
-        kept,
-        crafters,
-        master,
-    )
-    if found is not None:
-        return found
     found, quest_note = _quest_first(
         m,
         classes,
@@ -3473,8 +3458,22 @@ def _member_step(
         still_for,
     )
     if found is not None:
-        step, doing, note, gear_why = found
-        return step, doing, _join(note, room_note), gear_why
+        return found
+    found, room_note = _room_first(
+        m,
+        equip_room,
+        leveling,
+        recent,
+        cap,
+        level_room,
+        still_for,
+        classes,
+        kept,
+        crafters,
+        master,
+    )
+    if found is not None:
+        return found
     quest_note = _join(quest_note, room_note)
     found, supply_note, gear_note = _upkeep_first(
         m, offer, supply, leveling, kept, recent, cap, quest_note, weapon, mount
