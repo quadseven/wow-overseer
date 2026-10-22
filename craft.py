@@ -1387,7 +1387,22 @@ RECIPES: dict = {
     # are both ordinary beast drops at the family's level, both AcquireMethod 1
     # ClassMask 0, both yellow 45 / grey 85. The moment a fire can be lit,
     # Cooking is a 44-point ladder with no trainer and no purchase.
-    SKILL_IDS["cooking"]: (),
+    SKILL_IDS["cooking"]: (
+        Recipe(
+            818,
+            "Basic Campfire",
+            min_skill=1,
+            max_skill=120,
+            note="no focus needed; creates gameobject 29784",
+        ),
+        Recipe(
+            2538,
+            "Charred Wolf Meat",
+            min_skill=1,
+            max_skill=300,
+            note="requires Cooking Fire; yields 1x Charred Wolf Meat",
+        ),
+    ),
     # ELEVEN OF THESE EIGHTEEN NEED AN ANVIL, AND UNTIL NOW EVERY ONE OF THEM
     # SAID IT DID NOT (infra#3760, corrected here as part of infra#3748).
     #
