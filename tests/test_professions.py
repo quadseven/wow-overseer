@@ -1128,7 +1128,7 @@ class SecondaryRankRefusalTest(unittest.TestCase):
         self.assertIn("first aid is at 1/75", said)
         self.assertIn("Linen Bandage", said)
         self.assertIn("cooking is at 1/75", said)
-        self.assertIn("Spice Bread", said)
+        self.assertIn("maintenance crew raises Cooking through guildjobs", said)
 
     def test_fishing_names_the_pole_and_the_missing_drive(self):
         said = professions.secondary_rank_refusal({"fishing": 1})

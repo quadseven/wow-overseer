@@ -47,6 +47,7 @@ def member(name, role=guildjobs.MAINTENANCE, **over):
     # have their own tests (TheClothTrades).
     skills = dict(base.get("skills") or {})
     skills.setdefault(guildjobs.FIRST_AID, (40, 75))
+    skills.setdefault(guildjobs.COOKING, (1, 75))
     base["skills"] = skills
     return guildjobs.Member(**base)
 
@@ -98,6 +99,25 @@ class TheTradeSplit(unittest.TestCase):
         )
         self.assertEqual(trades, {})
 
+    def test_one_maintenance_member_per_guild_is_assigned_cooking(self):
+        crew = [member("A"), member("B", guild="Bonkers")]
+        cooks = guildjobs.choose_cooks(crew)
+        self.assertEqual(len(cooks), 2)
+        trades = guildjobs.cloth_trades(
+            guildjobs.split_trades(crew), frozenset(), frozenset(), cooks
+        )
+        self.assertEqual(sum(guildjobs.COOKING in v for v in trades.values()), 2)
+
+    def test_cooking_ranks_start_and_advance_at_the_rank_thresholds(self):
+        self.assertEqual(guildjobs.next_rank(guildjobs.COOKING, 0, 0, 5).spell, 2550)
+        self.assertEqual(guildjobs.next_rank(guildjobs.COOKING, 72, 75, 10).spell, 3102)
+        self.assertEqual(
+            guildjobs.next_rank(guildjobs.COOKING, 147, 150, 20).spell, 3413
+        )
+        self.assertEqual(
+            guildjobs.next_rank(guildjobs.COOKING, 222, 225, 35).spell, 18260
+        )
+
     def test_each_guild_is_split_on_its_own(self):
         crew = [member("A"), member("B", guild="Bonkers")]
         trades = guildjobs.split_trades(crew)
@@ -112,6 +132,7 @@ FA, TAILOR = guildjobs.FIRST_AID, guildjobs.TAILORING
 def bare(name, **over):
     """A maintenance member with no First Aid, as a natural restart leaves it."""
     over.setdefault("skills", {})
+    over["skills"].setdefault(guildjobs.COOKING, (1, 75))
     m = member(name, **over)
     return guildjobs.Member(
         **{
@@ -464,6 +485,21 @@ class TheLeatherAndAlchemyLadders(unittest.TestCase):
         self.assertEqual(step.action, "craft")
         self.assertEqual(step.rows[0].command, "3756")
         self.assertEqual(step.repeat, 2)
+
+    def test_cooking_lights_a_fire_before_casting_what_the_member_carries(self):
+        m = member(
+            "Cook",
+            skills={
+                guildjobs.COOKING: (1, 75),
+                H: (40, 75),
+                guildjobs.MINING: (40, 75),
+            },
+            carried=(stack(1, 2672, 1, subclass=7), stack(2, 2901, 1)),
+        )
+        step = guildjobs._craft_step(m)
+        self.assertEqual(step.action, "craft")
+        self.assertEqual([row.command for row in step.rows], ["818", "2538"])
+        self.assertEqual(step.repeat, 1)
 
     def test_a_failed_learn_walk_cools_down_on_the_skill(self):
         failed = (guildjobs.Recent("Maker", "train", 30, "error", LEATHER),)

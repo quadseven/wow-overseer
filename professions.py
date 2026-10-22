@@ -1081,15 +1081,10 @@ SECONDARY_RANK_REFUSAL = (
 # and deleting the hand-off needs no trainer, no purchase, no focus and no C++,
 # and is the whole of First Aid's 58 points below.
 #
-# COOKING IS STILL ZERO AND IT IS A FOCUS PROBLEM, NOT A RECIPE PROBLEM. All 181
-# abilities on skill 185 were read out of SkillLineAbility.dbc and joined to
-# Spell.dbc: every one that creates an item and is reachable below 75 requires
-# focus 4. The family holds the reagents and the recipes; nothing lights a fire.
-# It is cheap to fix and it is C++ - spell 818 "Basic Campfire" (AcquireMethod 1,
-# ClassMask 0, no reagent, no focus of its own) summons gameobject 29784, which
-# `acore_world.gameobject_template` gives type 8 / Data0 4 / Data1 10, i.e. a
-# Cooking Fire with a ten-yard radius centred on the caster. One ordered pair of
-# casts in DriveCraft turns Cooking's 0 into 44. Filed, not faked.
+# THE FAMILY'S ROSTER ERRAND STILL DOES NOT DRIVE COOKING. Maintenance members
+# now raise it in guildjobs, which queues Basic Campfire (818) before a Cooking
+# recipe. The roster path remains unable to write that ordered pair, so its
+# secondary headroom stays zero; this is a limit of that path, not of the crew.
 SECONDARY_HEADROOM = {
     # 1 -> 59, the last value Linen Bandage (3275) can grant a point at.
     "first aid": 58,
@@ -1110,10 +1105,8 @@ SECONDARY_BLOCKED = {
         "First Aid trainer is reachable (infra#3614, mod-overseer#454)"
     ),
     "cooking": (
-        "every Cooking recipe reachable below 75 requires RequiresSpellFocus 4 "
-        "(a Cooking Fire) and nothing in this system lights one - the family "
-        "holds the recipes and the reagents; Spice Bread (37836) is focus 4 "
-        "too, so it is not the exception it was taken for (infra#3614)"
+        "the roster craft errand cannot queue Basic Campfire before a recipe; "
+        "the maintenance crew raises Cooking through guildjobs instead"
     ),
     "fishing": (
         "nobody owns a Fishing Pole (item 6256, 23 copper) and mod-overseer has "

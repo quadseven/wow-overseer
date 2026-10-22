@@ -941,6 +941,35 @@ def _ensure_thought_store() -> None:
             log.info("overseer_thought: source gained 'council'")
 
 
+def _ensure_dungeon_run_event_store() -> None:
+    # The newest-boss-credit read filters on (leader_name, kind), so that
+    # pair needs an index: a family with no boss rows otherwise walks the
+    # whole overseer_dungeon_run_event table on every agenda read.
+    # The table is the worldserver's, not bridge-owned, so this only ensures
+    # the index when the table exists. A realm without it gets an empty read
+    # from the realm reader's missing-table degrade instead.
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM information_schema.TABLES "
+            "WHERE table_schema = DATABASE() "
+            "  AND table_name = 'overseer_dungeon_run_event'"
+        )
+        if not (cur.fetchone() or {}).get("n"):
+            return
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM information_schema.STATISTICS "
+            "WHERE table_schema = DATABASE() "
+            "  AND table_name = 'overseer_dungeon_run_event' "
+            "  AND index_name = 'idx_leader_kind'"
+        )
+        if not (cur.fetchone() or {}).get("n"):
+            cur.execute(
+                "ALTER TABLE overseer_dungeon_run_event "
+                "ADD KEY idx_leader_kind (leader_name, kind)"
+            )
+            log.info("overseer_dungeon_run_event: added idx_leader_kind")
+
+
 def _insert_thought(name: str, source: str, text: str) -> None:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
@@ -7063,6 +7092,7 @@ class Bridge(discord.Client):
         Both start paths call this: on_ready and run_headless."""
         for ensure in (
             _ensure_thought_store,
+            _ensure_dungeon_run_event_store,
             _ensure_goal_store,
             _ensure_sample_store,
             _ensure_economy_store,
