@@ -870,7 +870,8 @@ MILESTONES = {
         (30, "Felhunter (class quest)"),
     ),
 }
-MOUNT_LEVEL = 40
+APPRENTICE_RIDING_LEVEL = 20
+JOURNEYMAN_RIDING_LEVEL = 40
 
 
 def milestones(members, low: int, high: int) -> list:
@@ -882,10 +883,14 @@ def milestones(members, low: int, high: int) -> list:
         for at, what in MILESTONES.get(int(m.get("class") or 0), ()):
             if low <= at <= high and int(m.get("level") or 0) < at:
                 out.append("%s at %d: %s" % (name, at, what))
-    if low <= MOUNT_LEVEL <= high and any(
-        int(m.get("level") or 0) < MOUNT_LEVEL for m in members
+    if low <= APPRENTICE_RIDING_LEVEL <= high and any(
+        int(m.get("level") or 0) < APPRENTICE_RIDING_LEVEL for m in members
     ):
-        out.append("everyone at %d: riding and a mount" % MOUNT_LEVEL)
+        out.append("everyone at %d: Apprentice Riding and a mount" % APPRENTICE_RIDING_LEVEL)
+    if low <= JOURNEYMAN_RIDING_LEVEL <= high and any(
+        int(m.get("level") or 0) < JOURNEYMAN_RIDING_LEVEL for m in members
+    ):
+        out.append("everyone at %d: Journeyman Riding" % JOURNEYMAN_RIDING_LEVEL)
     return out
 
 

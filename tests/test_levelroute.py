@@ -281,7 +281,22 @@ class ThePage(unittest.TestCase):
         milestones = [m for b in bands for m in b["milestones"]]
         self.assertIn("Zug at 30: Whirlwind Axe (class quest)", milestones)
         self.assertIn("Zug at 40: Shield Slam (protection talent)", milestones)
-        self.assertIn("everyone at 40: riding and a mount", milestones)
+        self.assertIn("everyone at 40: Journeyman Riding", milestones)
+
+    def test_apprentice_riding_milestone_shows_for_members_below_20(self):
+        low_facts = facts(members=tuple(
+            {"name": n, "race": r, "class": c, "level": l, "map_id": KALIMDOR}
+            for n, r, c, l in (
+                ("Zug", 2, 1, 19),
+                ("Oz", 8, 8, 18),
+                ("Uzza", 8, 5, 17),
+                ("Zork", 6, 11, 16),
+                ("Zrog", 2, 7, 15),
+            )
+        ))
+        bands = levelroute.route(low_facts)
+        milestones = [m for b in bands for m in b["milestones"]]
+        self.assertIn("everyone at 20: Apprentice Riding and a mount", milestones)
 
     def test_at_the_cap_it_says_so(self):
         capped = members({n: 60 for n, *_ in HORDE_FIVE})
