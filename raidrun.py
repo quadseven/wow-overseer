@@ -53,9 +53,10 @@ NAMES = {
 # ahead of it.
 FORMS = True  # converts the head's group and seats the lineup
 ENTERS = True  # assembles at the door and walks the raid in, head last
-# Molten Core's dungeon-clear behavior belongs to the later clearing slice.
-# Until that slice orders it, the raid run forms and enters but holds inside.
-CLEARS = False
+# HOLD, CLEAR and RECOVER (mod-overseer#640, merged 2026-09-24 and in the
+# deployed module): inside, the raid rests, then the dungeon brain is armed on
+# the head, and a wipe is released and run back.
+CLEARS = True
 # ASSEMBLE walks the head alone (StepRaidRun's aimStaging). A seated raider
 # who is not already near the door when the raid forms is not walked there,
 # not ferried across a sea and not summoned, and after the assemble wait the
@@ -328,8 +329,12 @@ def attunement(names: list, rewarded: set, in_log: set, fragments: dict) -> dict
 # --- what the overseer can and cannot do with the raid ------------------------
 
 DUNGEON_CLEAR_LINE = (
-    "Molten Core is map 409. The dungeon-clear brain stays off there until a "
-    "clearing order arms it; the raid run currently holds at the entrance."
+    "The dungeon-clear brain at the pinned revision has raid code: a raid "
+    "profile of its settings, a pre-boss muster, a stand-down that hands each "
+    "boss fight to the playerbots raid strategies, and Molten Core's finale "
+    "authored (Majordomo's adds, then Ragnaros summoned by gossip). Its own "
+    "notes say none of it has been validated live, and the overseer keeps it "
+    "switched off on a raid map until the raid run reaches CLEAR."
 )
 
 
