@@ -11778,7 +11778,16 @@ class Bridge(discord.Client):
         # the floor with Bork, whose 68 kept stacks no vendor will buy.
         # Only the stacks of the members at the floor count (#1243): a slot
         # freed in a bag with room is no slot at the floor.
-        freed = bag_pressure.family_sale_slots(free_slots, sellable_counts)
+        #
+        # THE COLLECTIVE COUNT, NOT THE LIFT (#1309). `family_sale_slots`
+        # counts the stacks of the members a trip lifts off the floor, which
+        # is the question the bag-room hold asks before it waits on a trip
+        # and which cannot answer this one: it is a subset of the question
+        # above, so the shared sale could not fire at all. The trip is worth
+        # taking when the family's sale at the counter is worth the walk, and
+        # the goods move and the room is made whatever the trip does to the
+        # member that pins the family at the floor.
+        freed = bag_pressure.family_shared_sale_slots(free_slots, sellable_counts)
         if not trip_worth and freed >= bag_pressure.FAMILY_SALE_SLOTS:
             trip_worth = True
             log.info("economy: the family is at the floor and a vendor trip "
