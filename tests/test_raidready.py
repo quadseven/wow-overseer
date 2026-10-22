@@ -223,9 +223,13 @@ class HardBlockers(unittest.TestCase):
         self.assertIn("Nothing clears Molten Core yet", hard[0])
         self.assertIn("holds at the entrance", hard[0])
 
-    def test_the_run_holds_and_does_not_gather(self):
+    def test_the_shipped_answer_is_that_it_clears_but_does_not_gather(self):
+        """Unpatched, the card states today's truth: the run clears
+        (mod-overseer#640, in the deployed module since 2026-09-24), and only
+        the head is walked to the door. This fails the moment raidrun claims
+        a gather it has not got, or drops the clear the module has."""
         self.assertIn(raidready.RAID_PORTAL, raidready.jobs.RAID_KEYWORDS)
-        self.assertFalse(raidready.raidrun.CLEARS)
+        self.assertTrue(raidready.raidrun.CLEARS)
         self.assertFalse(raidready.raidrun.GATHERS)
 
     def test_a_run_that_does_not_gather_is_a_hard_blocker_said_plainly(self):
@@ -536,7 +540,6 @@ class EachRaiderIsReported(unittest.TestCase):
             worn=self.worn,
             item_rows=ITEM_ROWS,
             attuned=[self.head],
-            clears=False,
             gathers=False,
         )
         self.by_name = {r["name"]: r for r in self.card["raiders"]}
@@ -592,12 +595,12 @@ class EachRaiderIsReported(unittest.TestCase):
         self.assertIn("1 wearing any fire resistance (17 in all)", line)
         self.assertIn("0 fire protection potions carried", line)
 
-    def test_the_card_says_the_run_holds_until_clearing_is_ordered(self):
+    def test_the_card_says_what_the_run_does_and_that_it_clears(self):
         self.assertIn("moltencore 1", self.card["run_line"])
-        self.assertIn("does not clear", self.card["run_line"])
-        self.assertIn("holds at the entrance", self.card["run_line"])
-        self.assertIn("map 409", self.card["clearing_line"])
-        self.assertIn("until a clearing order arms it", self.card["clearing_line"])
+        self.assertNotIn("does not clear", self.card["run_line"])
+        self.assertIn("clears it with the dungeon brain", self.card["run_line"])
+        self.assertIn("none of it has been validated live", self.card["clearing_line"])
+        self.assertIn("until the raid run reaches CLEAR", self.card["clearing_line"])
 
     def test_the_attunement_path_is_on_the_card(self):
         att = self.card["attunement"]
