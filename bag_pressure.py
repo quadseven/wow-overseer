@@ -721,13 +721,17 @@ def vendor_pass_mode(trip_worth: bool, withheld: bool, in_run: bool) -> str:
     return VENDOR_MODE_NONE
 
 
+# A sustained vendor wait with no reachable NPC can pin a member at the floor.
+# The bridge records `no_vendor`, not a creature or distance, so the wait has
+# no candidate to time out into another route. A fresh 30-minute wait with
+# sellable goods can trigger a vendor trip, unless an active dungeon owns travel.
 VENDOR_WAIT_TRIP_SECONDS = 30 * 60
 
 
 def vendor_wait_trip(
     wait_seconds: int, sellable_counts: dict[str, int], in_run: bool
 ) -> bool:
-    """Take an ordinary vendor turn after a repeated, actionable range wait."""
+    """Take a vendor turn after a sustained wait, unless a dungeon owns travel."""
     return (
         not in_run
         and wait_seconds >= VENDOR_WAIT_TRIP_SECONDS
@@ -2089,6 +2093,11 @@ ROLE_TANK, ROLE_DAMAGE, ROLE_UNKNOWN = (
 equips_to_queue = gear.equips_to_queue
 equip_room = gear.equip_room
 latest_answers = gear.latest_answers
+recent_asks = gear.recent_asks
+retry_answers = gear.retry_answers
+wearers_from_rows = gear.wearers_from_rows
+items_from_rows = gear.items_from_rows
+general_bag_room = gear.general_bag_room
 worn_pieces = gear.worn_pieces
 world_held = gear.world_held
 equip_entry = gear.equip_entry

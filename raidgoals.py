@@ -226,10 +226,9 @@ MAKES_ONE = 1
 # NOTHING HERE IS EDITED ON THE STRENGTH OF THAT, because there was nothing to
 # correct, and a note is the honest way to record a check that found nothing
 # rather than a change that pretends it found something. The EIGHTH recipe -
-# the Engineering Field Repair Bot (22704) - was not checked and stays exactly
-# as unverified as the footer already says: nobody on the roster holds
-# Engineering at a rank that could cast it, so it was outside that pass's
-# scope. `MAKES_ONE` is also untouched and is still the floor it says it is:
+# the Engineering Field Repair Bot (22704) - still has unverified reagents;
+# raidcraft records its separately verified lack of a recipe source.
+# `MAKES_ONE` is also untouched and is still the floor it says it is:
 # how many items one cast produces is a different Spell.dbc field from the
 # reagents, and it was not part of what that pass measured.
 ALCHEMY = "alchemy"

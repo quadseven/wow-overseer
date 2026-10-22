@@ -35,6 +35,7 @@ import chat
 import craftpleas
 import dungeonpath
 import materials
+import raidrun
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 
@@ -178,7 +179,7 @@ class ReadTheRoomTest(unittest.TestCase):
         self.assertIn("_roster_jobs", body)
         self.assertIn("chat.mid_run", body)
 
-    def test_fresh_instance_snapshot_holds_even_without_a_run_row(self):
+    def test_molten_core_snapshot_holds_even_without_a_run_row(self):
         source = ast.parse(_source())
         bridge = next(
             node
@@ -198,8 +199,12 @@ class ReadTheRoomTest(unittest.TestCase):
             "asyncio": asyncio,
             "chat": chat,
             "dungeonpath": dungeonpath,
+            "raidrun": raidrun,
             "_active_dungeon_run": lambda: None,
-            "_fetch_live_maps": lambda names: {"Zug": 389, "Oz": 389},
+            "_fetch_live_maps": lambda names: {
+                "Zug": raidrun.MOLTEN_CORE_MAP,
+                "Oz": raidrun.MOLTEN_CORE_MAP,
+            },
             "_roster_jobs": lambda: {},
             "log": types.SimpleNamespace(
                 debug=lambda *args: None, info=lambda *args: None

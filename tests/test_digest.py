@@ -531,6 +531,21 @@ class BridgeWiring(unittest.TestCase):
         names = {n.value for n in ast.walk(registry) if isinstance(n, ast.Constant)}
         self.assertIn("_sample_family", names)
 
+    def test_digest_sampler_includes_every_roster_family(self):
+        """The digest history must cover the same roster as the Bags history."""
+        import ast
+
+        loop = self._function("_sample_family")
+        subjects = [
+            node
+            for node in ast.walk(loop)
+            if isinstance(node, ast.Attribute) and node.attr == "subjects"
+        ]
+        self.assertTrue(subjects, "digest sampling must expand to roster subjects")
+        self.assertTrue(
+            any(ast.unparse(node) == "holdings.subjects" for node in subjects)
+        )
+
     def test_the_optional_event_table_can_never_take_the_report_down(self):
         """overseer_event belongs to a concurrent ticket.
 

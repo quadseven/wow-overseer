@@ -152,13 +152,9 @@ class Reagent:
 # Reagent[0]=2589, ReagentCount[0]=2, which is exactly what infra#3689
 # established by hand. Reagent[] is fields 52-59 and ReagentCount[] 60-67.
 #
-# ALL SIXTY-TWO RECIPES IN `craft.RECIPES` WERE READ, AND EVERY REAGENT NOTE IN
-# THAT TABLE PROVED CORRECT - spell id, output item, reagent ids and per-cast
-# counts, with no discrepancy anywhere. That is worth recording rather than
-# passing over: the notes were assembled from guides and secondary databases
-# over many passes, one of which (Mageweave's reagent count) was known to have
-# been wrong once, and this is the first time the whole table has been checked
-# against the server in one go. It is also why this projection can be trusted.
+# Every row here is cross-checked against the recipe note and its spell's
+# reagent data. The per-row test below keeps the machine-readable projection
+# aligned with that human-readable record.
 #
 # WHAT "GATHERED" MEANS HERE, AND HOW IT WAS DECIDED. A reagent is gathered if
 # the family can obtain it by killing, mining, skinning, herbing or fishing -
@@ -273,6 +269,16 @@ class Reagent:
 # the Skinning that fed it is long past 12. It is recorded because the next
 # reader will wonder, and because a future bracket could break the assumption.
 GATHERED: dict[int, tuple[Reagent, ...]] = {
+    # Cooking uses ingredients the member already carries, after the crew's
+    # craft step has cast Basic Campfire.
+    2538: (Reagent(2672, "Stringy Wolf Meat", 1),),
+    2540: (Reagent(769, "Chunk of Boar Meat", 1),),
+    8607: (Reagent(3173, "Bear Meat", 1),),
+    2545: (Reagent(2675, "Crawler Claw", 1),),
+    3397: (Reagent(3730, "Big Bear Meat", 1),),
+    15855: (Reagent(12184, "Raptor Flesh", 1),),
+    18243: (Reagent(13759, "Raw Nightfin Snapper", 1),),
+    24801: (Reagent(20401, "Sandworm Meat", 1),),
     # TAILORING - the bolt family. Cloth is a humanoid kill drop, which is why
     # Og needs no gathering PROFESSION at all to restock: he needs to be out
     # in the world killing things, which is exactly what MODE_GATHER is.

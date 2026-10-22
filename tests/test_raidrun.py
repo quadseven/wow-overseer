@@ -56,33 +56,27 @@ class TheKeywordIsAnOrderAndNeverAPlan(unittest.TestCase):
         self.assertEqual(set(jobs.RAID_KEYWORDS), set(raidrun.PLACES))
         self.assertEqual(set(jobs.RAID_KEYWORDS), set(raidrun.NAMES.values()))
 
-    def test_describe_says_it_clears_and_walks_only_the_head(self):
-        """mod-overseer#640 shipped HOLD, CLEAR and RECOVER on 2026-09-24, and
-        the deployed module carries it. The maintainer's sentence must say the
-        raid clears, and must still say who is not walked to the door."""
+    def test_describe_holds_the_brain_until_clearing_is_ordered(self):
         said = jobs.describe("raid:moltencore")
-        self.assertNotIn("does not clear", said)
-        self.assertIn("clears it", said)
-        self.assertIn("mod-overseer#640", said)
+        self.assertIn("does not clear", said)
+        self.assertIn("holds at the entrance", said)
+        self.assertNotIn("clears it", said)
         self.assertIn("only the head", said)
-        self.assertNotIn("NOT BUILT YET", said)
 
 
 class TheRunLineSaysWhatShipped(unittest.TestCase):
-    """The Raid tab's run line and the job's reader sentence, unpatched: the
-    shipped answer is that an order clears, and that a raider away from the
-    door is not brought to it."""
+    """The Raid tab and job sentence state the hold at the instance entrance."""
 
-    def test_the_module_clears_and_does_not_gather(self):
-        self.assertTrue(raidrun.CLEARS)
+    def test_the_module_holds_and_does_not_gather(self):
+        self.assertFalse(raidrun.CLEARS)
         self.assertFalse(raidrun.GATHERS)
 
-    def test_the_run_line_says_it_clears(self):
+    def test_the_run_line_says_it_holds(self):
         line = raidrun.run_line()
-        self.assertNotIn("does not clear", line)
-        self.assertNotIn("holds at the entrance", line)
-        self.assertIn("clears it with the dungeon brain", line)
-        self.assertIn("runs back after a wipe", line)
+        self.assertIn("does not clear", line)
+        self.assertIn("holds at the entrance", line)
+        self.assertNotIn("clears it with the dungeon brain", line)
+        self.assertNotIn("runs back after a wipe", line)
 
     def test_the_run_line_says_who_is_not_brought(self):
         line = raidrun.run_line()
@@ -100,10 +94,10 @@ class TheRunLineSaysWhatShipped(unittest.TestCase):
         )
         self.assertNotIn("clears it with the dungeon brain", line)
 
-    def test_the_reader_sentence_says_it_clears(self):
+    def test_the_reader_sentence_says_it_holds(self):
         said = jobs.say("raid:moltencore", "Molten Core")
-        self.assertNotIn("does not clear", said)
-        self.assertIn("clears it", said)
+        self.assertIn("does not clear", said)
+        self.assertIn("holds at the entrance", said)
         self.assertIn("Only the head", said)
 
 
@@ -127,6 +121,17 @@ class TheQueueReadsARaidOrder(unittest.TestCase):
         plan = campaignqueue.plan("Zug", entries, rows)
         self.assertIn("Zug is below level 50", plan.refusal)
         self.assertEqual((), plan.entries)
+
+    def test_any_count_other_than_one_refuses_the_raid_order(self):
+        for count in (0, 2):
+            entries, refusal = campaignqueue.parse_entries("moltencore %d" % count)
+            if count == 0:
+                self.assertTrue(refusal)
+                continue
+            self.assertEqual("", refusal)
+            plan = campaignqueue.plan("Grug", entries, ALLIANCE)
+            self.assertIn("one night", plan.refusal)
+            self.assertEqual((), plan.entries)
 
     def test_more_than_one_night_is_refused(self):
         entries, _ = campaignqueue.parse_entries("moltencore 3")

@@ -264,12 +264,12 @@ FOCUS_AIMS = {
 # nodes (gameobject_loot_template: 5% off Tin Vein/Silver Vein) and mob
 # loot, the same GATHERED shape as Blacksmithing's mining-byproduct stones,
 # not a buyable one. Adding Standard Scope here would create exactly the
-# "recipe that can never complete" trap the 151-174 gap below was already
+# "recipe that can never complete" trap the 145-174 gap below was already
 # left empty to avoid - no drive in this codebase aims a character at a
 # specific gem drop, so it stays deferred rather than shipped broken. See
 # craft_supply.py's own module docstring for the full verification.
 #
-#   151-174 (Whirring Bronze Gizmo, Bronze Framework, Explosive Sheep) -
+#   145-174 (Whirring Bronze Gizmo, Bronze Framework, Explosive Sheep) -
 #   verified real, but they collide with Heavy Blasting Powder for the SAME
 #   skill window instead of sitting in their own like the Mithril/Thorium
 #   chains below do (Whirring Bronze Gizmo's own trainer-verified skill floor
@@ -1332,62 +1332,53 @@ RECIPES: dict = {
             "grey 350",
         ),
     ),
-    # COOKING (infra#2757's Cooking/First Aid slice) - also SECONDARY, same
-    # reasoning as First Aid above: every one of the five holds it at 1/75
-    # already (character_skills skill 185, verified live 2026-09-12).
-    #
-    # COOKING HAS NO ENTRY AT ALL, AND THE ONE IT HAD WAS INERT (infra#3614).
-    # Charred Wolf Meat (2538) shipped here reading "taught with Apprentice
-    # Cooking", which is true - AcquireMethod 1, ClassMask 0, req 1. What it
-    # did not say, because nothing checked, is that `Spell.dbc` gives it
-    # `RequiresSpellFocus = 4`, and `SpellFocusObject.dbc` resolves 4 to
-    # "Cooking Fire". DriveCraft casts in place and walks nobody anywhere, so
-    # CheckCast refused it with SPELL_FAILED_REQUIRES_SPELL_FOCUS on every poll
-    # and logged a bare numeric SpellCastResult at INFO - the exact silent
-    # failure `Recipe.focus` was added to prevent (infra#3747), which it did
-    # not catch because the entry predates the field and defaulted to 0.
-    #
-    # IT IS NOT ONE RECIPE, IT IS THE WHOLE SKILL LINE. All 181 abilities on
-    # skill 185 were read out of `SkillLineAbility.dbc` and joined to
-    # `Spell.dbc`. Every single one that creates an item and is reachable below
-    # the family's 75 cap carries `RequiresSpellFocus = 4`. The only focus-free
-    # rows are the six "Cooking" rank spells (which create nothing), spell 818,
-    # and three recipes whose yellow values are 100, 350 and 375 - far above 75
-    # and none of them auto-learned. There is no cooking-without-a-fire bracket
-    # to pick instead, at any skill value this family can reach.
-    #
-    # SO SPICE BREAD IS NOT THE WAY IN EITHER, and it was specifically proposed
-    # as one. infra#3732 named 37836 "the cheapest real point of secondary
-    # progress available" on the strength of the family already owning it. They
-    # do own it - it is the one secondary recipe `character_spell` records for
-    # all five, because it is AcquireMethod 0. But 37836 is
-    # `RequiresSpellFocus = 4` as well, and its bracket is yellow 30 / grey 40,
-    # which is WORSE than the Charred Wolf Meat it would replace (yellow 45 /
-    # grey 85). Adding it would have bought a second inert entry with a shorter
-    # ladder. `test_no_cooking_recipe_needs_a_fire` names its id so the
-    # proposal cannot land again without the drive that makes it castable.
-    #
-    # THE FIX IS SMALL AND IT IS NOT THIS TABLE'S. Unlike the Forge (focus 3),
-    # which is a world spawn a character must be walked to, a Cooking Fire is
-    # something the caster CONJURES WHERE IT STANDS: spell 818 "Basic Campfire"
-    # is on skill 185 at req 1, AcquireMethod 1, ClassMask 0, needs no reagent
-    # and no focus of its own, and summons gameobject 29784 - live in
-    # `acore_world.gameobject_template` as `type = 8`
-    # (GAMEOBJECT_TYPE_SPELL_FOCUS), `Data0 = 4` (Cooking Fire), `Data1 = 10`
-    # (radius, yards). The caster is standing at the centre of its own ten-yard
-    # radius, so no travel, no gameobject index and no proximity race is
-    # involved - the whole of what Cooking needs is for something to cast 818
-    # before the recipe and let the fire stand. That is one ordered pair of
-    # casts in DriveCraft, filed separately rather than faked from here by
-    # naming a spell that cannot go off.
-    #
-    # WHAT DOES NOT BLOCK IT, recorded so the next reader does not re-derive
-    # it: the reagents are fine. 1x Stringy Wolf Meat (2672) -> 1x Charred Wolf
-    # Meat (2679) and 1x Chunk of Boar Meat (769) -> Roasted Boar Meat (2681)
-    # are both ordinary beast drops at the family's level, both AcquireMethod 1
-    # ClassMask 0, both yellow 45 / grey 85. The moment a fire can be lit,
-    # Cooking is a 44-point ladder with no trainer and no purchase.
-    SKILL_IDS["cooking"]: (),
+    # Cooking requires a Cooking Fire (focus 4); Basic Campfire (818)
+    # creates gameobject 29784, so guildjobs casts it before the recipe. Meat
+    # comes from the member's bags.
+    SKILL_IDS["cooking"]: (
+        Recipe(
+            2538, "Charred Wolf Meat", 1, 49, "1x Stringy Wolf Meat (2672)", focus=4
+        ),
+        Recipe(
+            2540, "Roasted Boar Meat", 50, 74, "1x Chunk of Boar Meat (769)", focus=4
+        ),
+        Recipe(8607, "Smoked Bear Meat", 75, 119, "1x Bear Meat (3173)", focus=4),
+        Recipe(
+            2545,
+            "Cooked Crab Claw",
+            120,
+            164,
+            "1x Crawler Claw (2675)",
+            focus=4,
+        ),
+        Recipe(
+            3397,
+            "Big Bear Steak",
+            165,
+            189,
+            "1x Big Bear Meat (3730)",
+            focus=4,
+        ),
+        Recipe(
+            15855,
+            "Roast Raptor",
+            190,
+            249,
+            "1x Raptor Flesh (12184)",
+            focus=4,
+        ),
+        Recipe(
+            18243, "Nightfin Soup", 250, 284, "1x Raw Nightfin Snapper (13759)", focus=4
+        ),
+        Recipe(
+            24801,
+            "Smoked Desert Dumplings",
+            285,
+            300,
+            "1x Sandworm Meat (20401)",
+            focus=4,
+        ),
+    ),
     # ELEVEN OF THESE EIGHTEEN NEED AN ANVIL, AND UNTIL NOW EVERY ONE OF THEM
     # SAID IT DID NOT (infra#3760, corrected here as part of infra#3748).
     #
@@ -1527,7 +1518,7 @@ RECIPES: dict = {
             "135 - also the reagent Hi-Explosive Bomb needs later. "
             "max_skill was 150, past its own grey of 145",
         ),
-        # 151-174 deliberately empty - Whirring Bronze Gizmo / Bronze
+        # 145-174 deliberately empty - Whirring Bronze Gizmo / Bronze
         # Framework / Explosive Sheep, see the module-level comment above.
         Recipe(
             12585,
@@ -1602,11 +1593,11 @@ RECIPES: dict = {
         Recipe(
             19791,
             "Thorium Widget",
-            min_skill=261,
+            min_skill=260,
             max_skill=285,
             focus=1,
             note="3x Thorium Bar, 1x Runecloth (item 14047) -> 1x Thorium "
-            "Widget (item 15994)",
+            "Widget (item 15994); trainer rank 260, grey 300",
         ),
         Recipe(
             19795,
@@ -2437,7 +2428,9 @@ SECONDARY_AUTO_LEARNED = frozenset({3275})
 # written to `character_spell`, so its absence there proves nothing. Every
 # other rung is bought, and a bought recipe persists there. guildjobs, standin
 # and craft_rhythm all read this one set.
-AUTO_LEARNED = frozenset({3275, 2963, 3918, 2657, 2330, 2660, 2881, 2152, 9058})
+AUTO_LEARNED = frozenset(
+    {3275, 2963, 3918, 2657, 2330, 2660, 2881, 2152, 9058, 2538, 2540}
+)
 
 # THE TRAINER'S PRICE FOR EVERY BOUGHT RUNG, spell -> (ReqSkillRank, copper).
 # acore_world.trainer_spell on the dev world, 2026-10-10: the least

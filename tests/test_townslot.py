@@ -140,9 +140,9 @@ class AFreeColumnIsTakenAndRecorded(unittest.TestCase):
         slot = townslot.Slot(releasable=economy)
         d = slot.want(
             claimant="economy",
-            character="Grug",
+            character="Leader",
             aim="vendor",
-            leader="Grug",
+            leader="Leader",
             column="",
             retaskable=("", "vendor"),
             now=10.0,
@@ -160,9 +160,9 @@ class AFreeColumnIsTakenAndRecorded(unittest.TestCase):
         slot = townslot.Slot(releasable=economy)
         d = slot.want(
             claimant="economy",
-            character="Grug",
+            character="Leader",
             aim="vendor",
-            leader="Grug",
+            leader="Leader",
             column="",
             retaskable=("", "vendor"),
             now=10.0,
@@ -177,9 +177,9 @@ class AFreeColumnIsTakenAndRecorded(unittest.TestCase):
         slot = townslot.Slot(releasable=economy)
         d = slot.want(
             claimant="bank",
-            character="Grug",
+            character="Leader",
             aim="banker",
-            leader="Grug",
+            leader="Leader",
             column="vendor",
             retaskable=("", "banker"),
             now=5.0,
@@ -1576,6 +1576,44 @@ class AWalkThatLeavesTownGetsALeaseDimensionedForIt(unittest.TestCase):
         )
         self.assertEqual(townslot.SLOT_WAIT, waiting.verdict)
         self.assertFalse(waiting.granted)
+
+    def test_a_gathering_walk_keeps_its_own_target_while_distance_closes(self):
+        """Progress is measured from the aim itself, and does not free the slot."""
+        aim = "at:1:100,200,30"
+        slot = townslot.Slot(releasable=economy, long_leases={"gather": 450.0})
+        taken = slot.want(
+            claimant="gather",
+            character="Grug",
+            aim=aim,
+            leader="Grug",
+            column="",
+            retaskable=("", aim),
+            now=0.0,
+            distance=5498.0,
+        )
+        slot.settle(taken, True, 0.0)
+        progressing = slot.want(
+            claimant="gather",
+            character="Grug",
+            aim=aim,
+            leader="Grug",
+            column=aim,
+            retaskable=("", aim),
+            now=23.0,
+            distance=5400.0,
+        )
+        slot.settle(progressing, True, 23.0)
+        waiter = slot.want(
+            claimant="towntrip",
+            character="Grug",
+            aim="repair",
+            leader="Grug",
+            column=aim,
+            retaskable=("", "repair"),
+            now=23.0,
+        )
+        self.assertEqual(townslot.SLOT_WAIT, waiter.verdict)
+        self.assertEqual(aim, slot.holder.aim)
 
     def test_the_same_wait_would_have_preempted_a_town_errand(self):
         """The control. Identical timing and an identical ground aim, with a

@@ -53,6 +53,19 @@ class VendorWaitTrip(unittest.TestCase):
         self.assertFalse(bag_pressure.vendor_wait_trip(30 * 60, {"Leader": 0}, False))
         self.assertFalse(bag_pressure.vendor_wait_trip(30 * 60, {"Leader": 2}, True))
 
+    def test_vendor_wait_times_out_into_a_trip_on_a_town_errand(self):
+        # Once the wait exceeds 30 minutes, an ordinary town errand claims a
+        # sale trip. Dungeon travel remains under the run coordinator.
+        namespace = _vendor_pass_mode(
+            {"_fetch_vendor_wait_seconds": lambda names: 30 * 60}
+        )
+        mode = asyncio.run(
+            namespace["_vendor_pass_mode"](
+                None, ["Leader"], {"Leader": 12}, {"Leader": 2}, False
+            )
+        )
+        self.assertEqual(bag_pressure.VENDOR_MODE_TRIP, mode)
+
     def test_vendor_pass_claims_a_trip_for_an_old_range_wait(self):
         namespace = _vendor_pass_mode()
         mode = asyncio.run(

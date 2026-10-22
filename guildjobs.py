@@ -144,6 +144,7 @@ MINING = guildcorps.MINING
 SKINNING = guildcorps.SKINNING
 GATHERING = (HERBALISM, MINING, SKINNING)
 FIRST_AID = 129
+COOKING = guildcorps.COOKING
 TAILORING = guildcorps.TAILORING
 SKILL_NAMES = {
     HERBALISM: "Herbalism",
@@ -261,6 +262,12 @@ RANKS[ALCHEMY] = (
     Rank(2280, 150, 10, 50, 500),
     Rank(3465, 225, 20, 125, 5000),
     Rank(11612, 300, 35, 200, 50000),
+)
+RANKS[COOKING] = (
+    Rank(2550, 75, 5, 0, 10),
+    Rank(3102, 150, 10, 50, 500),
+    Rank(3413, 225, 20, 125, 5000),
+    Rank(18260, 300, 35, 200, 25000),
 )
 # BLACKSMITHING, ENGINEERING AND ENCHANTING, THE SAME FOUR RANKS (#774,
 # 2026-10-10). Without these rows `ranks_due` never wrote a rank errand for a
@@ -1027,6 +1034,30 @@ def choose_alchemists(members, tailors=frozenset(), recent=()) -> frozenset:
     return frozenset(out)
 
 
+def choose_cooks(members, recent=()) -> frozenset:
+    """Choose one maintenance cook per guild, keeping a trainer walk stable."""
+    picked = {
+        r.name for r in recent or () if r.action == "train" and r.skill_id == COOKING
+    }
+    crews = {}
+    for m in members or ():
+        if m.role == MAINTENANCE:
+            crews.setdefault(m.guild, []).append(m)
+    out = set()
+    for crew in crews.values():
+        crew.sort(
+            key=lambda m: (
+                not m.holds(COOKING),
+                m.name not in picked,
+                len(m.primaries),
+                m.name,
+            )
+        )
+        if crew:
+            out.add(crew[0].name)
+    return frozenset(out)
+
+
 def split_trades(members, tailors=frozenset(), alchemists=frozenset()) -> dict:
     """name -> (skill, skill): the two gathering trades each maintenance
     member works, per guild. See TRADE SPLIT in the module docstring. A member
@@ -1072,7 +1103,7 @@ def _fill_gathering(m, counts, tailor, alchemist=False) -> tuple:
     return tuple(wanted)
 
 
-def cloth_trades(trades, tailors, alchemists=frozenset()) -> dict:
+def cloth_trades(trades, tailors, alchemists=frozenset(), cooks=frozenset()) -> dict:
     """`split_trades` with the crafting trades added: Tailoring for a tailor,
     Alchemy for an alchemist, and First Aid, which takes no primary slot, for
     every maintenance member."""
@@ -1080,6 +1111,7 @@ def cloth_trades(trades, tailors, alchemists=frozenset()) -> dict:
         name: tuple(gathering)
         + ((TAILORING,) if name in tailors else ())
         + ((ALCHEMY,) if name in alchemists else ())
+        + ((COOKING,) if name in cooks else ())
         + (FIRST_AID,)
         for name, gathering in (trades or {}).items()
     }
@@ -1411,7 +1443,7 @@ def _open_recipe(member, skill):
     if ceiling <= 0 or value >= ceiling:
         return None
     recipe = craft.recipe_for(skill, value)
-    if recipe is None or recipe.focus:
+    if recipe is None or (recipe.focus and skill != COOKING):
         return None
     if recipe.spell_id not in AUTO_LEARNED and recipe.spell_id not in member.known:
         return None
@@ -1509,6 +1541,18 @@ def _craft_step(member):
             "%s crafts %d %s to raise its %s"
             % (member.name, casts, recipe.name, SKILL_NAMES.get(skill, skill)),
             rows=(
+                *(
+                    (
+                        guildcorps.Row(
+                            "cast",
+                            "818",
+                            "",
+                            source_for("craft", member.name),
+                        ),
+                    )
+                    if skill == COOKING
+                    else ()
+                ),
                 guildcorps.Row(
                     "cast",
                     str(recipe.spell_id),
@@ -1516,7 +1560,7 @@ def _craft_step(member):
                     source_for("craft", member.name),
                 ),
             ),
-            repeat=casts,
+            repeat=1 if skill == COOKING else casts,
         )
     return None
 
@@ -3029,8 +3073,9 @@ def plan(
     pending = {str(n) for n in pending or ()}
     tailors = choose_tailors(members)
     alchemists = choose_alchemists(members, tailors, recent)
+    cooks = choose_cooks(members, recent)
     trades = cloth_trades(
-        split_trades(members, tailors, alchemists), tailors, alchemists
+        split_trades(members, tailors, alchemists), tailors, alchemists, cooks
     )
     trades.update(focus_trades(members, focus))
     tally = _focus_tally(members, focus)
@@ -3080,7 +3125,11 @@ def plan(
             _offer_for(supply, m.name),
             _offer_for(pets, m.name),
             _offer_for(weapons, m.name),
-            (equip_room or {}).get(m.name),
+            # A guild whose make-room steps are used up this pass asks none:
+            # its member takes its class quest instead of no step at all.
+            (equip_room or {}).get(m.name)
+            if counters["room"].get(m.guild, 0) < ROOM_STEPS_PER_GUILD
+            else None,
             _offer_for(mounts, m.name),
         )
         asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
@@ -3308,6 +3357,40 @@ def _upkeep_first(
     return None, _join(supply_note, riding_note), gear_note
 
 
+def _room_first(
+    m, room, leveling, recent, cap, level_room, still_for, book, kept, crafters, master
+):
+    """(the member's step as _member_step returns it, or None; the room note)
+    for a member whose upgrade waits on room in its bags (`room`, from
+    gear.equip_room, #1088), ahead of the class quest.
+
+    ROOM FOR AN UPGRADE COMES BEFORE THE CLASS QUEST. It is one sale, post or
+    destroy, on its own cooldown and allowance (ROOM_ACTION), and a member
+    that cannot put an upgrade on without it is otherwise never given it:
+    behind the class quest, Bonk and Cronk carried a two-hander they could not
+    wear for 4.8 days and no "makes room ... to put on" step ran in four hours
+    of guild passes (2026-10-21), every one of them a class quest's. Only the
+    two ways out of a spot the member cannot work from come first (a stalled
+    class step's level walk, the stood-still hearth), because a vendor walk
+    from there never finishes either. A room step cooling down, used up for
+    these bags (ROOM_STEPS_PER_STATE) or with nothing to part with takes no
+    pass: the class quest runs, and the note says why."""
+    if not room:
+        return None, ""
+    first = stalled_level_first(m, leveling, recent, cap, level_room)
+    if first is not None:
+        return (*first, ""), ""
+    step = stood_still_step(m, still_for, recent, leveling)
+    if step is not None:
+        return (step, step.said, "", ""), ""
+    step, _doing, note = equip_room_step(
+        m, room, book, recent, cap, kept, crafters, master
+    ) or (None, "", "")
+    if step is not None:
+        return (step, step.said, "", ""), ""
+    return None, note
+
+
 def _member_step(
     m,
     offer,
@@ -3336,10 +3419,11 @@ def _member_step(
     equip_room=None,
     mount=None,
 ):
-    """A class quest first, then a hunter's first pet, then a hearth out of a
-    spot it cannot leave, then room in the bags for an upgrade the world
-    cannot put on without it (equip_room_step, #1088), then food for a member
-    with nothing to eat or drink,
+    """For a member whose upgrade waits on room in its bags, the way out of a
+    spot it cannot work from and then the make-room step (_room_first,
+    #1088); then a class quest, then a hunter's first pet, then a hearth out
+    of a spot it cannot leave, then food for a member with nothing to eat or
+    drink,
     then a sale for bags that leave loot on the corpse (loot_room_short), then
     the inn, then riding, then a mount (`mount`, a mountbuy.Facts), then the
     weapon master for a carried weapon it has no
@@ -3351,7 +3435,8 @@ def _member_step(
     `crafting`), keeping the notes.
 
     THE CLASS QUEST COMES FIRST (the operator, 2026-10-06: the highest-priority
-    job in the guild). It is the first rung here, ahead of gear, PvP, post, the
+    job in the guild). It is the first rung of work here, behind only the one
+    make-room step an upgrade waits on, ahead of gear, PvP, post, the
     level walk and every ordinary job, and it has its own allowance per guild
     (CLASSQUEST_STEPS_PER_GUILD), so no other kind of step can use up the
     passes it needs. A member held on a class quest is also kept out of the
@@ -3366,6 +3451,21 @@ def _member_step(
     A member that has stood on one spot for standstill.STILL_MINUTES
     (`still_for`) with nothing asked of it hearths home before anything else
     is asked (stood_still_step)."""
+    found, room_note = _room_first(
+        m,
+        equip_room,
+        leveling,
+        recent,
+        cap,
+        level_room,
+        still_for,
+        classes,
+        kept,
+        crafters,
+        master,
+    )
+    if found is not None:
+        return found
     found, quest_note = _quest_first(
         m,
         classes,
@@ -3383,12 +3483,8 @@ def _member_step(
         still_for,
     )
     if found is not None:
-        return found
-    step, doing, room_note = equip_room_step(
-        m, equip_room, classes, recent, cap, kept, crafters, master
-    ) or (None, "", "")
-    if step is not None or doing:
-        return step, doing, quest_note, ""
+        step, doing, note, gear_why = found
+        return step, doing, _join(note, room_note), gear_why
     quest_note = _join(quest_note, room_note)
     found, supply_note, gear_note = _upkeep_first(
         m, offer, supply, leveling, kept, recent, cap, quest_note, weapon, mount
@@ -4592,19 +4688,42 @@ def _room_ladder(m, said, need, kept, book, cap, crafters, master):
     )
 
 
+# The make-room steps one upgrade is given while its holder's bags stand at
+# one count of free slots (#1088). A step that frees a slot starts the count
+# again; three that free none mean the vendor walk cannot finish from where the
+# member is, and the steps stop until the bags change.
+ROOM_STEPS_PER_STATE = 3
+
+
+def _room_steps_since(m, recent, minutes) -> int:
+    """The make-room steps written for `m` in the last `minutes` (rows of one
+    step share their age)."""
+    return len(
+        {
+            int(r.age_minutes)
+            for r in recent or ()
+            if r.name == m.name
+            and r.action == ROOM_ACTION
+            and int(r.age_minutes) <= int(minutes)
+        }
+    )
+
+
 def equip_room_step(m, room, book, recent, cap, kept=None, crafters=None, master=""):
     """None when the member has the room its upgrade needs, or none is asked,
     else (step or None, what the member does, a note): the member makes room
     for an upgrade the world cannot put on yet (#1088).
 
-    `room` is (free slots needed, "to put on <piece> over <worn>") from
-    gear.equip_room: a two-hander over a main hand and a shield moves two
-    pieces into the one bag slot it leaves, so with full bags the world
-    refuses it. Three members with full bags were held a day each on that
-    refusal. The make-room ladder is the class quest's (_room_ladder), with
-    its cooldown and allowance; the equip pass asks again the pass the room
-    is there. With nothing to part with, no step: the note says so plainly
-    and the upgrade stays in the bags.
+    `room` is (free slots needed, "to put on <piece> over <worn>", minutes the
+    bags have stood at this count) from gear.equip_room: a two-hander over a
+    worn off hand moves the off hand into a bag slot of its own, so with full
+    bags the world refuses it. Three members with full bags were held a day
+    each on that refusal. The make-room ladder is the class quest's
+    (_room_ladder), with its cooldown and allowance; the equip pass asks again
+    the pass the room is there, and settles the upgrade with a plain reason
+    when no slot frees in gear.ROOM_WAIT_MINUTES, so a member with nothing to
+    part with is never held. With nothing to part with, or ROOM_STEPS_PER_STATE
+    steps already taken for these bags, no step: the note says so plainly.
     """
     if not room or m.free_slots is None or int(m.free_slots) >= int(room[0]):
         return None
@@ -4619,7 +4738,19 @@ def equip_room_step(m, room, book, recent, cap, kept=None, crafters=None, master
     )
     if _cooling(m, ROOM_ACTION, recent):
         return None, said, ""
-    step = _room_ladder(m, said, need, kept, book, cap, crafters, master)
+    stood = int(room[2]) if len(room) > 2 else None
+    if (
+        stood is not None
+        and _room_steps_since(m, recent, stood) >= ROOM_STEPS_PER_STATE
+    ):
+        return (
+            None,
+            "",
+            "%s made room %d time(s) %s and its bags have not gained a slot; no "
+            "more until they change" % (m.name, ROOM_STEPS_PER_STATE, words),
+        )
+    short = need - int(m.free_slots)
+    step = _room_ladder(m, said, short, kept, book, cap, crafters, master)
     if step is None:
         return (
             None,
@@ -6050,3 +6181,64 @@ def spots_from_rows(rows, kind="gameobject") -> tuple:
         except (KeyError, TypeError, ValueError):
             continue
     return tuple(out)
+
+
+# ALWAYS-ONLINE GUILD WATCH (#874). A member of an always-online guild holds a
+# permanent lease, yet eight of them logged out between 14:18 and 14:25 on
+# 2026-10-12 and nothing named why: the bridge only noticed afterwards, as "waits
+# for gear: it is offline". The watch reads the characters table and logs one
+# line per departure. The cause is a PROBABLE one: the bridge sees rows, not the
+# worldserver's logout call, so the line names what the rows show.
+
+# How far back a logout still counts as new: a few watch cycles.
+LEAVE_LOOKBACK_SECONDS = 300
+
+
+def new_departures(rows, seen, now):
+    """(rows that left the world within LEAVE_LOOKBACK_SECONDS and are not in
+    `seen`, the grown `seen`). A departure is keyed by guid and logout time, so
+    a member that leaves twice is reported twice and a standing one once."""
+    found = []
+    grown = set(seen)
+    for row in rows:
+        key = (row["guid"], row["logout_time"])
+        if row["online"] or key in grown:
+            continue
+        if now - int(row["logout_time"]) > LEAVE_LOOKBACK_SECONDS:
+            continue
+        grown.add(key)
+        found.append(row)
+    return found, grown
+
+
+def leave_line(row, departed, online_on_account):
+    """One log line naming the probable cause of `row`'s logout.
+
+    `departed` is every departure of this pass; `online_on_account` maps an
+    account to how many of its characters are online now.
+    """
+    who = "guild member %s (%s) left the world" % (row["name"], row["guild"])
+    mates = [
+        d["name"]
+        for d in departed
+        if d["name"] != row["name"] and d["logout_time"] == row["logout_time"]
+    ]
+    if mates:
+        return (
+            "%s: same second as %s, so a server-side pass logged them out together"
+            % (
+                who,
+                ", ".join(mates),
+            )
+        )
+    others = online_on_account.get(row["account"], 0)
+    if others:
+        return (
+            "%s: %d other characters on its account are online, so a login or the "
+            "bot rotation on that account may have replaced this session"
+            % (who, others)
+        )
+    return (
+        "%s: no other session on its account and no batch, so the cause is not in the rows"
+        % who
+    )

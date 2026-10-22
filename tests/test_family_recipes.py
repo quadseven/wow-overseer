@@ -30,6 +30,7 @@ import craft  # noqa: E402
 import craft_rhythm  # noqa: E402
 import craft_supply  # noqa: E402
 import guildjobs  # noqa: E402
+import goals  # noqa: E402
 import learnaim  # noqa: E402
 import modsource  # noqa: E402
 import standin  # noqa: E402
@@ -137,11 +138,20 @@ class AFamilyCrafterIsDueATrainerRecipe(unittest.TestCase):
 
     def test_every_ladder_rung_has_its_trainer_row(self):
         for skill, recipes in craft.RECIPES.items():
+            if skill == goals.SKILL_IDS["cooking"]:
+                continue  # quest/vendor cooking recipes are learned elsewhere
             for recipe in recipes:
                 if recipe.spell_id in craft.AUTO_LEARNED:
                     continue
                 with self.subTest(skill=skill, recipe=recipe.name):
                     self.assertIn(recipe.spell_id, craft.TRAINER_RECIPES)
+
+    def test_raid_food_rungs_are_learned_from_their_quest_or_vendor(self):
+        foods = craft.RECIPES[goals.SKILL_IDS["cooking"]]
+        self.assertEqual({r.spell_id for r in foods[-2:]}, {18243, 24801})
+        self.assertTrue(
+            all(r.spell_id not in craft.TRAINER_RECIPES for r in foods[-2:])
+        )
 
     def test_the_crew_and_the_family_share_one_auto_learned_set(self):
         self.assertIs(craft.AUTO_LEARNED, guildjobs.AUTO_LEARNED)
