@@ -281,7 +281,13 @@ class ThePage(unittest.TestCase):
         milestones = [m for b in bands for m in b["milestones"]]
         self.assertIn("Zug at 30: Whirlwind Axe (class quest)", milestones)
         self.assertIn("Zug at 40: Shield Slam (protection talent)", milestones)
-        self.assertIn("everyone at 40: riding and a mount", milestones)
+        self.assertNotIn("everyone at 40: riding and a mount", milestones)
+
+    def test_mount_milestone_uses_apprentice_level(self):
+        self.assertIn(
+            "everyone at 20: riding and a mount",
+            levelroute.milestones(members({n: 19 for n, *_ in HORDE_FIVE}), 20, 29),
+        )
 
     def test_at_the_cap_it_says_so(self):
         capped = members({n: 60 for n, *_ in HORDE_FIVE})

@@ -17,8 +17,8 @@ THE ORDER. What the member buys first is what it saves for first:
   2. RIDING: Apprentice Riding at level 20, Journeyman Riding at 40, at the
      world's riding trainer (RIDING). Bought by the riding walk
      (guildjobs.riding_step).
-  3. GEAR: vendor gear for empty or weak slots (gearup), from what is left.
-  4. FOOD AND DRINK (restsupply), from what is left after the gear too.
+  3. FOOD AND DRINK (restsupply), from what is left after riding.
+  4. GEAR: vendor gear for empty or weak slots (gearup), from what is left.
 
 A purchase spends only the purse ABOVE everything ahead of it (`spendable`).
 So a member holding 4 silver and owing 3 gold of spells buys no gear: it saves.
@@ -48,7 +48,7 @@ SPELLS = "class spells"
 RIDING = "riding"
 GEAR = "gear"
 FOOD = "food and drink"
-ORDER = (SPELLS, RIDING, GEAR, FOOD)
+ORDER = (SPELLS, RIDING, FOOD, GEAR)
 
 RIDING_SKILL = 762
 
@@ -216,8 +216,8 @@ def order(
     rank = riding_due(level, riding_max)
     if rank is not None:
         wants.append(Want(RIDING, rank.cost, rank.name, rank.spell))
-    wants.append(Want(GEAR, 0, GEAR))
     wants.append(Want(FOOD, 0, FOOD))
+    wants.append(Want(GEAR, 0, GEAR))
     return Order(
         str(name), _int(level), max(0, _int(purse)), tuple(wants), bool(hungry)
     )

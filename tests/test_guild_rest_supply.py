@@ -195,7 +195,14 @@ class InThePass(unittest.TestCase):
     def test_the_class_quest_still_comes_first(self):
         source = member_rungs.names()
         self.assertLess(source.index("class_step"), source.index("_supply_first"))
-        self.assertLess(source.index("_supply_first"), source.index("_gear_first"))
+        import inspect
+
+        upkeep = inspect.getsource(guildjobs._upkeep_first)
+        gear = upkeep.index("step, doing, gear_note = _gear_first")
+        ordinary_supply = upkeep.index(
+            "step, doing, supply_note = _supply_first", upkeep.index("if not hungry:")
+        )
+        self.assertLess(ordinary_supply, gear)
 
     def test_the_bridge_reads_the_bags_and_the_stock(self):
         import pathlib

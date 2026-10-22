@@ -3309,12 +3309,11 @@ def _upkeep_first(
     note; the gear note): food for a member with nothing to eat or drink, then
     a sale for full bags, then the inn, then riding, then a mount for a member
     with riding and none (mount_step, #779), then the weapon master for
-    a carried weapon it has no skill for (weapon_step, #793), then gear and food
+    a carried weapon it has no skill for (weapon_step, #793), then food and gear
     in their purchase order (purse.py). A gear step carries no notes; the
     riding and weapon notes ride on the supply note."""
-    # FOOD FIRST ONLY FOR A MEMBER WITH NOTHING TO EAT OR DRINK (purse.py): it
-    # dies between pulls without. Otherwise the purchase order puts its class
-    # spells, riding and gear ahead of food.
+    # An empty ration bag gets food ahead of every errand. Otherwise the
+    # purchase order puts class spells and riding first, then food, then gear.
     hungry = restsupply.empty(m)
     supply_note = ""
     if hungry:
@@ -3338,13 +3337,13 @@ def _upkeep_first(
     if step is not None:
         return (step, step.said, quest_note, ""), supply_note, ""
     riding_note = _join(riding_note, weapon_note)
-    step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
-    if step is not None:
-        return (step, doing, "", ""), supply_note, gear_note
     if not hungry:
         step, doing, supply_note = _supply_first(m, supply, recent, cap, kept)
         if step is not None:
-            return (step, doing, quest_note, ""), supply_note, gear_note
+            return (step, doing, quest_note, ""), supply_note, ""
+    step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
+    if step is not None:
+        return (step, doing, "", ""), supply_note, gear_note
     return None, _join(supply_note, riding_note), gear_note
 
 

@@ -870,7 +870,7 @@ MILESTONES = {
         (30, "Felhunter (class quest)"),
     ),
 }
-MOUNT_LEVEL = 40
+MOUNT_LEVEL = 20
 
 
 def milestones(members, low: int, high: int) -> list:
@@ -951,7 +951,9 @@ def route(facts: Facts) -> list:
                     high,
                     level if low == start else 0,
                 ),
-                "milestones": milestones(facts.members, max(low, level), high),
+                "milestones": milestones(
+                    facts.members, max(low, min(level, MOUNT_LEVEL)), high
+                ),
             }
         )
     return out
