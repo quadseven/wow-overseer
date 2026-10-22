@@ -30,6 +30,7 @@ from __future__ import annotations
 import bank
 import jobs
 import places
+import raidcraft
 import raidgear
 import raidgoals
 import raidlineup
@@ -933,6 +934,7 @@ def _supply_card(lineup, members, worn_rows, group, supply) -> dict:
         read.get("bank"),
         crafters=group["family_names"],
         snapshots=read.get("snapshots") or (),
+        unobtainable=raidcraft.unobtainable_lines(),
     )
 
 

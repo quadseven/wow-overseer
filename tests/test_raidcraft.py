@@ -292,6 +292,12 @@ class TheBriefsListWasCheckedAndNineOfItWasWrong(unittest.TestCase):
     """A list that silently dropped the entries it could not confirm would read
     as a list that had confirmed all of them. Both refusals are data."""
 
+    def test_field_repair_bot_has_no_recipe_source_on_this_realm(self):
+        product, reason = raidcraft.UNOBTAINABLE_RECIPES[22704]
+        self.assertEqual("Field Repair Bot 74A", product)
+        self.assertIn("Schematic 18235", reason)
+        self.assertIn("no trainer, vendor, loot or quest", reason)
+
     def test_the_six_jujus_are_recorded_as_uncraftable(self):
         for entry in (12451, 12460, 12457, 12455, 12450, 12459):
             with self.subTest(entry=entry):
