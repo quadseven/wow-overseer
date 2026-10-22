@@ -19,6 +19,7 @@ Tickets: quadseven/mod-overseer#88, quadseven/mod-overseer#147.
 import pathlib
 import unittest
 
+import bag_pressure
 import family
 import panel
 import wealth
@@ -406,6 +407,60 @@ class Capacity(unittest.TestCase):
         self.assertEqual(cap["used"], 1)
         self.assertEqual(cap["free"], wealth.BACKPACK_SLOTS + 13)
         self.assertEqual(cap["bags"], 2)
+
+    def test_a_quiver_or_a_soul_bag_is_no_room(self):
+        """Free bag slots are the bridge's answer (bag_pressure.general_bag_room, #740):
+        the backpack and the general bags. An empty quiver is no room for loot,
+        so the page counting it would call a member roomy whom every bridge
+        pass holds for bag room. The quiver is still drawn as a bag."""
+        rows = [
+            bag(slot=BAG_SLOT, guid=7001, slots=6),
+            bag(slot=BAG_SLOT + 1, guid=7002, slots=16, **{"class": 11, "subclass": 2}),
+            bag(slot=BAG_SLOT + 2, guid=7003, slots=20, subclass=1),
+            item(bag=7002, slot=0, entry=1),
+        ]
+        cap = wealth.build_capacity(wealth.split_inventory(rows, ICONS)["containers"])
+        self.assertEqual(cap["slots"], wealth.BACKPACK_SLOTS + 6)
+        self.assertEqual(cap["used"], 0)
+        self.assertEqual(cap["free"], wealth.BACKPACK_SLOTS + 6)
+        self.assertEqual(cap["bags"], 3)
+
+    def test_the_page_and_the_bridge_count_the_same_free_slots(self):
+        rows = [
+            bag(slot=BAG_SLOT, guid=7001, slots=6),
+            bag(slot=BAG_SLOT + 1, guid=7002, slots=16, **{"class": 11, "subclass": 2}),
+            item(slot=BACKPACK_SLOT, entry=1),
+            item(bag=7001, slot=0, entry=2),
+        ]
+        cap = wealth.build_capacity(wealth.split_inventory(rows, ICONS)["containers"])
+        bridge_rows = [
+            {
+                "name": FIRST,
+                "bag_slot": 0,
+                "size": 16,
+                "bag_class": 1,
+                "bag_subclass": 0,
+                "used": 1,
+            },
+            {
+                "name": FIRST,
+                "bag_slot": BAG_SLOT,
+                "size": 6,
+                "bag_class": 1,
+                "bag_subclass": 0,
+                "used": 1,
+            },
+            {
+                "name": FIRST,
+                "bag_slot": BAG_SLOT + 1,
+                "size": 16,
+                "bag_class": 11,
+                "bag_subclass": 2,
+                "used": 0,
+            },
+        ]
+        free, slots = bag_pressure.general_bag_room(bridge_rows)[FIRST]
+        self.assertEqual((cap["free"], cap["slots"]), (free, slots))
 
     def test_the_bag_containers_are_not_counted_as_things_being_carried(self):
         """A bag occupies a bag SLOT, not a bag slot's worth of cargo. Adding

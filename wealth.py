@@ -74,6 +74,7 @@ from __future__ import annotations
 import armory
 import bagfate
 import bonds
+import bag_pressure
 import family
 import holdings
 from armory import (
@@ -493,6 +494,11 @@ def _container(
         "quality_name": quality_name(row.get("quality")) if row else None,
         "icon": icons.get(row.get("displayid") or 0) if row else None,
         "wowhead": WOWHEAD % row["entry"] if row else None,
+        # Which kind of bag it is, for build_capacity: a quiver or a soul bag
+        # is drawn like any bag but is no room for loot
+        # (bag_pressure.general_bag_room).
+        "bag_class": row.get("class") if row else None,
+        "bag_subclass": row.get("subclass") if row else None,
     }
 
 
@@ -633,18 +639,37 @@ def split_inventory(rows: list[dict], icons: dict[int, str]) -> dict:
 def build_capacity(containers: list[dict]) -> dict:
     """How much room there is, how much is left, and how many bags there are.
 
+    ROOM IS THE BRIDGE'S ANSWER (#740): the backpack and the general bags,
+    counted by bag_pressure.general_bag_room, the one reader every bridge
+    pass holds a member's free bag slots to. A quiver or a soul bag is still
+    a bag here, but its slots are no room for loot, so a page counting them
+    would call roomy a member the bridge is holding for bag room. `used` is
+    what fills that room, so a quiver's arrows are not in it.
+
     `empty_bag_slots` is the actionable half of a full inventory: three empty
     bag slots on a character with nothing to put in them is a different
     problem from four full bags, and the two want different answers (find him
     a bag, versus sell something).
     """
     bags = [c for c in containers if c["key"] != BACKPACK]
-    slots = sum(c["slots"] for c in containers)
-    used = sum(c["used"] for c in containers)
+    free, slots = bag_pressure.general_bag_room(
+        {
+            "name": "",
+            "bag_slot": 0
+            if c["key"] == BACKPACK
+            else _BAG_SLOTS.start + c["position"] - 1,
+            "size": c["slots"],
+            "bag_class": c["bag_class"],
+            "bag_subclass": c["bag_subclass"],
+            "used": c["used"],
+        }
+        for c in containers
+    ).get("", (0, 0))
+    used = slots - free
     return {
         "slots": slots,
         "used": used,
-        "free": max(0, slots - used),
+        "free": free,
         "bags": len(bags),
         "bag_slots": BAG_POSITIONS,
         "empty_bag_slots": max(0, BAG_POSITIONS - len(bags)),

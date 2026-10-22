@@ -692,6 +692,8 @@ def commands_ok(commands: Iterable[str]) -> bool:
 
 # --------------------------------------------------------------------- storage --
 
+# Run by the bridge alone (bridge._ensure_watch_store, #740); the site reads
+# and writes the row but never creates the table.
 CREATE_SQL = (
     "CREATE TABLE IF NOT EXISTS overseer_watch ("
     " id TINYINT UNSIGNED NOT NULL,"
