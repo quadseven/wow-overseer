@@ -41,6 +41,7 @@ def member(name, role=guildjobs.RAIDER, **over):
         skills={FA: (10, 75), H: (40, 75), ALCHEMY: (10, 75)},
     )
     base.update(over)
+    base["skills"].setdefault(guildjobs.COOKING, (1, 75))
     return guildjobs.Member(**base)
 
 
@@ -288,8 +289,8 @@ class EveryCraftingTrade(unittest.TestCase):
 
     def test_every_auto_learned_recipe_is_a_real_recipe(self):
         # craft.py's list of nine auto-learned first rungs.
-        nine = {3275, 2963, 3918, 2657, 2330, 2660, 2881, 2152, 9058}
-        self.assertEqual(guildjobs.AUTO_LEARNED, nine)
+        learned = {3275, 2963, 3918, 2657, 2330, 2660, 2881, 2152, 9058, 2538, 2540}
+        self.assertEqual(guildjobs.AUTO_LEARNED, learned)
         self.assertLessEqual(guildjobs.AUTO_LEARNED, guildjobs.CRAFT_SPELLS)
         named = {r.spell_id for recipes in craft.RECIPES.values() for r in recipes}
         self.assertLessEqual(guildjobs.AUTO_LEARNED, named)
