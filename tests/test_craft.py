@@ -102,6 +102,15 @@ MEASURED_FOCUS = {
     19795: 1,
     # MINING - the one focus-gated entry that has a walk (infra#3748)
     2657: 3,
+    # COOKING
+    2538: 4,
+    2540: 4,
+    8607: 4,
+    2545: 4,
+    3397: 4,
+    15855: 4,
+    18243: 4,
+    24801: 4,
     # ALCHEMY - 3450 and 11467 are the raid-consumable brackets, and their
     # focus is a measurement rather than an inherited assumption: the brief
     # that asked for them stated that Alchemy's high-tier flasks need an
@@ -213,6 +222,15 @@ MEASURED_BANDS = {
     19795: (1, 295, 315),
     # MINING
     2657: (1, 25, 70),
+    # COOKING
+    2538: (1, 45, 85),
+    2540: (1, 45, 85),
+    8607: (40, 80, 120),
+    2545: (85, 125, 165),
+    3397: (110, 150, 190),
+    15855: (175, 215, 255),
+    18243: (250, 275, 295),
+    24801: (285, 310, 335),
     # ALCHEMY - 2337's floor of 80 is the twenty-point wall Ugga walked into
     2330: (1, 55, 95),
     2337: (80, 85, 125),
@@ -1097,20 +1115,18 @@ class FirstAidAndCookingTests(unittest.TestCase):
             craft.craft_errand("Grug", {"first aid": 59}, primaries=()), 3275
         )
 
-    def test_cooking_has_no_reachable_bracket_at_all(self):
-        """Every Cooking recipe below the 75 cap needs a Cooking Fire.
-
-        Read off `SkillLineAbility.dbc` joined to `Spell.dbc` from the running
-        worldserver: all 181 abilities on skill 185, and every one that
-        creates an item and is reachable below 75 carries
-        `RequiresSpellFocus = 4`. DriveCraft casts in place, so an entry here
-        would sit refused for ever. The table carries none rather than one
-        that looks right and produces nothing.
-        """
-        self.assertEqual(craft.RECIPES[goals.SKILL_IDS["cooking"]], ())
-        for value in (1, 50, 51, 75):
-            with self.subTest(value=value):
-                self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["cooking"], value))
+    def test_cooking_has_a_campfire_supported_ladder(self):
+        recipes = craft.RECIPES[goals.SKILL_IDS["cooking"]]
+        self.assertTrue(recipes)
+        self.assertEqual(craft.recipe_for(185, 1).spell_id, 2538)
+        self.assertEqual(craft.recipe_for(185, 50).spell_id, 2540)
+        self.assertEqual(craft.recipe_for(185, 75).spell_id, 8607)
+        self.assertEqual(craft.recipe_for(185, 120).spell_id, 2545)
+        self.assertEqual(craft.recipe_for(185, 165).spell_id, 3397)
+        self.assertEqual(craft.recipe_for(185, 190).spell_id, 15855)
+        self.assertEqual(craft.recipe_for(185, 250).spell_id, 18243)
+        self.assertEqual(craft.recipe_for(185, 285).spell_id, 24801)
+        self.assertTrue(all(recipe.focus == 4 for recipe in recipes))
 
     def test_craft_errand_finds_first_aid_for_a_character_assigned_no_primary_with_recipe(
         self,
@@ -1240,7 +1256,14 @@ class MeasuredCraftBands(unittest.TestCase):
         # can end a recipe before its own grey cutoff. The five gaps below are
         # intentional places where no castable recipe covers the intervening
         # values.
-        gap_starts = {12585: 175, 19791: 260, 3337: 125, 9918: 200, 16641: 250}
+        gap_starts = {
+            12585: 175,
+            19791: 260,
+            3337: 125,
+            9918: 200,
+            16641: 250,
+            18243: 250,
+        }
         for skill_recipes in craft.RECIPES.values():
             for index, recipe in enumerate(skill_recipes):
                 learn_floor, yellow, grey = MEASURED_BANDS[recipe.spell_id]
@@ -1377,9 +1400,11 @@ class SpellFocusTests(unittest.TestCase):
         those eleven, so a twelfth cannot be added without a walk."""
         stranded = {
             recipe.spell_id
-            for recipes in craft.RECIPES.values()
+            for skill_id, recipes in craft.RECIPES.items()
             for recipe in recipes
-            if recipe.focus and recipe.focus not in craft.FOCUS_AIMS
+            if recipe.focus
+            and recipe.focus not in craft.FOCUS_AIMS
+            and skill_id != goals.SKILL_IDS["cooking"]
         }
         self.assertEqual(
             stranded,
@@ -1395,9 +1420,11 @@ class SpellFocusTests(unittest.TestCase):
         one focus object, one profession, one issue."""
         stranded = {
             recipe.spell_id: recipe.focus
-            for recipes in craft.RECIPES.values()
+            for skill_id, recipes in craft.RECIPES.items()
             for recipe in recipes
-            if recipe.focus and recipe.focus not in craft.FOCUS_AIMS
+            if recipe.focus
+            and recipe.focus not in craft.FOCUS_AIMS
+            and skill_id != goals.SKILL_IDS["cooking"]
         }
         self.assertEqual(set(stranded.values()), {1})  # Anvil, and only Anvil
         engineering = {
@@ -1425,7 +1452,7 @@ class SpellFocusTests(unittest.TestCase):
                 focus = craft.focus_for(spell)
                 with self.subTest(skill=skill_name, value=value, spell=spell):
                     self.assertTrue(
-                        focus == 0 or focus in craft.FOCUS_AIMS,
+                        focus == 0 or focus in craft.FOCUS_AIMS or focus == 4,
                         f"craft_errand names {spell} at {skill_name} {value}, "
                         f"which needs focus {focus} and nothing walks there",
                     )
@@ -1539,8 +1566,8 @@ class SpellFocusTests(unittest.TestCase):
         self.assertEqual(craft.focus_for(0), 0)
         self.assertEqual(craft.focus_for(999999), 0)  # a spell this table lost
 
-    def test_no_cooking_recipe_needs_a_fire(self):
-        """The sibling of the smelt refusal, for focus 4 (infra#3614).
+    def test_cooking_recipes_declare_their_fire_requirement(self):
+        """Every cooking recipe accurately declares its Cooking Fire focus.
 
         WHY THIS EXISTS SEPARATELY FROM `test_no_recipe_requires_a_spell_focus`
         ABOVE, and it is the hole that let an inert recipe ship. That test
@@ -1568,6 +1595,9 @@ class SpellFocusTests(unittest.TestCase):
         fire_spells = {
             2538: "Charred Wolf Meat",
             2540: "Roasted Boar Meat",
+            8607: "Smoked Bear Meat",
+            2545: "Cooked Crab Claw",
+            15855: "Roast Raptor",
             3370: "Crocolisk Steak",
             3371: "Blood Sausage",
             3372: "Murloc Fin Soup",
@@ -1585,20 +1615,13 @@ class SpellFocusTests(unittest.TestCase):
             7751: "Brilliant Smallfish",
             7752: "Slitherskin Mackerel",
             37836: "Spice Bread",
+            18243: "Nightfin Soup",
+            24801: "Smoked Desert Dumplings",
         }
-        named = {
-            recipe.spell_id for recipes in craft.RECIPES.values() for recipe in recipes
-        }
-        clash = named & set(fire_spells)
-        self.assertFalse(
-            clash,
-            "RECIPES names %s, which require a Cooking Fire "
-            "(RequiresSpellFocus = 4, SpellFocusObject.dbc id 4). Nothing in "
-            "this system lights one. See craft.py's COOKING comment for the "
-            "single cast (spell 818, gameobject 29784, ten-yard radius) that "
-            "would."
-            % sorted("%d (%s)" % (spell, fire_spells[spell]) for spell in clash),
-        )
+        cooking = craft.RECIPES[goals.SKILL_IDS["cooking"]]
+        self.assertTrue(cooking)
+        self.assertTrue({recipe.spell_id for recipe in cooking} <= set(fire_spells))
+        self.assertTrue(all(recipe.focus == 4 for recipe in cooking))
 
     def test_the_module_records_the_forge_finding(self):
         # The measurements behind this are the expensive part of infra#3738,
