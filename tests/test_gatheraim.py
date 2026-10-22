@@ -184,8 +184,11 @@ class SameMapOnly(unittest.TestCase):
         self.assertIn("map 1", got.refused)
 
 
-class DensityBeatsProximity(unittest.TestCase):
-    def test_the_zone_with_more_reachable_nodes_wins(self):
+class ProximityBeatsDensity(unittest.TestCase):
+    def test_a_nearer_in_band_field_beats_a_denser_distant_one(self):
+        # The nearer thin field wins even though the denser field is still
+        # inside the lease; distance is weighed in terms of the lease, not an
+        # arbitrary thousand-yard step.
         rows = [spawn(1, COPPER, x=1.0)] + [spawn(148, COPPER, x=500.0)] * 4
         got = gatheraim.choose(
             skills={"G": {"mining": 1}},
@@ -193,9 +196,10 @@ class DensityBeatsProximity(unittest.TestCase):
             spawns=rows,
             family_level=60,
             zone_levels={1: 10, 148: 12},
+            origin=(0.0, 0.0),
         )
-        self.assertEqual(got.chosen.zone_id, 148)
-        self.assertEqual(got.chosen.nodes, 4)
+        self.assertEqual(got.chosen.zone_id, 1)
+        self.assertEqual(got.chosen.nodes, 1)
 
     def test_out_of_band_nodes_do_not_count_toward_density(self):
         """A zone full of Truesilver is empty to a Mining 1 character."""
@@ -340,6 +344,34 @@ class TheReachIsTheLeaseNotAGuess(unittest.TestCase):
         )
         self.assertEqual(inside, [])
         self.assertEqual(beyond, far)
+
+    def test_the_current_family_reaches_a_field_within_the_lease(self):
+        # Weakest gatherers: Grug mining 8, Grog mining 1, Bork skinning 12.
+        # Any copper field is in band; the nearer thin field must win over the
+        # dense field that sits near the lease edge, and it must be a walk the
+        # 450s gather lease can actually carry.
+        rows = [
+            spawn(1, COPPER, x=100.0),
+            spawn(148, COPPER, x=gatheraim.MAX_YARDS - 100.0),
+        ]
+        got = gatheraim.choose(
+            skills={
+                "Grug": {"mining": 8},
+                "Grog": {"mining": 1},
+                "Ugga": {"herbalism": 133},
+                "Bork": {"skinning": 12},
+            },
+            standing_on=1,
+            spawns=rows,
+            family_level=60,
+            zone_levels={1: 10, 148: 12},
+            origin=(0.0, 0.0),
+        )
+        self.assertTrue(got.chosen)
+        self.assertEqual(got.chosen.zone_id, 1)
+        self.assertLessEqual(
+            gatheraim.yards(got.chosen.spawn, (0.0, 0.0)), gatheraim.MAX_YARDS
+        )
 
 
 if __name__ == "__main__":
