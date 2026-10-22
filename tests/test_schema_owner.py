@@ -11,6 +11,12 @@ The rule these tests hold: every `_ensure_*_store` the bridge defines runs
 from `_ensure_stores` and from nowhere else, and the site creates only the
 table it owns (`overseer_stream`). A site reading a bridge table the bridge
 has not created yet says so in its payload rather than creating it.
+
+The issue's "four places" and "three ways" count the duplication this
+removes, not tables or methods to add: the change adds no table and no new
+way to count free bag slots. Its scope is giving each table one creator,
+held here, and having the site count free bag slots by the bridge's
+bag_pressure.general_bag_room, held in tests/test_wealth.py.
 """
 
 import ast
@@ -88,6 +94,9 @@ class TheBridgeOwnsItsTablesInOnePlace(unittest.TestCase):
 
 class TheSiteCreatesOnlyWhatItOwns(unittest.TestCase):
     def test_the_only_table_the_site_creates_is_the_stream_store(self):
+        # The set is what the site still creates after the change, not a
+        # target to grow: the site's other creates (overseer_watch, by
+        # director.CREATE_SQL) moved to their one owner, the bridge.
         src = (ROOT / "map_server.py").read_text(encoding="utf-8")
         created = set(re.findall(r'"CREATE TABLE IF NOT EXISTS (\w+)', src))
         self.assertEqual({"overseer_stream"}, created)
