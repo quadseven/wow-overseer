@@ -45,12 +45,25 @@ ALLIANCE = (
     ("Grog", 60, 3),
 )
 
+# A second Horde five on Kalimdor, levels 16 to 19, Thrak leading.
+THRAK = (
+    ("Thrak", 18, 2),
+    ("Drog", 17, 8),
+    ("Korg", 16, 6),
+    ("Mug", 19, 2),
+    ("Rok", 17, 8),
+)
+
 
 def level_rows(family=HORDE, map_id=1):
     return [
         {"name": n, "level": lvl, "race": race, "map_id": map_id, "lead": int(i == 0)}
         for i, (n, lvl, race) in enumerate(family)
     ]
+
+
+def thrak_level_rows():
+    return level_rows(THRAK, 1)
 
 
 def roster_rows():
@@ -201,6 +214,56 @@ class TheBoxDoorsAreKnown(unittest.TestCase):
         # overseer_roster.job is VARCHAR(32) on the live schema.
         for keyword in jobs.PORTAL_KEYWORDS:
             self.assertLessEqual(len(jobs.dungeon_job(keyword)), 32, keyword)
+
+
+# --- combined runs: two families on the same dungeon step ---------------------
+
+
+class TheCombinedRun(unittest.TestCase):
+    """A combined-run entry holds two families on the same dungeon step
+    (acceptance criterion 1). Two 5-man parties on one keyword become a
+    single 10-man group; the raid conversion, leader election and the
+    `group_size=10` log line live in mod-overseer (quadseven/mod-overseer),
+    not in this module."""
+
+    def combined(self, family_a, family_b, entries, rows_a, rows_b):
+        return campaignqueue.combined_plan(family_a, family_b, entries, rows_a, rows_b)
+
+    def test_a_combined_entry_holds_both_families_on_the_same_step(self):
+        entries, refusal = campaignqueue.parse_entries("ragefire 50")
+        self.assertEqual("", refusal)
+        plan = self.combined("Zug", "Thrak", entries, level_rows(), thrak_level_rows())
+        self.assertEqual("", plan.refusal, plan.refusal)
+        self.assertEqual(1, len(plan.entries))
+        entry = plan.entries[0]
+        self.assertEqual(("Zug", "Thrak"), entry.families)
+        self.assertEqual("ragefire", entry.keyword)
+        self.assertEqual(50, entry.runs)
+        self.assertIn("Zug's family and Thrak's family", plan.says)
+
+    def test_a_combined_run_refused_when_one_family_cannot_use_the_door(self):
+        entries, _ = campaignqueue.parse_entries("ragefire 50")
+        # Grug's family is Alliance on the Eastern Kingdoms; Ragefire Chasm is
+        # inside Orgrimmar on Kalimdor, so it refuses that family.
+        plan = self.combined(
+            "Zug", "Grug", entries, level_rows(), level_rows(ALLIANCE, 0)
+        )
+        self.assertNotEqual("", plan.refusal)
+        self.assertEqual((), plan.entries)
+        self.assertIn("Grug's family", plan.refusal)
+
+    def test_a_combined_run_with_no_entries_is_refused(self):
+        plan = self.combined("Zug", "Thrak", (), level_rows(), thrak_level_rows())
+        self.assertEqual((), plan.entries)
+        self.assertIn("names no dungeon", plan.refusal)
+
+    def test_a_single_family_entry_stays_single(self):
+        """parse_entries still builds single-family entries; only the combined
+        planner fills in two families."""
+        entries, refusal = campaignqueue.parse_entries("ragefire 50, wailing 50")
+        self.assertEqual("", refusal)
+        self.assertEqual((), entries[0].families)
+        self.assertEqual((), entries[1].families)
 
 
 # --- advancing ------------------------------------------------------------------

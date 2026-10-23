@@ -128,6 +128,11 @@ def level_rows_sql(count: int) -> str:
 class Entry:
     keyword: str
     runs: int
+    families: tuple[str, ...] = ()
+    # The family keys this entry covers. () means a single family, the one the
+    # plan is written for; two keys are a combined run, one dungeon step two
+    # families enter together (a 10-man raid such as UBRS: two 5-man parties
+    # on the same keyword).
 
 
 @dataclass(frozen=True)
@@ -334,6 +339,51 @@ def plan(family: str, entries: tuple, level_rows: list) -> Plan:
         tuple(entries),
         False,
         "Queued for %s: %s." % (_family(family), _plain(entries)),
+    )
+
+
+def combined_plan(
+    family_a: str, family_b: str, entries: tuple, level_rows_a: list, level_rows_b: list
+) -> Plan:
+    """Validate the same step for two families: one combined run.
+
+    A combined run is one dungeon step two families enter together (a 10-man
+    raid such as UBRS: two 5-man parties on the same keyword). Both families
+    must clear the door, and a refusal from either family refuses the combined
+    run - neither family goes in without the other. Each entry carries both
+    family keys so the bridge can write one row per family on the same step.
+    """
+    if not entries:
+        return Plan(family_a, "The queue names no dungeon.", (), False, "")
+    for entry in entries:
+        for level_rows in (level_rows_a, level_rows_b):
+            why = (
+                raidrun.refusal(entry.keyword, entry.runs, level_rows)
+                if raidrun.is_raid(entry.keyword)
+                else council.door_refusal(entry.keyword, level_rows)
+            )
+            if why:
+                return Plan(
+                    family_a,
+                    "Not queued: %s for %s and %s - %s. Nothing was written."
+                    % (
+                        _place(entry.keyword),
+                        _family(family_a),
+                        _family(family_b),
+                        why,
+                    ),
+                    (),
+                    False,
+                    "",
+                )
+    combined = tuple(replace(e, families=(family_a, family_b)) for e in entries)
+    return Plan(
+        family_a,
+        "",
+        combined,
+        False,
+        "Combined run for %s and %s: %s."
+        % (_family(family_a), _family(family_b), _plain(combined)),
     )
 
 
