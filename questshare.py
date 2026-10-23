@@ -277,43 +277,61 @@ def say(result: Plan) -> str:
 
 
 # The worldserver's share gates in the order DoShare tests them
-# (mod_overseer.cpp), each named by the describe() literal it writes into
-# overseer_command.result.reason. The ORDER is load-bearing: a refusal at
-# one gate proves every gate before it passed at that moment, which is how
-# a stale permanent refusal is told apart from a live one below. The tuple
-# is pinned against the mod source by tests/test_questshare.py, so a gate
-# added or moved in C++ fails a test here rather than silently proving the
-# wrong thing. "delivered" passed all of them.
+# (mod_overseer.cpp), each named by every describe() literal it has written
+# into overseer_command.result.reason, newest wording first. The ORDER is
+# load-bearing: a refusal at one gate proves every gate before it passed at
+# that moment, which is how a stale permanent refusal is told apart from a
+# live one below. The tuple is pinned against the mod source by
+# tests/test_questshare.py, so a gate added or moved in C++ fails a test here
+# rather than silently proving the wrong thing. "delivered" passed all of
+# them.
+#
+# A GATE CAN HAVE MORE THAN ONE WORDING. mod-overseer#1059 split the
+# CanShareQuest refusal in two ("quest is not sharable" when the holder has
+# it, "holder does not carry the quest" when not) and the old single wording
+# stays here for a worldserver built before it. They are one gate: a refusal
+# in one wording neither ends nor outranks a streak in another.
 SHARE_GATES = (
-    "malformed request",
-    "no taker",
-    "taker offline",
-    "same character",
-    "no such quest",
-    "holder cannot share it (not held, or not flagged sharable)",
-    "not in the same party",
-    "not on the same map",
-    "taker already turned it in",
-    "taker already holds it",
-    "taker cannot take it in its current state",
-    "taker quest log is full",
-    "taker is not eligible (level, race, class, prerequisite or exclusive group)",
-    "no bag space for the quest starting item",
-    "the quest did not land in the taker log",
+    ("malformed request",),
+    ("no taker",),
+    ("taker offline",),
+    ("same character",),
+    ("no such quest",),
+    (
+        "quest is not sharable",
+        "holder does not carry the quest",
+        "holder cannot share it (not held, or not flagged sharable)",
+    ),
+    ("not in the same party",),
+    ("not on the same map",),
+    ("taker already turned it in",),
+    ("taker already holds it",),
+    ("taker cannot take it in its current state",),
+    ("taker quest log is full",),
+    ("taker is not eligible (level, race, class, prerequisite or exclusive group)",),
+    ("no bag space for the quest starting item",),
+    ("the quest did not land in the taker log",),
 )
-_GATE_RANK = {reason: rank for rank, reason in enumerate(SHARE_GATES)}
+_GATE_RANK = {reason: rank for rank, gate in enumerate(SHARE_GATES) for reason in gate}
+# A delivery got past every gate.
+_DELIVERED_RANK = len(SHARE_GATES)
 
 # The gates waiting cannot change the answer of: the family regrouping,
 # freeing a log slot or logging in makes none of these succeed. "holder
-# cannot share it" is infra#2892's Bork row - a quest held at status 0 that
-# the read now excludes - and the reason this exists at all: 167 hourly
-# retries of a share that could never land. Every other gate is transient
-# ("taker offline", "not in the same party", "not on the same map", a full
-# log, "taker already holds it" - the next
-# pass recomputes from live rows and simply stops proposing that one). A
-# reason not in SHARE_GATES at all proves nothing and counts for nothing.
+# cannot share it" (now "quest is not sharable" / "holder does not carry the
+# quest") is infra#2892's Bork row - a quest held at status 0 that the read
+# now excludes - and the reason this exists at all: 167 hourly retries of a
+# share that could never land. Every other gate is transient ("taker
+# offline", "not in the same party", "not on the same map", a full log,
+# "taker already holds it" - the next pass recomputes from live rows and
+# simply stops proposing that one). A reason not in SHARE_GATES at all
+# proves nothing and counts for nothing - unless the worldserver itself
+# marked the row `"retryable": false`, which backed_off() honours whatever
+# the wording.
 PERMANENT_REFUSALS = frozenset(
     {
+        "quest is not sharable",
+        "holder does not carry the quest",
         "holder cannot share it (not held, or not flagged sharable)",
         "no such quest",
         "malformed request",
@@ -392,35 +410,73 @@ def backed_off(attempts, base_minutes: int, cap_hours: int) -> frozenset:
     Transient refusals never accumulate here. A taker who was offline five
     times is offered the quest again the moment they are back, which the
     first draft of this got wrong by counting every error row alike.
+
+    THE WORLDSERVER'S OWN VERDICT COUNTS TOO. Since mod-overseer#1059 every
+    refusal carries `"retryable"`, and a row with `"retryable": false` (the
+    JSON boolean, nothing else) is permanent whatever its reason says. That
+    change also reworded the holder gate, and a bridge matching the wording
+    alone stopped recognising it and went back to retrying hourly
+    (mod-overseer#969); the marker is what keeps the next rewording from
+    doing that again. A reason in PERMANENT_REFUSALS stays permanent when
+    the row says retryable - the module marks only CanShareQuest final, and
+    eligibility (#170) and the rest are this side's judgement. A final
+    refusal whose wording is in no gate has no known place in the order, so
+    it proves no later gate passed and ends no older streak; only a delivery
+    ends a streak it is part of.
     """
     answers: dict = {}
     for holder, taker, command, status, result, age_s in attempts:
-        key = (holder, taker, command)
-        if status == "delivered":
-            answers.setdefault(key, []).append((age_s, len(SHARE_GATES), False))
-            continue
-        if status != "error" or not result:
-            continue
-        try:
-            reason = json.loads(result).get("reason")
-        except (ValueError, AttributeError):
-            continue
-        if reason not in _GATE_RANK:
-            continue
-        answers.setdefault(key, []).append(
-            (age_s, _GATE_RANK[reason], reason in PERMANENT_REFUSALS)
-        )
+        judged = _judge(status, result)
+        if judged is not None:
+            answers.setdefault((holder, taker, command), []).append((age_s, *judged))
     held = set()
     for key, rows in answers.items():
-        n, youngest, furthest = 0, None, -1
-        for age_s, rank, permanent in sorted(rows):
-            if permanent and rank >= furthest:
-                n += 1
-                youngest = age_s if youngest is None else youngest
-            furthest = max(furthest, rank)
+        n, youngest = _streak(rows)
         if n == 0:
             continue
         quiet_s = min(cap_hours * 3600, base_minutes * 60 * 2 ** min(n, 30))
         if youngest < quiet_s:
             held.add(key)
     return frozenset(held)
+
+
+def _judge(status, result):
+    """(gate rank, permanent) for one answered share, or None when the row
+    proves nothing. A delivery ranks past every gate and is never
+    permanent. The rank is None for a refusal the worldserver marked final
+    (`"retryable": false`) whose wording is in no gate."""
+    if status == "delivered":
+        return _DELIVERED_RANK, False
+    if status != "error" or not result:
+        return None
+    try:
+        answer = json.loads(result)
+        reason = answer.get("reason")
+        final = answer.get("retryable") is False
+    except (ValueError, AttributeError):
+        return None
+    rank = _GATE_RANK.get(reason)
+    if rank is None and not final:
+        return None
+    return rank, final or reason in PERMANENT_REFUSALS
+
+
+def _streak(rows):
+    """(length, youngest age) of the permanent streak in one triple's
+    (age_s, rank, permanent) answers: youngest first, a permanent refusal
+    counts while nothing younger got past its gate. An unknown gate (rank
+    None) counts unless a delivery is younger and raises no gate itself."""
+    n, youngest, furthest = 0, None, -1
+    # an unknown gate sorts as the first gate only to break an age tie
+    for age_s, rank, permanent in sorted(
+        rows, key=lambda row: (row[0], -1 if row[1] is None else row[1])
+    ):
+        if rank is None:
+            counts = furthest < _DELIVERED_RANK
+        else:
+            counts = permanent and rank >= furthest
+            furthest = max(furthest, rank)
+        if counts:
+            n += 1
+            youngest = age_s if youngest is None else youngest
+    return n, youngest
