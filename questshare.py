@@ -426,44 +426,57 @@ def backed_off(attempts, base_minutes: int, cap_hours: int) -> frozenset:
     """
     answers: dict = {}
     for holder, taker, command, status, result, age_s in attempts:
-        key = (holder, taker, command)
-        if status == "delivered":
-            answers.setdefault(key, []).append((age_s, _DELIVERED_RANK, False))
-            continue
-        if status != "error" or not result:
-            continue
-        try:
-            answer = json.loads(result)
-            reason = answer.get("reason")
-            final = answer.get("retryable") is False
-        except (ValueError, AttributeError):
-            continue
-        rank = _GATE_RANK.get(reason)
-        if rank is None and not final:
-            continue
-        answers.setdefault(key, []).append(
-            (age_s, rank, final or reason in PERMANENT_REFUSALS)
-        )
+        judged = _judge(status, result)
+        if judged is not None:
+            answers.setdefault((holder, taker, command), []).append((age_s, *judged))
     held = set()
     for key, rows in answers.items():
-        n, youngest, furthest = 0, None, -1
-        # Youngest first; an unknown gate (rank None) sorts as if it were
-        # the first gate only to break an age tie, and is compared by hand.
-        for age_s, rank, permanent in sorted(
-            rows, key=lambda row: (row[0], -1 if row[1] is None else row[1])
-        ):
-            if rank is None:
-                if furthest < _DELIVERED_RANK:
-                    n += 1
-                    youngest = age_s if youngest is None else youngest
-                continue
-            if permanent and rank >= furthest:
-                n += 1
-                youngest = age_s if youngest is None else youngest
-            furthest = max(furthest, rank)
+        n, youngest = _streak(rows)
         if n == 0:
             continue
         quiet_s = min(cap_hours * 3600, base_minutes * 60 * 2 ** min(n, 30))
         if youngest < quiet_s:
             held.add(key)
     return frozenset(held)
+
+
+def _judge(status, result):
+    """(gate rank, permanent) for one answered share, or None when the row
+    proves nothing. A delivery ranks past every gate and is never
+    permanent. The rank is None for a refusal the worldserver marked final
+    (`"retryable": false`) whose wording is in no gate."""
+    if status == "delivered":
+        return _DELIVERED_RANK, False
+    if status != "error" or not result:
+        return None
+    try:
+        answer = json.loads(result)
+        reason = answer.get("reason")
+        final = answer.get("retryable") is False
+    except (ValueError, AttributeError):
+        return None
+    rank = _GATE_RANK.get(reason)
+    if rank is None and not final:
+        return None
+    return rank, final or reason in PERMANENT_REFUSALS
+
+
+def _streak(rows):
+    """(length, youngest age) of the permanent streak in one triple's
+    (age_s, rank, permanent) answers: youngest first, a permanent refusal
+    counts while nothing younger got past its gate. An unknown gate (rank
+    None) counts unless a delivery is younger and raises no gate itself."""
+    n, youngest, furthest = 0, None, -1
+    # an unknown gate sorts as the first gate only to break an age tie
+    for age_s, rank, permanent in sorted(
+        rows, key=lambda row: (row[0], -1 if row[1] is None else row[1])
+    ):
+        if rank is None:
+            counts = furthest < _DELIVERED_RANK
+        else:
+            counts = permanent and rank >= furthest
+            furthest = max(furthest, rank)
+        if counts:
+            n += 1
+            youngest = age_s if youngest is None else youngest
+    return n, youngest
