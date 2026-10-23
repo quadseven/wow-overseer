@@ -38,10 +38,15 @@ def _source() -> str:
 
 
 def _share_source() -> str:
-    """Everything from the share banner to the end of DoShare."""
+    """Everything from the share banner to the end of DoShare.
+
+    Ends at DoShare's own closing brace (four-space indent, the class
+    member level) rather than at a later function's name: the module has
+    grown other handlers between DoShare and WriteSnapshot, and their
+    returns and core calls are not the share path's."""
     src = _source()
     start = src.index(BANNER)
-    end = src.index("    void WriteSnapshot()")
+    end = src.index("\n    }\n", src.index("static char const* DoShare(", start)) + 6
     assert end > start
     return src[start:end]
 
@@ -219,7 +224,6 @@ class NoRefusalIsSilent(unittest.TestCase):
             "taker offline",
             "same character",
             "no such quest",
-            "holder cannot share it",
             "not in the same party",
             "not on the same map",
             "taker already turned it in",
@@ -229,6 +233,17 @@ class NoRefusalIsSilent(unittest.TestCase):
             "no bag space",
         ):
             self.assertIn(reason, share, reason)
+        # The holder gate, in the wording of the pinned module or the one
+        # mod-overseer#1059 split it into (a not-sharable quest and a quest
+        # the holder does not carry need different answers too).
+        self.assertTrue(
+            "holder cannot share it" in share
+            or (
+                "quest is not sharable" in share
+                and "holder does not carry the quest" in share
+            ),
+            "the holder gate's reason",
+        )
 
     def test_no_detail_literal_carries_a_quote_character(self):
         """`detail` is embedded straight into the UPDATE that reports the
