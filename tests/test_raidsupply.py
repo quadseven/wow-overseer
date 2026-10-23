@@ -15,6 +15,7 @@ import types
 import unittest
 
 import auction
+import farmassign as fa
 import guildcorps as gc
 import jev
 import raidready
@@ -1061,6 +1062,7 @@ class TheBridgePassRuns(unittest.TestCase):
                 err=types.SimpleNamespace(MySQLError=Exception)
             ),
             "raidsupply": rs,
+            "farmassign": fa,
             "guildcorps": gc,
             "auction": auction,
             "travel": types.SimpleNamespace(
