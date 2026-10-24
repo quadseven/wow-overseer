@@ -18354,7 +18354,7 @@ class Bridge(discord.Client):
         capital = await asyncio.to_thread(_fetch_capital_hub, leader,
                                           teams.get(leader, ""))
         home = await asyncio.to_thread(_fetch_bind_hub, leader)
-        hub = townerrand.choose_hub(home, capital, positions.get(leader))
+        hub = townerrand.choose_hub(home, capital, positions.get(leader), why)
         if not hub:
             log.info("town errand: %s%s, but neither %s's hearthstone point nor "
                      "a capital of the family's own auction house on his map "
