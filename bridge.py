@@ -8721,6 +8721,9 @@ class Bridge(discord.Client):
             urgent=urgent, distance=distance,
             trainer_route=trainer_route,
         )
+        lapsed = getattr(slot, "take_lapse", lambda _now: "")(now)
+        if lapsed:
+            log.warning("town slot: %s", lapsed)
         if decision.verdict == townslot.SLOT_GIVE_UP:
             released = await asyncio.to_thread(
                 _release_trade_errand, decision.character, decision.aim)
@@ -13822,8 +13825,9 @@ class Bridge(discord.Client):
             await asyncio.to_thread(_fetch_free_slots, names),
         )
         if withheld and trip.vendor is not None:
-            slot.reserve(BAGS_CLAIMANT, time.monotonic(),
-                         "the family's campaign is withheld for bag space")
+            if slot.reserve(BAGS_CLAIMANT, time.monotonic(),
+                            "the family's campaign is withheld for bag space") is False:
+                log.info("town slot: %s", slot.refused)
         else:
             slot.unreserve(BAGS_CLAIMANT)
         if not trip.target:
@@ -18067,7 +18071,9 @@ class Bridge(discord.Client):
                 if orphans is not None:
                     await asyncio.to_thread(orphans, names)
                 return
-            slot.reserve(TOWN_ERRAND_CLAIMANT, now, "the family's town errand")
+            if slot.reserve(TOWN_ERRAND_CLAIMANT, now,
+                            "the family's town errand") is False:
+                log.info("town slot: %s", slot.refused)
         positions = await self._settled_positions(names)
         hub = state.hub
         state = await self._town_errand_regroup(state, names, positions, now,
@@ -18112,8 +18118,9 @@ class Bridge(discord.Client):
             # not cut by the reservation's own ceiling; the errand's ceiling
             # (townerrand.TOTAL_SECONDS) is what bounds it.
             slot.unreserve(TOWN_ERRAND_CLAIMANT)
-            if new.active:
-                slot.reserve(TOWN_ERRAND_CLAIMANT, now, "the family's town errand")
+            if new.active and slot.reserve(
+                    TOWN_ERRAND_CLAIMANT, now, "the family's town errand") is False:
+                log.info("town slot: %s", slot.refused)
             _TOWN_ERRAND_MARKS.pop(key, None)
         if new.phase == townerrand.DONE:
             await self._town_errand_release(names, leader, slot, label)
