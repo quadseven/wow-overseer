@@ -62,6 +62,24 @@ RUNS_SQL = (
     "WHERE state = 'ended' AND leader_name IN ({holes}) "
     "AND started_at >= NOW() - INTERVAL %s HOUR ORDER BY id"
 )
+# THE DOOR FROM THE RUN'S OWN TIMELINE, on a realm whose ledger has no
+# `portal_keyword` yet (the column comes with a worldserver roll). Every
+# timeline row names the portal the run went through, so the first one is the
+# run's door. The two tables sit in different collation groups (infra#3173);
+# they meet only on the integer run id, and the one string test is written in
+# the timeline's own collation. Without this, RUNS_SQL failed on such a realm,
+# the stall reads came back empty, and nothing was ever stuck: on the dev
+# realm 2026-10-23 the Alliance family stalled at the Cathedral and Uldaman
+# for days, stepping down and back up between them, while every pass read "the
+# run ledger by door cannot be read on this realm".
+RUNS_SQL_TIMELINE = (
+    "SELECT r.id, r.map_id, (SELECT e.portal FROM overseer_dungeon_run_event e "
+    "WHERE e.run_id = r.id AND e.portal <> _utf8mb4'' COLLATE utf8mb4_unicode_ci "
+    "ORDER BY e.id LIMIT 1) "
+    "AS portal_keyword, r.outcome FROM overseer_dungeon_run r "
+    "WHERE r.state = 'ended' AND r.leader_name IN ({holes}) "
+    "AND r.started_at >= NOW() - INTERVAL %s HOUR ORDER BY r.id"
+)
 EVENTS_SQL = (
     "SELECT run_id, kind, detail FROM overseer_dungeon_run_event "
     "WHERE run_id IN ({holes}) AND kind IN ('boss', 'stalled') ORDER BY id"
