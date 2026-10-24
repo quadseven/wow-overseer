@@ -8721,6 +8721,9 @@ class Bridge(discord.Client):
             urgent=urgent, distance=distance,
             trainer_route=trainer_route,
         )
+        lapsed = getattr(slot, "take_lapse", lambda _now: "")(now)
+        if lapsed:
+            log.warning("town slot: %s", lapsed)
         if decision.verdict == townslot.SLOT_GIVE_UP:
             released = await asyncio.to_thread(
                 _release_trade_errand, decision.character, decision.aim)
@@ -13622,10 +13625,14 @@ class Bridge(discord.Client):
         not counted as a reason to walk. What is left over - members whose own
         reach stocks no bag - is what `_aim_at_bag_vendor` may take a trip for.
         """
-        needy = await self._buy_bags_once(names, auction_too=cohort is None)
+        # HELD IN TOWN WIDENS THE CAP'S FLOOR (#1375, bag_market.cap_yields).
+        held = bool(self._cohort_town_slot(cohort).town_first)
+        needy = await self._buy_bags_once(names, auction_too=cohort is None,
+                                          held=held)
         await self._aim_at_bag_vendor(needy, names, cohort)
 
-    async def _buy_bags_once(self, names: list, auction_too: bool = False) -> tuple:
+    async def _buy_bags_once(self, names: list, auction_too: bool = False,
+                             held: bool = False) -> tuple:
         """Buy the cheapest bag a vendor in reach stocks, for anyone short (#150).
 
         `bag_pressure.bag_purchases` decides; this reads and writes. A
@@ -13641,7 +13648,7 @@ class Bridge(discord.Client):
         members = bag_upgrade.members_from_rows(
             await asyncio.to_thread(_fetch_bag_state, names), names)
         try:
-            await self._vendor_bag_upgrades(members, auction_too)
+            await self._vendor_bag_upgrades(members, auction_too, held=held)
         except Exception:
             log.exception("bag upgrade: vendor half failed; retrying next cycle")
         open_positions = bag_pressure.open_bag_positions(members)
@@ -13689,7 +13696,8 @@ class Bridge(discord.Client):
                  "%d held back", len(buyers), bought, len(notes))
         return needy
 
-    async def _vendor_bag_upgrades(self, members, auction_too: bool = False) -> None:
+    async def _vendor_bag_upgrades(self, members, auction_too: bool = False,
+                                   held: bool = False) -> None:
         """Buy a bigger bag at a vendor in reach, for a member with full positions.
 
         The vendor half of `bag_market`, and the half every family gets: the
@@ -13720,6 +13728,7 @@ class Bridge(discord.Client):
             mailed=await asyncio.to_thread(_fetch_mailed_bags, list(reach)),
             reach=reach,
             free_slots=await asyncio.to_thread(_fetch_free_slots, list(reach)),
+            held=held,
         )
         for note in notes:
             log.info("bags: %s", note)
@@ -13804,7 +13813,8 @@ class Bridge(discord.Client):
             in_run=in_run)
         if not trip.target:
             trip = await self._aim_upgrade_trip(
-                names, leader, standing, vendors, in_run) or trip
+                names, leader, standing, vendors, in_run,
+                held=bool(slot.town_first)) or trip
         # ONE OWNER OF THE AIM WHILE THE CAMPAIGN IS WITHHELD (#225). Measured
         # on wow-dev 2026-09-23: clearance took the leader 17 yards short of
         # the bag vendor to post guild letters, and the campaign stayed
@@ -13815,8 +13825,9 @@ class Bridge(discord.Client):
             await asyncio.to_thread(_fetch_free_slots, names),
         )
         if withheld and trip.vendor is not None:
-            slot.reserve(BAGS_CLAIMANT, time.monotonic(),
-                         "the family's campaign is withheld for bag space")
+            if slot.reserve(BAGS_CLAIMANT, time.monotonic(),
+                            "the family's campaign is withheld for bag space") is False:
+                log.info("town slot: %s", slot.refused)
         else:
             slot.unreserve(BAGS_CLAIMANT)
         if not trip.target:
@@ -13834,7 +13845,7 @@ class Bridge(discord.Client):
                  bag_pressure.bag_trip_report(trip, leader), aimed)
 
     async def _aim_upgrade_trip(self, names, leader, standing, vendors,
-                                in_run=False):
+                                in_run=False, held=False):
         """Walk full-position buyers at the floor to a bigger bag (#1218).
 
         `_buy_bags_once` buys an upgrade only where the family stands and the
@@ -13850,7 +13861,7 @@ class Bridge(discord.Client):
         try:
             free_slots = await asyncio.to_thread(_fetch_free_slots, names)
             if not any(
-                bag_market.cap_yields(free) for free in free_slots.values()
+                bag_market.cap_yields(free, held) for free in free_slots.values()
             ):
                 return None
             members = bag_upgrade.members_from_rows(
@@ -13866,6 +13877,7 @@ class Bridge(discord.Client):
                 leader=leader,
                 standing=standing,
                 in_run=in_run,
+                held=held,
             )
         except Exception:
             log.exception("bags: the upgrade trip failed; retrying next cycle")
@@ -18059,7 +18071,9 @@ class Bridge(discord.Client):
                 if orphans is not None:
                     await asyncio.to_thread(orphans, names)
                 return
-            slot.reserve(TOWN_ERRAND_CLAIMANT, now, "the family's town errand")
+            if slot.reserve(TOWN_ERRAND_CLAIMANT, now,
+                            "the family's town errand") is False:
+                log.info("town slot: %s", slot.refused)
         positions = await self._settled_positions(names)
         hub = state.hub
         state = await self._town_errand_regroup(state, names, positions, now,
@@ -18104,8 +18118,9 @@ class Bridge(discord.Client):
             # not cut by the reservation's own ceiling; the errand's ceiling
             # (townerrand.TOTAL_SECONDS) is what bounds it.
             slot.unreserve(TOWN_ERRAND_CLAIMANT)
-            if new.active:
-                slot.reserve(TOWN_ERRAND_CLAIMANT, now, "the family's town errand")
+            if new.active and slot.reserve(
+                    TOWN_ERRAND_CLAIMANT, now, "the family's town errand") is False:
+                log.info("town slot: %s", slot.refused)
             _TOWN_ERRAND_MARKS.pop(key, None)
         if new.phase == townerrand.DONE:
             await self._town_errand_release(names, leader, slot, label)
