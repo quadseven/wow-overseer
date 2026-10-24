@@ -116,6 +116,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Answers: the guild coordinator's groups (guildrun).
 - Example: `overseer get /api/guildruns`
 
+## `GET /api/guildseats`
+
+- Query: none
+- Answers: the carry-ready tanks and healers per door.
+- Example: `overseer get /api/guildseats`
+
 ## `GET /api/item`
 
 - Query: `entry`
