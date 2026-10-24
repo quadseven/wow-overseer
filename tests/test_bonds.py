@@ -563,11 +563,29 @@ class WindowContaminationTest(unittest.TestCase):
 
         src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
         writers: dict[str, set[str]] = {}
+        refs = 0
+        seen = 0
 
-        def scan(fn: ast.AST) -> None:
-            for call in ast.walk(fn):
-                if not isinstance(call, ast.Call):
-                    continue
+        class Scan(ast.NodeVisitor):
+            """Attributes each call to its NEAREST enclosing function."""
+
+            def __init__(self) -> None:
+                self.stack: list[str] = []
+
+            def _fn(self, node: ast.AST) -> None:
+                self.stack.append(node.name)
+                self.generic_visit(node)
+                self.stack.pop()
+
+            visit_FunctionDef = visit_AsyncFunctionDef = _fn
+
+            def visit_Name(self, node: ast.Name) -> None:
+                nonlocal refs
+                if node.id == "_insert_thought":
+                    refs += 1
+
+            def visit_Call(self, call: ast.Call) -> None:
+                nonlocal seen
                 args = call.args
                 # to_thread(_insert_thought, who, source, text)
                 if (
@@ -576,11 +594,20 @@ class WindowContaminationTest(unittest.TestCase):
                     and args[0].id == "_insert_thought"
                     and isinstance(args[2], ast.Constant)
                 ):
-                    writers.setdefault(fn.name, set()).add(args[2].value)
+                    seen += 1
+                    owner = self.stack[-1] if self.stack else "<module>"
+                    writers.setdefault(owner, set()).add(args[2].value)
+                self.generic_visit(call)
 
-        for node in ast.walk(ast.parse(src)):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                scan(node)
+        Scan().visit(ast.parse(src))
+        # Every mention of _insert_thought (bar its own def, which is not a
+        # Name node) must be a call this scan understood; an alias, a partial
+        # or a non-literal source would otherwise slip past unseen.
+        self.assertEqual(
+            refs,
+            seen,
+            "a _insert_thought use the guard cannot read: %d vs %d" % (refs, seen),
+        )
 
         reflectors = {n for n, tags in writers.items() if "reflection" in tags}
         self.assertEqual(
