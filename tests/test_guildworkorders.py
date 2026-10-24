@@ -17,12 +17,11 @@ one.
 import unittest
 
 import goals
-import guildworkorders
+import guildwork as guildworkorders
 
 ALCHEMY = goals.SKILL_IDS["alchemy"]
 HERBALISM = goals.SKILL_IDS["herbalism"]
 TAILORING = goals.SKILL_IDS["tailoring"]
-ENCHANTING = goals.SKILL_IDS["enchanting"]
 
 
 def _member(name, level=40, skills=None, online=True, guild="The Guild"):
@@ -100,12 +99,10 @@ class CanTakeTest(unittest.TestCase):
         member = _member("Og", skills={TAILORING: 300})
         self.assertEqual(guildworkorders.can_take(member, order), "Og holds tailoring")
 
-    def test_an_enchanter_takes_the_arcanite_cooldown(self):
+    def test_an_alchemist_takes_the_arcanite_cooldown(self):
         order = _order(guildworkorders.COOLDOWN, "Arcanite")
-        member = _member("Grog", skills={ENCHANTING: 300})
-        self.assertEqual(
-            guildworkorders.can_take(member, order), "Grog holds enchanting"
-        )
+        member = _member("Grog", skills={ALCHEMY: 300})
+        self.assertEqual(guildworkorders.can_take(member, order), "Grog holds alchemy")
 
     def test_a_cooldown_no_profession_names_is_refused(self):
         order = _order(guildworkorders.COOLDOWN, "Unknown Cooldown")
@@ -123,6 +120,20 @@ class PlanAssignsTest(unittest.TestCase):
         self.assertEqual(plan.assignments[0].taker, "Ugga")
         self.assertEqual(
             plan.assignments[0].order.item, "Greater Fire Protection Potion"
+        )
+        self.assertEqual(plan.assignments[0].order.status, guildworkorders.ASSIGNED)
+        self.assertEqual(plan.assignments[0].order.assigned_to, "Ugga")
+
+    def test_only_the_assignee_can_complete_an_order(self):
+        order = _order(
+            guildworkorders.COOLDOWN,
+            "Mooncloth",
+            status=guildworkorders.ASSIGNED,
+            assigned_to="Og",
+        )
+        self.assertEqual(guildworkorders.complete(order, "Bork"), order)
+        self.assertEqual(
+            guildworkorders.complete(order, "Og").status, guildworkorders.COMPLETE
         )
 
     def test_a_farming_assignment_goes_to_the_online_gatherer(self):
