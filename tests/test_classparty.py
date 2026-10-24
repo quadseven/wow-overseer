@@ -1296,6 +1296,22 @@ class TheHeldMeeting(unittest.TestCase):
             )
         )
 
+    def test_a_busy_walker_is_held_too(self):
+        # #1375: Whakk's Klaven's Tower meeting failed on these two.
+        for said in (
+            "Whakk cannot walk to Malformed Defias Drone: character is in combat",
+            "Whakk cannot walk to Malformed Defias Drone: character is on a "
+            "flight path",
+            "character is logging out",
+            "character is not in the world",
+            "a walk is already under way for this character",
+        ):
+            self.assertTrue(classparty.held_refusal(said), said)
+
+    def test_a_dead_or_unreachable_walker_is_not_held(self):
+        self.assertFalse(classparty.held_refusal("character is dead"))
+        self.assertFalse(classparty.held_refusal("no path to the target"))
+
     def test_other_endings_are_not_held(self):
         self.assertFalse(classparty.held_refusal("cut off after 2110 seconds"))
         self.assertFalse(classparty.held_refusal(""))
