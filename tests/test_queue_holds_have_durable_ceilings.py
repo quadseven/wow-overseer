@@ -127,6 +127,7 @@ class QuestPassCeilingTest(unittest.TestCase):
             mock.patch.object(
                 bridge, "_fetch_free_slots", lambda n: {x: 30 for x in n}
             ),
+            mock.patch.object(bridge, "_guild_run_members_out", lambda: set()),
             mock.patch.object(bridge, "_dungeonquest_facts", lambda *a: None),
             mock.patch.object(bridge, "_queue_stall_floor", lambda names: stall),
             mock.patch.object(bridge.dungeonquests, "step", lambda facts: walk),
