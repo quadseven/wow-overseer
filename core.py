@@ -159,6 +159,7 @@ class QueueDirective:
     family: str
     text: str
     source: str
+    family_b: str = ""
 
 
 @dataclass(frozen=True)
@@ -384,7 +385,10 @@ def _unaddressed(text: str, dedicated: bool, author_id: str = "") -> list:
     if queue is not None:
         return [
             QueueDirective(
-                family=queue.family, text=queue.text, source=f"discord:{author_id}"
+                family=queue.family,
+                text=queue.text,
+                source=f"discord:{author_id}",
+                family_b=queue.family_b,
             )
         ]
     mode = _job_mode(text)

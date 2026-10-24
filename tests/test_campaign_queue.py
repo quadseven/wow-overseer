@@ -138,6 +138,11 @@ class TheOperatorsOrderIsRead(unittest.TestCase):
             [core.QueueDirective(family="Zug", text=ORDER, source="discord:7")], said
         )
 
+    def test_combined_queue_names_two_families(self):
+        order = campaignqueue.parse_order("queue Zug + Thrak: ubrs 10")
+        self.assertEqual(("Zug", "Thrak", "ubrs 10"),
+                         (order.family, order.family_b, order.text))
+
     def test_clear_is_read_as_clear(self):
         self.assertTrue(campaignqueue.parse_order("queue Zug: clear").clear)
         self.assertFalse(campaignqueue.parse_order("queue Zug: ragefire 5").clear)

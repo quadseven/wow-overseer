@@ -4062,6 +4062,24 @@ def _write_queue(plan, source: str) -> int:
     return changed
 
 
+def _write_combined_queue(plan, source: str) -> int:
+    """Write the same ordered steps to both family queues."""
+    families = tuple(dict.fromkeys(
+        family for entry in plan.entries for family in entry.families
+    ))
+    with _connect() as conn, conn.cursor() as cur:
+        changed = 0
+        for family in families:
+            cur.execute(campaignqueue.CANCEL_SQL, (family,))
+            changed += cur.rowcount or 0
+            for position, entry in enumerate(plan.entries):
+                cur.execute(campaignqueue.INSERT_SQL,
+                            (family, position, entry.keyword, entry.runs,
+                             source[:64]))
+                changed += 1
+    return changed
+
+
 def _mark_queue(sql: str, entry_id: int) -> int:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, (int(entry_id),))
@@ -20908,6 +20926,12 @@ class Bridge(discord.Client):
         if refusal:
             await channel.send(refusal[:1990])
             return
+        second_key = ""
+        if d.family_b:
+            second_key, refusal = campaignqueue.pick_family(d.family_b, sorted(fams))
+            if refusal or second_key == key:
+                await channel.send((refusal or "Choose two different families.")[:1990])
+                return
         if not order.text.strip():
             mine = campaignqueue.pending_by_family(
                 await asyncio.to_thread(_fetch_queue_rows)).get(key, [])
@@ -20924,14 +20948,22 @@ class Bridge(discord.Client):
             if refusal:
                 await channel.send(refusal[:1990])
                 return
-            level_rows = await asyncio.to_thread(_queue_level_rows, fams[key])
-            plan = campaignqueue.plan(key, entries, level_rows)
+            if second_key:
+                rows_a, rows_b = await asyncio.gather(
+                    asyncio.to_thread(_queue_level_rows, fams[key]),
+                    asyncio.to_thread(_queue_level_rows, fams[second_key]),
+                )
+                plan = campaignqueue.combined_plan(key, second_key, entries, rows_a, rows_b)
+            else:
+                level_rows = await asyncio.to_thread(_queue_level_rows, fams[key])
+                plan = campaignqueue.plan(key, entries, level_rows)
             if plan.refusal:
                 log.info("queue: refused for %s: %s", campaignqueue._family(key),
                          plan.refusal)
                 await channel.send(plan.refusal[:1990])
                 return
-        written = await asyncio.to_thread(_write_queue, plan, d.source)
+        writer = _write_combined_queue if second_key and plan.entries else _write_queue
+        written = await asyncio.to_thread(writer, plan, d.source)
         log.info("queue: %s set by %s, %d row(s) written: %s",
                  campaignqueue._family(key), d.source, written, plan.says)
         await channel.send(plan.says[:1990])

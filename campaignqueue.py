@@ -410,7 +410,9 @@ def _plain(entries) -> str:
 
 _ORDER = re.compile(
     r"^\s*queue\b\s*(?:for\s+)?"
-    r"(?:(?P<family>[a-z]+)(?:'s)?(?:\s+family)?\s*:)?(?P<rest>.*)$",
+    r"(?:(?P<family>[a-z]+)(?:'s)?(?:\s+family)?"
+    r"(?:\s*(?:\+|and)\s*(?P<family_b>[a-z]+)(?:'s)?(?:\s+family)?)?\s*:)?"
+    r"(?P<rest>.*)$",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -425,6 +427,7 @@ class Order:
 
     family: str
     text: str
+    family_b: str = ""
 
     @property
     def clear(self) -> bool:
@@ -441,7 +444,9 @@ def parse_order(text: str) -> Order | None:
     if found is None:
         return None
     return Order(
-        family=(found.group("family") or ""), text=(found.group("rest") or "").strip()
+        family=(found.group("family") or ""),
+        text=(found.group("rest") or "").strip(),
+        family_b=(found.group("family_b") or ""),
     )
 
 
