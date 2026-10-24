@@ -410,7 +410,9 @@ def _plain(entries) -> str:
 
 _ORDER = re.compile(
     r"^\s*queue\b\s*(?:for\s+)?"
-    r"(?:(?P<family>[a-z]+)(?:'s)?(?:\s+family)?\s*:)?(?P<rest>.*)$",
+    r"(?:(?P<family>[a-z]+)(?:'s)?(?:\s+family)?"
+    r"(?:(?:\s*\+\s*|\s+and\s+)(?P<partner>[a-z]+)(?:'s)?(?:\s+family)?)?"
+    r"\s*:)?(?P<rest>.*)$",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -421,10 +423,13 @@ class Order:
 
     family  the family named before the colon, "" when none was
     text    what follows: the entries, "clear", or "" to be told the queue
+    partner the second family of a combined run ("queue Zug and Thrak:"),
+            "" for a single family's order
     """
 
     family: str
     text: str
+    partner: str = ""
 
     @property
     def clear(self) -> bool:
@@ -441,7 +446,9 @@ def parse_order(text: str) -> Order | None:
     if found is None:
         return None
     return Order(
-        family=(found.group("family") or ""), text=(found.group("rest") or "").strip()
+        family=(found.group("family") or ""),
+        text=(found.group("rest") or "").strip(),
+        partner=(found.group("partner") or ""),
     )
 
 

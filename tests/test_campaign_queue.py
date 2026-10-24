@@ -7,6 +7,7 @@ touches a database.
 
 import ast
 import asyncio
+import dataclasses
 import pathlib
 import types
 import unittest
@@ -136,6 +137,32 @@ class TheOperatorsOrderIsRead(unittest.TestCase):
         said = core.parse_directive("queue Zug: " + ORDER, "7", {"7"}, dedicated=True)
         self.assertEqual(
             [core.QueueDirective(family="Zug", text=ORDER, source="discord:7")], said
+        )
+
+    def test_a_combined_order_names_two_families(self):
+        for text in (
+            "queue Zug and Thrak: ragefire 5",
+            "queue Zug + Thrak: ragefire 5",
+        ):
+            order = campaignqueue.parse_order(text)
+            self.assertEqual(
+                ("Zug", "Thrak", "ragefire 5"),
+                (order.family, order.partner, order.text),
+                text,
+            )
+        self.assertEqual("", campaignqueue.parse_order("queue Zug: ragefire 5").partner)
+
+    def test_the_discord_form_carries_the_partner_family(self):
+        said = core.parse_directive(
+            "queue Zug and Thrak: ragefire 5", "7", {"7"}, dedicated=True
+        )
+        self.assertEqual(
+            [
+                core.QueueDirective(
+                    family="Zug", text="ragefire 5", source="discord:7", partner="Thrak"
+                )
+            ],
+            said,
         )
 
     def test_clear_is_read_as_clear(self):
@@ -769,8 +796,16 @@ class NothingElseStompsTheQueue(unittest.TestCase):
 class TheDiscordOrder(unittest.TestCase):
     """bridge._set_queue: validated whole, written only when every entry passes."""
 
-    def run_order(self, family, text):
+    def run_order(self, family, text, partner=""):
         world = FakeWorld([])
+        world.roster += [
+            dict(world.row("Zug"), name=name, family="Thrak", lead=int(i == 0))
+            for i, (name, _, _) in enumerate(THRAK)
+        ]
+        levels = roster_rows() + [
+            {"name": name, "level": lvl, "race": race, "map_id": 1}
+            for name, lvl, race in THRAK
+        ]
         written, sent, passes = [], [], []
 
         class Channel:
@@ -781,17 +816,18 @@ class TheDiscordOrder(unittest.TestCase):
             passes.append(1)
 
         ns = _load(
-            ["_set_queue"],
+            ["_set_queue", "_set_combined_queue"],
             {
                 "asyncio": asyncio,
                 "campaignqueue": campaignqueue,
                 "core": core,
+                "dataclasses": dataclasses,
                 "log": _Log(),
                 "_fetch_queue_roster": world.fetch_roster,
                 "_fetch_queue_rows": world.fetch_queue,
                 "_queue_level_rows": lambda fam: [
                     dict(r, lead=int(r["name"] == fam["leader"]["name"]))
-                    for r in roster_rows()
+                    for r in levels
                     if r["name"] in fam["names"]
                 ],
                 "_write_queue": lambda plan, source: (
@@ -800,12 +836,39 @@ class TheDiscordOrder(unittest.TestCase):
             },
         )
         me = types.SimpleNamespace(_campaign_queue_once=queue_once)
+        me._set_combined_queue = types.MethodType(ns["_set_combined_queue"], me)
         asyncio.run(
             ns["_set_queue"](
-                me, core.QueueDirective(family, text, "discord:7"), Channel()
+                me, core.QueueDirective(family, text, "discord:7", partner), Channel()
             )
         )
         return written, sent, passes
+
+    def test_a_combined_order_writes_the_step_for_both_families(self):
+        written, sent, passes = self.run_order("Zug", "ragefire 5", partner="Thrak")
+        self.assertEqual(["Zug", "Thrak"], [plan.family for plan, _ in written])
+        for plan, source in written:
+            self.assertEqual("discord:7", source)
+            self.assertEqual(["ragefire"], [e.keyword for e in plan.entries])
+            self.assertEqual(("Zug", "Thrak"), plan.entries[0].families)
+        self.assertIn("Combined run for Zug's family and Thrak's family", sent[0])
+        self.assertEqual([1], passes)
+
+    def test_a_combined_order_one_family_cannot_take_writes_nothing(self):
+        written, sent, passes = self.run_order("Zug", "ragefire 5", partner="Grug")
+        self.assertEqual([], written)
+        self.assertIn("Grug's family", sent[0])
+        self.assertEqual([], passes)
+
+    def test_a_combined_order_needs_two_different_families(self):
+        written, sent, _ = self.run_order("Zug", "ragefire 5", partner="zug")
+        self.assertEqual([], written)
+        self.assertIn("two different families", sent[0])
+
+    def test_a_combined_order_needs_a_dungeon(self):
+        written, sent, _ = self.run_order("Zug", "clear", partner="Thrak")
+        self.assertEqual([], written)
+        self.assertIn("names the dungeon", sent[0])
 
     def test_the_horde_order_is_written_and_started(self):
         written, sent, passes = self.run_order("Zug", ORDER)
