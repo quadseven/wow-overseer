@@ -74,6 +74,7 @@ import guildfund
 import guildshare
 import guildpost
 import guildroute
+import orders
 import guildwork
 import gearup
 import weaponskill
@@ -5076,13 +5077,10 @@ def _roster_leads() -> set:
 
 def _insert_hearth(name: str, source: str = jev_movement.SOURCE) -> int:
     """One kind='hearth' row: the character uses its hearthstone."""
-    with _connect() as conn, conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO overseer_command (target_name, command, kind, source) "
-            "VALUES (%s, 'use', 'hearth', %s)",
-            (name, source),
-        )
-        return cur.lastrowid
+    return orders.send(
+        orders.MySqlStore(_connect),
+        orders.Order(target=name, command="use", kind="hearth", source=source),
+    )
 
 
 def _holders_of(quest_id: int) -> set:
