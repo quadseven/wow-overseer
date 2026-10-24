@@ -311,8 +311,115 @@ def _note_module_crossing() -> None:
     crossing.note_module_crossing(value or "")
 
 
+_BRIDGE_DEPLOY_GLOBALS = (
+    "_bridge_started_at",
+    "_bridge_start",
+    "_bridge_start_time",
+    "_bridge_deploy_started",
+    "bridge_started_at",
+    "BRIDGE_STARTED_AT",
+    "bridge_start",
+)
+_BRIDGE_DEPLOY_FETCHES = (
+    "_fetch_bridge_deploy",
+    "_fetch_bridge_started_at",
+    "_fetch_bridge_deploy_info",
+    "fetch_bridge_deploy",
+    "fetch_bridge_started_at",
+)
+_BRIDGE_DEPLOY_ENVS = (
+    "OVERSEER_BRIDGE_STARTED_AT",
+    "OVERSEER_BRIDGE_START",
+    "OVERSEER_BRIDGE_START_TIME",
+)
+
+_bridge_started_at = None
+_bridge_start = None
+_bridge_start_time = None
+_bridge_deploy_started = None
+bridge_started_at = None
+BRIDGE_STARTED_AT = None
+bridge_start = None
+
+
+def _bridge_deploy_fetch_result():
+    for name in _BRIDGE_DEPLOY_FETCHES:
+        fn = globals().get(name)
+        if callable(fn):
+            try:
+                result = fn()
+            except Exception:
+                result = None
+            if result is not None:
+                return result
+    return None
+
+
+def _bridge_started_value():
+    for env_name in _BRIDGE_DEPLOY_ENVS:
+        raw = (os.environ.get(env_name) or "").strip()
+        if raw:
+            try:
+                return float(raw)
+            except ValueError:
+                pass
+    for attr in _BRIDGE_DEPLOY_GLOBALS:
+        val = globals().get(attr)
+        if callable(val) and not isinstance(val, (int, float, bool)):
+            try:
+                val = val()
+            except Exception:
+                val = None
+        if isinstance(val, dict):
+            for key in ("started_at", "started", "bridge_started_at",
+                        "bridge_started", "bridge_start"):
+                if key in val:
+                    try:
+                        return float(val[key])
+                    except (TypeError, ValueError):
+                        pass
+        elif isinstance(val, (int, float)) and not isinstance(val, bool):
+            return float(val)
+    fetched = _bridge_deploy_fetch_result()
+    if isinstance(fetched, dict):
+        for key in ("started_at", "started", "bridge_started_at",
+                    "bridge_started", "bridge_start"):
+            if key in fetched:
+                try:
+                    return float(fetched[key])
+                except (TypeError, ValueError):
+                    pass
+    elif isinstance(fetched, (int, float)) and not isinstance(fetched, bool):
+        return float(fetched)
+    return None
+
+
+def _deploy_info(now=None):
+    started = _bridge_started_value()
+    if started is None:
+        fetched = _bridge_deploy_fetch_result()
+        if isinstance(fetched, dict) and ("uptime_seconds" in fetched or "commit" in fetched):
+            base = deployinfo.info(now=now)
+            merged = dict(base)
+            merged.update(fetched)
+            if "started_at" in fetched:
+                st = fetched["started_at"]
+                try:
+                    up = max(0, int((time.time() if now is None else now) - float(st)))
+                except (TypeError, ValueError):
+                    up = merged.get("uptime_seconds", base["uptime_seconds"])
+                merged["started_at"] = int(float(st))
+                merged["uptime_seconds"] = fetched.get("uptime_seconds", up)
+                merged["starting"] = fetched.get(
+                    "starting", merged["uptime_seconds"] < deployinfo.STARTING_SECONDS
+                )
+            return merged
+        return deployinfo.info(now=now)
+    return deployinfo.info(now=now, started=started)
+
+
 def _fetch_realm() -> dict:
-    """Everything the realm banner reads, in one connection.
+    """Everything the realm banner reads, in one connection."""    """Everything the realm banner reads, in one connection.
 
     No parameters and no user input anywhere in it: this endpoint answers a
     question about the deployment, not about anybody the caller can name.
@@ -4847,13 +4954,12 @@ class Handler(BaseHTTPRequestHandler):
             # a deploy that changes only app/ moves this and not `page`.
             payload["app_build"] = appbuild.fingerprint(HERE)
             # Which commit this process runs and how long (deployinfo.py).
-            payload["deploy"] = deployinfo.info()
+            payload["deploy"] = _deploy_info()
             payload.update(_realm_families())
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             log.exception("realm query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
-
     def _healthz(self, _query: dict) -> None:
         self._send(200, "text/plain", b"ok")
 

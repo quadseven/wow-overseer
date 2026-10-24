@@ -101,12 +101,8 @@ export function update(root, opts) {
   root.querySelector('[data-slot="tabbar"]').innerHTML = tabBar(section).map(String).join("");
   root.querySelectorAll('[data-slot="realm"]').forEach((el) => { el.textContent = realmTag; el.hidden = !realmTag; });
   updateAge(root, health);
-  const dep = marker(deployInfo, health && health.state);
-  root.querySelectorAll('[data-slot="deploy"]').forEach((el) => {
-    el.textContent = dep.text; el.hidden = !dep.text; el.setAttribute("data-restarting", dep.restarting ? "1" : "0");
-  });
-  const themeLabel = theme === "light" ? "Dark theme" : "Light theme";
-  const themeIcon = theme === "light" ? "ph ph-moon" : "ph ph-sun";
+  updateDeploy(root, health);
+  const themeLabel = theme === "light" ? "Dark theme" : "Light theme";  const themeIcon = theme === "light" ? "ph ph-moon" : "ph ph-sun";
   root.querySelectorAll('[data-action="theme"]').forEach((b) => {
     b.setAttribute("aria-label", themeLabel);
     b.innerHTML = b.classList.contains("btn-icon")
@@ -128,8 +124,15 @@ export function updateAge(root, health) {
   if (a) a.innerHTML = html`${dot}<span>${long}</span>`.s;
   if (b) b.innerHTML = html`${dot}<span>${short}</span>`.s;
   sayAgeState(root, h.state);
+  updateDeploy(root, health);
 }
 
+export function updateDeploy(root, health) {
+  const dep = marker(deployInfo, health && health.state);
+  root.querySelectorAll('[data-slot="deploy"]').forEach((el) => {
+    el.textContent = dep.text; el.hidden = !dep.text; el.setAttribute("data-restarting", dep.restarting ? "1" : "0");
+  });
+}
 // The floating guild switch on phone (Guilds and Raid).
 export function setThumb(root, opts) {
   const slot = root.querySelector('[data-slot="thumb"]');

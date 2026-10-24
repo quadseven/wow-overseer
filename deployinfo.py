@@ -47,14 +47,24 @@ def startup_line() -> str:
     )
 
 
-def info(now: float | None = None) -> dict:
-    up = max(0, int((time.time() if now is None else now) - _started))
+def info(
+    now: float | None = None,
+    started=None,
+    started_at=None,
+    bridge_started=None,
+    bridge_started_at=None,
+) -> dict:
+    base = _started
+    for cand in (started, started_at, bridge_started, bridge_started_at):
+        if cand is not None:
+            base = cand
+    up = max(0, int((time.time() if now is None else now) - base))
     return {
         "commit": _sha("OVERSEER_COMMIT"),
         "previous": _sha("OVERSEER_PREVIOUS_COMMIT"),
         "built": _env("OVERSEER_BUILT"),
         "ship_pr": _pr(),
-        "started_at": int(_started),
+        "started_at": int(base),
         "uptime_seconds": up,
         "starting": up < STARTING_SECONDS,
     }
