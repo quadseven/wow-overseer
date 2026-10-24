@@ -42,7 +42,11 @@ def _import_bridge():
 
 class StartupLine(unittest.TestCase):
     def test_line_names_commit_previous_and_build_time(self):
-        env = {"OVERSEER_COMMIT": SHA, "OVERSEER_PREVIOUS_COMMIT": PREV, "OVERSEER_BUILT": "2026-10-24T01:02:03Z"}
+        env = {
+            "OVERSEER_COMMIT": SHA,
+            "OVERSEER_PREVIOUS_COMMIT": PREV,
+            "OVERSEER_BUILT": "2026-10-24T01:02:03Z",
+        }
         with mock.patch.dict(os.environ, env, clear=True):
             self.assertEqual(
                 deployinfo.startup_line(),
@@ -52,14 +56,19 @@ class StartupLine(unittest.TestCase):
     def test_unset_or_malformed_reads_unknown(self):
         with mock.patch.dict(os.environ, {"OVERSEER_COMMIT": "not a sha"}, clear=True):
             self.assertEqual(
-                deployinfo.startup_line(), "bridge up: commit unknown, previous unknown, built unknown"
+                deployinfo.startup_line(),
+                "bridge up: commit unknown, previous unknown, built unknown",
             )
 
     def test_main_logs_the_line(self):
         bridge = _import_bridge()
 
         with (
-            mock.patch.dict(os.environ, {"OVERSEER_HEADLESS": "1", "OVERSEER_COMMIT": SHA}, clear=True),
+            mock.patch.dict(
+                os.environ,
+                {"OVERSEER_HEADLESS": "1", "OVERSEER_COMMIT": SHA},
+                clear=True,
+            ),
             mock.patch.object(bridge, "HeadlessBridge"),
             mock.patch.object(bridge.asyncio, "run"),
             self.assertLogs("wow-overseer", level="INFO") as logs,
@@ -70,10 +79,16 @@ class StartupLine(unittest.TestCase):
 
 class DeployFields(unittest.TestCase):
     def test_info_fields_and_starting_window(self):
-        env = {"OVERSEER_COMMIT": SHA, "OVERSEER_PREVIOUS_COMMIT": PREV, "OVERSEER_SHIP_PR": "1400"}
+        env = {
+            "OVERSEER_COMMIT": SHA,
+            "OVERSEER_PREVIOUS_COMMIT": PREV,
+            "OVERSEER_SHIP_PR": "1400",
+        }
         with mock.patch.dict(os.environ, env, clear=True):
             fresh = deployinfo.info(now=deployinfo._started + 5)
-            settled = deployinfo.info(now=deployinfo._started + deployinfo.STARTING_SECONDS + 1)
+            settled = deployinfo.info(
+                now=deployinfo._started + deployinfo.STARTING_SECONDS + 1
+            )
         self.assertEqual(fresh["commit"], "0123456789ab")
         self.assertEqual(fresh["previous"], "fedcba987654")
         self.assertEqual(fresh["ship_pr"], 1400)
@@ -81,7 +96,16 @@ class DeployFields(unittest.TestCase):
         self.assertTrue(fresh["starting"])
         self.assertFalse(settled["starting"])
         self.assertEqual(
-            set(fresh), {"commit", "previous", "built", "ship_pr", "started_at", "uptime_seconds", "starting"}
+            set(fresh),
+            {
+                "commit",
+                "previous",
+                "built",
+                "ship_pr",
+                "started_at",
+                "uptime_seconds",
+                "starting",
+            },
         )
 
     def test_realm_reports_deploy(self):
@@ -112,18 +136,32 @@ class DashboardMarker(unittest.TestCase):
     def marker(self, deploy, state):
         script = (
             'import {marker} from "%s";\nconsole.log(JSON.stringify(marker(%s, %s)));\n'
-            % ((HERE / "app" / "deploy.js").as_uri(), json.dumps(deploy), json.dumps(state))
+            % (
+                (HERE / "app" / "deploy.js").as_uri(),
+                json.dumps(deploy),
+                json.dumps(state),
+            )
         )
         out = subprocess.run(
-            [NODE, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=30, check=False
+            [NODE, "--input-type=module", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
         )
         self.assertEqual(out.returncode, 0, out.stderr)
         return json.loads(out.stdout.strip().splitlines()[-1])
 
     def test_shows_commit_pr_and_uptime(self):
-        d = {"commit": "0123456789ab", "ship_pr": 1400, "uptime_seconds": 7300, "starting": False}
+        d = {
+            "commit": "0123456789ab",
+            "ship_pr": 1400,
+            "uptime_seconds": 7300,
+            "starting": False,
+        }
         self.assertEqual(
-            self.marker(d, "fresh"), {"restarting": False, "text": "Build 0123456789ab PR #1400, up 2h"}
+            self.marker(d, "fresh"),
+            {"restarting": False, "text": "Build 0123456789ab PR #1400, up 2h"},
         )
 
     def test_starting_says_restarting(self):
@@ -139,7 +177,9 @@ class DashboardMarker(unittest.TestCase):
         self.assertIn("was 0123456789ab", m["text"])
 
     def test_nothing_known_shows_nothing(self):
-        self.assertEqual(self.marker(None, "loading"), {"restarting": False, "text": ""})
+        self.assertEqual(
+            self.marker(None, "loading"), {"restarting": False, "text": ""}
+        )
 
 
 if __name__ == "__main__":
