@@ -763,20 +763,20 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
         its gates in. Read the mod source (the submodule the gate command
         initialises) and compare the describe() literals, in order, with
         adjacent C++ string literals joined."""
-        import re
-
         src = modsource.read(modsource.MODULE, encoding="utf-8")
-        body = src[
-            src.index("static char const* DoShare(") : src.index("void WriteSnapshot()")
-        ]
-        found = [
-            "".join(re.findall(r'"([^"]*)"', literals))
-            for literals in re.findall(
-                r'describe\("(?:refused|error)",\s*((?:"[^"]*"\s*)+)', body
-            )
-        ]
-        self.assertEqual(found, list(questshare.SHARE_GATES))
-        self.assertTrue(questshare.PERMANENT_REFUSALS <= set(questshare.SHARE_GATES))
+        start = src.index("static char const* DoShare(")
+        # DoShare's own closing brace, not a later function's name: the
+        # module has grown other describe() callers between the two.
+        body = src[start : src.index("\n    }\n", start)]
+        found = _gate_literals(body)
+        self.assertEqual(len(found), len(questshare.SHARE_GATES), found)
+        for written, gate in zip(found, questshare.SHARE_GATES, strict=True):
+            # Each gate lists every wording a worldserver has written for it,
+            # old and new, so the pinned module's reasons must be among them.
+            self.assertTrue(written, gate)
+            self.assertLessEqual(set(written), set(gate), gate)
+        known = {reason for gate in questshare.SHARE_GATES for reason in gate}
+        self.assertTrue(questshare.PERMANENT_REFUSALS <= known)
 
     def test_history_depth_is_where_the_doubling_meets_the_cap(self):
         # 60 min * 2**8 = 256h >= 168h, and 2**7 = 128h is not
@@ -796,8 +796,15 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
         rng = random.Random(2892)
         depth = questshare.history_depth(self.BASE, self.CAP)
         outcomes = [
-            ("error", json.dumps({"outcome": "refused", "reason": g}))
-            for g in questshare.SHARE_GATES
+            ("error", json.dumps({"outcome": "refused", "reason": r}))
+            for gate in questshare.SHARE_GATES
+            for r in gate
+        ]
+        # the worldserver's own verdict (mod-overseer#1059), on a known gate
+        # and on a wording this side has never seen
+        outcomes += [
+            ("error", json.dumps({"reason": r, "retryable": False}))
+            for r in ("holder does not carry the quest", "taker offline", "reworded")
         ]
         outcomes += [
             ("delivered", json.dumps({"outcome": "shared"})),
@@ -833,6 +840,224 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
             if self.held(rows) != self.held(kept):
                 disagreements += 1
         self.assertEqual(disagreements, 0)
+
+
+def _gate_literals(body):
+    """The reason literals of every describe() refusal in a DoShare body, in
+    order, one tuple per gate. A gate passes its reason either inline (the
+    adjacent C++ literals joined) or, since mod-overseer#1059, through a
+    local picked by a ternary just above the call (`char const* reason =
+    holderHasQuest ? "..." : "...";`), whose literals are that gate's
+    possible reasons."""
+    import re
+
+    gates = []
+    cursor = 0
+    for call in re.finditer(
+        r'describe\("(?:refused|error)",\s*((?:"[^"]*"\s*)+|\w+)', body
+    ):
+        arg = call.group(1)
+        if arg.lstrip().startswith('"'):
+            gates.append(("".join(re.findall(r'"([^"]*)"', arg)),))
+        else:
+            name = re.escape(arg.strip())
+            window = body[cursor : call.start()]
+            picks = re.findall(r"char const\*\s+" + name + r"\s*=([^;]*);", window)
+            gates.append(tuple(re.findall(r'"([^"]*)"', picks[-1])) if picks else ())
+        cursor = call.end()
+    return gates
+
+
+# The CanShareQuest gate as mod-overseer#1059 writes it, verbatim from the
+# module the live worldserver runs (mod-overseer cc25b2f6). The submodule this
+# suite reads is pinned older and still carries the single literal, so this
+# copy is what proves the gate-order reader handles the shape that bump brings.
+_SHARE_GATE_AFTER_1059 = """
+        if (!holder->CanShareQuest(questId))
+        {
+            bool const holderHasQuest =
+                holder->GetQuestStatus(questId) != QUEST_STATUS_NONE;
+            char const* reason = holderHasQuest ? "quest is not sharable"
+                                                : "holder does not carry the quest";
+            describe("refused", reason, int32(taker->GetQuestStatus(questId)), false);
+            return "holder is not carrying that quest or it is not sharable";
+        }
+        Group* group = holder->GetGroup();
+        if (!group || !group->IsMember(taker->GetGUID()))
+        {
+            describe("refused", "not in the same party", int32(taker->GetQuestStatus(questId)));
+            return "holder and taker are not in the same party";
+        }
+"""
+
+
+class TheWorldserverCanSayARefusalIsFinal(unittest.TestCase):
+    """mod-overseer#1059 (live since 2026-10-20) split the CanShareQuest
+    refusal into "quest is not sharable" and "holder does not carry the
+    quest", and marks it `"retryable":false`. The bridge matched refusals by
+    their old wording only, so a reason it did not know counted for nothing
+    and the hourly retry of a share that can never land came back - the
+    shape of infra#2892 and mod-overseer#969. These rows are the module's own
+    JSON, field for field."""
+
+    KEY = ("Bork", "Grug", "quest:3361")
+    BASE, CAP = 60, 168
+    H = 3600
+
+    @staticmethod
+    def answer(reason, retryable=None, **extra):
+        body = {"outcome": "refused", "reason": reason}
+        if retryable is not None:
+            body["retryable"] = retryable
+        body.update(extra)
+        return json.dumps(body)
+
+    LIVE = (
+        '{"outcome":"refused","reason":"holder does not carry the quest",'
+        '"retryable":false,"from":"Bork","to":"Grug","quest_id":3361,'
+        '"taker_status":0,"request":"quest:3361"}'
+    )
+    LIVE_NOT_SHARABLE = (
+        '{"outcome":"refused","reason":"quest is not sharable",'
+        '"retryable":false,"from":"Bork","to":"Grug","quest_id":3361,'
+        '"taker_status":0,"request":"quest:3361"}'
+    )
+
+    def rows(self, result, ages_h, status="error"):
+        return [(*self.KEY, status, result, age * self.H) for age in ages_h]
+
+    def held(self, rows):
+        return questshare.backed_off(rows, self.BASE, self.CAP)
+
+    def test_the_live_holder_refusal_backs_off(self):
+        for result in (self.LIVE, self.LIVE_NOT_SHARABLE):
+            with self.subTest(result=result):
+                self.assertEqual(
+                    self.held(self.rows(result, [1])), frozenset({self.KEY})
+                )
+                self.assertEqual(self.held(self.rows(result, [2])), frozenset())
+
+    def test_the_live_holder_refusal_never_returns_to_hourly(self):
+        """The loop the bridge runs: offer every hour unless held, every offer
+        answered with the live refusal. 2h, 4h, ... then a week, never an
+        hourly retry."""
+        rows, offers = [], []
+        for hour in range(30 * 24):
+            rows = [(h, t, c, st, r, age + self.H) for h, t, c, st, r, age in rows]
+            if self.KEY in self.held(rows):
+                continue
+            offers.append(hour)
+            rows.append((*self.KEY, "error", self.LIVE, 0))
+        gaps = [b - a for a, b in zip(offers, offers[1:], strict=False)]
+        self.assertEqual(gaps[:7], [2, 4, 8, 16, 32, 64, 128])
+        self.assertLess(len(offers), 12, offers)
+
+    def test_the_old_wording_still_backs_off_for_an_older_worldserver(self):
+        old = self.answer("holder cannot share it (not held, or not flagged sharable)")
+        self.assertEqual(self.held(self.rows(old, [1])), frozenset({self.KEY}))
+
+    def test_the_two_new_wordings_are_one_gate(self):
+        """Both come from the one CanShareQuest check, so the holder dropping
+        the quest after it was found unsharable (or the other way round) is a
+        streak of two, not a later gate ending the first."""
+        rows = self.rows(self.LIVE, [3]) + self.rows(self.LIVE_NOT_SHARABLE, [5])
+        self.assertEqual(self.held(rows), frozenset({self.KEY}))  # 4h wait
+        rows = self.rows(self.LIVE_NOT_SHARABLE, [3]) + self.rows(self.LIVE, [5])
+        self.assertEqual(self.held(rows), frozenset({self.KEY}))
+        old = self.answer("holder cannot share it (not held, or not flagged sharable)")
+        rows = self.rows(self.LIVE, [3]) + self.rows(old, [5])
+        self.assertEqual(self.held(rows), frozenset({self.KEY}))
+
+    def test_a_later_gate_still_ends_the_new_streak(self):
+        streak = self.rows(self.LIVE, [4, 5, 6, 7, 8])
+        later = self.rows(self.answer("not on the same map", True), [1])
+        self.assertEqual(self.held(streak), frozenset({self.KEY}))
+        self.assertEqual(self.held(streak + later), frozenset())
+
+    def test_an_earlier_gate_still_ends_nothing(self):
+        streak = self.rows(self.LIVE, [4, 5, 6, 7, 8])
+        earlier = self.rows(self.answer("taker offline", True), [1])
+        self.assertEqual(self.held(streak + earlier), frozenset({self.KEY}))
+
+    def test_retryable_false_backs_off_whatever_the_wording(self):
+        """The generic half: a future rewording of any refusal still carries
+        the worldserver's own verdict, so the bridge cannot silently drift
+        back to hourly retries the way it did after #1059."""
+        reworded = self.answer("a reason worded some new way next year", False)
+        self.assertEqual(self.held(self.rows(reworded, [1])), frozenset({self.KEY}))
+        self.assertEqual(self.held(self.rows(reworded, [2])), frozenset())
+        self.assertEqual(
+            self.held(self.rows(reworded, [3, 5])), frozenset({self.KEY})
+        )  # a streak of two: 4h
+
+    def test_retryable_false_on_a_known_gate_is_honoured(self):
+        offline = self.answer("taker offline", False)
+        self.assertEqual(self.held(self.rows(offline, [1])), frozenset({self.KEY}))
+
+    def test_a_delivery_ends_an_unknown_final_streak(self):
+        reworded = self.answer("a reason worded some new way next year", False)
+        rows = self.rows(reworded, [3, 4, 5]) + self.rows(
+            json.dumps({"outcome": "shared"}), [2], status="delivered"
+        )
+        self.assertEqual(self.held(rows), frozenset())
+
+    def test_an_unknown_final_refusal_proves_no_later_gate_passed(self):
+        """Its gate is unknown, so it cannot end an older streak the way a
+        later known gate does: the older refusals keep counting."""
+        holder = self.rows(self.LIVE, [3, 4, 5, 6, 7])
+        reworded = self.rows(self.answer("a reason worded some new way", False), [1])
+        # six in the streak: 64h from the youngest, not the 2h of a fresh one
+        held = self.held(holder + reworded)
+        self.assertEqual(held, frozenset({self.KEY}))
+        later = self.rows(self.answer("a reason worded some new way", False), [40])
+        self.assertEqual(self.held(holder + later), frozenset({self.KEY}))
+
+    def test_retryable_true_or_absent_on_an_unknown_reason_counts_for_nothing(self):
+        for result in (
+            self.answer("a reason worded some new way", True),
+            self.answer("a reason worded some new way"),
+            self.answer("a reason worded some new way", "false"),
+        ):
+            with self.subTest(result=result):
+                self.assertEqual(self.held(self.rows(result, [0])), frozenset())
+
+    def test_retryable_true_does_not_shorten_a_bridge_side_permanent_reason(self):
+        """The module marks only CanShareQuest final; eligibility (#170) and
+        the rest of PERMANENT_REFUSALS are the bridge's own judgement and
+        stay permanent when the row says retryable:true."""
+        for reason in questshare.PERMANENT_REFUSALS:
+            with self.subTest(reason=reason):
+                rows = self.rows(self.answer(reason, True), [1])
+                self.assertEqual(self.held(rows), frozenset({self.KEY}))
+
+    def test_a_transient_gate_marked_retryable_stays_transient(self):
+        rows = self.rows(self.answer("taker offline", True), range(50))
+        self.assertEqual(self.held(rows), frozenset())
+
+    def test_every_new_reason_is_known_and_permanent(self):
+        for reason in ("quest is not sharable", "holder does not carry the quest"):
+            with self.subTest(reason=reason):
+                self.assertIn(reason, questshare.PERMANENT_REFUSALS)
+                self.assertIn(
+                    reason,
+                    {r for gate in questshare.SHARE_GATES for r in gate},
+                )
+
+    def test_the_gate_reader_handles_the_1059_shape(self):
+        self.assertEqual(
+            _gate_literals(_SHARE_GATE_AFTER_1059),
+            [
+                ("quest is not sharable", "holder does not carry the quest"),
+                ("not in the same party",),
+            ],
+        )
+        holder_gate = next(
+            g for g in questshare.SHARE_GATES if "quest is not sharable" in g
+        )
+        self.assertLessEqual(
+            {"quest is not sharable", "holder does not carry the quest"},
+            set(holder_gate),
+        )
 
 
 if __name__ == "__main__":
