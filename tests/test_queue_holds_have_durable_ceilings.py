@@ -12,6 +12,10 @@ bag-room hold measured its ceiling the same way. Pinned here:
   * the quest pass stands down past the queue's own stall ceiling;
   * the gear gate, the gear hold and the town-first wait all read the queue's
     stall as read from the store, so a restart does not restart the wait.
+
+The 2-hour dungeon job timeout (from PR #1378): no family sits on a dungeon
+job longer than 2 hours without a recorded reason. If the queue stall reaches
+2 hours with no other hold active, the family is released to the default job.
 """
 
 import ast
@@ -33,6 +37,7 @@ import jobs  # noqa: E402
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (ROOT / "bridge.py").read_text(encoding="utf-8")
 CEILING = bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS
+DUNGEON_JOB_TIMEOUT = bag_pressure.BAG_HOLD_FORGET_SECONDS
 NAMES = ["Zug", "Oz", "Uzza", "Zork", "Zrog"]
 
 
@@ -249,6 +254,92 @@ class StallFloorTest(unittest.TestCase):
         self.assertIn(
             "town first", self.ns["_town_first"]("dungeon:ragefire", NAMES, free)
         )
+
+
+class DungeonJobTimeoutTest(unittest.TestCase):
+    """No family sits on a dungeon job longer than 2 hours without a recorded
+    reason. If the queue stall reaches 2 hours with no other hold active,
+    the family is released to the default job.
+    """
+
+    def setUp(self):
+        self.clock = Clock()
+        self.jobs = {n: "dungeon:ragefire" for n in NAMES}
+        self.stall = {}
+
+        # Proper mock chain: _connect() -> conn (context manager)
+        # conn.__enter__() -> conn
+        # conn.cursor() -> cur (context manager)
+        # cur.__enter__() -> cur
+        # cur.fetchone() -> None (no bag hold)
+        self.cur_mock = mock.MagicMock()
+        self.cur_mock.fetchone.return_value = None
+        self.cur_mock.__enter__ = mock.Mock(return_value=self.cur_mock)
+        self.cur_mock.__exit__ = mock.Mock(return_value=False)
+
+        self.conn_mock = mock.MagicMock()
+        self.conn_mock.cursor.return_value = self.cur_mock
+        self.conn_mock.__enter__ = mock.Mock(return_value=self.conn_mock)
+        self.conn_mock.__exit__ = mock.Mock(return_value=False)
+
+        def mock_connect():
+            return self.conn_mock
+
+        self.ns = {
+            "time": self.clock,
+            "log": Log(),
+            "bag_pressure": bag_pressure,
+            "gearup": gearup,
+            "jobs": jobs,
+            "pymysql": mock.MagicMock(),
+            "TOWN_FIRST_SOURCE": "overseer:town-first",
+            "GEARUP_GATE_EMPTY_SLOTS": 6,
+            "GEARUP_GATE_MIN_PURSE": 20000,
+            "_GEAR_HOLD_SINCE": {},
+            "_TOWN_FIRST_SINCE": {},
+            "_QUEUE_STALL": self.stall,
+            "_STALL_HOLD_SAID": {},
+            "_fetch_gearup_facts": lambda names: {
+                n: {"equipped": ["mainhand"], "purse": 30000} for n in names
+            },
+            "_jobs_of": lambda names: {n: self.jobs[n] for n in names},
+            "_insert_job": lambda *a: None,
+            "_keep_in_town": lambda names: None,
+            "_connect": mock_connect,
+        }
+        module = ast.Module(
+            body=[
+                _function(n)
+                for n in (
+                    "_queue_stall_floor",
+                    "_note_queue_stall",
+                    "_queue_job_timeout",
+                    "_stall_held_door",
+                )
+            ],
+            type_ignores=[],
+        )
+        exec(compile(module, "bridge.py", "exec"), self.ns)  # noqa: S102
+
+    def test_family_on_dungeon_job_for_two_hours_is_released(self):
+        """A family on a dungeon job for 2+ hours with no other hold is released."""
+        self.ns["_note_queue_stall"](NAMES, DUNGEON_JOB_TIMEOUT + 1)
+        result = self.ns["_queue_job_timeout"](NAMES, "ragefire")
+        self.assertTrue(result)
+
+    def test_family_on_dungeon_job_under_two_hours_is_not_released(self):
+        """A family on a dungeon job for less than 2 hours is not released."""
+        self.ns["_note_queue_stall"](NAMES, DUNGEON_JOB_TIMEOUT - 100)
+        result = self.ns["_queue_job_timeout"](NAMES, "ragefire")
+        self.assertFalse(result)
+
+    def test_family_not_on_dungeon_job_is_not_released(self):
+        """A family on a non-dungeon job is not released by the timeout."""
+        self.jobs = {n: "town run" for n in NAMES}
+        self.ns["_jobs_of"] = lambda names: {n: self.jobs[n] for n in names}
+        self.ns["_note_queue_stall"](NAMES, DUNGEON_JOB_TIMEOUT + 1)
+        result = self.ns["_queue_job_timeout"](NAMES, "ragefire")
+        self.assertFalse(result)
 
 
 if __name__ == "__main__":

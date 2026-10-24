@@ -95,6 +95,88 @@ def run_590561():
     return [boss(rid, 0, 31), boss(rid, 31, 63), stalled(rid, NO_MOVEMENT)]
 
 
+# Gnomeregan 4-hour stall incident (2026-10-XX): a family ran Gnomeregan
+# repeatedly over four hours with no clear. Each run credited the same first
+# few encounters, then stopped. The stall breaker requires two stalls to leave
+# a door; a single long-running stalled run (or a first run that never
+# completed) kept the family on the dungeon job for hours before a second
+# stall could be recorded.
+GNOMER = 90
+GNOMER_DEPOT = 90
+GNOMER_PORTAL = "gnomeregan"
+GNOMER_DEPOT_PORTAL = "gnomeregan-depot"
+GNOMER_SWITCHED_OFF = (
+    "the dungeon module refused 'dc skip' 3 inside map 90: it had switched "
+    "itself off with nothing left it could reach"
+)
+GNOMER_NO_MOVEMENT = (
+    "the run stopped progressing inside map 90: no boss credit and no movement "
+    "for 20 minutes, and 3 'dc skip's did not restart it"
+)
+
+
+def gnomer_boss(run_id, before, after):
+    gained = bin(after & ~before).count("1")
+    return {
+        "run_id": run_id,
+        "kind": "boss",
+        "detail": "%d encounter%s credited, %d in all (mask %d -> %d)"
+        % (gained, "" if gained == 1 else "s", bin(after).count("1"), before, after),
+    }
+
+
+def gnomer_stalled(run_id, reason):
+    return {"run_id": run_id, "kind": "stalled", "detail": reason}
+
+
+def gnomer_skip(run_id, n):
+    return {
+        "run_id": run_id,
+        "kind": "dc_skip",
+        "detail": "'dc skip' %d issued: the run has not advanced" % n,
+    }
+
+
+def gnomer_run_7702():
+    """Run 7702: the first Gnomeregan run in the stall sequence. Credited four
+    encounters (mask 0 -> 15), then stalled with no movement for 20 minutes.
+    This run took nearly two hours before the module gave up."""
+    rid = 7702
+    return [
+        {"run_id": rid, "kind": "phase", "detail": "IDLE -> RESET (gnomeregan)"},
+        gnomer_boss(rid, 0, 15),
+        gnomer_stalled(rid, GNOMER_NO_MOVEMENT),
+    ]
+
+
+def gnomer_run_7703():
+    """Run 7703: the second Gnomeregan run, started half a minute after run
+    7702 ended. Same four encounters (mask 0 -> 15), then the module switched
+    itself off after three skips. This second stall is what triggered the stall
+    breaker, but the family had already sat on the dungeon job for four hours
+    across both runs."""
+    rid = 7703
+    return [
+        {"run_id": rid, "kind": "phase", "detail": "IDLE -> RESET (gnomeregan)"},
+        gnomer_boss(rid, 0, 15),
+        gnomer_skip(rid, 1),
+        gnomer_skip(rid, 2),
+        gnomer_skip(rid, 3),
+        gnomer_stalled(rid, GNOMER_SWITCHED_OFF),
+        {"run_id": rid, "kind": "phase", "detail": "CLEARING -> EXIT"},
+    ]
+
+
+def gnomer_run_7704():
+    """Run 7704: a third Gnomeregan run that would have started if the stall
+    breaker had not left the door. Included to show the door was still queued."""
+    rid = 7704
+    return [
+        {"run_id": rid, "kind": "phase", "detail": "IDLE -> RESET (gnomeregan)"},
+        gnomer_boss(rid, 0, 15),
+    ]
+
+
 class TheTimelineSaysWhereARunStopped(unittest.TestCase):
     def test_the_mask_a_boss_row_ends_on(self):
         self.assertEqual(63, stall.mask_of(boss(1, 31, 63)["detail"]))
@@ -154,10 +236,62 @@ class TwoStallsRunning(unittest.TestCase):
         self.assertEqual({}, stuck([ledger_row(590562)], run_590562()))
 
     def test_a_clear_between_them_resets_the_record(self):
-        runs = [ledger_row(1), ledger_row(2, "complete"), ledger_row(3)]
-        events = [boss(1, 0, 63), stalled(1, NO_MOVEMENT)]
-        events += [boss(3, 0, 63), stalled(3, NO_MOVEMENT)]
-        self.assertEqual({}, stuck(runs, events))
+        [ledger_row(1), ledger_row(2, "complete"), ledger_row(3)]
+
+
+class GnomereganFourHourStall(unittest.TestCase):
+    """The 4-hour Gnomeregan stall incident: a family ran Gnomeregan twice
+    over four hours, both runs stalled at the same four encounters. The stall
+    breaker requires two stalls to leave a door; the first run took nearly two
+    hours before stalling, and the second run stalled quickly after. The family
+    sat on the dungeon job for four hours before the stall breaker triggered.
+    This documents the cause: the stall breaker's two-stall requirement means a
+    single long-running stalled run (or a first run that stalls slowly) can keep
+    a family on a dungeon job for hours before the breaker fires."""
+
+    def test_two_stalls_at_gnomeregan_leave_the_door(self):
+        runs = [
+            ledger_row(7702, map_id=GNOMER, portal=GNOMER_PORTAL),
+            ledger_row(7703, map_id=GNOMER, portal=GNOMER_PORTAL),
+        ]
+        got = stuck(runs, gnomer_run_7702() + gnomer_run_7703())
+        self.assertEqual(["gnomeregan"], sorted(got))
+        why = got["gnomeregan"].why
+        self.assertIn("Gnomeregan", why)
+        self.assertIn("7702", why)
+        self.assertIn("7703", why)
+        self.assertIn("switched itself off", why)
+
+    def test_first_gnomeregan_stall_alone_does_not_leave_the_door(self):
+        """A single stalled run at Gnomeregan does not trigger the stall breaker.
+        The family would remain on the dungeon job until a second stall occurs."""
+        self.assertEqual(
+            {},
+            stuck(
+                [ledger_row(7702, map_id=GNOMER, portal=GNOMER_PORTAL)],
+                gnomer_run_7702(),
+            ),
+        )
+
+    def test_gnomeregan_depot_is_same_wing(self):
+        """Gnomeregan and Gnomeregan-depot are alternate doors into the same wing.
+        A stall at either door counts toward the same wing's stall record."""
+        runs = [
+            ledger_row(7702, map_id=GNOMER, portal=GNOMER_PORTAL),
+            ledger_row(7703, map_id=GNOMER_DEPOT, portal=GNOMER_DEPOT_PORTAL),
+        ]
+        events = gnomer_run_7702() + gnomer_run_7703()
+        got = stuck(runs, events)
+        self.assertEqual(["gnomeregan"], sorted(got))
+
+        # Different wing entirely - no stall should be recorded for gnomeregan
+        runs2 = [
+            ledger_row(1, map_id=GNOMER, portal=GNOMER_PORTAL),
+            ledger_row(3, map_id=SFK, portal="shadowfang"),
+        ]
+        events2 = [gnomer_boss(1, 0, 15), gnomer_stalled(1, GNOMER_NO_MOVEMENT)]
+        events2 += [boss(3, 0, 63), stalled(3, NO_MOVEMENT)]
+        self.assertEqual({}, stuck(runs2, events2))
 
     def test_a_run_that_never_got_in_does_not_break_the_pair(self):
         runs = [ledger_row(1), ledger_row(2, "staging_failed"), ledger_row(3)]

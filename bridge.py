@@ -2528,6 +2528,60 @@ def _queue_stall_floor(names) -> float:
     return read[0] + max(0.0, time.monotonic() - read[1])
 
 
+def _queue_job_timeout(names, keyword: str) -> bool:
+    """Whether the family has sat on a dungeon job for 2+ hours with no run
+    progress and no other hold reason. If so, returns True with the reason.
+
+    This implements the acceptance criterion from PR #1378: no family sits on
+    a dungeon job longer than 2 hours without a recorded reason.
+    """
+    # Check if the family's leader is on a dungeon job
+    job_map = _jobs_of(names)
+    leader_name = next((n for n in names if n in job_map), None)
+    if not leader_name:
+        return False
+    leader_job = str(job_map.get(leader_name) or "").strip().lower()
+    if not leader_job.startswith("dungeon"):
+        return False
+
+    # Check if queue stall has reached 2 hours (BAG_HOLD_FORGET_SECONDS = 7200)
+    stall = _queue_stall_floor(names)
+    if stall < bag_pressure.BAG_HOLD_FORGET_SECONDS:
+        return False
+
+    # Check if there's another active hold that would explain the delay
+    # (bag hold, gear hold, stall breaker hold, town errand)
+    hold_key = tuple(sorted(names))
+    if hold_key in _GEAR_HOLD_SINCE:
+        return False
+    if hold_key in _TOWN_FIRST_SINCE:
+        return False
+    # Bag hold: check if family is held for bag room
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM overseer_bag_hold WHERE leader_name IN (%s)"
+                % ",".join(["%s"] * len(names)),
+                list(names),
+            )
+            if cur.fetchone():
+                return False
+    except pymysql.err.MySQLError:
+        pass
+
+    # Stall breaker hold: check if the door is already held
+    if _stall_held_door(hold_key):
+        return False
+
+    return True
+
+
+def _stall_held_door(hold_key) -> bool:
+    """Whether a stall breaker hold is active for this family."""
+    # The stall breaker records holds in _STALL_HOLD_SAID
+    return any(k[0] == hold_key for k in _STALL_HOLD_SAID.keys())
+
+
 def _jobs_of(names: list) -> dict:
     """name -> overseer_roster.job for `names`; {} when it cannot be read."""
     if not names:
@@ -20247,7 +20301,20 @@ class Bridge(discord.Client):
                 log.exception("pace: the pass for %s failed; the queue steps as "
                               "before", campaignqueue._family(key))
         gear_hold = getattr(self, "_queue_gear_hold", None)
-        return gear_hold is not None and await gear_hold(rows[0], fam)
+        if gear_hold is not None and await gear_hold(rows[0], fam):
+            return True
+        # 2-hour dungeon job timeout: release family if on dungeon job
+        # for 2+ hours with no run progress and no other hold reason (#1378).
+        names = list(fam["names"])
+        keyword = str(rows[0].get("keyword") or "")
+        timeout = await asyncio.to_thread(_queue_job_timeout, names, keyword)
+        if timeout:
+            said = await asyncio.to_thread(_apply_queue_move, campaignqueue.Move(
+                quest=True, why="dungeon job timeout: family on dungeon job for 2+ hours "
+                "with no run progress and no recorded hold reason"), names, key)
+            log.warning("timeout: %s: %s", campaignqueue._family(key), said)
+            return True
+        return False
 
     async def _stall_breaker(self, key: str, rows: list, fam: dict) -> bool:
         """Leave the head door when the family stalled at it twice running.
