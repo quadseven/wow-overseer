@@ -75,6 +75,7 @@ MOD_REPO = "quadseven/mod-overseer"
 ENV_LOGS = "OVERSEER_REALM_LOGS"
 WORKLOAD = "worldserver"
 GH_TIMEOUT = 60
+ARCHIVE_TIMEOUT = 120
 STOP_TEXT = "Dungeon clear stopped: "
 NO_STOP = "no Dungeon clear stopped line"
 # How a mod-overseer pull request cites a ticket here: "wow-overseer#N", or
@@ -182,10 +183,17 @@ def archived_logs(since: str) -> list:
         text=True,
         errors="replace",
     ) as proc:
-        kept = [line for line in proc.stdout or () if STOP_TEXT in line]
+        try:
+            out, _ = proc.communicate(timeout=ARCHIVE_TIMEOUT)
+        except subprocess.TimeoutExpired as exc:
+            proc.kill()
+            raise Unreadable("the log archive helper timed out") from exc
+        except BaseException:
+            proc.kill()
+            raise
     if proc.returncode:
         raise Unreadable("the log archive helper exited %d" % proc.returncode)
-    return kept
+    return [line for line in (out or "").splitlines() if STOP_TEXT in line]
 
 
 def declared_revision() -> str:
@@ -246,13 +254,25 @@ def real_sources() -> Sources:
     )
 
 
+# What a source read can truly raise; a programming fault is not one of them
+# and surfaces instead of printing as a missing source.
+READ_ERRORS = (
+    Unreadable,
+    OSError,
+    pymysql.MySQLError,
+    realmread.Gap,
+    json.JSONDecodeError,
+    subprocess.SubprocessError,
+)
+
+
 def read(unread: list, err, name: str, how: Callable):
     """`how()`, or None with `name` noted in `unread`. The note carries an
     Unreadable's own reason, else only the error's class: a driver's message
     can name the host it could not reach. The whole error goes to `err`."""
     try:
         return how()
-    except Exception as exc:  # noqa: BLE001 - named on stdout, whole on stderr
+    except READ_ERRORS as exc:  # named on stdout, whole on stderr
         traceback.print_exception(exc, file=err)
         why = str(exc) if isinstance(exc, Unreadable) else type(exc).__name__
         unread.append("Not read: %s (%s)" % (name, why))

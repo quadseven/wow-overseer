@@ -11,13 +11,19 @@ on a member surfacing for breath).
 import calendar
 import importlib.util
 import io
+import os
 import pathlib
+import shutil
 import sys
+import tempfile
 import time
 import types
 import unittest
+from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+_stub = types.ModuleType("pymysql")
+_stub.MySQLError = type("MySQLError", (Exception,), {})
+sys.modules.setdefault("pymysql", _stub)
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
@@ -332,6 +338,44 @@ class TheUnreadableSourceTest(unittest.TestCase):
         self.assertIn("Not read: logs (OVERSEER_REALM_LOGS is not set)", text)
 
 
+class TheArchiveHelperTest(unittest.TestCase):
+    def helper(self, body: str) -> str:
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, True)
+        path = os.path.join(folder, "helper.sh")
+        with open(path, "w") as fh:
+            fh.write("#!/bin/sh\n" + body + "\n")
+        os.chmod(path, 0o755)
+        return path
+
+    def run_helper(self, body: str, timeout: float = 20):
+        env = {diag.ENV_LOGS: self.helper(body)}
+        with mock.patch.dict(os.environ, env), mock.patch.object(
+            diag, "ARCHIVE_TIMEOUT", timeout
+        ):
+            return diag.archived_logs("2026-10-19T00:00:00Z")
+
+    def test_only_the_stop_lines_come_back(self):
+        got = self.run_helper("echo noise; echo '%sx'; echo more" % diag.STOP_TEXT)
+        self.assertEqual(["%sx" % diag.STOP_TEXT], got)
+
+    def test_a_failing_helper_is_unreadable(self):
+        with self.assertRaises(diag.Unreadable):
+            self.run_helper("exit 3")
+
+    def test_a_wedged_helper_is_cut_off_and_reaped(self):
+        started = time.monotonic()
+        with self.assertRaises(diag.Unreadable) as ctx:
+            self.run_helper("exec sleep 30", timeout=0.5)
+        self.assertIn("timed out", str(ctx.exception))
+        self.assertLess(time.monotonic() - started, 15)
+
+    def test_a_programming_fault_is_not_called_an_unread_source(self):
+        src = sources(logs=lambda since: {}["missing"])
+        with self.assertRaises(KeyError):
+            run([KEY], src)
+
+
 class TheShapeTest(unittest.TestCase):
     def test_another_kind_of_finding_has_no_diagnosis(self):
         code, text, _ = run(["dungeon-clear-rate:bfd"])
@@ -368,6 +412,9 @@ class TheShapeTest(unittest.TestCase):
         text.encode("ascii")
         self.assertIn("older runs not shown", text)
         self.assertIn("30 of 30 stalls", text)
+        # Runs are read in id order and shown highest id first.
+        self.assertIn("Run 720029 ", text)
+        self.assertNotIn("Run 720000 ", text)
 
     def test_the_parser_reads_a_stop_line(self):
         stop = diag.stop_of(LOG_LINES[0])
