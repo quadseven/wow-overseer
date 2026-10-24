@@ -127,12 +127,17 @@ class TheCarriedPreFilter(unittest.TestCase):
 
     @staticmethod
     def _carried(sub, inv, rl=15):
-        return types.SimpleNamespace(item_class=weaponskill.ITEM_CLASS_WEAPON,
-                                     subclass=sub, inventory_type=inv,
-                                     required_level=rl)
+        return types.SimpleNamespace(
+            item_class=weaponskill.ITEM_CLASS_WEAPON,
+            subclass=sub,
+            inventory_type=inv,
+            required_level=rl,
+        )
 
     def test_a_hunter_carrying_only_a_melee_weapon_needs_no_trip(self):
-        for inv in sorted(weaponskill.MELEE_INVENTORY_TYPES & set(weaponskill.WEAPON_SLOT)):
+        for inv in sorted(
+            weaponskill.MELEE_INVENTORY_TYPES & set(weaponskill.WEAPON_SLOT)
+        ):
             got = weaponskill.may_need(HUNTER, 24, [self._carried(7, inv)])
             self.assertFalse(got, inv)
 
@@ -143,8 +148,9 @@ class TheCarriedPreFilter(unittest.TestCase):
         self.assertTrue(weaponskill.may_need(WARRIOR, 24, [self._carried(7, 13)]))
 
     def test_a_melee_weapon_does_not_hide_a_ranged_one_in_the_same_bag(self):
-        got = weaponskill.may_need(HUNTER, 24,
-                                   [self._carried(7, 13), self._carried(2, 15)])
+        got = weaponskill.may_need(
+            HUNTER, 24, [self._carried(7, 13), self._carried(2, 15)]
+        )
         self.assertTrue(got)
 
 
