@@ -345,13 +345,14 @@ class TheArchiveHelperTest(unittest.TestCase):
         path = os.path.join(folder, "helper.sh")
         with open(path, "w") as fh:
             fh.write("#!/bin/sh\n" + body + "\n")
-        os.chmod(path, 0o755)
+        os.chmod(path, 0o700)
         return path
 
     def run_helper(self, body: str, timeout: float = 20):
         env = {diag.ENV_LOGS: self.helper(body)}
-        with mock.patch.dict(os.environ, env), mock.patch.object(
-            diag, "ARCHIVE_TIMEOUT", timeout
+        with (
+            mock.patch.dict(os.environ, env),
+            mock.patch.object(diag, "ARCHIVE_TIMEOUT", timeout),
         ):
             return diag.archived_logs("2026-10-19T00:00:00Z")
 

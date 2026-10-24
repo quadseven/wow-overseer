@@ -259,7 +259,7 @@ def real_sources() -> Sources:
 READ_ERRORS = (
     Unreadable,
     OSError,
-    pymysql.MySQLError,
+    getattr(pymysql, "MySQLError", OSError),  # a test's stub may lack it
     realmread.Gap,
     json.JSONDecodeError,
     subprocess.SubprocessError,
