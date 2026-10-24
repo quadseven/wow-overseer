@@ -221,12 +221,36 @@ def should_start(
     return ""
 
 
+# SLOTS THAT ARE NOT EMPTY GEAR (#1375). A two-hander fills the off hand too:
+# the weapon subclasses that take both hands are gearup.TWO_HAND_SUBCLASSES
+# (pinned equal by a test, since this module imports nothing). And the ranged
+# slot of a paladin, shaman, druid or death knight holds a relic, which no
+# vendor in the levelling range sells. A paladin wielding a two-handed axe
+# read "4 empty" for its off hand, two trinkets and relic, so a gear errand
+# started every cooldown for a shortfall no town counter could fill, and each
+# one held the family in town for half an hour.
+TWO_HAND_SUBCLASSES = frozenset({1, 5, 6, 8, 10, 20})
+RELIC_CLASSES = frozenset({"paladin", "shaman", "druid", "death_knight"})
+
+
+def _two_hander(worn) -> bool:
+    return (
+        isinstance(worn, dict)
+        and int(worn.get("item_class") or 0) == 2
+        and int(worn.get("item_subclass") or -1) in TWO_HAND_SUBCLASSES
+    )
+
+
 def _shortfall(fact: dict) -> str:
     """'no weapon', 'N empty', or '' for a member not short of gear."""
     equipped = fact.get("equipped", {})
     if "mainhand" not in equipped:
         return "no weapon"
     worn = [s for s in equipped if s not in ("shirt", "tabard")]
+    if "offhand" not in equipped and _two_hander(equipped.get("mainhand")):
+        worn.append("offhand")
+    if "ranged" not in equipped and fact.get("class") in RELIC_CLASSES:
+        worn.append("ranged")
     empty = 17 - len(worn)
     return "%d empty" % empty if empty >= START_EMPTY_SLOTS else ""
 

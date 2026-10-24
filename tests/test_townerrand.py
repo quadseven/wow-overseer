@@ -905,3 +905,48 @@ class TheMovementChoice(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ATwoHanderFillsTheOffHand(unittest.TestCase):
+    """#1375: a paladin with a two-handed axe was "4 empty" every cooldown."""
+
+    WORN = (
+        "head",
+        "neck",
+        "shoulder",
+        "shirt",
+        "chest",
+        "waist",
+        "legs",
+        "feet",
+        "wrist",
+        "hands",
+        "finger1",
+        "finger2",
+        "back",
+    )
+
+    def fact(self, subclass, cls="paladin"):
+        equipped = {slot: {"item_level": 45} for slot in self.WORN}
+        equipped["mainhand"] = {
+            "item_level": 42,
+            "item_class": 2,
+            "item_subclass": subclass,
+        }
+        return {"Grog": {"class": cls, "equipped": equipped, "purse": 147483}}
+
+    def test_the_measured_paladin_is_not_short(self):
+        self.assertEqual([], te.short_of_gear(self.fact(1)))
+
+    def test_a_one_hander_still_leaves_the_off_hand_empty(self):
+        self.assertEqual(
+            ["Grog (4 empty)"], te.short_of_gear(self.fact(0, cls="warrior"))
+        )
+
+    def test_a_warriors_ranged_slot_still_counts(self):
+        self.assertEqual(
+            ["Grog (3 empty)"], te.short_of_gear(self.fact(1, cls="warrior"))
+        )
+
+    def test_the_subclasses_are_gearups(self):
+        self.assertEqual(set(te.TWO_HAND_SUBCLASSES), set(gearup.TWO_HAND_SUBCLASSES))
