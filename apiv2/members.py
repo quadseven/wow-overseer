@@ -53,7 +53,7 @@ import raidteams
 import situation
 from panel import _CLASS_NAMES, _RACE_NAMES
 
-from . import activity, presence
+from . import activity
 from ._scope import holes
 
 # A class quest ask newer than this means the blocker still stands: the bridge
@@ -133,8 +133,8 @@ BASIS = (
 def fetch(ctx) -> dict:
     """Every row build() reads, on one connection plus the now-step reads."""
     server = ctx.server
-    families = server.FAMILIES.families()
-    names = server.FAMILIES.names()
+    families = ctx.families.families()
+    names = ctx.families.names()
     rows = {
         "guild": [],
         "chars": [],
@@ -165,7 +165,7 @@ def _read(ctx, names: list) -> dict:
     everyone = sorted(set(names) | {r["name"] for r in guild})
     h = holes(len(everyone))
     chars = rd.rows(CHARS_SQL.format(holes=h), tuple(everyone), what="characters")
-    readings = presence.of(rd, everyone)
+    readings = ctx.presence(everyone)
     online = [n for n in everyone if readings[n]["online"]]
     snaps = []
     if online:

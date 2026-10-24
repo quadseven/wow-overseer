@@ -621,7 +621,8 @@ LIVE = {
 
 def call(query, answers=None):
     rd = realmread.Memory(LIVE if answers is None else answers)
-    ctx = Context(read=rd, server=server())
+    srv = server()
+    ctx = Context(read=rd, server=srv, families=srv.FAMILIES)
     status, payload = A.achievements(query, ctx)
     return status, payload, rd.asked
 

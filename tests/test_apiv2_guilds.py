@@ -51,6 +51,7 @@ class Ctx:
         self.server = server if server is not None else types.SimpleNamespace()
         if not hasattr(self.server, "FAMILIES"):
             self.server.FAMILIES = FAMILIES
+        self.families = FAMILIES
 
 
 XP = [{"level": lvl, "xp": 1000} for lvl in range(1, 60)]

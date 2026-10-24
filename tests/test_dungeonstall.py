@@ -321,7 +321,10 @@ class StoreCursor:
 
     def _read(self, flat, params):
         store = self.store
-        if flat.startswith("SELECT id, map_id, portal_keyword"):
+        if flat.startswith("SELECT id, map_id, portal_keyword") or flat.startswith(
+            "SELECT r.id, r.map_id, (SELECT e.portal"
+        ):
+            # The ledger by door: the column, or each run's timeline door.
             return [dict(r) for r in store.runs]
         if "FROM overseer_dungeon_run_event" in flat:
             return [dict(e) for e in store.events if e["run_id"] in params]

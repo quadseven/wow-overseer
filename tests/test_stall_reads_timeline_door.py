@@ -83,6 +83,29 @@ class _NoPortalColumnCursor:
         return list(self.rows)
 
 
+class _EmptyDoorColumnCursor(_NoPortalColumnCursor):
+    """A realm with the column, empty on every run that did not complete."""
+
+    def execute(self, sql, args=()):
+        self.asked.append(sql)
+        if "FROM overseer_dungeon_run_event" in sql and "e.portal" not in sql:
+            self.rows = EVENTS
+        elif "e.portal" in sql:
+            self.rows = TIMELINE_LEDGER
+        elif "portal_keyword" in sql:
+            self.rows = [
+                dict(
+                    r,
+                    portal_keyword=r["portal_keyword"]
+                    if r["outcome"] == "complete"
+                    else "",
+                )
+                for r in TIMELINE_LEDGER
+            ]
+        else:
+            self.rows = []
+
+
 class _Log:
     def __init__(self):
         self.lines = []
@@ -124,12 +147,20 @@ class TheDoorComesFromTheTimeline(unittest.TestCase):
         stuck, _log = _stuck_doors(_NoPortalColumnCursor())
         self.assertNotIn("scarlet-armory", stuck)
 
-    def test_the_column_is_asked_first(self):
+    def test_the_timeline_is_asked_first(self):
         cur = _NoPortalColumnCursor()
         _stuck_doors(cur)
         self.assertEqual(
-            dungeonstall.RUNS_SQL.format(holes=dungeonstall.holes(5)), cur.asked[0]
+            dungeonstall.RUNS_SQL_TIMELINE.format(holes=dungeonstall.holes(5)),
+            cur.asked[0],
         )
+
+    def test_an_empty_column_after_the_roll_does_not_hide_the_door(self):
+        # #1375: the worldserver writes `portal_keyword` only on a run that
+        # completes, so a stalled run's column is empty after the roll.
+        cur = _EmptyDoorColumnCursor()
+        stuck, _log = _stuck_doors(cur)
+        self.assertEqual({"scarlet-cathedral"}, set(stuck))
 
     def test_the_timeline_read_never_names_the_missing_column_as_a_field(self):
         sql = dungeonstall.RUNS_SQL_TIMELINE

@@ -4158,12 +4158,17 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
     marks = campaignplan.holes(len(names))
     args = tuple(names)
     with _connect() as conn, conn.cursor() as cur:
+        # THE TIMELINE'S DOOR FIRST (#1375): the worldserver writes
+        # `portal_keyword` only on a run that completes, so after the roll
+        # that adds the column a failed run's door is empty there and would
+        # count toward its map's first wing. Every run's timeline names its
+        # door. The column is the fallback for a realm without the timeline.
         runs = _planner_rows(
-            cur, campaignplan.RUNS_SQL.format(holes=marks), args, "the run ledger")
+            cur, campaignplan.RUNS_SQL_TIMELINE.format(holes=marks), args,
+            "the run ledger by the timeline's door")
         if runs is None:
             runs = _planner_rows(
-                cur, campaignplan.RUNS_SQL_TIMELINE.format(holes=marks), args,
-                "the run ledger by the timeline's door")
+                cur, campaignplan.RUNS_SQL.format(holes=marks), args, "the run ledger")
         if runs is None:
             runs = _planner_rows(
                 cur, campaignplan.RUNS_SQL_OLD.format(holes=marks), args,
@@ -4584,12 +4589,13 @@ def _stuck_doors(cur, names: list) -> dict:
     """dungeonstall.stuck_doors for the family's runs in the window, on `cur`."""
     marks = dungeonstall.holes(len(names))
     args = tuple(names) + (dungeonstall.WINDOW_HOURS,)
-    runs = _planner_rows(cur, dungeonstall.RUNS_SQL.format(holes=marks), args,
-                         "the run ledger by door")
+    # The timeline's door first, for the reason `_planner_facts` gives (#1375).
+    runs = _planner_rows(
+        cur, dungeonstall.RUNS_SQL_TIMELINE.format(holes=marks), args,
+        "the run ledger by the timeline's door")
     if runs is None:
-        runs = _planner_rows(
-            cur, dungeonstall.RUNS_SQL_TIMELINE.format(holes=marks), args,
-            "the run ledger by the timeline's door")
+        runs = _planner_rows(cur, dungeonstall.RUNS_SQL.format(holes=marks), args,
+                             "the run ledger by door")
     ids = dungeonstall.event_ids(runs or [])
     if not ids:
         return {}

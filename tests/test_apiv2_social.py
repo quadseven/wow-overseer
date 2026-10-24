@@ -42,7 +42,7 @@ def ctx_for(answers, srv):
     """The handler's context over a reader that knows `answers` and no other
     statement: a renamed read fails here instead of reading as empty."""
     rd = realmread.Memory(answers)
-    return Context(read=rd, server=srv), rd.asked
+    return Context(read=rd, server=srv, families=srv.FAMILIES), rd.asked
 
 
 def family_sql(n):
