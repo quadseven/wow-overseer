@@ -1814,14 +1814,7 @@ def census(mates: list, held: dict) -> str:
 CARRY_LEVEL_GAP = 14
 CROSS_LEVEL_GAP = CARRY_LEVEL_GAP
 XP_SHARE_PRESERVED = True
-BAND_SPREAD = guildrun.BAND_SPREAD if False else 4
-
-try:
-    import guildrun as _gr
-
-    BAND_SPREAD = _gr.BAND_SPREAD
-except Exception:
-    pass
+BAND_SPREAD = guildrun.BAND_SPREAD
 
 
 @dataclass(frozen=True)
@@ -1862,7 +1855,7 @@ def _carry_levels(args, kwargs):
         elif isinstance(a, str):
             if a.strip().lower() in ("deadmines", "the deadmines"):
                 dungeon = "Deadmines"
-    for key, val in (kwargs or {}).items():
+    for _key, val in (kwargs or {}).items():
         if isinstance(val, (list, tuple, set, frozenset)):
             for x in val:
                 if isinstance(x, (int, float)) and not isinstance(x, bool):
@@ -1886,12 +1879,9 @@ def _carry_result(high, low, dungeon, allowed=True, errors=()):
         dungeon,
         gap,
     )
-    try:
-        import logging
+    import logging
 
-        logging.getLogger("guildsocial").info(log)
-    except Exception:
-        pass
+    logging.getLogger("guildsocial").info(log)
     return CarryResult(
         allowed=bool(allowed),
         valid=bool(allowed),
@@ -1902,9 +1892,9 @@ def _carry_result(high, low, dungeon, allowed=True, errors=()):
         high_level=int(high),
         low_level=int(low),
         level_gap=gap,
-        cross_level=gap > BAND_SPREAD,
-        xp_share=1.0,
-        preserves_xp=True,
+        cross_level=bool(BAND_SPREAD < gap <= CARRY_LEVEL_GAP),
+        xp_share=1.0 if gap <= CARRY_LEVEL_GAP else 0.0,
+        preserves_xp=bool(gap <= CARRY_LEVEL_GAP),
         safe=True,
         reason="" if allowed else "invalid carry",
         errors=tuple(errors),
@@ -1914,7 +1904,8 @@ def _carry_result(high, low, dungeon, allowed=True, errors=()):
 
 def cross_level_group(*args, **kwargs):
     high, low, _ = _carry_levels(args, kwargs)
-    return bool(high - low > BAND_SPREAD)
+    gap = max(0, int(high) - int(low))
+    return bool(BAND_SPREAD < gap <= CARRY_LEVEL_GAP)
 
 
 def cross_level_gap(*args, **kwargs):
@@ -1927,7 +1918,8 @@ def allow_cross_level(*args, **kwargs):
 
 def carry_allowed(*args, **kwargs):
     high, low, _ = _carry_levels(args, kwargs)
-    return bool(high > low + BAND_SPREAD)
+    gap = max(0, int(high) - int(low))
+    return bool(high > low and BAND_SPREAD < gap <= CARRY_LEVEL_GAP)
 
 
 def can_carry(*args, **kwargs):
@@ -1939,7 +1931,9 @@ def is_carry(*args, **kwargs):
 
 
 def xp_share(*args, **kwargs):
-    return 1.0
+    high, low, _ = _carry_levels(args, kwargs)
+    gap = max(0, int(high) - int(low))
+    return 1.0 if gap <= CARRY_LEVEL_GAP else 0.0
 
 
 def xp_shared(*args, **kwargs):
@@ -1947,17 +1941,21 @@ def xp_shared(*args, **kwargs):
 
 
 def preserves_xp(*args, **kwargs):
-    return XP_SHARE_PRESERVED
+    if not args and not kwargs:
+        return XP_SHARE_PRESERVED
+    high, low, _ = _carry_levels(args, kwargs)
+    gap = max(0, int(high) - int(low))
+    return bool(gap <= CARRY_LEVEL_GAP)
 
 
 def safe_carry(*args, **kwargs):
     high, low, dungeon = _carry_levels(args, kwargs)
-    return _carry_result(high, low, dungeon, True)
+    return _carry_result(high, low, dungeon, carry_allowed(high, low))
 
 
 def carry_mode(*args, **kwargs):
     high, low, dungeon = _carry_levels(args, kwargs)
-    allowed = high > low or high != low
+    allowed = carry_allowed(high, low)
     return _carry_result(high, low, dungeon, allowed)
 
 
@@ -1966,6 +1964,9 @@ def validate_carry(*args, **kwargs):
     errors = []
     if high <= low:
         errors.append("high-level must exceed low-level")
+    gap = max(0, int(high) - int(low))
+    if gap > CARRY_LEVEL_GAP:
+        errors.append("level gap too large for carry")
     return errors
 
 
