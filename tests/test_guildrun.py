@@ -1588,5 +1588,19 @@ class AnySeatedRaiderIsReadByPreraid(unittest.TestCase):
         self.assertIn("LEFT JOIN overseer_roster", preraid.GUILD_MEMBERS_SQL)
 
 
+class CarryModeValidation(unittest.TestCase):
+    def test_deadmines_carry_rejects_a_gap_above_the_supported_range(self):
+        result = guildrun.carry_mode(40, 25, "Deadmines")
+        self.assertFalse(result.allowed)
+        self.assertFalse(result.safe)
+        self.assertEqual(result.xp_share, 0.0)
+
+    def test_deadmines_carry_preserves_xp_inside_the_supported_range(self):
+        result = guildrun.carry_mode(40, 26, "Deadmines")
+        self.assertTrue(result.allowed)
+        self.assertTrue(result.safe)
+        self.assertEqual(result.xp_share, 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()

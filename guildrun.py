@@ -2562,9 +2562,9 @@ def _carry_result(high, low, dungeon, allowed=True, errors=()):
         low_level=int(low),
         level_gap=gap,
         cross_level=bool(BAND_SPREAD < gap <= CARRY_LEVEL_GAP),
-        xp_share=1.0 if gap <= CARRY_LEVEL_GAP else 0.0,
-        preserves_xp=bool(gap <= CARRY_LEVEL_GAP),
-        safe=True,
+        xp_share=1.0 if allowed else 0.0,
+        preserves_xp=bool(allowed),
+        safe=bool(allowed),
         reason="" if allowed else "invalid carry",
         errors=tuple(errors),
         log=log,
@@ -2624,8 +2624,9 @@ def safe_carry(*args, **kwargs):
 
 def carry_mode(*args, **kwargs):
     high, low, dungeon = _carry_levels(args, kwargs)
-    allowed = carry_allowed(high, low)
-    return _carry_result(high, low, dungeon, allowed)
+    errors = validate_carry(high, low)
+    allowed = carry_allowed(high, low) and not errors
+    return _carry_result(high, low, dungeon, allowed, errors)
 
 
 def validate_carry(*args, **kwargs):
