@@ -338,8 +338,8 @@ Topic labels proposed: 58. The most used are `stab:stuck` (24), `raid:prep` (22)
 
 | Ticket | Title | Topics | Proposed epic | Note |
 |---|---|---|---|---|
-| mod-overseer#469 (epic) | Epic: the world is one map - inter-continent travel, transport, summons | `travel:crossing` | merge into mod-overseer#513 (cross-continent travel) | overlaps mod#513 and wow#196; four travel epics |
-| mod-overseer#513 (epic) | Epic: cross-continent travel for the family via boat or portal | `travel:crossing` | keep | keep as the single crossing epic; merge mod#469 and wow#196 overlap here or into wow#196 |
+| mod-overseer#469 (epic) | Epic: the world is one map - inter-continent travel, transport, summons | `travel:crossing` | merge into mod-overseer#513 (cross-continent travel) | overlaps mod-overseer#513 and wow-overseer#196; four travel epics |
+| mod-overseer#513 (epic) | Epic: cross-continent travel for the family via boat or portal | `travel:crossing` | keep | keep as the single crossing epic; merge mod-overseer#469 and wow-overseer#196 overlap here or into wow-overseer#196 |
 | mod-overseer#518 (epic) | Epic: the family can reliably reach where it is sent | `travel:pathing` | split: pathing / crossings | 20 children, over the 15 cap; split |
 | wow-overseer#196 (epic) | Epic: any character can be sent anywhere and gets there | `travel:crossing` | keep | one of four travel epics; consider merge with mod-overseer#518/#469/#513 |
 | mod-overseer#1029 | The crossing catalogue skips a transport on one map, so ride-to-stop never prices the Unde | `travel:crossing` `zone:undercity` | mod-overseer#518 |  |
