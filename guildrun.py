@@ -1368,6 +1368,9 @@ class Plan:
     table: dict = field(default_factory=dict)
     # map id -> raid recipes nobody in the pool's guild knows (unknown_recipes).
     recipes: dict = field(default_factory=dict)
+    # place -> (preraid.Gain per pool member): what one run of each level 60
+    # dungeon is worth to each seated raider (#760). Empty when unread.
+    gains: dict = field(default_factory=dict)
 
     @property
     def labels(self) -> tuple:
@@ -1378,9 +1381,14 @@ class Plan:
 
 
 def plan_for(
-    pool: Pool, all_doors: list, table: dict, recipes: dict | None = None
+    pool: Pool,
+    all_doors: list,
+    table: dict,
+    recipes: dict | None = None,
+    gains: dict | None = None,
 ) -> Plan | None:
-    """The plan for one pool. `recipes` is unknown_recipes for its guild."""
+    """The plan for one pool. `recipes` is unknown_recipes for its guild;
+    `gains` is preraid.run_gains over the pool's members (#760)."""
     comps = compositions(list(pool.members))
     if not comps:
         return None
@@ -1404,6 +1412,7 @@ def plan_for(
         band=band_of(comps[0].levels),
         table=dict(table),
         recipes=dict(recipes or {}),
+        gains=dict(gains or {}),
     )
 
 
@@ -1444,6 +1453,47 @@ def _door_score(rate: Rate) -> float:
     return rate.smoothed if rate.runs >= MIN_SAMPLES else UNTRIED_PRIOR
 
 
+# PRE-RAID UPGRADES FOR THE SEATED RAIDERS (#760). From UPGRADE_FLOOR (the
+# level preraid starts reading, preraid.FIRE_FLOOR) a group's door is also
+# weighed by what one run drops for the five members in it: preraid.run_gains
+# per member, read by the bridge for the pool. It breaks a tie between doors
+# and is named in the choice's reason, so the bridge log says what a run was
+# chosen for. It never overrides a record: no gain moves a door past one that
+# scores better by its clear rate.
+UPGRADE_FLOOR = 52
+MAX_UPGRADE_NAMES = 3
+
+
+def _seat_gains(plan: Plan, door: Door, composition: Composition) -> list:
+    """The Gain of each member of `composition` for one run of `door`, or []
+    below UPGRADE_FLOOR or when the gains are unread."""
+    if not plan.gains or min(composition.levels) < UPGRADE_FLOOR:
+        return []
+    seated = set(composition.names)
+    return [g for g in plan.gains.get(door.keyword, ()) if g.name in seated]
+
+
+def upgrade_levels(plan: Plan, door: Door, composition: Composition) -> float:
+    """Expected item levels one run of `door` adds across the composition."""
+    return round(sum(float(g.levels) for g in _seat_gains(plan, door, composition)), 2)
+
+
+def upgrade_words(plan: Plan, door: Door, composition: Composition) -> str:
+    """"upgrades for Name (best piece), ...", the members a run of `door`
+    helps most; "" when none or unread."""
+    helped = sorted(
+        (g for g in _seat_gains(plan, door, composition) if g.upgrades and g.best),
+        key=lambda g: (-g.levels, g.name),
+    )
+    if not helped:
+        return ""
+    shown = ", ".join(
+        "%s (%s)" % (g.name, g.best.split(" (")[0]) for g in helped[:MAX_UPGRADE_NAMES]
+    )
+    more = len(helped) - MAX_UPGRADE_NAMES
+    return "upgrades for %s%s" % (shown, " and %d more" % more if more > 0 else "")
+
+
 def heuristic_door(plan: Plan, composition: Composition) -> tuple:
     """(keyword, why). The best score among the doors that fit (_door_score:
     the smoothed rate at this band, or the untried prior under MIN_SAMPLES
@@ -1459,16 +1509,22 @@ def heuristic_door(plan: Plan, composition: Composition) -> tuple:
         rate = door_rate(plan.table, door.keyword, plan.band, composition.key)
         scored.append((_door_score(rate), door, rate))
     # Stable: on a tie the earlier door, the closer level fit, stays first.
-    scored.sort(key=lambda t: -t[0])
+    # With the seats' pre-raid gains read (#760), a tie goes to the door that
+    # drops the most for them first.
+    scored.sort(key=lambda t: (-t[0], -upgrade_levels(plan, t[1], composition)))
     _score, door, rate = scored[0]
+    said = upgrade_words(plan, door, composition)
     if rate.runs >= MIN_SAMPLES:
-        return door.keyword, "the best record at band %s: %s" % (
+        return door.keyword, "the best record at band %s: %s%s" % (
             plan.band,
             rate.words(),
+            "; " + said if said else "",
         )
     recipe = door_recipe(door, plan.recipes, composition.levels)
     if recipe:
-        return door.keyword, recipe_words(recipe)
+        return door.keyword, recipe_words(recipe) + ("; " + said if said else "")
+    if said:
+        return door.keyword, "the most pre-raid upgrades for the seats: %s" % said
     if door.keyword != doors[0].keyword:
         return door.keyword, "untried at band %s, over records that lose" % plan.band
     return door.keyword, "the closest level fit (%s wants %d to %d)" % (

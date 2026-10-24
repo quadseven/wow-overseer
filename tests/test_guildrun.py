@@ -19,6 +19,7 @@ from unittest import mock
 
 import guildrun
 import jev
+import preraid
 from test_jev_items import FakeJev
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
@@ -1500,6 +1501,84 @@ class TheSeatsThatCarryStandAtTheBossesLevel(unittest.TestCase):
             ),
             2,
         )
+
+
+def seated_plan(level, gains):
+    """A pool of five at `level` choosing between two untried doors that both
+    fit, with `gains` as preraid.run_gains would give them (#760)."""
+    window = [
+        member("Tanky", level, WARRIOR, talent_spells=PROTECTION_TALENT),
+        member("Healy", level, PRIEST, talent_spells=HOLY_TALENT),
+        member("Stabby", level, ROGUE),
+        member("Zappy", level, MAGE),
+        member("Locky", level, WARLOCK),
+    ]
+    comp = guildrun.Composition(window[0], window[1], tuple(window[2:]))
+    doors = tuple(
+        guildrun.Door(kw, kw.title(), 50, 60, 1, 50) for kw in ("alpha", "beta")
+    )
+    pool = guildrun.Pool("Cave", tuple(window))
+    return guildrun.Plan(
+        pool=pool, options=(comp,), doors=doors, band="55-59", gains=gains
+    ), comp
+
+
+def gain(name, levels, best="Helm of Might for head (+9 item levels, 20%)"):
+    return preraid.Gain(
+        name=name, upgrades=1 if levels else 0, drops=0.2, levels=levels,
+        best=best if levels else "",
+    )
+
+
+class SeatedRaidersUpgradesChooseTheDoor(unittest.TestCase):
+    """#760: from level 52 a guild run's door is weighed by what it drops for
+    the five seated raiders, and the reason names the upgrades."""
+
+    def gains(self):
+        return {
+            "alpha": (gain("Tanky", 0), gain("Stabby", 0)),
+            "beta": (gain("Tanky", 4.5), gain("Stabby", 2.0, "Edge for hands (+5 item levels, 10%)")),
+        }
+
+    def test_the_door_that_drops_more_for_the_seats_wins_a_tie(self):
+        p, comp = seated_plan(55, self.gains())
+        keyword, why = guildrun.heuristic_door(p, comp)
+        self.assertEqual(keyword, "beta")
+        self.assertIn("upgrades for Tanky (Helm of Might for head)", why)
+        self.assertIn("Stabby (Edge for hands)", why)
+
+    def test_without_gains_the_first_door_stays_first(self):
+        p, comp = seated_plan(55, {})
+        keyword, why = guildrun.heuristic_door(p, comp)
+        self.assertEqual(keyword, "alpha")
+        self.assertEqual(guildrun.upgrade_words(p, p.doors[1], comp), "")
+
+    def test_below_level_52_the_gains_are_not_read(self):
+        p, comp = seated_plan(50, self.gains())
+        self.assertEqual(guildrun.heuristic_door(p, comp)[0], "alpha")
+        self.assertEqual(guildrun.upgrade_levels(p, p.doors[1], comp), 0)
+
+    def test_a_better_record_still_beats_the_gains(self):
+        p, comp = seated_plan(55, self.gains())
+        rows = [ended("alpha", "cleared", band="55-59", comp=comp.key)] * 3
+        p = replace(p, table=guildrun.rates(rows))
+        keyword, _why = guildrun.heuristic_door(p, comp)
+        self.assertEqual(keyword, "alpha")
+
+    def test_the_bridge_reads_the_seats_and_logs_the_upgrades(self):
+        self.assertIn("_guild_seat_gains(", BRIDGE)
+        self.assertIn("guildrun.upgrade_words(plan, decision.door", BRIDGE)
+        self.assertIn("gains)", BRIDGE)
+
+
+class AnySeatedRaiderIsReadByPreraid(unittest.TestCase):
+    def test_a_guild_member_row_with_no_roster_tab_gets_the_class_default(self):
+        rows = [{"name": "Stabby", "class_id": 4, "level": 55, "race": 2,
+                 "spec_tab": None}]
+        (m,) = preraid.members(rows, [])
+        self.assertEqual((m.name, m.level, m.tree), ("Stabby", 55, -1))
+        self.assertIn("overseer_raid_spec", preraid.GUILD_MEMBERS_SQL)
+        self.assertIn("LEFT JOIN overseer_roster", preraid.GUILD_MEMBERS_SQL)
 
 
 if __name__ == "__main__":
