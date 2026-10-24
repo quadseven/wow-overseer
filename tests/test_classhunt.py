@@ -167,6 +167,20 @@ class TheAnswer(unittest.TestCase):
             )
             self.assertEqual(got.state, state)
 
+    def test_full_bags_end_the_hunt_rather_than_ask_again(self):
+        # #1375: a party leader refused 12 times in 17 minutes on this.
+        got = self.judge(
+            *answer(
+                "error",
+                "refused",
+                outcome="refused",
+                reason="the character has no free bag slot",
+                retry="later",
+            )
+        )
+        self.assertEqual(got.state, classhunt.BAGS_FULL)
+        self.assertIn("bags need room", got.said)
+
     def test_a_refusal_with_no_word_is_asked_again_later(self):
         got = self.judge(*answer("error", "refused", outcome="refused"))
         self.assertEqual(

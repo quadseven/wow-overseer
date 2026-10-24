@@ -1296,6 +1296,26 @@ class TheHeldMeeting(unittest.TestCase):
             )
         )
 
+    def test_full_bags_stop_the_party_hunt_with_the_reason(self):
+        hunt = classparty.PartyHunt("hunt-spawn creature:1 item:2 count:1")
+        hunt.row_id = 7
+        said = "Whakk's hunt is refused: the character has no free bag slot"
+        hunt.ended(classhunt.Answer(classhunt.BAGS_FULL, said), 100.0)
+        self.assertEqual(hunt.command, "")
+        self.assertEqual(hunt.stop_why, said)
+        self.assertFalse(hunt.due(1000.0))
+
+    def test_an_ordinary_refusal_waits_and_hunts_again(self):
+        hunt = classparty.PartyHunt("hunt-spawn creature:1 item:2 count:1")
+        hunt.row_id = 7
+        hunt.ended(classhunt.Answer(classhunt.LATER, "busy", 60.0), 100.0)
+        self.assertEqual(hunt.stop_why, "")
+        self.assertTrue(hunt.due(161.0))
+
+    def test_the_watch_ends_on_a_stopped_hunt(self):
+        source = classparty_bridge_source()
+        self.assertIn('if getattr(hunt, "stop_why", ""):', source)
+
     def test_a_busy_walker_is_held_too(self):
         # #1375: Whakk's Klaven's Tower meeting failed on these two.
         for said in (
@@ -1335,3 +1355,11 @@ class TheHeldMeeting(unittest.TestCase):
     def test_the_held_retry_is_bounded(self):
         self.assertTrue(classparty.MEET_HELD_RETRIES >= 1)
         self.assertTrue(classparty.MEET_HELD_WAIT_SECONDS > 0)
+
+
+def classparty_bridge_source():
+    import pathlib
+
+    return (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
+        encoding="utf-8"
+    )
