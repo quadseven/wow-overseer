@@ -50,32 +50,28 @@ class AFullRosterFillsEveryPlace(unittest.TestCase):
             )
         )
 
-    def test_eight_groups_of_five(self):
+    def test_eight_groups_keep_forty_seats(self):
         self.assertEqual(len(self.lineup["groups"]), 8)
         for group in self.lineup["groups"]:
             self.assertEqual(len(group["members"]), 5, group["number"])
 
-    def test_every_group_is_one_tank_one_healer_and_three_damage(self):
-        """The operator's raid (2026-09-26): eight perfect groups of five."""
-        for group in self.lineup["groups"]:
-            seats = [m["seat"] for m in group["members"]]
-            self.assertEqual(seats.count("tank"), 1, group["number"])
-            self.assertEqual(seats.count("healer"), 1, group["number"])
-            self.assertEqual(seats.count("dps"), 3, group["number"])
-        first = self.lineup["groups"][0]["members"]
-        self.assertEqual(first[0]["duty"], raidlineup.MAIN_TANK)
-        self.assertTrue(
-            any(m["class_id"] == PRIEST and m["seat"] == "healer" for m in first),
-            "a priest shields the main tank",
-        )
-        others = [m for g in self.lineup["groups"][1:] for m in g["members"]]
-        self.assertEqual(
-            [m["duty"] for m in others if m["seat"] == "tank"],
-            [raidlineup.OFF_TANK] * 7,
-        )
-        self.assertEqual(self.lineup["wanted"]["tanks"], 8)
-        self.assertEqual(self.lineup["wanted"]["healers"], 8)
-        self.assertEqual(self.lineup["wanted"]["damage"], 24)
+    def test_roles_follow_raid_needs_not_group_templates(self):
+        placed = [m for g in self.lineup["groups"] for m in g["members"]]
+        self.assertEqual(self.lineup["wanted"]["tanks"], 4)
+        self.assertEqual(self.lineup["wanted"]["healers"], 9)
+        self.assertEqual(self.lineup["wanted"]["damage"], 27)
+        self.assertEqual(sum(m["seat"] == "tank" for m in placed), 4)
+        self.assertEqual(sum(m["seat"] == "healer" for m in placed), 9)
+        self.assertEqual(sum(m["seat"] == "dps" for m in placed), 27)
+
+    def test_encounter_table_and_composer_report_missing_capabilities(self):
+        self.assertEqual(len(raidlineup.MOLTEN_CORE_ENCOUNTERS), 10)
+        roster = [_member("Rogue", ROGUE), _member("Hunter", raidlineup.HUNTER)]
+        report = raidlineup.encounter_readiness(roster)
+        lucifron = report["Lucifron"]
+        self.assertIn("curse_dispel", lucifron["missing"])
+        self.assertIn("magic_dispel", lucifron["missing"])
+        self.assertIn("tanks", lucifron["missing"])
 
     def test_every_raider_is_given_the_tree_its_seat_needs(self):
         for group in self.lineup["groups"]:
@@ -249,14 +245,14 @@ class TheSurplusIsTheKickList(unittest.TestCase):
 
 class AThinRosterDegradesHonestly(unittest.TestCase):
     def test_short_on_tanks_reports_it_rather_than_forming_a_tankless_group(self):
-        """Two warriors and no hybrids cannot fill eight tank seats. The six
+        """Two warriors and no hybrids cannot fill four dedicated tank seats. The two
         missing are the recruiting ask - they must appear, not be smoothed
         away by promoting a mage."""
         lineup = raidlineup.build_lineup(
             _roster(WARRIOR=2, PRIEST=12, MAGE=30, WARLOCK=21)
         )
-        self.assertEqual(lineup["shortfall"]["tanks"], 6)
-        self.assertEqual(lineup["gaps"]["tanks"], 6)
+        self.assertEqual(lineup["shortfall"]["tanks"], 2)
+        self.assertEqual(lineup["gaps"]["tanks"], 2)
         tanks = [
             m for g in lineup["groups"] for m in g["members"] if m["role"] == "tank"
         ]
@@ -265,38 +261,33 @@ class AThinRosterDegradesHonestly(unittest.TestCase):
         self.assertEqual(
             lineup["recruit_classes"][:3], [WARRIOR, PALADIN, raidlineup.DRUID]
         )
-        self.assertIn("Short 6 tanks", lineup["gap_line"])
+        self.assertIn("Short 2 tanks", lineup["gap_line"])
         self.assertIn("Recruiting prefers Warrior, Paladin, Druid", lineup["gap_line"])
 
-    def test_a_group_never_takes_a_fourth_damage_dealer_for_a_missing_seat(self):
-        """A group without its tank stays a seat short: a dungeon party of
-        four damage dealers and a healer is not a party."""
+    def test_groups_keep_five_named_seats_without_role_quotas(self):
         lineup = raidlineup.build_lineup(
             _roster(WARRIOR=2, PRIEST=12, MAGE=30, WARLOCK=21)
         )
         for group in lineup["groups"]:
             seats = [m["seat"] for m in group["members"]]
-            self.assertLessEqual(seats.count("dps"), 3, group["number"])
-            self.assertLessEqual(seats.count("healer"), 1, group["number"])
-        self.assertEqual(lineup["counts"]["raiders"], 2 + 8 + 24)
+            self.assertLessEqual(len(seats), 5, group["number"])
+        self.assertEqual(lineup["counts"]["raiders"], 40)
 
     def test_hybrids_split_evenly_when_both_seats_are_short(self):
-        """Four warriors, four priests and four paladins: the paladins go two
-        to tanking and two to healing, so each seat is two short, not four and
-        none."""
+        """Dedicated tank demand is filled before hybrids cover healing."""
         lineup = raidlineup.build_lineup(
             _roster(WARRIOR=4, PRIEST=4, PALADIN=4, MAGE=30, WARLOCK=21)
         )
-        self.assertEqual(lineup["gaps"]["tanks"], 2)
-        self.assertEqual(lineup["gaps"]["healers"], 2)
-        self.assertEqual(lineup["recruit_classes"][:2], [PALADIN, raidlineup.DRUID])
+        self.assertEqual(lineup["gaps"]["tanks"], 0)
+        self.assertEqual(lineup["gaps"]["healers"], 1)
+        self.assertEqual(lineup["recruit_classes"][:2], [PRIEST, raidlineup.SHAMAN])
 
     def test_an_empty_roster_is_empty_groups_and_a_full_shortfall(self):
         lineup = raidlineup.build_lineup([])
         self.assertEqual(lineup["counts"]["raiders"], 0)
         self.assertEqual(lineup["shortfall"]["raiders"], 40)
         self.assertEqual(lineup["surplus"], [])
-        self.assertEqual(lineup["gaps"], {"tanks": 8, "healers": 8, "damage": 24})
+        self.assertEqual(lineup["gaps"], {"tanks": 4, "healers": 9, "damage": 27})
 
 
 class TheNaturalGuildsFillEveryGroup(unittest.TestCase):
@@ -405,35 +396,33 @@ class SeatsComeFromClassesAndTheFamilyKeepsItsTree(unittest.TestCase):
         self.assertEqual(self.by_name["Tree1"]["seat"], "healer")
 
     def test_a_free_tree_is_seated_before_one_that_would_respec(self):
-        """Five warriors with no tree fill the tank seats before the Fury
-        warrior, who deals damage in the tree it plays."""
+        """Tree fit and tank scarcity decide which warriors take tank duties."""
         fury = self.by_name["Fury1"]
         self.assertEqual(fury["seat"], "dps")
         self.assertEqual(fury["label"], "melee, Fury")
-        for index in range(5):
-            self.assertEqual(
-                self.by_name["Warrior%d" % index]["target_spec"], "Protection"
-            )
+        tanks = [m for m in self.by_name.values() if m["seat"] == "tank"]
+        self.assertEqual(len(tanks), 4)
+        self.assertTrue(
+            all(m["target_spec"] in {"Protection", "Feral Combat"} for m in tanks)
+        )
 
     def test_a_seat_that_needs_another_tree_says_so(self):
-        """Eight healer seats, seven healing priests and druids: the Shadow
+        """Nine healer seats, eight healing priests and druids: the Shadow
         priest takes the last and is planned Holy."""
         shadow = self.by_name["Shadow1"]
         self.assertEqual(shadow["seat"], "healer")
         self.assertEqual(shadow["target_spec"], "Holy")
         self.assertTrue(shadow["respec"])
         self.assertEqual(shadow["label"], "healer, Holy (now Shadow)")
-        self.assertEqual(self.lineup["counts"]["respec"], 1)
-        self.assertIn("1 play another tree now", self.lineup["roles_line"])
+        self.assertEqual(self.lineup["counts"]["respec"], 2)
+        self.assertIn("2 play another tree now", self.lineup["roles_line"])
 
     def test_the_roles_line_says_the_make_up(self):
         line = self.lineup["roles_line"]
         self.assertIn(
-            "8 of 8 tanks (Grug the main tank), 8 of 8 healers, 24 of 24 damage", line
+            "4 of 4 tanks (Grug the main tank), 9 of 9 healers, 27 of 27 damage", line
         )
-        self.assertIn(
-            "8 of 8 groups are a full tank, healer and three damage dealers", line
-        )
+        self.assertIn("8 of 8 groups are full", line)
         self.assertEqual(self.lineup["composition"]["main tank"], 1)
 
 

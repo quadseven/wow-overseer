@@ -1,8 +1,8 @@
 """How close each guild is to its first raid, and what stands in the way.
 
-THE QUESTION THIS ANSWERS is the operator's goal, stated once per guild: forty
-raiders in eight groups of five, ten on maintenance, twenty-one warlocks kept
-for summoning, and a raid the guild can actually walk into. raidgoals.py
+THE QUESTION THIS ANSWERS is the raid plan: forty raiders in eight groups of
+five, with encounter-driven role totals, ten on maintenance, and twenty-one
+warlocks kept for summoning. raidgoals.py
 already counts the consumables a Molten Core night calls for and
 raidlineup.py already decides who fills which place. Neither said whether the
 guild could raid, so the Raid tab read as a shopping list with no verdict.
@@ -12,8 +12,8 @@ a raid is formed inside one guild. A merged count would put a Horde level ten
 into an Alliance group and call the pair of them half a raid.
 
 HARD AND SOFT ARE KEPT APART, and that split is the whole finding. A HARD
-blocker stops the first raid outright: not enough raiders to fill the groups,
-a group with no tank or no healer, a raider below the level the instance's own
+blocker stops the first raid outright: not enough raiders, fewer than the
+minimum tank or healer totals, a raider below the level the instance's own
 access row asks for, or nothing in the overseer able to take a group inside.
 A SOFT one makes the night worse and stops nothing: a raider below the level
 cap, thin gear, no attunement shortcut, a short summoner corps, consumables
@@ -204,7 +204,6 @@ def _staffing_blockers(
     """The HARD blockers about who is there: the raid cannot start without."""
     out = []
     short = lineup["shortfall"]
-    groups = raidlineup.RAIDERS // raidlineup.GROUP_SIZE
     if not runnable:
         out.append(
             "The overseer cannot take a raid in yet: mod-overseer's raid run "
@@ -239,51 +238,45 @@ def _staffing_blockers(
     tanks, healers = _roles(lineup)["tank"], _roles(lineup)["healer"]
     if short["tanks"] and tanks < raidlineup.MIN_TANKS:
         out.append(
-            "%s short: the raid is %d groups with a tank each, and cannot hold "
-            "a fight with fewer than %d. No class left in the guild can take "
+            "%s short: the raid needs at least %d dedicated tanks to hold its "
+            "encounters. No class left in the guild can take "
             "the seat; recruiting prefers a warrior, paladin or druid."
             % (
                 _count(short["tanks"], "tank", "tanks"),
-                groups,
                 raidlineup.MIN_TANKS,
             )
         )
-    if short["healers"] and healers < groups:
+    if short["healers"] and healers < raidlineup.MIN_HEALERS:
         out.append(
-            "%s short: the raid is %d groups with a healer each, and a group "
-            "without one cannot keep itself standing. No class left in the "
+            "%s short: the raid needs at least %d healers to keep the raid "
+            "standing. No class left in the "
             "guild can take the seat; recruiting prefers a priest, shaman, "
             "paladin or druid."
             % (
                 _count(short["healers"], "healer", "healers"),
-                groups,
+                raidlineup.MIN_HEALERS,
             )
         )
     return out
 
 
 def _thin_role_blockers(lineup: dict) -> list:
-    """SOFT: short of the classic make-up, but above the minimums."""
+    """SOFT: below preferred raid totals while above the minimums."""
     out = []
     short = lineup["shortfall"]
     roles = _roles(lineup)
     if short["tanks"] and roles["tank"] >= raidlineup.MIN_TANKS:
         out.append(
-            "%s short of the %d the eight groups need, one each: %d hold the "
-            "tank seats, so %s without a tank."
+            "%s short of the preferred %d: %d can tank now."
             % (
                 _count(short["tanks"], "tank", "tanks"),
                 lineup["wanted"]["tanks"],
                 roles["tank"],
-                _count(short["tanks"], "group is", "groups are"),
             )
         )
-    # One healer a group is the whole of what is wanted, so a healer short is
-    # always a group without one: that is the hard blocker above.
     if short.get("damage"):
         out.append(
-            "%s short of the %d the eight groups need, three each: %d deal "
-            "damage."
+            "%s short of the preferred %d: %d deal damage."
             % (
                 _count(short["damage"], "damage dealer", "damage dealers"),
                 lineup["wanted"]["damage"],
@@ -881,8 +874,7 @@ def build_guild(
         ),
         "tiles": _tiles(lineup, raiders),
         "roster_line": _roster_line(members, lineup, raiders),
-        # The eight groups (the operator's one tank, one healer and three
-        # damage dealers each) and what no class in the guild can fill.
+        # The eight groups and what no class in the guild can fill.
         "groups": _group_lines(lineup),
         "gap_line": lineup.get("gap_line", ""),
         "gaps": lineup.get("gaps", {}),

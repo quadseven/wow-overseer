@@ -264,14 +264,12 @@ class HardBlockers(unittest.TestCase):
         hard = [b["text"] for b in card["blockers"] if b["tone"] == "hard"]
         self.assertTrue(any("35 raiders short" in t for t in hard), hard)
         soft = [b["text"] for b in card["blockers"] if b["tone"] == "soft"]
-        # A warrior and a druid hold the two tank seats a raid cannot do
-        # without; the other six of the eight groups' are short, which is
-        # soft. A group without a healer is hard.
-        self.assertTrue(any("6 tanks short of the 8" in t for t in soft), soft)
-        self.assertFalse(any("tanks short" in t for t in hard), hard)
+        self.assertTrue(any("3 tanks short" in t for t in hard), hard)
         self.assertTrue(any("6 healers short" in t for t in hard), hard)
-        self.assertTrue(any("damage dealers short of the 24" in t for t in soft), soft)
-        self.assertIn("Short 6 tanks, 6 healers", card["gap_line"])
+        self.assertTrue(
+            any("damage dealers short of the preferred 27" in t for t in soft), soft
+        )
+        self.assertIn("Short 3 tanks, 6 healers", card["gap_line"])
         self.assertEqual(8, len(card["groups"]))
         self.assertTrue(card["groups"][0]["line"].startswith("Group 1: "))
         self.assertTrue(any("below level 50" in t for t in hard), hard)
