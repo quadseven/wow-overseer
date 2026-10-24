@@ -4159,6 +4159,10 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
             cur, campaignplan.RUNS_SQL.format(holes=marks), args, "the run ledger")
         if runs is None:
             runs = _planner_rows(
+                cur, campaignplan.RUNS_SQL_TIMELINE.format(holes=marks), args,
+                "the run ledger by the timeline's door")
+        if runs is None:
+            runs = _planner_rows(
                 cur, campaignplan.RUNS_SQL_OLD.format(holes=marks), args,
                 "the old run ledger") or []
         quest_rows = _planner_rows(cur, campaignplan.QUESTS_SQL, (),
@@ -4512,15 +4516,22 @@ def _pace_score(unscored: list, runs: list) -> list:
 # --- the stall breaker (dungeonstall.py, #1041) --------------------------------
 #
 # dungeonstall.py decides; these read the run ledger and the run timeline it
-# judges from, and carry out its leave. A realm that cannot answer a read
-# (1054 or 1146) judges nothing, so no door is left on a missing column.
+# judges from, and carry out its leave. A ledger without `portal_keyword` is
+# read with each run's door off its own timeline; a realm that cannot answer
+# either read (1054 or 1146) judges nothing, so no door is left on a missing
+# column.
 
 
 def _stuck_doors(cur, names: list) -> dict:
     """dungeonstall.stuck_doors for the family's runs in the window, on `cur`."""
-    runs = _planner_rows(
-        cur, dungeonstall.RUNS_SQL.format(holes=dungeonstall.holes(len(names))),
-        tuple(names) + (dungeonstall.WINDOW_HOURS,), "the run ledger by door")
+    marks = dungeonstall.holes(len(names))
+    args = tuple(names) + (dungeonstall.WINDOW_HOURS,)
+    runs = _planner_rows(cur, dungeonstall.RUNS_SQL.format(holes=marks), args,
+                         "the run ledger by door")
+    if runs is None:
+        runs = _planner_rows(
+            cur, dungeonstall.RUNS_SQL_TIMELINE.format(holes=marks), args,
+            "the run ledger by the timeline's door")
     ids = dungeonstall.event_ids(runs or [])
     if not ids:
         return {}
