@@ -1180,6 +1180,40 @@ RESERVE_SECONDS = ORPHAN_LEASE_SECONDS
 RESERVE_ORDER = ("town errand", "bags")
 
 
+# WHO AN URGENT ASK MAY CUT IN FRONT OF (#1375).
+#
+# Urgency zeroes every lease (`Slot.want`), and seven passes ask urgently: the
+# town errand, the vendor pass, the bag trip, the bank exit, the gear vendor,
+# the weapon master and the auction pass under bag pressure. With nothing
+# ranking them, two urgent passes take the column off each other on alternate
+# cycles and neither walk lands. So urgency now preempts only a holder ranked
+# BEHIND the asker: the bag-room passes (BAG_ROOM_CLAIMANTS, every pass whose
+# urgency is bag pressure: selling, listing, banking, the bag trip and the
+# errand that walks to them) ahead of every
+# other named pass, and every named pass ahead of an orphan (a holder this
+# process cannot name). A pass holding the live reservation is the one owner
+# and keeps its urgency against anybody. An urgent ask that does not outrank
+# the holder is decided as an ordinary one, so the holder keeps its lease and
+# the asker its place in the queue.
+BAG_ROOM_CLAIMANTS = frozenset(
+    {"town errand", "bags", "economy", "bank", "auction", "bag pressure"}
+)
+
+
+def walk_rank(claimant: str) -> int:
+    """0 for a bag-room pass, 1 for any other named pass, 2 for an orphan."""
+    if not claimant:
+        return 2
+    return 0 if claimant in BAG_ROOM_CLAIMANTS else 1
+
+
+def urgency_cuts(claimant: str, holder, reserved: bool) -> bool:
+    """Whether an urgent ask by `claimant` may preempt `holder` (#1375)."""
+    if holder is None or reserved or holder.claimant == claimant:
+        return True
+    return walk_rank(claimant) < walk_rank(holder.claimant)
+
+
 def reserve_rank(claimant: str) -> int:
     """Where `claimant` stands in RESERVE_ORDER; lower is ahead."""
     try:
@@ -1747,6 +1781,11 @@ class Slot:
         # than the claimed one. A pass in backoff is not refused; it falls
         # back to the ordinary lease and its ordinary turn.
         if urgent and now < self.urgency_suppressed_until(claimant):
+            urgent = False
+        # URGENCY DOES NOT CUT IN FRONT OF AN EQUAL (#1375, `urgency_cuts`).
+        if urgent and not urgency_cuts(
+            claimant, self.holder, self.reserved_by(claimant, now)
+        ):
             urgent = False
         # A full bag is a loot-blocking failure, not an ordinary queue wait.
         # An orphaned economy aim can otherwise hold the traveller for the

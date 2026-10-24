@@ -165,3 +165,63 @@ class AHeldPassTimesOutIntoARecordedReason(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UrgencyCutsOnlyInFrontOfALowerRank(unittest.TestCase):
+    """The recorded order after the 04:24 UTC ship, Zug's family:
+
+        04:27:46 level takes the traveller Zug for 'at:1:-5407.7,-2414.3,90.3'
+        04:29:12 weapon master takes the traveller Zug from level ... held the
+                 column for 85s, past its 0s lease
+
+    Two passes of the same rank, the second urgent: the walk to Freewind Post,
+    where the family's vendor stands, never landed.
+    """
+
+    FREEWIND = "at:1:-5407.7,-2414.3,90.3"
+
+    def level_walking(self):
+        slot = townslot.Slot(releasable=economy)
+        took = ask(slot, "level", self.FREEWIND, "", 0.0)
+        slot.settle(took, True, 0.0)
+        return slot
+
+    def test_an_urgent_equal_waits_for_the_lease(self):
+        slot = self.level_walking()
+        d = ask(slot, "weapon master", "11869", self.FREEWIND, 85.0, urgent=True)
+        self.assertEqual(townslot.SLOT_WAIT, d.verdict)
+        self.assertIn("lease", d.reason)
+
+    def test_past_the_lease_the_equal_takes_its_turn(self):
+        slot = self.level_walking()
+        d = ask(
+            slot,
+            "weapon master",
+            "11869",
+            self.FREEWIND,
+            townslot.LEASE_SECONDS + 1,
+            urgent=True,
+        )
+        self.assertEqual(townslot.SLOT_PREEMPT, d.verdict)
+
+    def test_a_bag_room_pass_still_cuts_in_front(self):
+        slot = self.level_walking()
+        d = ask(slot, "economy", "vendor", self.FREEWIND, 10.0, urgent=True)
+        self.assertEqual(townslot.SLOT_PREEMPT, d.verdict)
+
+    def test_two_bag_room_passes_do_not_trade_the_walk(self):
+        slot = townslot.Slot(releasable=economy)
+        took = ask(slot, "economy", "vendor", "", 0.0, urgent=True)
+        slot.settle(took, True, 0.0)
+        d = ask(slot, "bags", BAG_VENDOR, "vendor", 37.0, urgent=True)
+        self.assertNotEqual(townslot.SLOT_PREEMPT, d.verdict)
+
+    def test_an_orphan_is_still_cut_by_any_named_pass(self):
+        slot = townslot.Slot(releasable=economy)
+        d = ask(slot, "weapon master", "11869", "at:1:1,2,3", 5.0, urgent=True)
+        self.assertEqual(townslot.SLOT_PREEMPT, d.verdict)
+
+    def test_the_ranks(self):
+        self.assertEqual(0, townslot.walk_rank("economy"))
+        self.assertEqual(1, townslot.walk_rank("weapon master"))
+        self.assertEqual(2, townslot.walk_rank(""))
