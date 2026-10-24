@@ -4447,17 +4447,34 @@ def _fetch_roster_rows() -> list:
         return _with_family(rd, rows)
 
 
-def _fetch_guild_members() -> tuple[list, dict]:
-    """Fresh commandable guild membership and guild names for one decree."""
+def _fetch_guild_members(guild=None) -> tuple[list, dict]:
+    """Fresh commandable members of the named guild, and every guild's name.
+
+    BOUNDED: only the named guild's live bots are read, and no more than one
+    past the muster cap, since decree.plan_order only needs to know the guild
+    is over the cap, not by how much. A name that matches no guild reads no
+    membership, and plan_order refuses it in its own words.
+    """
     with realmread.Session(_connect) as rd:
         guilds = rd.must("SELECT guildid, name FROM guild")
+        names = {int(row["guildid"]): row["name"] for row in guilds}
+        wanted = guild.strip().lower() if isinstance(guild, str) else ""
+        guild_id = next(
+            (gid for gid, name in sorted(names.items()) if name.lower() == wanted),
+            None,
+        )
+        if guild_id is None:
+            return [], names
         members = rd.must(
             "SELECT c.name, s.level, s.is_bot, gm.guildid AS guild_id "
             "FROM guild_member gm JOIN characters c ON c.guid = gm.guid "
             "JOIN overseer_snapshot s ON s.name = c.name "
-            "WHERE s.updated_at > NOW() - INTERVAL 60 SECOND"
+            "WHERE gm.guildid = %s AND s.is_bot "
+            "AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+            "ORDER BY s.level DESC, c.name LIMIT %s",
+            (guild_id, decree.fanout.MAX_FANOUT_TARGETS + 1),
         )
-    return members, {int(row["guildid"]): row["name"] for row in guilds}
+    return members, names
 
 
 def _apply_order(order) -> int:
@@ -5629,7 +5646,8 @@ class Handler(BaseHTTPRequestHandler):
                 _note_module_crossing()
                 roster_rows = _fetch_roster_rows()
                 members, guild_names = (
-                    _fetch_guild_members() if request.get("section") == decree.MUSTER
+                    _fetch_guild_members(request.get("guild"))
+                    if request.get("section") == decree.MUSTER
                     else ([], {})
                 )
                 order = decree.plan_order(request, roster_rows, members, guild_names)
