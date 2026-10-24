@@ -643,3 +643,53 @@ class TheBridgeWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheCapYieldsWhileTheFamilyIsHeldInTown(unittest.TestCase):
+    """#1375: the hold is let go at CAMPAIGN_RESUME_FREE_SLOTS, so the cap gives
+    way below that line while the family is held in town.
+
+    Measured on the dev realm 2026-10-24: Grug's family was held 45 minutes on
+    "Bork, Grog, Ugga below 8 free slots" (4, 6 and 7 free), and the bags pass
+    said "Ugga cannot buy a bag bigger than its 8-slot one ... at most 2500 a
+    slot" with 18 gold to spend.
+    """
+
+    def test_the_floor_is_the_resume_line_while_held(self):
+        line = bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS - 1
+        self.assertTrue(bag_market.cap_yields(line, held=True))
+        self.assertFalse(bag_market.cap_yields(line + 1, held=True))
+        self.assertFalse(bag_market.cap_yields(4))
+        for free in (-1, None, "2", True):
+            self.assertFalse(bag_market.cap_yields(free, held=True), free)
+
+    def test_a_held_member_between_the_lines_buys_the_vendor_bag(self):
+        refused, _ = bag_market.plan_upgrades(
+            [HELD],
+            HELD_PURSES,
+            VENDOR_STOCK,
+            reach={"Grog": EVERY_STOCK},
+            free_slots={"Grog": 6},
+        )
+        self.assertEqual(refused, ())
+        bought, _ = bag_market.plan_upgrades(
+            [HELD],
+            HELD_PURSES,
+            VENDOR_STOCK,
+            reach={"Grog": EVERY_STOCK},
+            free_slots={"Grog": 6},
+            held=True,
+        )
+        self.assertEqual([u.buyer for u in bought], ["Grog"])
+        self.assertEqual(bought[0].listing.source, VENDOR)
+
+    def test_a_held_member_between_the_lines_is_walked_to_the_vendor(self):
+        idle = _upgrade_trip([HELD], HELD_PURSES, {"Grog": 6})
+        self.assertEqual(idle.buyers, ())
+        held = _upgrade_trip([HELD], HELD_PURSES, {"Grog": 6}, held=True)
+        self.assertEqual(held.buyers, ("Grog",))
+
+    def test_the_bags_pass_reads_the_hold_off_the_town_slot(self):
+        source = BRIDGE.read_text(encoding="utf-8")
+        self.assertIn("held = bool(self._cohort_town_slot(cohort).town_first)", source)
+        self.assertIn("held=bool(slot.town_first)", source)
