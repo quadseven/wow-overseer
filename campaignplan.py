@@ -296,7 +296,18 @@ RUNS_SQL = (
     "SELECT leader_name, map_id, portal_keyword, outcome "
     "FROM overseer_dungeon_run WHERE state = 'ended' AND leader_name IN ({holes})"
 )
-# A realm whose ledger predates `portal_keyword` still counts by map.
+# A realm whose ledger predates `portal_keyword` reads each run's door off its
+# own timeline (dungeonstall.RUNS_SQL_TIMELINE, the same read), so a wing on a
+# shared map is still counted as itself.
+RUNS_SQL_TIMELINE = (
+    "SELECT r.leader_name, r.map_id, (SELECT e.portal FROM "
+    "overseer_dungeon_run_event e WHERE e.run_id = r.id "
+    "AND e.portal <> _utf8mb4'' COLLATE utf8mb4_unicode_ci "
+    "ORDER BY e.id LIMIT 1) AS portal_keyword, r.outcome "
+    "FROM overseer_dungeon_run r WHERE r.state = 'ended' "
+    "AND r.leader_name IN ({holes})"
+)
+# A realm with neither still counts by map.
 RUNS_SQL_OLD = (
     "SELECT leader_name, map_id, outcome "
     "FROM overseer_dungeon_run WHERE state = 'ended' AND leader_name IN ({holes})"

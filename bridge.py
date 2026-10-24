@@ -4159,6 +4159,10 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
             cur, campaignplan.RUNS_SQL.format(holes=marks), args, "the run ledger")
         if runs is None:
             runs = _planner_rows(
+                cur, campaignplan.RUNS_SQL_TIMELINE.format(holes=marks), args,
+                "the run ledger by the timeline's door")
+        if runs is None:
+            runs = _planner_rows(
                 cur, campaignplan.RUNS_SQL_OLD.format(holes=marks), args,
                 "the old run ledger") or []
         quest_rows = _planner_rows(cur, campaignplan.QUESTS_SQL, (),
@@ -4512,15 +4516,22 @@ def _pace_score(unscored: list, runs: list) -> list:
 # --- the stall breaker (dungeonstall.py, #1041) --------------------------------
 #
 # dungeonstall.py decides; these read the run ledger and the run timeline it
-# judges from, and carry out its leave. A realm that cannot answer a read
-# (1054 or 1146) judges nothing, so no door is left on a missing column.
+# judges from, and carry out its leave. A ledger without `portal_keyword` is
+# read with each run's door off its own timeline; a realm that cannot answer
+# either read (1054 or 1146) judges nothing, so no door is left on a missing
+# column.
 
 
 def _stuck_doors(cur, names: list) -> dict:
     """dungeonstall.stuck_doors for the family's runs in the window, on `cur`."""
-    runs = _planner_rows(
-        cur, dungeonstall.RUNS_SQL.format(holes=dungeonstall.holes(len(names))),
-        tuple(names) + (dungeonstall.WINDOW_HOURS,), "the run ledger by door")
+    marks = dungeonstall.holes(len(names))
+    args = tuple(names) + (dungeonstall.WINDOW_HOURS,)
+    runs = _planner_rows(cur, dungeonstall.RUNS_SQL.format(holes=marks), args,
+                         "the run ledger by door")
+    if runs is None:
+        runs = _planner_rows(
+            cur, dungeonstall.RUNS_SQL_TIMELINE.format(holes=marks), args,
+            "the run ledger by the timeline's door")
     ids = dungeonstall.event_ids(runs or [])
     if not ids:
         return {}
@@ -11869,6 +11880,11 @@ class Bridge(discord.Client):
             leader = await asyncio.to_thread(_head_now) if names else ""
         else:
             names, leader = sorted(cohort.names), cohort.leader
+        # ONLY THE MEMBERS STANDING WITH THE FAMILY (#1375). A member lent to
+        # a guild run cannot reach the family's vendor, so its full bags held
+        # the leader at the counter with no sale to make, and its dungeon map
+        # read the whole family as mid-run. It sells when it is back.
+        names = await asyncio.to_thread(_present_members, names, leader)
         if not names:
             return
         slot = self._cohort_town_slot(cohort)
@@ -20595,9 +20611,16 @@ class Bridge(discord.Client):
         # on a trip that never ended it: Zug's family read "waits for bag
         # room" for 70 minutes on the dev realm 2026-10-20. The walk goes
         # then, and a quest turned in frees its items.
-        free = await asyncio.to_thread(_fetch_free_slots, list(fam["names"]))
+        # A MEMBER LENT TO A GUILD RUN IS NOT WAITED FOR (#1375). Its bags
+        # are the guild run's while it is away: on the dev realm 2026-10-24
+        # Uzza sat at one free slot inside Razorfen Kraul with the guild, and
+        # Zug's family read "waits for bag room" for an hour while the leader
+        # stood at a vendor that could sell nothing of Uzza's.
+        here = await asyncio.to_thread(_present_members, list(fam["names"]),
+                                       leader)
+        free = await asyncio.to_thread(_fetch_free_slots, here)
         if (jev_activity.withheld(True, free)
-                and _vendor_trip_makes_room(list(fam["names"]), free)):
+                and _vendor_trip_makes_room(here, free)):
             log.info("dungeon quests: %s waits for bag room; the vendor trip "
                      "keeps the travel column", campaignqueue._family(key))
             return False
@@ -24830,6 +24853,18 @@ def _fetch_seat_meter_runs() -> list:
 
 # family -> the last familyseat.hold_line said for it, only while it waits.
 _LENT_HOLD_SAID: dict = {}
+
+
+def _present_members(names, leader: str = "") -> list:
+    """familyseat.present off the guild runs queued or inside, or every name
+    when that cannot be read (the family is judged whole, as before)."""
+    try:
+        out = _guild_run_members_out()
+    except pymysql.err.MySQLError:
+        log.exception("bags: who is out in a guild run could not be read; "
+                      "the whole family is judged")
+        return list(names)
+    return familyseat.present(names, out, leader)
 
 
 def _guild_run_members_out() -> set:

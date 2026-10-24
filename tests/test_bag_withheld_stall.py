@@ -428,6 +428,7 @@ def _bridge_self(world, clock, log):
             "_fetch_bag_vendors": lambda here: BARG_ROWS,
             "_campaign_waiting": lambda names: world.queued,
             "_fetch_free_slots": lambda names: dict(LIVE_FREE),
+            "_present_members": lambda names, leader="": list(names),
         },
     )
     me = types.SimpleNamespace(_town_slot=townslot.Slot(), _cohort_town_slots={})
@@ -614,6 +615,7 @@ def _run_vendor_once(queued, at_vendor=True):
             "SELL_ROUTES": (),
             "SELL_MEMORY_HOURS": 24,
             "_fetch_free_slots": lambda names: dict(free),
+            "_present_members": lambda names, leader="": list(names),
             "_fetch_vendor_wait_seconds": lambda names: 0,
             "_fetch_vendor_items": lambda names: _vendor_rows(),
             "_fetch_surplus_bags": lambda names: [],
