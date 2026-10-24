@@ -38,6 +38,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Answers: current aura samples for the fixed family rosters.
 - Example: `overseer get /api/auras`
 
+## `GET /api/chat/party`
+
+- Query: `family`, `after`
+- Answers: lines to read aloud.
+- Example: `overseer get /api/chat/party family=grug`
+
 ## `GET /api/client/bags`
 
 - Query: `name`

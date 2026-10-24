@@ -293,6 +293,75 @@ class ChatEndpointTest(unittest.TestCase):
         )
 
 
+class PartyFeedTest(unittest.TestCase):
+    """GET /api/chat/party?family=<key>&after=<id> (ticket 177)."""
+
+    def setUp(self):
+        rosters = {"Grug": ["Grug", "Ugga"], "Zug": ["Zug", "Oz"]}
+        for name, value in (("families", rosters), ("default", "Grug")):
+            patcher = mock.patch.object(map_server.FAMILIES, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def get(self, path):
+        handler = FakeHandler(path)
+        handler.do_GET()
+        return handler
+
+    def chat_row(self, rid, sender="Grug", text="Aye."):
+        return {
+            "id": rid,
+            "sender_name": sender,
+            "channel": "party",
+            "text": text,
+            "created_at": "2026-08-23 12:00:00",
+            "age_s": 2,
+        }
+
+    def test_the_first_read_only_learns_where_the_chat_ends(self):
+        # Turning the reader on must not speak the last three hours aloud.
+        with (
+            mock.patch.object(map_server, "_fetch_chat_newest", return_value=812),
+            mock.patch.object(map_server, "_fetch_chat_party") as fetch,
+        ):
+            handler = self.get("/api/chat/party?family=Grug")
+        self.assertEqual(handler.code, 200)
+        self.assertEqual(handler.payload, {"rows": [], "after": 812})
+        fetch.assert_not_called()
+
+    def test_a_line_heard_by_two_comes_back_once_with_its_voice(self):
+        rows = [self.chat_row(5), self.chat_row(6)]
+        with mock.patch.object(
+            map_server, "_fetch_chat_party", return_value=rows
+        ) as fetch:
+            handler = self.get("/api/chat/party?family=Grug&after=4")
+        self.assertEqual(handler.code, 200)
+        self.assertEqual([r["id"] for r in handler.payload["rows"]], [5])
+        self.assertEqual(handler.payload["rows"][0]["voice"]["pitch"], 0.7)
+        self.assertEqual(handler.payload["after"], 6)
+        fetch.assert_called_once_with(["Grug", "Ugga"], 4)
+
+    def test_the_roster_comes_from_the_family_key_not_the_request(self):
+        with mock.patch.object(
+            map_server, "_fetch_chat_party", return_value=[]
+        ) as fetch:
+            self.get("/api/chat/party?family=Zug&after=1")
+        fetch.assert_called_once_with(["Zug", "Oz"], 1)
+
+    def test_a_bad_cursor_is_refused_before_any_query(self):
+        with mock.patch.object(map_server, "_fetch_chat_party") as fetch:
+            handler = self.get("/api/chat/party?family=Grug&after=abc")
+        self.assertEqual(handler.code, 400)
+        fetch.assert_not_called()
+
+    def test_a_dead_database_is_a_503(self):
+        with mock.patch.object(
+            map_server, "_fetch_chat_party", side_effect=OSError("gone")
+        ):
+            handler = self.get("/api/chat/party?family=Grug&after=1")
+        self.assertEqual(handler.code, 503)
+
+
 class ParseGateTest(unittest.TestCase):
     def test_the_endpoint_and_the_bridge_share_one_command_gate(self):
         # Not a duplicate of the chat.py suite: this pins that the web
