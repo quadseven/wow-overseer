@@ -341,7 +341,7 @@ Each entry: path, query parameters, what it answers, one example.
 ## `GET /api/v2/training`
 
 - Query: `name`
-- Answers: what a member has learned, can train now, and cannot yet. Each held trade lists `recipes` (`spell` id and `name`, by name then id, at most 300) and `recipe_count`, the recipes the member knows in it.
+- Answers: what a member has learned, can train now, and cannot yet.
 - Example: `overseer get /api/v2/training name=Grug`
 
 ## `GET /api/v2/upgrades`
