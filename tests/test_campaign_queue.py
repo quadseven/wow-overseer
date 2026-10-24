@@ -860,6 +860,13 @@ class TheDiscordOrder(unittest.TestCase):
         self.assertIn("Grug's family", sent[0])
         self.assertEqual([], passes)
 
+    def test_a_combined_order_with_an_unknown_partner_reads_no_rows(self):
+        """The partner is picked from the roster's own keys before any lookup."""
+        written, sent, passes = self.run_order("Zug", "ragefire 5", partner="Nobody")
+        self.assertEqual([], written)
+        self.assertIn("Nobody is not a family on the roster", sent[0])
+        self.assertEqual([], passes)
+
     def test_a_combined_order_needs_two_different_families(self):
         written, sent, _ = self.run_order("Zug", "ragefire 5", partner="zug")
         self.assertEqual([], written)
