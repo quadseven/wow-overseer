@@ -1164,12 +1164,9 @@ RESERVE_SECONDS = ORPHAN_LEASE_SECONDS
 # errand that walks the family to the vendor, the banker and the tidy) and the
 # bag vendor trip. Each reservation used to REPLACE the other, so each pass in
 # turn owned the leader, asked urgently, zeroed the other's lease and took the
-# column off it. Measured on wow-dev 2026-10-24, 03:00 to 03:20 UTC, Zug's
-# family: the town errand, the bags pass and the economy vendor aim took the
-# traveller from each other six times in sixteen minutes, every one "past its
-# 0s lease", and the errand ended with "the walk to the capital did not land
-# in 1200s". Grug's family lost its vendor and bank steps the same way, each
-# "ran out of time" while the bags pass held the reservation.
+# column off it, and a third urgent pass could take it off the errand once the
+# bag trip had replaced the errand's reservation. The errand's walk and its
+# vendor and bank steps ran out of time while the leader changed hands.
 #
 # ONE OWNER AND A FIXED ORDER. A live reservation is replaced only by a pass
 # ranked ahead of its holder; anybody else is refused and waits behind it, and
