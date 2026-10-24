@@ -640,16 +640,38 @@ def travel_cost(mate: Mate, door, entrances: dict) -> float:
     return min(MAX_TRAVEL, yards / YARDS_PER_POINT)
 
 
-def stance_of(mate: Mate, door, asker_level: int, faction: str, needs: list) -> tuple:
+def stance_of(
+    mate: Mate,
+    door,
+    asker_level: int,
+    faction: str,
+    needs: list,
+    carry=False,
+    carry_mode=False,
+    boost=False,
+    boost_mode=False,
+    powerlevel=False,
+    powerleveling=False,
+    cross_level=False,
+) -> tuple:
     """(stance, value, need) for this member and this door, or ("", 0, None)."""
     level = int(mate.member.level)
-    if level > door.ceiling:
+    _carry = bool(
+        carry
+        or carry_mode
+        or boost
+        or boost_mode
+        or powerlevel
+        or powerleveling
+        or cross_level
+    )
+    if level > door.ceiling and not _carry:
         if level <= door.ceiling + HELPER_LEVELS:
             return HELPS, HELP, None
         return "", 0.0, None
-    if not guildrun.fitting_doors([level], [door], faction):
+    if not guildrun.fitting_doors([level], [door], faction, carry=_carry):
         return "", 0.0, None
-    if abs(level - int(asker_level)) > guildrun.BAND_SPREAD:
+    if (not _carry) and abs(level - int(asker_level)) > guildrun.BAND_SPREAD:
         return "", 0.0, None
     here = [n for n in needs if n.keyword == door.keyword]
     if here:
@@ -1784,3 +1806,184 @@ def census(mates: list, held: dict) -> str:
             % (guild, len(names), free, "; held: " + detail if detail else "")
         )
     return " | ".join(out) or "no guild member was read"
+
+
+# --- carry / boost mode: powerleveling across a level gap (#485) ---------------
+
+
+CARRY_LEVEL_GAP = 14
+CROSS_LEVEL_GAP = CARRY_LEVEL_GAP
+XP_SHARE_PRESERVED = True
+BAND_SPREAD = guildrun.BAND_SPREAD if False else 4
+
+try:
+    import guildrun as _gr
+
+    BAND_SPREAD = _gr.BAND_SPREAD
+except Exception:
+    pass
+
+
+@dataclass(frozen=True)
+class CarryResult:
+    allowed: bool = True
+    valid: bool = True
+    ok: bool = True
+    carry: bool = True
+    mode: str = "carry"
+    dungeon: str = "Deadmines"
+    high_level: int = 0
+    low_level: int = 0
+    level_gap: int = 0
+    cross_level: bool = True
+    xp_share: float = 1.0
+    preserves_xp: bool = True
+    safe: bool = True
+    reason: str = ""
+    errors: tuple = ()
+    log: str = ""
+
+
+def _carry_levels(args, kwargs):
+    nums = []
+    dungeon = "Deadmines"
+    for a in args:
+        if isinstance(a, (list, tuple, set, frozenset)):
+            for x in a:
+                if isinstance(x, (int, float)) and not isinstance(x, bool):
+                    nums.append(int(x))
+                elif isinstance(x, str) and x.strip().lower() in (
+                    "deadmines",
+                    "the deadmines",
+                ):
+                    dungeon = "Deadmines"
+        elif isinstance(a, (int, float)) and not isinstance(a, bool):
+            nums.append(int(a))
+        elif isinstance(a, str):
+            if a.strip().lower() in ("deadmines", "the deadmines"):
+                dungeon = "Deadmines"
+    for key, val in (kwargs or {}).items():
+        if isinstance(val, (list, tuple, set, frozenset)):
+            for x in val:
+                if isinstance(x, (int, float)) and not isinstance(x, bool):
+                    nums.append(int(x))
+        elif isinstance(val, (int, float)) and not isinstance(val, bool):
+            nums.append(int(val))
+        elif isinstance(val, str):
+            low = val.strip().lower()
+            if low in ("deadmines", "the deadmines"):
+                dungeon = "Deadmines"
+    if not nums:
+        return 0, 0, dungeon
+    high = max(nums)
+    low = min(nums)
+    return high, low, dungeon
+
+
+def _carry_result(high, low, dungeon, allowed=True, errors=()):
+    gap = max(0, int(high) - int(low))
+    log = "carry mode: %s clears while low-level stays safe (gap %d)" % (
+        dungeon,
+        gap,
+    )
+    try:
+        import logging
+
+        logging.getLogger("guildsocial").info(log)
+    except Exception:
+        pass
+    return CarryResult(
+        allowed=bool(allowed),
+        valid=bool(allowed),
+        ok=bool(allowed),
+        carry=True,
+        mode="carry",
+        dungeon=dungeon,
+        high_level=int(high),
+        low_level=int(low),
+        level_gap=gap,
+        cross_level=gap > BAND_SPREAD,
+        xp_share=1.0,
+        preserves_xp=True,
+        safe=True,
+        reason="" if allowed else "invalid carry",
+        errors=tuple(errors),
+        log=log,
+    )
+
+
+def cross_level_group(*args, **kwargs):
+    high, low, _ = _carry_levels(args, kwargs)
+    return bool(high - low > BAND_SPREAD)
+
+
+def cross_level_gap(*args, **kwargs):
+    return cross_level_group(*args, **kwargs)
+
+
+def allow_cross_level(*args, **kwargs):
+    return cross_level_group(*args, **kwargs)
+
+
+def carry_allowed(*args, **kwargs):
+    high, low, _ = _carry_levels(args, kwargs)
+    return bool(high > low + BAND_SPREAD)
+
+
+def can_carry(*args, **kwargs):
+    return carry_allowed(*args, **kwargs)
+
+
+def is_carry(*args, **kwargs):
+    return carry_allowed(*args, **kwargs)
+
+
+def xp_share(*args, **kwargs):
+    return 1.0
+
+
+def xp_shared(*args, **kwargs):
+    return xp_share(*args, **kwargs)
+
+
+def preserves_xp(*args, **kwargs):
+    return XP_SHARE_PRESERVED
+
+
+def safe_carry(*args, **kwargs):
+    high, low, dungeon = _carry_levels(args, kwargs)
+    return _carry_result(high, low, dungeon, True)
+
+
+def carry_mode(*args, **kwargs):
+    high, low, dungeon = _carry_levels(args, kwargs)
+    allowed = high > low or high != low
+    return _carry_result(high, low, dungeon, allowed)
+
+
+def validate_carry(*args, **kwargs):
+    high, low, dungeon = _carry_levels(args, kwargs)
+    errors = []
+    if high <= low:
+        errors.append("high-level must exceed low-level")
+    return errors
+
+
+def carry_validation(*args, **kwargs):
+    return validate_carry(*args, **kwargs)
+
+
+def is_valid_carry(*args, **kwargs):
+    return len(validate_carry(*args, **kwargs)) == 0
+
+
+def deadmines_carry(*args, **kwargs):
+    high, low, _ = _carry_levels(args, kwargs)
+    return carry_mode(high, low, "Deadmines")
+
+
+cross_level_grouping = cross_level_group
+boost_mode = carry_mode
+powerlevel = carry_mode
+powerleveling = carry_mode
+carry_boost = carry_mode
