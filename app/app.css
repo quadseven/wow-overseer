@@ -156,6 +156,9 @@ a.card:hover { box-shadow: var(--shadow-sm); }
 .age-dot[data-state="stale"], .age-dot[data-state="saved"] { background: var(--warn); }
 .age-dot[data-state="error"] { background: var(--bad); }
 .age-dot[data-state="loading"] { background: var(--color-neutral-600); animation: pulse 1.2s infinite; }
+.deploy[hidden] { display: none; }
+.deploy[data-restarting="1"] { color: var(--warn); font-weight: 500; }
+.topbar .deploy[data-restarting="0"] { display: none; }
 .op-link { font-size: var(--fs-1); color: var(--color-neutral-500); text-decoration: none; padding: 4px 6px; display: flex; gap: 6px; align-items: center; min-height: 32px; }
 .op-link:hover { color: var(--color-neutral-300); }
 .theme-btn { justify-content: flex-start; }
