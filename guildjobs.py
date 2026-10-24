@@ -794,30 +794,52 @@ def _cooling(member: Member, action: str, recent) -> bool:
     return any(
         r.name == member.name
         and r.action == action
-        and not (action == "train" and passing_train_row(r))
-        and int(r.age_minutes) < minutes
+        and int(r.age_minutes) < _train_row_wait(r, minutes)
         for r in recent or ()
     )
 
 
-PASSING_TRAIN_WORDS = ("in combat",)
+# THE TRAINER GATE'S PASSING WALLS (#1116), the module's own literals
+# (MailWalkRefusal and ErrandWalkRefusal in mod-overseer's
+# overseer_decisions.h) for a member that was busy when the row was served: in
+# a fight, on a flight, logging out, out of the world, already walking, or held
+# by another verb, and the mid-walk ending of a fight. Matched exactly. The
+# module calls many more trainer refusals retryable (a trainer beyond the cap,
+# ground that does not hold, Outland, a grouped follower, a dead character, the
+# far walk budget); those say the same walk will be refused again for a while,
+# and they keep the doubling backoff below.
+PASSING_TRAIN_REASONS = frozenset(
+    {
+        "character is in combat",
+        "entered combat on the way to the trainer",
+        "character is on a flight path",
+        "character is logging out",
+        "character is not in the world",
+        "a walk is already under way for this character",
+        "character is held by another verb",
+    }
+)
 
 
 def passing_train_row(r) -> bool:
-    """Whether a trainer row ended for a reason the next moment changes (#1116).
-
-    A member in a fight when its rank walk was cast, or one the module refused
-    with `retryable:true`, learned nothing about the trainer or the road: the
-    walk is asked again on the next pass. Counting it as a failed walk doubled
-    the wait toward TRAIN_BACKOFF_CAP_MINUTES, and a member at a tier cap with
-    the coin for the next rank then sat out up to twelve hours behind a fight
-    it had already won."""
+    """Whether a failed trainer row ended for a reason the next moment changes
+    (#1116): one of PASSING_TRAIN_REASONS, read exactly from the module's
+    `reason`. Such a row learned nothing about the trainer or the road, so it
+    does not double the wait (train_cooldown); it still waits the base
+    COOLDOWN_MINUTES["train"] (_train_row_wait), so the same walk is not asked
+    every pass. Counting a fight as a failed walk once sat a member at a tier
+    cap out up to twelve hours behind a fight it had already won."""
     if r.status not in TRAIN_FAILED:
         return False
-    if r.refusal and r.retryable:
-        return True
-    text = ("%s %s %s" % (r.reason, r.refusal, r.result)).lower()
-    return any(word in text for word in PASSING_TRAIN_WORDS)
+    return (r.refusal or r.reason) in PASSING_TRAIN_REASONS
+
+
+def _train_row_wait(r, minutes: int) -> int:
+    """The minutes `r` holds its step back: the base trainer wait for a passing
+    trainer row, `minutes` for every other row."""
+    if r.action == "train" and passing_train_row(r):
+        return min(minutes, COOLDOWN_MINUTES["train"])
+    return minutes
 
 
 def train_cooldown(name: str, recent, skill_id: int | None = None) -> int:
@@ -825,6 +847,8 @@ def train_cooldown(name: str, recent, skill_id: int | None = None) -> int:
 
     Rows without a skill id predate skill-scoped cooldowns and remain
     character-wide so older facts and callers preserve their prior behavior.
+    A passing row (passing_train_row) neither doubles the wait nor ends the
+    run of failures it sits in.
     """
     rows = sorted(
         (
@@ -852,11 +876,10 @@ def _training_cooling(name: str, skill_id: int, recent) -> bool:
         for r in recent or ()
         if r.name == name
         and r.action == "train"
-        and not passing_train_row(r)
         and (r.skill_id is None or r.skill_id == skill_id)
     )
     minutes = train_cooldown(name, rows, skill_id)
-    return any(int(r.age_minutes) < minutes for r in rows)
+    return any(int(r.age_minutes) < _train_row_wait(r, minutes) for r in rows)
 
 
 # ---------------------------------------------------------------------------
