@@ -97,6 +97,7 @@ import crafters
 import craft_rhythm
 import gatheraim
 import gatherband
+import farmassign
 import craft_supply
 import dungeonpace
 import dungeonprogression
@@ -15921,6 +15922,21 @@ class Bridge(discord.Client):
         _log_capped("raid supply", plan.notes)
         now = time.monotonic()
         for step in plan.steps:
+            self._corps_steps[step.holder] = now
+            task = asyncio.create_task(self._run_corps_step(step, cap))
+            self._mail_walk_tasks.add(task)
+            task.add_done_callback(self._mail_walk_task_done)
+        # Farming assignments for what the raid is short of: who gathers what,
+        # where, and for how long, plus the mail steps that route collected
+        # material to the crafters who need it.
+        farm = farmassign.assign(
+            [farmassign.Deficit(line.entry, line.name, line.short)
+             for line in plan.lines if line.short],
+            guild_facts.members, guild_facts.posts, busy, recent, cap)
+        for task in farm.tasks:
+            log.info("farmassign: assigned %s to %s", task.bot, task.name)
+        _log_capped("farmassign", farm.notes)
+        for step in farm.steps:
             self._corps_steps[step.holder] = now
             task = asyncio.create_task(self._run_corps_step(step, cap))
             self._mail_walk_tasks.add(task)
