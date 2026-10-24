@@ -19933,6 +19933,13 @@ class Bridge(discord.Client):
             guildpug.factions(mates, guilds))
         log.info("guild seats: last hour: %s; %d family member(s) free to a tank or "
                  "healer seat", seatmeter.line(found), len(lent))
+        # The carry-ready tanks and healers per door, for the guild page.
+        stamp = time.time()
+        for guild, rows in seatmeter.bench(
+                guilds, [m for m in mates if m.member.guild in guilds], doors,
+                guildpug.factions(mates, guilds)).items():
+            await asyncio.to_thread(_memo_upsert, seatmeter.BENCH_KIND, guild, rows,
+                                    stamp, stamp + seatmeter.BENCH_KEEP_SECONDS)
 
     async def _campaign_queue_loop(self) -> None:
         """Advance every family's queue on its own clock.
