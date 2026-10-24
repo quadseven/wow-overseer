@@ -282,9 +282,7 @@ def start(now: float, hub: dict, why: str, hearthed: bool = False) -> State:
     )
 
 
-def choose_hub(
-    bind_hub: dict, capital_hub: dict, leader_at, why: str = ""
-) -> dict:
+def choose_hub(bind_hub: dict, capital_hub: dict, leader_at, why: str = "") -> dict:
     """The errand's hub: the head's home town, or a capital he is already in.
 
     `bind_hub` is the mailbox by the head's hearthstone point ({} when none is
