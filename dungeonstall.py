@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import timedelta
 
 import campaignplan
 import council
@@ -54,6 +55,7 @@ import jobs
 DECISION = "stall_out"
 STALLED = "stalled"
 WINDOW_HOURS = dungeonpace.WINDOW_HOURS
+NO_PROGRESS_AFTER = timedelta(hours=2)
 
 RUNS_SQL = (
     "SELECT id, map_id, portal_keyword, outcome FROM overseer_dungeon_run "
@@ -170,6 +172,8 @@ class Stuck:
 
     @property
     def why(self) -> str:
+        if self.earlier.run_id == self.later.run_id:
+            return "%s: %s" % (council.keyword_place(self.door), self.later.reason)
         cause = self.later.reason or self.earlier.reason
         return "%s stalled twice running, the second no further in (%s; %s)%s" % (
             council.keyword_place(self.door),
@@ -177,6 +181,28 @@ class Stuck:
             self.later.said(),
             ": " + cause if cause else "",
         )
+
+
+def silent_run(row: dict) -> Stuck | None:
+    """Name an active run with no progress evidence for two hours.
+
+    `silent_seconds` is measured from the run start or the newest quest,
+    level, equip, or boss progress event. The run table's presence heartbeat
+    is deliberately not accepted as progress.
+    """
+    seconds = row.get("silent_seconds")
+    if seconds is None or float(seconds) < NO_PROGRESS_AFTER.total_seconds():
+        return None
+    door = door_of(row)
+    if not door:
+        return None
+    rid = int(row.get("id") or 0)
+    reason = (
+        "no quest, level, gear, or boss progress event and no stall reason "
+        "recorded for at least 2 hours"
+    )
+    stall = Stall(rid, 0, reason)
+    return Stuck(door, stall, stall)
 
 
 def stuck_doors(runs: list, events: list) -> dict:

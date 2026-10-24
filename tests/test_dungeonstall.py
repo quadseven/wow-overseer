@@ -197,6 +197,25 @@ class TwoStallsRunning(unittest.TestCase):
         self.assertEqual([3, 4], stall.event_ids(runs))
 
 
+class ActiveRunSilence(unittest.TestCase):
+    def test_active_run_without_progress_gets_a_named_course_change_at_two_hours(self):
+        row = {
+            "id": 73,
+            "map_id": 90,
+            "portal_keyword": "gnomeregan",
+            "silent_seconds": 2 * 60 * 60,
+        }
+        got = stall.silent_run(row)
+        self.assertEqual("gnomeregan", got.door)
+        self.assertIn("no quest, level, gear, or boss progress event", got.why)
+        self.assertIn("no stall reason recorded", got.why)
+
+    def test_active_run_silence_does_not_trip_early_or_without_a_clock(self):
+        row = {"id": 73, "map_id": 90, "portal_keyword": "gnomeregan"}
+        self.assertIsNone(stall.silent_run({**row, "silent_seconds": 7199}))
+        self.assertIsNone(stall.silent_run(row))
+
+
 def queue_row(qid, keyword, status="active", position=0):
     return {
         "id": qid,
@@ -383,6 +402,7 @@ class StallWorld(FakeWorld):
         self.commits = 0
         self.held_left = None
         self.hold_said = {}
+        self.silent_run = None
         self.world = self
 
     def cancel(self, qid):
@@ -420,6 +440,7 @@ def _pass(world):
             "log": log,
             "pymysql": __import__("pymysql"),
             "_connect": lambda: StoreConn(world),
+            "_silent_dungeon_run": lambda names: world.silent_run,
             "_fetch_queue_rows": world.fetch_queue,
             "_fetch_queue_roster": world.fetch_roster,
             "_fetch_module_crossing": lambda: "",
@@ -502,6 +523,24 @@ class TheCampaignDoesNotStartAThirdRun(unittest.TestCase):
         _pass(w)
         self.assertNotIn("dungeon:shadowfang", self.zug_jobs(w))
         self.assertFalse([j for j in w.jobs if j[1] == "dungeon:shadowfang"])
+
+    def test_two_hours_without_a_progress_event_releases_an_active_run(self):
+        w = StallWorld([_q(7, "gnomeregan", 27, "active", 0)], [], [])
+        for row in w.family("Zug"):
+            row["job"] = "dungeon:gnomeregan"
+        w.silent_run = {
+            "id": 73,
+            "map_id": 90,
+            "portal_keyword": "gnomeregan",
+            "silent_seconds": 2 * 60 * 60,
+        }
+
+        lines = _pass(w)
+
+        self.assertEqual("cancelled", w.queue[0]["status"], lines)
+        self.assertEqual({jobs.DEFAULT}, self.zug_jobs(w))
+        self.assertIn("no stall reason recorded", w.records[0][7])
+        self.assertTrue([line for line in lines if "no stall reason recorded" in line])
 
     def test_the_campaign_moves_on_to_its_next_dungeon(self):
         w = self.world(
@@ -663,6 +702,18 @@ class TheBridgeOrder(unittest.TestCase):
     def test_the_cancel_is_durable_before_the_job_moves(self):
         body = BRIDGE[BRIDGE.index("    async def _stall_breaker(") :]
         self.assertLess(body.index("_stall_write"), body.index("_apply_queue_move"))
+
+    def test_active_run_silence_uses_progress_events_and_the_two_hour_rule(self):
+        read = BRIDGE[BRIDGE.index("def _silent_dungeon_run(") :]
+        read = read[: read.index("\ndef ", 10)]
+        self.assertIn("TIMESTAMPDIFF(SECOND", read)
+        self.assertIn("'level_up'", read)
+        self.assertIn("'item_equip'", read)
+        self.assertIn("re.kind = 'boss'", read)
+        body = BRIDGE[BRIDGE.index("    async def _stall_breaker(") :]
+        body = body[: body.index("\n    async def ", 10)]
+        self.assertIn("_silent_dungeon_run", body)
+        self.assertIn("dungeonstall.silent_run", body)
 
     def test_the_ladder_never_steps_to_a_stuck_door(self):
         facts = BRIDGE[BRIDGE.index("    async def _pace_facts(") :]
