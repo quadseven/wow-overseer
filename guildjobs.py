@@ -792,9 +792,32 @@ def _cooling(member: Member, action: str, recent) -> bool:
     elif action == "gear" and not last_gear_failed(member.name, recent):
         minutes = GEAR_SUCCESS_COOLDOWN_MINUTES
     return any(
-        r.name == member.name and r.action == action and int(r.age_minutes) < minutes
+        r.name == member.name
+        and r.action == action
+        and not (action == "train" and passing_train_row(r))
+        and int(r.age_minutes) < minutes
         for r in recent or ()
     )
+
+
+PASSING_TRAIN_WORDS = ("in combat",)
+
+
+def passing_train_row(r) -> bool:
+    """Whether a trainer row ended for a reason the next moment changes (#1116).
+
+    A member in a fight when its rank walk was cast, or one the module refused
+    with `retryable:true`, learned nothing about the trainer or the road: the
+    walk is asked again on the next pass. Counting it as a failed walk doubled
+    the wait toward TRAIN_BACKOFF_CAP_MINUTES, and a member at a tier cap with
+    the coin for the next rank then sat out up to twelve hours behind a fight
+    it had already won."""
+    if r.status not in TRAIN_FAILED:
+        return False
+    if r.refusal and r.retryable:
+        return True
+    text = ("%s %s %s" % (r.reason, r.refusal, r.result)).lower()
+    return any(word in text for word in PASSING_TRAIN_WORDS)
 
 
 def train_cooldown(name: str, recent, skill_id: int | None = None) -> int:
@@ -809,6 +832,7 @@ def train_cooldown(name: str, recent, skill_id: int | None = None) -> int:
             for r in recent or ()
             if r.name == name
             and r.action == "train"
+            and not passing_train_row(r)
             and (skill_id is None or r.skill_id is None or r.skill_id == skill_id)
         ),
         key=lambda r: int(r.age_minutes),
@@ -828,6 +852,7 @@ def _training_cooling(name: str, skill_id: int, recent) -> bool:
         for r in recent or ()
         if r.name == name
         and r.action == "train"
+        and not passing_train_row(r)
         and (r.skill_id is None or r.skill_id == skill_id)
     )
     minutes = train_cooldown(name, rows, skill_id)
