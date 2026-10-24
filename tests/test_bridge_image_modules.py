@@ -68,6 +68,7 @@ KNOWN_UNREACHED = {
     "realmroller_act",
     "realmroller_plan",
     "realmroller_world",
+    "strands_server",  # a standalone localhost HTTP server, run as its own process
 }
 
 
