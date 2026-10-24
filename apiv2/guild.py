@@ -477,7 +477,7 @@ def guild(query: dict, ctx) -> tuple[int, dict]:
     found = ctx.read.must(_GUILD_SQL, (name,))
     if not found:
         return 404, {"error": "no such guild", "guild": name}
-    return 200, build(ctx.read, found[0], zones, maps, server.FAMILIES.guilds())
+    return 200, build(ctx.read, found[0], zones, maps, ctx.families.guilds())
 
 
 ROUTES = {"/api/v2/guild": guild}

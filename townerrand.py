@@ -221,12 +221,36 @@ def should_start(
     return ""
 
 
+# SLOTS THAT ARE NOT EMPTY GEAR (#1375). A two-hander fills the off hand too:
+# the weapon subclasses that take both hands are gearup.TWO_HAND_SUBCLASSES
+# (pinned equal by a test, since this module imports nothing). And the ranged
+# slot of a paladin, shaman, druid or death knight holds a relic, which no
+# vendor in the levelling range sells. A paladin wielding a two-handed axe
+# read "4 empty" for its off hand, two trinkets and relic, so a gear errand
+# started every cooldown for a shortfall no town counter could fill, and each
+# one held the family in town for half an hour.
+TWO_HAND_SUBCLASSES = frozenset({1, 5, 6, 8, 10, 20})
+RELIC_CLASSES = frozenset({"paladin", "shaman", "druid", "death_knight"})
+
+
+def _two_hander(worn) -> bool:
+    return (
+        isinstance(worn, dict)
+        and int(worn.get("item_class") or 0) == 2
+        and int(worn.get("item_subclass") or -1) in TWO_HAND_SUBCLASSES
+    )
+
+
 def _shortfall(fact: dict) -> str:
     """'no weapon', 'N empty', or '' for a member not short of gear."""
     equipped = fact.get("equipped", {})
     if "mainhand" not in equipped:
         return "no weapon"
     worn = [s for s in equipped if s not in ("shirt", "tabard")]
+    if "offhand" not in equipped and _two_hander(equipped.get("mainhand")):
+        worn.append("offhand")
+    if "ranged" not in equipped and fact.get("class") in RELIC_CLASSES:
+        worn.append("ranged")
     empty = 17 - len(worn)
     return "%d empty" % empty if empty >= START_EMPTY_SLOTS else ""
 
@@ -258,7 +282,7 @@ def start(now: float, hub: dict, why: str, hearthed: bool = False) -> State:
     )
 
 
-def choose_hub(bind_hub: dict, capital_hub: dict, leader_at) -> dict:
+def choose_hub(bind_hub: dict, capital_hub: dict, leader_at, why: str = "") -> dict:
     """The errand's hub: the head's home town, or a capital he is already in.
 
     `bind_hub` is the mailbox by the head's hearthstone point ({} when none is
@@ -267,7 +291,22 @@ def choose_hub(bind_hub: dict, capital_hub: dict, leader_at) -> dict:
     `leader_at` the head's snapshot row. A capital wins only when the head is
     already within a walk of it; otherwise home, which a hearthstone reaches
     from anywhere. With no home mailbox, the capital as before.
+
+    A BAG-ROOM ERRAND STAYS ON THE HEAD'S CONTINENT (wow-dev 2026-10-24). The
+    family's door was Razorfen Downs and its stones were bound in Stormwind, so
+    every bag-room errand crossed the sea and crossed back. When `why` is the
+    bag-room errand and the home mailbox is on another map than the head while
+    a capital mailbox is on his own, the capital wins: the family shops where
+    its campaign door is and goes straight back.
     """
+    if (
+        why == BAG_PRESSURE_WHY
+        and bind_hub
+        and capital_hub
+        and not _same_map(bind_hub, leader_at)
+        and _same_map(capital_hub, leader_at)
+    ):
+        return dict(capital_hub)
     if capital_hub and in_range(capital_hub, leader_at, WALK_YARDS):
         return dict(capital_hub)
     return dict(bind_hub or capital_hub or {})

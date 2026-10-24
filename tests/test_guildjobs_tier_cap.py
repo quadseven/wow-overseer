@@ -17,6 +17,7 @@ import json
 import unittest
 
 import guildjobs
+import modsource
 import pvpgear
 
 H, M, S = guildjobs.HERBALISM, guildjobs.MINING, guildjobs.SKINNING
@@ -246,6 +247,35 @@ class AWalkThatEndedInAFightIsAskedAgain(unittest.TestCase):
         self.assertEqual([], train_steps(early, "Funkymon"))
 
 
+IN_INSTANCE = "character is inside an instance or battleground"
+FLIGHT_ON_THE_WAY = "took a flight on the way to the trainer"
+LEFT_WORLD_ON_THE_WAY = "left the world on the way to the trainer"
+
+
+class AShortLivedEndingIsAskedAgain(unittest.TestCase):
+    """An instance or battleground wall at the gate, a flight taken on the way
+    and leaving the world on the way are all moments that pass (#1389)."""
+
+    def test_an_instance_refusal_waits_the_base_sixty_minutes(self):
+        rows = walks(IN_INSTANCE, 65, 125, 185, 245)
+        self.assertEqual(60, guildjobs.train_cooldown("Funkymon", rows, H))
+        m = member(skills={H: (75, 75)})
+        self.assertEqual(
+            1, len(train_steps(guildjobs.plan([m], recent=rows), "Funkymon"))
+        )
+        early = guildjobs.plan([m], recent=walks(IN_INSTANCE, 16))
+        self.assertEqual([], train_steps(early, "Funkymon"))
+
+    def test_a_flight_or_leaving_the_world_mid_walk_counts_as_passing(self):
+        for reason in (FLIGHT_ON_THE_WAY, LEFT_WORLD_ON_THE_WAY):
+            with self.subTest(reason=reason):
+                rows = walks(reason, 65, 125, 185, outcome="abandoned")
+                self.assertEqual(60, guildjobs.train_cooldown("Funkymon", rows, H))
+                m = member(skills={H: (75, 75)})
+                result = guildjobs.plan([m], recent=rows)
+                self.assertEqual(1, len(train_steps(result, "Funkymon")))
+
+
 class APermanentRefusalStillBacksOff(unittest.TestCase):
     """The module marks many trainer walls retryable that the next pass will
     not change (a trainer beyond the cap, the ground, Outland, a follower, a
@@ -308,6 +338,38 @@ class AWalkThatFailedForTheRoadStillBacksOff(unittest.TestCase):
         m = member(skills={H: (75, 75)})
         result = guildjobs.plan([m], recent=rows)
         self.assertEqual([], train_steps(result, "Funkymon"))
+
+
+def absent_from(source: str, reasons) -> list:
+    """The reasons that do not appear in `source` as a whole C++ string
+    literal, sorted."""
+    return sorted(r for r in reasons if '"%s"' % r not in source)
+
+
+class ThePassingListIsPinnedToTheModule(unittest.TestCase):
+    """PASSING_TRAIN_REASONS is matched exactly (#1389), so a module that
+    rewords a reason would quietly put it back on the doubling backoff."""
+
+    def test_a_reason_the_source_does_not_have_is_reported(self):
+        src = 'constexpr char const* A = "character is in combat";'
+        self.assertEqual(["gone"], absent_from(src, {"character is in combat", "gone"}))
+        self.assertEqual([], absent_from(src, {"character is in combat"}))
+
+    def test_a_substring_of_a_longer_literal_is_not_a_match(self):
+        src = 'x = "entered combat on the way to the trainer today";'
+        self.assertEqual(
+            ["entered combat on the way to the trainer"],
+            absent_from(src, {"entered combat on the way to the trainer"}),
+        )
+
+    def test_every_passing_reason_is_a_literal_in_the_pinned_module(self):
+        src = modsource.read(modsource.DECISIONS_H, encoding="utf-8")
+        if "on the way to the trainer" not in src:
+            self.skipTest(
+                "the pinned mod-overseer predates the trainer walk endings; "
+                "this runs once the submodule is bumped"
+            )
+        self.assertEqual([], absent_from(src, guildjobs.PASSING_TRAIN_REASONS))
 
 
 if __name__ == "__main__":

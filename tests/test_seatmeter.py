@@ -14,7 +14,18 @@ from unittest import mock
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import seatmeter as sm  # noqa: E402
-from test_guildsocial import DOORS, MAGE, ROGUE, mate  # noqa: E402
+from test_guildsocial import (  # noqa: E402
+    DOORS,
+    HOLY,
+    MAGE,
+    PRIEST,
+    PROTECTION,
+    ROGUE,
+    WARRIOR,
+    mate,
+)
+import guildrun  # noqa: E402
+import json  # noqa: E402
 from test_guildsocial_bridge import _Self, bridge, facts  # noqa: E402
 
 
@@ -74,6 +85,93 @@ class TheLine(unittest.TestCase):
         )
 
 
+class TheBench(unittest.TestCase):
+    """Carry-ready tanks and healers per door (#784 box 1)."""
+
+    DEADMINES_AT_20 = guildrun.doors({}, {36: 20})
+
+    def _row(self, found, guild="Cave"):
+        return next(r for r in found[guild] if r["keyword"] == "deadmines")
+
+    def test_counts_the_tanks_and_healers_standing_at_the_carry_floor(self):
+        mates = [
+            mate("Tanky", 21, WARRIOR, talent_spells=PROTECTION, has_shield=1),
+            mate("LowTank", 19, WARRIOR, talent_spells=PROTECTION, has_shield=1),
+            mate("Healy", 20, PRIEST, talent_spells=HOLY),
+            mate("Auren", 25, ROGUE),
+            mate(
+                "Bonk",
+                30,
+                WARRIOR,
+                talent_spells=PROTECTION,
+                has_shield=1,
+                guild="Bonkers",
+            ),
+        ]
+        found = sm.bench(
+            ["Cave", "Bonkers"],
+            mates,
+            self.DEADMINES_AT_20,
+            {"Cave": "Alliance", "Bonkers": "Alliance"},
+        )
+        row = self._row(found)
+        self.assertEqual((row["tanks"], row["healers"], row["carry_floor"]), (1, 1, 20))
+        self.assertEqual(
+            (
+                self._row(found, "Bonkers")["tanks"],
+                self._row(found, "Bonkers")["healers"],
+            ),
+            (1, 0),
+        )
+
+    def test_a_tank_with_no_shield_is_not_ready(self):
+        mates = [mate("Bare", 25, WARRIOR, talent_spells=PROTECTION, has_shield=0)]
+        found = sm.bench(["Cave"], mates, self.DEADMINES_AT_20, {"Cave": "Alliance"})
+        self.assertEqual(self._row(found)["tanks"], 0)
+
+    def test_a_door_with_no_bosses_level_is_left_out(self):
+        found = sm.bench(["Cave"], [], guildrun.doors({}, {}), {"Cave": "Alliance"})
+        self.assertEqual(found, {"Cave": []})
+
+    def test_the_page_reads_the_memo_rows(self):
+        rows = [
+            {
+                "subject": "Cave",
+                "value": json.dumps([{"keyword": "deadmines"}]),
+                "since": 5.0,
+            },
+            {"subject": "Bonkers", "value": "not json", "since": 5.0},
+        ]
+        self.assertEqual(
+            sm.page(rows),
+            {
+                "guilds": [
+                    {"guild": "Cave", "doors": [{"keyword": "deadmines"}], "at": 5.0}
+                ]
+            },
+        )
+
+    def test_the_bridge_leaves_the_bench_in_the_memo_store(self):
+        this = _Self()
+        this._log_seat_meter = lambda *a: bridge.Bridge._log_seat_meter(this, *a)
+        saved = []
+        bounds = mock.Mock(guilds=("Cave",))
+        mates = [mate("Tanky", 21, WARRIOR, talent_spells=PROTECTION, has_shield=1)]
+        with (
+            mock.patch.object(bridge, "_fetch_seat_meter_runs", lambda: []),
+            mock.patch.object(bridge, "_memo_upsert", lambda *a: saved.append(a)),
+            self.assertLogs("wow-overseer", level="INFO"),
+        ):
+            asyncio.run(
+                bridge.Bridge._log_seat_meter(
+                    this, bounds, {"family": set()}, mates, {}, self.DEADMINES_AT_20, []
+                )
+            )
+        self.assertEqual([(a[0], a[1]) for a in saved], [("seatbench", "Cave")])
+        row = next(r for r in saved[0][2] if r["keyword"] == "deadmines")
+        self.assertEqual((row["tanks"], row["healers"]), (1, 0))
+
+
 class TheBridgeSaysIt(unittest.TestCase):
     def test_the_social_pass_logs_the_meter_at_most_every_ten_minutes(self):
         this = _Self()
@@ -85,6 +183,7 @@ class TheBridgeSaysIt(unittest.TestCase):
             "_write_guild_social": lambda social: 0,
             "_guild_social_names": lambda: set(),
             "_fetch_seat_meter_runs": lambda: [run("Cave", ["A", "B", "C", "D", "E"])],
+            "_memo_upsert": lambda *a: None,
         }
         with (
             mock.patch.multiple(bridge, **stubs),

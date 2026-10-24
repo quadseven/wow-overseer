@@ -155,6 +155,8 @@ KEY_ITEMS = tuple(sorted({key for key, _name, _where in DOOR_KEYS.values()}))
 
 # Why a run is not offered, beyond council's door refusals.
 REFUSED_OUTGROWN = "outgrown"
+# A door the family keeps clearing and learns nothing from (#1400).
+REFUSED_DRY = "dry"
 REFUSED_LOCKED = "locked"
 # The family's two latest runs there stalled, the later no further in
 # (dungeonstall.py, #1041): a third would stall the same way.
@@ -567,6 +569,9 @@ class Facts:
     bosses: dict | None = None
     keys: frozenset | None = None
     stalled: dict | None = None
+    # Run keyword -> completed runs since the family's last level (#1400,
+    # `dry_doors`), or None when unread.
+    dry: dict | None = None
 
     @property
     def weakest(self) -> tuple:
@@ -739,6 +744,62 @@ def _outgrown_run(facts: Facts, run: Run, level: int) -> str:
     return "outgrown: it tops out at %d and holds no upgrade for anyone" % (run.ceiling)
 
 
+# A DOOR THAT TEACHES NOTHING IS LEFT FOR ANOTHER (#1400).
+#
+# `_outgrown_run` ends a door only once the weakest member passes its ceiling,
+# and below that a planned entry runs to its count whatever the runs yield.
+# Measured on the dev realm 2026-10-24: Zug's family, all five at level 35, on
+# run 20 of a 27-run Gnomeregan entry (ceiling 38), gained about six hundred
+# experience a member over a complete run, and the Now page read it stalled
+# for hours. While the family levels, a door it has cleared DRY_RUNS times
+# since any member last gained a level is done for now: the planner chooses
+# another, or nothing, and the family quests until a level makes it a door
+# worth running again. Its own wing is judged by its door, so the record of
+# a wing that shares its map cannot bar the others.
+DRY_RUNS = 3
+
+# The family's last level, then its completed runs per map since then, for
+# `dry_doors`: two reads, because the run ledger and the level ledger sit on
+# the two sides of the collation split (bridge.COLLATIONS). A family with no
+# level on record counts every completed run.
+LAST_LEVEL_SQL = (
+    "SELECT MAX(created_at) AS at FROM overseer_level WHERE character_name IN ({holes})"
+)
+DRY_SQL = (
+    "SELECT map_id, COUNT(*) AS n FROM overseer_dungeon_run "
+    "WHERE state = 'ended' AND outcome = 'complete' AND leader_name IN ({holes}) "
+    "AND started_at > %s GROUP BY map_id"
+)
+
+
+def dry_doors(rows) -> dict:
+    """Run keyword -> completed runs since the family's last level, from
+    DRY_SQL rows. A map that holds more than one wing names no door."""
+    out: dict = {}
+    for row in rows or ():
+        try:
+            map_id, count = int(row["map_id"]), int(row["n"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        wings = [run for run in RUNS if run.map_id == map_id]
+        if len(wings) == 1:
+            out[wings[0].keyword] = count
+    return out
+
+
+def _dry(dry: dict | None, keyword: str, level: int) -> str:
+    """Why the door teaches the family nothing now, or ""."""
+    if not dry or level >= LEVEL_CAP:
+        return ""
+    count = int(dry.get(wing_of(keyword), 0) or 0)
+    if count < DRY_RUNS:
+        return ""
+    return (
+        "cleared %d times since the family's last level, so it teaches nothing now"
+        % count
+    )
+
+
 def _locked(facts: Facts, run: Run) -> str:
     """Why the family cannot get through `run`'s door without a key, or ""."""
     need = DOOR_KEYS.get(run.keyword)
@@ -770,6 +831,7 @@ def _refusal_kind(facts: Facts, run: Run, level: int) -> tuple:
         (REFUSED_OUTGROWN, _outgrown_run(facts, run, level)),
         (REFUSED_LOCKED, _locked(facts, run)),
         (REFUSED_STALLED, _stalled(facts, run)),
+        (REFUSED_DRY, _dry(facts.dry, run.keyword, level)),
     ):
         if why:
             return kind, why
@@ -988,9 +1050,12 @@ class Due:
 
     reason: str = ""
     finish: int = 0
+    # The head is ended for teaching nothing (#1400), so it ends even when no
+    # other door is chosen, and the family quests.
+    dry: bool = False
 
 
-def due(rows: list, leader: dict | None, level_rows: list) -> Due:
+def due(rows: list, leader: dict | None, level_rows: list, dry=None) -> Due:
     """Whether this family needs a planned run, from its pending queue rows.
 
     rows    the family's queued and active entries, in order, each with its
@@ -1019,10 +1084,10 @@ def due(rows: list, leader: dict | None, level_rows: list) -> Due:
                 int(head["runs_wanted"]),
             )
         )
-    return _outgrown(head, level_rows)
+    return _outgrown(head, level_rows, dry)
 
 
-def _outgrown(head: dict, level_rows: list) -> Due:
+def _outgrown(head: dict, level_rows: list, dry=None) -> Due:
     """An active planner entry the weakest member has outgrown ends early.
 
     Only the planner's own entries: an operator's order runs to its count.
@@ -1039,6 +1104,9 @@ def _outgrown(head: dict, level_rows: list) -> Due:
             % (run.place, min(weakest), run.ceiling),
             finish=int(head["id"]),
         )
+    why = _dry(dry, run.keyword, min(weakest) if weakest else 0)
+    if weakest and why:
+        return Due("%s is %s" % (run.place, why), finish=int(head["id"]), dry=True)
     return Due()
 
 

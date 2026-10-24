@@ -199,6 +199,23 @@ class TheStates(unittest.TestCase):
         self.assertEqual(HUB, te.choose_hub({}, HUB, _at(3000, 3000)))
         self.assertEqual({}, te.choose_hub({}, {}, _at(0, 0)))
 
+    def test_a_bag_room_errand_from_kalimdor_does_not_cross_the_sea(self):
+        # Grug's family, wow-dev 2026-10-24: door on Kalimdor, head bound in
+        # Stormwind (map 0), a Ratchet mailbox (map 1) on the head's map.
+        ratchet = {"map_id": 1, "x": -956.0, "y": -3745.0, "z": 5.0}
+        door = _at(-4600, -2400, 1)
+        pick = te.choose_hub(STORMWIND_BIND, ratchet, door, te.BAG_PRESSURE_WHY)
+        self.assertEqual(ratchet, pick)
+        # Other errands keep the home town, and a home on the head's own map
+        # is still home.
+        self.assertEqual(STORMWIND_BIND, te.choose_hub(STORMWIND_BIND, ratchet, door))
+        self.assertEqual(HOME, te.choose_hub(HOME, ratchet, door, te.BAG_PRESSURE_WHY))
+        # With no capital mailbox on his map the home town is the only choice.
+        self.assertEqual(
+            STORMWIND_BIND,
+            te.choose_hub(STORMWIND_BIND, {}, door, te.BAG_PRESSURE_WHY),
+        )
+
     def test_members_beyond_a_walk_from_home_hearth(self):
         positions = {
             "Grug": _at(3000, 3000),
@@ -905,3 +922,48 @@ class TheMovementChoice(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ATwoHanderFillsTheOffHand(unittest.TestCase):
+    """#1375: a paladin with a two-handed axe was "4 empty" every cooldown."""
+
+    WORN = (
+        "head",
+        "neck",
+        "shoulder",
+        "shirt",
+        "chest",
+        "waist",
+        "legs",
+        "feet",
+        "wrist",
+        "hands",
+        "finger1",
+        "finger2",
+        "back",
+    )
+
+    def fact(self, subclass, cls="paladin"):
+        equipped = {slot: {"item_level": 45} for slot in self.WORN}
+        equipped["mainhand"] = {
+            "item_level": 42,
+            "item_class": 2,
+            "item_subclass": subclass,
+        }
+        return {"Grog": {"class": cls, "equipped": equipped, "purse": 147483}}
+
+    def test_the_measured_paladin_is_not_short(self):
+        self.assertEqual([], te.short_of_gear(self.fact(1)))
+
+    def test_a_one_hander_still_leaves_the_off_hand_empty(self):
+        self.assertEqual(
+            ["Grog (4 empty)"], te.short_of_gear(self.fact(0, cls="warrior"))
+        )
+
+    def test_a_warriors_ranged_slot_still_counts(self):
+        self.assertEqual(
+            ["Grog (3 empty)"], te.short_of_gear(self.fact(1, cls="warrior"))
+        )
+
+    def test_the_subclasses_are_gearups(self):
+        self.assertEqual(set(te.TWO_HAND_SUBCLASSES), set(gearup.TWO_HAND_SUBCLASSES))
