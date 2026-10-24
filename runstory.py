@@ -779,13 +779,25 @@ def _tell_ending(tale: _Tale, g: _GuildRun, wiped: bool) -> None:
             "the run was called off after %d minutes inside"
             % round(g.seconds_inside / 60.0)
         )
+    elif g.outcome == "stalled":
+        fact = (
+            "the dungeon brain could not reach the next boss after %d of %d bosses"
+            % (g.done, g.total)
+            if g.total
+            else ""
+        )
+        tale.tag("stalled", fact, first=True)
+        tale.say(
+            "the run stalled after %d minutes inside: the dungeon brain could "
+            "not reach the next boss" % round(g.seconds_inside / 60.0)
+        )
     elif wiped and not g.inside:
         counted = " (%s)" % _deaths_said(g.deaths) if g.deaths else ""
         tale.say("everybody inside died%s, and no death record says to what" % counted)
 
 
 def _tell_went_in(g: _GuildRun, zones: dict) -> dict:
-    """A run that went in and did not clear: wiped, abandoned or timed out."""
+    """A run that went in and did not clear: wiped, abandoned, timed out or stalled."""
     tale = _Tale()
     wiped = g.outcome == "wiped"
     _tell_levels(tale, g)

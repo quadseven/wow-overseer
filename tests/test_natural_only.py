@@ -83,7 +83,6 @@ KNOWN_NATURAL_LITERALS = frozenset(
     {
         "auras",
         "meter",
-        "use",
     }
 )
 

@@ -549,6 +549,88 @@ class WindowContaminationTest(unittest.TestCase):
             "the bond rules count, and crowds out the memories",
         )
 
+    def test_only_the_kin_muster_writes_reflection_rows_anywhere_in_the_bridge(self):
+        """The guard over EVERY _insert_thought call, not just _council_once.
+
+        Council speech is written from many places (craft asks, tabard, settled
+        notices, trade plans, blocked and handover lines). Any one of them
+        tagging its rows 'reflection' puts council chatter into the window the
+        bond rules read. So: 'reflection' may be written only by the kin
+        muster, and every council function must write 'council'.
+        """
+        import ast
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        writers: dict[str, set[str]] = {}
+        refs = 0
+        seen = 0
+
+        class Scan(ast.NodeVisitor):
+            """Attributes each call to its NEAREST enclosing function."""
+
+            def __init__(self) -> None:
+                self.stack: list[str] = []
+
+            def _fn(self, node: ast.AST) -> None:
+                self.stack.append(node.name)
+                self.generic_visit(node)
+                self.stack.pop()
+
+            visit_FunctionDef = visit_AsyncFunctionDef = _fn
+
+            def visit_Name(self, node: ast.Name) -> None:
+                nonlocal refs
+                if node.id == "_insert_thought":
+                    refs += 1
+
+            def visit_Call(self, call: ast.Call) -> None:
+                nonlocal seen
+                args = call.args
+                # to_thread(_insert_thought, who, source, text)
+                if (
+                    len(args) >= 3
+                    and isinstance(args[0], ast.Name)
+                    and args[0].id == "_insert_thought"
+                    and isinstance(args[2], ast.Constant)
+                ):
+                    seen += 1
+                    owner = self.stack[-1] if self.stack else "<module>"
+                    writers.setdefault(owner, set()).add(args[2].value)
+                self.generic_visit(call)
+
+        Scan().visit(ast.parse(src))
+        # Every mention of _insert_thought (bar its own def, which is not a
+        # Name node) must be a call this scan understood; an alias, a partial
+        # or a non-literal source would otherwise slip past unseen.
+        self.assertEqual(
+            refs,
+            seen,
+            "a _insert_thought use the guard cannot read: %d vs %d" % (refs, seen),
+        )
+
+        reflectors = {n for n, tags in writers.items() if "reflection" in tags}
+        self.assertEqual(
+            reflectors,
+            {"_muster_for_pleas"},
+            "only the kin muster may write 'reflection' rows; these also do: %s"
+            % sorted(reflectors - {"_muster_for_pleas"}),
+        )
+        councillors = {n for n, tags in writers.items() if "council" in tags}
+        for name in (
+            "_council_once",
+            "_tabard_once",
+            "_announce_settled",
+            "_speak_trade_plan",
+            "_say_blocked",
+            "_speak_handovers",
+            "_answer_craft_ask",
+            "_stood_down_for_craft",
+        ):
+            self.assertIn(
+                name, councillors, "%s no longer writes 'council' rows" % name
+            )
+
     def test_every_declaration_of_the_source_column_admits_the_new_tag(self):
         """A tag the ENUM rejects is an insert that fails, every council.
 
