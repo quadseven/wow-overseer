@@ -41,6 +41,7 @@ from __future__ import annotations
 import functools
 from dataclasses import dataclass
 
+import darkiron
 import gearscore
 
 # THE TARGETS, PER SEAT. The Ragnaros tank first, as classic guilds asked
@@ -216,7 +217,7 @@ def _piece(entry, slot: str, phase: str = "", row: dict | None = None) -> Piece:
         fire=int(book.get("fire_res") or row.get("fire_res") or 0),
         slot=slot,
         required_level=int(book.get("req") or row.get("req") or 0),
-        source=_source(book.get("sources")),
+        source=darkiron.source(entry) or _source(book.get("sources")),
         phase=phase,
     )
 
