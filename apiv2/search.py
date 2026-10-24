@@ -190,9 +190,9 @@ def _limit_statements(rd) -> None:
         )
 
 
-def build(q: str, rd, server) -> dict:
+def build(q: str, rd, families, server) -> dict:
     """The five groups for `q` (already normalised), from one reader."""
-    roster = server.FAMILIES.names()
+    roster = families.names()
     keywords = server.council.DUNGEON_KEYWORDS
     place = server.council.keyword_place
     guilds = list(server.guildrun.limits().guilds)
@@ -236,7 +236,7 @@ def search(query: dict, ctx) -> tuple[int, dict]:
     hit = _cached(q, now)
     if hit is not None:
         return 200, hit
-    payload = build(q, ctx.read, ctx.server)
+    payload = build(q, ctx.read, ctx.families, ctx.server)
     _keep(q, now, payload)
     return 200, payload
 
