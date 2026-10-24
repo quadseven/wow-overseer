@@ -326,11 +326,30 @@ def _lost_words(run, walked, far, stands) -> str:
     return "; ".join(words)
 
 
+# THE WALK REFUSALS THE NEXT MOMENT CHANGES (#1375), the module's own literals:
+# held by another verb (#1275), and a member that was busy when its meeting
+# walk was served - in a fight, on a flight, logging out, out of the world or
+# already walking (the same passing walls guildjobs.PASSING_TRAIN_REASONS
+# names for the trainer gate). A class quest meeting failed on these when a
+# member was briefly in a fight or on a flight, each failure counted against
+# the ask, and the quest stood stuck.
+TRANSIENT_WALK_REASONS = (
+    classquest.HELD_REASON,
+    "character is in combat",
+    "entered combat on the way",
+    "character is on a flight path",
+    "character is logging out",
+    "character is not in the world",
+    "a walk is already under way for this character",
+)
+
+
 def held_refusal(said) -> bool:
-    """True when a walk's sentence is the worldserver's held-by-another-verb
-    refusal: the walker is held by a verb the module did not write, so the hold
-    is transient (classquest.HELD_REASON) rather than a lost member."""
-    return classquest.HELD_REASON in str(said or "")
+    """True when a walk's sentence is a refusal the next moment changes
+    (TRANSIENT_WALK_REASONS): the walker was held by another verb or busy, so
+    the hold is transient rather than a lost member."""
+    text = str(said or "")
+    return any(reason in text for reason in TRANSIENT_WALK_REASONS)
 
 
 def meeting_held(run) -> tuple:
