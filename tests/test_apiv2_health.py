@@ -386,7 +386,9 @@ def ctx_for(answers):
     )
     fams = families_module.Families(store, fallback=lambda: [])
     rd = realmread.Memory(answers)
-    return Context(read=rd, server=types.SimpleNamespace(FAMILIES=fams)), rd.asked
+    return Context(
+        read=rd, server=types.SimpleNamespace(FAMILIES=fams), families=fams
+    ), rd.asked
 
 
 class Handler(unittest.TestCase):

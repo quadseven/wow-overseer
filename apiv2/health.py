@@ -574,7 +574,7 @@ def health(_query: dict, ctx) -> tuple[int, dict]:
             )
         }
     invites = rd.rows(INVITES_SQL, (REFUSAL_HOURS,), what="overseer_command")
-    streaks, events = family_reads(rd, ctx.server.FAMILIES.families())
+    streaks, events = family_reads(rd, ctx.families.families())
     _, stuck = members.stuck(_query, ctx)
     _, questers = quests.questers(_query, ctx)
     payload = build(

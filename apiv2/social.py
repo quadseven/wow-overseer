@@ -51,7 +51,7 @@ FRIENDS_SQL = (
 
 def family_of(ctx, name: str) -> tuple[str, list[str]]:
     """(family key, the family's names) for a member, or ("", [name])."""
-    for key, names in ctx.server.FAMILIES.families().items():
+    for key, names in ctx.families.families().items():
         if name in names:
             return key, list(names)
     return "", [name]
