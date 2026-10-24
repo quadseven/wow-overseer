@@ -43,6 +43,7 @@ import chat
 import clearance
 import council
 import core
+import deployinfo
 import craftpleas
 import crossing
 import digest
@@ -35104,6 +35105,7 @@ class HeadlessBridge(Bridge):
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    log.info(deployinfo.startup_line())
 
     # HEADLESS IS CHOSEN, NEVER FALLEN INTO. An absent token could mean "this
     # is the dev world" or "the secret failed to mount in production", and

@@ -106,7 +106,11 @@ jobs:
           echo "will build $image:sha-${sha:0:12} (publish=$publish)"
 
       - name: Build
-        run: docker build -t '${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}' .
+        run: |
+          docker build \
+            --build-arg OVERSEER_COMMIT="$(git rev-parse HEAD)" \
+            --build-arg OVERSEER_BUILT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t '${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}' .
 
       - name: The image must actually run python and hold the interpreter this needs
         # No live Discord/MySQL to smoke-test against in CI, and starting
