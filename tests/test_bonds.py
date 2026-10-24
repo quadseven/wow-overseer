@@ -549,6 +549,59 @@ class WindowContaminationTest(unittest.TestCase):
             "the bond rules count, and crowds out the memories",
         )
 
+    def test_only_the_kin_muster_writes_reflection_rows_anywhere_in_the_bridge(self):
+        """The guard over EVERY _insert_thought call, not just _council_once.
+
+        Council speech is written from many places (craft asks, tabard, settled
+        notices, trade plans, blocked and handover lines). Any one of them
+        tagging its rows 'reflection' puts council chatter into the window the
+        bond rules read. So: 'reflection' may be written only by the kin
+        muster, and every council function must write 'council'.
+        """
+        import ast
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        writers: dict[str, set[str]] = {}
+
+        def scan(fn: ast.AST) -> None:
+            for call in ast.walk(fn):
+                if not isinstance(call, ast.Call):
+                    continue
+                args = call.args
+                # to_thread(_insert_thought, who, source, text)
+                if (
+                    len(args) >= 3
+                    and isinstance(args[0], ast.Name)
+                    and args[0].id == "_insert_thought"
+                    and isinstance(args[2], ast.Constant)
+                ):
+                    writers.setdefault(fn.name, set()).add(args[2].value)
+
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                scan(node)
+
+        reflectors = {n for n, tags in writers.items() if "reflection" in tags}
+        self.assertEqual(
+            reflectors,
+            {"_muster_for_pleas"},
+            "only the kin muster may write 'reflection' rows; these also do: %s"
+            % sorted(reflectors - {"_muster_for_pleas"}),
+        )
+        councillors = {n for n, tags in writers.items() if "council" in tags}
+        for name in (
+            "_council_once",
+            "_tabard_once",
+            "_announce_settled",
+            "_speak_trade_plan",
+            "_say_blocked",
+            "_speak_handovers",
+            "_answer_craft_ask",
+            "_stood_down_for_craft",
+        ):
+            self.assertIn(name, councillors, "%s no longer writes 'council' rows" % name)
+
     def test_every_declaration_of_the_source_column_admits_the_new_tag(self):
         """A tag the ENUM rejects is an insert that fails, every council.
 
