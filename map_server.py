@@ -52,6 +52,7 @@ import guildcraft
 import places
 import guildgear
 import guildroute
+import seatmeter
 import jevview
 import levelroute
 import llmmode
@@ -6067,6 +6068,24 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("guild runs query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _guild_seats(self, _query: dict) -> None:
+        """GET /api/guildseats - the carry-ready tanks and healers per door (#784).
+
+        The bridge counts them every few minutes and leaves one memo row per
+        guild (seatmeter.bench); this reads those rows. A guild the bridge has
+        not written lately is absent, a world without the memo table answers
+        empty rather than 503.
+        """
+        try:
+            with realmread.Session(_connect) as rd:
+                rows = rd.rows(seatmeter.BENCH_READ_SQL, (seatmeter.BENCH_KIND,),
+                               what="overseer_bridge_memo")
+            self._send(200, "application/json",
+                       json.dumps(seatmeter.page(rows), default=str).encode())
+        except Exception:
+            log.exception("guild seats query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _guild_chat(self, query: dict) -> None:
         """GET /api/guildchat?guild=X&limit=N - the guild's asks and answers.
 
@@ -6296,6 +6315,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/levelroute": _levelroute,
         "/api/party-status": _party_status,
         "/api/guildruns": _guild_runs,
+        "/api/guildseats": _guild_seats,
         "/api/guildchat": _guild_chat,
         "/api/decree": _decree,
         "/api/thoughts": _thoughts,

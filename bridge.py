@@ -38,6 +38,7 @@ import bag_upgrade
 import bank
 import bankbags
 import bankforecast
+import housedemand
 import bankpolicy
 import chat
 import clearance
@@ -73,6 +74,7 @@ import guildfund
 import guildshare
 import guildpost
 import guildroute
+import orders
 import guildwork
 import gearup
 import weaponskill
@@ -4272,6 +4274,33 @@ def _planner_preraid(names: list, level_rows: list) -> tuple:
     return upgrades, progress
 
 
+def _guild_seat_gains(names: list, levels: list) -> dict:
+    """preraid.run_gains over the seated raiders in `names` (#760): what one
+    run of each level 60 dungeon drops for each of them, the way the family's
+    upgrades are read for its planner. {} below guildrun.UPGRADE_FLOOR and
+    for any read this realm cannot answer. Reads only."""
+    if not names or not levels or min(levels) < guildrun.UPGRADE_FLOOR:
+        return {}
+    marks = preraid.holes(len(names))
+    args = tuple(names)
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            found = _planner_catalog(cur)
+            people = _planner_rows(
+                cur, preraid.GUILD_MEMBERS_SQL.format(holes=marks), args,
+                "the seated raiders' specs")
+            worn = _planner_rows(
+                cur, preraid.WORN_SQL.format(holes=marks), args,
+                "the seated raiders' worn items")
+    except pymysql.err.MySQLError:
+        log.exception("guild runs: the seated raiders' gear could not be read")
+        return {}
+    if found is None or people is None or worn is None:
+        return {}
+    plans = [preraid.plan(m, found) for m in preraid.members(people, worn)]
+    return preraid.run_gains(plans)
+
+
 def _planner_dry(names: list) -> dict | None:
     """campaignplan.dry_doors for the family, or None when unreadable (#1400)."""
     if not names:
@@ -5103,13 +5132,10 @@ def _roster_leads() -> set:
 
 def _insert_hearth(name: str, source: str = jev_movement.SOURCE) -> int:
     """One kind='hearth' row: the character uses its hearthstone."""
-    with _connect() as conn, conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO overseer_command (target_name, command, kind, source) "
-            "VALUES (%s, 'use', 'hearth', %s)",
-            (name, source),
-        )
-        return cur.lastrowid
+    return orders.send(
+        orders.MySqlStore(_connect),
+        orders.Order(target=name, command="use", kind="hearth", source=source),
+    )
 
 
 def _holders_of(quest_id: int) -> set:
@@ -10042,6 +10068,19 @@ class Bridge(discord.Client):
                 holder_house[holder] = house
         return holder_house
 
+    async def _house_is_closed(self, house: int) -> bool:
+        """Whether `house` sold nothing in its last finished lots (#778).
+
+        Logs the verdict when it changes, so a closed house is named once
+        rather than every pass.
+        """
+        outcomes = await asyncio.to_thread(
+            _fetch_house_outcomes, house, housedemand.RECENT)
+        shut, _sold, total = housedemand.closed(outcomes)
+        _log_changed("auction-house", [housedemand.closed_line(house, total)]
+                     if shut else [], key=(house,), capped=False)
+        return shut
+
     async def _auction_sell_house(self, house: int, house_candidates: list,
                                   seen: set, cohort=None) -> int:
         """Plan and queue listings for one house's candidates.
@@ -10051,6 +10090,8 @@ class Bridge(discord.Client):
         wrong pool is a row `DoAuction` refuses as `WrongHouse`. Returns the
         number of rows queued.
         """
+        if await self._house_is_closed(house):
+            return 0
         house_entries = sorted({int(c["entry"]) for c in house_candidates})
         listings = await asyncio.to_thread(
             _fetch_auction_listings, house_entries, house)
@@ -13351,8 +13392,12 @@ class Bridge(discord.Client):
         if auction_open and leader:
             teams = await asyncio.to_thread(_fetch_teams, [leader])
             house = auction.TEAM_HOUSE.get(teams.get(leader, ""), 0)
-            listings = await asyncio.to_thread(
-                _fetch_auction_listings, sorted({s.entry for s in stacks}), house)
+            # A CLOSED HOUSE HOLDS NOTHING BACK (#778): no market means no
+            # AUCTION route, so the stack goes on to the vendor.
+            listings = ([] if await self._house_is_closed(house) else
+                        await asyncio.to_thread(
+                            _fetch_auction_listings,
+                            sorted({s.entry for s in stacks}), house))
             for listing in listings:
                 market[listing.entry] = min(
                     market.get(listing.entry, listing.per_unit), listing.per_unit)
@@ -17396,6 +17441,13 @@ class Bridge(discord.Client):
                 run.outcome = "party timed out before quest credit"
                 return False
             await self._class_party_tend_hunt(run, hunt)
+            if getattr(hunt, "stop_why", ""):
+                # NO HUNT CAN BRING THE ITEM HOME (#1375): the party ends with
+                # the reason, and the member makes room before it asks again.
+                log.info("class party: %s's party for %s stops: %s", run.leader,
+                         run.title, hunt.stop_why)
+                run.outcome = hunt.stop_why
+                return False
             await asyncio.sleep(min(classparty.WATCH_SECONDS, max(1.0, left)))
 
     async def _class_party_disband_row(self, run) -> None:
@@ -18330,7 +18382,7 @@ class Bridge(discord.Client):
         capital = await asyncio.to_thread(_fetch_capital_hub, leader,
                                           teams.get(leader, ""))
         home = await asyncio.to_thread(_fetch_bind_hub, leader)
-        hub = townerrand.choose_hub(home, capital, positions.get(leader))
+        hub = townerrand.choose_hub(home, capital, positions.get(leader), why)
         if not hub:
             log.info("town errand: %s%s, but neither %s's hearthstone point nor "
                      "a capital of the family's own auction house on his map "
@@ -19791,8 +19843,10 @@ class Bridge(discord.Client):
         # The guild with the fewest runs in flight first, so both get turns.
         pools.sort(key=lambda p: (facts["in_flight_by_guild"].get(p.guild, 0),
                                   -max(p.levels)))
+        gains = await asyncio.to_thread(
+            _guild_seat_gains, [m.name for m in pools[0].members], pools[0].levels)
         plan = guildrun.plan_for(pools[0], doors, guildrun.rates(facts["history"]),
-                                 facts.get("recipes", {}).get(pools[0].guild))
+                                 facts.get("recipes", {}).get(pools[0].guild), gains)
         if plan is None:
             return
         decision = await guildrun.decide(self._jev, plan)
@@ -19810,6 +19864,11 @@ class Bridge(discord.Client):
         if recipe:
             log.info("guild run %s: %s %s", plan.pool.guild, decision.door.place,
                      guildrun.recipe_words(recipe))
+        # THE SEATED RAIDERS' UPGRADES the run was chosen for (#760).
+        upgrades = guildrun.upgrade_words(plan, decision.door, decision.chosen)
+        if upgrades:
+            log.info("guild run %s: %s drops %s", plan.pool.guild,
+                     decision.door.place, upgrades)
 
     async def _guild_social_once(self) -> None:
         """One pass of the guild's asks and answers (guildsocial, #568, #569).
@@ -19954,6 +20013,13 @@ class Bridge(discord.Client):
             guildpug.factions(mates, guilds))
         log.info("guild seats: last hour: %s; %d family member(s) free to a tank or "
                  "healer seat", seatmeter.line(found), len(lent))
+        # The carry-ready tanks and healers per door, for the guild page.
+        stamp = time.time()
+        for guild, rows in seatmeter.bench(
+                guilds, [m for m in mates if m.member.guild in guilds], doors,
+                guildpug.factions(mates, guilds)).items():
+            await asyncio.to_thread(_memo_upsert, seatmeter.BENCH_KIND, guild, rows,
+                                    stamp, stamp + seatmeter.BENCH_KEEP_SECONDS)
 
     async def _campaign_queue_loop(self) -> None:
         """Advance every family's queue on its own clock.
@@ -33711,6 +33777,29 @@ def _insert_auction(member: str, command: str, source: str = "auction") -> int:
                 return 0
             raise
         return cur.lastrowid or 0
+
+
+def _fetch_house_outcomes(house: int, limit: int) -> list:
+    """The outcomes of a house's last `limit` finished lots, newest first.
+
+    Empty when the history table is unreadable, so a world image without it
+    leaves the house open as before.
+    """
+    if int(house) <= 0:
+        return []
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT outcome FROM overseer_auction_history "
+                "WHERE house = %s AND outcome IN ('sold', 'expired') "
+                "ORDER BY occurred_at DESC LIMIT %s",
+                (int(house), int(limit)),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return []
+            raise
+        return [row["outcome"] for row in cur.fetchall()]
 
 
 def _recent_auction_keys(minutes: int) -> set:

@@ -282,7 +282,7 @@ def start(now: float, hub: dict, why: str, hearthed: bool = False) -> State:
     )
 
 
-def choose_hub(bind_hub: dict, capital_hub: dict, leader_at) -> dict:
+def choose_hub(bind_hub: dict, capital_hub: dict, leader_at, why: str = "") -> dict:
     """The errand's hub: the head's home town, or a capital he is already in.
 
     `bind_hub` is the mailbox by the head's hearthstone point ({} when none is
@@ -291,7 +291,22 @@ def choose_hub(bind_hub: dict, capital_hub: dict, leader_at) -> dict:
     `leader_at` the head's snapshot row. A capital wins only when the head is
     already within a walk of it; otherwise home, which a hearthstone reaches
     from anywhere. With no home mailbox, the capital as before.
+
+    A BAG-ROOM ERRAND STAYS ON THE HEAD'S CONTINENT (wow-dev 2026-10-24). The
+    family's door was Razorfen Downs and its stones were bound in Stormwind, so
+    every bag-room errand crossed the sea and crossed back. When `why` is the
+    bag-room errand and the home mailbox is on another map than the head while
+    a capital mailbox is on his own, the capital wins: the family shops where
+    its campaign door is and goes straight back.
     """
+    if (
+        why == BAG_PRESSURE_WHY
+        and bind_hub
+        and capital_hub
+        and not _same_map(bind_hub, leader_at)
+        and _same_map(capital_hub, leader_at)
+    ):
+        return dict(capital_hub)
     if capital_hub and in_range(capital_hub, leader_at, WALK_YARDS):
         return dict(capital_hub)
     return dict(bind_hub or capital_hub or {})
