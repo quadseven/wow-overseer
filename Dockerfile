@@ -45,7 +45,7 @@ COPY core.py bridge.py voice.py transform.py \
      lootcouncil.py statweights.py \
      bank.py bankpolicy.py bankforecast.py \
      mailrun.py mountbuy.py holdings.py hunterpet.py \
-     realm.py realmread.py basepath.py appbuild.py watchwall.py nowstatus.py realmnav.py classic.py \
+     realm.py realmread.py basepath.py appbuild.py deployinfo.py watchwall.py nowstatus.py realmnav.py classic.py \
      needs.py partystatus.py lootcard.py lootstory.py towntrip.py \
      townerrand.py townslot.py tradechoice.py \
      enroll.py \
@@ -80,6 +80,12 @@ COPY manifest.webmanifest apple-touch-icon.png icon-192.png icon-512.png /app/
 
 # gearscore.py reads its curated lists and weights from data/bis/.
 COPY data /app/data
+
+# The build's own commit and time, so the bridge can say what it runs
+# (deployinfo.py). Unset on a local build, which reads "unknown".
+ARG OVERSEER_COMMIT=unknown
+ARG OVERSEER_BUILT=unknown
+ENV OVERSEER_COMMIT=$OVERSEER_COMMIT OVERSEER_BUILT=$OVERSEER_BUILT
 
 USER 10000
 CMD ["python", "-u", "bridge.py"]

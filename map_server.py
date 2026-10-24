@@ -28,6 +28,7 @@ from apiv2 import presence as v2_presence
 from apiv2._context import Context as _V2Context
 import agenda
 import appbuild
+import deployinfo
 import armory
 import gearupgrades
 import bag_pressure
@@ -4827,6 +4828,8 @@ class Handler(BaseHTTPRequestHandler):
             # The page and every app script and stylesheet (appbuild.py):
             # a deploy that changes only app/ moves this and not `page`.
             payload["app_build"] = appbuild.fingerprint(HERE)
+            # Which commit this process runs and how long (deployinfo.py).
+            payload["deploy"] = deployinfo.info()
             payload.update(_realm_families())
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
