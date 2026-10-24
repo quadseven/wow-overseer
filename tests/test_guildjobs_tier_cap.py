@@ -13,6 +13,7 @@ member only waiting in a queue walks too).
 Pure unit tests against guildjobs.plan.
 """
 
+import json
 import unittest
 
 import guildjobs
@@ -181,49 +182,131 @@ class TheRankWalkHasItsOwnAllowance(unittest.TestCase):
         self.assertEqual(guildjobs.TRAIN_STEPS_PER_GUILD, len(trains))
 
 
-class AWalkThatEndedInAFightIsAskedAgain(unittest.TestCase):
-    """A rank walk the world refused for a fight is no failed trainer walk."""
+def walk_row(reason, age, outcome="refused", retryable=True):
+    """A trainer row the way the realm writes it (MailWalkJson): status error,
+    the module's reason, and whether it calls the reason retryable."""
+    result = json.dumps(
+        {
+            "outcome": outcome,
+            "reason": reason,
+            "retryable": retryable,
+            "goal": "trainer",
+            "character": "Funkymon",
+        },
+        separators=(",", ":"),
+    )
+    return {
+        "id": age + 1,
+        "target_name": "Funkymon",
+        "command": "walk-to-trainer skill:%d max:3000" % H,
+        "source": guildjobs.source_for("train", "Funkymon"),
+        "status": "error",
+        "result": result,
+        "age": age,
+    }
 
-    def fought(self, *ages):
-        return tuple(
-            guildjobs.Recent(
-                "Funkymon",
-                "train",
-                a,
-                "error",
-                H,
-                result='{"outcome":"error","reason":"character is in combat"}',
-            )
-            for a in ages
-        )
+
+def walks(reason, *ages, outcome="refused"):
+    return guildjobs.recent_from_rows([walk_row(reason, a, outcome) for a in ages])
+
+
+IN_COMBAT = "character is in combat"
+COMBAT_ON_THE_WAY = "entered combat on the way to the trainer"
+TOO_FAR = "the nearest trainer that will teach it is beyond the cap"
+GROUND = "the ground toward the trainer does not hold"
+
+
+class AWalkThatEndedInAFightIsAskedAgain(unittest.TestCase):
+    """A rank walk the world refused for a fight is no failed trainer walk:
+    it does not double the wait, and it is asked again after the base wait."""
 
     def test_fights_do_not_double_the_wait(self):
-        rows = self.fought(5, 65, 125, 185, 245)
+        rows = walks(IN_COMBAT, 5, 65, 125, 185, 245)
         self.assertEqual(60, guildjobs.train_cooldown("Funkymon", rows, H))
 
-    def test_the_capped_member_is_sent_again_right_after_a_fight(self):
+    def test_the_capped_member_is_sent_again_after_the_base_wait(self):
         m = member(skills={H: (75, 75)})
-        result = guildjobs.plan([m], recent=self.fought(5, 65, 125, 185))
+        result = guildjobs.plan([m], recent=walks(IN_COMBAT, 65, 125, 185, 245))
         self.assertEqual(1, len(train_steps(result, "Funkymon")), result.notes)
 
-    def test_a_retryable_refusal_is_asked_again_too(self):
-        row = guildjobs.Recent(
-            "Funkymon", "train", 5, "error", H, refusal="far walk wall", retryable=True
-        )
-        self.assertEqual(60, guildjobs.train_cooldown("Funkymon", (row,), H))
+    def test_a_fight_still_waits_one_cycle_before_the_walk_is_asked_again(self):
+        m = member(skills={H: (75, 75)})
+        result = guildjobs.plan([m], recent=walks(IN_COMBAT, 16))
+        self.assertEqual([], train_steps(result, "Funkymon"))
 
-    def test_a_walk_that_failed_for_the_road_still_backs_off(self):
+    def test_a_fight_on_the_way_counts_as_passing(self):
+        rows = walks(COMBAT_ON_THE_WAY, 65, 125, 185, outcome="abandoned")
+        self.assertEqual(60, guildjobs.train_cooldown("Funkymon", rows, H))
+        m = member(skills={H: (75, 75)})
+        result = guildjobs.plan([m], recent=rows)
+        self.assertEqual(1, len(train_steps(result, "Funkymon")), result.notes)
+        early = guildjobs.plan(
+            [m], recent=walks(COMBAT_ON_THE_WAY, 16, outcome="abandoned")
+        )
+        self.assertEqual([], train_steps(early, "Funkymon"))
+
+
+class APermanentRefusalStillBacksOff(unittest.TestCase):
+    """The module marks many trainer walls retryable that the next pass will
+    not change (a trainer beyond the cap, the ground, Outland, a follower, a
+    dead character); each still doubles the wait, so a capped member is not
+    sent the same refused walk every pass and reaches the rungs below."""
+
+    def test_a_trainer_beyond_the_cap_doubles_the_wait(self):
+        rows = walks(TOO_FAR, 16, 31, 46)
+        self.assertEqual(480, guildjobs.train_cooldown("Funkymon", rows, H))
+
+    def test_a_trainer_beyond_the_cap_yields_no_train_step_next_pass(self):
+        m = member(skills={H: (75, 75)})
+        result = guildjobs.plan([m], recent=walks(TOO_FAR, 16))
+        self.assertEqual([], train_steps(result, "Funkymon"))
+
+    def test_other_retryable_walls_back_off_too(self):
+        for reason in (
+            GROUND,
+            "character stands in Outland or Northrend, outside the classic world",
+            "character is grouped as a follower",
+            "character is dead",
+        ):
+            with self.subTest(reason=reason):
+                rows = walks(reason, 75)
+                self.assertEqual(120, guildjobs.train_cooldown("Funkymon", rows, H))
+                m = member(skills={H: (75, 75)})
+                result = guildjobs.plan([m], recent=rows)
+                self.assertEqual([], train_steps(result, "Funkymon"))
+
+    def test_a_reason_that_only_mentions_combat_is_not_passing(self):
         row = guildjobs.Recent(
             "Funkymon",
             "train",
-            5,
+            75,
             "error",
             H,
-            reason="stopped getting nearer the trainer",
+            result='{"outcome":"refused","note":"was in combat earlier",'
+            '"reason":"the ground toward the trainer does not hold"}',
         )
         self.assertEqual(120, guildjobs.train_cooldown("Funkymon", (row,), H))
+
+
+class AWalkThatFailedForTheRoadStillBacksOff(unittest.TestCase):
+    """The road refused at the gate (TrainerGround, TrainerTooFar, both written
+    `refused` with retryable:true) and the road failing mid-walk both double
+    the wait."""
+
+    def test_the_gate_refusing_the_road_backs_off(self):
+        for reason in (GROUND, TOO_FAR):
+            with self.subTest(reason=reason):
+                rows = walks(reason, 5)
+                self.assertEqual(120, guildjobs.train_cooldown("Funkymon", rows, H))
+                m = member(skills={H: (75, 75)})
+                result = guildjobs.plan([m], recent=walks(reason, 65))
+                self.assertEqual([], train_steps(result, "Funkymon"))
+
+    def test_a_walk_that_stalled_on_the_road_backs_off(self):
+        rows = walks("stopped getting nearer the trainer", 65, outcome="abandoned")
+        self.assertEqual(120, guildjobs.train_cooldown("Funkymon", rows, H))
         m = member(skills={H: (75, 75)})
-        result = guildjobs.plan([m], recent=(row,))
+        result = guildjobs.plan([m], recent=rows)
         self.assertEqual([], train_steps(result, "Funkymon"))
 
 
