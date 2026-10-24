@@ -124,6 +124,15 @@ def waiting_for(names, in_runs) -> list:
     return sorted(set(names or ()) & set(in_runs or ()))
 
 
+def present(names, in_runs, keep: str = "") -> list:
+    """The family's members standing with it: everyone not out in a guild run
+    (`keep`, the leader, always stays). A lent member's bags are not the
+    family's to empty while it is away: the family's vendor stop cannot reach
+    them, and holding the family for them holds it until the run ends."""
+    away = set(in_runs or ()) - {keep}
+    return [name for name in names or () if name not in away]
+
+
 def hold_line(names: list) -> str:
     """The queue's line for a family waiting on its lent members."""
     return "waits for %s to come back from a guild run before its campaign starts" % (
