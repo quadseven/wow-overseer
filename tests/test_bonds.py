@@ -600,7 +600,9 @@ class WindowContaminationTest(unittest.TestCase):
             "_answer_craft_ask",
             "_stood_down_for_craft",
         ):
-            self.assertIn(name, councillors, "%s no longer writes 'council' rows" % name)
+            self.assertIn(
+                name, councillors, "%s no longer writes 'council' rows" % name
+            )
 
     def test_every_declaration_of_the_source_column_admits_the_new_tag(self):
         """A tag the ENUM rejects is an insert that fails, every council.
