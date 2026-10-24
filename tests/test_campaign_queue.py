@@ -359,6 +359,7 @@ def _queue_pass(world, holds=None, stuck=None, extra=None, **hooks):
             "_campaign_queue_once",
             "_apply_queue_move",
             "_prune_bag_hold_stuck",
+            "_bag_hold_released",
         ],
         {
             "asyncio": asyncio,
@@ -523,6 +524,22 @@ class TheQueueAdvancesByItself(unittest.TestCase):
         self.assertEqual(0, self.world.row("Zug")["drive_quest"])
         self.assertEqual(0, self.world.row("Oz")["drive_quest"])
         self.assertEqual(12345, self.world.row("Grug")["drive_quest"])
+
+    def test_a_released_bag_hold_keeps_the_family_quest_aim(self):
+        """#872: a family the bag hold sent questing keeps its quest aim.
+        Measured 2026-10-24: Zug's family was withheld "so the family quests
+        until there is room" for over an hour while this clear took back the
+        level route's quest aim every pass, so nobody quested."""
+        self.world.withhold = True
+        self.world.row("Zug")["drive_quest"] = 4821
+        self.world.row("Uzza")["drive_quest"] = 4821
+        self.world.row("Grug")["drive_quest"] = 12345
+
+        lines = _queue_pass(self.world, stuck={"Zug": ("Uzza",), "Uzza": ("Uzza",)})
+
+        self.assertEqual(4821, self.world.row("Zug")["drive_quest"])
+        self.assertEqual(4821, self.world.row("Uzza")["drive_quest"])
+        self.assertFalse([ln for ln in lines if "stale quest aim" in ln], lines)
 
     def test_persistent_quest_goal_cannot_restore_campaigns_old_aim(self):
         cleared, quest_writes = [], []

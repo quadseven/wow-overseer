@@ -19954,10 +19954,19 @@ class Bridge(discord.Client):
         # deliberate no-dungeon fallback questing intact.
         # Per family: _PACE_QUESTING is filled family by family, so one
         # family's first pace pass says nothing about another's.
+        # NOT ONCE THE BAG HOLD IS RELEASED (#872): the family was sent
+        # questing until there is room, and its quest aim is that walk.
+        # Measured on the dev realm 2026-10-24: Zug's family was withheld
+        # "so the family quests until there is room" for over an hour while
+        # the level route aimed it at a quest every two minutes and this
+        # clear took the aim back seconds later, so nobody quested. Looked
+        # up: the queue tests load this method in isolation.
+        released = globals().get("_bag_hold_released")
+        questing_for_room = bool(released and released(fam["names"]))
         if not _pass_completed("dungeon_pace:" + key):
             self._log_waiting_for_pass(
                 "queue: %s waits for its first dungeon pace pass" % campaignqueue._family(key))
-        elif key not in _PACE_QUESTING:
+        elif key not in _PACE_QUESTING and not questing_for_room:
             cleared = await asyncio.to_thread(_aim_family_quest, key, 0, ())
             if cleared:
                 log.info("queue: %s's dungeon campaign clears %d stale quest "
