@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import council
 import guildrun
 
 # The runs formed in the last hour.
@@ -106,3 +107,94 @@ def line(found: list) -> str:
         % (m.guild, m.seats, m.runs, m.pug_seats, m.family_seats, m.waiting)
         for m in found
     )
+
+
+# THE SEATS EACH DOOR CAN FILL (#784): carry-ready tanks and healers per door
+# band, so the guild page shows where the tank and healer seats run short. The
+# bridge reads the members, so it computes the counts every EVERY_SECONDS and
+# leaves them in the memo store; the site reads that row, with no second
+# member read. A row not renewed within BENCH_KEEP_SECONDS is dropped.
+BENCH_KIND = "seatbench"
+BENCH_KEEP_SECONDS = 3 * EVERY_SECONDS
+BENCH_READ_SQL = (
+    "SELECT subject, value, since FROM overseer_bridge_memo "
+    "WHERE kind = %s AND expires > UNIX_TIMESTAMP()"
+)
+
+
+def _offered(door, faction: str) -> bool:
+    """Whether a guild of this faction is ever sent to the door."""
+    allowed = guildrun.GUILD_DOORS.get(faction) or frozenset.intersection(
+        *guildrun.GUILD_DOORS.values()
+    )
+    return not (
+        council._other_capital(door.map_id, faction)
+        or door.keyword not in allowed
+        or door.keyword in guildrun.NO_CLEAR_DATA
+    )
+
+
+def bench(guilds, mates: list, doors: list, factions: dict) -> dict:
+    """guild -> one row per door it is offered: the tanks and healers who stand
+    at the door's carry floor (guildrun.carries) and are ready for the seat
+    (guildrun.tank_ready, guildrun.covered). A door whose bosses' level is
+    unread holds nobody and is left out."""
+    out: dict = {}
+    for guild in guilds:
+        members = [m.member for m in mates or () if m.member.guild == guild]
+        rows = []
+        for door in doors:
+            if int(door.carry_floor) <= 0 or not _offered(
+                door, factions.get(guild, "")
+            ):
+                continue
+            tanks = sum(
+                1
+                for m in members
+                if m.plays(guildrun.TANK)
+                and guildrun.tank_ready(m)
+                and guildrun.carries(m, door)
+            )
+            healers = sum(
+                1
+                for m in members
+                if m.plays(guildrun.HEALER)
+                and guildrun.covered(m)
+                and guildrun.carries(m, door)
+            )
+            rows.append(
+                {
+                    "keyword": door.keyword,
+                    "place": door.place,
+                    "floor": int(door.floor),
+                    "ceiling": int(door.ceiling),
+                    "carry_floor": int(door.carry_floor),
+                    "tanks": tanks,
+                    "healers": healers,
+                }
+            )
+        out[guild] = rows
+    return out
+
+
+def page(memo_rows: list) -> dict:
+    """The /api/guildseats answer from the memo rows (subject = guild, value =
+    JSON of bench rows, since = when the bridge wrote it). Guilds sorted;
+    a guild the bridge has not written lately is absent."""
+    import json
+
+    guilds = []
+    for row in sorted(memo_rows or (), key=lambda r: str(r.get("subject"))):
+        try:
+            doors = json.loads(row.get("value") or "[]")
+        except (TypeError, ValueError):
+            continue
+        if isinstance(doors, list):
+            guilds.append(
+                {
+                    "guild": str(row.get("subject")),
+                    "doors": doors,
+                    "at": float(row.get("since") or 0),
+                }
+            )
+    return {"guilds": guilds}

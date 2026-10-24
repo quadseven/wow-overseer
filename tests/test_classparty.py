@@ -1305,6 +1305,27 @@ class TheHeldMeeting(unittest.TestCase):
         self.assertEqual(hunt.stop_why, said)
         self.assertFalse(hunt.due(1000.0))
 
+    def test_a_final_hunt_refusal_stops_the_party_with_the_reason(self):
+        # #871: the module refusing the hunt for good (never) or for this pack
+        # (elsewhere) left the party standing idle until its 28 minute clock
+        # ran out, and the ask then read "timed out before quest credit".
+        for state, said in (
+            (classhunt.NEVER, "Whakk cannot hunt: the quest creature is not huntable"),
+            (classhunt.ELSEWHERE, "Whakk cannot hunt here: no pack of it in reach"),
+        ):
+            hunt = classparty.PartyHunt("hunt-spawn creature:1 count:1")
+            hunt.row_id = 7
+            hunt.ended(classhunt.Answer(state, said), 100.0)
+            self.assertEqual(hunt.command, "", state)
+            self.assertEqual(hunt.stop_why, said, state)
+
+    def test_a_worldserver_that_does_not_hunt_leaves_the_party_standing(self):
+        hunt = classparty.PartyHunt("hunt-spawn creature:1 count:1")
+        hunt.row_id = 7
+        hunt.ended(classhunt.Answer(classhunt.UNSUPPORTED, "old worldserver"), 100.0)
+        self.assertEqual(hunt.command, "")
+        self.assertEqual(hunt.stop_why, "")
+
     def test_an_ordinary_refusal_waits_and_hunts_again(self):
         hunt = classparty.PartyHunt("hunt-spawn creature:1 item:2 count:1")
         hunt.row_id = 7

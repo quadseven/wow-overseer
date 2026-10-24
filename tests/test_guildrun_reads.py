@@ -146,6 +146,16 @@ class TheRunState(unittest.TestCase):
             self.state_of(state="ended", outcome="not entered"), "not entered"
         )
 
+    def test_a_stalled_run_reads_back_as_stalled_and_went_in(self):
+        # The module's stall ladder ends a run as "stalled"; it is not lost.
+        self.assertEqual(self.state_of(state="ended", outcome="stalled"), "stalled")
+        self.assertIn("stalled", guildrun.WENT_IN)
+        self.assertTrue(
+            guildrun.rests_members(
+                {"outcome": "stalled", "seconds_inside": 299, "bosses_done": 0}
+            )
+        )
+
     def test_an_ended_run_without_a_known_outcome_is_lost(self):
         # The bridge's own rule (outcome_from_row): no known outcome is lost.
         self.assertEqual(self.state_of(state="ended", outcome=""), "lost")
