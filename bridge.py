@@ -38,6 +38,7 @@ import bag_upgrade
 import bank
 import bankbags
 import bankforecast
+import housedemand
 import bankpolicy
 import chat
 import clearance
@@ -10014,6 +10015,19 @@ class Bridge(discord.Client):
                 holder_house[holder] = house
         return holder_house
 
+    async def _house_is_closed(self, house: int) -> bool:
+        """Whether `house` sold nothing in its last finished lots (#778).
+
+        Logs the verdict when it changes, so a closed house is named once
+        rather than every pass.
+        """
+        outcomes = await asyncio.to_thread(
+            _fetch_house_outcomes, house, housedemand.RECENT)
+        shut, _sold, total = housedemand.closed(outcomes)
+        _log_changed("auction-house", [housedemand.closed_line(house, total)]
+                     if shut else [], key=(house,), capped=False)
+        return shut
+
     async def _auction_sell_house(self, house: int, house_candidates: list,
                                   seen: set, cohort=None) -> int:
         """Plan and queue listings for one house's candidates.
@@ -10023,6 +10037,8 @@ class Bridge(discord.Client):
         wrong pool is a row `DoAuction` refuses as `WrongHouse`. Returns the
         number of rows queued.
         """
+        if await self._house_is_closed(house):
+            return 0
         house_entries = sorted({int(c["entry"]) for c in house_candidates})
         listings = await asyncio.to_thread(
             _fetch_auction_listings, house_entries, house)
@@ -13323,8 +13339,12 @@ class Bridge(discord.Client):
         if auction_open and leader:
             teams = await asyncio.to_thread(_fetch_teams, [leader])
             house = auction.TEAM_HOUSE.get(teams.get(leader, ""), 0)
-            listings = await asyncio.to_thread(
-                _fetch_auction_listings, sorted({s.entry for s in stacks}), house)
+            # A CLOSED HOUSE HOLDS NOTHING BACK (#778): no market means no
+            # AUCTION route, so the stack goes on to the vendor.
+            listings = ([] if await self._house_is_closed(house) else
+                        await asyncio.to_thread(
+                            _fetch_auction_listings,
+                            sorted({s.entry for s in stacks}), house))
             for listing in listings:
                 market[listing.entry] = min(
                     market.get(listing.entry, listing.per_unit), listing.per_unit)
@@ -33686,6 +33706,29 @@ def _insert_auction(member: str, command: str, source: str = "auction") -> int:
                 return 0
             raise
         return cur.lastrowid or 0
+
+
+def _fetch_house_outcomes(house: int, limit: int) -> list:
+    """The outcomes of a house's last `limit` finished lots, newest first.
+
+    Empty when the history table is unreadable, so a world image without it
+    leaves the house open as before.
+    """
+    if int(house) <= 0:
+        return []
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT outcome FROM overseer_auction_history "
+                "WHERE house = %s AND outcome IN ('sold', 'expired') "
+                "ORDER BY occurred_at DESC LIMIT %s",
+                (int(house), int(limit)),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return []
+            raise
+        return [row["outcome"] for row in cur.fetchall()]
 
 
 def _recent_auction_keys(minutes: int) -> set:
