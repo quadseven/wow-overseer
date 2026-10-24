@@ -330,10 +330,9 @@ def _lost_words(run, walked, far, stands) -> str:
 # held by another verb (#1275), and a member that was busy when its meeting
 # walk was served - in a fight, on a flight, logging out, out of the world or
 # already walking (the same passing walls guildjobs.PASSING_TRAIN_REASONS
-# names for the trainer gate). Measured on the dev realm over 2026-10-22 to
-# 10-24: 9 class quest meetings failed, among them Whakk's Klaven's Tower
-# twice on "character is in combat" and once on "character is on a flight
-# path"; each failure counted against the ask, and the quest stood stuck.
+# names for the trainer gate). A class quest meeting failed on these when a
+# member was briefly in a fight or on a flight, each failure counted against
+# the ask, and the quest stood stuck.
 TRANSIENT_WALK_REASONS = (
     classquest.HELD_REASON,
     "character is in combat",
