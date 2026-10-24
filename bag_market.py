@@ -101,18 +101,32 @@ MIN_UPGRADE_GAIN = 2
 # arrives by mail, and a member at the floor may have no room to collect it.
 
 
-def cap_yields(free_slots) -> bool:
+def cap_yields(free_slots, held: bool = False) -> bool:
     """Does the per-slot cap give way for this member (see above)?
 
     Yes when the member's free bag slots are a real reading at or below
-    `bag_pressure.TOWN_RUN_FREE_SLOTS`, the line the family is held on.
+    `bag_pressure.TOWN_RUN_FREE_SLOTS`, the line the family is withheld on.
     An unknown reading (None, negative, not an int) fails closed.
+
+    AND BELOW THE RESUME LINE WHILE THE FAMILY IS HELD IN TOWN (#1375).
+    `held` is the family's campaign waiting in town for bag room
+    (`townslot.Slot.town_first`). The hold is let go only once every member
+    has `bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS`, so a member between the two
+    lines keeps the whole family in town, and the hold is the wait the cap
+    would otherwise ask it to sit out. Measured on the dev realm 2026-10-24:
+    Grug's family was held 45 minutes on "Bork, Grog, Ugga below 8 free
+    slots" with Bork at 4, Grog at 6 and Ugga at 7, while "Ugga cannot buy a
+    bag bigger than its 8-slot one ... at most 2500 a slot" with 18 gold to
+    spend.
     """
-    return (
-        isinstance(free_slots, int)
-        and not isinstance(free_slots, bool)
-        and 0 <= free_slots <= bag_pressure.TOWN_RUN_FREE_SLOTS
+    if not isinstance(free_slots, int) or isinstance(free_slots, bool):
+        return False
+    line = (
+        bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS - 1
+        if held
+        else bag_pressure.TOWN_RUN_FREE_SLOTS
     )
+    return 0 <= free_slots <= line
 
 
 @dataclass(frozen=True)
@@ -296,7 +310,9 @@ def _refusal(who: _Shopper, purse: Purse, budget: int, rule: Rule) -> str:
     )
 
 
-def _shopper(member: Member, purse: Purse, budget: int, reach, free_slots, rule):
+def _shopper(
+    member: Member, purse: Purse, budget: int, reach, free_slots, rule, held=False
+):
     owned = {bag.entry for bag in member.worn + member.carried if bag.entry}
     return _Shopper(
         name=member.name,
@@ -305,7 +321,7 @@ def _shopper(member: Member, purse: Purse, budget: int, reach, free_slots, rule)
         allowance=min(spendable(purse, rule.reserve_per_level), budget),
         room=int((free_slots or {}).get(member.name, 0)),
         reach=None if reach is None else frozenset(reach.get(member.name, ())),
-        at_floor=cap_yields((free_slots or {}).get(member.name)),
+        at_floor=cap_yields((free_slots or {}).get(member.name), held),
     )
 
 
@@ -318,6 +334,7 @@ def plan_upgrades(
     reach=None,
     free_slots=None,
     rule: Rule = Rule(),
+    held: bool = False,
 ) -> tuple:
     """The best affordable upgrade per member, and a note for each refusal.
 
@@ -331,7 +348,8 @@ def plan_upgrades(
     is only offered to a buyer who can reach it. `free_slots` maps a buyer to
     its free bag slots, and a vendor purchase needs one to land in; an
     auction purchase goes to the mail and does not. A buyer at the bag floor
-    (`cap_yields`) is not held to the per-slot cap for a vendor's bag.
+    (`cap_yields`, which `held` widens while the family is held in town) is
+    not held to the per-slot cap for a vendor's bag.
     """
     mailed = mailed or {}
     budget = family_budget(purses, rule.share)
@@ -348,7 +366,7 @@ def plan_upgrades(
                 else "%s has no purse reading, so buys nothing" % member.name
             )
             continue
-        who = _shopper(member, purse, budget, reach, free_slots, rule)
+        who = _shopper(member, purse, budget, reach, free_slots, rule, held)
         listing, bigger = _best(listings, who, taken, rule)
         if listing is None:
             if bigger:
@@ -456,7 +474,7 @@ def _standing_map(standing: dict, name: str) -> int | None:
         return None
 
 
-def _upgrade_walkers(members, free_slots, pending=()) -> tuple:
+def _upgrade_walkers(members, free_slots, pending=(), held=False) -> tuple:
     """Full-position members at the floor with room for a bag to land in, by
     name. An empty position belongs to `bag_pressure.bag_purchases` and its
     walk; a member with no free slot has nowhere for a vendor's bag to land
@@ -467,7 +485,7 @@ def _upgrade_walkers(members, free_slots, pending=()) -> tuple:
         if smallest_worn(member) is None or member.name in pending:
             continue
         free = (free_slots or {}).get(member.name)
-        if not cap_yields(free) or int(free) < 1:
+        if not cap_yields(free, held) or int(free) < 1:
             continue
         walkers.append(member)
     return tuple(walkers)
@@ -512,6 +530,7 @@ def upgrade_vendor_trip(
     standing: dict,
     in_run: bool = False,
     max_yards: float = bag_pressure.BAG_VENDOR_MAX_YARDS,
+    held: bool = False,
 ) -> bag_pressure.BagTrip:
     """Where to walk the family so a full member can buy a bigger bag.
 
@@ -530,7 +549,7 @@ def upgrade_vendor_trip(
     map_id = int(standing[leader].map_id)
     walkers = [
         w
-        for w in _upgrade_walkers(members, free_slots, pending)
+        for w in _upgrade_walkers(members, free_slots, pending, held)
         if _standing_map(standing, w.name) == map_id
     ]
     if not walkers:
@@ -554,6 +573,7 @@ def upgrade_vendor_trip(
             mailed=mailed,
             reach=reach,
             free_slots=free_slots,
+            held=held,
         )
         served = tuple(u.buyer for u in upgrades)
         if not served:
