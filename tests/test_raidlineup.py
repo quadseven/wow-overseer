@@ -63,6 +63,17 @@ class AFullRosterFillsEveryPlace(unittest.TestCase):
         self.assertEqual(sum(m["seat"] == "tank" for m in placed), 4)
         self.assertEqual(sum(m["seat"] == "healer" for m in placed), 9)
         self.assertEqual(sum(m["seat"] == "dps" for m in placed), 27)
+        self.assertTrue(
+            any(
+                (
+                    sum(m["seat"] == "tank" for m in group["members"]),
+                    sum(m["seat"] == "healer" for m in group["members"]),
+                    sum(m["seat"] == "dps" for m in group["members"]),
+                )
+                != (1, 1, 3)
+                for group in self.lineup["groups"]
+            )
+        )
 
     def test_encounter_table_and_composer_report_missing_capabilities(self):
         self.assertEqual(len(raidlineup.MOLTEN_CORE_ENCOUNTERS), 10)
