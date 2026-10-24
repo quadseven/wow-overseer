@@ -181,5 +181,51 @@ class TheRankWalkHasItsOwnAllowance(unittest.TestCase):
         self.assertEqual(guildjobs.TRAIN_STEPS_PER_GUILD, len(trains))
 
 
+class AWalkThatEndedInAFightIsAskedAgain(unittest.TestCase):
+    """A rank walk the world refused for a fight is no failed trainer walk."""
+
+    def fought(self, *ages):
+        return tuple(
+            guildjobs.Recent(
+                "Funkymon",
+                "train",
+                a,
+                "error",
+                H,
+                result='{"outcome":"error","reason":"character is in combat"}',
+            )
+            for a in ages
+        )
+
+    def test_fights_do_not_double_the_wait(self):
+        rows = self.fought(5, 65, 125, 185, 245)
+        self.assertEqual(60, guildjobs.train_cooldown("Funkymon", rows, H))
+
+    def test_the_capped_member_is_sent_again_right_after_a_fight(self):
+        m = member(skills={H: (75, 75)})
+        result = guildjobs.plan([m], recent=self.fought(5, 65, 125, 185))
+        self.assertEqual(1, len(train_steps(result, "Funkymon")), result.notes)
+
+    def test_a_retryable_refusal_is_asked_again_too(self):
+        row = guildjobs.Recent(
+            "Funkymon", "train", 5, "error", H, refusal="far walk wall", retryable=True
+        )
+        self.assertEqual(60, guildjobs.train_cooldown("Funkymon", (row,), H))
+
+    def test_a_walk_that_failed_for_the_road_still_backs_off(self):
+        row = guildjobs.Recent(
+            "Funkymon",
+            "train",
+            5,
+            "error",
+            H,
+            reason="stopped getting nearer the trainer",
+        )
+        self.assertEqual(120, guildjobs.train_cooldown("Funkymon", (row,), H))
+        m = member(skills={H: (75, 75)})
+        result = guildjobs.plan([m], recent=(row,))
+        self.assertEqual([], train_steps(result, "Funkymon"))
+
+
 if __name__ == "__main__":
     unittest.main()
