@@ -17,6 +17,7 @@ WHICH order to give; that stays with the callers. It only moves rows.
 Stdlib only. The MySQL adapter takes the bridge's connect function, so this
 file never imports pymysql.
 """
+
 from __future__ import annotations
 
 import re
@@ -67,10 +68,16 @@ class MemoryStore:
         row_id = self._next
         self._next += 1
         self.rows[row_id] = {
-            "id": row_id, "target_name": order.target, "command": order.command,
-            "kind": order.kind, "source": order.source,
-            "target_arg": order.target_arg, "channel": order.channel,
-            "status": "pending", "detail": "", "result": "",
+            "id": row_id,
+            "target_name": order.target,
+            "command": order.command,
+            "kind": order.kind,
+            "source": order.source,
+            "target_arg": order.target_arg,
+            "channel": order.channel,
+            "status": "pending",
+            "detail": "",
+            "result": "",
         }
         return row_id
 
@@ -81,7 +88,9 @@ class MemoryStore:
     def kinds(self) -> Optional[frozenset]:
         return self._kinds
 
-    def answer(self, row_id: int, status: str, detail: str = "", result: str = "") -> None:
+    def answer(
+        self, row_id: int, status: str, detail: str = "", result: str = ""
+    ) -> None:
         """Stand in for the worldserver finishing a row."""
         self.rows[row_id].update(status=status, detail=detail, result=result)
 
@@ -109,11 +118,15 @@ class MySqlStore:
         cols.append("source")
         vals.append(order.source)
         sql = "INSERT INTO overseer_command (%s) VALUES (%s)" % (  # noqa: S608 - column names are fixed literals above; every value is bound
-            ", ".join(cols), ", ".join(["%s"] * len(cols)))
+            ", ".join(cols),
+            ", ".join(["%s"] * len(cols)),
+        )
         with self._connect() as conn, conn.cursor() as cur:
             try:
                 cur.execute(sql, tuple(vals))
-            except Exception as exc:  # pymysql.err.MySQLError, kept out of this file's imports
+            except (
+                Exception
+            ) as exc:  # pymysql.err.MySQLError, kept out of this file's imports
                 if exc.args and exc.args[0] in MISSING_MACHINERY:
                     return 0
                 raise

@@ -1,4 +1,5 @@
 """The orders module: send, follow and supports over both adapters (#736)."""
+
 import os
 import sys
 import unittest
@@ -71,7 +72,9 @@ class SendTests(unittest.TestCase):
 
     def test_memory_send_refuses_an_unknown_verb_with_zero(self):
         store = orders.MemoryStore(kinds={"chat"})
-        self.assertEqual(orders.send(store, orders.Order("Brug", "x", "t", kind="guild")), 0)
+        self.assertEqual(
+            orders.send(store, orders.Order("Brug", "x", "t", kind="guild")), 0
+        )
         self.assertEqual(store.rows, {})
 
     def test_mysql_send_writes_only_the_columns_given(self):
@@ -83,13 +86,19 @@ class SendTests(unittest.TestCase):
         self.assertEqual(row_id, 7)
         sql, args = db.calls[0]
         self.assertEqual(
-            sql, "INSERT INTO overseer_command (target_name, command, kind, source) VALUES (%s, %s, %s, %s)")
+            sql,
+            "INSERT INTO overseer_command (target_name, command, kind, source) VALUES (%s, %s, %s, %s)",
+        )
         self.assertEqual(args, ("Brug", "use", "hearth", "src"))
 
     def test_mysql_send_includes_target_arg_and_channel(self):
         db = FakeDb()
-        orders.send(orders.MySqlStore(db), orders.Order(
-            "Brug", "invite", "s", kind="guild", target_arg="Ugga", channel="say"))
+        orders.send(
+            orders.MySqlStore(db),
+            orders.Order(
+                "Brug", "invite", "s", kind="guild", target_arg="Ugga", channel="say"
+            ),
+        )
         sql, args = db.calls[0]
         self.assertIn("kind, target_arg, channel, source", sql)
         self.assertEqual(args, ("Brug", "invite", "guild", "Ugga", "say", "s"))
@@ -97,11 +106,18 @@ class SendTests(unittest.TestCase):
     def test_mysql_send_returns_zero_when_the_realm_lacks_the_machinery(self):
         for code in orders.MISSING_MACHINERY:
             db = FakeDb(raises=code)
-            self.assertEqual(orders.send(orders.MySqlStore(db), orders.Order("B", "c", "s", kind="guild")), 0)
+            self.assertEqual(
+                orders.send(
+                    orders.MySqlStore(db), orders.Order("B", "c", "s", kind="guild")
+                ),
+                0,
+            )
 
     def test_mysql_send_raises_other_errors(self):
         with self.assertRaises(FakeMySqlError):
-            orders.send(orders.MySqlStore(FakeDb(raises=1205)), orders.Order("B", "c", "s"))
+            orders.send(
+                orders.MySqlStore(FakeDb(raises=1205)), orders.Order("B", "c", "s")
+            )
 
 
 class SupportsTests(unittest.TestCase):
@@ -120,7 +136,9 @@ class SupportsTests(unittest.TestCase):
         self.assertTrue(orders.supports(orders.MemoryStore(kinds=set()), ""))
 
     def test_unreadable_enum_answers_true(self):
-        self.assertTrue(orders.supports(orders.MySqlStore(FakeDb(raises=1146)), "guild"))
+        self.assertTrue(
+            orders.supports(orders.MySqlStore(FakeDb(raises=1146)), "guild")
+        )
         self.assertTrue(orders.supports(orders.MemoryStore(), "anything"))
 
     def test_memory_kinds_gate_supports(self):
@@ -142,8 +160,15 @@ class FollowTests(unittest.TestCase):
         self.now += s
 
     def run_follow(self, store, row_id, judge, deadline, poll=1.0):
-        return orders.follow(store, row_id, judge, deadline, poll=poll,
-                             sleep=self.sleep, clock=self.clock)
+        return orders.follow(
+            store,
+            row_id,
+            judge,
+            deadline,
+            poll=poll,
+            sleep=self.sleep,
+            clock=self.clock,
+        )
 
     def test_returns_as_soon_as_the_judge_says_final(self):
         store = orders.MemoryStore()
@@ -187,7 +212,9 @@ class FollowTests(unittest.TestCase):
         self.assertEqual((ans.value, ans.final, self.sleeps), (None, False, []))
 
     def test_mysql_follow_reads_through_the_adapter(self):
-        db = FakeDb(fetch={"target_name": "B", "status": "applied", "detail": "", "result": ""})
+        db = FakeDb(
+            fetch={"target_name": "B", "status": "applied", "detail": "", "result": ""}
+        )
         ans = self.run_follow(orders.MySqlStore(db), 5, orders.settled, 5)
         self.assertEqual((ans.value, ans.final), ("applied", True))
         self.assertEqual(db.calls[0][1], (5,))
@@ -197,7 +224,7 @@ class BridgeWiringTests(unittest.TestCase):
     def test_hearth_writer_goes_through_orders(self):
         src = open(os.path.join(os.path.dirname(__file__), "..", "bridge.py")).read()
         start = src.index("def _insert_hearth(")
-        body = src[start:src.index("\ndef ", start + 10)]
+        body = src[start : src.index("\ndef ", start + 10)]
         self.assertIn("orders.send(", body)
         self.assertNotIn("INSERT INTO overseer_command", body)
         self.assertIn('kind="hearth"', body)
@@ -207,6 +234,7 @@ class BridgeWiringTests(unittest.TestCase):
         """test_natural_only reads INSERT literals; an order built for
         orders.send has none, so the same rule is checked on the Order call."""
         import re
+
         sys.path.insert(0, os.path.dirname(__file__))
         import test_natural_only as nat
 
