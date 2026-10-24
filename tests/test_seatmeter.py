@@ -15,7 +15,14 @@ sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import seatmeter as sm  # noqa: E402
 from test_guildsocial import (  # noqa: E402
-    DOORS, HOLY, MAGE, PRIEST, PROTECTION, ROGUE, WARRIOR, mate,
+    DOORS,
+    HOLY,
+    MAGE,
+    PRIEST,
+    PROTECTION,
+    ROGUE,
+    WARRIOR,
+    mate,
 )
 import guildrun  # noqa: E402
 import json  # noqa: E402
@@ -92,14 +99,30 @@ class TheBench(unittest.TestCase):
             mate("LowTank", 19, WARRIOR, talent_spells=PROTECTION, has_shield=1),
             mate("Healy", 20, PRIEST, talent_spells=HOLY),
             mate("Auren", 25, ROGUE),
-            mate("Bonk", 30, WARRIOR, talent_spells=PROTECTION, has_shield=1, guild="Bonkers"),
+            mate(
+                "Bonk",
+                30,
+                WARRIOR,
+                talent_spells=PROTECTION,
+                has_shield=1,
+                guild="Bonkers",
+            ),
         ]
-        found = sm.bench(["Cave", "Bonkers"], mates, self.DEADMINES_AT_20,
-                         {"Cave": "Alliance", "Bonkers": "Alliance"})
+        found = sm.bench(
+            ["Cave", "Bonkers"],
+            mates,
+            self.DEADMINES_AT_20,
+            {"Cave": "Alliance", "Bonkers": "Alliance"},
+        )
         row = self._row(found)
         self.assertEqual((row["tanks"], row["healers"], row["carry_floor"]), (1, 1, 20))
-        self.assertEqual((self._row(found, "Bonkers")["tanks"],
-                          self._row(found, "Bonkers")["healers"]), (1, 0))
+        self.assertEqual(
+            (
+                self._row(found, "Bonkers")["tanks"],
+                self._row(found, "Bonkers")["healers"],
+            ),
+            (1, 0),
+        )
 
     def test_a_tank_with_no_shield_is_not_ready(self):
         mates = [mate("Bare", 25, WARRIOR, talent_spells=PROTECTION, has_shield=0)]
@@ -111,12 +134,21 @@ class TheBench(unittest.TestCase):
         self.assertEqual(found, {"Cave": []})
 
     def test_the_page_reads_the_memo_rows(self):
-        rows = [{"subject": "Cave", "value": json.dumps([{"keyword": "deadmines"}]),
-                 "since": 5.0},
-                {"subject": "Bonkers", "value": "not json", "since": 5.0}]
+        rows = [
+            {
+                "subject": "Cave",
+                "value": json.dumps([{"keyword": "deadmines"}]),
+                "since": 5.0,
+            },
+            {"subject": "Bonkers", "value": "not json", "since": 5.0},
+        ]
         self.assertEqual(
             sm.page(rows),
-            {"guilds": [{"guild": "Cave", "doors": [{"keyword": "deadmines"}], "at": 5.0}]},
+            {
+                "guilds": [
+                    {"guild": "Cave", "doors": [{"keyword": "deadmines"}], "at": 5.0}
+                ]
+            },
         )
 
     def test_the_bridge_leaves_the_bench_in_the_memo_store(self):
@@ -130,8 +162,11 @@ class TheBench(unittest.TestCase):
             mock.patch.object(bridge, "_memo_upsert", lambda *a: saved.append(a)),
             self.assertLogs("wow-overseer", level="INFO"),
         ):
-            asyncio.run(bridge.Bridge._log_seat_meter(
-                this, bounds, {"family": set()}, mates, {}, self.DEADMINES_AT_20, []))
+            asyncio.run(
+                bridge.Bridge._log_seat_meter(
+                    this, bounds, {"family": set()}, mates, {}, self.DEADMINES_AT_20, []
+                )
+            )
         self.assertEqual([(a[0], a[1]) for a in saved], [("seatbench", "Cave")])
         row = next(r for r in saved[0][2] if r["keyword"] == "deadmines")
         self.assertEqual((row["tanks"], row["healers"]), (1, 0))

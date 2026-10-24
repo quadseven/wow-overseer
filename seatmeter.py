@@ -144,24 +144,35 @@ def bench(guilds, mates: list, doors: list, factions: dict) -> dict:
         members = [m.member for m in mates or () if m.member.guild == guild]
         rows = []
         for door in doors:
-            if int(door.carry_floor) <= 0 or not _offered(door, factions.get(guild, "")):
+            if int(door.carry_floor) <= 0 or not _offered(
+                door, factions.get(guild, "")
+            ):
                 continue
             tanks = sum(
-                1 for m in members
-                if m.plays(guildrun.TANK) and guildrun.tank_ready(m)
+                1
+                for m in members
+                if m.plays(guildrun.TANK)
+                and guildrun.tank_ready(m)
                 and guildrun.carries(m, door)
             )
             healers = sum(
-                1 for m in members
-                if m.plays(guildrun.HEALER) and guildrun.covered(m)
+                1
+                for m in members
+                if m.plays(guildrun.HEALER)
+                and guildrun.covered(m)
                 and guildrun.carries(m, door)
             )
-            rows.append({
-                "keyword": door.keyword, "place": door.place,
-                "floor": int(door.floor), "ceiling": int(door.ceiling),
-                "carry_floor": int(door.carry_floor),
-                "tanks": tanks, "healers": healers,
-            })
+            rows.append(
+                {
+                    "keyword": door.keyword,
+                    "place": door.place,
+                    "floor": int(door.floor),
+                    "ceiling": int(door.ceiling),
+                    "carry_floor": int(door.carry_floor),
+                    "tanks": tanks,
+                    "healers": healers,
+                }
+            )
         out[guild] = rows
     return out
 
@@ -179,8 +190,11 @@ def page(memo_rows: list) -> dict:
         except (TypeError, ValueError):
             continue
         if isinstance(doors, list):
-            guilds.append({
-                "guild": str(row.get("subject")), "doors": doors,
-                "at": float(row.get("since") or 0),
-            })
+            guilds.append(
+                {
+                    "guild": str(row.get("subject")),
+                    "doors": doors,
+                    "at": float(row.get("since") or 0),
+                }
+            )
     return {"guilds": guilds}
