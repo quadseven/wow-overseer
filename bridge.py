@@ -20401,7 +20401,7 @@ class Bridge(discord.Client):
         names = list(fam["names"])
         stuck = await asyncio.to_thread(_stall_reads, names)
         silent = await asyncio.to_thread(_silent_dungeon_run, names)
-        silent_stall = dungeonstall.silent_run(silent or {})
+        silent_stall = dungeonstall.silent_run(silent)
         if silent_stall is not None:
             stuck[silent_stall.door] = silent_stall
         leave = dungeonstall.leave(rows, stuck)
