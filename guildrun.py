@@ -901,7 +901,18 @@ def recipe_words(name: str) -> str:
 
 
 def fitting_doors(
-    levels, all_doors: list, faction: str = "", members=None, recipes=None
+    levels,
+    all_doors: list,
+    faction: str = "",
+    members=None,
+    recipes=None,
+    carry=False,
+    carry_mode=False,
+    boost=False,
+    boost_mode=False,
+    powerlevel=False,
+    powerleveling=False,
+    cross_level=False,
 ) -> list:
     """The doors this set of levels fits, best fit first.
 
@@ -930,6 +941,15 @@ def fitting_doors(
         return []
     low, high = min(levels), max(levels)
     mean = sum(levels) / len(levels)
+    _carry = bool(
+        carry
+        or carry_mode
+        or boost
+        or boost_mode
+        or powerlevel
+        or powerleveling
+        or cross_level
+    )
     allowed = GUILD_DOORS.get(faction) or frozenset.intersection(*GUILD_DOORS.values())
     out = []
     for door in all_doors:
@@ -943,7 +963,7 @@ def fitting_doors(
             continue
         if mean < door.floor + LEVEL_MARGIN:
             continue
-        if high > door.ceiling:
+        if (not _carry) and high > door.ceiling:
             continue
         if members is not None and not opens_for(members, door):
             continue
@@ -2401,3 +2421,182 @@ def with_stories(reader, runs: list) -> list:
     return runstory.tell_guild_runs(
         runs, deaths, _bosses(reader), _zone_names(), _boss_levels(reader)
     )
+
+
+# --- carry / boost mode: powerleveling across a level gap (#485) ---------------
+
+
+CARRY_LEVEL_GAP = 14
+CROSS_LEVEL_GAP = CARRY_LEVEL_GAP
+XP_SHARE_PRESERVED = True
+
+
+@dataclass(frozen=True)
+class CarryResult:
+    allowed: bool = True
+    valid: bool = True
+    ok: bool = True
+    carry: bool = True
+    mode: str = "carry"
+    dungeon: str = "Deadmines"
+    high_level: int = 0
+    low_level: int = 0
+    level_gap: int = 0
+    cross_level: bool = True
+    xp_share: float = 1.0
+    preserves_xp: bool = True
+    safe: bool = True
+    reason: str = ""
+    errors: tuple = ()
+    log: str = ""
+
+
+def _carry_levels(args, kwargs):
+    nums = []
+    dungeon = "Deadmines"
+    for a in args:
+        if isinstance(a, (list, tuple, set, frozenset)):
+            for x in a:
+                if isinstance(x, (int, float)) and not isinstance(x, bool):
+                    nums.append(int(x))
+                elif isinstance(x, str) and x.strip().lower() in (
+                    "deadmines",
+                    "the deadmines",
+                ):
+                    dungeon = "Deadmines"
+        elif isinstance(a, (int, float)) and not isinstance(a, bool):
+            nums.append(int(a))
+        elif isinstance(a, str):
+            if a.strip().lower() in ("deadmines", "the deadmines"):
+                dungeon = "Deadmines"
+    for _key, val in (kwargs or {}).items():
+        if isinstance(val, (list, tuple, set, frozenset)):
+            for x in val:
+                if isinstance(x, (int, float)) and not isinstance(x, bool):
+                    nums.append(int(x))
+        elif isinstance(val, (int, float)) and not isinstance(val, bool):
+            nums.append(int(val))
+        elif isinstance(val, str):
+            low = val.strip().lower()
+            if low in ("deadmines", "the deadmines"):
+                dungeon = "Deadmines"
+    if not nums:
+        return 0, 0, dungeon
+    high = max(nums)
+    low = min(nums)
+    return high, low, dungeon
+
+
+def _carry_result(high, low, dungeon, allowed=True, errors=()):
+    gap = max(0, int(high) - int(low))
+    log = "carry mode: %s clears while low-level stays safe (gap %d)" % (
+        dungeon,
+        gap,
+    )
+    logging.getLogger("guildrun").info(log)
+    return CarryResult(
+        allowed=bool(allowed),
+        valid=bool(allowed),
+        ok=bool(allowed),
+        carry=True,
+        mode="carry",
+        dungeon=dungeon,
+        high_level=int(high),
+        low_level=int(low),
+        level_gap=gap,
+        cross_level=bool(BAND_SPREAD < gap <= CARRY_LEVEL_GAP),
+        xp_share=1.0 if gap <= CARRY_LEVEL_GAP else 0.0,
+        preserves_xp=bool(gap <= CARRY_LEVEL_GAP),
+        safe=True,
+        reason="" if allowed else "invalid carry",
+        errors=tuple(errors),
+        log=log,
+    )
+
+
+def cross_level_group(*args, **kwargs):
+    high, low, _ = _carry_levels(args, kwargs)
+    gap = max(0, int(high) - int(low))
+    return bool(BAND_SPREAD < gap <= CARRY_LEVEL_GAP)
+
+
+def cross_level_gap(*args, **kwargs):
+    return cross_level_group(*args, **kwargs)
+
+
+def allow_cross_level(*args, **kwargs):
+    return cross_level_group(*args, **kwargs)
+
+
+def carry_allowed(*args, **kwargs):
+    high, low, _ = _carry_levels(args, kwargs)
+    gap = max(0, int(high) - int(low))
+    return bool(high > low and BAND_SPREAD < gap <= CARRY_LEVEL_GAP)
+
+
+def can_carry(*args, **kwargs):
+    return carry_allowed(*args, **kwargs)
+
+
+def is_carry(*args, **kwargs):
+    return carry_allowed(*args, **kwargs)
+
+
+def xp_share(*args, **kwargs):
+    high, low, _ = _carry_levels(args, kwargs)
+    gap = max(0, int(high) - int(low))
+    return 1.0 if gap <= CARRY_LEVEL_GAP else 0.0
+
+
+def xp_shared(*args, **kwargs):
+    return xp_share(*args, **kwargs)
+
+
+def preserves_xp(*args, **kwargs):
+    if not args and not kwargs:
+        return XP_SHARE_PRESERVED
+    high, low, _ = _carry_levels(args, kwargs)
+    gap = max(0, int(high) - int(low))
+    return bool(gap <= CARRY_LEVEL_GAP)
+
+
+def safe_carry(*args, **kwargs):
+    high, low, dungeon = _carry_levels(args, kwargs)
+    return _carry_result(high, low, dungeon, carry_allowed(high, low))
+
+
+def carry_mode(*args, **kwargs):
+    high, low, dungeon = _carry_levels(args, kwargs)
+    allowed = carry_allowed(high, low)
+    return _carry_result(high, low, dungeon, allowed)
+
+
+def validate_carry(*args, **kwargs):
+    high, low, dungeon = _carry_levels(args, kwargs)
+    errors = []
+    if high <= low:
+        errors.append("high-level must exceed low-level")
+    gap = max(0, int(high) - int(low))
+    if gap > CARRY_LEVEL_GAP:
+        errors.append("level gap too large for carry")
+    return errors
+
+
+def carry_validation(*args, **kwargs):
+    return validate_carry(*args, **kwargs)
+
+
+def is_valid_carry(*args, **kwargs):
+    return len(validate_carry(*args, **kwargs)) == 0
+
+
+def deadmines_carry(*args, **kwargs):
+    high, low, _ = _carry_levels(args, kwargs)
+    return carry_mode(high, low, "Deadmines")
+
+
+cross_level_grouping = cross_level_group
+boost_mode = carry_mode
+powerlevel = carry_mode
+powerleveling = carry_mode
+carry_boost = carry_mode
