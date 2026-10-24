@@ -559,7 +559,7 @@ class TheAdapterRunsAndDoesNotDecide(unittest.TestCase):
     def test_the_handler_asks_the_module_and_runs_what_it_gets_back(self):
         handler = self.handler()
         self.assertIn("roster_rows = _fetch_roster_rows()", handler)
-        self.assertIn("_fetch_guild_members(request.get(\"guild\"))", handler)
+        self.assertIn('_fetch_guild_members(request.get("guild"))', handler)
         self.assertIn(
             "decree.plan_order(request, roster_rows, members, guild_names)", handler
         )
