@@ -201,13 +201,15 @@ class Stuck:
         )
 
 
-def silent_run(row: dict) -> Stuck | None:
+def silent_run(row: dict | None) -> Stuck | None:
     """Name an active run with no progress evidence for two hours.
 
     `silent_seconds` is measured from the run start or the newest quest,
     level, equip, or boss progress event. The run table's presence heartbeat
     is deliberately not accepted as progress.
     """
+    if row is None:
+        return None
     seconds = row.get("silent_seconds")
     if seconds is None or float(seconds) < NO_PROGRESS_AFTER.total_seconds():
         return None

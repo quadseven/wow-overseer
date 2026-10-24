@@ -215,6 +215,9 @@ class ActiveRunSilence(unittest.TestCase):
         self.assertIsNone(stall.silent_run({**row, "silent_seconds": 7199}))
         self.assertIsNone(stall.silent_run(row))
 
+    def test_no_active_run_is_not_a_silent_stall(self):
+        self.assertIsNone(stall.silent_run(None))
+
 
 def queue_row(qid, keyword, status="active", position=0):
     return {
