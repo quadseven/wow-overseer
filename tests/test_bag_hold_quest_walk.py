@@ -199,6 +199,7 @@ def _run_vendor_once(stuck):
             "SELL_ROUTES": (),
             "SELL_MEMORY_HOURS": 24,
             "_fetch_free_slots": lambda names: dict(FREE),
+            "_present_members": lambda names, leader="": list(names),
             "_fetch_vendor_wait_seconds": lambda names: 0,
             "_fetch_vendor_items": lambda names: _vendor_rows(),
             "_fetch_surplus_bags": lambda names: [],
