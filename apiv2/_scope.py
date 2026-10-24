@@ -29,12 +29,12 @@ def name_shaped(value: str) -> bool:
 
 def may_answer(ctx, name: str) -> bool:
     """True when `name` is a family member or a member of a family guild."""
-    return ctx.server.FAMILIES.may_answer(name)
+    return ctx.families.may_answer(name)
 
 
 def guilds(ctx) -> dict:
     """{lower-case name: name} for every family guild."""
-    return {g["name"].lower(): g["name"] for g in ctx.server.FAMILIES.guilds()}
+    return {g["name"].lower(): g["name"] for g in ctx.families.guilds()}
 
 
 def guild(ctx, value: str) -> str | None:

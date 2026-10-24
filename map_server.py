@@ -4264,10 +4264,17 @@ def _shared_key(path: str, query: dict) -> str:
         "%s=%s" % (k, v) for k in sorted(query) for v in query[k])
 
 
-# What a /api/v2 handler is given: the request's realm reader, this server's
-# own module, and the shared reads for a build two endpoints have in common.
+# What a /api/v2 handler is given: the request's realm reader (S2), the
+# families (S3) and a bound presence reader (#718). The server module is kept
+# as a narrow escape hatch for the world data that is none of those.
 def _v2_context(read) -> _V2Context:
-    return _V2Context(read=read, server=sys.modules[__name__], shared=SHARED_READS)
+    return _V2Context(
+        read=read,
+        server=sys.modules[__name__],
+        families=FAMILIES,
+        presence=lambda names: v2_presence.of(read, names),
+        shared=SHARED_READS,
+    )
 
 
 def _etag(body: bytes) -> str:
