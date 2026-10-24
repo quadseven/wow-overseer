@@ -41,7 +41,7 @@ COPY core.py bridge.py voice.py transform.py \
      bag_pressure.py bag_upgrade.py bag_economy.py bag_market.py disposition.py bagfate.py tidy.py \
      lockbox.py clearance.py \
      item_plan.py \
-     jev.py jev_items.py jev_choices.py jev_recovery.py jev_activity.py jev_keep.py jevview.py \
+     jev.py jev_items.py jev_choices.py jev_recovery.py jev_activity.py jev_keep.py jevview.py strands_server.py \
      lootcouncil.py statweights.py \
      bank.py bankpolicy.py bankforecast.py housedemand.py \
      mailrun.py mountbuy.py holdings.py hunterpet.py \

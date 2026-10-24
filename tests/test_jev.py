@@ -274,6 +274,94 @@ class AnswerTest(unittest.TestCase):
         self.assertIsNone(jev.parse(yes, {"type": "choice", "noul": 0.9}))
 
 
+class StrandsBackendTest(unittest.TestCase):
+    """The strands adapter talks to its localhost wrapper and never needs a key."""
+
+    def _client(self, environ=None, transport=None, **kw):
+        env = dict(environ or {})
+        env.setdefault("JEV_BACKEND", "strands")
+        env.setdefault("STRANDS_URL", "http://localhost:8765/ask")
+        if transport is not None:
+            kw["transport"] = transport
+        return jev.Client.from_env(env, **kw)
+
+    def test_strands_is_a_known_backend(self):
+        self.assertIn("strands", jev.BACKENDS)
+        self.assertEqual(jev.STRANDS.name, "strands")
+        self.assertFalse(jev.STRANDS.requires_key)
+
+    def test_strands_needs_no_key_and_is_ready(self):
+        client = self._client()
+        self.assertTrue(client.ready("item_disposition"))
+
+    def test_only_loopback_http_is_allowed(self):
+        for url in ("http://api.typesafe.ai/v1/systemone", "http://evil.example/ask"):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                jev.Client("k", url=url)
+        jev.Client("k", url="http://127.0.0.1:8765/ask")  # does not raise
+
+    def test_a_good_choice_is_typed(self):
+        transport = Transport(result=reply(good_choice(), model="strands-decider-2b"))
+        client = self._client(transport=transport)
+        outcome = ask(client)
+        self.assertEqual(outcome.status, jev.ANSWERED)
+        self.assertEqual(outcome.model, "strands-decider-2b")
+        self.assertEqual(outcome.backend, "strands")
+        self.assertEqual(outcome.answers["route"].choice, "equip")
+        self.assertAlmostEqual(outcome.answers["route"].confidence, 0.7)
+        self.assertEqual(
+            outcome.answers["route"].probabilities,
+            {"keep": 0.1, "vendor": 0.1, "equip": 0.8},
+        )
+        self.assertAlmostEqual(outcome.answers["route"].confidence, 0.7)
+        self.assertEqual(
+            outcome.answers["route"].probabilities,
+            {"keep": 0.1, "vendor": 0.1, "equip": 0.8},
+        )
+
+    def test_a_noul_is_typed(self):
+        questions = {"sure": jev.noul("Is it an upgrade?")}
+        answers = {"sure": {"type": "noul", "noul": 0.9}}
+        transport = Transport(result=reply(answers))
+        client = self._client(transport=transport)
+        outcome = ask(client, questions=questions)
+        self.assertEqual(outcome.status, jev.ANSWERED)
+        self.assertAlmostEqual(outcome.answers["sure"].noul, 0.9)
+
+    def test_a_failure_returns_none_so_the_heuristic_acts(self):
+        for result, status in (
+            ((529, b"overloaded"), jev.ERROR),
+            ((200, b"<html>"), jev.INVALID),
+        ):
+            with self.subTest(status=status):
+                client = self._client(transport=Transport(result=result))
+                self.assertEqual(
+                    (ask(client).status, ask(client).answers), (status, None)
+                )
+
+    def test_a_transport_exception_is_none(self):
+        client = self._client(transport=Transport(error=OSError("refused")))
+        self.assertEqual(ask(client).status, jev.ERROR)
+
+    def test_an_untyped_answer_is_invalid(self):
+        answers = good_choice()
+        answers["route"]["choice"] = "disenchant"
+        transport = Transport(result=reply(answers))
+        client = self._client(transport=transport)
+        self.assertEqual(ask(client).answers, None)
+
+    def test_the_request_goes_to_the_local_wrapper(self):
+        transport = Transport(result=reply(good_choice()))
+        client = self._client(transport=transport)
+        ask(client)
+        url, body, headers, timeout = transport.calls[0]
+        self.assertEqual(url, "http://localhost:8765/ask")
+        self.assertEqual(body["model"], "strands-decider-2b")
+        self.assertEqual(headers["Content-Type"], "application/json")
+        self.assertEqual(body["state"], "a sword")
+        self.assertIn("route", body["questions"])
+
+
 class ModeTest(unittest.TestCase):
     def test_the_default_is_shadow(self):
         self.assertEqual(jev.mode("item_disposition", {}), jev.SHADOW)

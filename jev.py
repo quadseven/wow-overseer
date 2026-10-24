@@ -56,10 +56,16 @@ chosen by `JEV_BACKEND` (default `jev`):
   openai  OpenAI Decisions API. OPENAI_API_KEY_FILE (mounted secret file),
           OPENAI_DECISIONS_MODEL (default gpt-6-luna), OPENAI_DECISIONS_URL.
           noul/choice/score are translated to predicate/choice/score and back.
+  strands The Strands Decider 2B, served on localhost by its small HTTP
+          wrapper (strands_server). STRANDS_URL (default
+          http://127.0.0.1:8765/ask) and STRANDS_MODEL (default
+          strands-decider-2b). No API key is needed. Choice and Noul
+          questions are forwarded; Score only if the wrapper's library
+          supports it.
 
 A backend with no token answers `no_key` and the heuristic acts. The Strands
-Decider is a local CLI/Python model with no HTTP server, so it has no adapter
-here (ticketed follow-up).
+Decider wrapper needs no key, so a local outage is a normal failure path: the
+adapter returns None and the heuristic acts.
 
 COMPARE (opt-in). `JEV_COMPARE_BACKEND=<name>` asks a second backend the same
 question alongside the active one, off the caller's path, and hands one row
@@ -101,6 +107,8 @@ CLEF_BASE = "https://api.cloudflare.com/client/v4/accounts/%s/ai/run/%s"
 CLEF_MODEL = "@cf/cloudflare/clef"
 OPENAI_URL = "https://api.openai.com/v1/decisions"
 OPENAI_MODEL = "gpt-6-luna"
+STRANDS_URL = "http://127.0.0.1:8765/ask"
+STRANDS_MODEL = "strands-decider-2b"
 TALLY_SECONDS = 3600.0
 # How often a pass queued for a free slot looks again (see Client.ask's wait).
 SLOT_POLL_SECONDS = 0.05
@@ -406,6 +414,7 @@ class JevBackend:
     """TypeSafe's Jev: the request and response this module was built on."""
 
     name = "jev"
+    requires_key = True
 
     def request(self, url, model, key, state, questions) -> tuple:
         body = json.dumps(
@@ -539,10 +548,46 @@ class OpenAIBackend:
         return out
 
 
+class StrandsBackend:
+    """The Strands Decider 2B, served on localhost by its small HTTP wrapper.
+
+    Choice and Noul questions are forwarded to the wrapper. Score is forwarded
+    too, but the wrapper only answers it if the underlying library supports it;
+    anything the wrapper cannot type-check comes back as None and the heuristic
+    acts. The wrapper needs no API key.
+    """
+
+    name = "strands"
+    requires_key = False
+
+    def request(self, url, model, key, state, questions) -> tuple:
+        body = json.dumps(
+            {"state": state, "model": model, "questions": questions}
+        ).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        return url, body, headers
+
+    def read(self, questions: dict, data) -> tuple:
+        """(typed answers or None, model id). None when any is not well-typed."""
+        if not isinstance(data, dict):
+            return None, ""
+        raw = data.get("answers")
+        if not isinstance(raw, dict):
+            return None, ""
+        answers = {}
+        for qid, question in questions.items():
+            typed = parse(question, raw.get(qid))
+            if typed is None:
+                return None, str(data.get("model") or "")
+            answers[qid] = typed
+        return answers, str(data.get("model") or "")
+
+
 JEV_BACKEND = JevBackend()
 CLEF = ClefBackend()
 OPENAI = OpenAIBackend()
-BACKENDS = {b.name: b for b in (JEV_BACKEND, CLEF, OPENAI)}
+STRANDS = StrandsBackend()
+BACKENDS = {b.name: b for b in (JEV_BACKEND, CLEF, OPENAI, STRANDS)}
 
 
 def backend_name(environ=None, var: str = "JEV_BACKEND") -> str:
@@ -587,6 +632,12 @@ def _settings(name: str, env) -> dict:
             "api_key": _read_secret(env.get("OPENAI_API_KEY_FILE", "")),
             "url": env.get("OPENAI_DECISIONS_URL", "") or OPENAI_URL,
             "model": env.get("OPENAI_DECISIONS_MODEL", "") or OPENAI_MODEL,
+        }
+    if name == "strands":
+        return {
+            "api_key": "",
+            "url": env.get("STRANDS_URL", "") or STRANDS_URL,
+            "model": env.get("STRANDS_MODEL", "") or STRANDS_MODEL,
         }
     return {
         "api_key": env.get("TYPESAFE_API_KEY", ""),
@@ -720,6 +771,22 @@ def _cache_key(model: str, state, questions: dict) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _ok_url(url: str) -> bool:
+    """True for https, or for plain http on loopback (a local backend).
+
+    The Strands Decider wrapper runs on localhost over plain HTTP; only
+    loopback is allowed so an operator cannot point Jev at an arbitrary
+    http host from the environment.
+    """
+    text = str(url).lower()
+    if text.startswith("https://"):
+        return True
+    if text.startswith("http://"):
+        host = text[len("http://") :].split("/", 1)[0].split(":", 1)[0]
+        return host == "localhost" or host == "127.0.0.1" or host.startswith("127.")
+    return False
+
+
 class Client:
     """The one door to Jev. See the module docstring for the contract."""
 
@@ -738,8 +805,11 @@ class Client:
         shadow=None,
         compare_sink=None,
     ):
-        if not str(url).lower().startswith("https://"):
-            raise ValueError("Jev URL must be https: %r" % url)
+        if not _ok_url(url):
+            raise ValueError(
+                "Jev URL must be https, or http on loopback for a local backend: %r"
+                % url
+            )
         self._key = (api_key or "").strip()
         self.url = url
         self.model = model
@@ -785,17 +855,20 @@ class Client:
         return bool(self._key)
 
     def ready(self, kind: str) -> bool:
-        """True when a key is set. Without one, says so ONCE per process."""
-        if self._key:
-            return True
-        if not self._said_no_key:
-            log.warning(
-                "jev: no TYPESAFE_API_KEY; %s and every other judgment keeps "
-                "the heuristic",
-                kind,
-            )
-            self._said_no_key = True
-        return False
+        """True when a key is set. Without one, says so ONCE per process.
+
+        A backend that needs no key (a local model) is always ready.
+        """
+        if getattr(self.backend, "requires_key", True) and not self._key:
+            if not self._said_no_key:
+                log.warning(
+                    "jev: no TYPESAFE_API_KEY; %s and every other judgment keeps "
+                    "the heuristic",
+                    kind,
+                )
+                self._said_no_key = True
+            return False
+        return True
 
     def _remember(self, key: str, value: tuple) -> None:
         if not self._cache_size:
