@@ -30,7 +30,7 @@ WHAT IT DECIDES, and what Jev decides.
 
 THE LEARNING LOOP. Every run is a row in overseer_guild_run, beside the
 decision that made it: the options, Jev's answer and confidence, who acted,
-and the outcome (cleared, wiped, abandoned, timed out, not entered), deaths,
+and the outcome (cleared, wiped, abandoned, timed out, stalled, not entered), deaths,
 time inside, bosses, loot and gear. `rates` folds the last ROLLING runs of each
 (dungeon, level band, composition) into a smoothed success rate, (cleared + 1)
 / (runs + 2). Each option Jev is shown says its own record, and the heuristic
@@ -128,13 +128,14 @@ OUTCOMES = (
     "wiped",
     "abandoned",
     "timed out",
+    "stalled",
     "not entered",
     "refused",
     "lost",
 )
 # The outcomes of a run that went in. Only these say anything about the
 # dungeon, and only these rest the members afterwards.
-WENT_IN = (CLEARED, "wiped", "abandoned", "timed out")
+WENT_IN = (CLEARED, "wiped", "abandoned", "timed out", "stalled")
 
 
 def enabled(environ=None) -> bool:
