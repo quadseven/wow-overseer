@@ -148,6 +148,7 @@ HUNT_STOPS = (
     classhunt.ELSEWHERE,
     classhunt.UNSUPPORTED,
     classhunt.UNREADABLE,
+    classhunt.BAGS_FULL,
 )
 # An ask with some yes but not all waits this long from its post for the rest.
 PARTIAL_WAIT_MINUTES = 3.0
@@ -430,6 +431,9 @@ class PartyHunt:
     command: str
     row_id: int = 0
     next_at: float = 0.0
+    # Why the party must stop rather than wait (#1375): the leader's bags are
+    # full, so no hunt row can bring the quest item home. "" otherwise.
+    stop_why: str = ""
 
     def due(self, now) -> bool:
         """True when a hunt row should be written now."""
@@ -441,6 +445,8 @@ class PartyHunt:
         was refused for now after HUNT_WAIT_SECONDS, an old worldserver's
         item key gives way to the plain row, and HUNT_STOPS stop the hunting."""
         self.row_id = 0
+        if verdict.state == classhunt.BAGS_FULL:
+            self.stop_why = verdict.said
         if verdict.state in HUNT_STOPS:
             self.command = ""
         elif verdict.state == classhunt.ITEMLESS:

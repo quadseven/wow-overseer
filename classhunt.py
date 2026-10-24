@@ -80,6 +80,15 @@ RESPAWNING = "respawning"
 # with few spawns it is a wait for the respawn (classquest.slow_respawns); the
 # bridge reads it as `later` for any other.
 RESTING = "resting"
+# THE HUNTER'S BAGS ARE FULL (#1375): the world refuses the hunt with
+# BAGS_FULL_REASON and calls it retryable, but nothing in the hunt makes room,
+# so asking again every minute is the same refusal for as long as the bags
+# stay full. Measured on the dev realm 2026-10-24: a class party's leader had
+# its hunt refused on "the character has no free bag slot" 12 times in 17
+# minutes. A hunt that ends this way ends the step or the party, and the
+# member's own make-room step runs before the quest is tried again.
+BAGS_FULL = "bags full"
+BAGS_FULL_REASON = "no free bag slot"
 # The module's answer to a key it does not know, from a worldserver before
 # mod-overseer#871: the item token is rejected as a malformed row.
 ITEM_KEY = " item:"
@@ -289,6 +298,12 @@ def _refusal(holder, detail, body) -> Answer:
         return Answer(NEVER, "%s cannot hunt: %s" % (holder, why))
     if word == ELSEWHERE:
         return Answer(ELSEWHERE, "%s cannot hunt here: %s" % (holder, why))
+    if BAGS_FULL_REASON in reason:
+        return Answer(
+            BAGS_FULL,
+            "%s's hunt is refused: %s; its bags need room before it hunts again"
+            % (holder, why),
+        )
     if reason == classquest.NO_LIVING_REASON:
         return Answer(
             RESTING,

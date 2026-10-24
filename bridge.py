@@ -17368,6 +17368,13 @@ class Bridge(discord.Client):
                 run.outcome = "party timed out before quest credit"
                 return False
             await self._class_party_tend_hunt(run, hunt)
+            if getattr(hunt, "stop_why", ""):
+                # NO HUNT CAN BRING THE ITEM HOME (#1375): the party ends with
+                # the reason, and the member makes room before it asks again.
+                log.info("class party: %s's party for %s stops: %s", run.leader,
+                         run.title, hunt.stop_why)
+                run.outcome = hunt.stop_why
+                return False
             await asyncio.sleep(min(classparty.WATCH_SECONDS, max(1.0, left)))
 
     async def _class_party_disband_row(self, run) -> None:
