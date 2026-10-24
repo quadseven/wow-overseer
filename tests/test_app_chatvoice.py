@@ -3,8 +3,10 @@
 The queue, the ducking and the reader are pure: every browser object they
 touch is handed in, so node drives them here with fakes. What is pinned is
 the rate limit the ticket asks for (one line at a time, stale lines dropped,
-repeats skipped, queue capped), the duck that always lifts, and a reader that
-never speaks the backlog it finds when it is switched on.
+repeats skipped, queue capped), the duck that always lifts, a reader that
+never speaks the backlog it finds when it is switched on, and the line itself:
+read once even when its listener copies span two polls, within about 10 s of
+being said, in its speaker's voice.
 
 Ticket: 177.
 """
@@ -166,10 +168,12 @@ const said = [];
 let current = null;
 const video = {muted: false, volume: 1};
 const synth = {
-  speak(u) { said.push({text: u.text, pitch: u.pitch, rate: u.rate}); current = u; },
+  speak(u) { said.push({text: u.text, pitch: u.pitch, rate: u.rate, voice: u.voice && u.voice.name}); current = u; },
   cancel() { if (current) { const u = current; current = null; u.onerror({error: 'canceled'}); } },
-  getVoices() { return []; },
+  getVoices() { return voices; },
 };
+const voices = [];
+const timers = [];
 class Utterance { constructor(text) { this.text = text; } }
 const answers = %s;
 const asked = [];
@@ -180,7 +184,7 @@ const reader = M.makeReader({
   video: () => video,
   synth, Utterance,
   now: () => clock,
-  setTimer: () => 1, clearTimer: () => {},
+  setTimer: (fn, ms) => { timers.push(ms); return 1; }, clearTimer: () => {},
   warn: () => {},
 });
 """
@@ -239,6 +243,48 @@ class Reader(unittest.TestCase):
             ),
         )
         self.assertEqual(got, [False, 1, 1])
+
+    def test_copies_split_across_two_polls_are_spoken_once(self):
+        # One line heard by several listeners lands as several rows; a poll
+        # that falls between their inserts sees one copy now, one next time.
+        got = run_async(
+            "await reader.start(); await reader.poll(); current.onend();"
+            " await reader.poll(); return said.map((s) => s.text);",
+            fake(
+                "[{rows: [], after: 40}, {rows: [%s], after: 41}, {rows: [%s], after: 42}]"
+                % (ROW % (41, "Ug."), ROW % (42, "Ug."))
+            ),
+        )
+        self.assertEqual(got, ["Ug."])
+
+    def test_a_line_said_just_after_a_poll_is_read_within_ten_seconds(self):
+        # The worst case: said the moment one poll left, so it waits a whole
+        # interval and arrives that old. It must still be read, not dropped,
+        # and the next poll must come well inside the ticket's 10 s.
+        row = ROW.replace("age_s: 1", "age_s: M.POLL_MS / 1000")
+        got = run_async(
+            "await reader.start(); const due = timers.slice();"
+            " await reader.poll(); return [due, M.POLL_MS, said.map((s) => s.text)];",
+            fake(
+                "[{rows: [], after: 40}, {rows: [%s], after: 41}]" % (row % (41, "Ug."))
+            ),
+        )
+        due, poll_ms, spoken = got
+        self.assertEqual(due, [poll_ms])
+        self.assertLessEqual(poll_ms, 5000)
+        self.assertEqual(spoken, ["Ug."])
+
+    def test_a_line_is_read_in_the_system_voice_its_hint_names(self):
+        got = run_async(
+            "voices.push({name: 'Samantha', lang: 'en-US'}, {name: 'Daniel', lang: 'en-GB'});"
+            " await reader.start(); await reader.poll(); return said;",
+            fake(
+                "[{rows: [], after: 40}, {rows: [%s], after: 41}]" % (ROW % (41, "Ug."))
+            ),
+        )
+        self.assertEqual(
+            got, [{"text": "Ug.", "pitch": 0.7, "rate": 0.85, "voice": "Daniel"}]
+        )
 
     def test_it_is_off_until_asked(self):
         self.assertEqual(
