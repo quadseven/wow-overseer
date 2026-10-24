@@ -54,6 +54,68 @@ def bridge_modules() -> set[str]:
     return {n for n in names if n not in stdlib and n not in THIRD_PARTY}
 
 
+# Shipped today but reached by no import from the image's entry points
+# (bridge.py, map_server.py, the apiv2 endpoints). Each is used only by
+# tools/ or by tests, or is not wired yet. The list may only shrink: wire a
+# module in or stop copying it, then delete its name here.
+KNOWN_UNREACHED = {
+    "bag_economy",
+    "bonkers",
+    "dungeonladder",
+    "enroll",
+    "lootcard",
+    "realmroller",
+    "realmroller_act",
+    "realmroller_plan",
+    "realmroller_world",
+}
+
+
+def _imported_names(path: pathlib.Path) -> set[str]:
+    """Every dotted module name a file imports, `from X import Y` as X and X.Y."""
+    out: set[str] = set()
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return out
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            out.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            out.add(node.module)
+            out.update("%s.%s" % (node.module, a.name) for a in node.names)
+    return out
+
+
+def _source_for(name: str) -> pathlib.Path | None:
+    base = name.replace(".", "/")
+    for candidate in (base + ".py", base + "/__init__.py"):
+        if pathlib.Path(candidate).exists():
+            return pathlib.Path(candidate)
+    return None
+
+
+def reached_modules() -> set[str]:
+    """Module names reachable by imports from the image's entry points.
+
+    apiv2 endpoints are loaded by the package, so each is a root too.
+    """
+    roots = [pathlib.Path("bridge.py"), pathlib.Path("map_server.py")]
+    roots += sorted(pathlib.Path("apiv2").glob("*.py"))
+    seen: set[pathlib.Path] = set()
+    todo = list(roots)
+    while todo:
+        path = todo.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        for name in _imported_names(path):
+            source = _source_for(name)
+            if source is not None:
+                todo.append(source)
+    return {p.stem for p in seen}
+
+
 class ImageModuleWiring(unittest.TestCase):
     def test_every_module_bridge_imports_is_in_the_image(self):
         image = dockerfile_modules()
@@ -68,6 +130,28 @@ class ImageModuleWiring(unittest.TestCase):
     def test_death_dismiss_is_not_shipped(self):
         """A module imported by nothing ships no behavior and is not copied."""
         self.assertNotIn("death_dismiss", dockerfile_modules())
+
+    def test_every_shipped_module_has_an_importer(self):
+        """No module is copied into the image that nothing imports."""
+        reached = reached_modules()
+        orphans = sorted(
+            m
+            for m in dockerfile_modules()
+            if pathlib.Path(m + ".py").exists()
+            and m not in reached
+            and m not in KNOWN_UNREACHED
+        )
+        self.assertEqual(
+            orphans, [], "shipped modules with no importer: %s" % ", ".join(orphans)
+        )
+
+    def test_known_unreached_list_only_shrinks(self):
+        """A listed module that is now imported (or gone) leaves the list."""
+        reached = reached_modules()
+        stale = sorted(
+            m for m in KNOWN_UNREACHED if m in reached or m not in dockerfile_modules()
+        )
+        self.assertEqual(stale, [], "drop from KNOWN_UNREACHED: %s" % ", ".join(stale))
 
 
 if __name__ == "__main__":
