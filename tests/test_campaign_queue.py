@@ -527,9 +527,9 @@ class TheQueueAdvancesByItself(unittest.TestCase):
 
     def test_a_released_bag_hold_keeps_the_family_quest_aim(self):
         """#872: a family the bag hold sent questing keeps its quest aim.
-        Measured 2026-10-24: Zug's family was withheld "so the family quests
-        until there is room" for over an hour while this clear took back the
-        level route's quest aim every pass, so nobody quested."""
+        A released bag hold sends a family questing 'until there is room';
+        the queue pass must not clear that aim back to the level route
+        every cycle, or nobody quests."""
         self.world.withhold = True
         self.world.row("Zug")["drive_quest"] = 4821
         self.world.row("Uzza")["drive_quest"] = 4821
