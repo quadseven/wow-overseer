@@ -4272,6 +4272,34 @@ def _planner_preraid(names: list, level_rows: list) -> tuple:
     return upgrades, progress
 
 
+def _planner_dry(names: list) -> dict | None:
+    """campaignplan.dry_doors for the family, or None when unreadable (#1400)."""
+    if not names:
+        return None
+    marks = campaignplan.holes(len(names))
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(campaignplan.LAST_LEVEL_SQL.format(holes=marks),
+                        tuple(names))
+            row = cur.fetchone() or {}
+            since = row.get("at") or "1970-01-01 00:00:00"
+            cur.execute(campaignplan.DRY_SQL.format(holes=marks),
+                        tuple(names) + (since,))
+            return campaignplan.dry_doors(cur.fetchall())
+    except pymysql.err.MySQLError:
+        log.exception("planner: the dry-door read failed; no door is judged dry")
+        return None
+
+
+def _finish_planned(finish: int) -> int:
+    """Mark one planned entry done (#1400). Rows changed."""
+    if not finish:
+        return 0
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(campaignqueue.FINISH_SQL, (int(finish),))
+        return cur.rowcount or 0
+
+
 def _append_planned(family: str, rows: list, finish: int, option,
                     source: str = campaignplan.SOURCE) -> int:
     """Queue `option` after the family's pending rows. Rows changed.
@@ -20513,7 +20541,8 @@ class Bridge(discord.Client):
         """
         who = campaignqueue._family(key)
         level_rows = await asyncio.to_thread(_queue_level_rows, fam)
-        due = campaignplan.due(rows, fam["leader"], level_rows)
+        dry = await asyncio.to_thread(_planner_dry, list(fam["names"]))
+        due = campaignplan.due(rows, fam["leader"], level_rows, dry)
         if not due.reason:
             self._planner_said.pop(key, None)
             return False
@@ -20522,8 +20551,17 @@ class Bridge(discord.Client):
         if idle is not None and now - idle[1] < campaignplan.IDLE_SECONDS:
             return False
         facts = await asyncio.to_thread(_planner_facts, key, fam, level_rows)
+        facts = dataclasses.replace(facts, dry=dry)
         opts = campaignplan.options(facts)
         pick = campaignplan.heuristic(opts)
+        if pick is None and due.dry:
+            # A DOOR THAT TEACHES NOTHING ENDS EVEN WITH NOTHING TO FOLLOW IT
+            # (#1400): the queue runs out and the family quests until a level
+            # makes a door worth running again.
+            ended = await asyncio.to_thread(_finish_planned, due.finish)
+            log.info("planner: %s: %s; no other door, so the family quests "
+                     "(finished=%s)", who, due.reason, ended)
+            return bool(ended)
         if pick is None:
             line = campaignplan.nothing_line(facts)
             if idle is None or idle[0] != line:
