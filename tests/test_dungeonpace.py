@@ -35,11 +35,12 @@ HORDE = [
 ]
 
 
-def run(outcome, minutes, map_id=189):
+def run(outcome, minutes, map_id=189, ended_reason=""):
     return {
         "map_id": map_id,
         "outcome": outcome,
         "started_at": T0 + timedelta(minutes=minutes),
+        "ended_reason": ended_reason,
     }
 
 
@@ -129,6 +130,22 @@ class TheRecordOfADoor(unittest.TestCase):
         self.assertEqual(3, v.uncleared_streak)
         self.assertTrue(v.hard)
         self.assertFalse(v.clearable)
+
+    def test_a_client_lost_during_a_restart_is_not_an_attempt(self):
+        # A worldserver roll ended the run, so the realm lost the client, not
+        # the door: it is recorded as restart_lost and the uncleared streak
+        # ignores it.
+        v = pace.viability(
+            [run("client_lost", 0, 48, ended_reason="restart: the worldserver rolled")],
+            48,
+        )
+        self.assertEqual(0, v.uncleared_streak)
+        self.assertFalse(v.hard)
+        self.assertTrue(v.clearable)
+
+    def test_a_client_lost_outside_a_restart_is_still_an_attempt(self):
+        v = pace.viability([run("client_lost", 0, 48)], 48)
+        self.assertEqual(1, v.uncleared_streak)
 
     def test_a_high_rate_without_a_streak_is_unclearable_but_not_hard(self):
         runs = [
@@ -665,6 +682,20 @@ class NoEasierDoor(unittest.TestCase):
     def test_a_clear_on_the_way_back_in_holds(self):
         runs = [run("complete", 200, self.BFD)]
         self.assertFalse(self._at_bfd(runs, returned=True).acts)
+
+    def test_a_client_lost_during_a_restart_does_not_beat_a_returned_family(self):
+        # A realm roll ended the return attempt, so the door did not beat the
+        # family: it stays at the door instead of stepping away.
+        runs = [
+            run(
+                "client_lost",
+                200,
+                self.BFD,
+                ended_reason="restart: the worldserver rolled",
+            )
+        ]
+        self.assertFalse(self._at_bfd(runs, returned=True).acts)
+        self.assertEqual(pace.NOTHING, self._at_bfd(runs, returned=True).kind)
 
     def test_a_return_with_an_easier_door_steps_down_and_jev_may_not_keep_it(self):
         rows = [dict(r, level=26) for r in HORDE]
