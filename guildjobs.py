@@ -802,8 +802,9 @@ def _cooling(member: Member, action: str, recent) -> bool:
 # THE TRAINER GATE'S PASSING WALLS (#1116), the module's own literals
 # (MailWalkRefusal and ErrandWalkRefusal in mod-overseer's
 # overseer_decisions.h) for a member that was busy when the row was served: in
-# a fight, on a flight, logging out, out of the world, already walking, or held
-# by another verb, and the mid-walk ending of a fight. Matched exactly. The
+# a fight, on a flight, logging out, out of the world, inside an instance or
+# battleground, already walking, or held by another verb, and the mid-walk
+# endings of a fight, a flight and leaving the world (#1389). Matched exactly. The
 # module calls many more trainer refusals retryable (a trainer beyond the cap,
 # ground that does not hold, Outland, a grouped follower, a dead character, the
 # far walk budget); those say the same walk will be refused again for a while,
@@ -815,6 +816,9 @@ PASSING_TRAIN_REASONS = frozenset(
         "character is on a flight path",
         "character is logging out",
         "character is not in the world",
+        "character is inside an instance or battleground",
+        "took a flight on the way to the trainer",
+        "left the world on the way to the trainer",
         "a walk is already under way for this character",
         "character is held by another verb",
     }
