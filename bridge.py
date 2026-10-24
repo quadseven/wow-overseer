@@ -4274,6 +4274,33 @@ def _planner_preraid(names: list, level_rows: list) -> tuple:
     return upgrades, progress
 
 
+def _guild_seat_gains(names: list, levels: list) -> dict:
+    """preraid.run_gains over the seated raiders in `names` (#760): what one
+    run of each level 60 dungeon drops for each of them, the way the family's
+    upgrades are read for its planner. {} below guildrun.UPGRADE_FLOOR and
+    for any read this realm cannot answer. Reads only."""
+    if not names or not levels or min(levels) < guildrun.UPGRADE_FLOOR:
+        return {}
+    marks = preraid.holes(len(names))
+    args = tuple(names)
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            found = _planner_catalog(cur)
+            people = _planner_rows(
+                cur, preraid.GUILD_MEMBERS_SQL.format(holes=marks), args,
+                "the seated raiders' specs")
+            worn = _planner_rows(
+                cur, preraid.WORN_SQL.format(holes=marks), args,
+                "the seated raiders' worn items")
+    except pymysql.err.MySQLError:
+        log.exception("guild runs: the seated raiders' gear could not be read")
+        return {}
+    if found is None or people is None or worn is None:
+        return {}
+    plans = [preraid.plan(m, found) for m in preraid.members(people, worn)]
+    return preraid.run_gains(plans)
+
+
 def _planner_dry(names: list) -> dict | None:
     """campaignplan.dry_doors for the family, or None when unreadable (#1400)."""
     if not names:
@@ -19788,8 +19815,10 @@ class Bridge(discord.Client):
         # The guild with the fewest runs in flight first, so both get turns.
         pools.sort(key=lambda p: (facts["in_flight_by_guild"].get(p.guild, 0),
                                   -max(p.levels)))
+        gains = await asyncio.to_thread(
+            _guild_seat_gains, [m.name for m in pools[0].members], pools[0].levels)
         plan = guildrun.plan_for(pools[0], doors, guildrun.rates(facts["history"]),
-                                 facts.get("recipes", {}).get(pools[0].guild))
+                                 facts.get("recipes", {}).get(pools[0].guild), gains)
         if plan is None:
             return
         decision = await guildrun.decide(self._jev, plan)
@@ -19807,6 +19836,11 @@ class Bridge(discord.Client):
         if recipe:
             log.info("guild run %s: %s %s", plan.pool.guild, decision.door.place,
                      guildrun.recipe_words(recipe))
+        # THE SEATED RAIDERS' UPGRADES the run was chosen for (#760).
+        upgrades = guildrun.upgrade_words(plan, decision.door, decision.chosen)
+        if upgrades:
+            log.info("guild run %s: %s drops %s", plan.pool.guild,
+                     decision.door.place, upgrades)
 
     async def _guild_social_once(self) -> None:
         """One pass of the guild's asks and answers (guildsocial, #568, #569).
