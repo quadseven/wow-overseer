@@ -268,10 +268,33 @@ class AThinRosterDegradesHonestly(unittest.TestCase):
         lineup = raidlineup.build_lineup(
             _roster(WARRIOR=2, PRIEST=12, MAGE=30, WARLOCK=21)
         )
+        groups = lineup["groups"]
         for group in lineup["groups"]:
             seats = [m["seat"] for m in group["members"]]
             self.assertLessEqual(len(seats), 5, group["number"])
+        self.assertTrue(
+            any(not any(m["seat"] == "tank" for m in g["members"]) for g in groups)
+        )
         self.assertEqual(lineup["counts"]["raiders"], 40)
+        thin_healing = raidlineup.build_lineup(
+            _roster(WARRIOR=2, PRIEST=4, MAGE=30, WARLOCK=21)
+        )
+        self.assertTrue(
+            any(
+                not any(m["seat"] == "healer" for m in g["members"])
+                for g in thin_healing["groups"]
+            )
+        )
+
+    def test_a_group_can_take_a_fourth_damage_dealer_when_tank_seats_are_short(self):
+        lineup = raidlineup.build_lineup(
+            _roster(WARRIOR=2, PRIEST=12, MAGE=30, WARLOCK=21)
+        )
+        dps_counts = [
+            sum(m["seat"] == "dps" for m in group["members"])
+            for group in lineup["groups"]
+        ]
+        self.assertIn(4, dps_counts)
 
     def test_hybrids_split_evenly_when_both_seats_are_short(self):
         """Dedicated tank demand is filled before hybrids cover healing."""
