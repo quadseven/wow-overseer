@@ -559,7 +559,7 @@ class TheAdapterRunsAndDoesNotDecide(unittest.TestCase):
     def test_the_handler_asks_the_module_and_runs_what_it_gets_back(self):
         handler = self.handler()
         self.assertIn("roster_rows = _fetch_roster_rows()", handler)
-        self.assertIn("_fetch_guild_members()", handler)
+        self.assertIn("_fetch_guild_members(request.get(\"guild\"))", handler)
         self.assertIn(
             "decree.plan_order(request, roster_rows, members, guild_names)", handler
         )
@@ -892,12 +892,42 @@ class TheWritesThatActuallyRun(unittest.TestCase):
         cursor = GuildCursor()
         conn = FakeConn(cursor)
         with mock.patch.object(map_server, "_connect", return_value=conn):
-            members, names = map_server._fetch_guild_members()
+            members, names = map_server._fetch_guild_members("Example Guild")
         self.assertEqual(members, guild_members(1))
         self.assertEqual(names, {7: "Example Guild"})
         self.assertIn("JOIN characters c ON c.guid = gm.guid", cursor.calls[1][0])
         self.assertIn("s.updated_at > NOW() - INTERVAL 60 SECOND", cursor.calls[1][0])
         self.assertTrue(conn.closed)
+
+    def test_guild_membership_read_is_bounded_to_the_named_guild_and_the_cap(self):
+        class GuildCursor(FakeCursor):
+            def fetchall(self):
+                if "FROM guild_member gm" in self.calls[-1][0]:
+                    return guild_members(1)
+                return [
+                    {"guildid": 7, "name": "Example Guild"},
+                    {"guildid": 9, "name": "Other Guild"},
+                ]
+
+        cursor = GuildCursor()
+        conn = FakeConn(cursor)
+        with mock.patch.object(map_server, "_connect", return_value=conn):
+            members, names = map_server._fetch_guild_members("example guild")
+        self.assertEqual(members, guild_members(1))
+        self.assertEqual(names, {7: "Example Guild", 9: "Other Guild"})
+        sql, params = cursor.calls[1]
+        self.assertIn("gm.guildid = %s", sql)
+        self.assertIn("LIMIT %s", sql)
+        self.assertEqual(params, (7, decree.fanout.MAX_FANOUT_TARGETS + 1))
+
+    def test_an_unknown_guild_reads_no_membership_at_all(self):
+        cursor = FakeCursor(rows=[{"guildid": 7, "name": "Example Guild"}])
+        conn = FakeConn(cursor)
+        with mock.patch.object(map_server, "_connect", return_value=conn):
+            members, names = map_server._fetch_guild_members("Nowhere")
+        self.assertEqual(members, [])
+        self.assertEqual(names, {7: "Example Guild"})
+        self.assertEqual(len(cursor.calls), 1)
 
     def test_a_roster_read_that_is_not_a_schema_problem_still_raises(self):
         cursor = FakeCursor(
