@@ -240,7 +240,9 @@ class AWalkThatEndedInAFightIsAskedAgain(unittest.TestCase):
         m = member(skills={H: (75, 75)})
         result = guildjobs.plan([m], recent=rows)
         self.assertEqual(1, len(train_steps(result, "Funkymon")), result.notes)
-        early = guildjobs.plan([m], recent=walks(COMBAT_ON_THE_WAY, 16, outcome="abandoned"))
+        early = guildjobs.plan(
+            [m], recent=walks(COMBAT_ON_THE_WAY, 16, outcome="abandoned")
+        )
         self.assertEqual([], train_steps(early, "Funkymon"))
 
 
