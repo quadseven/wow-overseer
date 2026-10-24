@@ -128,6 +128,10 @@ def trade_state(skill: int, value: int, ceiling: int, level: int) -> dict:
         "cap": upper.cap,
         "level": upper.level,
         "needs": upper.needs,
+        # The skill at which the bridge buys this rank: the rank's own ask, or
+        # the margin below the ceiling when that is higher (next_rank). A
+        # trade at 58 of 75 with the rank asking 50 is not yet due.
+        "buys_at": max(upper.needs, ceiling - guildjobs.RANK_UP_MARGIN),
         "cost": upper.cost,
     }
     if rank is not None:
