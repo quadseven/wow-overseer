@@ -27,7 +27,7 @@ import guildgear  # noqa: E402
 import guildjobs  # noqa: E402
 import nowstatus  # noqa: E402
 import realmread  # noqa: E402
-from apiv2 import activity, classchain, members, training, upgrades  # noqa: E402
+from apiv2 import activity, classchain, members, presence, training, upgrades  # noqa: E402
 from apiv2._context import Context  # noqa: E402
 
 NOW = 1_800_000_000
@@ -102,7 +102,15 @@ def ctx_for(rules, srv):
     fake connection, so the reads run as the map server runs them."""
     log = []
     rd = realmread.Session(lambda: FakeConn(rules, log))
-    return Context(read=rd, server=srv), log
+    return (
+        Context(
+            read=rd,
+            server=srv,
+            families=srv.FAMILIES,
+            presence=lambda names: presence.of(rd, names),
+        ),
+        log,
+    )
 
 
 # ---- the routes ------------------------------------------------------------------
