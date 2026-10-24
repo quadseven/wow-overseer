@@ -1479,7 +1479,7 @@ def upgrade_levels(plan: Plan, door: Door, composition: Composition) -> float:
 
 
 def upgrade_words(plan: Plan, door: Door, composition: Composition) -> str:
-    """"upgrades for Name (best piece), ...", the members a run of `door`
+    """ "upgrades for Name (best piece), ...", the members a run of `door`
     helps most; "" when none or unread."""
     helped = sorted(
         (g for g in _seat_gains(plan, door, composition) if g.upgrades and g.best),

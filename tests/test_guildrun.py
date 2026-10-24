@@ -1525,7 +1525,10 @@ def seated_plan(level, gains):
 
 def gain(name, levels, best="Helm of Might for head (+9 item levels, 20%)"):
     return preraid.Gain(
-        name=name, upgrades=1 if levels else 0, drops=0.2, levels=levels,
+        name=name,
+        upgrades=1 if levels else 0,
+        drops=0.2,
+        levels=levels,
         best=best if levels else "",
     )
 
@@ -1537,7 +1540,10 @@ class SeatedRaidersUpgradesChooseTheDoor(unittest.TestCase):
     def gains(self):
         return {
             "alpha": (gain("Tanky", 0), gain("Stabby", 0)),
-            "beta": (gain("Tanky", 4.5), gain("Stabby", 2.0, "Edge for hands (+5 item levels, 10%)")),
+            "beta": (
+                gain("Tanky", 4.5),
+                gain("Stabby", 2.0, "Edge for hands (+5 item levels, 10%)"),
+            ),
         }
 
     def test_the_door_that_drops_more_for_the_seats_wins_a_tie(self):
@@ -1573,8 +1579,9 @@ class SeatedRaidersUpgradesChooseTheDoor(unittest.TestCase):
 
 class AnySeatedRaiderIsReadByPreraid(unittest.TestCase):
     def test_a_guild_member_row_with_no_roster_tab_gets_the_class_default(self):
-        rows = [{"name": "Stabby", "class_id": 4, "level": 55, "race": 2,
-                 "spec_tab": None}]
+        rows = [
+            {"name": "Stabby", "class_id": 4, "level": 55, "race": 2, "spec_tab": None}
+        ]
         (m,) = preraid.members(rows, [])
         self.assertEqual((m.name, m.level, m.tree), ("Stabby", 55, -1))
         self.assertIn("overseer_raid_spec", preraid.GUILD_MEMBERS_SQL)
