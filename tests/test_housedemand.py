@@ -42,16 +42,18 @@ class HouseClosedTests(unittest.TestCase):
         self.assertFalse(housedemand.closed(["cancelled"] * 30)[0])
 
     def test_log_line_names_the_house_and_count(self):
-        self.assertEqual(housedemand.closed_line(2, 20),
-                         "auction: 2 closed (0 of 20 sold)")
+        self.assertEqual(
+            housedemand.closed_line(2, 20), "auction: 2 closed (0 of 20 sold)"
+        )
 
 
 class BridgeWiringTests(unittest.TestCase):
     def test_listing_skips_a_closed_house(self):
         body = _block("    async def _auction_sell_house(")
         self.assertIn("_house_is_closed(house)", body)
-        self.assertLess(body.index("_house_is_closed"),
-                        body.index("_fetch_auction_listings"))
+        self.assertLess(
+            body.index("_house_is_closed"), body.index("_fetch_auction_listings")
+        )
 
     def test_clearance_reads_no_market_from_a_closed_house(self):
         body = _block("    async def _clearance_plan(")
@@ -63,8 +65,9 @@ class BridgeWiringTests(unittest.TestCase):
         self.assertIn("overseer_auction_history", body)
 
     def test_dockerfile_ships_the_module(self):
-        self.assertIn("housedemand.py",
-                      (ROOT / "Dockerfile").read_text(encoding="utf-8"))
+        self.assertIn(
+            "housedemand.py", (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        )
 
 
 if __name__ == "__main__":
