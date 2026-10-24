@@ -113,6 +113,12 @@ CLIENT_LOST = "client_lost"
 ATTEMPTED = FOUGHT | {"evacuated", CLIENT_LOST}
 WIPE = "wipe"
 COMPLETE = "complete"
+# A run the worldserver rolled (a deliberate realm restart) is closed with an
+# `ended_reason` that names the roll. The door did not beat the family: the
+# realm did, so it is recorded as `RESTART_LOST` and the uncleared-streak rule
+# ignores it. The command surface uses the `restart: ` prefix
+# (core.RESTART_DETAIL_PREFIX); the run row does the same.
+RESTART_LOST = "restart_lost"
 
 STREAK_WIPES = 2
 STREAK_UNCLEARED = 3
@@ -219,7 +225,7 @@ LAST_BACK_SQL = (
     "WHERE family = %s AND decision IN ('step_up', 'release') GROUP BY door"
 )
 RUNS_SQL = (
-    "SELECT id, map_id, outcome, started_at FROM overseer_dungeon_run "
+    "SELECT id, map_id, outcome, ended_reason, started_at FROM overseer_dungeon_run "
     "WHERE state = 'ended' AND leader_name IN ({holes}) "
     "AND started_at >= NOW() - INTERVAL %s HOUR ORDER BY id"
 )
@@ -333,6 +339,17 @@ def returned(started, back) -> bool:
     return started is None or started - back <= timedelta(hours=RETURN_HOURS)
 
 
+def _restart_ended(run: dict | None) -> bool:
+    """True when the worldserver rolled and ended this run, not the door.
+
+    A run the realm closed because it restarted carries an `ended_reason`
+    that names the roll (`restart: ...`). The door did not beat the family,
+    so the run is recorded as `RESTART_LOST` and the uncleared-streak rule
+    ignores it: a return to the door does not step away on it.
+    """
+    return bool(run) and str(run.get("ended_reason") or "").startswith("restart")
+
+
 def viability(runs, map_id: int, since=None) -> Viability:
     """The door's record from ledger rows, oldest first.
 
@@ -357,6 +374,7 @@ def viability(runs, map_id: int, since=None) -> Viability:
         for r in runs or ()
         if int(r.get("map_id") or 0) == int(map_id)
         and str(r.get("outcome") or "") in ATTEMPTED
+        and not _restart_ended(r)
         and (since is None or r.get("started_at") is None or r["started_at"] >= since)
     ]
     uncleared_streak = 0
@@ -887,6 +905,9 @@ def _at_the_door(f: Facts, place: str) -> Decision:
         # So is any attempt that did not clear (#1074): the record restarts at
         # the return, and a stall, an empty run or a lost client there held
         # Blackfathom Deeps for two more tries after a release.
+        # A run the realm rolled (a worldserver restart) is not the door's
+        # doing: it is recorded as `RESTART_LOST` and does not count here, so a
+        # family whose only return attempt ended in the roll stays at the door.
         why = "%s beat the family again on its way back: %s" % (
             place,
             f.record.line(),
