@@ -121,5 +121,32 @@ class WhatJevChose(unittest.TestCase):
         self.assertEqual(["Hunting Rifle"], [e.name for e in got])
 
 
+class TheCarriedPreFilter(unittest.TestCase):
+    """weaponskill.may_need keeps the skill and bag reads to members who carry
+    a weapon worth a trip; a hunter's melee weapon never is."""
+
+    @staticmethod
+    def _carried(sub, inv, rl=15):
+        return types.SimpleNamespace(item_class=weaponskill.ITEM_CLASS_WEAPON,
+                                     subclass=sub, inventory_type=inv,
+                                     required_level=rl)
+
+    def test_a_hunter_carrying_only_a_melee_weapon_needs_no_trip(self):
+        for inv in sorted(weaponskill.MELEE_INVENTORY_TYPES & set(weaponskill.WEAPON_SLOT)):
+            got = weaponskill.may_need(HUNTER, 24, [self._carried(7, inv)])
+            self.assertFalse(got, inv)
+
+    def test_a_hunter_carrying_a_ranged_weapon_may_need_one(self):
+        self.assertTrue(weaponskill.may_need(HUNTER, 24, [self._carried(2, 15)]))
+
+    def test_a_warrior_carrying_the_same_melee_weapon_may_need_one(self):
+        self.assertTrue(weaponskill.may_need(WARRIOR, 24, [self._carried(7, 13)]))
+
+    def test_a_melee_weapon_does_not_hide_a_ranged_one_in_the_same_bag(self):
+        got = weaponskill.may_need(HUNTER, 24,
+                                   [self._carried(7, 13), self._carried(2, 15)])
+        self.assertTrue(got)
+
+
 if __name__ == "__main__":
     unittest.main()
