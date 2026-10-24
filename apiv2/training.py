@@ -1,4 +1,4 @@
-"""GET /api/v2/training?name=X: what a member has learned, can train now, and cannot yet.
+"""GET /api/v2/training?name=X: what a member has learned, can train now, cannot yet, and the recipes known per trade.
 
 The profile's Standing card. Two kinds of thing a trainer sells:
 
