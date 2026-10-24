@@ -9,7 +9,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import orders
 
 
-class FakeMySqlError(Exception):
+import pymysql
+
+
+class FakeMySqlError(pymysql.err.MySQLError):
     pass
 
 
@@ -118,6 +121,35 @@ class SendTests(unittest.TestCase):
             orders.send(
                 orders.MySqlStore(FakeDb(raises=1205)), orders.Order("B", "c", "s")
             )
+
+
+class OnlyMySqlErrorsAreAnswersTests(unittest.TestCase):
+    """A fault that is not a MySQL error is a bug, and is never read as 'no row'."""
+
+    class Boom(Exception):
+        pass
+
+    def broken(self):
+        db = FakeDb()
+        db.raises = 1146
+
+        def execute(sql, args=()):
+            raise self.Boom(1146)
+
+        class Cur(FakeCursor):
+            pass
+
+        Cur.execute = lambda self_, sql, args=(): execute(sql, args)
+        return lambda: type("C", (FakeConn,), {"cursor": lambda s: Cur(db)})(db)
+
+    def test_insert_read_and_kinds_propagate_other_exceptions(self):
+        store = orders.MySqlStore(self.broken())
+        with self.assertRaises(self.Boom):
+            store.insert(orders.Order("B", "c", "s"))
+        with self.assertRaises(self.Boom):
+            store.read(1)
+        with self.assertRaises(self.Boom):
+            store.kinds()
 
 
 class SupportsTests(unittest.TestCase):

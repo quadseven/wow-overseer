@@ -14,8 +14,8 @@ Two adapters sit behind the same four methods (insert, read, kinds): the
 MySQL one the bridge uses and a memory one tests use. Nothing here decides
 WHICH order to give; that stays with the callers. It only moves rows.
 
-Stdlib only. The MySQL adapter takes the bridge's connect function, so this
-file never imports pymysql.
+The MySQL adapter takes the bridge's connect function and catches only
+pymysql's own errors; any other exception is a bug and propagates.
 """
 
 from __future__ import annotations
@@ -24,6 +24,8 @@ import re
 import time
 from dataclasses import dataclass
 from typing import Callable, Optional
+
+import pymysql
 
 # A missing column, a missing table, a truncated ENUM value: the three errors
 # a realm that has not run a migration yet raises. They mean "this realm does
@@ -124,9 +126,7 @@ class MySqlStore:
         with self._connect() as conn, conn.cursor() as cur:
             try:
                 cur.execute(sql, tuple(vals))
-            except (
-                Exception
-            ) as exc:  # pymysql.err.MySQLError, kept out of this file's imports
+            except pymysql.err.MySQLError as exc:
                 if exc.args and exc.args[0] in MISSING_MACHINERY:
                     return 0
                 raise
@@ -139,7 +139,7 @@ class MySqlStore:
                     "SELECT target_name, status, detail, result FROM overseer_command WHERE id = %s",
                     (int(row_id),),
                 )
-            except Exception as exc:
+            except pymysql.err.MySQLError as exc:
                 if exc.args and exc.args[0] in (1054, 1146):
                     return None
                 raise
@@ -153,7 +153,7 @@ class MySqlStore:
         with self._connect() as conn, conn.cursor() as cur:
             try:
                 cur.execute("SHOW COLUMNS FROM overseer_command LIKE 'kind'")
-            except Exception as exc:
+            except pymysql.err.MySQLError as exc:
                 if exc.args and exc.args[0] in (1054, 1146):
                     return None
                 raise
