@@ -290,10 +290,17 @@ class AThinRosterDegradesHonestly(unittest.TestCase):
         lineup = raidlineup.build_lineup(
             _roster(WARRIOR=2, PRIEST=12, MAGE=30, WARLOCK=21)
         )
-        dps_counts = [
-            sum(m["seat"] == "dps" for m in group["members"])
-            for group in lineup["groups"]
-        ]
+        dps_counts = []
+        for group in lineup["groups"]:
+            members = group["members"]
+            self.assertEqual(len(members), 5, group["number"])
+            dps_counts.append(sum(m["seat"] == "dps" for m in members))
+            self.assertLessEqual(dps_counts[-1], 5)
+        self.assertGreater(sum(dps_counts), lineup["wanted"]["damage"])
+        members = [m for group in lineup["groups"] for m in group["members"]]
+        tanks = sum(m["seat"] == "tank" for m in members)
+        healers = sum(m["seat"] == "healer" for m in members)
+        self.assertEqual(sum(dps_counts), 40 - tanks - healers)
         self.assertIn(4, dps_counts)
 
     def test_hybrids_split_evenly_when_both_seats_are_short(self):
