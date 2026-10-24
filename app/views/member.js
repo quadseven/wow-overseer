@@ -153,7 +153,7 @@ function tradeLine(t) {
     learned: "top rank held",
     trainable: n ? "next rank (" + n.cap + ") trainable now, " + gold(n.cost) : "trainable now",
     above: n ? "next rank (" + n.cap + ") at level " + n.level : "above level",
-    skill: n ? "needs skill " + n.needs + " for the next rank (" + n.cap + ")" : "needs more skill",
+    skill: n ? "buys the next rank (" + n.cap + ") at skill " + (n.buys_at ?? n.needs) + ", it asks " + n.needs : "needs more skill",
   }[t.state] || t.state;
   const tone = t.state === "trainable" ? "warn" : t.state === "learned" ? "" : "dim";
   return html`<div class="st-trade"><span class="mb-b">${t.name}</span><span class="num">${t.value} / ${t.max}</span><span class="${tone}">${words}</span></div>`;
