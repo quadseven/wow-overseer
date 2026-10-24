@@ -876,16 +876,21 @@ class CombinedRun(unittest.TestCase):
 
     def test_combined_run_has_two_families_on_same_step(self):
         """A combined-run entry can hold two families on the same dungeon step."""
-        combined_entry = (
-            campaignqueue.Entry("wailing", 50),
-            campaignqueue.Entry("blackfathom", 50),
-        )
-        plan = campaignqueue.plan("Zug", combined_entry, self.level_rows_zug)
-        plan_grug = campaignqueue.plan("Grug", combined_entry, self.level_rows_grug)
+        # One entry, both families, same Kalimdor step.
+        combined_entry = campaignqueue.Entry("wailing", 50, families=("Zug", "Grug"))
+        plan = campaignqueue.plan("Zug", (combined_entry,), self.level_rows_zug)
+        plan_grug = campaignqueue.plan("Grug", (combined_entry,), self.level_rows_grug)
         self.assertEqual("", plan.refusal)
         self.assertEqual("", plan_grug.refusal)
-        self.assertEqual(combined_entry, plan.entries)
-        self.assertEqual(combined_entry, plan_grug.entries)
+        self.assertEqual((combined_entry,), plan.entries)
+        self.assertEqual((combined_entry,), plan_grug.entries)
+
+    def test_combined_run_refuses_a_family_not_in_the_entry(self):
+        """A combined-run entry is not planned for a family it does not hold."""
+        combined_entry = campaignqueue.Entry("wailing", 50, families=("Zug", "Grug"))
+        plan = campaignqueue.plan("Oz", (combined_entry,), self.level_rows_zug)
+        self.assertNotEqual("", plan.refusal)
+        self.assertEqual((), plan.entries)
 
     def test_combined_run_two_families_on_raid_step(self):
         """A combined-run entry can hold two families on a raid step."""

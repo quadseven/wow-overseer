@@ -128,6 +128,10 @@ def level_rows_sql(count: int) -> str:
 class Entry:
     keyword: str
     runs: int
+    # The families this entry is planned for. Empty means an operator's order
+    # for a single family; two names mean a combined run both families share
+    # on the same dungeon step.
+    families: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -314,6 +318,15 @@ def plan(family: str, entries: tuple, level_rows: list) -> Plan:
     if not entries:
         return Plan(family, "The queue names no dungeon.", (), False, "")
     for entry in entries:
+        if entry.families and family not in entry.families:
+            return Plan(
+                family,
+                "Not queued: %s for %s - not one of this entry's families. "
+                "Nothing was written." % (_place(entry.keyword), _family(family)),
+                (),
+                False,
+                "",
+            )
         why = (
             raidrun.refusal(entry.keyword, entry.runs, level_rows)
             if raidrun.is_raid(entry.keyword)
