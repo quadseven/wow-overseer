@@ -775,5 +775,83 @@ class TheBridgePass(unittest.TestCase):
         )
 
 
+class AStallSendsTheFamilyToADoorThatFits(unittest.TestCase):
+    """A step down after failures without a wipe goes to a door that fits.
+
+    The dev realm 2026-10-21 to 10-24: the Alliance family (41, 44, 44, 45, 47)
+    stalled at Uldaman (map 70) with no wipe, every time. Each step down went
+    to the Scarlet Armory (36-41), which it had mastered and four of the five
+    had outgrown, while Razorfen Downs (33-47) was open to all five by boat.
+    """
+
+    LEVELS = [
+        {"name": "Grug", "level": 47, "race": 1, "map_id": 0, "lead": 1},
+        {"name": "Grog", "level": 45, "race": 3, "map_id": 0},
+        {"name": "Bork", "level": 44, "race": 7, "map_id": 0},
+        {"name": "Ugga", "level": 44, "race": 1, "map_id": 0},
+        {"name": "Og", "level": 41, "race": 1, "map_id": 0},
+    ]
+    SCARLET_KEY = frozenset({7146})
+    ARMORY_CLEARS = [run("complete", -200), run("complete", -100)]
+
+    def setUp(self):
+        before = pace.campaignplan.council.crossing._module_crossing
+        pace.campaignplan.council.crossing.note_module_crossing("boards")
+        self.addCleanup(pace.campaignplan.council.crossing.note_module_crossing, before)
+
+    def decide(self, outcome):
+        runs = self.ARMORY_CLEARS + [run(outcome, 10 * i, map_id=70) for i in range(3)]
+        rows = members(self.LEVELS, worn=17)
+        door = head("uldaman", source=pace.campaignplan.SOURCE_JEV, runs=30)
+        gates, notes = pace.readiness("uldaman", rows)
+        f = pace.Facts(
+            family="Grug",
+            head=door,
+            door="uldaman",
+            door_row=door,
+            record=pace.viability(runs, 70),
+            members=rows,
+            gates=gates,
+            notes=notes,
+            open=None,
+            changed="",
+            done=0,
+            cands=tuple(
+                pace.candidates(
+                    "uldaman",
+                    self.LEVELS,
+                    self.SCARLET_KEY,
+                    runs,
+                    avoid={"uldaman", "scarlet-cathedral"},
+                )
+            ),
+        )
+        return f, pace.decide(f)
+
+    def test_the_armory_is_a_door_the_family_could_still_open(self):
+        f, _d = self.decide("stalled")
+        self.assertIn("scarlet-armory", [c.keyword for c in f.cands])
+
+    def test_three_stalls_step_down_to_razorfen_downs(self):
+        _f, d = self.decide("stalled")
+        self.assertEqual(pace.STEP_DOWN, d.kind)
+        self.assertEqual("razorfen-downs", d.target)
+
+    def test_an_outgrown_door_is_not_offered_to_jev(self):
+        _f, d = self.decide("stalled")
+        self.assertNotIn("scarlet-armory", d.offer)
+        self.assertNotIn("razorfen-kraul", d.offer)
+
+    def test_after_wipes_the_mastered_door_still_stands(self):
+        _f, d = self.decide("wipe")
+        self.assertEqual("scarlet-armory", d.target)
+
+    def test_the_middle_member_judges_the_fit(self):
+        self.assertEqual(44, pace.middle_level([47, 45, 44, 44, 41]))
+        self.assertFalse(pace.fits(41, 44))
+        self.assertTrue(pace.fits(43, 44))
+        self.assertTrue(pace.fits(41, 0))
+
+
 if __name__ == "__main__":
     unittest.main()

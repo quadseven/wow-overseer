@@ -54,13 +54,18 @@ class _Pass:
 
 
 FREE = {"Zug": 30, "Oz": 30}
+# Members out in a guild run (familyseat.present).
+OUT = set()
 
 
-def run_pass(granted, sellable=None):
-    fam = {"leader": {"name": "Zug"}, "names": ["Zug", "Oz"]}
+def run_pass(granted, sellable=None, names=("Zug", "Oz")):
+    fam = {"leader": {"name": "Zug"}, "names": list(names)}
     rows = [{"status": campaignqueue.QUEUED, "keyword": "ragefire"}]
     with (
-        mock.patch.object(bridge, "_fetch_free_slots", lambda names: FREE),
+        mock.patch.object(
+            bridge, "_fetch_free_slots", lambda names: {n: FREE[n] for n in names}
+        ),
+        mock.patch.object(bridge, "_guild_run_members_out", lambda: set(OUT)),
         mock.patch.dict(bridge._VENDOR_SELLABLE, sellable or {}, clear=True),
         mock.patch.object(bridge, "_dungeonquest_facts", lambda *a: None),
         mock.patch.object(bridge.dungeonquests, "step", lambda facts: WALK),
@@ -156,6 +161,76 @@ class TheVendorPassReadingTest(unittest.TestCase):
         self.assertTrue(
             bridge._vendor_trip_makes_room(["Zug", "Oz"], {"Zug": 30, "Oz": 0})
         )
+
+
+class ALentMemberIsNotWaitedForTest(unittest.TestCase):
+    """#1375: a member out in a guild run holds no family walk for bag room.
+
+    On the dev realm 2026-10-24 Uzza was lent to a guild run in Razorfen Kraul
+    at one free slot with nine stacks a vendor buys. Zug's family read "waits
+    for bag room; the vendor trip keeps the travel column" for an hour: the
+    leader stood at a vendor that could sell nothing of Uzza's, and the family
+    walked nowhere.
+    """
+
+    def setUp(self):
+        FREE["Uzza"] = 1
+        OUT.add("Uzza")
+        self.addCleanup(lambda: (FREE.pop("Uzza", None), OUT.clear()))
+
+    def test_the_walk_goes_while_the_floor_is_out_in_a_guild_run(self):
+        held, said = run_pass(
+            True, {"Zug": 0, "Oz": 0, "Uzza": 9}, names=("Zug", "Oz", "Uzza")
+        )
+        self.assertTrue(held)
+        self.assertFalse([s for s in said if "waits for bag room" in s], said)
+
+    def test_the_same_member_at_home_still_holds_the_walk(self):
+        OUT.clear()
+        held, said = run_pass(
+            True, {"Zug": 0, "Oz": 0, "Uzza": 9}, names=("Zug", "Oz", "Uzza")
+        )
+        self.assertFalse(held)
+        self.assertTrue([s for s in said if "waits for bag room" in s], said)
+
+
+class TheVendorPassJudgesThePresentMembersTest(unittest.TestCase):
+    """#1375: the vendor pass sells for, and holds the leader for, only the
+    members standing with the family."""
+
+    def test_present_leaves_out_the_lent_member_and_keeps_the_leader(self):
+        import familyseat
+
+        self.assertEqual(
+            ["Oz", "Zug"],
+            familyseat.present(["Oz", "Uzza", "Zug"], {"Uzza", "Zug"}, "Zug"),
+        )
+
+    def test_the_vendor_pass_filters_before_it_settles_the_errand(self):
+        import inspect
+
+        body = inspect.getsource(bridge.Bridge._vendor_once)
+        self.assertLess(
+            body.index("_present_members"),
+            body.index("_settle_vendor_errand_and_should_yield"),
+        )
+
+    def test_an_unreadable_guild_run_judges_the_whole_family(self):
+        class Down(Exception):
+            pass
+
+        def broken():
+            raise Down("down")
+
+        db = types.SimpleNamespace(err=types.SimpleNamespace(MySQLError=Down))
+        with (
+            mock.patch.object(bridge, "pymysql", db),
+            mock.patch.object(bridge, "_guild_run_members_out", broken),
+            mock.patch.object(bridge.log, "exception"),
+        ):
+            self.assertEqual(
+                ["Uzza", "Zug"], bridge._present_members(["Uzza", "Zug"], "Zug")
+            )
 
 
 if __name__ == "__main__":

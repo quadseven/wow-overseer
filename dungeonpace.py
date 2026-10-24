@@ -134,6 +134,10 @@ RETURN_HOURS = 6
 # A run whose band tops out this many levels under the weakest member is still
 # worth farming for gear while the family grows; past it, it is outgrown.
 OUTGROWN_GRACE = 3
+# A door still FITS the family (`fits`) while its middle member is no more
+# than this many levels past the band's top: one level over still earns from
+# its pulls, and the wing beside a failing door often tops out just there.
+FIT_GRACE = 1
 # An upgrade: a slot filled, or the worn item levels rising by this much.
 UPGRADE_ITEM_LEVELS = 5
 
@@ -526,6 +530,8 @@ class Candidate:
     # The family has cleared it (Viability.mastered): a step down goes back to
     # a door it knows before one it has only met.
     mastered: bool = False
+    # Most of the family still learns from it (`fits`).
+    fit: bool = True
 
     def said(self) -> str:
         return "%s (levels %d-%d%s%s)" % (
@@ -547,6 +553,27 @@ def _weakest_level(level_rows) -> int:
     known = [int(r.get("level") or 0) for r in level_rows or ()]
     known = [level for level in known if level > 0]
     return min(known) if known else 0
+
+
+def middle_level(levels) -> int:
+    """The family's middle member's level (the upper one of an even count),
+    0 when none is known."""
+    known = sorted(int(level) for level in levels if int(level or 0) > 0)
+    return known[len(known) // 2] if known else 0
+
+
+def fits(ceiling: int, middle: int) -> bool:
+    """Whether a door whose band tops out at `ceiling` still teaches most of
+    the family (`middle`, from `middle_level`); unknown levels fit.
+
+    THE WEAKEST SAYS WHETHER A DOOR IS OPEN, THE MIDDLE SAYS WHETHER IT FITS.
+    On the dev realm 2026-10-23 the Alliance family was 41, 44, 44, 45 and 47,
+    and the ladder stepped it down to the Scarlet Armory (36-41) over and over
+    because the weakest, at 41, had not outgrown it: four of the five had, and
+    the leader at 47 earned nothing there, while Razorfen Downs (33-47) stood
+    open to all five.
+    """
+    return not middle or middle <= int(ceiling) + FIT_GRACE
 
 
 def _open_to(run, level: int, level_rows, keys) -> bool:
@@ -586,6 +613,7 @@ def candidates(below: str, level_rows, keys, runs=None, avoid=()) -> list:
     if top <= 0 or not level:
         return []
     here = campaignplan.RUNS[top].map_id
+    middle = middle_level(r.get("level") or 0 for r in level_rows or ())
     out = []
     for run in campaignplan.RUNS[:top]:
         if run.keyword in avoid or not _open_to(run, level, level_rows, keys):
@@ -602,6 +630,7 @@ def candidates(below: str, level_rows, keys, runs=None, avoid=()) -> list:
                 record,
                 beside=run.map_id == here,
                 mastered=bool(runs) and viability(runs, run.map_id).mastered,
+                fit=fits(run.ceiling, middle),
             )
         )
     out.reverse()
@@ -722,8 +751,28 @@ def is_step_down(row: dict | None) -> bool:
     return bool(row) and str(row.get("source") or "") == SOURCE
 
 
-def _down_to(kind: str, cands, why: str) -> Decision:
-    """A step to the hardest candidate, with every candidate offered to Jev."""
+def fitting(cands, record: Viability | None = None) -> tuple:
+    """The candidates a step may go to, off the failing door's `record`.
+
+    A DOOR THAT BEAT THE FAMILY WITHOUT A WIPE SENDS IT TO A DOOR THAT FITS.
+    Nobody died: the run stalled, emptied or never cleared, so a mastered door
+    the family has outgrown is no safer than one it still learns from, and
+    only teaches it nothing. On the dev realm 2026-10-21 to 10-24 the Alliance
+    family (41 to 47) stalled at Uldaman and the Cathedral with no wipe, and
+    every step down landed in the Scarlet Armory (36-41) while Razorfen Downs
+    (33-47) was open. So while any candidate fits, only those that fit are
+    offered. After a wipe every candidate stands, and the ladder's preference
+    for the mastered door is the family's safety.
+    """
+    cands = tuple(cands)
+    if record is not None and not record.wipes and any(c.fit for c in cands):
+        return tuple(c for c in cands if c.fit)
+    return cands
+
+
+def _down_to(kind: str, cands, why: str, record: Viability | None = None) -> Decision:
+    """A step to the ladder's candidate, with every candidate offered to Jev."""
+    cands = fitting(cands, record)
     return Decision(kind, ladder(cands).keyword, why, tuple(c.keyword for c in cands))
 
 
@@ -821,7 +870,7 @@ def _while_stepped_down(f: Facts, place: str) -> Decision:
     if not f.record.clearable:
         why = "%s is not clearable either (%s)" % (place, f.record.line())
         if f.cands:
-            return _down_to(FURTHER, f.cands, why)
+            return _down_to(FURTHER, f.cands, why, f.record)
         return _no_easier_door(f, why)
     return _grown_or_farming(f, place)
 
@@ -848,7 +897,7 @@ def _at_the_door(f: Facts, place: str) -> Decision:
         return Decision(NOTHING, "", "%s holds (%s)" % (place, f.record.line()))
     if not f.cands:
         return _no_easier_door(f, why)
-    d = _down_to(STEP_DOWN, f.cands, why)
+    d = _down_to(STEP_DOWN, f.cands, why, f.record)
     # A high wipe rate without a hard streak or a gate is a judgment call:
     # Jev may keep the door. Repeated failure without a clear is not, and
     # neither is failing it again on the way back.
