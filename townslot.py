@@ -1158,6 +1158,69 @@ def _held_column(
 # the ceiling this file already puts on an errand nobody can hand back.
 RESERVE_SECONDS = ORPHAN_LEASE_SECONDS
 
+# WHO OWNS THE LEADER'S WALK WHEN TWO PASSES BOTH RESERVE IT (#1375).
+#
+# Two passes reserve the traveller: the family's town errand (the bag-room
+# errand that walks the family to the vendor, the banker and the tidy) and the
+# bag vendor trip. Each reservation used to REPLACE the other, so each pass in
+# turn owned the leader, asked urgently, zeroed the other's lease and took the
+# column off it, and a third urgent pass could take it off the errand once the
+# bag trip had replaced the errand's reservation. The errand's walk and its
+# vendor and bank steps ran out of time while the leader changed hands.
+#
+# ONE OWNER AND A FIXED ORDER. A live reservation is replaced only by a pass
+# ranked ahead of its holder; anybody else is refused and waits behind it, and
+# the reservation's own ceiling (RESERVE_SECONDS) still bounds the wait. The
+# order is the operator's: class quests first, which are walked by the world's
+# quest drive and never reserve this column; then the bag-room errand, whose
+# town errand comes before the bag vendor trip because the errand runs the
+# vendor and bank steps the trip would interrupt; then the queued dungeon,
+# which owns the traveller only through `campaign` and stands down while the
+# family is held for bag room. A claimant not named here ranks last.
+RESERVE_ORDER = ("town errand", "bags")
+
+
+# WHO AN URGENT ASK MAY CUT IN FRONT OF (#1375).
+#
+# Urgency zeroes every lease (`Slot.want`), and seven passes ask urgently: the
+# town errand, the vendor pass, the bag trip, the bank exit, the gear vendor,
+# the weapon master and the auction pass under bag pressure. With nothing
+# ranking them, two urgent passes take the column off each other on alternate
+# cycles and neither walk lands. So urgency now preempts only a holder ranked
+# BEHIND the asker: the bag-room passes (BAG_ROOM_CLAIMANTS, every pass whose
+# urgency is bag pressure: selling, listing, banking, the bag trip and the
+# errand that walks to them) ahead of every
+# other named pass, and every named pass ahead of an orphan (a holder this
+# process cannot name). A pass holding the live reservation is the one owner
+# and keeps its urgency against anybody. An urgent ask that does not outrank
+# the holder is decided as an ordinary one, so the holder keeps its lease and
+# the asker its place in the queue.
+BAG_ROOM_CLAIMANTS = frozenset(
+    {"town errand", "bags", "economy", "bank", "auction", "bag pressure"}
+)
+
+
+def walk_rank(claimant: str) -> int:
+    """0 for a bag-room pass, 1 for any other named pass, 2 for an orphan."""
+    if not claimant:
+        return 2
+    return 0 if claimant in BAG_ROOM_CLAIMANTS else 1
+
+
+def urgency_cuts(claimant: str, holder, reserved: bool) -> bool:
+    """Whether an urgent ask by `claimant` may preempt `holder` (#1375)."""
+    if holder is None or reserved or holder.claimant == claimant:
+        return True
+    return walk_rank(claimant) < walk_rank(holder.claimant)
+
+
+def reserve_rank(claimant: str) -> int:
+    """Where `claimant` stands in RESERVE_ORDER; lower is ahead."""
+    try:
+        return RESERVE_ORDER.index(claimant)
+    except ValueError:
+        return len(RESERVE_ORDER)
+
 
 @dataclasses.dataclass(frozen=True)
 class Reservation:
@@ -1344,6 +1407,10 @@ class Slot:
         self._fruitless: dict = {}
         # The pass that owns the traveller for a stated reason (#225), or None.
         self.reservation: Reservation | None = None
+        # Why the last `reserve` was refused (#1375), for the caller's log.
+        self.refused = ""
+        # The (claimant, since) of reservations already reported as lapsed.
+        self._lapse_said: set = set()
         # Why the family's campaign owns the traveller (#227), or "" when it
         # does not. Set and cleared by the bridge's queue pass every cycle.
         self.campaign = ""
@@ -1366,22 +1433,66 @@ class Slot:
         # traveller, so a campaign gives each claimant one stop per window.
         self._campaign_stops: dict = {}
 
-    def reserve(self, claimant: str, now: float, why: str) -> None:
+    def reserve(self, claimant: str, now: float, why: str) -> bool:
         """Give `claimant` the traveller until it unreserves or the hold ends.
 
         NOT RENEWED BY ASKING AGAIN, for rule 2's reason: a hold renewed on
-        every cycle never ends. A new claimant replaces the old one.
+        every cycle never ends. A new claimant replaces the old one only when
+        the old one's hold has lapsed or the new one is ranked ahead of it
+        (RESERVE_ORDER); otherwise this returns False and `refused` says why.
         """
         if not claimant:
-            return
-        if self.reservation is not None and self.reservation.claimant == claimant:
-            return
+            return False
+        current = self.reservation
+        if current is not None and current.claimant == claimant:
+            return True
+        if (
+            current is not None
+            and current.live(now)
+            and reserve_rank(claimant) >= reserve_rank(current.claimant)
+        ):
+            # ONE OWNER (#1375): a pass not ranked ahead of the holder waits
+            # behind it rather than taking the hold off it.
+            self.refused = (
+                "%s may not reserve the traveller for %s: %s owns it "
+                "while %s (%ds of %ds), and %s is not ranked ahead of it"
+                % (
+                    claimant,
+                    why,
+                    current.claimant,
+                    current.why,
+                    int(now - current.since),
+                    int(RESERVE_SECONDS),
+                    claimant,
+                )
+            )
+            return False
         self.reservation = Reservation(claimant=claimant, since=now, why=why)
+        return True
 
     def reserved_by(self, claimant: str, now: float) -> bool:
         """Whether `claimant` holds a live reservation right now."""
         r = self.reservation
         return r is not None and r.claimant == claimant and r.live(now)
+
+    def take_lapse(self, now: float) -> str:
+        """The sentence for a reservation that ran out unreleased, once, or "".
+
+        A HELD PASS TIMES OUT INTO A RECORDED REASON (#1375). A reservation
+        whose owner never hands it back stops holding anybody at
+        RESERVE_SECONDS; this is the line that says so, the first time it is
+        asked after the hold ran out, so the end of a hold is a logged event
+        rather than a silence in which the waiting passes start winning again.
+        """
+        r = self.reservation
+        if r is None or r.live(now) or (r.claimant, r.since) in self._lapse_said:
+            return ""
+        self._lapse_said.add((r.claimant, r.since))
+        return (
+            "%s's hold on the traveller lapsed after %ds without being handed "
+            "back (it was held while %s); the column goes back to the queue"
+            % (r.claimant, int(now - r.since), r.why)
+        )
 
     def unreserve(self, claimant: str) -> None:
         """End `claimant`'s reservation; another pass's is left alone."""
@@ -1670,6 +1781,11 @@ class Slot:
         # than the claimed one. A pass in backoff is not refused; it falls
         # back to the ordinary lease and its ordinary turn.
         if urgent and now < self.urgency_suppressed_until(claimant):
+            urgent = False
+        # URGENCY DOES NOT CUT IN FRONT OF AN EQUAL (#1375, `urgency_cuts`).
+        if urgent and not urgency_cuts(
+            claimant, self.holder, self.reserved_by(claimant, now)
+        ):
             urgent = False
         # A full bag is a loot-blocking failure, not an ordinary queue wait.
         # An orphaned economy aim can otherwise hold the traveller for the

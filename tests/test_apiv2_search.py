@@ -130,7 +130,8 @@ def reader(answered):
 
 
 def ctx_for(rd):
-    return types.SimpleNamespace(read=rd, server=server())
+    srv = server()
+    return types.SimpleNamespace(read=rd, server=srv, families=srv.FAMILIES)
 
 
 def statements(rd):

@@ -402,9 +402,10 @@ TOOL_WEAPON_SUBCLASSES = frozenset({14, 20})
 WORN_ARMOR_SUBCLASSES = frozenset({1, 2, 3, 4, 5, 6})
 
 # THE BAR FOR A POST, per role: a stack must hold at least this many before it
-# is worth thirty copper of postage and a walk. Maintenance posts soonest, a
-# raider only a real haul. MAX_LETTERS per stand keeps one stop short.
-POST_MIN = {MAINTENANCE: 5, SUMMONER: 10, RAIDER: 20}
+# is worth thirty copper of postage and a walk. A maintenance member posts any
+# gathered yield so field materials reach the guild; a raider still needs a
+# real haul. MAX_LETTERS per stand keeps one stop short.
+POST_MIN = {MAINTENANCE: 1, SUMMONER: 10, RAIDER: 20}
 MAX_LETTERS = 6
 POSTAGE_COPPER = 30
 
@@ -792,9 +793,58 @@ def _cooling(member: Member, action: str, recent) -> bool:
     elif action == "gear" and not last_gear_failed(member.name, recent):
         minutes = GEAR_SUCCESS_COOLDOWN_MINUTES
     return any(
-        r.name == member.name and r.action == action and int(r.age_minutes) < minutes
+        r.name == member.name
+        and r.action == action
+        and int(r.age_minutes) < _train_row_wait(r, minutes)
         for r in recent or ()
     )
+
+
+# THE TRAINER GATE'S PASSING WALLS (#1116), the module's own literals
+# (MailWalkRefusal and ErrandWalkRefusal in mod-overseer's
+# overseer_decisions.h) for a member that was busy when the row was served: in
+# a fight, on a flight, logging out, out of the world, inside an instance or
+# battleground, already walking, or held by another verb, and the mid-walk
+# endings of a fight, a flight and leaving the world (#1389). Matched exactly. The
+# module calls many more trainer refusals retryable (a trainer beyond the cap,
+# ground that does not hold, Outland, a grouped follower, a dead character, the
+# far walk budget); those say the same walk will be refused again for a while,
+# and they keep the doubling backoff below.
+PASSING_TRAIN_REASONS = frozenset(
+    {
+        "character is in combat",
+        "entered combat on the way to the trainer",
+        "character is on a flight path",
+        "character is logging out",
+        "character is not in the world",
+        "character is inside an instance or battleground",
+        "took a flight on the way to the trainer",
+        "left the world on the way to the trainer",
+        "a walk is already under way for this character",
+        "character is held by another verb",
+    }
+)
+
+
+def passing_train_row(r) -> bool:
+    """Whether a failed trainer row ended for a reason the next moment changes
+    (#1116): one of PASSING_TRAIN_REASONS, read exactly from the module's
+    `reason`. Such a row learned nothing about the trainer or the road, so it
+    does not double the wait (train_cooldown); it still waits the base
+    COOLDOWN_MINUTES["train"] (_train_row_wait), so the same walk is not asked
+    every pass. Counting a fight as a failed walk once sat a member at a tier
+    cap out up to twelve hours behind a fight it had already won."""
+    if r.status not in TRAIN_FAILED:
+        return False
+    return (r.refusal or r.reason) in PASSING_TRAIN_REASONS
+
+
+def _train_row_wait(r, minutes: int) -> int:
+    """The minutes `r` holds its step back: the base trainer wait for a passing
+    trainer row, `minutes` for every other row."""
+    if r.action == "train" and passing_train_row(r):
+        return min(minutes, COOLDOWN_MINUTES["train"])
+    return minutes
 
 
 def train_cooldown(name: str, recent, skill_id: int | None = None) -> int:
@@ -802,6 +852,8 @@ def train_cooldown(name: str, recent, skill_id: int | None = None) -> int:
 
     Rows without a skill id predate skill-scoped cooldowns and remain
     character-wide so older facts and callers preserve their prior behavior.
+    A passing row (passing_train_row) neither doubles the wait nor ends the
+    run of failures it sits in.
     """
     rows = sorted(
         (
@@ -809,6 +861,7 @@ def train_cooldown(name: str, recent, skill_id: int | None = None) -> int:
             for r in recent or ()
             if r.name == name
             and r.action == "train"
+            and not passing_train_row(r)
             and (skill_id is None or r.skill_id is None or r.skill_id == skill_id)
         ),
         key=lambda r: int(r.age_minutes),
@@ -831,7 +884,7 @@ def _training_cooling(name: str, skill_id: int, recent) -> bool:
         and (r.skill_id is None or r.skill_id == skill_id)
     )
     minutes = train_cooldown(name, rows, skill_id)
-    return any(int(r.age_minutes) < minutes for r in rows)
+    return any(int(r.age_minutes) < _train_row_wait(r, minutes) for r in rows)
 
 
 # ---------------------------------------------------------------------------
@@ -2421,6 +2474,7 @@ def postable(member: Member, kept, crafting=False, bar=None) -> list:
         c
         for c in member.carried
         if c.material
+        and not c.junk
         and int(c.count) >= bar
         and int(c.entry) not in eaten
         and not _kept(member.name, c, kept)

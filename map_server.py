@@ -28,6 +28,7 @@ from apiv2 import presence as v2_presence
 from apiv2._context import Context as _V2Context
 import agenda
 import appbuild
+import deployinfo
 import armory
 import gearupgrades
 import bag_pressure
@@ -51,6 +52,7 @@ import guildcraft
 import places
 import guildgear
 import guildroute
+import seatmeter
 import jevview
 import levelroute
 import llmmode
@@ -4263,10 +4265,17 @@ def _shared_key(path: str, query: dict) -> str:
         "%s=%s" % (k, v) for k in sorted(query) for v in query[k])
 
 
-# What a /api/v2 handler is given: the request's realm reader, this server's
-# own module, and the shared reads for a build two endpoints have in common.
+# What a /api/v2 handler is given: the request's realm reader (S2), the
+# families (S3) and a bound presence reader (#718). The server module is kept
+# as a narrow escape hatch for the world data that is none of those.
 def _v2_context(read) -> _V2Context:
-    return _V2Context(read=read, server=sys.modules[__name__], shared=SHARED_READS)
+    return _V2Context(
+        read=read,
+        server=sys.modules[__name__],
+        families=FAMILIES,
+        presence=lambda names: v2_presence.of(read, names),
+        shared=SHARED_READS,
+    )
 
 
 def _etag(body: bytes) -> str:
@@ -4446,17 +4455,34 @@ def _fetch_roster_rows() -> list:
         return _with_family(rd, rows)
 
 
-def _fetch_guild_members() -> tuple[list, dict]:
-    """Fresh commandable guild membership and guild names for one decree."""
+def _fetch_guild_members(guild=None) -> tuple[list, dict]:
+    """Fresh commandable members of the named guild, and every guild's name.
+
+    BOUNDED: only the named guild's live bots are read, and no more than one
+    past the muster cap, since decree.plan_order only needs to know the guild
+    is over the cap, not by how much. A name that matches no guild reads no
+    membership, and plan_order refuses it in its own words.
+    """
     with realmread.Session(_connect) as rd:
         guilds = rd.must("SELECT guildid, name FROM guild")
+        names = {int(row["guildid"]): row["name"] for row in guilds}
+        wanted = guild.strip().lower() if isinstance(guild, str) else ""
+        guild_id = next(
+            (gid for gid, name in sorted(names.items()) if name.lower() == wanted),
+            None,
+        )
+        if guild_id is None:
+            return [], names
         members = rd.must(
             "SELECT c.name, s.level, s.is_bot, gm.guildid AS guild_id "
             "FROM guild_member gm JOIN characters c ON c.guid = gm.guid "
             "JOIN overseer_snapshot s ON s.name = c.name "
-            "WHERE s.updated_at > NOW() - INTERVAL 60 SECOND"
+            "WHERE gm.guildid = %s AND s.is_bot "
+            "AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+            "ORDER BY s.level DESC, c.name LIMIT %s",
+            (guild_id, decree.fanout.MAX_FANOUT_TARGETS + 1),
         )
-    return members, {int(row["guildid"]): row["name"] for row in guilds}
+    return members, names
 
 
 def _apply_order(order) -> int:
@@ -4827,6 +4853,8 @@ class Handler(BaseHTTPRequestHandler):
             # The page and every app script and stylesheet (appbuild.py):
             # a deploy that changes only app/ moves this and not `page`.
             payload["app_build"] = appbuild.fingerprint(HERE)
+            # Which commit this process runs and how long (deployinfo.py).
+            payload["deploy"] = deployinfo.info()
             payload.update(_realm_families())
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
@@ -5626,7 +5654,8 @@ class Handler(BaseHTTPRequestHandler):
                 _note_module_crossing()
                 roster_rows = _fetch_roster_rows()
                 members, guild_names = (
-                    _fetch_guild_members() if request.get("section") == decree.MUSTER
+                    _fetch_guild_members(request.get("guild"))
+                    if request.get("section") == decree.MUSTER
                     else ([], {})
                 )
                 order = decree.plan_order(request, roster_rows, members, guild_names)
@@ -6046,6 +6075,24 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("guild runs query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _guild_seats(self, _query: dict) -> None:
+        """GET /api/guildseats - the carry-ready tanks and healers per door (#784).
+
+        The bridge counts them every few minutes and leaves one memo row per
+        guild (seatmeter.bench); this reads those rows. A guild the bridge has
+        not written lately is absent, a world without the memo table answers
+        empty rather than 503.
+        """
+        try:
+            with realmread.Session(_connect) as rd:
+                rows = rd.rows(seatmeter.BENCH_READ_SQL, (seatmeter.BENCH_KIND,),
+                               what="overseer_bridge_memo")
+            self._send(200, "application/json",
+                       json.dumps(seatmeter.page(rows), default=str).encode())
+        except Exception:
+            log.exception("guild seats query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _guild_chat(self, query: dict) -> None:
         """GET /api/guildchat?guild=X&limit=N - the guild's asks and answers.
 
@@ -6275,6 +6322,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/levelroute": _levelroute,
         "/api/party-status": _party_status,
         "/api/guildruns": _guild_runs,
+        "/api/guildseats": _guild_seats,
         "/api/guildchat": _guild_chat,
         "/api/decree": _decree,
         "/api/thoughts": _thoughts,

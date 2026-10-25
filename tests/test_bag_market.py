@@ -8,8 +8,11 @@ replay runs the planner pass after pass, putting each bought bag on and
 taking its listing off the house, until nothing more is worth buying.
 """
 
+import ast
+import asyncio
 import itertools
 import pathlib
+import types
 import unittest
 
 import bag_market
@@ -567,6 +570,81 @@ class TheUpgradeWalkWiring(unittest.TestCase):
         self.assertIn("_recent_bag_buys", body)
 
 
+def _load_aim_upgrade_trip(recent, calls):
+    """The bridge's `_aim_upgrade_trip`, exec'd against fakes for its reads.
+
+    Only the database reads are faked; the planner and the trip are the real
+    `bag_market` and `bag_pressure`, so what the fetch returns has to flow into
+    `upgrade_vendor_trip` for the answer to change.
+    """
+    tree = ast.parse(BRIDGE.read_text(encoding="utf-8"))
+    func = next(
+        n
+        for c in tree.body
+        if isinstance(c, ast.ClassDef)
+        for n in c.body
+        if isinstance(n, ast.AsyncFunctionDef) and n.name == "_aim_upgrade_trip"
+    )
+    module = ast.Module(body=[func], type_ignores=[])
+
+    async def to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    def recent_bag_buys(minutes):
+        calls.append(minutes)
+        return set(recent)
+
+    ns = {
+        "asyncio": types.SimpleNamespace(to_thread=to_thread),
+        "bag_market": bag_market,
+        "bag_upgrade": types.SimpleNamespace(
+            members_from_rows=lambda rows, names: [HELD]
+        ),
+        "log": types.SimpleNamespace(
+            info=lambda *a, **k: None, exception=lambda *a, **k: None
+        ),
+        "GIVE_RETRY_MINUTES": 77,
+        "_fetch_free_slots": lambda names: {"Grog": 3},
+        "_fetch_bag_state": lambda names: [],
+        "_fetch_mailed_bags": lambda names: {},
+        "_recent_bag_buys": recent_bag_buys,
+    }
+    exec(compile(module, "bridge.py", "exec"), ns)  # noqa: S102
+    me = types.SimpleNamespace()
+
+    async def purses(names):
+        return HELD_PURSES
+
+    me._bag_purses = purses
+    return lambda: asyncio.run(
+        ns["_aim_upgrade_trip"](
+            me,
+            ["Grog"],
+            "Grug",
+            _standing("Grog", "Grug"),
+            bag_pressure.bag_vendors_from_rows(UPGRADE_VENDOR_ROWS),
+        )
+    )
+
+
+class TheUpgradeTripBehavior(unittest.TestCase):
+    """#1218 via #1262: the recent-buys fetch drives the trip, not just a name."""
+
+    def test_a_member_with_a_recent_bag_buy_is_not_walked(self):
+        calls = []
+        trip = _load_aim_upgrade_trip({"Grog"}, calls)()
+        self.assertEqual(trip.target, "")
+        self.assertEqual(trip.buyers, ())
+        self.assertEqual(calls, [77])
+
+    def test_without_a_recent_buy_the_member_is_walked(self):
+        calls = []
+        trip = _load_aim_upgrade_trip(set(), calls)()
+        self.assertEqual(trip.target, "3487")
+        self.assertEqual(trip.buyers, ("Grog",))
+        self.assertEqual(calls, [77])
+
+
 class TheBridgeWiring(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -643,3 +721,53 @@ class TheBridgeWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheCapYieldsWhileTheFamilyIsHeldInTown(unittest.TestCase):
+    """#1375: the hold is let go at CAMPAIGN_RESUME_FREE_SLOTS, so the cap gives
+    way below that line while the family is held in town.
+
+    Measured on the dev realm 2026-10-24: Grug's family was held 45 minutes on
+    "Bork, Grog, Ugga below 8 free slots" (4, 6 and 7 free), and the bags pass
+    said "Ugga cannot buy a bag bigger than its 8-slot one ... at most 2500 a
+    slot" with 18 gold to spend.
+    """
+
+    def test_the_floor_is_the_resume_line_while_held(self):
+        line = bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS - 1
+        self.assertTrue(bag_market.cap_yields(line, held=True))
+        self.assertFalse(bag_market.cap_yields(line + 1, held=True))
+        self.assertFalse(bag_market.cap_yields(4))
+        for free in (-1, None, "2", True):
+            self.assertFalse(bag_market.cap_yields(free, held=True), free)
+
+    def test_a_held_member_between_the_lines_buys_the_vendor_bag(self):
+        refused, _ = bag_market.plan_upgrades(
+            [HELD],
+            HELD_PURSES,
+            VENDOR_STOCK,
+            reach={"Grog": EVERY_STOCK},
+            free_slots={"Grog": 6},
+        )
+        self.assertEqual(refused, ())
+        bought, _ = bag_market.plan_upgrades(
+            [HELD],
+            HELD_PURSES,
+            VENDOR_STOCK,
+            reach={"Grog": EVERY_STOCK},
+            free_slots={"Grog": 6},
+            held=True,
+        )
+        self.assertEqual([u.buyer for u in bought], ["Grog"])
+        self.assertEqual(bought[0].listing.source, VENDOR)
+
+    def test_a_held_member_between_the_lines_is_walked_to_the_vendor(self):
+        idle = _upgrade_trip([HELD], HELD_PURSES, {"Grog": 6})
+        self.assertEqual(idle.buyers, ())
+        held = _upgrade_trip([HELD], HELD_PURSES, {"Grog": 6}, held=True)
+        self.assertEqual(held.buyers, ("Grog",))
+
+    def test_the_bags_pass_reads_the_hold_off_the_town_slot(self):
+        source = BRIDGE.read_text(encoding="utf-8")
+        self.assertIn("held = bool(self._cohort_town_slot(cohort).town_first)", source)
+        self.assertIn("held=bool(slot.town_first)", source)

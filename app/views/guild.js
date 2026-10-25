@@ -47,6 +47,7 @@ const P = {
   roster: () => "/api/v2/roster",
   series: (ctx) => "/api/v2/series?guild=" + key(ctx),
   runs: () => "/api/guildruns",
+  seats: () => "/api/guildseats",
   ups: (ctx) => "/api/v2/dungeonups?family=" + family(ctx).toLowerCase(),
   timeline: () => "/api/runtimeline",
   chronicle: (ctx) => "/api/v2/chronicle?guild=" + key(ctx),
@@ -59,7 +60,7 @@ const P = {
 
 const TAB_READS = {
   progress: ["guild", "series", "roster"],
-  runs: ["guild", "runs", "ups", "timeline"],
+  runs: ["guild", "runs", "ups", "timeline", "seats"],
   chronicle: ["guild", "runs", "chronicle", "loot", "recap", "council", "chat", "achievements"],
 };
 
@@ -251,7 +252,21 @@ ${learned.length ? html`<div class="card g-list g-narrow">${learned.map((d) => h
 ${g.family && g.family !== family(ctx) ? state("stale", "This guild's family reads as " + g.family + "'s here", "The upgrades below are for " + family(ctx) + "'s family.") : ""}
 <div class="card g-list g-pathlist">${g.dungeons.map((d) => pathRow(ctx, g, d, med, upsRead))}</div>
 </section>
-<section class="section">${sectionHead("05", "Run timelines", tl.data ? tl.data.line : "")}${timelines(ctx, tl)}</section>`;
+<section class="section">${sectionHead("05", "Run timelines", tl.data ? tl.data.line : "")}${timelines(ctx, tl)}</section>
+<section class="section">${sectionHead("06", "Tanks and healers ready, by dungeon")}${seatsSection(ctx)}</section>`;
+}
+
+// Carry-ready tanks and healers per door (seatmeter.bench, #784): a door seats
+// a group only while both counts are above zero.
+function seatsSection(ctx) {
+  const r = peek(P.seats());
+  if (!r.data) return r.error ? state("stale", "The seat read did not answer", "") : pendingRead(r, 1);
+  const mineSeats = (r.data.guilds || []).find((x) => x.guild === gname(ctx));
+  if (!mineSeats || !mineSeats.doors.length) return state("empty", "No seat count for " + gname(ctx) + " yet.");
+  return html`<div class="card g-list">
+<div class="g-list-head"><span class="g-card-title">Ready to carry, by dungeon</span><span class="muted">tank | healer</span></div>
+${mineSeats.doors.map((d) => html`<div class="g-row g-dun"><span>${d.place}</span><span class="muted g-lv">${d.floor}-${d.ceiling}, carry at ${d.carry_floor}</span><span class="num"${d.tanks ? "" : raw(' data-gt="bad"')}>${plural(d.tanks, "tank")}</span><span class="num"${d.healers ? "" : raw(' data-gt="bad"')}>${plural(d.healers, "healer")}</span></div>`)}
+</div>`;
 }
 
 function tally(d) {

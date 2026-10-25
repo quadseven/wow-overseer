@@ -27,7 +27,7 @@ import guildgear  # noqa: E402
 import guildjobs  # noqa: E402
 import nowstatus  # noqa: E402
 import realmread  # noqa: E402
-from apiv2 import activity, classchain, members, training, upgrades  # noqa: E402
+from apiv2 import activity, classchain, members, presence, training, upgrades  # noqa: E402
 from apiv2._context import Context  # noqa: E402
 
 NOW = 1_800_000_000
@@ -102,7 +102,15 @@ def ctx_for(rules, srv):
     fake connection, so the reads run as the map server runs them."""
     log = []
     rd = realmread.Session(lambda: FakeConn(rules, log))
-    return Context(read=rd, server=srv), log
+    return (
+        Context(
+            read=rd,
+            server=srv,
+            families=srv.FAMILIES,
+            presence=lambda names: presence.of(rd, names),
+        ),
+        log,
+    )
 
 
 # ---- the routes ------------------------------------------------------------------
@@ -815,6 +823,23 @@ class StandingSortsWhatATrainerSells(unittest.TestCase):
         self.assertEqual(training.trade_state(herb, 75, 75, 10)["state"], "trainable")
         self.assertEqual(training.trade_state(herb, 20, 75, 10)["state"], "skill")
         self.assertEqual(training.trade_state(herb, 225, 225, 20)["state"], "above")
+
+    def test_an_apprentice_trade_reads_the_skill_the_bridge_buys_at(self):
+        # Cooking 1/75 and First Aid 58/75: the next rank asks skill 50, but the
+        # bridge buys it only within RANK_UP_MARGIN of the 75 ceiling, so the
+        # card must say 70 and not 50 (a 58 reads as met when it is not due).
+        cook = training.trade_state(guildjobs.COOKING, 1, 75, 46)
+        self.assertEqual(cook["state"], "skill")
+        self.assertEqual(cook["next"]["needs"], 50)
+        self.assertEqual(cook["next"]["buys_at"], 70)
+        aid = training.trade_state(guildjobs.FIRST_AID, 58, 75, 46)
+        self.assertEqual(aid["state"], "skill")
+        self.assertEqual(aid["next"]["buys_at"], 70)
+        # A rank whose own ask is higher than the margin keeps its ask.
+        self.assertEqual(
+            training.trade_state(guildjobs.HERBALISM, 20, 150, 40)["next"]["buys_at"],
+            max(guildjobs.RANKS[guildjobs.HERBALISM][2].needs, 145),
+        )
 
     def test_the_line_counts_both(self):
         f = {

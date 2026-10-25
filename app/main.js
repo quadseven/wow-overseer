@@ -258,6 +258,10 @@ document.addEventListener("touchstart", () => {}, { passive: true });
 // this tab's saved copy at once when it has them, else from the realm read
 // above. Every later answer is learned too.
 api.onChange((path) => {
-  if (path === "/api/realm" && learnRealm(api.peek(path).data)) drawShell();
+  if (path === "/api/realm") {
+    const d = api.peek(path).data;
+    shell.setDeploy(d && d.deploy);
+    if (learnRealm(d) || (d && d.deploy)) drawShell();
+  }
 });
 (learnRealm(api.peek("/api/realm").data) ? Promise.resolve() : api.load("/api/realm")).then(() => route());

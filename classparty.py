@@ -148,6 +148,18 @@ HUNT_STOPS = (
     classhunt.ELSEWHERE,
     classhunt.UNSUPPORTED,
     classhunt.UNREADABLE,
+    classhunt.BAGS_FULL,
+)
+# Hunt answers that end the PARTY, not just its hunting (#871): the leader's
+# bags are full, or the module refuses the hunt for good (never) or for the
+# party's one pack (elsewhere). Nothing else will bring the objective home, so
+# standing idle until the party's clock runs out only delays the ask's next
+# plan by PARTY_SECONDS. The party ends with the module's own words, the ask
+# counts the failure, and the member levels or makes room before it asks again.
+HUNT_ENDS_PARTY = (
+    classhunt.BAGS_FULL,
+    classhunt.NEVER,
+    classhunt.ELSEWHERE,
 )
 # An ask with some yes but not all waits this long from its post for the rest.
 PARTIAL_WAIT_MINUTES = 3.0
@@ -326,11 +338,30 @@ def _lost_words(run, walked, far, stands) -> str:
     return "; ".join(words)
 
 
+# THE WALK REFUSALS THE NEXT MOMENT CHANGES (#1375), the module's own literals:
+# held by another verb (#1275), and a member that was busy when its meeting
+# walk was served - in a fight, on a flight, logging out, out of the world or
+# already walking (the same passing walls guildjobs.PASSING_TRAIN_REASONS
+# names for the trainer gate). A class quest meeting failed on these when a
+# member was briefly in a fight or on a flight, each failure counted against
+# the ask, and the quest stood stuck.
+TRANSIENT_WALK_REASONS = (
+    classquest.HELD_REASON,
+    "character is in combat",
+    "entered combat on the way",
+    "character is on a flight path",
+    "character is logging out",
+    "character is not in the world",
+    "a walk is already under way for this character",
+)
+
+
 def held_refusal(said) -> bool:
-    """True when a walk's sentence is the worldserver's held-by-another-verb
-    refusal: the walker is held by a verb the module did not write, so the hold
-    is transient (classquest.HELD_REASON) rather than a lost member."""
-    return classquest.HELD_REASON in str(said or "")
+    """True when a walk's sentence is a refusal the next moment changes
+    (TRANSIENT_WALK_REASONS): the walker was held by another verb or busy, so
+    the hold is transient rather than a lost member."""
+    text = str(said or "")
+    return any(reason in text for reason in TRANSIENT_WALK_REASONS)
 
 
 def meeting_held(run) -> tuple:
@@ -411,6 +442,10 @@ class PartyHunt:
     command: str
     row_id: int = 0
     next_at: float = 0.0
+    # Why the party must stop rather than wait (#1375, #871): the leader's bags
+    # are full, or the module refuses the hunt for good, so no hunt row can
+    # bring the objective home (HUNT_ENDS_PARTY). "" otherwise.
+    stop_why: str = ""
 
     def due(self, now) -> bool:
         """True when a hunt row should be written now."""
@@ -422,6 +457,8 @@ class PartyHunt:
         was refused for now after HUNT_WAIT_SECONDS, an old worldserver's
         item key gives way to the plain row, and HUNT_STOPS stop the hunting."""
         self.row_id = 0
+        if verdict.state in HUNT_ENDS_PARTY:
+            self.stop_why = verdict.said
         if verdict.state in HUNT_STOPS:
             self.command = ""
         elif verdict.state == classhunt.ITEMLESS:
