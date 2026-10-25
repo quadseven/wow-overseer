@@ -60,9 +60,15 @@ chosen by `JEV_BACKEND` (default `jev`):
   strands Strands Decider 2B behind a localhost wrapper that speaks the Jev
           request and response body (#822). No Authorization header: the
           service is local and has no auth. STRANDS_URL (default
-          http://127.0.0.1:8790/; the only plain-http URL the client accepts,
-          and only on a loopback host; explicitly empty turns the backend
-          off), STRANDS_MODEL (default strands-decider-2b). The response may
+          http://127.0.0.1:8790/; plain http is accepted only on a loopback
+          host or an opted-in cluster service host, see below; explicitly
+          empty turns the backend off), STRANDS_ALLOW_HTTP_HOST (a comma list
+          of cluster-internal service hosts that may take plain http, for a
+          service in its own pod: a bare single-label name such as
+          `strands-decider`, or a name ending `.svc` or `.svc.cluster.local`;
+          any other name is ignored and logged, and https stays required for
+          every host not listed), STRANDS_MODEL (default strands-decider-2b).
+          The response may
           carry the service's own `latency_ms`, which the tally and the
           comparison keep beside the round trip.
 
@@ -74,7 +80,9 @@ COMPARE (opt-in). `JEV_COMPARE_BACKEND=<name>` asks a second backend the same
 question alongside the active one, off the caller's path, and hands one row
 per question to `Client.compare_sink` (the bridge writes it to
 overseer_jev_judgment with mode `compare` and the backend name). It never acts
-and never delays or changes the active answer.
+and never delays or changes the active answer. A compare backend that cannot be
+built (a URL the client refuses) is logged once at error level and the client
+runs with compare off; it never stops the active backend or the bridge.
 
 HOURLY TALLY. `TALLY` counts answered, disagreed and error per backend and
 kind, with the p50 and p95 round-trip milliseconds of the answered calls (and
@@ -93,6 +101,7 @@ import json
 import logging
 import math
 import os
+import re
 import time
 import threading
 import urllib.error
@@ -118,6 +127,10 @@ OPENAI_MODEL = "gpt-6-luna"
 STRANDS_URL = "http://127.0.0.1:8790/"
 STRANDS_MODEL = "strands-decider-2b"
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+# The suffixes of a cluster-internal Service name (#1469). A bare single-label
+# name is one too: it resolves only through the pod's cluster search domains.
+CLUSTER_SERVICE_SUFFIXES = (".svc", ".svc.cluster.local")
+_LABEL = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 # Per backend and kind, the most recent latencies a tally period keeps.
 TALLY_SAMPLES = 2000
 TALLY_SECONDS = 3600.0
@@ -396,13 +409,13 @@ class Outcome:
 def _urllib_post(url: str, body: bytes, headers: dict, timeout: float) -> tuple:
     """POST and return (http status, body bytes). Runs in a worker thread.
 
-    Only an https URL (or a loopback http URL for a local backend) is ever
-    opened: `Client` refuses any other scheme when it is built, so a `file:`
+    Only an https URL (or, for a local backend, an http URL on a loopback host
+    or an opted-in cluster service host) is ever opened: `Client` refuses any other scheme when it is built, so a `file:`
     or custom scheme from the environment cannot reach urlopen.
     """
-    request = urllib.request.Request(url, data=body, headers=headers, method="POST")  # noqa: S310 - https or loopback http only, enforced in Client.__init__
+    request = urllib.request.Request(url, data=body, headers=headers, method="POST")  # noqa: S310 - https, or http on loopback or an opted-in cluster host, enforced in Client.__init__
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - https or loopback http only, enforced in Client.__init__
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - https, or http on loopback or an opted-in cluster host, enforced in Client.__init__
             return response.status, response.read()
     except urllib.error.HTTPError as exc:
         try:
@@ -653,6 +666,7 @@ def _settings(name: str, env) -> dict:
             "api_key": "",
             "url": url,
             "model": env.get("STRANDS_MODEL", "") or STRANDS_MODEL,
+            "allow_http_hosts": allow_http_hosts(env.get("STRANDS_ALLOW_HTTP_HOST")),
         }
     return {
         "api_key": env.get("TYPESAFE_API_KEY", ""),
@@ -826,8 +840,47 @@ def compare_rows(kind, questions, active, shadow, active_name, shadow_name) -> l
     return rows
 
 
-def _url_ok(url, backend) -> bool:
-    """https always; plain http only for a local backend on a loopback host."""
+def cluster_service_host(host) -> bool:
+    """True for a cluster-internal Service host: a bare single-label DNS name
+    (`strands-decider`), or a dotted name of DNS labels ending `.svc` or
+    `.svc.cluster.local` (`strands-decider.wow-dev.svc`). An IP or any other
+    dotted name is not one."""
+    text = str(host or "").strip().lower()
+    labels = text
+    for suffix in CLUSTER_SERVICE_SUFFIXES:
+        if text.endswith(suffix):
+            labels = text[: -len(suffix)]
+            break
+    else:
+        if "." in text:
+            return False
+    parts = labels.split(".")
+    return bool(labels) and all(_LABEL.match(part) for part in parts)
+
+
+def allow_http_hosts(raw) -> tuple:
+    """The opted-in plain-http hosts from a comma list (#1469). Only a
+    cluster-internal Service host is kept; any other entry is dropped and said
+    so, so the opt-in can never open plain http to a public name."""
+    kept = []
+    for entry in str(raw or "").split(","):
+        host = entry.strip().lower()
+        if not host:
+            continue
+        if cluster_service_host(host):
+            kept.append(host)
+        else:
+            log.warning(
+                "jev: STRANDS_ALLOW_HTTP_HOST entry %r is not a cluster service "
+                "host; ignored, https stays required for it",
+                host,
+            )
+    return tuple(kept)
+
+
+def _url_ok(url, backend, allow_http=()) -> bool:
+    """https always; plain http only for a local backend on a loopback host, or
+    on a cluster-internal Service host it was explicitly opted in for."""
     text = str(url).strip()
     if text.lower().startswith("https://"):
         return True
@@ -837,7 +890,10 @@ def _url_ok(url, backend) -> bool:
         host = urllib.parse.urlsplit(text).hostname
     except ValueError:
         return False
-    return host in LOOPBACK_HOSTS
+    if host in LOOPBACK_HOSTS:
+        return True
+    host = (host or "").lower()
+    return host in allow_http and cluster_service_host(host)
 
 
 def _cache_key(model: str, state, questions: dict) -> str:
@@ -867,12 +923,14 @@ class Client:
         backend=None,
         shadow=None,
         compare_sink=None,
+        allow_http_hosts=(),
     ):
         self.backend = backend or JEV_BACKEND
         # A local backend with an empty URL is a switched-off one (no_key);
-        # any other URL must be https, or plain http on a loopback host.
+        # any other URL must be https, or plain http on a loopback host or an
+        # opted-in cluster service host.
         if not (self.backend.local and not str(url).strip()) and not _url_ok(
-            url, self.backend
+            url, self.backend, tuple(allow_http_hosts or ())
         ):
             raise ValueError("Jev URL must be https: %r" % url)
         self._key = (api_key or "").strip()
@@ -911,10 +969,21 @@ class Client:
         settings = _settings(name, env)
         other = backend_name(env, "JEV_COMPARE_BACKEND")
         if other and other != name and "shadow" not in kw:
-            kw["shadow"] = cls.from_env(
-                env, backend_name=other, transport=kw.get("transport")
-            )
-            # A second backend never gets a sink of its own.
+            # A second backend never gets a sink of its own, and one that
+            # cannot be built never takes the active backend down (#1469):
+            # say so loudly once and run with compare off.
+            try:
+                kw["shadow"] = cls.from_env(
+                    env, backend_name=other, transport=kw.get("transport")
+                )
+            except ValueError as exc:
+                log.error(
+                    "jev: compare backend %s not built (%s); compare is off, "
+                    "the %s backend runs alone",
+                    other,
+                    exc,
+                    name,
+                )
         return cls(
             settings.pop("api_key"), backend=BACKENDS[name], **settings, **common, **kw
         )
