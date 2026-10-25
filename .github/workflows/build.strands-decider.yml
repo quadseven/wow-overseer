@@ -1,0 +1,134 @@
+name: build - strands decider image
+
+# Builds AND PUBLISHES the Strands Decider wrapper image (#822) to GHCR, the
+# same way build.yml publishes the bridge image and for the same reasons (see
+# that file's header): GHCR needs no credential beyond this run's own
+# GITHUB_TOKEN plus `packages: write`, the package stays private, and the tag
+# is one immutable `sha-<12>` per commit for humans; the deploy repo pins the
+# digest, which the Push step prints.
+#
+# The build context is services/strands-decider/ alone: the image holds the
+# wrapper and the strands-decider package on CPU torch, nothing of the bridge.
+# The weights are not in it (see that directory's Dockerfile).
+
+on:
+  pull_request:
+    paths:
+      - 'services/strands-decider/**'
+      - '.github/workflows/build.strands-decider.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'services/strands-decider/**'
+      - '.github/workflows/build.strands-decider.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-strands-decider-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: strands decider image (build + publish)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+
+      - name: Resolve image ref and whether to publish
+        id: meta
+        env:
+          OWNER: ${{ github.repository_owner }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')/wow-overseer-strands-decider"
+          sha="${PR_HEAD_SHA:-$GITHUB_SHA}"
+
+          head="$(git rev-parse HEAD)"
+          if [ "$head" != "$sha" ]; then
+            echo "::error::checked out $head but would tag $sha"
+            exit 1
+          fi
+
+          # Only main publishes; a pull request (fork or not) builds and tests.
+          publish=true
+          if [ "$EVENT" = "pull_request" ]; then
+            publish=false
+          fi
+
+          {
+            echo "image=$image"
+            echo "tag=sha-${sha:0:12}"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+          echo "will build $image:sha-${sha:0:12} (publish=$publish)"
+
+      - name: Build
+        run: docker build -t '${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}' services/strands-decider
+
+      - name: The image holds the real decider runtime
+        # Loading the real model needs a 4.5 GB download and about 8 GB of
+        # memory, so CI does not. What is proven instead: the package's two
+        # entry points the wrapper calls import from the image, on CPU torch.
+        run: |
+          set -euo pipefail
+          docker run --rm '${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}' \
+            python -c "import sys, torch; assert sys.version_info[:2] == (3, 12); assert not torch.cuda.is_available(); from strands_decider.infer import load_engine; from strands_decider.schema import SystemOneRequest; import strands_server; print('runtime OK: torch', torch.__version__)"
+
+      - name: The image serves the contract (fake decider)
+        # The wrapper itself, started as the image starts it, with the fake
+        # decider: /healthz turns 200 and a choice comes back in the Jev shape.
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/smoke.py" <<'PY'
+          import json
+          import time
+          import urllib.request
+
+          base = "http://127.0.0.1:8790"
+          for _ in range(50):
+              try:
+                  with urllib.request.urlopen(base + "/healthz", timeout=2) as r:
+                      assert json.load(r)["status"] == "ok"
+                  break
+              except OSError:
+                  time.sleep(0.2)
+          else:
+              raise SystemExit("healthz never turned 200")
+          q = {"type": "choice", "instructions": "Route it", "criteria": {"a": "one", "b": "two"}}
+          body = json.dumps({"state": "s", "model": "m", "questions": {"q": q}}).encode()
+          req = urllib.request.Request(base + "/", data=body, headers={"Content-Type": "application/json"})
+          with urllib.request.urlopen(req, timeout=5) as r:
+              out = json.load(r)
+          a = out["answers"]["q"]
+          assert a["type"] == "choice" and a["choice"] == "a", out
+          assert set(a["probabilities"]) == {"a", "b"} and "confidence" in a, out
+          assert isinstance(out["latency_ms"], float), out
+          print("contract OK:", out)
+          PY
+          docker run --rm -e STRANDS_DECIDER=fake -v "$RUNNER_TEMP/smoke.py:/tmp/smoke.py:ro" \
+            '${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}' \
+            sh -c 'python -u strands_server.py & exec python /tmp/smoke.py'
+
+      - name: Log in to GHCR
+        if: steps.meta.outputs.publish == 'true'
+        run: echo "${{ github.token }}" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+
+      - name: Push
+        if: steps.meta.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          docker push '${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}'
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' '${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}')"
+          echo "::notice::published $digest"
+          echo "$digest" >> "$GITHUB_STEP_SUMMARY"
