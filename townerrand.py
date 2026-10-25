@@ -364,11 +364,51 @@ def hub_reachable(hub: dict, positions: dict, leader: str, casting) -> bool:
     return _same_map(hub, (positions or {}).get(leader))
 
 
+_CONTINENT_MAPS = (0, 1, 530, 571)
+_ENTRANCES_CACHE = None
+
+
+def _entrances() -> dict:
+    global _ENTRANCES_CACHE
+    if _ENTRANCES_CACHE is None:
+        try:
+            import json
+            import pathlib
+
+            with open(pathlib.Path(__file__).resolve().parent / "entrances.json") as f:
+                _ENTRANCES_CACHE = json.load(f)
+        except (OSError, ValueError):
+            _ENTRANCES_CACHE = {}
+    return _ENTRANCES_CACHE
+
+
+def _entrance_map(map_id) -> int:
+    try:
+        m = int(map_id)
+    except (TypeError, ValueError):
+        return map_id
+    if m in _CONTINENT_MAPS:
+        return m
+    rec = _entrances().get(str(m))
+    if rec:
+        try:
+            return int(rec["map"])
+        except (TypeError, ValueError):
+            return m
+    return m
+
+
+entrance_map = _entrance_map
+continent_of = _entrance_map
+
+
 def _same_map(spot: dict, standing) -> bool:
     if not spot or not standing:
         return False
     try:
-        return int(spot.get("map_id")) == int(standing.get("map_id"))
+        return _entrance_map(spot.get("map_id")) == _entrance_map(
+            standing.get("map_id")
+        )
     except (TypeError, ValueError):
         return False
 

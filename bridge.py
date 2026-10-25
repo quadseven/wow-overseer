@@ -18360,7 +18360,25 @@ class Bridge(discord.Client):
         capital = await asyncio.to_thread(_fetch_capital_hub, leader,
                                           teams.get(leader, ""))
         home = await asyncio.to_thread(_fetch_bind_hub, leader)
-        hub = townerrand.choose_hub(home, capital, positions.get(leader), why)
+        leader_at = positions.get(leader)
+        try:
+            leader_map = int((leader_at or {}).get("map_id"))
+        except (TypeError, ValueError):
+            leader_map = None
+        import guildjobs
+
+        entrances = guildjobs.entrances()
+        rec = entrances.get(str(leader_map)) if leader_map is not None else None
+        if rec and leader_map not in (0, 1, 530, 571):
+            try:
+                leader_at = {
+                    "map_id": int(rec["map"]),
+                    "pos_x": float(rec["x"]),
+                    "pos_y": float(rec["y"]),
+                }
+            except (TypeError, ValueError):
+                pass
+        hub = townerrand.choose_hub(home, capital, leader_at, why)
         if not hub:
             log.info("town errand: %s%s, but neither %s's hearthstone point nor "
                      "a capital of the family's own auction house on his map "
@@ -31374,9 +31392,9 @@ def _hub_aim(hub) -> str:
 _ERRAND_AUCTIONEERS_SQL = (
     "SELECT cr.map AS map_id, cr.position_x AS x, cr.position_y AS y, "
     "ct.name AS name, ct.faction AS faction, "
-    "(POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2)) AS d2 "
+    "(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2)) AS d2 "
     "FROM overseer_snapshot s "
-    "JOIN acore_world.creature cr ON cr.map = s.map_id "
+    "JOIN acore_world.creature cr ON cr.map = %s "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
     "AND (ct.npcflag & %s) <> 0 ORDER BY d2 LIMIT 60"
@@ -31394,13 +31412,56 @@ ERRAND_HUB_MAILBOX_YARDS = 120.0
 
 
 def _fetch_capital_hub(leader: str, team: str) -> dict:
-    """The mailbox spawn by the nearest auctioneer of `team`'s house, or {}."""
+    """The mailbox spawn by the nearest auctioneer of `team`'s house, or {}.
+
+    When the head stands inside an instance, resolve the capital against the
+    instance's entrance continent instead of the instance map itself, which has
+    no auctioneers: the family shops where its campaign door is.
+    """
     house = auction.TEAM_HOUSE.get(team, 0)
     if not house:
         return {}
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(_ERRAND_AUCTIONEERS_SQL, (leader, NPC_FLAG_AUCTIONEER))
+            cur.execute(
+                "SELECT map_id, pos_x, pos_y FROM overseer_snapshot "
+                "WHERE name = %s AND updated_at > NOW() - INTERVAL 120 SECOND",
+                (leader,),
+            )
+            snap = cur.fetchone()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return {}
+            raise
+    if not snap:
+        return {}
+    try:
+        leader_map = int(snap["map_id"])
+    except (TypeError, ValueError):
+        return {}
+    import guildjobs
+
+    entrances = guildjobs.entrances()
+    rec = entrances.get(str(leader_map))
+    if rec and leader_map not in (0, 1, 530, 571):
+        try:
+            query_map = int(rec["map"])
+            qx = float(rec["x"])
+            qy = float(rec["y"])
+        except (TypeError, ValueError):
+            query_map = leader_map
+            qx = float(snap["pos_x"])
+            qy = float(snap["pos_y"])
+    else:
+        query_map = leader_map
+        qx = float(snap["pos_x"])
+        qy = float(snap["pos_y"])
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                _ERRAND_AUCTIONEERS_SQL,
+                (qx, qy, query_map, leader, NPC_FLAG_AUCTIONEER),
+            )
             rows = [dict(r) for r in cur.fetchall()]
             own = next((r for r in rows if auction.reachable_house(
                 team, int(r.get("faction") or 0)) == house), None)
