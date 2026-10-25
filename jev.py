@@ -57,9 +57,18 @@ chosen by `JEV_BACKEND` (default `jev`):
           OPENAI_DECISIONS_MODEL (default gpt-6-luna), OPENAI_DECISIONS_URL.
           noul/choice/score are translated to predicate/choice/score and back.
 
-A backend with no token answers `no_key` and the heuristic acts. The Strands
-Decider is a local CLI/Python model with no HTTP server, so it has no adapter
-here (ticketed follow-up).
+  strands Strands Decider 2B behind a localhost wrapper that speaks the Jev
+          request and response body (#822). No Authorization header: the
+          service is local and has no auth. STRANDS_URL (default
+          http://127.0.0.1:8790/; the only plain-http URL the client accepts,
+          and only on a loopback host; explicitly empty turns the backend
+          off), STRANDS_MODEL (default strands-decider-2b). The response may
+          carry the service's own `latency_ms`, which the tally and the
+          comparison keep beside the round trip.
+
+A backend with no token (or, for strands, no URL) answers `no_key` and the
+heuristic acts. A strands service that is down or slow is an ordinary `error`
+or `timeout` outcome, counted in the tally and logged once an hour.
 
 COMPARE (opt-in). `JEV_COMPARE_BACKEND=<name>` asks a second backend the same
 question alongside the active one, off the caller's path, and hands one row
@@ -68,8 +77,12 @@ overseer_jev_judgment with mode `compare` and the backend name). It never acts
 and never delays or changes the active answer.
 
 HOURLY TALLY. `TALLY` counts answered, disagreed and error per backend and
-kind, and `maybe_log` writes one line per kind per hour. A repeating failure
-(a 402 on every call) is logged once an hour, not once per call (#797).
+kind, with the p50 and p95 round-trip milliseconds of the answered calls (and
+the service's own p50 and p95 where the backend reports one), and `maybe_log`
+writes one line per backend and kind per hour. In compare mode the comparison
+backend gets its own lines, and `disagreed` counts its answers that differ
+from the active backend's. A repeating failure (a 402 on every call) is
+logged once an hour, not once per call (#797).
 """
 
 from __future__ import annotations
@@ -83,6 +96,7 @@ import os
 import time
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import OrderedDict
 import dataclasses
@@ -101,6 +115,11 @@ CLEF_BASE = "https://api.cloudflare.com/client/v4/accounts/%s/ai/run/%s"
 CLEF_MODEL = "@cf/cloudflare/clef"
 OPENAI_URL = "https://api.openai.com/v1/decisions"
 OPENAI_MODEL = "gpt-6-luna"
+STRANDS_URL = "http://127.0.0.1:8790/"
+STRANDS_MODEL = "strands-decider-2b"
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+# Per backend and kind, the most recent latencies a tally period keeps.
+TALLY_SAMPLES = 2000
 TALLY_SECONDS = 3600.0
 # How often a pass queued for a free slot looks again (see Client.ask's wait).
 SLOT_POLL_SECONDS = 0.05
@@ -370,18 +389,20 @@ class Outcome:
     model: str = ""
     detail: str = ""
     backend: str = ""
+    # The backend's own reported latency, where it reports one (0 otherwise).
+    service_ms: int = 0
 
 
 def _urllib_post(url: str, body: bytes, headers: dict, timeout: float) -> tuple:
     """POST and return (http status, body bytes). Runs in a worker thread.
 
-    Only an https URL is ever opened: `Client` refuses any other scheme when
-    it is built, so a `file:` or custom scheme from the environment cannot
-    reach urlopen.
+    Only an https URL (or a loopback http URL for a local backend) is ever
+    opened: `Client` refuses any other scheme when it is built, so a `file:`
+    or custom scheme from the environment cannot reach urlopen.
     """
-    request = urllib.request.Request(url, data=body, headers=headers, method="POST")  # noqa: S310 - https only, enforced in Client.__init__
+    request = urllib.request.Request(url, data=body, headers=headers, method="POST")  # noqa: S310 - https or loopback http only, enforced in Client.__init__
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - https only, enforced in Client.__init__
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - https or loopback http only, enforced in Client.__init__
             return response.status, response.read()
     except urllib.error.HTTPError as exc:
         try:
@@ -406,6 +427,13 @@ class JevBackend:
     """TypeSafe's Jev: the request and response this module was built on."""
 
     name = "jev"
+    # A local backend needs a URL and no key, and may use plain http on a
+    # loopback host.
+    local = False
+
+    def service_ms(self, data) -> int:
+        """The service's own latency in ms when the body reports one, else 0."""
+        return 0
 
     def request(self, url, model, key, state, questions) -> tuple:
         body = json.dumps(
@@ -445,11 +473,37 @@ class ClefBackend(JevBackend):
         )
 
 
+class StrandsBackend(JevBackend):
+    """Strands Decider 2B behind a localhost wrapper (#822). The same body as
+    Jev both ways; the service is local, so there is no Authorization header,
+    and its optional `latency_ms` is the model's own time."""
+
+    name = "strands"
+    local = True
+
+    def service_ms(self, data) -> int:
+        value = _answers_of(data).get("latency_ms")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return 0
+        if not math.isfinite(value):
+            return 0
+        return max(0, int(round(value)))
+
+    def request(self, url, model, key, state, questions) -> tuple:
+        url, body, headers = super().request(url, model, key, state, questions)
+        headers.pop("Authorization", None)
+        return url, body, headers
+
+
 class OpenAIBackend:
     """OpenAI Decisions: noul is a predicate, choice keeps its options, score
     keeps its ordered levels; answers come back in a list keyed by name."""
 
     name = "openai"
+    local = False
+
+    def service_ms(self, data) -> int:
+        return 0
 
     def request(self, url, model, key, state, questions) -> tuple:
         sent = []
@@ -542,7 +596,8 @@ class OpenAIBackend:
 JEV_BACKEND = JevBackend()
 CLEF = ClefBackend()
 OPENAI = OpenAIBackend()
-BACKENDS = {b.name: b for b in (JEV_BACKEND, CLEF, OPENAI)}
+STRANDS = StrandsBackend()
+BACKENDS = {b.name: b for b in (JEV_BACKEND, CLEF, OPENAI, STRANDS)}
 
 
 def backend_name(environ=None, var: str = "JEV_BACKEND") -> str:
@@ -588,6 +643,17 @@ def _settings(name: str, env) -> dict:
             "url": env.get("OPENAI_DECISIONS_URL", "") or OPENAI_URL,
             "model": env.get("OPENAI_DECISIONS_MODEL", "") or OPENAI_MODEL,
         }
+    if name == "strands":
+        # Unset is the local default; explicitly empty turns the backend off.
+        if "STRANDS_URL" in env:
+            url = str(env.get("STRANDS_URL") or "").strip()
+        else:
+            url = STRANDS_URL
+        return {
+            "api_key": "",
+            "url": url,
+            "model": env.get("STRANDS_MODEL", "") or STRANDS_MODEL,
+        }
     return {
         "api_key": env.get("TYPESAFE_API_KEY", ""),
         "url": env.get("JEV_URL", URL) or URL,
@@ -599,9 +665,18 @@ def _settings(name: str, env) -> dict:
 # THE HOURLY TALLY
 
 
+def _percentile(values: list, pct: float) -> int:
+    """Nearest-rank percentile of a non-empty list of numbers."""
+    ordered = sorted(values)
+    rank = max(1, int(math.ceil(pct / 100.0 * len(ordered))))
+    return int(ordered[min(rank, len(ordered)) - 1])
+
+
 class Tally:
-    """Per backend and kind: answered, disagreed and error counts, one log
-    line per kind per hour, and one line per hour per repeating failure."""
+    """Per backend and kind: answered, disagreed and error counts, the p50 and
+    p95 round-trip (and service-reported) milliseconds of answered calls, one
+    log line per backend and kind per hour, and one line per hour per
+    repeating failure."""
 
     def __init__(self, clock=time.monotonic, period: float = TALLY_SECONDS):
         self._clock = clock
@@ -609,27 +684,47 @@ class Tally:
         self._lock = threading.Lock()
         self._since = clock()
         self._counts: dict = {}
+        # The backend that last answered as the active one: the bridge's
+        # heuristic-vs-active agreement belongs to it.
         self._backend = "jev"
         self._failures: dict = {}
 
-    def status(self, backend: str, kind: str, status: str) -> None:
+    def _slot(self, backend: str, kind: str) -> dict:
+        return self._counts.setdefault(
+            (backend, kind),
+            {"answered": 0, "disagreed": 0, "errors": 0, "ms": [], "service": []},
+        )
+
+    def status(
+        self,
+        backend: str,
+        kind: str,
+        status: str,
+        latency_ms: int = 0,
+        service_ms: int = 0,
+        active: bool = True,
+    ) -> None:
         with self._lock:
-            self._backend = backend
-            c = self._counts.setdefault(
-                kind, {"answered": 0, "disagreed": 0, "errors": 0}
-            )
+            if active:
+                self._backend = backend
+            c = self._slot(backend, kind)
             if status in (ANSWERED, CACHED):
                 c["answered"] += 1
+                if status == ANSWERED:
+                    c["ms"].append(max(0, int(latency_ms)))
+                    del c["ms"][:-TALLY_SAMPLES]
+                    if service_ms:
+                        c["service"].append(int(service_ms))
+                        del c["service"][:-TALLY_SAMPLES]
             elif status in (ERROR, TIMEOUT, INVALID):
                 c["errors"] += 1
 
-    def agreement(self, kind: str, agree) -> None:
+    def agreement(self, kind: str, agree, backend: str | None = None) -> None:
+        """One answer's agreement. `backend` is the one whose answer is being
+        judged: the last active backend when not named."""
         if agree is False:
             with self._lock:
-                c = self._counts.setdefault(
-                    kind, {"answered": 0, "disagreed": 0, "errors": 0}
-                )
-                c["disagreed"] += 1
+                self._slot(backend or self._backend, kind)["disagreed"] += 1
 
     def first_failure(self, key: tuple) -> int | None:
         """None when `key` was already said inside the hour; else how many
@@ -643,15 +738,35 @@ class Tally:
             self._failures[key] = (now, 0)
             return held
 
+    @staticmethod
+    def _line(backend: str, kind: str, c: dict) -> str:
+        line = "jev: hourly backend=%s kind=%s answered=%d disagreed=%d errors=%d" % (
+            backend,
+            kind,
+            c["answered"],
+            c["disagreed"],
+            c["errors"],
+        )
+        if c["ms"]:
+            line += " p50_ms=%d p95_ms=%d" % (
+                _percentile(c["ms"], 50),
+                _percentile(c["ms"], 95),
+            )
+        if c["service"]:
+            line += " service_p50_ms=%d service_p95_ms=%d" % (
+                _percentile(c["service"], 50),
+                _percentile(c["service"], 95),
+            )
+        return line
+
     def lines(self) -> list:
         with self._lock:
             now = self._clock()
             if now - self._since < self._period:
                 return []
             out = [
-                "jev: hourly backend=%s kind=%s answered=%d disagreed=%d errors=%d"
-                % (self._backend, kind, c["answered"], c["disagreed"], c["errors"])
-                for kind, c in sorted(self._counts.items())
+                self._line(backend, kind, c)
+                for (backend, kind), c in sorted(self._counts.items())
             ]
             self._counts = {}
             self._since = now
@@ -703,11 +818,26 @@ def compare_rows(kind, questions, active, shadow, active_name, shadow_name) -> l
                 "probabilities": probs,
                 "status": shadow.status,
                 "latency_ms": shadow.latency_ms,
+                "service_ms": shadow.service_ms,
                 "model": shadow.model,
                 "agree": (mine == theirs) if (mine and theirs) else None,
             }
         )
     return rows
+
+
+def _url_ok(url, backend) -> bool:
+    """https always; plain http only for a local backend on a loopback host."""
+    text = str(url).strip()
+    if text.lower().startswith("https://"):
+        return True
+    if not (backend.local and text.lower().startswith("http://")):
+        return False
+    try:
+        host = urllib.parse.urlsplit(text).hostname
+    except ValueError:
+        return False
+    return host in LOOPBACK_HOSTS
 
 
 def _cache_key(model: str, state, questions: dict) -> str:
@@ -738,7 +868,12 @@ class Client:
         shadow=None,
         compare_sink=None,
     ):
-        if not str(url).lower().startswith("https://"):
+        self.backend = backend or JEV_BACKEND
+        # A local backend with an empty URL is a switched-off one (no_key);
+        # any other URL must be https, or plain http on a loopback host.
+        if not (self.backend.local and not str(url).strip()) and not _url_ok(
+            url, self.backend
+        ):
             raise ValueError("Jev URL must be https: %r" % url)
         self._key = (api_key or "").strip()
         self.url = url
@@ -754,10 +889,14 @@ class Client:
         self._transport = transport or _urllib_post
         self._clock = clock
         self._said_no_key = False
-        self.backend = backend or JEV_BACKEND
+        # Set on a comparison client: its tally lines are its own, and its
+        # answers are not the active backend's.
+        self.compared = False
         # The opt-in comparison (see the module docstring): a second client
         # asked the same questions, and where its rows go.
         self.shadow = shadow
+        if shadow is not None:
+            shadow.compared = True
         self.compare_sink = compare_sink
         self._compares: set = set()
 
@@ -782,18 +921,29 @@ class Client:
 
     @property
     def configured(self) -> bool:
+        if self.backend.local:
+            return bool(str(self.url).strip())
         return bool(self._key)
 
     def ready(self, kind: str) -> bool:
-        """True when a key is set. Without one, says so ONCE per process."""
-        if self._key:
+        """True when a key is set (a local backend: when its URL is). Without
+        one, says so ONCE per process."""
+        if self.configured:
             return True
         if not self._said_no_key:
-            log.warning(
-                "jev: no TYPESAFE_API_KEY; %s and every other judgment keeps "
-                "the heuristic",
-                kind,
-            )
+            if self.backend.local:
+                log.warning(
+                    "jev: no URL for the %s backend; %s and every other "
+                    "judgment keeps the heuristic",
+                    self.backend.name,
+                    kind,
+                )
+            else:
+                log.warning(
+                    "jev: no TYPESAFE_API_KEY; %s and every other judgment keeps "
+                    "the heuristic",
+                    kind,
+                )
             self._said_no_key = True
         return False
 
@@ -858,6 +1008,8 @@ class Client:
                 self.backend.name,
                 self.shadow.backend.name,
             )
+            for row in rows:
+                TALLY.agreement(kind, row["agree"], row["backend"])
             await self.compare_sink(rows)
         except Exception:
             log.exception("jev: comparison for %s was not recorded", kind)
@@ -933,12 +1085,26 @@ class Client:
             )
         self._remember(key, (answers, model))
         return self._said(
-            kind, Outcome(ANSWERED, elapsed(), answers=answers, model=model)
+            kind,
+            Outcome(
+                ANSWERED,
+                elapsed(),
+                answers=answers,
+                model=model,
+                service_ms=self.backend.service_ms(data),
+            ),
         )
 
     def _said(self, kind: str, outcome: Outcome) -> Outcome:
         outcome = dataclasses.replace(outcome, backend=self.backend.name)
-        TALLY.status(self.backend.name, kind, outcome.status)
+        TALLY.status(
+            self.backend.name,
+            kind,
+            outcome.status,
+            outcome.latency_ms,
+            outcome.service_ms,
+            active=not self.compared,
+        )
         TALLY.maybe_log()
         if outcome.answers is None:
             # A failure that repeats is said once an hour with the count it
@@ -958,11 +1124,12 @@ class Client:
             )
             return outcome
         log.info(
-            "jev: kind=%s status=%s latency_ms=%d model=%s%s",
+            "jev: kind=%s status=%s latency_ms=%d model=%s%s%s",
             kind,
             outcome.status,
             outcome.latency_ms,
             outcome.model or "-",
+            (" service_ms=%d" % outcome.service_ms) if outcome.service_ms else "",
             (" detail=" + outcome.detail) if outcome.detail else "",
         )
         return outcome
