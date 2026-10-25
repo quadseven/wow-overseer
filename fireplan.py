@@ -46,6 +46,7 @@ import functools
 from dataclasses import dataclass
 
 import gearscore
+import towntrip
 
 # THE TARGETS, PER SEAT. The Ragnaros tank first, as classic guilds asked
 # (raidgoals' own range tops out at the same 200); other tanks next, because
@@ -571,3 +572,65 @@ IRON_ROAD = (
     + "; "
     + skill_note()
 )
+
+
+# ---------------------------------------------------------------------------
+# THE ERRAND THE ROAD'S NEXT STEP BECOMES (#480)
+#
+# overseer_command takes kind='quest' (a turn-in or a take) and kind='buy'
+# (entry:N count:N max:N) and nothing for a smelt, a learn, a gather or a craft:
+# those steps are said in the log line and the crafting pass that owns them
+# does the work. The plan's price is not in the item book, so the buy carries a
+# ceiling and not a price.
+# ---------------------------------------------------------------------------
+
+PLAN_CEILING = 100000  # copper; a ceiling on one plan, not its price
+SMELT_SPELL = 14891  # Smelt Dark Iron
+
+
+def _grind_command(held: dict) -> str:
+    """The turn-in the member can make now, else the first quest to take."""
+    for quest, needs in TURNINS:
+        if all(held.get(item, 0) >= n for item, n in needs):
+            return "turnin quest:%d" % quest
+    return "take quest:%d" % TURNINS[0][0]
+
+
+def iron_errand(member: str, pipe: IronPipeline, held: dict):
+    """The `towntrip.Errand` for this pipeline's next step, or None when the
+    step is one overseer_command has no kind for."""
+    step = pipe.step
+    if step is None:
+        return None
+    if step.kind == GRIND:
+        return towntrip.Errand(member, "quest", _grind_command(held), step.said)
+    if step.kind == BUY:
+        command = "entry:%d count:1 max:%d" % (step.plan.entry, PLAN_CEILING)
+        return towntrip.Errand(member, "buy", command, step.said, PLAN_CEILING)
+    return None
+
+
+def iron_log(member: str, pipe: IronPipeline) -> str:
+    """The line the Live criteria name: the member and the step it chose."""
+    if pipe.step is None:
+        return "dark iron: %s: every piece is made" % member
+    return "dark iron: %s step %s: %s" % (member, pipe.step.kind, pipe.step.said)
+
+
+def rank_for(standing: int) -> str:
+    """The Thorium Brotherhood rank a standing value falls in."""
+    return [r for r in _RANKS if RANK_VALUE[r] <= standing][-1]
+
+
+def iron_member(member: str, learned: set, standing: int, held: dict):
+    """(pipeline, errand) for one blacksmith from what the world says of them:
+    the spells in `learned`, their Thorium Brotherhood `standing` and the
+    items in `held`."""
+    pipe = iron_plan(
+        known={p.entry for p in PLANS if p.teaches in learned},
+        rank=rank_for(standing),
+        smelt_known=SMELT_SPELL in learned,
+        held=held,
+        made={p.piece for p in PLANS if held.get(p.piece, 0)},
+    )
+    return pipe, iron_errand(member, pipe, held)

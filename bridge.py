@@ -53,6 +53,7 @@ import director
 import dungeonpath
 import events
 import fanout
+import fireplan
 import flightlearn
 import followhold
 import goals
@@ -8545,6 +8546,8 @@ class Bridge(discord.Client):
             )
             return
 
+        await self._dark_iron_once(names)
+
         mode = craft_rhythm.standing_mode(
             await asyncio.to_thread(_standing_jobs, getattr(cohort, "key", None)),
             exempt=_standin_out(),
@@ -8913,6 +8916,41 @@ class Bridge(discord.Client):
             decision.release.character, decision.release.aim, claimant,
         )
         return False
+
+    async def _dark_iron_once(self, names: list) -> int:
+        """Queue the next Dark Iron step for every blacksmith (#480).
+
+        The decision is `fireplan.iron_plan`; this reads the world for it and
+        writes its answer. A step overseer_command has no kind for (learn,
+        smelt, gather, craft) is only logged. Returns the rows queued.
+        """
+        smiths = [
+            n for n in sorted(names)
+            if await asyncio.to_thread(_fetch_skill_cap, n, BLACKSMITHING_SKILL)
+        ]
+        if not smiths:
+            return 0
+        spells = [p.teaches for p in fireplan.PLANS] + [fireplan.SMELT_SPELL]
+        known = await asyncio.to_thread(_fetch_crafter_known, smiths, spells)
+        standing = await asyncio.to_thread(_fetch_standing, smiths, THORIUM_FACTION)
+        items = sorted(
+            {i for i in fireplan.ITEM_NAMES} | {p.piece for p in fireplan.PLANS}
+        )
+        held_by = await asyncio.to_thread(
+            _fetch_item_counts, [(n, i) for n in smiths for i in items]
+        )
+        queued = 0
+        for name in smiths:
+            learned = {r["spell"] for r in known if r["name"] == name}
+            held = {i: held_by.get((name, i), 0) for i in items}
+            pipe, errand = fireplan.iron_member(
+                name, learned, standing.get(name, 0), held
+            )
+            log.info("%s", fireplan.iron_log(name, pipe))
+            if errand and not await asyncio.to_thread(_errand_pending, errand):
+                if await asyncio.to_thread(_insert_town_errand, errand):
+                    queued += 1
+        return queued
 
     async def _buy_fishing_poles(self, names: list, cohort=None) -> tuple:
         """Queue a Fishing Pole for every member holding none (mod-overseer#530).
@@ -34365,6 +34403,37 @@ def _out_of_reach_buys(minutes: int) -> set:
                 return set()
             raise
         return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
+
+BLACKSMITHING_SKILL = 164
+THORIUM_FACTION = 59
+
+
+def _fetch_standing(names: list, faction: int) -> dict:
+    """name -> reputation standing with `faction`; absent when never gained."""
+    if not names:
+        return {}
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT c.name AS name, r.standing AS standing "  # noqa: S608 - placeholders from a COUNT
+            "FROM characters c JOIN character_reputation r ON r.guid = c.guid "
+            f"WHERE r.faction = %s AND c.name IN ({marks})",
+            (int(faction), *names),
+        )
+        return {row["name"]: int(row["standing"]) for row in cur.fetchall()}
+
+
+def _errand_pending(errand) -> bool:
+    """Whether this exact row is already queued or being run."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM overseer_command WHERE target_name = %s "
+            "AND command = %s AND kind = %s AND status IN ('pending', 'claimed') "
+            "LIMIT 1",
+            (errand.member, errand.command, errand.kind),
+        )
+        return cur.fetchone() is not None
 
 
 def _insert_town_errand(errand) -> int:

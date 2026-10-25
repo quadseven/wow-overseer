@@ -212,5 +212,44 @@ class SaidTests(unittest.TestCase):
         self.assertIn("fireplan.py", dockerfile)
 
 
+class ErrandTests(unittest.TestCase):
+    def test_a_blacksmith_with_no_plans_and_neutral_standing_is_sent_to_grind(self):
+        pipe, errand = fireplan.iron_member("Smith", set(), 0, {})
+        self.assertEqual(pipe.step.kind, fireplan.GRIND)
+        self.assertEqual(errand.kind, "quest")
+        self.assertEqual(errand.member, "Smith")
+        self.assertEqual(errand.command, "take quest:%d" % fireplan.TURNINS[0][0])
+
+    def test_a_member_holding_a_turnin_hands_it_in(self):
+        _pipe, errand = fireplan.iron_member(
+            "Smith", set(), 0, {fireplan.FIERY_CORE: 1}
+        )
+        self.assertEqual(errand.command, "turnin quest:6643")
+
+    def test_a_member_at_rank_buys_the_plan(self):
+        _pipe, errand = fireplan.iron_member("Smith", set(), 3000, {})
+        self.assertEqual(errand.kind, "buy")
+        self.assertIn("entry:17051 ", errand.command)
+
+    def test_a_step_with_no_command_kind_queues_nothing(self):
+        learned = {fireplan.PLANS[0].teaches}
+        pipe, errand = fireplan.iron_member("Smith", learned, 3000, {})
+        self.assertEqual(pipe.step.kind, fireplan.LEARN)
+        self.assertIsNone(errand)
+
+    def test_the_log_line_names_the_member_and_the_step(self):
+        pipe, _errand = fireplan.iron_member("Smith", set(), 0, {})
+        self.assertEqual(
+            fireplan.iron_log("Smith", pipe),
+            "dark iron: Smith step grind: " + pipe.step.said,
+        )
+
+    def test_the_bridge_plans_it_from_the_craft_supply_pass(self):
+        src = (ROOT / "bridge.py").read_text(encoding="utf-8")
+        self.assertIn("await self._dark_iron_once(names)", src)
+        self.assertIn("fireplan.iron_member(", src)
+        self.assertIn("fireplan.iron_log(", src)
+
+
 if __name__ == "__main__":
     unittest.main()
