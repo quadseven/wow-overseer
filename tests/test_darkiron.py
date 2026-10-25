@@ -188,12 +188,6 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(pipe.done)
         self.assertIn("every piece is made", pipe.line)
 
-    def test_points_and_names_reach_the_same_rank(self):
-        self.assertEqual(fireplan.rank_of(3000), fireplan.FRIENDLY)
-        self.assertEqual(fireplan.rank_of(8999), fireplan.FRIENDLY)
-        self.assertEqual(fireplan.rank_of(9000), fireplan.HONORED)
-        self.assertEqual(fireplan.rank_of(42000), fireplan.EXALTED)
-
 
 class SaidTests(unittest.TestCase):
     def test_a_piece_names_its_plan_and_rank_for_the_fire_plan(self):
@@ -208,6 +202,10 @@ class SaidTests(unittest.TestCase):
     def test_the_road_names_the_place_the_rank_and_the_anvil(self):
         for word in ("Lokhtos", "Thorium Brotherhood", "Black Forge", "Black Anvil"):
             self.assertIn(word, fireplan.IRON_ROAD)
+
+    def test_the_road_says_the_first_step_and_the_skill_note(self):
+        self.assertIn(fireplan.iron_plan().line, fireplan.IRON_ROAD)
+        self.assertIn(fireplan.skill_note(), fireplan.IRON_ROAD)
 
     def test_the_module_ships_in_the_image(self):
         dockerfile = (ROOT / "Dockerfile").read_text()

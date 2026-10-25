@@ -437,11 +437,6 @@ def rank_index(rank: str) -> int:
     return _RANKS.index(rank)
 
 
-def rank_of(points: int) -> str:
-    """The rank `points` of Thorium Brotherhood reputation reach."""
-    return max((r for r in _RANKS if RANK_VALUE[r] <= points), key=rank_index)
-
-
 @dataclass(frozen=True)
 class IronStep:
     kind: str
@@ -571,5 +566,8 @@ def iron_source(entry) -> str:
 IRON_ROAD = (
     "Dark Iron plate (blacksmithing): reputation with the Thorium Brotherhood "
     "for Lokhtos's plans, the smelt for Dark Iron bars at the Black Forge, and "
-    "the piece made at the Black Anvil; see fireplan.iron_plan for the next step"
+    "the piece made at the Black Anvil; first step for a guild with nothing yet: "
+    + iron_plan().line
+    + "; "
+    + skill_note()
 )
