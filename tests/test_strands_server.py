@@ -13,9 +13,11 @@ which is tested here against a stub of the package's two entry points.
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import pathlib
+import socket
 import sys
 import threading
 import types
@@ -43,9 +45,16 @@ URGENCY = jev.score("How urgent is clearing space?", ["low", "medium", "high"])
 class Running:
     """A server on 127.0.0.1:<ephemeral> in a thread, for one test."""
 
-    def __init__(self, service, max_body=strands_server.DEFAULT_MAX_BODY):
+    def __init__(
+        self,
+        service,
+        max_body=strands_server.DEFAULT_MAX_BODY,
+        request_timeout=strands_server.REQUEST_TIMEOUT_SECONDS,
+    ):
         self.service = service
-        self.server = strands_server.make_server(service, "127.0.0.1", 0, max_body)
+        self.server = strands_server.make_server(
+            service, "127.0.0.1", 0, max_body, request_timeout
+        )
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(
             target=self.server.serve_forever,
@@ -72,7 +81,8 @@ class Running:
             headers={"Content-Type": "application/json"},
         )
         try:
-            with urllib.request.urlopen(request, timeout=5) as response:
+            # S310: the URL is always http://127.0.0.1:<this test's port>, never a file: or custom scheme.
+            with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310
                 return response.status, json.loads(response.read())
         except urllib.error.HTTPError as exc:
             try:
@@ -112,6 +122,16 @@ class ChoiceAnswer(WrapperCase):
         self.assertIsInstance(typed["route"], jev.Choice)
         self.assertEqual(typed["route"].choice, "keep")
         self.assertEqual(typed["route"].probabilities, answer["probabilities"])
+
+    def test_a_two_option_choice_has_a_confidence_jev_accepts(self):
+        running = self.serve(strands_server.FakeDecider())
+        pair = jev.choice("Sell it?", {"sell": "sell it", "keep": "keep it"})
+        status, body = running.ask({"pair": pair})
+        self.assertEqual(status, 200)
+        answer = body["answers"]["pair"]
+        self.assertEqual(answer["choice"], "sell")
+        self.assertGreater(answer["confidence"], 0.0)
+        self.assertIsInstance(jev.parse(pair, answer), jev.Choice)
 
     def test_v1_ask_is_the_same_route(self):
         running = self.serve(strands_server.FakeDecider())
@@ -221,6 +241,37 @@ class MalformedRequest(WrapperCase):
         # A malformed request never reaches the model.
         self.assertEqual(fake.calls, [])
 
+    def raw_post(self, running, announced, sent, close_write):
+        with socket.create_connection(("127.0.0.1", running.port), timeout=5) as sock:
+            sock.sendall(
+                b"POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+                + b"Content-Length: %d\r\n\r\n" % announced
+                + sent
+            )
+            if close_write:
+                sock.shutdown(socket.SHUT_WR)
+            reply = b""
+            while chunk := sock.recv(4096):
+                reply += chunk
+        status = int(reply.split(b" ", 2)[1])
+        return status, json.loads(reply.split(b"\r\n\r\n", 1)[1])
+
+    def test_a_body_shorter_than_announced_is_400(self):
+        fake = strands_server.FakeDecider()
+        running = self.serve(fake)
+        status, reply = self.raw_post(running, 100, b'{"state": "s"}', close_write=True)
+        self.assertEqual(status, 400)
+        self.assertIn("shorter", reply["error"])
+        self.assertEqual(fake.calls, [])
+
+    def test_a_stalled_body_gives_up_its_thread(self):
+        fake = strands_server.FakeDecider()
+        running = self.serve(fake, request_timeout=0.2)
+        status, reply = self.raw_post(running, 100, b'{"state"', close_write=False)
+        self.assertEqual(status, 408)
+        self.assertIn("error", reply)
+        self.assertEqual(fake.calls, [])
+
     def test_body_over_the_limit_is_413(self):
         running = self.serve(strands_server.FakeDecider(), max_body=64)
         status, reply = running.ask({"route": ROUTE})
@@ -315,6 +366,35 @@ class DeciderFailures(WrapperCase):
         status, body = running.ask({"route": ROUTE, "full": FULL})
         self.assertEqual(status, 200)
         self.assertEqual(body["answers"], {})
+
+
+class TheBridgeClient(WrapperCase):
+    """jev.Client with JEV_BACKEND=strands asks this wrapper over real HTTP."""
+
+    def client(self, running):
+        env = {
+            "JEV_BACKEND": "strands",
+            "STRANDS_URL": f"http://127.0.0.1:{running.port}/",
+        }
+        return jev.Client.from_env(env)
+
+    def test_the_strands_backend_gets_typed_answers(self):
+        running = self.serve(strands_server.FakeDecider(model="strands-test-3"))
+        outcome = asyncio.run(
+            self.client(running).ask("bag", "state", {"route": ROUTE, "full": FULL})
+        )
+        self.assertEqual(outcome.status, jev.ANSWERED, outcome)
+        self.assertEqual(outcome.model, "strands-test-3")
+        self.assertEqual(outcome.answers["route"].choice, "keep")
+        self.assertEqual(outcome.answers["full"], jev.Noul(0.75))
+
+    def test_a_service_with_no_model_is_no_answer(self):
+        running = self.serve(None)
+        outcome = asyncio.run(
+            self.client(running).ask("bag", "state", {"route": ROUTE})
+        )
+        self.assertIsNone(outcome.answers)
+        self.assertNotEqual(outcome.status, jev.ANSWERED)
 
 
 class Shaping(unittest.TestCase):

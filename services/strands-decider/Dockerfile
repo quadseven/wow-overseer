@@ -12,7 +12,7 @@ FROM python:3.12-slim
 COPY requirements.txt /tmp/requirements.txt
 # torch from the CPU wheel index first, so the CUDA wheels never download;
 # the pinned set then finds it already satisfied.
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.7.1 \
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.13.0 \
  && pip install --no-cache-dir -r /tmp/requirements.txt \
  && rm /tmp/requirements.txt
 

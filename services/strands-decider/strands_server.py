@@ -27,6 +27,7 @@ THE CONTRACT.
               returns None for it and the heuristic acts. latency_ms is the
               decider's own time for the request, in milliseconds.
     400       the body is not JSON, or not a well-formed Jev request
+    408       the body did not arrive within 30 seconds
     413       the body is larger than STRANDS_MAX_BODY_BYTES
     422       the decider refused the request (a prompt it cannot fit)
     500       the decider failed
@@ -88,6 +89,7 @@ DEFAULT_PORT = 8790
 DEFAULT_CHECKPOINT = "StrandsAgents/strands-decider-2B-qwen3.5-v1-2610"
 DEFAULT_DEVICE = "cpu"
 DEFAULT_MAX_BODY = 1 << 20
+REQUEST_TIMEOUT_SECONDS = 30.0
 
 ASK_PATHS = ("/", "/v1/ask")
 HEALTH_PATH = "/healthz"
@@ -111,39 +113,49 @@ def _is_content(value) -> bool:
     return isinstance(value, (str, dict, list))
 
 
+def _check_choice(qid: str, criteria) -> None:
+    if not isinstance(criteria, dict):
+        raise BadRequest(f"choice {qid!r} needs criteria as an object")
+    if not 2 <= len(criteria) <= MAX_CHOICE_OPTIONS:
+        raise BadRequest(
+            f"choice {qid!r} needs 2 to {MAX_CHOICE_OPTIONS} options, "
+            f"got {len(criteria)}"
+        )
+    if any(text is not None and not _is_content(text) for text in criteria.values()):
+        raise BadRequest(f"choice {qid!r} has an option that is not text")
+
+
+def _check_score(qid: str, criteria) -> None:
+    if not isinstance(criteria, list) or not all(
+        isinstance(level, str) for level in criteria
+    ):
+        raise BadRequest(f"score {qid!r} needs criteria as a list of strings")
+    if not MIN_SCORE_LEVELS <= len(criteria) <= MAX_SCORE_LEVELS:
+        raise BadRequest(
+            f"score {qid!r} needs {MIN_SCORE_LEVELS} to {MAX_SCORE_LEVELS} "
+            f"levels, got {len(criteria)}"
+        )
+
+
+def _check_noul(qid: str, criteria) -> None:
+    if criteria is None:
+        return
+    if not isinstance(criteria, dict) or not set(criteria) <= {"true", "false"}:
+        raise BadRequest(f"noul {qid!r} criteria keys must be true/false")
+
+
+_CRITERIA_CHECKS = {"choice": _check_choice, "score": _check_score, "noul": _check_noul}
+
+
 def _check_question(qid: str, question) -> None:
     if not isinstance(question, dict):
         raise BadRequest(f"question {qid!r} is not an object")
     kind = question.get("type")
-    if kind not in KINDS:
+    if kind not in _CRITERIA_CHECKS:
         raise BadRequest(f"question {qid!r} has type {kind!r}, not one of {KINDS}")
     if not _is_content(question.get("instructions")):
         raise BadRequest(f"question {qid!r} has no instructions")
-    criteria = question.get("criteria")
-    if kind == "choice":
-        if not isinstance(criteria, dict):
-            raise BadRequest(f"choice {qid!r} needs criteria as an object")
-        if not 2 <= len(criteria) <= MAX_CHOICE_OPTIONS:
-            raise BadRequest(
-                f"choice {qid!r} needs 2 to {MAX_CHOICE_OPTIONS} options, "
-                f"got {len(criteria)}"
-            )
-        for text in criteria.values():
-            if text is not None and not _is_content(text):
-                raise BadRequest(f"choice {qid!r} has an option that is not text")
-    elif kind == "score":
-        if not isinstance(criteria, list) or not all(
-            isinstance(level, str) for level in criteria
-        ):
-            raise BadRequest(f"score {qid!r} needs criteria as a list of strings")
-        if not MIN_SCORE_LEVELS <= len(criteria) <= MAX_SCORE_LEVELS:
-            raise BadRequest(
-                f"score {qid!r} needs {MIN_SCORE_LEVELS} to {MAX_SCORE_LEVELS} "
-                f"levels, got {len(criteria)}"
-            )
-    elif criteria is not None:
-        if not isinstance(criteria, dict) or not set(criteria) <= {"true", "false"}:
-            raise BadRequest(f"noul {qid!r} criteria keys must be true/false")
+    _CRITERIA_CHECKS[kind](qid, question.get("criteria"))
 
 
 def parse_request(raw: bytes) -> tuple:
@@ -305,7 +317,9 @@ class FakeDecider:
                 options = list(question["criteria"])
                 weights = list(range(len(options), 0, -1))
                 total = float(sum(weights))
-                probabilities = {o: w / total for o, w in zip(options, weights)}
+                probabilities = {
+                    o: w / total for o, w in zip(options, weights, strict=True)
+                }
                 top = weights[0] / total
                 n = len(options)
                 out[qid] = {
@@ -396,59 +410,99 @@ class Service:
 # HTTP
 
 
-def make_handler(service: Service, max_body: int = DEFAULT_MAX_BODY):
-    class Handler(BaseHTTPRequestHandler):
-        server_version = "strands-decider"
-        protocol_version = "HTTP/1.1"
+class Handler(BaseHTTPRequestHandler):
+    """The routes. make_handler binds a Service and the limits to a subclass."""
 
-        def _send(self, status: int, payload: dict) -> None:
-            body = json.dumps(payload).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+    service: Service
+    max_body: int = DEFAULT_MAX_BODY
+    server_version = "strands-decider"
+    # A socket timeout per connection: a client that announces a body and
+    # stops sending gives up its thread after this many seconds instead of
+    # holding it (StreamRequestHandler applies it to the socket).
+    timeout = REQUEST_TIMEOUT_SECONDS
+    protocol_version = "HTTP/1.1"
 
-        def _path(self) -> str:
-            return self.path.split("?", 1)[0]
+    def _send(self, status: int, payload: dict) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
-        def do_GET(self) -> None:  # noqa: N802 - http.server's naming
-            if self._path() == HEALTH_PATH:
-                self._send(*service.health())
-            else:
-                self._send(404, {"error": "not found"})
+    def _path(self) -> str:
+        return self.path.split("?", 1)[0]
 
-        def do_POST(self) -> None:  # noqa: N802 - http.server's naming
-            if self._path() not in ASK_PATHS:
-                self._send(404, {"error": "not found"})
-                return
-            try:
-                length = int(self.headers.get("Content-Length", ""))
-            except ValueError:
-                self.close_connection = True
-                self._send(411, {"error": "Content-Length is required"})
-                return
-            if length < 0:
-                self.close_connection = True
-                self._send(400, {"error": "Content-Length is negative"})
-                return
-            if length > max_body:
-                # The unread body would be parsed as the next request.
-                self.close_connection = True
-                self._send(413, {"error": f"body is over {max_body} bytes"})
-                return
-            self._send(*service.ask(self.rfile.read(length)))
+    def do_GET(self) -> None:  # noqa: N802 - http.server's naming
+        if self._path() == HEALTH_PATH:
+            self._send(*self.service.health())
+        else:
+            self._send(404, {"error": "not found"})
 
-        def log_message(self, format, *args) -> None:  # noqa: A002 - http.server's signature
-            log.debug("%s %s", self.address_string(), format % args)
+    def _refuse(self, status: int, error: str) -> None:
+        # Whatever of the body is unread would be parsed as the next
+        # request, so a refused body also ends the connection.
+        self.close_connection = True
+        self._send(status, {"error": error})
 
-    return Handler
+    def _body(self) -> bytes | None:
+        """The request body, or None once a refusal has been sent."""
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            self._refuse(411, "Content-Length is required")
+            return None
+        if length < 0:
+            self._refuse(400, "Content-Length is negative")
+            return None
+        if length > self.max_body:
+            self._refuse(413, f"body is over {self.max_body} bytes")
+            return None
+        try:
+            raw = self.rfile.read(length)
+        except TimeoutError:
+            self._refuse(408, "body not received in time")
+            return None
+        if len(raw) < length:
+            self._refuse(400, "body is shorter than Content-Length")
+            return None
+        return raw
+
+    def do_POST(self) -> None:  # noqa: N802 - http.server's naming
+        if self._path() not in ASK_PATHS:
+            self._send(404, {"error": "not found"})
+            return
+        raw = self._body()
+        if raw is not None:
+            self._send(*self.service.ask(raw))
+
+    def log_message(self, format, *args) -> None:  # noqa: A002 - http.server's signature
+        log.debug("%s %s", self.address_string(), format % args)
+
+
+def make_handler(
+    service: Service,
+    max_body: int = DEFAULT_MAX_BODY,
+    request_timeout: float = REQUEST_TIMEOUT_SECONDS,
+):
+    """A Handler subclass bound to one service and its limits."""
+    return type(
+        "BoundHandler",
+        (Handler,),
+        {"service": service, "max_body": max_body, "timeout": request_timeout},
+    )
 
 
 def make_server(
-    service: Service, bind: str, port: int, max_body: int = DEFAULT_MAX_BODY
+    service: Service,
+    bind: str,
+    port: int,
+    max_body: int = DEFAULT_MAX_BODY,
+    request_timeout: float = REQUEST_TIMEOUT_SECONDS,
 ):
-    return ThreadingHTTPServer((bind, port), make_handler(service, max_body))
+    return ThreadingHTTPServer(
+        (bind, port), make_handler(service, max_body, request_timeout)
+    )
 
 
 def decider_factory(environ):

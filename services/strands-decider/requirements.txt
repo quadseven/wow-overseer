@@ -4,7 +4,7 @@
 # dependencies that do not move the model's numbers (fastapi, uvicorn, typer,
 # rich, pydantic) are left to its own ranges.
 strands-decider==0.2.0
-torch==2.7.1
+torch==2.13.0
 transformers==5.20.2
 peft==0.21.2
 accelerate==1.15.0
