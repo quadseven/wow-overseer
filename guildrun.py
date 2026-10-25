@@ -90,6 +90,7 @@ BAND_SPREAD = 4
 # levels starves that loop (operator, 2026-09-28).
 LEVEL_MARGIN = 0
 ROLLING = 20
+PROGRESS_BOSSES = 3
 MIN_SAMPLES = 3
 MAX_OPTIONS = 3
 MAX_DUNGEONS = 4
@@ -1150,6 +1151,8 @@ class Rate:
     runs: int
     cleared: int
     deaths: int
+    seconds_inside: int = 0
+    bosses_inside: int = 0
 
     @property
     def smoothed(self) -> float:
@@ -1158,13 +1161,21 @@ class Rate:
     def words(self) -> str:
         if not self.runs:
             return "no runs yet"
-        return "%d cleared of %d run%s (%.0f%%), %.1f deaths a run" % (
+        base = "%d cleared of %d run%s (%.0f%%), %.1f deaths a run" % (
             self.cleared,
             self.runs,
             "" if self.runs == 1 else "s",
             100.0 * self.cleared / self.runs,
             self.deaths / float(self.runs),
         )
+        if self.bosses_inside > 0:
+            avg_seconds = self.seconds_inside / self.bosses_inside
+            if avg_seconds >= 60:
+                minutes = avg_seconds / 60
+                return "%s, about %.1f minutes a boss" % (base, minutes)
+            else:
+                return "%s, about %d seconds a boss" % (base, int(avg_seconds))
+        return base
 
 
 NO_RATE = Rate(0, 0, 0)
@@ -1193,10 +1204,26 @@ def rates(rows: list, rolling: int = ROLLING) -> dict:
             continue
         counted[key] = n + 1
         rate = out.get(key, NO_RATE)
+        cleared_increment = 0
+        seconds_increment = 0
+        bosses_increment = 0
+        if outcome == CLEARED:
+            cleared_increment = 1
+        elif outcome == "timed out":
+            bosses_done = int(row.get("bosses_done") or 0)
+            if bosses_done >= PROGRESS_BOSSES:
+                cleared_increment = 1
+        seconds_inside = int(row.get("seconds_inside") or 0)
+        bosses_done = int(row.get("bosses_done") or 0)
+        if bosses_done > 0:
+            seconds_increment = seconds_inside
+            bosses_increment = bosses_done
         out[key] = Rate(
             rate.runs + 1,
-            rate.cleared + (1 if outcome == CLEARED else 0),
+            rate.cleared + cleared_increment,
             rate.deaths + int(row.get("deaths") or 0),
+            rate.seconds_inside + seconds_increment,
+            rate.bosses_inside + bosses_increment,
         )
     return out
 
@@ -1208,13 +1235,15 @@ def door_rate(table: dict, keyword: str, band: str, composition: str = "") -> Ra
         exact = table.get((keyword, band, composition))
         if exact and exact.runs:
             return exact
-    runs = cleared = deaths = 0
+    runs = cleared = deaths = seconds_inside = bosses_inside = 0
     for (k, b, _c), rate in table.items():
         if k == keyword and b == band:
             runs += rate.runs
             cleared += rate.cleared
             deaths += rate.deaths
-    return Rate(runs, cleared, deaths)
+            seconds_inside += rate.seconds_inside
+            bosses_inside += rate.bosses_inside
+    return Rate(runs, cleared, deaths, seconds_inside, bosses_inside)
 
 
 # THE RECORD BY SHAPE, COUNTING THE RUNS THAT NEVER GOT IN (#583, #584). The
@@ -1241,7 +1270,7 @@ def shape_key(real_tank: bool, real_healer: bool) -> str:
 
 @dataclass(frozen=True)
 class ShapeRecord:
-    """One (door, band, shape)'s runs: those that went in, and those the
+    """One (door, band, shape) 's runs: those that went in, and those the
     finder turned away (`streak` of them newest first, before any run in)."""
 
     went_in: int = 0
@@ -1249,6 +1278,7 @@ class ShapeRecord:
     deaths: int = 0
     turned_away: int = 0
     streak: int = 0
+    progress: int = 0
 
     @property
     def rate(self) -> Rate:
@@ -1256,6 +1286,8 @@ class ShapeRecord:
 
     @property
     def failing(self) -> bool:
+        if self.progress > 0:
+            return False
         return (
             self.went_in >= FAILING_RUNS and self.cleared == 0
         ) or self.streak >= TURNED_AWAY_RUNS
@@ -1297,11 +1329,17 @@ def _counted(rec: ShapeRecord, row: dict, entered: bool, streaking: bool):
     """`rec` with one more run: in (and how it went) or turned away."""
     if entered:
         outcome = str(row.get("outcome") or "")
+        progress_increment = 0
+        if outcome == "timed out":
+            bosses_done = int(row.get("bosses_done") or 0)
+            if bosses_done >= PROGRESS_BOSSES:
+                progress_increment = 1
         return replace(
             rec,
             went_in=rec.went_in + 1,
             cleared=rec.cleared + (1 if outcome == CLEARED else 0),
             deaths=rec.deaths + int(row.get("deaths") or 0),
+            progress=rec.progress + progress_increment,
         )
     return replace(
         rec, turned_away=rec.turned_away + 1, streak=rec.streak + int(streaking)
@@ -1346,13 +1384,15 @@ def cleared_doors(rows: list) -> set:
 
 
 def comp_rate(table: dict, composition: str, band: str) -> Rate:
-    runs = cleared = deaths = 0
+    runs = cleared = deaths = seconds_inside = bosses_inside = 0
     for (_k, b, c), rate in table.items():
         if c == composition and b == band:
             runs += rate.runs
             cleared += rate.cleared
             deaths += rate.deaths
-    return Rate(runs, cleared, deaths)
+            seconds_inside += rate.seconds_inside
+            bosses_inside += rate.bosses_inside
+    return Rate(runs, cleared, deaths, seconds_inside, bosses_inside)
 
 
 # --- the plan for one pool, and the heuristic -------------------------------------

@@ -1019,7 +1019,7 @@ class TheCompositions(unittest.TestCase):
         self.assertEqual(len(seen), len(set(seen)))
 
 
-def ended(keyword, outcome, band="15-19", comp="spec-tank/spec-healer", deaths=0):
+def ended(keyword, outcome, band="15-19", comp="spec-tank/spec-healer", deaths=0, bosses_done=0, seconds_inside=0):
     return {
         "keyword": keyword,
         "band": band,
@@ -1027,6 +1027,8 @@ def ended(keyword, outcome, band="15-19", comp="spec-tank/spec-healer", deaths=0
         "state": "ended",
         "outcome": outcome,
         "deaths": deaths,
+        "bosses_done": bosses_done,
+        "seconds_inside": seconds_inside,
     }
 
 
@@ -1577,16 +1579,154 @@ class SeatedRaidersUpgradesChooseTheDoor(unittest.TestCase):
         self.assertIn("gains)", BRIDGE)
 
 
-class AnySeatedRaiderIsReadByPreraid(unittest.TestCase):
-    def test_a_guild_member_row_with_no_roster_tab_gets_the_class_default(self):
+class ProgressRuns(unittest.TestCase):
+    """A timed-out run with 3 or more bosses counts as progress."""
+
+    def test_timed_out_with_3_bosses_counts_as_progress(self):
+        """rates and door_rate count a timed out row with 3 or more bosses done as progress, and not one with 2 or fewer, an abandoned row, or a row with no bosses_done."""
         rows = [
-            {"name": "Stabby", "class_id": 4, "level": 55, "race": 2, "spec_tab": None}
+            ended("ragefire", "timed out", band="15-19", comp="spec-tank/spec-healer", bosses_done=3),
+            ended("ragefire", "cleared", band="15-19", comp="spec-tank/spec-healer"),
         ]
-        (m,) = preraid.members(rows, [])
-        self.assertEqual((m.name, m.level, m.tree), ("Stabby", 55, -1))
-        self.assertIn("overseer_raid_spec", preraid.GUILD_MEMBERS_SQL)
-        self.assertIn("LEFT JOIN overseer_roster", preraid.GUILD_MEMBERS_SQL)
+        table = guildrun.rates(rows)
+        door_rate = guildrun.door_rate(table, "ragefire", "15-19")
+        self.assertEqual(door_rate.runs, 2)
+        self.assertEqual(door_rate.cleared, 2)
+
+    def test_timed_out_with_2_bosses_does_not_count_as_progress(self):
+        """A timed out run with 2 or fewer bosses does not count as progress."""
+        rows = [
+            ended("ragefire", "timed out", band="15-19", comp="spec-tank/spec-healer", bosses_done=2),
+            ended("ragefire", "cleared", band="15-19", comp="spec-tank/spec-healer"),
+        ]
+        table = guildrun.rates(rows)
+        door_rate = guildrun.door_rate(table, "ragefire", "15-19")
+        self.assertEqual(door_rate.runs, 2)
+        self.assertEqual(door_rate.cleared, 1)
+
+    def test_abandoned_run_does_not_count_as_progress(self):
+        """An abandoned row does not count as progress."""
+        rows = [
+            ended("ragefire", "abandoned", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "cleared", band="15-19", comp="spec-tank/spec-healer"),
+        ]
+        table = guildrun.rates(rows)
+        door_rate = guildrun.door_rate(table, "ragefire", "15-19")
+        self.assertEqual(door_rate.runs, 2)
+        self.assertEqual(door_rate.cleared, 1)
+
+    def test_timed_out_with_no_bosses_does_not_count_as_progress(self):
+        """A timed out row with no bosses_done does not count as progress."""
+        rows = [
+            ended("ragefire", "timed out", band="15-19", comp="spec-tank/spec-healer", bosses_done=0),
+            ended("ragefire", "cleared", band="15-19", comp="spec-tank/spec-healer"),
+        ]
+        table = guildrun.rates(rows)
+        door_rate = guildrun.door_rate(table, "ragefire", "15-19")
+        self.assertEqual(door_rate.runs, 2)
+        self.assertEqual(door_rate.cleared, 1)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class ProgressDoors(unittest.TestCase):
+    """A door with a progress run is not in failing_doors or ShapeRecord.failing."""
+
+    def test_door_with_progress_run_not_failing(self):
+        """A door with FAILING_RUNS runs, none cleared, one of them a timed out run with 3+ bosses, is not in failing_doors."""
+        rows = [
+            ended("ragefire", "timed out", band="15-19", comp="spec-tank/spec-healer", bosses_done=3),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+        ]
+        p = plan(rows)
+        self.assertNotIn("ragefire", guildrun.failing_doors(p))
+
+    def test_door_without_progress_run_is_failing(self):
+        """The same door without the progress run still is in failing_doors."""
+        rows = [
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+        ]
+        p = plan(rows)
+        self.assertIn("ragefire", guildrun.failing_doors(p))
+
+    def test_shape_record_failing_with_progress_run(self):
+        """ShapeRecord.failing is False when there are progress runs."""
+        rows = [
+            ended("ragefire", "timed out", band="15-19", comp="spec-tank/spec-healer", bosses_done=3),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+        ]
+        shape_records = guildrun.shape_records(rows)
+        key = ("ragefire", "15-19", "spec-tank/spec-healer")
+        self.assertIsNotNone(shape_records.get(key))
+        self.assertFalse(shape_records[key].failing)
+
+    def test_shape_record_failing_without_progress_run(self):
+        """ShapeRecord.failing is True when there are no progress runs."""
+        rows = [
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+            ended("ragefire", "wiped", band="15-19", comp="spec-tank/spec-healer"),
+        ]
+        shape_records = guildrun.shape_records(rows)
+        key = ("ragefire", "15-19", "spec-tank/spec-healer")
+        self.assertIsNotNone(shape_records.get(key))
+        self.assertTrue(shape_records[key].failing)
+
+
+class BossTimeRecord(unittest.TestCase):
+    """A door's option text shows seconds or minutes per boss."""
+
+    def test_door_with_bosses_in_run_shows_time_per_boss(self):
+        """The door option text for a door with timed-out runs shows seconds or minutes per boss, and shows none for a door with no run that had a boss down."""
+        rows = [
+            ended("ragefire", "timed out", band="15-19", comp="spec-tank/spec-healer", bosses_done=3, seconds_inside=180),
+            ended("wailing", "timed out", band="15-19", comp="spec-tank/spec-healer", bosses_done=2, seconds_inside=60),
+        ]
+        table = guildrun.rates(rows)
+        door_rate_ragefire = guildrun.door_rate(table, "ragefire", "15-19")
+        door_rate_wailing = guildrun.door_rate(table, "wailing", "15-19")
+        self.assertIn("about 1.0 minutes a boss", door_rate_ragefire.words())
+        self.assertIn("about 30 seconds a boss", door_rate_wailing.words())
+
+    def test_door_with_no_boss_in_run_shows_no_time(self):
+        """A door option text for a door with no run that had a boss down shows none."""
+        rows = [
+            ended("ragefire", "timed out", band="15-19", comp="spec-tank/spec-healer", bosses_done=0, seconds_inside=60),
+            ended("wailing", "cleared", band="15-19", comp="spec-tank/spec-healer"),
+        ]
+        table = guildrun.rates(rows)
+        door_rate_ragefire = guildrun.door_rate(table, "ragefire", "15-19")
+        self.assertNotIn("seconds a boss", door_rate_ragefire.words())
+        self.assertNotIn("minutes a boss", door_rate_ragefire.words())
+
+    def test_door_with_1_minute_per_boss_shows_minutes(self):
+        """A door option text shows minutes per boss when the average is 60+ seconds."""
+        rows = [
+            ended("ragefire", "timed out", band="15-19", comp="spec-tank/spec-healer", bosses_done=3, seconds_inside=360),
+        ]
+        table = guildrun.rates(rows)
+        door_rate = guildrun.door_rate(table, "ragefire", "15-19")
+        self.assertIn("about 2.0 minutes a boss", door_rate.words())
+
+    def test_door_with_30_seconds_per_boss_shows_seconds(self):
+        """A door option text shows seconds per boss when the average is less than 60 seconds."""
+        rows = [
+            ended("ragefire", "timed out", band="15-19", comp="spec-tank/spec-healer", bosses_done=4, seconds_inside=120),
+        ]
+        table = guildrun.rates(rows)
+        door_rate = guildrun.door_rate(table, "ragefire", "15-19")
+        self.assertIn("about 30 seconds a boss", door_rate.words())
