@@ -402,9 +402,10 @@ TOOL_WEAPON_SUBCLASSES = frozenset({14, 20})
 WORN_ARMOR_SUBCLASSES = frozenset({1, 2, 3, 4, 5, 6})
 
 # THE BAR FOR A POST, per role: a stack must hold at least this many before it
-# is worth thirty copper of postage and a walk. Maintenance posts soonest, a
-# raider only a real haul. MAX_LETTERS per stand keeps one stop short.
-POST_MIN = {MAINTENANCE: 5, SUMMONER: 10, RAIDER: 20}
+# is worth thirty copper of postage and a walk. A maintenance member posts any
+# gathered yield so field materials reach the guild; a raider still needs a
+# real haul. MAX_LETTERS per stand keeps one stop short.
+POST_MIN = {MAINTENANCE: 1, SUMMONER: 10, RAIDER: 20}
 MAX_LETTERS = 6
 POSTAGE_COPPER = 30
 
@@ -2473,6 +2474,7 @@ def postable(member: Member, kept, crafting=False, bar=None) -> list:
         c
         for c in member.carried
         if c.material
+        and not c.junk
         and int(c.count) >= bar
         and int(c.entry) not in eaten
         and not _kept(member.name, c, kept)
