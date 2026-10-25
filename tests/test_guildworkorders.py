@@ -72,6 +72,12 @@ class CanTakeTest(unittest.TestCase):
         member = _member("Grug", skills={HERBALISM: 200})
         self.assertEqual(guildworkorders.can_take(member, order), "")
 
+    def test_malformed_skill_value_is_not_treated_as_no_profession(self):
+        order = _order(guildworkorders.CONSUMABLE, "Greater Fire Protection Potion")
+        member = _member("Ugga", skills={ALCHEMY: "unknown"})
+        with self.assertRaises(ValueError):
+            guildworkorders.can_take(member, order)
+
     def test_an_item_no_craft_names_is_refused_not_guessed(self):
         order = _order(guildworkorders.CONSUMABLE, "Mystery Tonic")
         member = _member("Ugga", skills={ALCHEMY: 200})

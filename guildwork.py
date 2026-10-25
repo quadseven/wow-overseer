@@ -434,6 +434,26 @@ _ORDER_SKILLS = {
     (COOLDOWN, "arcanite"): ("alchemy", "alchemy"),
 }
 
+# Public work-order API for callers that collect requests, assign work, and
+# render guild updates. Keep these names available to bridge integrations.
+__all__ = [
+    "ASSIGNED",
+    "COMPLETE",
+    "CONSUMABLE",
+    "COOLDOWN",
+    "FARMING",
+    "REFUSED",
+    "REQUESTED",
+    "WorkAssignment",
+    "WorkOrder",
+    "WorkOrderPlan",
+    "can_take",
+    "complete",
+    "headline",
+    "lines",
+    "plan",
+]
+
 
 @dataclass(frozen=True)
 class WorkOrder:
@@ -472,10 +492,7 @@ def can_take(member, order):
         return ""
     skill_name, label = requirement
     skill_id = goals.SKILL_IDS[skill_name]
-    try:
-        skill = int(member.skills.get(skill_id, 0))
-    except (TypeError, ValueError):
-        return ""
+    skill = int(member.skills.get(skill_id, 0))
     return "%s holds %s" % (member.name, label) if skill > 0 else ""
 
 
