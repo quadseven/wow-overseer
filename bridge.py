@@ -7178,7 +7178,14 @@ class Bridge(discord.Client):
             _ensure_quest_ledger_store,
             _ensure_now_store,
         ):
-            await asyncio.to_thread(ensure)
+            try:
+                await asyncio.to_thread(ensure)
+            except Exception:
+                if ensure is _ensure_dungeon_run_event_store:
+                    log.exception(
+                        "overseer_dungeon_run_event: index ensure failed; continuing startup")
+                else:
+                    raise
         owing = self.__dict__.get("_class_owing")
         if owing is not None:
             await asyncio.to_thread(owing.restore)

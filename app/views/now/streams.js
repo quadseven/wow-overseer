@@ -17,6 +17,9 @@
 import { html, memberHref, duration, classVar } from "../../ui.js";
 import { makePlayer, hasSound } from "./whep.js";
 import { darkSampler, darkReason } from "./dark.js";
+import { makeReader } from "./chatvoice.js";
+import { u } from "../../api.js";
+import { familyKeys } from "../../families.js";
 
 const tiles = new Map(); // name -> tile
 let heard = null;        // the one tile heard; off on every load (autoplay policy)
@@ -133,6 +136,7 @@ export function mount(root) {
 
 export function stopAll() {
   if (fullscreenElement(document)) exitFullscreen(document);
+  if (reader && reader.on()) reader.stop();
   tiles.forEach((t) => {
     t.player.stop();
     t.started = false;
@@ -235,6 +239,54 @@ function applyAudio() {
 export function toggleHear(name) {
   heard = heard === name ? null : name;
   applyAudio();
+}
+
+// ---- read chat aloud (chatvoice.js) ------------------------------------
+// Off on every load, like the sound: only a click starts it, and the voices
+// it reads in are the browser's own, so a browser without speechSynthesis
+// offers no toggle at all.
+let reader = null;
+
+export function canReadAloud() {
+  return typeof window.speechSynthesis !== "undefined" && typeof window.SpeechSynthesisUtterance === "function";
+}
+
+async function fetchJson(path) {
+  const r = await fetch(u(path), { cache: "no-store" });
+  if (!r.ok) throw new Error(path + " answered " + r.status);
+  return r.json();
+}
+
+function heardVideo() {
+  const t = heard && tiles.get(heard);
+  return t ? t.video : null;
+}
+
+export function readingAloud() {
+  return Boolean(reader && reader.on());
+}
+
+// Called from a click. The empty line spoken inside the click is what lets
+// the browsers that want a gesture before any speech read the later lines.
+export function toggleReadAloud() {
+  if (!canReadAloud()) return false;
+  if (!reader) {
+    reader = makeReader({
+      fetchJson, video: heardVideo,
+      families: familyKeys,
+      synth: window.speechSynthesis, Utterance: window.SpeechSynthesisUtterance,
+      now: Date.now,
+      setTimer: (fn, ms) => window.setTimeout(fn, ms), clearTimer: (id) => window.clearTimeout(id),
+      warn: (...args) => console.warn(...args),
+    });
+  }
+  if (reader.on()) {
+    reader.stop();
+    return false;
+  }
+  window.speechSynthesis.speak(new window.SpeechSynthesisUtterance(""));
+  reader.start();
+  return true;
 }
 
 // ---- frame age ------------------------------------------------------------

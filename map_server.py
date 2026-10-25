@@ -63,6 +63,7 @@ import lootstory
 import modelviewer
 import needs
 import partystatus
+import partyvoice
 import questlog
 import raidgoals
 import holdings
@@ -4081,6 +4082,51 @@ def _fetch_thoughts(name: str, before: int | None, limit: int) -> tuple[list[dic
         conn.close()
 
 
+# One page of the party and raid feed. A council burst is a handful of lines;
+# the page polls every few seconds, so twenty rows a read is never behind.
+_CHAT_PARTY_PAGE = 20
+
+
+def _fetch_chat_party(names: list[str], after: int) -> list[dict]:
+    """Party and raid rows said by `names` since row `after`, oldest first.
+
+    `names` is a roster from the database, never the request. The age comes
+    from MySQL's own clock, the one that stamped created_at, so the page can
+    drop a stale line without comparing two clocks.
+    """
+    if not names:
+        return []
+    holes = ", ".join(["%s"] * len(names))
+    channels = ", ".join(["%s"] * len(partyvoice.CHANNELS))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # S608: `holes` and `channels` are placeholders only; every value
+            # is bound by the driver.
+            cur.execute(
+                "SELECT id, sender_name, channel, text, created_at, "  # noqa: S608
+                "TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age_s "
+                f"FROM overseer_chat WHERE channel IN ({channels}) "
+                f"AND sender_name IN ({holes}) AND id > %s "
+                "ORDER BY id LIMIT %s",
+                (*partyvoice.CHANNELS, *names, after, _CHAT_PARTY_PAGE),
+            )
+            return list(cur.fetchall())
+    finally:
+        conn.close()
+
+
+def _fetch_chat_newest() -> int:
+    """The newest overseer_chat row id, 0 for an empty table."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COALESCE(MAX(id), 0) AS newest FROM overseer_chat")
+            return int(cur.fetchone()["newest"])
+    finally:
+        conn.close()
+
+
 def _fetch_chat_grounding(name: str) -> dict | None:
     """Snapshot + personality + recent thoughts, or None if no such character.
 
@@ -5099,6 +5145,31 @@ class Handler(BaseHTTPRequestHandler):
             return
         rows, db_now = fetched
         payload = chat.build_timeline(name, rows, db_now, limit)
+        self._send(200, "application/json", json.dumps(payload).encode())
+
+    def _chat_party(self, query: dict) -> None:
+        """GET /api/chat/party?family=<key>&after=<id> - lines to read aloud.
+
+        Without `after` it answers only where the chat ends, so switching the
+        reader on never reads the last three hours aloud. With it, the
+        family's party and raid lines since that row, one per utterance
+        (partyvoice.feed), each with its speaker's voice.
+        """
+        names, _chosen, _known = self._family_scope(query)
+        raw_after = query.get("after", [""])[0]
+        if raw_after and not raw_after.isdigit():
+            self._send(400, "application/json", b'{"error": "bad cursor"}')
+            return
+        try:
+            if not raw_after:
+                payload = {"rows": [], "after": _fetch_chat_newest()}
+            else:
+                after = int(raw_after)
+                payload = partyvoice.feed(_fetch_chat_party(names, after), after)
+        except Exception:
+            log.exception("party chat query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+            return
         self._send(200, "application/json", json.dumps(payload).encode())
 
     def _trade_crafts(self, query: dict) -> None:
@@ -6326,6 +6397,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/guildchat": _guild_chat,
         "/api/decree": _decree,
         "/api/thoughts": _thoughts,
+        "/api/chat/party": _chat_party,
         "/api/watch": _watch_state,
         "/api/director": _director_state,
         "/": _index,
