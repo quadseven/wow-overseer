@@ -1,4 +1,4 @@
-"""The repo's Loom live-evidence adapter (#1463, quadseven/loom#1770).
+"""The repo's Loom live-evidence adapter (#1463).
 
 .loom/live-evidence.json declares two read-only commands Loom's station runs
 to prove a shipped ticket's Live box: `.loom/live-evidence/log` (the realm
@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -137,8 +138,10 @@ def _alive(pid: int) -> bool:
 
 
 class Fakes:
-    """A bin directory of fake programs placed first on PATH, recording
-    every call to one file."""
+    """A bin directory holding the fake programs and python3, and nothing
+    else: it is the whole PATH, so a real kubectl, mysql or realm-logs on
+    the machine running the tests is never found. Every call is recorded to
+    one file."""
 
     def __init__(self, test: unittest.TestCase, programs: dict) -> None:
         self.dir = tempfile.mkdtemp(prefix="live-evidence-")
@@ -150,6 +153,8 @@ class Fakes:
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write("#!%s\n%s" % (sys.executable, body))
             os.chmod(path, 0o755)
+        # For the scripts' `#!/usr/bin/env python3` line.
+        os.symlink(sys.executable, os.path.join(self.bin, "python3"))
         self.calls = os.path.join(self.dir, "calls")
         self.pidfile = os.path.join(self.dir, "pid")
         open(self.calls, "w").close()
@@ -160,14 +165,16 @@ class Fakes:
                 os.kill(self.forward_pid(), signal.SIGKILL)
             except (ProcessLookupError, ValueError):
                 pass
-        subprocess.run(["rm", "-rf", self.dir], check=False)
+        shutil.rmtree(self.dir, ignore_errors=True)
 
     def env(self, **extra) -> dict:
         # The station's minimal environment: PATH, HOME, LANG, TMPDIR.
-        path = os.pathsep.join(
-            [self.bin, os.path.dirname(sys.executable), "/usr/bin", "/bin"]
-        )
-        env = {"PATH": path, "HOME": self.dir, "LANG": "C.UTF-8", "TMPDIR": self.dir}
+        env = {
+            "PATH": self.bin,
+            "HOME": self.dir,
+            "LANG": "C.UTF-8",
+            "TMPDIR": self.dir,
+        }
         env.update({"FAKE_CALLS": self.calls, "FAKE_PIDFILE": self.pidfile}, **extra)
         return env
 

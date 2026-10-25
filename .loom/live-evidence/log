@@ -3,7 +3,7 @@
 
     .loom/live-evidence/log <source> <since> <needle>
 
-Loom's station (bus/live_adapter.py, quadseven/loom#1770) runs this from a
+Loom's station (its bus/live_adapter.py) runs this from a
 private copy to prove a shipped ticket's `log:<source>` Live line. It wraps
 the deploy repo's realm log archive report, installed on the station's PATH
 as `realm-logs`:

@@ -3,7 +3,7 @@
 
     .loom/live-evidence/sql <statement>
 
-Loom's station (bus/live_adapter.py, quadseven/loom#1770) runs this from a
+Loom's station (its bus/live_adapter.py) runs this from a
 private copy to prove a shipped ticket's `sql:<SELECT ...>` Live line. It:
 
 1. refuses anything but one SELECT (or WITH ... SELECT) or one SHOW, the
