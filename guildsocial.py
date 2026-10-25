@@ -106,6 +106,7 @@ PRERAID_BONUS = 1.0
 NEED_QUEST = 2.5
 XP_BAND = 2.0
 HELP = 1.5
+CARRY_WORTH = 2.5
 QUESTING = 1.0
 YARDS_PER_POINT = 1500.0
 OTHER_CONTINENT = 2.5
@@ -120,7 +121,7 @@ CAPITAL_ZONES = frozenset({1519, 1537, 1657, 1637, 1638, 1497, 3487, 3557})
 
 TANK, HEALER, DPS = "tank", "healer", "dps"
 SEATS = (TANK, HEALER, DPS, DPS, DPS)
-NEED, HELPS = "need", "help"
+NEED, HELPS, CARRY = "need", "help", "carry"
 # A random bot from outside the guild who answered the asker's call in
 # LookingForGroup for a tank or a healer (guildpug.py, #591).
 PUG = "pug"
@@ -163,7 +164,7 @@ ANSWER_TABLE_SQL = (
     " ask_id INT NOT NULL,"
     " member VARCHAR(12) NOT NULL,"
     " role ENUM('tank','healer','dps') NOT NULL,"
-    " stance ENUM('need','help') NOT NULL,"
+    " stance ENUM('need','help','carry') NOT NULL,"
     " said VARCHAR(255) NOT NULL DEFAULT '',"
     " created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,"
     " state ENUM('yes','seated','declined','withdrawn') NOT NULL DEFAULT 'yes',"
@@ -646,6 +647,8 @@ def stance_of(mate: Mate, door, asker_level: int, faction: str, needs: list) -> 
     if level > door.ceiling:
         if level <= door.ceiling + HELPER_LEVELS:
             return HELPS, HELP, None
+        if guildrun.fitting_doors([asker_level], [door], faction):
+            return CARRY, CARRY_WORTH, None
         return "", 0.0, None
     if not guildrun.fitting_doors([level], [door], faction):
         return "", 0.0, None
@@ -741,6 +744,14 @@ _ANSWER = {
     (DPS, HELPS): (
         "I'll come help, I know the way.",
         "Nothing there for me but sure, I'll help out.",
+    ),
+    (TANK, CARRY): ("I'll tank it for you, I've far outleveled it.",),
+    (HEALER, CARRY): (
+        "I'll come heal, nothing in there for me but I'll carry the group.",
+    ),
+    (DPS, CARRY): (
+        "I'll carry you through, I know the way.",
+        "Nothing there for me but sure, I'll carry the group.",
     ),
 }
 _ANSWER_ITEM = (
@@ -884,16 +895,18 @@ class Formation:
     seated: tuple  # answer ids
     declined: tuple  # answer ids
     helpers: tuple  # names
+    carriers: tuple  # names
     said: str
     # Seated members from outside the guild (guildpug, #591).
     pugs: tuple = ()
 
     @property
     def key(self) -> str:
-        """The learning record's composition key, with its helpers and pugs
+        """The learning record's composition key, with its helpers and carriers
         counted."""
         base = self.composition.key
         base += "+%dhelp" % len(self.helpers) if self.helpers else ""
+        base += "+%dcarry" % len(self.carriers) if self.carriers else ""
         return base + ("+%dpug" % len(self.pugs) if self.pugs else "")
 
     @property
@@ -948,13 +961,19 @@ def seats_so_far(ask: Ask, answers: list, free: dict, door=None) -> tuple | None
 
 def _yeses(answers: list, free: dict) -> list:
     """The yeses from members free now, oldest first, with only the first
-    MAX_HELPERS helpers."""
+    MAX_HELPERS helpers and at most one carrier."""
     yes = sorted(
         (a for a in answers if a.state == YES and a.member in free), key=lambda a: a.id
     )
     helpers = {a.id for a in yes if a.stance == HELPS}
     keep = set(sorted(helpers)[:MAX_HELPERS])
-    return [a for a in yes if a.stance != HELPS or a.id in keep]
+    carriers = {a.id for a in yes if a.stance == CARRY}
+    keep_carriers = set(sorted(carriers)[:1])
+    return [
+        a
+        for a in yes
+        if a.stance not in (HELPS, CARRY) or a.id in keep or a.id in keep_carriers
+    ]
 
 
 def _seats(asker: guildrun.Member, yes: list, free: dict, door=None) -> tuple:
@@ -989,6 +1008,10 @@ def _chosen(seats: dict, damage: list) -> list | None:
 
 def _helping(answer) -> bool:
     return answer is not None and answer.stance == HELPS
+
+
+def _carrying(answer) -> bool:
+    return answer is not None and answer.stance == CARRY
 
 
 def _with_key(chosen: list, yes: list, free: dict, door) -> list | None:
@@ -1035,16 +1058,17 @@ def seat(ask: Ask, answers: list, free: dict, door, faction: str):
     chosen = _with_key(chosen, yes, free, door)
     if chosen is None:
         return None
-    beneficiaries = [m.level for m, a in chosen if not _helping(a)]
+    beneficiaries = [m.level for m, a in chosen if not _helping(a) and not _carrying(a)]
     if not guildrun.fitting_doors(beneficiaries, [door], faction):
         return None
     used = {a.id for _m, a in chosen if a is not None}
     helper_names = tuple(m.name for m, a in chosen if _helping(a))
+    carrier_names = tuple(m.name for m, a in chosen if _carrying(a))
     comp = guildrun.Composition(
         chosen[0][0], chosen[1][0], tuple(m for m, _a in chosen[2:])
     )
     declined = tuple(a.id for a in answers if a.state == YES and a.id not in used)
-    return comp, tuple(sorted(used)), declined, helper_names
+    return comp, tuple(sorted(used)), declined, helper_names, carrier_names
 
 
 @dataclass
@@ -1174,7 +1198,7 @@ def _form(board: _Board, still: list, can_form: bool) -> tuple:
             if ask.state == OPEN:
                 filled.append(ask.id)
             continue
-        comp, used, declined, helpers = seated
+        comp, used, declined, helpers, carriers = seated
         pugs = tuple(
             a.member for a in board.current(ask) if a.id in used and a.stance == PUG
         )
@@ -1187,6 +1211,7 @@ def _form(board: _Board, still: list, can_form: bool) -> tuple:
             seated=used,
             declined=declined,
             helpers=helpers,
+            carriers=carriers,
             said=formed_line(ask.asker, speaker, door),
             pugs=pugs,
         )
@@ -1246,6 +1271,7 @@ def _answers_to(board: _Board, ask: Ask, spoken: set) -> list:
     current = board.current(ask)
     open_seats = _open_seats(ask, current)
     helpers = sum(1 for a in current if a.state == YES and a.stance == HELPS)
+    carriers = sum(1 for a in current if a.state == YES and a.stance == CARRY)
     out = []
     for _scarce, _neg, name, mate, stance, need in _candidates(
         board, ask, open_seats, spoken
@@ -1255,10 +1281,13 @@ def _answers_to(board: _Board, ask: Ask, spoken: set) -> list:
         role = _seat_for(mate.member, open_seats, door)
         if not role or (stance == HELPS and helpers >= MAX_HELPERS):
             continue
+        if stance == CARRY and carriers >= 1:
+            continue
         if name in board.lent and role not in (TANK, HEALER):
             continue
         open_seats.remove(role)
         helpers += 1 if stance == HELPS else 0
+        carriers += 1 if stance == CARRY else 0
         out.append(
             Reply(
                 ask.id, name, role, stance, answer_line(name, role, stance, door, need)

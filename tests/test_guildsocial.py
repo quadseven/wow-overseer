@@ -203,7 +203,7 @@ class TheTablesKeepTheContract(unittest.TestCase):
             "ask_id INT",
             "member VARCHAR(12)",
             "role ENUM('tank','healer','dps')",
-            "stance ENUM('need','help')",
+            "stance ENUM('need','help','carry')",
             "said VARCHAR(255)",
             "created_at DATETIME",
             "state ENUM('yes','seated','declined','withdrawn')",
@@ -457,7 +457,7 @@ class WhoAnswers(unittest.TestCase):
         crowd.append(
             mate(
                 "Ancient",
-                DEADMINES.ceiling + gs.HELPER_LEVELS + 1,
+                DEADMINES.ceiling + gs.HELPER_LEVELS,
                 MAGE,
                 zone_id=STORMWIND,
             )
@@ -465,7 +465,6 @@ class WhoAnswers(unittest.TestCase):
         out = plan(crowd, asks=[ask(7, "Auren")])
         self.assertEqual(len(out.replies), 2)
         self.assertEqual({r.stance for r in out.replies}, {"help"})
-        self.assertNotIn("Ancient", [r.member for r in out.replies])
         more = plan(
             crowd,
             asks=[ask(7, "Auren")],
@@ -475,6 +474,44 @@ class WhoAnswers(unittest.TestCase):
             ],
         )
         self.assertEqual(more.replies, ())
+
+    def test_level_forty_carries_a_low_asker_into_deadmines(self):
+        """A level 40 member more than HELPER_LEVELS above the Deadmines
+        ceiling answers a level 26 asker's ask as carry."""
+        asker = mate("Auren", 26, ROGUE)
+        carrier = mate("Oldtimer", 40, MAGE, zone_id=STORMWIND, at=NEAR)
+        out = plan([asker, carrier], asks=[ask(7, "Auren")])
+        self.assertEqual(
+            [(r.member, r.stance) for r in out.replies],
+            [("Oldtimer", "carry")],
+        )
+
+    def test_only_one_carrier_is_seated_when_two_could_carry(self):
+        """When two members could carry, only one is seated as carrier."""
+        asker = mate("Auren", 26, ROGUE)
+        carriers = [
+            mate("Oldtimer", 40, MAGE, zone_id=STORMWIND, at=NEAR),
+            mate("Ancient", 40, MAGE, zone_id=STORMWIND, at=NEAR),
+        ]
+        out = plan([asker, *carriers], asks=[ask(7, "Auren")])
+        carry_replies = [r for r in out.replies if r.stance == "carry"]
+        self.assertEqual(len(carry_replies), 1)
+
+    def test_member_within_helper_levels_of_ceiling_still_answers_help(self):
+        """A member at ceiling + HELPER_LEVELS still answers help, not carry."""
+        asker = mate("Auren", 26, ROGUE)
+        helper = mate(
+            "Oldtimer",
+            DEADMINES.ceiling + gs.HELPER_LEVELS,
+            MAGE,
+            zone_id=STORMWIND,
+            at=NEAR,
+        )
+        out = plan([asker, helper], asks=[ask(7, "Auren")])
+        self.assertEqual(
+            [(r.member, r.stance) for r in out.replies],
+            [("Oldtimer", "help")],
+        )
 
     def test_an_upgrade_there_is_said_in_the_answer(self):
         # Idle in Darnassus, across the sea: the finder brings it in, and an
