@@ -553,8 +553,6 @@ class Carried:
 
     @property
     def material(self) -> str:
-        if self.item_class != TRADE_GOODS:
-            return ""
         return MATERIAL_SUBCLASSES.get(int(self.subclass), "")
 
     @property
