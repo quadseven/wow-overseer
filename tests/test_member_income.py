@@ -406,6 +406,242 @@ class TheRidingWalk(unittest.TestCase):
         self.assertEqual(0, guildjobs.spendable(bonk(purse=o), purse.GEAR, 666))
         self.assertEqual(666, guildjobs.spendable(bonk(), purse.GEAR, 666))
 
+    def test_riding_waits_when_last_refusal_was_no_trainer_on_this_map_and_map_id_unchanged(
+        self,
+    ):
+        refusal_text = "no trainer on this map will teach this character that skill"
+        recent = guildjobs.recent_from_rows(
+            (
+                {
+                    "target_name": "Bruk",
+                    "command": "walk-to-trainer skill:762 learn:33388 max:20000",
+                    "source": "guildjobs:train:Bruk",
+                    "status": "error",
+                    "age": 5,
+                    "result": '{"outcome":"refused","reason":"'
+                    + refusal_text
+                    + '","retryable":false}',
+                },
+            )
+        )[0]
+        # Replace with a Recent that has map_id set (simulating the fix)
+        recent_with_map = guildjobs.Recent(
+            name=recent.name,
+            action=recent.action,
+            age_minutes=recent.age_minutes,
+            status=recent.status,
+            skill_id=recent.skill_id,
+            walk=recent.walk,
+            refusal=recent.refusal,
+            retryable=recent.retryable,
+            command=recent.command,
+            result=recent.result,
+            map_id=530,
+        )
+        m = bonk(name="Bruk", map_id=530, money=80000)
+        o = purse.order("Bruk", 60, 80000, 37600, 9, 0)
+        m = m.__replace__(purse=o)
+        step, note = guildjobs.riding_step(m, (recent_with_map,))
+        self.assertIsNone(step)
+        self.assertIn(
+            "waits on the map change before walking to a riding trainer", note
+        )
+
+    def test_riding_proceeds_when_last_refusal_was_no_trainer_on_this_map_but_map_id_changed(
+        self,
+    ):
+        refusal_text = "no trainer on this map will teach this character that skill"
+        recent = guildjobs.recent_from_rows(
+            (
+                {
+                    "target_name": "Bruk",
+                    "command": "walk-to-trainer skill:762 learn:33388 max:20000",
+                    "source": "guildjobs:train:Bruk",
+                    "status": "error",
+                    "age": 5,
+                    "result": '{"outcome":"refused","reason":"'
+                    + refusal_text
+                    + '","retryable":false}',
+                },
+            )
+        )[0]
+        recent_with_map = guildjobs.Recent(
+            name=recent.name,
+            action=recent.action,
+            age_minutes=recent.age_minutes,
+            status=recent.status,
+            skill_id=recent.skill_id,
+            walk=recent.walk,
+            refusal=recent.refusal,
+            retryable=recent.retryable,
+            command=recent.command,
+            result=recent.result,
+            map_id=530,
+        )
+        m = bonk(name="Bruk", map_id=1, money=80000)  # Different map_id
+        o = purse.order("Bruk", 60, 80000, 37600, 9, 0)
+        m = m.__replace__(purse=o)
+        step, note = guildjobs.riding_step(m, (recent_with_map,))
+        self.assertIsNotNone(step)
+        self.assertEqual("", note)
+
+
+class TheTrainStep(unittest.TestCase):
+    def test_train_step_waits_when_last_refusal_was_no_trainer_on_this_map_and_map_id_unchanged(
+        self,
+    ):
+        refusal_text = "no trainer on this map will teach this character that skill"
+        recent = guildjobs.recent_from_rows(
+            (
+                {
+                    "target_name": "Bruk",
+                    "command": "walk-to-trainer skill:197 max:20000",  # Tailoring
+                    "source": "guildjobs:train:Bruk",
+                    "status": "error",
+                    "age": 5,
+                    "result": '{"outcome":"refused","reason":"'
+                    + refusal_text
+                    + '","retryable":false}',
+                },
+            )
+        )[0]
+        recent_with_map = guildjobs.Recent(
+            name=recent.name,
+            action=recent.action,
+            age_minutes=recent.age_minutes,
+            status=recent.status,
+            skill_id=recent.skill_id,
+            walk=recent.walk,
+            refusal=recent.refusal,
+            retryable=recent.retryable,
+            command=recent.command,
+            result=recent.result,
+            map_id=530,
+        )
+        m = bonk(name="Bruk", map_id=530, money=10000, skills={197: (75, 75)})
+        step, note = guildjobs._train_step(
+            m, {"Bruk": (197,)}, 1000, (recent_with_map,)
+        )
+        self.assertIsNone(step)
+        self.assertIn(
+            "waits on the map change before walking to a Tailoring trainer", note
+        )
+
+    def test_train_step_proceeds_when_last_refusal_was_no_trainer_on_this_map_but_map_id_changed(
+        self,
+    ):
+        refusal_text = "no trainer on this map will teach this character that skill"
+        # Use age > 120 minutes (past the cooldown for a single failed train)
+        recent = guildjobs.recent_from_rows(
+            (
+                {
+                    "target_name": "Bruk",
+                    "command": "walk-to-trainer skill:197 max:20000",  # Tailoring
+                    "source": "guildjobs:train:Bruk",
+                    "status": "error",
+                    "age": 150,
+                    "result": '{"outcome":"refused","reason":"'
+                    + refusal_text
+                    + '","retryable":false}',
+                },
+            )
+        )[0]
+        recent_with_map = guildjobs.Recent(
+            name=recent.name,
+            action=recent.action,
+            age_minutes=recent.age_minutes,
+            status=recent.status,
+            skill_id=recent.skill_id,
+            walk=recent.walk,
+            refusal=recent.refusal,
+            retryable=recent.retryable,
+            command=recent.command,
+            result=recent.result,
+            map_id=530,
+        )
+        m = bonk(
+            name="Bruk", map_id=1, money=10000, skills={197: (75, 75)}
+        )  # Different map_id
+        step, note = guildjobs._train_step(
+            m, {"Bruk": (197,)}, 1000, (recent_with_map,)
+        )
+        self.assertIsNotNone(step)
+        self.assertEqual("", note)
+
+
+class TheLearnStep(unittest.TestCase):
+    def test_learn_step_returns_none_when_last_refusal_was_no_trainer_on_this_map_and_map_id_unchanged(
+        self,
+    ):
+        refusal_text = "no trainer on this map will teach this character that skill"
+        recent = guildjobs.recent_from_rows(
+            (
+                {
+                    "target_name": "Bruk",
+                    "command": "walk-to-trainer skill:129 learn:3273",  # First Aid
+                    "source": "guildjobs:train:Bruk",
+                    "status": "error",
+                    "age": 5,
+                    "result": '{"outcome":"refused","reason":"'
+                    + refusal_text
+                    + '","retryable":false}',
+                },
+            )
+        )[0]
+        recent_with_map = guildjobs.Recent(
+            name=recent.name,
+            action=recent.action,
+            age_minutes=recent.age_minutes,
+            status=recent.status,
+            skill_id=recent.skill_id,
+            walk=recent.walk,
+            refusal=recent.refusal,
+            retryable=recent.retryable,
+            command=recent.command,
+            result=recent.result,
+            map_id=530,
+        )
+        m = bonk(name="Bruk", map_id=530, money=10000, skills={129: (75, 150)})
+        step = guildjobs._learn_step(m, 1000, (recent_with_map,))
+        self.assertIsNone(step)
+
+    def test_learn_step_proceeds_when_last_refusal_was_no_trainer_on_this_map_but_map_id_changed(
+        self,
+    ):
+        refusal_text = "no trainer on this map will teach this character that skill"
+        recent = guildjobs.recent_from_rows(
+            (
+                {
+                    "target_name": "Bruk",
+                    "command": "walk-to-trainer skill:129 learn:3273",  # First Aid
+                    "source": "guildjobs:train:Bruk",
+                    "status": "error",
+                    "age": 150,
+                    "result": '{"outcome":"refused","reason":"'
+                    + refusal_text
+                    + '","retryable":false}',
+                },
+            )
+        )[0]
+        recent_with_map = guildjobs.Recent(
+            name=recent.name,
+            action=recent.action,
+            age_minutes=recent.age_minutes,
+            status=recent.status,
+            skill_id=recent.skill_id,
+            walk=recent.walk,
+            refusal=recent.refusal,
+            retryable=recent.retryable,
+            command=recent.command,
+            result=recent.result,
+            map_id=530,
+        )
+        m = bonk(
+            name="Bruk", map_id=1, money=10000, skills={129: (75, 150)}
+        )  # Different map_id
+        step = guildjobs._learn_step(m, 1000, (recent_with_map,))
+        self.assertIsNotNone(step)
+
 
 class TheSpellsItCasts(unittest.TestCase):
     ROWS = [

@@ -29126,9 +29126,10 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
         _rewarded_of(rewarded_rows), bag_slots or {}, worn or {})
     pending = {str(r.get(k) or "") for r in pending_rows
                for k in ("target_name", "target_arg")} - {""}
+    map_id_by_name = {m.name: m.map_id for m in members if m.map_id is not None}
     return {
         "members": members, "masters": masters, "crafters": crafters,
-        "recent": guildjobs.recent_from_rows(recent_rows), "pending": pending,
+        "recent": guildjobs.recent_from_rows(recent_rows, map_id_by_name), "pending": pending,
         "stones": guildjobs.spots_from_rows(_JOB_STONES),
     }
 
