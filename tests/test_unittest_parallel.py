@@ -170,6 +170,16 @@ class CheckWorkflowTest(unittest.TestCase):
         )
         self.assertNotIn("unittest discover", cmd)
 
+    def test_lane_check_uses_same_parallel_runner_as_ci(self):
+        conf = (HERE / ".loom" / "validation.conf").read_text(encoding="utf-8")
+        self.assertIn(".github/scripts/unittest_parallel.py", conf)
+        self.assertNotIn("unittest discover", conf)
+        text = CHECK_YML.read_text(encoding="utf-8")
+        cmd = re.search(r'^\s*test-cmd:\s*"(.*)"\s*$', text, re.M)
+        self.assertIsNotNone(cmd, "check.yml has no quoted unittest test-cmd")
+        self.assertIn(".github/scripts/unittest_parallel.py", cmd.group(1))
+        self.assertNotIn("unittest discover", cmd.group(1))
+
 
 if __name__ == "__main__":
     unittest.main()

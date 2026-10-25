@@ -148,7 +148,7 @@ class FallbackTest(unittest.TestCase):
         async def both():
             first = await client.ask("x", "s1", {"route": ROUTE})
             second = await client.ask("x", "s2", {"route": ROUTE})
-            await asyncio.sleep(0.8)
+            await asyncio.sleep(2.0)
             third = await client.ask("x", "s3", {"route": ROUTE})
             return first, second, third
 
