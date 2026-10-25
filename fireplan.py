@@ -33,6 +33,10 @@ piece that adds the most fire resistance over what the seat wears in its slot
 source the item book knows comes before one it does not, since a piece with no
 known road is no plan.
 
+THE DARK IRON ROAD (#480). The blacksmith pieces on that list have a road of
+their own, set out at the foot of this file: Thorium Brotherhood reputation,
+Lokhtos's plans, the smelt, the Black Forge and the Black Anvil.
+
 PURE MODULE: committed data and rows in, a plan and sentences out.
 """
 
@@ -41,7 +45,6 @@ from __future__ import annotations
 import functools
 from dataclasses import dataclass
 
-import darkiron
 import gearscore
 
 # THE TARGETS, PER SEAT. The Ragnaros tank first, as classic guilds asked
@@ -217,7 +220,7 @@ def _piece(entry, slot: str, phase: str = "", row: dict | None = None) -> Piece:
         fire=int(book.get("fire_res") or row.get("fire_res") or 0),
         slot=slot,
         required_level=int(book.get("req") or row.get("req") or 0),
-        source=darkiron.source(entry) or _source(book.get("sources")),
+        source=iron_source(entry) or _source(book.get("sources")),
         phase=phase,
     )
 
@@ -328,3 +331,245 @@ def plan(name: str, seat: str, class_id: int, worn_fire, level: int = 0) -> Fire
     if total < target:
         nxt = next_piece(pieces_for(seat, class_id), slot_fire, level)
     return FirePlan(name, seat, target, total, nxt)
+
+
+# ---------------------------------------------------------------------------
+# THE DARK IRON ROAD (#480)
+#
+# Nothing on this road fails loudly in the world. A plan bought a rank early is
+# simply absent from the vendor's list; a smelt cast at an ordinary forge
+# returns a numeric SpellCastResult and no bar; a craft at the wrong anvil does
+# the same. The order is the whole pipeline, so the order is what is modelled:
+# reputation, the plan, the smelt, the bars, the reagents, the anvil.
+#
+# The item book gives these crafts skill 315 and 320; the classic cap is 300.
+# `skill_note` says so rather than trusting the number: the realm's own
+# item_template is the authority, and the ranks, plan ids and bar costs below
+# are to be confirmed against it before a bot spends gold on them.
+# ---------------------------------------------------------------------------
+
+CLASSIC_SKILL = 300
+NEUTRAL, FRIENDLY, HONORED, REVERED, EXALTED = (
+    "Neutral",
+    "Friendly",
+    "Honored",
+    "Revered",
+    "Exalted",
+)
+# Thorium Brotherhood points at which each rank starts.
+RANK_VALUE = {NEUTRAL: 0, FRIENDLY: 3000, HONORED: 9000, REVERED: 21000, EXALTED: 42000}
+_RANKS = tuple(RANK_VALUE)
+
+DARK_IRON_ORE, DARK_IRON_BAR = 11370, 11371
+FIERY_CORE, LAVA_CORE, CORE_LEATHER = 17010, 17011, 17012
+BLOOD_OF_THE_MOUNTAIN = 11382
+ITEM_NAMES = {
+    DARK_IRON_ORE: "Dark Iron Ore",
+    DARK_IRON_BAR: "Dark Iron Bar",
+    FIERY_CORE: "Fiery Core",
+    LAVA_CORE: "Lava Core",
+    CORE_LEATHER: "Core Leather",
+    BLOOD_OF_THE_MOUNTAIN: "Blood of the Mountain",
+}
+ORE_PER_BAR = 8
+
+# The turn-in quests that raise the reputation: (quest, ((item, count), ...)).
+TURNINS = (
+    (6642, ((DARK_IRON_ORE, 10),)),
+    (6643, ((FIERY_CORE, 1),)),
+    (6644, ((LAVA_CORE, 1),)),
+    (6645, ((CORE_LEATHER, 2),)),
+    (6646, ((BLOOD_OF_THE_MOUNTAIN, 1),)),
+)
+
+GRIND, BUY, LEARN, SMELT, GATHER, CRAFT = (
+    "grind",
+    "buy",
+    "learn",
+    "smelt",
+    "gather",
+    "craft",
+)
+VENDOR = "Lokhtos Darkbargainer"
+FORGE = "the Black Forge in Blackrock Depths"
+ANVIL = "the Black Anvil in Blackrock Depths"
+SMELT_TRAINER = "The Spectral Chalice (Mining 230, with a Star Ruby)"
+
+
+@dataclass(frozen=True)
+class IronPlan:
+    """One Dark Iron plan, the piece it makes and what the piece costs."""
+
+    entry: int
+    name: str
+    rank: str
+    piece: int
+    piece_name: str
+    fire: int
+    teaches: int
+    bars: int
+    reagents: tuple  # ((item, count), ...) besides the bars
+
+
+def _iron(entry, rank, piece, piece_name, fire, teaches, bars, reagents):
+    return IronPlan(
+        entry, "Plans: " + piece_name, rank, piece, piece_name, fire, teaches,
+        bars, reagents,
+    )  # fmt: skip
+
+
+PLANS = (
+    _iron(17051, FRIENDLY, 17014, "Dark Iron Bracers", 18, 20874, 4,
+          ((FIERY_CORE, 2), (LAVA_CORE, 2))),
+    _iron(19206, HONORED, 19148, "Dark Iron Helm", 35, 23636, 6,
+          ((FIERY_CORE, 4), (LAVA_CORE, 4))),
+    _iron(19207, HONORED, 19164, "Dark Iron Gauntlets", 28, 23637, 6,
+          ((FIERY_CORE, 3), (LAVA_CORE, 3))),
+    _iron(17060, REVERED, 17013, "Dark Iron Leggings", 30, 20876, 8,
+          ((FIERY_CORE, 4), (LAVA_CORE, 4))),
+    _iron(20040, EXALTED, 20039, "Dark Iron Boots", 28, 24399, 6,
+          ((FIERY_CORE, 3), (LAVA_CORE, 3))),
+)  # fmt: skip
+_PIECES = {p.piece: p for p in PLANS}
+
+
+def rank_index(rank: str) -> int:
+    return _RANKS.index(rank)
+
+
+def rank_of(points: int) -> str:
+    """The rank `points` of Thorium Brotherhood reputation reach."""
+    return max((r for r in _RANKS if RANK_VALUE[r] <= points), key=rank_index)
+
+
+@dataclass(frozen=True)
+class IronStep:
+    kind: str
+    said: str
+    plan: IronPlan | None = None
+
+
+@dataclass(frozen=True)
+class IronPipeline:
+    plan: IronPlan | None
+    step: IronStep | None
+
+    @property
+    def done(self) -> bool:
+        return self.plan is None
+
+    @property
+    def line(self) -> str:
+        if self.step is None:
+            return "Dark Iron: every piece is made"
+        return "Dark Iron: " + self.step.said
+
+
+def skill_note() -> str:
+    """Why the item book's skill numbers are not trusted."""
+    return (
+        "the item book gives these crafts skill 315 and 320 but the classic "
+        "cap is %d; the realm's item_template is the authority" % CLASSIC_SKILL
+    )
+
+
+def _count(item: int, n: int) -> str:
+    return "%d %s" % (n, ITEM_NAMES[item])
+
+
+def _missing(plan: IronPlan, held: dict) -> tuple:
+    return tuple(
+        (item, need - held.get(item, 0))
+        for item, need in plan.reagents
+        if held.get(item, 0) < need
+    )
+
+
+def _grind_step(plan: IronPlan) -> IronStep:
+    quests = ", ".join(_count(*needs[0]) for _q, needs in TURNINS)
+    said = "raise Thorium Brotherhood to %s with %s's turn-ins (%s) to buy %s" % (
+        plan.rank,
+        VENDOR,
+        quests,
+        plan.name,
+    )
+    return IronStep(GRIND, said, plan)
+
+
+def _buy_step(plan: IronPlan) -> IronStep:
+    said = "buy %s from %s, who sells it at %s" % (plan.name, VENDOR, plan.rank)
+    return IronStep(BUY, said, plan)
+
+
+def _learn_step(plan: IronPlan) -> IronStep:
+    said = "learn the Dark Iron smelt from %s before %s" % (SMELT_TRAINER, plan.name)
+    return IronStep(LEARN, said, plan)
+
+
+def _bars_step(plan: IronPlan, short: int) -> IronStep:
+    said = "smelt %s from %s at %s" % (
+        _count(DARK_IRON_BAR, short) + "s",
+        _count(DARK_IRON_ORE, short * ORE_PER_BAR),
+        FORGE,
+    )
+    return IronStep(SMELT, said, plan)
+
+
+def _gather_step(plan: IronPlan, missing: tuple) -> IronStep:
+    said = "gather %s for %s" % (
+        ", ".join(_count(i, n) for i, n in missing),
+        plan.piece_name,
+    )
+    return IronStep(GATHER, said, plan)
+
+
+def _craft_step(plan: IronPlan) -> IronStep:
+    said = "make %s (%d fire resistance) at %s" % (plan.piece_name, plan.fire, ANVIL)
+    return IronStep(CRAFT, said, plan)
+
+
+def _step_for(plan, known, rank, smelt_known, held) -> IronStep:
+    if plan.entry not in known:
+        if rank_index(rank) < rank_index(plan.rank):
+            return _grind_step(plan)
+        return _buy_step(plan)
+    if not smelt_known:
+        return _learn_step(plan)
+    short = plan.bars - held.get(DARK_IRON_BAR, 0)
+    if short > 0:
+        return _bars_step(plan, short)
+    missing = _missing(plan, held)
+    if missing:
+        return _gather_step(plan, missing)
+    return _craft_step(plan)
+
+
+def iron_plan(known=(), rank=NEUTRAL, smelt_known=False, held=None, made=()):
+    """The next step of the Dark Iron road for a guild that knows the plans
+    `known`, stands at `rank`, has (or lacks) the smelt, holds the items in
+    `held` ({entry: count}) and has made the pieces `made`."""
+    plan = next((p for p in PLANS if p.piece not in made), None)
+    if plan is None:
+        return IronPipeline(None, None)
+    step = _step_for(plan, set(known), rank, smelt_known, held or {})
+    return IronPipeline(plan, step)
+
+
+def iron_source(entry) -> str:
+    """The road to the Dark Iron piece `entry`, said; "" for any other item."""
+    plan = _PIECES.get(int(entry))
+    if plan is None:
+        return ""
+    return "made at %s from %s, bought from %s at %s with the Thorium Brotherhood" % (
+        ANVIL,
+        plan.name,
+        VENDOR,
+        plan.rank,
+    )
+
+
+IRON_ROAD = (
+    "Dark Iron plate (blacksmithing): reputation with the Thorium Brotherhood "
+    "for Lokhtos's plans, the smelt for Dark Iron bars at the Black Forge, and "
+    "the piece made at the Black Anvil; see fireplan.iron_plan for the next step"
+)
