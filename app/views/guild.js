@@ -437,11 +437,13 @@ function chat(ctx) {
   if (wait) return wait;
   const asks = c.data.asks || [];
   if (!asks.length) return state("empty", "Nobody in " + gname(ctx) + " has asked for anything yet.");
-  const row = (a) => {
+    const row = (a) => {
     const answers = a.answers || [];
+    const tone = a.state === "ran" || a.state === "filled" ? "good"
+      : a.state === "cancelled" || a.state === "expired" ? "bad" : "";
     const out = a.run ? html`<a href="${runHref(a.run)}">${a.run.outcome ? "The run " + a.run.outcome : "The run is " + (a.run.state || "on")}${a.run.bosses_total ? ", " + a.run.bosses_done + " of " + a.run.bosses_total + " bosses" : ""}</a>` : "";
     return html`<div class="g-chat">
-<div class="g-chat-top"><span>${member({ name: a.asker })} <span class="g-said">${said(a.said)}</span></span><span class="muted g-when">${since(a.created_at)}</span></div>
+<div class="g-chat-top"><span>${member({ name: a.asker })} <span class="g-said">${said(a.said)}</span></span><span class="muted g-when">${since(a.created_at)}</span><span class="g-chat-state" data-gt="${tone}">${a.state}</span></div>
 <div class="g-answers">${answers.length ? answers.map((x) => html`<span>${member({ name: x.member })}: ${said(x.said)}</span>`) : html`<span data-gt="warn">${a.state === "open" ? "No answer yet." : "No answer: the ask " + a.state + "."}</span>`}${out}</div>
 </div>`;
   };
