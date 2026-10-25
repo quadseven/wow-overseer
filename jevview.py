@@ -145,7 +145,7 @@ def _percentile(values: list, pct: float) -> int:
 
 
 def _spread(rows: list) -> str:
-    """", p50 N ms, p95 N ms" over the answered rows' round trip, or ""."""
+    """ ", p50 N ms, p95 N ms" over the answered rows' round trip, or ""."""
     latencies = [int(r.get("latency_ms") or 0) for r in rows if r.get("jev")]
     if not latencies:
         return ""

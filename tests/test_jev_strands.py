@@ -93,7 +93,9 @@ class Selection(unittest.TestCase):
                 "STRANDS_MODEL": "strands-x",
             }
         )
-        self.assertEqual((client.url, client.model), ("http://127.0.0.1:9000/ask", "strands-x"))
+        self.assertEqual(
+            (client.url, client.model), ("http://127.0.0.1:9000/ask", "strands-x")
+        )
 
     def test_plain_http_is_only_for_a_local_backend_on_loopback(self):
         with self.assertRaises(ValueError):
@@ -127,7 +129,9 @@ class OverHttp(unittest.TestCase):
     def test_a_choice_arrives_typed_with_probabilities_and_confidence(self):
         service = FakeService(service_ms=118)
         self.addCleanup(service.close)
-        client = jev.Client.from_env({"JEV_BACKEND": "strands", "STRANDS_URL": service.url})
+        client = jev.Client.from_env(
+            {"JEV_BACKEND": "strands", "STRANDS_URL": service.url}
+        )
         out = run(client.ask("item_keep", {"a": 1}, {"route": ROUTE}))
         self.assertEqual(out.status, jev.ANSWERED)
         answer = out.answers["route"]
@@ -142,7 +146,9 @@ class OverHttp(unittest.TestCase):
     def test_an_option_nobody_offered_is_none(self):
         service = FakeService(answers=good_choice("bank"))
         self.addCleanup(service.close)
-        client = jev.Client.from_env({"JEV_BACKEND": "strands", "STRANDS_URL": service.url})
+        client = jev.Client.from_env(
+            {"JEV_BACKEND": "strands", "STRANDS_URL": service.url}
+        )
         out = run(client.ask("item_keep", {"a": 1}, {"route": ROUTE}))
         self.assertIsNone(out.answers)
         self.assertEqual(out.status, jev.INVALID)
@@ -150,7 +156,9 @@ class OverHttp(unittest.TestCase):
     def test_a_service_error_is_none_with_the_reason(self):
         service = FakeService(status=503)
         self.addCleanup(service.close)
-        client = jev.Client.from_env({"JEV_BACKEND": "strands", "STRANDS_URL": service.url})
+        client = jev.Client.from_env(
+            {"JEV_BACKEND": "strands", "STRANDS_URL": service.url}
+        )
         out = run(client.ask("item_keep", {"a": 1}, {"route": ROUTE}))
         self.assertEqual((out.status, out.detail), (jev.ERROR, "http 503"))
         self.assertIsNone(out.answers)
@@ -244,7 +252,12 @@ class Compare(unittest.TestCase):
         self.assertEqual((out.backend, out.answers["route"].choice), ("jev", "equip"))
         [row] = rows
         self.assertEqual(
-            (row["backend"], row["active_backend"], row["answer"], row["active_answer"]),
+            (
+                row["backend"],
+                row["active_backend"],
+                row["answer"],
+                row["active_answer"],
+            ),
             ("strands", "jev", "keep", "equip"),
         )
         self.assertIs(row["agree"], False)
@@ -258,7 +271,9 @@ class Compare(unittest.TestCase):
         self.assertEqual(out.status, jev.ANSWERED)
         self.assertEqual(out.answers["route"].choice, "equip")
         [row] = rows
-        self.assertEqual((row["backend"], row["status"], row["answer"]), ("strands", jev.ERROR, ""))
+        self.assertEqual(
+            (row["backend"], row["status"], row["answer"]), ("strands", jev.ERROR, "")
+        )
         self.assertIsNone(row["agree"])
 
 
@@ -334,7 +349,13 @@ class Visible(unittest.TestCase):
         self.assertIn("p50 100 ms, p95 300 ms", out["backends"][0])
         by_kind = {line.split(":")[0]: line for line in out["backend_kinds"]}
         keep = by_kind["strands, What to do with a protected non-gear item"]
-        for part in ("3 answered", "agreed on 2 of 3 (67%)", "p50 200 ms", "p95 300 ms", "1 error"):
+        for part in (
+            "3 answered",
+            "agreed on 2 of 3 (67%)",
+            "p50 200 ms",
+            "p95 300 ms",
+            "1 error",
+        ):
             self.assertIn(part, keep)
         move = by_kind["strands, How a family gets moving again"]
         self.assertIn("agreed on 1 of 1 (100%)", move)
