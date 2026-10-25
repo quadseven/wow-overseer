@@ -385,7 +385,9 @@ class Service:
             return 400, {"error": str(exc)}
         kinds = getattr(decider, "kinds", None)
         if kinds is None:
-            return 501, {"error": "the loaded decider does not declare its question kinds"}
+            return 501, {
+                "error": "the loaded decider does not declare its question kinds"
+            }
         supported = {q: v for q, v in questions.items() if v["type"] in kinds}
         answers = {}
         started = time.perf_counter()
