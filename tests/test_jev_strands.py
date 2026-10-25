@@ -110,6 +110,128 @@ class Selection(unittest.TestCase):
             jev.Client("k", url="http://127.0.0.1:8790/")
 
 
+DEV = {
+    "TYPESAFE_API_KEY": "k",
+    "JEV_COMPARE_BACKEND": "strands",
+    "STRANDS_URL": "http://strands-decider:8080",
+}
+
+
+class ClusterServiceHttp(unittest.TestCase):
+    """Plain http to an in-cluster Service in its own pod, by opt-in (#1469)."""
+
+    def test_an_opted_in_bare_service_host_is_accepted(self):
+        client = jev.Client.from_env(
+            {
+                "JEV_BACKEND": "strands",
+                "STRANDS_URL": "http://strands-decider:8080",
+                "STRANDS_ALLOW_HTTP_HOST": "strands-decider",
+            }
+        )
+        self.assertEqual(client.url, "http://strands-decider:8080")
+        self.assertTrue(client.configured)
+
+    def test_an_opted_in_svc_name_is_accepted(self):
+        for host in (
+            "strands-decider.wow-dev.svc",
+            "strands-decider.wow-dev.svc.cluster.local",
+        ):
+            client = jev.Client.from_env(
+                {
+                    "JEV_BACKEND": "strands",
+                    "STRANDS_URL": "http://%s:8080/" % host,
+                    "STRANDS_ALLOW_HTTP_HOST": " Other , %s" % host.upper(),
+                }
+            )
+            self.assertEqual(client.url, "http://%s:8080/" % host)
+
+    def test_the_service_host_without_the_opt_in_is_rejected(self):
+        with self.assertRaises(ValueError):
+            jev.Client.from_env(
+                {"JEV_BACKEND": "strands", "STRANDS_URL": "http://strands-decider:8080"}
+            )
+
+    def test_a_look_alike_host_is_rejected(self):
+        for url in (
+            "http://strands-decider.example.com:8080/",
+            "http://strands-decider.svc.example.com/",
+            "http://strands-deciders:8080/",
+            "http://192.0.2.5:8080/",
+        ):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                jev.Client.from_env(
+                    {
+                        "JEV_BACKEND": "strands",
+                        "STRANDS_URL": url,
+                        "STRANDS_ALLOW_HTTP_HOST": "strands-decider",
+                    }
+                )
+
+    def test_a_public_name_cannot_be_opted_in(self):
+        with self.assertLogs("wow-overseer.jev", "WARNING") as logs:
+            hosts = jev.allow_http_hosts("example.com,strands-decider,192.0.2.5")
+        self.assertEqual(hosts, ("strands-decider",))
+        self.assertIn("example.com", "\n".join(logs.output))
+        with self.assertRaises(ValueError):
+            jev.Client.from_env(
+                {
+                    "JEV_BACKEND": "strands",
+                    "STRANDS_URL": "http://example.com/",
+                    "STRANDS_ALLOW_HTTP_HOST": "example.com",
+                }
+            )
+
+    def test_a_non_local_backend_never_takes_plain_http(self):
+        with self.assertRaises(ValueError):
+            jev.Client(
+                "k",
+                url="http://strands-decider:8080/",
+                allow_http_hosts=("strands-decider",),
+            )
+
+    def test_the_cluster_host_shapes(self):
+        yes = ("strands-decider", "a.b.svc", "a.svc.cluster.local", "x1")
+        no = ("", "example.com", "a.svc.evil", "-bad", "192.0.2.5", "a..svc", ".svc")
+        for host in yes:
+            self.assertTrue(jev.cluster_service_host(host), host)
+        for host in no:
+            self.assertFalse(jev.cluster_service_host(host), host)
+
+
+class CompareNeverStopsTheActive(unittest.TestCase):
+    """A compare backend that cannot be built is off, loudly (#1469)."""
+
+    def test_a_refused_compare_url_leaves_the_active_backend_working(self):
+        transport = Transport()
+        with self.assertLogs("wow-overseer.jev", "ERROR") as logs:
+            client = jev.Client.from_env(DEV, transport=transport)
+        self.assertIsNone(client.shadow)
+        self.assertEqual(client.backend.name, "jev")
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn("compare is off", logs.output[0])
+        out = run(client.ask("item_keep", {"item": "Destiny"}, {"route": ROUTE}))
+        self.assertEqual(out.status, jev.ANSWERED)
+
+    def test_the_dev_config_with_the_opt_in_builds_the_compare_client(self):
+        client = jev.Client.from_env(
+            dict(DEV, STRANDS_ALLOW_HTTP_HOST="strands-decider")
+        )
+        self.assertEqual(client.shadow.backend.name, "strands")
+        self.assertEqual(client.shadow.url, "http://strands-decider:8080")
+
+    def test_the_bridge_builds_its_client_through_the_guarded_from_env(self):
+        """bridge.py cannot be imported here (it needs discord), so pin that its
+        constructor builds the client with the bare from_env, whose compare
+        failure is caught above, and nothing else that could raise first."""
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("self._jev = jev.Client.from_env()\n", src)
+        self.assertEqual(src.count("jev.Client("), 0)
+
+
 class RequestShape(unittest.TestCase):
     def test_the_body_is_the_jev_body_and_no_authorization_is_sent(self):
         transport = Transport()
