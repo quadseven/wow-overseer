@@ -132,7 +132,10 @@ class ClusterServiceHttp(unittest.TestCase):
         self.assertTrue(client.configured)
 
     def test_an_opted_in_svc_name_is_accepted(self):
-        for host in ("strands-decider.wow-dev.svc", "strands-decider.wow-dev.svc.cluster.local"):
+        for host in (
+            "strands-decider.wow-dev.svc",
+            "strands-decider.wow-dev.svc.cluster.local",
+        ):
             client = jev.Client.from_env(
                 {
                     "JEV_BACKEND": "strands",
@@ -153,7 +156,7 @@ class ClusterServiceHttp(unittest.TestCase):
             "http://strands-decider.example.com:8080/",
             "http://strands-decider.svc.example.com/",
             "http://strands-deciders:8080/",
-            "http://10.0.0.5:8080/",
+            "http://192.0.2.5:8080/",
         ):
             with self.subTest(url=url), self.assertRaises(ValueError):
                 jev.Client.from_env(
@@ -166,7 +169,7 @@ class ClusterServiceHttp(unittest.TestCase):
 
     def test_a_public_name_cannot_be_opted_in(self):
         with self.assertLogs("wow-overseer.jev", "WARNING") as logs:
-            hosts = jev.allow_http_hosts("example.com,strands-decider,10.0.0.5")
+            hosts = jev.allow_http_hosts("example.com,strands-decider,192.0.2.5")
         self.assertEqual(hosts, ("strands-decider",))
         self.assertIn("example.com", "\n".join(logs.output))
         with self.assertRaises(ValueError):
@@ -188,7 +191,7 @@ class ClusterServiceHttp(unittest.TestCase):
 
     def test_the_cluster_host_shapes(self):
         yes = ("strands-decider", "a.b.svc", "a.svc.cluster.local", "x1")
-        no = ("", "example.com", "a.svc.evil", "-bad", "10.0.0.5", "a..svc", ".svc")
+        no = ("", "example.com", "a.svc.evil", "-bad", "192.0.2.5", "a..svc", ".svc")
         for host in yes:
             self.assertTrue(jev.cluster_service_host(host), host)
         for host in no:
@@ -210,7 +213,9 @@ class CompareNeverStopsTheActive(unittest.TestCase):
         self.assertEqual(out.status, jev.ANSWERED)
 
     def test_the_dev_config_with_the_opt_in_builds_the_compare_client(self):
-        client = jev.Client.from_env(dict(DEV, STRANDS_ALLOW_HTTP_HOST="strands-decider"))
+        client = jev.Client.from_env(
+            dict(DEV, STRANDS_ALLOW_HTTP_HOST="strands-decider")
+        )
         self.assertEqual(client.shadow.backend.name, "strands")
         self.assertEqual(client.shadow.url, "http://strands-decider:8080")
 
