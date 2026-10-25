@@ -102,7 +102,7 @@ class PlanTableTests(unittest.TestCase):
                     if s.get("type") == "craft"
                 ]
                 self.assertGreater(crafts[0]["skill"], fireplan.CLASSIC_SKILL)
-        self.assertIn("300", fireplan.skill_note())
+        self.assertIn("classic cap is 300", fireplan.skill_note())
 
 
 class PipelineTests(unittest.TestCase):
