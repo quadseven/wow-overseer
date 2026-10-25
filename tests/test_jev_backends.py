@@ -355,7 +355,7 @@ class Tally(unittest.TestCase):
             run(go())
         failures = [x for x in logs.output if "http 402" in x]
         self.assertEqual(len(failures), 1)
-        self.assertEqual(jev.TALLY._counts["k"]["errors"], 5)
+        self.assertEqual(jev.TALLY._counts[("jev", "k")]["errors"], 5)
 
 
 class BridgeWiring(unittest.TestCase):

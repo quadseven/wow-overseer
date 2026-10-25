@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "log": {
+    "argv": [".loom/live-evidence/log", "{source}", "{since}", "{needle}"],
+    "sources": ["worldserver", "wow-overseer", "authserver", "wow-map"],
+    "timeout": 240
+  },
+  "sql": {
+    "argv": [".loom/live-evidence/sql", "{sql}"],
+    "timeout": 60
+  }
+}
