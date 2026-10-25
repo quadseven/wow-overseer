@@ -725,6 +725,9 @@ class Recent:
     # Why the module refused the row, "" when it did not, and whether it said
     # the refusal would pass (the realm's far walk walls, a dead character).
     refusal: str = ""
+    # Raw refusal text from the JSON result, for unrecognized "no trainer"
+    # refusals that don't exactly match NO_TRAINER_ON_MAP_REFUSAL.
+    raw_refusal: str = ""
     retryable: bool = False
     # The module's reason for ANY ending ("stopped getting nearer the spawn",
     # "died on the way to the spawn"), "" when the row gave none, and the spawn
@@ -6211,14 +6214,17 @@ def _refusal_of(row) -> dict:
         return {}
     found = re.search(r'"reason":"((?:[^"\\]|\\.)*)"', result)
     refusal = found.group(1) if found else ""
+    raw_refusal = ""
     if "no trainer" in refusal.lower() and refusal != NO_TRAINER_ON_MAP_REFUSAL:
         log.warning(
             "trainer refusal text drift: %r (expected %r)",
             refusal,
             NO_TRAINER_ON_MAP_REFUSAL,
         )
+        raw_refusal = refusal
     return {
         "refusal": refusal,
+        "raw_refusal": raw_refusal,
         "retryable": '"retryable":true' in result or '"retry":true' in result,
     }
 
