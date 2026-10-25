@@ -13,6 +13,7 @@ import asyncio
 import pathlib
 import types
 import unittest
+from unittest import mock
 
 import bag_pressure
 import gearup
@@ -214,6 +215,23 @@ class TheStates(unittest.TestCase):
         self.assertEqual(
             STORMWIND_BIND,
             te.choose_hub(STORMWIND_BIND, {}, door, te.BAG_PRESSURE_WHY),
+        )
+
+    def test_a_bag_room_errand_from_inside_an_instance_does_not_cross_the_sea(self):
+        # Grug's family, wow-dev 2026-10-24: the head stands inside Razorfen
+        # Downs (map 129) with a Stormwind bind (map 0) and a Kalimdor
+        # mailbox (map 1) as the capital. The capital is on the instance's
+        # entrance continent, not on map 129 itself.
+        ratchet = {"map_id": 1, "x": -956.0, "y": -3745.0, "z": 5.0}
+        inside = _at(0, 0, 129)
+        pick = te.choose_hub(STORMWIND_BIND, ratchet, inside, te.BAG_PRESSURE_WHY)
+        self.assertEqual(ratchet, pick)
+        # Other errands keep the home town.
+        self.assertEqual(STORMWIND_BIND, te.choose_hub(STORMWIND_BIND, ratchet, inside))
+        # With no capital mailbox the home town is the only choice.
+        self.assertEqual(
+            STORMWIND_BIND,
+            te.choose_hub(STORMWIND_BIND, {}, inside, te.BAG_PRESSURE_WHY),
         )
 
     def test_members_beyond_a_walk_from_home_hearth(self):
@@ -967,3 +985,60 @@ class ATwoHanderFillsTheOffHand(unittest.TestCase):
 
     def test_the_subclasses_are_gearups(self):
         self.assertEqual(set(te.TWO_HAND_SUBCLASSES), set(gearup.TWO_HAND_SUBCLASSES))
+
+
+class TheBridgeCapitalLookup(unittest.TestCase):
+    def test_a_head_inside_an_instance_resolves_the_capital_on_its_entrance_continent(
+        self,
+    ):
+        snapshot = {"map_id": 129, "pos_x": -4666.5, "pos_y": -2536.8}
+        auctioneer = {
+            "map_id": 1,
+            "x": -956.0,
+            "y": -3745.0,
+            "faction": 1,
+            "name": "Auctioneer",
+        }
+        mailbox = {"map_id": 1, "x": -956.0, "y": -3745.0, "z": 5.0, "d2": 0.0}
+
+        class Cursor:
+            def __init__(self):
+                self.rows = []
+
+            def execute(self, sql, args=()):
+                if "acore_world.creature cr" in sql:
+                    self.rows = [dict(auctioneer)]
+                elif "acore_world.gameobject g" in sql:
+                    self.rows = [dict(mailbox)]
+                elif "FROM overseer_snapshot" in sql:
+                    self.rows = [dict(snapshot)]
+                else:
+                    self.rows = []
+
+            def fetchall(self):
+                return list(self.rows)
+
+            def fetchone(self):
+                return dict(self.rows[0]) if self.rows else None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        class Connection:
+            def cursor(self):
+                return Cursor()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        import bridge
+
+        with mock.patch.object(bridge, "_connect", lambda: Connection()):
+            hub = bridge._fetch_capital_hub("Grug", "alliance")
+        self.assertEqual(1, int(hub.get("map_id")))
