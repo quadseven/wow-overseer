@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""Loom live-evidence log adapter: read the dev realm's log archive (#1463).
+
+    .loom/live-evidence/log <source> <since> <needle>
+
+Loom's station (its bus/live_adapter.py) runs this from a
+private copy to prove a shipped ticket's `log:<source>` Live line. It wraps
+the deploy repo's realm log archive report, installed on the station's PATH
+as `realm-logs`:
+
+    realm-logs report <source> <since> <needle>
+
+which reads every archived line of that workload (about 96 hours) through the
+read-only agent reader identity the station's kubeconfig names, and prints a
+coverage block and a per-needle block. This script runs nothing else: no
+kubectl of its own, no exec into any pod, no write.
+
+It prints, one line each, on stdout:
+
+    <time> <text>                       each sample line the report quotes
+    loom-evidence-window-hours: N       hours of archive read since <since>
+    loom-evidence-count: N              lines naming the needle since <since>
+
+and exits 0 when the needle matched, 1 when it did not (the window and count
+lines are still printed, so an absence can be shown), and 2 on any failure to
+read: realm-logs missing or failing, a report it cannot parse, an argument
+it refuses, or its own deadline passed. Diagnostics go to stderr only.
+
+The window is the archive's span from <since> (or from its first line, when
+it starts later) to its last line, rounded down: what was read in full.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+# The realm workloads the archive keeps, by the pod name before its hash:
+# the worldserver (mod-overseer logs there), the bridge, the authserver and
+# the map service. .loom/live-evidence.json lists the same names.
+SOURCES = ("worldserver", "wow-overseer", "authserver", "wow-map")
+REPORT = "realm-logs"
+# Under the manifest's 240 second timeout, so this script reports its own
+# failure before the station kills it.
+DEADLINE = 225
+SINCE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+STAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+MAX_NEEDLE = 120
+MAX_SAMPLES = 50
+
+
+class ReadError(Exception):
+    """The archive could not be read, or its report not understood."""
+
+
+def fail(message: str) -> int:
+    print("live-evidence log: %s" % message, file=sys.stderr)
+    return 2
+
+
+def parse_stamp(value: str) -> datetime:
+    return datetime.strptime(value, STAMP_FORMAT).replace(tzinfo=timezone.utc)
+
+
+def refusal(source: str, since: str, needle: str) -> str:
+    """Why the arguments are not ones this script reads, or ""."""
+    if source not in SOURCES:
+        return "no `%s` log here; the sources are %s" % (source, ", ".join(SOURCES))
+    if not SINCE_RE.match(since):
+        return "since must be a UTC time such as 2030-01-02T03:04:05Z"
+    if not (0 < len(needle) <= MAX_NEEDLE and needle.isascii()):
+        return "the needle must be 1 to %d ASCII characters" % MAX_NEEDLE
+    if any(ord(char) < 32 or ord(char) == 127 for char in needle):
+        return "the needle has a control character"
+    if needle.startswith("-"):
+        return "a needle starting with '-' would read as an option of the report"
+    return ""
+
+
+def _field(lines, label: str) -> str:
+    prefix = "  %s: " % label
+    for line in lines:
+        if line.startswith(prefix):
+            return line[len(prefix) :].strip()
+    raise ReadError("the report has no `%s` line" % label)
+
+
+def parse_report(text: str, needle: str, since: datetime):
+    """(sample lines, window hours, count) from a realm-logs report."""
+    lines = text.splitlines()
+    if "coverage" not in lines:
+        raise ReadError("the report has no coverage block")
+    head = lines[: lines.index("coverage") + 8]
+    first, last = _field(head, "first archived line"), _field(head, "last archived line")
+    try:
+        start = lines.index("needle: %s" % needle)
+    except ValueError:
+        raise ReadError("the report has no block for the needle") from None
+    block = []
+    for line in lines[start + 1 :]:
+        if line.startswith("needle: "):
+            break
+        block.append(line)
+    inside = _field(block, "inside window")
+    if not inside.isdigit():
+        raise ReadError("the report's inside-window count is not a number")
+    samples = []
+    in_samples = False
+    for line in block:
+        if line.startswith("  samples: "):
+            in_samples = True
+        elif in_samples and line.startswith("    > "):
+            samples.append(line[len("    > ") :])
+        elif in_samples:
+            break
+    hours = 0.0
+    if first != "none" and last != "none":
+        try:
+            begin, end = max(parse_stamp(first), since), parse_stamp(last)
+        except ValueError:
+            raise ReadError("the report's coverage times are not UTC times") from None
+        hours = max(0.0, (end - begin).total_seconds() / 3600)
+    # Rounded down, so the window is never more than was read.
+    return samples[:MAX_SAMPLES], int(hours * 10) / 10, int(inside)
+
+
+def _stop(process: subprocess.Popen) -> None:
+    """End the report and the kubectl reads it started. The station starts
+    this script as its own process group, so the whole group is ended; run
+    any other way, only the child is."""
+    if process.poll() is not None:
+        return
+    if os.getpgid(0) == os.getpid():
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        os.killpg(os.getpid(), signal.SIGTERM)
+    else:
+        process.kill()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def read_report(source: str, since: str, needle: str) -> str:
+    program = shutil.which(REPORT)
+    if program is None:
+        raise ReadError(
+            "`%s` is not on PATH (the station host installs the deploy repo's "
+            "realm log archive reader under that name)" % REPORT
+        )
+    process = subprocess.Popen(
+        [program, "report", source, since, needle],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        out, err = process.communicate(timeout=DEADLINE)
+    except subprocess.TimeoutExpired:
+        _stop(process)
+        raise ReadError("the archive report did not finish in %d seconds" % DEADLINE) from None
+    if process.returncode != 0:
+        tail = err.decode("utf-8", "replace").strip().splitlines()[-1:] or ["no message"]
+        raise ReadError("the archive report exited %d (%s)" % (process.returncode, tail[0]))
+    return out.decode("utf-8", "replace")
+
+
+def main(argv) -> int:
+    if len(argv) != 3:
+        return fail("usage: log <source> <since> <needle>")
+    source, since, needle = argv
+    why = refusal(source, since, needle)
+    if why:
+        return fail(why)
+    try:
+        report = read_report(source, since, needle)
+        samples, hours, count = parse_report(report, needle, parse_stamp(since))
+    except (ReadError, OSError) as err:
+        return fail(str(err))
+    for line in samples:
+        print(line)
+    print("loom-evidence-window-hours: %.1f" % hours)
+    print("loom-evidence-count: %d" % count)
+    return 0 if count else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
