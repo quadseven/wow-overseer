@@ -893,6 +893,35 @@ class TheDiscordOrder(unittest.TestCase):
         self.assertEqual([], looked_up)
         self.assertIn("Gone is not a family on the roster", sent[0])
 
+    def test_a_combined_run_looks_rows_up_by_the_roster_spelling_of_its_key(self):
+        """A key matched with another case is read under the roster's own key."""
+        looked_up = []
+
+        class Channel:
+            async def send(self, line):
+                pass
+
+        ns = _load(
+            ["_set_combined_queue"],
+            {
+                "asyncio": asyncio,
+                "campaignqueue": campaignqueue,
+                "_queue_level_rows": lambda fam: looked_up.append(fam["names"]) or [],
+                "log": _Log(),
+            },
+        )
+        order = campaignqueue.Order(family="zug", text="ragefire 5", partner="Thrak")
+        fams = {
+            "Zug": {"names": ["Zug"], "leader": {"name": "Zug"}},
+            "Thrak": {"names": ["Thrak"], "leader": {"name": "Thrak"}},
+        }
+        asyncio.run(
+            ns["_set_combined_queue"](
+                types.SimpleNamespace(), order, "zug", fams, "discord:7", Channel()
+            )
+        )
+        self.assertEqual([["Zug"], ["Thrak"]], looked_up)
+
     def test_a_combined_order_needs_two_different_families(self):
         written, sent, _ = self.run_order("Zug", "ragefire 5", partner="zug")
         self.assertEqual([], written)
