@@ -75,6 +75,21 @@ class AFullRosterFillsEveryPlace(unittest.TestCase):
             )
         )
 
+    def test_the_main_tank_leads_group_one_with_a_priest_beside_it(self):
+        """The per-group quota is gone, but the main tank still opens the
+        first group, a priest shields it, and every other tank is an off tank."""
+        first = self.lineup["groups"][0]["members"]
+        self.assertEqual(first[0]["duty"], raidlineup.MAIN_TANK)
+        self.assertTrue(
+            any(m["class_id"] == PRIEST and m["seat"] == "healer" for m in first),
+            "a priest shields the main tank",
+        )
+        others = [m for g in self.lineup["groups"] for m in g["members"]][1:]
+        self.assertEqual(
+            [m["duty"] for m in others if m["seat"] == "tank"],
+            [raidlineup.OFF_TANK] * 3,
+        )
+
     def test_encounter_table_and_composer_report_missing_capabilities(self):
         self.assertEqual(len(raidlineup.MOLTEN_CORE_ENCOUNTERS), 10)
         roster = [_member("Rogue", ROGUE), _member("Hunter", raidlineup.HUNTER)]
@@ -283,6 +298,7 @@ class AThinRosterDegradesHonestly(unittest.TestCase):
         for group in lineup["groups"]:
             seats = [m["seat"] for m in group["members"]]
             self.assertLessEqual(len(seats), 5, group["number"])
+            self.assertLessEqual(seats.count("tank"), 1, group["number"])
         self.assertTrue(
             any(not any(m["seat"] == "tank" for m in g["members"]) for g in groups)
         )
