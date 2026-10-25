@@ -12,6 +12,8 @@ PURE: rows in, a dict of strings out. map_server reads the rows.
 
 from __future__ import annotations
 
+import math
+
 TITLE = "Jev"
 LEDE = (
     "Jev is asked the same questions the heuristics answer. Where a kind acts "
@@ -140,7 +142,7 @@ def _percentile(values: list, pct: float) -> int:
     """Nearest-rank percentile of a non-empty list (the same rule as the
     bridge's hourly tally, jev.Tally)."""
     ordered = sorted(values)
-    rank = max(1, -(-int(pct * len(ordered)) // 100))
+    rank = max(1, int(math.ceil(pct / 100.0 * len(ordered))))
     return int(ordered[min(rank, len(ordered)) - 1])
 
 

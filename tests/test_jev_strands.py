@@ -321,6 +321,14 @@ class Visible(unittest.TestCase):
         self.assertEqual(counts[("jev", "item_keep")]["disagreed"], 0)
         self.assertEqual(len(counts[("strands", "item_keep")]["service"]), 1)
 
+    def test_the_card_and_the_log_line_count_the_same_percentile(self):
+        for n in range(1, 40):
+            values = [(i * 37) % 101 for i in range(n)]
+            for pct in (50, 95):
+                self.assertEqual(
+                    jevview._percentile(values, pct), jev._percentile(values, pct)
+                )
+
     def test_the_decree_card_shows_latency_and_agreement_per_kind(self):
         def compare_row(kind, jev_answer, agree, ms):
             return {
