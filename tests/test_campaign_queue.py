@@ -867,6 +867,32 @@ class TheDiscordOrder(unittest.TestCase):
         self.assertIn("Nobody is not a family on the roster", sent[0])
         self.assertEqual([], passes)
 
+    def test_a_combined_run_for_a_family_off_the_roster_reads_no_rows(self):
+        """The combined run refuses a key its roster lacks before any lookup."""
+        sent, looked_up = [], []
+
+        class Channel:
+            async def send(self, line):
+                sent.append(line)
+
+        ns = _load(
+            ["_set_combined_queue"],
+            {
+                "asyncio": asyncio,
+                "campaignqueue": campaignqueue,
+                "_queue_level_rows": looked_up.append,
+            },
+        )
+        order = campaignqueue.Order(family="Gone", text="ragefire 5", partner="Zug")
+        fams = {"Zug": {"names": ["Zug"], "leader": {"name": "Zug"}}}
+        asyncio.run(
+            ns["_set_combined_queue"](
+                types.SimpleNamespace(), order, "Gone", fams, "discord:7", Channel()
+            )
+        )
+        self.assertEqual([], looked_up)
+        self.assertIn("Gone is not a family on the roster", sent[0])
+
     def test_a_combined_order_needs_two_different_families(self):
         written, sent, _ = self.run_order("Zug", "ragefire 5", partner="zug")
         self.assertEqual([], written)

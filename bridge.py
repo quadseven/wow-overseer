@@ -21015,8 +21015,12 @@ class Bridge(discord.Client):
         Both families must clear every door (campaignqueue.combined_plan), and
         the same steps are then written to each family's own queue, so the two
         5-man parties stand on the same keyword for the module to group.
+        Both keys are matched against the roster before either is looked up.
         """
-        partner, refusal = campaignqueue.pick_family(order.partner, sorted(fams))
+        _, refusal = campaignqueue.pick_family(key, sorted(fams))
+        partner = ""
+        if not refusal:
+            partner, refusal = campaignqueue.pick_family(order.partner, sorted(fams))
         if not refusal and partner == key:
             refusal = "A combined run needs two different families."
         if not refusal and (order.clear or not order.text.strip()):
