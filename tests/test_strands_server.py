@@ -20,6 +20,7 @@ import pathlib
 import socket
 import sys
 import threading
+import time
 import types
 import unittest
 import urllib.error
@@ -271,6 +272,40 @@ class MalformedRequest(WrapperCase):
         self.assertEqual(status, 408)
         self.assertIn("error", reply)
         self.assertEqual(fake.calls, [])
+
+    def test_a_trickled_body_hits_the_total_deadline(self):
+        # Every gap is under the socket timeout; only a total deadline from
+        # the start of the body stops this.
+        fake = strands_server.FakeDecider()
+        running = self.serve(fake, request_timeout=0.5)
+        with socket.create_connection(("127.0.0.1", running.port), timeout=5) as sock:
+            sock.sendall(
+                b"POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 100\r\n\r\n"
+            )
+            start = time.monotonic()
+            reply = b""
+            sock.settimeout(0.15)
+            while not reply and time.monotonic() - start < 4:
+                try:
+                    reply = sock.recv(4096)
+                except TimeoutError:
+                    sock.sendall(b" ")
+            elapsed = time.monotonic() - start
+        self.assertEqual(int(reply.split(b" ", 2)[1]), 408)
+        self.assertLess(elapsed, 2.0)
+        self.assertEqual(fake.calls, [])
+
+    def test_a_decider_without_kinds_is_501_not_a_crash(self):
+        class Bare:
+            model = "bare"
+
+            def decide(self, state, questions):
+                raise AssertionError("must not be asked")
+
+        running = self.serve(Bare())
+        status, reply = running.ask({"route": ROUTE})
+        self.assertEqual(status, 501)
+        self.assertIn("kinds", reply["error"])
 
     def test_body_over_the_limit_is_413(self):
         running = self.serve(strands_server.FakeDecider(), max_body=64)

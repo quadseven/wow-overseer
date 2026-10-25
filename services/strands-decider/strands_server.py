@@ -27,7 +27,10 @@ THE CONTRACT.
               returns None for it and the heuristic acts. latency_ms is the
               decider's own time for the request, in milliseconds.
     400       the body is not JSON, or not a well-formed Jev request
-    408       the body did not arrive within 30 seconds
+    408       the whole body did not arrive within 30 seconds of the headers
+              (a total deadline, so a slow trickle is cut off too), or the
+              connection went 30 seconds without a byte
+    501       the loaded decider does not declare which question kinds it answers
     413       the body is larger than STRANDS_MAX_BODY_BYTES
     422       the decider refused the request (a prompt it cannot fit)
     500       the decider failed
@@ -380,7 +383,10 @@ class Service:
             state, questions = parse_request(raw)
         except BadRequest as exc:
             return 400, {"error": str(exc)}
-        supported = {q: v for q, v in questions.items() if v["type"] in decider.kinds}
+        kinds = getattr(decider, "kinds", None)
+        if kinds is None:
+            return 501, {"error": "the loaded decider does not declare its question kinds"}
+        supported = {q: v for q, v in questions.items() if v["type"] in kinds}
         answers = {}
         started = time.perf_counter()
         if supported:
@@ -445,6 +451,33 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         self._send(status, {"error": error})
 
+    def _read_within_deadline(self, length: int) -> bytes | None:
+        """Read `length` bytes within `self.timeout` seconds in total, or None.
+
+        The deadline starts when the body read starts, so a client that
+        trickles one byte at a time cannot hold the thread past it. A peer
+        that closes early returns the short bytes (the caller answers 400).
+        """
+        deadline = time.monotonic() + self.timeout
+        chunks = []
+        remaining = length
+        try:
+            while remaining > 0:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return None
+                self.connection.settimeout(left)
+                chunk = self.rfile.read1(min(remaining, 65536))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+        except TimeoutError:
+            return None
+        finally:
+            self.connection.settimeout(self.timeout)
+        return b"".join(chunks)
+
     def _body(self) -> bytes | None:
         """The request body, or None once a refusal has been sent."""
         try:
@@ -458,9 +491,8 @@ class Handler(BaseHTTPRequestHandler):
         if length > self.max_body:
             self._refuse(413, f"body is over {self.max_body} bytes")
             return None
-        try:
-            raw = self.rfile.read(length)
-        except TimeoutError:
+        raw = self._read_within_deadline(length)
+        if raw is None:
             self._refuse(408, "body not received in time")
             return None
         if len(raw) < length:

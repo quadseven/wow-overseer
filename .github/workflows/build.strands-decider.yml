@@ -96,7 +96,8 @@ jobs:
           import urllib.request
 
           base = "http://127.0.0.1:8790"
-          for _ in range(50):
+          deadline = time.monotonic() + 30
+          while time.monotonic() < deadline:
               try:
                   with urllib.request.urlopen(base + "/healthz", timeout=2) as r:
                       assert json.load(r)["status"] == "ok"
