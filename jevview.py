@@ -136,6 +136,50 @@ def keep_line(row: dict) -> str:
 COMPARE = "compare"
 
 
+def _percentile(values: list, pct: float) -> int:
+    """Nearest-rank percentile of a non-empty list (the same rule as the
+    bridge's hourly tally, jev.Tally)."""
+    ordered = sorted(values)
+    rank = max(1, -(-int(pct * len(ordered)) // 100))
+    return int(ordered[min(rank, len(ordered)) - 1])
+
+
+def _spread(rows: list) -> str:
+    """", p50 N ms, p95 N ms" over the answered rows' round trip, or ""."""
+    latencies = [int(r.get("latency_ms") or 0) for r in rows if r.get("jev")]
+    if not latencies:
+        return ""
+    return ", p50 %d ms, p95 %d ms" % (
+        _percentile(latencies, 50),
+        _percentile(latencies, 95),
+    )
+
+
+def backend_kind_line(backend: str, kind: str, rows: list) -> str:
+    """One comparison backend's record on one decision kind: how often it
+    agreed with the active backend and how long it took, next to the other
+    backends' lines of the same kind (#822)."""
+    answered = [r for r in rows if r.get("jev")]
+    judged = [r for r in answered if r.get("agree") is not None]
+    agreed = sum(1 for r in judged if r.get("agree"))
+    text = "%s, %s: %d question%s, %d answered" % (
+        backend,
+        _label(kind),
+        len(rows),
+        "" if len(rows) == 1 else "s",
+        len(answered),
+    )
+    if judged:
+        text += ", agreed on %d of %d (%d%%)" % (
+            agreed,
+            len(judged),
+            round(100.0 * agreed / len(judged)),
+        )
+    text += _spread(rows)
+    errors = len(rows) - len(answered)
+    return text + ", %d error%s." % (errors, "" if errors == 1 else "s")
+
+
 def backend_line(backend: str, rows: list) -> str:
     """One comparison backend's summary: its answers set beside the active
     backend's on the identical questions (#820)."""
@@ -157,6 +201,7 @@ def backend_line(backend: str, rows: list) -> str:
         )
     if latencies:
         parts += ", mean latency %d ms" % (sum(latencies) // len(latencies))
+        parts += _spread(answered)
     parts += ", %d error%s" % (errors, "" if errors == 1 else "s")
     return "%s, asked alongside the active backend, never acting: %s." % (
         backend,
@@ -173,6 +218,13 @@ def _split_compare(rows) -> tuple:
         else:
             own.append(r)
     return own, compared
+
+
+def _by_kind(rows: list) -> dict:
+    out: dict = {}
+    for r in rows:
+        out.setdefault(str(r.get("kind") or "?"), []).append(r)
+    return out
 
 
 def view(rows, recent: int = 12) -> dict:
@@ -192,6 +244,11 @@ def view(rows, recent: int = 12) -> dict:
             : max(0, int(recent))
         ],
         "backends": [backend_line(b, compared[b]) for b in sorted(compared)],
+        "backend_kinds": [
+            backend_kind_line(b, k, kind_rows)
+            for b in sorted(compared)
+            for k, kind_rows in sorted(_by_kind(compared[b]).items())
+        ],
         "empty": EMPTY,
         "keep_title": KEEP_TITLE,
         "keep_differ": [
