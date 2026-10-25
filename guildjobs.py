@@ -107,6 +107,7 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import math
 import os
 import re
@@ -138,6 +139,8 @@ import situation
 import standstill
 import vendorsale
 import weaponskill
+
+log = logging.getLogger(__name__)
 
 HERBALISM = guildcorps.HERBALISM
 MINING = guildcorps.MINING
@@ -6207,8 +6210,15 @@ def _refusal_of(row) -> dict:
     if '"outcome":"refused"' not in result:
         return {}
     found = re.search(r'"reason":"((?:[^"\\]|\\.)*)"', result)
+    refusal = found.group(1) if found else ""
+    if "no trainer" in refusal.lower() and refusal != NO_TRAINER_ON_MAP_REFUSAL:
+        log.warning(
+            "trainer refusal text drift: %r (expected %r)",
+            refusal,
+            NO_TRAINER_ON_MAP_REFUSAL,
+        )
     return {
-        "refusal": found.group(1) if found else "",
+        "refusal": refusal,
         "retryable": '"retryable":true' in result or '"retry":true' in result,
     }
 

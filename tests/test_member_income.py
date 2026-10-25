@@ -15,6 +15,7 @@ backpack with 2 free, starter chain on, Journeyman's Pants (a green, item level
 10) and 22 Moongraze Stag Tenderloin in the bags.
 """
 
+import dataclasses
 import unittest
 
 import bankforecast as bf
@@ -440,7 +441,7 @@ class TheRidingWalk(unittest.TestCase):
         )
         m = bonk(name="Bruk", map_id=530, money=80000)
         o = purse.order("Bruk", 60, 80000, 37600, 9, 0)
-        m = m.__replace__(purse=o)
+        m = dataclasses.replace(m, purse=o)
         step, note = guildjobs.riding_step(m, (recent_with_map,))
         self.assertIsNone(step)
         self.assertIn(
@@ -480,7 +481,7 @@ class TheRidingWalk(unittest.TestCase):
         )
         m = bonk(name="Bruk", map_id=1, money=80000)  # Different map_id
         o = purse.order("Bruk", 60, 80000, 37600, 9, 0)
-        m = m.__replace__(purse=o)
+        m = dataclasses.replace(m, purse=o)
         step, note = guildjobs.riding_step(m, (recent_with_map,))
         self.assertIsNotNone(step)
         self.assertEqual("", note)
