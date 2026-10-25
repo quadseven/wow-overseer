@@ -68,6 +68,7 @@ from datetime import datetime, timezone
 
 import auction
 import classic
+import darkiron
 import fireplan
 import guildcorps
 import guildroute
@@ -561,8 +562,7 @@ FIRE_ROADS = (
     "Flarecore gloves, mantle, leggings and robe (tailoring): Fiery Core and "
     "Lava Core drop inside Molten Core, and the patterns are Thorium "
     "Brotherhood's, so they follow the first clears",
-    "Dark Iron plate (blacksmithing): Dark Iron bars and Thorium Brotherhood "
-    "plans, which nobody in the guild holds yet",
+    darkiron.ROAD,
     "the auction house: no fire resistance piece worth wearing is listed",
     "a paladin's Fire Resistance Aura in the tank's group, which gear totals "
     "here do not count",
