@@ -152,7 +152,7 @@ class Fakes:
             path = os.path.join(self.bin, name)
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write("#!%s\n%s" % (sys.executable, body))
-            os.chmod(path, 0o755)
+            os.chmod(path, 0o700)
         # For the scripts' `#!/usr/bin/env python3` line.
         os.symlink(sys.executable, os.path.join(self.bin, "python3"))
         self.calls = os.path.join(self.dir, "calls")
