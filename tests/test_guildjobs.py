@@ -808,6 +808,21 @@ class ASkinnersField(unittest.TestCase):
 
 
 class WhereMaterialsGo(unittest.TestCase):
+    def test_a_maintenance_member_posts_a_single_gathered_herb(self):
+        m = member(
+            "Keeper",
+            skills={H: (40, 75), M: (40, 75)},
+            carried=(
+                stack(11, 2447, 1, subclass=9, name="Peacebloom"),
+                stack(12, 2901, 1, item_class=2),
+            ),
+        )
+
+        step = only_step(plan([m]), "Keeper")
+
+        self.assertEqual(step.action, "post")
+        self.assertEqual(step.rows[0].command, "send item:11 subject:Guild materials")
+
     def test_herbs_go_to_the_guilds_alchemist_and_ore_to_the_bank(self):
         m = member(
             "Keeper",
