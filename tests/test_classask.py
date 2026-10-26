@@ -643,6 +643,75 @@ class TheYield(unittest.TestCase):
         (line,) = [line for _key, line in result.ask_yields]
         self.assertIn("after 3 asks that did not get it done (6 yes)", line)
 
+    def test_an_asker_refused_its_own_road_for_good_levels_at_once(self):
+        # #1345: a level 20 warlock asked the guild 27 times for Surena
+        # Caledon; 11 asks stopped because the asker itself did not reach the
+        # meeting, the module refusing its walk on a road through ground far
+        # above its level, a refusal that holds until it has levelled. Each
+        # new ask pulled three more helpers across the map for nothing.
+        b = group_book()
+        road = classquest.LETHAL_ROAD_REASON
+        rows = [
+            {
+                "asker": "Bigzug",
+                "target": "quest:2000",
+                "state": "cancelled",
+                "reason": "stopped: the meeting failed: Bigzug did not reach "
+                "Group Job (%s)" % road,
+                "age": 20,
+                "yeses": 3,
+            }
+        ]
+        asks = guildjobs.quest_asks_from_rows(rows)
+        self.assertEqual(guildjobs.class_helps(asker(), b, asks=asks), [])
+        result = class_plan([asker()], b=b, asks=asks)
+        self.assertEqual(result.helps, ())
+        self.assertNotIn("Bigzug", result.owed)
+        (line,) = [line for _key, line in result.ask_yields]
+        left = guildjobs.CLASS_STALL_HOLD_MINUTES - 20
+        self.assertEqual(
+            line,
+            "class ask: Bigzug stops asking for Group Job: its own walk to the "
+            "objective was refused (%s), which no helper can change; it levels "
+            "for %d minute(s)" % (road, left),
+        )
+        self.assertIn(2000, guildjobs.class_ask_held("Bigzug", asks))
+        self.assertEqual(asks[0].road_why, road)
+        # The hold runs out from that ask, as the streak's does.
+        late = guildjobs.quest_asks_from_rows(
+            [dict(rows[0], age=guildjobs.CLASS_STALL_HOLD_MINUTES)]
+        )
+        self.assertEqual(len(guildjobs.class_helps(asker(), b, asks=late)), 1)
+
+    def test_a_passing_or_helpers_refusal_does_not_hold_the_asker(self):
+        # A fight, a flight or a far walk wall passes; a stall or a death on
+        # the way is a short mark; a helper's road is the helper's, and the
+        # next ask may draw another. None of these stops the asker asking.
+        b = group_book()
+        for reason in (
+            "stopped: the meeting failed: Bigzug did not reach Group Job "
+            "(character is in combat)",
+            "stopped: the meeting failed: Bigzug did not reach Group Job "
+            "(%s)" % classquest.BOT_BUDGET_REASON,
+            "stopped: the meeting failed: Bigzug did not reach Group Job "
+            "(died on the way to the spawn)",
+            "stopped: the meeting failed: no helper met Bigzug at Group Job: "
+            "Chill did not reach Group Job (%s)" % classquest.LETHAL_ROAD_REASON,
+            "stopped: the meeting failed: Chill did not reach Group Job "
+            "(%s)" % classquest.LETHAL_ROAD_REASON,
+        ):
+            row = {
+                "asker": "Bigzug",
+                "target": "quest:2000",
+                "state": "cancelled",
+                "reason": reason,
+                "age": 20,
+            }
+            asks = guildjobs.quest_asks_from_rows([row])
+            self.assertEqual(
+                len(guildjobs.class_helps(asker(), b, asks=asks)), 1, reason
+            )
+
     def test_another_members_or_quests_asks_do_not_count(self):
         b = group_book()
         asks = [done_ask(60, quest=1), done_ask(50, asker_="Chill"), done_ask(40)]
