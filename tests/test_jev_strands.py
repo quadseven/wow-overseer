@@ -3,7 +3,8 @@
 The Strands Decider 2B runs behind a localhost wrapper that speaks the Jev
 request and response body. These drive the real client: a fake HTTP server on
 127.0.0.1 for the wire, a fake transport for the request shape. Nothing here
-leaves the machine.
+leaves the machine. The lane check sandbox denies localhost, so every test that
+binds a port skips there (tests/sandbox_caps.py); CI runs them.
 """
 
 import asyncio
@@ -19,6 +20,7 @@ import jev_choices
 import jevview
 from test_jev import Transport, ROUTE, good_choice, reply
 import test_jev_choices
+from tests import sandbox_caps
 
 
 def run(coro):
@@ -247,6 +249,7 @@ class RequestShape(unittest.TestCase):
         self.assertEqual(headers, {"Content-Type": "application/json"})
 
 
+@unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
 class OverHttp(unittest.TestCase):
     def test_a_choice_arrives_typed_with_probabilities_and_confidence(self):
         service = FakeService(service_ms=118)
@@ -301,6 +304,7 @@ class NoService(unittest.TestCase):
         self.assertEqual(transport.calls, [])
         self.assertEqual(len(logs.output), 1)
 
+    @unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
     def test_an_unreachable_service_is_none_and_counted(self):
         self.addCleanup(setattr, jev, "TALLY", jev.TALLY)
         jev.TALLY = jev.Tally()
@@ -323,6 +327,7 @@ class NoService(unittest.TestCase):
         self.assertEqual(len([x for x in logs.output if "backend=strands" in x]), 1)
         self.assertEqual(jev.TALLY._counts[("strands", "item_keep")]["errors"], 3)
 
+    @unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
     def test_the_heuristic_acts_when_the_service_is_down(self):
         case = test_jev_choices.DungeonChoiceTest()
         facts = case.facts()
@@ -337,6 +342,7 @@ class NoService(unittest.TestCase):
         self.assertIs(jev_choices.dungeon_carried(opts, pick, judgment), pick)
 
 
+@unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
 class Compare(unittest.TestCase):
     def pair(self, strands_url, active_choice="equip"):
         rows = []
@@ -431,6 +437,7 @@ class Visible(unittest.TestCase):
         self.assertIn("p50_ms=400", other)
         self.assertNotIn("service_p50_ms", other)
 
+    @unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
     def test_the_comparison_backend_has_its_own_tally_lines(self):
         service = FakeService(answers=good_choice("keep"), service_ms=90)
         self.addCleanup(service.close)
