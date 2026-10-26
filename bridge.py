@@ -9043,8 +9043,18 @@ class Bridge(discord.Client):
         ISOLATED: it runs at the head of the craft supply pass, so anything it
         raises is logged here and the pass carries on to its own buys.
         Returns the rows queued.
+
+        A DARK_IRON_ENABLED other than 0 or 1 reads as off, with one warning
+        per bridge (#1510): the flag read raised outside the guard before.
         """
-        if not fireplan.dark_iron_enabled():
+        try:
+            enabled = fireplan.dark_iron_enabled()
+        except ValueError as exc:
+            if not getattr(self, "_dark_iron_flag_warned", False):
+                self._dark_iron_flag_warned = True
+                log.warning("dark iron: %s; the pass stays off", exc)
+            return 0
+        if not enabled:
             return 0
         try:
             return await self._dark_iron_pass(names, cohort)
