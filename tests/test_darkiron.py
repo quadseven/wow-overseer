@@ -92,8 +92,17 @@ class PlanTableTests(unittest.TestCase):
                     self.assertIn(entry, fireplan.ITEM_NAMES)
                     self.assertGreater(count, 0)
 
-    def test_the_item_book_skill_is_past_the_classic_cap(self):
+    def test_the_skill_note_quotes_the_item_book_and_the_classic_cap(self):
+        """The note must stay true to the data it warns about.
+
+        Nothing here claims the realm's skill gate: the realm's item_template
+        is the authority and the plan never reads the item book's number. What
+        is pinned is that `skill_note` quotes whatever skill the item book
+        gives each craft, so a changed book makes the note fail here instead
+        of going stale, and that it names the classic cap.
+        """
         book = item_book()
+        note = fireplan.skill_note()
         for plan in fireplan.PLANS:
             with self.subTest(plan=plan.name):
                 crafts = [
@@ -101,8 +110,8 @@ class PlanTableTests(unittest.TestCase):
                     for s in book[str(plan.piece)]["sources"]
                     if s.get("type") == "craft"
                 ]
-                self.assertGreater(crafts[0]["skill"], fireplan.CLASSIC_SKILL)
-        self.assertIn("classic cap is 300", fireplan.skill_note())
+                self.assertIn(str(crafts[0]["skill"]), note)
+        self.assertIn("classic cap is 300", note)
 
 
 class PipelineTests(unittest.TestCase):
