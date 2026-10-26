@@ -203,7 +203,7 @@ class TheTablesKeepTheContract(unittest.TestCase):
             "ask_id INT",
             "member VARCHAR(12)",
             "role ENUM('tank','healer','dps')",
-            "stance ENUM('need','help')",
+            "stance ENUM('need','help','carry')",
             "said VARCHAR(255)",
             "created_at DATETIME",
             "state ENUM('yes','seated','declined','withdrawn')",
@@ -215,6 +215,7 @@ class TheTablesKeepTheContract(unittest.TestCase):
         store = store[: store.index("_GUILD_RUN_MEMBERS_SQL = (")]
         self.assertIn("guildsocial.ASK_TABLE_SQL", store)
         self.assertIn("guildsocial.ANSWER_TABLE_SQL", store)
+        self.assertIn("guildsocial.ANSWER_STANCE_SQL", store)
         self.assertIn("ADD COLUMN proposer VARCHAR(12)", store)
 
 
@@ -449,23 +450,41 @@ class WhoAnswers(unittest.TestCase):
         out = plan([mate("Auren", 20, ROGUE), low], asks=[ask(7, "Auren")])
         self.assertEqual(out.replies, ())
 
+    def test_a_member_far_above_the_door_answers_as_a_carry(self):
+        out = plan(
+            [mate("Auren", 26, ROGUE), mate("Ancient", 40, MAGE)],
+            asks=[ask(7, "Auren")],
+        )
+        self.assertEqual(
+            [(r.member, r.stance) for r in out.replies], [("Ancient", "carry")]
+        )
+        self.assertEqual(
+            gs.worth(mate("Ancient", 40, MAGE), DEADMINES, gs.CARRY, ENTRANCES), 1.0
+        )
+        self.assertIn("carry", out.replies[0].said)
+
+    def test_at_most_one_far_member_carries_an_ask(self):
+        out = plan(
+            [
+                mate("Auren", 26, ROGUE),
+                mate("Ancient", 40, MAGE),
+                mate("Elder", 41, WARLOCK),
+            ],
+            asks=[ask(7, "Auren")],
+        )
+        self.assertEqual(
+            [(r.member, r.stance) for r in out.replies if r.stance == "carry"],
+            [("Ancient", "carry")],
+        )
+
     def test_helpers_up_to_ten_levels_above_at_most_two(self):
         crowd = [mate("Auren", 20, ROGUE)] + [
             mate("Old%s" % c, DEADMINES.ceiling + 5, MAGE, zone_id=STORMWIND, at=NEAR)
             for c in "abc"
         ]
-        crowd.append(
-            mate(
-                "Ancient",
-                DEADMINES.ceiling + gs.HELPER_LEVELS + 1,
-                MAGE,
-                zone_id=STORMWIND,
-            )
-        )
         out = plan(crowd, asks=[ask(7, "Auren")])
         self.assertEqual(len(out.replies), 2)
         self.assertEqual({r.stance for r in out.replies}, {"help"})
-        self.assertNotIn("Ancient", [r.member for r in out.replies])
         more = plan(
             crowd,
             asks=[ask(7, "Auren")],

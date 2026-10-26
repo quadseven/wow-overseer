@@ -97,6 +97,7 @@ ANSWERS_PER_PASS = 4
 # --- who may answer -----------------------------------------------------------
 
 MAX_HELPERS = 2
+MAX_CARRIERS = 1
 HELPER_LEVELS = 10
 
 # --- what an answer is worth --------------------------------------------------
@@ -106,6 +107,7 @@ PRERAID_BONUS = 1.0
 NEED_QUEST = 2.5
 XP_BAND = 2.0
 HELP = 1.5
+CARRY = 2.0
 QUESTING = 1.0
 YARDS_PER_POINT = 1500.0
 OTHER_CONTINENT = 2.5
@@ -120,7 +122,7 @@ CAPITAL_ZONES = frozenset({1519, 1537, 1657, 1637, 1638, 1497, 3487, 3557})
 
 TANK, HEALER, DPS = "tank", "healer", "dps"
 SEATS = (TANK, HEALER, DPS, DPS, DPS)
-NEED, HELPS = "need", "help"
+NEED, HELPS, CARRIES = "need", "help", "carry"
 # A random bot from outside the guild who answered the asker's call in
 # LookingForGroup for a tank or a healer (guildpug.py, #591).
 PUG = "pug"
@@ -163,12 +165,16 @@ ANSWER_TABLE_SQL = (
     " ask_id INT NOT NULL,"
     " member VARCHAR(12) NOT NULL,"
     " role ENUM('tank','healer','dps') NOT NULL,"
-    " stance ENUM('need','help') NOT NULL,"
+    " stance ENUM('need','help','carry') NOT NULL,"
     " said VARCHAR(255) NOT NULL DEFAULT '',"
     " created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,"
     " state ENUM('yes','seated','declined','withdrawn') NOT NULL DEFAULT 'yes',"
     " PRIMARY KEY (id), KEY idx_ask (ask_id), KEY idx_member (member, state)"
     ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+)
+ANSWER_STANCE_SQL = (
+    "ALTER TABLE overseer_guild_answer "
+    "MODIFY COLUMN stance ENUM('need','help','carry','pug') NOT NULL"
 )
 
 # The asks still in play, and every ask made within the cooldown (for "one
@@ -646,6 +652,8 @@ def stance_of(mate: Mate, door, asker_level: int, faction: str, needs: list) -> 
     if level > door.ceiling:
         if level <= door.ceiling + HELPER_LEVELS:
             return HELPS, HELP, None
+        if guildrun.fitting_doors([asker_level], [door], faction):
+            return CARRIES, CARRY, None
         return "", 0.0, None
     if not guildrun.fitting_doors([level], [door], faction):
         return "", 0.0, None
@@ -742,6 +750,9 @@ _ANSWER = {
         "I'll come help, I know the way.",
         "Nothing there for me but sure, I'll help out.",
     ),
+    (TANK, CARRIES): ("I can tank this run and carry the group.",),
+    (HEALER, CARRIES): ("I'll heal this run and carry the group.",),
+    (DPS, CARRIES): ("I'll come carry the group through.",),
 }
 _ANSWER_ITEM = (
     "I'm in, I want {item} too.",
@@ -953,8 +964,15 @@ def _yeses(answers: list, free: dict) -> list:
         (a for a in answers if a.state == YES and a.member in free), key=lambda a: a.id
     )
     helpers = {a.id for a in yes if a.stance == HELPS}
-    keep = set(sorted(helpers)[:MAX_HELPERS])
-    return [a for a in yes if a.stance != HELPS or a.id in keep]
+    carriers = {a.id for a in yes if a.stance == CARRIES}
+    keep_helpers = set(sorted(helpers)[:MAX_HELPERS])
+    keep_carrier = set(sorted(carriers)[:MAX_CARRIERS])
+    return [
+        a
+        for a in yes
+        if (a.stance != HELPS or a.id in keep_helpers)
+        and (a.stance != CARRIES or a.id in keep_carrier)
+    ]
 
 
 def _seats(asker: guildrun.Member, yes: list, free: dict, door=None) -> tuple:
@@ -988,7 +1006,7 @@ def _chosen(seats: dict, damage: list) -> list | None:
 
 
 def _helping(answer) -> bool:
-    return answer is not None and answer.stance == HELPS
+    return answer is not None and answer.stance in (HELPS, CARRIES)
 
 
 def _with_key(chosen: list, yes: list, free: dict, door) -> list | None:
@@ -1246,6 +1264,7 @@ def _answers_to(board: _Board, ask: Ask, spoken: set) -> list:
     current = board.current(ask)
     open_seats = _open_seats(ask, current)
     helpers = sum(1 for a in current if a.state == YES and a.stance == HELPS)
+    carriers = sum(1 for a in current if a.state == YES and a.stance == CARRIES)
     out = []
     for _scarce, _neg, name, mate, stance, need in _candidates(
         board, ask, open_seats, spoken
@@ -1255,10 +1274,13 @@ def _answers_to(board: _Board, ask: Ask, spoken: set) -> list:
         role = _seat_for(mate.member, open_seats, door)
         if not role or (stance == HELPS and helpers >= MAX_HELPERS):
             continue
+        if stance == CARRIES and carriers >= MAX_CARRIERS:
+            continue
         if name in board.lent and role not in (TANK, HEALER):
             continue
         open_seats.remove(role)
         helpers += 1 if stance == HELPS else 0
+        carriers += 1 if stance == CARRIES else 0
         out.append(
             Reply(
                 ask.id, name, role, stance, answer_line(name, role, stance, door, need)
