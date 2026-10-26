@@ -257,32 +257,35 @@ class Gates(unittest.TestCase):
         self.assertIn("channel paused", a.why)
 
     def test_one_roll_start_an_hour(self):
+        # The hourly gate is retired: a recent roll start no longer blocks.
         a = self.tick(_clear(last_roll_started=T0 - timedelta(minutes=20)))
-        self.assertEqual(a.kind, "wait")
-        self.assertIn("one roll start per 1h; next at 03:40Z", a.why)
+        self.assertEqual((a.kind, a.release), ("roll", "r2026.10.04-2"))
 
     def test_unreachable_family_api_counts_as_inside(self):
+        # The family gate is retired: an unreachable family API no longer blocks.
         a = self.tick(_clear(family_in_instance=None))
-        self.assertEqual(
-            (a.kind, a.why), ("wait", "family API unreachable: treat as inside")
-        )
+        self.assertEqual((a.kind, a.release), ("roll", "r2026.10.04-2"))
 
     def test_family_inside_waits(self):
+        # The family gate is retired: family members in an instance no longer block.
         a = self.tick(_clear(family_in_instance=3))
-        self.assertEqual((a.kind, a.why), ("wait", "3 family member(s) in an instance"))
+        self.assertEqual((a.kind, a.release), ("roll", "r2026.10.04-2"))
 
     def test_guild_group_inside_waits(self):
+        # The guild gate is retired: a guild group in an instance no longer blocks.
         a = self.tick(_clear(guild_groups_inside=1))
-        self.assertEqual((a.kind, a.why), ("wait", "1 guild group(s) in an instance"))
+        self.assertEqual((a.kind, a.release), ("roll", "r2026.10.04-2"))
 
     def test_unreadable_guild_runs_count_as_inside(self):
+        # The guild gate is retired: unreadable guild runs no longer block.
         a = self.tick(_clear(guild_groups_inside=None))
-        self.assertEqual(a.kind, "wait")
+        self.assertEqual((a.kind, a.release), ("roll", "r2026.10.04-2"))
 
     def test_just_out_settles(self):
+        # The settle gate is retired: everyone just out no longer blocks.
         a = self.tick(_clear(out_since=T0 - timedelta(minutes=2)))
-        self.assertEqual((a.kind, a.why), ("wait", "everyone out, settling for 5m"))
-        self.assertEqual(self.tick(_clear(out_since=None)).kind, "wait")
+        self.assertEqual((a.kind, a.release), ("roll", "r2026.10.04-2"))
+        self.assertEqual(self.tick(_clear(out_since=None)).release, "r2026.10.04-2")
 
     def test_newest_proven_coalesces_the_older(self):
         newer = _release("r2026.10.04-3", "proven", {"mod-overseer": "9" * 40})
@@ -348,6 +351,67 @@ class Gates(unittest.TestCase):
             extra=[d], paused=False, queue=["r2026.10.04-3", "r2026.10.04-2"]
         )
         self.assertEqual(self.tick(_clear(), ch, rels).release, "r2026.10.04-2")
+
+
+class RetiredKeys(unittest.TestCase):
+    def setUp(self):
+        self.ch, self.rels = _set(paused=False)
+
+    def tick(self, w, ch=None, rels=None):
+        return rr.tick(ch or self.ch, rels or self.rels, w)
+
+    def test_a_channel_without_the_four_keys_loads(self):
+        d = _channel_data(paused=False)
+        for key in ("min_interval", "settle", "families", "guild_run_states"):
+            del d["policy"][key]
+        ch = rr.parse_channel(d)
+        self.assertEqual(ch.policy.min_interval, timedelta(0))
+        self.assertEqual(ch.policy.settle, timedelta(0))
+        self.assertEqual(ch.policy.families, ())
+        self.assertEqual(ch.policy.guild_run_states, ())
+
+    def test_a_channel_without_the_four_keys_rolls_with_no_waits(self):
+        d = _channel_data(paused=False)
+        for key in ("min_interval", "settle", "families", "guild_run_states"):
+            del d["policy"][key]
+        ch = rr.parse_channel(d)
+        rels = {}
+        for n in ("r2026.10.03-3", "r2026.10.04-1", "r2026.10.04-2"):
+            rels[n] = rr.parse_release(_release_data(n), ch)
+        w = _clear(
+            family_in_instance=5,
+            guild_groups_inside=2,
+            out_since=None,
+            last_roll_started=T0,
+        )
+        a = rr.tick(ch, rels, w)
+        self.assertEqual((a.kind, a.release), ("roll", "r2026.10.04-2"))
+
+    def test_a_channel_with_the_four_keys_logs_them_once_as_retired(self):
+        d = _channel_data(paused=False)
+        with self.assertLogs("realmroller", level="INFO") as log:
+            ch = rr.parse_channel(d)
+        self.assertEqual(len(log.records), 1)
+        self.assertIn("min_interval", log.output[0])
+        self.assertIn("settle", log.output[0])
+        self.assertIn("families", log.output[0])
+        self.assertIn("guild_run_states", log.output[0])
+        self.assertEqual(ch.policy.min_interval, timedelta(hours=1))
+        self.assertEqual(ch.policy.settle, timedelta(minutes=5))
+        self.assertEqual(ch.policy.families, ("Grug", "Zug"))
+        self.assertEqual(ch.policy.guild_run_states, ("inside",))
+
+    def test_a_channel_with_the_four_keys_does_not_gate(self):
+        # The keys are still accepted but no longer gate: even with families
+        # inside, a recent roll start, and everyone just out, the roll goes.
+        w = _clear(
+            family_in_instance=3,
+            guild_groups_inside=1,
+            out_since=T0 - timedelta(minutes=1),
+            last_roll_started=T0 - timedelta(minutes=20),
+        )
+        a = self.tick(w)
+        self.assertEqual((a.kind, a.release), ("roll", "r2026.10.04-2"))
 
 
 class Watch(unittest.TestCase):
