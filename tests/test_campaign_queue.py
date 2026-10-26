@@ -832,8 +832,9 @@ class TheDiscordOrder(unittest.TestCase):
         def write_queue(plan, source, new_ids=None):
             written.append((plan, source))
             if new_ids is not None:
-                new_ids.extend(100 + len(written) * 10 + i
-                               for i in range(len(plan.entries)))
+                new_ids.extend(
+                    100 + len(written) * 10 + i for i in range(len(plan.entries))
+                )
             return 2
 
         ns = _load(
@@ -883,9 +884,7 @@ class TheDiscordOrder(unittest.TestCase):
         kind, source, _, rows = self.noted[0]
         self.assertEqual(orderrecord.QUEUE, kind)
         self.assertEqual("discord:7", source)
-        self.assertEqual(
-            orderrecord.ids(campaignqueue.TABLE, [110, 120]), tuple(rows)
-        )
+        self.assertEqual(orderrecord.ids(campaignqueue.TABLE, [110, 120]), tuple(rows))
 
     def test_a_combined_order_reply_does_not_promise_grouping(self):
         """The module cannot group the two parties yet, so the reply says so (#1509)."""
