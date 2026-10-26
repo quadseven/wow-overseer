@@ -21098,11 +21098,14 @@ class Bridge(discord.Client):
         entry refuses the whole order: a queue with a hole in it is a
         different plan from the one that was given.
         """
-        order = campaignqueue.Order(family=d.family, text=d.text)
+        order = campaignqueue.Order(family=d.family, text=d.text, partner=d.partner)
         fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
         key, refusal = campaignqueue.pick_family(order.family, sorted(fams))
         if refusal:
             await channel.send(refusal[:1990])
+            return
+        if order.partner:
+            await self._set_combined_queue(order, key, fams, d.source, channel)
             return
         if not order.text.strip():
             mine = campaignqueue.pending_by_family(
@@ -21141,6 +21144,59 @@ class Bridge(discord.Client):
             # Started now, not a minute from now, for the reason _set_job
             # drives train at once: somebody has just given an order.
             await self._campaign_queue_once()
+
+    async def _set_combined_queue(self, order, key: str, fams: dict, source: str,
+                                  channel) -> None:
+        """Queue one dungeon step for two families together: a combined run.
+
+        Both families must clear every door (campaignqueue.combined_plan), and
+        the same steps are then written to each family's own queue, so the two
+        5-man parties stand on the same keyword for the module to group.
+        Both keys are matched against the roster, and looked up under the
+        roster's own spelling, before either is read.
+        """
+        key, refusal = campaignqueue.pick_family(key, sorted(fams))
+        partner = ""
+        if not refusal:
+            partner, refusal = campaignqueue.pick_family(order.partner, sorted(fams))
+        if not refusal and partner == key:
+            refusal = "A combined run needs two different families."
+        if not refusal and (order.clear or not order.text.strip()):
+            refusal = ('A combined run names the dungeon: "queue %s and %s: '
+                       'ragefire 5". Clear or read each queue on its own.'
+                       % (key, partner))
+        entries = ()
+        if not refusal:
+            entries, refusal = campaignqueue.parse_entries(order.text)
+        if refusal:
+            await channel.send(refusal[:1990])
+            return
+        try:
+            rows_a = await asyncio.to_thread(_queue_level_rows, fams[key])
+            rows_b = await asyncio.to_thread(_queue_level_rows, fams[partner])
+            plan = campaignqueue.combined_plan(key, partner, entries, rows_a, rows_b)
+        except Exception as exc:
+            # A bad row or a missing key must not kill the order in silence:
+            # log it, and tell the channel nothing was written.
+            log.exception("queue: combined run for %s and %s could not be "
+                          "checked", key, partner)
+            await channel.send(("Not queued: the combined run for %s and %s "
+                                "could not be checked (%s). Nothing was written."
+                                % (key, partner, type(exc).__name__))[:1990])
+            return
+        if plan.refusal:
+            log.info("queue: combined run refused for %s and %s: %s",
+                     key, partner, plan.refusal)
+            await channel.send(plan.refusal[:1990])
+            return
+        written = 0
+        for family in (key, partner):
+            written += await asyncio.to_thread(
+                _write_queue, dataclasses.replace(plan, family=family), source)
+        log.info("queue: combined run for %s and %s set by %s, %d row(s) "
+                 "written: %s", key, partner, source, written, plan.says)
+        await channel.send(plan.says[:1990])
+        await self._campaign_queue_once()
 
     # --- the activity choice (#216) -------------------------------------------
 
