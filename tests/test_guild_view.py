@@ -121,18 +121,44 @@ def render():
     return json.loads(out.stdout)
 
 
+def asks(out):
+    """Each ask's rendered block, keyed by what the asker said."""
+    blocks = out.split('<div class="g-chat">')[1:]
+    return {
+        said: b
+        for b in blocks
+        for said in ("open ask", "filled ask", "ran ask", "expired ask")
+        if said in b
+    }
+
+
 @unittest.skipUnless(shutil.which("node"), "node is needed to run the app's views")
 class TheGuildChatFeed(unittest.TestCase):
     def test_state_badge_on_every_ask(self):
-        out = render()
-        self.assertIn('class="g-chat-state" data-gt="">open</span>', out)
-        self.assertIn('class="g-chat-state" data-gt="good">filled</span>', out)
-        self.assertIn('class="g-chat-state" data-gt="good">ran</span>', out)
-        self.assertIn('class="g-chat-state" data-gt="bad">expired</span>', out)
+        got = asks(render())
+        want = {
+            "open ask": ("accent", "open"),
+            "filled ask": ("ok", "filled"),
+            "ran ask": ("ok", "ran"),
+            "expired ask": ("warn", "expired"),
+        }
+        self.assertEqual(set(got), set(want))
+        for said, (tone, st) in want.items():
+            with self.subTest(ask=said):
+                self.assertIn(
+                    'g-ask-state" data-gt="%s">%s</span>' % (tone, st), got[said]
+                )
+
+    def test_filled_and_expired_asks_with_answers_still_show_their_state(self):
+        got = asks(render())
+        for said, st in (("filled ask", "filled"), ("expired ask", "expired")):
+            with self.subTest(ask=said):
+                self.assertNotIn("No answer", got[said])
+                self.assertIn(">%s</span>" % st, got[said])
 
     def test_run_link_renders_for_an_ask_that_ran(self):
-        out = render()
-        self.assertIn("The run cleared", out)
+        got = asks(render())
+        self.assertIn("The run cleared, 1 of 1 bosses</a>", got["ran ask"])
 
 
 if __name__ == "__main__":
