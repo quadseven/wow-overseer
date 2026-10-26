@@ -495,6 +495,9 @@ class Step:
     # The spawn the walk goes to (a guildjobs.Spot), for a step the bridge may
     # have to leave for another pack (a class quest hunt, classhunt.py).
     spot: object = None
+    # The classquest.Move a class quest step carries out, for the shadow
+    # executor (steps.py) to compare its orders with this step's rows.
+    move: object = None
 
 
 def source_for(action, key) -> str:

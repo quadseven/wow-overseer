@@ -556,7 +556,7 @@ class TheAffray(unittest.TestCase):
         self.assertEqual(blocked, [])
         self.assertEqual(move.kind, classquest.HUNT)
         self.assertEqual((move.spot.guid, move.spot.entry), (13575, 6238))
-        spot = guildjobs._class_spot(move)
+        spot = guildjobs.class_spot(move)
         self.assertEqual(
             spot.command,
             "walk-to-spawn creature:13575 near:%d" % classquest.SCRIPTED_NEAR,
@@ -628,7 +628,7 @@ class TheFelhunter(unittest.TestCase):
         self.assertEqual(
             (move.kind, move.use.verb), (classquest.USE, classquest.USE_HERE)
         )
-        spot = guildjobs._class_spot(move)
+        spot = guildjobs.class_spot(move)
         self.assertEqual(
             spot.command,
             "walk-to-spawn creature:14370 near:%d" % classquest.SCRIPTED_NEAR,

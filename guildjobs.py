@@ -3854,7 +3854,7 @@ CLASSQUEST_STEPS_PER_GUILD = 6
 STALLED_WALK_REASON = "stopped getting nearer the spawn"
 
 
-def _class_spot(move) -> Spot:
+def class_spot(move) -> Spot:
     s = move.spot
     chest = move.kind == classquest.USE and move.use.verb in (
         classquest.USE_OBJECT,
@@ -4643,6 +4643,7 @@ def _cross_step(m, move, recent):
             ),
         ),
         goal=classquest.CONTINENTS.get(int(move.to_map), ""),
+        move=move,
     )
     return step, move.said, ""
 
@@ -5028,7 +5029,7 @@ def class_step(
         return step, doing, _join(note, why)
     if move.kind == classquest.ABANDON:
         return _abandon_step(m, move, recent, note)
-    spot = _class_spot(move)
+    spot = class_spot(move)
     # A pack tried without progress is left, so a member is "at" the next one
     # only within a pack's width, not the whole field's.
     tried = class_avoid(m, book, recent, hunts, now)[0].get(move.quest)
@@ -5070,6 +5071,7 @@ def class_step(
             source_for(classquest.ACTION + "-walk", m.name),
         ),
         goal=spot.name,
+        move=move,
     )
     return step, move.said, note
 
@@ -5124,7 +5126,7 @@ def deadly_way_note(m, move, recent) -> str:
     classquest.HUNT_REACH of it, where no far walk is left to make."""
     if move.kind not in DEADLY_WAY_MOVES or move.spot is None:
         return ""
-    spot = _class_spot(move)
+    spot = class_spot(move)
     if spot.kind != "creature" or _near(m, spot, classquest.HUNT_REACH):
         return ""
     found = deadly_ways(m.name, recent).get(int(spot.spawn))
@@ -5244,7 +5246,9 @@ def _hunt_step(m, move, spot, book, cap, hunts, arrived):
     alone (today's hunt) for a member not yet there, and no step with a note for
     one that is. With no hunt verb (`slots` None) the walk alone, as it was."""
     slots = getattr(hunts, "slots", None)
-    walk_only = _spot_step(m, spot, classquest.ACTION, cap, move.said)
+    walk_only = replace(
+        _spot_step(m, spot, classquest.ACTION, cap, move.said), move=move
+    )
     if slots is None:
         return walk_only, ""
     quest = book.quests.get(int(move.quest)) if book is not None else None
@@ -5276,6 +5280,7 @@ def _hunt_step(m, move, spot, book, cap, hunts, arrived):
         walk=walk,
         goal=spot.name,
         spot=spot,
+        move=move,
     )
     return step, ""
 
@@ -5323,6 +5328,7 @@ def _abandon_step(m, move, recent, note):
             ),
         ),
         goal=m.name,
+        move=move,
     )
     return step, move.said, note
 
@@ -5353,6 +5359,7 @@ def _use_step(m, move, spot, cap):
         rows=(row,),
         walk=walk,
         goal=spot.name,
+        move=move,
     )
 
 

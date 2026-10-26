@@ -214,14 +214,14 @@ class TheStep(unittest.TestCase):
     def test_the_step_walks_to_the_sword_chest_as_a_gameobject_then_opens_it(self):
         m = knight()
         move, _ = classquest.next_move(runeblade(), m)
-        step = guildjobs._use_step(m, move, guildjobs._class_spot(move), 5000)
+        step = guildjobs._use_step(m, move, guildjobs.class_spot(move), 5000)
         self.assertEqual(step.rows[0].command, "use-gameobject %d" % CHEST)
         self.assertIn("gameobject:%d" % NEAREST_CHEST, step.walk.command)
 
     def test_the_step_walks_to_the_forge_as_a_gameobject_then_uses(self):
         m = knight(carried=carried((SWORD, 1)))
         move, _ = classquest.next_move(runeblade(), m)
-        step = guildjobs._use_step(m, move, guildjobs._class_spot(move), 5000)
+        step = guildjobs._use_step(m, move, guildjobs.class_spot(move), 5000)
         self.assertEqual(step.rows[0].command, "use-item-here item:%d" % SWORD)
         self.assertIn("gameobject:129401", step.walk.command)
 

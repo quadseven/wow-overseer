@@ -204,7 +204,7 @@ class TheStep(unittest.TestCase):
     def test_the_step_walks_to_the_circle_then_uses_the_choker(self):
         m = warlock()
         move, _ = classquest.next_move(book(), m)
-        step = guildjobs._use_step(m, move, guildjobs._class_spot(move), 5000)
+        step = guildjobs._use_step(m, move, guildjobs.class_spot(move), 5000)
         self.assertEqual(step.rows[0].command, "use-item-here item:%d" % CHOKER)
         self.assertIn("gameobject:42881", step.walk.command)
 

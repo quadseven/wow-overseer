@@ -71,6 +71,7 @@ import classparty
 import classhunt
 import classquest
 import classuse
+import steps
 import guildbank
 import guildfund
 import guildshare
@@ -16912,12 +16913,25 @@ class Bridge(discord.Client):
                 "walk-to-vendor any")
             if (step.action == "sell" or vendor_walk) and not sale_walks:
                 continue
+            self._shadow_class_step(step, cap)
             self._job_steps[step.holder] = now
             task = asyncio.create_task(self._run_job_step(step, cap))
             self._mail_walk_tasks.add(task)
             task.add_done_callback(self._mail_walk_task_done)
             started += 1
         return started
+
+    def _shadow_class_step(self, step, cap) -> None:
+        """Log how steps.run's orders for a class quest step compare with the
+        rows the step writes (CLASSQUEST_EXECUTOR=shadow). It writes nothing, and
+        a failure in it is logged, never allowed to stop the real writers."""
+        if step.move is None:
+            return
+        try:
+            if steps.mode() == steps.SHADOW:
+                log.info("%s", steps.line(step, cap))
+        except Exception:
+            log.exception("classquest executor: the comparison for %s failed", step.holder)
 
     async def _job_fields(self, members, focus=None, busy=()) -> dict:
         """name -> guildjobs.Spot for every natural maintenance member that
