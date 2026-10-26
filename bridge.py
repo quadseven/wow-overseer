@@ -4611,6 +4611,34 @@ def _stall_reads(names: list) -> dict:
         return _stuck_doors(cur, names)
 
 
+def _silent_dungeon_run(names: list) -> dict | None:
+    """The active dungeon run with its age since actual progress evidence."""
+    holes = dungeonstall.holes(len(names))
+    sql = (
+        "SELECT r.id, r.map_id, r.portal_keyword, "
+        "TIMESTAMPDIFF(SECOND, GREATEST(r.started_at, "
+        "COALESCE((SELECT MAX(e.last_seen) FROM overseer_event e "
+        "WHERE e.character_name COLLATE utf8mb4_0900_ai_ci IN ({holes}) "
+        "AND e.kind IN "
+        "('quest_accept', 'quest_complete', 'quest_reward', 'level_up', "
+        "'item_equip', 'unlearn')), r.started_at), "
+        "COALESCE((SELECT MAX(re.created_at) "
+        "FROM overseer_dungeon_run_event re WHERE re.run_id = r.id "
+        "AND re.kind = 'boss'), r.started_at)), NOW()) AS silent_seconds "
+        "FROM overseer_dungeon_run r WHERE r.state = 'active' "
+        "AND r.leader_name IN ({holes}) ORDER BY r.id DESC LIMIT 1"
+    ).format(holes=holes)
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, tuple(names) + tuple(names))
+            rows = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+    return dict(rows[0]) if rows else None
+
+
 def _stall_held(key: str, door: str) -> dict | None:
     """This door's leave in its recent stall window, or None: the pace row's
     id and the seconds its hold has left (`left_s`).
@@ -20385,6 +20413,10 @@ class Bridge(discord.Client):
             return False
         names = list(fam["names"])
         stuck = await asyncio.to_thread(_stall_reads, names)
+        silent = await asyncio.to_thread(_silent_dungeon_run, names)
+        silent_stall = dungeonstall.silent_run(silent)
+        if silent_stall is not None:
+            stuck[silent_stall.door] = silent_stall
         leave = dungeonstall.leave(rows, stuck)
         if leave is None:
             return False
