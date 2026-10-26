@@ -400,7 +400,7 @@ class FarWalkWallsWait(unittest.TestCase):
     def plan(self, *rows, member=None):
         tried = questers.attempts(rows)
         return questers.plan(
-            world(), member or self.member(), questers.Clock(), 0.0, tried=tried
+            world(), member or self.member(x=-700.0), questers.Clock(), 0.0, tried=tried
         )
 
     def test_with_no_refused_walk_it_walks(self):
@@ -420,6 +420,17 @@ class FarWalkWallsWait(unittest.TestCase):
                 due = self.plan(walk_row(wall, wait))
                 self.assertIsNotNone(due.move, due.line)
                 self.assertEqual((due.move.kind, due.move.quest), (classquest.TAKE, 3))
+
+    def test_a_near_hand_in_is_not_held_by_a_far_walk_wall(self):
+        member = self.member(quest_log={3: questers.STATUS_COMPLETE})
+        p = self.plan(walk_row(WALLS[0], 5), member=member)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TURN_IN, 3))
+
+    def test_a_far_hand_in_is_still_held_by_a_far_walk_wall(self):
+        member = self.member(x=-700.0, quest_log={3: questers.STATUS_COMPLETE})
+        p = self.plan(walk_row(WALLS[0], 5), member=member)
+        self.assertIsNone(p.move, p.line)
+        self.assertIn("waits", p.line)
 
     def test_only_the_newest_row_decides(self):
         budget = WALLS[0]

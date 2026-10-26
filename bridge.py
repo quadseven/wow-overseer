@@ -25101,6 +25101,7 @@ def _ensure_guild_run_store() -> None:
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(guildsocial.ASK_TABLE_SQL)
             cur.execute(guildsocial.ANSWER_TABLE_SQL)
+            cur.execute(guildsocial.ANSWER_STANCE_SQL)
             cur.execute(
                 "SELECT COUNT(*) AS n FROM information_schema.STATISTICS "
                 "WHERE table_schema = DATABASE() "
