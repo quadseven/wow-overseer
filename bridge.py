@@ -18392,10 +18392,14 @@ class Bridge(discord.Client):
             return state
         _TOWN_ERRAND_HEAD_AWAY.discard(leader)
         teams = await asyncio.to_thread(_fetch_teams, [leader])
+        # Inside an instance the head stands, for this choice, at its door on
+        # the continent: the capital and the continent check both read there.
+        standing = townerrand.errand_standing(positions.get(leader),
+                                              guildjobs.entrances())
         capital = await asyncio.to_thread(_fetch_capital_hub, leader,
-                                          teams.get(leader, ""))
+                                          teams.get(leader, ""), standing)
         home = await asyncio.to_thread(_fetch_bind_hub, leader)
-        hub = townerrand.choose_hub(home, capital, positions.get(leader), why)
+        hub = townerrand.choose_hub(home, capital, standing, why)
         if not hub:
             log.info("town errand: %s%s, but neither %s's hearthstone point nor "
                      "a capital of the family's own auction house on his map "
@@ -31407,15 +31411,18 @@ def _hub_aim(hub) -> str:
 
 
 # THE CAPITAL, FROM THE WORLD'S OWN SPAWN TABLES. The nearest auctioneer on the
-# leader's map that serves the family's own auction house, then the mailbox
-# spawn nearest to that auctioneer: the counters of a capital stand together,
-# and no coordinate is written here.
+# map where the leader stands for the errand (townerrand.errand_standing: his
+# own reading, or his dungeon's door on its continent) that serves the
+# family's own auction house, then the mailbox spawn nearest to that
+# auctioneer: the counters of a capital stand together, and no coordinate is
+# written here. The leader's fresh snapshot still gates the read: an absent
+# leader finds no capital.
 _ERRAND_AUCTIONEERS_SQL = (
     "SELECT cr.map AS map_id, cr.position_x AS x, cr.position_y AS y, "
     "ct.name AS name, ct.faction AS faction, "
-    "(POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2)) AS d2 "
+    "(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2)) AS d2 "
     "FROM overseer_snapshot s "
-    "JOIN acore_world.creature cr ON cr.map = s.map_id "
+    "JOIN acore_world.creature cr ON cr.map = %s "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
     "AND (ct.npcflag & %s) <> 0 ORDER BY d2 LIMIT 60"
@@ -31432,14 +31439,22 @@ _ERRAND_MAILBOX_SQL = (
 ERRAND_HUB_MAILBOX_YARDS = 120.0
 
 
-def _fetch_capital_hub(leader: str, team: str) -> dict:
-    """The mailbox spawn by the nearest auctioneer of `team`'s house, or {}."""
+def _fetch_capital_hub(leader: str, team: str, standing) -> dict:
+    """The mailbox spawn by the auctioneer of `team`'s house nearest
+    `standing` (a {map_id, pos_x, pos_y} row, townerrand.errand_standing), on
+    its map, or {}."""
     house = auction.TEAM_HOUSE.get(team, 0)
-    if not house:
+    if not house or not standing:
+        return {}
+    try:
+        at = (float(standing["pos_x"]), float(standing["pos_y"]),
+              int(standing["map_id"]))
+    except (KeyError, TypeError, ValueError):
         return {}
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(_ERRAND_AUCTIONEERS_SQL, (leader, NPC_FLAG_AUCTIONEER))
+            cur.execute(_ERRAND_AUCTIONEERS_SQL,
+                        (*at, leader, NPC_FLAG_AUCTIONEER))
             rows = [dict(r) for r in cur.fetchall()]
             own = next((r for r in rows if auction.reachable_house(
                 team, int(r.get("faction") or 0)) == house), None)
