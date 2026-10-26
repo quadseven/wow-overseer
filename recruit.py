@@ -55,6 +55,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+__all__ = [
+    "AD_INTERVAL_MINUTES",
+    "MIN_RAID_LEVEL",
+    "RETENTION_DAYS",
+    "may_post_ad",
+    "prune_surplus_members",
+    "rank_raid_candidates",
+    "recruiting_ad",
+]
+
 # How many names to ask mod-overseer for. Comfortably more than one pass can
 # use, so that a shortlist survives several invites before it goes stale and
 # a few already-asked names near the top do not exhaust it. The module's own
