@@ -431,6 +431,13 @@ function said(text) {
   return out;
 }
 
+// The ask's state (open, filled, ran, expired, cancelled) as a tag on every
+// ask, answered or not (#570): the answers line alone hid it once anyone replied.
+const ASK_TONE = { open: "accent", filled: "ok", ran: "ok", expired: "warn", cancelled: "bad" };
+function askBadge(st) {
+  return st ? html`<span class="tag g-run-tag g-ask-state" data-gt="${ASK_TONE[st] || "dim"}">${st}</span>` : "";
+}
+
 function chat(ctx) {
   const c = peek(P.chat(ctx));
   const wait = pendingRead(c, 2);
@@ -441,7 +448,7 @@ function chat(ctx) {
     const answers = a.answers || [];
     const out = a.run ? html`<a href="${runHref(a.run)}">${a.run.outcome ? "The run " + a.run.outcome : "The run is " + (a.run.state || "on")}${a.run.bosses_total ? ", " + a.run.bosses_done + " of " + a.run.bosses_total + " bosses" : ""}</a>` : "";
     return html`<div class="g-chat">
-<div class="g-chat-top"><span>${member({ name: a.asker })} <span class="g-said">${said(a.said)}</span></span><span class="muted g-when">${since(a.created_at)}</span></div>
+<div class="g-chat-top"><span>${member({ name: a.asker })} <span class="g-said">${said(a.said)}</span></span><span class="g-chat-meta">${askBadge(a.state)}<span class="muted g-when">${since(a.created_at)}</span></span></div>
 <div class="g-answers">${answers.length ? answers.map((x) => html`<span>${member({ name: x.member })}: ${said(x.said)}</span>`) : html`<span data-gt="warn">${a.state === "open" ? "No answer yet." : "No answer: the ask " + a.state + "."}</span>`}${out}</div>
 </div>`;
   };
