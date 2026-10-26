@@ -31,6 +31,7 @@ world.
 
 from __future__ import annotations
 
+import mcencounters
 import raidroles
 import raidteams
 
@@ -400,7 +401,9 @@ def build_lineup(
     (the tree the seat needs), `respec` (it plays another tree now), `buff`
     and `label`. Each group carries `buffs` and `missing_buffs`. The lineup
     carries `gaps` (seats no class in the guild can fill), `recruit_classes`
-    (the classes to recruit for them) and `buff_cover`.
+    (the classes to recruit for them), `buff_cover`, and `encounters` with
+    `encounter_line` (what each Molten Core boss asks for and what the
+    lineup lacks for it, mcencounters.py).
     """
     guaranteed = frozenset(guaranteed)
     # AN APPROVED GUILD IS SEATED AS APPROVED (raidteams, 2026-10-05): the
@@ -444,6 +447,7 @@ def build_lineup(
         "damage": max(0, wanted["damage"] - len(damage)),
     }
     cover = _buff_cover(groups, placed)
+    encounters = mcencounters.compose(placed)
     recruit = _recruit_classes(gaps, cover, count)
     return {
         "groups": groups,
@@ -463,6 +467,8 @@ def build_lineup(
         "gaps": gaps,
         "recruit_classes": recruit,
         "buff_cover": cover,
+        "encounters": encounters,
+        "encounter_line": mcencounters.encounter_line(encounters),
         "counts": {
             "raiders": len(placed),
             "maintenance": len(upkeep),
@@ -585,6 +591,7 @@ def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
     wanted.update(_seat_counts(raidteams.seats(team)))
     gaps = _seat_counts(open_seats)
     cover = _buff_cover(groups, placed)
+    encounters = mcencounters.compose(placed)
     recruit = list(dict.fromkeys(s.class_id for s in open_seats))
     return {
         "groups": groups,
@@ -604,6 +611,8 @@ def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
         "recruits": [s._asdict() for s in open_seats],
         "approved": team,
         "buff_cover": cover,
+        "encounters": encounters,
+        "encounter_line": mcencounters.encounter_line(encounters),
         "counts": {
             "raiders": len(placed),
             "maintenance": len(upkeep),
