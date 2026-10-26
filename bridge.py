@@ -4686,13 +4686,22 @@ def _stall_reads(names: list) -> dict:
 
 
 def _silent_dungeon_run(names: list) -> dict | None:
-    """The active dungeon run with its age since actual progress evidence."""
+    """The active dungeon run with its age since actual progress evidence.
+
+    The COLLATE sits on each bound name, never on `e.character_name`
+    (wow-overseer#1513). overseer_event is utf8mb4_unicode_ci; collating the
+    names to that same collation keeps the column bare, so MySQL can use
+    `idx_character_last_seen` for the MAX(last_seen). A COLLATE on the column
+    naming another collation forces a scan of the event table on every
+    family's queue pass.
+    """
     holes = dungeonstall.holes(len(names))
+    more_names = ", %s COLLATE utf8mb4_unicode_ci" * (len(names) - 1)
     sql = (
         "SELECT r.id, r.map_id, r.portal_keyword, "
         "TIMESTAMPDIFF(SECOND, GREATEST(r.started_at, "
         "COALESCE((SELECT MAX(e.last_seen) FROM overseer_event e "
-        "WHERE e.character_name COLLATE utf8mb4_0900_ai_ci IN ({holes}) "
+        "WHERE e.character_name IN (%s COLLATE utf8mb4_unicode_ci{more_names}) "
         "AND e.kind IN "
         "('quest_accept', 'quest_complete', 'quest_reward', 'level_up', "
         "'item_equip', 'unlearn')), r.started_at), "
@@ -4701,7 +4710,7 @@ def _silent_dungeon_run(names: list) -> dict | None:
         "AND re.kind = 'boss'), r.started_at)), NOW()) AS silent_seconds "
         "FROM overseer_dungeon_run r WHERE r.state = 'active' "
         "AND r.leader_name IN ({holes}) ORDER BY r.id DESC LIMIT 1"
-    ).format(holes=holes)
+    ).format(holes=holes, more_names=more_names)
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(sql, tuple(names) + tuple(names))
