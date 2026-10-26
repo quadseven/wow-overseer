@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import dataclasses
 import json
 import logging
@@ -75,6 +76,7 @@ import guildshare
 import guildpost
 import guildroute
 import orders
+import orderrecord
 import guildwork
 import workorders
 import gearup
@@ -207,6 +209,12 @@ CHAT_CHANNEL_ID = os.environ.get("CHAT_CHANNEL_ID", "")
 OWNED_CHANNEL_IDS = frozenset(
     cid for cid in (OVERSEER_CHANNEL_ID, CHAT_CHANNEL_ID) if cid
 )
+
+# The Discord message being acted on, as typed (#1499). The order record needs
+# the words and the writers are handed only the parsed directive. A context
+# variable, not an attribute, because discord.py runs each on_message in its
+# own task: two orders typed a second apart must not read each other's text.
+_HEARD = contextvars.ContextVar("heard_order_text", default="")
 RELAY_SECONDS = float(os.environ.get("RELAY_SECONDS", "3"))
 # On restart, anything older than this is marked relayed WITHOUT being sent.
 # Same contract as the outcome poller: the bridge reports what happens while
@@ -4052,8 +4060,11 @@ def _queue_level_rows(family: dict) -> list:
     return rows
 
 
-def _write_queue(plan, source: str) -> int:
-    """Replace a family's pending queue with `plan`'s entries. Rows changed."""
+def _write_queue(plan, source: str, new_ids: list | None = None) -> int:
+    """Replace a family's pending queue with `plan`'s entries. Rows changed.
+
+    `new_ids`, when given, collects each inserted entry's id for the order
+    record (#1499)."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(campaignqueue.CANCEL_SQL, (plan.family,))
         changed = cur.rowcount or 0
@@ -4061,8 +4072,51 @@ def _write_queue(plan, source: str) -> int:
             cur.execute(campaignqueue.INSERT_SQL,
                         (plan.family, position, entry.keyword, entry.runs,
                          source[:64]))
+            if new_ids is not None:
+                new_ids.append(cur.lastrowid)
             changed += 1
     return changed
+
+
+def _ensure_order_store() -> None:
+    """The order record (#1499), created the way the queue store is.
+
+    A FAILURE IS LOGGED AND SWALLOWED: an order is carried out whether or not
+    it can be recorded, so a missing record table must not stop start-up.
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(orderrecord.CREATE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("orders: the order record store is unavailable, so "
+                      "Discord orders are carried out but not recorded")
+
+
+def _insert_order(record) -> int:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(orderrecord.INSERT_SQL, record.params())
+        return cur.lastrowid
+
+
+async def _note_order(kind: str, source: str, channel, rows) -> None:
+    """Record one Discord order AFTER its rows landed (#1499).
+
+    Nothing is recorded for an order that wrote nothing or did not come from
+    a person in Discord (orderrecord.build). A failed write is logged and the
+    order stands: the record describes the order, it is not part of it.
+    """
+    record = orderrecord.build(
+        kind, source, _HEARD.get(), getattr(channel, "id", ""), rows)
+    if record is None:
+        return
+    try:
+        row_id = await asyncio.to_thread(_insert_order, record)
+    except Exception:
+        log.exception("orders: the %s order from %s was carried out but not "
+                      "recorded", kind, source)
+        return
+    log.info("orders: %s order from %s recorded as %s: %s",
+             kind, source, row_id, record.rows_json())
 
 
 def _mark_queue(sql: str, entry_id: int) -> int:
@@ -7206,6 +7260,7 @@ class Bridge(discord.Client):
             _ensure_watch_store,
             _ensure_quest_ledger_store,
             _ensure_now_store,
+            _ensure_order_store,
         ):
             try:
                 await asyncio.to_thread(ensure)
@@ -7247,6 +7302,7 @@ class Bridge(discord.Client):
         # the production one runs it on the live family.
         if OWNED_CHANNEL_IDS and str(message.channel.id) not in OWNED_CHANNEL_IDS:
             return
+        _HEARD.set(message.content or "")
         dedicated = OVERSEER_CHANNEL_ID and str(message.channel.id) == OVERSEER_CHANNEL_ID
         decisions = core.parse_directive(
             message.content, str(message.author.id), self._allowed, dedicated=bool(dedicated)
@@ -19575,11 +19631,18 @@ class Bridge(discord.Client):
             return False
         if isinstance(parsed, goals.CancelGoal):
             cancelled = await asyncio.to_thread(_cancel_goals, d.target_name)
+            await _note_order(
+                orderrecord.GOAL, d.source, channel,
+                (orderrecord.Written(
+                    "overseer_goal", "character=%s cancelled=%d" % (d.target_name, cancelled)),)
+                if cancelled else ())
             await channel.send(goals.cancel_text(d.target_name, cancelled))
             return True
         row_id = await asyncio.to_thread(
             _insert_goal, d.target_name, parsed, str(channel.id)
         )
+        await _note_order(
+            orderrecord.GOAL, d.source, channel, orderrecord.ids("overseer_goal", [row_id]))
         ack = goals.ack_text(d.target_name, parsed)
         await asyncio.to_thread(_insert_thought, d.target_name, "goal", ack)
         await channel.send(ack)
@@ -21049,9 +21112,15 @@ class Bridge(discord.Client):
                          plan.refusal)
                 await channel.send(plan.refusal[:1990])
                 return
-        written = await asyncio.to_thread(_write_queue, plan, d.source)
+        new_ids: list = []
+        written = await asyncio.to_thread(_write_queue, plan, d.source, new_ids)
         log.info("queue: %s set by %s, %d row(s) written: %s",
                  campaignqueue._family(key), d.source, written, plan.says)
+        await _note_order(
+            orderrecord.QUEUE, d.source, channel,
+            orderrecord.ids(campaignqueue.TABLE, new_ids) if plan.entries else (
+                (orderrecord.Written(campaignqueue.TABLE, "family=%s cleared" % key),)
+                if written else ()))
         await channel.send(plan.says[:1990])
         if plan.entries:
             # Started now, not a minute from now, for the reason _set_job
@@ -22494,9 +22563,11 @@ class Bridge(discord.Client):
                      "campaign to craft (%s)", d.mode, ", ".join(sitting), standin.ENV)
             names = _standin_running(names)
         written = 0
+        job_ids = []
         for name in names:
             try:
-                await asyncio.to_thread(_insert_job, name, d.mode, d.source)
+                job_ids.append(
+                    await asyncio.to_thread(_insert_job, name, d.mode, d.source))
                 written += 1
             except Exception:
                 # One failed insert must not cost the rest of the family; see
@@ -22506,6 +22577,8 @@ class Bridge(discord.Client):
         log.info(
             "job: mode=%r called=%d written=%d", d.mode, len(names), written
         )
+        await _note_order(
+            orderrecord.JOB, d.source, channel, orderrecord.ids("overseer_command", job_ids))
         # DRIVEN NOW, NOT ONLY ON THE NEXT CYCLE. The protect cycle re-asserts
         # this every ten minutes, which is right for a restart and far too slow
         # for a person who has just given an order and is watching a stream.
