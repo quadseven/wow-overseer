@@ -1332,7 +1332,8 @@ def _withheld(grant: Grant, crowded: list, absent: list, apart=()) -> str:
     walls = []
     if crowded:
         walls.append(
-            "%s %s no free bag slot to receive it"
+            "%s %s no free bag slot to receive it (slot freeing is unavailable "
+            "and no direct equip path is available)"
             % (_joined(crowded), "have" if len(crowded) > 1 else "has")
         )
     if absent:
@@ -3228,7 +3229,9 @@ def _route_withheld(route, posting, walls: dict) -> str:
         )
     if full:
         said.append(
-            "%s ha%s no free bag slot" % (_few(full), "ve" if len(full) > 1 else "s")
+            "%s ha%s no free bag slot (slot freeing is unavailable and no "
+            "direct equip path is available)"
+            % (_few(full), "ve" if len(full) > 1 else "s")
         )
     if absent:
         said.append(
