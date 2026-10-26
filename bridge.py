@@ -20876,11 +20876,24 @@ class Bridge(discord.Client):
         here = await asyncio.to_thread(_present_members, list(fam["names"]),
                                        leader)
         free = await asyncio.to_thread(_fetch_free_slots, here)
-        if (jev_activity.withheld(True, free)
-                and _vendor_trip_makes_room(here, free)):
-            log.info("dungeon quests: %s waits for bag room; the vendor trip "
-                     "keeps the travel column", campaignqueue._family(key))
-            return False
+        if jev_activity.withheld(True, free) and _vendor_trip_makes_room(
+                here, free):
+            # THE VENDOR TRIP CANNOT GO WHILE ANOTHER ERRAND HOLDS THE COLUMN.
+            # Zug's town errand to Camp Taurajo held the traveller while it
+            # walked to the hub and waited for Zork at the mailbox, so the
+            # vendor trip that would sell Zrog's stacks could not go, and the
+            # family read "waits for bag room" for 32 minutes on the dev realm
+            # 2026-10-26. Hold only while the column is free or already carried
+            # by the vendor trip itself; a town errand's ground aim means the
+            # sale cannot happen yet, so waiting for it holds the family for
+            # the whole town errand. When another errand owns the column the
+            # hold yields and the walk is attempted instead (it will be claimed
+            # as soon as the town errand releases the column).
+            column = await asyncio.to_thread(_current_travel_npc, leader)
+            if column in ("", "vendor"):
+                log.info("dungeon quests: %s waits for bag room; the vendor trip "
+                         "keeps the travel column", campaignqueue._family(key))
+                return False
         mid = await self._mid_run(list(fam["names"]))
         facts = await asyncio.to_thread(
             _dungeonquest_facts, fam, str(head["keyword"]), leader, True, mid)
