@@ -139,6 +139,20 @@ MEASURED_FOCUS = {
     3337: 0,
     9918: 0,
     16641: 0,
+    # The worn recipes: Anvil, and a Blacksmith Hammer in the bags.
+    7818: 1,
+    2666: 1,
+    14379: 1,
+    2668: 1,
+    2672: 1,
+    3506: 1,
+    3501: 1,
+    7223: 1,
+    9928: 1,
+    9935: 1,
+    9964: 1,
+    16649: 1,
+    16657: 1,
     # LEATHERWORKING
     2881: 0,
     2152: 0,
@@ -252,6 +266,19 @@ MEASURED_BANDS = {
     3337: (1, 125, 150),
     9918: (1, 200, 210),
     16641: (1, 255, 260),
+    7818: (1, 105, 110),
+    2666: (80, 110, 150),
+    14379: (1, 155, 160),
+    2668: (95, 145, 175),
+    2672: (120, 150, 180),
+    3506: (1, 180, 205),
+    3501: (1, 190, 215),
+    7223: (1, 210, 235),
+    9928: (1, 225, 245),
+    9935: (1, 235, 255),
+    9964: (1, 255, 275),
+    16649: (1, 290, 310),
+    16657: (1, 315, 335),
     # LEATHERWORKING
     2881: (1, 20, 40),
     2152: (1, 30, 60),
@@ -439,16 +466,14 @@ class RecipeForTests(unittest.TestCase):
         self.assertIsNotNone(recipe)
         self.assertEqual(recipe.spell_id, 2660)
 
-    def test_blacksmithing_returns_none_in_an_anvil_gated_gap(self):
-        # 100-124 is real skill range with real recipes (Runed Copper Belt,
-        # Silver Rod, Rough Bronze Leggings) - all require an Anvil nothing
-        # walks a smith to, so this must stay None rather than falling back to
-        # a stone recipe past its own grey, which would grant no skill-up.
-        for value in (100, 124, 150, 199, 210, 249, 260, 300):
+    def test_blacksmithing_hands_the_anvil_rungs_to_the_hammer_recipes(self):
+        # 100-124 is real skill range with real recipes; they need an Anvil and
+        # a Blacksmith Hammer, which DriveCraft walks to and fetches.
+        for value, spell in ((100, 7818), (124, 2666), (150, 14379), (199, 3501)):
             with self.subTest(value=value):
-                self.assertIsNone(
-                    craft.recipe_for(goals.SKILL_IDS["blacksmithing"], value)
-                )
+                recipe = craft.recipe_for(goals.SKILL_IDS["blacksmithing"], value)
+                self.assertEqual(recipe.spell_id, spell)
+                self.assertEqual(recipe.tool, craft.BLACKSMITH_HAMMER)
 
     def test_the_grinding_stones_carry_the_smith_to_their_own_grey(self):
         """Coarse Grinding Stone's grey is 100 and Heavy Grinding Stone's 150,
@@ -463,21 +488,16 @@ class RecipeForTests(unittest.TestCase):
                 self.assertEqual(craft.recipe_for(blacksmithing, value).spell_id, 3337)
 
     def test_blacksmithing_finds_the_top_bracket(self):
-        # Dense Sharpening Stone, 250-259 - the highest verified entry. It
-        # ends at 259 and not 260 because 260 is its own grey value, where
-        # the core rolls no skill-up at all.
-        recipe = craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 259)
-        self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, 16641)
-
-    def test_blacksmithing_stops_at_dense_sharpening_stones_grey(self):
-        """260 IS THE GREY VALUE, not a bracket the table gave up on. Casting
-        there produces the item and never the point - see craft.py's COLOUR
-        BANDS block for the other nine edges that had the same fault."""
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 260))
+        # Imperial Plate Boots at the 300 cap; Dense Sharpening Stone ends at
+        # 259 and not 260 because 260 is its own grey value, where the core
+        # rolls no skill-up at all.
+        blacksmithing = goals.SKILL_IDS["blacksmithing"]
+        self.assertEqual(craft.recipe_for(blacksmithing, 259).spell_id, 16641)
+        self.assertEqual(craft.recipe_for(blacksmithing, 260).spell_id, 9964)
+        self.assertEqual(craft.recipe_for(blacksmithing, 300).spell_id, 16657)
 
     def test_blacksmithing_returns_none_past_the_last_verified_bracket(self):
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 261))
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 301))
 
     def test_blacksmithing_never_aims_below_a_recipes_learn_floor(self):
         """THE 65-74 WALL THAT STOPPED GRUG. Coarse Sharpening Stone's
@@ -1404,6 +1424,7 @@ class SpellFocusTests(unittest.TestCase):
             for recipe in recipes
             if recipe.focus
             and recipe.focus not in craft.FOCUS_AIMS
+            and not recipe.tool
             and skill_id != goals.SKILL_IDS["cooking"]
         }
         self.assertEqual(
@@ -1424,6 +1445,7 @@ class SpellFocusTests(unittest.TestCase):
             for recipe in recipes
             if recipe.focus
             and recipe.focus not in craft.FOCUS_AIMS
+            and not recipe.tool
             and skill_id != goals.SKILL_IDS["cooking"]
         }
         self.assertEqual(set(stranded.values()), {1})  # Anvil, and only Anvil
@@ -1452,7 +1474,10 @@ class SpellFocusTests(unittest.TestCase):
                 focus = craft.focus_for(spell)
                 with self.subTest(skill=skill_name, value=value, spell=spell):
                     self.assertTrue(
-                        focus == 0 or focus in craft.FOCUS_AIMS or focus == 4,
+                        focus == 0
+                        or focus in craft.FOCUS_AIMS
+                        or focus == 4
+                        or craft.tool_for(spell) != 0,
                         f"craft_errand names {spell} at {skill_name} {value}, "
                         f"which needs focus {focus} and nothing walks there",
                     )

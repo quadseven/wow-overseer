@@ -1,206 +1,135 @@
-"""Test Blacksmith Hammer buying and worn blacksmithing recipes.
+"""The Blacksmith Hammer buy, Green Dye and the worn Blacksmithing recipes.
 
-Every fixture below is a fact measured on the live wow-dev roster the night
-this module was written, not an invented number.
-
-Blacksmith Hammer 5956: read from acore_world.item_template
-Green Dye 2605: read from acore_world.item_template
+Item facts below were read from acore_world.item_template on the dev realm:
+Blacksmith Hammer 5956 (BuyPrice 18, 206 vendor rows, all unlimited) and
+Green Dye 2605 (BuyPrice 100, 87 vendor rows, all unlimited). Spell ids, bar
+counts and output items were checked against wowhead.com/wotlk and
+classicdb.ch.
 """
 
 import unittest
 
+import craft
 import craft_supply
+import goals
 from towntrip import Town
 
+BLACKSMITHING = goals.SKILL_IDS["blacksmithing"]
 HAMMER = 5956
 GREEN_DYE = 2605
-
-HAMMER_PRICE = 0
-HAMMER_STOCKS = frozenset()
-
-DYE_PRICE = 0
-DYE_STOCKS = frozenset()
+BELT = 2666  # Runed Copper Belt, a hammer recipe
+STONE = 3337  # Heavy Grinding Stone, no hammer
 
 
-def town_with_hammer():
-    return Town(repairs=False, stocks=frozenset(HAMMER_STOCKS), vendor=bool(HAMMER_STOCKS))
-
-
-def town_with_dye():
-    return Town(repairs=False, stocks=frozenset(DYE_STOCKS), vendor=bool(DYE_STOCKS))
-
-
-def town_with_both():
-    return Town(repairs=False, stocks=frozenset(HAMMER_STOCKS | DYE_STOCKS), vendor=bool(HAMMER_STOCKS | DYE_STOCKS))
+def town(*stocks):
+    return Town(repairs=False, stocks=frozenset(stocks), vendor=bool(stocks))
 
 
 class HammerBuyTests(unittest.TestCase):
-    def test_hammer_not_in_reagents(self):
-        hammer_in_reagents = HAMMER in craft_supply.REAGENTS
-        self.assertFalse(hammer_in_reagents)
+    def buy(self, spell=BELT, held=False, money=1000, slots=5, at=(HAMMER,)):
+        return craft_supply.hammer_errand("Og", spell, held, money, slots, town(*at))
 
-    def test_buy_hammer_when_needed(self):
-        errand, note = craft_supply.reagent_errand(
-            "Og",
-            HAMMER,
-            held=0,
-            money=100_000,
-            free_slots=10,
-            town=town_with_hammer(),
-        )
+    def test_a_smith_with_no_hammer_gets_one_buy_row(self):
+        errand, note = self.buy()
         self.assertIsNone(note)
-        self.assertIsNotNone(errand)
-        self.assertEqual(errand.member, "Og")
         self.assertEqual(errand.kind, "buy")
-        self.assertEqual(errand.command, "entry:5956 count:5 max:0")
-
-    def test_hammer_not_bought_when_already_held(self):
-        errand, note = craft_supply.reagent_errand(
-            "Og",
-            HAMMER,
-            held=5,
-            money=100_000,
-            free_slots=10,
-            town=town_with_hammer(),
-        )
-        self.assertIsNone(errand)
-        self.assertIsNone(note)
-
-
-class DyeBuyTests(unittest.TestCase):
-    def test_green_dye_not_in_reagents(self):
-        dye_in_reagents = GREEN_DYE in craft_supply.REAGENTS
-        self.assertFalse(dye_in_reagents)
-
-    def test_buy_green_dye_when_needed(self):
-        errand, note = craft_supply.reagent_errand(
-            "Og",
-            GREEN_DYE,
-            held=0,
-            money=100_000,
-            free_slots=10,
-            town=town_with_dye(),
-        )
-        self.assertIsNone(note)
-        self.assertIsNotNone(errand)
         self.assertEqual(errand.member, "Og")
-        self.assertEqual(errand.kind, "buy")
-        self.assertEqual(errand.command, "entry:2605 count:5 max:0")
+        self.assertEqual(errand.command, "entry:5956 count:1 max:18")
 
-    def test_green_dye_not_bought_when_already_held(self):
-        errand, note = craft_supply.reagent_errand(
-            "Og",
-            GREEN_DYE,
-            held=5,
-            money=100_000,
-            free_slots=10,
-            town=town_with_dye(),
-        )
+    def test_no_second_buy_while_one_is_held(self):
+        self.assertEqual(self.buy(held=True), (None, None))
+
+    def test_a_recipe_without_the_tool_buys_nothing(self):
+        self.assertEqual(self.buy(spell=STONE), (None, None))
+
+    def test_no_vendor_in_reach_is_a_note(self):
+        errand, note = self.buy(at=())
         self.assertIsNone(errand)
-        self.assertIsNone(note)
+        self.assertIn("no reachable vendor", note)
+
+    def test_a_full_bag_is_a_note(self):
+        errand, note = self.buy(slots=0)
+        self.assertIsNone(errand)
+        self.assertIn("no free bag slot", note)
+
+    def test_a_short_purse_is_a_note(self):
+        errand, note = self.buy(money=17)
+        self.assertIsNone(errand)
+        self.assertIn("cannot afford", note)
+
+    def test_the_need_walks_only_when_nothing_in_reach_sells_one(self):
+        need = craft_supply.hammer_need("Og", BELT, False, town())
+        self.assertEqual((need.shopper, need.entry), ("Og", HAMMER))
+        self.assertIsNone(craft_supply.hammer_need("Og", BELT, False, town(HAMMER)))
+        self.assertIsNone(craft_supply.hammer_need("Og", BELT, True, town()))
+        self.assertIsNone(craft_supply.hammer_need("Og", STONE, False, town()))
 
 
-class WornRecipesTests(unittest.TestCase):
-    def test_runed_copper_belt_exists(self):
-        import craft
+class GreenDyeTests(unittest.TestCase):
+    def test_both_green_iron_recipes_buy_one_dye_per_cast(self):
+        for spell in (3506, 3501):
+            with self.subTest(spell=spell):
+                self.assertEqual(
+                    craft_supply.REAGENTS[spell], ((GREEN_DYE, "Green Dye", 100, 1),)
+                )
 
-        spell_id = 2666
-        recipe = craft.recipe_for(craft.SKILL_IDS["blacksmithing"], 80)
-        self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, spell_id)
+    def test_dye_is_bought_up_to_five_casts(self):
+        errands, notes = craft_supply.craft_reagent_errands(
+            "Og", 3501, {GREEN_DYE: 0}, 10_000, 5, town(GREEN_DYE)
+        )
+        self.assertEqual(notes, [])
+        self.assertEqual(errands[0].command, "entry:2605 count:5 max:500")
 
-    def test_silver_rod_exists(self):
-        import craft
 
-        spell_id = 7818
-        recipe = craft.recipe_for(craft.SKILL_IDS["blacksmithing"], 1)
-        self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, spell_id)
+# spell, name, min_skill, max_skill
+WORN = (
+    (7818, "Silver Rod", 100, 109),
+    (2666, "Runed Copper Belt", 110, 124),
+    (14379, "Golden Rod", 150, 159),
+    (2668, "Rough Bronze Leggings", 160, 174),
+    (2672, "Patterned Bronze Bracers", 175, 179),
+    (3506, "Green Iron Leggings", 180, 189),
+    (3501, "Green Iron Bracers", 190, 199),
+    (7223, "Golden Scale Bracers", 210, 224),
+    (9928, "Heavy Mithril Gauntlet", 225, 234),
+    (9935, "Steel Plate Helm", 235, 249),
+    (9964, "Mithril Spurs", 260, 274),
+    (16649, "Imperial Plate Bracers", 275, 299),
+    (16657, "Imperial Plate Boots", 300, 300),
+)
 
-    def test_rough_bronze_leggings_exists(self):
-        import craft
 
-        spell_id = 2668
-        recipe = craft.recipe_for(craft.SKILL_IDS["blacksmithing"], 95)
-        self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, spell_id)
+class WornRecipeTests(unittest.TestCase):
+    def test_each_worn_recipe_is_pinned(self):
+        for spell, name, low, high in WORN:
+            with self.subTest(name=name):
+                for value in (low, high):
+                    recipe = craft.recipe_for(BLACKSMITHING, value)
+                    self.assertEqual(recipe.spell_id, spell)
+                    self.assertEqual(recipe.name, name)
+                self.assertEqual(craft.focus_for(spell), 1)
+                self.assertEqual(craft.tool_for(spell), HAMMER)
 
-    def test_patterned_bronze_bracers_exists(self):
-        import craft
+    def test_the_output_items_are_named_in_the_notes(self):
+        items = {
+            7818: 6338, 2666: 2857, 14379: 11128, 2668: 2865, 2672: 2868,
+            3506: 3842, 3501: 3835, 7223: 6040, 9928: 7919, 9935: 7922,
+            9964: 7969, 16649: 12425, 16657: 12426,
+        }  # fmt: skip
+        notes = {r.spell_id: r.note for r in craft.RECIPES[BLACKSMITHING]}
+        for spell, item in items.items():
+            with self.subTest(spell=spell):
+                self.assertIn(f"item {item}", notes[spell])
 
-        spell_id = 2672
-        recipe = craft.recipe_for(craft.SKILL_IDS["blacksmithing"], 120)
-        self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, spell_id)
+    def test_the_stones_carry_no_tool(self):
+        for recipe in craft.RECIPES[BLACKSMITHING]:
+            if recipe.spell_id not in {w[0] for w in WORN}:
+                self.assertEqual((recipe.focus, recipe.tool), (0, 0))
 
-    def test_golden_rod_exists(self):
-        import craft
+    def test_a_smith_is_handed_a_worn_recipe(self):
+        spell = craft.craft_errand("Grug", {"blacksmithing": 110}, ("blacksmithing",))
+        self.assertEqual(spell, BELT)
 
-        spell_id = 14379
-        recipe = craft.recipe_for(craft.SKILL_IDS["blacksmithing"], 1)
-        self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, spell_id)
 
-    def test_green_iron_leggings_exists(self):
-        import craft
-
-        spell_id = 3506
-        recipe = craft.recipe_for(craft.SKILL_IDS["blacksmithing"], 1)
-        self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, spell_id)
-
-    def test_green_iron_bracers_exists(self):
-        import craft
-
-        spell_id = 3501
-        recipe = craft.recipe_for(craft.SKILL_IDS["blacksmithing"], 1)
-        self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, spell_id)
-
-    def test_golden_scale_bracers_exists(self):
-        import craft
-
-        spell_id = 7223
-        recipe = craft.recipe_for(craft.SKILL_IDS["blacksmithing"], 210)
-        self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, spell_id)
-
-    def test_heavy_mithril_gauntlet_exists(self):
-        import craft
-
-        spell_id = 9928
-        recipe = craft.recipe_for(craft.SKILL_IDS["blacksmithing"], 225)
-        self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, spell_id)
-
-    def test_steel_plate_helm_exists(self):
-        import craft
-
-        spell_id = 9935
-        recipe = craft.recipe_for(craft.SKILL_IDS["blacksmithing"], 235)
-        self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, spell_id)
-
-    def test_mithril_spurs_exists(self):
-        import craft
-
-        spell_id = 9964
-        recipe = craft.recipe_for(craft.SKILL_IDS["blacksmithing"], 255)
-        self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, spell_id)
-
-    def test_imperial_plate_bracers_exists(self):
-        import craft
-
-        spell_id = 16649
-        recipe = craft.recipe_for(craft.SKILL_IDS["blacksmithing"], 290)
-        self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, spell_id)
-
-    def test_imperial_plate_boots_exists(self):
-        import craft
-
-        spell_id = 16657
-        recipe = craft.recipe_for(craft.SKILL_IDS["blacksmithing"], 315)
-        self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, spell_id)
+if __name__ == "__main__":
+    unittest.main()

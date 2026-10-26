@@ -219,6 +219,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import craft
 import jobs
 import towntrip
 import travel
@@ -399,6 +400,11 @@ REAGENTS: dict[int, tuple[tuple[int, str, int, int], ...]] = {
         (14341, "Rune Thread", 5000, 1),
     ),
     19082: ((14341, "Rune Thread", 5000, 1),),  # Runic Leather Headband
+    # BLACKSMITHING'S GREEN DYE, read from acore_world.item_template (entry
+    # 2605, BuyPrice 100) with 87 npc_vendor rows, every one maxcount 0
+    # (unlimited), read 2026-10-26. Spell.dbc takes one per cast.
+    3506: ((2605, "Green Dye", 100, 1),),  # Green Iron Leggings
+    3501: ((2605, "Green Dye", 100, 1),),  # Green Iron Bracers
 }
 
 # How many casts' worth of a REAGENTS reagent to keep in stock - see the
@@ -544,6 +550,66 @@ def pole_need(name: str, holds_pole: bool, town: "towntrip.Town"):
         return None
     entry, label, _price = FISHING_POLE
     if entry in town.stocks:
+        return None
+    return Need(name, entry, label)
+
+
+# THE BLACKSMITH HAMMER, A BAG TOOL BOUGHT ONCE AND BANKED (the module ticket).
+# Every worn Blacksmithing recipe carries `craft.Recipe.tool` = this entry.
+# DriveCraft takes the hammer out of the crafter's bank to craft and banks it
+# again, so it counts as held in the bags OR the bank, and a crafter with
+# neither is sold one. Entry, name and price read from
+# acore_world.item_template (class 2, subclass 14, BuyPrice 18), with 206
+# npc_vendor rows, every one maxcount 0 (unlimited), read 2026-10-26:
+BLACKSMITH_HAMMER: tuple[int, str, int] = (
+    craft.BLACKSMITH_HAMMER,
+    "Blacksmith Hammer",
+    18,
+)
+
+
+def hammer_errand(
+    name: str,
+    craft_spell: int,
+    holds_hammer: bool,
+    money: int,
+    free_slots: int,
+    town: "towntrip.Town",
+) -> tuple["towntrip.Errand | None", "str | None"]:
+    """The buy errand for this crafter's Blacksmith Hammer, or why not.
+
+    `pole_errand`'s shape: (errand, None) when a row should be written,
+    (None, note) when something stopped it, (None, None) when nothing is
+    owed - the recipe needs no hammer, or one is already in the bags or bank.
+    """
+    entry, label, price = BLACKSMITH_HAMMER
+    if craft.tool_for(craft_spell) != entry or holds_hammer:
+        return None, None
+    if entry not in town.stocks:
+        return None, f"no reachable vendor stocks a {label} ({entry}) for {name}"
+    if free_slots < 1:
+        return None, f"{name} has no free bag slot for a {label}"
+    if money < price:
+        return None, f"{name} cannot afford a {label} ({price} copper against {money})"
+    return (
+        towntrip.Errand(
+            name,
+            "buy",
+            f"entry:{entry} count:1 max:{price}",
+            f"holds no {label} in bags or bank for craft_spell {craft_spell}",
+            price,
+        ),
+        None,
+    )
+
+
+def hammer_need(name: str, craft_spell: int, holds_hammer: bool, town: "towntrip.Town"):
+    """The trip this crafter's Blacksmith Hammer needs, or None.
+
+    `hammer_errand`'s sibling, as `pole_need` is `pole_errand`'s.
+    """
+    entry, label, _price = BLACKSMITH_HAMMER
+    if craft.tool_for(craft_spell) != entry or holds_hammer or entry in town.stocks:
         return None
     return Need(name, entry, label)
 
