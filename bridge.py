@@ -7947,7 +7947,7 @@ class Bridge(discord.Client):
         if prompt is None:
             return plain
         try:
-            said = await asyncio.to_thread(
+            said = await llmpool.call(
                 _ask_llm, prompt,
                 "Answer with the sentence only. No reasoning, no preamble, "
                 "no quotation marks.",
@@ -19537,7 +19537,7 @@ class Bridge(discord.Client):
             texts: list[str] = []
             if voiced:
                 try:
-                    reply = await asyncio.to_thread(
+                    reply = await llmpool.call(
                         _ask_llm, events.build_batch_prompt(voiced)
                     )
                     texts = events.voice_events(voiced, reply)
@@ -22804,7 +22804,7 @@ class Bridge(discord.Client):
             return
         speaker = bonds.head_of_family()
         try:
-            said = await asyncio.to_thread(
+            said = await llmpool.call(
                 _ask_llm, digest.build_prompt(report, speaker=speaker))
         except Exception:
             log.exception("digest voice unreachable; the account stands alone")
