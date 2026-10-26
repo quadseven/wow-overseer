@@ -50,6 +50,9 @@ class _Slot:
         self.adopted.append(kw)
 
 
+_Sale = object
+
+
 class _Self:
     def __init__(self, taken=True):
         self.slot = _Slot()
@@ -112,6 +115,98 @@ class KeepAtAuctioneerTest(unittest.TestCase):
         self.assertEqual([], me.claims)
         self.assertEqual(1, len(me.slot.adopted))
         self.assertEqual("auction", me.slot.adopted[0]["claimant"])
+
+
+class ListWalkQueuesRows(unittest.TestCase):
+    """`_auction_list_walk` queues listing rows, it does not only aim.
+
+    A surplus material past the guild's target is carried by a member who is
+    not at a counter, so `sales_by_house` drops it. The walk must queue its
+    listing row at the leader's house (priced against the leader's house
+    market, fair price included) rather than only aiming the leader.
+    """
+
+    def run_walk(self, sales=(), slot_taken=True, house_closed=False):
+        queued = []
+        log = _Log()
+        ns = _load(
+            ["_auction_list_walk"],
+            {
+                "asyncio": types.SimpleNamespace(to_thread=_to_thread),
+                "auction": auction,
+                "bag_pressure": types.SimpleNamespace(
+                    family_town_run_needed=lambda names: 1
+                ),
+                "_log_changed": lambda claimant, lines, key=None, capped=False: None,
+                "_fetch_free_slots": lambda names: {n: 8 for n in names},
+                "_fetch_teams": lambda names: {name: "alliance" for name in names},
+                "_recent_auction_keys": lambda minutes: set(),
+                "_cohort_key": lambda cohort=None: "Grug",
+                "_insert_auction": lambda holder, command, source="auction": (
+                    queued.append((holder, command)) or 1
+                ),
+                "_family_label": lambda cohort=None: "",
+                "GIVE_RETRY_MINUTES": 60,
+                "log": log,
+                "time": types.SimpleNamespace(monotonic=lambda: 1.0),
+            },
+        )
+        me = _Self(slot_taken)
+
+        async def listable(candidates, leader):
+            return sales
+
+        async def claim(claimant, character, aim, **kw):
+            return slot_taken
+
+        async def closed(house):
+            return house_closed
+
+        async def sell_house(house, candidates, seen, cohort):
+            queued.append(("sell_house", house))
+            return 0
+
+        me._auction_listable_at_home = listable
+        me._claim_town_slot = claim
+        me._cohort_key = lambda cohort=None: "Grug"
+        me._fetch_teams = lambda names: {name: "alliance" for name in names}
+        me._house_is_closed = closed
+        me._auction_sell_house = sell_house
+        me._auction_urgency_spent = lambda cohort, kind, pressure: None
+
+        candidate = {
+            "holder": "Grog",
+            "item_guid": 7,
+            "entry": 2589,
+            "label": "Linen Cloth",
+            "quality": 1,
+            "binding": "none",
+            "quest_item": False,
+            "recipient": "",
+            "sell_price": 13,
+            "count": 20,
+            "fair_price": 546,
+        }
+        asyncio.run(
+            ns["_auction_list_walk"](me, [candidate], ["Grug"], "Grug", cohort="Grug")
+        )
+        return queued, log
+
+    def test_the_walk_queues_rows_instead_of_only_aiming(self):
+        queued, _ = self.run_walk(sales=(_Sale(),))
+        self.assertTrue(any("sell_house" in str(q) for q in queued))
+
+    def test_no_sales_means_no_queue(self):
+        queued, _ = self.run_walk(sales=())
+        self.assertEqual([], queued)
+
+    def test_slot_not_taken_means_no_queue(self):
+        queued, _ = self.run_walk(sales=(_Sale(),), slot_taken=False)
+        self.assertEqual([], queued)
+
+    def test_closed_house_means_no_queue(self):
+        queued, _ = self.run_walk(sales=(_Sale(),), house_closed=True)
+        self.assertEqual([], queued)
 
 
 if __name__ == "__main__":

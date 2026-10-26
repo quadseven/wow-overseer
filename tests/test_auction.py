@@ -941,6 +941,25 @@ class SalesPassWiringTest(unittest.TestCase):
         # code paths disagreeing about which house a listing is priced in.
         self.assertNotIn("_fetch_auctioneer, leader", body)
 
+    def test_unlisted_candidates_listed_at_the_leaders_house(self):
+        body = self._body()
+        # A candidate whose holder stands at no counter is listed at the
+        # leader's house (priced against the leader's house market, fair
+        # price included) rather than silently dropped.
+        self.assertIn("unlisted", body)
+        self.assertIn('holder_house.get(str(c["holder"])', body)
+        self.assertIn("await self._auction_list_walk(unlisted", body)
+
+    def test_the_list_walk_queues_rows_not_only_aims(self):
+        src = BRIDGE.read_text(encoding="utf-8", errors="ignore")
+        start = src.index("async def _auction_list_walk(")
+        end = src.index("async def _auction_listable_at_home(")
+        body = src[start:end]
+        # The walk now queues listing rows at the leader's house instead of
+        # only aiming the leader at the counter.
+        self.assertIn("_auction_sell_house(", body)
+        self.assertIn("_house_is_closed(house)", body)
+
 
 class VocabularyTest(unittest.TestCase):
     """The keyword this module aims with, across its three copies."""

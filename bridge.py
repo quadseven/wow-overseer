@@ -10160,15 +10160,20 @@ class Bridge(discord.Client):
             return
         holder_house = await self._auction_holder_houses(candidates, names)
         by_house = auction.sales_by_house(candidates, holder_house)
-        if not by_house:
-            if step == bag_pressure.VENDOR_ERRAND_AIM:
-                await self._auction_list_walk(candidates, names, leader, cohort)
-            return
         seen = await asyncio.to_thread(_recent_auction_keys, GIVE_RETRY_MINUTES)
         queued = 0
         for house, house_candidates in sorted(by_house.items()):
             queued += await self._auction_sell_house(
                 house, house_candidates, seen, cohort)
+        # A candidate whose holder stands at no counter cannot be priced at
+        # that holder's house. Walk the leader to the leader's house and list
+        # those stacks there, priced against the leader's house market, so they
+        # list when a holder reaches a counter. `_auction_list_walk` now queues
+        # the rows rather than only aiming.
+        unlisted = [c for c in candidates
+                    if int(holder_house.get(str(c["holder"]), 0) or 0) <= 0]
+        if unlisted and step == bag_pressure.VENDOR_ERRAND_AIM:
+            await self._auction_list_walk(unlisted, names, leader, cohort)
         if queued:
             await self._keep_at_auctioneer(leader, cohort)
             self._cohort_town_slot(_cohort_key(cohort)).productive("auction")
@@ -10181,6 +10186,10 @@ class Bridge(discord.Client):
         against the house of the leader's team, the way the bag upgrade walk
         plans before it arrives; `DoAuction` and the per-house plan at the
         counter still decide.
+
+        The walk no longer only aims: once the leader holds the counter, the
+        rows are queued at the leader's house so a surplus material stack a
+        holder carries can list when that holder reaches a counter.
         """
         sales = await self._auction_listable_at_home(candidates, leader)
         _log_changed("auction", [] if sales else [
@@ -10200,6 +10209,13 @@ class Bridge(discord.Client):
         if await self._claim_town_slot(
                 "auction", leader, auction.AUCTIONEER_ROLE, urgent=pressure,
                 cohort=_cohort_key(cohort)):
+            teams = await asyncio.to_thread(_fetch_teams, [leader])
+            house = auction.TEAM_HOUSE.get(teams.get(leader, ""), 0)
+            if house and not await self._house_is_closed(house):
+                seen = await asyncio.to_thread(_recent_auction_keys,
+                                               GIVE_RETRY_MINUTES)
+                await self._auction_sell_house(house, candidates, seen,
+                                               cohort)
             log.info("auction: leader=%s aimed to list %d surplus BoE item(s)",
                      leader, len(sales))
             self._auction_urgency_spent(cohort, "list", pressure)
