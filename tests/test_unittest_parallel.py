@@ -8,9 +8,13 @@ module, or miscount what ran:
 - one failing test, in any one module, fails the whole run;
 - a module that holds no tests (unittest's exit code 5) is not a failure;
 - the reported total equals what `unittest discover` counts for the same dir;
-- check.yml really calls the runner, not discover.
+- check.yml really calls the runner, not discover;
+- the lane check (.loom/validation.conf) calls the same runner CI does (#1434);
+- a module that used to lean on another module's pymysql stub passes alone,
+  with no pymysql installed, the way a batch of the lane check runs it (#1434).
 """
 
+import os
 import pathlib
 import re
 import subprocess
@@ -22,6 +26,7 @@ import unittest
 HERE = pathlib.Path(__file__).resolve().parent.parent
 SCRIPT = HERE / ".github" / "scripts" / "unittest_parallel.py"
 CHECK_YML = HERE / ".github" / "workflows" / "check.yml"
+LANE_CONF = HERE / ".loom" / "validation.conf"
 
 PASSING = """
     import unittest
@@ -169,6 +174,100 @@ class CheckWorkflowTest(unittest.TestCase):
             cmd,
         )
         self.assertNotIn("unittest discover", cmd)
+
+
+def runner_call(command):
+    """The runner script and its arguments in the last `&&` step of a shell
+    command: what follows the `python3` that runs it, minus interpreter flags
+    such as -B, so CI's `uv run ... python3 X` and the lane's `python3 -B X`
+    compare as the same call."""
+    step = command.split("&&")[-1].split()
+    at = len(step) - 1 - step[::-1].index("python3")
+    return [arg for arg in step[at + 1 :] if not arg.startswith("-")]
+
+
+class LaneCheckTest(unittest.TestCase):
+    """The lane runs .loom/validation.conf before it pushes. It used to run
+    `unittest discover` on one core, about ten minutes a check and two
+    checks a ticket, while CI ran the parallel runner in about a minute
+    (#1434). The two must run the same suite runner, so a change to one
+    cannot leave the other behind."""
+
+    def lane_check(self):
+        lines = LANE_CONF.read_text(encoding="utf-8").splitlines()
+        checks = [line for line in lines if line.startswith("check:")]
+        self.assertEqual(len(checks), 1, "validation.conf needs one check: line")
+        return checks[0].removeprefix("check:").strip()
+
+    def ci_check(self):
+        text = CHECK_YML.read_text(encoding="utf-8")
+        cmd = re.search(r"^\s*test-cmd:\s*\"(.*)\"\s*$", text, re.M)
+        self.assertIsNotNone(cmd, "check.yml has no quoted unittest test-cmd")
+        return cmd.group(1)
+
+    def test_the_lane_runs_the_runner_ci_runs(self):
+        self.assertEqual(runner_call(self.lane_check()), runner_call(self.ci_check()))
+        self.assertEqual(
+            runner_call(self.lane_check()), [".github/scripts/unittest_parallel.py"]
+        )
+
+    def test_the_lane_does_not_run_discover(self):
+        self.assertNotIn("unittest discover", self.lane_check())
+
+    def test_the_comparison_sees_a_difference(self):
+        self.assertNotEqual(
+            runner_call("ruff check . && python3 -B -m unittest discover -s tests"),
+            runner_call(self.ci_check()),
+        )
+
+
+# Runs unittest on the named modules with pymysql unimportable, as on a lane
+# machine without it installed. A stub a test module installs itself still
+# works: sys.modules is read before any finder.
+NO_PYMYSQL = """
+import importlib.abc
+import sys
+import unittest
+
+
+class NoPyMySQL(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path, target=None):
+        if name == "pymysql" or name.startswith("pymysql."):
+            raise ModuleNotFoundError(f"No module named {name!r}")
+        return None
+
+
+sys.meta_path.insert(0, NoPyMySQL())
+unittest.main(module=None, argv=["unittest", *sys.argv[1:]])
+"""
+
+
+class EachModuleStandsAloneTest(unittest.TestCase):
+    """The runner splits the modules into batches whose make-up changes with
+    the core count, so no module may lean on a stub another module left in
+    sys.modules. Under discover these four passed only because an earlier
+    module (alphabetically) had stubbed pymysql; on the lane, without
+    pymysql, whichever batch held one of them failed, and which batch that
+    was changed from run to run (#1434)."""
+
+    MODULES = (
+        "test_member_gold",
+        "test_named_aims",
+        "test_named_places",
+        "test_orders",
+    )
+
+    def test_each_passes_alone_without_pymysql(self):
+        for module in self.MODULES:
+            with self.subTest(module=module):
+                result = subprocess.run(
+                    [sys.executable, "-B", "-c", NO_PYMYSQL, module],
+                    cwd=HERE,
+                    env={**os.environ, "PYTHONPATH": str(HERE / "tests")},
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr[-2000:])
 
 
 if __name__ == "__main__":
