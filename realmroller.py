@@ -15,8 +15,9 @@ do next. It reads no network, cluster or git. `realmroller_world.py` observes;
 THE ANSWERS #522 APPROVED, and where each lives here:
 
 - Site-only releases skip the worldserver gates (`Component.gated`).
-- A roll waits for the families AND any guild group in an instance.
-- The hourly limit is per roll start; a rollback is exempt.
+- A roll does not wait for families or guild groups, and there is no hourly
+  limit (operator ruling 2026-10-20): it goes as soon as the release is
+  proven, and a run caught inside restarts.
 - A failed roll rolls back automatically and pauses the channel.
 - A missing verify grep rolls back unless the change marks it `soft`.
 - Queued proven releases coalesce: only the newest rolls.
@@ -27,9 +28,12 @@ THE ANSWERS #522 APPROVED, and where each lives here:
 from __future__ import annotations
 
 import itertools
+import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+
+log = logging.getLogger("realmroller")
 
 # proposed -> building -> built -> proven -> rolling -> live -> verified
 # Exits: build_failed, prove_failed, rolled_back; superseded when a newer
@@ -122,16 +126,17 @@ class Rollback:
 
 @dataclass(frozen=True)
 class Policy:
-    min_interval: timedelta
-    settle: timedelta
     ready_within: timedelta
-    families: tuple[str, ...]
-    guild_run_states: tuple[str, ...]
     rollback: Rollback
-    # Where a roll that predates the roller left its mark: the deploy-repo
-    # file whose digest lines a roll changes, and the regex `git log -G` uses.
     roll_marker_path: str
     roll_marker_pattern: str
+    # Retired by operator ruling 2026-10-20: optional, ignored when present.
+    # A channel that still carries them loads with one info log line naming
+    # them, and they do not gate the roll.
+    min_interval: timedelta = timedelta(0)
+    settle: timedelta = timedelta(0)
+    families: tuple[str, ...] = ()
+    guild_run_states: tuple[str, ...] = ()
     # Optional. A regex with ONE group over the marker file's text: a commit
     # counts as a roll only when what the group captures differs from the
     # parent's. The line pattern alone cannot tell the gated image's digest
@@ -285,12 +290,17 @@ def _parse_policy(raw: object, problems: list[str]) -> Policy:
     if isinstance(pct, int) and not 0 < pct < 100:
         problems.append("policy.rollback.bots_below_pct must be between 1 and 99")
     path, pattern, value = _parse_marker(raw.get("roll_marker"), problems)
+    # Retired keys (operator ruling 2026-10-20): optional, ignored when present.
+    # A channel that still carries them logs them once and keeps loading.
+    retired = [
+        key
+        for key in ("min_interval", "settle", "families", "guild_run_states")
+        if key in raw
+    ]
+    if retired:
+        log.info("retired policy keys ignored: %s", ", ".join(retired))
     return Policy(
-        min_interval=_duration_of(raw, "min_interval", problems, "policy."),
-        settle=_duration_of(raw, "settle", problems, "policy."),
         ready_within=_duration_of(raw, "ready_within", problems, "policy."),
-        families=_strings(raw, "families", problems, "policy."),
-        guild_run_states=_strings(raw, "guild_run_states", problems, "policy."),
         rollback=Rollback(
             restarts_over=restarts or 0,
             restarts_window=_duration_of(
@@ -304,6 +314,18 @@ def _parse_policy(raw: object, problems: list[str]) -> Policy:
         ),
         roll_marker_path=path,
         roll_marker_pattern=pattern,
+        min_interval=_duration_of(raw, "min_interval", problems, "policy.")
+        if "min_interval" in raw
+        else timedelta(0),
+        settle=_duration_of(raw, "settle", problems, "policy.")
+        if "settle" in raw
+        else timedelta(0),
+        families=_strings(raw, "families", problems, "policy.")
+        if "families" in raw
+        else (),
+        guild_run_states=_strings(raw, "guild_run_states", problems, "policy.")
+        if "guild_run_states" in raw
+        else (),
         roll_marker_value=value,
     )
 
@@ -749,29 +771,15 @@ def _pipeline_step(channel: Channel, releases: dict[str, Release]) -> Action | N
 
 
 def _held(channel: Channel, w: World, gated: bool) -> str:
-    """Why the roll waits, or "" when every gate is open. Pause holds every roll."""
+    """Why the roll waits, or "" when every gate is open. Pause holds every roll.
+
+    The min_interval, settle, families and guild_run_states gates are retired
+    (operator ruling 2026-10-20): a proven release rolls as soon as it is
+    proven, and a run caught inside restarts.
+    """
     if channel.paused:
         reason = channel.paused_reason
         return "channel paused" + (": %s" % reason if reason else "")
-    if not gated:
-        return ""
-    p = channel.policy
-    if w.last_roll_started and w.now - w.last_roll_started < p.min_interval:
-        nxt = (w.last_roll_started + p.min_interval).astimezone(timezone.utc)
-        return "one roll start per %s; next at %s" % (
-            _span(p.min_interval),
-            nxt.strftime("%H:%MZ"),
-        )
-    for count, unreadable, what in (
-        (w.family_in_instance, "family API unreachable", "family member(s)"),
-        (w.guild_groups_inside, "guild runs unreadable", "guild group(s)"),
-    ):
-        if count is None:
-            return "%s: treat as inside" % unreadable
-        if count > 0:
-            return "%d %s in an instance" % (count, what)
-    if w.out_since is None or w.now - w.out_since < p.settle:
-        return "everyone out, settling for %s" % _span(p.settle)
     return ""
 
 
