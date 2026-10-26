@@ -90,6 +90,8 @@ COLLATIONS = {
     "overseer_jev_outcome": "utf8mb4_0900_ai_ci",
     # Bridge-owned (#209), named in campaignqueue.CREATE_SQL the same way.
     "overseer_dungeon_queue": "utf8mb4_0900_ai_ci",
+    # Bridge-owned (#1499), named in orderrecord.CREATE_SQL the same way.
+    "overseer_order": "utf8mb4_0900_ai_ci",
     # Bridge-owned (the guild coordinator), named in
     # bridge._ensure_guild_run_store the same way overseer_jev_judgment is.
     "overseer_guild_run": "utf8mb4_0900_ai_ci",
@@ -261,6 +263,8 @@ STRING_COLUMNS = {
         {"before_state", "chose", "instead_of", "kind", "outcome", "subject"}
     ),
     "overseer_dungeon_queue": frozenset({"family", "keyword", "status", "source"}),
+    # From its own DDL (orderrecord.CREATE_SQL): every VARCHAR column.
+    "overseer_order": frozenset({"channel_id", "author", "text", "kind"}),
     # From its own DDL (standin.TABLE_SQL): every VARCHAR and ENUM column.
     "overseer_family_standin": frozenset(
         {"family", "out_name", "in_name", "seat", "reason"}
