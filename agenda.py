@@ -730,6 +730,12 @@ def last_movement(event_rows: list[dict]) -> datetime | None:
     return max(stamps) if stamps else None
 
 
+def boss_credit_words(detail) -> str:
+    """A boss credit's detail without the module's "(mask 1 -> 3)" tail, which
+    is bookkeeping for the run timeline: "1 encounter credited, 2 in all"."""
+    return str(detail or "").split(" (mask")[0].strip()
+
+
 def last_boss_credit(event_rows: list[dict], moved_at: datetime | None) -> str:
     """The newest boss credit's detail when it is the newest movement, else "".
 
@@ -741,7 +747,7 @@ def last_boss_credit(event_rows: list[dict], moved_at: datetime | None) -> str:
         return ""
     for row in event_rows:
         if str(row.get("kind") or "") == BOSS_KIND and row.get("last_seen") == moved_at:
-            return str(row.get("detail") or "").split(" (mask")[0].strip()
+            return boss_credit_words(row.get("detail"))
     return ""
 
 
