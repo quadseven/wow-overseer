@@ -7,6 +7,9 @@ validation and answer shaping are the shipped code. The answers are then read
 by jev.py's own JevBackend.read and jev.parse: the wrapper is correct when the
 bridge's parser accepts what it returns, not when it looks right.
 
+The lane check sandbox denies localhost, so the tests that start the server
+skip there (tests/sandbox_caps.py); CI runs them.
+
 No torch and no model: the package is imported only inside LibraryDecider,
 which is tested here against a stub of the package's two entry points.
 """
@@ -27,6 +30,7 @@ import urllib.error
 import urllib.request
 
 import jev
+from tests import sandbox_caps
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SERVER_PATH = ROOT / "services" / "strands-decider" / "strands_server.py"
@@ -105,6 +109,7 @@ class WrapperCase(unittest.TestCase):
         return running
 
 
+@unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
 class ChoiceAnswer(WrapperCase):
     def test_choice_carries_label_probabilities_and_confidence(self):
         running = self.serve(strands_server.FakeDecider(model="strands-test-1"))
@@ -153,6 +158,7 @@ class ChoiceAnswer(WrapperCase):
         self.assertEqual(questions, {"route": ROUTE, "full": FULL})
 
 
+@unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
 class NoulAnswer(WrapperCase):
     def test_noul_is_a_probability_jev_reads(self):
         running = self.serve(strands_server.FakeDecider(noul=0.8))
@@ -163,6 +169,7 @@ class NoulAnswer(WrapperCase):
         self.assertEqual(typed["full"], jev.Noul(0.8))
 
 
+@unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
 class ScoreAnswer(WrapperCase):
     def test_unsupported_score_is_omitted_so_jev_returns_none(self):
         fake = strands_server.FakeDecider(kinds=("choice", "noul"))
@@ -197,6 +204,7 @@ class ScoreAnswer(WrapperCase):
         self.assertEqual(typed["urgency"].score, 1.0)
 
 
+@unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
 class MalformedRequest(WrapperCase):
     def assert_400(self, running, *, body=None, raw=None):
         status, reply = running.call("POST", "/", body=body, raw=raw)
@@ -319,6 +327,7 @@ class MalformedRequest(WrapperCase):
         self.assertEqual(running.ask({"route": ROUTE}, path="/v1/other")[0], 404)
 
 
+@unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
 class ModelNotLoaded(WrapperCase):
     def test_ask_and_health_are_503_until_loaded(self):
         running = self.serve(None)
@@ -351,6 +360,7 @@ class ModelNotLoaded(WrapperCase):
         self.assertIn("no weights", body["error"])
 
 
+@unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
 class Latency(WrapperCase):
     def test_latency_ms_is_present_and_measures_the_decider(self):
         running = self.serve(strands_server.FakeDecider(delay=0.05))
@@ -366,6 +376,7 @@ class Latency(WrapperCase):
         self.assertIn("latency_ms", body)
 
 
+@unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
 class DeciderFailures(WrapperCase):
     def test_a_refused_prompt_is_422(self):
         running = self.serve(
@@ -403,6 +414,7 @@ class DeciderFailures(WrapperCase):
         self.assertEqual(body["answers"], {})
 
 
+@unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
 class TheBridgeClient(WrapperCase):
     """jev.Client with JEV_BACKEND=strands asks this wrapper over real HTTP."""
 
@@ -560,6 +572,7 @@ class LibraryDeciderOverTheStub(unittest.TestCase):
 
         self.addCleanup(restore)
 
+    @unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
     def test_loads_once_names_the_model_and_answers(self):
         decider = strands_server.LibraryDecider("Org/strands-decider-2B-x/", "cpu")
         self.assertEqual(decider.model, "strands-decider-2B-x")
