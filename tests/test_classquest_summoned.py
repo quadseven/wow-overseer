@@ -395,6 +395,23 @@ class WhatTheDataCannotSay(unittest.TestCase):
         self.assertEqual(quest.uses, ())
         self.assertEqual(classquest.blocker_of(quest, m)[0], classquest.SOURCE)
 
+    def test_the_live_world_spawns_the_corrupt_water_so_63_is_a_hunt(self):
+        # With a spawn row of the Corrupt Minor Manifestation of Water (5894),
+        # whose loot drops the bracers, 63 needs no summoner: it is an ordinary
+        # hunt, not a summoned objective.
+        water = spawn(9001, CORRUPT_WATER, 427.39, 1821.41, "Corrupt Water", EASTERN)
+        quest = classquest.build(
+            quest_rows=quest_rows(),
+            giver_rows=givers(),
+            spawn_rows=[water],
+            loot_rows=LOOT,
+            summon_rows=[],
+            held_rows=[],
+        ).quests[63]
+        m = draenei(63, level=22, race=2, map_id=EASTERN, x=500.0, y=1700.0)
+        self.assertEqual(classquest.blocker_of(quest, m), ("", ""))
+        self.assertEqual([s.guid for s in quest.fields], [9001])
+
 
 if __name__ == "__main__":
     unittest.main()
