@@ -34,10 +34,10 @@ COPY core.py bridge.py voice.py transform.py \
      armory.py wealth.py questlog.py modelviewer.py \
      relay.py digest.py \
      achievements.py recap.py agenda.py eye.py decree.py meter.py \
-     dungeonplan.py dungeonpath.py raidgoals.py raidcraft.py raidprep.py raidlineup.py raidgear.py raidroles.py raidteams.py teamsync.py attunestep.py raidready.py raidrun.py raidsupply.py readcache.py \
+     dungeonplan.py dungeonpath.py raidgoals.py raidcraft.py raidprep.py raidlineup.py mcencounters.py raidgear.py raidroles.py raidteams.py teamsync.py attunestep.py raidready.py raidrun.py raidsupply.py readcache.py \
      dungeonprogression.py dungeonquests.py \
      dungeonprogression.py dungeonquests.py \
-     guildcraft.py tradespec.py guildbank.py guildshare.py guildroute.py orders.py guildpost.py guildwork.py guildfund.py classtrain.py classcasts.py purse.py vendorsale.py bankbags.py natural.py guildcorps.py guildjobs.py guildlevel.py classquest.py classask.py classparty.py classuse.py classhunt.py guildrun.py guildpug.py familyseat.py seatmeter.py guildsocial.py crafters.py recruit.py interview.py \
+     guildcraft.py tradespec.py guildbank.py guildshare.py guildroute.py orders.py guildpost.py guildwork.py workorders.py guildfund.py classtrain.py classcasts.py purse.py vendorsale.py bankbags.py natural.py guildcorps.py guildjobs.py guildlevel.py classquest.py classask.py classparty.py classuse.py classhunt.py guildrun.py guildpug.py familyseat.py seatmeter.py guildsocial.py crafters.py recruit.py interview.py \
      bag_pressure.py bag_upgrade.py bag_economy.py bag_market.py disposition.py bagfate.py tidy.py \
      lockbox.py clearance.py \
      item_plan.py \
@@ -46,7 +46,7 @@ COPY core.py bridge.py voice.py transform.py \
      bank.py bankpolicy.py bankforecast.py housedemand.py \
      mailrun.py mountbuy.py holdings.py hunterpet.py \
      realm.py realmread.py basepath.py appbuild.py deployinfo.py watchwall.py nowstatus.py realmnav.py classic.py \
-     needs.py partystatus.py lootcard.py lootstory.py towntrip.py \
+     needs.py partystatus.py partyvoice.py lootcard.py lootstory.py towntrip.py \
      townerrand.py townslot.py tradechoice.py \
      enroll.py \
      tabard.py crossing.py \
@@ -54,7 +54,7 @@ COPY core.py bridge.py voice.py transform.py \
      campaignqueue.py dungeonpace.py dungeonstall.py standin.py \
      campaignplan.py dungeonladder.py director.py levelroute.py \
      preraid.py fireplan.py gearscore.py gearupgrades.py pvpgear.py equipscore.py \
-     runtimeline.py runstory.py places.py commandwords.py \
+     runtimeline.py runstory.py places.py commandwords.py orderrecord.py \
      vclient.py guildgear.py \
      situation.py standstill.py restsupply.py vision.py llmmode.py llmpool.py jev_movement.py jev_family_intent.py jev_outcomes.py leadcmd.py \
      realmroller.py realmroller_world.py realmroller_plan.py realmroller_act.py \

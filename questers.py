@@ -68,7 +68,12 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
     that alone (a script may summon it, a chest or a vendor may hold the
     item): it stalls, and its stall says so (STALLED_UNSOURCED);
   * REFUSED_TAKE / REFUSED_TURN_IN: the world refused the take or the hand-in
-    FAILS_BEFORE_BROKEN times in a day, with its own words appended.
+    FAILS_BEFORE_BROKEN times in a day, with its own words appended;
+  * CANNOT_TURN_IN: the world refused the hand-in once and said no retry
+    can help (`"retryable":false`, mod-overseer#19), with its own
+    words appended. That is "could not", not "did not yet": the quest is
+    reported at once and its hand-in is not asked again while the refusal is
+    in the rows the pass reads (`turn_in_held`).
 
 A broken quest the quester holds is dropped (the move in 1 above); one it
 never held (a giver that is not there) is only recorded, and so is a complete
@@ -80,6 +85,8 @@ A HAND-IN THE WORLD KEEPS REFUSING IS HELD (`turn_in_held`). A complete quest
 whose hand-in was refused FAILS_BEFORE_BROKEN times is not handed in again
 until TURN_IN_RETRY_MINUTES have passed since the last refusal, the hold
 doubling with each refusal past those; then it is tried once more.
+A hand-in refused as never retryable (CANNOT_TURN_IN) is held from its
+first refusal while that row is in the rows the pass reads.
 
 PURE MODULE: rows in, moves and verdicts out. No MySQL; the clock is passed in.
 """
@@ -160,6 +167,15 @@ SOURCE_MISSING = "an objective's creature or item is never found in the world"
 STALLED_UNSOURCED = STALLED + ", and no spawned creature is or drops what it asks for"
 REFUSED_TAKE = "the quest giver would not give it"
 REFUSED_TURN_IN = "the turn-in NPC would not take it"
+# The module refused the hand-in and marked it never retryable (#19 in
+# quadseven/mod-overseer): the world names nothing that takes the quest in,
+# or no such quest. Distinct from REFUSED_TURN_IN so the ledger never reads a
+# quest nobody can hand in as one that was merely slow to go through.
+CANNOT_TURN_IN = "the world says no hand-in of it can go through"
+# The module's non-retryable refusals that are about the quest log's state at
+# that moment, not about the quest: a later read of the log settles them, so
+# they never make a held quest a could-not.
+LOG_STATE_REFUSALS = frozenset({"already turned in", "not in the quest log"})
 
 # The world's own words for a spawn that is not there (classquest.SPAWN_REFUSALS).
 GONE = "no such spawn in the world"
@@ -512,10 +528,20 @@ class Attempt:
     reason: str = ""
     spawn: int = 0
     age_minutes: int = 0
+    # False only when the module said so (`"retryable":false` in the row's
+    # result). A refusal without the field, from a world image older than
+    # mod-overseer#19, is retryable, so it keeps the three-strike
+    # rule instead of being reported as could-not.
+    retryable: bool = True
 
     @property
     def failed(self) -> bool:
         return self.status in _FAILED
+
+    @property
+    def final(self) -> bool:
+        """The module refused this row and said no retry can help."""
+        return self.failed and not self.retryable
 
 
 def attempts(rows) -> tuple:
@@ -536,6 +562,7 @@ def attempts(rows) -> tuple:
                 reason=(recent.reason or recent.refusal) if recent else "",
                 spawn=recent.spawn if recent else 0,
                 age_minutes=_int(row.get("age"), 10**6),
+                retryable='"retryable":false' not in str(row.get("result") or ""),
             )
         )
     return tuple(out)
@@ -620,6 +647,20 @@ def refusals(name, tried) -> dict:
     return out
 
 
+def cannot_turn_in(name, tried) -> dict:
+    """quest id -> the module's words, for each hand-in of this quester the
+    module refused as never retryable (CANNOT_TURN_IN), newest words kept.
+    A refusal about the log's state (LOG_STATE_REFUSALS) is left out."""
+    out: dict = {}
+    for a in sorted(tried or (), key=lambda a: -a.age_minutes):
+        if a.name != name or not a.final or a.reason in LOG_STATE_REFUSALS:
+            continue
+        found = _CHAIN_ROW.match(a.command)
+        if found and found.group(1) == "turnin":
+            out[int(found.group(2))] = a.reason
+    return out
+
+
 def _module_complete(name, tried) -> frozenset:
     """The quest ids the module told this quester are complete, by refusing
     their abandon with its complete words: they are due a turn-in, never a
@@ -643,7 +684,11 @@ def turn_in_held(name, tried) -> frozenset:
     walked to Farmer Saldean and handed in The Killing Fields 216 times in
     42 hours, Pindle Return to Bellowfiz 511 times, each refused for the same
     lasting reason ("no taker of that quest in reach"). Asked again only after
-    the hold, the quester gets on with the rest of its zone meanwhile."""
+    the hold, the quester gets on with the rest of its zone meanwhile.
+
+    A hand-in the module refused as never retryable (`cannot_turn_in`) is held
+    from the first refusal for as long as that row is in the rows the pass
+    reads: asking again cannot change the answer."""
     count: dict = {}
     newest: dict = {}
     for a in tried or ():
@@ -660,7 +705,7 @@ def turn_in_held(name, tried) -> frozenset:
         for qid, times in count.items()
         if times >= FAILS_BEFORE_BROKEN
         and newest[qid] < TURN_IN_RETRY_MINUTES * 2 ** (times - FAILS_BEFORE_BROKEN)
-    )
+    ) | frozenset(cannot_turn_in(name, tried))
 
 
 class Clock:
@@ -807,6 +852,7 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
     is told every quest in the log, so it must be asked once a pass."""
     gone = gone_spawns(member.name, tried)
     refused = refusals(member.name, tried)
+    final = cannot_turn_in(member.name, tried)
     working = _working(cat, member, last_quest)
     playing = bool(member.online and member.alive)
     out = []
@@ -817,14 +863,16 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
         quest, facts = cat.quest(qid), cat.facts.get(qid)
         if quest is None or facts is None:
             continue
-        reason = _broken_reason(quest, facts, status, played, gone, refused)
+        reason = _broken_reason(quest, facts, status, played, gone, refused, final)
         if reason:
             out.append(Broken(member.name, qid, quest.title, reason, held=True))
     clock.forget(member.name, member.quest_log)
     return out
 
 
-def _broken_reason(quest, facts: Facts, status, played, gone, refused) -> str:
+def _broken_reason(
+    quest, facts: Facts, status, played, gone, refused, final=None
+) -> str:
     """Why a quest the quester holds is broken, "" when it is not (yet). A
     complete quest's objectives cannot move, so stillness never stalls it:
     it is due a turn-in, not a drop (#1085)."""
@@ -834,6 +882,8 @@ def _broken_reason(quest, facts: Facts, status, played, gone, refused) -> str:
         return ENDER_MISSING
     if status == STATUS_INCOMPLETE and _fields_gone(quest, gone):
         return SOURCE_MISSING
+    if quest.id in (final or {}):
+        return _refused_words(CANNOT_TURN_IN, final[quest.id])
     count, words = refused.get(("turnin", quest.id), (0, ""))
     if count >= FAILS_BEFORE_BROKEN:
         return _refused_words(REFUSED_TURN_IN, words)

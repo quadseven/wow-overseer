@@ -455,9 +455,30 @@ class ModelCallsHaveTheirOwnThreads(unittest.TestCase):
         self.assertTrue(_held_default(test).startswith(llmpool.PREFIX))
 
     def test_the_bridge_asks_its_model_on_the_model_threads(self):
-        source = (HERE / "bridge.py").read_text(encoding="utf-8")
-        self.assertFalse("to_thread(_ask_llm" in source)
-        self.assertEqual(source.count("llmpool.call(_ask_llm, prompt)"), 3)
+        # Parsed, not text-matched: a call written across two lines
+        # (`to_thread(` then `_ask_llm, ...` on the next) slipped past a
+        # substring check, and three such calls still held default threads
+        # after #1150.
+        tree = ast.parse((HERE / "bridge.py").read_text(encoding="utf-8"))
+        off_pool, on_pool = [], 0
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and node.args):
+                continue
+            first = node.args[0]
+            if not (isinstance(first, ast.Name) and first.id == "_ask_llm"):
+                continue
+            fn = node.func
+            if (
+                isinstance(fn, ast.Attribute)
+                and fn.attr == "call"
+                and isinstance(fn.value, ast.Name)
+                and fn.value.id == "llmpool"
+            ):
+                on_pool += 1
+            else:
+                off_pool.append(node.lineno)
+        self.assertEqual(off_pool, [], "_ask_llm handed to a non-model pool")
+        self.assertEqual(on_pool, 6)
 
     def test_the_image_ships_the_module(self):
         docker = (HERE / "Dockerfile").read_text(encoding="utf-8")
