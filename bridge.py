@@ -11009,7 +11009,12 @@ class Bridge(discord.Client):
             # Its own writer and its own failure: a broken route read must not
             # stop the surplus below from going out.
             log.exception("guild route pass failed; retrying next cycle")
-        _log_work_orders(roster)
+        try:
+            _log_work_orders(roster)
+        except Exception:
+            # Log-only planner (#486): a broken plan must not stop the
+            # surplus below from going out.
+            log.exception("work order plan failed; retrying next cycle")
         if share.gifts:
             await self._write_guild_gifts(share.gifts, cohort=cohort)
 
