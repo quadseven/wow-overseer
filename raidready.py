@@ -886,6 +886,9 @@ def build_guild(
         "groups": _group_lines(lineup),
         "gap_line": lineup.get("gap_line", ""),
         "gaps": lineup.get("gaps", {}),
+        # What each Molten Core boss asks for and what the lineup lacks.
+        "encounters": lineup.get("encounters", []),
+        "encounter_line": lineup.get("encounter_line", ""),
         "gear_line": _gear_line(raiders, gear),
         "blockers": blockers,
         "blockers_line": (
