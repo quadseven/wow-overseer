@@ -524,7 +524,12 @@ async def _to_thread(fn, *a, **k):
 
 
 def _bridge_pass(
-    enabled="1", blocked=frozenset(), standing=3000, stocks=LOKHTOS_STOCK, boom=False
+    enabled="1",
+    blocked=frozenset(),
+    standing=3000,
+    stocks=LOKHTOS_STOCK,
+    boom=False,
+    runs=1,
 ):
     inserted, walks = [], []
 
@@ -563,7 +568,8 @@ def _bridge_pass(
     old = fireplan.os.environ.get("DARK_IRON_ENABLED")
     fireplan.os.environ["DARK_IRON_ENABLED"] = enabled
     try:
-        queued = asyncio.run(ns["_dark_iron_once"](me, ["Smith"]))
+        for _ in range(runs):
+            queued = asyncio.run(ns["_dark_iron_once"](me, ["Smith"]))
     finally:
         if old is None:
             fireplan.os.environ.pop("DARK_IRON_ENABLED", None)
@@ -576,6 +582,16 @@ class BridgePassTests(unittest.TestCase):
     def test_off_by_default_queues_nothing(self):
         queued, inserted, _w, _l = _bridge_pass(enabled="0")
         self.assertEqual((queued, inserted), (0, []))
+
+    def test_an_invalid_flag_is_logged_once_and_treated_as_off(self):
+        # #1510: the flag read sat outside the pass guard, so DARK_IRON_ENABLED
+        # set to anything but 0 or 1 raised ValueError into the craft supply
+        # pass. It now reads as off, with one warning per bridge.
+        queued, inserted, _w, log = _bridge_pass(enabled="yes", runs=3)
+        self.assertEqual((queued, inserted), (0, []))
+        warned = [line for line in log.lines if "DARK_IRON_ENABLED" in line]
+        self.assertEqual(len(warned), 1, log.lines)
+        self.assertIn("'yes'", warned[0])
 
     def test_a_failing_pass_is_logged_and_does_not_raise(self):
         queued, _i, _w, log = _bridge_pass(boom=True)
