@@ -132,6 +132,7 @@ import mountbuy
 import purse
 import pvpgear
 import raidroles
+import raidrun
 import recipebook
 import restsupply
 import situation
@@ -2624,13 +2625,24 @@ def entrances() -> dict:
         return json.load(f)
 
 
+# The level a raid night's on-call summoner is held to as a ceiling: the cap.
+RAID_CEILING = 60
+
+
+def _door_map(keyword: str):
+    """The map a door keyword opens: a portal's, or the raid door's."""
+    if raidrun.is_raid(keyword):
+        return raidrun.MOLTEN_CORE_MAP
+    return dungeonpath.PORTAL_MAPS.get(keyword)
+
+
 def stone_for(keyword: str, entrances: dict, stones) -> Spot | None:
     """The meeting stone nearest the door's entrance, within STONE_YARDS.
 
     `entrances` is entrances.json (dungeon map id -> the entrance on its
     continent); `stones` are the world's meeting stone spawns as Spots.
     """
-    map_id = dungeonpath.PORTAL_MAPS.get(keyword)
+    map_id = _door_map(keyword)
     door = (entrances or {}).get(str(map_id)) if map_id is not None else None
     if not door:
         return None
@@ -2703,29 +2715,37 @@ def _spread_door(m, entrances, stones, load):
     return Door(keyword, run.place, run.floor, run.ceiling, stone)
 
 
+def _campaign_door_of(member, campaign_door):
+    """The Door `member` can hold for the family's campaign door, without a
+    stone, or None. A raid night's door is held by any warlock at the raid's
+    minimum level (a raid is not in campaignplan.RUNS)."""
+    if raidrun.is_raid(campaign_door):
+        floor = raidrun.MIN_LEVEL[campaign_door]
+        if member.level < floor:
+            return None
+        return Door(campaign_door, raidrun.place(campaign_door), floor, RAID_CEILING)
+    for candidate in doors_for(member):
+        if candidate.keyword == campaign_door:
+            return Door(
+                campaign_door, candidate.place, candidate.floor, candidate.ceiling
+            )
+    return None
+
+
 def _assign_campaign_door(casters, entrances, stones, campaign_door):
     """Reserve the family's campaign door for its highest-level eligible caster."""
     load, out = {}, {}
     if not campaign_door:
         return None, load, out
-    stone = run = on_call = None
+    stone = door = None
     for member in casters:
-        for candidate in doors_for(member):
-            if candidate.keyword != campaign_door:
-                continue
-            stone = stone_for(candidate.keyword, entrances, stones)
-            if stone is not None:
-                on_call, run = member, candidate
-                break
-        if on_call is not None:
-            break
-    if on_call is None or run is None or stone is None:
-        return None, load, out
-    out[on_call.name] = Door(
-        campaign_door, run.place, run.floor, run.ceiling, stone, True
-    )
-    load[stone.spawn] = 1
-    return on_call, load, out
+        door = _campaign_door_of(member, campaign_door)
+        stone = stone_for(campaign_door, entrances, stones) if door else None
+        if stone is not None:
+            out[member.name] = replace(door, stone=stone, on_call=True)
+            load[stone.spawn] = 1
+            return member, load, out
+    return None, load, out
 
 
 # ---------------------------------------------------------------------------
