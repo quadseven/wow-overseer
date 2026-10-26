@@ -272,10 +272,10 @@ class AGoalOrder(unittest.TestCase):
         )
         _run(
             ns,
-            "@Grug " + text,
+            "Ugga, " + text,
             lambda: ns["_maybe_handle_goal"](
                 types.SimpleNamespace(),
-                core.NLDirective("Grug", text, "discord:7"),
+                core.NLDirective("Ugga", text, "discord:7"),
                 channel,
             ),
         )
@@ -285,7 +285,7 @@ class AGoalOrder(unittest.TestCase):
         records, _ = self.run_order("reach level 20")
         self.assertEqual(1, len(records))
         self.assertEqual(
-            ("goal", "@Grug reach level 20"), (records[0].kind, records[0].text)
+            ("goal", "Ugga, reach level 20"), (records[0].kind, records[0].text)
         )
         self.assertEqual(
             [{"table": "overseer_goal", "key": "id=77"}],
@@ -295,7 +295,7 @@ class AGoalOrder(unittest.TestCase):
     def test_a_cancel_is_recorded_with_what_it_cancelled(self):
         records, _ = self.run_order("forget your goals", cancelled=2)
         self.assertEqual(
-            [{"table": "overseer_goal", "key": "character=Grug cancelled=2"}],
+            [{"table": "overseer_goal", "key": "character=Ugga cancelled=2"}],
             json.loads(records[0].rows_json()),
         )
 
