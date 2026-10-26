@@ -70,7 +70,7 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
   * REFUSED_TAKE / REFUSED_TURN_IN: the world refused the take or the hand-in
     FAILS_BEFORE_BROKEN times in a day, with its own words appended;
   * CANNOT_TURN_IN: the world refused the hand-in once and said no retry
-    can help (`"retryable":false`, quadseven/mod-overseer#19), with its own
+    can help (`"retryable":false`, mod-overseer#19), with its own
     words appended. That is "could not", not "did not yet": the quest is
     reported at once and its hand-in is not asked again while the refusal is
     in the rows the pass reads (`turn_in_held`).
@@ -530,7 +530,7 @@ class Attempt:
     age_minutes: int = 0
     # False only when the module said so (`"retryable":false` in the row's
     # result). A refusal without the field, from a world image older than
-    # quadseven/mod-overseer#19, is retryable, so it keeps the three-strike
+    # mod-overseer#19, is retryable, so it keeps the three-strike
     # rule instead of being reported as could-not.
     retryable: bool = True
 

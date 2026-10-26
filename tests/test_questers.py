@@ -1030,7 +1030,7 @@ class Broken(unittest.TestCase):
         tried = self._refused_hand_ins((30, 20, 10))[1:]
         self.assertEqual(self._move_with(tried), (classquest.TURN_IN, 1))
 
-    # quadseven/mod-overseer#19: quest 45, Discover Rolf's Fate, has no
+    # mod-overseer#19: quest 45, Discover Rolf's Fate, has no
     # creature ender; a world that names nothing to hand it in to refuses the
     # hand-in with "retryable":false. That is "could not", not "did not yet".
     NO_HOLDER = "the world names no creature and no object that takes that quest in"
