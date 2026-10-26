@@ -285,6 +285,15 @@ class TheCombinedRun(unittest.TestCase):
         self.assertEqual((), plan.entries)
         self.assertIn("names no dungeon", plan.refusal)
 
+    def test_a_combined_run_is_one_step_not_a_list(self):
+        """Both families are stamped on one step only: a two-dungeon order is
+        refused, not stamped on a second step neither family asked to share."""
+        entries, refusal = campaignqueue.parse_entries("ragefire 5, wailing 5")
+        self.assertEqual("", refusal)
+        plan = self.combined("Zug", "Thrak", entries, level_rows(), thrak_level_rows())
+        self.assertEqual((), plan.entries)
+        self.assertIn("names one dungeon step, not 2", plan.refusal)
+
     def test_a_single_family_entry_stays_single(self):
         """parse_entries still builds single-family entries; only the combined
         planner fills in two families."""
@@ -859,6 +868,49 @@ class TheDiscordOrder(unittest.TestCase):
             self.assertEqual(("Zug", "Thrak"), plan.entries[0].families)
         self.assertIn("Combined run for Zug's family and Thrak's family", sent[0])
         self.assertEqual([1], passes)
+
+    def test_a_combined_order_of_two_dungeons_writes_nothing(self):
+        written, sent, passes = self.run_order(
+            "Zug", "ragefire 5, wailing 5", partner="Thrak"
+        )
+        self.assertEqual([], written)
+        self.assertIn("names one dungeon step", sent[0])
+        self.assertEqual([], passes)
+
+    def test_a_combined_run_whose_rows_cannot_be_read_says_so(self):
+        """A failure checking the run is logged and told, not lost in silence."""
+        sent, log = [], _Log()
+
+        class Channel:
+            async def send(self, line):
+                sent.append(line)
+
+        def broken(fam):
+            raise KeyError("level")
+
+        ns = _load(
+            ["_set_combined_queue"],
+            {
+                "asyncio": asyncio,
+                "campaignqueue": campaignqueue,
+                "_queue_level_rows": broken,
+                "log": log,
+            },
+        )
+        order = campaignqueue.Order(family="Zug", text="ragefire 5", partner="Thrak")
+        fams = {
+            "Zug": {"names": ["Zug"], "leader": {"name": "Zug"}},
+            "Thrak": {"names": ["Thrak"], "leader": {"name": "Thrak"}},
+        }
+        asyncio.run(
+            ns["_set_combined_queue"](
+                types.SimpleNamespace(), order, "Zug", fams, "discord:7", Channel()
+            )
+        )
+        self.assertEqual(1, len(sent))
+        self.assertIn("could not be checked (KeyError)", sent[0])
+        self.assertIn("Nothing was written", sent[0])
+        self.assertTrue(any("could not be checked" in line for line in log.lines))
 
     def test_a_combined_order_one_family_cannot_take_writes_nothing(self):
         written, sent, passes = self.run_order("Zug", "ragefire 5", partner="Grug")

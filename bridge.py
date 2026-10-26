@@ -21171,9 +21171,19 @@ class Bridge(discord.Client):
         if refusal:
             await channel.send(refusal[:1990])
             return
-        rows_a = await asyncio.to_thread(_queue_level_rows, fams[key])
-        rows_b = await asyncio.to_thread(_queue_level_rows, fams[partner])
-        plan = campaignqueue.combined_plan(key, partner, entries, rows_a, rows_b)
+        try:
+            rows_a = await asyncio.to_thread(_queue_level_rows, fams[key])
+            rows_b = await asyncio.to_thread(_queue_level_rows, fams[partner])
+            plan = campaignqueue.combined_plan(key, partner, entries, rows_a, rows_b)
+        except Exception as exc:
+            # A bad row or a missing key must not kill the order in silence:
+            # log it, and tell the channel nothing was written.
+            log.exception("queue: combined run for %s and %s could not be "
+                          "checked", key, partner)
+            await channel.send(("Not queued: the combined run for %s and %s "
+                                "could not be checked (%s). Nothing was written."
+                                % (key, partner, type(exc).__name__))[:1990])
+            return
         if plan.refusal:
             log.info("queue: combined run refused for %s and %s: %s",
                      key, partner, plan.refusal)

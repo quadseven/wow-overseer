@@ -355,6 +355,19 @@ def combined_plan(
     """
     if not entries:
         return Plan(family_a, "The queue names no dungeon.", (), False, "")
+    if len(entries) != 1:
+        # A combined run is ONE dungeon step the two families enter together.
+        # Stamping both families on every entry of a longer list would send the
+        # pair through steps neither family asked to share.
+        return Plan(
+            family_a,
+            "Not queued: a combined run for %s and %s names one dungeon step, "
+            "not %d. Nothing was written."
+            % (_family(family_a), _family(family_b), len(entries)),
+            (),
+            False,
+            "",
+        )
     for entry in entries:
         for level_rows in (level_rows_a, level_rows_b):
             why = (
