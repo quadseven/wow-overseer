@@ -312,6 +312,47 @@ def choose_hub(bind_hub: dict, capital_hub: dict, leader_at, why: str = "") -> d
     return dict(bind_hub or capital_hub or {})
 
 
+# The four continent maps. A head on any other map with a door in
+# entrances.json stands inside that dungeon.
+CONTINENT_MAPS = frozenset({0, 1, 530, 571})
+
+
+def errand_standing(leader_at, entrances):
+    """Where the head stands for choosing the errand's capital and hub.
+
+    His own snapshot row on a continent, and the dungeon's entrance on its
+    continent ({map_id, pos_x, pos_y}) when he stands inside an instance that
+    `entrances` (entrances.json: dungeon map id -> {map, x, y}) names. An
+    instance with no known entrance, or no reading at all, is his row as read.
+
+    THE CAPITAL OF A HEAD INSIDE AN INSTANCE IS ON ITS DOOR'S CONTINENT (wow-dev
+    2026-10-24). The family worked Razorfen Downs (map 129) and was bound in
+    Stormwind. The capital was looked up on map 129, which has no auctioneer,
+    so the bag-room errand found no capital and crossed the sea to Stormwind
+    again. From the door, the capital and the continent check in choose_hub
+    both read Kalimdor.
+    """
+    if not leader_at:
+        return leader_at
+    try:
+        map_id = int(leader_at.get("map_id"))
+    except (TypeError, ValueError):
+        return leader_at
+    if map_id in CONTINENT_MAPS:
+        return leader_at
+    door = (entrances or {}).get(str(map_id))
+    if not door:
+        return leader_at
+    try:
+        return {
+            "map_id": int(door["map"]),
+            "pos_x": float(door["x"]),
+            "pos_y": float(door["y"]),
+        }
+    except (KeyError, TypeError, ValueError):
+        return leader_at
+
+
 def to_hearth(
     hub: dict, positions: dict, names, hearthed=frozenset(), binds=None
 ) -> list:
