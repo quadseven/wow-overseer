@@ -183,7 +183,7 @@ def plan(orders, members) -> WorkOrderPlan:
                 "nobody online holds %s, so %s stays unassigned" % (trade, order.item)
             )
             continue
-        ready = [m for m in holders if not cooldown_left(m, order)]
+        ready = [m for m in holders if can_take(m, order)]
         if not ready:
             soonest = min(holders, key=lambda m: cooldown_left(m, order))
             notes.append(
