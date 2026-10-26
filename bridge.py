@@ -21283,12 +21283,17 @@ class Bridge(discord.Client):
                      key, partner, plan.refusal)
             await channel.send(plan.refusal[:1990])
             return
-        written = 0
+        written, new_ids = 0, []
         for family in (key, partner):
             written += await asyncio.to_thread(
-                _write_queue, dataclasses.replace(plan, family=family), source)
+                _write_queue, dataclasses.replace(plan, family=family), source,
+                new_ids)
         log.info("queue: combined run for %s and %s set by %s, %d row(s) "
                  "written: %s", key, partner, source, written, plan.says)
+        # ONE ORDER, ONE RECORD (#1509): both families' rows go in the same
+        # record row, the way a single-family queue order is recorded.
+        await _note_order(orderrecord.QUEUE, source, channel,
+                          orderrecord.ids(campaignqueue.TABLE, new_ids))
         await channel.send(plan.says[:1990])
         await self._campaign_queue_once()
 
