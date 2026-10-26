@@ -76,6 +76,7 @@ import guildpost
 import guildroute
 import orders
 import guildwork
+import workorders
 import gearup
 import weaponskill
 import natural
@@ -11036,6 +11037,12 @@ class Bridge(discord.Client):
             # Its own writer and its own failure: a broken route read must not
             # stop the surplus below from going out.
             log.exception("guild route pass failed; retrying next cycle")
+        try:
+            _log_work_orders(roster)
+        except Exception:
+            # Log-only planner (#486): a broken plan must not stop the
+            # surplus below from going out.
+            log.exception("work order plan failed; retrying next cycle")
         if share.gifts:
             await self._write_guild_gifts(share.gifts, cohort=cohort)
 
@@ -23539,6 +23546,22 @@ _GUILD_SKILLS_SQL = (
     "                     WHERE c2.name IN (%s)) "
     "  AND cs.skill IN (%s)"
 )
+
+
+def _log_work_orders(roster: list) -> None:
+    """Log who takes each standing guild work order this pass (#486).
+
+    Log only: workorders.py decides, and nothing here writes a row or sends
+    an order, so the world is unchanged by it.
+    """
+    plan = workorders.plan(
+        workorders.STANDING_ORDERS, workorders.members_from_roster(roster)
+    )
+    log.info("workorders: %s", workorders.headline(plan))
+    for line in workorders.lines(plan):
+        log.info("workorders: %s", line)
+    for note in plan.notes:
+        log.info("workorders: %s", note)
 
 
 def _fetch_guild_roster(names: list) -> list:
