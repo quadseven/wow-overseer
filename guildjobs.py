@@ -1354,7 +1354,7 @@ def _train_step(member, trades, cap, recent=(), held=None):
             guildcorps.Row(
                 "cast",
                 "walk-to-trainer skill:%d%s" % (skill, _cap_word(cap)),
-                "",
+                str(member.map_id or 0),
                 source_for("train", member.name),
             ),
         ),
@@ -1486,7 +1486,7 @@ def _learn_step(member, cap, recent=()):
                     "cast",
                     "walk-to-trainer skill:%d learn:%d%s"
                     % (skill, recipe.spell_id, _cap_word(cap)),
-                    "",
+                    str(member.map_id or 0),
                     source_for("train", member.name),
                 ),
             ),
@@ -1949,7 +1949,7 @@ def riding_step(m, recent):
                         want.spell,
                         _cap_word(guildroute.FAR_WALK_YARDS),
                     ),
-                    "",
+                    str(m.map_id or 0),
                     source_for(RIDING_ACTION, m.name),
                 ),
             ),
@@ -6214,7 +6214,15 @@ def recent_from_rows(rows, map_id_by_name: dict[str, int] | None = None) -> tupl
             continue
         name = str(row.get("target_name") or "")
         map_id = 0
-        if action == "train" and map_id_by_name is not None:
+        command = str(row.get("command") or "")
+        if action == "train" and command.startswith("walk-to-trainer"):
+            target_arg = row.get("target_arg")
+            if target_arg is not None:
+                try:
+                    map_id = int(target_arg)
+                except (ValueError, TypeError):
+                    map_id = 0
+        elif action == "train" and map_id_by_name is not None:
             map_id = map_id_by_name.get(name, 0)
         out.append(
             Recent(
@@ -6222,17 +6230,15 @@ def recent_from_rows(rows, map_id_by_name: dict[str, int] | None = None) -> tupl
                 action=action.replace("-walk", ""),
                 age_minutes=_int(row.get("age"), 10**6),
                 status=str(row.get("status") or ""),
-                command=str(row.get("command") or ""),
+                command=command,
                 result=str(row.get("result") or ""),
-                skill_id=(
-                    _trainer_skill_id(row.get("command")) if action == "train" else None
-                ),
+                skill_id=(_trainer_skill_id(command) if action == "train" else None),
                 walk=action.endswith("-walk"),
                 reason=_reason_of(row),
-                spawn=_spawn_of(row.get("command")),
-                abandoned=_abandoned_of(row.get("command")),
-                taken=_taken_of(row.get("command"), row.get("status")),
-                dest=_cross_dest_of(row.get("command")),
+                spawn=_spawn_of(command),
+                abandoned=_abandoned_of(command),
+                taken=_taken_of(command, row.get("status")),
+                dest=_cross_dest_of(command),
                 row_id=_int(row.get("id"), 0),
                 map_id=map_id,
                 **_hunt_of(row),

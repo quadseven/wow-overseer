@@ -761,7 +761,9 @@ class ATrainerWalkThatKeepsFailing(unittest.TestCase):
             )
         )
         self.assertIsNone(malformed.skill_id)
-        self.assertIn('"SELECT id, target_name, command, source, status, "', BRIDGE)
+        self.assertIn(
+            '"SELECT id, target_name, command, source, status, target_arg, "', BRIDGE
+        )
 
 
 class ASkinnersField(unittest.TestCase):
