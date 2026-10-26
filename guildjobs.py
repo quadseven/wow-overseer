@@ -133,6 +133,7 @@ import mountbuy
 import purse
 import pvpgear
 import raidroles
+import raidrun
 import recipebook
 import restsupply
 import situation
@@ -2676,13 +2677,24 @@ def entrances() -> dict:
         return json.load(f)
 
 
+# The level a raid night's on-call summoner is held to as a ceiling: the cap.
+RAID_CEILING = 60
+
+
+def _door_map(keyword: str):
+    """The map a door keyword opens: a portal's, or the raid door's."""
+    if raidrun.is_raid(keyword):
+        return raidrun.MOLTEN_CORE_MAP
+    return dungeonpath.PORTAL_MAPS.get(keyword)
+
+
 def stone_for(keyword: str, entrances: dict, stones) -> Spot | None:
     """The meeting stone nearest the door's entrance, within STONE_YARDS.
 
     `entrances` is entrances.json (dungeon map id -> the entrance on its
     continent); `stones` are the world's meeting stone spawns as Spots.
     """
-    map_id = dungeonpath.PORTAL_MAPS.get(keyword)
+    map_id = _door_map(keyword)
     door = (entrances or {}).get(str(map_id)) if map_id is not None else None
     if not door:
         return None
@@ -2755,29 +2767,37 @@ def _spread_door(m, entrances, stones, load):
     return Door(keyword, run.place, run.floor, run.ceiling, stone)
 
 
+def _campaign_door_of(member, campaign_door):
+    """The Door `member` can hold for the family's campaign door, without a
+    stone, or None. A raid night's door is held by any warlock at the raid's
+    minimum level (a raid is not in campaignplan.RUNS)."""
+    if raidrun.is_raid(campaign_door):
+        floor = raidrun.MIN_LEVEL[campaign_door]
+        if member.level < floor:
+            return None
+        return Door(campaign_door, raidrun.place(campaign_door), floor, RAID_CEILING)
+    for candidate in doors_for(member):
+        if candidate.keyword == campaign_door:
+            return Door(
+                campaign_door, candidate.place, candidate.floor, candidate.ceiling
+            )
+    return None
+
+
 def _assign_campaign_door(casters, entrances, stones, campaign_door):
     """Reserve the family's campaign door for its highest-level eligible caster."""
     load, out = {}, {}
     if not campaign_door:
         return None, load, out
-    stone = run = on_call = None
+    stone = door = None
     for member in casters:
-        for candidate in doors_for(member):
-            if candidate.keyword != campaign_door:
-                continue
-            stone = stone_for(candidate.keyword, entrances, stones)
-            if stone is not None:
-                on_call, run = member, candidate
-                break
-        if on_call is not None:
-            break
-    if on_call is None or run is None or stone is None:
-        return None, load, out
-    out[on_call.name] = Door(
-        campaign_door, run.place, run.floor, run.ceiling, stone, True
-    )
-    load[stone.spawn] = 1
-    return on_call, load, out
+        door = _campaign_door_of(member, campaign_door)
+        stone = stone_for(campaign_door, entrances, stones) if door else None
+        if stone is not None:
+            out[member.name] = replace(door, stone=stone, on_call=True)
+            load[stone.spawn] = 1
+            return member, load, out
+    return None, load, out
 
 
 # ---------------------------------------------------------------------------
@@ -4291,7 +4311,11 @@ def class_asking(m, book, hunts=None, now=0.0, recent=(), asks=()) -> tuple:
             continue
         left, count, yeses = class_ask_streak(m.name, h.quest, asks)
         if left:
-            yields.append(_streak_yield(m, h, left, count, yeses))
+            why = class_road_refusal(m.name, h.quest, asks)
+            if why:
+                yields.append(_road_yield(m, h, left, why))
+            else:
+                yields.append(_streak_yield(m, h, left, count, yeses))
             continue
         helps.append(
             classquest.Help(m.name, m.guild, int(m.level), int(m.map_id), h, count)
@@ -4385,6 +4409,17 @@ def _outlevel_yield(m, move, book, hunts, now) -> tuple:
     return (m.name, move.quest, "outlevel", move.blocker), line
 
 
+def _road_yield(m, move, left, why) -> tuple:
+    """(key, line) for a quest whose last party stopped because the member's
+    own walk to the objective was refused for good (class_road_refusal)."""
+    line = (
+        "class ask: %s stops asking for %s: its own walk to the objective was "
+        "refused (%s), which no helper can change; it levels for %d minute(s)"
+        % (m.name, move.title, why, left)
+    )
+    return (m.name, move.quest, "road", why), line
+
+
 def _streak_yield(m, move, left, count, yeses) -> tuple:
     line = (
         "class ask: %s stops asking for %s after %d asks that did not get it done "
@@ -4438,6 +4473,39 @@ class QuestAsk:
     yeses: int = 0
     failed: bool = False
     timed_out: bool = False
+    # The module's lasting refusal of the asker's OWN meeting walk, when its
+    # party stopped on one (asker_road_refusal), else "".
+    road_why: str = ""
+
+
+# AN ASKER WHOSE OWN WAY TO THE OBJECTIVE IS REFUSED FOR GOOD IS NOT ASKED FOR
+# AGAIN AT ONCE (#1345). From 2026-10-10 to 2026-10-23 a level 20 warlock asked
+# the guild 27 times for Surena Caledon, a level 9 creature: one party ever
+# formed, and 11 asks stopped because the asker itself did not reach the
+# meeting. Its meeting walks were refused 11 times in 39 on "the road to the
+# spawn crosses ground far above its level", the module's refusal that holds
+# until the member has levelled (classquest.LETHAL_ROAD_REASON, #1295). No
+# guildmate can fix that road: the party meets at the objective, so each new
+# ask pulled three more helpers across the map to wait for an asker that could
+# not come. The solo walks read that refusal as lasting (refused_marks), but
+# the meeting walks are the ask's rows, not this pass's, so the ask never did.
+# An ask whose meeting failed on the asker's own lasting refusal
+# (classquest.SPAWN_REFUSALS that are not SPAWN_SHORT_REFUSALS) starts the
+# stall hold at once: the member levels, which is what opens the road.
+def asker_road_refusal(reason, asker) -> str:
+    """The lasting refusal of `asker`'s own meeting walk named in an ask's
+    reason column ("stopped: the meeting failed: <asker> did not reach <spot>
+    (<why>)"), else "". A helper's refusal, a short one (a stall, a death) or a
+    passing one (a fight, a flight, a far walk wall) is not one."""
+    head = classask.STOPPED + "the meeting failed: %s did not reach " % asker
+    text = str(reason or "")
+    if not asker or not text.startswith(head):
+        return ""
+    lasting = classquest.SPAWN_REFUSALS - classquest.SPAWN_SHORT_REFUSALS
+    for why in sorted(lasting):
+        if text.endswith("(%s)" % why):
+            return why
+    return ""
 
 
 def quest_asks_from_rows(rows) -> tuple:
@@ -4459,6 +4527,7 @@ def quest_asks_from_rows(rows) -> tuple:
                 timed_out=str(row.get("reason") or "").startswith(
                     classask.FAILED + "party timed out"
                 ),
+                road_why=asker_road_refusal(row.get("reason"), row.get("asker")),
             )
         )
     return tuple(out)
@@ -4468,8 +4537,10 @@ def class_ask_streak(name, quest, asks) -> tuple:
     """(minutes left of the hold, asks in the run, yeses they drew) for one
     member's quest: the closed asks for it since the newest whose party got
     it done, newest first, inside CLASS_ASK_STREAK_WINDOW_MINUTES. The hold is 0 while the run
-    is short of CLASS_ASK_STREAK_MAX without three consecutive party timeouts,
-    or CLASS_STALL_HOLD_MINUTES have passed since its newest ask."""
+    is short of CLASS_ASK_STREAK_MAX without three consecutive party timeouts
+    and its newest ask did not stop on the asker's own lasting walk refusal
+    (asker_road_refusal), or CLASS_STALL_HOLD_MINUTES have passed since its
+    newest ask."""
     rows = sorted(
         (
             a
@@ -4493,10 +4564,31 @@ def class_ask_streak(name, quest, asks) -> tuple:
     repeated_timeouts = len(run) >= CLASS_PARTY_TIMEOUT_STREAK_MAX and all(
         a.timed_out for a in run[:CLASS_PARTY_TIMEOUT_STREAK_MAX]
     )
-    if len(run) < CLASS_ASK_STREAK_MAX and not repeated_timeouts:
+    road_refused = bool(run) and bool(run[0].road_why)
+    if len(run) < CLASS_ASK_STREAK_MAX and not repeated_timeouts and not road_refused:
         return 0, len(run), yeses
     left = max(0, CLASS_STALL_HOLD_MINUTES - int(run[0].age_minutes))
     return left, len(run), yeses
+
+
+def class_road_refusal(name, quest, asks) -> str:
+    """The lasting refusal of the member's own meeting walk that stopped its
+    newest closed ask for `quest` inside CLASS_ASK_STREAK_WINDOW_MINUTES
+    (asker_road_refusal), else ""."""
+    closed = sorted(
+        (
+            a
+            for a in asks or ()
+            if a.asker == name
+            and a.quest == int(quest)
+            and a.state not in _ASK_LIVE
+            and int(a.age_minutes) < CLASS_ASK_STREAK_WINDOW_MINUTES
+        ),
+        key=lambda a: int(a.age_minutes),
+    )
+    if not closed or (closed[0].state == _ASK_RAN and not closed[0].failed):
+        return ""
+    return closed[0].road_why
 
 
 def class_ask_held(name, asks) -> frozenset:

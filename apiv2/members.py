@@ -105,6 +105,17 @@ MOVED_SQL = (
     "FROM overseer_event WHERE character_name IN ({holes}) "
     "AND kind IN ({kinds}) GROUP BY character_name"
 )
+# Each family leader's newest boss credit (#1314). A campaign repeating one
+# dungeon writes no quest, level or equip to overseer_event, and the encounter
+# credit in the run's event log is its only progress: Zug's family was called
+# stuck 33 minutes on its ninth Blackfathom run while two bosses fell. Only
+# `boss` rows are read, so phase changes, dc_on and deaths cannot reset a stall.
+BOSS_SQL = (
+    "SELECT leader_name AS name, UNIX_TIMESTAMP(created_at) AS at, detail "
+    "FROM overseer_dungeon_run_event WHERE id IN ("
+    "SELECT MAX(id) FROM overseer_dungeon_run_event "
+    "WHERE leader_name IN ({holes}) AND kind = %s GROUP BY leader_name)"
+)
 ASKS_SQL = (
     "SELECT asker, target, target_label, reason, state, UNIX_TIMESTAMP(created_at) AS at, "
     "(SELECT COUNT(*) FROM overseer_guild_answer an "
@@ -118,8 +129,9 @@ BASIS = (
     "asked the guild for help with in the last two hours (first seen at the "
     "first ask of that run), or a reason to wait it has logged for 30 minutes "
     "or more (first seen when the reason was first logged). A family's leader "
-    "is also stuck when the family is STALLED on the Now page (no quest, level "
-    "or gear change for 20 minutes; first seen when it last made one), named by "
+    "is also stuck when the family is STALLED on the Now page (no quest, level, "
+    "gear change or boss credit for 20 minutes; first seen when it last made "
+    "one), named by "
     "what the leader is doing and waiting for. A member that only "
     "follows is stuck when its leader is (first seen when the leader's reason "
     "was) or when it is left far behind. Ghost is a released "
@@ -143,6 +155,7 @@ def fetch(ctx) -> dict:
         "asks": [],
         "jobs": [],
         "moved": {},
+        "credits": {},
         "now_at": 0,
     }
     if names:
@@ -190,6 +203,11 @@ def _read(ctx, names: list) -> dict:
         (*names, *kinds),
         what="overseer_event",
     )
+    credits = rd.rows(
+        BOSS_SQL.format(holes=holes(len(names))),
+        (*names, agenda.BOSS_KIND),
+        what="overseer_dungeon_run_event",
+    )
     clock = rd.must("SELECT UNIX_TIMESTAMP() AS now_at")
     now_at = int(clock[0]["now_at"]) if clock else 0
     return {
@@ -200,6 +218,11 @@ def _read(ctx, names: list) -> dict:
         "asks": asks,
         "jobs": jobs,
         "moved": {r["name"]: int(r["at"]) for r in moved or () if r.get("at")},
+        "credits": {
+            r["name"]: {"at": int(r["at"]), "detail": str(r.get("detail") or "")}
+            for r in credits or ()
+            if r.get("at")
+        },
         "now_at": now_at,
     }
 
@@ -527,9 +550,12 @@ def _with_stuck(m: dict, found: dict | None) -> dict:
     return m
 
 
-def stall_entry(leader: dict, moved_at: int | None, now_at: int) -> dict | None:
+def stall_entry(
+    leader: dict, moved_at: int | None, now_at: int, credit: str = ""
+) -> dict | None:
     """The stuck entry for a family that is STALLED (agenda.stalled: no quest,
-    level or gear change for agenda.STALL_AFTER), on its leader, or None.
+    level, gear change or boss credit for agenda.STALL_AFTER), on its leader,
+    or None.
 
     The Now page called Grug's family STALLED while its realm report said "No
     current blocker recorded": a stall was not a stuck record, and a hold had
@@ -537,31 +563,57 @@ def stall_entry(leader: dict, moved_at: int | None, now_at: int) -> dict | None:
     since the family last moved, named by the leader's own reading
     (agenda.stall_blocker), the same sentence the agenda's STALLED line ends
     with. A dead or released leader is not stuck, as for every other record.
+
+    `credit` is the newest boss credit's words when that credit is the
+    family's newest movement (#1314); the sentence then names it.
     """
     if not moved_at or not now_at or leader["life"] in ("dead", "ghost"):
         return None
     still = now_at - int(moved_at)
     if still <= agenda.STALL_AFTER.total_seconds():
         return None
+    if credit:
+        quiet = (
+            "No quest, level, gear change or boss credit for the family for %s"
+            " (last boss credit: %s)." % (agenda.span(still), credit)
+        )
+    else:
+        quiet = "No quest, level or gear change for the family for %s." % agenda.span(
+            still
+        )
     return {
         "step": leader["doing"],
-        "blocker": "No quest, level or gear change for the family for %s. %s"
-        % (agenda.span(still), agenda.stall_blocker(leader["name"], leader)),
+        "blocker": "%s %s" % (quiet, agenda.stall_blocker(leader["name"], leader)),
         "since": int(moved_at),
         "kind": "stall",
     }
 
 
-def _stalled_leaders(families, members, found, moved: dict, now_at: int) -> None:
+def _stalled_leaders(
+    families, members, found, moved: dict, now_at: int, credits: dict | None = None
+) -> None:
     """A stalled family's leader is stuck on the stall, unless a record of
-    its own already holds it (a class quest ask or a long hold)."""
+    its own already holds it (a class quest ask or a long hold).
+
+    `credits` is leader -> its newest boss credit ({"at", "detail"}); a boss
+    falling is movement, as a quest, level or gear change is (#1314)."""
+    credits = credits or {}
     by_name = {m["name"]: m for m in members}
     for names in (families or {}).values():
         leader = by_name.get(names[0]) if names else None
         if leader is None or found.get(leader["name"]) is not None:
             continue
         moved_at = max((moved.get(n) or 0 for n in names), default=0)
-        found[leader["name"]] = stall_entry(leader, moved_at or None, now_at)
+        boss = max(
+            (credits[n] for n in names if (credits.get(n) or {}).get("at")),
+            key=lambda c: c["at"],
+            default=None,
+        )
+        words = ""
+        if boss and int(boss["at"]) >= moved_at:
+            moved_at = int(boss["at"])
+            words = agenda.boss_credit_words(boss.get("detail"))
+        found[leader["name"]] = stall_entry(leader, moved_at or None, now_at, words)
 
 
 def _order(families: dict, guild_of: dict) -> list:
@@ -594,12 +646,14 @@ def build(
     jobs=(),
     readings=None,
     moved=None,
+    credits=None,
 ) -> dict:
     """The roster: one row per member, family first, with its stuck reading.
 
     `readings` is presence.of's answer for every member; `snaps` is where the
     online ones stand; `moved` is name -> when it last made progress (Unix
-    seconds), for a stalled family (stall_entry)."""
+    seconds), for a stalled family (stall_entry); `credits` is leader -> its
+    newest boss credit ({"at", "detail"}), which counts as movement too."""
     families = families or {}
     rows = _lookups(families, chars, snaps, facts, now_at, jobs, readings)
     guild_of = {r["name"]: r for r in guild or ()}
@@ -614,7 +668,9 @@ def build(
         if followed and not _asking(found[name]):
             follows[name] = followed
         members.append(m)
-    _stalled_leaders(families, members, found, moved or {}, rows["now_at"])
+    _stalled_leaders(
+        families, members, found, moved or {}, rows["now_at"], credits or {}
+    )
     # Leaders first: a follower's reading is its leader's (follower_blocker).
     _resolve_followers(members, found, follows)
     members = [_with_stuck(m, found[m["name"]]) for m in members]
@@ -751,6 +807,7 @@ def _build_roster(ctx) -> dict:
         f["jobs"],
         f["readings"],
         f.get("moved"),
+        f.get("credits"),
     )
 
 

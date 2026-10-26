@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import dataclasses
 import json
 import logging
@@ -75,7 +76,9 @@ import guildshare
 import guildpost
 import guildroute
 import orders
+import orderrecord
 import guildwork
+import workorders
 import gearup
 import weaponskill
 import natural
@@ -206,6 +209,12 @@ CHAT_CHANNEL_ID = os.environ.get("CHAT_CHANNEL_ID", "")
 OWNED_CHANNEL_IDS = frozenset(
     cid for cid in (OVERSEER_CHANNEL_ID, CHAT_CHANNEL_ID) if cid
 )
+
+# The Discord message being acted on, as typed (#1499). The order record needs
+# the words and the writers are handed only the parsed directive. A context
+# variable, not an attribute, because discord.py runs each on_message in its
+# own task: two orders typed a second apart must not read each other's text.
+_HEARD = contextvars.ContextVar("heard_order_text", default="")
 RELAY_SECONDS = float(os.environ.get("RELAY_SECONDS", "3"))
 # On restart, anything older than this is marked relayed WITHOUT being sent.
 # Same contract as the outcome poller: the bridge reports what happens while
@@ -3625,6 +3634,23 @@ def _write_raid_specs(names: list) -> str:
         gaps.get("damage", 0), lineup.get("roles_line", ""), lineup.get("gap_line", ""))
 
 
+def _log_raid_arrivals(cur, keyword: str, seats: list) -> None:
+    """Log how each seated raider away from the door arrives (raidrun's
+    decision: the raid's own warlocks summon, the rest walk). A failed read
+    is logged and never holds the order."""
+    names = [seat[2] for seat in seats]
+    door = guildjobs.entrances().get(str(raidrun.MOLTEN_CORE_MAP))
+    try:
+        cur.execute(raidrun.ARRIVAL_SQL.format(holes=", ".join(["%s"] * len(names))),  # noqa: S608
+                    tuple(names))
+        raiders = [dict(row, ritual=bool(row.get("ritual"))) for row in cur.fetchall()]
+    except pymysql.err.MySQLError:
+        log.exception("raid: where the seated raiders stand could not be read")
+        return
+    if door and raiders:
+        log.info("%s", raidrun.arrival_line(keyword, raidrun.arrival_plan(raiders, door)))
+
+
 def _drive_raid(keyword: str, family: str, names: list, source: str,
                 withheld: list | None = None) -> int:
     """Write an ordered raid's seats, then its job. Returns jobs written.
@@ -3682,6 +3708,7 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
                     keyword)
                 return _withheld(withheld, "the raid seat table is not deployed")[0]
             raise
+        _log_raid_arrivals(cur, keyword, seats)
     written = 0
     for name in names:
         try:
@@ -4051,8 +4078,11 @@ def _queue_level_rows(family: dict) -> list:
     return rows
 
 
-def _write_queue(plan, source: str) -> int:
-    """Replace a family's pending queue with `plan`'s entries. Rows changed."""
+def _write_queue(plan, source: str, new_ids: list | None = None) -> int:
+    """Replace a family's pending queue with `plan`'s entries. Rows changed.
+
+    `new_ids`, when given, collects each inserted entry's id for the order
+    record (#1499)."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(campaignqueue.CANCEL_SQL, (plan.family,))
         changed = cur.rowcount or 0
@@ -4060,8 +4090,51 @@ def _write_queue(plan, source: str) -> int:
             cur.execute(campaignqueue.INSERT_SQL,
                         (plan.family, position, entry.keyword, entry.runs,
                          source[:64]))
+            if new_ids is not None:
+                new_ids.append(cur.lastrowid)
             changed += 1
     return changed
+
+
+def _ensure_order_store() -> None:
+    """The order record (#1499), created the way the queue store is.
+
+    A FAILURE IS LOGGED AND SWALLOWED: an order is carried out whether or not
+    it can be recorded, so a missing record table must not stop start-up.
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(orderrecord.CREATE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("orders: the order record store is unavailable, so "
+                      "Discord orders are carried out but not recorded")
+
+
+def _insert_order(record) -> int:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(orderrecord.INSERT_SQL, record.params())
+        return cur.lastrowid
+
+
+async def _note_order(kind: str, source: str, channel, rows) -> None:
+    """Record one Discord order AFTER its rows landed (#1499).
+
+    Nothing is recorded for an order that wrote nothing or did not come from
+    a person in Discord (orderrecord.build). A failed write is logged and the
+    order stands: the record describes the order, it is not part of it.
+    """
+    record = orderrecord.build(
+        kind, source, _HEARD.get(), getattr(channel, "id", ""), rows)
+    if record is None:
+        return
+    try:
+        row_id = await asyncio.to_thread(_insert_order, record)
+    except Exception:
+        log.exception("orders: the %s order from %s was carried out but not "
+                      "recorded", kind, source)
+        return
+    log.info("orders: %s order from %s recorded as %s: %s",
+             kind, source, row_id, record.rows_json())
 
 
 def _mark_queue(sql: str, entry_id: int) -> int:
@@ -4609,6 +4682,34 @@ def _stall_reads(names: list) -> dict:
     """The family's stuck doors. Reads only."""
     with _connect() as conn, conn.cursor() as cur:
         return _stuck_doors(cur, names)
+
+
+def _silent_dungeon_run(names: list) -> dict | None:
+    """The active dungeon run with its age since actual progress evidence."""
+    holes = dungeonstall.holes(len(names))
+    sql = (
+        "SELECT r.id, r.map_id, r.portal_keyword, "
+        "TIMESTAMPDIFF(SECOND, GREATEST(r.started_at, "
+        "COALESCE((SELECT MAX(e.last_seen) FROM overseer_event e "
+        "WHERE e.character_name COLLATE utf8mb4_0900_ai_ci IN ({holes}) "
+        "AND e.kind IN "
+        "('quest_accept', 'quest_complete', 'quest_reward', 'level_up', "
+        "'item_equip', 'unlearn')), r.started_at), "
+        "COALESCE((SELECT MAX(re.created_at) "
+        "FROM overseer_dungeon_run_event re WHERE re.run_id = r.id "
+        "AND re.kind = 'boss'), r.started_at)), NOW()) AS silent_seconds "
+        "FROM overseer_dungeon_run r WHERE r.state = 'active' "
+        "AND r.leader_name IN ({holes}) ORDER BY r.id DESC LIMIT 1"
+    ).format(holes=holes)
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, tuple(names) + tuple(names))
+            rows = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+    return dict(rows[0]) if rows else None
 
 
 def _stall_held(key: str, door: str) -> dict | None:
@@ -7177,8 +7278,16 @@ class Bridge(discord.Client):
             _ensure_watch_store,
             _ensure_quest_ledger_store,
             _ensure_now_store,
+            _ensure_order_store,
         ):
-            await asyncio.to_thread(ensure)
+            try:
+                await asyncio.to_thread(ensure)
+            except Exception:
+                if ensure is _ensure_dungeon_run_event_store:
+                    log.exception(
+                        "overseer_dungeon_run_event: index ensure failed; continuing startup")
+                else:
+                    raise
         owing = self.__dict__.get("_class_owing")
         if owing is not None:
             await asyncio.to_thread(owing.restore)
@@ -7211,6 +7320,7 @@ class Bridge(discord.Client):
         # the production one runs it on the live family.
         if OWNED_CHANNEL_IDS and str(message.channel.id) not in OWNED_CHANNEL_IDS:
             return
+        _HEARD.set(message.content or "")
         dedicated = OVERSEER_CHANNEL_ID and str(message.channel.id) == OVERSEER_CHANNEL_ID
         decisions = core.parse_directive(
             message.content, str(message.author.id), self._allowed, dedicated=bool(dedicated)
@@ -7911,7 +8021,7 @@ class Bridge(discord.Client):
         if prompt is None:
             return plain
         try:
-            said = await asyncio.to_thread(
+            said = await llmpool.call(
                 _ask_llm, prompt,
                 "Answer with the sentence only. No reasoning, no preamble, "
                 "no quotation marks.",
@@ -11001,6 +11111,12 @@ class Bridge(discord.Client):
             # Its own writer and its own failure: a broken route read must not
             # stop the surplus below from going out.
             log.exception("guild route pass failed; retrying next cycle")
+        try:
+            _log_work_orders(roster)
+        except Exception:
+            # Log-only planner (#486): a broken plan must not stop the
+            # surplus below from going out.
+            log.exception("work order plan failed; retrying next cycle")
         if share.gifts:
             await self._write_guild_gifts(share.gifts, cohort=cohort)
 
@@ -18357,10 +18473,14 @@ class Bridge(discord.Client):
             return state
         _TOWN_ERRAND_HEAD_AWAY.discard(leader)
         teams = await asyncio.to_thread(_fetch_teams, [leader])
+        # Inside an instance the head stands, for this choice, at its door on
+        # the continent: the capital and the continent check both read there.
+        standing = townerrand.errand_standing(positions.get(leader),
+                                              guildjobs.entrances())
         capital = await asyncio.to_thread(_fetch_capital_hub, leader,
-                                          teams.get(leader, ""))
+                                          teams.get(leader, ""), standing)
         home = await asyncio.to_thread(_fetch_bind_hub, leader)
-        hub = townerrand.choose_hub(home, capital, positions.get(leader), why)
+        hub = townerrand.choose_hub(home, capital, standing, why)
         if not hub:
             log.info("town errand: %s%s, but neither %s's hearthstone point nor "
                      "a capital of the family's own auction house on his map "
@@ -19491,7 +19611,7 @@ class Bridge(discord.Client):
             texts: list[str] = []
             if voiced:
                 try:
-                    reply = await asyncio.to_thread(
+                    reply = await llmpool.call(
                         _ask_llm, events.build_batch_prompt(voiced)
                     )
                     texts = events.voice_events(voiced, reply)
@@ -19529,11 +19649,18 @@ class Bridge(discord.Client):
             return False
         if isinstance(parsed, goals.CancelGoal):
             cancelled = await asyncio.to_thread(_cancel_goals, d.target_name)
+            await _note_order(
+                orderrecord.GOAL, d.source, channel,
+                (orderrecord.Written(
+                    "overseer_goal", "character=%s cancelled=%d" % (d.target_name, cancelled)),)
+                if cancelled else ())
             await channel.send(goals.cancel_text(d.target_name, cancelled))
             return True
         row_id = await asyncio.to_thread(
             _insert_goal, d.target_name, parsed, str(channel.id)
         )
+        await _note_order(
+            orderrecord.GOAL, d.source, channel, orderrecord.ids("overseer_goal", [row_id]))
         ack = goals.ack_text(d.target_name, parsed)
         await asyncio.to_thread(_insert_thought, d.target_name, "goal", ack)
         await channel.send(ack)
@@ -20378,6 +20505,10 @@ class Bridge(discord.Client):
             return False
         names = list(fam["names"])
         stuck = await asyncio.to_thread(_stall_reads, names)
+        silent = await asyncio.to_thread(_silent_dungeon_run, names)
+        silent_stall = dungeonstall.silent_run(silent)
+        if silent_stall is not None:
+            stuck[silent_stall.door] = silent_stall
         leave = dungeonstall.leave(rows, stuck)
         if leave is None:
             return False
@@ -20967,11 +21098,14 @@ class Bridge(discord.Client):
         entry refuses the whole order: a queue with a hole in it is a
         different plan from the one that was given.
         """
-        order = campaignqueue.Order(family=d.family, text=d.text)
+        order = campaignqueue.Order(family=d.family, text=d.text, partner=d.partner)
         fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
         key, refusal = campaignqueue.pick_family(order.family, sorted(fams))
         if refusal:
             await channel.send(refusal[:1990])
+            return
+        if order.partner:
+            await self._set_combined_queue(order, key, fams, d.source, channel)
             return
         if not order.text.strip():
             mine = campaignqueue.pending_by_family(
@@ -20996,14 +21130,73 @@ class Bridge(discord.Client):
                          plan.refusal)
                 await channel.send(plan.refusal[:1990])
                 return
-        written = await asyncio.to_thread(_write_queue, plan, d.source)
+        new_ids: list = []
+        written = await asyncio.to_thread(_write_queue, plan, d.source, new_ids)
         log.info("queue: %s set by %s, %d row(s) written: %s",
                  campaignqueue._family(key), d.source, written, plan.says)
+        await _note_order(
+            orderrecord.QUEUE, d.source, channel,
+            orderrecord.ids(campaignqueue.TABLE, new_ids) if plan.entries else (
+                (orderrecord.Written(campaignqueue.TABLE, "family=%s cleared" % key),)
+                if written else ()))
         await channel.send(plan.says[:1990])
         if plan.entries:
             # Started now, not a minute from now, for the reason _set_job
             # drives train at once: somebody has just given an order.
             await self._campaign_queue_once()
+
+    async def _set_combined_queue(self, order, key: str, fams: dict, source: str,
+                                  channel) -> None:
+        """Queue one dungeon step for two families together: a combined run.
+
+        Both families must clear every door (campaignqueue.combined_plan), and
+        the same steps are then written to each family's own queue, so the two
+        5-man parties stand on the same keyword for the module to group.
+        Both keys are matched against the roster, and looked up under the
+        roster's own spelling, before either is read.
+        """
+        key, refusal = campaignqueue.pick_family(key, sorted(fams))
+        partner = ""
+        if not refusal:
+            partner, refusal = campaignqueue.pick_family(order.partner, sorted(fams))
+        if not refusal and partner == key:
+            refusal = "A combined run needs two different families."
+        if not refusal and (order.clear or not order.text.strip()):
+            refusal = ('A combined run names the dungeon: "queue %s and %s: '
+                       'ragefire 5". Clear or read each queue on its own.'
+                       % (key, partner))
+        entries = ()
+        if not refusal:
+            entries, refusal = campaignqueue.parse_entries(order.text)
+        if refusal:
+            await channel.send(refusal[:1990])
+            return
+        try:
+            rows_a = await asyncio.to_thread(_queue_level_rows, fams[key])
+            rows_b = await asyncio.to_thread(_queue_level_rows, fams[partner])
+            plan = campaignqueue.combined_plan(key, partner, entries, rows_a, rows_b)
+        except Exception as exc:
+            # A bad row or a missing key must not kill the order in silence:
+            # log it, and tell the channel nothing was written.
+            log.exception("queue: combined run for %s and %s could not be "
+                          "checked", key, partner)
+            await channel.send(("Not queued: the combined run for %s and %s "
+                                "could not be checked (%s). Nothing was written."
+                                % (key, partner, type(exc).__name__))[:1990])
+            return
+        if plan.refusal:
+            log.info("queue: combined run refused for %s and %s: %s",
+                     key, partner, plan.refusal)
+            await channel.send(plan.refusal[:1990])
+            return
+        written = 0
+        for family in (key, partner):
+            written += await asyncio.to_thread(
+                _write_queue, dataclasses.replace(plan, family=family), source)
+        log.info("queue: combined run for %s and %s set by %s, %d row(s) "
+                 "written: %s", key, partner, source, written, plan.says)
+        await channel.send(plan.says[:1990])
+        await self._campaign_queue_once()
 
     # --- the activity choice (#216) -------------------------------------------
 
@@ -22398,9 +22591,11 @@ class Bridge(discord.Client):
                      "campaign to craft (%s)", d.mode, ", ".join(sitting), standin.ENV)
             names = _standin_running(names)
         written = 0
+        job_ids = []
         for name in names:
             try:
-                await asyncio.to_thread(_insert_job, name, d.mode, d.source)
+                job_ids.append(
+                    await asyncio.to_thread(_insert_job, name, d.mode, d.source))
                 written += 1
             except Exception:
                 # One failed insert must not cost the rest of the family; see
@@ -22410,6 +22605,8 @@ class Bridge(discord.Client):
         log.info(
             "job: mode=%r called=%d written=%d", d.mode, len(names), written
         )
+        await _note_order(
+            orderrecord.JOB, d.source, channel, orderrecord.ids("overseer_command", job_ids))
         # DRIVEN NOW, NOT ONLY ON THE NEXT CYCLE. The protect cycle re-asserts
         # this every ten minutes, which is right for a restart and far too slow
         # for a person who has just given an order and is watching a stream.
@@ -22754,7 +22951,7 @@ class Bridge(discord.Client):
             return
         speaker = bonds.head_of_family()
         try:
-            said = await asyncio.to_thread(
+            said = await llmpool.call(
                 _ask_llm, digest.build_prompt(report, speaker=speaker))
         except Exception:
             log.exception("digest voice unreachable; the account stands alone")
@@ -23496,6 +23693,22 @@ _GUILD_SKILLS_SQL = (
     "                     WHERE c2.name IN (%s)) "
     "  AND cs.skill IN (%s)"
 )
+
+
+def _log_work_orders(roster: list) -> None:
+    """Log who takes each standing guild work order this pass (#486).
+
+    Log only: workorders.py decides, and nothing here writes a row or sends
+    an order, so the world is unchanged by it.
+    """
+    plan = workorders.plan(
+        workorders.STANDING_ORDERS, workorders.members_from_roster(roster)
+    )
+    log.info("workorders: %s", workorders.headline(plan))
+    for line in workorders.lines(plan):
+        log.info("workorders: %s", line)
+    for note in plan.notes:
+        log.info("workorders: %s", note)
 
 
 def _fetch_guild_roster(names: list) -> list:
@@ -29033,7 +29246,7 @@ def _fetch_job_facts(family_names: list) -> dict:
 
 
 def _guild_campaign_door(cohort=None) -> str:
-    """The family's active dungeon job, or its next queued run keyword."""
+    """The family's active dungeon or raid job, or its next queued run keyword."""
     head = cohort.leader if cohort is not None else _head_now()
     family = getattr(cohort, "key", None) or _cohort_of(head) or ""
     roster = campaignqueue.families(_fetch_queue_roster())
@@ -29045,6 +29258,8 @@ def _guild_campaign_door(cohort=None) -> str:
         keyword = job.split(":", 1)[1].strip().lower()
         if keyword in {run.keyword for run in campaignplan.RUNS}:
             return keyword
+    if jobs.is_raid_job(job):
+        return job[len(jobs.RAID_PREFIX):].strip().lower()
     queue = campaignqueue.pending_by_family(_fetch_queue_rows()).get(family, ())
     return str(queue[0].get("keyword") or "").strip().lower() if queue else ""
 
@@ -31369,15 +31584,18 @@ def _hub_aim(hub) -> str:
 
 
 # THE CAPITAL, FROM THE WORLD'S OWN SPAWN TABLES. The nearest auctioneer on the
-# leader's map that serves the family's own auction house, then the mailbox
-# spawn nearest to that auctioneer: the counters of a capital stand together,
-# and no coordinate is written here.
+# map where the leader stands for the errand (townerrand.errand_standing: his
+# own reading, or his dungeon's door on its continent) that serves the
+# family's own auction house, then the mailbox spawn nearest to that
+# auctioneer: the counters of a capital stand together, and no coordinate is
+# written here. The leader's fresh snapshot still gates the read: an absent
+# leader finds no capital.
 _ERRAND_AUCTIONEERS_SQL = (
     "SELECT cr.map AS map_id, cr.position_x AS x, cr.position_y AS y, "
     "ct.name AS name, ct.faction AS faction, "
-    "(POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2)) AS d2 "
+    "(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2)) AS d2 "
     "FROM overseer_snapshot s "
-    "JOIN acore_world.creature cr ON cr.map = s.map_id "
+    "JOIN acore_world.creature cr ON cr.map = %s "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
     "AND (ct.npcflag & %s) <> 0 ORDER BY d2 LIMIT 60"
@@ -31394,14 +31612,22 @@ _ERRAND_MAILBOX_SQL = (
 ERRAND_HUB_MAILBOX_YARDS = 120.0
 
 
-def _fetch_capital_hub(leader: str, team: str) -> dict:
-    """The mailbox spawn by the nearest auctioneer of `team`'s house, or {}."""
+def _fetch_capital_hub(leader: str, team: str, standing) -> dict:
+    """The mailbox spawn by the auctioneer of `team`'s house nearest
+    `standing` (a {map_id, pos_x, pos_y} row, townerrand.errand_standing), on
+    its map, or {}."""
     house = auction.TEAM_HOUSE.get(team, 0)
-    if not house:
+    if not house or not standing:
+        return {}
+    try:
+        at = (float(standing["pos_x"]), float(standing["pos_y"]),
+              int(standing["map_id"]))
+    except (KeyError, TypeError, ValueError):
         return {}
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(_ERRAND_AUCTIONEERS_SQL, (leader, NPC_FLAG_AUCTIONEER))
+            cur.execute(_ERRAND_AUCTIONEERS_SQL,
+                        (*at, leader, NPC_FLAG_AUCTIONEER))
             rows = [dict(r) for r in cur.fetchall()]
             own = next((r for r in rows if auction.reachable_house(
                 team, int(r.get("faction") or 0)) == house), None)

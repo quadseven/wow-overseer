@@ -144,14 +144,29 @@ function miniMap(fam) {
   return html`<a class="minimap" data-minimap="${fam}" href="#/now/map"><span class="minimap-l">Where ${fam}'s family is</span><div class="wm wm-compact" data-map-box="${fam}"><div class="wm-wait">Unrolling the map...</div></div></a>`;
 }
 
+// Party and raid chat read aloud over the heard stream, in each speaker's voice.
+const ALOUD_ICON = { true: "ph-fill ph-chat-circle-text", false: "ph ph-chat-circle" };
+const ALOUD_WORD = { true: "Reading chat aloud", false: "Read chat aloud" };
+
+function readAloudButton(on) {
+  return html`<button type="button" class="st-hear" data-read-aloud aria-pressed="${String(on)}"><i class="${ALOUD_ICON[on]}" aria-hidden="true"></i><span>${ALOUD_WORD[on]}</span></button>`;
+}
+
+function showReadAloud(b, on) {
+  b.setAttribute("aria-pressed", String(on));
+  b.querySelector("i").className = ALOUD_ICON[on];
+  b.querySelector("span").textContent = ALOUD_WORD[on];
+}
+
 function familiesSection(ctx, agendas) {
   const wall = ctx.get("/api/wall");
   const w = wallModel(wall);
   const hs = heads(ctx);
   const layout = readLayout();
   const seg = html`<div class="seg live-seg" role="radiogroup" aria-label="Stream layout">${[["side", "Side by side"], ["stacked", "Stacked"]].map(([k, label]) => html`<button type="button" role="radio" aria-checked="${String(layout === k)}" data-layout="${k}">${label}</button>`)}</div>`;
+  const aloud = streams.canReadAloud() ? readAloudButton(streams.readingAloud()) : "";
   const streamed = hs ? hs.filter((m) => (w.tile(m.name) || {}).url || m.broadcast_url).length : null;
-  return html`<section class="fams" aria-labelledby="fams-title"><div class="sec-row"><h2 class="kicker" id="fams-title">Families, live</h2><span class="dim small">${streamed === null ? "" : streamed + " of " + hs.length + " streamed"}</span>${seg}</div>
+  return html`<section class="fams" aria-labelledby="fams-title"><div class="sec-row"><h2 class="kicker" id="fams-title">Families, live</h2><span class="dim small">${streamed === null ? "" : streamed + " of " + hs.length + " streamed"}</span>${aloud}${seg}</div>
 <div class="families" data-wall="${layout}">${D.familyKeys().map((f, i) => html`<div class="fam" data-family="${f}">${agendaCard(f, agendas[i])}<div class="fam-live">${familyLive(f, w, wall)}</div>${miniMap(f)}</div>`)}</div>
 </section>`;
 }
@@ -289,6 +304,9 @@ ${reportSection(ctx, allGuilds())}`;
     streams.mount(main);
     streams.bind(main, openPanel);
     pressed();
+    main.querySelectorAll("button[data-read-aloud]").forEach((b) => b.addEventListener("click", () => {
+      showReadAloud(b, streams.toggleReadAloud());
+    }));
     drawMiniMaps(main, ctx);
     // A new achievement since the last visit: a brief toast, once per device.
     announce(ctx.get("/api/v2/achievements"), ctx.previousVisit);
