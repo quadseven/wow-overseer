@@ -123,6 +123,86 @@ class OnlyDamageDealersFillDamageSeats(unittest.TestCase):
 
 
 class TheSwitchAndTheLimits(unittest.TestCase):
+    def test_registry_enrols_only_template_ready_guilds_within_faction_cap(self):
+        roster = (
+            [{"name": "tank%d" % i, "class_id": WARRIOR, "level": 60} for i in range(8)]
+            + [
+                {"name": "heal%d" % i, "class_id": PRIEST, "level": 60}
+                for i in range(11)
+            ]
+            + [
+                {"name": "damage%d" % i, "class_id": MAGE, "level": 60}
+                for i in range(19)
+            ]
+            + [
+                {"name": "source%d" % i, "class_id": PALADIN, "level": 60}
+                for i in range(8)
+            ]
+        )
+        natural = {m["name"] for m in roster}
+        candidates = [
+            {
+                "name": "NewA",
+                "faction": "Alliance",
+                "members": roster,
+                "naturalized": natural,
+                "raid_nights": ["Tuesday"],
+                "size_target": 40,
+            },
+            {
+                "name": "NewB",
+                "faction": "Horde",
+                "members": roster,
+                "naturalized": natural,
+                "raid_nights": ["Wednesday"],
+                "size_target": 40,
+            },
+            {
+                "name": "NewC",
+                "faction": "Alliance",
+                "members": roster,
+                "naturalized": natural,
+                "raid_nights": ["Thursday"],
+                "size_target": 40,
+            },
+        ]
+        registry = guildrun.guild_registry(candidates)
+        run_guilds = tuple(row["name"] for row in registry)
+        self.assertEqual(run_guilds, ("Cave", "Bonkers", "NewA", "NewB"))
+
+    def test_factory_made_or_short_guild_does_not_enrol(self):
+        roster = (
+            [{"name": "tank%d" % i, "class_id": WARRIOR, "level": 60} for i in range(8)]
+            + [
+                {"name": "heal%d" % i, "class_id": PRIEST, "level": 60}
+                for i in range(11)
+            ]
+            + [
+                {"name": "damage%d" % i, "class_id": MAGE, "level": 60}
+                for i in range(13)
+            ]
+            + [
+                {"name": "source%d" % i, "class_id": PALADIN, "level": 60}
+                for i in range(8)
+            ]
+        )
+        candidate = {
+            "name": "NewA",
+            "faction": "Alliance",
+            "members": roster,
+            "naturalized": set(),
+            "raid_nights": [],
+            "size_target": 40,
+        }
+        self.assertEqual(
+            guildrun.guild_registry([candidate]), guildrun.guild_registry([])
+        )
+        candidate["naturalized"] = {member["name"] for member in roster}
+        candidate["members"] = roster[:39]
+        self.assertEqual(
+            guildrun.guild_registry([candidate]), guildrun.guild_registry([])
+        )
+
     def test_off_unless_it_is_turned_on(self):
         self.assertFalse(guildrun.enabled({}))
         self.assertFalse(guildrun.enabled({"GUILD_RUNS": "off"}))
