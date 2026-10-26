@@ -394,6 +394,25 @@ class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
         self.assertIn("_current_travel_npc", door)
         self.assertIn("townslot.report(decision)", door)
 
+    def test_refusal_counts_all_queued_work_and_names_slot_holder(self):
+        refusal = self.body[self.body.index("if not aimed and not at_the_vault:") :]
+        refusal = refusal[: refusal.index("if not at_the_vault:")]
+        for token in (
+            "len(actions)",
+            "len(deposits)",
+            "len(items)",
+            "len(withdrawals)",
+            "fund",
+            "holder_label",
+        ):
+            self.assertIn(token, refusal)
+
+    def test_queued_work_claim_uses_the_bounded_turn(self):
+        claim = self.body[self.body.index("aimed = await self._claim_town_slot(") :]
+        claim = claim[: claim.index("# ALREADY STANDING THERE COUNTS AS AIMED")]
+        self.assertIn("if not any((actions, deposits, items, withdrawals)):", self.body)
+        self.assertIn("priority_after=1200.0", claim)
+
     def test_nothing_is_queued_when_no_vault_can_be_reached(self):
         """A deposit queued when nobody can stand at a vault has exactly one
         possible answer - `no guild bank in reach` - which is the error this

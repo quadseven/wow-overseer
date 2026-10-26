@@ -2255,3 +2255,85 @@ class EveryUnledgeredTravelWriteTellsTheLedger(unittest.TestCase):
             "these write travel_npc without telling the ledger, so the next "
             f"want() orphans the column on the long lease: {offenders}",
         )
+
+
+class AgedGuildBankWantGetsATurn(unittest.TestCase):
+    def test_bank_waiting_behind_repeating_bags_and_vendor_gets_column(self):
+        slot = townslot.Slot(lease=1300.0, releasable=economy)
+        owner = slot.want(
+            claimant="town errand",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=(),
+            now=0.0,
+        )
+        slot.settle(owner, True, 0.0)
+        for claimant in ("bags", "vendor"):
+            slot.want(
+                claimant=claimant,
+                character="Grug",
+                aim=claimant,
+                leader="Grug",
+                column="vendor",
+                retaskable=(),
+                now=1.0,
+            )
+        first = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="vault",
+            leader="Grug",
+            column="vendor",
+            retaskable=(),
+            now=10.0,
+            priority_after=1200.0,
+        )
+        self.assertEqual(townslot.SLOT_WAIT, first.verdict)
+        for claimant in ("bags", "vendor"):
+            slot.want(
+                claimant=claimant,
+                character="Grug",
+                aim=claimant,
+                leader="Grug",
+                column="vendor",
+                retaskable=(),
+                now=1208.0,
+            )
+
+        before_turn = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="vault",
+            leader="Grug",
+            column="vendor",
+            retaskable=(),
+            now=1209.0,
+            priority_after=1200.0,
+        )
+        self.assertEqual(townslot.SLOT_WAIT, before_turn.verdict)
+        for claimant in ("bags", "vendor"):
+            slot.want(
+                claimant=claimant,
+                character="Grug",
+                aim=claimant,
+                leader="Grug",
+                column="vendor",
+                retaskable=(),
+                now=1299.0,
+            )
+
+        decision = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="vault",
+            leader="Grug",
+            column="vendor",
+            retaskable=(),
+            now=1301.0,
+            priority_after=1200.0,
+        )
+
+        self.assertEqual(townslot.SLOT_PREEMPT, decision.verdict)
+        self.assertEqual("town errand", decision.release.claimant)

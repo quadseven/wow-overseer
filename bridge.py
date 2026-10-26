@@ -8826,7 +8826,8 @@ class Bridge(discord.Client):
     async def _claim_town_slot(self, claimant: str, character: str,
                                aim: str, urgent: bool = False,
                                cohort: str | None = None,
-                               distance: float | None = None) -> bool:
+                               distance: float | None = None,
+                               priority_after: float | None = None) -> bool:
         """Ask for the family's one traveller, and act on the answer (infra#3703).
 
         THE ONE DOOR EVERY TOWN ERRAND NOW GOES THROUGH. Seven passes write
@@ -8892,6 +8893,7 @@ class Bridge(discord.Client):
             claimant=claimant, character=character, aim=aim, leader=leader,
             column=column, retaskable=_retaskable_from(aim), now=now,
             urgent=urgent, distance=distance,
+            priority_after=priority_after,
             trainer_route=trainer_route,
         )
         lapsed = getattr(slot, "take_lapse", lambda _now: "")(now)
@@ -14880,8 +14882,12 @@ class Bridge(discord.Client):
         # THE GUILD FUND NEEDS THE VAULT TOO (guildfund.py): the master walks
         # there to withdraw what it posts to the members.
         fund = sum(getattr(self, "_fund_wants", {}).get(n, 0) for n in names)
+        fund_wants = sum(
+            1 for n in names if getattr(self, "_fund_wants", {}).get(n, 0) > 0
+        )
         if not any((actions, deposits, items, withdrawals)):
             if not fund:
+                self._cohort_town_slot(cohort).forget("guild bank")
                 log.info("guild bank: nobody is carrying more than the float")
                 return
             log.info("guild bank: the guild fund needs the vault: %s to withdraw "
@@ -14912,7 +14918,8 @@ class Bridge(discord.Client):
         # (townslot.STOP_CLAIMANTS), the way the mail pass's does.
         aimed = await self._claim_town_slot("guild bank", leader, vault.aim,
                                              cohort=_cohort_key(cohort),
-                                             distance=_spawn_yards(spawn))
+                                             distance=_spawn_yards(spawn),
+                                             priority_after=1200.0)
         # ALREADY STANDING THERE COUNTS AS AIMED, because it is the state the
         # aim exists to produce. mod-overseer RELEASES a travel aim the moment
         # the walk arrives (it clears `travel_npc`, which is the signal the
@@ -14948,12 +14955,19 @@ class Bridge(discord.Client):
             # and one that never finishes stops winning after LEASE_SECONDS.
             # `_claim_town_slot` has already logged whose errand it is, how
             # long they have had it and who is ahead in the queue.
+            slot_holder = self._cohort_town_slot(cohort).holder
+            holder_label = (
+                "%s carrying %r" % (slot_holder.claimant or "unknown", slot_holder.aim)
+                if slot_holder else "none"
+            )
             log.info(
                 "guild bank: leader=%s could not be aimed at the vault (%s) "
-                "this pass, so no setup row or deposit is queued (%d setup "
-                "action(s), %d deposit(s) waiting) - every row queued into a "
+                "this pass, so no work is queued (%d setup action(s), %d gold "
+                "deposit(s), %d item deposit(s), %d withdrawal(s), %d fund "
+                "want(s) waiting; slot holder=%s) - every row queued into a "
                 "trip nobody is taking comes back 'no guild bank in reach'",
-                leader, vault.aim, len(actions), len(deposits),
+                leader, vault.aim, len(actions), len(deposits), len(items),
+                len(withdrawals), fund_wants, holder_label,
             )
             return
         if not at_the_vault:
