@@ -9,6 +9,7 @@ idle-traveller guard rather than repeating that mistake one file over.
 """
 
 import ast
+import asyncio
 import pathlib
 import re
 import unittest
@@ -16,6 +17,7 @@ import unittest
 import guildbank
 import travel
 import modsource
+from test_campaign_owns_travel import FakeWorld, Clock, _Log, _bridge_self
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 TRAVEL = pathlib.Path(__file__).resolve().parents[1] / "travel.py"
@@ -420,6 +422,72 @@ class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
         head = self.body[: self.body.index("_recent_guild_bank_keys")]
         self.assertIn("if not vault.aim:", head)
         self.assertIn("return", head)
+
+    def test_bank_claim_earns_a_turn_after_repeating_bags_and_vendor_claims(self):
+        world = FakeWorld(column="")
+        clock = Clock(0.0)
+        bridge = _bridge_self(world, clock, _Log())
+        slot = bridge._cohort_town_slot("Zug")
+        slot.lease = 1200.0
+        owner = slot.want(
+            claimant="town errand",
+            character="Zug",
+            aim="vendor",
+            leader="Zug",
+            column="",
+            retaskable=(),
+            now=0.0,
+        )
+        slot.settle(owner, True, 0.0)
+        world.column["Zug"] = "vendor"
+
+        for claimant in ("bags", "vendor"):
+            slot.want(
+                claimant=claimant,
+                character="Zug",
+                aim=claimant,
+                leader="Zug",
+                column="vendor",
+                retaskable=(),
+                now=1.0,
+            )
+        self.assertFalse(
+            asyncio.run(
+                bridge._claim_town_slot(
+                    "guild bank",
+                    "Zug",
+                    "vault",
+                    cohort="Zug",
+                    priority_after=1200.0,
+                )
+            )
+        )
+
+        for now in (600.0, 1199.0):
+            clock.now = now
+            for claimant in ("bags", "vendor"):
+                slot.want(
+                    claimant=claimant,
+                    character="Zug",
+                    aim=claimant,
+                    leader="Zug",
+                    column="vendor",
+                    retaskable=(),
+                    now=now,
+                )
+        clock.now = 1201.0
+        self.assertTrue(
+            asyncio.run(
+                bridge._claim_town_slot(
+                    "guild bank",
+                    "Zug",
+                    "vault",
+                    cohort="Zug",
+                    priority_after=1200.0,
+                )
+            )
+        )
+        self.assertEqual("vault", world.column["Zug"])
 
 
 class TheVaultAimComesFromTheSpawnTableTests(unittest.TestCase):

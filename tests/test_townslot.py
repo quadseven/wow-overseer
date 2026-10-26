@@ -2259,7 +2259,7 @@ class EveryUnledgeredTravelWriteTellsTheLedger(unittest.TestCase):
 
 class AgedGuildBankWantGetsATurn(unittest.TestCase):
     def test_bank_waiting_behind_repeating_bags_and_vendor_gets_column(self):
-        slot = townslot.Slot(lease=1300.0, releasable=economy)
+        slot = townslot.Slot(lease=1200.0, releasable=economy)
         owner = slot.want(
             claimant="town errand",
             character="Grug",
@@ -2299,7 +2299,7 @@ class AgedGuildBankWantGetsATurn(unittest.TestCase):
                 leader="Grug",
                 column="vendor",
                 retaskable=(),
-                now=1208.0,
+                now=1108.0,
             )
 
         before_turn = slot.want(
@@ -2309,7 +2309,7 @@ class AgedGuildBankWantGetsATurn(unittest.TestCase):
             leader="Grug",
             column="vendor",
             retaskable=(),
-            now=1209.0,
+            now=1109.0,
             priority_after=1200.0,
         )
         self.assertEqual(townslot.SLOT_WAIT, before_turn.verdict)
@@ -2321,7 +2321,7 @@ class AgedGuildBankWantGetsATurn(unittest.TestCase):
                 leader="Grug",
                 column="vendor",
                 retaskable=(),
-                now=1299.0,
+                now=1199.0,
             )
 
         decision = slot.want(
@@ -2331,7 +2331,7 @@ class AgedGuildBankWantGetsATurn(unittest.TestCase):
             leader="Grug",
             column="vendor",
             retaskable=(),
-            now=1301.0,
+            now=1210.0,
             priority_after=1200.0,
         )
 
