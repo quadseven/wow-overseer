@@ -765,6 +765,76 @@ class ATrainerWalkThatKeepsFailing(unittest.TestCase):
             '"SELECT id, target_name, command, source, status, target_arg, "', BRIDGE
         )
 
+    def test_riding_refusal_waits_on_its_recorded_map_and_resumes_after_a_map_change(
+        self,
+    ):
+        refusal = "no trainer on this map will teach this character that skill"
+        (recent,) = guildjobs.recent_from_rows(
+            (
+                {
+                    "target_name": "Keeper",
+                    "command": "walk-to-trainer skill:762 learn:33388 max:20000",
+                    "source": "guildjobs:riding:Keeper",
+                    "status": "error",
+                    "age": 5,
+                    "target_arg": "530",
+                    "result": json.dumps(
+                        {
+                            "outcome": "refused",
+                            "reason": refusal,
+                            "retryable": False,
+                        },
+                        separators=(",", ":"),
+                    ),
+                },
+            )
+        )
+        order = guildjobs.purse.order("Keeper", 60, 80000, 37600, 9, 0)
+        stranded = member("Keeper", level=60, money=80000, map_id=530, purse=order)
+
+        step, note = guildjobs.riding_step(stranded, (recent,))
+
+        self.assertIsNone(step)
+        self.assertEqual(
+            note, "Keeper waits on the map change before walking to a riding trainer"
+        )
+
+        moved = member("Keeper", level=60, money=80000, map_id=1, purse=order)
+        step, note = guildjobs.riding_step(moved, (recent,))
+
+        self.assertEqual(guildjobs.RIDING_ACTION, step.action)
+        self.assertEqual("", note)
+
+    def test_another_riding_refusal_keeps_the_180_minute_cooldown(self):
+        order = guildjobs.purse.order("Keeper", 60, 80000, 37600, 9, 0)
+        m = member("Keeper", level=60, money=80000, map_id=530, purse=order)
+
+        def refusal_at(age):
+            return guildjobs.recent_from_rows(
+                (
+                    {
+                        "target_name": "Keeper",
+                        "command": "walk-to-trainer skill:762 learn:33388 max:20000",
+                        "source": "guildjobs:riding:Keeper",
+                        "status": "error",
+                        "age": age,
+                        "target_arg": "530",
+                        "result": (
+                            '{"outcome":"refused","reason":"died on the way",'
+                            '"retryable":true}'
+                        ),
+                    },
+                )
+            )
+
+        step, note = guildjobs.riding_step(m, refusal_at(5))
+        self.assertIsNone(step)
+        self.assertEqual("", note)
+
+        step, note = guildjobs.riding_step(m, refusal_at(181))
+        self.assertEqual(guildjobs.RIDING_ACTION, step.action)
+        self.assertEqual("", note)
+
 
 class ASkinnersField(unittest.TestCase):
     def beast(self, spawn, x, y, level=10, name="Mottled Boar"):

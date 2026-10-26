@@ -1876,25 +1876,30 @@ NO_TRAINER_ON_MAP_REFUSAL = (
 )
 
 
+def _no_trainer_refusal(name: str, skill_id: int, recent) -> bool:
+    return any(
+        r.name == name
+        and r.action in ("train", RIDING_ACTION)
+        and r.skill_id == skill_id
+        and r.refusal == NO_TRAINER_ON_MAP_REFUSAL
+        for r in recent or ()
+    )
+
+
 def _stranded_by_no_trainer(
     name: str, skill_id: int, current_map_id: int | None, recent
 ) -> bool:
-    """Whether the member's last trainer walk for this skill was refused with
-    'no trainer on this map will teach this character that skill' and the
-    member's map_id has not changed since."""
-    if current_map_id is None:
+    """Whether the member's refused trainer walk still has the same map."""
+    if current_map_id is None or not current_map_id:
         return False
-    for r in recent or ():
-        if (
-            r.name == name
-            and r.action == "train"
-            and r.skill_id == skill_id
-            and r.refusal == NO_TRAINER_ON_MAP_REFUSAL
-            and r.map_id == current_map_id
-            and r.map_id != 0
-        ):
-            return True
-    return False
+    return any(
+        r.name == name
+        and r.action in ("train", RIDING_ACTION)
+        and r.skill_id == skill_id
+        and r.refusal == NO_TRAINER_ON_MAP_REFUSAL
+        and r.map_id == current_map_id
+        for r in recent or ()
+    )
 
 
 def riding_step(m, recent):
@@ -1922,13 +1927,17 @@ def riding_step(m, recent):
                 purse.money(order.money),
             ),
         )
-    if not m.online or not m.alive or m.in_combat or _cooling(m, RIDING_ACTION, recent):
+    if not m.online or not m.alive or m.in_combat:
         return None, ""
     if _stranded_by_no_trainer(m.name, purse.RIDING_SKILL, m.map_id, recent):
         return (
             None,
             "%s waits on the map change before walking to a riding trainer" % m.name,
         )
+    if _cooling(m, RIDING_ACTION, recent) and not _no_trainer_refusal(
+        m.name, purse.RIDING_SKILL, recent
+    ):
+        return None, ""
     said = "%s walks to a riding trainer to buy %s for %s of its own" % (
         m.name,
         want.what,
@@ -6215,14 +6224,17 @@ def recent_from_rows(rows, map_id_by_name: dict[str, int] | None = None) -> tupl
         name = str(row.get("target_name") or "")
         map_id = 0
         command = str(row.get("command") or "")
-        if action == "train" and command.startswith("walk-to-trainer"):
+        trainer_walk = action in ("train", RIDING_ACTION) and command.startswith(
+            "walk-to-trainer"
+        )
+        if trainer_walk:
             target_arg = row.get("target_arg")
             if target_arg is not None:
                 try:
                     map_id = int(target_arg)
                 except (ValueError, TypeError):
                     map_id = 0
-        elif action == "train" and map_id_by_name is not None:
+        elif action in ("train", RIDING_ACTION) and map_id_by_name is not None:
             map_id = map_id_by_name.get(name, 0)
         out.append(
             Recent(
@@ -6232,7 +6244,7 @@ def recent_from_rows(rows, map_id_by_name: dict[str, int] | None = None) -> tupl
                 status=str(row.get("status") or ""),
                 command=command,
                 result=str(row.get("result") or ""),
-                skill_id=(_trainer_skill_id(command) if action == "train" else None),
+                skill_id=(_trainer_skill_id(command) if trainer_walk else None),
                 walk=action.endswith("-walk"),
                 reason=_reason_of(row),
                 spawn=_spawn_of(command),
