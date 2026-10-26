@@ -225,6 +225,7 @@ class NobodyIsSentAnythingTheyCannotHold(unittest.TestCase):
         self.assertEqual(plan.grants, ())
         self.assertIn("Bork", " ".join(plan.notes))
         self.assertIn("slot freeing is unavailable", " ".join(plan.notes))
+        self.assertIn("no direct equip path is available", " ".join(plan.notes))
 
     def test_unknown_capacity_is_treated_as_no_room(self):
         """A failed capacity read is not a licence to write a doomed row -
