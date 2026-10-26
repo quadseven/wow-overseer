@@ -14,8 +14,11 @@ name: check.leak-scan
 # `edited` is in the trigger list on purpose: a PR body can leak long after
 # the last push.
 #
-# allowed-repo-refs: repos this one cites by `<name>#123` as a matter of
-# course. This repo's own refs are always exempt and need no entry.
+# allowed-repo-refs: repos this one cites as a matter of course. A public
+# sibling is listed `quadseven/<name>`, which exempts both `<name>#123` and
+# `quadseven/<name>#123`; a bare `<name>` exempts only the bare form, so the
+# private repo stays bare (#1493, pinned by tests/test_leak_scan_caller.py).
+# This repo's own refs are always exempt and need no entry.
 
 # DENY-LIST LAYER. Terms with no generic shape (people, products, projects)
 # are read at run time from the SSM parameter below, through the role in the
@@ -37,7 +40,7 @@ jobs:
       # Mint the OIDC token for the deny-list read role.
       id-token: write
     with:
-      allowed-repo-refs: infra, infra-public, mod-overseer, mod-playerbots
+      allowed-repo-refs: infra, quadseven/infra-public, quadseven/mod-overseer, quadseven/mod-playerbots
       deny-list-ssm-param: /infra/leak-scan/deny-list
     secrets:
       aws-role-arn: ${{ secrets.LEAK_SCAN_ROLE_ARN }}
