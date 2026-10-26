@@ -20,6 +20,7 @@ import crossing  # noqa: E402
 import decree  # noqa: E402
 import jobs  # noqa: E402
 import map_server  # noqa: E402
+import orderrecord  # noqa: E402
 import raidrun  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
@@ -717,6 +718,9 @@ class TheDiscordOrder(unittest.TestCase):
         async def queue_once():
             passes.append(1)
 
+        async def note_order(*a):
+            return None
+
         ns = _load(
             ["_set_queue"],
             {
@@ -731,9 +735,11 @@ class TheDiscordOrder(unittest.TestCase):
                     for r in roster_rows()
                     if r["name"] in fam["names"]
                 ],
-                "_write_queue": lambda plan, source: (
+                "_write_queue": lambda plan, source, new_ids=None: (
                     written.append((plan, source)) or 2
                 ),
+                "_note_order": note_order,
+                "orderrecord": orderrecord,
             },
         )
         me = types.SimpleNamespace(_campaign_queue_once=queue_once)
