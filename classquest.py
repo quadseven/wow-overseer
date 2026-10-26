@@ -183,11 +183,11 @@ MAX_DEATH_KNIGHT_QUEST_LEVEL = 60
 
 # The core's QuestStatus values a character_queststatus row carries.
 STATUS_COMPLETE, STATUS_INCOMPLETE = 1, 3
-# A FAILED QUEST STAYS IN THE LOG (#781, 2026-10-26). A timed quest whose clock
+# A FAILED QUEST STAYS IN THE LOG (#781). A timed quest whose clock
 # ran out (The Affray, 1719, TimeAllowed 600) is held at status 5 until it is
 # dropped, and the core refuses to take a quest the log holds. Read as never
-# taken, ten warriors were sent to take The Affray again about once an hour
-# each, and none got further. A failed class quest is an ABANDON: the member
+# taken, a warrior that failed it was sent to take The Affray again pass
+# after pass. A failed class quest is an ABANDON: the member
 # drops it and takes it again, and the quest's clock starts anew.
 STATUS_FAILED = 5
 

@@ -1,18 +1,13 @@
 """A class quest the member failed is dropped and taken again (#781).
 
-Read on the dev realm on 2026-10-26 (read-only SELECT on acore_characters):
-ten warriors hold The Affray (1719) at status 5, QUEST_STATUS_FAILED. The
-quest is timed (quest_template TimeAllowed 600, ten minutes from the take), so
-a warrior that does not reach Twiggy Flathead's grate and beat the challengers
-and Big Will in time fails it, and a failed quest stays in the log.
+The Affray (1719) is a timed quest (quest_template TimeAllowed 600, ten
+minutes from the take), so a warrior that does not beat the challengers and
+Big Will in time fails it, and a failed quest (status 5) stays in the log.
 
 The book read the log as `status IN (1, 3)`, so a failed quest read as never
 taken, and the planner sent the member to take it again. The core refuses that
-take while the failed quest holds its log slot, so the loop never ended: in
-the bridge log of 2026-10-25 and 2026-10-26, Crag, Gronk, Durg, Dreadlox, Hurk
-and Flintt were sent to "walk to Klannoc Macleod and take The Affray" about
-once an hour each, and none of them got further. 2458 (Berserker Stance)
-reached nobody that way.
+take while the failed quest holds its log slot, so the warrior was sent back to
+Klannoc Macleod pass after pass and never got further.
 
 A failed class quest is now an ABANDON, the same one-row step a quest whose
 StartItem was lost already is: the member drops it, the next pass sends it to
