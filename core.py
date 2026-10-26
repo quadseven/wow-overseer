@@ -153,12 +153,15 @@ class QueueDirective:
     """A family's dungeon campaign queue order (#209): "queue Zug: ragefire
     50, then wailing 50". `family` is the name before the colon, "" when none
     was given; `text` is the entries, "clear", or "" to be told the queue.
-    campaignqueue.py reads both, and the bridge validates before it writes.
+    `partner` is the second family of a combined run ("queue Zug and Thrak:
+    ..."), "" for one family. campaignqueue.py reads them, and the bridge
+    validates before it writes.
     """
 
     family: str
     text: str
     source: str
+    partner: str = ""
 
 
 @dataclass(frozen=True)
@@ -384,7 +387,10 @@ def _unaddressed(text: str, dedicated: bool, author_id: str = "") -> list:
     if queue is not None:
         return [
             QueueDirective(
-                family=queue.family, text=queue.text, source=f"discord:{author_id}"
+                family=queue.family,
+                text=queue.text,
+                source=f"discord:{author_id}",
+                partner=queue.partner,
             )
         ]
     mode = _job_mode(text)

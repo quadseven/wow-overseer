@@ -54,6 +54,7 @@ import director
 import dungeonpath
 import events
 import fanout
+import fireplan
 import flightlearn
 import followhold
 import goals
@@ -8655,6 +8656,8 @@ class Bridge(discord.Client):
             )
             return
 
+        await self._dark_iron_once(names, cohort)
+
         mode = craft_rhythm.standing_mode(
             await asyncio.to_thread(_standing_jobs, getattr(cohort, "key", None)),
             exempt=_standin_out(),
@@ -9023,6 +9026,88 @@ class Bridge(discord.Client):
             decision.release.character, decision.release.aim, claimant,
         )
         return False
+
+    async def _dark_iron_once(self, names: list, cohort=None) -> int:
+        """Queue the next Dark Iron step for every blacksmith (#480).
+
+        OFF UNLESS DARK_IRON_ENABLED=1 (`fireplan.dark_iron_enabled`), and
+        ISOLATED: it runs at the head of the craft supply pass, so anything it
+        raises is logged here and the pass carries on to its own buys.
+        Returns the rows queued.
+        """
+        if not fireplan.dark_iron_enabled():
+            return 0
+        try:
+            return await self._dark_iron_pass(names, cohort)
+        except Exception:
+            log.exception("dark iron: the pass failed; craft supply carries on")
+            return 0
+
+    async def _dark_iron_pass(self, names: list, cohort=None) -> int:
+        """Read the world for `fireplan.iron_member` and write its answers.
+
+        The same halves as `_buy_fishing_poles`: a row for whoever stands at
+        Lokhtos with the bag slot, the money and something spare, and a
+        `craft_supply.Need` on his stock for whoever does not, which
+        `_walk_for_reagents` turns into one walk. Rows already pending, or
+        refused inside `fireplan.REFUSED_RETRY_MINUTES`, are not written again,
+        and when that cannot be read nothing is written at all.
+        """
+        smiths = [
+            n for n in sorted(names)
+            if await asyncio.to_thread(_fetch_skill_cap, n, BLACKSMITHING_SKILL)
+        ]
+        if not smiths:
+            log.info("dark iron: no blacksmith in this family")
+            return 0
+        spells = [p.teaches for p in fireplan.PLANS] + [fireplan.SMELT_SPELL]
+        known = await asyncio.to_thread(_fetch_crafter_known, smiths, spells)
+        standing = await asyncio.to_thread(_fetch_standing, smiths, THORIUM_FACTION)
+        made = await asyncio.to_thread(
+            _fetch_crafted, smiths, [p.piece for p in fireplan.PLANS]
+        )
+        quests = [q for q, _needs in fireplan.TURNINS]
+        in_log = await asyncio.to_thread(_fetch_quest_log, smiths, quests)
+        items = sorted(fireplan.ITEM_NAMES)
+        held_by = await asyncio.to_thread(
+            _fetch_item_counts, [(n, i) for n in smiths for i in items]
+        )
+        purses = await asyncio.to_thread(_fetch_purses, smiths)
+        free_slots = await asyncio.to_thread(_fetch_free_slots, smiths)
+        blocked = await asyncio.to_thread(
+            _iron_rows_blocked, fireplan.REFUSED_RETRY_MINUTES
+        )
+        queued = 0
+        needs: list = []
+        for name in smiths:
+            town = await asyncio.to_thread(_fetch_town, name)
+            smith = fireplan.Smith(
+                name=name,
+                learned=frozenset(r["spell"] for r in known if r["name"] == name),
+                standing=standing.get(name, 0),
+                held=tuple((i, held_by.get((name, i), 0)) for i in items),
+                in_log=frozenset(q for n, q in in_log if n == name),
+                money=purses.get(name, (0, 0))[1],
+                free_slots=free_slots.get(name, 0),
+                stocks=frozenset(town.stocks),
+            )
+            turn = fireplan.iron_member(smith, made, blocked or frozenset())
+            log.info("%s", fireplan.iron_log(name, turn.pipe))
+            if turn.note:
+                log.info("dark iron: %s", turn.note)
+            if turn.walk_to:
+                needs.append(craft_supply.Need(name, turn.walk_to, fireplan.VENDOR))
+            if turn.errand is None:
+                continue
+            if blocked is None:
+                log.info("dark iron: cannot read which rows are pending, so %s "
+                         "for %s waits", turn.errand.command, name)
+                continue
+            if await asyncio.to_thread(_insert_iron_errand, turn.errand):
+                queued += 1
+        if needs:
+            await self._walk_for_reagents(needs, cohort)
+        return queued
 
     async def _buy_fishing_poles(self, names: list, cohort=None) -> tuple:
         """Queue a Fishing Pole for every member holding none (mod-overseer#530).
@@ -21111,11 +21196,14 @@ class Bridge(discord.Client):
         entry refuses the whole order: a queue with a hole in it is a
         different plan from the one that was given.
         """
-        order = campaignqueue.Order(family=d.family, text=d.text)
+        order = campaignqueue.Order(family=d.family, text=d.text, partner=d.partner)
         fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
         key, refusal = campaignqueue.pick_family(order.family, sorted(fams))
         if refusal:
             await channel.send(refusal[:1990])
+            return
+        if order.partner:
+            await self._set_combined_queue(order, key, fams, d.source, channel)
             return
         if not order.text.strip():
             mine = campaignqueue.pending_by_family(
@@ -21154,6 +21242,59 @@ class Bridge(discord.Client):
             # Started now, not a minute from now, for the reason _set_job
             # drives train at once: somebody has just given an order.
             await self._campaign_queue_once()
+
+    async def _set_combined_queue(self, order, key: str, fams: dict, source: str,
+                                  channel) -> None:
+        """Queue one dungeon step for two families together: a combined run.
+
+        Both families must clear every door (campaignqueue.combined_plan), and
+        the same steps are then written to each family's own queue, so the two
+        5-man parties stand on the same keyword for the module to group.
+        Both keys are matched against the roster, and looked up under the
+        roster's own spelling, before either is read.
+        """
+        key, refusal = campaignqueue.pick_family(key, sorted(fams))
+        partner = ""
+        if not refusal:
+            partner, refusal = campaignqueue.pick_family(order.partner, sorted(fams))
+        if not refusal and partner == key:
+            refusal = "A combined run needs two different families."
+        if not refusal and (order.clear or not order.text.strip()):
+            refusal = ('A combined run names the dungeon: "queue %s and %s: '
+                       'ragefire 5". Clear or read each queue on its own.'
+                       % (key, partner))
+        entries = ()
+        if not refusal:
+            entries, refusal = campaignqueue.parse_entries(order.text)
+        if refusal:
+            await channel.send(refusal[:1990])
+            return
+        try:
+            rows_a = await asyncio.to_thread(_queue_level_rows, fams[key])
+            rows_b = await asyncio.to_thread(_queue_level_rows, fams[partner])
+            plan = campaignqueue.combined_plan(key, partner, entries, rows_a, rows_b)
+        except Exception as exc:
+            # A bad row or a missing key must not kill the order in silence:
+            # log it, and tell the channel nothing was written.
+            log.exception("queue: combined run for %s and %s could not be "
+                          "checked", key, partner)
+            await channel.send(("Not queued: the combined run for %s and %s "
+                                "could not be checked (%s). Nothing was written."
+                                % (key, partner, type(exc).__name__))[:1990])
+            return
+        if plan.refusal:
+            log.info("queue: combined run refused for %s and %s: %s",
+                     key, partner, plan.refusal)
+            await channel.send(plan.refusal[:1990])
+            return
+        written = 0
+        for family in (key, partner):
+            written += await asyncio.to_thread(
+                _write_queue, dataclasses.replace(plan, family=family), source)
+        log.info("queue: combined run for %s and %s set by %s, %d row(s) "
+                 "written: %s", key, partner, source, written, plan.says)
+        await channel.send(plan.says[:1990])
+        await self._campaign_queue_once()
 
     # --- the activity choice (#216) -------------------------------------------
 
@@ -34548,6 +34689,119 @@ def _out_of_reach_buys(minutes: int) -> set:
                 return set()
             raise
         return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
+
+BLACKSMITHING_SKILL = 164
+THORIUM_FACTION = 59
+
+
+def _fetch_standing(names: list, faction: int) -> dict:
+    """name -> reputation standing with `faction`; absent when never gained.
+
+    Guarded like its siblings: a realm that cannot answer (1054, 1146) reads
+    as no standing, which plans the lowest step and queues nothing.
+    """
+    if not names:
+        return {}
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT c.name AS name, r.standing AS standing "  # noqa: S608 - placeholders from a COUNT
+                "FROM characters c JOIN character_reputation r ON r.guid = c.guid "
+                f"WHERE r.faction = %s AND c.name IN ({marks})",
+                (int(faction), *names),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                log.warning("dark iron: reputation cannot be read here")
+                return {}
+            raise
+        return {row["name"]: int(row["standing"]) for row in cur.fetchall()}
+
+
+def _fetch_crafted(names: list, entries: list) -> set:
+    """Item entries any of `names` has crafted, from overseer_event's craft
+    rows: a durable record, where holding the piece is not (it is traded,
+    worn, banked or vendored). A realm without the table has made nothing."""
+    if not names or not entries:
+        return set()
+    marks = ",".join(["%s"] * len(names))
+    items = ",".join(["%s"] * len(entries))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT DISTINCT subject_id FROM overseer_event "  # noqa: S608 - placeholders from a COUNT
+                f"WHERE kind = 'craft' AND character_name IN ({marks}) "
+                f"AND subject_id IN ({items})",
+                (*names, *[int(e) for e in entries]),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return set()
+            raise
+        return {int(row["subject_id"]) for row in cur.fetchall()}
+
+
+def _fetch_quest_log(names: list, quests: list) -> set:
+    """(name, quest) for each of `quests` in a member's quest log."""
+    if not names or not quests:
+        return set()
+    sql = attunestep.LOG_SQL.format(
+        holes=",".join(["%s"] * len(names)),
+        quests=",".join(str(int(q)) for q in quests),
+    )
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, tuple(names))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return set()
+            raise
+        return {(row["name"], int(row["quest"])) for row in cur.fetchall()}
+
+
+def _iron_rows_blocked(minutes: int):
+    """(character, command) of Dark Iron rows still pending or claimed, or
+    refused (status 'error') inside the window - the `_out_of_reach_buys`
+    rule, so a refused row is not written every pass. None when the table
+    cannot answer (1054, 1146, 1265): the caller then writes nothing."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, command FROM overseer_command "
+                "WHERE source = %s AND (status IN ('pending', 'claimed', 'verifying') "
+                "OR (status = 'error' "
+                "AND created_at > NOW() - INTERVAL %s MINUTE))",
+                (fireplan.SOURCE, int(minutes)),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                log.warning("dark iron: overseer_command cannot be read here")
+                return None
+            raise
+        return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
+
+def _insert_iron_errand(errand) -> int:
+    """One Dark Iron buy or quest row, under its own source so its refusals
+    can be read back by `_iron_rows_blocked`. 0 when the realm cannot take it."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (errand.member, errand.command, errand.kind, errand.taker,
+                 fireplan.SOURCE),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                log.warning("dark iron: overseer_command cannot take a %r row "
+                            "for %s here", errand.kind, errand.member)
+                return 0
+            raise
+        return cur.lastrowid or 0
 
 
 def _insert_town_errand(errand) -> int:
