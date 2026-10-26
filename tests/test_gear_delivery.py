@@ -224,7 +224,7 @@ class NobodyIsSentAnythingTheyCannotHold(unittest.TestCase):
         plan = hand_off([carried()], THE_HAND_OFF, free_slots={"Grog": 4, "Bork": 0})
         self.assertEqual(plan.grants, ())
         self.assertIn("Bork", " ".join(plan.notes))
-        self.assertIn("slot freeing is unavailable", " ".join(plan.notes))
+        self.assertIn("no slot-freeing step is available", " ".join(plan.notes))
         self.assertIn("no direct equip path is available", " ".join(plan.notes))
 
     def test_unknown_capacity_is_treated_as_no_room(self):
