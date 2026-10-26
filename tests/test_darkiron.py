@@ -31,7 +31,6 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import fireplan  # noqa: E402
-import pymysql  # noqa: E402
 import towntrip  # noqa: E402
 
 
@@ -468,7 +467,7 @@ class _Conn(_Cursor):
 
 def _exec(nodes, **ns):
     base = {
-        "pymysql": pymysql,
+        "pymysql": _PYMYSQL,
         "fireplan": fireplan,
         "log": _Log(),
         "attunestep": types.SimpleNamespace(LOG_SQL="{holes}{quests}"),
@@ -478,11 +477,20 @@ def _exec(nodes, **ns):
     return base
 
 
+class _MySQLError(Exception):
+    """Stands in for pymysql.err.MySQLError: (code, message) args. Another
+    module in the same test batch may replace pymysql in sys.modules, so the
+    exec'd bridge functions get this rather than whatever is imported."""
+
+
+_PYMYSQL = types.SimpleNamespace(err=types.SimpleNamespace(MySQLError=_MySQLError))
+
+
 class BridgeGuardTests(unittest.TestCase):
     """_fetch_standing and the pending/refused read degrade like siblings."""
 
     def _ns(self, code):
-        err = pymysql.err.OperationalError(code, "x")
+        err = _MySQLError(code, "x")
         names = [
             "_fetch_standing",
             "_iron_rows_blocked",
@@ -507,7 +515,7 @@ class BridgeGuardTests(unittest.TestCase):
 
     def test_another_error_still_raises(self):
         ns = self._ns(2013)
-        with self.assertRaises(pymysql.err.MySQLError):
+        with self.assertRaises(_MySQLError):
             ns["_fetch_standing"](["A"], 59)
 
 
