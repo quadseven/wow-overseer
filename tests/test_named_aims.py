@@ -8,16 +8,22 @@ number when it does not - never a bare "<kind> <digits>".
 """
 
 import re
+import sys
+import types
 import unittest
 
-import agenda
-import bag_pressure
-import commandwords
-import craft_supply
-import nowstatus
-import places
-import travel
-from apiv2 import guild
+# apiv2 imports realmread, which imports pymysql. Stub it when it is not
+# installed, so this module does not lean on another module's stub (#1434).
+sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+
+import agenda  # noqa: E402
+import bag_pressure  # noqa: E402
+import commandwords  # noqa: E402
+import craft_supply  # noqa: E402
+import nowstatus  # noqa: E402
+import places  # noqa: E402
+import travel  # noqa: E402
+from apiv2 import guild  # noqa: E402
 
 KORGELD = {"name": "Kor'geld", "subname": "Alchemy Supplies", "place": "Orgrimmar"}
 CREATURES = {8122: KORGELD, 5594: "Alchemist Pestlezugg"}

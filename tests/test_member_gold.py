@@ -13,6 +13,8 @@ checks on the bridge passes that write the rows.
 
 import ast
 import pathlib
+import sys
+import types
 import unittest
 
 import classtrain
@@ -20,6 +22,10 @@ import guildfund
 import guildpost
 import guildroute
 import guildwork
+
+# apiv2 imports realmread, which imports pymysql. Stub it when it is not
+# installed, so this module does not lean on another module's stub (#1434).
+sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
