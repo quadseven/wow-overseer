@@ -14,23 +14,25 @@ that passes here has been checked against a real shape rather than a convenient
 one.
 """
 
+import pathlib
 import unittest
 
 import goals
-import guildwork as guildworkorders
+import guildshare
+import workorders as guildworkorders
 
 ALCHEMY = goals.SKILL_IDS["alchemy"]
 HERBALISM = goals.SKILL_IDS["herbalism"]
 TAILORING = goals.SKILL_IDS["tailoring"]
 
 
-def _member(name, level=40, skills=None, online=True, guild="The Guild"):
-    return guildworkorders.Member(
+def _member(name, level=40, skills=None, online=True, cooldowns=None):
+    return guildworkorders.WorkMember(
         name=name,
-        guild=guild,
         level=level,
         online=online,
         skills=skills or {},
+        cooldowns=cooldowns or {},
     )
 
 
@@ -142,6 +144,37 @@ class PlanAssignsTest(unittest.TestCase):
             guildworkorders.complete(order, "Og").status, guildworkorders.COMPLETE
         )
 
+    def test_an_order_not_yet_assigned_cannot_be_completed(self):
+        # The status gate on its own: the reporter matches assigned_to, but
+        # the order is still requested, so the report changes nothing.
+        order = _order(
+            guildworkorders.COOLDOWN,
+            "Mooncloth",
+            status=guildworkorders.REQUESTED,
+            assigned_to="Og",
+        )
+        self.assertEqual(guildworkorders.complete(order, "Og"), order)
+
+    def test_a_completed_order_stays_complete(self):
+        order = _order(
+            guildworkorders.COOLDOWN,
+            "Mooncloth",
+            status=guildworkorders.COMPLETE,
+            assigned_to="Og",
+        )
+        self.assertEqual(guildworkorders.complete(order, "Og"), order)
+
+    def test_the_full_life_of_an_order(self):
+        # requested -> assigned (by plan) -> complete (by its assignee).
+        order = _order(guildworkorders.CONSUMABLE, "Greater Fire Protection Potion", 96)
+        plan = guildworkorders.plan([order], [_member("Ugga", skills={ALCHEMY: 290})])
+        assigned = plan.assignments[0].order
+        self.assertEqual(assigned.status, guildworkorders.ASSIGNED)
+        done = guildworkorders.complete(assigned, "Ugga")
+        self.assertEqual(done.status, guildworkorders.COMPLETE)
+        self.assertEqual(done.assigned_to, "Ugga")
+        self.assertEqual(done.quantity, 96)
+
     def test_a_farming_assignment_goes_to_the_online_gatherer(self):
         order = _order(guildworkorders.FARMING, "Firebloom", zone="Searing Gorge")
         plan = guildworkorders.plan([order], [_member("Bork", skills={HERBALISM: 200})])
@@ -156,15 +189,14 @@ class PlanAssignsTest(unittest.TestCase):
 
     def test_one_order_per_member_per_cycle(self):
         # Two consumables, one alchemist: only one is placed, the other notes
-        # that the only taker is already taken.
+        # that every taker already has an order.
         orders = [
             _order(guildworkorders.CONSUMABLE, "Greater Fire Protection Potion", 48),
             _order(guildworkorders.CONSUMABLE, "Greater Fire Protection Potion", 48),
         ]
         plan = guildworkorders.plan(orders, [_member("Ugga", skills={ALCHEMY: 200})])
         self.assertEqual(len(plan.assignments), 1)
-        self.assertEqual(len(plan.taken), 1)
-        self.assertIn("already taken", plan.notes[0].lower())
+        self.assertIn("already has an order this pass", plan.notes[0])
 
     def test_lowest_level_first_among_qualifiers(self):
         # Two herbalists, one low level and one capped: the low level takes it.
@@ -181,16 +213,6 @@ class PlanAssignsTest(unittest.TestCase):
             guildworkorders.CONSUMABLE,
             "Greater Fire Protection Potion",
             status=guildworkorders.COMPLETE,
-        )
-        plan = guildworkorders.plan([order], [_member("Ugga", skills={ALCHEMY: 200})])
-        self.assertEqual(plan.assignments, ())
-        self.assertEqual(plan.notes, ())
-
-    def test_an_order_already_refused_is_skipped(self):
-        order = _order(
-            guildworkorders.CONSUMABLE,
-            "Greater Fire Protection Potion",
-            status=guildworkorders.REFUSED,
         )
         plan = guildworkorders.plan([order], [_member("Ugga", skills={ALCHEMY: 200})])
         self.assertEqual(plan.assignments, ())
@@ -214,7 +236,7 @@ class PlanNoTakerTest(unittest.TestCase):
         )
         self.assertEqual(
             guildworkorders.headline(plan),
-            "1 open order and nobody online who can take them",
+            "1 open order and nobody who can take them now",
         )
 
     def test_an_unknown_item_nobody_can_make_says_so(self):
@@ -247,6 +269,49 @@ class PlanNoTakerTest(unittest.TestCase):
         first = guildworkorders.plan([order], members)
         second = guildworkorders.plan([order], list(reversed(members)))
         self.assertEqual(first.assignments[0].taker, second.assignments[0].taker)
+
+
+class CooldownTest(unittest.TestCase):
+    """A cooldown goes only to a holder whose own cooldown is ready."""
+
+    def test_a_tailor_on_cooldown_is_not_a_taker(self):
+        order = _order(guildworkorders.COOLDOWN, "Mooncloth")
+        member = _member("Og", skills={TAILORING: 300}, cooldowns={"mooncloth": 600})
+        self.assertEqual(guildworkorders.can_take(member, order), "")
+
+    def test_the_ready_tailor_takes_it_over_a_lower_level_one_on_cooldown(self):
+        order = _order(guildworkorders.COOLDOWN, "Mooncloth")
+        members = [
+            _member(
+                "Og", level=20, skills={TAILORING: 250}, cooldowns={"mooncloth": 600}
+            ),
+            _member("Ugga", level=60, skills={TAILORING: 300}),
+        ]
+        plan = guildworkorders.plan([order], members)
+        self.assertEqual(plan.assignments[0].taker, "Ugga")
+
+    def test_every_holder_on_cooldown_names_the_soonest(self):
+        order = _order(guildworkorders.COOLDOWN, "Arcanite")
+        members = [
+            _member("Grog", skills={ALCHEMY: 300}, cooldowns={"arcanite": 7200}),
+            _member("Ugga", skills={ALCHEMY: 300}, cooldowns={"arcanite": 3000}),
+        ]
+        plan = guildworkorders.plan([order], members)
+        self.assertEqual(plan.assignments, ())
+        self.assertEqual(
+            plan.notes,
+            ("every alchemy holder is on the Arcanite cooldown; Ugga is ready in 1h",),
+        )
+
+    def test_a_cooldown_on_another_item_does_not_block(self):
+        order = _order(guildworkorders.COOLDOWN, "Arcanite")
+        member = _member("Grog", skills={ALCHEMY: 300}, cooldowns={"mooncloth": 9000})
+        self.assertEqual(guildworkorders.can_take(member, order), "Grog holds alchemy")
+
+    def test_cooldowns_do_not_gate_a_consumable(self):
+        order = _order(guildworkorders.CONSUMABLE, "Greater Fire Protection Potion", 8)
+        member = _member("Grog", skills={ALCHEMY: 300}, cooldowns={"arcanite": 9000})
+        self.assertEqual(guildworkorders.can_take(member, order), "Grog holds alchemy")
 
 
 class SaidLinesTest(unittest.TestCase):
@@ -283,7 +348,7 @@ class HeadlineTest(unittest.TestCase):
     def test_no_orders_says_so(self):
         self.assertEqual(
             guildworkorders.headline(guildworkorders.WorkOrderPlan()),
-            "no open work orders this cycle",
+            "no open work orders this pass",
         )
 
     def test_placed_orders_name_the_takers(self):
@@ -310,6 +375,66 @@ class HeadlineTest(unittest.TestCase):
             guildworkorders.headline(plan),
             "2 work orders going out to 2 members: Bork, Ugga",
         )
+
+
+class RosterTest(unittest.TestCase):
+    """The bridge's guild roster becomes WorkMembers unchanged."""
+
+    def test_a_guildshare_member_carries_name_level_online_and_skills(self):
+        roster = [
+            guildshare.Member(
+                name="Og", level=58, skills={TAILORING: 300}, online=True
+            ),
+            guildshare.Member(name="Bork", level=12, skills=None, online=False),
+        ]
+        self.assertEqual(
+            guildworkorders.members_from_roster(roster),
+            [
+                guildworkorders.WorkMember("Og", 58, True, {TAILORING: 300}),
+                guildworkorders.WorkMember("Bork", 12, False, {}),
+            ],
+        )
+
+    def test_the_standing_orders_are_the_two_cooldowns(self):
+        self.assertEqual(
+            [(o.kind, o.item) for o in guildworkorders.STANDING_ORDERS],
+            [
+                (guildworkorders.COOLDOWN, "Mooncloth"),
+                (guildworkorders.COOLDOWN, "Arcanite"),
+            ],
+        )
+
+
+class BridgeWiringTest(unittest.TestCase):
+    """The guild surplus pass logs the standing work orders, and writes nothing."""
+
+    def test_the_bridge_logs_who_takes_each_standing_order(self):
+        from test_guildsocial_bridge import bridge
+
+        roster = [
+            guildshare.Member(
+                name="Og", level=58, skills={TAILORING: 300}, online=True
+            ),
+        ]
+        with self.assertLogs(bridge.log, "INFO") as seen:
+            bridge._log_work_orders(roster)
+        said = [r.getMessage() for r in seen.records]
+        self.assertEqual(
+            said,
+            [
+                "workorders: 1 work order going out to 1 member: Og",
+                "workorders: Og: the Mooncloth cooldown is mine to spend",
+                "workorders: nobody online holds alchemy, so Arcanite stays unassigned",
+            ],
+        )
+
+    def test_the_guild_surplus_pass_calls_it_with_its_roster(self):
+        source = (
+            pathlib.Path(__file__).resolve().parent.parent / "bridge.py"
+        ).read_text(encoding="utf-8")
+        start = source.index("    async def _guild_share_once(")
+        end = source.index("    async def _write_guild_gifts(")
+        self.assertIn("_log_work_orders(roster)", source[start:end])
 
 
 if __name__ == "__main__":

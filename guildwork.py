@@ -54,11 +54,10 @@ written here so a test can read them.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 
 import guildbank
 import guildroute
-import goals
 import raidlineup
 import raidroles
 
@@ -206,7 +205,6 @@ class Member:
     # Copper of the class spells its trainer would sell it now, and a gear
     # budget (guildfund.reserve): never posted as dues.
     reserve: int = 0
-    skills: dict = field(default_factory=dict)
 
     @property
     def dues(self) -> int:
@@ -419,160 +417,6 @@ def _money_of(row) -> int:
         if word.startswith("money:") and word[6:].isdigit():
             return int(word[6:])
     return 0
-
-
-# ---------------------------------------------------------------------------
-# GUILD WORK ORDERS: requested work, assigned to a qualified member, and
-# returned with an explicit status so a caller can persist progress.
-
-CONSUMABLE, FARMING, COOLDOWN = "consumable", "farming", "cooldown"
-REQUESTED, ASSIGNED, COMPLETE, REFUSED = "requested", "assigned", "complete", "refused"
-_ORDER_SKILLS = {
-    (CONSUMABLE, "greater fire protection potion"): ("alchemy", "alchemy"),
-    (FARMING, "firebloom"): ("herbalism", "herbalism"),
-    (COOLDOWN, "mooncloth"): ("tailoring", "tailoring"),
-    (COOLDOWN, "arcanite"): ("alchemy", "alchemy"),
-}
-
-# Public work-order API for callers that collect requests, assign work, and
-# render guild updates. Keep these names available to bridge integrations.
-__all__ = [
-    "ASSIGNED",
-    "COMPLETE",
-    "CONSUMABLE",
-    "COOLDOWN",
-    "FARMING",
-    "REFUSED",
-    "REQUESTED",
-    "WorkAssignment",
-    "WorkOrder",
-    "WorkOrderPlan",
-    "can_take",
-    "complete",
-    "headline",
-    "lines",
-    "plan",
-]
-
-
-@dataclass(frozen=True)
-class WorkOrder:
-    """A guild request, including its progress and optional assignee."""
-
-    kind: str
-    item: str
-    quantity: int = 0
-    zone: str = ""
-    requested_by: str = "the guild"
-    status: str = REQUESTED
-    assigned_to: str = ""
-
-
-@dataclass(frozen=True)
-class WorkAssignment:
-    order: WorkOrder
-    taker: str
-
-
-@dataclass(frozen=True)
-class WorkOrderPlan:
-    assignments: tuple = ()
-    taken: tuple = ()
-    notes: tuple = ()
-
-
-def _order_skill(order):
-    return _ORDER_SKILLS.get((str(order.kind).lower(), str(order.item).strip().lower()))
-
-
-def can_take(member, order):
-    """Describe the profession held by an online member who can do an order."""
-    requirement = _order_skill(order)
-    if not requirement or not member.online:
-        return ""
-    skill_name, label = requirement
-    skill_id = goals.SKILL_IDS[skill_name]
-    skill = int(member.skills.get(skill_id, 0))
-    return "%s holds %s" % (member.name, label) if skill > 0 else ""
-
-
-def plan(orders, members):
-    """Assign each requested order to one qualified member, deterministically."""
-    assignments, taken, notes = [], [], []
-    occupied = set()
-    for order in orders or ():
-        if order.status != REQUESTED:
-            continue
-        requirement = _order_skill(order)
-        if requirement is None:
-            notes.append("%s has no craft or trade this guild knows" % order.item)
-            continue
-        qualified = [m for m in members or () if can_take(m, order)]
-        if not qualified:
-            label = requirement[1]
-            notes.append(
-                "nobody online holds %s, so %s stays unassigned" % (label, order.item)
-            )
-            continue
-        available = sorted(
-            (m for m in qualified if m.name not in occupied),
-            key=lambda m: (int(m.level), str(m.name).casefold()),
-        )
-        if not available:
-            notes.append("the only qualified member is already taken for this cycle")
-            continue
-        taker = available[0]
-        occupied.add(taker.name)
-        taken.append(taker.name)
-        assigned = replace(order, status=ASSIGNED, assigned_to=taker.name)
-        assignments.append(WorkAssignment(assigned, taker.name))
-    return WorkOrderPlan(tuple(assignments), tuple(taken), tuple(notes))
-
-
-def complete(order, member):
-    """Mark an assigned order complete only when its assignee reports it."""
-    if order.status != ASSIGNED or str(order.assigned_to) != str(member):
-        return order
-    return replace(order, status=COMPLETE)
-
-
-def lines(work_plan):
-    """Render assigned work as short guild-facing updates."""
-    output = []
-    for assignment in work_plan.assignments:
-        order = assignment.order
-        if order.kind == CONSUMABLE:
-            message = "the guild needs %d %s" % (order.quantity, order.item)
-        elif order.kind == FARMING:
-            message = "the guild wants %s from %s" % (order.item, order.zone)
-        else:
-            message = "the %s cooldown is mine to spend" % order.item
-        output.append("%s: %s" % (assignment.taker, message))
-    return output
-
-
-def headline(work_plan):
-    """Summarize an assignment pass."""
-    count = len(work_plan.assignments)
-    if not count:
-        if work_plan.notes and "nobody online" in work_plan.notes[0]:
-            open_orders = sum("stays unassigned" in note for note in work_plan.notes)
-            noun = "order" if open_orders == 1 else "orders"
-            return "%d open %s and nobody online who can take them" % (
-                open_orders,
-                noun,
-            )
-        return "no open work orders this cycle"
-    members = sorted({item.taker for item in work_plan.assignments}, key=str.casefold)
-    order_word = "work order" if count == 1 else "work orders"
-    member_word = "member" if len(members) == 1 else "members"
-    return "%d %s going out to %d %s: %s" % (
-        count,
-        order_word,
-        len(members),
-        member_word,
-        ", ".join(members),
-    )
 
 
 def _sent(row) -> bool:
