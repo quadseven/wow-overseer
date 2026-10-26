@@ -99,6 +99,9 @@ class EnsureStoresResilience(unittest.TestCase):
             mock.patch.object(
                 bridge, "_ensure_now_store", make_ensure("_ensure_now_store")
             ),
+            mock.patch.object(
+                bridge, "_ensure_order_store", make_ensure("_ensure_order_store")
+            ),
             mock.patch.object(bridge.log, "exception", fake_log_exception),
         ):
             # We need to call the actual _ensure_stores method, but it's an instance method
@@ -147,6 +150,7 @@ class EnsureStoresResilience(unittest.TestCase):
         self.assertIn("_ensure_goal_store", ensures_called)
         self.assertIn("_ensure_economy_store", ensures_called)
         self.assertIn("_ensure_now_store", ensures_called)
+        self.assertIn("_ensure_order_store", ensures_called)
 
         # Verify the error was logged
         self.assertTrue(
@@ -213,6 +217,9 @@ class EnsureStoresResilience(unittest.TestCase):
             ),
             mock.patch.object(
                 bridge, "_ensure_now_store", make_ensure("_ensure_now_store")
+            ),
+            mock.patch.object(
+                bridge, "_ensure_order_store", make_ensure("_ensure_order_store")
             ),
             mock.patch.object(bridge, "_guild_run_last_formed_at", return_value=None),
             mock.patch.object(bridge, "_restore_bag_holds"),
