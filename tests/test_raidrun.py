@@ -225,11 +225,14 @@ def _function(name):
     raise AssertionError("no %s in bridge.py" % name)
 
 
+DOOR = {"map": 0, "x": -7510.87, "y": -1035.87}
+
+
 def _load_drive_raid(events, members, missing_table=False, missing_duty=False):
     """bridge._drive_raid, run for real against fakes that record order."""
     source = "\n\n".join(
         ast.get_source_segment(BRIDGE, _function(name))
-        for name in ("_withheld", "_drive_raid")
+        for name in ("_withheld", "_log_raid_arrivals", "_drive_raid")
     )
 
     class MissingTable(Exception):
@@ -268,6 +271,7 @@ def _load_drive_raid(events, members, missing_table=False, missing_duty=False):
         "jobs": jobs,
         "raidrun": raidrun,
         "raidlineup": raidlineup,
+        "guildjobs": types.SimpleNamespace(entrances=lambda: {"409": DOOR}),
         # The readiness read is its own test (test_raidgear); here the members
         # pass through unchanged.
         "_with_readiness": lambda cur, members: members,
@@ -431,6 +435,7 @@ def _load_write_specs(events, members, guild="Cave", missing_table=False):
     namespace = {
         "raidrun": raidrun,
         "raidlineup": raidlineup,
+        "guildjobs": types.SimpleNamespace(entrances=lambda: {"409": DOOR}),
         # The readiness read is its own test (test_raidgear); here the members
         # pass through unchanged.
         "_with_readiness": lambda cur, members: members,
@@ -493,3 +498,83 @@ class TheSeatTargetsAreWrittenForTheModule(unittest.TestCase):
 
     def test_the_bridge_runs_the_pass_in_both_loop_lists(self):
         self.assertEqual(1, BRIDGE.count('_Pass("_raid_spec_loop"),'))
+
+
+def _raider(name, map_id=0, x=-7500.0, y=-1030.0, ritual=False):
+    return {"name": name, "map_id": map_id, "x": x, "y": y, "ritual": ritual}
+
+
+class TheArrivalOrderNamesHowEachRaiderComes(unittest.TestCase):
+    """The decision for the raid night's gathering: the raid's own warlocks
+    summon (the ritual moves only a member of the summoner's raid, and the 40
+    seats leave no room for a guild summoner), and everyone a warlock cannot
+    bring walks."""
+
+    def test_a_raider_at_the_door_is_there(self):
+        plan = raidrun.arrival_plan([_raider("Near")], DOOR)
+        self.assertEqual(raidrun.THERE, plan[0]["how"])
+
+    def test_a_far_raider_is_summoned_by_a_raid_warlock(self):
+        raiders = [
+            _raider("Lock", ritual=True),
+            _raider("Far", map_id=1, x=1800.0, y=-4400.0),
+        ]
+        plan = {p["name"]: p for p in raidrun.arrival_plan(raiders, DOOR)}
+        self.assertEqual(raidrun.SUMMON, plan["Far"]["how"])
+        self.assertEqual("Lock", plan["Far"]["by"])
+
+    def test_a_far_warlock_walks_to_the_stone_it_summons_at(self):
+        raiders = [_raider("Lock", map_id=1, x=1800.0, y=-4400.0, ritual=True)]
+        plan = raidrun.arrival_plan(raiders, DOOR)
+        self.assertEqual(raidrun.WALK, plan[0]["how"])
+
+    def test_without_a_warlock_every_far_raider_walks(self):
+        plan = raidrun.arrival_plan([_raider("Far", map_id=1, x=1.0, y=2.0)], DOOR)
+        self.assertEqual(raidrun.WALK, plan[0]["how"])
+        self.assertEqual("", plan[0]["by"])
+
+    def test_summons_are_shared_between_the_warlocks(self):
+        raiders = [_raider("A", ritual=True), _raider("B", ritual=True)] + [
+            _raider("F%d" % i, map_id=1, x=1.0, y=2.0) for i in range(4)
+        ]
+        plan = raidrun.arrival_plan(raiders, DOOR)
+        by = [p["by"] for p in plan if p["how"] == raidrun.SUMMON]
+        self.assertEqual({"A": 2, "B": 2}, {n: by.count(n) for n in set(by)})
+
+    def test_a_raider_with_no_position_is_not_assumed_at_the_door(self):
+        raiders = [_raider("Lock", ritual=True), _raider("Lost", map_id=None)]
+        plan = {p["name"]: p for p in raidrun.arrival_plan(raiders, DOOR)}
+        self.assertEqual(raidrun.SUMMON, plan["Lost"]["how"])
+
+    def test_the_line_names_every_raider_not_at_the_door(self):
+        raiders = [
+            _raider("Lock", ritual=True),
+            _raider("Near"),
+            _raider("Far", map_id=1, x=1.0, y=2.0),
+        ]
+        line = raidrun.arrival_line("moltencore", raidrun.arrival_plan(raiders, DOOR))
+        self.assertIn("Molten Core", line)
+        self.assertIn("2 of 3 at the door", line)
+        self.assertIn("Far summoned by Lock", line)
+        self.assertNotIn("Near summoned", line)
+
+    def test_the_line_names_who_walks(self):
+        raiders = [_raider("Lock", map_id=1, x=1.0, y=2.0, ritual=True)]
+        line = raidrun.arrival_line("moltencore", raidrun.arrival_plan(raiders, DOOR))
+        self.assertIn("Lock walks", line)
+
+    def test_the_drive_logs_the_order_after_the_seats(self):
+        drive = BRIDGE[BRIDGE.index("def _drive_raid(") :]
+        drive = drive[: drive.index("\ndef ")]
+        self.assertIn("_log_raid_arrivals(cur, keyword, seats)", drive)
+        self.assertLess(
+            drive.index("raidrun.INSERT_SEAT_SQL"),
+            drive.index("_log_raid_arrivals(cur"),
+        )
+        self.assertIn("raidrun.arrival_line(", BRIDGE)
+
+    def test_the_run_line_says_the_order_is_logged_not_yet_carried_out(self):
+        """GATHERS stays pinned to the module: it does not summon yet."""
+        line = raidrun.run_line()
+        self.assertIn("logs how each raider away from the door is to arrive", line)
+        self.assertIn("Only the head is walked to the door", line)

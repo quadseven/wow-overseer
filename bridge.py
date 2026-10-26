@@ -3634,6 +3634,23 @@ def _write_raid_specs(names: list) -> str:
         gaps.get("damage", 0), lineup.get("roles_line", ""), lineup.get("gap_line", ""))
 
 
+def _log_raid_arrivals(cur, keyword: str, seats: list) -> None:
+    """Log how each seated raider away from the door arrives (raidrun's
+    decision: the raid's own warlocks summon, the rest walk). A failed read
+    is logged and never holds the order."""
+    names = [seat[2] for seat in seats]
+    door = guildjobs.entrances().get(str(raidrun.MOLTEN_CORE_MAP))
+    try:
+        cur.execute(raidrun.ARRIVAL_SQL.format(holes=", ".join(["%s"] * len(names))),  # noqa: S608
+                    tuple(names))
+        raiders = [dict(row, ritual=bool(row.get("ritual"))) for row in cur.fetchall()]
+    except pymysql.err.MySQLError:
+        log.exception("raid: where the seated raiders stand could not be read")
+        return
+    if door and raiders:
+        log.info("%s", raidrun.arrival_line(keyword, raidrun.arrival_plan(raiders, door)))
+
+
 def _drive_raid(keyword: str, family: str, names: list, source: str,
                 withheld: list | None = None) -> int:
     """Write an ordered raid's seats, then its job. Returns jobs written.
@@ -3691,6 +3708,7 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
                     keyword)
                 return _withheld(withheld, "the raid seat table is not deployed")[0]
             raise
+        _log_raid_arrivals(cur, keyword, seats)
     written = 0
     for name in names:
         try:
@@ -29218,7 +29236,7 @@ def _fetch_job_facts(family_names: list) -> dict:
 
 
 def _guild_campaign_door(cohort=None) -> str:
-    """The family's active dungeon job, or its next queued run keyword."""
+    """The family's active dungeon or raid job, or its next queued run keyword."""
     head = cohort.leader if cohort is not None else _head_now()
     family = getattr(cohort, "key", None) or _cohort_of(head) or ""
     roster = campaignqueue.families(_fetch_queue_roster())
@@ -29230,6 +29248,8 @@ def _guild_campaign_door(cohort=None) -> str:
         keyword = job.split(":", 1)[1].strip().lower()
         if keyword in {run.keyword for run in campaignplan.RUNS}:
             return keyword
+    if jobs.is_raid_job(job):
+        return job[len(jobs.RAID_PREFIX):].strip().lower()
     queue = campaignqueue.pending_by_family(_fetch_queue_rows()).get(family, ())
     return str(queue[0].get("keyword") or "").strip().lower() if queue else ""
 
