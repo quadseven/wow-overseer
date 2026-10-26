@@ -17,6 +17,7 @@ these tests is what should make it look out of place.
 import ast
 import pathlib
 import unittest
+from datetime import datetime, timedelta
 
 import recruit
 
@@ -542,6 +543,45 @@ class TheModuleShipsInTheImage(unittest.TestCase):
         """test_ship_manifest checks this generically; named here too so a
         failure points at the module that moved rather than at a list."""
         self.assertIn("recruit.py", DOCKERFILE.read_text(encoding="utf-8"))
+
+
+class GuildRecruitingPolicy(unittest.TestCase):
+    def test_ad_names_missing_roles_and_raid_nights_and_is_hourly(self):
+        line = recruit.recruiting_ad(
+            "<Lost Armada>", ["healers", "tanks"], ["Tue", "Thu"]
+        )
+        self.assertIn("healers, tanks", line)
+        self.assertIn("Tue, Thu", line)
+        self.assertTrue(recruit.may_post_ad(None))
+        self.assertFalse(recruit.may_post_ad(59))
+        self.assertTrue(recruit.may_post_ad(60))
+
+    def test_missing_role_outranks_gear_and_below_level_is_dropped(self):
+        picks = recruit.rank_raid_candidates(
+            [
+                {"name": "Filled", "role": "damage", "level": 60, "gear": 999},
+                {"name": "Needed", "role": "healer", "level": 55, "gear": 1},
+                {"name": "Low", "role": "healer", "level": 54, "gear": 9999},
+            ],
+            {"healer"},
+        )
+        self.assertEqual([row["name"] for row in picks], ["Needed", "Filled"])
+
+    def test_offline_six_days_is_kept_and_eight_days_surplus_is_pruned(self):
+        now = datetime(2026, 10, 26)
+        members = [
+            {"name": "Recent", "last_seen": now - timedelta(days=6)},
+            {"name": "Stale", "last_seen": now - timedelta(days=8)},
+        ]
+        self.assertEqual(
+            [
+                row["name"]
+                for row in recruit.prune_surplus_members(
+                    members, now, {"Recent", "Stale"}
+                )
+            ],
+            ["Stale"],
+        )
 
 
 if __name__ == "__main__":
