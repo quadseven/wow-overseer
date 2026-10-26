@@ -14683,6 +14683,33 @@ class Bridge(discord.Client):
             await self._for_other_families("bank", self._bank_once)
             await asyncio.sleep(cycle)
 
+    def _log_bank_unaimed(self, cohort, leader: str, aim: str, names,
+                          queued) -> None:
+        """Say what the guild bank pass was waiting to move, and who has the column.
+
+        `queued` is (setup actions, gold deposits, item deposits, withdrawals).
+        Every kind of work the pass carries is counted, plus the members the
+        guild fund wants to pay, so a pass starved of real work reads
+        differently from an idle one (#1452).
+        """
+        actions, deposits, items, withdrawals = queued
+        wants = getattr(self, "_fund_wants", {})
+        fund_wants = sum(1 for n in names if wants.get(n, 0) > 0)
+        holder = self._cohort_town_slot(cohort).holder
+        holder_label = (
+            "%s carrying %r" % (holder.claimant or "unknown", holder.aim)
+            if holder else "none"
+        )
+        log.info(
+            "guild bank: leader=%s could not be aimed at the vault (%s) "
+            "this pass, so no work is queued (%d setup action(s), %d gold "
+            "deposit(s), %d item deposit(s), %d withdrawal(s), %d fund "
+            "want(s) waiting; slot holder=%s) - every row queued into a "
+            "trip nobody is taking comes back 'no guild bank in reach'",
+            leader, aim, len(actions), len(deposits), len(items),
+            len(withdrawals), fund_wants, holder_label,
+        )
+
     async def _guild_bank_once(self, cohort=None) -> None:
         """One pass of the guild bank: park gold above each character's float.
 
@@ -14882,9 +14909,6 @@ class Bridge(discord.Client):
         # THE GUILD FUND NEEDS THE VAULT TOO (guildfund.py): the master walks
         # there to withdraw what it posts to the members.
         fund = sum(getattr(self, "_fund_wants", {}).get(n, 0) for n in names)
-        fund_wants = sum(
-            1 for n in names if getattr(self, "_fund_wants", {}).get(n, 0) > 0
-        )
         if not any((actions, deposits, items, withdrawals)):
             if not fund:
                 self._cohort_town_slot(cohort).forget("guild bank")
@@ -14955,20 +14979,8 @@ class Bridge(discord.Client):
             # and one that never finishes stops winning after LEASE_SECONDS.
             # `_claim_town_slot` has already logged whose errand it is, how
             # long they have had it and who is ahead in the queue.
-            slot_holder = self._cohort_town_slot(cohort).holder
-            holder_label = (
-                "%s carrying %r" % (slot_holder.claimant or "unknown", slot_holder.aim)
-                if slot_holder else "none"
-            )
-            log.info(
-                "guild bank: leader=%s could not be aimed at the vault (%s) "
-                "this pass, so no work is queued (%d setup action(s), %d gold "
-                "deposit(s), %d item deposit(s), %d withdrawal(s), %d fund "
-                "want(s) waiting; slot holder=%s) - every row queued into a "
-                "trip nobody is taking comes back 'no guild bank in reach'",
-                leader, vault.aim, len(actions), len(deposits), len(items),
-                len(withdrawals), fund_wants, holder_label,
-            )
+            self._log_bank_unaimed(cohort, leader, vault.aim, names,
+                                   (actions, deposits, items, withdrawals))
             return
         if not at_the_vault:
             # AIMED BUT STILL WALKING, WHICH IS ITS OWN ANSWER (infra#3713).

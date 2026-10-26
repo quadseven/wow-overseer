@@ -12,12 +12,13 @@ import ast
 import asyncio
 import pathlib
 import re
+import types
 import unittest
 
 import guildbank
 import travel
 import modsource
-from test_campaign_owns_travel import FakeWorld, Clock, _Log, _bridge_self
+from test_campaign_owns_travel import FakeWorld, Clock, _Log, _bridge_self, _load
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 TRAVEL = pathlib.Path(__file__).resolve().parents[1] / "travel.py"
@@ -388,9 +389,10 @@ class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
         this pins is that the sentence did not go away with the local read: the
         pass still reports its own cost, and `_claim_town_slot` still reports
         the holder."""
-        self.assertIn(
-            "guild bank: leader=%s could not be aimed at the vault", self.body
-        )
+        helper = self.source[self.source.index("    def _log_bank_unaimed(") :]
+        helper = helper[: helper.index("    async def _guild_bank_once(")]
+        self.assertIn("self._log_bank_unaimed(", self.body)
+        self.assertIn("guild bank: leader=%s could not be aimed at the vault", helper)
         door = self.source[self.source.index("    async def _claim_town_slot(") :]
         door = door[: door.index("    async def _aim_at_reagent_vendor(")]
         self.assertIn("_current_travel_npc", door)
@@ -399,15 +401,29 @@ class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
     def test_refusal_counts_all_queued_work_and_names_slot_holder(self):
         refusal = self.body[self.body.index("if not aimed and not at_the_vault:") :]
         refusal = refusal[: refusal.index("if not at_the_vault:")]
-        for token in (
-            "len(actions)",
-            "len(deposits)",
-            "len(items)",
-            "len(withdrawals)",
-            "fund",
-            "holder_label",
-        ):
-            self.assertIn(token, refusal)
+        self.assertIn("self._log_bank_unaimed(", refusal)
+        log = _Log()
+        holder = types.SimpleNamespace(claimant="bags", aim="vendor")
+        ns = _load(["_log_bank_unaimed"], {"log": log})
+        bank = types.SimpleNamespace(
+            _fund_wants={"Zug": 500, "Grug": 0, "Ug": 200},
+            _cohort_town_slot=lambda _cohort: types.SimpleNamespace(holder=holder),
+        )
+        ns["_log_bank_unaimed"](
+            bank,
+            "Zug",
+            "Zug",
+            "vault",
+            ("Zug", "Grug", "Ug"),
+            ((), ("g",), ("i1", "i2", "i3"), ("w1", "w2")),
+        )
+        (line,) = log.lines
+        self.assertIn(
+            "(0 setup action(s), 1 gold deposit(s), 3 item deposit(s), "
+            "2 withdrawal(s), 2 fund want(s) waiting; "
+            "slot holder=bags carrying 'vendor')",
+            line,
+        )
 
     def test_queued_work_claim_uses_the_bounded_turn(self):
         claim = self.body[self.body.index("aimed = await self._claim_town_slot(") :]
