@@ -999,6 +999,21 @@ class TheClassChain(unittest.TestCase):
         blocked = classchain.chains(self.book(), char, status, {1}, set(), 3)
         self.assertEqual(blocked[0]["steps"][2]["state"], "blocked")
 
+    def test_a_failed_quest_is_failed_not_in_progress(self):
+        # LOG_SQL reads status 5 (failed) since #1497; it was drawn as
+        # "in progress" until the member dropped it (#1511).
+        char = {"class_id": 1, "race": 1, "level": 20}
+        status = {2: classchain.classquest.STATUS_FAILED}
+        found = classchain.chains(self.book(), char, status, {1}, set(), 0)
+        steps = {s["title"]: s["state"] for c in found for s in c["steps"]}
+        self.assertEqual(steps["Bartleby the Drunk"], "failed")
+
+    def test_the_chain_view_draws_a_failed_step(self):
+        src = (HERE / "app" / "views" / "member.js").read_text(encoding="utf-8")
+        table = src[src.index("const STEP = {") :]
+        table = table[: table.index("};")]
+        self.assertIn("  failed: [", table)
+
     def test_a_known_reward_spell_is_a_done_chain(self):
         char = {"class_id": 1, "race": 1, "level": 40}
         found = classchain.chains(self.book(), char, {}, set(), {71}, 0)

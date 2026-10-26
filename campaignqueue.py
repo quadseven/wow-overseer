@@ -395,8 +395,11 @@ def combined_plan(
         "",
         combined,
         False,
-        "Combined run for %s and %s: %s."
-        % (_family(family_a), _family(family_b), _plain(combined)),
+        # NO GROUPING YET (#1509): the module half that turns the two parties
+        # into one raid (#1384) is not built, so the reply must not promise it.
+        "Combined run for %s and %s: %s. Each family runs it as its own "
+        "5-man for now; grouping the two into one run waits on the module "
+        "half." % (_family(family_a), _family(family_b), _plain(combined)),
     )
 
 
