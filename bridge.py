@@ -157,13 +157,16 @@ import raidsupply
 import recipebook
 import raidteams
 import recruit
+import realmread
 import relay
+import runreport
 import retire
 import situation
 import skillgoal
 import standin
 import places
 import standstill
+import strategybook
 import tabard
 import teamsync
 import towntrip
@@ -219,6 +222,10 @@ OWNED_CHANNEL_IDS = frozenset(
 # own task: two orders typed a second apart must not read each other's text.
 _HEARD = contextvars.ContextVar("heard_order_text", default="")
 RELAY_SECONDS = float(os.environ.get("RELAY_SECONDS", "3"))
+# How often ended dungeon runs are checked for an owed report (mod-overseer#152:
+# a report within 60 seconds of the run row closing), and where it goes.
+RUN_REPORT_SECONDS = float(os.environ.get("RUN_REPORT_SECONDS", "20"))
+RUN_REPORT_CHANNEL_ID = os.environ.get("RUN_REPORT_CHANNEL_ID", "")
 # On restart, anything older than this is marked relayed WITHOUT being sent.
 # Same contract as the outcome poller: the bridge reports what happens while
 # it is watching, and never replays hours of history into the channel.
@@ -405,7 +412,33 @@ def _insert_command(cmd: core.InsertCommand) -> int:
             "INSERT INTO overseer_command (target_name, command, source) VALUES (%s, %s, %s)",
             (cmd.target_name, cmd.command, cmd.source),
         )
-        return cur.lastrowid
+        row_id = cur.lastrowid
+    # Written AFTER the row: a strategy order the table refused is not one the
+    # operator has, so the book must not replay it after a roll (#1553).
+    _record_strategy(cmd)
+    return row_id
+
+
+# A book page outlives any roll gap; each operator order refreshes it.
+STRATEGY_BOOK_SECONDS = 30 * 24 * 3600
+
+
+def _record_strategy(cmd: core.InsertCommand) -> None:
+    """Fold an operator's strategy order into its member's book page (#1553).
+
+    Only orders a person gave (strategybook.is_operator): the bridge's own
+    strategy writers re-assert on their own cadence. Never fatal - a failed
+    write costs a replay after the next roll, not the order itself."""
+    if not strategybook.is_operator(cmd.source):
+        return
+    try:
+        now = time.time()
+        for subject, sign in strategybook.rows(cmd.target_name, cmd.command):
+            _memo_upsert(strategybook.MEMO_KIND, subject, sign, now,
+                         now + STRATEGY_BOOK_SECONDS)
+    except Exception:
+        log.exception("strategy book: could not record %r for %s",
+                      cmd.command, cmd.target_name)
 
 
 def _insert_speak(cmd: relay.SpeakCommand) -> int:
@@ -985,6 +1018,35 @@ def _ensure_dungeon_run_event_store() -> None:
             log.info("overseer_dungeon_run_event: added idx_leader_kind")
 
 
+def _ensure_event_store() -> None:
+    # The agenda banner's newest-event-per-kind read (map_server
+    # _EVENT_NEWEST_SQL) groups by (character_name, kind) and takes
+    # MAX(last_seen); this index turns that into a loose index scan of a few
+    # hundred entries instead of a walk over every family's events (#1333).
+    # The table is the worldserver's, so, as above, the index is ensured only
+    # when the table exists, and a failure here does not stop the bridge.
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM information_schema.TABLES "
+            "WHERE table_schema = DATABASE() "
+            "  AND table_name = 'overseer_event'"
+        )
+        if not (cur.fetchone() or {}).get("n"):
+            return
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM information_schema.STATISTICS "
+            "WHERE table_schema = DATABASE() "
+            "  AND table_name = 'overseer_event' "
+            "  AND index_name = 'idx_character_kind_last_seen'"
+        )
+        if not (cur.fetchone() or {}).get("n"):
+            cur.execute(
+                "ALTER TABLE overseer_event "
+                "ADD KEY idx_character_kind_last_seen (character_name, kind, last_seen)"
+            )
+            log.info("overseer_event: added idx_character_kind_last_seen")
+
+
 def _insert_thought(name: str, source: str, text: str) -> None:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
@@ -1445,6 +1507,59 @@ def _give_them_a_life(names: list) -> int:
         ):
             _insert_command(core.InsertCommand(name, command, "overseer:life"))
     return len(driven)
+
+
+def _worldserver_start():
+    """The newest worldserver start (acore_auth.uptime.starttime), or None
+    when it is unreadable."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT MAX(starttime) AS start FROM acore_auth.uptime")
+            start = (cur.fetchone() or {}).get("start")
+    except pymysql.err.MySQLError:
+        log.exception("strategy reapply: the worldserver's start is unreadable")
+        return None
+    return None if start is None else int(start)
+
+
+def _strategy_start_seen():
+    """The worldserver start the strategy book was last replayed for, from
+    the memo store, so a bridge restart after a roll still replays."""
+    memo = _memo_read(strategybook.START_MEMO_KIND).get(strategybook.START_SUBJECT)
+    if memo is None:
+        return None
+    try:
+        return int(memo[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _reapply_strategies(reapplier) -> int:
+    """One pass of the strategy replay (#1553): read the start and the book,
+    send what is owed to members back in the world. Returns rows written."""
+    start = _worldserver_start()
+    pages = strategybook.book(_memo_read(strategybook.MEMO_KIND))
+    owed_before = reapplier.owed()
+    in_world = _bot_held_names(sorted(pages)) if pages else []
+    commands, new_start = reapplier.due(start, pages, in_world)
+    if new_start is not None:
+        now = time.time()
+        _memo_upsert(strategybook.START_MEMO_KIND, strategybook.START_SUBJECT,
+                     new_start, now, now + STRATEGY_BOOK_SECONDS)
+        if reapplier.owed() - owed_before:
+            log.info("strategy reapply: worldserver start %s - %s owed a replay",
+                     new_start, ", ".join(sorted(reapplier.owed())))
+    leads = _roster_leads() if commands else set()
+    sent = 0
+    for name, command in commands:
+        if not leadcmd.for_character([command], name in leads):
+            continue
+        _insert_command(core.InsertCommand(name, command, strategybook.REAPPLY_SOURCE))
+        sent += 1
+    if commands:
+        log.info("strategy reapply: %d command(s) sent to %s", sent,
+                 ", ".join(sorted({n for n, _ in commands})))
+    return sent
 
 
 def _ensure_chat_watch(names: list) -> int:
@@ -6924,6 +7039,7 @@ PASSES = (
     _Pass("_narrate_events"),
     _Pass("_supervise_goals"),
     _Pass("_relay_chat", headless=False),
+    _Pass("_run_report_loop", headless=False),
     _Pass("_hold_council"),
     _Pass("_design_tabard"),
     _Pass("_assign_trades"),
@@ -6961,6 +7077,7 @@ PASSES = (
     _Pass("_towntrip_loop"),
     _Pass("_flight_learn_loop"),
     _Pass("_restore_lost_lives"),
+    _Pass("_reapply_strategies_loop"),
     _Pass("_campaign_queue_loop"),
     _Pass("_activity_loop"),
     _Pass("_run_recovery_loop"),
@@ -7319,6 +7436,7 @@ class Bridge(discord.Client):
         for ensure in (
             _ensure_thought_store,
             _ensure_dungeon_run_event_store,
+            _ensure_event_store,
             _ensure_goal_store,
             _ensure_sample_store,
             _ensure_economy_store,
@@ -7332,13 +7450,16 @@ class Bridge(discord.Client):
             _ensure_quest_ledger_store,
             _ensure_now_store,
             _ensure_order_store,
+            _ensure_run_report_store,
         ):
             try:
                 await asyncio.to_thread(ensure)
             except Exception:
-                if ensure is _ensure_dungeon_run_event_store:
+                if ensure in (_ensure_dungeon_run_event_store, _ensure_event_store):
+                    # An index on a worldserver table speeds a read; its
+                    # absence never breaks one, so it never stops the bridge.
                     log.exception(
-                        "overseer_dungeon_run_event: index ensure failed; continuing startup")
+                        "%s: index ensure failed; continuing startup", ensure.__name__)
                 else:
                     raise
         owing = self.__dict__.get("_class_owing")
@@ -8062,6 +8183,50 @@ class Bridge(discord.Client):
             except Exception:
                 log.exception("chat relay tick failed; retrying next cycle")
 
+    async def _run_report_loop(self) -> None:
+        """Post each ended dungeon run's report to Discord (mod-overseer#152).
+
+        Discord-only, like the chat relay: headless there is no channel. The
+        marker row is written only AFTER Discord accepts the message, so a
+        failed send is retried next tick, and a posted run is never posted
+        again. A run that cannot be posted for runreport.OWED_MINUTES ages out
+        rather than blocking the ones behind it.
+        """
+        await self.wait_until_ready()
+        channel_id = RUN_REPORT_CHANNEL_ID or OVERSEER_CHANNEL_ID
+        if not channel_id:
+            log.warning("no RUN_REPORT_CHANNEL_ID and no OVERSEER_CHANNEL_ID - "
+                        "dungeon run reports have nowhere to go")
+            return
+        while not self.is_closed():
+            await asyncio.sleep(RUN_REPORT_SECONDS)
+            try:
+                await self._post_run_reports(int(channel_id))
+            except Exception:
+                log.exception("run reports: tick failed; retrying next cycle")
+
+    async def _post_run_reports(self, channel_id: int) -> int:
+        """Post every owed report; how many were posted."""
+        owed = await asyncio.to_thread(_fetch_owed_run_reports)
+        if not owed:
+            return 0
+        channel = self.get_channel(channel_id)
+        if channel is None:
+            log.warning("run report channel %s is not visible", channel_id)
+            return 0
+        posted = 0
+        for run_id in owed:
+            report = await asyncio.to_thread(_read_run_report, run_id)
+            if report is None:
+                continue
+            message = await channel.send(runreport.render(report))
+            await asyncio.to_thread(
+                _mark_run_reported, run_id, int(getattr(message, "id", 0) or 0),
+                report["outcome"])
+            log.info("run reports: posted run %s (%s)", run_id, report["outcome"])
+            posted += 1
+        return posted
+
     async def _in_character(self, speaker: str, plain: str, context: str) -> str:
         """The line as this character would say it, or the plain line.
 
@@ -8358,6 +8523,32 @@ class Bridge(discord.Client):
                 # Never fatal. A failed recheck costs latency on the next
                 # relog, and the 600s sweep is still underneath it.
                 log.exception("life recheck failed")
+            await asyncio.sleep(cycle)
+
+    async def _reapply_strategies_loop(self) -> None:
+        """After a worldserver roll, give each member back the strategies the
+        operator set on it (#1553).
+
+        Every login runs ResetStrategies, so a runtime `nc +...` the operator
+        sent through this bridge is gone after a roll. strategybook keeps what
+        was asked for; this loop watches acore_auth.uptime for a new start and
+        replays each member's page once, as soon as that member is back under
+        the AI. Same cadence as the life recheck: a member comes back within
+        seconds of logging in rather than on the ten-minute sweep.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("LIFE_RECHECK_SECONDS", "20"))
+        reapplier = None
+        while not self.is_closed():
+            try:
+                if reapplier is None:
+                    seen = await asyncio.to_thread(_strategy_start_seen)
+                    reapplier = strategybook.Reapplier(seen)
+                await asyncio.to_thread(_reapply_strategies, reapplier)
+            except Exception:
+                # Never fatal: a failed pass is retried next cycle, and the
+                # members still owed stay owed.
+                log.exception("strategy reapply failed")
             await asyncio.sleep(cycle)
 
     async def _assign_trades(self) -> None:
@@ -8748,21 +8939,25 @@ class Bridge(discord.Client):
             # (guildcorps.shop_steps), so the family stays out farming.
             and spell_id not in guildcorps.CREW_RUNGS
         }
+        # THE BLACKSMITH HAMMER FIRST, because the early return below ends the
+        # pass for a smith whose recipe names no vendor reagent
+        # (the module ticket): its buy rows and its walk join the same single trip.
+        queued, needs = await self._buy_blacksmith_hammers(spells)
         if not candidates and not multi_candidates:
+            await self._walk_for_hammers(needs, cohort)
             log.info(
                 "craft_supply: %d craft errand(s) standing on job=%s, none of "
                 "which names a vendor-bought reagent, so there is nothing to "
-                "buy this pass", len(spells), mode,
+                "buy this pass beyond %d hammer row(s)", len(spells), mode,
+                queued,
             )
             return
 
-        queued = 0
         # EVERY REAGENT NOBODY CAN REACH A COUNTER FOR, from both blocks
         # below, collected rather than acted on one at a time (infra#3692).
         # One walk can serve only one of them - the family has one traveller
         # - so the choice of which is a decision about the whole family and
         # is made once, at the end, by craft_supply.supply_trip.
-        needs: list = []
         if candidates:
             free_slots = await asyncio.to_thread(_fetch_free_slots, list(candidates))
             # ONE BATCH, NOT ONE QUERY PER CANDIDATE - holdings for every
@@ -9172,6 +9367,51 @@ class Bridge(discord.Client):
         if needs:
             await self._walk_for_reagents(needs, cohort)
         return queued
+
+    async def _walk_for_hammers(self, needs: list, cohort=None) -> None:
+        """Walk for a hammer no counter in reach sells, when a pass ends early.
+
+        Its own function so `_craft_supply_once` gains no branch for the
+        hammer (`_buy_blacksmith_hammers` already wrote the rows): an empty
+        `needs` is no walk.
+        """
+        if needs:
+            await self._walk_for_reagents(needs, cohort)
+
+    async def _buy_blacksmith_hammers(self, spells: dict) -> tuple:
+        """Queue a Blacksmith Hammer for every smith who has none (the module ticket).
+
+        `spells` is `_fetch_standing_crafts`' name -> (craft_spell, money).
+        The decisions are `craft_supply.hammer_errand` / `hammer_need`; this
+        reads the world and writes their answers. A hammer in the bank counts
+        as held, so a crafter DriveCraft banked it for is never sold a second.
+        Returns (rows queued, needs for the caller's one walk).
+        """
+        smiths = {
+            name: (spell, money)
+            for name, (spell, money) in spells.items()
+            if craft.tool_for(spell) == craft.BLACKSMITH_HAMMER
+        }
+        if not smiths:
+            return 0, []
+        holders = await asyncio.to_thread(_fetch_hammer_holders, list(smiths))
+        free_slots = await asyncio.to_thread(_fetch_free_slots, list(smiths))
+        queued = 0
+        needs: list = []
+        for name, (spell, money) in sorted(smiths.items()):
+            town = await asyncio.to_thread(_fetch_town, name)
+            need = craft_supply.hammer_need(name, spell, name in holders, town)
+            if need:
+                needs.append(need)
+            errand, note = craft_supply.hammer_errand(
+                name, spell, name in holders, money, free_slots.get(name, 0), town,
+            )
+            if note:
+                log.info("craft_supply: %s", note)
+            elif errand and await asyncio.to_thread(_insert_town_errand, errand):
+                queued += 1
+                log.info("craft_supply: %s %s - %s", name, errand.command, errand.why)
+        return queued, needs
 
     async def _buy_fishing_poles(self, names: list, cohort=None) -> tuple:
         """Queue a Fishing Pole for every member holding none (mod-overseer#530).
@@ -16935,7 +17175,8 @@ class Bridge(discord.Client):
     async def _job_weapon_offers(self, members, recent) -> dict:
         """name -> weaponskill.Offer for each guild member carrying a weapon it
         has no skill for (#793): weaponskill decides the need, and the nearest
-        weapon master of its side on its map that teaches it is read here.
+        weapon master of its side on its map that teaches it is read here, else
+        one on the other classic continent (weaponskill.choose_far_master).
 
         Only members guildjobs.weapon_candidate passes are read, and at most
         GUILD_WEAPON_READS_PER_PASS weapon master reads, in turn.
@@ -16956,9 +17197,15 @@ class Bridge(discord.Client):
         for name in chosen:
             m, need = by_name[name], need_of[name]
             at = {"map_id": m.map_id, "pos_x": m.x, "pos_y": m.y}
-            masters = await asyncio.to_thread(_fetch_weapon_masters, at, [need.spell])
-            offers[name] = weaponskill.offer(need, weaponskill.choose_master(
-                masters, {need.spell}, auction.team_of(m.race), int(m.map_id)))
+            masters = await asyncio.to_thread(
+                _fetch_weapon_masters, at, [need.spell],
+                weaponskill.far_maps(m.map_id))
+            team = auction.team_of(m.race)
+            master = (weaponskill.choose_master(
+                masters, {need.spell}, team, int(m.map_id))
+                or weaponskill.choose_far_master(
+                    masters, {need.spell}, team, int(m.map_id)))
+            offers[name] = weaponskill.offer(need, master)
         return offers
 
     def _log_stranded_knights(self, members, plan):
@@ -23248,6 +23495,40 @@ def _chunks(text: str, limit: int) -> list:
     return out
 
 
+# --- dungeon run reports (mod-overseer#152) --------------------------------
+
+
+def _ensure_run_report_store() -> None:
+    """Logged and swallowed: without the marker table no report is posted
+    (the pending read fails each tick), and nothing else stops."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(runreport.CREATE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("run reports: the report marker store is unavailable, so "
+                      "no dungeon run report is posted")
+
+
+def _fetch_owed_run_reports() -> list[int]:
+    """Ended runs inside runreport.OWED_MINUTES with no report posted yet."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(runreport.PENDING_SQL, (runreport.OWED_MINUTES, runreport.OWED_LIMIT))
+        return [int(row["id"]) for row in cur.fetchall()]
+
+
+def _read_run_report(run_id: int) -> dict | None:
+    """The report, through the same runreport.read the family page uses.
+    `must`, not `rows`: a realm without the summary view raises rather than
+    posting a report that says no loot and no bosses."""
+    with realmread.Session(_connect) as rd:
+        return runreport.read(rd.must, run_id)
+
+
+def _mark_run_reported(run_id: int, message_id: int, outcome: str) -> None:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(runreport.MARK_SQL, (run_id, message_id, outcome[:16]))
+
+
 # --- goal store adapters (infra#2601) --------------------------------------
 
 GOAL_INTERVAL = float(os.environ.get("GOAL_INTERVAL_SECONDS", "60"))
@@ -23736,6 +24017,36 @@ def _insert_share(grant) -> int:
         return cur.lastrowid or 0
 
 
+# Each family member's party as the worldserver last wrote it: the leader's
+# guid, 0 for no party. The same 60 second freshness _LEDGER_MEMBER_SQL reads
+# the level through; a member with no fresh row is left out, which
+# questshare.grouped() reads as "in no party" (the worldserver would refuse
+# that share as "taker offline" or "not in the same party" anyway).
+_SHARE_PARTY_SQL = (
+    "SELECT name, group_leader FROM overseer_snapshot "
+    "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 60 SECOND"
+)
+
+
+def _fetch_parties(names: list):
+    """name -> party key for questshare.plan(), or None when this world's
+    snapshot has no group column or no table (1054, 1146), and party is
+    then left to the worldserver's own gate as before (mod-overseer#969)."""
+    if not names:
+        return {}
+    sql = _SHARE_PARTY_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+        return {
+            str(row["name"]): int(row["group_leader"] or 0) for row in cur.fetchall()
+        }
+
+
 def _share_quests() -> questshare.Plan:
     """Hand every family member the quests the others are already carrying.
 
@@ -23766,7 +24077,10 @@ def _share_family_quests(names: list, zone: int = 0, label: str = "") -> questsh
     members, catalog = _fetch_family_quests(names)
     if zone:
         members = levelroute.share_members(members, zone)
-    plan = questshare.plan(members, catalog)
+    # Party first (mod-overseer#969): a share across parties is refused by
+    # the worldserver every hour it is offered, so the plan names a holder in
+    # the taker's party or refuses the pair as not-grouped and asks nothing.
+    plan = questshare.plan(members, catalog, _fetch_parties(names))
 
     seen = _recent_share_keys(SHARE_RETRY_MINUTES)
     held = questshare.backed_off(
@@ -26833,6 +27147,20 @@ async def _queue_vendor_sales(
         holder_candidates = tuple(by_holder[holder])
         town = holder_town[holder]
         if holder not in queue_holders:
+            # A STACK THE WORLD ALREADY ANSWERED IS NOT A VENDOR WAIT (#1261).
+            # The line below is the `no_vendor` step the stuck read names
+            # "Waiting for a vendor within reach", and its age is what the
+            # vendor-wait trip reads. A stack already sold or refused for good
+            # is held back by `item_plan` at every counter, so no trip can
+            # sell it: logged as a wait, it kept the hold alive for hours and
+            # re-fired the trip into a sale of nothing.
+            if item_plan.all_answered(holder_candidates, attempts):
+                log.info(
+                    "economy: %d carried candidate(s) for %s are already "
+                    "answered by the world, so it waits for no vendor",
+                    len(holder_candidates), holder,
+                )
+                continue
             log.info(
                 "economy: %d carried candidate(s) for %s but no vendor "
                 "within reach - leader=%s aim taken=%s",
@@ -33208,7 +33536,7 @@ _WEAPON_MASTERS_SQL = (
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "JOIN acore_world.creature_default_trainer cdt ON cdt.CreatureId = cr.id "
     "JOIN acore_world.trainer_spell ts ON ts.TrainerId = cdt.TrainerId "
-    "WHERE cr.map = %s AND ts.SpellId IN ({spells}) ORDER BY yards"
+    "WHERE cr.map IN ({maps}) AND ts.SpellId IN ({spells}) ORDER BY yards"
 )
 
 
@@ -33282,15 +33610,19 @@ def _fetch_mount_facts(members) -> dict:
     return {n: mountbuy.Facts(n in known, stock) for n in wanted}
 
 
-def _fetch_weapon_masters(at: dict, spells: list) -> list:
-    """Spawns on the reading's map of trainers that teach any of `spells`."""
+def _fetch_weapon_masters(at: dict, spells: list, also_maps=()) -> list:
+    """Spawns on the reading's map, and on `also_maps` (weaponskill.far_maps,
+    #793), of trainers that teach any of `spells`. The yards are from the
+    reading's point, so they rank spawns on its own map only."""
     if not at or not spells:
         return []
-    sql = _WEAPON_MASTERS_SQL.format(spells=",".join(["%s"] * len(spells)))
+    maps = [int(at["map_id"]), *[int(m) for m in also_maps if int(m) != int(at["map_id"])]]
+    sql = _WEAPON_MASTERS_SQL.format(maps=",".join(["%s"] * len(maps)),
+                                     spells=",".join(["%s"] * len(spells)))
     x, y = float(at["pos_x"]), float(at["pos_y"])
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(sql, (x, y, int(at["map_id"]), *[int(s) for s in spells]))
+            cur.execute(sql, (x, y, *maps, *[int(s) for s in spells]))
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 return []
@@ -33646,6 +33978,29 @@ def _fetch_pole_holders(names: list) -> set:
             "SELECT wb.item FROM character_inventory wb "
             "WHERE wb.guid = c.guid AND wb.bag = 0 AND wb.slot BETWEEN 19 AND 22))",
             names,
+        )
+        return {row["name"] for row in cur.fetchall()}
+
+
+def _fetch_hammer_holders(names: list) -> set:
+    """The names among `names` holding a Blacksmith Hammer in the bags or bank.
+
+    Read from character_inventory, so a hammer that is mailed or sitting in a
+    guild vault does not count; every slot a character owns does, because
+    DriveCraft keeps the hammer in the bank and withdraws it to craft
+    (the module ticket) and a second one must not be bought for that.
+    """
+    if not names:
+        return set()
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT c.name AS name "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "FROM characters c "
+            "JOIN character_inventory ci ON ci.guid = c.guid "
+            "JOIN item_instance ii ON ii.guid = ci.item "
+            f"WHERE c.name IN ({marks}) AND ii.itemEntry = %s",
+            (*names, craft.BLACKSMITH_HAMMER),
         )
         return {row["name"] for row in cur.fetchall()}
 
