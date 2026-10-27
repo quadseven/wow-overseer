@@ -86,6 +86,7 @@ import natural
 import nowstatus
 import guildcorps
 import guildjobs
+import deathloop
 import guildlevel
 import guildrun
 import familyseat
@@ -137,6 +138,7 @@ import tidy
 import overhear
 import persona
 import preraid
+import priorities
 import professions
 import protect
 import questbook
@@ -2751,6 +2753,14 @@ def _note_vendor_sellable(names, sellable: dict) -> None:
         _VENDOR_SELLABLE[str(name)] = int((sellable or {}).get(name, 0))
 
 
+def _bag_hold_reads(names: list, leader: str) -> tuple:
+    """The members present, their free slots and the leader's travel column,
+    read together in one worker thread for the dungeon-quest bag hold (#1243).
+    """
+    here = _present_members(names, leader)
+    return here, _fetch_free_slots(here), _current_travel_npc(leader)
+
+
 def _vendor_trip_makes_room(names, free_slots: dict) -> bool:
     """Whether the family's bag-room hold is waiting on a vendor trip that
     would make room (#1243).
@@ -3888,6 +3898,31 @@ def _ensure_queue_store() -> None:
     except pymysql.err.MySQLError:
         log.exception("pace: the dungeon pace store is unavailable, so no family "
                       "steps down from a door it keeps wiping in")
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(priorities.CREATE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("priorities: the family priorities store is unavailable, "
+                      "so every pass uses the default order")
+
+
+def _fetch_priority_order() -> tuple:
+    """The family's ranked priorities, as priorities.read_stored reads them.
+
+    No table yet (1146) is a realm that has never stored an order, exactly
+    like no row: the default. Any other error is raised, because a dead
+    database is not "the operator never ranked anything" - the caller says so
+    and keeps the order it last read.
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(priorities.SELECT_SQL)
+            rows = [dict(row) for row in cur.fetchall()]
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return priorities.DEFAULT_ORDER, priorities.UNSET
+        raise
+    return priorities.read_stored(rows)
 
 
 def _fetch_queue_rows() -> list:
@@ -7207,6 +7242,10 @@ class Bridge(discord.Client):
         # family -> (the last "nothing to plan" line, when), so it is said
         # once and the facts are not re-read every cycle.
         self._planner_said: dict = {}
+        # The family's ranked priorities (priorities.py, #1559), as last read.
+        # Refreshed by `_priority_order` before every Jev Choice ask and on
+        # every goal pass; the default until the first read lands.
+        self._priorities: tuple = priorities.DEFAULT_ORDER
         # dungeonpace: the last "nothing to do" line said per family (#767).
         self._pace_said: dict = {}
         # The attunement step (attunestep.py): the line last said per family,
@@ -8840,7 +8879,8 @@ class Bridge(discord.Client):
     async def _claim_town_slot(self, claimant: str, character: str,
                                aim: str, urgent: bool = False,
                                cohort: str | None = None,
-                               distance: float | None = None) -> bool:
+                               distance: float | None = None,
+                               priority_after: float | None = None) -> bool:
         """Ask for the family's one traveller, and act on the answer (infra#3703).
 
         THE ONE DOOR EVERY TOWN ERRAND NOW GOES THROUGH. Seven passes write
@@ -8906,6 +8946,7 @@ class Bridge(discord.Client):
             claimant=claimant, character=character, aim=aim, leader=leader,
             column=column, retaskable=_retaskable_from(aim), now=now,
             urgent=urgent, distance=distance,
+            priority_after=priority_after,
             trainer_route=trainer_route,
         )
         lapsed = getattr(slot, "take_lapse", lambda _now: "")(now)
@@ -13295,9 +13336,12 @@ class Bridge(discord.Client):
             seen["ledger"], held_by_traveller=seen["driveable"],
             wanted=int(plan.quest_id or 0), beneficiary=plan.beneficiary)
         levels = {str(r["name"]): int(r["level"] or 0) for r in level_rows}
+        # The order the goal pass last read (#1559): this runs inside the
+        # council's own pass and does not wait on a read of its own.
+        ranked = getattr(self, "_priorities", priorities.DEFAULT_ORDER)
         self._jev_hold(jev_choices.quest_shadow(
             self._jev, candidates, seen["chosen"], plan.beneficiary,
-            seen["held"], levels, rule.mode), "the quest aim")
+            seen["held"], levels, rule.mode, ranked=ranked), "the quest aim")
 
     def _jev_keep_shadow(self, names: list, leader: str, rows: list, clear,
                          locks, free_slots: dict, auction_open: bool) -> None:
@@ -14740,6 +14784,33 @@ class Bridge(discord.Client):
             await self._for_other_families("bank", self._bank_once)
             await asyncio.sleep(cycle)
 
+    def _log_bank_unaimed(self, cohort, leader: str, aim: str, names,
+                          queued) -> None:
+        """Say what the guild bank pass was waiting to move, and who has the column.
+
+        `queued` is (setup actions, gold deposits, item deposits, withdrawals).
+        Every kind of work the pass carries is counted, plus the members the
+        guild fund wants to pay, so a pass starved of real work reads
+        differently from an idle one (#1452).
+        """
+        actions, deposits, items, withdrawals = queued
+        wants = getattr(self, "_fund_wants", {})
+        fund_wants = sum(1 for n in names if wants.get(n, 0) > 0)
+        holder = self._cohort_town_slot(cohort).holder
+        holder_label = (
+            "%s carrying %r" % (holder.claimant or "unknown", holder.aim)
+            if holder else "none"
+        )
+        log.info(
+            "guild bank: leader=%s could not be aimed at the vault (%s) "
+            "this pass, so no work is queued (%d setup action(s), %d gold "
+            "deposit(s), %d item deposit(s), %d withdrawal(s), %d fund "
+            "want(s) waiting; slot holder=%s) - every row queued into a "
+            "trip nobody is taking comes back 'no guild bank in reach'",
+            leader, aim, len(actions), len(deposits), len(items),
+            len(withdrawals), fund_wants, holder_label,
+        )
+
     async def _guild_bank_once(self, cohort=None) -> None:
         """One pass of the guild bank: park gold above each character's float.
 
@@ -14941,6 +15012,7 @@ class Bridge(discord.Client):
         fund = sum(getattr(self, "_fund_wants", {}).get(n, 0) for n in names)
         if not any((actions, deposits, items, withdrawals)):
             if not fund:
+                self._cohort_town_slot(cohort).forget("guild bank")
                 log.info("guild bank: nobody is carrying more than the float")
                 return
             log.info("guild bank: the guild fund needs the vault: %s to withdraw "
@@ -14971,7 +15043,8 @@ class Bridge(discord.Client):
         # (townslot.STOP_CLAIMANTS), the way the mail pass's does.
         aimed = await self._claim_town_slot("guild bank", leader, vault.aim,
                                              cohort=_cohort_key(cohort),
-                                             distance=_spawn_yards(spawn))
+                                             distance=_spawn_yards(spawn),
+                                             priority_after=1200.0)
         # ALREADY STANDING THERE COUNTS AS AIMED, because it is the state the
         # aim exists to produce. mod-overseer RELEASES a travel aim the moment
         # the walk arrives (it clears `travel_npc`, which is the signal the
@@ -15007,13 +15080,8 @@ class Bridge(discord.Client):
             # and one that never finishes stops winning after LEASE_SECONDS.
             # `_claim_town_slot` has already logged whose errand it is, how
             # long they have had it and who is ahead in the queue.
-            log.info(
-                "guild bank: leader=%s could not be aimed at the vault (%s) "
-                "this pass, so no setup row or deposit is queued (%d setup "
-                "action(s), %d deposit(s) waiting) - every row queued into a "
-                "trip nobody is taking comes back 'no guild bank in reach'",
-                leader, vault.aim, len(actions), len(deposits),
-            )
+            self._log_bank_unaimed(cohort, leader, vault.aim, names,
+                                   (actions, deposits, items, withdrawals))
             return
         if not at_the_vault:
             # AIMED BUT STILL WALKING, WHICH IS ITS OWN ANSWER (infra#3713).
@@ -16708,7 +16776,9 @@ class Bridge(discord.Client):
             # quest done stops the next (guildjobs.class_ask_streak).
             asks=facts.get("quest_asks", ()),
             # Members too full to put an upgrade on make room (#1088).
-            equip_room=self._equip_room)
+            equip_room=self._equip_room,
+            # Members dying over and over in one zone leave it (#1464).
+            loops=facts.get("death_loops"))
         log.info("guild jobs: the plan took %.2f s on the event loop for %d "
                  "member(s)%s", time.perf_counter() - plan_started, len(members),
                  _family_label(cohort))
@@ -19823,16 +19893,72 @@ class Bridge(discord.Client):
                 # store is durable, so next cycle simply retries.
                 log.exception("goal fetch failed; retrying next cycle")
                 continue
-            for row in rows:
-                try:
-                    observed = await asyncio.to_thread(_observe_goal, row)
-                    for action in goals.reconcile(row, observed):
-                        await self._apply_goal_action(row, action)
-                except Exception:
-                    # One wedged goal (or one Discord hiccup) must not
-                    # stall the rest; state lives in the store, so the
-                    # failed goal is retried whole next cycle.
-                    log.exception("goal %s reconcile failed; retrying next cycle", row.get("id"))
+            await self._goal_pass(rows)
+
+    async def _goal_pass(self, rows: list) -> None:
+        """One goal pass over the active goal rows: reconcile, tie-break, apply.
+
+        THE TIE-BREAK (#1559). More than one goal can want the family's job in
+        one pass - a dungeon goal and a skill goal each set it - and the last
+        one applied used to win by row order. The family's priorities decide
+        instead, in ONE contest across every active goal that wants the job:
+        every goal drive writes this bridge's own family's job (a dungeon drive
+        and a skill drive both target bonds.head_of_family()'s family, whoever
+        the goal's character is), so two goals on characters in different
+        families would still overwrite the same job. Per-family contests need
+        the drives to target the goal character's family first.
+
+        A GOAL THAT LOSES WAITS WHOLE. Every action it planned this pass is
+        held back, not only its DriveDungeon/DriveSkill: its RecordProgress
+        would otherwise renew a dungeon lease that never drove (no drive for
+        REASSERT_AFTER_CYCLES passes) or record a skill goal's first sighting
+        so it never drives at all. Its row is left exactly as it was, so the
+        next pass plans the same drive again and it lands on the first pass
+        the contest lets it.
+        """
+        planned = []
+        for row in sorted(rows, key=lambda r: int(r.get("id") or 0)):
+            try:
+                observed = await asyncio.to_thread(_observe_goal, row)
+                planned.append((row, goals.reconcile(row, observed)))
+            except Exception:
+                # One wedged goal (or one Discord hiccup) must not
+                # stall the rest; state lives in the store, so the
+                # failed goal is retried whole next cycle.
+                log.exception("goal %s reconcile failed; retrying next cycle", row.get("id"))
+        # Read every pass, contest or not: the quest shadow reads the order
+        # this pass last held (self._priorities) instead of reading its own.
+        order = await self._priority_order()
+        contest = priorities.job_contest(
+            [(row.get("id"), row.get("kind")) for row, actions in planned
+             if any(type(a) in _JOB_GOAL_ACTIONS for a in actions)],
+            order)
+        if contest.line:
+            log.info("goal: %s", contest.line)
+        for row, actions in planned:
+            if row.get("id") in contest.waiting:
+                continue
+            try:
+                for action in actions:
+                    await self._apply_goal_action(row, action)
+            except Exception:
+                log.exception("goal %s apply failed; retrying next cycle", row.get("id"))
+
+    async def _priority_order(self) -> tuple:
+        """The family's ranked priorities, read now, or the last order read.
+
+        A failed read keeps the order already held and says so: a database
+        hiccup is not the operator un-ranking everything (#1559).
+        """
+        try:
+            order, _state = await asyncio.to_thread(_fetch_priority_order)
+        except Exception:
+            held = getattr(self, "_priorities", priorities.DEFAULT_ORDER)
+            log.exception("priorities: the order could not be read; this pass "
+                          "keeps %s", priorities.trace(held))
+            return held
+        self._priorities = order
+        return order
 
     async def _apply_goal_action(self, row: dict, action) -> None:
         """Apply one typed action from goals.reconcile.
@@ -20888,8 +21014,12 @@ class Bridge(discord.Client):
         if rule.mode != jev.OFF and self._jev.ready(jev_choices.KIND_DUNGEON):
             where = await self._situation_for(
                 key, list(fam["names"]), fam["leader"].get("name"))
+            ranked = await self._priority_order()
+            log.info("planner: %s: asking Jev under %s", who,
+                     priorities.prompt_line(ranked))
             judgment = await jev_choices.dungeon_ask(
-                self._jev, facts, opts, pick, rule, due.reason, where=where)
+                self._jev, facts, opts, pick, rule, ranked=ranked,
+                why_now=due.reason, where=where)
         if judgment is not None:
             log.info("%s", judgment.line())
             try:
@@ -21017,14 +21147,25 @@ class Bridge(discord.Client):
         # Uzza sat at one free slot inside Razorfen Kraul with the guild, and
         # Zug's family read "waits for bag room" for an hour while the leader
         # stood at a vendor that could sell nothing of Uzza's.
-        here = await asyncio.to_thread(_present_members, list(fam["names"]),
-                                       leader)
-        free = await asyncio.to_thread(_fetch_free_slots, here)
-        if (jev_activity.withheld(True, free)
-                and _vendor_trip_makes_room(here, free)):
-            log.info("dungeon quests: %s waits for bag room; the vendor trip "
-                     "keeps the travel column", campaignqueue._family(key))
-            return False
+        here, free, column = await asyncio.to_thread(
+            _bag_hold_reads, list(fam["names"]), leader)
+        if jev_activity.withheld(True, free) and _vendor_trip_makes_room(
+                here, free):
+            # THE VENDOR TRIP CANNOT GO WHILE ANOTHER ERRAND HOLDS THE COLUMN.
+            # Zug's town errand to Camp Taurajo held the traveller while it
+            # walked to the hub and waited for Zork at the mailbox, so the
+            # vendor trip that would sell Zrog's stacks could not go, and the
+            # family read "waits for bag room" for 32 minutes on the dev realm
+            # 2026-10-26. Hold only while the column is free or already carried
+            # by the vendor trip itself; a town errand's ground aim means the
+            # sale cannot happen yet, so waiting for it holds the family for
+            # the whole town errand. When another errand owns the column the
+            # hold yields and the walk is attempted instead (it will be claimed
+            # as soon as the town errand releases the column).
+            if column in ("", "vendor"):
+                log.info("dungeon quests: %s waits for bag room; the vendor trip "
+                         "keeps the travel column", campaignqueue._family(key))
+                return False
         mid = await self._mid_run(list(fam["names"]))
         facts = await asyncio.to_thread(
             _dungeonquest_facts, fam, str(head["keyword"]), leader, True, mid)
@@ -22076,8 +22217,11 @@ class Bridge(discord.Client):
         rule = jev_choices.policy(jev_choices.KIND_ZONE)
         if rule.mode == jev.OFF or not self._jev.ready(jev_choices.KIND_ZONE):
             return None
+        ranked = await self._priority_order()
+        log.info("levelroute: %s: asking Jev under %s",
+                 campaignqueue._family(key), priorities.prompt_line(ranked))
         judgment = await jev_choices.zone_ask(self._jev, facts, opts, pick, rule,
-                                              why_now)
+                                              why_now, ranked=ranked)
         if judgment is None:
             return None
         log.info("%s", judgment.line())
@@ -23141,6 +23285,12 @@ def _chunks(text: str, limit: int) -> list:
 # --- goal store adapters (infra#2601) --------------------------------------
 
 GOAL_INTERVAL = float(os.environ.get("GOAL_INTERVAL_SECONDS", "60"))
+
+# The goal actions that set the family's job (`_drive_dungeon`, and
+# `_drive_skill` through `_set_job`), both on this bridge's own family. A goal
+# planning one of these enters the goal pass's single tie-break
+# (priorities.job_contest); a goal that loses applies nothing that pass.
+_JOB_GOAL_ACTIONS = (goals.DriveDungeon, goals.DriveSkill)
 
 
 def _ensure_goal_store() -> None:
@@ -29328,6 +29478,16 @@ _JOB_QUEST_ASKS_SQL = (
 )
 
 
+def _job_deaths(cur, names: list) -> list:
+    """The deaths deathloop.loops judges: a member dying over and over in one
+    zone leaves it (#1464)."""
+    if not names:
+        return []
+    return _job_read(
+        cur, "deaths", deathloop.SQL.format(holes=",".join(["%s"] * len(names))),
+        (*names, deathloop.READ_SECONDS))
+
+
 def _fetch_job_facts(family_names: list) -> dict:
     """Everything guildjobs.plan reads, on one connection; no judgement here."""
     ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
@@ -29365,6 +29525,7 @@ def _fetch_job_facts(family_names: list) -> dict:
                                    (guildjobs.CLASS_ASK_STREAK_WINDOW_MINUTES,))
         far_open = _far_walks_open(cur)
         hunt_open = _hunts_open(cur)
+        death_rows = _job_deaths(cur, sorted(guid_of))
     # THE ONE NATURAL GATE (natural.py, #331): who may act on a guild job and
     # give the guild anything.
     eligible = _natural_contributors(list(guid_of), family_names)
@@ -29378,6 +29539,8 @@ def _fetch_job_facts(family_names: list) -> dict:
                                  worn=_job_worn(worn_rows))
     facts["class_book"] = book
     facts["quest_asks"] = guildjobs.quest_asks_from_rows(quest_ask_rows)
+    facts["death_loops"] = deathloop.loops(
+        death_rows, {str(r["name"]): int(r.get("level") or 0) for r in rows})
     facts["far_open"] = far_open
     facts["hunt_open"] = hunt_open
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}

@@ -33,7 +33,7 @@ COPY core.py bridge.py voice.py transform.py \
      gear.py gearorigin.py itemsource.py handover.py \
      armory.py wealth.py questlog.py modelviewer.py \
      relay.py digest.py \
-     achievements.py recap.py agenda.py eye.py decree.py meter.py \
+     achievements.py recap.py agenda.py eye.py decree.py priorities.py meter.py \
      dungeonplan.py dungeonpath.py raidgoals.py raidcraft.py raidprep.py raidlineup.py mcencounters.py raidgear.py raidroles.py raidteams.py teamsync.py attunestep.py raidready.py raidrun.py raidsupply.py readcache.py \
      dungeonprogression.py dungeonquests.py \
      dungeonprogression.py dungeonquests.py \
@@ -56,7 +56,7 @@ COPY core.py bridge.py voice.py transform.py \
      preraid.py fireplan.py gearscore.py gearupgrades.py pvpgear.py equipscore.py \
      runtimeline.py runstory.py places.py commandwords.py orderrecord.py \
      vclient.py guildgear.py \
-     situation.py standstill.py restsupply.py vision.py llmmode.py llmpool.py jev_movement.py jev_family_intent.py jev_outcomes.py leadcmd.py \
+     situation.py standstill.py deathloop.py restsupply.py vision.py llmmode.py llmpool.py jev_movement.py jev_family_intent.py jev_outcomes.py leadcmd.py \
      realmroller.py realmroller_world.py realmroller_plan.py realmroller_act.py \
      zones.json entrances.json shapes.json \
      talents.json items.json icons.json bagicons.json spells.json bagspells.json viewerdisplays.json \
