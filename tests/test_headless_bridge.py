@@ -227,9 +227,12 @@ class TheChatRelayIsTheOnlyThingLeftOut(unittest.TestCase):
     warn that the channel is invisible, once every RELAY_SECONDS, forever -
     which buries the lines that matter. Everything else drives the world."""
 
-    def test_only_the_relay_is_discord_only(self):
+    def test_only_the_relay_and_the_run_reports_are_discord_only(self):
+        """The run report pass (mod-overseer#152) only posts to Discord, so
+        headless it too could only warn that its channel is invisible."""
         self.assertEqual(
-            ["_relay_chat"], [name for name, headless in _registry() if not headless]
+            ["_relay_chat", "_run_report_loop"],
+            [name for name, headless in _registry() if not headless],
         )
 
     def test_the_quest_brain_is_declared_for_both_paths(self):
