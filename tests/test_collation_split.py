@@ -106,6 +106,13 @@ COLLATIONS = {
     "overseer_guild_pug_call": "utf8mb4_0900_ai_ci",
     # Bridge-owned (mod-overseer#767), named in dungeonpace.CREATE_SQL.
     "overseer_dungeon_pace": "utf8mb4_0900_ai_ci",
+    # Bridge-owned (mod-overseer#152), named in runreport.CREATE_SQL the same way.
+    "overseer_dungeon_run_report": "utf8mb4_0900_ai_ci",
+    # A view (mod-overseer#152 reads it): information_schema.TABLES has no
+    # collation for a view. Its event columns, the only strings runreport
+    # reads from it, are overseer_event's, so they carry overseer_event's
+    # collation; the run's columns it also carries are not read from it.
+    "overseer_dungeon_run_summary": "utf8mb4_unicode_ci",
     # Bridge-owned (the Bags tab's week), named in
     # bridge._ensure_economy_store the same way overseer_jev_judgment is.
     "overseer_economy_sample": "utf8mb4_0900_ai_ci",
@@ -195,6 +202,10 @@ STRING_COLUMNS = {
         }
     ),
     "overseer_dungeon_run": frozenset({"ended_reason", "leader_name", "state"}),
+    "overseer_dungeon_run_report": frozenset({"outcome"}),
+    "overseer_dungeon_run_summary": frozenset(
+        {"character_name", "detail", "kind", "subject_name"}
+    ),
     # From its own DDL (mod-overseer#616): every VARCHAR column.
     "overseer_dungeon_run_event": frozenset(
         {

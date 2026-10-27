@@ -157,7 +157,9 @@ import raidsupply
 import recipebook
 import raidteams
 import recruit
+import realmread
 import relay
+import runreport
 import retire
 import situation
 import skillgoal
@@ -220,6 +222,10 @@ OWNED_CHANNEL_IDS = frozenset(
 # own task: two orders typed a second apart must not read each other's text.
 _HEARD = contextvars.ContextVar("heard_order_text", default="")
 RELAY_SECONDS = float(os.environ.get("RELAY_SECONDS", "3"))
+# How often ended dungeon runs are checked for an owed report (mod-overseer#152:
+# a report within 60 seconds of the run row closing), and where it goes.
+RUN_REPORT_SECONDS = float(os.environ.get("RUN_REPORT_SECONDS", "20"))
+RUN_REPORT_CHANNEL_ID = os.environ.get("RUN_REPORT_CHANNEL_ID", "")
 # On restart, anything older than this is marked relayed WITHOUT being sent.
 # Same contract as the outcome poller: the bridge reports what happens while
 # it is watching, and never replays hours of history into the channel.
@@ -7029,6 +7035,7 @@ PASSES = (
     _Pass("_narrate_events"),
     _Pass("_supervise_goals"),
     _Pass("_relay_chat", headless=False),
+    _Pass("_run_report_loop", headless=False),
     _Pass("_hold_council"),
     _Pass("_design_tabard"),
     _Pass("_assign_trades"),
@@ -7439,6 +7446,7 @@ class Bridge(discord.Client):
             _ensure_quest_ledger_store,
             _ensure_now_store,
             _ensure_order_store,
+            _ensure_run_report_store,
         ):
             try:
                 await asyncio.to_thread(ensure)
@@ -8170,6 +8178,50 @@ class Bridge(discord.Client):
                     await asyncio.to_thread(_mark_relayed, ids)
             except Exception:
                 log.exception("chat relay tick failed; retrying next cycle")
+
+    async def _run_report_loop(self) -> None:
+        """Post each ended dungeon run's report to Discord (mod-overseer#152).
+
+        Discord-only, like the chat relay: headless there is no channel. The
+        marker row is written only AFTER Discord accepts the message, so a
+        failed send is retried next tick, and a posted run is never posted
+        again. A run that cannot be posted for runreport.OWED_MINUTES ages out
+        rather than blocking the ones behind it.
+        """
+        await self.wait_until_ready()
+        channel_id = RUN_REPORT_CHANNEL_ID or OVERSEER_CHANNEL_ID
+        if not channel_id:
+            log.warning("no RUN_REPORT_CHANNEL_ID and no OVERSEER_CHANNEL_ID - "
+                        "dungeon run reports have nowhere to go")
+            return
+        while not self.is_closed():
+            await asyncio.sleep(RUN_REPORT_SECONDS)
+            try:
+                await self._post_run_reports(int(channel_id))
+            except Exception:
+                log.exception("run reports: tick failed; retrying next cycle")
+
+    async def _post_run_reports(self, channel_id: int) -> int:
+        """Post every owed report; how many were posted."""
+        owed = await asyncio.to_thread(_fetch_owed_run_reports)
+        if not owed:
+            return 0
+        channel = self.get_channel(channel_id)
+        if channel is None:
+            log.warning("run report channel %s is not visible", channel_id)
+            return 0
+        posted = 0
+        for run_id in owed:
+            report = await asyncio.to_thread(_read_run_report, run_id)
+            if report is None:
+                continue
+            message = await channel.send(runreport.render(report))
+            await asyncio.to_thread(
+                _mark_run_reported, run_id, int(getattr(message, "id", 0) or 0),
+                report["outcome"])
+            log.info("run reports: posted run %s (%s)", run_id, report["outcome"])
+            posted += 1
+        return posted
 
     async def _in_character(self, speaker: str, plain: str, context: str) -> str:
         """The line as this character would say it, or the plain line.
@@ -23435,6 +23487,40 @@ def _chunks(text: str, limit: int) -> list:
     if current:
         out.append(current)
     return out
+
+
+# --- dungeon run reports (mod-overseer#152) --------------------------------
+
+
+def _ensure_run_report_store() -> None:
+    """Logged and swallowed: without the marker table no report is posted
+    (the pending read fails each tick), and nothing else stops."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(runreport.CREATE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("run reports: the report marker store is unavailable, so "
+                      "no dungeon run report is posted")
+
+
+def _fetch_owed_run_reports() -> list[int]:
+    """Ended runs inside runreport.OWED_MINUTES with no report posted yet."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(runreport.PENDING_SQL, (runreport.OWED_MINUTES, runreport.OWED_LIMIT))
+        return [int(row["id"]) for row in cur.fetchall()]
+
+
+def _read_run_report(run_id: int) -> dict | None:
+    """The report, through the same runreport.read the family page uses.
+    `must`, not `rows`: a realm without the summary view raises rather than
+    posting a report that says no loot and no bosses."""
+    with realmread.Session(_connect) as rd:
+        return runreport.read(rd.must, run_id)
+
+
+def _mark_run_reported(run_id: int, message_id: int, outcome: str) -> None:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(runreport.MARK_SQL, (run_id, message_id, outcome[:16]))
 
 
 # --- goal store adapters (infra#2601) --------------------------------------
