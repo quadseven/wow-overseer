@@ -164,6 +164,7 @@ import skillgoal
 import standin
 import places
 import standstill
+import strategybook
 import tabard
 import teamsync
 import towntrip
@@ -405,7 +406,33 @@ def _insert_command(cmd: core.InsertCommand) -> int:
             "INSERT INTO overseer_command (target_name, command, source) VALUES (%s, %s, %s)",
             (cmd.target_name, cmd.command, cmd.source),
         )
-        return cur.lastrowid
+        row_id = cur.lastrowid
+    # Written AFTER the row: a strategy order the table refused is not one the
+    # operator has, so the book must not replay it after a roll (#1553).
+    _record_strategy(cmd)
+    return row_id
+
+
+# A book page outlives any roll gap; each operator order refreshes it.
+STRATEGY_BOOK_SECONDS = 30 * 24 * 3600
+
+
+def _record_strategy(cmd: core.InsertCommand) -> None:
+    """Fold an operator's strategy order into its member's book page (#1553).
+
+    Only orders a person gave (strategybook.is_operator): the bridge's own
+    strategy writers re-assert on their own cadence. Never fatal - a failed
+    write costs a replay after the next roll, not the order itself."""
+    if not strategybook.is_operator(cmd.source):
+        return
+    try:
+        now = time.time()
+        for subject, sign in strategybook.rows(cmd.target_name, cmd.command):
+            _memo_upsert(strategybook.MEMO_KIND, subject, sign, now,
+                         now + STRATEGY_BOOK_SECONDS)
+    except Exception:
+        log.exception("strategy book: could not record %r for %s",
+                      cmd.command, cmd.target_name)
 
 
 def _insert_speak(cmd: relay.SpeakCommand) -> int:
@@ -1445,6 +1472,59 @@ def _give_them_a_life(names: list) -> int:
         ):
             _insert_command(core.InsertCommand(name, command, "overseer:life"))
     return len(driven)
+
+
+def _worldserver_start():
+    """The newest worldserver start (acore_auth.uptime.starttime), or None
+    when it is unreadable."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT MAX(starttime) AS start FROM acore_auth.uptime")
+            start = (cur.fetchone() or {}).get("start")
+    except pymysql.err.MySQLError:
+        log.exception("strategy reapply: the worldserver's start is unreadable")
+        return None
+    return None if start is None else int(start)
+
+
+def _strategy_start_seen():
+    """The worldserver start the strategy book was last replayed for, from
+    the memo store, so a bridge restart after a roll still replays."""
+    memo = _memo_read(strategybook.START_MEMO_KIND).get(strategybook.START_SUBJECT)
+    if memo is None:
+        return None
+    try:
+        return int(memo[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _reapply_strategies(reapplier) -> int:
+    """One pass of the strategy replay (#1553): read the start and the book,
+    send what is owed to members back in the world. Returns rows written."""
+    start = _worldserver_start()
+    pages = strategybook.book(_memo_read(strategybook.MEMO_KIND))
+    owed_before = reapplier.owed()
+    in_world = _bot_held_names(sorted(pages)) if pages else []
+    commands, new_start = reapplier.due(start, pages, in_world)
+    if new_start is not None:
+        now = time.time()
+        _memo_upsert(strategybook.START_MEMO_KIND, strategybook.START_SUBJECT,
+                     new_start, now, now + STRATEGY_BOOK_SECONDS)
+        if reapplier.owed() - owed_before:
+            log.info("strategy reapply: worldserver start %s - %s owed a replay",
+                     new_start, ", ".join(sorted(reapplier.owed())))
+    leads = _roster_leads() if commands else set()
+    sent = 0
+    for name, command in commands:
+        if not leadcmd.for_character([command], name in leads):
+            continue
+        _insert_command(core.InsertCommand(name, command, strategybook.REAPPLY_SOURCE))
+        sent += 1
+    if commands:
+        log.info("strategy reapply: %d command(s) sent to %s", sent,
+                 ", ".join(sorted({n for n, _ in commands})))
+    return sent
 
 
 def _ensure_chat_watch(names: list) -> int:
@@ -6957,6 +7037,7 @@ PASSES = (
     _Pass("_towntrip_loop"),
     _Pass("_flight_learn_loop"),
     _Pass("_restore_lost_lives"),
+    _Pass("_reapply_strategies_loop"),
     _Pass("_campaign_queue_loop"),
     _Pass("_activity_loop"),
     _Pass("_run_recovery_loop"),
@@ -8354,6 +8435,32 @@ class Bridge(discord.Client):
                 # Never fatal. A failed recheck costs latency on the next
                 # relog, and the 600s sweep is still underneath it.
                 log.exception("life recheck failed")
+            await asyncio.sleep(cycle)
+
+    async def _reapply_strategies_loop(self) -> None:
+        """After a worldserver roll, give each member back the strategies the
+        operator set on it (#1553).
+
+        Every login runs ResetStrategies, so a runtime `nc +...` the operator
+        sent through this bridge is gone after a roll. strategybook keeps what
+        was asked for; this loop watches acore_auth.uptime for a new start and
+        replays each member's page once, as soon as that member is back under
+        the AI. Same cadence as the life recheck: a member comes back within
+        seconds of logging in rather than on the ten-minute sweep.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("LIFE_RECHECK_SECONDS", "20"))
+        reapplier = None
+        while not self.is_closed():
+            try:
+                if reapplier is None:
+                    seen = await asyncio.to_thread(_strategy_start_seen)
+                    reapplier = strategybook.Reapplier(seen)
+                await asyncio.to_thread(_reapply_strategies, reapplier)
+            except Exception:
+                # Never fatal: a failed pass is retried next cycle, and the
+                # members still owed stay owed.
+                log.exception("strategy reapply failed")
             await asyncio.sleep(cycle)
 
     async def _assign_trades(self) -> None:
