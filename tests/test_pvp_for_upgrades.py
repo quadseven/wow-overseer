@@ -15,6 +15,7 @@ import guildjobs
 import guildrun
 import guildsocial
 import pvpgear
+from guildjobs import Carried
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
@@ -342,15 +343,27 @@ class TheJobStep(unittest.TestCase):
         plan = guildjobs.plan([job_member(eligible=False)], pvp=pvp_for())
         self.assertEqual((), plan.steps)
 
-    def test_a_buy_with_full_bags_does_not_walk(self):
-        """A member with no free bag slots does not walk to the PvP vendor."""
-        member = job_member(free_slots=0, bag_slots=16)
+    def test_a_buy_with_full_bags_makes_room_before_walk(self):
+        """A member with no free bag slots generates a room/sell step to free slots before vendor walk."""
+        member = job_member(
+            free_slots=0,
+            bag_slots=16,
+            carried=(Carried(guid=1, entry=2589, count=10, quality=0, sell_price=500),),
+        )
         plan = guildjobs.plan([member], pvp=pvp_for(held=6000))
-        self.assertFalse(any(s.action == "pvp" for s in plan.steps))
-        self.assertIn("no free bag slot", plan.lines.get("Auren", ""))
+        # Either a "room" step (PvP-specific) or "sell" step (general bag-clearing) should free slots
+        room_or_sell_steps = [s for s in plan.steps if s.action in ("room", "sell")]
+        self.assertTrue(
+            room_or_sell_steps, "Expected a ROOM_ACTION or sell step to free bag slots"
+        )
+        self.assertFalse(
+            any(s.action == "pvp" and s.walk for s in plan.steps),
+            "Should not walk to vendor until room is made",
+        )
 
     def test_a_buy_that_failed_with_full_bags_cools_down(self):
-        """A member whose honor buy failed with 'bags cannot take the item' cools down."""
+        """A member whose honor buy failed with 'bags cannot take the item' cools down, then re-aims when free slot exists."""
+        # First: with cooldown active and free slot - should still be cooling
         member = job_member(free_slots=1, bag_slots=16)
         recent = (
             guildjobs.Recent(
@@ -364,7 +377,30 @@ class TheJobStep(unittest.TestCase):
             ),
         )
         plan = guildjobs.plan([member], pvp=pvp_for(held=6000), recent=recent)
-        self.assertFalse(any(s.action == "pvp" for s in plan.steps))
+        self.assertFalse(
+            any(s.action == "pvp" for s in plan.steps), "Still cooling down"
+        )
+
+        # Second: after cooldown expires (age > backoff) and free slot exists - should re-aim
+        # PVP_WALK_BACKOFF_MINUTES = 60, first failure = 60 min backoff
+        # So age_minutes=61 should be past cooldown
+        recent_past = (
+            guildjobs.Recent(
+                name="Auren",
+                action="pvp",
+                age_minutes=61,
+                status="error",
+                command="buy 19325",
+                result="bags cannot take the item",
+                walk=False,
+            ),
+        )
+        plan2 = guildjobs.plan([member], pvp=pvp_for(held=6000), recent=recent_past)
+        pvp_steps = [s for s in plan2.steps if s.action == "pvp"]
+        self.assertTrue(
+            pvp_steps,
+            "Should re-aim and generate PvP step after cooldown with free slot",
+        )
 
 
 class GuildChat(unittest.TestCase):

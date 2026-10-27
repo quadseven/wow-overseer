@@ -5510,6 +5510,40 @@ def _pvp_buy_cooling(name, recent) -> bool:
     )  # fmt: skip
 
 
+def _pvp_room_step(m, aim, cap, kept=None):
+    """A make-room step for a PvP honor buy: sell junk to free a slot.
+
+    Returns a step if the member has junk to sell, else None (the member
+    has nothing to part with and the buy is held with a reason).
+    """
+    if m.free_slots is None or m.free_slots >= 1:
+        return None
+    if not m.alive:
+        return None
+    junk = vendor_stacks(m, kept)
+    if not junk:
+        return None
+    said = f"{aim.line}: makes room in its bags ({m.free_slots} free, 1 needed) for PvP buy"
+    return guildcorps.Step(
+        m.name,
+        ROOM_ACTION,
+        len(junk),
+        f"{said}: walks to a vendor to sell {len(junk)} stack(s)",
+        rows=tuple(
+            guildcorps.Row(
+                "sell", f"guid:{int(c.guid)}", "", source_for(ROOM_ACTION, m.name)
+            )
+            for c in junk
+        ),
+        walk=guildcorps.Row(
+            "buy",
+            f"walk-to-vendor any{_cap_word(cap)}",
+            "",
+            source_for(ROOM_ACTION + "-walk", m.name),
+        ),
+    )
+
+
 def pvp_step(m, aim, move, cap, kept=None):
     """The step for a PvP move: the queue row, or the walk to the vendor that
     stocks the item and the honor buy, after selling junk for room."""
@@ -5582,7 +5616,14 @@ def _pvp_first(m, pvp, recent, cap, kept=None, pet_wanted=False):
     if move.kind == pvpgear.BUY and _pvp_buy_cooling(m.name, recent):
         return None, "", False
     if move.kind == pvpgear.BUY and m.free_slots is not None and m.free_slots < 1:
-        return None, f"{aim.line}: no free bag slot for PvP buy", False
+        room_step = _pvp_room_step(m, aim, cap, kept)
+        if room_step is not None:
+            return room_step, f"{aim.line}: makes room for PvP buy", False
+        return (
+            None,
+            f"{aim.line}: no free bag slot for PvP buy and nothing to sell",
+            False,
+        )
     step = pvp_step(m, aim, move, cap, kept)
     return step, (aim.line + ": " + move.said) if step else "", move.holds
 
