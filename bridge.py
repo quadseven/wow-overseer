@@ -8706,7 +8706,7 @@ class Bridge(discord.Client):
             and spell_id not in guildcorps.CREW_RUNGS
         }
         # THE BLACKSMITH HAMMER FIRST, because the early return below ends the
-        # pass for a smith whose recipe names no vendor reagent 
+        # pass for a smith whose recipe names no vendor reagent
         # (the module ticket): its buy rows and its walk join the same single trip.
         queued, needs = await self._buy_blacksmith_hammers(spells)
         if not candidates and not multi_candidates:
@@ -8716,8 +8716,7 @@ class Bridge(discord.Client):
                 "buy this pass beyond %d hammer row(s)", len(spells), mode,
                 queued,
             )
-            if needs:
-                await self._walk_for_reagents(needs, cohort)
+            await self._walk_for_reagents(needs, cohort)
             return
 
         # EVERY REAGENT NOBODY CAN REACH A COUNTER FOR, from both blocks
@@ -9208,8 +9207,10 @@ class Bridge(discord.Client):
 
         A family whose campaign queue owns its job keeps its leader for the
         runs (#215): the walk waits, and a buy at a counter it already
-        stands at still lands.
+        stands at still lands. No needs means no walk.
         """
+        if not needs:
+            return
         if cohort is not None and await asyncio.to_thread(
                 _queue_owns_job, cohort.key):
             log.info("craft_supply: family %s's campaign queue owns its job, "
