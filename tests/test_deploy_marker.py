@@ -115,12 +115,26 @@ class DeployFields(unittest.TestCase):
         with (
             mock.patch.object(shell.map_server, "_fetch_realm", return_value={}),
             mock.patch.object(shell.map_server.realm, "build_realm", return_value={}),
-            mock.patch.dict(os.environ, {"OVERSEER_COMMIT": SHA}, clear=False),
+            mock.patch.dict(
+                os.environ,
+                {
+                    "OVERSEER_COMMIT": SHA,
+                    "OVERSEER_PREVIOUS_COMMIT": PREV,
+                    "OVERSEER_SHIP_PR": "1400",
+                },
+                clear=False,
+            ),
+            mock.patch.object(deployinfo, "_started", 1000),
+            mock.patch.object(deployinfo.time, "time", return_value=1012),
         ):
             h._realm({})
         deploy = json.loads(h.body())["deploy"]
         self.assertEqual(deploy["commit"], "0123456789ab")
-        self.assertIn("uptime_seconds", deploy)
+        self.assertEqual(deploy["previous"], "fedcba987654")
+        self.assertEqual(deploy["ship_pr"], 1400)
+        self.assertEqual(deploy["uptime_seconds"], 12)
+        self.assertTrue(deploy["starting"])
+        self.assertEqual(deploy["started_at"], 1000)
 
     def test_image_and_workflow_carry_the_commit(self):
         docker = (HERE / "Dockerfile").read_text(encoding="utf-8")
@@ -175,6 +189,30 @@ class DashboardMarker(unittest.TestCase):
         m = self.marker(d, "stale")
         self.assertTrue(m["restarting"])
         self.assertIn("was 0123456789ab", m["text"])
+
+    def test_age_tick_redraws_marker_when_realm_read_fails(self):
+        import test_app_shell as shell_test
+
+        script = """
+M.setDeploy({commit:"0123456789ab", uptime_seconds:900, starting:false});
+const slots = [{textContent:"", hidden:true, attrs:{}, setAttribute(k,v){this.attrs[k]=v;}}];
+const root = {querySelectorAll(){return slots;}, querySelector(){return null;}};
+const health = {state:"stale", at:Date.now()-5000};
+M.updateAge(root, health);
+M.updateDeploy(root, health);
+console.log(JSON.stringify(slots.map(s => ({text:s.textContent, hidden:s.hidden, restarting:s.attrs["data-restarting"]}))));
+"""
+        out = shell_test.node_module("shell.js", script)
+        self.assertEqual(
+            out,
+            [
+                {
+                    "text": "Restarting or not answering (was 0123456789ab)",
+                    "hidden": False,
+                    "restarting": "1",
+                }
+            ],
+        )
 
     def test_nothing_known_shows_nothing(self):
         self.assertEqual(
