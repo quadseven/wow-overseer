@@ -1980,6 +1980,9 @@ def mount_step(m, facts, recent, cap):
 
 
 WEAPON_ACTION = "weapon"
+# The crossing to a weapon master across the water (weaponskill.choose_far_master):
+# its row shares every crossing's clock and walls (CROSS_ACTIONS).
+WEAPON_CROSS_ACTION = WEAPON_ACTION + "-cross"
 # The walk ends this near the weapon master's spawn: the module's train-weapon
 # looks for a trainer it can talk to from where the member stands.
 WEAPON_MASTER_NEAR_YARDS = 3
@@ -2024,7 +2027,7 @@ def weapon_step(m, offer, recent, cap):
     if not offer.spawn:
         return None, (
             "%s carries %s (%s) and has no skill %d for it; no weapon master of "
-            "its side on this map teaches it"
+            "its side on this map or across the water teaches it"
             % (m.name, need.item, need.why, need.skill)
         )
     if weapon_purse(m, need) < int(offer.cost):
@@ -2035,6 +2038,8 @@ def weapon_step(m, offer, recent, cap):
             need.item,
             purse.money(weapon_purse(m, need)),
         )
+    if m.map_id is not None and int(offer.map_id) != int(m.map_id):
+        return weapon_cross_step(m, offer, recent)
     said = "%s walks to %s to buy skill %d for %s of its own, to wield %s (%s)" % (
         m.name,
         offer.master or "a weapon master",
@@ -2072,6 +2077,63 @@ def weapon_step(m, offer, recent, cap):
             source_for(WEAPON_ACTION + "-walk", m.name),
         ),
         goal=offer.master or "the weapon master",
+    )
+    return step, ""
+
+
+def weapon_cross_step(m, offer, recent):
+    """(step or None, a note) for a weapon master on the other classic continent
+    (weaponskill.choose_far_master, #793): one `cross-to-map map:<id>` row, no
+    walk, as the level step crosses (level_cross_step). Once the member stands
+    on that map, the next pass finds the master there and walks to it. Held
+    with no row while its last crossing is young (crossing_cooling); a crossing
+    the module refused for good (class_walls) is named and not asked."""
+    need, to_map = offer.need, int(offer.map_id)
+    where = classquest.CONTINENTS.get(to_map, "map %d" % to_map)
+    wall = class_walls(m.name, recent).get(to_map)
+    if wall:
+        return None, (
+            "%s carries %s (%s) and has no skill %d for it; %s teaches it on %s, "
+            "and the module will not cross it there (%s)"
+            % (
+                m.name,
+                need.item,
+                need.why,
+                need.skill,
+                offer.master or "a weapon master",
+                where,
+                wall,
+            )
+        )
+    if crossing_cooling(m.name, recent):
+        return None, ""
+    said = (
+        "%s crosses to %s by its faction's boat or zeppelin to buy skill %d at %s "
+        "for %s of its own, to wield %s (%s)"
+        % (
+            m.name,
+            where,
+            need.skill,
+            offer.master or "a weapon master",
+            purse.money(offer.cost),
+            need.item,
+            need.why,
+        )
+    )
+    step = guildcorps.Step(
+        m.name,
+        WEAPON_ACTION,
+        int(need.skill),
+        said,
+        rows=(
+            guildcorps.Row(
+                "job",
+                classquest.cross_command(to_map),
+                "",
+                source_for(WEAPON_CROSS_ACTION, m.name),
+            ),
+        ),
+        goal=where,
     )
     return step, ""
 
@@ -4636,7 +4698,12 @@ def class_ask_held(name, asks) -> frozenset:
 # here because questers imports this module; questers takes it from here.
 QUESTER_CROSS_ACTION = "quester-cross"
 CROSS_ACTIONS = frozenset(
-    {classquest.CROSS_ACTION, guildlevel.CROSS_ACTION, QUESTER_CROSS_ACTION}
+    {
+        classquest.CROSS_ACTION,
+        guildlevel.CROSS_ACTION,
+        QUESTER_CROSS_ACTION,
+        WEAPON_CROSS_ACTION,
+    }
 )
 
 
