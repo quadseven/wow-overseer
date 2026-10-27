@@ -214,6 +214,15 @@ console.log(JSON.stringify(slots.map(s => ({text:s.textContent, hidden:s.hidden,
             ],
         )
 
+    def test_main_age_tick_refreshes_deploy_marker(self):
+        main = (HERE / "app" / "main.js").read_text(encoding="utf-8")
+        tick = main.split("window.setInterval(() => {", 1)[1].split(
+            "}, shell.AGE_TICK_MS);", 1
+        )[0]
+        self.assertIn("api.health(ageReads())", tick)
+        self.assertIn("shell.updateAge(root, health)", tick)
+        self.assertIn("shell.updateDeploy(root, health)", tick)
+
     def test_nothing_known_shows_nothing(self):
         self.assertEqual(
             self.marker(None, "loading"), {"restarting": False, "text": ""}
