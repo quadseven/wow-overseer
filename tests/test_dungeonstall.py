@@ -16,6 +16,7 @@ import pathlib
 import time
 import types
 import unittest
+from unittest.mock import patch
 
 from test_campaign_queue import FakeWorld, _load, _Log, _q  # sets up the pymysql stub
 
@@ -646,7 +647,8 @@ class TheBreakerWritesInOrder(unittest.TestCase):
             [_q(9, "shadowfang", 30, "queued", 1), _q(10, "deadmines", 10, "queued", 2)]
         )
         before = time.time()
-        first = self.held_lines(_pass(w))
+        with patch("time.time", return_value=before):
+            first = self.held_lines(_pass(w))
         self.assertEqual(1, len(first), first)
         self.assertIn("Zug", first[0])
         self.assertIn("shadowfang", first[0])
