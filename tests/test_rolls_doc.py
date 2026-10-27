@@ -41,6 +41,18 @@ class RollsDocTest(unittest.TestCase):
             with self.subTest(kept=kept):
                 self.assertTrue(kept in self.text, f"ROLLS.md lost: {kept!r}")
 
+    def test_roll_lock_check_precedes_pre_roll_review(self):
+        command = "python3 .github/scripts/wow_bridge_ship.py --check-lock"
+        self.assertIn(command, self.text)
+        self.assertIn("30-minute", self.text)
+        self.assertIn("merged bridge ship", self.text)
+        self.assertIn("worldserver pin", self.text)
+        self.assertIn("numbered roll", self.text)
+        self.assertIn("wait", self.text.lower())
+        self.assertLess(
+            self.text.index(command), self.text.index("### Pre-roll adversarial review")
+        )
+
     def test_the_ship_and_proof_helpers_are_named(self):
         # #1288: the deploy repo has helpers for the ship (repin and PR body),
         # the proof (when a merge went live, a windowed log report) and the
