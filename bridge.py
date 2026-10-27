@@ -86,6 +86,7 @@ import natural
 import nowstatus
 import guildcorps
 import guildjobs
+import deathloop
 import guildlevel
 import guildrun
 import familyseat
@@ -4686,13 +4687,22 @@ def _stall_reads(names: list) -> dict:
 
 
 def _silent_dungeon_run(names: list) -> dict | None:
-    """The active dungeon run with its age since actual progress evidence."""
+    """The active dungeon run with its age since actual progress evidence.
+
+    The COLLATE sits on each bound name, never on `e.character_name`
+    (wow-overseer#1513). overseer_event is utf8mb4_unicode_ci; collating the
+    names to that same collation keeps the column bare, so MySQL can use
+    `idx_character_last_seen` for the MAX(last_seen). A COLLATE on the column
+    naming another collation forces a scan of the event table on every
+    family's queue pass.
+    """
     holes = dungeonstall.holes(len(names))
+    more_names = ", %s COLLATE utf8mb4_unicode_ci" * (len(names) - 1)
     sql = (
         "SELECT r.id, r.map_id, r.portal_keyword, "
         "TIMESTAMPDIFF(SECOND, GREATEST(r.started_at, "
         "COALESCE((SELECT MAX(e.last_seen) FROM overseer_event e "
-        "WHERE e.character_name COLLATE utf8mb4_0900_ai_ci IN ({holes}) "
+        "WHERE e.character_name IN (%s COLLATE utf8mb4_unicode_ci{more_names}) "
         "AND e.kind IN "
         "('quest_accept', 'quest_complete', 'quest_reward', 'level_up', "
         "'item_equip', 'unlearn')), r.started_at), "
@@ -4701,7 +4711,7 @@ def _silent_dungeon_run(names: list) -> dict | None:
         "AND re.kind = 'boss'), r.started_at)), NOW()) AS silent_seconds "
         "FROM overseer_dungeon_run r WHERE r.state = 'active' "
         "AND r.leader_name IN ({holes}) ORDER BY r.id DESC LIMIT 1"
-    ).format(holes=holes)
+    ).format(holes=holes, more_names=more_names)
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(sql, tuple(names) + tuple(names))
@@ -8826,7 +8836,8 @@ class Bridge(discord.Client):
     async def _claim_town_slot(self, claimant: str, character: str,
                                aim: str, urgent: bool = False,
                                cohort: str | None = None,
-                               distance: float | None = None) -> bool:
+                               distance: float | None = None,
+                               priority_after: float | None = None) -> bool:
         """Ask for the family's one traveller, and act on the answer (infra#3703).
 
         THE ONE DOOR EVERY TOWN ERRAND NOW GOES THROUGH. Seven passes write
@@ -8892,6 +8903,7 @@ class Bridge(discord.Client):
             claimant=claimant, character=character, aim=aim, leader=leader,
             column=column, retaskable=_retaskable_from(aim), now=now,
             urgent=urgent, distance=distance,
+            priority_after=priority_after,
             trainer_route=trainer_route,
         )
         lapsed = getattr(slot, "take_lapse", lambda _now: "")(now)
@@ -9034,8 +9046,18 @@ class Bridge(discord.Client):
         ISOLATED: it runs at the head of the craft supply pass, so anything it
         raises is logged here and the pass carries on to its own buys.
         Returns the rows queued.
+
+        A DARK_IRON_ENABLED other than 0 or 1 reads as off, with one warning
+        per bridge (#1510): the flag read raised outside the guard before.
         """
-        if not fireplan.dark_iron_enabled():
+        try:
+            enabled = fireplan.dark_iron_enabled()
+        except ValueError as exc:
+            if not getattr(self, "_dark_iron_flag_warned", False):
+                self._dark_iron_flag_warned = True
+                log.warning("dark iron: %s; the pass stays off", exc)
+            return 0
+        if not enabled:
             return 0
         try:
             return await self._dark_iron_pass(names, cohort)
@@ -14681,6 +14703,33 @@ class Bridge(discord.Client):
             await self._for_other_families("bank", self._bank_once)
             await asyncio.sleep(cycle)
 
+    def _log_bank_unaimed(self, cohort, leader: str, aim: str, names,
+                          queued) -> None:
+        """Say what the guild bank pass was waiting to move, and who has the column.
+
+        `queued` is (setup actions, gold deposits, item deposits, withdrawals).
+        Every kind of work the pass carries is counted, plus the members the
+        guild fund wants to pay, so a pass starved of real work reads
+        differently from an idle one (#1452).
+        """
+        actions, deposits, items, withdrawals = queued
+        wants = getattr(self, "_fund_wants", {})
+        fund_wants = sum(1 for n in names if wants.get(n, 0) > 0)
+        holder = self._cohort_town_slot(cohort).holder
+        holder_label = (
+            "%s carrying %r" % (holder.claimant or "unknown", holder.aim)
+            if holder else "none"
+        )
+        log.info(
+            "guild bank: leader=%s could not be aimed at the vault (%s) "
+            "this pass, so no work is queued (%d setup action(s), %d gold "
+            "deposit(s), %d item deposit(s), %d withdrawal(s), %d fund "
+            "want(s) waiting; slot holder=%s) - every row queued into a "
+            "trip nobody is taking comes back 'no guild bank in reach'",
+            leader, aim, len(actions), len(deposits), len(items),
+            len(withdrawals), fund_wants, holder_label,
+        )
+
     async def _guild_bank_once(self, cohort=None) -> None:
         """One pass of the guild bank: park gold above each character's float.
 
@@ -14882,6 +14931,7 @@ class Bridge(discord.Client):
         fund = sum(getattr(self, "_fund_wants", {}).get(n, 0) for n in names)
         if not any((actions, deposits, items, withdrawals)):
             if not fund:
+                self._cohort_town_slot(cohort).forget("guild bank")
                 log.info("guild bank: nobody is carrying more than the float")
                 return
             log.info("guild bank: the guild fund needs the vault: %s to withdraw "
@@ -14912,7 +14962,8 @@ class Bridge(discord.Client):
         # (townslot.STOP_CLAIMANTS), the way the mail pass's does.
         aimed = await self._claim_town_slot("guild bank", leader, vault.aim,
                                              cohort=_cohort_key(cohort),
-                                             distance=_spawn_yards(spawn))
+                                             distance=_spawn_yards(spawn),
+                                             priority_after=1200.0)
         # ALREADY STANDING THERE COUNTS AS AIMED, because it is the state the
         # aim exists to produce. mod-overseer RELEASES a travel aim the moment
         # the walk arrives (it clears `travel_npc`, which is the signal the
@@ -14948,13 +14999,8 @@ class Bridge(discord.Client):
             # and one that never finishes stops winning after LEASE_SECONDS.
             # `_claim_town_slot` has already logged whose errand it is, how
             # long they have had it and who is ahead in the queue.
-            log.info(
-                "guild bank: leader=%s could not be aimed at the vault (%s) "
-                "this pass, so no setup row or deposit is queued (%d setup "
-                "action(s), %d deposit(s) waiting) - every row queued into a "
-                "trip nobody is taking comes back 'no guild bank in reach'",
-                leader, vault.aim, len(actions), len(deposits),
-            )
+            self._log_bank_unaimed(cohort, leader, vault.aim, names,
+                                   (actions, deposits, items, withdrawals))
             return
         if not at_the_vault:
             # AIMED BUT STILL WALKING, WHICH IS ITS OWN ANSWER (infra#3713).
@@ -16649,7 +16695,9 @@ class Bridge(discord.Client):
             # quest done stops the next (guildjobs.class_ask_streak).
             asks=facts.get("quest_asks", ()),
             # Members too full to put an upgrade on make room (#1088).
-            equip_room=self._equip_room)
+            equip_room=self._equip_room,
+            # Members dying over and over in one zone leave it (#1464).
+            loops=facts.get("death_loops"))
         log.info("guild jobs: the plan took %.2f s on the event loop for %d "
                  "member(s)%s", time.perf_counter() - plan_started, len(members),
                  _family_label(cohort))
@@ -21274,12 +21322,17 @@ class Bridge(discord.Client):
                      key, partner, plan.refusal)
             await channel.send(plan.refusal[:1990])
             return
-        written = 0
+        written, new_ids = 0, []
         for family in (key, partner):
             written += await asyncio.to_thread(
-                _write_queue, dataclasses.replace(plan, family=family), source)
+                _write_queue, dataclasses.replace(plan, family=family), source,
+                new_ids)
         log.info("queue: combined run for %s and %s set by %s, %d row(s) "
                  "written: %s", key, partner, source, written, plan.says)
+        # ONE ORDER, ONE RECORD (#1509): both families' rows go in the same
+        # record row, the way a single-family queue order is recorded.
+        await _note_order(orderrecord.QUEUE, source, channel,
+                          orderrecord.ids(campaignqueue.TABLE, new_ids))
         await channel.send(plan.says[:1990])
         await self._campaign_queue_once()
 
@@ -29264,6 +29317,16 @@ _JOB_QUEST_ASKS_SQL = (
 )
 
 
+def _job_deaths(cur, names: list) -> list:
+    """The deaths deathloop.loops judges: a member dying over and over in one
+    zone leaves it (#1464)."""
+    if not names:
+        return []
+    return _job_read(
+        cur, "deaths", deathloop.SQL.format(holes=",".join(["%s"] * len(names))),
+        (*names, deathloop.READ_SECONDS))
+
+
 def _fetch_job_facts(family_names: list) -> dict:
     """Everything guildjobs.plan reads, on one connection; no judgement here."""
     ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
@@ -29301,6 +29364,7 @@ def _fetch_job_facts(family_names: list) -> dict:
                                    (guildjobs.CLASS_ASK_STREAK_WINDOW_MINUTES,))
         far_open = _far_walks_open(cur)
         hunt_open = _hunts_open(cur)
+        death_rows = _job_deaths(cur, sorted(guid_of))
     # THE ONE NATURAL GATE (natural.py, #331): who may act on a guild job and
     # give the guild anything.
     eligible = _natural_contributors(list(guid_of), family_names)
@@ -29314,6 +29378,8 @@ def _fetch_job_facts(family_names: list) -> dict:
                                  worn=_job_worn(worn_rows))
     facts["class_book"] = book
     facts["quest_asks"] = guildjobs.quest_asks_from_rows(quest_ask_rows)
+    facts["death_loops"] = deathloop.loops(
+        death_rows, {str(r["name"]): int(r.get("level") or 0) for r in rows})
     facts["far_open"] = far_open
     facts["hunt_open"] = hunt_open
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}

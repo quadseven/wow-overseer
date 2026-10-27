@@ -15,6 +15,8 @@ EACH STEP'S STATE, from the member's own rows and nothing inferred:
   done        rewarded (character_queststatus_rewarded)
   ready       in the log and complete, waiting to be handed in
   in progress in the log, not complete
+  failed      in the log and failed (a timed quest whose clock ran out): the
+              member drops it and takes it again (classquest.STATUS_FAILED)
   blocked     the member's latest class quest ask (overseer_guild_ask) names it
               and is under members.ASK_LIVE_SECONDS old
   locked      not taken, and its level is above the member's
@@ -152,7 +154,11 @@ def step_state(q, status: dict, done: set, blocked: int, level: int) -> str:
     if q.id == blocked:
         return "blocked"
     if q.id in status:
-        return "ready" if status[q.id] == classquest.STATUS_COMPLETE else "in progress"
+        if status[q.id] == classquest.STATUS_COMPLETE:
+            return "ready"
+        if status[q.id] == classquest.STATUS_FAILED:
+            return "failed"
+        return "in progress"
     return "locked" if q.min_level > level else "open"
 
 

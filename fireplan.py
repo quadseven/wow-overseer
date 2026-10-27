@@ -644,7 +644,7 @@ def dark_iron_enabled(environ=None) -> bool:
     env = os.environ if environ is None else environ
     value = str(env.get(ENABLE_ENV, "0")).strip()
     if value not in {"0", "1"}:
-        raise ValueError("%s must be 0 or 1" % ENABLE_ENV)
+        raise ValueError("%s must be 0 or 1, not %r" % (ENABLE_ENV, value))
     return value == "1"
 
 
