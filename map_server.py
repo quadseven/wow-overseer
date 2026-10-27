@@ -78,6 +78,7 @@ import raidready
 import raidsupply
 import readcache
 import recap
+import runreport
 import realm
 import realmread
 import runtimeline
@@ -3549,8 +3550,27 @@ def _fetch_run_timeline() -> dict:
                 (*names, runtimeline.WINDOW_HOURS, runtimeline.ROW_LIMIT),
                 what="overseer_death")
         bosses = _run_bosses(rd) if deaths else frozenset()
+        reports = _run_reports(rd, rows, len(families) * runtimeline.RUNS_PER_FAMILY)
     return {"rows": rows, "families": families, "present": present,
-            "deaths": deaths, "bosses": bosses}
+            "deaths": deaths, "bosses": bosses, "reports": reports}
+
+
+def _run_reports(rd, rows: list, limit: int) -> dict:
+    """Each recent run's post-run report (mod-overseer#152), by run id: the
+    newest `limit` run ids in the timeline rows, read through runreport.read,
+    the same read the bridge posts to Discord. A realm without the summary
+    view shows no report rather than one that says nothing dropped."""
+    ids = sorted({int(r.get("run_id") or 0) for r in rows} - {0}, reverse=True)[:limit]
+    reports: dict = {}
+    try:
+        for run_id in ids:
+            report = runreport.read(rd.must, run_id)
+            if report is not None:
+                reports[run_id] = report
+    except realmread.Gap:
+        log.info("run reports unavailable (no overseer_dungeon_run_summary yet)")
+        return {}
+    return reports
 
 
 # --- the live dungeon recap and the loot board (infra#2597) ------------------
@@ -5360,7 +5380,7 @@ class Handler(BaseHTTPRequestHandler):
             payload = runtimeline.build_run_timeline(
                 fetched["rows"], fetched["families"], present=fetched["present"],
                 deaths=fetched["deaths"], bosses=fetched["bosses"],
-                zones=recap.zone_names(GEO.continents))
+                zones=recap.zone_names(GEO.continents), reports=fetched["reports"])
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # The tab keeps what it has drawn and says it may be stale.
