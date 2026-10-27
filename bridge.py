@@ -19894,7 +19894,7 @@ class Bridge(discord.Client):
                 for action in actions:
                     await self._apply_goal_action(row, action)
             except Exception:
-                log.exception("goal %s reconcile failed; retrying next cycle", row.get("id"))
+                log.exception("goal %s apply failed; retrying next cycle", row.get("id"))
 
     async def _priority_order(self) -> tuple:
         """The family's ranked priorities, read now, or the last order read.
