@@ -40,6 +40,7 @@ import chat
 import council
 import crossing
 import decree
+import priorities
 import director
 import dungeonplan
 import eye
@@ -4368,8 +4369,13 @@ def _fetch_decree() -> dict:
         # bridge predates it reads as nothing queued.
         queue_rows = rd.rows(campaignqueue.SELECT_PENDING_SQL,
                              (), what=campaignqueue.TABLE)
+        # The family's priority order (#1559). The bridge's table too, so a
+        # realm whose bridge predates it reads as the default order.
+        priority_rows = rd.rows(priorities.SELECT_SQL, (),
+                                what=priorities.TABLE)
     return {"roster_rows": roster_rows, "command_rows": command_rows,
-            "newest_job_rows": newest_job_rows, "queue_rows": queue_rows}
+            "newest_job_rows": newest_job_rows, "queue_rows": queue_rows,
+            "priority_rows": priority_rows}
 
 
 def _with_family(rd, roster_rows: list) -> list:
@@ -4434,6 +4440,31 @@ def _apply_queue(cur, plan) -> int:
                     "bridge creates it when it starts", campaignqueue.TABLE,
                     exc.args[0])
         return 0
+    return changed
+
+
+def _apply_priorities(cur, order: tuple) -> int:
+    """Store the family's priority order, one row (#1559).
+
+    The statement is priorities.UPSERT_SQL and the value is the order
+    decree.plan_order already validated; nothing is decided here. 1 when the
+    row changed, 0 when it already held this order (no CLIENT_FOUND_ROWS) or
+    when this realm has no table yet - the bridge creates it when it starts,
+    exactly as it does the campaign queue's.
+    """
+    try:
+        cur.execute(priorities.UPSERT_SQL,
+                    (priorities.stored_value(order), WEB_SOURCE))
+    except pymysql.err.MySQLError as exc:
+        if not (exc.args and exc.args[0] in _DEGRADED):
+            raise
+        log.warning("decree: %s is not writable on this realm (%s) - the "
+                    "bridge creates it when it starts", priorities.TABLE,
+                    exc.args[0])
+        return 0
+    changed = 1 if (cur.rowcount or 0) > 0 else 0
+    log.info("decree: priorities %s (changed=%d): %s",
+             priorities.trace(order), changed, priorities.prompt_line(order))
     return changed
 
 
@@ -4597,6 +4628,8 @@ def _apply_order(order) -> int:
                 changed += cur.rowcount
             if order.queue is not None:
                 changed += _apply_queue(cur, order.queue)
+            if order.priorities is not None:
+                changed += _apply_priorities(cur, order.priorities)
     finally:
         conn.close()
     return changed
