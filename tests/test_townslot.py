@@ -2258,6 +2258,34 @@ class EveryUnledgeredTravelWriteTellsTheLedger(unittest.TestCase):
 
 
 class AgedGuildBankWantGetsATurn(unittest.TestCase):
+    def test_first_ask_with_no_recorded_want_waits_without_priority(self):
+        slot = townslot.Slot(lease=1200.0, releasable=economy)
+        owner = slot.want(
+            claimant="town errand",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=(),
+            now=0.0,
+        )
+        slot.settle(owner, True, 0.0)
+        self.assertNotIn("guild bank", [w.claimant for w in slot.wants])
+
+        decision = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="vault",
+            leader="Grug",
+            column="vendor",
+            retaskable=(),
+            now=10.0,
+            priority_after=1200.0,
+        )
+
+        self.assertEqual(townslot.SLOT_WAIT, decision.verdict)
+        self.assertEqual(10.0, townslot._own_wait("guild bank", (), 10.0))
+
     def test_bank_waiting_behind_repeating_bags_and_vendor_gets_column(self):
         slot = townslot.Slot(lease=1200.0, releasable=economy)
         owner = slot.want(
