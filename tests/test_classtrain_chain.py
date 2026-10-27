@@ -1,4 +1,4 @@
-"""A member far behind trains to its level in one visit (wow-overseer#792).
+"""A member far behind trains to its level in one visit.
 
 Each trainer visit bought only the next rank of each spell: classtrain.due
 counted a spell only when every spell it requires was already known, so a
