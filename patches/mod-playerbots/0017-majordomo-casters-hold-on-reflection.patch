@@ -1,0 +1,130 @@
+Subject: [PATCH] mc: casters hold while an add carries magic reflection
+
+WHY THIS PATCH EXISTS
+
+Majordomo Executus casts Magic Reflection (20619) on himself and his adds
+every 30 seconds. The `moltencore` strategy excludes Majordomo himself from
+damage (AppendTargetExclusions, MCStrategy.cpp at the pinned SHA) but never
+reads the reflection aura, so casters keep casting into it and are hit by
+their own spells.
+
+While an add carries Magic Reflection, casters hold their spells on it and
+switch to an unshielded target, or wand or wait. A new
+MajordomoReflectionMultiplier returns 0 for spell casts on a reflection
+shielded add, and logs `[MC] majordomo: N casters holding, magic reflection
+on <add>`.
+
+WHAT WOULD LET THIS PATCH BE DELETED
+
+Upstream adds a reflect-aware target check to the Molten Core combat
+strategy or the generic caster targeting, at which point this multiplier is
+redundant.
+
+APPLIES TO
+
+    mod-playerbots @ 60e6555e4e4b552ee4c6551b466aff648916f38b
+    src/Ai/Raid/MC/MCHelpers.h, MoltenCoreSpells
+    src/Ai/Raid/MC/MCMultipliers.h, MajordomoReflectionMultiplier
+    src/Ai/Raid/MC/MCMultipliers.cpp, MajordomoReflectionMultiplier::GetValue
+    src/Ai/Raid/MC/MCStrategy.cpp, RaidMcStrategy::InitMultipliers
+
+Uses only members already present at this pin: `PlayerbotAI::IsCaster`,
+`CastSpellAction`, `AI_VALUE(Unit*, "current target")`, `Unit::GetEntry`,
+`Unit::HasAura`, `botAI->TellError`, `Group`/`GroupReference`.
+
+diff --git a/src/Ai/Raid/MC/MCStrategy.cpp b/src/Ai/Raid/MC/MCStrategy.cpp
+index 0000000..0000000 100644
+--- a/src/Ai/Raid/MC/MCStrategy.cpp
++++ b/src/Ai/Raid/MC/MCStrategy.cpp
+@@ -88,6 +88,7 @@ void RaidMcStrategy::InitMultipliers(std::vector<Multiplier*>& multipliers)
+     multipliers.push_back(new GarrDisableDpsAoeMultiplier(botAI));
+     multipliers.push_back(new BaronGeddonAbilityMultiplier(botAI));
+     multipliers.push_back(new GolemaggMultiplier(botAI));
++    multipliers.push_back(new MajordomoReflectionMultiplier(botAI));
+ }
+ 
+ void RaidMcStrategy::AppendTargetExclusions(GuidSet& exclusions, TargetValueExclusionType type)
+diff --git a/src/Ai/Raid/MC/MCHelpers.h b/src/Ai/Raid/MC/MCHelpers.h
+index 0000000..0000000 100644
+--- a/src/Ai/Raid/MC/MCHelpers.h
++++ b/src/Ai/Raid/MC/MCHelpers.h
+@@ -29,6 +29,9 @@ enum MoltenCoreSpells
+     // Golemagg
+     SPELL_GOLEMAGGS_TRUST = 20553,
+     SPELL_MAGMA_SPLASH = 13880,
++    // Majordomo Executus
++    SPELL_MAGIC_REFLECTION = 20619,
+ };
+ 
+ constexpr uint32 MAGMA_SPLASH_BACK_OFF_STACKS = 20;
+diff --git a/src/Ai/Raid/MC/MCMultipliers.h b/src/Ai/Raid/MC/MCMultipliers.h
+index 0000000..0000000 100644
+--- a/src/Ai/Raid/MC/MCMultipliers.h
++++ b/src/Ai/Raid/MC/MCMultipliers.h
+@@ -19,6 +19,11 @@ class GolemaggMultiplier : public Multiplier
+ public:
+     GolemaggMultiplier(PlayerbotAI* botAI) : Multiplier(botAI, "golemagg multiplier") {}
+     float GetValue(Action* action) override;
++};
++
++class MajordomoReflectionMultiplier : public Multiplier
++{
++public:
++    MajordomoReflectionMultiplier(PlayerbotAI* botAI) : Multiplier(botAI, "majordomo reflection multiplier") {}
++    float GetValue(Action* action) override;
+ };
+ 
+ #endif
+diff --git a/src/Ai/Raid/MC/MCMultipliers.cpp b/src/Ai/Raid/MC/MCMultipliers.cpp
+index 0000000..0000000 100644
+--- a/src/Ai/Raid/MC/MCMultipliers.cpp
++++ b/src/Ai/Raid/MC/MCMultipliers.cpp
+@@ -120,3 +120,43 @@ float GolemaggMultiplier::GetValue(Action* action)
+         if (!burnPhase && !PlayerbotAI::IsTank(bot) && backedOff && engagesBoss)
+             return 0.0f;
+     }
+     return 1.0f;
+ }
++
++// Majordomo's Magic Reflection sends a caster's own spell back at them.
++// While an add carries the reflection, casters hold their spells on it
++// and switch to an unshielded target, or wand or wait.
++float MajordomoReflectionMultiplier::GetValue(Action* action)
++{
++    if (!PlayerbotAI::IsCaster(bot))
++        return 1.0f;
++
++    // Only spell casts can break the reflection shield.
++    if (!dynamic_cast<CastSpellAction*>(action))
++        return 1.0f;
++
++    Unit* target = AI_VALUE(Unit*, "current target");
++    if (!target || !target->IsInWorld())
++        return 1.0f;
++
++    // The shield is on Majordomo and his Flamewaker adds.
++    if (target->GetEntry() != NPC_MAJORDOMO_EXECUTUS &&
++        target->GetEntry() != NPC_FLAMEWAKER_HEALER &&
++        target->GetEntry() != NPC_FLAMEWAKER_ELITE)
++        return 1.0f;
++
++    if (!target->HasAura(SPELL_MAGIC_REFLECTION))
++        return 1.0f;
++
++    int holding = 0;
++    if (Group* group = bot->GetGroup())
++    {
++        for (GroupReference* itr = group->GetFirstMember(); itr; itr = itr->next())
++        {
++            Player* member = itr->GetSource();
++            if (member && member->IsAlive() && PlayerbotAI::IsCaster(member))
++                ++holding;
++        }
++    }
++    if (!holding)
++        holding = 1;
++
++    botAI->TellError("[MC] majordomo: " + std::to_string(holding) +
++                     " casters holding, magic reflection on " + target->GetName());
++    return 0.0f;
++}

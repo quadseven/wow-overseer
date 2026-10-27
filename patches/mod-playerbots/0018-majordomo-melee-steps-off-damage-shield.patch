@@ -1,0 +1,106 @@
+Subject: [PATCH] mc: melee steps off an add carrying damage shield
+
+WHY THIS PATCH EXISTS
+
+Majordomo Executus casts Damage Shield (21075) on himself and his adds
+every 30 seconds. The `moltencore` strategy never reads the damage shield
+aura, so melee keep swinging into a shielded add and take reflected damage.
+
+While an add carries Damage Shield, melee retarget off that add. A new
+MajordomoDamageShieldMultiplier returns 0 for melee attacks on a damage
+shield add, so the melee bot picks an unshielded target instead.
+
+WHAT WOULD LET THIS PATCH BE DELETED
+
+Upstream adds a damage-shield-aware target check to the Molten Core combat
+strategy or the generic melee targeting, at which point this multiplier is
+redundant.
+
+APPLIES TO
+
+    mod-playerbots @ 60e6555e4e4b552ee4c6551b466aff648916f38b
+    src/Ai/Raid/MC/MCHelpers.h, MoltenCoreSpells
+    src/Ai/Raid/MC/MCMultipliers.h, MajordomoDamageShieldMultiplier
+    src/Ai/Raid/MC/MCMultipliers.cpp, MajordomoDamageShieldMultiplier::GetValue
+    src/Ai/Raid/MC/MCStrategy.cpp, RaidMcStrategy::InitMultipliers
+
+Uses only members already present at this pin: `PlayerbotAI::IsMelee`,
+`MeleeAction`, `AI_VALUE(Unit*, "current target")`, `Unit::GetEntry`,
+`Unit::HasAura`.
+
+diff --git a/src/Ai/Raid/MC/MCHelpers.h b/src/Ai/Raid/MC/MCHelpers.h
+index 0000000..0000000 100644
+--- a/src/Ai/Raid/MC/MCHelpers.h
++++ b/src/Ai/Raid/MC/MCHelpers.h
+@@ -33,6 +33,9 @@ enum MoltenCoreSpells
+     // Majordomo Executus
+     SPELL_MAGIC_REFLECTION = 20619,
++    SPELL_DAMAGE_SHIELD = 21075,
+ };
+ 
+ constexpr uint32 MAGMA_SPLASH_BACK_OFF_STACKS = 20;
+diff --git a/src/Ai/Raid/MC/MCMultipliers.h b/src/Ai/Raid/MC/MCMultipliers.h
+index 0000000..0000000 100644
+--- a/src/Ai/Raid/MC/MCMultipliers.h
++++ b/src/Ai/Raid/MC/MCMultipliers.h
+@@ -28,6 +28,11 @@ class MajordomoReflectionMultiplier : public Multiplier
+ public:
+     MajordomoReflectionMultiplier(PlayerbotAI* botAI) : Multiplier(botAI, "majordomo reflection multiplier") {}
+     float GetValue(Action* action) override;
++};
++
++class MajordomoDamageShieldMultiplier : public Multiplier
++{
++public:
++    MajordomoDamageShieldMultiplier(PlayerbotAI* botAI) : Multiplier(botAI, "majordomo damage shield multiplier") {}
++    float GetValue(Action* action) override;
+ };
+ 
+ #endif
+diff --git a/src/Ai/Raid/MC/MCMultipliers.cpp b/src/Ai/Raid/MC/MCMultipliers.cpp
+index 0000000..0000000 100644
+--- a/src/Ai/Raid/MC/MCMultipliers.cpp
++++ b/src/Ai/Raid/MC/MCMultipliers.cpp
+@@ -162,3 +162,25 @@ float MajordomoReflectionMultiplier::GetValue(Action* action)
+                     " casters holding, magic reflection on " + target->GetName());
+     return 0.0f;
+ }
++
++// Majordomo's Damage Shield reflects melee damage back at the attacker.
++// While an add carries the shield, melee step off it and retarget an
++// unshielded add.
++float MajordomoDamageShieldMultiplier::GetValue(Action* action)
++{
++    if (!PlayerbotAI::IsMelee(bot))
++        return 1.0f;
++
++    // Only melee swings trigger the damage shield.
++    if (!dynamic_cast<MeleeAction*>(action))
++        return 1.0f;
++
++    Unit* target = AI_VALUE(Unit*, "current target");
++    if (!target || !target->IsInWorld())
++        return 1.0f;
++
++    // The shield is on Majordomo and his Flamewaker adds.
++    if (target->GetEntry() != NPC_MAJORDOMO_EXECUTUS &&
++        target->GetEntry() != NPC_FLAMEWAKER_HEALER &&
++        target->GetEntry() != NPC_FLAMEWAKER_ELITE)
++        return 1.0f;
++
++    if (!target->HasAura(SPELL_DAMAGE_SHIELD))
++        return 1.0f;
++
++    return 0.0f;
++}
+diff --git a/src/Ai/Raid/MC/MCStrategy.cpp b/src/Ai/Raid/MC/MCStrategy.cpp
+index 0000000..0000000 100644
+--- a/src/Ai/Raid/MC/MCStrategy.cpp
++++ b/src/Ai/Raid/MC/MCStrategy.cpp
+@@ -91,6 +91,7 @@ void RaidMcStrategy::InitMultipliers(std::vector<Multiplier*>& multipliers)
+     multipliers.push_back(new GolemaggMultiplier(botAI));
+     multipliers.push_back(new MajordomoReflectionMultiplier(botAI));
++    multipliers.push_back(new MajordomoDamageShieldMultiplier(botAI));
+ }
+ 
+ void RaidMcStrategy::AppendTargetExclusions(GuidSet& exclusions, TargetValueExclusionType type)
