@@ -16931,7 +16931,8 @@ class Bridge(discord.Client):
     async def _job_weapon_offers(self, members, recent) -> dict:
         """name -> weaponskill.Offer for each guild member carrying a weapon it
         has no skill for (#793): weaponskill decides the need, and the nearest
-        weapon master of its side on its map that teaches it is read here.
+        weapon master of its side on its map that teaches it is read here, else
+        one on the other classic continent (weaponskill.choose_far_master).
 
         Only members guildjobs.weapon_candidate passes are read, and at most
         GUILD_WEAPON_READS_PER_PASS weapon master reads, in turn.
@@ -16952,9 +16953,15 @@ class Bridge(discord.Client):
         for name in chosen:
             m, need = by_name[name], need_of[name]
             at = {"map_id": m.map_id, "pos_x": m.x, "pos_y": m.y}
-            masters = await asyncio.to_thread(_fetch_weapon_masters, at, [need.spell])
-            offers[name] = weaponskill.offer(need, weaponskill.choose_master(
-                masters, {need.spell}, auction.team_of(m.race), int(m.map_id)))
+            masters = await asyncio.to_thread(
+                _fetch_weapon_masters, at, [need.spell],
+                weaponskill.far_maps(m.map_id))
+            team = auction.team_of(m.race)
+            master = (weaponskill.choose_master(
+                masters, {need.spell}, team, int(m.map_id))
+                or weaponskill.choose_far_master(
+                    masters, {need.spell}, team, int(m.map_id)))
+            offers[name] = weaponskill.offer(need, master)
         return offers
 
     def _log_stranded_knights(self, members, plan):
@@ -33202,7 +33209,7 @@ _WEAPON_MASTERS_SQL = (
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "JOIN acore_world.creature_default_trainer cdt ON cdt.CreatureId = cr.id "
     "JOIN acore_world.trainer_spell ts ON ts.TrainerId = cdt.TrainerId "
-    "WHERE cr.map = %s AND ts.SpellId IN ({spells}) ORDER BY yards"
+    "WHERE cr.map IN ({maps}) AND ts.SpellId IN ({spells}) ORDER BY yards"
 )
 
 
@@ -33276,15 +33283,19 @@ def _fetch_mount_facts(members) -> dict:
     return {n: mountbuy.Facts(n in known, stock) for n in wanted}
 
 
-def _fetch_weapon_masters(at: dict, spells: list) -> list:
-    """Spawns on the reading's map of trainers that teach any of `spells`."""
+def _fetch_weapon_masters(at: dict, spells: list, also_maps=()) -> list:
+    """Spawns on the reading's map, and on `also_maps` (weaponskill.far_maps,
+    #793), of trainers that teach any of `spells`. The yards are from the
+    reading's point, so they rank spawns on its own map only."""
     if not at or not spells:
         return []
-    sql = _WEAPON_MASTERS_SQL.format(spells=",".join(["%s"] * len(spells)))
+    maps = [int(at["map_id"]), *[int(m) for m in also_maps if int(m) != int(at["map_id"])]]
+    sql = _WEAPON_MASTERS_SQL.format(maps=",".join(["%s"] * len(maps)),
+                                     spells=",".join(["%s"] * len(spells)))
     x, y = float(at["pos_x"]), float(at["pos_y"])
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(sql, (x, y, int(at["map_id"]), *[int(s) for s in spells]))
+            cur.execute(sql, (x, y, *maps, *[int(s) for s in spells]))
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 return []
