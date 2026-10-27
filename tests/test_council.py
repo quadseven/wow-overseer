@@ -15,6 +15,7 @@ from unittest import mock
 
 import bonds
 import council
+import family_value
 import goals
 
 
@@ -91,36 +92,36 @@ class CouncilTest(unittest.TestCase):
             {"family": "first", "name": "Able", "lead": 1},
         ]
 
-        result = council.families(rows)
+        result = family_value.families(rows)
 
         self.assertEqual(
             result,
             (
-                council.Family("first", ("Able", "Beta")),
-                council.Family("second", ("Alpha", "Zed")),
+                family_value.Family("first", ("Able", "Beta")),
+                family_value.Family("second", ("Alpha", "Zed")),
             ),
         )
         with self.assertRaises(AttributeError):
             result[0].name = "changed"
 
     def test_families_marks_the_roster_fallback_at_large(self):
-        result = council.families(None)
+        result = family_value.families(None)
 
         self.assertEqual(len(result), 1)
         self.assertTrue(result[0].at_large)
         self.assertEqual(result[0].name, result[0].members[0])
 
     def test_legacy_none_resolves_to_the_bridge_family(self):
-        resolved = council.resolve_legacy_family(None, ["Beta", "Able"])
+        resolved = family_value.resolve_legacy_family(None, ["Beta", "Able"])
 
-        self.assertEqual(resolved, council.Family("", ("Able", "Beta")))
+        self.assertEqual(resolved, family_value.Family("", ("Able", "Beta")))
         self.assertFalse(resolved.at_large)
 
     def test_legacy_cohort_resolves_to_its_members_and_name(self):
         cohort = type("Cohort", (), {"key": "second", "names": {"Zed", "Alpha"}})()
-        resolved = council.resolve_legacy_family(cohort, ["unused"])
+        resolved = family_value.resolve_legacy_family(cohort, ["unused"])
 
-        self.assertEqual(resolved, council.Family("second", ("Alpha", "Zed")))
+        self.assertEqual(resolved, family_value.Family("second", ("Alpha", "Zed")))
 
     def test_a_council_of_one_decides_nothing(self):
         c = council.hold([_m("Grug", 5)], history=[])
