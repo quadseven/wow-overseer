@@ -23837,6 +23837,36 @@ def _insert_share(grant) -> int:
         return cur.lastrowid or 0
 
 
+# Each family member's party as the worldserver last wrote it: the leader's
+# guid, 0 for no party. The same 60 second freshness _LEDGER_MEMBER_SQL reads
+# the level through; a member with no fresh row is left out, which
+# questshare.grouped() reads as "in no party" (the worldserver would refuse
+# that share as "taker offline" or "not in the same party" anyway).
+_SHARE_PARTY_SQL = (
+    "SELECT name, group_leader FROM overseer_snapshot "
+    "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 60 SECOND"
+)
+
+
+def _fetch_parties(names: list):
+    """name -> party key for questshare.plan(), or None when this world's
+    snapshot has no group column or no table (1054, 1146), and party is
+    then left to the worldserver's own gate as before (mod-overseer#969)."""
+    if not names:
+        return {}
+    sql = _SHARE_PARTY_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+        return {
+            str(row["name"]): int(row["group_leader"] or 0) for row in cur.fetchall()
+        }
+
+
 def _share_quests() -> questshare.Plan:
     """Hand every family member the quests the others are already carrying.
 
@@ -23867,7 +23897,10 @@ def _share_family_quests(names: list, zone: int = 0, label: str = "") -> questsh
     members, catalog = _fetch_family_quests(names)
     if zone:
         members = levelroute.share_members(members, zone)
-    plan = questshare.plan(members, catalog)
+    # Party first (mod-overseer#969): a share across parties is refused by
+    # the worldserver every hour it is offered, so the plan names a holder in
+    # the taker's party or refuses the pair as not-grouped and asks nothing.
+    plan = questshare.plan(members, catalog, _fetch_parties(names))
 
     seen = _recent_share_keys(SHARE_RETRY_MINUTES)
     held = questshare.backed_off(
