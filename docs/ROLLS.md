@@ -61,6 +61,15 @@ the realm and its proof line was seen (section 3).
 
 A roll is five steps that must land as ONE worldserver restart.
 
+Before opening a roll PR, check the deploy repository's ship lock:
+
+    python3 .github/scripts/wow_bridge_ship.py --check-lock
+
+The lock holds for a 30-minute watch window after a merged bridge ship,
+worldserver pin or numbered roll. If the command exits 1, it names the holder
+and when the window closes; wait for the window to close, then check again
+before opening the PR.
+
 1. **Merge the module PRs** (mod-overseer, mod-dungeon-clear) after checks pass and every bot thread is
    answered. Record the new main SHA of each. mod-dungeon-clear is pinned to the head of its deployed fork
    branch, not main.
