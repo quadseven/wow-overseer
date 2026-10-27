@@ -817,6 +817,7 @@ class TheDiscordOrder(unittest.TestCase):
             for name, lvl, race in THRAK
         ]
         written, sent, passes = [], [], []
+        self.noted = []
 
         class Channel:
             async def send(self, line):
@@ -826,7 +827,15 @@ class TheDiscordOrder(unittest.TestCase):
             passes.append(1)
 
         async def note_order(*a):
-            return None
+            self.noted.append(a)
+
+        def write_queue(plan, source, new_ids=None):
+            written.append((plan, source))
+            if new_ids is not None:
+                new_ids.extend(
+                    100 + len(written) * 10 + i for i in range(len(plan.entries))
+                )
+            return 2
 
         ns = _load(
             ["_set_queue", "_set_combined_queue"],
@@ -843,9 +852,7 @@ class TheDiscordOrder(unittest.TestCase):
                     for r in levels
                     if r["name"] in fam["names"]
                 ],
-                "_write_queue": lambda plan, source, new_ids=None: (
-                    written.append((plan, source)) or 2
-                ),
+                "_write_queue": write_queue,
                 "_note_order": note_order,
                 "orderrecord": orderrecord,
             },
@@ -868,6 +875,26 @@ class TheDiscordOrder(unittest.TestCase):
             self.assertEqual(("Zug", "Thrak"), plan.entries[0].families)
         self.assertIn("Combined run for Zug's family and Thrak's family", sent[0])
         self.assertEqual([1], passes)
+
+    def test_a_combined_order_is_recorded_once_with_both_families_rows(self):
+        """One combined order is one order record row, as a single queue is (#1509)."""
+        written, _, _ = self.run_order("Zug", "ragefire 5", partner="Thrak")
+        self.assertEqual(2, len(written))
+        self.assertEqual(1, len(self.noted))
+        kind, source, _, rows = self.noted[0]
+        self.assertEqual(orderrecord.QUEUE, kind)
+        self.assertEqual("discord:7", source)
+        self.assertEqual(orderrecord.ids(campaignqueue.TABLE, [110, 120]), tuple(rows))
+
+    def test_a_combined_order_reply_does_not_promise_grouping(self):
+        """The module cannot group the two parties yet, so the reply says so (#1509)."""
+        _, sent, _ = self.run_order("Zug", "ragefire 5", partner="Thrak")
+        self.assertIn("as its own 5-man for now", sent[0])
+        self.assertIn("waits on the module half", sent[0])
+
+    def test_a_refused_combined_order_is_not_recorded(self):
+        self.run_order("Zug", "ragefire 5", partner="Grug")
+        self.assertEqual([], self.noted)
 
     def test_a_combined_order_of_two_dungeons_writes_nothing(self):
         written, sent, passes = self.run_order(
