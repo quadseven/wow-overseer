@@ -1913,6 +1913,35 @@ def families_of(roster_rows: list[dict] | None) -> list[tuple[str, list[str]]]:
     return out
 
 
+@dataclass(frozen=True)
+class Family:
+    """A family grouping, with members ordered as the roster presents them."""
+
+    name: str
+    members: tuple[str, ...]
+    at_large: bool = False
+
+
+def families(roster_rows: list[dict] | None) -> tuple[Family, ...]:
+    """Build immutable family values using the established roster ordering."""
+    grouped = families_of(roster_rows)
+    has_roster_family = any(
+        str(row.get("family") or "").strip() and str(row.get("name") or "").strip()
+        for row in roster_rows or []
+    )
+    return tuple(
+        Family(name, tuple(names), at_large=not has_roster_family)
+        for name, names in grouped
+    )
+
+
+def resolve_legacy_family(cohort, own_members) -> Family:
+    """Resolve None to this bridge's own family; explicit cohorts keep their key."""
+    if cohort is None:
+        return Family("", tuple(sorted(own_members)))
+    return Family(str(cohort.key), tuple(sorted(cohort.names)))
+
+
 def _standing(roster_rows: list[dict] | None, names: list[str]) -> dict | None:
     """The family leader's job and campaign counter, or None if unread."""
     rows = [
