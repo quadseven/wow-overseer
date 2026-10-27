@@ -7,6 +7,7 @@ counts and output items were checked against wowhead.com/wotlk and
 classicdb.ch.
 """
 
+import typing
 import unittest
 from unittest import mock
 
@@ -64,6 +65,12 @@ class HammerBuyTests(unittest.TestCase):
         self.assertIsNone(craft_supply.hammer_need("Og", BELT, False, town(HAMMER)))
         self.assertIsNone(craft_supply.hammer_need("Og", BELT, True, town()))
         self.assertIsNone(craft_supply.hammer_need("Og", STONE, False, town()))
+
+    def test_the_need_says_it_may_be_none(self):
+        # The contract is spoken in the signature, not only the docstring: a
+        # caller (bridge._buy_blacksmith_hammers) must handle None.
+        hints = typing.get_type_hints(craft_supply.hammer_need)
+        self.assertEqual(hints.get("return"), craft_supply.Need | None)
 
 
 class GreenDyeTests(unittest.TestCase):

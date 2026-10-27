@@ -603,7 +603,9 @@ def hammer_errand(
     )
 
 
-def hammer_need(name: str, craft_spell: int, holds_hammer: bool, town: "towntrip.Town"):
+def hammer_need(
+    name: str, craft_spell: int, holds_hammer: bool, town: "towntrip.Town"
+) -> "Need | None":
     """The trip this crafter's Blacksmith Hammer needs, or None.
 
     `hammer_errand`'s sibling, as `pole_need` is `pole_errand`'s.
