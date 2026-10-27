@@ -138,6 +138,7 @@ import tidy
 import overhear
 import persona
 import preraid
+import priorities
 import professions
 import protect
 import questbook
@@ -3897,6 +3898,31 @@ def _ensure_queue_store() -> None:
     except pymysql.err.MySQLError:
         log.exception("pace: the dungeon pace store is unavailable, so no family "
                       "steps down from a door it keeps wiping in")
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(priorities.CREATE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("priorities: the family priorities store is unavailable, "
+                      "so every pass uses the default order")
+
+
+def _fetch_priority_order() -> tuple:
+    """The family's ranked priorities, as priorities.read_stored reads them.
+
+    No table yet (1146) is a realm that has never stored an order, exactly
+    like no row: the default. Any other error is raised, because a dead
+    database is not "the operator never ranked anything" - the caller says so
+    and keeps the order it last read.
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(priorities.SELECT_SQL)
+            rows = [dict(row) for row in cur.fetchall()]
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return priorities.DEFAULT_ORDER, priorities.UNSET
+        raise
+    return priorities.read_stored(rows)
 
 
 def _fetch_queue_rows() -> list:
@@ -7216,6 +7242,10 @@ class Bridge(discord.Client):
         # family -> (the last "nothing to plan" line, when), so it is said
         # once and the facts are not re-read every cycle.
         self._planner_said: dict = {}
+        # The family's ranked priorities (priorities.py, #1559), as last read.
+        # Refreshed by `_priority_order` before every Jev Choice ask and on
+        # every goal pass; the default until the first read lands.
+        self._priorities: tuple = priorities.DEFAULT_ORDER
         # dungeonpace: the last "nothing to do" line said per family (#767).
         self._pace_said: dict = {}
         # The attunement step (attunestep.py): the line last said per family,
@@ -13266,9 +13296,12 @@ class Bridge(discord.Client):
             seen["ledger"], held_by_traveller=seen["driveable"],
             wanted=int(plan.quest_id or 0), beneficiary=plan.beneficiary)
         levels = {str(r["name"]): int(r["level"] or 0) for r in level_rows}
+        # The order the goal pass last read (#1559): this runs inside the
+        # council's own pass and does not wait on a read of its own.
+        ranked = getattr(self, "_priorities", priorities.DEFAULT_ORDER)
         self._jev_hold(jev_choices.quest_shadow(
             self._jev, candidates, seen["chosen"], plan.beneficiary,
-            seen["held"], levels, rule.mode), "the quest aim")
+            seen["held"], levels, rule.mode, ranked=ranked), "the quest aim")
 
     def _jev_keep_shadow(self, names: list, leader: str, rows: list, clear,
                          locks, free_slots: dict, auction_open: bool) -> None:
@@ -19820,16 +19853,72 @@ class Bridge(discord.Client):
                 # store is durable, so next cycle simply retries.
                 log.exception("goal fetch failed; retrying next cycle")
                 continue
-            for row in rows:
-                try:
-                    observed = await asyncio.to_thread(_observe_goal, row)
-                    for action in goals.reconcile(row, observed):
-                        await self._apply_goal_action(row, action)
-                except Exception:
-                    # One wedged goal (or one Discord hiccup) must not
-                    # stall the rest; state lives in the store, so the
-                    # failed goal is retried whole next cycle.
-                    log.exception("goal %s reconcile failed; retrying next cycle", row.get("id"))
+            await self._goal_pass(rows)
+
+    async def _goal_pass(self, rows: list) -> None:
+        """One goal pass over the active goal rows: reconcile, tie-break, apply.
+
+        THE TIE-BREAK (#1559). More than one goal can want the family's job in
+        one pass - a dungeon goal and a skill goal each set it - and the last
+        one applied used to win by row order. The family's priorities decide
+        instead, in ONE contest across every active goal that wants the job:
+        every goal drive writes this bridge's own family's job (a dungeon drive
+        and a skill drive both target bonds.head_of_family()'s family, whoever
+        the goal's character is), so two goals on characters in different
+        families would still overwrite the same job. Per-family contests need
+        the drives to target the goal character's family first.
+
+        A GOAL THAT LOSES WAITS WHOLE. Every action it planned this pass is
+        held back, not only its DriveDungeon/DriveSkill: its RecordProgress
+        would otherwise renew a dungeon lease that never drove (no drive for
+        REASSERT_AFTER_CYCLES passes) or record a skill goal's first sighting
+        so it never drives at all. Its row is left exactly as it was, so the
+        next pass plans the same drive again and it lands on the first pass
+        the contest lets it.
+        """
+        planned = []
+        for row in sorted(rows, key=lambda r: int(r.get("id") or 0)):
+            try:
+                observed = await asyncio.to_thread(_observe_goal, row)
+                planned.append((row, goals.reconcile(row, observed)))
+            except Exception:
+                # One wedged goal (or one Discord hiccup) must not
+                # stall the rest; state lives in the store, so the
+                # failed goal is retried whole next cycle.
+                log.exception("goal %s reconcile failed; retrying next cycle", row.get("id"))
+        # Read every pass, contest or not: the quest shadow reads the order
+        # this pass last held (self._priorities) instead of reading its own.
+        order = await self._priority_order()
+        contest = priorities.job_contest(
+            [(row.get("id"), row.get("kind")) for row, actions in planned
+             if any(type(a) in _JOB_GOAL_ACTIONS for a in actions)],
+            order)
+        if contest.line:
+            log.info("goal: %s", contest.line)
+        for row, actions in planned:
+            if row.get("id") in contest.waiting:
+                continue
+            try:
+                for action in actions:
+                    await self._apply_goal_action(row, action)
+            except Exception:
+                log.exception("goal %s apply failed; retrying next cycle", row.get("id"))
+
+    async def _priority_order(self) -> tuple:
+        """The family's ranked priorities, read now, or the last order read.
+
+        A failed read keeps the order already held and says so: a database
+        hiccup is not the operator un-ranking everything (#1559).
+        """
+        try:
+            order, _state = await asyncio.to_thread(_fetch_priority_order)
+        except Exception:
+            held = getattr(self, "_priorities", priorities.DEFAULT_ORDER)
+            log.exception("priorities: the order could not be read; this pass "
+                          "keeps %s", priorities.trace(held))
+            return held
+        self._priorities = order
+        return order
 
     async def _apply_goal_action(self, row: dict, action) -> None:
         """Apply one typed action from goals.reconcile.
@@ -20885,8 +20974,12 @@ class Bridge(discord.Client):
         if rule.mode != jev.OFF and self._jev.ready(jev_choices.KIND_DUNGEON):
             where = await self._situation_for(
                 key, list(fam["names"]), fam["leader"].get("name"))
+            ranked = await self._priority_order()
+            log.info("planner: %s: asking Jev under %s", who,
+                     priorities.prompt_line(ranked))
             judgment = await jev_choices.dungeon_ask(
-                self._jev, facts, opts, pick, rule, due.reason, where=where)
+                self._jev, facts, opts, pick, rule, ranked=ranked,
+                why_now=due.reason, where=where)
         if judgment is not None:
             log.info("%s", judgment.line())
             try:
@@ -22084,8 +22177,11 @@ class Bridge(discord.Client):
         rule = jev_choices.policy(jev_choices.KIND_ZONE)
         if rule.mode == jev.OFF or not self._jev.ready(jev_choices.KIND_ZONE):
             return None
+        ranked = await self._priority_order()
+        log.info("levelroute: %s: asking Jev under %s",
+                 campaignqueue._family(key), priorities.prompt_line(ranked))
         judgment = await jev_choices.zone_ask(self._jev, facts, opts, pick, rule,
-                                              why_now)
+                                              why_now, ranked=ranked)
         if judgment is None:
             return None
         log.info("%s", judgment.line())
@@ -23149,6 +23245,12 @@ def _chunks(text: str, limit: int) -> list:
 # --- goal store adapters (infra#2601) --------------------------------------
 
 GOAL_INTERVAL = float(os.environ.get("GOAL_INTERVAL_SECONDS", "60"))
+
+# The goal actions that set the family's job (`_drive_dungeon`, and
+# `_drive_skill` through `_set_job`), both on this bridge's own family. A goal
+# planning one of these enters the goal pass's single tie-break
+# (priorities.job_contest); a goal that loses applies nothing that pass.
+_JOB_GOAL_ACTIONS = (goals.DriveDungeon, goals.DriveSkill)
 
 
 def _ensure_goal_store() -> None:
