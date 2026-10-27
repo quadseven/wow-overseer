@@ -669,6 +669,14 @@ def _lookups(families, chars, snaps, facts, now_at, jobs, readings) -> dict:
     }
 
 
+def _levels(chars: dict, guild_of: dict) -> dict:
+    """name -> level now, off the character row, else the guild row."""
+    return {
+        name: _either(chars.get(name) or {}, guild_of.get(name) or {}, "level")
+        for name in set(chars) | set(guild_of)
+    }
+
+
 def build(
     families,
     guild,
@@ -696,12 +704,7 @@ def build(
     guild_of = {r["name"]: r for r in guild or ()}
     streaks = ask_streaks(asks)
     members, found, follows = [], {}, {}
-    levels = {}
-    for name in _order(families, guild_of):
-        if name in rows["chars"] or name in guild_of:
-            char = rows["chars"].get(name) or {}
-            levels[name] = _either(char, guild_of.get(name, {}), "level")
-    loops = deathloop.loops(deaths, levels)
+    loops = deathloop.loops(deaths, _levels(rows["chars"], guild_of))
     for name in _order(families, guild_of):
         if name not in rows["chars"] and name not in guild_of:
             continue

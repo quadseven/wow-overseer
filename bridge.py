@@ -29291,6 +29291,16 @@ _JOB_QUEST_ASKS_SQL = (
 )
 
 
+def _job_deaths(cur, names: list) -> list:
+    """The deaths deathloop.loops judges: a member dying over and over in one
+    zone leaves it (#1464)."""
+    if not names:
+        return []
+    return _job_read(
+        cur, "deaths", deathloop.SQL.format(holes=",".join(["%s"] * len(names))),
+        (*names, deathloop.READ_SECONDS))
+
+
 def _fetch_job_facts(family_names: list) -> dict:
     """Everything guildjobs.plan reads, on one connection; no judgement here."""
     ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
@@ -29328,11 +29338,7 @@ def _fetch_job_facts(family_names: list) -> dict:
                                    (guildjobs.CLASS_ASK_STREAK_WINDOW_MINUTES,))
         far_open = _far_walks_open(cur)
         hunt_open = _hunts_open(cur)
-        # A member dying over and over in one zone leaves it (deathloop.py).
-        names = sorted(guid_of)
-        death_rows = _job_read(
-            cur, "deaths", deathloop.SQL.format(holes=",".join(["%s"] * len(names))),
-            (*names, deathloop.READ_SECONDS)) if names else []
+        death_rows = _job_deaths(cur, sorted(guid_of))
     # THE ONE NATURAL GATE (natural.py, #331): who may act on a guild job and
     # give the guild anything.
     eligible = _natural_contributors(list(guid_of), family_names)

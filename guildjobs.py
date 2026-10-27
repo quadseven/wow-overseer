@@ -3639,12 +3639,9 @@ def level_step(m, world, recent, cap, loop=None):
     # A ZONE IS LEFT WHEN ITS QUESTS RUN OUT (2026-10-10): its open quests for
     # this member (guildlevel.open_quests), once its rewarded quests are read.
     opens = guildlevel.member_opens(world, m.race, m.level, m.rewarded)
-    why = guildlevel.outgrown(m.level, m.race, m.map_id, m.zone_id, bands, opens)
-    if not why and _in_loop_zone(m, loop):
-        why = "it died %d times in %s within an hour with no level gained" % (
-            loop.deaths,
-            loop.place,
-        )
+    why = guildlevel.outgrown(
+        m.level, m.race, m.map_id, m.zone_id, bands, opens
+    ) or _loop_why(m, loop)
     if not why:
         return None, "", ""
     # A GHOST IS WALKED NOWHERE (2026-10-09). On the dev realm 45 of 207 level
@@ -3690,6 +3687,16 @@ def level_step(m, world, recent, cap, loop=None):
         why=why,
     )
     return _spot_step(m, spot, guildlevel.ACTION, cap, said), said, ""
+
+
+def _loop_why(m, loop) -> str:
+    """Why a member in its death loop's zone leaves it, or ""."""
+    if not _in_loop_zone(m, loop):
+        return ""
+    return "it died %d times in %s within an hour with no level gained" % (
+        loop.deaths,
+        loop.place,
+    )
 
 
 def _in_loop_zone(m, loop) -> bool:
