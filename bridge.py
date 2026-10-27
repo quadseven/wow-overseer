@@ -21009,6 +21009,7 @@ class Bridge(discord.Client):
         here = await asyncio.to_thread(_present_members, list(fam["names"]),
                                        leader)
         free = await asyncio.to_thread(_fetch_free_slots, here)
+        column = await asyncio.to_thread(_current_travel_npc, leader)
         if jev_activity.withheld(True, free) and _vendor_trip_makes_room(
                 here, free):
             # THE VENDOR TRIP CANNOT GO WHILE ANOTHER ERRAND HOLDS THE COLUMN.
@@ -21022,7 +21023,6 @@ class Bridge(discord.Client):
             # the whole town errand. When another errand owns the column the
             # hold yields and the walk is attempted instead (it will be claimed
             # as soon as the town errand releases the column).
-            column = await asyncio.to_thread(_current_travel_npc, leader)
             if column in ("", "vendor"):
                 log.info("dungeon quests: %s waits for bag room; the vendor trip "
                          "keeps the travel column", campaignqueue._family(key))
