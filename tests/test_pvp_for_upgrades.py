@@ -481,6 +481,87 @@ class OnlyWhatItCanBuy(unittest.TestCase):
         (step,) = guildjobs.plan([job_member()], pvp={"Auren": (a, move)}).steps
         self.assertEqual("Illiyana Moonblaze", step.goal)
 
+    def test_an_idle_honor_buyer_crosses_and_a_busy_family_does_not(self):
+        (a,) = seekers(
+            [member_row(level=20, map_id=EASTERN_KINGDOMS, honor=300)],
+            5,
+            8,
+            [self.wsg()],
+        )
+        aim_to_buy = pvpgear.plan_aims([a])["Auren"]
+        move = pvpgear.next_move(aim_to_buy, EASTERN_KINGDOMS, False, ())
+        idle_plan = guildjobs.plan(
+            [job_member(map_id=EASTERN_KINGDOMS)], pvp={"Auren": (aim_to_buy, move)}
+        )
+        (step,) = idle_plan.steps
+        self.assertEqual("cross-to-map map:1", step.rows[0].command)
+        self.assertEqual("Kalimdor", step.goal)
+
+        for situation in ("in a run", "questing", "grouped away from town"):
+            with self.subTest(situation=situation):
+                busy_plan = guildjobs.plan(
+                    [job_member(map_id=EASTERN_KINGDOMS)],
+                    pvp={"Auren": (aim_to_buy, move)},
+                    busy={"Auren"},
+                )
+                self.assertFalse(
+                    any(
+                        step.rows and step.rows[0].command.startswith("cross-to-map")
+                        for step in busy_plan.steps
+                    )
+                )
+
+    def test_a_buyer_crosses_back_after_the_item_is_carried(self):
+        (a,) = seekers(
+            [member_row(level=20, map_id=KALIMDOR, honor=300)],
+            5,
+            8,
+            [self.wsg()],
+        )
+        aim_to_buy = pvpgear.plan_aims([a])["Auren"]
+        move = pvpgear.next_move(aim_to_buy, KALIMDOR, True, ())
+        plan = guildjobs.plan(
+            [job_member(map_id=KALIMDOR)], pvp={"Auren": (aim_to_buy, move)}
+        )
+        (step,) = plan.steps
+        self.assertEqual("cross-to-map map:0", step.rows[0].command)
+        self.assertEqual("Eastern Kingdoms", step.goal)
+
+    def test_a_refused_crossing_does_not_start_a_trip_or_spend_far_slots(self):
+        (a,) = seekers(
+            [member_row(level=20, map_id=EASTERN_KINGDOMS, honor=300)],
+            5,
+            8,
+            [self.wsg()],
+        )
+        aim_to_buy = pvpgear.plan_aims([a])["Auren"]
+        move = pvpgear.next_move(aim_to_buy, EASTERN_KINGDOMS, False, ())
+        refusal = guildjobs.Recent(
+            "Auren",
+            guildjobs.PVP_CROSS_ACTION,
+            5,
+            "error",
+            refusal="no transport the module knows sails from this map to that map for this faction",
+            dest=KALIMDOR,
+            command="cross-to-map map:1",
+        )
+        member = job_member(map_id=EASTERN_KINGDOMS)
+        plan = guildjobs.plan(
+            [member],
+            pvp={"Auren": (aim_to_buy, move)},
+            far_slots=0,
+            recent=(refusal,),
+        )
+        self.assertEqual((), plan.steps)
+        self.assertFalse(
+            any(
+                step.rows and step.rows[0].command.startswith("cross-to-map")
+                for step in plan.steps
+            )
+        )
+        # A refused crossing is held by class_walls before any walk is built;
+        # far_slots=0 also proves the crossing does not consume walk budget.
+
 
 def walk_rows(*statuses, age=0):
     """Failed or delivered PvP walk rows, newest first, `age` minutes apart."""
