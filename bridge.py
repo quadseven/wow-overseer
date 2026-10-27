@@ -8851,21 +8851,25 @@ class Bridge(discord.Client):
             # (guildcorps.shop_steps), so the family stays out farming.
             and spell_id not in guildcorps.CREW_RUNGS
         }
+        # THE BLACKSMITH HAMMER FIRST, because the early return below ends the
+        # pass for a smith whose recipe names no vendor reagent
+        # (the module ticket): its buy rows and its walk join the same single trip.
+        queued, needs = await self._buy_blacksmith_hammers(spells)
         if not candidates and not multi_candidates:
+            await self._walk_for_hammers(needs, cohort)
             log.info(
                 "craft_supply: %d craft errand(s) standing on job=%s, none of "
                 "which names a vendor-bought reagent, so there is nothing to "
-                "buy this pass", len(spells), mode,
+                "buy this pass beyond %d hammer row(s)", len(spells), mode,
+                queued,
             )
             return
 
-        queued = 0
         # EVERY REAGENT NOBODY CAN REACH A COUNTER FOR, from both blocks
         # below, collected rather than acted on one at a time (infra#3692).
         # One walk can serve only one of them - the family has one traveller
         # - so the choice of which is a decision about the whole family and
         # is made once, at the end, by craft_supply.supply_trip.
-        needs: list = []
         if candidates:
             free_slots = await asyncio.to_thread(_fetch_free_slots, list(candidates))
             # ONE BATCH, NOT ONE QUERY PER CANDIDATE - holdings for every
@@ -9275,6 +9279,51 @@ class Bridge(discord.Client):
         if needs:
             await self._walk_for_reagents(needs, cohort)
         return queued
+
+    async def _walk_for_hammers(self, needs: list, cohort=None) -> None:
+        """Walk for a hammer no counter in reach sells, when a pass ends early.
+
+        Its own function so `_craft_supply_once` gains no branch for the
+        hammer (`_buy_blacksmith_hammers` already wrote the rows): an empty
+        `needs` is no walk.
+        """
+        if needs:
+            await self._walk_for_reagents(needs, cohort)
+
+    async def _buy_blacksmith_hammers(self, spells: dict) -> tuple:
+        """Queue a Blacksmith Hammer for every smith who has none (the module ticket).
+
+        `spells` is `_fetch_standing_crafts`' name -> (craft_spell, money).
+        The decisions are `craft_supply.hammer_errand` / `hammer_need`; this
+        reads the world and writes their answers. A hammer in the bank counts
+        as held, so a crafter DriveCraft banked it for is never sold a second.
+        Returns (rows queued, needs for the caller's one walk).
+        """
+        smiths = {
+            name: (spell, money)
+            for name, (spell, money) in spells.items()
+            if craft.tool_for(spell) == craft.BLACKSMITH_HAMMER
+        }
+        if not smiths:
+            return 0, []
+        holders = await asyncio.to_thread(_fetch_hammer_holders, list(smiths))
+        free_slots = await asyncio.to_thread(_fetch_free_slots, list(smiths))
+        queued = 0
+        needs: list = []
+        for name, (spell, money) in sorted(smiths.items()):
+            town = await asyncio.to_thread(_fetch_town, name)
+            need = craft_supply.hammer_need(name, spell, name in holders, town)
+            if need:
+                needs.append(need)
+            errand, note = craft_supply.hammer_errand(
+                name, spell, name in holders, money, free_slots.get(name, 0), town,
+            )
+            if note:
+                log.info("craft_supply: %s", note)
+            elif errand and await asyncio.to_thread(_insert_town_errand, errand):
+                queued += 1
+                log.info("craft_supply: %s %s - %s", name, errand.command, errand.why)
+        return queued, needs
 
     async def _buy_fishing_poles(self, names: list, cohort=None) -> tuple:
         """Queue a Fishing Pole for every member holding none (mod-overseer#530).
@@ -33805,6 +33854,29 @@ def _fetch_pole_holders(names: list) -> set:
             "SELECT wb.item FROM character_inventory wb "
             "WHERE wb.guid = c.guid AND wb.bag = 0 AND wb.slot BETWEEN 19 AND 22))",
             names,
+        )
+        return {row["name"] for row in cur.fetchall()}
+
+
+def _fetch_hammer_holders(names: list) -> set:
+    """The names among `names` holding a Blacksmith Hammer in the bags or bank.
+
+    Read from character_inventory, so a hammer that is mailed or sitting in a
+    guild vault does not count; every slot a character owns does, because
+    DriveCraft keeps the hammer in the bank and withdraws it to craft
+    (the module ticket) and a second one must not be bought for that.
+    """
+    if not names:
+        return set()
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT c.name AS name "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "FROM characters c "
+            "JOIN character_inventory ci ON ci.guid = c.guid "
+            "JOIN item_instance ii ON ii.guid = ci.item "
+            f"WHERE c.name IN ({marks}) AND ii.itemEntry = %s",
+            (*names, craft.BLACKSMITH_HAMMER),
         )
         return {row["name"] for row in cur.fetchall()}
 
