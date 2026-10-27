@@ -3094,6 +3094,7 @@ def plan(
     weapons=None,
     equip_room=None,
     mounts=None,
+    loops=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -3128,7 +3129,9 @@ def plan(
     `mounts` name -> mountbuy.Facts for a member with riding and no mount
     (mount_step);
     `equip_room` name -> (free slots needed, what for) for members too full to
-    put an upgrade on (gear.equip_room, equip_room_step).
+    put an upgrade on (gear.equip_room, equip_room_step);
+    `loops` name -> deathloop.Loop for a member dying over and over in one zone
+    (death_loop_first), None or {} for none.
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -3196,6 +3199,7 @@ def plan(
             if counters["room"].get(m.guild, 0) < ROOM_STEPS_PER_GUILD
             else None,
             _offer_for(mounts, m.name),
+            _offer_for(loops, m.name),
         )
         asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
         helps += asked
@@ -3484,8 +3488,10 @@ def _member_step(
     weapon=None,
     equip_room=None,
     mount=None,
+    loop=None,
 ):
-    """A class quest first, then a hunter's first pet, then a hearth out of a
+    """A death loop's way out of its zone first (death_loop_first, #1464),
+    then a class quest, then a hunter's first pet, then a hearth out of a
     spot it cannot leave, then room in the bags for an upgrade the world
     cannot put on without it (_room_first, #1088), then food for a member
     with nothing to eat or drink,
@@ -3515,6 +3521,9 @@ def _member_step(
     A member that has stood on one spot for standstill.STILL_MINUTES
     (`still_for`) with nothing asked of it hearths home before anything else
     is asked (stood_still_step)."""
+    found = death_loop_first(m, loop, leveling, recent, cap)
+    if found is not None:
+        return found
     found, quest_note = _quest_first(
         m,
         classes,
@@ -3567,7 +3576,7 @@ def _member_step(
     step = _collect_first(m, mail, recent, cap)
     if step is not None:
         return step, step.said, supply_note, gear_note
-    step, doing, level_note = level_step(m, leveling, recent, cap)
+    step, doing, level_note = level_step(m, leveling, recent, cap, loop)
     if step is not None or doing:
         return step, doing, supply_note, gear_note
     step, doing, note = _plan_member(
@@ -3602,7 +3611,7 @@ def _join_once(*parts) -> str:
     return "; ".join(said)
 
 
-def level_step(m, world, recent, cap):
+def level_step(m, world, recent, cap, loop=None):
     """(step or None, what it does, a note): a member that has outgrown
     where it stands (its quests there have run out, or its band) walks to the
     flight master of a quest hub where it has open quests (guildlevel.py).
@@ -3614,6 +3623,9 @@ def level_step(m, world, recent, cap):
     pass's cap. When the hub lies across the water, from map 530 or from a
     continent, the step is its side's boat or zeppelin (level_cross_step) or
     orb (level_orb_step) instead.
+
+    With `loop` (a deathloop.Loop) the loop's zone is never the hub chosen,
+    and a member standing in it has outgrown it on the deaths alone.
     """
     # EVERY MEMBER, NATURAL OR NOT (2026-10-05). The natural reset gates what
     # a member contributes, not where it walks: on the dev realm 1 of Cave's
@@ -3628,6 +3640,11 @@ def level_step(m, world, recent, cap):
     # this member (guildlevel.open_quests), once its rewarded quests are read.
     opens = guildlevel.member_opens(world, m.race, m.level, m.rewarded)
     why = guildlevel.outgrown(m.level, m.race, m.map_id, m.zone_id, bands, opens)
+    if not why and _in_loop_zone(m, loop):
+        why = "it died %d times in %s within an hour with no level gained" % (
+            loop.deaths,
+            loop.place,
+        )
     if not why:
         return None, "", ""
     # A GHOST IS WALKED NOWHERE (2026-10-09). On the dev realm 45 of 207 level
@@ -3646,6 +3663,7 @@ def level_step(m, world, recent, cap):
         orbs=getattr(world, "orbs", None),
         opens=opens,
         nodes=m.taxi_nodes,
+        avoid=loop.zone if loop is not None else None,
     )
     if choice.refused:
         return None, "", guildlevel.refused_note(m.name, m.level, why, choice)
@@ -3672,6 +3690,62 @@ def level_step(m, world, recent, cap):
         why=why,
     )
     return _spot_step(m, spot, guildlevel.ACTION, cap, said), said, ""
+
+
+def _in_loop_zone(m, loop) -> bool:
+    """The member stands in the zone of its death loop."""
+    return (
+        loop is not None and m.zone_id is not None and int(m.zone_id) == int(loop.zone)
+    )
+
+
+# A MEMBER THAT DIES FIVE TIMES AN HOUR IN ONE ZONE LEAVES IT (#1464). Measured
+# on the dev realm on 2026-10-25: a level 21 priest of Cave died 167 times in a
+# day in Redridge Mountains and the Wetlands, mostly to creatures under its
+# level, and gained no level. Every spirit healer and corpse run put it back
+# where its own AI kept choosing to quest. A player in that loop stops, goes to
+# town to repair, sell and train, and quests somewhere else.
+def death_loop_hearth(m, loop, recent):
+    """The hearth home of a member in its death loop's zone, or None.
+
+    Only a member online, alive and out of combat, in the open world, that is
+    in the loop's zone, with no hearth inside the hearth cooldown."""
+    if not _in_loop_zone(m, loop):
+        return None
+    if not (m.online and m.alive and not m.in_combat) or not _in_the_open(m):
+        return None
+    if _cooling(m, "hearth", recent):
+        return None
+    return guildcorps.Step(
+        m.name,
+        "hearth",
+        0,
+        "%s hearths home to town for a town errand (repair, sell, train): %s"
+        % (m.name, loop.reason()),
+        rows=(guildcorps.Row("hearth", "use", "", source_for("hearth", m.name)),),
+    )
+
+
+def death_loop_first(m, loop, leveling, recent, cap):
+    """(the member's step as _member_step returns it), or None: the way out of
+    the zone a member keeps dying in (deathloop.Loop), ahead of every quest.
+
+    In the loop's zone: the hearth to its town first (death_loop_hearth), then
+    the level walk to a hub of another zone (level_step), and while neither can
+    start, no step at all, so no quest or grind of that zone is planned for it.
+    Out of the zone, None: the pass plans as usual, and its level walk never
+    chooses the loop's zone (level_step). The loop clears by itself
+    (deathloop.loops), and the planning with it."""
+    if not _in_loop_zone(m, loop):
+        return None
+    step = death_loop_hearth(m, loop, recent)
+    if step is not None:
+        return step, step.said, "", ""
+    step, doing, note = level_step(m, leveling, recent, cap, loop)
+    if step is not None:
+        return step, doing, note, ""
+    held = "%s plans no quest in %s: %s" % (m.name, loop.place, loop.reason())
+    return None, held, _join(note, held), ""
 
 
 def inn_step(m, world, recent, cap):

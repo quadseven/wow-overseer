@@ -86,6 +86,7 @@ import natural
 import nowstatus
 import guildcorps
 import guildjobs
+import deathloop
 import guildlevel
 import guildrun
 import familyseat
@@ -16668,7 +16669,9 @@ class Bridge(discord.Client):
             # quest done stops the next (guildjobs.class_ask_streak).
             asks=facts.get("quest_asks", ()),
             # Members too full to put an upgrade on make room (#1088).
-            equip_room=self._equip_room)
+            equip_room=self._equip_room,
+            # Members dying over and over in one zone leave it (#1464).
+            loops=facts.get("death_loops"))
         log.info("guild jobs: the plan took %.2f s on the event loop for %d "
                  "member(s)%s", time.perf_counter() - plan_started, len(members),
                  _family_label(cohort))
@@ -29325,6 +29328,11 @@ def _fetch_job_facts(family_names: list) -> dict:
                                    (guildjobs.CLASS_ASK_STREAK_WINDOW_MINUTES,))
         far_open = _far_walks_open(cur)
         hunt_open = _hunts_open(cur)
+        # A member dying over and over in one zone leaves it (deathloop.py).
+        names = sorted(guid_of)
+        death_rows = _job_read(
+            cur, "deaths", deathloop.SQL.format(holes=",".join(["%s"] * len(names))),
+            (*names, deathloop.READ_SECONDS)) if names else []
     # THE ONE NATURAL GATE (natural.py, #331): who may act on a guild job and
     # give the guild anything.
     eligible = _natural_contributors(list(guid_of), family_names)
@@ -29338,6 +29346,8 @@ def _fetch_job_facts(family_names: list) -> dict:
                                  worn=_job_worn(worn_rows))
     facts["class_book"] = book
     facts["quest_asks"] = guildjobs.quest_asks_from_rows(quest_ask_rows)
+    facts["death_loops"] = deathloop.loops(
+        death_rows, {str(r["name"]): int(r.get("level") or 0) for r in rows})
     facts["far_open"] = far_open
     facts["hunt_open"] = hunt_open
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}
