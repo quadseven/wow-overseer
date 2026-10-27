@@ -553,6 +553,7 @@ class GuildRecruitingPolicy(unittest.TestCase):
         self.assertIn("healers, tanks", line)
         self.assertIn("Tue, Thu", line)
         self.assertTrue(recruit.may_post_ad(None))
+        self.assertFalse(recruit.may_post_ad(30.0))
         self.assertFalse(recruit.may_post_ad(59))
         self.assertTrue(recruit.may_post_ad(60))
 
