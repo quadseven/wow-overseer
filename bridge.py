@@ -26934,6 +26934,20 @@ async def _queue_vendor_sales(
         holder_candidates = tuple(by_holder[holder])
         town = holder_town[holder]
         if holder not in queue_holders:
+            # A STACK THE WORLD ALREADY ANSWERED IS NOT A VENDOR WAIT (#1261).
+            # The line below is the `no_vendor` step the stuck read names
+            # "Waiting for a vendor within reach", and its age is what the
+            # vendor-wait trip reads. A stack already sold or refused for good
+            # is held back by `item_plan` at every counter, so no trip can
+            # sell it: logged as a wait, it kept the hold alive for hours and
+            # re-fired the trip into a sale of nothing.
+            if item_plan.all_answered(holder_candidates, attempts):
+                log.info(
+                    "economy: %d carried candidate(s) for %s are already "
+                    "answered by the world, so it waits for no vendor",
+                    len(holder_candidates), holder,
+                )
+                continue
             log.info(
                 "economy: %d carried candidate(s) for %s but no vendor "
                 "within reach - leader=%s aim taken=%s",
