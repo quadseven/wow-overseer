@@ -43,6 +43,67 @@ class TestGearChangesView(unittest.TestCase):
         self.assertIn("-2 DPS", got["diff"])
         self.assertIn("+2 Stamina", got["diff"])
         self.assertIn("-1 Agility", got["diff"])
+        self.assertIn('data-compare="11,22"', got["html"])
+
+    def test_an_unchanged_item_says_no_stat_changes(self):
+        same = {
+            "tooltip": {
+                "item_level": 30,
+                "armor": 9,
+                "damage": {"dps": 6},
+                "stats": ["+7 Stamina"],
+            }
+        }
+        got = self._run_view(
+            "process.stdout.write(JSON.stringify(V.compareItems(%s, %s)));"
+            % (json.dumps(same), json.dumps(same))
+        )
+        self.assertEqual(got, "No stat changes")
+
+    def test_a_failed_comparison_says_unavailable_instead_of_loading_forever(self):
+        # Entry 1 answers with a stats field that is not a list, entry 2 fails
+        # with a 500, entry 3 cannot be reached at all. Every span must leave
+        # "Loading stat changes" and no promise may be left unhandled.
+        code = (
+            "const unhandled = []; process.on('unhandledRejection', (err) => unhandled.push(String(err)));\n"
+            "console.warn = () => {};\n"
+            "globalThis.fetch = async (url) => {\n"
+            "  if (url.endsWith('entry=3')) throw new Error('network down');\n"
+            "  if (url.endsWith('entry=2')) return {ok: false, status: 500, text: async () => ''};\n"
+            "  const body = url.endsWith('entry=1') ? {tooltip: {stats: 5}} : {tooltip: {stats: ['+1 Stamina']}};\n"
+            "  return {ok: true, status: 200, text: async () => JSON.stringify(body)};\n"
+            "};\n"
+            "const nodes = ['1,9', '2,9', '3,9'].map((pair) => ({textContent: 'Loading stat changes', "
+            "getAttribute: () => pair}));\n"
+            "const main = {querySelectorAll: (sel) => sel === '[data-compare]' ? nodes : []};\n"
+            "V.default.after(main);\n"
+            "await new Promise((done) => setTimeout(done, 200));\n"
+            "process.stdout.write(JSON.stringify({text: nodes.map((n) => n.textContent), unhandled}));\n"
+        )
+        got = self._run_view(code)
+        self.assertEqual(got["text"], ["Stat changes unavailable"] * 3)
+        self.assertEqual(got["unhandled"], [])
+
+    def _run_view(self, body):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp) / "app"
+            shutil.copytree(APP, root)
+            (root / "package.json").write_text('{"type":"module"}', encoding="utf-8")
+            module = (root / "views/gearchanges.js").as_uri()
+            code = (
+                "globalThis.document = {querySelector: () => null, addEventListener: () => {}};\n"
+                "globalThis.window = {sessionStorage: {getItem: () => null, setItem: () => {}}};\n"
+                "const V = await import(%s);\n"
+            ) % json.dumps(module) + body
+            result = subprocess.run(
+                [shutil.which("node"), "--input-type=module", "-e", code],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
 
     def test_invalid_stored_times_fall_back_to_the_first_visit_window(self):
         with tempfile.TemporaryDirectory() as tmp:
