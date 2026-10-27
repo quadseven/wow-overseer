@@ -33,15 +33,21 @@ piece that adds the most fire resistance over what the seat wears in its slot
 source the item book knows comes before one it does not, since a piece with no
 known road is no plan.
 
+THE DARK IRON ROAD (#480). The blacksmith pieces on that list have a road of
+their own, set out at the foot of this file: Thorium Brotherhood reputation,
+Lokhtos's plans, the smelt, the Black Forge and the Black Anvil.
+
 PURE MODULE: committed data and rows in, a plan and sentences out.
 """
 
 from __future__ import annotations
 
 import functools
+import os
 from dataclasses import dataclass
 
 import gearscore
+import towntrip
 
 # THE TARGETS, PER SEAT. The Ragnaros tank first, as classic guilds asked
 # (raidgoals' own range tops out at the same 200); other tanks next, because
@@ -216,7 +222,7 @@ def _piece(entry, slot: str, phase: str = "", row: dict | None = None) -> Piece:
         fire=int(book.get("fire_res") or row.get("fire_res") or 0),
         slot=slot,
         required_level=int(book.get("req") or row.get("req") or 0),
-        source=_source(book.get("sources")),
+        source=iron_source(entry) or _source(book.get("sources")),
         phase=phase,
     )
 
@@ -327,3 +333,468 @@ def plan(name: str, seat: str, class_id: int, worn_fire, level: int = 0) -> Fire
     if total < target:
         nxt = next_piece(pieces_for(seat, class_id), slot_fire, level)
     return FirePlan(name, seat, target, total, nxt)
+
+
+# ---------------------------------------------------------------------------
+# THE DARK IRON ROAD (#480)
+#
+# Nothing on this road fails loudly in the world. A plan bought a rank early is
+# simply absent from the vendor's list; a smelt cast at an ordinary forge
+# returns a numeric SpellCastResult and no bar; a craft at the wrong anvil does
+# the same. The order is the whole pipeline, so the order is what is modelled:
+# reputation, the plan, the smelt, the bars, the reagents, the anvil.
+#
+# WHAT WAS READ FROM THE REALM, AND WHAT COULD NOT BE. Read from the realm's
+# acore_world on 2026-10-26 (SELECT only):
+#   * plan entries, prices and skill: item_template (entry, BuyPrice,
+#     RequiredSkillRank, spellid_2). The Leggings plan is 17052; 17060 is
+#     Plans: Dark Iron Destroyer.
+#   * the rank Lokhtos sells each plan at: conditions, source type 23 (vendor)
+#     group 12944, condition 5 (reputation rank) on faction 59, whose rank mask
+#     240 is Friendly, 224 Honored, 192 Revered and 128 Exalted. Gauntlets are
+#     Revered, not Honored.
+#   * the turn-ins: quest_template / quest_template_addon. Lokhtos's five Favor
+#     quests (6642-6646) need 9000 standing (Honored) before he takes them;
+#     below that the reputation is Master Smith Burninate's (What the Flux?
+#     first, then the Fiery Flux and Gaining Acceptance turn-ins).
+# The bar and reagent counts of each craft live in the client's Spell.dbc,
+# which this realm's spell_dbc table does not override, so they could not be
+# read; they are the classic recipe counts, used to say a step and to size
+# the ore kept for bars, never to spend gold.
+# ---------------------------------------------------------------------------
+
+CLASSIC_SKILL = 300
+NEUTRAL, FRIENDLY, HONORED, REVERED, EXALTED = (
+    "Neutral",
+    "Friendly",
+    "Honored",
+    "Revered",
+    "Exalted",
+)
+# Thorium Brotherhood points at which each rank starts.
+RANK_VALUE = {NEUTRAL: 0, FRIENDLY: 3000, HONORED: 9000, REVERED: 21000, EXALTED: 42000}
+_RANKS = tuple(RANK_VALUE)
+
+DARK_IRON_ORE, DARK_IRON_BAR = 11370, 11371
+FIERY_CORE, LAVA_CORE, CORE_LEATHER = 17010, 17011, 17012
+BLOOD_OF_THE_MOUNTAIN = 11382
+ITEM_NAMES = {
+    DARK_IRON_ORE: "Dark Iron Ore",
+    DARK_IRON_BAR: "Dark Iron Bar",
+    FIERY_CORE: "Fiery Core",
+    LAVA_CORE: "Lava Core",
+    CORE_LEATHER: "Core Leather",
+    BLOOD_OF_THE_MOUNTAIN: "Blood of the Mountain",
+}
+ORE_PER_BAR = 8
+
+# Lokhtos's turn-ins: (quest, ((item, count), ...)). quest_template_addon gives
+# every one of them RequiredMinRepValue 9000 on faction 59.
+TURNINS = (
+    (6642, ((DARK_IRON_ORE, 10),)),
+    (6643, ((FIERY_CORE, 1),)),
+    (6644, ((LAVA_CORE, 1),)),
+    (6645, ((CORE_LEATHER, 2),)),
+    (6646, ((BLOOD_OF_THE_MOUNTAIN, 1),)),
+)
+TURNIN_MIN_STANDING = RANK_VALUE[HONORED]
+
+# NEVER HANDED IN. Fiery Core and Lava Core are reagents of every Dark Iron
+# piece, and Fiery Core, Lava Core and Core Leather are what the Flarecore
+# tailoring pieces (raidsupply's other fire road) are made of. Their counts
+# are in Spell.dbc, out of reach of a SELECT, so none is spared for
+# reputation: a core handed to Lokhtos is a core a tank's piece goes without.
+KEPT_FOR_CRAFTS = frozenset({FIERY_CORE, LAVA_CORE, CORE_LEATHER})
+
+GRIND, BUY, LEARN, SMELT, GATHER, CRAFT = (
+    "grind",
+    "buy",
+    "learn",
+    "smelt",
+    "gather",
+    "craft",
+)
+VENDOR = "Lokhtos Darkbargainer"
+LOKHTOS = 12944
+FORGE = "the Black Forge in Blackrock Depths"
+ANVIL = "the Black Anvil in Blackrock Depths"
+SMELT_TRAINER = "The Spectral Chalice (Mining 230, with a Star Ruby)"
+LOWER_LADDER = (
+    "Master Smith Burninate's turn-ins (What the Flux? first, then Restoring "
+    "Fiery Flux Supplies to Friendly and Gaining Acceptance, Dark Iron Residue, "
+    "to Honored)"
+)
+
+
+@dataclass(frozen=True)
+class IronPlan:
+    """One Dark Iron plan, the piece it makes and what the piece costs."""
+
+    entry: int
+    name: str
+    rank: str
+    piece: int
+    piece_name: str
+    fire: int
+    teaches: int
+    bars: int
+    reagents: tuple  # ((item, count), ...) besides the bars
+    price: int = 0  # item_template.BuyPrice, copper
+    skill: int = 0  # item_template.RequiredSkillRank
+
+
+def _iron(entry, rank, piece, piece_name, fire, teaches, bars, reagents, price, skill):
+    return IronPlan(
+        entry, "Plans: " + piece_name, rank, piece, piece_name, fire, teaches,
+        bars, reagents, price, skill,
+    )  # fmt: skip
+
+
+PLANS = (
+    _iron(17051, FRIENDLY, 17014, "Dark Iron Bracers", 18, 20874, 4,
+          ((FIERY_CORE, 2), (LAVA_CORE, 2)), 70000, 295),
+    _iron(19206, HONORED, 19148, "Dark Iron Helm", 35, 23636, 6,
+          ((FIERY_CORE, 4), (LAVA_CORE, 4)), 60000, 300),
+    _iron(19207, REVERED, 19164, "Dark Iron Gauntlets", 28, 23637, 6,
+          ((FIERY_CORE, 3), (LAVA_CORE, 3)), 80000, 300),
+    _iron(17052, REVERED, 17013, "Dark Iron Leggings", 30, 20876, 8,
+          ((FIERY_CORE, 4), (LAVA_CORE, 4)), 180000, 300),
+    _iron(20040, EXALTED, 20039, "Dark Iron Boots", 28, 24399, 6,
+          ((FIERY_CORE, 3), (LAVA_CORE, 3)), 80000, 300),
+)  # fmt: skip
+_PIECES = {p.piece: p for p in PLANS}
+
+
+def rank_index(rank: str) -> int:
+    return _RANKS.index(rank)
+
+
+@dataclass(frozen=True)
+class IronStep:
+    kind: str
+    said: str
+    plan: IronPlan | None = None
+
+
+@dataclass(frozen=True)
+class IronPipeline:
+    plan: IronPlan | None
+    step: IronStep | None
+
+    @property
+    def done(self) -> bool:
+        return self.plan is None
+
+    @property
+    def line(self) -> str:
+        if self.step is None:
+            return "Dark Iron: every piece is made"
+        return "Dark Iron: " + self.step.said
+
+
+def skill_note() -> str:
+    """Why the item book's skill numbers are not trusted."""
+    realm = sorted({p.skill for p in PLANS})
+    return (
+        "the item book gives these crafts skill 315 and 320 but the classic "
+        "cap is %d; the realm's item_template asks %s for the plans and is the "
+        "authority" % (CLASSIC_SKILL, " and ".join(str(s) for s in realm))
+    )
+
+
+def _count(item: int, n: int) -> str:
+    return "%d %s" % (n, ITEM_NAMES[item])
+
+
+def _missing(plan: IronPlan, held: dict) -> tuple:
+    return tuple(
+        (item, need - held.get(item, 0))
+        for item, need in plan.reagents
+        if held.get(item, 0) < need
+    )
+
+
+def _grind_step(plan: IronPlan, rank: str) -> IronStep:
+    if rank_index(rank) < rank_index(HONORED):
+        said = "raise Thorium Brotherhood to %s with %s to buy %s" % (
+            plan.rank,
+            LOWER_LADDER,
+            plan.name,
+        )
+        return IronStep(GRIND, said, plan)
+    quests = ", ".join(_count(*needs[0]) for _q, needs in TURNINS)
+    said = "raise Thorium Brotherhood to %s with %s's turn-ins (%s) to buy %s" % (
+        plan.rank,
+        VENDOR,
+        quests,
+        plan.name,
+    )
+    return IronStep(GRIND, said, plan)
+
+
+def _buy_step(plan: IronPlan) -> IronStep:
+    said = "buy %s from %s, who sells it at %s" % (plan.name, VENDOR, plan.rank)
+    return IronStep(BUY, said, plan)
+
+
+def _learn_step(plan: IronPlan) -> IronStep:
+    said = "learn the Dark Iron smelt from %s before %s" % (SMELT_TRAINER, plan.name)
+    return IronStep(LEARN, said, plan)
+
+
+def _bars_step(plan: IronPlan, short: int) -> IronStep:
+    said = "smelt %s from %s at %s" % (
+        _count(DARK_IRON_BAR, short) + "s",
+        _count(DARK_IRON_ORE, short * ORE_PER_BAR),
+        FORGE,
+    )
+    return IronStep(SMELT, said, plan)
+
+
+def _gather_step(plan: IronPlan, missing: tuple) -> IronStep:
+    said = "gather %s for %s" % (
+        ", ".join(_count(i, n) for i, n in missing),
+        plan.piece_name,
+    )
+    return IronStep(GATHER, said, plan)
+
+
+def _craft_step(plan: IronPlan) -> IronStep:
+    said = "make %s (%d fire resistance) at %s" % (plan.piece_name, plan.fire, ANVIL)
+    return IronStep(CRAFT, said, plan)
+
+
+def _step_for(plan, known, rank, smelt_known, held) -> IronStep:
+    if plan.entry not in known:
+        if rank_index(rank) < rank_index(plan.rank):
+            return _grind_step(plan, rank)
+        return _buy_step(plan)
+    if not smelt_known:
+        return _learn_step(plan)
+    short = plan.bars - held.get(DARK_IRON_BAR, 0)
+    if short > 0:
+        return _bars_step(plan, short)
+    missing = _missing(plan, held)
+    if missing:
+        return _gather_step(plan, missing)
+    return _craft_step(plan)
+
+
+def iron_plan(known=(), rank=NEUTRAL, smelt_known=False, held=None, made=()):
+    """The next step of the Dark Iron road for a guild that knows the plans
+    `known`, stands at `rank`, has (or lacks) the smelt, holds the items in
+    `held` ({entry: count}) and has made the pieces `made`."""
+    plan = next((p for p in PLANS if p.piece not in made), None)
+    if plan is None:
+        return IronPipeline(None, None)
+    step = _step_for(plan, set(known), rank, smelt_known, held or {})
+    return IronPipeline(plan, step)
+
+
+def iron_source(entry) -> str:
+    """The road to the Dark Iron piece `entry`, said; "" for any other item."""
+    plan = _PIECES.get(int(entry))
+    if plan is None:
+        return ""
+    return "made at %s from %s, bought from %s at %s with the Thorium Brotherhood" % (
+        ANVIL,
+        plan.name,
+        VENDOR,
+        plan.rank,
+    )
+
+
+IRON_ROAD = (
+    "Dark Iron plate (blacksmithing): reputation with the Thorium Brotherhood "
+    "for Lokhtos's plans, the smelt for Dark Iron bars at the Black Forge, and "
+    "the piece made at the Black Anvil; first step for a guild with nothing yet: "
+    + iron_plan().line
+    + "; "
+    + skill_note()
+)
+
+
+# ---------------------------------------------------------------------------
+# THE ERRAND THE ROAD'S NEXT STEP BECOMES (#480)
+#
+# overseer_command takes kind='quest' (a take or a turn-in) and kind='buy'
+# (entry:N count:N max:N) and nothing for a smelt, a learn, a gather or a craft:
+# those steps are said in the log line only.
+#
+# THE SAME GATES AS EVERY OTHER COUNTER ERRAND (craft_supply.pole_errand). A
+# row is written only for a member standing at Lokhtos (his plans are in the
+# reachable stock), with a free bag slot and the plan's price for a buy, and
+# with something spare to hand in for a turn-in. A member who is not at the
+# counter gets a walk (`walk_to`, the plan entry Lokhtos stocks) rather than
+# a row the executor would refuse for range.
+#
+# OFF UNLESS ASKED FOR. The pass runs only with DARK_IRON_ENABLED=1: the road's
+# lower ladder and its craft steps have no executor yet, and none of the
+# counter rows has been seen to land live.
+# ---------------------------------------------------------------------------
+
+SMELT_SPELL = 14891  # Smelt Dark Iron
+SOURCE = "overseer:dark-iron"
+REFUSED_RETRY_MINUTES = 360
+ENABLE_ENV = "DARK_IRON_ENABLED"
+
+
+def dark_iron_enabled(environ=None) -> bool:
+    """Whether the Dark Iron pass may queue anything. Off unless set to 1."""
+    env = os.environ if environ is None else environ
+    value = str(env.get(ENABLE_ENV, "0")).strip()
+    if value not in {"0", "1"}:
+        raise ValueError("%s must be 0 or 1, not %r" % (ENABLE_ENV, value))
+    return value == "1"
+
+
+@dataclass(frozen=True)
+class Smith:
+    """What the world says of one blacksmith, read by the bridge."""
+
+    name: str
+    learned: frozenset = frozenset()
+    standing: int = 0
+    held: tuple = ()  # ((entry, count), ...)
+    in_log: frozenset = frozenset()  # quest ids in the quest log
+    money: int = 0
+    free_slots: int = 0
+    stocks: frozenset = frozenset()  # entries a reachable vendor sells
+
+    def has(self, entry: int) -> int:
+        return dict(self.held).get(entry, 0)
+
+
+@dataclass(frozen=True)
+class IronTurn:
+    """One blacksmith's answer: the road, and the row, note or walk it makes."""
+
+    pipe: IronPipeline
+    errand: towntrip.Errand | None = None
+    note: str = ""
+    walk_to: int = 0  # an item entry Lokhtos stocks, when he is out of reach
+
+
+def spare(held: dict, made=()) -> dict:
+    """What can be handed in without starving a planned piece.
+
+    Ore is kept for every bar the unmade pieces still need; cores and leather
+    are kept whole (KEPT_FOR_CRAFTS); Blood of the Mountain makes nothing here.
+    """
+    bars_needed = sum(p.bars for p in PLANS if p.piece not in made)
+    bars_short = max(0, bars_needed - held.get(DARK_IRON_BAR, 0))
+    out = {}
+    for item in ITEM_NAMES:
+        if item in KEPT_FOR_CRAFTS or item == DARK_IRON_BAR:
+            continue
+        have = held.get(item, 0)
+        if item == DARK_IRON_ORE:
+            have -= bars_short * ORE_PER_BAR
+        if have > 0:
+            out[item] = have
+    return out
+
+
+def _turnin(held: dict, made) -> int:
+    """The first turn-in whose items are all spare, else 0."""
+    free = spare(held, made)
+    for quest, needs in TURNINS:
+        if all(free.get(item, 0) >= n for item, n in needs):
+            return quest
+    return 0
+
+
+def _at_lokhtos(stocks) -> bool:
+    return any(p.entry in stocks for p in PLANS)
+
+
+def iron_member(smith: Smith, made=(), blocked=frozenset()) -> IronTurn:
+    """The road and the next counter row for one blacksmith.
+
+    `made` is the pieces the guild has crafted (a durable record: the craft
+    events, never the piece in somebody's bags, which is traded, worn or
+    banked). `blocked` is (member, command) rows already pending or refused
+    inside REFUSED_RETRY_MINUTES; those are not written again.
+    """
+    held = dict(smith.held)
+    standing = smith.standing
+    pipe = iron_plan(
+        known={p.entry for p in PLANS if p.teaches in smith.learned},
+        rank=rank_for(standing),
+        smelt_known=SMELT_SPELL in smith.learned,
+        held=held,
+        made=set(made),
+    )
+    step = pipe.step
+    if step is None or step.kind not in (GRIND, BUY):
+        return IronTurn(pipe)
+    plan = step.plan
+    if step.kind == GRIND:
+        if standing < TURNIN_MIN_STANDING:
+            return IronTurn(
+                pipe,
+                note="%s: below Honored %s takes no turn-in; "
+                "the reputation is %s, which has no command yet"
+                % (smith.name, VENDOR, LOWER_LADDER),
+            )
+        quest = _turnin(held, made)
+        if not quest:
+            return IronTurn(
+                pipe,
+                note="%s holds nothing spare to hand in (cores "
+                "and leather are kept for the pieces and Flarecore)" % smith.name,
+            )
+        if not _at_lokhtos(smith.stocks):
+            return IronTurn(
+                pipe,
+                note="%s is not at %s for a turn-in" % (smith.name, VENDOR),
+                walk_to=plan.entry,
+            )
+        verb = "turnin" if quest in smith.in_log else "take"
+        errand = towntrip.Errand(
+            smith.name, "quest", "%s quest:%d" % (verb, quest), step.said
+        )
+    else:
+        if plan.entry not in smith.stocks:
+            return IronTurn(
+                pipe,
+                note="%s is not at %s to buy %s" % (smith.name, VENDOR, plan.name),
+                walk_to=plan.entry,
+            )
+        if smith.free_slots < 1:
+            return IronTurn(
+                pipe, note="%s has no free bag slot for %s" % (smith.name, plan.name)
+            )
+        if smith.money < plan.price:
+            return IronTurn(
+                pipe,
+                note="%s cannot afford %s (%d copper against %d)"
+                % (smith.name, plan.name, plan.price, smith.money),
+            )
+        errand = towntrip.Errand(
+            smith.name,
+            "buy",
+            "entry:%d count:1 max:%d" % (plan.entry, plan.price),
+            step.said,
+            plan.price,
+        )
+    if (errand.member, errand.command) in blocked:
+        return IronTurn(
+            pipe,
+            note="%s %s is pending or was refused, so it is "
+            "not written again" % (smith.name, errand.command),
+        )
+    return IronTurn(pipe, errand=errand)
+
+
+def iron_log(member: str, pipe: IronPipeline) -> str:
+    """The line the Live criteria name: the member and the step it chose."""
+    if pipe.step is None:
+        return "dark iron: %s: every piece is made" % member
+    return "dark iron: %s step %s: %s" % (member, pipe.step.kind, pipe.step.said)
+
+
+def rank_for(standing: int) -> str:
+    """The Thorium Brotherhood rank a standing value falls in."""
+    reached = [r for r in _RANKS if RANK_VALUE[r] <= standing]
+    return reached[-1] if reached else NEUTRAL

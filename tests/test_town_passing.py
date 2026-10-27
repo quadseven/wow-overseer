@@ -349,7 +349,8 @@ class EveryCounterClaimSaysHowFar(unittest.TestCase):
         self.assertIn("distance=_spawn_yards(spawn))", self.body())
         start = BRIDGE.index("    async def _guild_bank_once(")
         guild = BRIDGE[start : BRIDGE.index("\n    async def ", start + 1)]
-        self.assertIn("distance=_spawn_yards(spawn))", guild)
+        self.assertIn("distance=_spawn_yards(spawn),", guild)
+        self.assertIn("priority_after=1200.0", guild)
         start = BRIDGE.index("    async def _settle_bank_errand(")
         bank = BRIDGE[start : BRIDGE.index("\n    async def ", start + 1)]
         self.assertIn("_nearest_banker_yards", bank)

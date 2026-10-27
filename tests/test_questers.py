@@ -400,7 +400,7 @@ class FarWalkWallsWait(unittest.TestCase):
     def plan(self, *rows, member=None):
         tried = questers.attempts(rows)
         return questers.plan(
-            world(), member or self.member(), questers.Clock(), 0.0, tried=tried
+            world(), member or self.member(x=-700.0), questers.Clock(), 0.0, tried=tried
         )
 
     def test_with_no_refused_walk_it_walks(self):
@@ -420,6 +420,17 @@ class FarWalkWallsWait(unittest.TestCase):
                 due = self.plan(walk_row(wall, wait))
                 self.assertIsNotNone(due.move, due.line)
                 self.assertEqual((due.move.kind, due.move.quest), (classquest.TAKE, 3))
+
+    def test_a_near_hand_in_is_not_held_by_a_far_walk_wall(self):
+        member = self.member(quest_log={3: questers.STATUS_COMPLETE})
+        p = self.plan(walk_row(WALLS[0], 5), member=member)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TURN_IN, 3))
+
+    def test_a_far_hand_in_is_still_held_by_a_far_walk_wall(self):
+        member = self.member(x=-700.0, quest_log={3: questers.STATUS_COMPLETE})
+        p = self.plan(walk_row(WALLS[0], 5), member=member)
+        self.assertIsNone(p.move, p.line)
+        self.assertIn("waits", p.line)
 
     def test_only_the_newest_row_decides(self):
         budget = WALLS[0]
@@ -1029,6 +1040,68 @@ class Broken(unittest.TestCase):
     def test_a_hand_in_refused_less_than_three_times_is_tried_again_at_once(self):
         tried = self._refused_hand_ins((30, 20, 10))[1:]
         self.assertEqual(self._move_with(tried), (classquest.TURN_IN, 1))
+
+    # mod-overseer#19: quest 45, Discover Rolf's Fate, has no
+    # creature ender; a world that names nothing to hand it in to refuses the
+    # hand-in with "retryable":false. That is "could not", not "did not yet".
+    NO_HOLDER = "the world names no creature and no object that takes that quest in"
+
+    @staticmethod
+    def _turn_in_row(reason, retryable, age=10, name="Mirra"):
+        result = '{"outcome":"refused","reason":"%s","holder":"none"' % reason
+        if retryable is not None:
+            result += ',"retryable":%s' % ("true" if retryable else "false")
+        return {
+            "id": 1,
+            "target_name": name,
+            "command": "turnin quest:1",
+            "source": guildjobs.source_for(questers.ACTION, name),
+            "status": "error",
+            "result": result + "}",
+            "age": age,
+        }
+
+    def _plan_rows(self, *rows):
+        return questers.plan(
+            world(),
+            mirra(quest_log={1: questers.STATUS_COMPLETE}),
+            questers.Clock(),
+            0.0,
+            tried=questers.attempts(rows),
+        )
+
+    def test_a_never_retryable_hand_in_is_could_not_on_the_first_refusal(self):
+        p = self._plan_rows(self._turn_in_row(self.NO_HOLDER, False))
+        self.assertEqual(
+            [(b.quest, b.reason) for b in p.broken],
+            [(1, questers.CANNOT_TURN_IN + ": " + self.NO_HOLDER)],
+        )
+        self.assertNotEqual(questers.CANNOT_TURN_IN, questers.REFUSED_TURN_IN)
+
+    def test_a_never_retryable_hand_in_is_not_asked_again(self):
+        p = self._plan_rows(self._turn_in_row(self.NO_HOLDER, False))
+        self.assertIsNotNone(p.move)
+        self.assertNotEqual((p.move.kind, p.move.quest), (classquest.TURN_IN, 1))
+        self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+    def test_a_retryable_or_unmarked_refusal_keeps_the_three_strike_rule(self):
+        # A world image older than mod-overseer#19 writes no "retryable" on a
+        # quest row: absent is not false.
+        for retryable in (True, None):
+            p = self._plan_rows(self._turn_in_row(self.NO_HOLDER, retryable))
+            self.assertEqual(p.broken, (), retryable)
+            self.assertEqual(
+                (p.move.kind, p.move.quest), (classquest.TURN_IN, 1), retryable
+            )
+
+    def test_a_never_retryable_refusal_about_the_log_is_not_could_not(self):
+        p = self._plan_rows(self._turn_in_row("already turned in", False))
+        self.assertEqual(p.broken, ())
+
+    def test_another_quester_s_never_retryable_refusal_does_not_count(self):
+        p = self._plan_rows(self._turn_in_row(self.NO_HOLDER, False, name="Pindle"))
+        self.assertEqual(p.broken, ())
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TURN_IN, 1))
 
     def test_no_pass_ever_sends_an_abandon_for_a_complete_quest(self):
         # Every way a held quest can be broken, with the quest complete in the

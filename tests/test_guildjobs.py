@@ -1062,6 +1062,28 @@ class Summoners(unittest.TestCase):
         self.assertTrue(doors["A"].on_call)
         self.assertFalse(doors["B"].on_call)
 
+    def test_a_raid_night_puts_a_summoner_on_call_at_blackrock_mountain(self):
+        stones = (
+            guildjobs.Spot("gameobject", 900, 0, -7480.0, -1020.0, "Meeting Stone"),
+        )
+        crew = [self.warlock("A", level=55, map_id=0), self.warlock("B", level=40)]
+        doors = guildjobs.assign_doors(
+            crew, guildjobs.entrances(), stones, "moltencore"
+        )
+        self.assertEqual(doors["A"].keyword, "moltencore")
+        self.assertEqual(doors["A"].stone.spawn, 900)
+        self.assertTrue(doors["A"].on_call)
+        self.assertFalse(doors["B"].on_call if "B" in doors else False)
+
+    def test_a_warlock_under_the_raid_floor_is_not_put_on_call_for_it(self):
+        stones = (
+            guildjobs.Spot("gameobject", 900, 0, -7480.0, -1020.0, "Meeting Stone"),
+        )
+        doors = guildjobs.assign_doors(
+            [self.warlock("B", level=40)], guildjobs.entrances(), stones, "moltencore"
+        )
+        self.assertFalse(any(d.on_call for d in doors.values()))
+
     def test_on_call_stands_close_and_is_released_when_campaign_door_changes(self):
         w = self.warlock("A", level=21, x=1811.0, y=-4389.0)
         doors = guildjobs.assign_doors(

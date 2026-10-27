@@ -21,6 +21,8 @@ nothing that talks to MySQL. bridge.py runs the statements named here.
 
 from __future__ import annotations
 
+import math
+
 import jobs
 import raidroles
 
@@ -62,6 +64,89 @@ CLEARS = True
 # not ferried across a sea and not summoned, and after the assemble wait the
 # raid goes in with whoever has arrived.
 GATHERS = False
+
+# --- how a raider comes to the door --------------------------------------------
+#
+# THE ORDER OF A RAID NIGHT'S GATHERING (quadseven/wow-overseer#762), decided:
+# the raid's OWN warlocks summon and everyone else who is away walks. Ritual
+# of Summoning and a meeting stone move only a member of the summoner's own
+# party or raid, and the forty seats leave no room for a guild summoner, so
+# summoners that join a short raid and leave (a) would need the raid to form
+# with fewer than forty and be re-seated, and releasing raiders early to walk
+# (c) is the fallback for anybody a raid warlock cannot bring: the warlock
+# itself, and every raider when the raid has no warlock that knows the ritual.
+# The module (mod-overseer) does not carry the order out yet (GATHERS), so the
+# bridge states it in its log and the Raid tab states what is not done.
+
+THERE = "there"
+SUMMON = "summon"
+WALK = "walk"
+
+# Within this many yards of the door's entrance a raider is at the door.
+AT_DOOR_YARDS = 150.0
+
+
+def _at_door(raider: dict, door: dict) -> bool:
+    if raider.get("map_id") is None or raider.get("x") is None:
+        return False
+    if int(raider["map_id"]) != int(door["map"]):
+        return False
+    return (
+        math.hypot(float(raider["x"]) - door["x"], float(raider["y"]) - door["y"])
+        <= AT_DOOR_YARDS
+    )
+
+
+def arrival_plan(raiders: list, door: dict) -> list:
+    """{name, how, by} per raider: THERE, SUMMON (by a raid warlock that knows
+    Ritual of Summoning) or WALK.
+
+    `raiders` are dicts with name, map_id, x, y and ritual (the raider knows
+    the ritual); `door` is entrances.json's entry (map, x, y). The warlocks
+    take the summons in turn. A warlock walks to the stone itself, as does
+    every raider when no warlock can summon. A raider with no position is
+    not assumed to be at the door.
+    """
+    casters = [str(r["name"]) for r in raiders if r.get("ritual")]
+    plan, turn = [], 0
+    for raider in raiders:
+        name = str(raider["name"])
+        how, by = THERE, ""
+        if not _at_door(raider, door):
+            if casters and name not in casters:
+                how, by = SUMMON, casters[turn % len(casters)]
+                turn += 1
+            else:
+                how = WALK
+        plan.append({"name": name, "how": how, "by": by})
+    return plan
+
+
+def arrival_line(keyword: str, plan: list) -> str:
+    """The bridge log line for a raid order: how each raider away from the
+    door arrives."""
+    there = len([p for p in plan if p["how"] == THERE])
+    summoned = [
+        "%s summoned by %s" % (p["name"], p["by"]) for p in plan if p["how"] == SUMMON
+    ]
+    walking = ["%s walks" % p["name"] for p in plan if p["how"] == WALK]
+    away = summoned + walking
+    return "raid order: %s - %d of %d at the door%s" % (
+        place(keyword),
+        there,
+        len(plan),
+        "; " + "; ".join(away) if away else "",
+    )
+
+
+# Where each seated raider stands, and whether it knows Ritual of Summoning
+# (spell 698), for arrival_plan. Built from constant strings only.
+ARRIVAL_SQL = (
+    "SELECT c.name, c.map AS map_id, c.position_x AS x, c.position_y AS y, "  # noqa: S608 - constant fragments only
+    "(SELECT COUNT(*) FROM character_spell cs WHERE cs.guid = c.guid "
+    "AND cs.spell = 698) AS ritual FROM characters c WHERE c.name IN ({holes})"
+)
+
 
 # --- the seats -----------------------------------------------------------------
 
@@ -363,6 +448,8 @@ def run_line() -> str:
         head += (
             " Only the head is walked to the door: a raider who is not near it "
             "when the raid forms is not brought there, and after the wait the "
-            "raid goes in with whoever has arrived."
+            "raid goes in with whoever has arrived. The bridge logs how each "
+            "raider away from the door is to arrive (summoned by a raid "
+            "warlock, or on foot) and does not carry it out."
         )
     return head

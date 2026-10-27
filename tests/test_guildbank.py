@@ -9,13 +9,16 @@ idle-traveller guard rather than repeating that mistake one file over.
 """
 
 import ast
+import asyncio
 import pathlib
 import re
+import types
 import unittest
 
 import guildbank
 import travel
 import modsource
+from test_campaign_owns_travel import FakeWorld, Clock, _Log, _bridge_self, _load
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 TRAVEL = pathlib.Path(__file__).resolve().parents[1] / "travel.py"
@@ -386,13 +389,47 @@ class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
         this pins is that the sentence did not go away with the local read: the
         pass still reports its own cost, and `_claim_town_slot` still reports
         the holder."""
-        self.assertIn(
-            "guild bank: leader=%s could not be aimed at the vault", self.body
-        )
+        helper = self.source[self.source.index("    def _log_bank_unaimed(") :]
+        helper = helper[: helper.index("    async def _guild_bank_once(")]
+        self.assertIn("self._log_bank_unaimed(", self.body)
+        self.assertIn("guild bank: leader=%s could not be aimed at the vault", helper)
         door = self.source[self.source.index("    async def _claim_town_slot(") :]
         door = door[: door.index("    async def _aim_at_reagent_vendor(")]
         self.assertIn("_current_travel_npc", door)
         self.assertIn("townslot.report(decision)", door)
+
+    def test_refusal_counts_all_queued_work_and_names_slot_holder(self):
+        refusal = self.body[self.body.index("if not aimed and not at_the_vault:") :]
+        refusal = refusal[: refusal.index("if not at_the_vault:")]
+        self.assertIn("self._log_bank_unaimed(", refusal)
+        log = _Log()
+        holder = types.SimpleNamespace(claimant="bags", aim="vendor")
+        ns = _load(["_log_bank_unaimed"], {"log": log})
+        bank = types.SimpleNamespace(
+            _fund_wants={"Zug": 500, "Grug": 0, "Ug": 200},
+            _cohort_town_slot=lambda _cohort: types.SimpleNamespace(holder=holder),
+        )
+        ns["_log_bank_unaimed"](
+            bank,
+            "Zug",
+            "Zug",
+            "vault",
+            ("Zug", "Grug", "Ug"),
+            ((), ("g",), ("i1", "i2", "i3"), ("w1", "w2")),
+        )
+        (line,) = log.lines
+        self.assertIn(
+            "(0 setup action(s), 1 gold deposit(s), 3 item deposit(s), "
+            "2 withdrawal(s), 2 fund want(s) waiting; "
+            "slot holder=bags carrying 'vendor')",
+            line,
+        )
+
+    def test_queued_work_claim_uses_the_bounded_turn(self):
+        claim = self.body[self.body.index("aimed = await self._claim_town_slot(") :]
+        claim = claim[: claim.index("# ALREADY STANDING THERE COUNTS AS AIMED")]
+        self.assertIn("if not any((actions, deposits, items, withdrawals)):", self.body)
+        self.assertIn("priority_after=1200.0", claim)
 
     def test_nothing_is_queued_when_no_vault_can_be_reached(self):
         """A deposit queued when nobody can stand at a vault has exactly one
@@ -401,6 +438,72 @@ class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
         head = self.body[: self.body.index("_recent_guild_bank_keys")]
         self.assertIn("if not vault.aim:", head)
         self.assertIn("return", head)
+
+    def test_bank_claim_earns_a_turn_after_repeating_bags_and_vendor_claims(self):
+        world = FakeWorld(column="")
+        clock = Clock(0.0)
+        bridge = _bridge_self(world, clock, _Log())
+        slot = bridge._cohort_town_slot("Zug")
+        slot.lease = 1200.0
+        owner = slot.want(
+            claimant="town errand",
+            character="Zug",
+            aim="vendor",
+            leader="Zug",
+            column="",
+            retaskable=(),
+            now=0.0,
+        )
+        slot.settle(owner, True, 0.0)
+        world.column["Zug"] = "vendor"
+
+        for claimant in ("bags", "vendor"):
+            slot.want(
+                claimant=claimant,
+                character="Zug",
+                aim=claimant,
+                leader="Zug",
+                column="vendor",
+                retaskable=(),
+                now=1.0,
+            )
+        self.assertFalse(
+            asyncio.run(
+                bridge._claim_town_slot(
+                    "guild bank",
+                    "Zug",
+                    "vault",
+                    cohort="Zug",
+                    priority_after=1200.0,
+                )
+            )
+        )
+
+        for now in (600.0, 1199.0):
+            clock.now = now
+            for claimant in ("bags", "vendor"):
+                slot.want(
+                    claimant=claimant,
+                    character="Zug",
+                    aim=claimant,
+                    leader="Zug",
+                    column="vendor",
+                    retaskable=(),
+                    now=now,
+                )
+        clock.now = 1201.0
+        self.assertTrue(
+            asyncio.run(
+                bridge._claim_town_slot(
+                    "guild bank",
+                    "Zug",
+                    "vault",
+                    cohort="Zug",
+                    priority_after=1200.0,
+                )
+            )
+        )
+        self.assertEqual("vault", world.column["Zug"])
 
 
 class TheVaultAimComesFromTheSpawnTableTests(unittest.TestCase):
