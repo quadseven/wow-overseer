@@ -496,6 +496,25 @@ class RecipeForTests(unittest.TestCase):
         self.assertEqual(craft.recipe_for(blacksmithing, 260).spell_id, 9964)
         self.assertEqual(craft.recipe_for(blacksmithing, 300).spell_id, 16657)
 
+    def test_blacksmithing_returns_none_in_an_anvil_gated_gap(self):
+        # The Anvil gap (100-124, 150-199, 210-249, 260-300) used to be None
+        # because nothing walked a smith to an Anvil. The hammer recipes fill
+        # it, so every skill up to the cap resolves, and each rung that lands
+        # in a former gap is a tool recipe, never a stone past its own grey.
+        blacksmithing = goals.SKILL_IDS["blacksmithing"]
+        for value in (100, 124, 150, 199, 210, 249, 260, 300):
+            with self.subTest(value=value):
+                recipe = craft.recipe_for(blacksmithing, value)
+                self.assertIsNotNone(recipe)
+                self.assertEqual(recipe.tool, craft.BLACKSMITH_HAMMER)
+
+    def test_blacksmithing_stops_at_dense_sharpening_stones_grey(self):
+        """260 IS THE GREY VALUE, not a bracket the table gave up on. Casting
+        Dense Sharpening Stone there produces the item and never the point, so
+        the smith moves to the next rung (Imperial Plate Bracers)."""
+        blacksmithing = goals.SKILL_IDS["blacksmithing"]
+        self.assertNotEqual(craft.recipe_for(blacksmithing, 260).spell_id, 16641)
+
     def test_blacksmithing_returns_none_past_the_last_verified_bracket(self):
         self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 301))
 
