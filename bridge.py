@@ -15262,29 +15262,43 @@ class Bridge(discord.Client):
         prefer = await asyncio.to_thread(_recruit_prefer, sorted(actors)[0]) if actors else ()
         result, age = await asyncio.to_thread(_latest_guild_shortlist)
         members, target = recruit.roster_from_shortlist(result or {})
-        action = recruit.plan_recruit(
+        asked = await asyncio.to_thread(_guild_invites_asked, recruit.ASKED_MEMORY_DAYS)
+        plan_inputs = dict(
             actors=actors,
             prefer=prefer,
             shortlist=recruit.names_from_shortlist(result or {}, prefer),
             shortlist_age_minutes=age,
             shortlist_asked_minutes_ago=await asyncio.to_thread(_minutes_since_shortlist_asked),
-            asked=await asyncio.to_thread(_guild_invites_asked, recruit.ASKED_MEMORY_DAYS),
+            asked=asked,
             minutes_since_last_invite=await asyncio.to_thread(_minutes_since_last_guild_invite),
             member_count=members,
             target_size=target,
         )
+        action = recruit.plan_recruit(**plan_inputs)
 
         if action.verb == "wait":
             log.info("recruit: nothing this pass - %s", action.reason)
             return
 
-        if action.verb == "invite":
+        while action.verb == "invite":
             exchange = await asyncio.to_thread(_interview_candidate, action.target_arg)
-            if exchange:
+            if not exchange:
                 log.info(
-                    "recruit interview: %s - Q: %s | A: %s",
-                    exchange.candidate, exchange.question, exchange.reply,
+                    "recruit: candidate %s offline, no snapshot - trying next shortlisted name",
+                    action.target_arg,
                 )
+                plan_inputs["asked"] = plan_inputs["asked"] | {action.target_arg}
+                action = recruit.plan_recruit(**plan_inputs)
+                continue
+            log.info(
+                "recruit interview: %s - Q: %s | A: %s",
+                exchange.candidate, exchange.question, exchange.reply,
+            )
+            break
+
+        if action.verb == "wait":
+            log.info("recruit: nothing this pass - %s", action.reason)
+            return
 
         row = await asyncio.to_thread(
             _insert_guild, action.actor, action.command, "recruit", action.target_arg,

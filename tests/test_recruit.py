@@ -648,16 +648,52 @@ class TheInterviewIntegration(unittest.TestCase):
             ),
         )
 
-    def test_invite_proceeds_when_interview_returns_none(self):
-        """When the candidate is offline (interview returns None), the invite
-        still proceeds - the LLM never gates the invite."""
-        self.mocks["_interview_candidate"].return_value = None
+    def test_offline_candidate_is_skipped_for_next_shortlisted_name(self):
+        """An offline candidate is skipped and the next name is interviewed."""
+        self.mocks["_latest_guild_shortlist"].return_value = (
+            {"shortlist": [
+                {"name": "Candidate1", "class": 1},
+                {"name": "Candidate2", "class": 1},
+            ]},
+            5.0,
+        )
+        self.mocks["_interview_candidate"].side_effect = [
+            None,
+            self.bridge.interview.InterviewExchange(
+                candidate="Candidate2",
+                question="What are you looking for?",
+                reply="A friendly guild.",
+                reason="shortlisted and online",
+            ),
+        ]
 
         client = self._make_client()
         asyncio.run(client._recruit_once())
 
-        self.mocks["_interview_candidate"].assert_called_once_with("Candidate1")
-        self.mocks["_insert_guild"].assert_called_once()
+        self.assertEqual(
+            self.mocks["_interview_candidate"].call_args_list,
+            [mock.call("Candidate1"), mock.call("Candidate2")],
+        )
+        self.mocks["_insert_guild"].assert_called_once_with(
+            "ActingMember", "invite Candidate2", "recruit", "Candidate2"
+        )
+
+    def test_negative_interview_reply_does_not_gate_invite(self):
+        """The interview reply is logged, but never decides whether to invite."""
+        exchange = self.bridge.interview.InterviewExchange(
+            candidate="Candidate1",
+            question="What are you looking for?",
+            reply="No, I do not want to join.",
+            reason="shortlisted and online",
+        )
+        self.mocks["_interview_candidate"].return_value = exchange
+
+        client = self._make_client()
+        asyncio.run(client._recruit_once())
+
+        self.mocks["_insert_guild"].assert_called_once_with(
+            "ActingMember", "invite Candidate1", "recruit", "Candidate1"
+        )
 
     def test_shortlist_action_does_not_call_interview(self):
         """When the action is shortlist, _interview_candidate is not called."""
