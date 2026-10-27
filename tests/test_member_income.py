@@ -486,6 +486,45 @@ class TheRidingWalk(unittest.TestCase):
         self.assertIsNotNone(step)
         self.assertEqual("", note)
 
+    def test_other_riding_refusals_keep_the_180_minute_cooldown(self):
+        order = purse.order("Bruk", 60, 80000, 37600, 9, 0)
+        m = bonk(name="Bruk", level=60, money=80000, map_id=530)
+        m = dataclasses.replace(m, purse=order)
+
+        for reason in (
+            "character is in combat",
+            "died on the way to the trainer",
+            "too far from the trainer",
+        ):
+            with self.subTest(reason=reason):
+
+                def refusal_at(age):
+                    return guildjobs.recent_from_rows(
+                        (
+                            {
+                                "target_name": "Bruk",
+                                "command": "walk-to-trainer skill:762 learn:33388 max:20000",
+                                "source": "guildjobs:riding:Bruk",
+                                "status": "error",
+                                "age": age,
+                                "target_arg": "530",
+                                "result": (
+                                    '{"outcome":"refused","reason":"'
+                                    + reason
+                                    + '","retryable":true}'
+                                ),
+                            },
+                        )
+                    )
+
+                step, note = guildjobs.riding_step(m, refusal_at(5))
+                self.assertIsNone(step)
+                self.assertEqual("", note)
+
+                step, note = guildjobs.riding_step(m, refusal_at(181))
+                self.assertEqual(guildjobs.RIDING_ACTION, step.action)
+                self.assertEqual("", note)
+
 
 class TheTrainStep(unittest.TestCase):
     def test_train_step_waits_when_last_refusal_was_no_trainer_on_this_map_and_map_id_unchanged(
