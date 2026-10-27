@@ -319,12 +319,19 @@ ALCHEMIST_EVERY = 5
 # set the crew, the family and the stand-in read. Any other recipe is cast
 # only once `character_spell` says the member knows it.
 AUTO_LEARNED = craft.AUTO_LEARNED
-# EVERY CRAFTING TRADE craft.RECIPES COVERS (2026-10-05). First Aid first, a
-# secondary trade every member may hold, then Tailoring, then the rest by
-# skill line. A trade with no recipe castable in place (Mining's smelts need a
-# forge; Cooking needs a fire) simply never yields a cast.
-CRAFT_SKILLS = (FIRST_AID, TAILORING) + tuple(
-    sorted(s for s in craft.RECIPES if s not in (FIRST_AID, TAILORING))
+# EVERY CRAFTING TRADE craft.RECIPES COVERS (2026-10-05). Cooking first, then
+# First Aid, a secondary trade every member may hold, then Tailoring, then the
+# rest by skill line. A trade with no recipe castable in place (Mining's smelts
+# need a forge) simply never yields a cast.
+#
+# COOKING GOES FIRST (#761). One craft step is written per pass and the craft
+# cooldown follows it, so the first trade with materials in the bags takes
+# every turn. A cook carries a stack of Linen Cloth for weeks, and with First
+# Aid first its meat was never reached: on 2026-10-27 the Bonkers cook stood at
+# Cooking 1/75 and every craft step it took was a Linen Bandage. Meat arrives a
+# few pieces at a time, so casting it when it is there costs First Aid little.
+CRAFT_SKILLS = (COOKING, FIRST_AID, TAILORING) + tuple(
+    sorted(s for s in craft.RECIPES if s not in (COOKING, FIRST_AID, TAILORING))
 )
 CRAFT_SPELLS = frozenset(
     r.spell_id for skill in CRAFT_SKILLS for r in craft.RECIPES.get(skill, ())
@@ -1088,14 +1095,26 @@ def choose_alchemists(members, tailors=frozenset(), recent=()) -> frozenset:
     return frozenset(out)
 
 
-def choose_cooks(members, recent=()) -> frozenset:
-    """Choose one maintenance cook per guild, keeping a trainer walk stable."""
+def choose_cooks(
+    members, recent=(), tailors=frozenset(), alchemists=frozenset()
+) -> frozenset:
+    """Choose one maintenance cook per guild, keeping a trainer walk stable.
+
+    NEVER A TAILOR OR AN ALCHEMIST PICK (#761). guildcorps.plan_corps gives a
+    member one post and fills the tailor and alchemist posts before the cook's,
+    so a cook that is also one of those picks leaves the cook post empty the
+    day its other trade outranks a guildmate's. And the two choices sort the
+    same way (fewest primaries, then name), so without this the same member
+    was both: on 2026-10-27 Cave's pick was its tailor pick, which had learned
+    neither trade, and the corps line named no cook.
+    """
     picked = {
         r.name for r in recent or () if r.action == "train" and r.skill_id == COOKING
     }
+    others = frozenset(tailors or ()) | frozenset(alchemists or ())
     crews = {}
     for m in members or ():
-        if m.role == MAINTENANCE:
+        if m.role == MAINTENANCE and m.name not in others:
             crews.setdefault(m.guild, []).append(m)
     out = set()
     for crew in crews.values():
@@ -1532,11 +1551,53 @@ def _weave_recipe(member, skill, spell):
     return (recipe, min(casts, CRAFT_BATCH)) if casts > 0 else (None, 0)
 
 
+# THE COOK COOKS THE MEAT IT CARRIES (#761). The ladder routes Charred Wolf
+# Meat at 1-49 and Roasted Boar Meat at 50-74, one meat each, but the realm
+# grants a point for either from 1 to 85 (SkillLineAbility: learn 1, yellow 45,
+# grey 85, the MEASURED_BANDS rows in tests/test_craft.py) and a new cook knows
+# both without a trainer. A cook levelling past 20 kills no wolves that drop
+# Stringy Wolf Meat, so on 2026-10-27 the Bonkers cook held Cooking 1/75 and
+# not one cooking cast was ever written. Each auto-learned rung is castable
+# across its whole band, so whichever of the two meats the bags hold is
+# cooked, and both are kept from the sale.
+COOK_BANDS = {2538: (1, 85), 2540: (1, 85)}
+
+
+def _open_recipes(member, skill) -> tuple:
+    """Every recipe this member may cast toward `skill` now, materials aside.
+
+    The route's own rung first (`_open_recipe`), then for Cooking every other
+    known rung whose COOK_BANDS band holds the member's value.
+    """
+    first = _open_recipe(member, skill)
+    out = [first] if first is not None else []
+    if skill != COOKING:
+        return tuple(out)
+    value, ceiling = member.skill(skill)
+    if ceiling <= 0 or value >= ceiling:
+        return tuple(out)
+    for recipe in craft.RECIPES.get(COOKING, ()):
+        low, grey = COOK_BANDS.get(recipe.spell_id, (0, 0))
+        if recipe in out or not low <= value < grey:
+            continue
+        if recipe.spell_id not in AUTO_LEARNED and recipe.spell_id not in member.known:
+            continue
+        if craft_rhythm.GATHERED.get(recipe.spell_id):
+            out.append(recipe)
+    return tuple(out)
+
+
 def _craft_recipe(member, skill):
     """(recipe, casts) this member can cast now toward `skill`, or (None, 0)."""
-    recipe = _open_recipe(member, skill)
-    if recipe is None:
-        return None, 0
+    for recipe in _open_recipes(member, skill):
+        made, casts = _recipe_casts(member, skill, recipe)
+        if made is not None:
+            return made, casts
+    return None, 0
+
+
+def _recipe_casts(member, skill, recipe):
+    """(recipe, casts) of one open recipe, or of the earlier rung it eats."""
     fed = craft_rhythm.BOLT_FED.get(recipe.spell_id)
     if fed is not None and member.count(fed[1].entry) < fed[1].per_cast:
         # The rung eats its own earlier output (a Cured Heavy Hide, a Minor
@@ -1553,8 +1614,7 @@ def craft_entries(member) -> frozenset:
     """The gathered items this member's next casts eat, which it keeps."""
     out = set()
     for skill in CRAFT_SKILLS:
-        recipe = _open_recipe(member, skill)
-        if recipe is not None:
+        for recipe in _open_recipes(member, skill):
             out.update(int(r.entry) for r in craft_rhythm.GATHERED[recipe.spell_id])
             fed = craft_rhythm.BOLT_FED.get(recipe.spell_id)
             if fed is not None:
@@ -1980,6 +2040,9 @@ def mount_step(m, facts, recent, cap):
 
 
 WEAPON_ACTION = "weapon"
+# The crossing to a weapon master across the water (weaponskill.choose_far_master):
+# its row shares every crossing's clock and walls (CROSS_ACTIONS).
+WEAPON_CROSS_ACTION = WEAPON_ACTION + "-cross"
 # The walk ends this near the weapon master's spawn: the module's train-weapon
 # looks for a trainer it can talk to from where the member stands.
 WEAPON_MASTER_NEAR_YARDS = 3
@@ -2024,7 +2087,7 @@ def weapon_step(m, offer, recent, cap):
     if not offer.spawn:
         return None, (
             "%s carries %s (%s) and has no skill %d for it; no weapon master of "
-            "its side on this map teaches it"
+            "its side on this map or across the water teaches it"
             % (m.name, need.item, need.why, need.skill)
         )
     if weapon_purse(m, need) < int(offer.cost):
@@ -2035,6 +2098,8 @@ def weapon_step(m, offer, recent, cap):
             need.item,
             purse.money(weapon_purse(m, need)),
         )
+    if m.map_id is not None and int(offer.map_id) != int(m.map_id):
+        return weapon_cross_step(m, offer, recent)
     said = "%s walks to %s to buy skill %d for %s of its own, to wield %s (%s)" % (
         m.name,
         offer.master or "a weapon master",
@@ -2072,6 +2137,63 @@ def weapon_step(m, offer, recent, cap):
             source_for(WEAPON_ACTION + "-walk", m.name),
         ),
         goal=offer.master or "the weapon master",
+    )
+    return step, ""
+
+
+def weapon_cross_step(m, offer, recent):
+    """(step or None, a note) for a weapon master on the other classic continent
+    (weaponskill.choose_far_master, #793): one `cross-to-map map:<id>` row, no
+    walk, as the level step crosses (level_cross_step). Once the member stands
+    on that map, the next pass finds the master there and walks to it. Held
+    with no row while its last crossing is young (crossing_cooling); a crossing
+    the module refused for good (class_walls) is named and not asked."""
+    need, to_map = offer.need, int(offer.map_id)
+    where = classquest.CONTINENTS.get(to_map, "map %d" % to_map)
+    wall = class_walls(m.name, recent).get(to_map)
+    if wall:
+        return None, (
+            "%s carries %s (%s) and has no skill %d for it; %s teaches it on %s, "
+            "and the module will not cross it there (%s)"
+            % (
+                m.name,
+                need.item,
+                need.why,
+                need.skill,
+                offer.master or "a weapon master",
+                where,
+                wall,
+            )
+        )
+    if crossing_cooling(m.name, recent):
+        return None, ""
+    said = (
+        "%s crosses to %s by its faction's boat or zeppelin to buy skill %d at %s "
+        "for %s of its own, to wield %s (%s)"
+        % (
+            m.name,
+            where,
+            need.skill,
+            offer.master or "a weapon master",
+            purse.money(offer.cost),
+            need.item,
+            need.why,
+        )
+    )
+    step = guildcorps.Step(
+        m.name,
+        WEAPON_ACTION,
+        int(need.skill),
+        said,
+        rows=(
+            guildcorps.Row(
+                "job",
+                classquest.cross_command(to_map),
+                "",
+                source_for(WEAPON_CROSS_ACTION, m.name),
+            ),
+        ),
+        goal=where,
     )
     return step, ""
 
@@ -3141,7 +3263,7 @@ def plan(
     pending = {str(n) for n in pending or ()}
     tailors = choose_tailors(members)
     alchemists = choose_alchemists(members, tailors, recent)
-    cooks = choose_cooks(members, recent)
+    cooks = choose_cooks(members, recent, tailors, alchemists)
     trades = cloth_trades(
         split_trades(members, tailors, alchemists), tailors, alchemists, cooks
     )
@@ -4636,7 +4758,12 @@ def class_ask_held(name, asks) -> frozenset:
 # here because questers imports this module; questers takes it from here.
 QUESTER_CROSS_ACTION = "quester-cross"
 CROSS_ACTIONS = frozenset(
-    {classquest.CROSS_ACTION, guildlevel.CROSS_ACTION, QUESTER_CROSS_ACTION}
+    {
+        classquest.CROSS_ACTION,
+        guildlevel.CROSS_ACTION,
+        QUESTER_CROSS_ACTION,
+        WEAPON_CROSS_ACTION,
+    }
 )
 
 
