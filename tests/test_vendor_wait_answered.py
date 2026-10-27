@@ -30,8 +30,7 @@ def _queue_vendor_sales(town_vendor: dict, logged: list, inserted: list):
     fn = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.AsyncFunctionDef)
-        and node.name == "_queue_vendor_sales"
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_queue_vendor_sales"
     )
     namespace = {
         "asyncio": asyncio,
@@ -45,14 +44,17 @@ def _queue_vendor_sales(town_vendor: dict, logged: list, inserted: list):
             info=lambda msg, *args: logged.append(msg % args if args else msg)
         ),
     }
-    exec(compile(ast.Module(body=[fn], type_ignores=[]), "bridge.py", "exec"),
-         namespace)
+    exec(
+        compile(ast.Module(body=[fn], type_ignores=[]), "bridge.py", "exec"), namespace
+    )
     return namespace["_queue_vendor_sales"]
 
 
 def _candidate(holder, guid):
     return bag_pressure.SellCandidate(
-        holder=holder, item_guid=guid, count=1,
+        holder=holder,
+        item_guid=guid,
+        count=1,
         item=bag_pressure.ItemForSale(quality=0, sell_price=5),
     )
 
@@ -71,15 +73,19 @@ class AnAnsweredSaleIsNotAVendorWait(unittest.TestCase):
     def _run(self, attempts):
         logged, inserted = [], []
         queue = _queue_vendor_sales({}, logged, inserted)
-        asyncio.run(queue(
-            [_candidate("Ugga", 101)], "Grug", False,
-            bag_pressure.VENDOR_MODE_COUNTER, attempts,
-        ))
+        asyncio.run(
+            queue(
+                [_candidate("Ugga", 101)],
+                "Grug",
+                False,
+                bag_pressure.VENDOR_MODE_COUNTER,
+                attempts,
+            )
+        )
         return logged, inserted
 
     def test_a_holder_whose_only_stack_was_sold_writes_no_vendor_wait(self):
-        sold = [item_plan.Attempt(holder="Ugga", item_guid=101,
-                                  status="delivered")]
+        sold = [item_plan.Attempt(holder="Ugga", item_guid=101, status="delivered")]
         logged, inserted = self._run(sold)
         self.assertEqual([], inserted)
         self.assertEqual([], _no_vendor_steps(logged))
@@ -92,8 +98,7 @@ class AnAnsweredSaleIsNotAVendorWait(unittest.TestCase):
     def test_a_queued_sale_still_waits_for_the_holder_to_reach_a_vendor(self):
         # An open row is not answered: it sells only once its holder stands at
         # a counter, so that holder is still waiting for a vendor.
-        open_row = [item_plan.Attempt(holder="Ugga", item_guid=101,
-                                      status="pending")]
+        open_row = [item_plan.Attempt(holder="Ugga", item_guid=101, status="pending")]
         logged, _ = self._run(open_row)
         self.assertEqual(1, len(_no_vendor_steps(logged)))
 
