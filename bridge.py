@@ -19845,36 +19845,76 @@ class Bridge(discord.Client):
                 # store is durable, so next cycle simply retries.
                 log.exception("goal fetch failed; retrying next cycle")
                 continue
-            planned = []
-            for row in sorted(rows, key=lambda r: int(r.get("id") or 0)):
-                try:
-                    observed = await asyncio.to_thread(_observe_goal, row)
-                    planned.append((row, goals.reconcile(row, observed)))
-                except Exception:
-                    # One wedged goal (or one Discord hiccup) must not
-                    # stall the rest; state lives in the store, so the
-                    # failed goal is retried whole next cycle.
-                    log.exception("goal %s reconcile failed; retrying next cycle", row.get("id"))
-            # THE TIE-BREAK (#1559). More than one goal can want the family's
-            # job in one pass - a dungeon goal and a skill goal each set it -
-            # and the last one applied used to win by row order. The family's
-            # priorities decide instead: the goal whose kind serves the
-            # higher-ranked priority sets the job, and the others wait.
-            contest = priorities.job_contest(
-                [(row.get("id"), row.get("kind")) for row, actions in planned
-                 if any(type(a) in _JOB_GOAL_ACTIONS for a in actions)],
-                await self._priority_order())
+            await self._goal_pass(rows)
+
+    async def _goal_pass(self, rows: list) -> None:
+        """One goal pass over the active goal rows: reconcile, tie-break, apply.
+
+        THE TIE-BREAK (#1559). More than one goal can want a family's job in
+        one pass - a dungeon goal and a skill goal each set it - and the last
+        one applied used to win by row order. The family's priorities decide
+        instead, PER FAMILY: a goal only competes with goals whose character
+        is in the same family, because that is the job it would set. Two goals
+        in two families both drive.
+
+        A GOAL THAT LOSES WAITS WHOLE. Every action it planned this pass is
+        held back, not only its DriveDungeon/DriveSkill: its RecordProgress
+        would otherwise renew a dungeon lease that never drove (no drive for
+        REASSERT_AFTER_CYCLES passes) or record a skill goal's first sighting
+        so it never drives at all. Its row is left exactly as it was, so the
+        next pass plans the same drive again and it lands on the first pass
+        the contest lets it.
+        """
+        planned = []
+        for row in sorted(rows, key=lambda r: int(r.get("id") or 0)):
+            try:
+                observed = await asyncio.to_thread(_observe_goal, row)
+                planned.append((row, goals.reconcile(row, observed)))
+            except Exception:
+                # One wedged goal (or one Discord hiccup) must not
+                # stall the rest; state lives in the store, so the
+                # failed goal is retried whole next cycle.
+                log.exception("goal %s reconcile failed; retrying next cycle", row.get("id"))
+        by_family: dict = {}
+        for row, actions in planned:
+            if any(type(a) in _JOB_GOAL_ACTIONS for a in actions):
+                family = await self._goal_family(row)
+                by_family.setdefault(family, []).append(
+                    (row.get("id"), row.get("kind")))
+        # Read every pass, contest or not: the quest shadow reads the order
+        # this pass last held (self._priorities) instead of reading its own.
+        order = await self._priority_order()
+        waiting: set = set()
+        for family, candidates in by_family.items():
+            contest = priorities.job_contest(candidates, order)
             if contest.line:
-                log.info("goal: %s", contest.line)
-            for row, actions in planned:
-                try:
-                    for action in actions:
-                        if (type(action) in _JOB_GOAL_ACTIONS
-                                and row.get("id") in contest.waiting):
-                            continue
-                        await self._apply_goal_action(row, action)
-                except Exception:
-                    log.exception("goal %s reconcile failed; retrying next cycle", row.get("id"))
+                log.info("goal: %s%s", contest.line,
+                         " (family %s)" % family if family else "")
+            waiting.update(contest.waiting)
+        for row, actions in planned:
+            if row.get("id") in waiting:
+                continue
+            try:
+                for action in actions:
+                    await self._apply_goal_action(row, action)
+            except Exception:
+                log.exception("goal %s reconcile failed; retrying next cycle", row.get("id"))
+
+    async def _goal_family(self, row: dict):
+        """The family whose job this goal would set: its character's cohort.
+
+        None is this bridge's own family, which is also what a realm without
+        the roster's `family` column answers for everybody, so there every
+        goal shares one contest exactly as before. A failed read is said and
+        treated the same way: sharing a contest can only make a goal wait a
+        pass, never let two goals write one family's job.
+        """
+        try:
+            return await asyncio.to_thread(_cohort_of, row.get("character_name"))
+        except Exception:
+            log.exception("goal %s: its family could not be read; it shares "
+                          "this family's contest", row.get("id"))
+            return None
 
     async def _priority_order(self) -> tuple:
         """The family's ranked priorities, read now, or the last order read.

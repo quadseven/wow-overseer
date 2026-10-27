@@ -74,6 +74,80 @@ def _import_bridge():
     return bridge
 
 
+def _drives(applied):
+    return [
+        (gid, type(a))
+        for gid, a in applied
+        if type(a) in (goals.DriveDungeon, goals.DriveSkill)
+    ]
+
+
+class _GoalStore:
+    """Two active goals and a fake store: the bridge's real goal pass and
+    goals.reconcile run against it; only the world reads and the writes are
+    faked. RecordProgress lands in the row the way _record_goal_progress
+    writes it, "<value>/<stalls>", so the next pass reads it back."""
+
+    def __init__(self):
+        self.bridge = _import_bridge()
+        self.rows = {
+            1: {
+                "id": 1,
+                "character_name": "Grug",
+                "kind": "dungeon",
+                "skill_name": "",
+                "target": 10,
+                "quest_id": 0,
+                "status": "active",
+                "channel_id": 0,
+                "last_report": None,
+            },
+            2: {
+                "id": 2,
+                "character_name": "Ugga",
+                "kind": "skill",
+                "skill_name": "mining",
+                "target": 150,
+                "quest_id": 0,
+                "status": "active",
+                "channel_id": 0,
+                "last_report": None,
+            },
+        }
+        self.observed = {1: 3, 2: 120}
+
+    def run_pass(self, families, order=priorities.DEFAULT_ORDER):
+        bridge = self.bridge
+        applied = []
+        store = self
+
+        class Holder:
+            _goal_pass = bridge.Bridge._goal_pass
+            _goal_family = bridge.Bridge._goal_family
+
+            async def _priority_order(self):
+                return order
+
+            async def _apply_goal_action(self, row, action):
+                applied.append((row["id"], action))
+                if type(action) is goals.RecordProgress:
+                    store.rows[action.goal_id]["last_report"] = "%d/%d" % (
+                        action.value,
+                        action.stalls,
+                    )
+
+        rows = [dict(r) for r in self.rows.values()]
+        with (
+            mock.patch.object(
+                bridge, "_observe_goal", side_effect=lambda r: self.observed[r["id"]]
+            ),
+            mock.patch.object(bridge, "_cohort_of", side_effect=families.get),
+            mock.patch.object(bridge.log, "info"),
+        ):
+            asyncio.run(Holder()._goal_pass(rows))
+        return applied
+
+
 def body_of(section_text: str, start: str) -> str:
     begin = section_text.index(start)
     return section_text[begin : section_text.index("\n    def ", begin + 10)]
@@ -321,15 +395,40 @@ class TheSchedulersTieBreakFollowsTheStoredOrder(unittest.TestCase):
             priorities.job_contest([], REORDERED), priorities.Contest(None, (), "")
         )
 
-    def test_the_goal_pass_holds_back_the_waiting_goals_job_actions(self):
-        loop = body_of(BRIDGE, "    async def _supervise_goals(")
-        self.assertIn("contest = priorities.job_contest(", loop)
-        self.assertIn("await self._priority_order())", loop)
-        self.assertIn("type(action) in _JOB_GOAL_ACTIONS", loop)
-        self.assertIn('row.get("id") in contest.waiting', loop)
-        self.assertIn(
-            "_JOB_GOAL_ACTIONS = (goals.DriveDungeon, goals.DriveSkill)", BRIDGE
+    def test_goals_in_two_families_both_drive(self):
+        # A dungeon goal in one family must not make a skill goal in another
+        # family wait: each family's job is its own contest.
+        store = _GoalStore()
+        applied = store.run_pass({"Grug": "A", "Ugga": "B"})
+        self.assertEqual(
+            _drives(applied), [(1, goals.DriveDungeon), (2, goals.DriveSkill)]
         )
+        self.assertEqual(store.rows[2]["last_report"], "120/0")
+
+    def test_a_waiting_goal_is_held_whole_and_drives_next_pass(self):
+        store = _GoalStore()
+        family = {"Grug": "A", "Ugga": "A"}
+        first = store.run_pass(family)
+        # Default order: dungeons rank above professions, so the dungeon goal
+        # sets the job and the skill goal waits - with NOTHING applied, its
+        # progress row included.
+        self.assertEqual(_drives(first), [(1, goals.DriveDungeon)])
+        self.assertEqual([gid for gid, _a in first if gid == 2], [])
+        self.assertIsNone(store.rows[2]["last_report"])
+        self.assertEqual(store.rows[1]["last_report"], "3/0")
+        # Next pass the dungeon lease is held (no drive), so the skill goal no
+        # longer loses a contest and drives on this very pass.
+        second = store.run_pass(family)
+        self.assertEqual(_drives(second), [(2, goals.DriveSkill)])
+        self.assertEqual(store.rows[2]["last_report"], "120/0")
+        self.assertEqual(store.rows[1]["last_report"], "3/1")
+
+    def test_the_stored_order_picks_the_winner_within_a_family(self):
+        store = _GoalStore()
+        reordered = priorities.move(priorities.DEFAULT_ORDER, priorities.PROFESSIONS, 1)
+        applied = store.run_pass({"Grug": "A", "Ugga": "A"}, order=reordered)
+        self.assertEqual(_drives(applied), [(2, goals.DriveSkill)])
+        self.assertIsNone(store.rows[1]["last_report"])
 
     def test_a_failed_read_keeps_the_last_order(self):
         bridge = _import_bridge()

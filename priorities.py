@@ -26,7 +26,10 @@ TWO READERS, both in the bridge:
     word for word, in the state and as the prompt line `prompt_line` renders;
   * the goal pass breaks a tie with `job_contest` when more than one active
     goal wants to set the family's job in the same pass: the goal whose
-    priority ranks higher sets it, and the others wait for the next pass.
+    priority ranks higher sets it, and the others wait. The contest is per
+    family (the family whose job the goal would set), and a goal that waits
+    is held back whole - its progress row too - so it drives on the first
+    pass the contest lets it.
 
 PURE MODULE, the same seam as decree.py and agenda.py: ids and rows in,
 decisions and sentences out. No MySQL, no HTTP, no LLM. map_server.py runs
@@ -361,7 +364,7 @@ def job_contest(candidates, order) -> Contest:
     pid = GOAL_PRIORITY.get(winner_kind)
     said = _BY_ID[pid].label if pid in _BY_ID else winner_kind
     line = (
-        "%d goals want the family's job; the %s goal %s sets it, because %s ranks highest, and %s wait%s for the next pass"
+        "%d goals want the family's job; the %s goal %s sets it, because %s ranks highest, and %s wait%s, unchanged, until no higher-ranked goal wants the job"
         % (
             len(candidates),
             winner_kind,
