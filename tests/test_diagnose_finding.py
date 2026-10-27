@@ -404,7 +404,7 @@ RFK_LOGS = [
         ansi=ansi,
         who="Zug",
     )
-    for r, ansi in zip(RFK_RUNS, ["", "\x1b[0m"])
+    for r, ansi in zip(RFK_RUNS, ["", "\x1b[0m"], strict=True)
 ]
 
 
