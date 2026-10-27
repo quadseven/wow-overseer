@@ -35,8 +35,8 @@ def _import_bridge():
 
 bridge = _import_bridge()
 
-import map_server
-import realmread
+import map_server  # noqa: E402
+import realmread  # noqa: E402
 
 T = datetime
 
