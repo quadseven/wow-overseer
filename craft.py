@@ -191,8 +191,9 @@ class Recipe:
     that sits in the bags, not an equipped weapon. DriveCraft walks a
     `tool` recipe's crafter to the nearest Anvil, takes the tool out of the
     bank and returns it afterwards, so a `tool` recipe is a walked focus even
-    though `FOCUS_AIMS` (the bridge-side walks) has no Anvil. The buyer is
-    `craft_supply.hammer_errand`.
+    though `FOCUS_AIMS` (the bridge-side walks) has no Anvil - once its tool
+    is in `TOOL_WALKS`, which stays empty until that walk is live. The buyer
+    is `craft_supply.hammer_errand`.
     """
 
     spell_id: int
@@ -236,6 +237,17 @@ FOCUS_AIMS = {
 # The Blacksmith Hammer (item_template class 2, subclass 14, BuyPrice 18):
 # the bag tool every worn Blacksmithing recipe needs. See `Recipe.tool`.
 BLACKSMITH_HAMMER = 5956
+
+
+# WHICH BAG TOOLS SOMETHING ACTUALLY WALKS A CRAFTER FOR, the `FOCUS_AIMS` of
+# `Recipe.tool`. EMPTY UNTIL THE ANVIL WALK IS LIVE (mod-overseer#524): the
+# module half that walks a smith to an Anvil and takes the hammer out of the
+# bank is not merged into what the realm runs, so a `tool` recipe is still a
+# focus nothing walks to. Until then `recipe_for` skips every `tool` recipe,
+# the hammer rows stay in the stranded-focus debt tests/test_craft.py pins,
+# and the smith keeps the Anvil gaps exactly as before. Landing the walk is
+# one line: add BLACKSMITH_HAMMER here and move the pinned debt.
+TOOL_WALKS: frozenset = frozenset()
 
 
 # One profession, one verified entry, per the module docstring's own
@@ -1873,7 +1885,8 @@ RECIPES: dict = {
     # EVERY ROW BUT THORIUM BELT IS A `tool` RECIPE NOW: Anvil plus a
     # Blacksmith Hammer in the bags (RequiredTotemCategoryID 162), walked by
     # DriveCraft (see `Recipe.tool`) and bought by
-    # `craft_supply.hammer_errand`. Thorium Belt stays out: the ticket that
+    # `craft_supply.hammer_errand`. They stay out of `recipe_for` until
+    # `TOOL_WALKS` names the hammer. Thorium Belt stays out: the ticket that
     # added the worn rungs did not name it.
     # Every row but Runed Copper Belt eats a bar nothing here smelts, so a
     # smith waits on the bars as on any gathered reagent.
@@ -2491,8 +2504,14 @@ def recipe_for(skill_id: int, skill_value: int):
     order (Engineering's table is the first with more than one entry, and
     `test_brackets_do_not_overlap_within_one_skill` holds it, and every
     profession after it, to that).
+
+    A `tool` recipe whose tool is not in `TOOL_WALKS` is skipped: nothing
+    walks its crafter to the Anvil yet, so its bracket answers None the way
+    an Anvil gap always has.
     """
     for recipe in RECIPES.get(skill_id, ()):
+        if recipe.tool and recipe.tool not in TOOL_WALKS:
+            continue
         if recipe.min_skill <= skill_value <= recipe.max_skill:
             return recipe
     return None
@@ -2540,9 +2559,11 @@ def walked(recipe: Recipe) -> bool:
     """Does something stand a character at this recipe's focus object?
 
     Zero focus needs nothing; a `FOCUS_AIMS` focus is walked by the bridge; a
-    `tool` recipe is walked by DriveCraft (the module ticket).
+    `tool` recipe is walked by DriveCraft once its tool is in `TOOL_WALKS`.
     """
-    return not recipe.focus or recipe.focus in FOCUS_AIMS or bool(recipe.tool)
+    if not recipe.focus or recipe.focus in FOCUS_AIMS:
+        return True
+    return bool(recipe.tool) and recipe.tool in TOOL_WALKS
 
 
 def smelt_errand(name: str, skills: dict, primaries=None) -> int:

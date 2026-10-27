@@ -8745,18 +8745,17 @@ class Bridge(discord.Client):
             and spell_id not in guildcorps.CREW_RUNGS
         }
         # THE BLACKSMITH HAMMER FIRST, because the early return below ends the
-        # pass for a smith whose recipe names no vendor reagent 
+        # pass for a smith whose recipe names no vendor reagent
         # (the module ticket): its buy rows and its walk join the same single trip.
         queued, needs = await self._buy_blacksmith_hammers(spells)
         if not candidates and not multi_candidates:
+            await self._walk_for_hammers(needs, cohort)
             log.info(
                 "craft_supply: %d craft errand(s) standing on job=%s, none of "
                 "which names a vendor-bought reagent, so there is nothing to "
                 "buy this pass beyond %d hammer row(s)", len(spells), mode,
                 queued,
             )
-            if needs:
-                await self._walk_for_reagents(needs, cohort)
             return
 
         # EVERY REAGENT NOBODY CAN REACH A COUNTER FOR, from both blocks
@@ -9173,6 +9172,16 @@ class Bridge(discord.Client):
         if needs:
             await self._walk_for_reagents(needs, cohort)
         return queued
+
+    async def _walk_for_hammers(self, needs: list, cohort=None) -> None:
+        """Walk for a hammer no counter in reach sells, when a pass ends early.
+
+        Its own function so `_craft_supply_once` gains no branch for the
+        hammer (`_buy_blacksmith_hammers` already wrote the rows): an empty
+        `needs` is no walk.
+        """
+        if needs:
+            await self._walk_for_reagents(needs, cohort)
 
     async def _buy_blacksmith_hammers(self, spells: dict) -> tuple:
         """Queue a Blacksmith Hammer for every smith who has none (the module ticket).

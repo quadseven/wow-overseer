@@ -319,6 +319,26 @@ FOCUS_WITHOUT_A_WALK = {
     19795,
 }
 
+# THE WORN BLACKSMITHING RECIPES (Anvil plus a Blacksmith Hammer) stay counted
+# as stranded until the Anvil walk is live (mod-overseer#524) and
+# craft.TOOL_WALKS names the hammer. Moving them out is that change's job.
+HAMMER_RECIPES_WITHOUT_A_WALK = {
+    7818,
+    2666,
+    14379,
+    2668,
+    2672,
+    3506,
+    3501,
+    7223,
+    9928,
+    9935,
+    9964,
+    16649,
+    16657,
+}
+FOCUS_WITHOUT_A_WALK |= HAMMER_RECIPES_WITHOUT_A_WALK
+
 
 class RecipeForTests(unittest.TestCase):
     def test_woolen_bag_carries_tailoring_from_101_to_124(self):
@@ -466,14 +486,16 @@ class RecipeForTests(unittest.TestCase):
         self.assertIsNotNone(recipe)
         self.assertEqual(recipe.spell_id, 2660)
 
-    def test_blacksmithing_hands_the_anvil_rungs_to_the_hammer_recipes(self):
-        # 100-124 is real skill range with real recipes; they need an Anvil and
-        # a Blacksmith Hammer, which DriveCraft walks to and fetches.
-        for value, spell in ((100, 7818), (124, 2666), (150, 14379), (199, 3501)):
+    def test_blacksmithing_returns_none_in_an_anvil_gated_gap(self):
+        # 100-124 is real skill range with real recipes (Runed Copper Belt,
+        # Silver Rod, Rough Bronze Leggings) - all require an Anvil nothing
+        # walks a smith to, so this must stay None rather than falling back to
+        # a stone recipe past its own grey, which would grant no skill-up.
+        for value in (100, 124, 150, 199, 210, 249, 260, 300):
             with self.subTest(value=value):
-                recipe = craft.recipe_for(goals.SKILL_IDS["blacksmithing"], value)
-                self.assertEqual(recipe.spell_id, spell)
-                self.assertEqual(recipe.tool, craft.BLACKSMITH_HAMMER)
+                self.assertIsNone(
+                    craft.recipe_for(goals.SKILL_IDS["blacksmithing"], value)
+                )
 
     def test_the_grinding_stones_carry_the_smith_to_their_own_grey(self):
         """Coarse Grinding Stone's grey is 100 and Heavy Grinding Stone's 150,
@@ -488,35 +510,21 @@ class RecipeForTests(unittest.TestCase):
                 self.assertEqual(craft.recipe_for(blacksmithing, value).spell_id, 3337)
 
     def test_blacksmithing_finds_the_top_bracket(self):
-        # Imperial Plate Boots at the 300 cap; Dense Sharpening Stone ends at
-        # 259 and not 260 because 260 is its own grey value, where the core
-        # rolls no skill-up at all.
-        blacksmithing = goals.SKILL_IDS["blacksmithing"]
-        self.assertEqual(craft.recipe_for(blacksmithing, 259).spell_id, 16641)
-        self.assertEqual(craft.recipe_for(blacksmithing, 260).spell_id, 9964)
-        self.assertEqual(craft.recipe_for(blacksmithing, 300).spell_id, 16657)
-
-    def test_blacksmithing_returns_none_in_an_anvil_gated_gap(self):
-        # The Anvil gap (100-124, 150-199, 210-249, 260-300) used to be None
-        # because nothing walked a smith to an Anvil. The hammer recipes fill
-        # it, so every skill up to the cap resolves, and each rung that lands
-        # in a former gap is a tool recipe, never a stone past its own grey.
-        blacksmithing = goals.SKILL_IDS["blacksmithing"]
-        for value in (100, 124, 150, 199, 210, 249, 260, 300):
-            with self.subTest(value=value):
-                recipe = craft.recipe_for(blacksmithing, value)
-                self.assertIsNotNone(recipe)
-                self.assertEqual(recipe.tool, craft.BLACKSMITH_HAMMER)
+        # Dense Sharpening Stone, 250-259 - the highest verified entry. It
+        # ends at 259 and not 260 because 260 is its own grey value, where
+        # the core rolls no skill-up at all.
+        recipe = craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 259)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 16641)
 
     def test_blacksmithing_stops_at_dense_sharpening_stones_grey(self):
         """260 IS THE GREY VALUE, not a bracket the table gave up on. Casting
-        Dense Sharpening Stone there produces the item and never the point, so
-        the smith moves to the next rung (Imperial Plate Bracers)."""
-        blacksmithing = goals.SKILL_IDS["blacksmithing"]
-        self.assertNotEqual(craft.recipe_for(blacksmithing, 260).spell_id, 16641)
+        there produces the item and never the point - see craft.py's COLOUR
+        BANDS block for the other nine edges that had the same fault."""
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 260))
 
     def test_blacksmithing_returns_none_past_the_last_verified_bracket(self):
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 301))
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 261))
 
     def test_blacksmithing_never_aims_below_a_recipes_learn_floor(self):
         """THE 65-74 WALL THAT STOPPED GRUG. Coarse Sharpening Stone's
@@ -1434,16 +1442,16 @@ class SpellFocusTests(unittest.TestCase):
     def test_a_focus_gated_recipe_without_a_walk_is_a_named_counted_debt(self):
         """The other half: a declaration can be HONEST and still name a focus
         nothing stands a character in, which is the eleven Engineering entries
-        infra#3760 is filed for. They stay in the table - removing them would
-        hide the gap rather than close it - but the set is pinned to exactly
-        those eleven, so a twelfth cannot be added without a walk."""
+        infra#3760 is filed for, plus the thirteen worn Blacksmithing rows that
+        wait on the Anvil walk. They stay in the table - removing them would
+        hide the gap rather than close it - but the set is pinned exactly, so
+        another cannot be added without a walk."""
         stranded = {
             recipe.spell_id
             for skill_id, recipes in craft.RECIPES.items()
             for recipe in recipes
             if recipe.focus
             and recipe.focus not in craft.FOCUS_AIMS
-            and not recipe.tool
             and skill_id != goals.SKILL_IDS["cooking"]
         }
         self.assertEqual(
@@ -1464,14 +1472,19 @@ class SpellFocusTests(unittest.TestCase):
             for recipe in recipes
             if recipe.focus
             and recipe.focus not in craft.FOCUS_AIMS
-            and not recipe.tool
             and skill_id != goals.SKILL_IDS["cooking"]
         }
         self.assertEqual(set(stranded.values()), {1})  # Anvil, and only Anvil
         engineering = {
             r.spell_id for r in craft.RECIPES[goals.SKILL_IDS["engineering"]]
         }
-        self.assertLessEqual(set(stranded), engineering)
+        self.assertLessEqual(set(stranded) - HAMMER_RECIPES_WITHOUT_A_WALK, engineering)
+        # The only other stranded rows are the worn Blacksmithing ones, each
+        # waiting on a hammer nothing fetches yet.
+        for spell in HAMMER_RECIPES_WITHOUT_A_WALK:
+            with self.subTest(spell=spell):
+                self.assertEqual(craft.tool_for(spell), craft.BLACKSMITH_HAMMER)
+                self.assertNotIn(craft.BLACKSMITH_HAMMER, craft.TOOL_WALKS)
 
     def test_an_anvil_gated_recipe_is_still_refused(self):
         """infra#3617's half stays fenced. Anvil is focus 1 and there is no
@@ -1493,10 +1506,7 @@ class SpellFocusTests(unittest.TestCase):
                 focus = craft.focus_for(spell)
                 with self.subTest(skill=skill_name, value=value, spell=spell):
                     self.assertTrue(
-                        focus == 0
-                        or focus in craft.FOCUS_AIMS
-                        or focus == 4
-                        or craft.tool_for(spell) != 0,
+                        focus == 0 or focus in craft.FOCUS_AIMS or focus == 4,
                         f"craft_errand names {spell} at {skill_name} {value}, "
                         f"which needs focus {focus} and nothing walks there",
                     )

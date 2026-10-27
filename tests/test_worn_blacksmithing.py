@@ -8,6 +8,7 @@ classicdb.ch.
 """
 
 import unittest
+from unittest import mock
 
 import craft
 import craft_supply
@@ -99,7 +100,42 @@ WORN = (
 )
 
 
+def hammer_walked():
+    """The world after the Anvil walk is live: the hammer is a walked tool."""
+    return mock.patch.object(craft, "TOOL_WALKS", frozenset({HAMMER}))
+
+
+class TheHammerRecipesWaitForTheAnvilWalk(unittest.TestCase):
+    """Until craft.TOOL_WALKS names the hammer, nothing walks a smith to an
+    Anvil, so no hammer recipe is handed out and the Anvil gaps stay None."""
+
+    def test_the_gate_is_shut_today(self):
+        self.assertNotIn(HAMMER, craft.TOOL_WALKS)
+
+    def test_recipe_for_never_returns_a_hammer_recipe(self):
+        for spell, name, low, high in WORN:
+            for value in (low, high):
+                with self.subTest(name=name, value=value):
+                    recipe = craft.recipe_for(BLACKSMITHING, value)
+                    self.assertTrue(recipe is None or not recipe.tool)
+
+    def test_a_smith_in_an_anvil_gap_gets_no_hammer_errand(self):
+        spell = craft.craft_errand("Grug", {"blacksmithing": 110}, ("blacksmithing",))
+        self.assertNotEqual(craft.tool_for(spell), HAMMER)
+
+    def test_a_hammer_recipe_is_not_walked(self):
+        belt = next(r for r in craft.RECIPES[BLACKSMITHING] if r.spell_id == BELT)
+        self.assertFalse(craft.walked(belt))
+        with hammer_walked():
+            self.assertTrue(craft.walked(belt))
+
+
 class WornRecipeTests(unittest.TestCase):
+    def setUp(self):
+        patcher = hammer_walked()
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_each_worn_recipe_is_pinned(self):
         for spell, name, low, high in WORN:
             with self.subTest(name=name):
