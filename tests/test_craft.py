@@ -139,6 +139,20 @@ MEASURED_FOCUS = {
     3337: 0,
     9918: 0,
     16641: 0,
+    # The worn recipes: Anvil, and a Blacksmith Hammer in the bags.
+    7818: 1,
+    2666: 1,
+    14379: 1,
+    2668: 1,
+    2672: 1,
+    3506: 1,
+    3501: 1,
+    7223: 1,
+    9928: 1,
+    9935: 1,
+    9964: 1,
+    16649: 1,
+    16657: 1,
     # LEATHERWORKING
     2881: 0,
     2152: 0,
@@ -252,6 +266,19 @@ MEASURED_BANDS = {
     3337: (1, 125, 150),
     9918: (1, 200, 210),
     16641: (1, 255, 260),
+    7818: (1, 105, 110),
+    2666: (80, 110, 150),
+    14379: (1, 155, 160),
+    2668: (95, 145, 175),
+    2672: (120, 150, 180),
+    3506: (1, 180, 205),
+    3501: (1, 190, 215),
+    7223: (1, 210, 235),
+    9928: (1, 225, 245),
+    9935: (1, 235, 255),
+    9964: (1, 255, 275),
+    16649: (1, 290, 310),
+    16657: (1, 315, 335),
     # LEATHERWORKING
     2881: (1, 20, 40),
     2152: (1, 30, 60),
@@ -291,6 +318,26 @@ FOCUS_WITHOUT_A_WALK = {
     19791,
     19795,
 }
+
+# THE WORN BLACKSMITHING RECIPES (Anvil plus a Blacksmith Hammer) stay counted
+# as stranded until the Anvil walk is live (mod-overseer#524) and
+# craft.TOOL_WALKS names the hammer. Moving them out is that change's job.
+HAMMER_RECIPES_WITHOUT_A_WALK = {
+    7818,
+    2666,
+    14379,
+    2668,
+    2672,
+    3506,
+    3501,
+    7223,
+    9928,
+    9935,
+    9964,
+    16649,
+    16657,
+}
+FOCUS_WITHOUT_A_WALK |= HAMMER_RECIPES_WITHOUT_A_WALK
 
 
 class RecipeForTests(unittest.TestCase):
@@ -1395,9 +1442,10 @@ class SpellFocusTests(unittest.TestCase):
     def test_a_focus_gated_recipe_without_a_walk_is_a_named_counted_debt(self):
         """The other half: a declaration can be HONEST and still name a focus
         nothing stands a character in, which is the eleven Engineering entries
-        infra#3760 is filed for. They stay in the table - removing them would
-        hide the gap rather than close it - but the set is pinned to exactly
-        those eleven, so a twelfth cannot be added without a walk."""
+        infra#3760 is filed for, plus the thirteen worn Blacksmithing rows that
+        wait on the Anvil walk. They stay in the table - removing them would
+        hide the gap rather than close it - but the set is pinned exactly, so
+        another cannot be added without a walk."""
         stranded = {
             recipe.spell_id
             for skill_id, recipes in craft.RECIPES.items()
@@ -1430,7 +1478,13 @@ class SpellFocusTests(unittest.TestCase):
         engineering = {
             r.spell_id for r in craft.RECIPES[goals.SKILL_IDS["engineering"]]
         }
-        self.assertLessEqual(set(stranded), engineering)
+        self.assertLessEqual(set(stranded) - HAMMER_RECIPES_WITHOUT_A_WALK, engineering)
+        # The only other stranded rows are the worn Blacksmithing ones, each
+        # waiting on a hammer nothing fetches yet.
+        for spell in HAMMER_RECIPES_WITHOUT_A_WALK:
+            with self.subTest(spell=spell):
+                self.assertEqual(craft.tool_for(spell), craft.BLACKSMITH_HAMMER)
+                self.assertNotIn(craft.BLACKSMITH_HAMMER, craft.TOOL_WALKS)
 
     def test_an_anvil_gated_recipe_is_still_refused(self):
         """infra#3617's half stays fenced. Anvil is focus 1 and there is no
