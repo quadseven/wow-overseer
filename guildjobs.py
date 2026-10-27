@@ -4635,8 +4635,14 @@ def class_ask_held(name, asks) -> frozenset:
 # The questers' crossing (questers.CROSS_ACTION) is the third. It is spelled
 # here because questers imports this module; questers takes it from here.
 QUESTER_CROSS_ACTION = "quester-cross"
+PVP_CROSS_ACTION = "pvp-cross"
 CROSS_ACTIONS = frozenset(
-    {classquest.CROSS_ACTION, guildlevel.CROSS_ACTION, QUESTER_CROSS_ACTION}
+    {
+        classquest.CROSS_ACTION,
+        guildlevel.CROSS_ACTION,
+        QUESTER_CROSS_ACTION,
+        PVP_CROSS_ACTION,
+    }
 )
 
 
@@ -5482,9 +5488,28 @@ def _pvp_walk_cooling(name, recent) -> bool:
     )  # fmt: skip
 
 
-def pvp_step(m, aim, move, cap, kept=None):
-    """The step for a PvP move: the queue row, or the walk to the vendor that
-    stocks the item and the honor buy, after selling junk for room."""
+def _pvp_cross_destination(m, aim) -> int | None:
+    """The continent map id a PvP buyer crosses to, or None when it cannot."""
+    here = m.map_id
+    if here is None or int(here) not in (0, 1):
+        return None
+    here = int(here)
+    vendor_continents = {
+        int(x) for x in (getattr(aim, "maps", None) or ()) if int(x) in (0, 1)
+    }
+    if not vendor_continents:
+        return None
+    if here in vendor_continents:
+        family = {0, 1} - vendor_continents
+        return min(family) if family else None
+    rest = vendor_continents - {here}
+    return min(rest) if rest else min(vendor_continents)
+
+
+def pvp_step(m, aim, move, cap, kept=None, recent=()):
+    """The step for a PvP move: the queue row, the walk to the vendor that
+    stocks the item and the honor buy, or a boat or zeppelin crossing to the
+    vendor's continent and back, after selling junk for room."""
     if move.kind == pvpgear.QUEUE:
         return guildcorps.Step(
             m.name,
@@ -5496,6 +5521,32 @@ def pvp_step(m, aim, move, cap, kept=None):
                     "guild", pvpgear.queue_command(aim), "", source_for("pvp", m.name)
                 ),
             ),
+        )
+    if move.kind == pvpgear.CROSS:
+        to_map = move.to_map
+        if to_map is None:
+            to_map = _pvp_cross_destination(m, aim)
+        if to_map is None:
+            return None
+        if class_walls(m.name, recent).get(int(to_map)) is not None:
+            return None
+        if crossing_cooling(m.name, recent):
+            return None
+        return guildcorps.Step(
+            m.name,
+            pvpgear.ACTION,
+            int(to_map),
+            move.said,
+            rows=(
+                guildcorps.Row(
+                    "job",
+                    classquest.cross_command(int(to_map)),
+                    "",
+                    source_for(PVP_CROSS_ACTION, m.name),
+                ),
+            ),
+            walk=None,
+            goal=classquest.CONTINENTS.get(int(to_map), aim.vendor),
         )
     if move.kind == pvpgear.BUY:
         return guildcorps.Step(
@@ -5541,6 +5592,22 @@ def _pvp_first(m, pvp, recent, cap, kept=None, pet_wanted=False):
     aim, move = pvp
     if move.kind in (pvpgear.INSIDE, pvpgear.WAITING):
         return None, aim.line + ": " + move.said, True
+    if move.kind == pvpgear.CROSS:
+        if m.in_combat:
+            return None, "", False
+        if pet_wanted:
+            return None, "", False
+        to_map = move.to_map
+        if to_map is None:
+            to_map = _pvp_cross_destination(m, aim)
+        if to_map is None:
+            return None, "", False
+        if class_walls(m.name, recent).get(int(to_map)):
+            return None, "", False
+        if crossing_cooling(m.name, recent):
+            return None, aim.line + ": " + move.said, True
+        step = pvp_step(m, aim, move, cap, kept, recent)
+        return step, (aim.line + ": " + move.said) if step else "", True
     if move.kind not in (pvpgear.QUEUE, pvpgear.BUY) or m.in_combat:
         return None, "", False
     if pet_wanted:
@@ -5549,7 +5616,7 @@ def _pvp_first(m, pvp, recent, cap, kept=None, pet_wanted=False):
         return None, "", False
     if move.kind == pvpgear.BUY and _pvp_walk_cooling(m.name, recent):
         return None, "", False
-    step = pvp_step(m, aim, move, cap, kept)
+    step = pvp_step(m, aim, move, cap, kept, recent)
     return step, (aim.line + ": " + move.said) if step else "", move.holds
 
 

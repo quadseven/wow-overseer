@@ -328,12 +328,51 @@ def offers_for(side: str, offers) -> list:
 
 
 def offers_on(map_id, offers) -> list:
-    """The offers a member standing on `map_id` can walk to: every one inside
+    """The offers a member standing on  can walk to: every one inside
     a battleground (it plays its game out), else those whose vendor stands on
     that map, and none on an unread map."""
     if map_id is not None and int(map_id) in BATTLEGROUND_MAPS:
         return list(offers)
     return [o for o in offers if o.sold_on(map_id)]
+
+
+_CONTINENT_NAME = {0: "Eastern Kingdoms", 1: "Kalimdor"}
+
+
+def _cross_to_vendor_destination(aim, map_id) -> int | None:
+    if map_id is None or int(map_id) not in (0, 1):
+        return None
+    here = int(map_id)
+    vendor_continents = {int(m) for m in (aim.maps or ()) if int(m) in (0, 1)}
+    if not vendor_continents or here in vendor_continents:
+        return None
+    rest = vendor_continents - {here}
+    return min(rest) if rest else min(vendor_continents)
+
+
+def _cross_back_destination(aim, map_id) -> int | None:
+    if map_id is None or int(map_id) not in (0, 1):
+        return None
+    here = int(map_id)
+    vendor_continents = {int(m) for m in (aim.maps or ()) if int(m) in (0, 1)}
+    if not vendor_continents or here not in vendor_continents:
+        return None
+    family = {0, 1} - vendor_continents
+    if not family:
+        return None
+    return min(family)
+
+
+def _cross_continent(member_map, offer_maps) -> bool:
+    """Whether the offer's vendor stands on the other classic continent from
+    `member_map`, so an idle member may cross to it by boat or zeppelin."""
+    if member_map is None or int(member_map) not in (0, 1):
+        return False
+    here = int(member_map)
+    vendor_continents = {int(m) for m in (offer_maps or ()) if int(m) in (0, 1)}
+    if not vendor_continents or here in vendor_continents:
+        return False
+    return True
 
 
 def list_ids(spec: str, phase: str) -> frozenset:
@@ -448,6 +487,12 @@ class Aim:
     filler: bool = False
     # The cohort's count line, said with the queue (#959).
     cohort: str = ""
+    # The maps the vendor's spawns stand on; empty when unread.
+    maps: frozenset = frozenset()
+
+    @property
+    def vendor_maps(self) -> frozenset:
+        return self.maps
 
     @property
     def vendor(self) -> str:
@@ -503,12 +548,13 @@ def plan_aims(seekers) -> dict:
         chosen.setdefault(s.guild, bg.key)
         out[s.name] = Aim(
             s.name, s.guild, s.level, offer.entry, offer.name, offer.honor,
-            int(s.honor), bg, offer.vendor_name, s.faction,
+            int(s.honor), bg, offer.vendor_name, s.faction, maps=offer.maps,
         )  # fmt: skip
     return out
 
 
 INSIDE, CARRIED, BUY, WAITING, QUEUE = "inside", "carried", "buy", "waiting", "queue"
+CROSS = "cross"
 # GATHERING: the cohort is short, nobody queues (#959). COOLING: the module
 # accepted a leave from it lately.
 GATHERING, COOLING = "gathering", "cooling"
@@ -522,11 +568,13 @@ class Move:
     # A queue accepted past WAITING_MINUTES: asked again (kind QUEUE), but the
     # member is still in the game's queue and stays held until the answer.
     queued: bool = False
+    # For a CROSS move: the continent map id to cross to.
+    to_map: int | None = None
 
     @property
     def holds(self) -> bool:
         """Whether the member is held from other jobs: inside, or queued."""
-        return self.kind in (INSIDE, WAITING) or self.queued
+        return self.kind in (INSIDE, WAITING, CROSS) or self.queued
 
 
 def _pvp_rows(name: str, recent):
@@ -573,9 +621,35 @@ def next_move(aim: Aim, map_id, carried: bool, recent) -> Move:
         return Move(
             INSIDE, "%s plays a battleground for honor toward %s" % (aim.name, aim.item)
         )
+    # Cross back to the family's continent once the item has been bought on
+    # the vendor's continent.
     if carried:
+        back = _cross_back_destination(aim, map_id)
+        if back is not None:
+            return Move(
+                CROSS,
+                "%s crosses to %s by boat or zeppelin with %s"
+                % (
+                    aim.name,
+                    _CONTINENT_NAME.get(back, "the other continent"),
+                    aim.item,
+                ),
+                to_map=back,
+            )
         return Move(CARRIED, "%s carries %s and puts it on" % (aim.name, aim.item))
     if not aim.filler and aim.held >= aim.honor:
+        dest = _cross_to_vendor_destination(aim, map_id)
+        if dest is not None:
+            return Move(
+                CROSS,
+                "%s crosses to %s by boat or zeppelin for %s"
+                % (
+                    aim.name,
+                    _CONTINENT_NAME.get(dest, "the vendor's continent"),
+                    aim.item,
+                ),
+                to_map=dest,
+            )
         return Move(
             BUY,
             "%s has the %d honor for %s and walks to %s"
@@ -910,7 +984,12 @@ def seekers_from_rows(
         if not gear or not spec:
             continue
         faction = guildrun.faction_of([member])
-        mine = offers_on(row.get("snapshot_map"), offers_for(faction, offers))
+        idle = member.name not in (busy or ())
+        mine = list(offers_on(row.get("snapshot_map"), offers_for(faction, offers)))
+        if idle:
+            for o in offers_for(faction, offers):
+                if o not in mine and _cross_continent(row.get("snapshot_map"), o.maps):
+                    mine.append(o)
         upgrade = next_upgrade(gear, spec, member.level, list_rows, mine)
         honor = int(row.get("honor") or 0)
         out.append(

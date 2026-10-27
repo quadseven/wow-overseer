@@ -81,11 +81,11 @@ def offer(
     )
 
 
-def seekers(rows, worn_agility, list_agility, offers):
+def seekers(rows, worn_agility, list_agility, offers, busy=()):
     worn = [w for r in rows for w in worn_rings(r["name"], worn_agility)]
     gear = guildsocial.gear_by_name(rows, worn, [])
     lists = {LIST_RING: ring(LIST_RING, list_agility, "Listed ring")}
-    return pvpgear.seekers_from_rows(rows, gear, lists, offers)
+    return pvpgear.seekers_from_rows(rows, gear, lists, offers, busy=busy)
 
 
 class WhoQueues(unittest.TestCase):
@@ -413,11 +413,23 @@ class OnlyWhatItCanBuy(unittest.TestCase):
     def wsg(self, maps=(KALIMDOR,)):
         return offer(vendor=SILVERWING, honor=300, required=18, maps=maps)
 
-    def test_a_vendor_on_another_continent_is_not_its_upgrade(self):
-        for map_id in (EASTERN_KINGDOMS, OUTLAND):
-            (s,) = seekers([member_row(level=20, map_id=map_id)], 5, 8, [self.wsg()])
-            self.assertFalse(s.upgrade.pvp, map_id)
-            self.assertEqual({}, pvpgear.plan_aims([s]))
+    def test_a_vendor_on_another_continent_is_an_upgrade_when_idle(self):
+        (s,) = seekers(
+            [member_row(level=20, map_id=EASTERN_KINGDOMS)], 5, 8, [self.wsg()]
+        )
+        self.assertTrue(s.upgrade.pvp, EASTERN_KINGDOMS)
+        self.assertIn("Auren", pvpgear.plan_aims([s]))
+
+    def test_a_vendor_on_another_continent_is_not_its_upgrade_when_busy(self):
+        rows = [member_row(level=20, map_id=EASTERN_KINGDOMS)]
+        (s,) = seekers(rows, 5, 8, [self.wsg()], busy={"Auren"})
+        self.assertFalse(s.upgrade.pvp, EASTERN_KINGDOMS)
+        self.assertEqual({}, pvpgear.plan_aims([s]))
+
+    def test_an_outland_buyer_never_crosses(self):
+        (s,) = seekers([member_row(level=20, map_id=OUTLAND)], 5, 8, [self.wsg()])
+        self.assertFalse(s.upgrade.pvp, OUTLAND)
+        self.assertEqual({}, pvpgear.plan_aims([s]))
 
     def test_on_the_vendors_continent_it_is(self):
         (s,) = seekers([member_row(level=20, map_id=KALIMDOR)], 5, 8, [self.wsg()])
