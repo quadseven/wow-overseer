@@ -165,7 +165,7 @@ ANSWER_TABLE_SQL = (
     " ask_id INT NOT NULL,"
     " member VARCHAR(12) NOT NULL,"
     " role ENUM('tank','healer','dps') NOT NULL,"
-    " stance ENUM('need','help','carry') NOT NULL,"
+    " stance ENUM('need','help','carry','pug') NOT NULL,"
     " said VARCHAR(255) NOT NULL DEFAULT '',"
     " created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,"
     " state ENUM('yes','seated','declined','withdrawn') NOT NULL DEFAULT 'yes',"

@@ -199,6 +199,7 @@ const STEP = {
   done: ["var(--ok)", "ph-fill ph-check-circle", "Turned in."],
   ready: ["var(--ok)", "ph ph-check-circle", "Complete, waiting to be handed in."],
   "in progress": ["var(--color-accent-300)", "ph ph-circle-dashed", "In the quest log."],
+  failed: ["var(--warn)", "ph-fill ph-x-circle", "Failed in the quest log: dropped and taken again."],
   blocked: ["var(--warn)", "ph-fill ph-hand-palm", ""],
   open: ["var(--color-neutral-400)", "ph ph-circle", "Open at this level, not taken."],
   locked: ["var(--color-neutral-500)", "ph ph-lock-simple", ""],
