@@ -110,8 +110,14 @@ class TheBridgeAsksOnlyWithinAParty(unittest.TestCase):
             self.assertTrue(questshare.grouped(g.holder, g.taker, SPLIT), g)
 
     def test_a_world_without_party_facts_shares_as_before(self):
+        # Compared by field: the bridge's questshare can be a separately
+        # loaded copy of the module, so its Grant is not this Grant class.
+        def triples(grants):
+            return [(g.holder, g.taker, g.quest_id) for g in grants]
+
         self.assertEqual(
-            self.run_pass(None), list(questshare.plan(FAMILY, CATALOG).grants)
+            triples(self.run_pass(None)),
+            triples(questshare.plan(FAMILY, CATALOG).grants),
         )
 
 
