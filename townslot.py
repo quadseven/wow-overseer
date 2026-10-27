@@ -764,6 +764,7 @@ def decide(
     last_served,
     now: float,
     urgent: bool = False,
+    priority: bool = False,
     lease: float = LEASE_SECONDS,
     orphan_lease: float = ORPHAN_LEASE_SECONDS,
     long_leases=None,
@@ -892,6 +893,7 @@ def decide(
             now=now,
             want_fresh=want_fresh,
             urgent=urgent,
+            priority=priority,
             stop=stop,
         )
     return _held_column(
@@ -907,6 +909,7 @@ def decide(
         want_fresh=want_fresh,
         releasable=releasable,
         urgent=urgent,
+        priority=priority,
     )
 
 
@@ -972,6 +975,7 @@ def _free_column(
     now: float,
     want_fresh: float,
     urgent: bool = False,
+    priority: bool = False,
     stop: bool = False,
 ) -> Decision:
     """Nobody is holding the traveller. Is it this pass's turn to take it?
@@ -1000,7 +1004,7 @@ def _free_column(
             character=character,
             stop=True,
         )
-    ahead = [] if urgent else _ahead_of(claimant, wants, now, want_fresh)
+    ahead = [] if urgent or priority else _ahead_of(claimant, wants, now, want_fresh)
     mine_served = last_served.get(claimant)
     # WHO IS OWED THE NEXT TURN. Only a pass that has been waiting longer than
     # this one (that is what `ahead` means) AND has not had the traveller since
@@ -1059,14 +1063,15 @@ def _held_column(
     releasable,
     clearing: bool = False,
     urgent: bool = False,
+    priority: bool = False,
     long_leases=None,
 ) -> Decision:
     """Somebody else has the traveller. Wait, or take it off them?
 
     THE ONLY PLACE A PREEMPTION IS DECIDED, and it takes three things to agree:
     the aim must be one this process could hand back, the lease must have run
-    out, and no other pass may have been starved longer. Any one of them
-    missing is a wait.
+    out, and no other pass may have been starved longer unless its bounded
+    priority turn has arrived. Any one of them missing is a wait.
 
     THE THIRD ONE RANKS ON THE WAIT AND NOT ON THE ASK (infra#4208). `ahead`
     comes from `_ahead_of`, which compares every live want against this
@@ -1114,9 +1119,9 @@ def _held_column(
             character=character,
         )
 
-    # Urgent bag pressure may preempt an expired releasable errand even when a
-    # different pass has been waiting longer. Ordinary fairness is unchanged.
-    ahead = [] if urgent else _ahead_of(claimant, wants, now, want_fresh)
+    # Urgent bag pressure and an earned priority turn may preempt an expired
+    # releasable errand even when a different pass has been waiting longer.
+    ahead = [] if urgent or priority else _ahead_of(claimant, wants, now, want_fresh)
     if ahead:
         # THE LEASE HAS RUN OUT BUT IT IS NOT THIS PASS'S TURN. Somebody has
         # been starved longer, and handing the column to whoever happened to
@@ -1752,10 +1757,14 @@ class Slot:
         retaskable,
         now: float,
         urgent: bool = False,
+        priority_after: float | None = None,
         distance: float | None = None,
         trainer_route: bool = False,
     ) -> Decision:
         """Decide, and register the wait if the answer is no.
+
+        `priority_after` lets a caller earn a turn after a continuous wait.
+        It bypasses queue order only; holder and orphan leases still apply.
 
         `distance` is how many yards the leader stands from a ground aim, for
         a pass that can say. It is what lets an owner give up a walk the world
@@ -1822,6 +1831,10 @@ class Slot:
             last_served=self._served,
             now=now,
             urgent=urgent,
+            priority=(
+                priority_after is not None
+                and now - _own_wait(claimant, self.wants, now) >= priority_after
+            ),
             lease=lease,
             orphan_lease=orphan_lease,
             long_leases=long_leases,
