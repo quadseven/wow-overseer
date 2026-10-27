@@ -194,14 +194,22 @@ class DashboardMarker(unittest.TestCase):
         import test_app_shell as shell_test
 
         script = """
-M.setDeploy({commit:"0123456789ab", uptime_seconds:900, starting:false});
+globalThis.document = {querySelector(){return null;}, addEventListener(){}, hidden:false};
+globalThis.window = {setTimeout(){return 1;}, clearTimeout(){}};
+globalThis.fetch = async () => ({ok:true, async text(){return '{"deploy":{"commit":"0123456789ab","uptime_seconds":900,"starting":false}}';}});
+globalThis.sessionStorage = {setItem(){}, getItem(){return null;}, removeItem(){}};
+const A = await import("__API_URL__");
+await A.load("/api/realm");
+M.setDeploy(A.peek("/api/realm").data.deploy);
+globalThis.fetch = async () => { throw new Error("unavailable"); };
+await A.load("/api/realm");
 const slots = [{textContent:"", hidden:true, attrs:{}, setAttribute(k,v){this.attrs[k]=v;}}];
 const root = {querySelectorAll(){return slots;}, querySelector(){return null;}};
-const health = {state:"stale", at:Date.now()-5000};
+const health = A.health(["/api/realm"]);
 M.updateAge(root, health);
 M.updateDeploy(root, health);
 console.log(JSON.stringify(slots.map(s => ({text:s.textContent, hidden:s.hidden, restarting:s.attrs["data-restarting"]}))));
-"""
+""".replace("__API_URL__", (HERE / "app" / "api.js").as_uri())
         out = shell_test.node_module("shell.js", script)
         self.assertEqual(
             out,
