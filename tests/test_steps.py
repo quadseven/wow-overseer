@@ -99,6 +99,22 @@ class ClassQuestStepsTests(unittest.TestCase):
         self.assertEqual(result, "missing trainer")
         self.assertEqual(rows, [])
 
+    def test_move_missing_its_target_or_quest_or_spot_fails_and_sends_nothing(self):
+        spot = classquest.Spawn(1, 123, 1, 0, 0)
+        cases = (
+            classquest.Move(classquest.TAKE, quest=42, said=None),
+            classquest.Move(classquest.TAKE, quest=42, said=""),
+            move(classquest.TURN_IN, quest=None),
+            move(classquest.HUNT, quest=42, spot=None),
+            move(classquest.HUNT, quest=None, spot=spot),
+        )
+        for quest_move in cases:
+            with self.subTest(move=quest_move):
+                store = orders.MemoryStore()
+                with self.assertRaises(ValueError):
+                    steps.run(quest_move, store)
+                self.assertEqual(store.rows, {})
+
     def test_sent_orders_do_not_grant_items_gold_or_xp(self):
         from test_natural_only import GRANT_VERBS, _command_verb
 

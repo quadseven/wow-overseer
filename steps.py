@@ -8,11 +8,24 @@ import guildjobs
 import orders
 
 
+def _checked(move: classquest.Move) -> tuple[str, int]:
+    """The member a move names and its quest id; a move missing either, or a
+    hunt with no spot, raises rather than send an order to no one."""
+    if not move.said:
+        raise ValueError("class quest %s move names no member" % move.kind)
+    if move.quest is None:
+        raise ValueError("class quest %s move has no quest" % move.kind)
+    if move.kind == classquest.HUNT and move.spot is None:
+        raise ValueError("class quest hunt move has no spot")
+    return move.said.split(" ", 1)[0], int(move.quest)
+
+
 def _order(move: classquest.Move) -> orders.Order | None:
     """Build the action order for one executable move."""
-    target = str(move.said).split(" ", 1)[0]
+    if move.kind == classquest.BLOCKED:
+        return None
+    target, quest = _checked(move)
     source = guildjobs.source_for(classquest.ACTION, target)
-    quest = int(move.quest)
     if move.kind == classquest.TAKE:
         return orders.Order(target, "take quest:%d" % quest, source, "quest")
     if move.kind == classquest.HUNT:
@@ -32,8 +45,6 @@ def _order(move: classquest.Move) -> orders.Order | None:
         return orders.Order(target, command, source, "job")
     if move.kind == classquest.ABANDON:
         return orders.Order(target, "abandon quest:%d" % quest, source, "quest")
-    if move.kind == classquest.BLOCKED:
-        return None
     raise ValueError("unknown class quest move kind: %s" % move.kind)
 
 
