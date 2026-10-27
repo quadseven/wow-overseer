@@ -3569,7 +3569,7 @@ def _member_step(
     step, doing, held = _pvp_first(
         m, pvp, recent, cap, kept, pet_due(m, pet, recent, cap, far)
     )
-    if step is not None or held:
+    if step is not None or held or doing:
         return step, doing, _join(supply_note, cap_note), gear_note
     supply_note = _join(supply_note, cap_note)
     supply_note = _cohort_note(supply_note, pvp)
@@ -5482,6 +5482,34 @@ def _pvp_walk_cooling(name, recent) -> bool:
     )  # fmt: skip
 
 
+def pvp_buy_cooldown(name, recent) -> int:
+    """Minutes to wait after this member's failed honor buys due to full bags,
+    0 when its newest such buy did not fail with 'bags cannot take the item'."""
+    rows = sorted(
+        (r for r in recent or () if r.name == name and r.action == pvpgear.ACTION
+         and not r.walk and "bags cannot take the item" in (r.result or "")),
+        key=lambda r: int(r.age_minutes),
+    )  # fmt: skip
+    failed = 0
+    for r in rows:
+        if r.status not in TRAIN_FAILED:
+            break
+        failed += 1
+    if not failed:
+        return 0
+    return min(PVP_WALK_BACKOFF_MINUTES * 2 ** (failed - 1), TRAIN_BACKOFF_CAP_MINUTES)
+
+
+def _pvp_buy_cooling(name, recent) -> bool:
+    minutes = pvp_buy_cooldown(name, recent)
+    return any(
+        r.name == name and r.action == pvpgear.ACTION and not r.walk
+        and "bags cannot take the item" in (r.result or "")
+        and int(r.age_minutes) < minutes
+        for r in recent or ()
+    )  # fmt: skip
+
+
 def pvp_step(m, aim, move, cap, kept=None):
     """The step for a PvP move: the queue row, or the walk to the vendor that
     stocks the item and the honor buy, after selling junk for room."""
@@ -5498,6 +5526,8 @@ def pvp_step(m, aim, move, cap, kept=None):
             ),
         )
     if move.kind == pvpgear.BUY:
+        if m.free_slots is not None and m.free_slots < 1:
+            return None
         return guildcorps.Step(
             m.name,
             pvpgear.ACTION,
@@ -5549,6 +5579,10 @@ def _pvp_first(m, pvp, recent, cap, kept=None, pet_wanted=False):
         return None, "", False
     if move.kind == pvpgear.BUY and _pvp_walk_cooling(m.name, recent):
         return None, "", False
+    if move.kind == pvpgear.BUY and _pvp_buy_cooling(m.name, recent):
+        return None, "", False
+    if move.kind == pvpgear.BUY and m.free_slots is not None and m.free_slots < 1:
+        return None, f"{aim.line}: no free bag slot for PvP buy", False
     step = pvp_step(m, aim, move, cap, kept)
     return step, (aim.line + ": " + move.said) if step else "", move.holds
 

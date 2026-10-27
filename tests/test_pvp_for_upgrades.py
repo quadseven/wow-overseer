@@ -342,6 +342,30 @@ class TheJobStep(unittest.TestCase):
         plan = guildjobs.plan([job_member(eligible=False)], pvp=pvp_for())
         self.assertEqual((), plan.steps)
 
+    def test_a_buy_with_full_bags_does_not_walk(self):
+        """A member with no free bag slots does not walk to the PvP vendor."""
+        member = job_member(free_slots=0, bag_slots=16)
+        plan = guildjobs.plan([member], pvp=pvp_for(held=6000))
+        self.assertFalse(any(s.action == "pvp" for s in plan.steps))
+        self.assertIn("no free bag slot", plan.lines.get("Auren", ""))
+
+    def test_a_buy_that_failed_with_full_bags_cools_down(self):
+        """A member whose honor buy failed with 'bags cannot take the item' cools down."""
+        member = job_member(free_slots=1, bag_slots=16)
+        recent = (
+            guildjobs.Recent(
+                name="Auren",
+                action="pvp",
+                age_minutes=5,
+                status="error",
+                command="buy 19325",
+                result="bags cannot take the item",
+                walk=False,
+            ),
+        )
+        plan = guildjobs.plan([member], pvp=pvp_for(held=6000), recent=recent)
+        self.assertFalse(any(s.action == "pvp" for s in plan.steps))
+
 
 class GuildChat(unittest.TestCase):
     def test_the_first_asks_and_a_guildmate_answers(self):
