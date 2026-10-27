@@ -176,7 +176,8 @@ class TheAudit(unittest.TestCase):
             },
         )
         ugga = self.by["Ugga"]
-        self.assertIsNone(ugga["since_moved_s"])
+        # Ugga has no event of her own; her family (Grug's) moved an hour ago.
+        self.assertEqual(ugga["since_moved_s"], 3600)
         self.assertEqual(ugga["deaths_last_hour"], 7)
         self.assertEqual(ugga["slots_filled"], 0)
         self.assertIsNone(ugga["item_level"])
@@ -189,11 +190,42 @@ class TheAudit(unittest.TestCase):
         self.assertIsNone(bork["hours_at_level"])
 
     def test_stalled_and_empty_slot_members_are_named(self):
-        # Grug is quiet an hour (over agenda.STALL_AFTER); Ugga has no
-        # progress event at all, which is unknown, not stalled.
-        self.assertEqual(self.payload["stalled"], ["Grug"])
+        # Grug's family is quiet an hour (over agenda.STALL_AFTER), so both
+        # of its members are named; Bork moved a minute ago.
+        self.assertEqual(self.payload["stalled"], ["Grug", "Ugga"])
         self.assertEqual(self.payload["empty_slots"], ["Grug", "Ugga"])
         self.assertEqual(self.payload["checked_at"], NOW)
+
+    def test_a_member_with_no_event_reads_its_family_not_unknown(self):
+        # The Now page judges a stall per family: a follower with no event of
+        # its own is as quiet as its family. Read alone it was None, unknown
+        # and never stalled, while the Now page called the family stalled.
+        self.assertEqual(self.by["Ugga"]["since_moved_s"], 3600)
+        self.assertIn("Ugga", self.payload["stalled"])
+
+    def test_a_family_with_no_event_at_all_is_unknown_not_stalled(self):
+        rules = [r for r in RULES if r[0] != ("overseer_event",)]
+        _code, payload, _log = run(rules=rules)
+        by = {m["name"]: m for m in payload["members"]}
+        self.assertIsNone(by["Grug"]["since_moved_s"])
+        self.assertIsNone(by["Ugga"]["since_moved_s"])
+        self.assertEqual(payload["stalled"], [])
+
+    def test_a_boss_credit_is_movement_as_on_the_now_page(self):
+        # A family repeating one dungeon writes no quest, level or equip; its
+        # boss credit two minutes ago is its newest movement (#1314), so it is
+        # not stalled, as the Now page says.
+        credit = (
+            ("overseer_dungeon_run_event",),
+            [{"name": "Grug", "at": NOW - 120, "detail": "1 encounter credited"}],
+        )
+        _code, payload, log = run(rules=[credit, *RULES])
+        by = {m["name"]: m for m in payload["members"]}
+        self.assertEqual(by["Grug"]["since_moved_s"], 120)
+        self.assertEqual(by["Ugga"]["since_moved_s"], 120)
+        self.assertEqual(payload["stalled"], [])
+        boss = [p for s, p in log if "overseer_dungeon_run_event" in s]
+        self.assertEqual(boss, [("Grug", "Ugga", "boss")])
 
     def test_the_death_window_is_one_hour(self):
         deaths = [p for s, p in self.log if "overseer_death" in s]
@@ -201,7 +233,7 @@ class TheAudit(unittest.TestCase):
         self.assertEqual(deaths[0][-1], 3600)
 
     def test_it_issues_only_select_statements(self):
-        self.assertGreaterEqual(len(self.log), 9)
+        self.assertGreaterEqual(len(self.log), 10)
         for sql, _ in self.log:
             self.assertTrue(sql.lstrip().upper().startswith("SELECT"), sql)
             self.assertIsNone(WRITES.search(sql), sql)

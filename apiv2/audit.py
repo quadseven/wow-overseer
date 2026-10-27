@@ -11,10 +11,17 @@ from the request reaches the SQL: the read takes no parameter.
 
 THE SIX FIELDS, per member:
 
-  since_moved_s      seconds since the member's last progress event (a quest,
-                     a level, a gear change or a boss credit: the Now page's
-                     agenda.MOVEMENT_KINDS, read off overseer_event by the
-                     database's own clock). None when no such event is kept:
+  since_moved_s      seconds since the last progress event (a quest, a level,
+                     a gear change off overseer_event, or a boss credit off
+                     overseer_dungeon_run_event: the Now page's
+                     agenda.MOVEMENT_KINDS, by the database's own clock).
+                     A family member reads its FAMILY's newest movement, as
+                     the Now page judges a stall per family (agenda.compose,
+                     members._stalled_leaders): a follower with no event of
+                     its own is as quiet as its family, not unknown, and a
+                     family whose only progress is boss credits on a repeated
+                     clear is moving. A guildmate outside the families reads
+                     its own events. None when no such event is kept:
                      unknown is not stalled (agenda.stalled).
   deaths_last_hour   overseer_death rows in the last DEATH_WINDOW_SECONDS.
   slots_filled       worn stat slots out of `slots` (the 17 guildgear counts:
@@ -29,8 +36,8 @@ THE SIX FIELDS, per member:
                      level, not wall-clock time (digest.py says why).
 
 `stalled` and `empty_slots` name the members a reader looks for first: a
-member quiet longer than agenda.STALL_AFTER, and a member with any empty stat
-slot.
+member quiet longer than agenda.STALL_AFTER (every member of a stalled
+family), and a member with any empty stat slot.
 
 READ ONLY. Every statement here is a SELECT through the request's realm
 reader; nothing is written, and tests/test_apiv2_audit.py runs the handler and
@@ -44,7 +51,7 @@ import guildgear
 from panel import _BACKPACK_SLOTS, _BAG_SLOTS, _EQUIPMENT_SLOT_NAMES
 
 from ._scope import holes
-from .members import MOVED_SQL
+from .members import BOSS_SQL, MOVED_SQL
 
 DEATH_WINDOW_SECONDS = 3600
 STAT_SLOTS = len(guildgear.STAT_SLOTS)
@@ -94,7 +101,8 @@ CLOCK_SQL = "SELECT UNIX_TIMESTAMP() AS now_at"
 
 BASIS = (
     "Every roster member and every online member of a family guild. Moved is "
-    "the last quest, level, gear change or boss credit; deaths are the last "
+    "the last quest, level, gear change or boss credit, of the whole family "
+    "for a family member; deaths are the last "
     "hour's; slots are the 17 stat slots (not shirt or tabard) against "
     "weapons and armour carried in bags that the level allows; item level is "
     "the average worn; mail is delivered letters still holding an item or "
@@ -113,6 +121,7 @@ def fetch(ctx) -> dict:
     names = list(ctx.families.names())
     empty = {
         "roster": names,
+        "families": {},
         "guild": [],
         "readings": {},
         "chars": [],
@@ -121,6 +130,7 @@ def fetch(ctx) -> dict:
         "mail": [],
         "deaths": [],
         "moved": [],
+        "credits": [],
         "now_at": 0,
     }
     if not names:
@@ -141,6 +151,7 @@ def fetch(ctx) -> dict:
     kinds = sorted(agenda.MOVEMENT_KINDS)
     return {
         "roster": names,
+        "families": ctx.families.families(),
         "guild": guild,
         "readings": readings,
         "chars": rd.must(CHARS_SQL.format(holes=h), values),
@@ -168,6 +179,12 @@ def fetch(ctx) -> dict:
             (*values, *kinds),
             what="overseer_event",
         ),
+        # Each family leader's newest boss credit, as the Now page reads it.
+        "credits": rd.rows(
+            BOSS_SQL.format(holes=holes(len(names))),
+            (*names, agenda.BOSS_KIND),
+            what="overseer_dungeon_run_event",
+        ),
         "now_at": int((rd.must(CLOCK_SQL) or [{}])[0].get("now_at") or 0),
     }
 
@@ -194,6 +211,29 @@ def _worn(rows) -> dict:
 def _average(levels: list) -> float | None:
     known = [lv for lv in levels if lv is not None]
     return round(sum(known) / len(known), 1) if known else None
+
+
+def _moved(rows: dict) -> dict:
+    """name -> when it last moved (Unix seconds), judged as the Now page does.
+
+    A member of a family reads the family's newest movement: the newest
+    quest, level or gear event of any member, or the newest boss credit of
+    any member (credits are kept on the run's leader). A guildmate outside
+    the families reads its own events.
+    """
+    own = {r["name"]: int(r["at"]) for r in rows["moved"] or () if r.get("at")}
+    for r in rows.get("credits") or ():
+        if r.get("at"):
+            own[r["name"]] = max(own.get(r["name"], 0), int(r["at"]))
+    out = dict(own)
+    for names in (rows.get("families") or {}).values():
+        newest = max((own.get(n, 0) for n in names), default=0)
+        for n in names:
+            if newest:
+                out[n] = newest
+            else:
+                out.pop(n, None)
+    return out
 
 
 def member(name: str, rows: dict, ids: dict) -> dict:
@@ -242,7 +282,7 @@ def build(rows: dict) -> dict:
         "bags": _counts(rows["bags"], "wearable"),
         "mail": _counts(rows["mail"], "letters"),
         "deaths": _counts(rows["deaths"], "deaths"),
-        "moved": {r["name"]: int(r["at"]) for r in rows["moved"] or () if r.get("at")},
+        "moved": _moved(rows),
     }
     members = [member(n, rows, ids) for n in names]
     quiet = agenda.STALL_AFTER.total_seconds()
