@@ -360,6 +360,10 @@ class TheArchiveHelperTest(unittest.TestCase):
         got = self.run_helper("echo noise; echo '%sx'; echo more" % diag.STOP_TEXT)
         self.assertEqual(["%sx" % diag.STOP_TEXT], got)
 
+    def test_the_all_bosses_cleared_lines_come_back(self):
+        got = self.run_helper("echo noise; echo '%s'" % RFK_LOGS[0])
+        self.assertEqual([RFK_LOGS[0]], got)
+
     def test_a_failing_helper_is_unreadable(self):
         with self.assertRaises(diag.Unreadable):
             self.run_helper("exit 3")
@@ -375,6 +379,58 @@ class TheArchiveHelperTest(unittest.TestCase):
         src = sources(logs=lambda since: {}["missing"])
         with self.assertRaises(KeyError):
             run([KEY], src)
+
+
+# The dungeon module logs a clear it finished on its own line, not as a
+# "Dungeon clear stopped" line (#1570). Shaped like two Razorfen Kraul runs of
+# the family-run-loop:Zug:47 finding whose stop reason was this line.
+CLEARED = (
+    "{t} stdout F {ansi}2026-10-27 00:00:00 INFO [playerbots.dungeonclear] "
+    "[DC:{who}] dungeon clear disabled: All bosses cleared!"
+)
+RFK_RUNS = [
+    dict(
+        RUNS[1],
+        id=740000 + i,
+        map_id=47,
+        started_unix=NOW - 3600 * (i + 2),
+        ended_unix=NOW - 3600 * (i + 1),
+    )
+    for i in range(2)
+]
+RFK_LOGS = [
+    CLEARED.format(
+        t=time.strftime("%Y-%m-%dT%H:%M:%S.5Z", time.gmtime(r["ended_unix"] - 120)),
+        ansi=ansi,
+        who="Zug",
+    )
+    for r, ansi in zip(RFK_RUNS, ["", "\x1b[0m"])
+]
+
+
+class TheAllBossesClearedStopTest(unittest.TestCase):
+    def rfk(self):
+        src = sources(
+            realm=lambda: realm(runs=RFK_RUNS, events=[]),
+            logs=lambda since: list(RFK_LOGS),
+        )
+        return run(["family-run-loop:Zug:47"], src)[1]
+
+    def test_each_run_gets_the_all_bosses_cleared_reason(self):
+        text = self.rfk()
+        self.assertIn("2 of 2 stalls: All bosses cleared!", text)
+        self.assertEqual(2, text.count("Zug: All bosses cleared!"), text)
+        self.assertNotIn("no Dungeon clear stopped line", text)
+
+    def test_the_parser_reads_a_cleared_line(self):
+        stop = diag.stop_of(RFK_LOGS[1])
+        self.assertEqual("Zug", stop.member)
+        self.assertEqual("All bosses cleared!", stop.reason)
+        self.assertEqual(RFK_RUNS[1]["ended_unix"] - 120, stop.at)
+
+    def test_another_disable_is_not_read_as_a_stop(self):
+        line = RFK_LOGS[0].replace("All bosses cleared!", "Dungeon clear disabled.")
+        self.assertIsNone(diag.stop_of(line))
 
 
 class TheShapeTest(unittest.TestCase):
