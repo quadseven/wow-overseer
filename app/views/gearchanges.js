@@ -52,6 +52,11 @@ function fillComparisons(main) {
       const before = peek("/api/item?entry=" + prior).data;
       const after = peek("/api/item?entry=" + next).data;
       node.textContent = before && after ? compareItems(before, after) : "Stat changes unavailable";
+    }).catch((err) => {
+      // load() never rejects, but a malformed item answer can still throw in
+      // compareItems; say so rather than leave "Loading stat changes" up.
+      node.textContent = "Stat changes unavailable";
+      console.warn("gear stat comparison failed", err);
     });
   });
 }
