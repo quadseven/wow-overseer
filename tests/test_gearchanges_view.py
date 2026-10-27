@@ -12,6 +12,38 @@ APP = HERE / "app"
 
 
 class TestGearChangesView(unittest.TestCase):
+    def test_feed_items_are_tooltip_links_and_comparison_names_gains_and_losses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp) / "app"
+            shutil.copytree(APP, root)
+            (root / "package.json").write_text('{"type":"module"}', encoding="utf-8")
+            module = (root / "views/gearchanges.js").as_uri()
+            code = (
+                "globalThis.document = {querySelector: () => null, addEventListener: () => {}}; const V = await import(%s); const row = {kind:'worn', item:'New blade', entry:22, "
+                "quality:3, replaced:'Old blade', prior_entry:11, prior_quality:2, "
+                "item_level:30, item_level_change:2, at:'now'}; "
+                "const html = String(V.renderFeed({changes:[row]}, 'site')); "
+                "const diff = V.compareItems({tooltip:{item_level:28, armor:4, damage:{dps:8}, stats:['+5 Stamina','+2 Agility']}}, "
+                "{tooltip:{item_level:30, armor:9, damage:{dps:6}, stats:['+1 Agility','+7 Stamina']}}); "
+                "process.stdout.write(JSON.stringify({html, diff}));"
+            ) % json.dumps(module)
+            result = subprocess.run(
+                [shutil.which("node"), "--input-type=module", "-e", code],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        got = json.loads(result.stdout)
+        self.assertIn('data-item="22"', got["html"])
+        self.assertIn('data-item="11"', got["html"])
+        self.assertIn("+2 item level", got["diff"])
+        self.assertIn("+5 Armor", got["diff"])
+        self.assertIn("-2 DPS", got["diff"])
+        self.assertIn("+2 Stamina", got["diff"])
+        self.assertIn("-1 Agility", got["diff"])
+
     def test_invalid_stored_times_fall_back_to_the_first_visit_window(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp) / "app"
