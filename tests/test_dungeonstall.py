@@ -723,6 +723,21 @@ class TheBridgeOrder(unittest.TestCase):
         self.assertIn("_silent_dungeon_run", body)
         self.assertIn("dungeonstall.silent_run", body)
 
+    def test_silent_run_event_read_keeps_the_name_index_usable(self):
+        # wow-overseer#1513: overseer_event.character_name is
+        # utf8mb4_unicode_ci and indexed (idx_character_last_seen). A COLLATE
+        # on the column makes MySQL scan the table; collate the names instead.
+        read = BRIDGE[BRIDGE.index("def _silent_dungeon_run(") :]
+        read = read[: read.index("\ndef ", 10)]
+        self.assertIn(
+            "e.character_name IN (%s COLLATE utf8mb4_unicode_ci{more_names})", read
+        )
+        self.assertIn('", %s COLLATE utf8mb4_unicode_ci" * (len(names) - 1)', read)
+        self.assertNotIn("character_name COLLATE", read)
+
+    def test_the_silent_run_threshold_is_two_hours(self):
+        self.assertEqual(stall.NO_PROGRESS_AFTER.total_seconds(), 2 * 3600)
+
     def test_the_ladder_never_steps_to_a_stuck_door(self):
         facts = BRIDGE[BRIDGE.index("    async def _pace_facts(") :]
         facts = facts[: facts.index("\n    async def ", 10)]

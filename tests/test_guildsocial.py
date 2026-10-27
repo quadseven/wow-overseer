@@ -12,6 +12,7 @@ import asyncio
 import datetime
 import types
 import pathlib
+import re
 import unittest
 from dataclasses import replace
 from unittest.mock import patch
@@ -203,12 +204,23 @@ class TheTablesKeepTheContract(unittest.TestCase):
             "ask_id INT",
             "member VARCHAR(12)",
             "role ENUM('tank','healer','dps')",
-            "stance ENUM('need','help','carry')",
+            "stance ENUM('need','help','carry','pug')",
             "said VARCHAR(255)",
             "created_at DATETIME",
             "state ENUM('yes','seated','declined','withdrawn')",
         ):
             self.assertIn(column, gs.ANSWER_TABLE_SQL)
+
+    def test_a_fresh_answer_table_already_knows_every_stance(self):
+        # A fresh CREATE must not lean on the ALTER that follows it to learn
+        # the pug stance (#1512): both declare the same stance ENUM.
+        def stances(sql):
+            m = re.search(r"stance ENUM\(([^)]*)\)", sql)
+            self.assertIsNotNone(m, sql)
+            return [v.strip().strip("'") for v in m.group(1).split(",")]
+
+        self.assertEqual(stances(gs.ANSWER_TABLE_SQL), stances(gs.ANSWER_STANCE_SQL))
+        self.assertIn("pug", stances(gs.ANSWER_TABLE_SQL))
 
     def test_the_bridge_creates_both_and_credits_the_proposer(self):
         store = BRIDGE[BRIDGE.index("def _ensure_guild_run_store") :]
