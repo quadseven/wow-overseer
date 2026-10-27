@@ -114,6 +114,35 @@ class Reapply(unittest.TestCase):
         self.assertEqual(1000, r.seen)
 
 
+class NameCase(unittest.TestCase):
+    """core accepts `@grug` as readily as `@Grug`; the replay side reads the
+    name back from overseer_snapshot in the worldserver's spelling (#1553)."""
+
+    def test_an_order_given_in_another_case_is_replayed_once(self):
+        pages = strategybook.book(_memo(("grug", "nc +grind")))
+        r = strategybook.Reapplier(seen=1000)
+        commands, _ = r.due(2000, pages, ["Grug"])
+        self.assertEqual([("Grug", "nc +grind")], commands)
+        self.assertEqual(set(), r.owed())
+        self.assertEqual(([], None), r.due(2000, pages, ["Grug"]))
+
+    def test_spellings_of_one_member_share_one_page(self):
+        pages = strategybook.book(
+            _memo(("GRUG", "nc +grind"), ("grug", "nc -grind,+loot"))
+        )
+        self.assertEqual({"Grug": {"nc": {"grind": "-", "loot": "+"}}}, pages)
+        r = strategybook.Reapplier(seen=1000)
+        commands, _ = r.due(2000, pages, ["Grug"])
+        self.assertEqual([("Grug", "nc -grind,+loot")], commands)
+
+    def test_a_row_kept_under_an_old_spelling_still_replays(self):
+        # Rows written before the book folded case keep their raw subject.
+        pages = strategybook.book({"grug|nc|grind": ("+", 0.0)})
+        r = strategybook.Reapplier(seen=1000)
+        commands, _ = r.due(2000, pages, ["Grug"])
+        self.assertEqual([("Grug", "nc +grind")], commands)
+
+
 class TheBridgeWiresIt(unittest.TestCase):
     def _function(self, name):
         tree = ast.parse(BRIDGE)

@@ -63,6 +63,16 @@ def parse(command) -> tuple | None:
     return engine, changes
 
 
+def canonical(name) -> str:
+    """The one spelling a member's page is kept under: `grug`, `GRUG` and
+    `Grug` are one character. core accepts an order's target in any case, and
+    the worldserver stores and reports a name first letter up, the rest down
+    (normalizePlayerName), which is the form the replay side reads back from
+    overseer_snapshot. Keying the book on the raw target meant an order for
+    `grug` was never replayed for `Grug` (#1553)."""
+    return str(name or "").strip().capitalize()
+
+
 def is_operator(source) -> bool:
     """A row a person ordered, from Discord."""
     return str(source or "").startswith("discord:")
@@ -78,20 +88,35 @@ def rows(name, command) -> list:
     if parsed is None:
         return []
     engine, changes = parsed
+    name = canonical(name)
+    if not name:
+        return []
     return [(f"{name}|{engine}|{strategy}", sign) for strategy, sign in changes.items()]
 
 
 def book(memo) -> dict:
     """{name: page} from the memo rows ({subject: (sign, since)}) `rows`
-    wrote. A subject or sign that does not parse is skipped."""
+    wrote. A subject or sign that does not parse is skipped. Names are
+    folded to `canonical`, so rows written under another spelling join the
+    member's one page; where two disagree on a strategy, the newer wins."""
     out: dict = {}
-    for subject, (sign, _since) in (memo or {}).items():
+    when: dict = {}
+    for subject, (sign, since) in (memo or {}).items():
         name, _, rest = str(subject).partition("|")
+        name = canonical(name)
         engine, _, strategy = rest.partition("|")
         if not name or engine not in ENGINES or not strategy:
             continue
         if sign not in ("+", "-"):
             continue
+        key = (name, engine, strategy)
+        try:
+            since = float(since)
+        except (TypeError, ValueError):
+            since = 0.0
+        if key in when and when[key] > since:
+            continue
+        when[key] = since
         out.setdefault(name, {}).setdefault(engine, {})[strategy] = sign
     return out
 
@@ -130,19 +155,24 @@ class Reapplier:
 
         `commands` is [(name, command)] to send now: every page owed a replay
         whose member is in `in_world`, each member at most once per start.
+        Names match in any case (`canonical`); a command carries the spelling
+        `in_world` reported.
         `new_start` is the start to persist when it changed, else None.
         `start` None (uptime unreadable) changes nothing."""
         new_start = None
         if start is not None and start != self.seen:
             if self.seen is not None:
-                self._owed = {name for name, page in book.items() if replay(page)}
+                self._owed = {
+                    canonical(name) for name, page in book.items() if replay(page)
+                }
             self.seen = start
             new_start = start
-        present = set(in_world)
+        pages = {canonical(name): page for name, page in book.items()}
+        present = {canonical(name): name for name in in_world}
         commands = []
-        for name in sorted(self._owed & present):
-            commands.extend((name, c) for c in replay(book.get(name)))
-            self._owed.discard(name)
+        for key in sorted(self._owed & set(present)):
+            commands.extend((present[key], c) for c in replay(pages.get(key)))
+            self._owed.discard(key)
         return commands, new_start
 
     def owed(self) -> set:
