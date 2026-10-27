@@ -634,11 +634,11 @@ class TheInterviewIntegration(unittest.TestCase):
         interview_calls = [
             call
             for call in self.mock_log_info.call_args_list
-            if call[0] and "recruit: interview" in call[0][0]
+            if call[0] and "recruit interview:" in call[0][0]
         ]
         self.assertEqual(len(interview_calls), 1)
         fmt, *args = interview_calls[0][0]
-        self.assertEqual(fmt, "recruit: interview %s - Q: %s | A: %s")
+        self.assertEqual(fmt, "recruit interview: %s - Q: %s | A: %s")
         self.assertEqual(
             tuple(args),
             (

@@ -15255,7 +15255,7 @@ class Bridge(discord.Client):
             exchange = await asyncio.to_thread(_interview_candidate, action.target_arg)
             if exchange:
                 log.info(
-                    "recruit: interview %s - Q: %s | A: %s",
+                    "recruit interview: %s - Q: %s | A: %s",
                     exchange.candidate, exchange.question, exchange.reply,
                 )
 
