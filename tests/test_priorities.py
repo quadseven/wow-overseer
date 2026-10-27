@@ -123,7 +123,6 @@ class _GoalStore:
 
         class Holder:
             _goal_pass = bridge.Bridge._goal_pass
-            _goal_family = bridge.Bridge._goal_family
 
             async def _priority_order(self):
                 return order
@@ -395,15 +394,16 @@ class TheSchedulersTieBreakFollowsTheStoredOrder(unittest.TestCase):
             priorities.job_contest([], REORDERED), priorities.Contest(None, (), "")
         )
 
-    def test_goals_in_two_families_both_drive(self):
-        # A dungeon goal in one family must not make a skill goal in another
-        # family wait: each family's job is its own contest.
+    def test_goals_in_two_families_still_contest(self):
+        # Every goal drive writes this bridge's own family's job, whoever the
+        # goal's character is, so goals on characters in two families still
+        # share one contest: only the higher-ranked goal drives, and the other
+        # applies nothing (its row is unchanged).
         store = _GoalStore()
         applied = store.run_pass({"Grug": "A", "Ugga": "B"})
-        self.assertEqual(
-            _drives(applied), [(1, goals.DriveDungeon), (2, goals.DriveSkill)]
-        )
-        self.assertEqual(store.rows[2]["last_report"], "120/0")
+        self.assertEqual(_drives(applied), [(1, goals.DriveDungeon)])
+        self.assertEqual([gid for gid, _a in applied if gid == 2], [])
+        self.assertIsNone(store.rows[2]["last_report"])
 
     def test_a_waiting_goal_is_held_whole_and_drives_next_pass(self):
         store = _GoalStore()
@@ -423,7 +423,7 @@ class TheSchedulersTieBreakFollowsTheStoredOrder(unittest.TestCase):
         self.assertEqual(store.rows[2]["last_report"], "120/0")
         self.assertEqual(store.rows[1]["last_report"], "3/1")
 
-    def test_the_stored_order_picks_the_winner_within_a_family(self):
+    def test_the_stored_order_picks_the_winner(self):
         store = _GoalStore()
         reordered = priorities.move(priorities.DEFAULT_ORDER, priorities.PROFESSIONS, 1)
         applied = store.run_pass({"Grug": "A", "Ugga": "A"}, order=reordered)

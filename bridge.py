@@ -19850,12 +19850,15 @@ class Bridge(discord.Client):
     async def _goal_pass(self, rows: list) -> None:
         """One goal pass over the active goal rows: reconcile, tie-break, apply.
 
-        THE TIE-BREAK (#1559). More than one goal can want a family's job in
+        THE TIE-BREAK (#1559). More than one goal can want the family's job in
         one pass - a dungeon goal and a skill goal each set it - and the last
         one applied used to win by row order. The family's priorities decide
-        instead, PER FAMILY: a goal only competes with goals whose character
-        is in the same family, because that is the job it would set. Two goals
-        in two families both drive.
+        instead, in ONE contest across every active goal that wants the job:
+        every goal drive writes this bridge's own family's job (a dungeon drive
+        and a skill drive both target bonds.head_of_family()'s family, whoever
+        the goal's character is), so two goals on characters in different
+        families would still overwrite the same job. Per-family contests need
+        the drives to target the goal character's family first.
 
         A GOAL THAT LOSES WAITS WHOLE. Every action it planned this pass is
         held back, not only its DriveDungeon/DriveSkill: its RecordProgress
@@ -19875,46 +19878,23 @@ class Bridge(discord.Client):
                 # stall the rest; state lives in the store, so the
                 # failed goal is retried whole next cycle.
                 log.exception("goal %s reconcile failed; retrying next cycle", row.get("id"))
-        by_family: dict = {}
-        for row, actions in planned:
-            if any(type(a) in _JOB_GOAL_ACTIONS for a in actions):
-                family = await self._goal_family(row)
-                by_family.setdefault(family, []).append(
-                    (row.get("id"), row.get("kind")))
         # Read every pass, contest or not: the quest shadow reads the order
         # this pass last held (self._priorities) instead of reading its own.
         order = await self._priority_order()
-        waiting: set = set()
-        for family, candidates in by_family.items():
-            contest = priorities.job_contest(candidates, order)
-            if contest.line:
-                log.info("goal: %s%s", contest.line,
-                         " (family %s)" % family if family else "")
-            waiting.update(contest.waiting)
+        contest = priorities.job_contest(
+            [(row.get("id"), row.get("kind")) for row, actions in planned
+             if any(type(a) in _JOB_GOAL_ACTIONS for a in actions)],
+            order)
+        if contest.line:
+            log.info("goal: %s", contest.line)
         for row, actions in planned:
-            if row.get("id") in waiting:
+            if row.get("id") in contest.waiting:
                 continue
             try:
                 for action in actions:
                     await self._apply_goal_action(row, action)
             except Exception:
                 log.exception("goal %s reconcile failed; retrying next cycle", row.get("id"))
-
-    async def _goal_family(self, row: dict):
-        """The family whose job this goal would set: its character's cohort.
-
-        None is this bridge's own family, which is also what a realm without
-        the roster's `family` column answers for everybody, so there every
-        goal shares one contest exactly as before. A failed read is said and
-        treated the same way: sharing a contest can only make a goal wait a
-        pass, never let two goals write one family's job.
-        """
-        try:
-            return await asyncio.to_thread(_cohort_of, row.get("character_name"))
-        except Exception:
-            log.exception("goal %s: its family could not be read; it shares "
-                          "this family's contest", row.get("id"))
-            return None
 
     async def _priority_order(self) -> tuple:
         """The family's ranked priorities, read now, or the last order read.
@@ -23248,8 +23228,9 @@ def _chunks(text: str, limit: int) -> list:
 GOAL_INTERVAL = float(os.environ.get("GOAL_INTERVAL_SECONDS", "60"))
 
 # The goal actions that set the family's job (`_drive_dungeon`, and
-# `_drive_skill` through `_set_job`). Only these compete in the goal pass's
-# tie-break (priorities.job_contest); every other action is applied as before.
+# `_drive_skill` through `_set_job`), both on this bridge's own family. A goal
+# planning one of these enters the goal pass's single tie-break
+# (priorities.job_contest); a goal that loses applies nothing that pass.
 _JOB_GOAL_ACTIONS = (goals.DriveDungeon, goals.DriveSkill)
 
 
