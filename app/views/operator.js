@@ -63,6 +63,17 @@ export const ACTIONS = {
     path: "/api/chat", submit: "Send",
     fields: [{ name: "name", label: "Character", choices: "who", typed: "a character name" }, { name: "text", label: "What to say", kind: "textarea" }],
   },
+  priorities: {
+    // The whole ranking, highest first. decree.py holds it to a full
+    // permutation of the fixed list (priorities.validate) and refuses
+    // anything else; this page only reorders what the read gave it.
+    path: "/api/decree", fixed: { section: "priorities" }, submit: "Save this order",
+    fields: [{ name: "order", label: "Highest first", kind: "ranked" }],
+  },
+  unrank: {
+    path: "/api/decree", fixed: { section: "priorities", reset: true }, submit: "Reset to default",
+    fields: [],
+  },
   will: {
     // The will is the chat route once per character, oldest first, in the
     // order /api/decree's will.audience gives. decree.py refuses section
@@ -113,9 +124,88 @@ function example(key, dec, dir) {
   return "";
 }
 
+// ---- the family's priorities (decree.py's priorities card, #1559) ----------------
+
+// The saved order, as the console read gives it, or [] before it answers.
+function savedOrder(dec) {
+  return ((dec && dec.priorities && dec.priorities.order) || []).slice();
+}
+
+function sameSet(a, b) {
+  return a.length === b.length && a.every((x) => b.includes(x)) && new Set(a).size === a.length;
+}
+
+// What the list shows: the operator's unsaved reorder while it is still a
+// ranking of the same priorities, else the saved order.
+function shownOrder(id, dec) {
+  const saved = savedOrder(dec);
+  const draft = form(id).draft.order;
+  return Array.isArray(draft) && sameSet(draft, saved) ? draft.slice() : saved;
+}
+
+// `pid` moved to `rank` (1 is highest), the rest shifted rather than swapped:
+// the same rule as priorities.move.
+export function moveTo(order, pid, rank) {
+  const rest = order.filter((x) => x !== pid);
+  if (rest.length === order.length) return order.slice();
+  const at = Math.max(0, Math.min(rest.length, rank - 1));
+  rest.splice(at, 0, pid);
+  return rest;
+}
+
+function entryOf(dec, pid) {
+  return ((dec && dec.priorities && dec.priorities.entries) || []).find((e) => e.id === pid) || { id: pid, label: pid, sentence: "" };
+}
+
+function rankedControl(id, f, dec) {
+  const st = form(id);
+  const order = shownOrder(id, dec);
+  const locked = st.phase === "confirm" || st.phase === "sending";
+  const fid = "op-" + id + "-" + f.name;
+  const dis = locked ? raw(" disabled") : "";
+  const rows = order.map((pid, i) => {
+    const e = entryOf(dec, pid);
+    const up = locked || i === 0 ? raw(" disabled") : "";
+    const down = locked || i === order.length - 1 ? raw(" disabled") : "";
+    return html`<li class="op-rank-item" data-op-rank="${id}" data-pid="${pid}"${locked ? "" : raw(' draggable="true"')} tabindex="0" aria-label="${i + 1}. ${e.label}. ${e.sentence}"><span class="op-rank-n" aria-hidden="true">${i + 1}</span><span class="op-rank-text"><span class="op-rank-label">${e.label}</span><span class="op-rank-sentence">${e.sentence}</span></span><span class="op-rank-moves"><button type="button" class="btn btn-ghost op-rank-btn" data-op-move="up" data-op-rank="${id}" data-pid="${pid}" aria-label="Move ${e.label} up"${up}><i class="ph ph-arrow-up" aria-hidden="true"></i></button><button type="button" class="btn btn-ghost op-rank-btn" data-op-move="down" data-op-rank="${id}" data-pid="${pid}" aria-label="Move ${e.label} down"${down}><i class="ph ph-arrow-down" aria-hidden="true"></i></button></span></li>`;
+  });
+  const changed = order.join(",") !== savedOrder(dec).join(",");
+  const list = order.length
+    ? html`<ol class="op-rank" id="${fid}-list" aria-labelledby="${fid}-label">${rows}</ol>`
+    : html`<span class="unmeasured">The saved order is not read yet. It comes from the decree console read.</span>`;
+  return html`<div class="op-field"><span class="op-flabel" id="${fid}-label">${f.label}</span>${list}<input type="hidden" id="${fid}" name="${f.name}" data-op-field="${id}" value="${order.join(",")}"${dis}><span class="op-hint">Drag a row, use its arrows, or focus it and press Alt with the up or down arrow.</span>${changed ? html`<span class="op-hint op-unsaved" role="status">Not saved yet. Until it is, the family keeps the saved order.</span>` : ""}</div>`;
+}
+
+function reorder(id, pid, rank) {
+  const dec = lastCtx && lastCtx.get("/api/decree").data;
+  const st = form(id);
+  if (st.phase !== "idle") return;
+  st.draft.order = moveTo(shownOrder(id, dec), pid, rank);
+  st.answer = null;
+  redrawForm(id);
+}
+
+function rankOf(id, pid) {
+  const dec = lastCtx && lastCtx.get("/api/decree").data;
+  return shownOrder(id, dec).indexOf(pid) + 1;
+}
+
+function prioritiesCard(d, agendaRead) {
+  const p = (d && d.priorities) || null;
+  const a = agendaRead && agendaRead.data;
+  const now = a && a.headline
+    ? html`<p class="op-pri-now">${a.headline}</p>`
+    : agendaRead && agendaRead.error
+      ? html`<p class="unmeasured">What the family is doing now did not answer (${agendaRead.error.message || "no answer"}).</p>`
+      : html`<p class="unmeasured">What the family is doing now is not read yet.</p>`;
+  const said = p ? html`<p class="op-hint">${p.state_says}</p>` : "";
+  return html`<div class="card op-card op-pri"><div class="op-pri-side"><div class="op-form-title">Doing now</div>${now}<p class="op-hint">${(p && p.takes_effect) || ""}</p>${said}</div><div class="op-pri-main">${formOf("priorities", "Family priorities", sectionDoes(d, "priorities"), d)}${formOf("unrank", "Reset to default", "Puts the default order back through the same save.", d)}</div></div>`;
+}
+
 // A select when the console read says what the choices are, a text box when it
 // did not answer: the server checks the value either way.
 function control(id, f, dec, dir) {
+  if (f.kind === "ranked") return rankedControl(id, f, dec);
   const st = form(id);
   const fid = "op-" + id + "-" + f.name;
   const locked = st.phase === "confirm" || st.phase === "sending";
@@ -147,6 +237,7 @@ function control(id, f, dec, dir) {
 // A whole number typed as digits goes as a number; anything else goes as typed
 // and the server's refusal says what was wrong with it.
 function typed(f, v) {
+  if (f.kind === "ranked") return Array.isArray(v) ? v.slice() : String(v == null ? "" : v).split(",").filter(Boolean);
   const s = String(v == null ? "" : v);
   if (f.kind === "number" && /^\s*\d+\s*$/.test(s)) return Number(s);
   return f.kind === "textarea" ? s : s.trim();
@@ -165,6 +256,7 @@ export function bodyOf(id, draft) {
 }
 
 function shown(v) {
+  if (Array.isArray(v)) return v.map((x, i) => (i + 1) + ". " + x).join("  ");
   if (v === "") return "(empty)";
   if (v === true) return "yes";
   return String(v);
@@ -310,13 +402,14 @@ function lockedView(op, dec) {
   return html`${pageHead("Operator actions")}${lockCard(op)}${dec.error && dec.data ? state("stale", "Showing the last answer", "The decree read failed; the cards below are from earlier.") : ""}${cards}`;
 }
 
-function onView(dec, dirRead) {
+function onView(dec, dirRead, agendaRead) {
   const d = dec.data;
   const dir = dirRead.data;
   const willReady = audience(d).length > 0;
   return html`${pageHead("Operator actions", "Every action asks you to confirm before it sends. The server checks each order and its answer is shown as it was given.")}
 <div class="card op-lock"><span class="card-title op-lock-title"><i class="ph ph-lock-simple-open" aria-hidden="true"></i>On for this deployment</span><span class="muted">The operator setting is on, so these controls send orders to the realm.</span></div>
 <section class="op-sec" aria-labelledby="op-h-decree">${sectionHead("01", html`<span id="op-h-decree">Decree console</span>`)}${consoleState(dec)}
+${prioritiesCard(d, agendaRead)}
 <div class="op-grid">
 <div class="card op-card">${formOf("job", "Standing job", sectionDoes(d, "job"), d)}</div>
 <div class="card op-card">${formOf("muster", "Guild muster", sectionDoes(d, "muster"), d)}</div>
@@ -374,6 +467,9 @@ async function confirmed(id) {
   redrawForm(id);
   if (ACTIONS[id].fanout) await sendFanout(id, st);
   else await sendOne(id, st);
+  // A reset or a save hands the list back to the saved order once the read
+  // comes round: the draft was the operator's, the order is now the realm's.
+  if (id === "unrank" && st.answer && st.answer.kind !== "refused") form("priorities").draft.order = "";
   st.phase = "idle";
   st.body = null; st.headers = null;
   redrawForm(id);
@@ -400,6 +496,10 @@ function bind(main) {
     const id = f.getAttribute("data-op");
     const st = form(id);
     if (!lastOn || st.phase !== "idle") return;
+    // The ranking sent is the one on screen at this moment.
+    if (ACTIONS[id].fields.some((x) => x.kind === "ranked")) {
+      st.draft.order = shownOrder(id, lastCtx && lastCtx.get("/api/decree").data);
+    }
     const sent = bodyOf(id, st.draft);
     st.body = sent.body; st.headers = sent.headers; st.answer = null;
     st.phase = "confirm";
@@ -407,6 +507,19 @@ function bind(main) {
     focusIn(id, "[data-op-confirm]");
   });
   main.addEventListener("click", (e) => {
+    const mv = e.target.closest && e.target.closest("[data-op-move]");
+    if (mv) {
+      e.preventDefault();
+      const id = mv.getAttribute("data-op-rank");
+      const pid = mv.getAttribute("data-pid");
+      const step = mv.getAttribute("data-op-move") === "up" ? -1 : 1;
+      reorder(id, pid, rankOf(id, pid) + step);
+      // Focus follows the row: its same arrow while it can still move that
+      // way, the row itself once it has reached the end.
+      focusIn(id, '[data-op-move="' + mv.getAttribute("data-op-move") + '"][data-pid="' + pid + '"]:not([disabled])');
+      if (!document.activeElement || document.activeElement.getAttribute("data-pid") !== pid) focusIn(id, 'li[data-pid="' + pid + '"]');
+      return;
+    }
     const yes = e.target.closest && e.target.closest("[data-op-confirm]");
     if (yes) { e.preventDefault(); confirmed(yes.getAttribute("data-op-confirm")); return; }
     const no = e.target.closest && e.target.closest("[data-op-cancel]");
@@ -419,6 +532,40 @@ function bind(main) {
       focusIn(id, "button[type=submit]");
     }
   });
+  // Alt+ArrowUp / Alt+ArrowDown on a focused priority moves it one place.
+  main.addEventListener("keydown", (e) => {
+    if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+    const li = e.target.closest && e.target.closest("li[data-op-rank]");
+    if (!li) return;
+    e.preventDefault();
+    const id = li.getAttribute("data-op-rank");
+    const pid = li.getAttribute("data-pid");
+    reorder(id, pid, rankOf(id, pid) + (e.key === "ArrowUp" ? -1 : 1));
+    focusIn(id, 'li[data-pid="' + pid + '"]');
+  });
+  // Drag a row onto another: it takes that row's place and the rest shift.
+  let dragging = null;
+  main.addEventListener("dragstart", (e) => {
+    const li = e.target.closest && e.target.closest("li[data-op-rank]");
+    if (!li) return;
+    dragging = { id: li.getAttribute("data-op-rank"), pid: li.getAttribute("data-pid") };
+    if (e.dataTransfer) { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", dragging.pid); }
+  });
+  main.addEventListener("dragover", (e) => {
+    const li = e.target.closest && e.target.closest("li[data-op-rank]");
+    if (li && dragging) e.preventDefault();
+  });
+  main.addEventListener("drop", (e) => {
+    const li = e.target.closest && e.target.closest("li[data-op-rank]");
+    if (!li || !dragging) return;
+    e.preventDefault();
+    const { id, pid } = dragging;
+    dragging = null;
+    if (li.getAttribute("data-op-rank") !== id) return;
+    reorder(id, pid, rankOf(id, li.getAttribute("data-pid")));
+    focusIn(id, 'li[data-pid="' + pid + '"]');
+  });
+  main.addEventListener("dragend", () => { dragging = null; });
 }
 
 export default {
@@ -426,7 +573,7 @@ export default {
   reads: (ctx) => {
     const op = ctx.get("/api/v2/operator");
     const on = !!(op.data && op.data.enabled);
-    return on ? ["/api/v2/operator", "/api/decree", "/api/director"] : ["/api/v2/operator", "/api/decree"];
+    return on ? ["/api/v2/operator", "/api/decree", "/api/director", "/api/agenda"] : ["/api/v2/operator", "/api/decree"];
   },
   every: 30000,
   title: () => "Operator actions",
@@ -436,7 +583,7 @@ export default {
     lastOn = !!(op.data && op.data.enabled);
     const dec = ctx.get("/api/decree");
     if (!lastOn) return lockedView(op, dec);
-    return onView(dec, ctx.get("/api/director"));
+    return onView(dec, ctx.get("/api/director"), ctx.get("/api/agenda"));
   },
   after(main) {
     if (!lastOn) return;
