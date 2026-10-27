@@ -2752,6 +2752,14 @@ def _note_vendor_sellable(names, sellable: dict) -> None:
         _VENDOR_SELLABLE[str(name)] = int((sellable or {}).get(name, 0))
 
 
+def _bag_hold_reads(names: list, leader: str) -> tuple:
+    """The members present, their free slots and the leader's travel column,
+    read together in one worker thread for the dungeon-quest bag hold (#1243).
+    """
+    here = _present_members(names, leader)
+    return here, _fetch_free_slots(here), _current_travel_npc(leader)
+
+
 def _vendor_trip_makes_room(names, free_slots: dict) -> bool:
     """Whether the family's bag-room hold is waiting on a vendor trip that
     would make room (#1243).
@@ -21006,10 +21014,8 @@ class Bridge(discord.Client):
         # Uzza sat at one free slot inside Razorfen Kraul with the guild, and
         # Zug's family read "waits for bag room" for an hour while the leader
         # stood at a vendor that could sell nothing of Uzza's.
-        here = await asyncio.to_thread(_present_members, list(fam["names"]),
-                                       leader)
-        free = await asyncio.to_thread(_fetch_free_slots, here)
-        column = await asyncio.to_thread(_current_travel_npc, leader)
+        here, free, column = await asyncio.to_thread(
+            _bag_hold_reads, list(fam["names"]), leader)
         if jev_activity.withheld(True, free) and _vendor_trip_makes_room(
                 here, free):
             # THE VENDOR TRIP CANNOT GO WHILE ANOTHER ERRAND HOLDS THE COLUMN.
