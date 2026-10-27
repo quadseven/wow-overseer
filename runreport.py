@@ -142,54 +142,67 @@ def _by_member(names: list[str], items: list[dict]) -> list[dict]:
     ]
 
 
-def build(
-    run: dict, events: list[dict], deaths: list[dict], map_name: str = ""
-) -> dict:
-    """The report for one run, from RUN_SQL's row, EVENTS_SQL's rows and
-    DEATHS_SQL's rows. Everything the page draws and Discord prints is here."""
-    names = members(run)
-    loot = [
+def _unique(items: list) -> list:
+    """`items` with repeats dropped, first sighting kept."""
+    out: list = []
+    for item in items:
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def _of_kind(events: list[dict], kind: str) -> list[dict]:
+    return [e for e in events if e.get("kind") == kind]
+
+
+def _subject(e: dict, fallback: str) -> str:
+    return e.get("subject_name") or "%s %s" % (fallback, e.get("subject_id"))
+
+
+def _loot(events: list[dict]) -> list[dict]:
+    """One entry per loot_won row, never merged: each row is an item won."""
+    return [
         {
             "member": e.get("character_name") or "",
-            "item": e.get("subject_name") or "item %s" % e.get("subject_id"),
+            "item": _subject(e, "item"),
             "entry": int(e.get("subject_id") or 0),
             "quality": _quality(e),
             "detail": e.get("detail") or "",
         }
-        for e in events
-        if e.get("kind") == "loot_won"
+        for e in _of_kind(events, "loot_won")
     ]
+
+
+def _bosses(events: list[dict]) -> list[str]:
+    return _unique([_subject(e, "creature") for e in _of_kind(events, "boss_kill")])
+
+
+def _upgrades(events: list[dict], loot: list[dict]) -> list[dict]:
+    """item_equip rows for an item the same member won in this run."""
     won = {(i["member"], i["entry"]) for i in loot}
+    return _unique(
+        [
+            {"member": e.get("character_name") or "", "item": _subject(e, "item")}
+            for e in _of_kind(events, "item_equip")
+            if (e.get("character_name") or "", int(e.get("subject_id") or 0)) in won
+        ]
+    )
 
-    bosses: list[str] = []
-    for e in events:
-        if e.get("kind") == "boss_kill":
-            name = e.get("subject_name") or "creature %s" % e.get("subject_id")
-            if name not in bosses:
-                bosses.append(name)
 
-    upgrades = []
-    for e in events:
-        key = (e.get("character_name") or "", int(e.get("subject_id") or 0))
-        if e.get("kind") == "item_equip" and key in won:
-            item = {
-                "member": key[0],
-                "item": e.get("subject_name") or "item %s" % key[1],
-            }
-            if item not in upgrades:
-                upgrades.append(item)
-
-    quests = []
-    for e in events:
-        if e.get("kind") == "quest_reward":
-            item = {
+def _quests(events: list[dict]) -> list[dict]:
+    return _unique(
+        [
+            {
                 "member": e.get("character_name") or "",
                 "item": e.get("subject_name") or "",
             }
-            if item not in quests:
-                quests.append(item)
+            for e in _of_kind(events, "quest_reward")
+        ]
+    )
 
-    died = [
+
+def _deaths(deaths: list[dict]) -> list[dict]:
+    return [
         {
             "member": d.get("character_name") or "",
             "item": d.get("killer_name") or "unknown",
@@ -197,29 +210,44 @@ def build(
         for d in deaths
     ]
 
+
+def _identity(run: dict, map_name: str) -> dict:
+    """The run row's own facts, as the report heading reads them."""
     seconds = run.get("duration_seconds")
+    word = outcome(run)
     return {
         "run_id": int(run.get("id") or 0),
         "run_number": int(run.get("run_number") or 0),
         "leader": run.get("leader_name") or "",
-        "members": names,
         "map_id": int(run.get("map_id") or 0),
         "map_name": map_name or "map %s" % (run.get("map_id") or 0),
         "ended": run.get("state") == "ended",
-        "outcome": outcome(run),
-        "wipe": outcome(run) == "wipe",
+        "outcome": word,
+        "wipe": word == "wipe",
         "reason": run.get("ended_reason") or "",
         "duration_seconds": int(seconds) if seconds is not None else None,
-        "bosses": bosses,
-        "loot": _by_member(names, loot),
-        "loot_count": len(loot),
-        "deaths": _by_member(names, died),
-        "death_count": len(died),
-        "upgrades": _by_member(names, upgrades),
-        "upgrade_count": len(upgrades),
-        "quests": _by_member(names, quests),
-        "quest_count": len(quests),
     }
+
+
+def build(
+    run: dict, events: list[dict], deaths: list[dict], map_name: str = ""
+) -> dict:
+    """The report for one run, from RUN_SQL's row, EVENTS_SQL's rows and
+    DEATHS_SQL's rows. Everything the page draws and Discord prints is here."""
+    names = members(run)
+    loot = _loot(events)
+    report = _identity(run, map_name)
+    report["members"] = names
+    report["bosses"] = _bosses(events)
+    for key, items in (
+        ("loot", loot),
+        ("death", _deaths(deaths)),
+        ("upgrade", _upgrades(events, loot)),
+        ("quest", _quests(events)),
+    ):
+        report[key if key == "loot" else key + "s"] = _by_member(names, items)
+        report[key + "_count"] = len(items)
+    return report
 
 
 def read(fetch, run_id: int) -> dict | None:
@@ -274,16 +302,36 @@ def _plain_line(group: dict, joiner: str = ", ") -> str:
     return "%s: %s" % (group["member"], joiner.join(i["item"] for i in group["items"]))
 
 
-def lines(report: dict) -> list[str]:
-    """The report as lines, the same lines on Discord and the page."""
-    head = "Run report #%d: %s, run %s, %s, outcome %s" % (
+def _death_line(group: dict) -> str:
+    return "%s: %s" % (
+        group["member"],
+        ", ".join("killed by %s" % i["item"] for i in group["items"]),
+    )
+
+
+# Each grouped section: its heading, the report keys, what an empty one says,
+# and how one member's line reads.
+_SECTIONS = (
+    ("Deaths", "deaths", "death_count", " none recorded", _death_line),
+    ("Loot", "loot", "loot_count", " none", _loot_line),
+    ("Upgrades equipped", "upgrades", "upgrade_count", " none", _plain_line),
+    ("Quests completed", "quests", "quest_count", " none", _plain_line),
+)
+
+
+def _head(report: dict) -> str:
+    return "Run report #%d: %s, run %s, %s, outcome %s" % (
         report["run_id"],
         report["map_name"],
         report["run_number"] or "unnumbered",
         duration(report["duration_seconds"]),
         report["outcome"].upper() if report["wipe"] else report["outcome"],
     )
-    out = [head]
+
+
+def lines(report: dict) -> list[str]:
+    """The report as lines, the same lines on Discord and the page."""
+    out = [_head(report)]
     if report["reason"]:
         out.append("Why it ended: %s" % report["reason"])
     out.append("Group: %s" % (", ".join(report["members"]) or "nobody recorded"))
@@ -291,29 +339,10 @@ def lines(report: dict) -> list[str]:
         "Bosses killed (%d): %s"
         % (len(report["bosses"]), ", ".join(report["bosses"]) or "none")
     )
-    out.append(
-        "Deaths (%d):%s"
-        % (report["death_count"], "" if report["deaths"] else " none recorded")
-    )
-    out += [
-        "  %s: %s"
-        % (g["member"], ", ".join("killed by %s" % i["item"] for i in g["items"]))
-        for g in report["deaths"]
-    ]
-    out.append(
-        "Loot (%d):%s" % (report["loot_count"], "" if report["loot"] else " none")
-    )
-    out += ["  " + _loot_line(g) for g in report["loot"]]
-    out.append(
-        "Upgrades equipped (%d):%s"
-        % (report["upgrade_count"], "" if report["upgrades"] else " none")
-    )
-    out += ["  " + _plain_line(g) for g in report["upgrades"]]
-    out.append(
-        "Quests completed (%d):%s"
-        % (report["quest_count"], "" if report["quests"] else " none")
-    )
-    out += ["  " + _plain_line(g) for g in report["quests"]]
+    for title, key, count, empty, line in _SECTIONS:
+        groups = report[key]
+        out.append("%s (%d):%s" % (title, report[count], "" if groups else empty))
+        out += ["  " + line(g) for g in groups]
     return out
 
 
