@@ -115,11 +115,30 @@ class ClassQuestStepsTests(unittest.TestCase):
             move(classquest.CROSS, quest=42, to_map=1),
             move(classquest.ABANDON, quest=42),
         )
+        verbs = set()
         for quest_move in cases:
             with self.subTest(kind=quest_move.kind):
                 sent, _rows = self.sent(quest_move)
+                self.assertIsInstance(sent, list)
+                self.assertTrue(sent, "the move sent no order to check")
                 for order in sent:
-                    self.assertNotIn(_command_verb(order.command), GRANT_VERBS)
+                    # _command_verb reads only a bare word or a dotted GM
+                    # command; an order carries arguments, so read its verb.
+                    verb = _command_verb(order.command.split(" ", 1)[0])
+                    self.assertIsNotNone(verb, order.command)
+                    self.assertNotIn(verb, GRANT_VERBS, order.command)
+                    verbs.add(verb)
+        self.assertEqual(
+            verbs,
+            {
+                "take",
+                "hunt-spawn",
+                "turnin",
+                "use-gameobject",
+                "cross-to-map",
+                "abandon",
+            },
+        )
 
 
 if __name__ == "__main__":
