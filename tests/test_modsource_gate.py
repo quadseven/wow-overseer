@@ -10,6 +10,8 @@ path on its own again, which is how the hundreds came about.
 import ast
 import os
 import pathlib
+import subprocess
+import sys
 import tempfile
 import unittest
 import warnings
@@ -18,6 +20,8 @@ from unittest import mock
 import modsource
 
 TESTS = pathlib.Path(__file__).resolve().parent
+REPO = TESTS.parent
+PIN_CHECK = REPO / ".github" / "scripts" / "check_mod_overseer_pin.py"
 
 # Path methods that touch the filesystem. Calling one on a mod-overseer path
 # outside modsource bypasses the gate.
@@ -193,6 +197,50 @@ class EveryReadGoesThroughTheGate(unittest.TestCase):
             "(modsource.read / glob / exists), so a checkout without the "
             "submodule skips locally and fails under CI",
         )
+
+
+class TheSubmodulePin(unittest.TestCase):
+    def _git(self, directory, *args):
+        return subprocess.run(
+            ["git", "-C", str(directory), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_a_pin_outside_main_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            remote = root / "remote.git"
+            seed = root / "seed"
+            checkout = root / "checkout"
+            self._git(root, "init", "--bare", str(remote))
+            self._git(root, "init", str(seed))
+            self._git(seed, "config", "user.name", "Test")
+            self._git(seed, "config", "user.email", "test@example.com")
+            (seed / "file").write_text("main\n", encoding="utf-8")
+            self._git(seed, "add", "file")
+            self._git(seed, "commit", "-m", "main")
+            self._git(seed, "branch", "-M", "main")
+            self._git(seed, "remote", "add", "origin", str(remote))
+            self._git(seed, "push", "origin", "main")
+            self._git(seed, "checkout", "--orphan", "off-main")
+            self._git(seed, "rm", "-rf", ".")
+            (seed / "file").write_text("off-main\n", encoding="utf-8")
+            self._git(seed, "add", "file")
+            self._git(seed, "commit", "-m", "off main")
+            off_main = self._git(seed, "rev-parse", "HEAD").stdout.strip()
+            self._git(seed, "push", "origin", "HEAD:off-main")
+            self._git(remote.parent, "clone", str(remote), str(checkout))
+            self._git(checkout, "checkout", off_main)
+
+            result = subprocess.run(
+                [sys.executable, str(PIN_CHECK), str(checkout)],
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
