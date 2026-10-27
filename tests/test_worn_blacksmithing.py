@@ -113,7 +113,7 @@ class TheHammerRecipesWaitForTheAnvilWalk(unittest.TestCase):
         self.assertNotIn(HAMMER, craft.TOOL_WALKS)
 
     def test_recipe_for_never_returns_a_hammer_recipe(self):
-        for spell, name, low, high in WORN:
+        for _spell, name, low, high in WORN:
             for value in (low, high):
                 with self.subTest(name=name, value=value):
                     recipe = craft.recipe_for(BLACKSMITHING, value)
