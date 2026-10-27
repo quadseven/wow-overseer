@@ -1012,6 +1012,35 @@ def _ensure_dungeon_run_event_store() -> None:
             log.info("overseer_dungeon_run_event: added idx_leader_kind")
 
 
+def _ensure_event_store() -> None:
+    # The agenda banner's newest-event-per-kind read (map_server
+    # _EVENT_NEWEST_SQL) groups by (character_name, kind) and takes
+    # MAX(last_seen); this index turns that into a loose index scan of a few
+    # hundred entries instead of a walk over every family's events (#1333).
+    # The table is the worldserver's, so, as above, the index is ensured only
+    # when the table exists, and a failure here does not stop the bridge.
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM information_schema.TABLES "
+            "WHERE table_schema = DATABASE() "
+            "  AND table_name = 'overseer_event'"
+        )
+        if not (cur.fetchone() or {}).get("n"):
+            return
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM information_schema.STATISTICS "
+            "WHERE table_schema = DATABASE() "
+            "  AND table_name = 'overseer_event' "
+            "  AND index_name = 'idx_character_kind_last_seen'"
+        )
+        if not (cur.fetchone() or {}).get("n"):
+            cur.execute(
+                "ALTER TABLE overseer_event "
+                "ADD KEY idx_character_kind_last_seen (character_name, kind, last_seen)"
+            )
+            log.info("overseer_event: added idx_character_kind_last_seen")
+
+
 def _insert_thought(name: str, source: str, text: str) -> None:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
@@ -7396,6 +7425,7 @@ class Bridge(discord.Client):
         for ensure in (
             _ensure_thought_store,
             _ensure_dungeon_run_event_store,
+            _ensure_event_store,
             _ensure_goal_store,
             _ensure_sample_store,
             _ensure_economy_store,
@@ -7413,9 +7443,11 @@ class Bridge(discord.Client):
             try:
                 await asyncio.to_thread(ensure)
             except Exception:
-                if ensure is _ensure_dungeon_run_event_store:
+                if ensure in (_ensure_dungeon_run_event_store, _ensure_event_store):
+                    # An index on a worldserver table speeds a read; its
+                    # absence never breaks one, so it never stops the bridge.
                     log.exception(
-                        "overseer_dungeon_run_event: index ensure failed; continuing startup")
+                        "%s: index ensure failed; continuing startup", ensure.__name__)
                 else:
                     raise
         owing = self.__dict__.get("_class_owing")
