@@ -63,7 +63,6 @@ KNOWN_UNREACHED = {
     "bonkers",
     "dungeonladder",
     "enroll",
-    "family_value",
     "lootcard",
     "realmroller",
     "realmroller_act",

@@ -1883,9 +1883,10 @@ def _crafting_roster(family: str | None = None) -> list:
 
 def _names_of(cohort=None) -> list:
     """A family's names, sorted: this bridge's own for None (#215)."""
-    if cohort is None:
-        return sorted(_protected_guids().values())
-    return sorted(cohort.names)
+    import family_value
+
+    family = family_value.resolve_legacy_family(cohort, _protected_guids().values())
+    return list(family.members)
 
 
 def _bank_bag_wait_note(step) -> str:
