@@ -1895,6 +1895,17 @@ def junk_sales(member, kept, action="gear") -> tuple:
     )
 
 
+def sale_notes(stacks) -> tuple:
+    """One vendorsale.Sale per stack sold on a `guid:<n>` row, for the step's
+    `sales`: what the bridge names when the world delivers each row (#1592)."""
+    return tuple(vendorsale.sale_of("guid:%d" % int(c.guid), c) for c in stacks)
+
+
+def junk_notes(member, kept) -> tuple:
+    """The Sales of the rows junk_sales writes, in the same order."""
+    return sale_notes(_junk(member, kept))
+
+
 def spendable(member, kind, copper) -> int:
     """Copper of `copper` (the purse and what its sales bring) that `kind` may
     spend under the member's purchase order (purse.py): everything above what
@@ -1966,14 +1977,99 @@ def riding_step(m, recent):
     )
 
 
-def mount_step(m, facts, recent, cap):
+def _newest_mount_buy(name, recent):
+    """The member's newest mount buy row (not its walk), or None."""
+    buys = [
+        r
+        for r in recent or ()
+        if r.name == name
+        and r.action == mountbuy.ACTION
+        and not r.walk
+        and str(r.command or "").startswith("entry:")
+    ]
+    if not buys:
+        return None
+    return min(buys, key=lambda r: (int(r.age_minutes), -int(r.row_id)))
+
+
+def mount_refused_for_bags(name, recent) -> bool:
+    """Whether the member's newest mount buy (not its walk) came back
+    mountbuy.BAGS_FULL_REASON."""
+    newest = _newest_mount_buy(name, recent)
+    if newest is None:
+        return False
+    reason = mountbuy.BAGS_FULL_REASON
+    return reason in (newest.refusal, newest.reason) or reason in str(
+        newest.result or ""
+    )
+
+
+def mount_room_short(m, recent) -> bool:
+    """Whether the mount buy has no bag slot to land in: the bags read full,
+    or the last buy was refused for full bags and no free slot has been read
+    since (#1593)."""
+    if m.free_slots is not None and int(m.free_slots) >= 1:
+        return False
+    return m.free_slots is not None or mount_refused_for_bags(m.name, recent)
+
+
+def _mount_room(m, offer, recent, cap, kept, book, crafters, master):
+    """(room step or None, a note) for a member whose mount buy has no bag
+    slot: one make-room step (_room_ladder) before the vendor walk, or the walk
+    held with the reason.
+
+    The same per-state cap as equip_room_step (#1607): the bags' state is the
+    one the newest buy was refused in, so ROOM_STEPS_PER_STATE make-room steps
+    since that refusal with the walk still held mean they gained no slot, and
+    no more are taken until a free slot is read or the refusal ages out. The
+    note says so once, in place of another sale, post or destroy."""
+    said = "%s makes room in its bags (%s free, 1 needed) for %s" % (
+        m.name,
+        "none" if m.free_slots is None else int(m.free_slots),
+        offer.name or "mount item %d" % offer.entry,
+    )
+    refused = (
+        _newest_mount_buy(m.name, recent)
+        if mount_refused_for_bags(m.name, recent)
+        else None
+    )
+    if (
+        refused is not None
+        and _room_steps_since(m, recent, refused.age_minutes) >= ROOM_STEPS_PER_STATE
+    ):
+        return None, (
+            "%s made room %d time(s) for %s since its buy was refused for full "
+            "bags and has read no free slot; no more until its bags change"
+            % (
+                m.name,
+                ROOM_STEPS_PER_STATE,
+                offer.name or "item %d" % offer.entry,
+            )
+        )
+    if not _cooling(m, ROOM_ACTION, recent):
+        step = _room_ladder(m, said, 1, kept, book, cap, crafters, master)
+        if step is not None:
+            return step, ""
+        return None, (
+            "%s holds its mount walk: its bags have no free slot for %s and "
+            "nothing it may sell, mail or destroy"
+            % (m.name, offer.name or "item %d" % offer.entry)
+        )
+    return None, (
+        "%s holds its mount walk until a bag slot is free for %s"
+        % (m.name, offer.name or "item %d" % offer.entry)
+    )
+
+
+def mount_step(m, facts, recent, cap, kept=None, book=None, crafters=None, master=""):
     """(step or None, a note): a member with Apprentice Riding and no mount
     walks to its race's mount vendor, buys the cheapest mount it can ride with
     its own gold above its class spell reserve, and uses the item to learn the
     mount (mountbuy.decide, #779). A member carrying an unused mount item only
     uses it. `facts` is a mountbuy.Facts, None for a member the bridge did not
     read. Never while offline, dead or fighting, and once per
-    COOLDOWN_MINUTES[mountbuy.ACTION]."""
+    COOLDOWN_MINUTES[mountbuy.ACTION]. With no bag slot for the item
+    (mount_room_short, #1593) it makes room first or holds the walk."""
     if facts is None:
         return None, ""
     order = m.purse
@@ -2008,6 +2104,8 @@ def mount_step(m, facts, recent, cap):
         return guildcorps.Step(
             m.name, mountbuy.ACTION, int(offer.entry), said, rows=(use,)
         ), ""
+    if mount_room_short(m, recent):
+        return _mount_room(m, offer, recent, cap, kept, book, crafters, master)
     said = "%s walks to its race's mount vendor to buy %s for %s of its own" % (
         m.name,
         offer.name or "item %d" % offer.entry,
@@ -2141,6 +2239,43 @@ def weapon_step(m, offer, recent, cap):
     return step, ""
 
 
+def _crossed_to(r, map_id) -> bool:
+    """A crossing row that asked for `map_id` and was not refused. Map 0 is a
+    map: a `cross-to-map map:0` row is a crossing by its verb (class_walls)."""
+    if r.refusal or int(r.dest) != int(map_id):
+        return False
+    return bool(r.dest) or classquest.is_cross_row(r.command)
+
+
+def weapon_cross_back(m, to_map, recent) -> str:
+    """Why the weapon crossing to `to_map` waits, "" when it may go.
+
+    THE LEVEL CROSSING COMES FIRST (#1585). The weapon step is asked ahead of
+    the level step, and the two share one crossing clock (crossing_cooling)
+    but not one destination. A member the weapon step crossed to a master it
+    did not reach is on the weapon cooldown once the walk ends, so the level
+    step may cross it back to its hub; once the shared clock runs out the
+    weapon step would cross it over again, and so on each time the clock ran
+    out. So, inside the recent rows' day, the weapon step does not cross a
+    member away from a map the level step crossed it to, and does not cross
+    a member to a map it already crossed to for a weapon master and came back
+    from. Either way the member crosses for a weapon master at most once a
+    day, and a level crossing is never undone by one."""
+    here = m.map_id
+    for r in recent or ():
+        if r.name != m.name:
+            continue
+        if (
+            r.action == guildlevel.CROSS_ACTION
+            and here is not None
+            and _crossed_to(r, here)
+        ):
+            return "its level crossing brought it here in the last day"
+        if r.action == WEAPON_CROSS_ACTION and _crossed_to(r, to_map):
+            return "it crossed there for a weapon master in the last day and is back"
+    return ""
+
+
 def weapon_cross_step(m, offer, recent):
     """(step or None, a note) for a weapon master on the other classic continent
     (weaponskill.choose_far_master, #793): one `cross-to-map map:<id>` row, no
@@ -2167,6 +2302,21 @@ def weapon_cross_step(m, offer, recent):
         )
     if crossing_cooling(m.name, recent):
         return None, ""
+    back = weapon_cross_back(m, to_map, recent)
+    if back:
+        return None, (
+            "%s carries %s (%s) and has no skill %d for it; %s teaches it on %s, "
+            "and it does not cross there now: %s"
+            % (
+                m.name,
+                need.item,
+                need.why,
+                need.skill,
+                offer.master or "a weapon master",
+                where,
+                back,
+            )
+        )
     said = (
         "%s crosses to %s by its faction's boat or zeppelin to buy skill %d at %s "
         "for %s of its own, to wield %s (%s)"
@@ -2277,6 +2427,7 @@ def gear_step(member, character, vendor_rows, cap, kept=None):
             "",
             source_for("gear", member.name),
         ),
+        sales=junk_notes(member, kept),
     )
     return step, ""
 
@@ -2326,6 +2477,7 @@ def supply_step(member, vendor_rows, cap, kept=None):
                 "",
                 source_for(restsupply.ACTION, member.name),
             ),
+            sales=junk_notes(member, kept),
         ),
         "",
     )
@@ -2703,6 +2855,7 @@ def _sell_step(member, kept, cap):
             "",
             source_for("sell-walk", member.name),
         ),
+        sales=sale_notes(junk),
     )
 
 
@@ -3503,7 +3656,19 @@ def _quest_first(
 
 
 def _upkeep_first(
-    m, offer, supply, leveling, kept, recent, cap, quest_note, weapon=None, mount=None
+    m,
+    offer,
+    supply,
+    leveling,
+    kept,
+    recent,
+    cap,
+    quest_note,
+    weapon=None,
+    mount=None,
+    book=None,
+    crafters=None,
+    master="",
 ):
     """(the member's step as _member_step returns it, or None; the supply
     note; the gear note): food for a member with nothing to eat or drink, then
@@ -3529,7 +3694,7 @@ def _upkeep_first(
     step, riding_note = riding_step(m, recent)
     if step is not None:
         return (step, step.said, quest_note, ""), supply_note, ""
-    step, mount_note = mount_step(m, mount, recent, cap)
+    step, mount_note = mount_step(m, mount, recent, cap, kept, book, crafters, master)
     if step is not None:
         return (step, step.said, quest_note, ""), supply_note, ""
     riding_note = _join(riding_note, mount_note)
@@ -3681,7 +3846,19 @@ def _member_step(
         return found
     quest_note = _join(quest_note, room_note)
     found, supply_note, gear_note = _upkeep_first(
-        m, offer, supply, leveling, kept, recent, cap, quest_note, weapon, mount
+        m,
+        offer,
+        supply,
+        leveling,
+        kept,
+        recent,
+        cap,
+        quest_note,
+        weapon,
+        mount,
+        classes,
+        crafters,
+        master,
     )
     if found is not None:
         return found
@@ -5153,6 +5330,7 @@ def _room_vendor_step(m, said, stacks, cap):
             "",
             source_for(ROOM_ACTION + "-walk", m.name),
         ),
+        sales=sale_notes(stacks),
     )
 
 
@@ -5643,6 +5821,7 @@ def pvp_step(m, aim, move, cap, kept=None):
                 source_for("pvp-walk", m.name),
             ),
             goal=aim.vendor,
+            sales=junk_notes(m, kept),
         )
     return None
 
