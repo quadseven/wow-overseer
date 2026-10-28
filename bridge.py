@@ -11641,9 +11641,12 @@ class Bridge(discord.Client):
         )
         # A FULL MEMBER'S GREYS (#550): a shield tank with no free slot has
         # its cheapest grey destroyed to make room for a spare shield. Read
-        # only for members with no room, so a roomy guild costs no read.
+        # only for members with no room, and only for the ones the AI drives
+        # now: nothing is ever destroyed in the bags of a character a person
+        # is playing.
         full = [name for name in all_names if free_slots.get(name, 0) <= 0]
-        greys = await asyncio.to_thread(_fetch_carried_greys, full)
+        driven = await asyncio.to_thread(_bot_held_names, full)
+        greys = await asyncio.to_thread(_fetch_carried_greys, driven)
         plan = bag_pressure.guild_gear_gifts_from_rows(
             gear_rows, equipped, family_names, roster,
             position_rows=positions, free_slots=free_slots,
@@ -11676,7 +11679,15 @@ class Bridge(discord.Client):
         row: the world takes pending rows in id order, so the slot is free
         when the trade lands. A destroy the world image cannot take (0) holds
         the hand-off too, because the trade would only fail on a full bag.
+
+        A hand-off the keep mark blocks destroys nothing. A trade that fails
+        after its destroy leaves the slot free, and the next pass reads that
+        room, so it clears nothing more for the same shield.
         """
+        if _KEEP.blocks(grant.holder, grant.command):
+            log.info("not writing %r for %s: the item is reserved to be kept "
+                     "(overseer_keep)", grant.command, grant.holder)
+            return 0
         if grant.clears is not None:
             candidate = bag_pressure.clear_candidate(grant.clears)
             if not await asyncio.to_thread(_insert_destroy, candidate):

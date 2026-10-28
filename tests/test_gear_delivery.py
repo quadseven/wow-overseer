@@ -907,11 +907,17 @@ class AFullTankStillGetsTheShield(unittest.TestCase):
     def test_the_guild_writer_destroys_the_grey_before_the_trade(self):
         body = _block("    async def _guild_gear_share_once(")
         self.assertIn("_fetch_carried_greys", body)
+        # Only an AI-driven member's greys are read, so none is destroyed in
+        # the bags of a character a person is playing.
+        self.assertLess(
+            body.index("_bot_held_names"), body.index("_fetch_carried_greys")
+        )
         self.assertIn("spares=", body)
         writer = _block("    async def _clear_then_hand(")
         self.assertLess(
             writer.index("_insert_destroy"), writer.index("_insert_gear_handoff")
         )
+        self.assertLess(writer.index("_KEEP.blocks"), writer.index("_insert_destroy"))
 
 
 if __name__ == "__main__":
