@@ -13516,7 +13516,15 @@ class Bridge(discord.Client):
 
     async def _jev_guild_once(self, asks: list, candidates: list,
                               family_names: list, mode: str) -> list:
-        """The guild recipient questions; the judgments, recorded by the caller."""
+        """The guild recipient questions; the judgments, recorded by the caller.
+
+        Earlier choices whose route has had its time are scored first
+        (_score_recipient_outcomes, #820). A database failure there is
+        logged and the questions are still asked."""
+        try:
+            await asyncio.to_thread(_score_recipient_outcomes)
+        except pymysql.err.MySQLError:
+            log.exception("guild recipient: earlier choices were not scored")
         people = [c.character for c in candidates]
         worn_items = await asyncio.to_thread(
             _fetch_jev_worn, [c.name for c in people])
@@ -25280,6 +25288,10 @@ def _create_jev_store() -> None:
         if not (cur.fetchone() or {}).get("n"):
             cur.execute(jev_outcomes.ADD_ACTED_SQL)
             log.info("overseer_jev_outcome: added acted")
+        cur.execute(jev_outcomes.BACKEND_COLUMN_SQL)
+        if not (cur.fetchone() or {}).get("n"):
+            cur.execute(jev_outcomes.ADD_BACKEND_SQL)
+            log.info("overseer_jev_outcome: added backend")
         cur.execute(
             "DELETE FROM overseer_jev_outcome "
             "WHERE created_at < NOW() - INTERVAL %s DAY",
@@ -25309,10 +25321,38 @@ def _jev_outcome_history(kind: str, subject: str, score, wait_minutes: int) -> l
         return jev_outcomes.history(list(cur.fetchall()))
 
 
+def _score_recipient_outcomes() -> int:
+    """Score guild_recipient's open overseer_jev_outcome rows that have had
+    jev_items.RECIPIENT_OUTCOME_MINUTES, each by where its item is now (#820).
+    Returns how many were scored; a world without the table scores none."""
+    scored = 0
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(jev_outcomes.OPEN_KIND_SQL, (
+                jev_items.KIND_GUILD, jev_items.RECIPIENT_OUTCOME_MINUTES,
+                jev_items.RECIPIENT_OUTCOME_LIMIT))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1146:
+                return 0
+            raise
+        for row in list(cur.fetchall()):
+            before = jev_outcomes.before_of(row)
+            guid = before.get("guid")
+            where = None
+            if isinstance(guid, int) and guid > 0:
+                cur.execute(jev_items.RECIPIENT_WHERE_SQL, (guid,))
+                where = cur.fetchone()
+            line = jev_items.recipient_outcome_words(
+                before, where, int(row.get("minutes") or 0))
+            cur.execute(jev_outcomes.SCORE_SQL, (line[:255], row["id"]))
+            scored += 1
+    return scored
+
+
 def _record_jev_override(judgment, before: dict) -> None:
     """One overseer_jev_outcome row for every disagreement, whichever side
     acted, and a sample of agreements (jev_outcomes.record_args, #820)."""
-    args = jev_outcomes.record_args(judgment, before)
+    args = jev_outcomes.record_args(judgment, before, backend=JEV_ACTIVE_BACKEND)
     if args is None:
         return
     with _connect() as conn, conn.cursor() as cur:
@@ -25379,10 +25419,21 @@ def _insert_jev_judgment(judgment) -> None:
         )
 
 
+def _compare_why(row: dict) -> str:
+    """What a comparison row's `heuristic` column holds: the active backend's
+    answer, or the heuristic's where the active backend gave none (#820)."""
+    if row.get("against") == jev.AGAINST_HEURISTIC:
+        return "heuristic; active backend %s gave no answer" % row["active_backend"]
+    return "active backend " + row["active_backend"]
+
+
 def _insert_jev_comparisons(rows: list) -> None:
     """Comparison rows (jev.compare_rows): one per question, the comparison
-    backend's answer beside the active backend's, mode `compare`. They never
-    act; jevview keeps them out of the per-kind lines."""
+    backend's answer beside the active backend's (or the heuristic's, when
+    the active backend gave none), mode `compare`. They never act; jevview
+    keeps them out of the per-kind lines. A disagreement with the heuristic
+    that carries a snapshot is also an overseer_jev_outcome row, the
+    heuristic arm (jev_outcomes.compare_record_args, #820)."""
     with _connect() as conn, conn.cursor() as cur:
         for row in rows:
             probabilities = row.get("probabilities")
@@ -25395,7 +25446,7 @@ def _insert_jev_comparisons(rows: list) -> None:
                 (
                     row["kind"][:32], row["question"][:120],
                     row["active_answer"][:40],
-                    ("active backend " + row["active_backend"])[:300],
+                    _compare_why(row)[:300],
                     row["answer"][:40] or None, row["confidence"],
                     json.dumps(probabilities, sort_keys=True)[:1000]
                     if probabilities else None,
@@ -25404,6 +25455,9 @@ def _insert_jev_comparisons(rows: list) -> None:
                     row["model"][:40], row["backend"][:12],
                 ),
             )
+            outcome = jev_outcomes.compare_record_args(row)
+            if outcome is not None:
+                cur.execute(jev_outcomes.INSERT_SQL, outcome)
 
 
 async def _jev_compare_sink(rows: list) -> None:
