@@ -247,5 +247,125 @@ class TheBridgeReadsAndPasses(unittest.TestCase):
         self.assertIn("ORDER BY yards", sql)
 
 
+# A WEAPON MASTER ACROSS THE WATER (#793). On the dev realm the guild passes
+# noted 362 times in a day that no weapon master of the member's side on its
+# map teaches the skill: the Horde's masters for axes and maces stand in
+# Kalimdor, the Alliance's for staves and daggers in the Eastern Kingdoms. The
+# member now crosses to the continent whose master teaches it, by the module's
+# `cross-to-map` row, and the next pass on that map walks it to the master.
+FAR_MASTER = dict(MASTER, map_id=0, spawn=8765, name="Far Master", yards=9000.0)
+
+
+class TheFarMaster(unittest.TestCase):
+    def test_a_master_on_the_other_continent_is_chosen(self):
+        got = weaponskill.choose_far_master([FAR_MASTER], {201}, "horde", 1)
+        self.assertEqual(8765, got["spawn"])
+        self.assertEqual(0, got["map_id"])
+
+    def test_a_master_on_its_own_map_is_not_far(self):
+        self.assertEqual({}, weaponskill.choose_far_master([MASTER], {201}, "horde", 1))
+
+    def test_the_other_side_master_is_not_chosen(self):
+        self.assertEqual(
+            {}, weaponskill.choose_far_master([FAR_MASTER], {201}, "alliance", 1)
+        )
+
+    def test_off_the_classic_continents_nothing_is_far(self):
+        self.assertEqual(
+            {}, weaponskill.choose_far_master([FAR_MASTER], {201}, "horde", 530)
+        )
+        far_off = dict(FAR_MASTER, map_id=530)
+        self.assertEqual(
+            {}, weaponskill.choose_far_master([far_off], {201}, "horde", 1)
+        )
+
+    def test_the_master_teaching_more_wins(self):
+        other = dict(FAR_MASTER, entry=11871, spawn=999, spell=196, yards=10.0)
+        both = dict(FAR_MASTER, spell=196)
+        got = weaponskill.choose_far_master(
+            [other, FAR_MASTER, both], {201, 196}, "horde", 1
+        )
+        self.assertEqual(11870, got["entry"])
+
+    def test_the_far_maps_are_the_other_continent(self):
+        self.assertEqual([1], weaponskill.far_maps(0))
+        self.assertEqual([0], weaponskill.far_maps(1))
+        self.assertEqual([], weaponskill.far_maps(530))
+        self.assertEqual([], weaponskill.far_maps(None))
+
+
+def far_offer(n=None):
+    return weaponskill.offer(n or need(), FAR_MASTER)
+
+
+class TheCrossing(unittest.TestCase):
+    def test_a_member_crosses_to_the_master_continent(self):
+        result = guildjobs.plan([member()], weapons={"Eggo": far_offer()})
+        (step,) = weapon_steps(result)
+        self.assertIsNone(step.walk)
+        self.assertEqual(
+            (
+                guildcorps.Row(
+                    "job", "cross-to-map map:0", "", "guildjobs:weapon-cross:Eggo"
+                ),
+            ),
+            step.rows,
+        )
+        self.assertIn("Far Master", step.said)
+        self.assertIn("Eastern Kingdoms", step.said)
+
+    def test_the_weapon_crossing_shares_the_crossing_clock(self):
+        self.assertIn(guildjobs.WEAPON_CROSS_ACTION, guildjobs.CROSS_ACTIONS)
+        recent = (
+            guildjobs.Recent(
+                "Eggo",
+                guildjobs.WEAPON_CROSS_ACTION,
+                5,
+                command="cross-to-map map:0",
+                dest=0,
+            ),
+        )
+        result = guildjobs.plan(
+            [member()], weapons={"Eggo": far_offer()}, recent=recent
+        )
+        self.assertEqual([], weapon_steps(result))
+
+    def test_a_crossing_the_module_refused_for_good_is_said_not_asked(self):
+        wall = sorted(guildjobs.classquest.CROSS_WALLS)[0]
+        recent = (
+            guildjobs.Recent(
+                "Eggo",
+                guildjobs.classquest.CROSS_ACTION,
+                60,
+                command="cross-to-map map:0",
+                dest=0,
+                refusal=wall,
+            ),
+        )
+        result = guildjobs.plan(
+            [member()], weapons={"Eggo": far_offer()}, recent=recent
+        )
+        self.assertEqual([], weapon_steps(result))
+        self.assertTrue(any(wall in n for n in result.notes), result.notes)
+
+    def test_a_purse_short_of_the_price_does_not_cross(self):
+        result = guildjobs.plan([member(money=400)], weapons={"Eggo": far_offer()})
+        self.assertEqual([], weapon_steps(result))
+        self.assertTrue(any("saves for skill 43" in n for n in result.notes))
+
+
+class TheBridgeReadsTheFarMaster(unittest.TestCase):
+    def test_the_guild_offer_falls_back_to_the_far_master(self):
+        body = BRIDGE.split("async def _job_weapon_offers", 1)[1].split(
+            "\n    def ", 1
+        )[0]
+        self.assertIn("weaponskill.choose_far_master(", body)
+        self.assertIn("weaponskill.far_maps(", body)
+
+    def test_the_master_read_takes_a_list_of_maps(self):
+        sql = BRIDGE.split("_WEAPON_MASTERS_SQL = (", 1)[1].split("\n)", 1)[0]
+        self.assertIn("cr.map IN ({maps})", sql)
+
+
 if __name__ == "__main__":
     unittest.main()

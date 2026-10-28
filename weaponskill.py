@@ -136,7 +136,9 @@ class Need:
 @dataclass(frozen=True)
 class Offer:
     """One guild member's weapon-master trip: the need, and the master's spawn
-    (0 when no master of its side on its map teaches the skill)."""
+    (0 when no master of its side teaches the skill on its map or across the
+    water). A map_id other than the member's is a master across the water
+    (choose_far_master): the member crosses first."""
 
     need: Need
     spawn: int = 0
@@ -304,6 +306,41 @@ def choose_master(masters, wanted, team: str, map_id: int) -> dict:
         by.values(),
         key=lambda r: (-len(r["spells"]), float(r["yards"]), int(r["entry"])),
     )
+
+
+# A WEAPON MASTER ACROSS THE WATER (#793). Each side's masters do not all teach
+# every skill, and they stand on both classic continents: on the dev realm the
+# guild passes noted 362 times in a day that no master of the member's side on
+# its map taught the skill it lacked. When none does, the master on the other
+# classic continent is chosen, and the member crosses by its faction's boat or
+# zeppelin (guildjobs.weapon_step, the module's `cross-to-map`). Off the two
+# classic continents nothing is far: the member stays put and the note stands.
+CLASSIC_CONTINENTS = (0, 1)
+
+
+def far_maps(map_id) -> list:
+    """The classic continent a member on `map_id` could cross to for a weapon
+    master: the other one, or none off the classic continents."""
+    try:
+        here = int(map_id)
+    except (TypeError, ValueError):
+        return []
+    if here not in CLASSIC_CONTINENTS:
+        return []
+    return [m for m in CLASSIC_CONTINENTS if m != here]
+
+
+def choose_far_master(masters, wanted, team: str, map_id: int) -> dict:
+    """The weapon master of `team`'s side on the classic continent across from
+    `map_id` (far_maps) that teaches the most of `wanted`. {} when the member is
+    off the classic continents or none there teaches it. A master on `map_id`
+    itself is choose_master's, never this one's."""
+    chosen: dict = {}
+    for there in far_maps(map_id):
+        got = choose_master(masters, wanted, team, there)
+        if got and (not chosen or len(got["spells"]) > len(chosen["spells"])):
+            chosen = got
+    return chosen
 
 
 def in_reach(master: dict, at: dict, yards: float = IN_REACH_YARDS) -> bool:

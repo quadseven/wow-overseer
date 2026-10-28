@@ -559,8 +559,32 @@ class OnlyWhatItCanBuy(unittest.TestCase):
                 for step in plan.steps
             )
         )
-        # A refused crossing is held by class_walls before any walk is built;
-        # far_slots=0 also proves the crossing does not consume walk budget.
+        # The same buyer with no refusal and no far-walk slot left still
+        # crosses: the boat takes no walk budget, so the empty plan above is
+        # the wall's doing (class_walls), not a spent budget.
+        (step,) = guildjobs.plan(
+            [member], pvp={"Auren": (aim_to_buy, move)}, far_slots=0
+        ).steps
+        self.assertEqual("cross-to-map map:1", step.rows[0].command)
+        self.assertIsNone(step.walk)
+
+    def test_the_trip_rides_the_boat_both_ways_and_nothing_else(self):
+        """Natural only (#603): the trip there and back is the module's
+        boat or zeppelin crossing, never a teleport, a summon or a GM command."""
+        for here, carried in ((EASTERN_KINGDOMS, False), (KALIMDOR, True)):
+            (a,) = seekers(
+                [member_row(level=20, map_id=here, honor=300)], 5, 8, [self.wsg()]
+            )
+            aim = pvpgear.plan_aims([a])["Auren"]
+            move = pvpgear.next_move(aim, here, carried, ())
+            (step,) = guildjobs.plan(
+                [job_member(map_id=here)], pvp={"Auren": (aim, move)}
+            ).steps
+            for row in step.rows:
+                with self.subTest(here=here, command=row.command):
+                    self.assertTrue(row.command.startswith("cross-to-map map:"))
+                    for word in ("teleport", "summon", ".gm", "tele "):
+                        self.assertNotIn(word, row.command.lower())
 
 
 def walk_rows(*statuses, age=0):
