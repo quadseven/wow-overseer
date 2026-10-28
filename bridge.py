@@ -1538,29 +1538,47 @@ def _strategy_start_seen():
 
 def _reapply_strategies(reapplier) -> int:
     """One pass of the strategy replay (#1553): read the start and the book,
-    send what is owed to members back in the world. Returns rows written."""
+    send what is owed to members back in the world. Returns rows written.
+
+    A member is paid only once all its rows are written; a refused row
+    leaves it owed for the next pass. The new start is saved only once
+    nobody is owed, so a bridge restart before every member is back owes
+    the replay again instead of losing it (#1584)."""
     start = _worldserver_start()
     pages = strategybook.book(_memo_read(strategybook.MEMO_KIND))
     owed_before = reapplier.owed()
     in_world = _bot_held_names(sorted(pages)) if pages else []
-    commands, new_start = reapplier.due(start, pages, in_world)
-    if new_start is not None:
+    commands = reapplier.due(start, pages, in_world)
+    if reapplier.owed() - owed_before:
+        log.info("strategy reapply: worldserver start %s - %s owed a replay",
+                 reapplier.seen, ", ".join(sorted(reapplier.owed())))
+    leads = _roster_leads() if commands else set()
+    by_name: dict = {}
+    for name, command in commands:
+        by_name.setdefault(name, []).append(command)
+    sent = 0
+    paid = []
+    for name, owed in by_name.items():
+        written = 0
+        try:
+            for command in leadcmd.for_character(owed, name in leads):
+                _insert_command(core.InsertCommand(name, command, strategybook.REAPPLY_SOURCE))
+                written += 1
+        except pymysql.err.MySQLError:
+            log.exception("strategy reapply: a row for %s was refused; "
+                          "retrying next pass", name)
+            continue
+        sent += written
+        reapplier.paid(name)
+        paid.append(name)
+    if paid:
+        log.info("strategy reapply: %d command(s) sent to %s", sent,
+                 ", ".join(sorted(paid)))
+    settled = reapplier.settled()
+    if settled is not None:
         now = time.time()
         _memo_upsert(strategybook.START_MEMO_KIND, strategybook.START_SUBJECT,
-                     new_start, now, now + STRATEGY_BOOK_SECONDS)
-        if reapplier.owed() - owed_before:
-            log.info("strategy reapply: worldserver start %s - %s owed a replay",
-                     new_start, ", ".join(sorted(reapplier.owed())))
-    leads = _roster_leads() if commands else set()
-    sent = 0
-    for name, command in commands:
-        if not leadcmd.for_character([command], name in leads):
-            continue
-        _insert_command(core.InsertCommand(name, command, strategybook.REAPPLY_SOURCE))
-        sent += 1
-    if commands:
-        log.info("strategy reapply: %d command(s) sent to %s", sent,
-                 ", ".join(sorted({n for n, _ in commands})))
+                     settled, now, now + STRATEGY_BOOK_SECONDS)
     return sent
 
 
