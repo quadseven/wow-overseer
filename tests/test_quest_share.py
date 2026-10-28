@@ -350,7 +350,7 @@ class TheBridgeAsksForWhatTheDecisionNeeds(unittest.TestCase):
         ]
         for smell in ("allowable_classes", "prev_quest_id", "1101", "class_bit"):
             self.assertNotIn(smell, share, smell)
-        self.assertIn("questshare.plan(members, catalog)", share)
+        self.assertIn("questshare.plan(members, catalog, _fetch_parties(names))", share)
 
     def test_it_says_what_it_did_even_when_it_did_nothing(self):
         bridge = self._bridge()

@@ -184,6 +184,15 @@ class Recipe:
     machine-readable list of which focus ids something actually stands a
     character at, and the test that holds this field to it. Zero still means
     "castable anywhere", which is every entry but Mining's.
+
+    `tool` IS THE ITEM ENTRY OF A BAG TOOL THE CAST NEEDS (the module ticket),
+    0 FOR NONE. The worn Blacksmithing recipes carry RequiresSpellFocus 1
+    (Anvil) and RequiredTotemCategoryID 162 (Blacksmith Hammer, 5956): a tool
+    that sits in the bags, not an equipped weapon. DriveCraft walks a
+    `tool` recipe's crafter to the nearest Anvil, takes the tool out of the
+    bank and returns it afterwards, so a `tool` recipe is a walked focus even
+    though `FOCUS_AIMS` (the bridge-side walks) has no Anvil - because its
+    tool is in `TOOL_WALKS`. The buyer is `craft_supply.hammer_errand`.
     """
 
     spell_id: int
@@ -193,6 +202,7 @@ class Recipe:
     note: str = ""
     repeatable: bool = True
     focus: int = 0
+    tool: int = 0
 
 
 # WHICH SPELL FOCUS OBJECTS SOMETHING IN THIS REPO ACTUALLY WALKS TO
@@ -221,6 +231,22 @@ FOCUS_AIMS = {
     # through the one sanctioned writer (`bridge._write_trade_errand`).
     3: "forge",
 }
+
+
+# The Blacksmith Hammer (item_template class 2, subclass 14, BuyPrice 18):
+# the bag tool every worn Blacksmithing recipe needs. See `Recipe.tool`.
+BLACKSMITH_HAMMER = 5956
+
+
+# WHICH BAG TOOLS SOMETHING ACTUALLY WALKS A CRAFTER FOR, the `FOCUS_AIMS` of
+# `Recipe.tool`. THE HAMMER IS WALKED (mod-overseer#524, #1590): the module
+# half that walks a smith to the nearest Anvil, takes the hammer out of the
+# bank to craft and banks it again afterwards (mod-overseer PRs 1163 and 1180)
+# is in the image the dev realm runs since wow-dev roll 75. So `recipe_for`
+# hands a smith the worn recipes, and tests/test_craft.py no longer counts
+# them in the stranded-focus debt. A tool goes in here only once the module
+# walk for it is live, the same rule `FOCUS_AIMS` holds for a focus object.
+TOOL_WALKS: frozenset = frozenset({BLACKSMITH_HAMMER})
 
 
 # One profession, one verified entry, per the module docstring's own
@@ -1833,11 +1859,11 @@ RECIPES: dict = {
             "already a raid consumable and was simply starting late",
         ),
     ),
-    # BLACKSMITHING ANVIL ROUTE: MEASURED, AND NOT IN THIS TABLE (operator,
-    # 2026-10-05). The wow-professions.com classic Blacksmithing guide fills
-    # 100-124, 150-199, 210-249 and 260-300 with Anvil recipes. Read from the
-    # same md5-verified Spell.dbc and SkillLineAbility.dbc as the First Aid
-    # ladder, with the same anchors:
+    # BLACKSMITHING ANVIL ROUTE: MEASURED, AND IN THIS TABLE EXCEPT THORIUM
+    # BELT (operator, 2026-10-05; worn rungs added for the module ticket). The
+    # wow-professions.com classic Blacksmithing guide fills 100-124, 150-199,
+    # 210-249 and 260-300 with Anvil recipes. Read from the same md5-verified
+    # Spell.dbc and SkillLineAbility.dbc as the First Aid ladder:
     #
     #   spell  name                     focus  reagents (bars)          req yel grey
     #   2666   Runed Copper Belt        1      10x Copper Bar (2840)     80 110 150
@@ -1855,15 +1881,14 @@ RECIPES: dict = {
     #   16649  Imperial Plate Bracers   1      12x Thorium Bar            1 290 310
     #   16657  Imperial Plate Boots     1      18x Thorium Bar            1 315 335
     #
-    # TWO WALLS, AND EVERY ONE OF THEM HITS AT LEAST ONE. Every row needs an
-    # Anvil (focus 1), and `FOCUS_AIMS` has no anvil walk, so each would join
-    # Engineering's stranded eleven (tests/test_craft.py pins that set). And
-    # every row but Runed Copper Belt eats a bar nothing here produces: Smelt
-    # Copper is the only smelt this table may name (see MINING AND SMELTING).
-    # So Runed Copper Belt at 100-124 is the next rung, and it lands with the
-    # anvil walk; the rest also wait on the trainer-taught smelts. The stone
-    # rungs below now reach their own grey instead, which leaves 100-124,
-    # 150-199, 210-249 and 260-300 empty on purpose.
+    # EVERY ROW BUT THORIUM BELT IS A `tool` RECIPE NOW: Anvil plus a
+    # Blacksmith Hammer in the bags (RequiredTotemCategoryID 162), walked by
+    # DriveCraft (see `Recipe.tool`) and bought by
+    # `craft_supply.hammer_errand`, and `TOOL_WALKS` names the hammer, so
+    # `recipe_for` hands them out. Thorium Belt stays out: the ticket that
+    # added the worn rungs did not name it.
+    # Every row but Runed Copper Belt eats a bar nothing here smelts, so a
+    # smith waits on the bars as on any gathered reagent.
     SKILL_IDS["blacksmithing"]: (
         Recipe(
             2660,
@@ -1902,6 +1927,35 @@ RECIPES: dict = {
             note="2x Coarse Stone -> 1x Coarse Grinding Stone, no focus "
             "needed; MinSkillLineRank 1, grey 100",
         ),
+        # THE WORN RECIPES (planner half). Every one needs
+        # an Anvil (focus 1) and a Blacksmith Hammer in the bags (tool 5956);
+        # DriveCraft walks to the Anvil and fetches the hammer, craft_supply
+        # buys it. Spell ids, output items and bar counts are the table in
+        # the ANVIL ROUTE block above, output items read from item_template
+        # and checked against wowhead.com/wotlk and classicdb.ch. Each
+        # bracket runs from its predecessor to its own grey or the next
+        # rung, so the table stays continuous from 100 to 300; the smith
+        # reaches Imperial Plate Boots (grey 335) only as the 300 rung.
+        Recipe(
+            7818,
+            "Silver Rod",
+            min_skill=100,
+            max_skill=109,
+            focus=1,
+            tool=BLACKSMITH_HAMMER,
+            note="1x Silver Bar -> Silver Rod (item 6338), plus 2x Rough "
+            "Grinding Stone; Anvil and Blacksmith Hammer",
+        ),
+        Recipe(
+            2666,
+            "Runed Copper Belt",
+            min_skill=110,
+            max_skill=124,
+            focus=1,
+            tool=BLACKSMITH_HAMMER,
+            note="10x Copper Bar -> Runed Copper Belt (item 2857); Anvil "
+            "and Blacksmith Hammer; learned at 80",
+        ),
         Recipe(
             3337,
             "Heavy Grinding Stone",
@@ -1909,6 +1963,57 @@ RECIPES: dict = {
             max_skill=149,
             note="3x Heavy Stone -> 1x Heavy Grinding Stone, no focus "
             "needed; yellow 125, grey 150",
+        ),
+        Recipe(
+            14379,
+            "Golden Rod",
+            min_skill=150,
+            max_skill=159,
+            focus=1,
+            tool=BLACKSMITH_HAMMER,
+            note="1x Gold Bar -> Golden Rod (item 11128), plus Coarse "
+            "Grinding Stones; Anvil and Blacksmith Hammer",
+        ),
+        Recipe(
+            2668,
+            "Rough Bronze Leggings",
+            min_skill=160,
+            max_skill=174,
+            focus=1,
+            tool=BLACKSMITH_HAMMER,
+            note="6x Bronze Bar -> Rough Bronze Leggings (item 2865); Anvil "
+            "and Blacksmith Hammer; learned at 95",
+        ),
+        Recipe(
+            2672,
+            "Patterned Bronze Bracers",
+            min_skill=175,
+            max_skill=179,
+            focus=1,
+            tool=BLACKSMITH_HAMMER,
+            note="5x Bronze Bar -> Patterned Bronze Bracers (item 2868), "
+            "plus Coarse Grinding Stones; Anvil and Blacksmith Hammer; "
+            "learned at 120",
+        ),
+        Recipe(
+            3506,
+            "Green Iron Leggings",
+            min_skill=180,
+            max_skill=189,
+            focus=1,
+            tool=BLACKSMITH_HAMMER,
+            note="8x Iron Bar, 3x Heavy Stone, 1x Green Dye (2605) -> "
+            "Green Iron Leggings (item 3842); Anvil and Blacksmith Hammer",
+        ),
+        Recipe(
+            3501,
+            "Green Iron Bracers",
+            min_skill=190,
+            max_skill=199,
+            focus=1,
+            tool=BLACKSMITH_HAMMER,
+            note="6x Iron Bar, 1x Green Dye (2605) -> Green Iron Bracers "
+            "(item 3835); Anvil and Blacksmith Hammer",
         ),
         # SOLID SHARPENING STONE REPLACED SOLID GRINDING STONE HERE, and the
         # two are one word apart in every leveling guide. A SHARPENING stone
@@ -1933,12 +2038,72 @@ RECIPES: dict = {
             "bracket and ate 4x Solid Stone for an armour reagent",
         ),
         Recipe(
+            7223,
+            "Golden Scale Bracers",
+            min_skill=210,
+            max_skill=224,
+            focus=1,
+            tool=BLACKSMITH_HAMMER,
+            note="5x Steel Bar -> Golden Scale Bracers (item 6040), plus "
+            "Heavy Grinding Stones; Anvil and Blacksmith Hammer",
+        ),
+        Recipe(
+            9928,
+            "Heavy Mithril Gauntlet",
+            min_skill=225,
+            max_skill=234,
+            focus=1,
+            tool=BLACKSMITH_HAMMER,
+            note="6x Mithril Bar, Mageweave Cloth -> Heavy Mithril Gauntlet "
+            "(item 7919); Anvil and Blacksmith Hammer",
+        ),
+        Recipe(
+            9935,
+            "Steel Plate Helm",
+            min_skill=235,
+            max_skill=249,
+            focus=1,
+            tool=BLACKSMITH_HAMMER,
+            note="14x Steel Bar -> Steel Plate Helm (item 7922), plus a "
+            "Citrine and Solid Stones; Anvil and Blacksmith Hammer",
+        ),
+        Recipe(
             16641,
             "Dense Sharpening Stone",
             min_skill=250,
             max_skill=259,
             note="1x Dense Stone -> 1x Dense Sharpening Stone, no focus "
             "needed; max_skill was 260, its own grey value",
+        ),
+        Recipe(
+            9964,
+            "Mithril Spurs",
+            min_skill=260,
+            max_skill=274,
+            focus=1,
+            tool=BLACKSMITH_HAMMER,
+            note="4x Mithril Bar -> Mithril Spurs (item 7969), plus Solid "
+            "Grinding Stones; Anvil and Blacksmith Hammer",
+        ),
+        Recipe(
+            16649,
+            "Imperial Plate Bracers",
+            min_skill=275,
+            max_skill=299,
+            focus=1,
+            tool=BLACKSMITH_HAMMER,
+            note="12x Thorium Bar -> Imperial Plate Bracers (item 12425); "
+            "Anvil and Blacksmith Hammer",
+        ),
+        Recipe(
+            16657,
+            "Imperial Plate Boots",
+            min_skill=300,
+            max_skill=300,
+            focus=1,
+            tool=BLACKSMITH_HAMMER,
+            note="18x Thorium Bar -> Imperial Plate Boots (item 12426); "
+            "Anvil and Blacksmith Hammer; the rung at the 300 cap",
         ),
     ),
     # LEATHERWORKING'S THREAD/DYE BRACKETS (infra#3611) - the fifteen
@@ -2338,8 +2503,14 @@ def recipe_for(skill_id: int, skill_value: int):
     order (Engineering's table is the first with more than one entry, and
     `test_brackets_do_not_overlap_within_one_skill` holds it, and every
     profession after it, to that).
+
+    A `tool` recipe whose tool is not in `TOOL_WALKS` is skipped: nothing
+    would walk its crafter to the focus, so its bracket answers None the way
+    an Anvil gap always did.
     """
     for recipe in RECIPES.get(skill_id, ()):
+        if recipe.tool and recipe.tool not in TOOL_WALKS:
+            continue
         if recipe.min_skill <= skill_value <= recipe.max_skill:
             return recipe
     return None
@@ -2369,6 +2540,29 @@ def focus_for(spell_id: int) -> int:
         if recipe.spell_id == wanted:
             return recipe.focus
     return 0
+
+
+def tool_for(spell_id: int) -> int:
+    """The item entry of the bag tool this recipe needs, or 0 for none.
+
+    0 for an unknown spell, for the reason `focus_for` gives.
+    """
+    wanted = int(spell_id or 0)
+    for recipe in known_recipes():
+        if recipe.spell_id == wanted:
+            return recipe.tool
+    return 0
+
+
+def walked(recipe: Recipe) -> bool:
+    """Does something stand a character at this recipe's focus object?
+
+    Zero focus needs nothing; a `FOCUS_AIMS` focus is walked by the bridge; a
+    `tool` recipe is walked by DriveCraft once its tool is in `TOOL_WALKS`.
+    """
+    if not recipe.focus or recipe.focus in FOCUS_AIMS:
+        return True
+    return bool(recipe.tool) and recipe.tool in TOOL_WALKS
 
 
 def smelt_errand(name: str, skills: dict, primaries=None) -> int:
@@ -2457,6 +2651,19 @@ TRAINER_RECIPES: dict[int, tuple[int, int]] = {
     3337: (125, 1000),  # Heavy Grinding Stone
     9918: (200, 2500),  # Solid Sharpening Stone
     16641: (250, 10000),  # Dense Sharpening Stone
+    # The worn recipes a trainer teaches (trainer_spell, read 2026-10-26).
+    # Mithril Spurs, Imperial Plate Bracers and Imperial Plate Boots have no
+    # trainer row: a plan teaches them, so they are no purchase here.
+    7818: (100, 100),  # Silver Rod
+    2666: (70, 200),  # Runed Copper Belt
+    14379: (150, 250),  # Golden Rod
+    2668: (105, 300),  # Rough Bronze Leggings
+    2672: (120, 500),  # Patterned Bronze Bracers
+    3506: (155, 5000),  # Green Iron Leggings
+    3501: (165, 1000),  # Green Iron Bracers
+    7223: (185, 1000),  # Golden Scale Bracers
+    9928: (205, 5000),  # Heavy Mithril Gauntlet
+    9935: (215, 5000),  # Steel Plate Helm
     # LEATHERWORKING
     3756: (55, 150),  # Embossed Leather Gloves
     3763: (80, 300),  # Fine Leather Belt
@@ -2576,7 +2783,7 @@ def craft_errand(name: str, skills: dict, primaries=None) -> int:
         if not value:
             continue  # not learned yet - professions.py's trainer errand owns this
         recipe = recipe_for(SKILL_IDS[skill_name], value)
-        if recipe and (not recipe.focus or recipe.focus in FOCUS_AIMS):
+        if recipe and walked(recipe):
             return recipe.spell_id
         # A rung that needs a focus nothing walks to (the eleven Anvil rows,
         # #53) is no errand: DriveCraft casts in place and would be refused

@@ -84,7 +84,12 @@ NON_ASCII = {
     "\u2014": "-",
 }
 
-STUCK_AREAS = {"class quest": "quests", "hold": "gear", "ghost": "deaths"}
+STUCK_AREAS = {
+    "class quest": "quests",
+    "hold": "gear",
+    "ghost": "deaths",
+    "death-loop": "deaths",
+}
 
 NOW_SQL = "SELECT UNIX_TIMESTAMP() AS now_at"
 # The team sync's guild invites (bridge TEAM_SYNC_SOURCE), with the module's
