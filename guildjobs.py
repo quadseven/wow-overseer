@@ -1977,9 +1977,8 @@ def riding_step(m, recent):
     )
 
 
-def mount_refused_for_bags(name, recent) -> bool:
-    """Whether the member's newest mount buy (not its walk) came back
-    mountbuy.BAGS_FULL_REASON."""
+def _newest_mount_buy(name, recent):
+    """The member's newest mount buy row (not its walk), or None."""
     buys = [
         r
         for r in recent or ()
@@ -1989,8 +1988,16 @@ def mount_refused_for_bags(name, recent) -> bool:
         and str(r.command or "").startswith("entry:")
     ]
     if not buys:
+        return None
+    return min(buys, key=lambda r: (int(r.age_minutes), -int(r.row_id)))
+
+
+def mount_refused_for_bags(name, recent) -> bool:
+    """Whether the member's newest mount buy (not its walk) came back
+    mountbuy.BAGS_FULL_REASON."""
+    newest = _newest_mount_buy(name, recent)
+    if newest is None:
         return False
-    newest = min(buys, key=lambda r: (int(r.age_minutes), -int(r.row_id)))
     reason = mountbuy.BAGS_FULL_REASON
     return reason in (newest.refusal, newest.reason) or reason in str(
         newest.result or ""
@@ -2009,12 +2016,36 @@ def mount_room_short(m, recent) -> bool:
 def _mount_room(m, offer, recent, cap, kept, book, crafters, master):
     """(room step or None, a note) for a member whose mount buy has no bag
     slot: one make-room step (_room_ladder) before the vendor walk, or the walk
-    held with the reason."""
+    held with the reason.
+
+    The same per-state cap as equip_room_step (#1607): the bags' state is the
+    one the newest buy was refused in, so ROOM_STEPS_PER_STATE make-room steps
+    since that refusal with the walk still held mean they gained no slot, and
+    no more are taken until a free slot is read or the refusal ages out. The
+    note says so once, in place of another sale, post or destroy."""
     said = "%s makes room in its bags (%s free, 1 needed) for %s" % (
         m.name,
         "none" if m.free_slots is None else int(m.free_slots),
         offer.name or "mount item %d" % offer.entry,
     )
+    refused = (
+        _newest_mount_buy(m.name, recent)
+        if mount_refused_for_bags(m.name, recent)
+        else None
+    )
+    if (
+        refused is not None
+        and _room_steps_since(m, recent, refused.age_minutes) >= ROOM_STEPS_PER_STATE
+    ):
+        return None, (
+            "%s made room %d time(s) for %s since its buy was refused for full "
+            "bags and has read no free slot; no more until its bags change"
+            % (
+                m.name,
+                ROOM_STEPS_PER_STATE,
+                offer.name or "item %d" % offer.entry,
+            )
+        )
     if not _cooling(m, ROOM_ACTION, recent):
         step = _room_ladder(m, said, 1, kept, book, cap, crafters, master)
         if step is not None:
