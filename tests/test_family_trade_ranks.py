@@ -85,13 +85,10 @@ class TheLadderGapsAreNamed(unittest.TestCase):
     ANVIL = "every trainer recipe here needs an Anvil, and no walk reaches one"
 
     GAPS = {
-        # The stones (no focus) grey at 100, 150, 210 and 260.
-        BLACKSMITHING: {
-            (100, 124): ANVIL,
-            (150, 199): ANVIL,
-            (210, 249): ANVIL,
-            (260, 300): ANVIL,
-        },
+        # The stones (no focus) grey at 100, 150, 210 and 260, and the worn
+        # hammer recipes fill every band between them now that DriveCraft
+        # walks a smith to an Anvil and fetches the hammer (#1590): no gap.
+        BLACKSMITHING: {},
         ENGINEERING: {
             # Bronze Framework (3953, taught at 145, grey 195) needs no focus
             # but eats two Bronze Bars, and nothing smelts bronze yet.
