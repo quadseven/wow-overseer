@@ -239,20 +239,23 @@ class ThePageShowsWhatDiscordWasSent(unittest.TestCase):
         self.assertNotIn("report", payload["families"][0]["runs"][0])
 
 
-def _post_run_reports():
-    """Bridge._post_run_reports, compiled out of bridge.py's source."""
+def _bridge_method(name):
+    """A Bridge method, compiled out of bridge.py's source."""
     tree = ast.parse(BRIDGE.read_text(encoding="utf-8"))
     bridge = next(
         n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Bridge"
     )
     fn = next(
-        n
-        for n in bridge.body
-        if isinstance(n, ast.AsyncFunctionDef) and n.name == "_post_run_reports"
+        n for n in bridge.body if isinstance(n, ast.AsyncFunctionDef) and n.name == name
     )
     return textwrap.dedent(
         ast.get_source_segment(BRIDGE.read_text(encoding="utf-8"), fn)
     )
+
+
+def _post_run_reports():
+    """Bridge._post_run_reports, compiled out of bridge.py's source."""
+    return _bridge_method("_post_run_reports")
 
 
 class OneDiscordMessagePerEndedRun(unittest.TestCase):
@@ -363,6 +366,92 @@ class OneDiscordMessagePerEndedRun(unittest.TestCase):
             src,
         )
         self.assertIn('_Pass("_run_report_loop", headless=False)', src)
+
+
+class ABurstAfterARestartIsBounded(unittest.TestCase):
+    """#1604: every run in an instance ends together after a worldserver roll.
+
+    The owed read takes at most runreport.OWED_LIMIT runs, so a burst posts
+    at most that many reports per tick and the rest follow on later ticks.
+    """
+
+    def test_the_owed_read_is_capped_at_five_per_tick(self):
+        self.assertEqual(5, runreport.OWED_LIMIT)
+        self.assertTrue(runreport.PENDING_SQL.rstrip().endswith("LIMIT %s"))
+        src = BRIDGE.read_text(encoding="utf-8")
+        self.assertIn(
+            "cur.execute(runreport.PENDING_SQL, "
+            "(runreport.OWED_MINUTES, runreport.OWED_LIMIT))",
+            src,
+        )
+
+    def test_twelve_runs_ending_together_post_five_five_then_two(self):
+        harness = OneDiscordMessagePerEndedRun()
+        post, bot, sent, marked = harness._harness(list(range(400, 412)))
+        owed = harness.state
+
+        def capped():
+            done = {m[0] for m in marked}
+            # What the database's LIMIT does to the owed read.
+            return [r for r in owed["owed"] if r not in done][: runreport.OWED_LIMIT]
+
+        fetch, _ = _fetcher()
+        report = runreport.read(fetch, 412)
+        post.__globals__["_fetch_owed_run_reports"] = capped
+        post.__globals__["_read_run_report"] = lambda run_id: report
+        self.assertEqual([5, 5, 2, 0], [asyncio.run(post(bot, 1)) for _ in range(4)])
+        self.assertEqual(list(range(400, 412)), [m[0] for m in marked])
+
+
+class RunReportsNeverFallBackToTheOverseerChannel(unittest.TestCase):
+    """#1604: unset RUN_REPORT_CHANNEL_ID means no reports, not the main channel."""
+
+    def _run_loop(self, run_report_channel):
+        posted: list = []
+        self.infos: list = []
+        ticks = {"left": 1}
+
+        async def sleep(_seconds):
+            return None
+
+        async def wait_until_ready():
+            return None
+
+        def is_closed():
+            ticks["left"] -= 1
+            return ticks["left"] < 0
+
+        async def post(channel_id):
+            posted.append(channel_id)
+            return 0
+
+        ns = {
+            "asyncio": types.SimpleNamespace(sleep=sleep),
+            "RUN_REPORT_CHANNEL_ID": run_report_channel,
+            "OVERSEER_CHANNEL_ID": "555",
+            "RUN_REPORT_SECONDS": 0,
+            "log": types.SimpleNamespace(
+                info=lambda *a: self.infos.append(a),
+                warning=lambda *a: self.infos.append(a),
+                exception=lambda *a: self.infos.append(a),
+            ),
+        }
+        exec(_bridge_method("_run_report_loop"), ns)  # noqa: S102
+        bot = types.SimpleNamespace(
+            wait_until_ready=wait_until_ready,
+            is_closed=is_closed,
+            _post_run_reports=post,
+        )
+        asyncio.run(ns["_run_report_loop"](bot))
+        return posted
+
+    def test_unset_posts_nowhere_and_says_so_once(self):
+        self.assertEqual([], self._run_loop(""))
+        self.assertEqual(1, len(self.infos))
+        self.assertIn("RUN_REPORT_CHANNEL_ID is unset", self.infos[0][0])
+
+    def test_set_posts_to_the_run_report_channel(self):
+        self.assertEqual([777], self._run_loop("777"))
 
 
 if __name__ == "__main__":

@@ -225,6 +225,7 @@ _HEARD = contextvars.ContextVar("heard_order_text", default="")
 RELAY_SECONDS = float(os.environ.get("RELAY_SECONDS", "3"))
 # How often ended dungeon runs are checked for an owed report (mod-overseer#152:
 # a report within 60 seconds of the run row closing), and where it goes.
+# Unset turns reports off; they never fall back to the overseer channel (#1604).
 RUN_REPORT_SECONDS = float(os.environ.get("RUN_REPORT_SECONDS", "20"))
 RUN_REPORT_CHANNEL_ID = os.environ.get("RUN_REPORT_CHANNEL_ID", "")
 # On restart, anything older than this is marked relayed WITHOUT being sent.
@@ -8194,12 +8195,18 @@ class Bridge(discord.Client):
         failed send is retried next tick, and a posted run is never posted
         again. A run that cannot be posted for runreport.OWED_MINUTES ages out
         rather than blocking the ones behind it.
+
+        Reports go only to RUN_REPORT_CHANNEL_ID, never to the overseer
+        channel (#1604): that is the operator's command and status channel,
+        and every run in an instance ends together after a worldserver roll,
+        so a fallback would bury it. Unset means reports are off, said once
+        per process start.
         """
         await self.wait_until_ready()
-        channel_id = RUN_REPORT_CHANNEL_ID or OVERSEER_CHANNEL_ID
+        channel_id = RUN_REPORT_CHANNEL_ID
         if not channel_id:
-            log.warning("no RUN_REPORT_CHANNEL_ID and no OVERSEER_CHANNEL_ID - "
-                        "dungeon run reports have nowhere to go")
+            log.info("run reports: RUN_REPORT_CHANNEL_ID is unset, so dungeon "
+                     "run reports are off (set it to turn them on)")
             return
         while not self.is_closed():
             await asyncio.sleep(RUN_REPORT_SECONDS)
@@ -16526,6 +16533,10 @@ class Bridge(discord.Client):
                      "; ".join("%s %s" % (p.name, p.said) for p in posts)
                      or "nobody on maintenance holds a corps trade")
         _log_capped("guild corps", plan.notes)
+        # Who the bags passed over because one waits in their mail (#1591),
+        # once per state (#1605), so the skip can be read from the log.
+        _log_changed("guild corps: bag in the mail", plan.mail_waits,
+                     _family_label(cohort))
         for step in plan.steps:
             # Reserved before the task starts and released when it ends, so a
             # holder is never read as free while one of its rows is in flight.
