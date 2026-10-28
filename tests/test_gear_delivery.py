@@ -40,9 +40,11 @@ that the pass says what it decided when it decides nothing.
 import pathlib
 import re
 import unittest
+from dataclasses import replace
 
 import bag_pressure
 import gear
+import guildshare
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 
@@ -224,8 +226,7 @@ class NobodyIsSentAnythingTheyCannotHold(unittest.TestCase):
         plan = hand_off([carried()], THE_HAND_OFF, free_slots={"Grog": 4, "Bork": 0})
         self.assertEqual(plan.grants, ())
         self.assertIn("Bork", " ".join(plan.notes))
-        self.assertIn("no slot-freeing step is available", " ".join(plan.notes))
-        self.assertIn("no direct equip path is available", " ".join(plan.notes))
+        self.assertIn("no free bag slot to receive it", " ".join(plan.notes))
 
     def test_unknown_capacity_is_treated_as_no_room(self):
         """A failed capacity read is not a licence to write a doomed row -
@@ -706,6 +707,211 @@ class ArmourNobodyCanWearIsNeverHandedOver(unittest.TestCase):
         )
         ugga = self._who("Ugga", PRIEST, 38, 0)
         self.assertTrue(gear.wearable_armor(axe, ugga))
+
+
+class AFullTankStillGetsTheShield(unittest.TestCase):
+    """Measured on the dev realm: 14 of 15 Protection warriors and paladins
+    wore a shield, and the fifteenth, a level 43 off tank in another family,
+    held a dagger in the off hand while three spare shields "stay with Grog:
+    ... has no free bag slot to receive it". A trade and a letter both land in
+    the bags, so a full bag blocks a shield that is going straight on. The
+    plan clears the cheapest grey in the tank's bags first and hands the
+    shield over in the same pass.
+    """
+
+    SPARE_SHIELD = gear.Holding(
+        holder="Grog",
+        guid=7401,
+        entry=6574,
+        name="Brigade Defender",
+        quality=2,
+        item_level=40,
+        required_level=35,
+        allowable_class=ANY_CLASS,
+        inventory_type=gear.INVTYPE_SHIELD,
+        item_class=gear.ITEM_CLASS_ARMOR,
+        item_subclass=gear.ARMOR_SHIELD,
+    )
+    TANK = gear.CharacterState(
+        name="Erg",
+        class_id=WARRIOR,
+        level=43,
+        equipped={"main_hand": 38, "off_hand": 30},
+        role=gear.ROLE_TANK,
+        off_hand_kind=gear.OFF_HAND_WEAPON,
+    )
+    MEMBERS = [
+        guildshare.Member(
+            name="Erg", class_id=WARRIOR, level=43, skills={}, online=True
+        )
+    ]
+    BESIDE = {"Grog": at(KALIMDOR, 100.0, 100.0), "Erg": at(KALIMDOR, 103.0, 100.0)}
+    FULL = {"Grog": 4, "Erg": 0}
+    GREYS = {
+        "Erg": (
+            gear.Spare(holder="Erg", guid=9002, count=1, name="Torn Pelt", value=40),
+            gear.Spare(holder="Erg", guid=9001, count=3, name="Broken Fang", value=6),
+        )
+    }
+
+    def _share(self, spares=None, characters=None):
+        return bag_pressure.guild_gear_gifts(
+            [self.SPARE_SHIELD],
+            characters or [self.TANK],
+            ["Grog"],
+            self.MEMBERS,
+            position_rows=self.BESIDE,
+            free_slots=self.FULL,
+            spares=spares,
+        )
+
+    def test_the_cheapest_grey_is_cleared_and_the_shield_handed_over(self):
+        plan = self._share(spares=self.GREYS)
+        self.assertEqual(len(plan.grants), 1)
+        grant = plan.grants[0]
+        self.assertEqual((grant.holder, grant.taker), ("Grog", "Erg"))
+        self.assertEqual(grant.verb, gear.TRADE)
+        self.assertEqual(grant.clears.guid, 9001)
+        self.assertIn("Broken Fang", grant.reason)
+        self.assertEqual(plan.notes, ())
+
+    def test_the_cleared_grey_is_the_worlds_destroy_row(self):
+        clears = self._share(spares=self.GREYS).grants[0].clears
+        self.assertEqual(
+            bag_pressure.destroy_command(bag_pressure.clear_candidate(clears)),
+            "destroy guid:9001 count:3",
+        )
+
+    def test_with_no_grey_the_refusal_names_both_steps_that_failed(self):
+        plan = self._share(spares={})
+        self.assertEqual(plan.grants, ())
+        said = " ".join(plan.notes)
+        self.assertIn("no slot could be freed", said)
+        self.assertIn("no hand-over equips it directly", said)
+
+    def test_one_grey_clears_room_for_one_shield_only(self):
+        second = replace(self.SPARE_SHIELD, guid=7402, name="Ancient Defender")
+        plan = bag_pressure.guild_gear_gifts(
+            [self.SPARE_SHIELD, second],
+            [self.TANK],
+            ["Grog"],
+            self.MEMBERS,
+            position_rows=self.BESIDE,
+            free_slots=self.FULL,
+            spares={"Erg": self.GREYS["Erg"][1:]},
+        )
+        self.assertEqual(len(plan.grants), 1)
+        self.assertIn("no slot could be freed", " ".join(plan.notes))
+
+    def test_a_tank_already_behind_a_shield_clears_nothing(self):
+        shielded = replace(self.TANK, off_hand_kind=gear.OFF_HAND_SHIELD)
+        plan = self._share(spares=self.GREYS, characters=[shielded])
+        self.assertEqual(plan.grants, ())
+        self.assertNotIn("no slot could be freed", " ".join(plan.notes))
+
+    def test_only_unwanted_greys_are_offered_to_clear(self):
+        rows = [
+            dict(
+                holder="Erg",
+                item_guid=9001,
+                count=3,
+                name="Broken Fang",
+                quality=0,
+                sell_price=2,
+                quest_item=False,
+            ),
+            dict(
+                holder="Erg",
+                item_guid=9002,
+                count=1,
+                name="Torn Pelt",
+                quality=0,
+                sell_price=40,
+                quest_item=False,
+            ),
+            dict(
+                holder="Erg",
+                item_guid=9003,
+                count=1,
+                name="Needed Bone",
+                quality=0,
+                sell_price=1,
+                quest_item=True,
+            ),
+            dict(
+                holder="Erg",
+                item_guid=9004,
+                count=1,
+                name="Linen Cloth",
+                quality=1,
+                sell_price=1,
+                quest_item=False,
+            ),
+            dict(
+                holder="Erg",
+                item_guid=9005,
+                count=1,
+                name="Kept Charm",
+                quality=0,
+                sell_price=1,
+                quest_item=False,
+            ),
+        ]
+        spares = bag_pressure.spare_slots(rows, keep_names=("Kept Charm",))
+        self.assertEqual([s.guid for s in spares["Erg"]], [9001, 9002])
+
+    def test_a_guildmate_protection_tree_is_a_tank_to_the_guild_pass(self):
+        """The family's party packing names only its own tank; a guildmate's
+        roster tree is the fact that makes the off tank a shield tank."""
+        rows = [
+            dict(
+                name="Erg",
+                class_id=WARRIOR,
+                level=43,
+                spec_tab=2,
+                inventory_type=13,
+                item_level=30,
+                equipment_slot=16,
+            ),
+            dict(
+                name="Grog",
+                class_id=PALADIN,
+                level=39,
+                spec_tab=255,
+                inventory_type=None,
+                item_level=None,
+            ),
+        ]
+        gear_rows = [
+            carried(
+                item_guid=7401,
+                entry=6574,
+                name="Brigade Defender",
+                required_level=35,
+                item_level=40,
+                inventory_type=14,
+                item_subclass=gear.ARMOR_SHIELD,
+            )
+        ]
+        plan = bag_pressure.guild_gear_gifts_from_rows(
+            gear_rows,
+            rows,
+            ["Grog"],
+            self.MEMBERS,
+            position_rows=self.BESIDE,
+            free_slots=self.FULL,
+            spares=self.GREYS,
+        )
+        self.assertEqual([g.taker for g in plan.grants], ["Erg"])
+
+    def test_the_guild_writer_destroys_the_grey_before_the_trade(self):
+        body = _block("    async def _guild_gear_share_once(")
+        self.assertIn("_fetch_carried_greys", body)
+        self.assertIn("spares=", body)
+        writer = _block("    async def _clear_then_hand(")
+        self.assertLess(
+            writer.index("_insert_destroy"), writer.index("_insert_gear_handoff")
+        )
 
 
 if __name__ == "__main__":
