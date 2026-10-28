@@ -1977,9 +1977,8 @@ def riding_step(m, recent):
     )
 
 
-def mount_refused_for_bags(name, recent) -> bool:
-    """Whether the member's newest mount buy (not its walk) came back
-    mountbuy.BAGS_FULL_REASON."""
+def _newest_mount_buy(name, recent):
+    """The member's newest mount buy row (not its walk), or None."""
     buys = [
         r
         for r in recent or ()
@@ -1989,8 +1988,16 @@ def mount_refused_for_bags(name, recent) -> bool:
         and str(r.command or "").startswith("entry:")
     ]
     if not buys:
+        return None
+    return min(buys, key=lambda r: (int(r.age_minutes), -int(r.row_id)))
+
+
+def mount_refused_for_bags(name, recent) -> bool:
+    """Whether the member's newest mount buy (not its walk) came back
+    mountbuy.BAGS_FULL_REASON."""
+    newest = _newest_mount_buy(name, recent)
+    if newest is None:
         return False
-    newest = min(buys, key=lambda r: (int(r.age_minutes), -int(r.row_id)))
     reason = mountbuy.BAGS_FULL_REASON
     return reason in (newest.refusal, newest.reason) or reason in str(
         newest.result or ""
@@ -2009,12 +2016,36 @@ def mount_room_short(m, recent) -> bool:
 def _mount_room(m, offer, recent, cap, kept, book, crafters, master):
     """(room step or None, a note) for a member whose mount buy has no bag
     slot: one make-room step (_room_ladder) before the vendor walk, or the walk
-    held with the reason."""
+    held with the reason.
+
+    The same per-state cap as equip_room_step (#1607): the bags' state is the
+    one the newest buy was refused in, so ROOM_STEPS_PER_STATE make-room steps
+    since that refusal with the walk still held mean they gained no slot, and
+    no more are taken until a free slot is read or the refusal ages out. The
+    note says so once, in place of another sale, post or destroy."""
     said = "%s makes room in its bags (%s free, 1 needed) for %s" % (
         m.name,
         "none" if m.free_slots is None else int(m.free_slots),
         offer.name or "mount item %d" % offer.entry,
     )
+    refused = (
+        _newest_mount_buy(m.name, recent)
+        if mount_refused_for_bags(m.name, recent)
+        else None
+    )
+    if (
+        refused is not None
+        and _room_steps_since(m, recent, refused.age_minutes) >= ROOM_STEPS_PER_STATE
+    ):
+        return None, (
+            "%s made room %d time(s) for %s since its buy was refused for full "
+            "bags and has read no free slot; no more until its bags change"
+            % (
+                m.name,
+                ROOM_STEPS_PER_STATE,
+                offer.name or "item %d" % offer.entry,
+            )
+        )
     if not _cooling(m, ROOM_ACTION, recent):
         step = _room_ladder(m, said, 1, kept, book, cap, crafters, master)
         if step is not None:
@@ -2208,6 +2239,43 @@ def weapon_step(m, offer, recent, cap):
     return step, ""
 
 
+def _crossed_to(r, map_id) -> bool:
+    """A crossing row that asked for `map_id` and was not refused. Map 0 is a
+    map: a `cross-to-map map:0` row is a crossing by its verb (class_walls)."""
+    if r.refusal or int(r.dest) != int(map_id):
+        return False
+    return bool(r.dest) or classquest.is_cross_row(r.command)
+
+
+def weapon_cross_back(m, to_map, recent) -> str:
+    """Why the weapon crossing to `to_map` waits, "" when it may go.
+
+    THE LEVEL CROSSING COMES FIRST (#1585). The weapon step is asked ahead of
+    the level step, and the two share one crossing clock (crossing_cooling)
+    but not one destination. A member the weapon step crossed to a master it
+    did not reach is on the weapon cooldown once the walk ends, so the level
+    step may cross it back to its hub; once the shared clock runs out the
+    weapon step would cross it over again, and so on each time the clock ran
+    out. So, inside the recent rows' day, the weapon step does not cross a
+    member away from a map the level step crossed it to, and does not cross
+    a member to a map it already crossed to for a weapon master and came back
+    from. Either way the member crosses for a weapon master at most once a
+    day, and a level crossing is never undone by one."""
+    here = m.map_id
+    for r in recent or ():
+        if r.name != m.name:
+            continue
+        if (
+            r.action == guildlevel.CROSS_ACTION
+            and here is not None
+            and _crossed_to(r, here)
+        ):
+            return "its level crossing brought it here in the last day"
+        if r.action == WEAPON_CROSS_ACTION and _crossed_to(r, to_map):
+            return "it crossed there for a weapon master in the last day and is back"
+    return ""
+
+
 def weapon_cross_step(m, offer, recent):
     """(step or None, a note) for a weapon master on the other classic continent
     (weaponskill.choose_far_master, #793): one `cross-to-map map:<id>` row, no
@@ -2234,6 +2302,21 @@ def weapon_cross_step(m, offer, recent):
         )
     if crossing_cooling(m.name, recent):
         return None, ""
+    back = weapon_cross_back(m, to_map, recent)
+    if back:
+        return None, (
+            "%s carries %s (%s) and has no skill %d for it; %s teaches it on %s, "
+            "and it does not cross there now: %s"
+            % (
+                m.name,
+                need.item,
+                need.why,
+                need.skill,
+                offer.master or "a weapon master",
+                where,
+                back,
+            )
+        )
     said = (
         "%s crosses to %s by its faction's boat or zeppelin to buy skill %d at %s "
         "for %s of its own, to wield %s (%s)"

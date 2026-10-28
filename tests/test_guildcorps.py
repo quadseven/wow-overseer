@@ -710,6 +710,33 @@ class TheGuildGetsTheBags(unittest.TestCase):
         self.assertEqual(step.action, "post")
         self.assertEqual(step.rows[0].target_arg, "Grog")
 
+    def test_a_guildmate_passed_over_for_a_bag_in_the_mail_is_named(self):
+        # #1605: the #1591 skip left no trace, so whether it held could not be
+        # read from the log. The plan names the member and the waiting bag.
+        t = tailor(carried=self.BAG)
+        waiting = member(
+            "Bodo",
+            maintenance=False,
+            worn_bags=(6,),
+            mail=(gc.Letter(7, 77, 4238, 1),),
+        )
+        cloth = member(
+            "Grog",
+            maintenance=False,
+            worn_bags=(6,),
+            mail=(gc.Letter(8, 88, 2589, 20),),
+        )
+        plan = gc.plan([t, waiting, cloth], {}, TRAINABLE, VENDORS, {}, set())
+        self.assertEqual(
+            plan.mail_waits,
+            ("Bodo is passed over for a bag: a Linen Bag waits in its mail",),
+        )
+
+    def test_the_bridge_logs_the_passed_over_once_per_state(self):
+        self.assertIn(
+            '_log_changed("guild corps: bag in the mail", plan.mail_waits', BRIDGE
+        )
+
     def test_a_letter_of_cloth_does_not_hold_back_a_bag(self):
         t = tailor(carried=self.BAG)
         raider = member(
