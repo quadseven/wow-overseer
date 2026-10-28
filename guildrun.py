@@ -391,6 +391,51 @@ def free_members(
     return free, held
 
 
+# ROOM TO LOOT BEFORE THE DOOR (#1568). Three Deadmines guild runs stalled at
+# the Iron Clad Door on 2026-10-27 because every member out of combat that
+# knew Opening had full bags, so nobody could loot the Defias Gunpowder. A
+# member with fewer than BAG_ROOM_FREE_SLOTS free general-bag slots is held
+# out of a run, its ask or yes taken back, so it is no longer spoken for and
+# the guild jobs pass sends it to sell (guildjobs.loot_room_short already asks
+# a sale of it there); with room again it is free to ask or answer. The wait
+# is bounded: once a member has been short for BAG_ROOM_WAIT_SECONDS it is
+# free to a run again, so one who cannot reach a vendor, or carries nothing a
+# vendor will buy, does not hold the run for ever. The family's own campaign has its hold at the resume
+# floor (bag_pressure.campaign_resume_short).
+SHORT_OF_BAG_ROOM = "short of bag room"
+BAG_ROOM_FREE_SLOTS = 4
+BAG_ROOM_WAIT_SECONDS = 20 * 60
+
+
+def bag_room_holds(
+    free_slots: dict,
+    since: dict,
+    now: float,
+    floor: int = BAG_ROOM_FREE_SLOTS,
+    wait: float = BAG_ROOM_WAIT_SECONDS,
+) -> tuple:
+    """(names held for bag room now, the clock to keep for the next pass).
+
+    `free_slots` is name -> free general-bag slots; `since` is the clock this
+    returned last time (name -> when it was first read short). A member short
+    of `floor` is held until it has been short for `wait` seconds; a member
+    with room, or one whose bags were not read, is forgotten, so a later
+    shortage starts a new wait. An unread or negative reading holds nobody: a
+    broken read must not keep a guild out of its dungeons."""
+    clock = {}
+    held = set()
+    for name, free in (free_slots or {}).items():
+        if not isinstance(free, int) or isinstance(free, bool):
+            continue
+        if free < 0 or free >= floor:
+            continue
+        start = (since or {}).get(name, now)
+        clock[name] = start
+        if now - start < wait:
+            held.add(name)
+    return frozenset(held), clock
+
+
 def settling(uptime_seconds, settle_seconds: int = SETTLE_SECONDS) -> bool:
     """Whether the worldserver is too newly started to pick anyone. An
     unknown uptime (no uptime table) does not hold the coordinator back."""
