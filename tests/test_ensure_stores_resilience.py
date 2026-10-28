@@ -107,6 +107,11 @@ class EnsureStoresResilience(unittest.TestCase):
                 "_ensure_run_report_store",
                 make_ensure("_ensure_run_report_store"),
             ),
+            mock.patch.object(
+                bridge,
+                "_ensure_milestone_store",
+                make_ensure("_ensure_milestone_store"),
+            ),
             mock.patch.object(bridge.log, "exception", fake_log_exception),
         ):
             # We need to call the actual _ensure_stores method, but it's an instance method
@@ -230,6 +235,11 @@ class EnsureStoresResilience(unittest.TestCase):
                 bridge,
                 "_ensure_run_report_store",
                 make_ensure("_ensure_run_report_store"),
+            ),
+            mock.patch.object(
+                bridge,
+                "_ensure_milestone_store",
+                make_ensure("_ensure_milestone_store"),
             ),
             mock.patch.object(bridge, "_guild_run_last_formed_at", return_value=None),
             mock.patch.object(bridge, "_restore_bag_holds"),

@@ -22,6 +22,7 @@ nothing that talks to MySQL. bridge.py runs the statements named here.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import jobs
 import raidroles
@@ -256,12 +257,15 @@ def place(keyword: str) -> str:
     return PLACES.get(keyword, keyword)
 
 
-def refusal(keyword: str, runs: int, level_rows: list) -> str:
+def refusal(
+    keyword: str, runs: int, level_rows: list, cleared: frozenset = frozenset()
+) -> str:
     """Why this family cannot be ordered to this raid, or "".
 
     Every member must be at the instance's own minimum level: the core refuses
     the door to anybody below it, and one member refused at the door is a
-    family split at the door.
+    family split at the door. Every member must also be in a guild the raid
+    is open to (waits_for_first_clear); `cleared` is cleared_raids' answer.
     """
     if not is_raid(keyword):
         return "the overseer has no raid door for %s" % keyword
@@ -281,7 +285,153 @@ def refusal(keyword: str, runs: int, level_rows: list) -> str:
             floor,
             place(keyword),
         )
+    return _guild_refusal(keyword, level_rows, cleared)
+
+
+def _guild_refusal(keyword: str, level_rows: list, cleared: frozenset) -> str:
+    """The first member's wait for the raid's first clear, named, or ""."""
+    for row in level_rows or []:
+        why = waits_for_first_clear(str(row.get("guild") or ""), keyword, cleared)
+        if why:
+            return "%s: %s" % (row.get("name"), why)
     return ""
+
+
+# --- the realm milestone: who raids first (#620) -------------------------------
+#
+# THE OPERATOR'S RULE (decided 2026-10-05, widened 2026-10-26): other guilds
+# may raid, but each raid opens to them only after Cave or Bonkers has
+# cleared it first, its final boss killed. "First" is the first kill by
+# either guild. One rule for every tier, so Molten Core's milestone opens
+# Molten Core and nothing else. Meanwhile the other guilds keep their
+# dungeon, gear and attunement runs, which no raid gate touches.
+#
+# THE RECORD is one overseer_realm_milestone row per raid, written once
+# (INSERT IGNORE on the raid key) and never rewritten, so the first guild
+# stays the first. A raid can be opened by hand, ahead of any kill, by
+# inserting its row: the gate reads the row, not the kill.
+#
+# THE KILL DATA is the core's own achievement credit: Achievement.dbc's
+# "Molten Core" (686), "Blackwing Lair" (685) and "Temple of Ahn'Qiraj" (687)
+# are each awarded for the final boss's kill, to every character who earned
+# it, in character_achievement with its time. That is read the same way
+# whoever drove the run, the family's queue or a guild's own coordinator, and
+# mod-overseer at the pinned revision writes no boss_kill event to read
+# instead.
+
+FIRST_GUILDS = ("Cave", "Bonkers")
+
+# Keywords for the later tiers. Only MOLTEN_CORE is a door the module has
+# (jobs.RAID_KEYWORDS); these name the milestones the gate holds them to.
+BLACKWING_LAIR = "blackwinglair"
+AHN_QIRAJ = "ahnqiraj"
+
+
+@dataclass(frozen=True)
+class FirstClear:
+    keyword: str
+    place: str
+    boss: str
+    achievement: int
+
+
+FIRST_CLEARS = (
+    FirstClear(MOLTEN_CORE, "Molten Core", "Ragnaros", 686),
+    FirstClear(BLACKWING_LAIR, "Blackwing Lair", "Nefarian", 685),
+    FirstClear(AHN_QIRAJ, "Temple of Ahn'Qiraj", "C'Thun", 687),
+)
+
+
+def first_clear(keyword: str) -> FirstClear | None:
+    return next((f for f in FIRST_CLEARS if f.keyword == keyword), None)
+
+
+MILESTONE_CREATE_SQL = (
+    "CREATE TABLE IF NOT EXISTS overseer_realm_milestone ("
+    " raid VARCHAR(24) NOT NULL,"
+    " guild VARCHAR(24) NOT NULL,"
+    " boss VARCHAR(24) NOT NULL,"
+    " killed_at TIMESTAMP NULL DEFAULT NULL,"
+    " recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+    " PRIMARY KEY (raid)"
+    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+)
+MILESTONE_SQL = "SELECT raid FROM overseer_realm_milestone"
+MILESTONE_INSERT_SQL = (
+    "INSERT IGNORE INTO overseer_realm_milestone (raid, guild, boss, killed_at) "
+    "VALUES (%s, %s, %s, FROM_UNIXTIME(%s))"
+)
+# Each guild's earliest credit for each final-boss achievement. {holes} is
+# one %s per FIRST_CLEARS achievement; every value is bound by the driver.
+KILLS_SQL = (
+    "SELECT ca.achievement, g.name AS guild, MIN(ca.date) AS killed_at "
+    "FROM character_achievement ca JOIN guild_member gm ON gm.guid = ca.guid "
+    "JOIN guild g ON g.guildid = gm.guildid WHERE ca.achievement IN ({holes}) "
+    "GROUP BY ca.achievement, g.name"
+)
+
+
+def kills_sql() -> tuple:
+    """(KILLS_SQL with its placeholders, the achievements to bind)."""
+    ids = tuple(f.achievement for f in FIRST_CLEARS)
+    return KILLS_SQL.format(holes=", ".join(["%s"] * len(ids))), ids
+
+
+def cleared_raids(rows: list) -> frozenset:
+    """The raid keywords with a milestone, from MILESTONE_SQL's rows."""
+    return frozenset(str(r["raid"]) for r in rows or [] if r.get("raid"))
+
+
+def new_milestones(kills: list, cleared: frozenset) -> list:
+    """(raid, guild, boss, killed_at) per raid not in `cleared` that a
+    FIRST_GUILDS guild has cleared: the earlier of the two when both have.
+
+    `kills` are KILLS_SQL's rows. A kill by any other guild writes nothing:
+    the raid is not theirs to open.
+    """
+    rows = []
+    for clear in FIRST_CLEARS:
+        if clear.keyword in cleared:
+            continue
+        ours = [
+            k
+            for k in kills or []
+            if int(k.get("achievement") or 0) == clear.achievement
+            and k.get("guild") in FIRST_GUILDS
+        ]
+        if ours:
+            first = min(ours, key=lambda k: int(k.get("killed_at") or 0))
+            rows.append(
+                (clear.keyword, first["guild"], clear.boss, int(first["killed_at"]))
+            )
+    return rows
+
+
+def milestone_line(row: tuple) -> str:
+    """The bridge log line for a milestone just written."""
+    clear = first_clear(row[0])
+    return "realm milestone: %s cleared %s first (%s); it is open to every guild" % (
+        row[1],
+        clear.place if clear else row[0],
+        row[2],
+    )
+
+
+def waits_for_first_clear(guild: str, keyword: str, cleared: frozenset) -> str:
+    """Why `guild` may not raid `keyword` yet, or "".
+
+    Cave and Bonkers are never held. Any other guild, and a character in no
+    guild, waits until the raid's own milestone is in `cleared`; another
+    raid's milestone does not count.
+    """
+    clear = first_clear(keyword)
+    if clear is None or guild in FIRST_GUILDS or keyword in cleared:
+        return ""
+    return "%s waits until Cave or Bonkers has cleared %s first (%s killed)" % (
+        guild or "a character in no guild",
+        clear.place,
+        clear.boss,
+    )
 
 
 def seat_rows(family: str, keyword: str, lineup: dict, *, duty: bool = False) -> list:

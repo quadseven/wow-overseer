@@ -847,6 +847,7 @@ class TheDiscordOrder(unittest.TestCase):
                 "log": _Log(),
                 "_fetch_queue_roster": world.fetch_roster,
                 "_fetch_queue_rows": world.fetch_queue,
+                "_fetch_cleared_raids": frozenset,
                 "_queue_level_rows": lambda fam: [
                     dict(r, lead=int(r["name"] == fam["leader"]["name"]))
                     for r in levels
@@ -920,6 +921,7 @@ class TheDiscordOrder(unittest.TestCase):
             {
                 "asyncio": asyncio,
                 "campaignqueue": campaignqueue,
+                "_fetch_cleared_raids": frozenset,
                 "_queue_level_rows": broken,
                 "log": log,
             },
@@ -965,6 +967,7 @@ class TheDiscordOrder(unittest.TestCase):
             {
                 "asyncio": asyncio,
                 "campaignqueue": campaignqueue,
+                "_fetch_cleared_raids": frozenset,
                 "_queue_level_rows": looked_up.append,
             },
         )
@@ -991,6 +994,7 @@ class TheDiscordOrder(unittest.TestCase):
             {
                 "asyncio": asyncio,
                 "campaignqueue": campaignqueue,
+                "_fetch_cleared_raids": frozenset,
                 "_queue_level_rows": lambda fam: looked_up.append(fam["names"]) or [],
                 "log": _Log(),
             },

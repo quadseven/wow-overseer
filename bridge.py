@@ -4231,6 +4231,71 @@ def _queue_level_rows(family: dict) -> list:
     return rows
 
 
+def _ensure_milestone_store() -> None:
+    """overseer_realm_milestone (raidrun, #620). Logged and swallowed: without
+    it no raid opens to a guild other than Cave or Bonkers (the cleared read
+    fails closed), and nothing else stops."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(raidrun.MILESTONE_CREATE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("realm milestones: the store is unavailable, so every raid "
+                      "stays closed to guilds other than Cave and Bonkers")
+
+
+def _fetch_cleared_raids() -> frozenset:
+    """The raids with a realm milestone. A failed read is logged and counts as
+    none cleared: the gate then holds every other guild, never opens early."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(raidrun.MILESTONE_SQL)
+            return raidrun.cleared_raids(cur.fetchall())
+    except pymysql.err.MySQLError:
+        log.exception("realm milestones: unread, so no raid counts as cleared")
+        return frozenset()
+
+
+_MILESTONES_DOWN = False
+
+
+def _record_realm_milestones() -> int:
+    """Write each raid's first clear by Cave or Bonkers that has no milestone
+    yet (raidrun.new_milestones). Rows written.
+
+    Its own failure never costs the guild coordinator's pass: it is logged
+    when it starts and when it clears, not every cycle."""
+    global _MILESTONES_DOWN
+    try:
+        written = _write_realm_milestones()
+    except pymysql.err.MySQLError as exc:
+        if not _MILESTONES_DOWN:
+            _MILESTONES_DOWN = True
+            log.warning("realm milestones: the kill read failed (%s: %s); no raid "
+                        "milestone is written until it works", type(exc).__name__, exc)
+        return 0
+    if _MILESTONES_DOWN:
+        _MILESTONES_DOWN = False
+        log.info("realm milestones: the kill read works again")
+    return written
+
+
+def _write_realm_milestones() -> int:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(raidrun.MILESTONE_SQL)
+        cleared = raidrun.cleared_raids(cur.fetchall())
+        if len(cleared) == len(raidrun.FIRST_CLEARS):
+            return 0
+        sql, ids = raidrun.kills_sql()
+        cur.execute(sql, ids)
+        written = 0
+        for row in raidrun.new_milestones([dict(r) for r in cur.fetchall()], cleared):
+            cur.execute(raidrun.MILESTONE_INSERT_SQL, row)
+            if cur.rowcount:
+                written += 1
+                log.info("%s", raidrun.milestone_line(row))
+        return written
+
+
 def _write_queue(plan, source: str, new_ids: list | None = None) -> int:
     """Replace a family's pending queue with `plan`'s entries. Rows changed.
 
@@ -7455,6 +7520,7 @@ class Bridge(discord.Client):
             _ensure_now_store,
             _ensure_order_store,
             _ensure_run_report_store,
+            _ensure_milestone_store,
         ):
             try:
                 await asyncio.to_thread(ensure)
@@ -20412,6 +20478,7 @@ class Bridge(discord.Client):
         while not self.is_closed():
             try:
                 await asyncio.to_thread(_follow_guild_runs)
+                await asyncio.to_thread(_record_realm_milestones)
                 active = await asyncio.to_thread(_active_guild_run_names)
                 self._guild_run_names = (
                     set(active) | set(getattr(self, "_guild_social_names", ()))
@@ -21672,7 +21739,8 @@ class Bridge(discord.Client):
                 await channel.send(refusal[:1990])
                 return
             level_rows = await asyncio.to_thread(_queue_level_rows, fams[key])
-            plan = campaignqueue.plan(key, entries, level_rows)
+            cleared = await asyncio.to_thread(_fetch_cleared_raids)
+            plan = campaignqueue.plan(key, entries, level_rows, cleared)
             if plan.refusal:
                 log.info("queue: refused for %s: %s", campaignqueue._family(key),
                          plan.refusal)
@@ -21722,7 +21790,9 @@ class Bridge(discord.Client):
         try:
             rows_a = await asyncio.to_thread(_queue_level_rows, fams[key])
             rows_b = await asyncio.to_thread(_queue_level_rows, fams[partner])
-            plan = campaignqueue.combined_plan(key, partner, entries, rows_a, rows_b)
+            cleared = await asyncio.to_thread(_fetch_cleared_raids)
+            plan = campaignqueue.combined_plan(key, partner, entries, rows_a, rows_b,
+                                               cleared)
         except Exception as exc:
             # A bad row or a missing key must not kill the order in silence:
             # log it, and tell the channel nothing was written.

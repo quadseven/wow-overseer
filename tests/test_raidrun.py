@@ -29,7 +29,7 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 
 ALLIANCE = [
-    {"name": n, "level": 60, "race": 1, "map_id": 0}
+    {"name": n, "level": 60, "race": 1, "map_id": 0, "guild": "Cave"}
     for n in ("Grug", "Ugga", "Og", "Bork", "Grog")
 ]
 
@@ -176,6 +176,109 @@ class TheQueueReadsARaidOrder(unittest.TestCase):
             rows, {"job": "raid:moltencore", "dungeon_runs_done": 0}
         )
         self.assertFalse(held.writes, held.why)
+
+
+def _in(guild, rows=ALLIANCE):
+    return [dict(r, guild=guild) for r in rows]
+
+
+def _kill(achievement, guild, killed_at=1_790_000_000):
+    return {"achievement": achievement, "guild": guild, "killed_at": killed_at}
+
+
+RAGNAROS = raidrun.first_clear(raidrun.MOLTEN_CORE).achievement
+NEFARIAN = raidrun.first_clear(raidrun.BLACKWING_LAIR).achievement
+
+
+class OtherGuildsWaitForTheFirstClear(unittest.TestCase):
+    """#620: a raid opens to other guilds only once Cave or Bonkers has
+    killed its final boss, one milestone per raid."""
+
+    def test_with_no_milestone_only_cave_and_bonkers_may_order_molten_core(self):
+        for guild in ("Cave", "Bonkers"):
+            self.assertEqual(
+                "", raidrun.refusal(raidrun.MOLTEN_CORE, 1, _in(guild)), guild
+            )
+        why = raidrun.refusal(raidrun.MOLTEN_CORE, 1, _in("Hollow Oak"))
+        self.assertIn("Cave or Bonkers", why)
+        self.assertIn("Ragnaros", why)
+
+    def test_a_member_in_no_guild_waits_too(self):
+        rows = ALLIANCE[:4] + [dict(ALLIANCE[4], guild=None)]
+        why = raidrun.refusal(raidrun.MOLTEN_CORE, 1, rows)
+        self.assertIn("Grog", why)
+
+    def test_the_molten_core_milestone_opens_molten_core(self):
+        cleared = frozenset({raidrun.MOLTEN_CORE})
+        self.assertEqual(
+            "", raidrun.refusal(raidrun.MOLTEN_CORE, 1, _in("Hollow Oak"), cleared)
+        )
+
+    def test_the_molten_core_milestone_opens_no_later_raid(self):
+        cleared = frozenset({raidrun.MOLTEN_CORE})
+        for keyword, boss in (
+            (raidrun.BLACKWING_LAIR, "Nefarian"),
+            (raidrun.AHN_QIRAJ, "C'Thun"),
+        ):
+            why = raidrun.waits_for_first_clear("Hollow Oak", keyword, cleared)
+            self.assertIn(boss, why, keyword)
+            self.assertEqual(
+                "", raidrun.waits_for_first_clear("Bonkers", keyword, cleared)
+            )
+
+    def test_the_queue_refuses_another_guilds_order_and_writes_nothing(self):
+        entries, _ = campaignqueue.parse_entries("moltencore 1")
+        plan = campaignqueue.plan("Grug", entries, _in("Hollow Oak"))
+        self.assertIn("Cave or Bonkers", plan.refusal)
+        self.assertEqual((), plan.entries)
+        opened = campaignqueue.plan(
+            "Grug", entries, _in("Hollow Oak"), frozenset({raidrun.MOLTEN_CORE})
+        )
+        self.assertEqual("", opened.refusal)
+
+
+class TheFirstKillWritesTheMilestone(unittest.TestCase):
+    def test_a_ragnaros_kill_by_cave_or_bonkers_writes_molten_core_once(self):
+        for guild in ("Cave", "Bonkers"):
+            rows = raidrun.new_milestones([_kill(RAGNAROS, guild)], frozenset())
+            self.assertEqual(
+                [(raidrun.MOLTEN_CORE, guild, "Ragnaros", 1_790_000_000)], rows
+            )
+            again = raidrun.new_milestones(
+                [_kill(RAGNAROS, guild)], frozenset({raidrun.MOLTEN_CORE})
+            )
+            self.assertEqual([], again)
+
+    def test_a_kill_by_another_guild_writes_none(self):
+        self.assertEqual(
+            [], raidrun.new_milestones([_kill(RAGNAROS, "Hollow Oak")], frozenset())
+        )
+
+    def test_the_earlier_of_the_two_family_guilds_is_first(self):
+        kills = [
+            _kill(RAGNAROS, "Cave", 1_790_000_500),
+            _kill(RAGNAROS, "Hollow Oak", 1_790_000_000),
+            _kill(RAGNAROS, "Bonkers", 1_790_000_100),
+        ]
+        rows = raidrun.new_milestones(kills, frozenset())
+        self.assertEqual(
+            [(raidrun.MOLTEN_CORE, "Bonkers", "Ragnaros", 1_790_000_100)], rows
+        )
+
+    def test_each_raid_is_its_own_milestone(self):
+        kills = [_kill(RAGNAROS, "Cave"), _kill(NEFARIAN, "Bonkers")]
+        rows = raidrun.new_milestones(kills, frozenset())
+        self.assertEqual(
+            {raidrun.MOLTEN_CORE, raidrun.BLACKWING_LAIR}, {r[0] for r in rows}
+        )
+
+    def test_the_store_keeps_one_row_per_raid(self):
+        self.assertIn("PRIMARY KEY (raid)", raidrun.MILESTONE_CREATE_SQL)
+        self.assertTrue(raidrun.MILESTONE_INSERT_SQL.startswith("INSERT IGNORE"))
+
+    def test_the_cleared_read_is_the_milestone_rows(self):
+        rows = [{"raid": raidrun.MOLTEN_CORE}, {"raid": ""}]
+        self.assertEqual(frozenset({raidrun.MOLTEN_CORE}), raidrun.cleared_raids(rows))
 
 
 class TheSeatsAreTheLineup(unittest.TestCase):

@@ -110,12 +110,15 @@ FINISH_SQL = (
     "WHERE id = %s AND status = 'active'"
 )
 
-# What the validation reads: each member's saved level, race and map. The
-# `characters` row and not the snapshot, for the reason
+# What the validation reads: each member's saved level, race and map, and
+# the guild a raid order is gated on (raidrun.waits_for_first_clear, NULL in
+# no guild). The `characters` row and not the snapshot, for the reason
 # map_server._fetch_council gives: a family that logged out ten minutes ago
 # still has a level.
 LEVEL_ROWS_SQL = (
-    "SELECT name, level, race, map AS map_id FROM characters WHERE name IN (%s)"
+    "SELECT c.name, c.level, c.race, c.map AS map_id, g.name AS guild "
+    "FROM characters c LEFT JOIN guild_member gm ON gm.guid = c.guid "
+    "LEFT JOIN guild g ON g.guildid = gm.guildid WHERE c.name IN (%s)"
 )
 
 
@@ -307,20 +310,23 @@ def parse_entries(text: str) -> tuple:
     return tuple(entries), ""
 
 
-def plan(family: str, entries: tuple, level_rows: list) -> Plan:
+def plan(
+    family: str, entries: tuple, level_rows: list, cleared: frozenset = frozenset()
+) -> Plan:
     """Validate a whole queue for one family against its members' rows.
 
     Every entry must be a door this family can use today: a known portal
     keyword, not withheld, not inside the other faction's capital, not above
     the weakest member's level, and on their continent or reachable from it.
     council.door_refusal is the one place those rules are written (#204,
-    #207), the same rules the council proposes by.
+    #207), the same rules the council proposes by. A raid is checked by
+    raidrun.refusal, against `cleared`, the raids with a realm milestone.
     """
     if not entries:
         return Plan(family, "The queue names no dungeon.", (), False, "")
     for entry in entries:
         why = (
-            raidrun.refusal(entry.keyword, entry.runs, level_rows)
+            raidrun.refusal(entry.keyword, entry.runs, level_rows, cleared)
             if raidrun.is_raid(entry.keyword)
             else council.door_refusal(entry.keyword, level_rows)
         )
@@ -343,7 +349,12 @@ def plan(family: str, entries: tuple, level_rows: list) -> Plan:
 
 
 def combined_plan(
-    family_a: str, family_b: str, entries: tuple, level_rows_a: list, level_rows_b: list
+    family_a: str,
+    family_b: str,
+    entries: tuple,
+    level_rows_a: list,
+    level_rows_b: list,
+    cleared: frozenset = frozenset(),
 ) -> Plan:
     """Validate the same step for two families: one combined run.
 
@@ -352,6 +363,7 @@ def combined_plan(
     must clear the door, and a refusal from either family refuses the combined
     run - neither family goes in without the other. Each entry carries both
     family keys so the bridge can write one row per family on the same step.
+    `cleared` is plan's: the raids with a realm milestone.
     """
     if not entries:
         return Plan(family_a, "The queue names no dungeon.", (), False, "")
@@ -371,7 +383,7 @@ def combined_plan(
     for entry in entries:
         for level_rows in (level_rows_a, level_rows_b):
             why = (
-                raidrun.refusal(entry.keyword, entry.runs, level_rows)
+                raidrun.refusal(entry.keyword, entry.runs, level_rows, cleared)
                 if raidrun.is_raid(entry.keyword)
                 else council.door_refusal(entry.keyword, level_rows)
             )

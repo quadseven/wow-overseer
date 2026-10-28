@@ -108,6 +108,8 @@ COLLATIONS = {
     "overseer_dungeon_pace": "utf8mb4_0900_ai_ci",
     # Bridge-owned (mod-overseer#152), named in runreport.CREATE_SQL the same way.
     "overseer_dungeon_run_report": "utf8mb4_0900_ai_ci",
+    # Bridge-owned (#620), named in raidrun.MILESTONE_CREATE_SQL the same way.
+    "overseer_realm_milestone": "utf8mb4_0900_ai_ci",
     # A view (mod-overseer#152 reads it): information_schema.TABLES has no
     # collation for a view. Its event columns, the only strings runreport
     # reads from it, are overseer_event's, so they carry overseer_event's
@@ -203,6 +205,8 @@ STRING_COLUMNS = {
     ),
     "overseer_dungeon_run": frozenset({"ended_reason", "leader_name", "state"}),
     "overseer_dungeon_run_report": frozenset({"outcome"}),
+    # From its own DDL (raidrun.MILESTONE_CREATE_SQL): every VARCHAR column.
+    "overseer_realm_milestone": frozenset({"raid", "guild", "boss"}),
     "overseer_dungeon_run_summary": frozenset(
         {"character_name", "detail", "kind", "subject_name"}
     ),

@@ -204,6 +204,7 @@ class AQueueOrder(unittest.TestCase):
                 campaignqueue=campaignqueue,
                 _fetch_queue_roster=world.fetch_roster,
                 _fetch_queue_rows=world.fetch_queue,
+                _fetch_cleared_raids=frozenset,
                 _queue_level_rows=lambda fam: [
                     dict(r, lead=int(r["name"] == fam["leader"]["name"]))
                     for r in roster_rows()
