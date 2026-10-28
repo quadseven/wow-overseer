@@ -390,12 +390,13 @@ class Wiring(unittest.TestCase):
             "_vendor_family_movement",
             "_bank_family_movement",
             "_family_lead_since",
+            "_material_requests",
         ):
             self.assertIn(f'"{attribute}"', text)
 
     def test_the_memo_kinds_fit_the_store(self):
         kinds = re.findall(r'_ClockMemo\(\s*"([^"]+)"', SOURCE)
-        self.assertEqual(4, len(set(kinds)), kinds)
+        self.assertEqual(5, len(set(kinds)), kinds)
         self.assertTrue(all(len(kind) <= 32 for kind in kinds))
 
 
