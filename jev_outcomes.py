@@ -327,7 +327,9 @@ _ACTED_SIDE = _reading(0)
 _OTHER_SIDE = _reading(1)
 _SCORED = "scored_at IS NOT NULL"
 
-OUTCOME_SQL = (
+# Built from this module's constants only (READINGS); the one value from
+# outside, `since`, is bound by the driver.
+OUTCOME_SQL = (  # noqa: S608 - constants only, see above
     "SELECT kind, backend, acted, COUNT(*) AS disagreements, "
     "SUM(CASE WHEN {scored} THEN 1 ELSE 0 END) AS scored, "
     "SUM(CASE WHEN {scored} AND ((acted = 'jev' AND {other}) "
