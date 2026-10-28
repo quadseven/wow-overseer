@@ -17219,8 +17219,10 @@ class Bridge(discord.Client):
     async def _job_weapon_offers(self, members, recent) -> dict:
         """name -> weaponskill.Offer for each guild member carrying a weapon it
         has no skill for (#793): weaponskill decides the need, and the nearest
-        weapon master of its side on its map that teaches it is read here, else
-        one on the other classic continent (weaponskill.choose_far_master).
+        weapon master of its side on its map and its ground (never an island
+        across the water, #1585) that teaches it is read here, else one on the
+        other classic continent nearest its side's landing there
+        (weaponskill.choose_far_master).
 
         Only members guildjobs.weapon_candidate passes are read, and at most
         GUILD_WEAPON_READS_PER_PASS weapon master reads, in turn.
@@ -17246,7 +17248,7 @@ class Bridge(discord.Client):
                 weaponskill.far_maps(m.map_id))
             team = auction.team_of(m.race)
             master = (weaponskill.choose_master(
-                masters, {need.spell}, team, int(m.map_id))
+                masters, {need.spell}, team, int(m.map_id), at)
                 or weaponskill.choose_far_master(
                     masters, {need.spell}, team, int(m.map_id)))
             offers[name] = weaponskill.offer(need, master)
@@ -18639,7 +18641,7 @@ class Bridge(discord.Client):
         master = weaponskill.choose_master(
             await asyncio.to_thread(_fetch_weapon_masters, at,
                                     sorted({n.spell for n in needs})),
-            {n.spell for n in needs}, teams.get(leader, ""), int(at["map_id"]))
+            {n.spell for n in needs}, teams.get(leader, ""), int(at["map_id"]), at)
         said = "; ".join("%s carries %s (%s) and has no skill %d for it" % (
             n.name, n.item, n.why, n.skill) for n in needs)
         if not master:
@@ -22029,7 +22031,7 @@ class Bridge(discord.Client):
                 _fetch_weapon_masters, at,
                 sorted({n.spell for n in critical})),
             {n.spell for n in critical}, teams.get(leader, ""),
-            int(at["map_id"]))
+            int(at["map_id"]), at)
         option = "errand:%d" % int(master["entry"]) if master else ""
         return option
 

@@ -2239,6 +2239,43 @@ def weapon_step(m, offer, recent, cap):
     return step, ""
 
 
+def _crossed_to(r, map_id) -> bool:
+    """A crossing row that asked for `map_id` and was not refused. Map 0 is a
+    map: a `cross-to-map map:0` row is a crossing by its verb (class_walls)."""
+    if r.refusal or int(r.dest) != int(map_id):
+        return False
+    return bool(r.dest) or classquest.is_cross_row(r.command)
+
+
+def weapon_cross_back(m, to_map, recent) -> str:
+    """Why the weapon crossing to `to_map` waits, "" when it may go.
+
+    THE LEVEL CROSSING COMES FIRST (#1585). The weapon step is asked ahead of
+    the level step, and the two share one crossing clock (crossing_cooling)
+    but not one destination. A member the weapon step crossed to a master it
+    did not reach is on the weapon cooldown once the walk ends, so the level
+    step may cross it back to its hub; once the shared clock runs out the
+    weapon step would cross it over again, and so on each time the clock ran
+    out. So, inside the recent rows' day, the weapon step does not cross a
+    member away from a map the level step crossed it to, and does not cross
+    a member to a map it already crossed to for a weapon master and came back
+    from. Either way the member crosses for a weapon master at most once a
+    day, and a level crossing is never undone by one."""
+    here = m.map_id
+    for r in recent or ():
+        if r.name != m.name:
+            continue
+        if (
+            r.action == guildlevel.CROSS_ACTION
+            and here is not None
+            and _crossed_to(r, here)
+        ):
+            return "its level crossing brought it here in the last day"
+        if r.action == WEAPON_CROSS_ACTION and _crossed_to(r, to_map):
+            return "it crossed there for a weapon master in the last day and is back"
+    return ""
+
+
 def weapon_cross_step(m, offer, recent):
     """(step or None, a note) for a weapon master on the other classic continent
     (weaponskill.choose_far_master, #793): one `cross-to-map map:<id>` row, no
@@ -2265,6 +2302,21 @@ def weapon_cross_step(m, offer, recent):
         )
     if crossing_cooling(m.name, recent):
         return None, ""
+    back = weapon_cross_back(m, to_map, recent)
+    if back:
+        return None, (
+            "%s carries %s (%s) and has no skill %d for it; %s teaches it on %s, "
+            "and it does not cross there now: %s"
+            % (
+                m.name,
+                need.item,
+                need.why,
+                need.skill,
+                offer.master or "a weapon master",
+                where,
+                back,
+            )
+        )
     said = (
         "%s crosses to %s by its faction's boat or zeppelin to buy skill %d at %s "
         "for %s of its own, to wield %s (%s)"
