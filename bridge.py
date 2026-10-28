@@ -2018,10 +2018,16 @@ def _crafting_roster(family: str | None = None) -> list:
 
 
 def _names_of(cohort=None) -> list:
-    """A family's names, sorted: this bridge's own for None (#215)."""
-    if cohort is None:
-        return sorted(_protected_guids().values())
-    return sorted(cohort.names)
+    """A family's names, sorted: this bridge's own for None (#215).
+
+    The None reading lives in family_value.resolve_legacy_family (#737), the
+    one place that says what `cohort=None` means. Imported here, not at the
+    top, because the parity suites load this function on its own.
+    """
+    import family_value
+
+    own = _protected_guids().values() if cohort is None else ()
+    return list(family_value.resolve_legacy_family(cohort, own).members)
 
 
 def _bank_bag_wait_note(step) -> str:
