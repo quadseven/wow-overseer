@@ -15,6 +15,7 @@ from unittest import mock
 
 import bonds
 import council
+import family_value
 import goals
 
 
@@ -83,6 +84,45 @@ class AssessTest(unittest.TestCase):
 
 
 class CouncilTest(unittest.TestCase):
+    def test_families_wrap_roster_groups_as_immutable_values(self):
+        rows = [
+            {"family": "second", "name": "Zed", "lead": 0},
+            {"family": "first", "name": "Beta", "lead": 0},
+            {"family": "second", "name": "Alpha", "lead": 1},
+            {"family": "first", "name": "Able", "lead": 1},
+        ]
+
+        result = family_value.families(rows)
+
+        self.assertEqual(
+            result,
+            (
+                family_value.Family("first", ("Able", "Beta")),
+                family_value.Family("second", ("Alpha", "Zed")),
+            ),
+        )
+        with self.assertRaises(AttributeError):
+            result[0].name = "changed"
+
+    def test_families_marks_the_roster_fallback_at_large(self):
+        result = family_value.families(None)
+
+        self.assertEqual(len(result), 1)
+        self.assertTrue(result[0].at_large)
+        self.assertEqual(result[0].name, result[0].members[0])
+
+    def test_legacy_none_resolves_to_the_bridge_family(self):
+        resolved = family_value.resolve_legacy_family(None, ["Beta", "Able"])
+
+        self.assertEqual(resolved, family_value.Family("", ("Able", "Beta")))
+        self.assertFalse(resolved.at_large)
+
+    def test_legacy_cohort_resolves_to_its_members_and_name(self):
+        cohort = type("Cohort", (), {"key": "second", "names": {"Zed", "Alpha"}})()
+        resolved = family_value.resolve_legacy_family(cohort, ["unused"])
+
+        self.assertEqual(resolved, family_value.Family("second", ("Alpha", "Zed")))
+
     def test_a_council_of_one_decides_nothing(self):
         c = council.hold([_m("Grug", 5)], history=[])
         self.assertIsNone(c.plan)
