@@ -163,11 +163,14 @@ class APartyReadErrorFallsBack(unittest.TestCase):
     check (parties None), logged once, and the share pass still runs."""
 
     def fetch(self, connect):
-        with mock.patch.object(bridge, "_connect", connect), mock.patch.object(
-            bridge.pymysql,
-            "err",
-            types.SimpleNamespace(MySQLError=MySQLError),
-            create=True,
+        with (
+            mock.patch.object(bridge, "_connect", connect),
+            mock.patch.object(
+                bridge.pymysql,
+                "err",
+                types.SimpleNamespace(MySQLError=MySQLError),
+                create=True,
+            ),
         ):
             return bridge._fetch_parties(["Grug", "Og"])
 
@@ -191,7 +194,10 @@ class APartyReadErrorFallsBack(unittest.TestCase):
             self.assertIsNone(self.fetch(lambda: conn))
 
     def test_a_good_read_names_each_party(self):
-        rows = [{"name": "Grug", "group_leader": 11}, {"name": "Og", "group_leader": None}]
+        rows = [
+            {"name": "Grug", "group_leader": 11},
+            {"name": "Og", "group_leader": None},
+        ]
         self.assertEqual(
             self.fetch(lambda: _Conn(_Cursor(rows=rows))), {"Grug": 11, "Og": 0}
         )
@@ -199,36 +205,45 @@ class APartyReadErrorFallsBack(unittest.TestCase):
     def test_the_share_pass_still_writes_its_shares_on_the_fallback(self):
         conn = _Conn(_Cursor(error=MySQLError(2013, "Lost connection")))
         inserted = []
-        with mock.patch.object(bridge, "_connect", lambda: conn), mock.patch.object(
-            bridge.pymysql,
-            "err",
-            types.SimpleNamespace(MySQLError=MySQLError),
-            create=True,
-        ), mock.patch.multiple(
-            bridge,
-            _fetch_family_quests=lambda names: (FAMILY, CATALOG),
-            _recent_share_keys=lambda minutes: set(),
-            _answered_share_rows=lambda days, depth: [],
-            _insert_share=lambda grant: inserted.append(grant) or 1,
-        ), self.assertLogs(bridge.log, "WARNING"):
+        with (
+            mock.patch.object(bridge, "_connect", lambda: conn),
+            mock.patch.object(
+                bridge.pymysql,
+                "err",
+                types.SimpleNamespace(MySQLError=MySQLError),
+                create=True,
+            ),
+            mock.patch.multiple(
+                bridge,
+                _fetch_family_quests=lambda names: (FAMILY, CATALOG),
+                _recent_share_keys=lambda minutes: set(),
+                _answered_share_rows=lambda days, depth: [],
+                _insert_share=lambda grant: inserted.append(grant) or 1,
+            ),
+            self.assertLogs(bridge.log, "WARNING"),
+        ):
             bridge._share_family_quests([m.name for m in FAMILY])
         self.assertEqual(
             [(g.holder, g.taker, g.quest_id) for g in inserted],
-            [(g.holder, g.taker, g.quest_id) for g in questshare.plan(FAMILY, CATALOG).grants],
+            [
+                (g.holder, g.taker, g.quest_id)
+                for g in questshare.plan(FAMILY, CATALOG).grants
+            ],
         )
         self.assertTrue(inserted)
 
     def test_the_not_grouped_refusal_holds_when_the_read_succeeds(self):
         rows = [{"name": n, "group_leader": k} for n, k in SPLIT.items()]
         inserted = []
-        with mock.patch.object(
-            bridge, "_connect", lambda: _Conn(_Cursor(rows=rows))
-        ), mock.patch.multiple(
-            bridge,
-            _fetch_family_quests=lambda names: (FAMILY, CATALOG),
-            _recent_share_keys=lambda minutes: set(),
-            _answered_share_rows=lambda days, depth: [],
-            _insert_share=lambda grant: inserted.append(grant) or 1,
+        with (
+            mock.patch.object(bridge, "_connect", lambda: _Conn(_Cursor(rows=rows))),
+            mock.patch.multiple(
+                bridge,
+                _fetch_family_quests=lambda names: (FAMILY, CATALOG),
+                _recent_share_keys=lambda minutes: set(),
+                _answered_share_rows=lambda days, depth: [],
+                _insert_share=lambda grant: inserted.append(grant) or 1,
+            ),
         ):
             plan = bridge._share_family_quests([m.name for m in FAMILY])
         self.assertTrue(inserted)
