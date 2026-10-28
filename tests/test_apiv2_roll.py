@@ -213,6 +213,57 @@ class TheHandler(unittest.TestCase):
         self.assertIsNone(payload["build"])
         self.assertIsNone(payload["uptime_seconds"])
 
+    def test_it_names_the_running_overseer_build(self):
+        # "Is merge X live?" is answered by comparing deploy.commit with the
+        # merge commit, so the route carries the same block /api/realm does.
+        ctx, _rd = context(
+            {
+                v2roll.BUILD_SQL: build_rows(),
+                v2roll.VERSION_SQL: [{"core_version": CORE}],
+                v2roll.UPTIME_SQL: [{"up": 3600}],
+            }
+        )
+        env = {
+            "OVERSEER_COMMIT": "D67AFE0123456789abcdef0123456789abcdef01",
+            "OVERSEER_BUILT": "2026-10-28T12:00:00Z",
+            "OVERSEER_SHIP_PR": "#1613",
+        }
+        with mock.patch.dict("os.environ", env):
+            code, payload = apiv2.handle("/api/v2/roll", {}, ctx)
+        self.assertEqual(code, 200)
+        deploy = payload["deploy"]
+        self.assertEqual(deploy["commit"], "d67afe012345")
+        self.assertEqual(deploy["built"], "2026-10-28T12:00:00Z")
+        self.assertEqual(deploy["ship_pr"], 1613)
+        self.assertIn("uptime_seconds", deploy)
+        json.dumps(payload)
+
+    def test_an_unset_build_reads_unknown_not_an_error(self):
+        ctx, _rd = context(
+            {v2roll.BUILD_SQL: [], v2roll.VERSION_SQL: [], v2roll.UPTIME_SQL: []}
+        )
+        with mock.patch.dict("os.environ", {"OVERSEER_COMMIT": ""}):
+            code, payload = apiv2.handle("/api/v2/roll", {}, ctx)
+        self.assertEqual(code, 200)
+        self.assertEqual(payload["deploy"]["commit"], "unknown")
+
+    def test_an_unreachable_auth_database_leaves_the_start_null_with_a_reason(self):
+        # The worldserver start fails soft: the route still answers, the
+        # build still reads, and uptime_seconds is null with why.
+        ctx, _rd = context(
+            {
+                v2roll.BUILD_SQL: build_rows(),
+                v2roll.VERSION_SQL: [{"core_version": CORE}],
+                v2roll.UPTIME_SQL: RuntimeError("auth database unreachable"),
+            }
+        )
+        code, payload = apiv2.handle("/api/v2/roll", {}, ctx)
+        self.assertEqual(code, 200)
+        self.assertEqual(payload["build"], "core 7f12e89ee5f4, module 0.1.0")
+        self.assertIsNone(payload["uptime_seconds"])
+        self.assertIn("could not be read", payload["unmeasured"]["uptime_seconds"])
+        self.assertIn("commit", payload["deploy"])
+
     def test_every_statement_only_reads(self):
         for sql in (v2roll.BUILD_SQL, v2roll.VERSION_SQL, v2roll.UPTIME_SQL):
             self.assertTrue(sql.lstrip().upper().startswith("SELECT"), sql)
