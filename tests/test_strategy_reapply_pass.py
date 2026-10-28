@@ -13,8 +13,6 @@ import types
 import unittest
 from unittest import mock
 
-import pymysql
-
 import strategybook
 
 
@@ -56,7 +54,9 @@ class _World:
 
     def insert(self, cmd):
         if cmd.target_name in self.refuse:
-            raise pymysql.err.OperationalError(1205, "lock wait timeout")
+            # Raise whatever bridge catches at call time: another module in a
+            # shared run can swap pymysql.err for a stub with no OperationalError.
+            raise bridge.pymysql.err.MySQLError(1205, "lock wait timeout")
         self.events.append(("row", cmd.target_name, cmd.command, cmd.source))
         return 1
 
