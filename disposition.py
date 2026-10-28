@@ -1119,6 +1119,38 @@ def material_surplus(rows, names, keep=MATERIAL_KEEP) -> frozenset:
     )
 
 
+def material_past_target(rows, excess, released=frozenset()) -> frozenset:
+    """guids of material stacks a holder lets go because the guild holds more of
+    the material than its target, whatever the keep cap says.
+
+    `excess` maps an entry to the units the guild holds past its target
+    (bankforecast). The keep cap is per holder, so a guild far past its target
+    with the stock spread thin released nothing. Each holder keeps its largest
+    stack; its other stacks leave, largest first, until the entry's excess is
+    spent. `released` are guids already let go (`material_surplus`): they count
+    against the excess and are not named again.
+    """
+    out = set()
+    for entry, held in _stacks_by_entry(rows).items():
+        budget = int(excess.get(entry, 0)) - sum(s[0] for s in held if s[1] in released)
+        by_holder: dict = {}
+        for stack in held:
+            by_holder.setdefault(stack[4], []).append(stack)
+        for _holder, stacks in sorted(by_holder.items()):
+            budget = _release_past_one(stacks, budget, released, out)
+    return frozenset(out)
+
+
+def _release_past_one(stacks, budget, released, out) -> int:
+    """Add one holder's stacks past its largest to `out`; the budget left."""
+    for count, guid, _name, _fact, _holder in sorted(stacks, reverse=True)[1:]:
+        if guid in released or count > budget:
+            continue
+        out.add(guid)
+        budget -= count
+    return budget
+
+
 def _holders_trades(worked_by):
     """holder -> lower-cased trade names, or None when no plan was given."""
     if worked_by is None:

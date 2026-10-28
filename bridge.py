@@ -13895,6 +13895,12 @@ class Bridge(discord.Client):
         materials_over = await asyncio.to_thread(
             _fetch_clearance_materials, names)
         over = disposition.material_surplus(materials_over, materials.REAGENTS)
+        # PAST THE GUILD'S TARGET THE KEEP CAP DOES NOT HOLD IT BACK (#747).
+        # The cap is per holder, so the guild sat on 2773 Linen Cloth past its
+        # target with every holder inside the cap and nothing was ever listed.
+        forecast = await asyncio.to_thread(_bank_forecast, names)
+        over |= disposition.material_past_target(
+            materials_over, forecast.releasable(names), released=over)
         surplus_rows = [dict(row, material_surplus=True)
                         for row in materials_over if row["item_guid"] in over]
         # WHAT A MEMBER TOOK OUT OF THE VAULT FOR THE HOUSE (bankforecast) is
@@ -13933,7 +13939,6 @@ class Bridge(discord.Client):
                 await asyncio.to_thread(_fetch_guild_bank_setup, names))
         # PAST THE GUILD'S TARGET (bankforecast): never the vault, a guildmate
         # only when its rung is short, and the house's own history for a price.
-        forecast = await asyncio.to_thread(_bank_forecast, names)
         routes = clearance.plan(stacks, people, kept=kept, market=market,
                                 auction_open=auction_open, picks=crafting.picks,
                                 vault=vault, vault_room=vault_room,

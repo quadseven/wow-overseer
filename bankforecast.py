@@ -51,7 +51,10 @@ price history and no vendor price is kept, because a guess is not a price.
 WHAT IT CHANGES TODAY. The keeper rule sends the vault nothing the guild
 already holds past its target (the holder's own bank takes it, as before),
 and clearance lists or sells a carried material past the target at the fair
-price. The vault's stacks to list leave it by a member's own hand
+price. A carried stack inside its holder's keep cap is let go too, down to
+the holder's largest stack and no further than the guild's excess, when the
+entry has a fair price and no family member is short of it
+(`Forecast.releasable`). The vault's stacks to list leave it by a member's own hand
 (`plan_withdrawals`): a member whose rank may withdraw from the tab stands at
 the vault and takes the stack into an empty bag slot through mod-overseer's
 `bank withdraw-item`, the core's own withdraw with its rank rights and daily
@@ -311,6 +314,21 @@ class Forecast:
         if not self.judged:
             return None
         return frozenset(self.judged) - frozenset(self.over_target)
+
+    def releasable(self, family=()) -> dict:
+        """entry -> units the guild holds past its target, for what `family`
+        may let go past its keep cap (disposition.material_past_target): an
+        entry with a fair price, so it is listed rather than sold at a vendor,
+        and that no member of `family` is short of."""
+        family = frozenset(family)
+        return {
+            line.entry: line.held - line.target
+            for line in self.lines
+            if line.entry in self.over_target
+            and line.entry in self.fair
+            and line.held > line.target
+            and not family & frozenset(self.short.get(line.entry, ()))
+        }
 
     def decisions(self) -> tuple:
         return tuple(d for line in self.lines for d in line.decisions)

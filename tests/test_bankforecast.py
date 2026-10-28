@@ -436,6 +436,101 @@ class ClearanceSellsWhatThePastTargetLeaves(unittest.TestCase):
         self.assertEqual((clearance.GUILD, "Totta"), (route.route, route.taker))
 
 
+def carried_linen(holder, n, first_guid=100):
+    return [
+        {
+            "holder": holder,
+            "item_guid": first_guid + i,
+            "entry": LINEN,
+            "count": 20,
+            "name": "Linen Cloth",
+            "item_class": 7,
+            "subclass": 5,
+            "quality": 1,
+            "sell_price": 13,
+            "bag_family": 0,
+        }
+        for i in range(n)
+    ]
+
+
+class APileInsideTheKeepCapStillLeavesPastTheTarget(unittest.TestCase):
+    """Measured 2026-10-22 to 10-26: the members held 2773 Linen Cloth past a
+    target of 598 and no stack of it was ever listed. Every holder carried
+    fewer than `disposition.MATERIAL_KEEP`, so `material_surplus` released
+    nothing and clearance never saw a stack to route to the house."""
+
+    def test_the_keep_cap_alone_releases_nothing(self):
+        rows = carried_linen("Og", 5)
+        self.assertEqual(
+            frozenset(), disposition.material_surplus(rows, {"Linen Cloth"})
+        )
+
+    def test_past_the_target_all_but_the_largest_stack_leave(self):
+        rows = carried_linen("Og", 5) + carried_linen("Bork", 2, first_guid=200)
+        out = disposition.material_past_target(rows, {LINEN: 2773})
+        self.assertEqual({100, 101, 102, 103, 200}, set(out))
+
+    def test_no_more_leaves_than_the_guild_holds_past_its_target(self):
+        out = disposition.material_past_target(carried_linen("Og", 5), {LINEN: 45})
+        self.assertEqual(2, len(out))
+
+    def test_what_the_keep_cap_released_counts_against_the_excess(self):
+        rows = carried_linen("Og", 8)
+        capped = disposition.material_surplus(rows, {"Linen Cloth"})
+        self.assertEqual(40, 20 * len(capped))
+        out = disposition.material_past_target(rows, {LINEN: 50}, released=capped)
+        self.assertEqual(frozenset(), out)
+
+    def test_an_entry_inside_its_target_keeps_every_stack(self):
+        self.assertEqual(
+            frozenset(),
+            disposition.material_past_target(carried_linen("Og", 5), {}),
+        )
+
+    def test_a_released_stack_is_listed_at_the_fair_price(self):
+        rows = carried_linen("Og", 5)
+        out = disposition.material_past_target(rows, {LINEN: 2773})
+        stacks = clearance.stacks_from_rows(
+            [dict(r, material_surplus=True) for r in rows if r["item_guid"] in out]
+        )
+        routes = clearance.plan(
+            stacks,
+            (clearance.Person("Og", {FIRST_AID: 1}, family=True, online=True),),
+            auction_open=True,
+            over_target={LINEN: "the guild holds 3371 against 598"},
+            fair={LINEN: 546},
+        )
+        self.assertEqual({clearance.AUCTION}, {r.route for r in routes})
+        self.assertEqual({546}, {r.price for r in routes})
+
+
+class WhatTheForecastLetsAFamilyRelease(unittest.TestCase):
+    def forecast(self, short=frozenset(), fair=546):
+        return bf.Forecast(
+            lines=(bf.Line(LINEN, "Linen Cloth", 0, 0, 3371, 598, bf.NOW, "w"),),
+            over_target={LINEN: "the guild holds 3371 against 598"},
+            fair={LINEN: fair} if fair else {},
+            short={LINEN: frozenset(short)} if short else {},
+        )
+
+    def test_the_units_past_the_target(self):
+        self.assertEqual({LINEN: 2773}, self.forecast().releasable(["Og", "Bork"]))
+
+    def test_nothing_while_a_family_member_is_short_of_it(self):
+        self.assertEqual(
+            {}, self.forecast(short=frozenset({"Og"})).releasable(["Og", "Bork"])
+        )
+
+    def test_a_short_guildmate_outside_the_family_does_not_hold_it(self):
+        self.assertEqual(
+            {LINEN: 2773}, self.forecast(short=frozenset({"Totta"})).releasable(["Og"])
+        )
+
+    def test_nothing_without_a_fair_price(self):
+        self.assertEqual({}, self.forecast(fair=0).releasable(["Og"]))
+
+
 class TheBridgeAsksTheForecast(unittest.TestCase):
     SOURCE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
         encoding="utf-8"
@@ -460,6 +555,11 @@ class TheBridgeAsksTheForecast(unittest.TestCase):
         self.assertIn("over_target=", body)
         self.assertIn("fair=", body)
         self.assertIn("short=", body)
+
+    def test_clearance_releases_past_the_keep_cap_on_its_word(self):
+        body = self.block("    async def _clearance_plan(")
+        self.assertIn("disposition.material_past_target(", body)
+        self.assertIn(".releasable(names)", body)
 
     def test_the_module_ships(self):
         dockerfile = (
