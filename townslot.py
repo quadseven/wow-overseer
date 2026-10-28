@@ -783,6 +783,12 @@ def _starved_ahead(claimant: str, wants, now: float, want_fresh: float) -> list:
     Ranked exactly as `_ahead_of` ranks, by the recorded wait and then by
     name, so the oldest starved pass goes first and a starved asker is never
     held up by a pass that started waiting after it.
+
+    THE ASKER'S OWN WAIT IS NEEDED HERE, AND IT IS ALWAYS A WAIT. `wants`
+    carries the asker's own want whenever it has asked before, and then
+    `_own_wait` is its `waiting_since`: two starved passes must not each be
+    told to stand aside for the other. An asker with no want gets `now`, its
+    first ask, which every starved want sorts before, so it waits behind them.
     """
     mine = (_own_wait(claimant, wants, now), claimant)
     return [

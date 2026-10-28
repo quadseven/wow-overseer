@@ -2502,6 +2502,22 @@ class EveryPassGetsTheColumnWithinTheBound(unittest.TestCase):
         )
         self.assertEqual(townslot.SLOT_PREEMPT, decision.verdict)
 
+    def test_an_older_starved_asker_is_not_held_up_by_a_younger_one(self):
+        now = townslot.STARVED_SECONDS + 4000.0
+        wants = (
+            want("auction", 0.0, last_asked=now - 600.0),
+            want("mail", 100.0, last_asked=now - 10.0),
+        )
+        self.assertEqual([], townslot._starved_ahead("auction", wants, now, 900.0))
+        self.assertEqual(
+            ["auction"],
+            [w.claimant for w in townslot._starved_ahead("mail", wants, now, 900.0)],
+        )
+        self.assertEqual(
+            ["auction", "mail"],
+            [w.claimant for w in townslot._starved_ahead("craft", wants, now, 900.0)],
+        )
+
     def test_a_want_that_went_stale_owes_nobody_a_turn(self):
         now = townslot.STARVED_SECONDS + 4000.0
         decision = decide(
