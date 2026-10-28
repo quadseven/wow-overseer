@@ -78,6 +78,17 @@ class FakeConnection:
         self.closed = True
 
 
+def driver_error(code, message):
+    """The driver's error for a code that is not a schema gap, which is what
+    realmread.Session re-raises unchanged. The suite may run with pymysql
+    stubbed (above), so it falls back to a stand-in of the same shape."""
+    err = getattr(realmread.pymysql, "err", None)
+    cls = getattr(err, "OperationalError", None) or type(
+        "OperationalError", (Exception,), {}
+    )
+    return cls(code, message)
+
+
 def context(answers):
     rd = realmread.Memory(answers)
     return Context(read=rd, server=types.SimpleNamespace()), rd
@@ -254,7 +265,9 @@ class TheHandler(unittest.TestCase):
             {
                 v2roll.BUILD_SQL: build_rows(),
                 v2roll.VERSION_SQL: [{"core_version": CORE}],
-                v2roll.UPTIME_SQL: RuntimeError("auth database unreachable"),
+                # What the real Session re-raises for a dead auth database:
+                # the driver's error, not a schema gap (2003 is no connection).
+                v2roll.UPTIME_SQL: driver_error(2003, "Can't connect to MySQL server"),
             }
         )
         code, payload = apiv2.handle("/api/v2/roll", {}, ctx)
@@ -263,6 +276,24 @@ class TheHandler(unittest.TestCase):
         self.assertIsNone(payload["uptime_seconds"])
         self.assertIn("could not be read", payload["unmeasured"]["uptime_seconds"])
         self.assertIn("commit", payload["deploy"])
+
+    def test_a_realm_without_the_uptime_table_reads_no_row_not_unreachable(self):
+        # A missing table is a schema gap: rows() degrades it to an empty
+        # read, so the reason is "no row", not "the database did not answer".
+        ctx, rd = context(
+            {
+                v2roll.BUILD_SQL: build_rows(),
+                v2roll.VERSION_SQL: [{"core_version": CORE}],
+                v2roll.UPTIME_SQL: realmread.MISSING_TABLE,
+            }
+        )
+        code, payload = apiv2.handle("/api/v2/roll", {}, ctx)
+        self.assertEqual(code, 200)
+        self.assertIsNone(payload["uptime_seconds"])
+        self.assertEqual(
+            payload["unmeasured"]["uptime_seconds"], v2roll.WHY["uptime_seconds"]
+        )
+        self.assertIn(v2roll.UPTIME_SQL, [sql for sql, _ in rd.asked])
 
     def test_every_statement_only_reads(self):
         for sql in (v2roll.BUILD_SQL, v2roll.VERSION_SQL, v2roll.UPTIME_SQL):
