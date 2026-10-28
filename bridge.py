@@ -4689,9 +4689,8 @@ def _pace_reads(key: str, fam: dict, level_rows: list, ids: list) -> dict:
                               args, "the main-hand weapons")
         runs = _planner_rows(cur, dungeonpace.RUNS_SQL.format(holes=marks),
                              args + (dungeonpace.WINDOW_HOURS,), "the run ledger")
-        world_start = _planner_rows(
-            cur, "SELECT MAX(starttime) AS started FROM acore_auth.uptime", (),
-            "the worldserver start time")
+        world_start = _planner_rows(cur, dungeonpace.WORLD_START_SQL, (),
+                                    "the worldserver start time")
         keys = _planner_rows(cur, campaignplan.KEYS_SQL.format(holes=marks), args,
                              "the door keys")
         started = _planner_rows(
@@ -4705,7 +4704,7 @@ def _pace_reads(key: str, fam: dict, level_rows: list, ids: list) -> dict:
     return {
         "members": dungeonpace.members_from_rows(level_rows, gear, armed),
         "runs": runs or [],
-        "world_started_at": (world_start or [{}])[0].get("started"),
+        "world_started_at": dungeonpace.world_start(world_start),
         "keys": _read_or_none(campaignplan.keys_held, keys),
         "started": {int(r["id"]): r.get("started_at") for r in started},
         "open": (opened or [None])[0],

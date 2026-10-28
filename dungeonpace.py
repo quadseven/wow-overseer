@@ -227,6 +227,14 @@ RUNS_SQL = (
 QUEUE_STARTED_SQL = (
     "SELECT id, started_at FROM overseer_dungeon_queue WHERE id IN ({holes})"
 )
+# The newest worldserver start. `uptime.starttime` is unix seconds, while the
+# run rows come back as datetimes on the database's own clock (RUNS_SQL windows
+# them with NOW()), so the database's NOW() rides along and `world_start` turns
+# the start into that same clock without guessing a time zone in Python.
+WORLD_START_SQL = (
+    "SELECT MAX(starttime) AS started, UNIX_TIMESTAMP() AS now_unix, "
+    "NOW() AS now_at FROM acore_auth.uptime"
+)
 MAIN_HAND_SQL = (
     "SELECT c.name FROM character_inventory ci JOIN characters c "
     "ON c.guid = ci.guid WHERE ci.bag = 0 AND ci.slot = 15 AND c.name IN ({holes})"
@@ -332,6 +340,20 @@ def returned(started, back) -> bool:
     if back is None:
         return False
     return started is None or started - back <= timedelta(hours=RETURN_HOURS)
+
+
+def world_start(rows):
+    """The newest worldserver start from WORLD_START_SQL's row, as a datetime
+    on the run rows' clock, or None when the realm has no start to give."""
+    row = (rows or [{}])[0]
+    started, now_unix, now_at = (
+        row.get("started"),
+        row.get("now_unix"),
+        row.get("now_at"),
+    )
+    if started is None or now_unix is None or now_at is None:
+        return None
+    return now_at - timedelta(seconds=int(now_unix) - int(started))
 
 
 def _ended_by_restart(run: dict, world_started_at) -> bool:
