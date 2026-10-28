@@ -206,6 +206,32 @@ REAGENT_TRIP_LEASE_SECONDS = 600.0
 # bug this module exists to end rather than to re-create facing the other way.
 WANT_FRESH_SECONDS = 900.0
 
+# HOW LONG A PASS MAY WAIT BEFORE NOTHING ELSE MAY CUT IN FRONT OF IT (#1601).
+#
+# Rule 3 orders the queue by the wait, but four kinds of ask never consult the
+# queue at all: a short town stop takes a free column ahead of it, an urgent
+# ask zeroes the holder's lease and skips it, an earned priority turn
+# (`priority_after`) skips it, and a pass never served itself takes a free
+# column outright. Each is right on its own. Together, on the dev realm on
+# 2026-10-27, they kept the auction pass off the column for about 9057
+# seconds while guild bank, mail and the vendor pass took it in turn, and
+# guild bank held it 784 seconds on a 300 second lease with auction the
+# oldest waiter by 7764 seconds. #1235 bounds every pass at 6906 seconds.
+#
+# SO A WANT THIS OLD IS OWED THE NEXT TURN OUTRIGHT. While it is still being
+# renewed (WANT_FRESH_SECONDS), every other pass waits behind it, stop, urgent
+# and priority alike; the oldest such want goes first. For that oldest pass the
+# bound is this hour, plus at most one more cycle of its own (600s), plus a
+# holder's remaining lease or reservation (1200s at the longest, the orphan
+# lease and RESERVE_SECONDS): 5400 seconds. A second starved pass waits one
+# more turn behind it, and a sweep of the measured shape over many start
+# offsets and hold lengths put the worst at 5700 seconds, inside 6906.
+#
+# An hour because it is the bound `NoPassGoesUnservedOverAWholeShift` already
+# claims for the ordinary queue: on that simulation nobody reaches it, so the
+# lane changes nothing there and only catches the passes the bypasses starve.
+STARVED_SECONDS = 3600.0
+
 # WHY THERE IS NO GRACE ON THE HANDOVER, WHICH WAS MEASURED RATHER THAN
 # ASSUMED (infra#4208).
 #
@@ -751,6 +777,45 @@ def _ahead_of(claimant: str, wants, now: float, want_fresh: float) -> list:
     ]
 
 
+def _starved_ahead(claimant: str, wants, now: float, want_fresh: float) -> list:
+    """The live wants past STARVED_SECONDS that outrank `claimant` (#1601).
+
+    Ranked exactly as `_ahead_of` ranks, by the recorded wait and then by
+    name, so the oldest starved pass goes first and a starved asker is never
+    held up by a pass that started waiting after it.
+    """
+    mine = (_own_wait(claimant, wants, now), claimant)
+    return [
+        want
+        for want in fresh_wants(wants, now, want_fresh)
+        if now - want.waiting_since >= STARVED_SECONDS
+        and want.claimant != claimant
+        and (want.waiting_since, want.claimant) < mine
+    ]
+
+
+def _owed_wait(
+    claimant: str, character: str, aim: str, owed: Want, now: float, free: bool
+) -> Decision:
+    """The wait for a pass that is not the starved one owed the turn."""
+    return Decision(
+        verdict=SLOT_WAIT,
+        reason="%s waits: %s has waited %ds for the traveller %s, past the "
+        "%ds bound, and is owed the %s before any stop, urgent or priority ask"
+        % (
+            claimant,
+            owed.claimant,
+            int(now - owed.waiting_since),
+            character,
+            int(STARVED_SECONDS),
+            "free column" if free else "next turn",
+        ),
+        claimant=claimant,
+        aim=aim,
+        character=character,
+    )
+
+
 def decide(
     *,
     claimant: str,
@@ -993,6 +1058,12 @@ def _free_column(
     # walk of a few dozen yards in the town the family is already standing
     # in, and making it wait a whole round behind trips across the zone is
     # how a mailbox 40 yards away went unvisited for a day.
+    #
+    # EXCEPT AHEAD OF A STARVED PASS (#1601, STARVED_SECONDS): neither a stop
+    # nor urgency may take the free column from a pass owed it.
+    starved = _starved_ahead(claimant, wants, now, want_fresh)
+    if starved:
+        return _owed_wait(claimant, character, aim, starved[0], now, free=True)
     if stop:
         return Decision(
             verdict=SLOT_TAKE,
@@ -1118,6 +1189,11 @@ def _held_column(
             aim=aim,
             character=character,
         )
+
+    # A STARVED PASS IS OWED IT FIRST (#1601), urgent or priority asker alike.
+    starved = _starved_ahead(claimant, wants, now, want_fresh)
+    if starved and not clearing:
+        return _owed_wait(claimant, character, aim, starved[0], now, free=False)
 
     # Urgent bag pressure and an earned priority turn may preempt an expired
     # releasable errand even when a different pass has been waiting longer.
@@ -1746,7 +1822,30 @@ class Slot:
         for the log line that says how many passes are queued."""
         return list(self._wants.values())
 
-    def want(
+    def own_wait_said(self, decision: Decision, now: float) -> Decision:
+        """A wait whose reason also says how long its own pass has waited (#1601).
+
+        The other wait lines give only a difference between two passes ("has
+        been waiting 7764s longer"), so a starved pass's real wait had to be
+        pieced together from log spans. This appends the asker's own recorded
+        wait, in seconds, to every wait that carries a registered want.
+        """
+        if decision.verdict != SLOT_WAIT:
+            return decision
+        own = self._wants.get(decision.claimant)
+        if own is None:
+            return decision
+        return dataclasses.replace(
+            decision,
+            reason="%s; %s's own wait is %ds"
+            % (decision.reason, decision.claimant, int(now - own.waiting_since)),
+        )
+
+    def want(self, *, now: float, **ask) -> Decision:
+        """`_want`, with the asker's own wait on the reason of a wait (#1601)."""
+        return self.own_wait_said(self._want(now=now, **ask), now)
+
+    def _want(
         self,
         *,
         claimant: str,
@@ -1953,7 +2052,11 @@ class Slot:
             self._progress[key] = (distance, now)
         return decision
 
-    def want_idle(
+    def want_idle(self, *, now: float, **ask) -> Decision:
+        """`_want_idle`, with the asker's own wait on a wait's reason (#1601)."""
+        return self.own_wait_said(self._want_idle(now=now, **ask), now)
+
+    def _want_idle(
         self, *, claimant: str, character: str, leader: str, column: str, now: float
     ) -> Decision:
         """Ask for the travel column to become empty, without a successor."""
