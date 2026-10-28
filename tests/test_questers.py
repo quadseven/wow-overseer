@@ -432,6 +432,25 @@ class FarWalkWallsWait(unittest.TestCase):
         self.assertIsNone(p.move, p.line)
         self.assertIn("waits", p.line)
 
+    def test_a_near_walk_is_held_by_another_verb_s_hold(self):
+        # 2026-10-27/28 on the dev realm: a quester's 170-yard hunt walk was
+        # refused as held by another verb every pass, about every two minutes,
+        # nine times in a row; the hold is on the character, not the road, so
+        # a near walk waits it out as a far one does.
+        held = classquest.HELD_REASON
+        wait = classquest.BACKOFF_MINUTES[held]
+        p = self.plan(walk_row(held, 2), member=self.member())
+        self.assertIsNone(p.move, p.line)
+        self.assertIn("waits %d more minutes to walk: %s" % (wait - 2, held), p.line)
+        due = self.plan(walk_row(held, wait), member=self.member())
+        self.assertEqual((due.move.kind, due.move.quest), (classquest.TAKE, 3))
+
+    def test_a_near_walk_is_not_held_by_a_far_walk_budget(self):
+        for wall in (classquest.BOT_BUDGET_REASON, classquest.REALM_FULL_REASON):
+            with self.subTest(wall=wall):
+                p = self.plan(walk_row(wall, 2), member=self.member())
+                self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 3))
+
     def test_only_the_newest_row_decides(self):
         budget = WALLS[0]
         p = self.plan(walk_row(budget, 10), walk_row("", 3, status="done"))
@@ -1301,4 +1320,64 @@ class AGameobjectEnder(unittest.TestCase):
             0.0,
             broken=frozenset({40}),
         )
+        self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+
+class ASummonedObjectEnder(unittest.TestCase):
+    """An incomplete quest one of whose enders is a gameobject with no static
+    spawn: a script or an event summons it, so the quest is not judged on its
+    ender and is never dropped for it (#1606)."""
+
+    def test_an_incomplete_quest_is_not_broken_or_dropped(self):
+        cat = object_world(object_ended(40, 270))
+        p = questers.plan(cat, mirra(quest_log={40: 3}), questers.Clock(), 0.0)
+        self.assertNotIn(40, [b.quest for b in p.broken])
+        self.assertFalse(
+            p.move is not None
+            and (p.move.kind, p.move.quest) == (classquest.ABANDON, 40)
+        )
+
+    def test_a_named_creature_not_spawned_does_not_judge_it_either(self):
+        cat = object_world(object_ended(40, 270), ended(40, 999))
+        p = questers.plan(cat, mirra(quest_log={40: 3}), questers.Clock(), 0.0)
+        self.assertNotIn(40, [b.quest for b in p.broken])
+
+    def test_it_still_stalls_after_two_hours_of_play(self):
+        cat = object_world(object_ended(40, 270))
+        clock = questers.Clock()
+        reasons = []
+        for minute in range(0, 2 * 60 + 10, 5):
+            p = questers.plan(
+                cat, mirra(quest_log={40: 3}), clock, minute * 60.0, last_quest=40
+            )
+            reasons += [b.reason for b in p.broken if b.quest == 40]
+        self.assertTrue(reasons and reasons[-1].startswith(questers.STALLED))
+
+    def test_an_incomplete_quest_whose_object_spawns_are_gone_is_still_broken(self):
+        member = mirra(quest_log={40: 3})
+        cat = object_world(object_ended(40, 270, guid=5001, x=300.0))
+        tried = questers.attempts(
+            [
+                {
+                    "id": 9,
+                    "target_name": "Mirra",
+                    "command": "walk-to-spawn gameobject:5001",
+                    "source": "guildjobs:quester-walk:Mirra",
+                    "status": "error",
+                    "result": '{"outcome":"refused","reason":"%s","retryable":true}'
+                    % questers.GONE,
+                    "age": 5,
+                }
+            ]
+        )
+        p = questers.plan(cat, member, questers.Clock(), 0.0, tried=tried)
+        self.assertEqual(
+            [(b.quest, b.reason) for b in p.broken],
+            [(40, questers.OBJECT_ENDER_MISSING)],
+        )
+
+    def test_a_complete_one_is_still_recorded_and_never_dropped(self):
+        cat = object_world(object_ended(40, 270))
+        p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
+        self.assertEqual([b.quest for b in p.broken], [40])
         self.assertNotEqual(p.move.kind, classquest.ABANDON)

@@ -307,5 +307,57 @@ class ARefusalForFullBagsIsNotRepeated(unittest.TestCase):
         self.assertFalse(guildjobs.mount_refused_for_bags("Grug", recent))
 
 
+class TheMakeRoomStepIsCapped(unittest.TestCase):
+    """Found in the pre-ship review after #1599 (#1607): with the free slots
+    never read and the refusal still recent, the member kept selling, mailing
+    or destroying materials every room cooldown. The make-room step takes the
+    equip pass's cap: ROOM_STEPS_PER_STATE steps for one state of the bags."""
+
+    FACTS = mountbuy.Facts(False, STOCK)
+    JUNK = guildjobs.Carried(guid=11, entry=900, count=1, quality=0, sell_price=50)
+
+    def room(self, *ages):
+        return tuple(guildjobs.Recent("Grug", guildjobs.ROOM_ACTION, a) for a in ages)
+
+    def test_under_the_cap_the_member_still_makes_room(self):
+        m = grug(carried=(self.JUNK,))
+        recent = (refused_buy(400),) + self.room(
+            *range(70, 70 * guildjobs.ROOM_STEPS_PER_STATE, 70)
+        )
+        step, note = guildjobs.mount_step(m, self.FACTS, recent, 100)
+        self.assertEqual("", note)
+        self.assertEqual(guildjobs.ROOM_ACTION, step.action)
+
+    def test_at_the_cap_no_more_room_is_made(self):
+        m = grug(carried=(self.JUNK,))
+        ages = range(70, 70 * (guildjobs.ROOM_STEPS_PER_STATE + 1), 70)
+        recent = (refused_buy(400),) + self.room(*ages)
+        step, note = guildjobs.mount_step(m, self.FACTS, recent, 100)
+        self.assertIsNone(step)
+        self.assertIn("no more until its bags change", note)
+        self.assertIn("Reins of the Pinto", note)
+
+    def test_the_cap_note_is_said_once(self):
+        m = grug(carried=(self.JUNK,))
+        ages = range(70, 70 * (guildjobs.ROOM_STEPS_PER_STATE + 1), 70)
+        recent = (refused_buy(400),) + self.room(*ages)
+        _, note = guildjobs.mount_step(m, self.FACTS, recent, 100)
+        self.assertEqual(1, note.count("made room"))
+
+    def test_steps_before_the_refusal_do_not_count(self):
+        m = grug(carried=(self.JUNK,))
+        ages = range(500, 500 + 70 * guildjobs.ROOM_STEPS_PER_STATE, 70)
+        recent = (refused_buy(400),) + self.room(*ages)
+        step, _ = guildjobs.mount_step(m, self.FACTS, recent, 100)
+        self.assertEqual(guildjobs.ROOM_ACTION, step.action)
+
+    def test_a_free_slot_read_lets_the_walk_go(self):
+        m = grug(free_slots=1, bag_slots=16, carried=(self.JUNK,))
+        ages = range(70, 70 * (guildjobs.ROOM_STEPS_PER_STATE + 1), 70)
+        recent = (refused_buy(400),) + self.room(*ages)
+        step, _ = guildjobs.mount_step(m, self.FACTS, recent, 100)
+        self.assertEqual(mountbuy.ACTION, step.action)
+
+
 if __name__ == "__main__":
     unittest.main()

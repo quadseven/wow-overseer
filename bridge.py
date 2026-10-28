@@ -225,6 +225,7 @@ _HEARD = contextvars.ContextVar("heard_order_text", default="")
 RELAY_SECONDS = float(os.environ.get("RELAY_SECONDS", "3"))
 # How often ended dungeon runs are checked for an owed report (mod-overseer#152:
 # a report within 60 seconds of the run row closing), and where it goes.
+# Unset turns reports off; they never fall back to the overseer channel (#1604).
 RUN_REPORT_SECONDS = float(os.environ.get("RUN_REPORT_SECONDS", "20"))
 RUN_REPORT_CHANNEL_ID = os.environ.get("RUN_REPORT_CHANNEL_ID", "")
 # On restart, anything older than this is marked relayed WITHOUT being sent.
@@ -1537,29 +1538,47 @@ def _strategy_start_seen():
 
 def _reapply_strategies(reapplier) -> int:
     """One pass of the strategy replay (#1553): read the start and the book,
-    send what is owed to members back in the world. Returns rows written."""
+    send what is owed to members back in the world. Returns rows written.
+
+    A member is paid only once all its rows are written; a refused row
+    leaves it owed for the next pass. The new start is saved only once
+    nobody is owed, so a bridge restart before every member is back owes
+    the replay again instead of losing it (#1584)."""
     start = _worldserver_start()
     pages = strategybook.book(_memo_read(strategybook.MEMO_KIND))
     owed_before = reapplier.owed()
     in_world = _bot_held_names(sorted(pages)) if pages else []
-    commands, new_start = reapplier.due(start, pages, in_world)
-    if new_start is not None:
+    commands = reapplier.due(start, pages, in_world)
+    if reapplier.owed() - owed_before:
+        log.info("strategy reapply: worldserver start %s - %s owed a replay",
+                 reapplier.seen, ", ".join(sorted(reapplier.owed())))
+    leads = _roster_leads() if commands else set()
+    by_name: dict = {}
+    for name, command in commands:
+        by_name.setdefault(name, []).append(command)
+    sent = 0
+    paid = []
+    for name, owed in by_name.items():
+        written = 0
+        try:
+            for command in leadcmd.for_character(owed, name in leads):
+                _insert_command(core.InsertCommand(name, command, strategybook.REAPPLY_SOURCE))
+                written += 1
+        except pymysql.err.MySQLError:
+            log.exception("strategy reapply: a row for %s was refused; "
+                          "retrying next pass", name)
+            continue
+        sent += written
+        reapplier.paid(name)
+        paid.append(name)
+    if paid:
+        log.info("strategy reapply: %d command(s) sent to %s", sent,
+                 ", ".join(sorted(paid)))
+    settled = reapplier.settled()
+    if settled is not None:
         now = time.time()
         _memo_upsert(strategybook.START_MEMO_KIND, strategybook.START_SUBJECT,
-                     new_start, now, now + STRATEGY_BOOK_SECONDS)
-        if reapplier.owed() - owed_before:
-            log.info("strategy reapply: worldserver start %s - %s owed a replay",
-                     new_start, ", ".join(sorted(reapplier.owed())))
-    leads = _roster_leads() if commands else set()
-    sent = 0
-    for name, command in commands:
-        if not leadcmd.for_character([command], name in leads):
-            continue
-        _insert_command(core.InsertCommand(name, command, strategybook.REAPPLY_SOURCE))
-        sent += 1
-    if commands:
-        log.info("strategy reapply: %d command(s) sent to %s", sent,
-                 ", ".join(sorted({n for n, _ in commands})))
+                     settled, now, now + STRATEGY_BOOK_SECONDS)
     return sent
 
 
@@ -1999,10 +2018,16 @@ def _crafting_roster(family: str | None = None) -> list:
 
 
 def _names_of(cohort=None) -> list:
-    """A family's names, sorted: this bridge's own for None (#215)."""
-    if cohort is None:
-        return sorted(_protected_guids().values())
-    return sorted(cohort.names)
+    """A family's names, sorted: this bridge's own for None (#215).
+
+    The None reading lives in family_value.resolve_legacy_family (#737), the
+    one place that says what `cohort=None` means. Imported here, not at the
+    top, because the parity suites load this function on its own.
+    """
+    import family_value
+
+    own = _protected_guids().values() if cohort is None else ()
+    return list(family_value.resolve_legacy_family(cohort, own).members)
 
 
 def _bank_bag_wait_note(step) -> str:
@@ -7117,6 +7142,12 @@ class Bridge(discord.Client):
         self._equip_notes_seen: dict[tuple, frozenset] = {}
         # (oldest row id, consecutive send failures) for the chat relay.
         self._stuck: tuple[int, int] = (0, 0)
+        # Run reports (#1602): the run ids whose report read already failed
+        # and was logged, so one unreadable run is said once, not every tick;
+        # and whether the owed read itself is failing, so a lost connection is
+        # logged when it starts and when it ends rather than every 20 s.
+        self._unreadable_runs: set[int] = set()
+        self._run_reports_down = False
         # Monotonic clock of the last kin muster, so a fight that produces
         # several pleas answers once. None means "never" - deliberately not 0.0,
         # which on a monotonic clock is a real moment the process may be near.
@@ -8198,12 +8229,18 @@ class Bridge(discord.Client):
         failed send is retried next tick, and a posted run is never posted
         again. A run that cannot be posted for runreport.OWED_MINUTES ages out
         rather than blocking the ones behind it.
+
+        Reports go only to RUN_REPORT_CHANNEL_ID, never to the overseer
+        channel (#1604): that is the operator's command and status channel,
+        and every run in an instance ends together after a worldserver roll,
+        so a fallback would bury it. Unset means reports are off, said once
+        per process start.
         """
         await self.wait_until_ready()
-        channel_id = RUN_REPORT_CHANNEL_ID or OVERSEER_CHANNEL_ID
+        channel_id = RUN_REPORT_CHANNEL_ID
         if not channel_id:
-            log.warning("no RUN_REPORT_CHANNEL_ID and no OVERSEER_CHANNEL_ID - "
-                        "dungeon run reports have nowhere to go")
+            log.info("run reports: RUN_REPORT_CHANNEL_ID is unset, so dungeon "
+                     "run reports are off (set it to turn them on)")
             return
         while not self.is_closed():
             await asyncio.sleep(RUN_REPORT_SECONDS)
@@ -8213,8 +8250,29 @@ class Bridge(discord.Client):
                 log.exception("run reports: tick failed; retrying next cycle")
 
     async def _post_run_reports(self, channel_id: int) -> int:
-        """Post every owed report; how many were posted."""
-        owed = await asyncio.to_thread(_fetch_owed_run_reports)
+        """Post every owed report; how many were posted.
+
+        A read error is the run's own (#1602): it is logged once per run id
+        and the loop moves to the next run, so one run that cannot be read
+        does not hold the ones behind it for runreport.OWED_MINUTES. A failed
+        owed read (the connection) is logged without a traceback when it
+        starts and when it clears, not on every tick. A failed send still
+        raises, so nothing is marked and the next tick retries it.
+        """
+        try:
+            owed = await asyncio.to_thread(_fetch_owed_run_reports)
+        except Exception as exc:
+            if not self._run_reports_down:
+                self._run_reports_down = True
+                log.warning(
+                    "run reports: the owed read failed (%s: %s); retrying "
+                    "quietly until it works", type(exc).__name__, exc)
+            return 0
+        if self._run_reports_down:
+            self._run_reports_down = False
+            log.info("run reports: the owed read works again")
+        # A run that aged out of the owed list is forgotten with it.
+        self._unreadable_runs &= set(owed)
         if not owed:
             return 0
         channel = self.get_channel(channel_id)
@@ -8223,7 +8281,16 @@ class Bridge(discord.Client):
             return 0
         posted = 0
         for run_id in owed:
-            report = await asyncio.to_thread(_read_run_report, run_id)
+            try:
+                report = await asyncio.to_thread(_read_run_report, run_id)
+            except Exception as exc:
+                if run_id not in self._unreadable_runs:
+                    self._unreadable_runs.add(run_id)
+                    log.warning(
+                        "run reports: run %s cannot be read (%s: %s); skipping "
+                        "it until it can", run_id, type(exc).__name__, exc)
+                continue
+            self._unreadable_runs.discard(run_id)
             if report is None:
                 continue
             message = await channel.send(runreport.render(report))
@@ -16537,6 +16604,10 @@ class Bridge(discord.Client):
                      "; ".join("%s %s" % (p.name, p.said) for p in posts)
                      or "nobody on maintenance holds a corps trade")
         _log_capped("guild corps", plan.notes)
+        # Who the bags passed over because one waits in their mail (#1591),
+        # once per state (#1605), so the skip can be read from the log.
+        _log_changed("guild corps: bag in the mail", plan.mail_waits,
+                     _family_label(cohort))
         for step in plan.steps:
             # Reserved before the task starts and released when it ends, so a
             # holder is never read as free while one of its rows is in flight.
@@ -17219,8 +17290,10 @@ class Bridge(discord.Client):
     async def _job_weapon_offers(self, members, recent) -> dict:
         """name -> weaponskill.Offer for each guild member carrying a weapon it
         has no skill for (#793): weaponskill decides the need, and the nearest
-        weapon master of its side on its map that teaches it is read here, else
-        one on the other classic continent (weaponskill.choose_far_master).
+        weapon master of its side on its map and its ground (never an island
+        across the water, #1585) that teaches it is read here, else one on the
+        other classic continent nearest its side's landing there
+        (weaponskill.choose_far_master).
 
         Only members guildjobs.weapon_candidate passes are read, and at most
         GUILD_WEAPON_READS_PER_PASS weapon master reads, in turn.
@@ -17246,7 +17319,7 @@ class Bridge(discord.Client):
                 weaponskill.far_maps(m.map_id))
             team = auction.team_of(m.race)
             master = (weaponskill.choose_master(
-                masters, {need.spell}, team, int(m.map_id))
+                masters, {need.spell}, team, int(m.map_id), at)
                 or weaponskill.choose_far_master(
                     masters, {need.spell}, team, int(m.map_id)))
             offers[name] = weaponskill.offer(need, master)
@@ -18639,7 +18712,7 @@ class Bridge(discord.Client):
         master = weaponskill.choose_master(
             await asyncio.to_thread(_fetch_weapon_masters, at,
                                     sorted({n.spell for n in needs})),
-            {n.spell for n in needs}, teams.get(leader, ""), int(at["map_id"]))
+            {n.spell for n in needs}, teams.get(leader, ""), int(at["map_id"]), at)
         said = "; ".join("%s carries %s (%s) and has no skill %d for it" % (
             n.name, n.item, n.why, n.skill) for n in needs)
         if not master:
@@ -20470,6 +20543,8 @@ class Bridge(discord.Client):
         members, skipped = guildrun.free_members(
             facts["rows"], facts["busy"], facts["resting"],
             facts["family"], facts["benched"], owed=frozenset(_class_owed_names(self)))
+        # ROOM TO LOOT BEFORE THE DOOR (#1568).
+        members = _skip_bag_room(members, skipped, _bag_room_short(self, facts))
         pools = guildrun.pools(members, doors)
         if not pools:
             log.info("guild runs: %d free member(s) in %s, and no five of one guild and one "
@@ -20571,6 +20646,9 @@ class Bridge(discord.Client):
             held, mates, facts.get("lendable", ()), facts["busy"],
             facts["resting"],
             facts["benched"] | facts.get("family_benched", set()))
+        # ROOM TO LOOT BEFORE THE DOOR (#1568): a member short of bag room is
+        # held, within a bound, while the guild jobs pass sends it to sell.
+        held, lent, needs = _hold_bag_room(held, lent, needs, _bag_room_short(self, facts))
         log.info("guild social: %s", guildsocial.census(mates, held))
         # PICK-UP GROUPS (guildpug, #591): a pug who said yes counts as free.
         pugs_on = guildpug.enabled()
@@ -22029,7 +22107,7 @@ class Bridge(discord.Client):
                 _fetch_weapon_masters, at,
                 sorted({n.spell for n in critical})),
             {n.spell for n in critical}, teams.get(leader, ""),
-            int(at["map_id"]))
+            int(at["map_id"]), at)
         option = "errand:%d" % int(master["entry"]) if master else ""
         return option
 
@@ -24079,22 +24157,34 @@ _SHARE_PARTY_SQL = (
 
 
 def _fetch_parties(names: list):
-    """name -> party key for questshare.plan(), or None when this world's
-    snapshot has no group column or no table (1054, 1146), and party is
-    then left to the worldserver's own gate as before (mod-overseer#969)."""
+    """name -> party key for questshare.plan(), or None when the party read
+    fails, and party is then left to the worldserver's own gate as before
+    (mod-overseer#969).
+
+    A world whose snapshot has no group column or no table (1054, 1146)
+    falls back quietly, as it always has. Any other MySQL error (a dropped
+    connection, a lock wait, a timeout) falls back too, with one warning:
+    the party read only narrows which holder is asked, so one failed read
+    must not stop every share the pass would have made (#1586).
+    """
     if not names:
         return {}
     sql = _SHARE_PARTY_SQL % ",".join(["%s"] * len(names))
-    with _connect() as conn, conn.cursor() as cur:
-        try:
+    try:
+        with _connect() as conn, conn.cursor() as cur:
             cur.execute(sql, names)
-        except pymysql.err.MySQLError as exc:
-            if exc.args and exc.args[0] in (1054, 1146):
-                return None
-            raise
-        return {
-            str(row["name"]): int(row["group_leader"] or 0) for row in cur.fetchall()
-        }
+            return {
+                str(row["name"]): int(row["group_leader"] or 0)
+                for row in cur.fetchall()
+            }
+    except pymysql.err.MySQLError as exc:
+        if not (exc.args and exc.args[0] in (1054, 1146)):
+            log.warning(
+                "questshare: party read failed (%s); sharing without the party "
+                "check this pass, the worldserver's own gate still applies",
+                exc,
+            )
+        return None
 
 
 def _share_quests() -> questshare.Plan:
@@ -25893,6 +25983,15 @@ def _fetch_guild_run_facts(bounds) -> dict:
         cur.execute(_GUILD_RUN_MEMBERS_SQL.format(holes=",".join(["%s"] * len(guilds))),
                     guilds)
         rows = list(cur.fetchall())
+        # Each member's free general-bag slots, for the hold that sends a
+        # member to make room before a run (guildrun.bag_room_holds, #1568).
+        names = sorted({str(r["name"]) for r in rows if r.get("name")})
+        bag_room = {}
+        if names:
+            marks = ",".join(["%s"] * len(names))
+            cur.execute(_BAG_ROOM_SQL.format(marks=marks), names + names)
+            bag_room = {name: free for name, (free, _slots)
+                        in bag_pressure.general_bag_room(cur.fetchall()).items()}
         cur.execute("SELECT name, tree FROM overseer_raid_spec")
         spec = {r["name"]: r["tree"] for r in cur.fetchall()}
         for row in rows:
@@ -25949,7 +26048,8 @@ def _fetch_guild_run_facts(bounds) -> dict:
             "resting": resting,
             "benched": benched, "family_benched": family_benched,
             "in_flight_by_guild": by_guild, "history": history,
-            "finder_floors": floors, "boss_levels": boss_levels, "recipes": recipes}
+            "finder_floors": floors, "boss_levels": boss_levels, "recipes": recipes,
+            "bag_room": bag_room}
 
 
 # WHERE THE RAID RECIPES DROP (guildrun.RECIPE_DROPS_SQL, #893), read once per
@@ -26468,6 +26568,44 @@ def _hold_owed(held: dict, needs: dict, owed) -> tuple:
     return held, {n: v for n, v in needs.items() if n not in owed}
 
 
+_ON_A_GUILD_JOB = "on a guild job"
+
+
+def _bag_room_short(owner, facts: dict) -> frozenset:
+    """The members held this pass to make bag room before a run
+    (guildrun.bag_room_holds, #1568), the wait's clock kept on the bridge so
+    the hold is bounded across passes."""
+    short, clock = guildrun.bag_room_holds(
+        facts.get("bag_room") or {}, getattr(owner, "_bag_room_since", None) or {},
+        time.monotonic())
+    owner._bag_room_since = clock
+    return short
+
+
+def _skip_bag_room(members: list, skipped: dict, short) -> list:
+    """The old picker's free members less those short of bag room, each one
+    left out counted in `skipped` under its reason (#1568)."""
+    kept = [m for m in members if m.name not in short]
+    if len(kept) < len(members):
+        skipped[guildrun.SHORT_OF_BAG_ROOM] = len(members) - len(kept)
+    return kept
+
+
+def _hold_bag_room(held: dict, lent, needs: dict, short) -> tuple:
+    """(held, lent, needs) with every member short of bag room held for it: no
+    ask of its own, no seat lent, and its yes taken back. Held, it is not
+    spoken for (_guild_social_names), so the guild jobs pass is free to send it
+    to a vendor. A member held for anything else keeps that reason, except a
+    guild job, which may be that very sale: the census then says why."""
+    short = set(short or ())
+    held = dict(held)
+    for name in short:
+        if held.get(name) in (None, _ON_A_GUILD_JOB):
+            held[name] = guildrun.SHORT_OF_BAG_ROOM
+    return (held, set(lent or ()) - short,
+            {n: v for n, v in needs.items() if n not in short})
+
+
 def _class_party_names(owner) -> set:
     """The members of the class quest parties that are up, for the passes that
     leave them alone (a bridge with no board holds nobody)."""
@@ -26505,7 +26643,7 @@ def _guild_social_mates(facts: dict, mid_job: set, doors: list) -> tuple:
         why = guildrun.why_not(mate.member, facts["busy"], facts["resting"],
                                facts["family"], facts["benched"])
         if not why and mate.name in mid_job:
-            why = "on a guild job"
+            why = _ON_A_GUILD_JOB
         if why:
             held[mate.name] = why
     factions = {g: guildrun.faction_of([m.member for m in mates if m.member.guild == g])

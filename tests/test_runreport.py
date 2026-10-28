@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+import realmread  # noqa: E402
 import runreport  # noqa: E402
 import runtimeline  # noqa: E402
 
@@ -238,26 +239,31 @@ class ThePageShowsWhatDiscordWasSent(unittest.TestCase):
         self.assertNotIn("report", payload["families"][0]["runs"][0])
 
 
-def _post_run_reports():
-    """Bridge._post_run_reports, compiled out of bridge.py's source."""
+def _bridge_method(name):
+    """A Bridge method, compiled out of bridge.py's source."""
     tree = ast.parse(BRIDGE.read_text(encoding="utf-8"))
     bridge = next(
         n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Bridge"
     )
     fn = next(
-        n
-        for n in bridge.body
-        if isinstance(n, ast.AsyncFunctionDef) and n.name == "_post_run_reports"
+        n for n in bridge.body if isinstance(n, ast.AsyncFunctionDef) and n.name == name
     )
     return textwrap.dedent(
         ast.get_source_segment(BRIDGE.read_text(encoding="utf-8"), fn)
     )
 
 
+def _post_run_reports():
+    """Bridge._post_run_reports, compiled out of bridge.py's source."""
+    return _bridge_method("_post_run_reports")
+
+
 class OneDiscordMessagePerEndedRun(unittest.TestCase):
-    def _harness(self, owed, send_fails=False):
+    def _harness(self, owed, send_fails=False, unreadable=(), owed_fails=None):
         marked: list = []
         sent: list = []
+        self.warnings: list = []
+        self.infos: list = []
         fetch, _ = _fetcher()
 
         async def to_thread(fn, *args):
@@ -271,18 +277,25 @@ class OneDiscordMessagePerEndedRun(unittest.TestCase):
                 return types.SimpleNamespace(id=900 + len(sent))
 
         def read(run_id):
+            if run_id in unreadable:
+                raise realmread.Gap(1146, "SELECT ...")
             return runreport.read(fetch, run_id)
 
-        state = {"owed": list(owed)}
+        state = {"owed": list(owed), "owed_fails": owed_fails}
 
         def fetch_owed():
+            if state["owed_fails"]:
+                raise state["owed_fails"]
             # The marker is what takes a run off the owed list.
             return [r for r in state["owed"] if r not in {m[0] for m in marked}]
 
         ns = {
             "asyncio": types.SimpleNamespace(to_thread=to_thread),
             "runreport": runreport,
-            "log": types.SimpleNamespace(info=lambda *a: None, warning=lambda *a: None),
+            "log": types.SimpleNamespace(
+                info=lambda *a: self.infos.append(a),
+                warning=lambda *a: self.warnings.append(a),
+            ),
             "_fetch_owed_run_reports": fetch_owed,
             "_read_run_report": read,
             "_mark_run_reported": lambda run_id, message_id, outcome: marked.append(
@@ -290,7 +303,12 @@ class OneDiscordMessagePerEndedRun(unittest.TestCase):
             ),
         }
         exec(_post_run_reports(), ns)  # noqa: S102 - bridge.py's own source
-        bot = types.SimpleNamespace(get_channel=lambda channel_id: Channel())
+        bot = types.SimpleNamespace(
+            get_channel=lambda channel_id: Channel(),
+            _unreadable_runs=set(),
+            _run_reports_down=False,
+        )
+        self.state = state
         return ns["_post_run_reports"], bot, sent, marked
 
     def test_an_ended_run_is_posted_once_with_its_run_id_and_marked_after(self):
@@ -307,6 +325,34 @@ class OneDiscordMessagePerEndedRun(unittest.TestCase):
             asyncio.run(post(bot, 1))
         self.assertEqual([], marked)
 
+    def test_an_unreadable_run_does_not_hold_the_runs_behind_it(self):
+        # #1602: one run whose read fails is skipped, the next is posted.
+        post, bot, sent, marked = self._harness([411, 412], unreadable={411})
+        self.assertEqual(1, asyncio.run(post(bot, 1)))
+        self.assertEqual([(412, 901)], marked)
+        self.assertTrue(sent[0].startswith("Run report #412:"))
+
+    def test_an_unreadable_run_is_logged_once_not_every_tick(self):
+        post, bot, sent, marked = self._harness([411], unreadable={411})
+        for _ in range(3):
+            self.assertEqual(0, asyncio.run(post(bot, 1)))
+        self.assertEqual([], marked)
+        self.assertEqual(1, len(self.warnings))
+        self.assertEqual(411, self.warnings[0][1])
+
+    def test_a_failed_owed_read_logs_once_when_it_starts_and_once_when_it_clears(
+        self,
+    ):
+        post, bot, sent, marked = self._harness(
+            [412], owed_fails=ConnectionError("lost connection")
+        )
+        for _ in range(3):
+            self.assertEqual(0, asyncio.run(post(bot, 1)))
+        self.assertEqual(1, len(self.warnings))
+        self.state["owed_fails"] = None
+        self.assertEqual(1, asyncio.run(post(bot, 1)))
+        self.assertEqual(1, len([a for a in self.infos if "again" in a[0]]))
+
     def test_the_owed_read_skips_reported_runs_and_old_history(self):
         sql = runreport.PENDING_SQL
         self.assertIn("p.run_id IS NULL", sql)
@@ -320,6 +366,92 @@ class OneDiscordMessagePerEndedRun(unittest.TestCase):
             src,
         )
         self.assertIn('_Pass("_run_report_loop", headless=False)', src)
+
+
+class ABurstAfterARestartIsBounded(unittest.TestCase):
+    """#1604: every run in an instance ends together after a worldserver roll.
+
+    The owed read takes at most runreport.OWED_LIMIT runs, so a burst posts
+    at most that many reports per tick and the rest follow on later ticks.
+    """
+
+    def test_the_owed_read_is_capped_at_five_per_tick(self):
+        self.assertEqual(5, runreport.OWED_LIMIT)
+        self.assertTrue(runreport.PENDING_SQL.rstrip().endswith("LIMIT %s"))
+        src = BRIDGE.read_text(encoding="utf-8")
+        self.assertIn(
+            "cur.execute(runreport.PENDING_SQL, "
+            "(runreport.OWED_MINUTES, runreport.OWED_LIMIT))",
+            src,
+        )
+
+    def test_twelve_runs_ending_together_post_five_five_then_two(self):
+        harness = OneDiscordMessagePerEndedRun()
+        post, bot, sent, marked = harness._harness(list(range(400, 412)))
+        owed = harness.state
+
+        def capped():
+            done = {m[0] for m in marked}
+            # What the database's LIMIT does to the owed read.
+            return [r for r in owed["owed"] if r not in done][: runreport.OWED_LIMIT]
+
+        fetch, _ = _fetcher()
+        report = runreport.read(fetch, 412)
+        post.__globals__["_fetch_owed_run_reports"] = capped
+        post.__globals__["_read_run_report"] = lambda run_id: report
+        self.assertEqual([5, 5, 2, 0], [asyncio.run(post(bot, 1)) for _ in range(4)])
+        self.assertEqual(list(range(400, 412)), [m[0] for m in marked])
+
+
+class RunReportsNeverFallBackToTheOverseerChannel(unittest.TestCase):
+    """#1604: unset RUN_REPORT_CHANNEL_ID means no reports, not the main channel."""
+
+    def _run_loop(self, run_report_channel):
+        posted: list = []
+        self.infos: list = []
+        ticks = {"left": 1}
+
+        async def sleep(_seconds):
+            return None
+
+        async def wait_until_ready():
+            return None
+
+        def is_closed():
+            ticks["left"] -= 1
+            return ticks["left"] < 0
+
+        async def post(channel_id):
+            posted.append(channel_id)
+            return 0
+
+        ns = {
+            "asyncio": types.SimpleNamespace(sleep=sleep),
+            "RUN_REPORT_CHANNEL_ID": run_report_channel,
+            "OVERSEER_CHANNEL_ID": "555",
+            "RUN_REPORT_SECONDS": 0,
+            "log": types.SimpleNamespace(
+                info=lambda *a: self.infos.append(a),
+                warning=lambda *a: self.infos.append(a),
+                exception=lambda *a: self.infos.append(a),
+            ),
+        }
+        exec(_bridge_method("_run_report_loop"), ns)  # noqa: S102
+        bot = types.SimpleNamespace(
+            wait_until_ready=wait_until_ready,
+            is_closed=is_closed,
+            _post_run_reports=post,
+        )
+        asyncio.run(ns["_run_report_loop"](bot))
+        return posted
+
+    def test_unset_posts_nowhere_and_says_so_once(self):
+        self.assertEqual([], self._run_loop(""))
+        self.assertEqual(1, len(self.infos))
+        self.assertIn("RUN_REPORT_CHANNEL_ID is unset", self.infos[0][0])
+
+    def test_set_posts_to_the_run_report_channel(self):
+        self.assertEqual([777], self._run_loop("777"))
 
 
 if __name__ == "__main__":
