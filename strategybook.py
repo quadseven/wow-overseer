@@ -13,7 +13,9 @@ one page per member: engine -> strategy -> '+' or '-', the last word on each
 strategy winning. It is stored as one memo row per member, engine and
 strategy (`rows`), and read back into pages (`book`). When the bridge sees a NEW worldserver start, it owes every
 member in the book a replay, and pays it once per member as soon as that
-member is back in the world under the AI. No new start, no replay.
+member is back in the world under the AI and its rows are written. No new
+start, no replay. The start is saved only once every member is paid, so a
+bridge restart in between owes the replay again rather than losing it.
 
 The bridge's own strategy writers (the life loop, the goal supervisor) are
 not recorded here: they re-assert on their own cadence already. Only orders
@@ -140,40 +142,57 @@ def replay(entry) -> list:
 class Reapplier:
     """Owes a replay to every member in the book after a new worldserver start.
 
-    `seen` is the start the bridge last replayed for, restored from the memo
-    store, or None when it has never looked. A first look with nothing seen
-    only seeds it: the bridge cannot tell a fresh realm from a roll it missed,
-    and replaying then would re-send orders to a world that never lost them.
+    `seen` is the start the bridge last saved, restored from the memo store,
+    or None when it has never looked. A first look with nothing seen only
+    seeds it: the bridge cannot tell a fresh realm from a roll it missed, and
+    replaying then would re-send orders to a world that never lost them.
+
+    The owed set lives only in memory, so the new start is saved only once
+    nobody is owed (`settled`, #1584). A bridge restart before every member
+    is back reads the old start, sees the new one as new, and owes the whole
+    book again: a member already paid gets its page a second time, which
+    sets the strategies it already has, and a member not yet back is not
+    lost. A member is paid only when the bridge says its rows were written
+    (`paid`), so a row the command table refused is sent again next pass.
     """
 
     def __init__(self, seen=None):
         self.seen = seen
         self._owed: set = set()
+        self._unsaved = None
 
-    def due(self, start, book, in_world) -> tuple:
-        """(commands, new_start).
-
-        `commands` is [(name, command)] to send now: every page owed a replay
-        whose member is in `in_world`, each member at most once per start.
+    def due(self, start, book, in_world) -> list:
+        """[(name, command)] to send now: every page owed a replay whose
+        member is in `in_world`. A member stays owed, and is offered again on
+        the next call, until `paid` says its rows were written.
         Names match in any case (`canonical`); a command carries the spelling
         `in_world` reported.
-        `new_start` is the start to persist when it changed, else None.
         `start` None (uptime unreadable) changes nothing."""
-        new_start = None
         if start is not None and start != self.seen:
             if self.seen is not None:
                 self._owed = {
                     canonical(name) for name, page in book.items() if replay(page)
                 }
             self.seen = start
-            new_start = start
+            self._unsaved = start
         pages = {canonical(name): page for name, page in book.items()}
         present = {canonical(name): name for name in in_world}
         commands = []
         for key in sorted(self._owed & set(present)):
             commands.extend((present[key], c) for c in replay(pages.get(key)))
-            self._owed.discard(key)
-        return commands, new_start
+        return commands
+
+    def paid(self, name) -> None:
+        """`name`'s replay rows were written: it is owed nothing more."""
+        self._owed.discard(canonical(name))
+
+    def settled(self):
+        """The start to save now, else None: the newest start, once, as soon
+        as nobody is owed a replay for it."""
+        if self._unsaved is None or self._owed:
+            return None
+        start, self._unsaved = self._unsaved, None
+        return start
 
     def owed(self) -> set:
         """Members still waiting for their replay."""
