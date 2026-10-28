@@ -256,8 +256,12 @@ class TheSharedGets(unittest.TestCase):
         # families x RUNS_PER_FAMILY run reports. Two asks inside the shared
         # window build once and get the same body.
         fetched = {
-            "rows": [], "families": {}, "present": True, "deaths": [],
-            "bosses": frozenset(), "reports": {},
+            "rows": [],
+            "families": {},
+            "present": True,
+            "deaths": [],
+            "bosses": frozenset(),
+            "reports": {},
         }
         with mock.patch.object(
             map_server, "_fetch_run_timeline", return_value=fetched
@@ -271,9 +275,14 @@ class TheSharedGets(unittest.TestCase):
         self.assertEqual(
             json.loads(second.body),
             map_server.runtimeline.build_run_timeline(
-                [], {}, present=True, deaths=[], bosses=frozenset(),
+                [],
+                {},
+                present=True,
+                deaths=[],
+                bosses=frozenset(),
                 zones=map_server.recap.zone_names(map_server.GEO.continents),
-                reports={}),
+                reports={},
+            ),
         )
 
     def test_an_unchanged_answer_is_still_a_304(self):
