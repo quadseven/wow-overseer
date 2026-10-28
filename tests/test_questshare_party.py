@@ -8,6 +8,7 @@ names a holder in the taker's party, or refuses the pair as not-grouped and
 asks the worldserver nothing.
 """
 
+import types
 import unittest
 from unittest import mock
 
@@ -119,6 +120,136 @@ class TheBridgeAsksOnlyWithinAParty(unittest.TestCase):
             triples(self.run_pass(None)),
             triples(questshare.plan(FAMILY, CATALOG).grants),
         )
+
+
+class MySQLError(Exception):
+    """Stands in for pymysql.err.MySQLError, which the stub module lacks."""
+
+
+class _Cursor:
+    def __init__(self, error=None, rows=()):
+        self.error, self.rows = error, list(rows)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, sql, params=()):
+        if self.error is not None:
+            raise self.error
+
+    def fetchall(self):
+        return self.rows
+
+
+class _Conn:
+    def __init__(self, cur):
+        self.cur = cur
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def cursor(self):
+        return self.cur
+
+
+class APartyReadErrorFallsBack(unittest.TestCase):
+    """#1586: any MySQL error in the party read falls back to no party
+    check (parties None), logged once, and the share pass still runs."""
+
+    def fetch(self, connect):
+        with (
+            mock.patch.object(bridge, "_connect", connect),
+            mock.patch.object(
+                bridge.pymysql,
+                "err",
+                types.SimpleNamespace(MySQLError=MySQLError),
+                create=True,
+            ),
+        ):
+            return bridge._fetch_parties(["Grug", "Og"])
+
+    def test_a_transient_error_falls_back_with_one_warning(self):
+        conn = _Conn(_Cursor(error=MySQLError(1205, "Lock wait timeout")))
+        with self.assertLogs(bridge.log, "WARNING") as logs:
+            self.assertIsNone(self.fetch(lambda: conn))
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("party read failed", logs.output[0])
+
+    def test_a_failed_connection_falls_back(self):
+        def connect():
+            raise MySQLError(2003, "Can't connect")
+
+        with self.assertLogs(bridge.log, "WARNING"):
+            self.assertIsNone(self.fetch(connect))
+
+    def test_a_world_without_the_column_falls_back_quietly(self):
+        conn = _Conn(_Cursor(error=MySQLError(1054, "Unknown column")))
+        with self.assertNoLogs(bridge.log, "WARNING"):
+            self.assertIsNone(self.fetch(lambda: conn))
+
+    def test_a_good_read_names_each_party(self):
+        rows = [
+            {"name": "Grug", "group_leader": 11},
+            {"name": "Og", "group_leader": None},
+        ]
+        self.assertEqual(
+            self.fetch(lambda: _Conn(_Cursor(rows=rows))), {"Grug": 11, "Og": 0}
+        )
+
+    def test_the_share_pass_still_writes_its_shares_on_the_fallback(self):
+        conn = _Conn(_Cursor(error=MySQLError(2013, "Lost connection")))
+        inserted = []
+        with (
+            mock.patch.object(bridge, "_connect", lambda: conn),
+            mock.patch.object(
+                bridge.pymysql,
+                "err",
+                types.SimpleNamespace(MySQLError=MySQLError),
+                create=True,
+            ),
+            mock.patch.multiple(
+                bridge,
+                _fetch_family_quests=lambda names: (FAMILY, CATALOG),
+                _recent_share_keys=lambda minutes: set(),
+                _answered_share_rows=lambda days, depth: [],
+                _insert_share=lambda grant: inserted.append(grant) or 1,
+            ),
+            self.assertLogs(bridge.log, "WARNING"),
+        ):
+            bridge._share_family_quests([m.name for m in FAMILY])
+        self.assertEqual(
+            [(g.holder, g.taker, g.quest_id) for g in inserted],
+            [
+                (g.holder, g.taker, g.quest_id)
+                for g in questshare.plan(FAMILY, CATALOG).grants
+            ],
+        )
+        self.assertTrue(inserted)
+
+    def test_the_not_grouped_refusal_holds_when_the_read_succeeds(self):
+        rows = [{"name": n, "group_leader": k} for n, k in SPLIT.items()]
+        inserted = []
+        with (
+            mock.patch.object(bridge, "_connect", lambda: _Conn(_Cursor(rows=rows))),
+            mock.patch.multiple(
+                bridge,
+                _fetch_family_quests=lambda names: (FAMILY, CATALOG),
+                _recent_share_keys=lambda minutes: set(),
+                _answered_share_rows=lambda days, depth: [],
+                _insert_share=lambda grant: inserted.append(grant) or 1,
+            ),
+        ):
+            plan = bridge._share_family_quests([m.name for m in FAMILY])
+        self.assertTrue(inserted)
+        for g in inserted:
+            self.assertTrue(questshare.grouped(g.holder, g.taker, SPLIT), g)
+        self.assertIn(questshare.NOT_GROUPED, questshare.say(plan))
 
 
 if __name__ == "__main__":
