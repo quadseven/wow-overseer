@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+import realmread  # noqa: E402
 import runreport  # noqa: E402
 import runtimeline  # noqa: E402
 
@@ -255,9 +256,11 @@ def _post_run_reports():
 
 
 class OneDiscordMessagePerEndedRun(unittest.TestCase):
-    def _harness(self, owed, send_fails=False):
+    def _harness(self, owed, send_fails=False, unreadable=(), owed_fails=None):
         marked: list = []
         sent: list = []
+        self.warnings: list = []
+        self.infos: list = []
         fetch, _ = _fetcher()
 
         async def to_thread(fn, *args):
@@ -271,18 +274,25 @@ class OneDiscordMessagePerEndedRun(unittest.TestCase):
                 return types.SimpleNamespace(id=900 + len(sent))
 
         def read(run_id):
+            if run_id in unreadable:
+                raise realmread.Gap(1146, "SELECT ...")
             return runreport.read(fetch, run_id)
 
-        state = {"owed": list(owed)}
+        state = {"owed": list(owed), "owed_fails": owed_fails}
 
         def fetch_owed():
+            if state["owed_fails"]:
+                raise state["owed_fails"]
             # The marker is what takes a run off the owed list.
             return [r for r in state["owed"] if r not in {m[0] for m in marked}]
 
         ns = {
             "asyncio": types.SimpleNamespace(to_thread=to_thread),
             "runreport": runreport,
-            "log": types.SimpleNamespace(info=lambda *a: None, warning=lambda *a: None),
+            "log": types.SimpleNamespace(
+                info=lambda *a: self.infos.append(a),
+                warning=lambda *a: self.warnings.append(a),
+            ),
             "_fetch_owed_run_reports": fetch_owed,
             "_read_run_report": read,
             "_mark_run_reported": lambda run_id, message_id, outcome: marked.append(
@@ -290,7 +300,12 @@ class OneDiscordMessagePerEndedRun(unittest.TestCase):
             ),
         }
         exec(_post_run_reports(), ns)  # noqa: S102 - bridge.py's own source
-        bot = types.SimpleNamespace(get_channel=lambda channel_id: Channel())
+        bot = types.SimpleNamespace(
+            get_channel=lambda channel_id: Channel(),
+            _unreadable_runs=set(),
+            _run_reports_down=False,
+        )
+        self.state = state
         return ns["_post_run_reports"], bot, sent, marked
 
     def test_an_ended_run_is_posted_once_with_its_run_id_and_marked_after(self):
@@ -306,6 +321,34 @@ class OneDiscordMessagePerEndedRun(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             asyncio.run(post(bot, 1))
         self.assertEqual([], marked)
+
+    def test_an_unreadable_run_does_not_hold_the_runs_behind_it(self):
+        # #1602: one run whose read fails is skipped, the next is posted.
+        post, bot, sent, marked = self._harness([411, 412], unreadable={411})
+        self.assertEqual(1, asyncio.run(post(bot, 1)))
+        self.assertEqual([(412, 901)], marked)
+        self.assertTrue(sent[0].startswith("Run report #412:"))
+
+    def test_an_unreadable_run_is_logged_once_not_every_tick(self):
+        post, bot, sent, marked = self._harness([411], unreadable={411})
+        for _ in range(3):
+            self.assertEqual(0, asyncio.run(post(bot, 1)))
+        self.assertEqual([], marked)
+        self.assertEqual(1, len(self.warnings))
+        self.assertEqual(411, self.warnings[0][1])
+
+    def test_a_failed_owed_read_logs_once_when_it_starts_and_once_when_it_clears(
+        self,
+    ):
+        post, bot, sent, marked = self._harness(
+            [412], owed_fails=ConnectionError("lost connection")
+        )
+        for _ in range(3):
+            self.assertEqual(0, asyncio.run(post(bot, 1)))
+        self.assertEqual(1, len(self.warnings))
+        self.state["owed_fails"] = None
+        self.assertEqual(1, asyncio.run(post(bot, 1)))
+        self.assertEqual(1, len([a for a in self.infos if "again" in a[0]]))
 
     def test_the_owed_read_skips_reported_runs_and_old_history(self):
         sql = runreport.PENDING_SQL

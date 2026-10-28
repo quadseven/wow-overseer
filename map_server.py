@@ -4331,8 +4331,11 @@ _APP_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; charset=
 # ETag and `no-cache`, because _send runs for every caller.
 SHARED_READ_SECONDS = 5.0
 SHARED_READS = readcache.ReadCache(SHARED_READ_SECONDS)
+# /api/runtimeline reads one post-run report per recent run id (#1603), so it
+# is shared too rather than read once per open family page.
 SHARED_GET_PATHS = frozenset({
     "/api/map", "/api/wall", "/api/guildgear", "/api/raidgoals", "/api/wealth",
+    "/api/runtimeline",
 })
 
 
