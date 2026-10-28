@@ -1,4 +1,8 @@
-"""Immutable family values built from the established council grouping."""
+"""Immutable family values built from the established council grouping.
+
+bridge._names_of resolves its legacy cohort=None through
+resolve_legacy_family; the passes move onto Family in follow-up tickets.
+"""
 
 from __future__ import annotations
 

@@ -9,6 +9,8 @@ here: it can disagree, and the plan it produces is data the goal supervisor
 can act on rather than prose.
 """
 
+import ast
+import pathlib
 import unittest
 from dataclasses import replace
 from unittest import mock
@@ -122,6 +124,29 @@ class CouncilTest(unittest.TestCase):
         resolved = family_value.resolve_legacy_family(cohort, ["unused"])
 
         self.assertEqual(resolved, family_value.Family("second", ("Alpha", "Zed")))
+
+    def test_bridge_names_of_reads_the_legacy_resolver(self):
+        source = (
+            pathlib.Path(__file__).resolve().parent.parent / "bridge.py"
+        ).read_text(encoding="utf-8")
+        node = next(
+            n
+            for n in ast.walk(ast.parse(source))
+            if isinstance(n, ast.FunctionDef) and n.name == "_names_of"
+        )
+        namespace = {"_protected_guids": lambda: {1: "Beta", 2: "Able"}}
+        module = ast.Module(body=[node], type_ignores=[])
+        exec(compile(module, "bridge.py", "exec"), namespace)  # noqa: S102 - bridge.py's own source
+        cohort = type("Cohort", (), {"key": "second", "names": {"Zed", "Alpha"}})()
+
+        self.assertEqual(namespace["_names_of"](None), ["Able", "Beta"])
+        self.assertEqual(namespace["_names_of"](cohort), ["Alpha", "Zed"])
+        with mock.patch.object(
+            family_value,
+            "resolve_legacy_family",
+            return_value=family_value.Family("", ("Pinned",)),
+        ):
+            self.assertEqual(namespace["_names_of"](None), ["Pinned"])
 
     def test_a_council_of_one_decides_nothing(self):
         c = council.hold([_m("Grug", 5)], history=[])
