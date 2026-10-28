@@ -1478,14 +1478,14 @@ def plan(
         held = crossing_held(member.name, move, crossings)
         if held:
             move, why = None, held
-    if (
-        move is not None
-        and move.spot is not None
-        and _yards(member, move.spot) > guildroute.TRAINER_WALK_YARDS
-    ):
-        # Only a far walk waits out a far walk wall; a drop does not walk.
+    if move is not None and move.spot is not None:
+        # A drop does not walk. Only a far walk waits out the far walk
+        # ceiling and budget, but another verb's hold is on the character, so
+        # a near walk waits it out too (#1295: a 170-yard hunt walk was refused
+        # as held every pass, about every two minutes).
         wall, wait = walk_wall(member.name, tried)
-        if wall:
+        far = _yards(member, move.spot) > guildroute.TRAINER_WALK_YARDS
+        if wall and (far or wall == classquest.HELD_REASON):
             move, why = (
                 None,
                 "%s waits %d more minute%s to walk: %s"
