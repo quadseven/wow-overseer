@@ -174,6 +174,7 @@ import townerrand
 import townslot
 import tradechoice
 import vendor_stall
+import vendorsale
 import trainjob
 import travel
 import vision
@@ -18009,6 +18010,14 @@ class Bridge(discord.Client):
             if status in ("applied", "delivered"):
                 log.info("guild jobs: %s row %d for %s (%s) came back %s",
                          row.kind, row_id, step.holder, row.command, status)
+                # EVERY SALE IS SAID (#1592): the member, the item and the
+                # price, one line a sale, so the bridge log shows what left
+                # the bags and for how much.
+                sale = (vendorsale.sale_for(getattr(step, "sales", ()), row.command)
+                        if row.kind == "sell" else None)
+                if sale is not None:
+                    log.info("guild jobs: sale: %s (row %d)",
+                             vendorsale.sale_line(step.holder, sale), row_id)
                 return True
             if attempt == 1 and await self._corps_row_again(step, row, row_id, detail, walk):
                 continue
