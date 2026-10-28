@@ -553,8 +553,10 @@ class GuildRecruitingPolicy(unittest.TestCase):
         self.assertIn("healers, tanks", line)
         self.assertIn("Tue, Thu", line)
         self.assertTrue(recruit.may_post_ad(None))
-        self.assertFalse(recruit.may_post_ad(30.0))
-        self.assertFalse(recruit.may_post_ad(59))
+        for minutes_since_first_post in (0.0, 0.5, 30.0, 59, 59.9):
+            with self.subTest(second_post_after=minutes_since_first_post):
+                self.assertFalse(recruit.may_post_ad(minutes_since_first_post))
+        self.assertTrue(recruit.may_post_ad(recruit.AD_INTERVAL_MINUTES))
         self.assertTrue(recruit.may_post_ad(60))
 
     def test_missing_role_outranks_gear_and_below_level_is_dropped(self):
