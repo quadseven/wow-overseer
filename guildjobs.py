@@ -1977,14 +1977,68 @@ def riding_step(m, recent):
     )
 
 
-def mount_step(m, facts, recent, cap):
+def mount_refused_for_bags(name, recent) -> bool:
+    """Whether the member's newest mount buy (not its walk) came back
+    mountbuy.BAGS_FULL_REASON."""
+    buys = [
+        r
+        for r in recent or ()
+        if r.name == name
+        and r.action == mountbuy.ACTION
+        and not r.walk
+        and str(r.command or "").startswith("entry:")
+    ]
+    if not buys:
+        return False
+    newest = min(buys, key=lambda r: (int(r.age_minutes), -int(r.row_id)))
+    reason = mountbuy.BAGS_FULL_REASON
+    return reason in (newest.refusal, newest.reason) or reason in str(
+        newest.result or ""
+    )
+
+
+def mount_room_short(m, recent) -> bool:
+    """Whether the mount buy has no bag slot to land in: the bags read full,
+    or the last buy was refused for full bags and no free slot has been read
+    since (#1593)."""
+    if m.free_slots is not None and int(m.free_slots) >= 1:
+        return False
+    return m.free_slots is not None or mount_refused_for_bags(m.name, recent)
+
+
+def _mount_room(m, offer, recent, cap, kept, book, crafters, master):
+    """(room step or None, a note) for a member whose mount buy has no bag
+    slot: one make-room step (_room_ladder) before the vendor walk, or the walk
+    held with the reason."""
+    said = "%s makes room in its bags (%s free, 1 needed) for %s" % (
+        m.name,
+        "none" if m.free_slots is None else int(m.free_slots),
+        offer.name or "mount item %d" % offer.entry,
+    )
+    if not _cooling(m, ROOM_ACTION, recent):
+        step = _room_ladder(m, said, 1, kept, book, cap, crafters, master)
+        if step is not None:
+            return step, ""
+        return None, (
+            "%s holds its mount walk: its bags have no free slot for %s and "
+            "nothing it may sell, mail or destroy"
+            % (m.name, offer.name or "item %d" % offer.entry)
+        )
+    return None, (
+        "%s holds its mount walk until a bag slot is free for %s"
+        % (m.name, offer.name or "item %d" % offer.entry)
+    )
+
+
+def mount_step(m, facts, recent, cap, kept=None, book=None, crafters=None, master=""):
     """(step or None, a note): a member with Apprentice Riding and no mount
     walks to its race's mount vendor, buys the cheapest mount it can ride with
     its own gold above its class spell reserve, and uses the item to learn the
     mount (mountbuy.decide, #779). A member carrying an unused mount item only
     uses it. `facts` is a mountbuy.Facts, None for a member the bridge did not
     read. Never while offline, dead or fighting, and once per
-    COOLDOWN_MINUTES[mountbuy.ACTION]."""
+    COOLDOWN_MINUTES[mountbuy.ACTION]. With no bag slot for the item
+    (mount_room_short, #1593) it makes room first or holds the walk."""
     if facts is None:
         return None, ""
     order = m.purse
@@ -2019,6 +2073,8 @@ def mount_step(m, facts, recent, cap):
         return guildcorps.Step(
             m.name, mountbuy.ACTION, int(offer.entry), said, rows=(use,)
         ), ""
+    if mount_room_short(m, recent):
+        return _mount_room(m, offer, recent, cap, kept, book, crafters, master)
     said = "%s walks to its race's mount vendor to buy %s for %s of its own" % (
         m.name,
         offer.name or "item %d" % offer.entry,
@@ -3517,7 +3573,19 @@ def _quest_first(
 
 
 def _upkeep_first(
-    m, offer, supply, leveling, kept, recent, cap, quest_note, weapon=None, mount=None
+    m,
+    offer,
+    supply,
+    leveling,
+    kept,
+    recent,
+    cap,
+    quest_note,
+    weapon=None,
+    mount=None,
+    book=None,
+    crafters=None,
+    master="",
 ):
     """(the member's step as _member_step returns it, or None; the supply
     note; the gear note): food for a member with nothing to eat or drink, then
@@ -3543,7 +3611,7 @@ def _upkeep_first(
     step, riding_note = riding_step(m, recent)
     if step is not None:
         return (step, step.said, quest_note, ""), supply_note, ""
-    step, mount_note = mount_step(m, mount, recent, cap)
+    step, mount_note = mount_step(m, mount, recent, cap, kept, book, crafters, master)
     if step is not None:
         return (step, step.said, quest_note, ""), supply_note, ""
     riding_note = _join(riding_note, mount_note)
@@ -3695,7 +3763,19 @@ def _member_step(
         return found
     quest_note = _join(quest_note, room_note)
     found, supply_note, gear_note = _upkeep_first(
-        m, offer, supply, leveling, kept, recent, cap, quest_note, weapon, mount
+        m,
+        offer,
+        supply,
+        leveling,
+        kept,
+        recent,
+        cap,
+        quest_note,
+        weapon,
+        mount,
+        classes,
+        crafters,
+        master,
     )
     if found is not None:
         return found
