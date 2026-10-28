@@ -205,5 +205,107 @@ class TheMountWalk(unittest.TestCase):
         self.assertEqual(mountbuy.ACTION, found[0].action)
 
 
+def refused_buy(age=30, row_id=1275201):
+    """The mount buy row the module refused for full bags (#1593)."""
+    return guildjobs.Recent(
+        "Grug",
+        mountbuy.ACTION,
+        age,
+        status="failed",
+        command="entry:2414 count:1 max:10000",
+        result='{"outcome":"refused","reason":"bags cannot take the item",'
+        '"inventory_result":50}',
+        refusal="bags cannot take the item",
+        row_id=row_id,
+    )
+
+
+class FullBagsMakeRoomFirst(unittest.TestCase):
+    """Read on the dev realm on 2026-10-27 (#1593): every one of the 9 mount
+    buys that reached the vendor came back "bags cannot take the item", and the
+    same walk was aimed again (Crag three times). The walk is no longer aimed
+    at a member with no free bag slot."""
+
+    FACTS = mountbuy.Facts(False, STOCK)
+    JUNK = guildjobs.Carried(guid=11, entry=900, count=1, quality=0, sell_price=50)
+
+    def test_full_bags_make_room_before_the_walk(self):
+        m = grug(free_slots=0, bag_slots=16, carried=(self.JUNK,))
+        step, note = guildjobs.mount_step(m, self.FACTS, (), 100)
+        self.assertEqual("", note)
+        self.assertEqual(guildjobs.ROOM_ACTION, step.action)
+        self.assertEqual(["guid:11"], [r.command for r in step.rows])
+        self.assertNotIn("item:2414", step.walk.command)
+        self.assertIn("Reins of the Pinto", step.said)
+
+    def test_full_bags_with_nothing_to_part_with_hold_the_walk(self):
+        m = grug(free_slots=0, bag_slots=16)
+        step, note = guildjobs.mount_step(m, self.FACTS, (), 100)
+        self.assertIsNone(step)
+        self.assertIn("holds its mount walk", note)
+
+    def test_a_cooling_room_step_holds_the_walk(self):
+        m = grug(free_slots=0, bag_slots=16, carried=(self.JUNK,))
+        recent = (guildjobs.Recent("Grug", guildjobs.ROOM_ACTION, 5),)
+        step, note = guildjobs.mount_step(m, self.FACTS, recent, 100)
+        self.assertIsNone(step)
+        self.assertIn("until a bag slot is free", note)
+
+    def test_the_upkeep_rungs_make_room_for_the_mount(self):
+        """With the full-bags sale cooling, the mount rung still aims no
+        walk at the vendor: it makes room."""
+        m = grug(free_slots=0, bag_slots=16, carried=(self.JUNK,))
+        recent = (guildjobs.Recent("Grug", "sell", 30),)
+        found, _, _ = guildjobs._upkeep_first(
+            m, None, None, None, None, recent, 100, "", None, self.FACTS
+        )
+        self.assertEqual(guildjobs.ROOM_ACTION, found[0].action)
+
+
+class ARefusalForFullBagsIsNotRepeated(unittest.TestCase):
+    FACTS = mountbuy.Facts(False, STOCK)
+
+    def test_unread_bags_after_a_refusal_hold_the_walk(self):
+        """Past the mount cooldown, a member whose last buy was refused for
+        full bags is not walked back until a free slot is read."""
+        step, note = guildjobs.mount_step(grug(), self.FACTS, (refused_buy(200),), 100)
+        self.assertIsNone(step)
+        self.assertIn("holds its mount walk", note)
+
+    def test_a_free_slot_after_the_refusal_lets_the_walk_go(self):
+        m = grug(free_slots=2, bag_slots=16)
+        step, _ = guildjobs.mount_step(m, self.FACTS, (refused_buy(200),), 100)
+        self.assertEqual(mountbuy.ACTION, step.action)
+        self.assertIsNotNone(step.walk)
+
+    def test_the_refusal_is_read_from_the_command_rows(self):
+        rows = (
+            {
+                "source": "guildjobs:mount:Grug",
+                "target_name": "Grug",
+                "age": 200,
+                "status": "failed",
+                "command": "entry:2414 count:1 max:10000",
+                "result": '{"outcome":"refused","reason":"bags cannot take the '
+                'item","retryable":true}',
+                "id": 1275201,
+            },
+        )
+        recent = guildjobs.recent_from_rows(rows)
+        self.assertTrue(guildjobs.mount_refused_for_bags("Grug", recent))
+
+    def test_only_the_newest_buy_counts(self):
+        bought_after = guildjobs.Recent(
+            "Grug",
+            mountbuy.ACTION,
+            20,
+            status="done",
+            command="entry:2414 count:1 max:10000",
+            result='{"outcome":"applied"}',
+        )
+        recent = (refused_buy(200), bought_after)
+        self.assertFalse(guildjobs.mount_refused_for_bags("Grug", recent))
+
+
 if __name__ == "__main__":
     unittest.main()

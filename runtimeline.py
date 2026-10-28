@@ -27,6 +27,7 @@ import re
 
 import council
 import places
+import runreport
 import runstory
 
 try:
@@ -282,7 +283,19 @@ def _run_card(run: dict, latest: bool, now: datetime, told: dict | None = None) 
             latest=latest,
         )
     )
+    # The post-run report (mod-overseer#152), the one Discord was sent: the
+    # same runreport.read, so the two show the same numbers for a run id.
+    report = (told.get("reports") or {}).get(run_id(run))
+    if report and report.get("ended"):
+        card["report"] = runreport.card(report)
     return card
+
+
+def run_id(run: dict) -> int:
+    """The overseer_dungeon_run id a timeline run belongs to, 0 for none. A
+    run's first rows carry 0 (the row is written once somebody is inside)."""
+    ids = [int(r.get("run_id") or 0) for r in run["rows"]]
+    return max(ids, default=0)
 
 
 def _family_block(
@@ -309,6 +322,7 @@ def build_run_timeline(
     deaths: list[dict] | None = None,
     bosses: frozenset = frozenset(),
     zones: dict | None = None,
+    reports: dict | None = None,
 ) -> dict:
     """The timeline payload for every family.
 
@@ -318,6 +332,7 @@ def build_run_timeline(
     the table does not exist yet. `deaths` (overseer_death rows with an
     `age_seconds` column), `bosses` (boss creature entries) and `zones` (area
     id to name) are what runstory tells each ended run's story from.
+    `reports` maps a run id to its runreport.read report, drawn on the card.
     """
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
@@ -349,6 +364,7 @@ def build_run_timeline(
                     "names": families.get(f, []),
                     "bosses": bosses,
                     "zones": zones or {},
+                    "reports": reports or {},
                 },
             )
             for f in names
