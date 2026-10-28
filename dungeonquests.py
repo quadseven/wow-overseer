@@ -1,4 +1,5 @@
-"""Dungeon quest pickup and turn-in for a queued campaign.
+"""Dungeon quest pickup and turn-in for a queued campaign, and the guild's
+Dark Iron Legacy chain to the Shadowforge Key (the end of this file).
 
 This module only decides. The bridge reads the world and character tables and
 mod-overseer performs the two quest verbs at the selected creature.
@@ -364,4 +365,196 @@ def _givers(rows):
 def _recent(rows):
     return frozenset(
         (str(row.get("target_name")), str(row.get("command"))) for row in rows or ()
+    )
+
+
+# DARK IRON LEGACY (#811). Blackrock Depths' keyed doors open only for a member
+# carrying the Shadowforge Key (campaignplan.DOOR_KEYS), and its one source is
+# this chain. Franclorn Forgewright gives 3801 and takes it back, and gives
+# 3802; he is seen only by a ghost (creature_template.flags_extra 1026), so a
+# member takes the chain on a corpse run past him, as players did. 3802 asks
+# for Ironfel, Fineous Darkvire's drop inside the dungeon, laid at the Shrine
+# of Thaurissan, a gameobject; its reward is the key. Nothing here grants
+# anything: these are mod-overseer's own take and turnin rows, which it refuses
+# for a quest the core would not give or reward.
+FRANCLORN = 8888
+SHRINE_OF_THAURISSAN = 164689
+LEGACY_TALE, LEGACY = 3801, 3802
+LEGACY_MIN_LEVEL = 48
+LEGACY_RUN = "blackrock-depths"
+LEGACY_SOURCE = "overseer:dark-iron-legacy"
+# mod-overseer takes and hands in within SPAWN_WALK_ARRIVE_YARDS of the giver;
+# a row written from further off is refused as out of reach.
+LEGACY_REACH_YARDS = 20.0
+LEGACY_RETRY_SECONDS = 600
+
+LEGACY_MEMBERS_SQL = (
+    "SELECT s.name, s.level, s.health, s.max_health, s.map_id, s.pos_x, s.pos_y, "
+    "s.pos_z FROM overseer_snapshot s JOIN guild g ON g.guildid = s.guild_id "
+    "WHERE s.updated_at > NOW() - INTERVAL 60 SECOND AND s.is_bot = 1 "
+    "AND g.name IN ({holes})"
+)
+LEGACY_LOG_SQL = (
+    "SELECT c.name, q.quest, q.status FROM character_queststatus q "
+    "JOIN characters c ON c.guid = q.guid WHERE q.quest IN (%d, %d) "
+    "AND c.name IN ({holes})" % (LEGACY_TALE, LEGACY)
+)
+LEGACY_REWARDED_SQL = (
+    "SELECT c.name, r.quest FROM character_queststatus_rewarded r "
+    "JOIN characters c ON c.guid = r.guid WHERE r.quest IN (%d, %d) "
+    "AND c.name IN ({holes})" % (LEGACY_TALE, LEGACY)
+)
+LEGACY_SPAWNS_SQL = (
+    "SELECT 'creature' AS kind, map AS map_id, position_x AS pos_x, "
+    "position_y AS pos_y, position_z AS pos_z FROM acore_world.creature "
+    "WHERE id = %d UNION ALL SELECT 'object' AS kind, map AS map_id, "
+    "position_x AS pos_x, position_y AS pos_y, position_z AS pos_z "
+    "FROM acore_world.gameobject WHERE id = %d" % (FRANCLORN, SHRINE_OF_THAURISSAN)
+)
+LEGACY_RUNS_SQL = (
+    "SELECT keyword, members FROM overseer_guild_run "
+    "WHERE state IN ('queued', 'inside')"
+)
+
+
+@dataclass(frozen=True)
+class Seeker:
+    """A guild member in the world, as the chain reads it."""
+
+    member: Member
+    ghost: bool
+    log: dict
+    rewarded: frozenset
+
+
+@dataclass(frozen=True)
+class LegacyFacts:
+    seekers: tuple = ()
+    franclorn: tuple | None = None
+    shrine: tuple | None = None
+    runners: frozenset = frozenset()
+    recent: frozenset = frozenset()
+
+
+def is_ghost(health, max_health) -> bool:
+    """A released spirit: the core sets its health to 1 (apiv2/presence.py).
+    A corpse not yet released has none and cannot talk to anybody."""
+    return int(health or 0) == 1 and int(max_health or 0) > 1
+
+
+def _in_reach(member: Member, spawn) -> bool:
+    gap = _distance(member, spawn)
+    return gap is not None and gap <= LEGACY_REACH_YARDS
+
+
+def _franclorn_steps(seeker: Seeker) -> tuple:
+    """The rest of the chain a ghost at Franclorn can do in one visit, in the
+    order it must happen. 3801 has no objectives, so it is complete as soon
+    as it is taken, and 3802 waits on 3801's reward (its PrevQuestID)."""
+    done, log = seeker.rewarded, seeker.log
+    if LEGACY in done or LEGACY in log:
+        return ()
+    steps = []
+    if LEGACY_TALE not in done and LEGACY_TALE not in log:
+        steps.append(command(TAKE, LEGACY_TALE))
+    if LEGACY_TALE not in done:
+        steps.append(command(TURN_IN, LEGACY_TALE))
+    steps.append(command(TAKE, LEGACY))
+    return tuple(steps)
+
+
+def _shrine_steps(seeker: Seeker, facts: LegacyFacts) -> tuple:
+    """3802 handed in at the Shrine by a member of a Blackrock Depths guild
+    run who carries Ironfel (the quest's one requirement, so its status is
+    complete) and stands at the Shrine."""
+    if seeker.member.name not in facts.runners:
+        return ()
+    if seeker.log.get(LEGACY) != STATUS_COMPLETE:
+        return ()
+    if not _in_reach(seeker.member, facts.shrine):
+        return ()
+    return (command(TURN_IN, LEGACY),)
+
+
+def _steps(seeker: Seeker, facts: LegacyFacts) -> tuple:
+    if seeker.ghost:
+        if seeker.member.level < LEGACY_MIN_LEVEL:
+            return ()
+        if not _in_reach(seeker.member, facts.franclorn):
+            return ()
+        return _franclorn_steps(seeker)
+    return _shrine_steps(seeker, facts)
+
+
+def legacy_rows(facts: LegacyFacts) -> tuple:
+    """(name, command) rows for the Dark Iron Legacy chain, in write order.
+    A row already written within the retry window is not written again."""
+    rows = []
+    for seeker in facts.seekers:
+        for said in _steps(seeker, facts):
+            if (seeker.member.name, said) not in facts.recent:
+                rows.append((seeker.member.name, said))
+    return tuple(rows)
+
+
+def key_holders(facts: LegacyFacts, handed) -> tuple:
+    """Members this bridge sent to the Shrine whose 3802 is now rewarded: the
+    core gives the Shadowforge Key with that reward and records it after."""
+    return tuple(
+        seeker.member.name
+        for seeker in facts.seekers
+        if seeker.member.name in handed and LEGACY in seeker.rewarded
+    )
+
+
+def _run_names(rows) -> frozenset:
+    """Members of the in-flight Blackrock Depths guild runs. members is
+    overseer_guild_run's `name:seat:class:level` list (guildrun._member_list)."""
+    return frozenset(
+        part.split(":")[0]
+        for row in rows or ()
+        if str(row.get("keyword")) == LEGACY_RUN
+        for part in str(row.get("members") or "").split(",")
+        if part.split(":")[0]
+    )
+
+
+def _spawn(rows, kind: str):
+    row = next((r for r in rows or () if str(r.get("kind")) == kind), None)
+    if row is None:
+        return None
+    return (
+        int(row.get("map_id") or 0),
+        float(row.get("pos_x") or 0),
+        float(row.get("pos_y") or 0),
+        float(row.get("pos_z") or 0),
+    )
+
+
+def legacy_facts_from_rows(
+    snapshot_rows, log_rows, rewarded_rows, spawn_rows, run_rows, recent_rows
+) -> LegacyFacts:
+    names = tuple(str(row.get("name")) for row in snapshot_rows or ())
+    seen = {str(row.get("name")): row for row in snapshot_rows or ()}
+    chars = {name: {"level": seen[name].get("level")} for name in names}
+    members = _members(names, chars, seen)
+    statuses = _statuses(names, log_rows)
+    rewarded = _rewarded(names, rewarded_rows)
+    seekers = tuple(
+        Seeker(
+            member,
+            is_ghost(
+                seen[member.name].get("health"), seen[member.name].get("max_health")
+            ),
+            statuses.get(member.name, {}),
+            frozenset(rewarded.get(member.name, ())),
+        )
+        for member in members
+    )
+    return LegacyFacts(
+        seekers=seekers,
+        franclorn=_spawn(spawn_rows, "creature"),
+        shrine=_spawn(spawn_rows, "object"),
+        runners=_run_names(run_rows),
+        recent=_recent(recent_rows),
     )
