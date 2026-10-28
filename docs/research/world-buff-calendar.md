@@ -204,6 +204,12 @@ second kill.
 
 ## How a turn-in time is announced
 
+Decision: the holder announces the time in guild chat (at raid set, T-30
+and T-5) and in the faction's public `lfg` channel (T-15 and T-2), and the
+site's Raid tab is the calendar. The time is set from the route time it
+assumes: 12 to 18 min from the turn-in place to the Blackrock Mountain doors
+for the Horde, 7 to 16 min for the Alliance.
+
 The holder announces it, as a player would. Overseer only decides the time
 and which lines to say. Three surfaces, each already used for a different
 purpose:
@@ -229,6 +235,12 @@ in the tables below. The gathering opens 10 min before the turn-in time.
 
 ## Where the guild gathers
 
+Decision: the guild gathers within 100 yd of the turn-in NPC, opening 10 min
+before T: Overlord Runthak in Orgrimmar (5.5 min from Bloodvenom Post) or
+Field Marshal Afrasiabi in Stormwind (9.2 min from Talonbranch Glade). The
+other buffs each have their own spot; the table gives each spot's travel
+time.
+
 | Buff | Gather at | Why there | Travel time it assumes |
 |---|---|---|---|
 | Warchief's Blessing + Rallying Cry, Horde | Within 100 yd of Overlord Runthak (14392), Valley of Strength, Orgrimmar | Rallying Cry reaches 100 yd around Runthak. Warchief's Blessing reaches all of Orgrimmar, so the same spot gets both. | 5.5 min from Bloodvenom Post (flight 4.5, walk 1) |
@@ -244,6 +256,12 @@ Blackrock Mountain. A guild that holds only a Nefarian head (or a Rend head)
 takes that one buff and goes straight to the raid.
 
 ## Reaching the raid before the buffs fade
+
+Decision: the whole raid travels together from the last buff by flight,
+zeppelin or boat, and on mounts, and does not summon. With a full set, the
+Horde reaches the Blackrock Mountain doors at T+18 (T+12 without a Heart of
+Hakkar), and the Alliance at T+16 (under T+7 without one). The
+shortest-lived buff left at the door is Songflower, with 31 min or more.
 
 The routes below assume Molten Core or Blackwing Lair: both doors are inside
 Blackrock Mountain (`entrances.json` maps 409 and 469). They also assume:
