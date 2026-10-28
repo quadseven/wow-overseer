@@ -1,8 +1,9 @@
 """The Watch view's sound gate: hasSound() over a WHEP stream's tracks.
 
 A streamed character carries his own audio track, not a desktop mix. The
-Watch view exposes a muted-by-default Hear control (streams.js), and the
-player's sound gate is hasSound() in whep.js: a live, unmuted audio track.
+Watch view exposes a muted-by-default Hear control (streams.js), pinned by
+HearControl below, and the player's sound gate is hasSound() in whep.js: a
+live, unmuted audio track.
 A remote track reports muted while no packets flow, and a character whose
 sound server is absent still streams video: video-only means no sound, not
 no picture.
@@ -12,6 +13,7 @@ import shutil
 import unittest
 
 from test_app_shell import node_module
+from test_now_tile_panels import run as browser_run
 
 NODE = unittest.skipUnless(
     shutil.which("node"), "node is needed to run the app's modules"
@@ -78,6 +80,44 @@ class HasSound(unittest.TestCase):
     def test_src_object_without_audio_tracks_is_silent(self):
         got = run()
         self.assertIs(got[5], False)
+
+
+# The Watch view's audio control: every tile starts muted, so opening the
+# Family view starts no sound, and Hear makes exactly one tile heard.
+HEAR = r"""
+const slot = (name) => {
+  const s = new El("div");
+  s.getAttribute = (k) => (k === "data-stream" ? name : null);
+  return s;
+};
+const slots = [slot("Grug"), slot("Zug")];
+M.mount({ querySelectorAll: (sel) => (sel === "[data-stream]" ? slots : []) });
+const videos = slots.map((s) => s.firstChild.children.find((c) => c.className === "st-video"));
+const look = () => videos.map((v) => v.muted);
+const out = { opened: look(), attr: videos.map((v) => v.hasAttribute("muted")) };
+M.toggleHear("Grug"); out.grug = look();
+M.toggleHear("Zug"); out.zug = look();
+M.toggleHear("Zug"); out.off = look();
+console.log(JSON.stringify(out));
+"""
+
+
+@NODE
+class HearControl(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.got = browser_run("views/now/streams.js", HEAR)
+
+    def test_every_tile_opens_muted(self):
+        self.assertEqual(self.got["opened"], [True, True])
+        self.assertEqual(self.got["attr"], [True, True])
+
+    def test_hear_unmutes_only_that_tile(self):
+        self.assertEqual(self.got["grug"], [False, True])
+        self.assertEqual(self.got["zug"], [True, False])
+
+    def test_hear_again_mutes_it(self):
+        self.assertEqual(self.got["off"], [True, True])
 
 
 if __name__ == "__main__":
