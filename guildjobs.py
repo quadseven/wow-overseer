@@ -1895,6 +1895,17 @@ def junk_sales(member, kept, action="gear") -> tuple:
     )
 
 
+def sale_notes(stacks) -> tuple:
+    """One vendorsale.Sale per stack sold on a `guid:<n>` row, for the step's
+    `sales`: what the bridge names when the world delivers each row (#1592)."""
+    return tuple(vendorsale.sale_of("guid:%d" % int(c.guid), c) for c in stacks)
+
+
+def junk_notes(member, kept) -> tuple:
+    """The Sales of the rows junk_sales writes, in the same order."""
+    return sale_notes(_junk(member, kept))
+
+
 def spendable(member, kind, copper) -> int:
     """Copper of `copper` (the purse and what its sales bring) that `kind` may
     spend under the member's purchase order (purse.py): everything above what
@@ -2277,6 +2288,7 @@ def gear_step(member, character, vendor_rows, cap, kept=None):
             "",
             source_for("gear", member.name),
         ),
+        sales=junk_notes(member, kept),
     )
     return step, ""
 
@@ -2326,6 +2338,7 @@ def supply_step(member, vendor_rows, cap, kept=None):
                 "",
                 source_for(restsupply.ACTION, member.name),
             ),
+            sales=junk_notes(member, kept),
         ),
         "",
     )
@@ -2703,6 +2716,7 @@ def _sell_step(member, kept, cap):
             "",
             source_for("sell-walk", member.name),
         ),
+        sales=sale_notes(junk),
     )
 
 
@@ -5153,6 +5167,7 @@ def _room_vendor_step(m, said, stacks, cap):
             "",
             source_for(ROOM_ACTION + "-walk", m.name),
         ),
+        sales=sale_notes(stacks),
     )
 
 
@@ -5643,6 +5658,7 @@ def pvp_step(m, aim, move, cap, kept=None):
                 source_for("pvp-walk", m.name),
             ),
             goal=aim.vendor,
+            sales=junk_notes(m, kept),
         )
     return None
 
