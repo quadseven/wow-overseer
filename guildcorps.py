@@ -672,14 +672,27 @@ def _takers(tailor, members):
     """Who a tailor's bag may be posted to: the whole guild (operator,
     2026-10-05), never the tailor itself, and only members whose worn bags
     were read. A master's own family is left to the family's bag hand-over,
-    which trades a bag across the camp fire instead of posting it."""
+    which trades a bag across the camp fire instead of posting it.
+
+    A MEMBER WITH A LADDER BAG STILL IN THE MAIL TAKES NO OTHER (#1591). A
+    letter used to count as a worn bag, so a member with empty bag positions
+    was posted one bag per position before opening the first: on the dev realm
+    20 corps bags sat in 9 mailboxes, 3 each to five members. The next bag
+    goes to a guildmate who will wear it; this member is a taker again once
+    its letter is collected."""
     return [
         m
         for m in members or ()
         if m.name != tailor.name
         and (m.worn_bags or m.family)
         and not (tailor.family and m.family)
+        and not _bag_in_mail(m)
     ]
+
+
+def _bag_in_mail(member) -> bool:
+    """Whether a crafted-ladder bag waits in this member's mail, delivered or not."""
+    return any(int(x.entry) in BAG_ITEMS for x in member.mail)
 
 
 def _recipient(bag, takers):
