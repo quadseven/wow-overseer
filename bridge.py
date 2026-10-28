@@ -7114,6 +7114,12 @@ class Bridge(discord.Client):
         self._equip_notes_seen: dict[tuple, frozenset] = {}
         # (oldest row id, consecutive send failures) for the chat relay.
         self._stuck: tuple[int, int] = (0, 0)
+        # Run reports (#1602): the run ids whose report read already failed
+        # and was logged, so one unreadable run is said once, not every tick;
+        # and whether the owed read itself is failing, so a lost connection is
+        # logged when it starts and when it ends rather than every 20 s.
+        self._unreadable_runs: set[int] = set()
+        self._run_reports_down = False
         # Monotonic clock of the last kin muster, so a fight that produces
         # several pleas answers once. None means "never" - deliberately not 0.0,
         # which on a monotonic clock is a real moment the process may be near.
@@ -8203,8 +8209,29 @@ class Bridge(discord.Client):
                 log.exception("run reports: tick failed; retrying next cycle")
 
     async def _post_run_reports(self, channel_id: int) -> int:
-        """Post every owed report; how many were posted."""
-        owed = await asyncio.to_thread(_fetch_owed_run_reports)
+        """Post every owed report; how many were posted.
+
+        A read error is the run's own (#1602): it is logged once per run id
+        and the loop moves to the next run, so one run that cannot be read
+        does not hold the ones behind it for runreport.OWED_MINUTES. A failed
+        owed read (the connection) is logged without a traceback when it
+        starts and when it clears, not on every tick. A failed send still
+        raises, so nothing is marked and the next tick retries it.
+        """
+        try:
+            owed = await asyncio.to_thread(_fetch_owed_run_reports)
+        except Exception as exc:
+            if not self._run_reports_down:
+                self._run_reports_down = True
+                log.warning(
+                    "run reports: the owed read failed (%s: %s); retrying "
+                    "quietly until it works", type(exc).__name__, exc)
+            return 0
+        if self._run_reports_down:
+            self._run_reports_down = False
+            log.info("run reports: the owed read works again")
+        # A run that aged out of the owed list is forgotten with it.
+        self._unreadable_runs &= set(owed)
         if not owed:
             return 0
         channel = self.get_channel(channel_id)
@@ -8213,7 +8240,16 @@ class Bridge(discord.Client):
             return 0
         posted = 0
         for run_id in owed:
-            report = await asyncio.to_thread(_read_run_report, run_id)
+            try:
+                report = await asyncio.to_thread(_read_run_report, run_id)
+            except Exception as exc:
+                if run_id not in self._unreadable_runs:
+                    self._unreadable_runs.add(run_id)
+                    log.warning(
+                        "run reports: run %s cannot be read (%s: %s); skipping "
+                        "it until it can", run_id, type(exc).__name__, exc)
+                continue
+            self._unreadable_runs.discard(run_id)
             if report is None:
                 continue
             message = await channel.send(runreport.render(report))
