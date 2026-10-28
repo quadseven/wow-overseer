@@ -17237,8 +17237,10 @@ class Bridge(discord.Client):
     async def _job_weapon_offers(self, members, recent) -> dict:
         """name -> weaponskill.Offer for each guild member carrying a weapon it
         has no skill for (#793): weaponskill decides the need, and the nearest
-        weapon master of its side on its map that teaches it is read here, else
-        one on the other classic continent (weaponskill.choose_far_master).
+        weapon master of its side on its map and its ground (never an island
+        across the water, #1585) that teaches it is read here, else one on the
+        other classic continent nearest its side's landing there
+        (weaponskill.choose_far_master).
 
         Only members guildjobs.weapon_candidate passes are read, and at most
         GUILD_WEAPON_READS_PER_PASS weapon master reads, in turn.
@@ -17264,7 +17266,7 @@ class Bridge(discord.Client):
                 weaponskill.far_maps(m.map_id))
             team = auction.team_of(m.race)
             master = (weaponskill.choose_master(
-                masters, {need.spell}, team, int(m.map_id))
+                masters, {need.spell}, team, int(m.map_id), at)
                 or weaponskill.choose_far_master(
                     masters, {need.spell}, team, int(m.map_id)))
             offers[name] = weaponskill.offer(need, master)
@@ -18657,7 +18659,7 @@ class Bridge(discord.Client):
         master = weaponskill.choose_master(
             await asyncio.to_thread(_fetch_weapon_masters, at,
                                     sorted({n.spell for n in needs})),
-            {n.spell for n in needs}, teams.get(leader, ""), int(at["map_id"]))
+            {n.spell for n in needs}, teams.get(leader, ""), int(at["map_id"]), at)
         said = "; ".join("%s carries %s (%s) and has no skill %d for it" % (
             n.name, n.item, n.why, n.skill) for n in needs)
         if not master:
@@ -22047,7 +22049,7 @@ class Bridge(discord.Client):
                 _fetch_weapon_masters, at,
                 sorted({n.spell for n in critical})),
             {n.spell for n in critical}, teams.get(leader, ""),
-            int(at["map_id"]))
+            int(at["map_id"]), at)
         option = "errand:%d" % int(master["entry"]) if master else ""
         return option
 
@@ -24097,22 +24099,34 @@ _SHARE_PARTY_SQL = (
 
 
 def _fetch_parties(names: list):
-    """name -> party key for questshare.plan(), or None when this world's
-    snapshot has no group column or no table (1054, 1146), and party is
-    then left to the worldserver's own gate as before (mod-overseer#969)."""
+    """name -> party key for questshare.plan(), or None when the party read
+    fails, and party is then left to the worldserver's own gate as before
+    (mod-overseer#969).
+
+    A world whose snapshot has no group column or no table (1054, 1146)
+    falls back quietly, as it always has. Any other MySQL error (a dropped
+    connection, a lock wait, a timeout) falls back too, with one warning:
+    the party read only narrows which holder is asked, so one failed read
+    must not stop every share the pass would have made (#1586).
+    """
     if not names:
         return {}
     sql = _SHARE_PARTY_SQL % ",".join(["%s"] * len(names))
-    with _connect() as conn, conn.cursor() as cur:
-        try:
+    try:
+        with _connect() as conn, conn.cursor() as cur:
             cur.execute(sql, names)
-        except pymysql.err.MySQLError as exc:
-            if exc.args and exc.args[0] in (1054, 1146):
-                return None
-            raise
-        return {
-            str(row["name"]): int(row["group_leader"] or 0) for row in cur.fetchall()
-        }
+            return {
+                str(row["name"]): int(row["group_leader"] or 0)
+                for row in cur.fetchall()
+            }
+    except pymysql.err.MySQLError as exc:
+        if not (exc.args and exc.args[0] in (1054, 1146)):
+            log.warning(
+                "questshare: party read failed (%s); sharing without the party "
+                "check this pass, the worldserver's own gate still applies",
+                exc,
+            )
+        return None
 
 
 def _share_quests() -> questshare.Plan:
