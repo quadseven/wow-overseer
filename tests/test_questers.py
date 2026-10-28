@@ -432,6 +432,25 @@ class FarWalkWallsWait(unittest.TestCase):
         self.assertIsNone(p.move, p.line)
         self.assertIn("waits", p.line)
 
+    def test_a_near_walk_is_held_by_another_verb_s_hold(self):
+        # 2026-10-27/28 on the dev realm: a quester's 170-yard hunt walk was
+        # refused as held by another verb every pass, about every two minutes,
+        # nine times in a row; the hold is on the character, not the road, so
+        # a near walk waits it out as a far one does.
+        held = classquest.HELD_REASON
+        wait = classquest.BACKOFF_MINUTES[held]
+        p = self.plan(walk_row(held, 2), member=self.member())
+        self.assertIsNone(p.move, p.line)
+        self.assertIn("waits %d more minutes to walk: %s" % (wait - 2, held), p.line)
+        due = self.plan(walk_row(held, wait), member=self.member())
+        self.assertEqual((due.move.kind, due.move.quest), (classquest.TAKE, 3))
+
+    def test_a_near_walk_is_not_held_by_a_far_walk_budget(self):
+        for wall in (classquest.BOT_BUDGET_REASON, classquest.REALM_FULL_REASON):
+            with self.subTest(wall=wall):
+                p = self.plan(walk_row(wall, 2), member=self.member())
+                self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 3))
+
     def test_only_the_newest_row_decides(self):
         budget = WALLS[0]
         p = self.plan(walk_row(budget, 10), walk_row("", 3, status="done"))
