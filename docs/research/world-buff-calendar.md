@@ -6,6 +6,31 @@ that time is announced, where the guild gathers, and how it then reaches the
 raid before the buffs fade. It ships no code; the build tickets at the end are
 for the brain to brief.
 
+## Decisions at a glance
+
+Each line is argued in full in the section it names.
+
+- Who holds the head: the guild leader, until the announced turn-in time.
+  The loot master gives them the head at the kill (operator decision,
+  2026-10-26). Natural kills only, no granted buffs.
+- How the time is announced (see "How a turn-in time is announced"): the
+  holder says it in guild chat at raid set, T-30 and T-5. They say it in the
+  faction's public `lfg` channel at T-15 and T-2, because this realm has no
+  separate world channel. The site's Raid tab is the calendar. T is
+  the raid's door time minus the route time: 12 to 18 min for the Horde,
+  7 to 16 min for the Alliance.
+- Where the guild gathers (see "Where the guild gathers"): within 100 yd of
+  Overlord Runthak in Orgrimmar (Horde) or Field Marshal Afrasiabi in
+  Stormwind (Alliance), opening 10 min before T. For Zandalar they gather by
+  Molthor on Yojamba Isle, for Songflower at a Felwood songflower, and for
+  the Dire Maul buffs inside Dire Maul North. The table there gives the
+  travel time to each spot.
+- How the raid reaches the door before the buffs fade (see "Reaching the
+  raid before the buffs fade"): the whole raid travels together by flight,
+  zeppelin or boat, and on mounts. The Horde reaches the Blackrock Mountain
+  doors at T+18 (T+12 without a heart), the Alliance at T+16 (T+7 without
+  one). The shortest buff left at the door is Songflower, with 31 min or more.
+
 ## Rules this note keeps
 
 - The guild leader holds the head until the announced turn-in time (operator
@@ -204,13 +229,13 @@ in the tables below. The gathering opens 10 min before the turn-in time.
 
 ## Where the guild gathers
 
-| Buff | Gather at | Why there |
-|---|---|---|
-| Warchief's Blessing + Rallying Cry, Horde | Within 100 yd of Overlord Runthak (14392), Valley of Strength, Orgrimmar | Rallying Cry reaches 100 yd around Runthak. Warchief's Blessing reaches all of Orgrimmar, so the same spot gets both. |
-| Rallying Cry, Alliance | Within 100 yd of Field Marshal Afrasiabi (14721), Valley of Heroes, Stormwind | 100 yd around Afrasiabi. |
-| Spirit of Zandalar | Within 100 yd of Molthor (14875), Yojamba Isle | 100 yd around Molthor. The Booty Bay emissary is a second chance, 50 s later. |
-| Songflower Serenade | At a Corrupted Songflower in Felwood, next to Bloodvenom Post (65 yd) or Talonbranch Glade (79 yd) | Each raider clicks the cleansed flower within its 30 s. |
-| Dire Maul tribute | Inside Dire Maul North, in turns of five | A five-player instance. |
+| Buff | Gather at | Why there | Travel time it assumes |
+|---|---|---|---|
+| Warchief's Blessing + Rallying Cry, Horde | Within 100 yd of Overlord Runthak (14392), Valley of Strength, Orgrimmar | Rallying Cry reaches 100 yd around Runthak. Warchief's Blessing reaches all of Orgrimmar, so the same spot gets both. | 5.5 min from Bloodvenom Post (flight 4.5, walk 1) |
+| Rallying Cry, Alliance | Within 100 yd of Field Marshal Afrasiabi (14721), Valley of Heroes, Stormwind | 100 yd around Afrasiabi. | 9.2 min from Talonbranch Glade (flight 2.9, boat at most 5, ride 1.3) |
+| Spirit of Zandalar | Within 100 yd of Molthor (14875), Yojamba Isle | 100 yd around Molthor. The Booty Bay emissary is a second chance, 50 s later. | Horde 8.5 min from Runthak (walk 1, zeppelin at most 5, swim 2.5); Alliance 5 min from Afrasiabi (flight 2, ride and swim 3) |
+| Songflower Serenade | At a Corrupted Songflower in Felwood, next to Bloodvenom Post (65 yd) or Talonbranch Glade (79 yd) | Each raider clicks the cleansed flower within its 30 s. | Horde 10.7 min from Dire Maul, Alliance 14.5 min |
+| Dire Maul tribute | Inside Dire Maul North, in turns of five | A five-player instance. | First stop of the night; the run itself is unmeasured (build ticket 8) |
 
 Order in which to take them: shortest-lived buffs last, and the order follows
 the geography. Horde: Dire Maul, Felwood, Orgrimmar, Yojamba Isle, then
