@@ -1028,15 +1028,19 @@ class TheBridgePassRuns(unittest.TestCase):
         "_raid_supply_guild",
         "_raid_supply_focus",
         "_raid_supply_market",
+        "_farm_assign_guild",
     )
 
-    def run_pass(self, at_vault=True, at_counter=True, listings=()):
+    def run_pass(self, at_vault=True, at_counter=True, listings=(), farm=None):
+        """`farm` adds to the Cave: "members" and "posts" beside the
+        alchemist, "recent" farmassign rows, "tasks" standing from a pass."""
+        farm = farm or {}
         world = {"rows": [], "auction": [], "judgments": [], "steps": []}
         log = _Log()
         oden = alchemist(
             carried=(held(1, 13464, 6), held(2, 13465, 3), held(3, VIAL, 3))
         )
-        members = [oden, *raider_members()]
+        members = [oden, *raider_members(), *farm.get("members", ())]
         extra = {
             "worn": [],
             "letters": [],
@@ -1045,9 +1049,14 @@ class TheBridgePassRuns(unittest.TestCase):
             "purses": {"Grug": 400_000},
             "ledger": [],
             "recent": [],
+            "farm_recent": list(farm.get("recent", ())),
         }
 
         def create_task(coro):
+            # The step is never run; its own coroutine names the step it holds.
+            step = coro.cr_frame.f_locals.get("step")
+            if step is not None:
+                world["steps"].append(step)
             coro.close()
             return _Task()
 
@@ -1092,6 +1101,7 @@ class TheBridgePassRuns(unittest.TestCase):
         class Self:
             _corps_steps = {}
             _raid_supply_said = {}
+            _farm_tasks = dict(farm.get("tasks") or {})
             _mail_walk_tasks = set()
             _jev = types.SimpleNamespace(
                 ready=lambda kind: True,
@@ -1102,13 +1112,13 @@ class TheBridgePassRuns(unittest.TestCase):
                 return None
 
             async def _run_corps_step(self, step, cap):
-                world["steps"].append(step)
+                return None
 
         me = Self()
         for name in self.PASS:
             setattr(me, name, types.MethodType(ns[name], me))
         facts = {"members": members, "vendors": {}}
-        posts = {"Cave": (ALCHEMIST,)}
+        posts = {"Cave": (ALCHEMIST, *farm.get("posts", ()))}
         asyncio.run(me._raid_supply_once(facts, posts, set(), 600.0))
         return world, log, me
 
@@ -1139,6 +1149,63 @@ class TheBridgePassRuns(unittest.TestCase):
         world, log, _ = self.run_pass(at_vault=False, listings=listings)
         self.assertFalse(world["rows"])
         self.assertTrue(any("is not at a vault" in line for line in log.lines))
+
+    def farm_steps(self, world):
+        return [
+            s
+            for s in world["steps"]
+            if s.walk and s.walk.source.startswith("farmassign:")
+        ]
+
+    def test_a_pass_mails_only_what_the_assigned_gatherer_collected(self):
+        # Hebus is the herbalist; Anneve already carries Dreamfoil, stock
+        # that was in the guild before anyone farmed.
+        hebus = member("Hebus", skills={gc.HERBALISM: (250, 300)}, maintenance=True)
+        anneve = member("Anneve", maintenance=False, carried=(held(30, 13463, 4),))
+        herbalist = gc.Post("Hebus", "herbalist", gc.HERBALISM, 250, 300)
+        farm = {"members": [hebus], "posts": [herbalist]}
+        world, log, me = self.run_pass(farm={**farm, "members": [hebus, anneve]})
+        assigned = [
+            line for line in log.lines if line.startswith("farmassign: assigned Hebus")
+        ]
+        self.assertEqual(len(assigned), 1)
+        self.assertEqual(self.farm_steps(world), [])
+        ((task, _),) = me._farm_tasks["Cave"].values()
+        # Next pass Hebus carries a stack it gathered for its task.
+        gathered = member(
+            "Hebus",
+            skills={gc.HERBALISM: (250, 300)},
+            carried=(held(50, task.material, 7),),
+        )
+        farm = {**farm, "members": [gathered, anneve], "tasks": me._farm_tasks}
+        world, log, _ = self.run_pass(farm=farm)
+        steps = self.farm_steps(world)
+        self.assertEqual([s.holder for s in steps], ["Hebus"])
+        self.assertEqual(steps[0].rows[0].command.split()[:2], ["send", "item:50"])
+        self.assertFalse(
+            any(line.startswith("farmassign: assigned") for line in log.lines)
+        )
+
+    def test_a_second_pass_inside_the_cooldown_queues_no_mail(self):
+        task = fa.Task("Hebus", 13463, "Dreamfoil", "Eastern Plaguelands", 0, 60)
+        hebus = member(
+            "Hebus",
+            skills={gc.HERBALISM: (250, 300)},
+            carried=(held(50, 13463, 7),),
+        )
+        herbalist = gc.Post("Hebus", "herbalist", gc.HERBALISM, 250, 300)
+        farm = {
+            "members": [hebus],
+            "posts": [herbalist],
+            "tasks": {"Cave": {13463: (task, 100.0)}},
+        }
+        first, _, _ = self.run_pass(farm=farm)
+        self.assertEqual(len(self.farm_steps(first)), 1)
+        rows = [
+            {"source": fa.source_for("post", 13463), "target_name": "Hebus", "age": 5}
+        ]
+        second, _, _ = self.run_pass(farm={**farm, "recent": rows})
+        self.assertEqual(self.farm_steps(second), [])
 
 
 DAY = 86400

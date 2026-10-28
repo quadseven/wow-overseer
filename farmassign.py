@@ -25,6 +25,12 @@ herbalist posts (guildcorps.ROLES), so a family member is never pulled off its
 own craft rhythm to farm, and a maintainer already on another errand is left
 alone. Once a material is gathered it is mailed to the crafter whose post
 consumes it (herbs to an alchemist, for the potions and flasks the raid eats).
+
+ONLY WHAT THE GATHERER GATHERED IS POSTED. A task remembers the stacks its bot
+already carried when it was given (`Task.baseline`). A later pass posts only a
+stack the bot picked up since; a stack that was already in the guild, with the
+gatherer or anyone else, is left where it is. raidsupply's own reagent letters
+move the guild's existing stock.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ from dataclasses import dataclass
 import classic
 import guildcorps as gc
 import guildroute
+import raidsupply
 
 SOURCE = "farmassign"
 KIND = "farm_assign"
@@ -173,14 +180,18 @@ class Task:
     zone: str
     map_id: int
     duration: int
+    # The guids of the bot's stacks of `material` when the task was given:
+    # those were already in the guild, so they are never posted as gathered.
+    baseline: frozenset = frozenset()
 
 
 @dataclass(frozen=True)
 class FarmPlan:
     """The assignments and mail steps for one pass.
 
-    `tasks` are logged live as `farmassign: assigned <bot> to <material>`.
-    `steps` route collected material to the designated crafters by mail.
+    `tasks` are this pass's new assignments, logged live as
+    `farmassign: assigned <bot> to <material>`. `steps` mail what standing
+    assignments gathered to the designated crafters.
     """
 
     tasks: tuple
@@ -190,12 +201,6 @@ class FarmPlan:
 
 def source_for(action, key) -> str:
     return "%s:%s:%d" % (SOURCE, action, int(key))
-
-
-def _stack(member, entry):
-    """The member's biggest carried stack of `entry`, or None."""
-    held = [h for h in member.carried if int(h.entry) == int(entry)]
-    return max(held, key=lambda h: (int(h.count), -int(h.guid))) if held else None
 
 
 def _online_gatherers(posts, members, skill, busy) -> list:
@@ -222,8 +227,9 @@ def _gatherer_for(posts, members, skill, busy):
     return cands[0] if cands else None
 
 
-def _crafter_for(material, members, posts, busy) -> object:
-    """The member whose corps post consumes `material`, or None."""
+def _crafter_for(material, members, posts) -> object:
+    """The member whose corps post consumes `material`, or None. A crafter
+    on another step still takes a letter: receiving one is not a step."""
     craft = CRAFT_OF.get(material.entry)
     if craft is None:
         return None
@@ -232,25 +238,12 @@ def _crafter_for(material, members, posts, busy) -> object:
         if int(p.skill) != int(craft):
             continue
         m = by_name.get(p.name)
-        if m is None or not m.online or m.name in busy or m.family:
+        if m is None or not m.online or m.family:
             continue
         if classic.is_expansion_map(m.map_id):
             continue
         return m
     return None
-
-
-def _holder_for(entry, members, busy, skip) -> object:
-    """An online member who already carries `entry`, most of it first, not
-    `skip` and not busy."""
-    out = []
-    for m in members or ():
-        if m.name in busy or m.name == skip or not m.online or m.family:
-            continue
-        if m.count(entry) > 0:
-            out.append(m)
-    out.sort(key=lambda m: (-m.count(entry), m.name))
-    return out[0] if out else None
 
 
 def _cooling(step, recent) -> bool:
@@ -259,11 +252,9 @@ def _cooling(step, recent) -> bool:
     return age is not None and age < minutes
 
 
-def _post_step(holder, entry, name, crafter, cap) -> object:
-    """The holder's stack of `entry`, posted by mail to the crafter."""
-    stack = _stack(holder, entry)
-    if stack is None:
-        return None
+def _post_step(holder, stack, name, crafter, cap) -> object:
+    """The holder's `stack`, posted by mail to the crafter."""
+    entry = int(stack.entry)
     return gc.Step(
         holder.name,
         "post",
@@ -287,6 +278,80 @@ def _post_step(holder, entry, name, crafter, cap) -> object:
     )
 
 
+def reagent_deficits(lines, members) -> list:
+    """The gathered reagents the raid's short consumables need, beyond what
+    the guild's members already carry, one Deficit per reagent.
+
+    `lines` are raidsupply.Line-shaped (`entry`, `short`); a supply with no
+    craft (bought or quested) needs no reagent and is passed over.
+    """
+    need = {}
+    for line in lines or ():
+        supply = raidsupply.SUPPLY_BY_ENTRY.get(int(line.entry))
+        if supply is None or supply.make is None or line.short <= 0:
+            continue
+        for entry, per in supply.make.reagents:
+            need[int(entry)] = need.get(int(entry), 0) + int(per) * int(line.short)
+    out = []
+    for entry, want in sorted(need.items()):
+        have = sum(m.count(entry) for m in members or ())
+        if want > have:
+            name = raidsupply.REAGENT_NAMES.get(entry) or str(entry)
+            out.append(Deficit(entry, name, want - have))
+    return out
+
+
+def _collected(member, task):
+    """The member's biggest stack of the task's material that it did not
+    carry when the task was given, or None: only what it gathered."""
+    held = [
+        h
+        for h in member.carried
+        if int(h.entry) == int(task.material) and int(h.guid) not in task.baseline
+    ]
+    return max(held, key=lambda h: (int(h.count), -int(h.guid))) if held else None
+
+
+def _route_collected(standing, members, posts, busy, recent, cap) -> list:
+    """Mail steps for what each standing task's gatherer has gathered since it
+    was assigned. A stack the gatherer already carried, or any stack held by
+    another member, is never posted."""
+    by_name = {m.name: m for m in members or ()}
+    steps = []
+    for task in standing:
+        gatherer = by_name.get(task.bot)
+        material = MATERIALS.get(task.material)
+        if gatherer is None or material is None or task.bot in busy:
+            continue
+        if not gatherer.online:
+            continue
+        stack = _collected(gatherer, task)
+        crafter = _crafter_for(material, members, posts)
+        if stack is None or crafter is None:
+            continue
+        step = _post_step(gatherer, stack, material.name, crafter.name, cap)
+        if not _cooling(step, recent):
+            steps.append(step)
+            busy.add(task.bot)
+    return steps
+
+
+def _new_task(gatherer, material) -> Task:
+    """The task for `gatherer`, remembering the stacks it already carries."""
+    baseline = frozenset(
+        int(h.guid) for h in gatherer.carried if int(h.entry) == material.entry
+    )
+    return Task(
+        gatherer.name,
+        material.entry,
+        material.name,
+        material.zone,
+        material.map_id,
+        material.duration,
+        baseline,
+    )
+
+
 def assign(
     deficits,
     members,
@@ -294,21 +359,29 @@ def assign(
     busy=frozenset(),
     recent=None,
     cap=guildroute.MAIL_RUN_YARDS,
+    standing=(),
 ) -> FarmPlan:
-    """One farming assignment per short, trackable material.
+    """One farming assignment per short, trackable material, and the mail
+    steps that route what standing assignments gathered.
 
-    `deficits` are raidsupply.Line-shaped objects carrying `entry`, `name` and
-    `short`. `members` are the guild's Members and `posts` its corps Posts.
-    `busy` is shared with the corps plan and is added to, so no member takes
-    two steps. `recent` are the last-pass cooldown readings keyed by
-    (holder, action, key). Returns the tasks, the mail steps and any notes.
+    `deficits` carry `entry`, `name` and `short` (reagent_deficits).
+    `members` are the guild's Members and `posts` its corps Posts. `busy` is
+    copied, never changed. `recent` are the cooldown readings keyed by
+    (holder, action, key), read with this module's SOURCE prefix.
+    `standing` are Tasks given on an earlier pass and still inside their
+    stint: their gatherers keep farming, are not assigned again, and post
+    only the stacks they gathered since. Returns the new tasks, the mail
+    steps and any notes.
     """
     busy = set(busy or ())
+    standing = tuple(standing or ())
+    steps = _route_collected(standing, members, posts, busy, recent, cap)
+    busy |= {t.bot for t in standing}
+    farming = {t.material for t in standing}
     tasks = []
-    steps = []
     notes = []
     for d in sorted(deficits, key=lambda d: (d.entry, d.name)):
-        if d.short <= 0:
+        if d.short <= 0 or d.entry in farming:
             continue
         material = MATERIALS.get(d.entry)
         if material is None:
@@ -319,24 +392,5 @@ def assign(
             notes.append("no %s is free to farm %s" % (material.skill_name, d.name))
             continue
         busy.add(gatherer.name)
-        tasks.append(
-            Task(
-                gatherer.name,
-                material.entry,
-                material.name,
-                material.zone,
-                material.map_id,
-                material.duration,
-            )
-        )
-        crafter = _crafter_for(material, members, posts, busy)
-        if crafter is not None:
-            holder = _holder_for(material.entry, members, busy, gatherer.name)
-            if holder is not None and holder.name != crafter.name:
-                step = _post_step(
-                    holder, material.entry, material.name, crafter.name, cap
-                )
-                if step is not None and not _cooling(step, recent):
-                    steps.append(step)
-                    busy.add(holder.name)
+        tasks.append(_new_task(gatherer, material))
     return FarmPlan(tuple(tasks), tuple(steps), tuple(notes))

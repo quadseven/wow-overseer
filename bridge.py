@@ -7215,6 +7215,8 @@ class Bridge(discord.Client):
         self._job_danger: dict = {}
         # guild -> the last raid_supply judgment's signature recorded (#275).
         self._raid_supply_said: dict = {}
+        # guild -> {reagent entry: (farmassign.Task, monotonic start)}, #479.
+        self._farm_tasks: dict = {}
         # Leader snapshot history used only to detect a vendor aim that has
         # stopped moving. The decision itself lives in vendor_stall.py.
         # This and the two family observations below are kept in the memo
@@ -16547,26 +16549,40 @@ class Bridge(discord.Client):
             task = asyncio.create_task(self._run_corps_step(step, cap))
             self._mail_walk_tasks.add(task)
             task.add_done_callback(self._mail_walk_task_done)
-        # Farming assignments for what the raid is short of: who gathers what,
-        # where, and for how long, plus the mail steps that route collected
-        # material to the crafters who need it.
-        farm = farmassign.assign(
-            [farmassign.Deficit(line.entry, line.name, line.short)
-             for line in plan.lines if line.short],
-            guild_facts.members, guild_facts.posts, busy, recent, cap)
-        for task in farm.tasks:
-            log.info("farmassign: assigned %s to %s", task.bot, task.name)
-        _log_capped("farmassign", farm.notes)
-        for step in farm.steps:
-            self._corps_steps[step.holder] = now
-            task = asyncio.create_task(self._run_corps_step(step, cap))
-            self._mail_walk_tasks.add(task)
-            task.add_done_callback(self._mail_walk_task_done)
+        self._farm_assign_guild(guild_facts, plan.lines, extra, busy, cap, now)
         bank = extra["bank"].get(guild)
         if master and bank is not None:
             await self._raid_supply_market(
                 guild, plan, master, focus, (bank, withdrawn, spent), extra)
         return len(plan.steps)
+
+    def _farm_assign_guild(self, guild_facts, lines, extra, busy, cap, now) -> None:
+        """Farming assignments (#479) for the reagents the raid is short of:
+        who gathers what, where, and for how long, logged live. A task stands
+        for its stint; meanwhile only the stacks its gatherer picked up are
+        mailed to the crafter, inside farmassign's own cooldown."""
+        guild = guild_facts.guild
+        standing = {
+            entry: (task, at)
+            for entry, (task, at) in self._farm_tasks.get(guild, {}).items()
+            if now - at < task.duration * 60
+        }
+        recent = guildcorps.recent_from_rows(
+            extra["farm_recent"], prefix=farmassign.SOURCE)
+        farm = farmassign.assign(
+            farmassign.reagent_deficits(lines, guild_facts.members),
+            guild_facts.members, guild_facts.posts, busy, recent, cap,
+            standing=[task for task, _ in standing.values()])
+        for task in farm.tasks:
+            log.info("farmassign: assigned %s to %s", task.bot, task.name)
+            standing[task.material] = (task, now)
+        self._farm_tasks[guild] = standing
+        _log_capped("farmassign", farm.notes)
+        for step in farm.steps:
+            self._corps_steps[step.holder] = now
+            run = asyncio.create_task(self._run_corps_step(step, cap))
+            self._mail_walk_tasks.add(run)
+            run.add_done_callback(self._mail_walk_task_done)
 
     async def _raid_supply_focus(self, guild_facts, recent, busy, cap, budget) -> str:
         """What the guild works first: Jev's `raid_supply` choice where it acts,
@@ -30197,7 +30213,7 @@ def _fetch_raid_supply_facts(members) -> dict:
     ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
     names = sorted({m.name for m in members})
     out = {"worn": [], "letters": [], "bank": {}, "masters": {}, "purses": {},
-           "ledger": [], "recent": []}
+           "ledger": [], "recent": [], "farm_recent": []}
     if not names:
         return out
     with _connect() as conn, conn.cursor() as cur:
@@ -30213,6 +30229,8 @@ def _fetch_raid_supply_facts(members) -> dict:
         _raid_supply_bank(cur, sorted({m.guild for m in members if m.guild}), out)
         rows = _corps_read(cur, "raid supply rows", _RAID_SUPPLY_ROWS_SQL,
                            (raidsupply.SOURCE + ":%",))
+        out["farm_recent"] = _corps_read(cur, "farm assign rows", _RAID_SUPPLY_ROWS_SQL,
+                                         (farmassign.SOURCE + ":%",))
     name_of = {guid: name for name, guid in guid_of.items()}
     for row in out["letters"]:
         row["name"] = name_of.get(int(row.get("receiver") or 0), "")
