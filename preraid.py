@@ -324,6 +324,17 @@ MEMBERS_SQL = (
     "WHERE c.name IN ({holes})"
 )
 
+# The same read for any guild member, family or not (#760): a family member's
+# talent tab, else the tab the raid plan gave the seat (overseer_raid_spec),
+# else none (the class's default tree).
+GUILD_MEMBERS_SQL = (
+    "SELECT c.name, c.class AS class_id, c.level, c.race, c.map AS map_id, "  # noqa: S608
+    "COALESCE(r.spec_tab, s.tab) AS spec_tab "
+    "FROM characters c LEFT JOIN overseer_roster r ON r.name = c.name "
+    "LEFT JOIN overseer_raid_spec s ON s.name = c.name "
+    "WHERE c.name IN ({holes})"
+)
+
 # --- the attunement and the key ------------------------------------------------
 
 ATTUNEMENT_QUESTS = (7487, 7848)  # raidready.ATTUNEMENT_QUESTS

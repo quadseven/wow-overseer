@@ -692,6 +692,35 @@ class TheGuildGetsTheBags(unittest.TestCase):
         self.assertEqual(step.action, "post")
         self.assertEqual(step.rows[0].target_arg, "Bodo")
 
+    def test_a_guildmate_with_a_corps_bag_still_in_the_mail_gets_no_next_bag(self):
+        # #1591: 20 corps bags sat in nine recipients' mailboxes, three each to
+        # five of them, because a letter filled an empty bag position and the
+        # next bag went to the same member. One uncollected bag is enough.
+        t = tailor(carried=self.BAG)
+        waiting = member(
+            "Bodo",
+            maintenance=False,
+            worn_bags=(6,),
+            mail=(gc.Letter(7, 77, 4238, 1),),
+        )
+        step, _ = step_of(t, members=[waiting])
+        self.assertIsNone(step)
+        other = member("Grog", maintenance=False, worn_bags=(8, 8, 8, 8))
+        step, _ = step_of(t, members=[waiting, other])
+        self.assertEqual(step.action, "post")
+        self.assertEqual(step.rows[0].target_arg, "Grog")
+
+    def test_a_letter_of_cloth_does_not_hold_back_a_bag(self):
+        t = tailor(carried=self.BAG)
+        raider = member(
+            "Bodo",
+            maintenance=False,
+            worn_bags=(6, 6, 6, 6),
+            mail=(gc.Letter(7, 77, 2589, 20),),
+        )
+        step, _ = step_of(t, members=[raider])
+        self.assertEqual(step.rows[0].target_arg, "Bodo")
+
     def test_a_guildmate_whose_bags_were_not_read_gets_nothing(self):
         t = tailor(carried=self.BAG)
         step, _ = step_of(t, members=[member("Bodo", maintenance=False)])

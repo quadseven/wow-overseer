@@ -400,7 +400,7 @@ class FarWalkWallsWait(unittest.TestCase):
     def plan(self, *rows, member=None):
         tried = questers.attempts(rows)
         return questers.plan(
-            world(), member or self.member(), questers.Clock(), 0.0, tried=tried
+            world(), member or self.member(x=-700.0), questers.Clock(), 0.0, tried=tried
         )
 
     def test_with_no_refused_walk_it_walks(self):
@@ -420,6 +420,36 @@ class FarWalkWallsWait(unittest.TestCase):
                 due = self.plan(walk_row(wall, wait))
                 self.assertIsNotNone(due.move, due.line)
                 self.assertEqual((due.move.kind, due.move.quest), (classquest.TAKE, 3))
+
+    def test_a_near_hand_in_is_not_held_by_a_far_walk_wall(self):
+        member = self.member(quest_log={3: questers.STATUS_COMPLETE})
+        p = self.plan(walk_row(WALLS[0], 5), member=member)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TURN_IN, 3))
+
+    def test_a_far_hand_in_is_still_held_by_a_far_walk_wall(self):
+        member = self.member(x=-700.0, quest_log={3: questers.STATUS_COMPLETE})
+        p = self.plan(walk_row(WALLS[0], 5), member=member)
+        self.assertIsNone(p.move, p.line)
+        self.assertIn("waits", p.line)
+
+    def test_a_near_walk_is_held_by_another_verb_s_hold(self):
+        # 2026-10-27/28 on the dev realm: a quester's 170-yard hunt walk was
+        # refused as held by another verb every pass, about every two minutes,
+        # nine times in a row; the hold is on the character, not the road, so
+        # a near walk waits it out as a far one does.
+        held = classquest.HELD_REASON
+        wait = classquest.BACKOFF_MINUTES[held]
+        p = self.plan(walk_row(held, 2), member=self.member())
+        self.assertIsNone(p.move, p.line)
+        self.assertIn("waits %d more minutes to walk: %s" % (wait - 2, held), p.line)
+        due = self.plan(walk_row(held, wait), member=self.member())
+        self.assertEqual((due.move.kind, due.move.quest), (classquest.TAKE, 3))
+
+    def test_a_near_walk_is_not_held_by_a_far_walk_budget(self):
+        for wall in (classquest.BOT_BUDGET_REASON, classquest.REALM_FULL_REASON):
+            with self.subTest(wall=wall):
+                p = self.plan(walk_row(wall, 2), member=self.member())
+                self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 3))
 
     def test_only_the_newest_row_decides(self):
         budget = WALLS[0]
@@ -1030,6 +1060,68 @@ class Broken(unittest.TestCase):
         tried = self._refused_hand_ins((30, 20, 10))[1:]
         self.assertEqual(self._move_with(tried), (classquest.TURN_IN, 1))
 
+    # mod-overseer#19: quest 45, Discover Rolf's Fate, has no
+    # creature ender; a world that names nothing to hand it in to refuses the
+    # hand-in with "retryable":false. That is "could not", not "did not yet".
+    NO_HOLDER = "the world names no creature and no object that takes that quest in"
+
+    @staticmethod
+    def _turn_in_row(reason, retryable, age=10, name="Mirra"):
+        result = '{"outcome":"refused","reason":"%s","holder":"none"' % reason
+        if retryable is not None:
+            result += ',"retryable":%s' % ("true" if retryable else "false")
+        return {
+            "id": 1,
+            "target_name": name,
+            "command": "turnin quest:1",
+            "source": guildjobs.source_for(questers.ACTION, name),
+            "status": "error",
+            "result": result + "}",
+            "age": age,
+        }
+
+    def _plan_rows(self, *rows):
+        return questers.plan(
+            world(),
+            mirra(quest_log={1: questers.STATUS_COMPLETE}),
+            questers.Clock(),
+            0.0,
+            tried=questers.attempts(rows),
+        )
+
+    def test_a_never_retryable_hand_in_is_could_not_on_the_first_refusal(self):
+        p = self._plan_rows(self._turn_in_row(self.NO_HOLDER, False))
+        self.assertEqual(
+            [(b.quest, b.reason) for b in p.broken],
+            [(1, questers.CANNOT_TURN_IN + ": " + self.NO_HOLDER)],
+        )
+        self.assertNotEqual(questers.CANNOT_TURN_IN, questers.REFUSED_TURN_IN)
+
+    def test_a_never_retryable_hand_in_is_not_asked_again(self):
+        p = self._plan_rows(self._turn_in_row(self.NO_HOLDER, False))
+        self.assertIsNotNone(p.move)
+        self.assertNotEqual((p.move.kind, p.move.quest), (classquest.TURN_IN, 1))
+        self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+    def test_a_retryable_or_unmarked_refusal_keeps_the_three_strike_rule(self):
+        # A world image older than mod-overseer#19 writes no "retryable" on a
+        # quest row: absent is not false.
+        for retryable in (True, None):
+            p = self._plan_rows(self._turn_in_row(self.NO_HOLDER, retryable))
+            self.assertEqual(p.broken, (), retryable)
+            self.assertEqual(
+                (p.move.kind, p.move.quest), (classquest.TURN_IN, 1), retryable
+            )
+
+    def test_a_never_retryable_refusal_about_the_log_is_not_could_not(self):
+        p = self._plan_rows(self._turn_in_row("already turned in", False))
+        self.assertEqual(p.broken, ())
+
+    def test_another_quester_s_never_retryable_refusal_does_not_count(self):
+        p = self._plan_rows(self._turn_in_row(self.NO_HOLDER, False, name="Pindle"))
+        self.assertEqual(p.broken, ())
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TURN_IN, 1))
+
     def test_no_pass_ever_sends_an_abandon_for_a_complete_quest(self):
         # Every way a held quest can be broken, with the quest complete in the
         # log, over four hours of passes: none of them is a drop (#1085).
@@ -1076,3 +1168,156 @@ class Broken(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def object_ended(qid, entry, guid=0, x=0.0, y=0.0, map_id=0, name="Wanted Poster"):
+    """An ENDERS_SQL gameobject row: the object named to take the quest, with
+    one of its spawns (guid 0: the object has no spawn in the world)."""
+    return {
+        "quest": qid,
+        "kind": "gameobject",
+        "entry": entry,
+        "guid": guid,
+        "map_id": map_id,
+        "x": x,
+        "y": y,
+        "name": name if guid else "",
+    }
+
+
+def object_world(*ends):
+    """world() with quest 40, of Elwynn, whose only ender is gameobject 270."""
+    return world(
+        extra_quests=[quest(40, ELWYNN, 4, title="Bitter Rivals")],
+        extra_givers=[giver(40, "start", 1003, 102, 400, 0)],
+        extra_starts=[started(40, 102)],
+        extra_ends=list(ends),
+    )
+
+
+class AGameobjectEnder(unittest.TestCase):
+    """A complete quest whose only ender is a gameobject (#1594)."""
+
+    def test_a_complete_quest_is_handed_in_at_the_object_spawn(self):
+        cat = object_world(object_ended(40, 270, guid=5001, x=300.0))
+        member = mirra(quest_log={40: 1})
+        p = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual(p.broken, ())
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TURN_IN, 40))
+        self.assertEqual(p.move.spot.guid, 5001)
+        self.assertIn("Wanted Poster", p.move.said)
+        step = questers.step_for(member, p.move, 0, cat.quest(40))
+        self.assertTrue(step.walk.command.startswith("walk-to-spawn gameobject:5001"))
+        self.assertEqual([r.command for r in step.rows], ["turnin quest:40"])
+
+    def test_the_nearest_object_spawn_is_walked_to(self):
+        cat = object_world(
+            object_ended(40, 270, guid=5001, x=900.0),
+            object_ended(40, 270, guid=5002, x=200.0),
+        )
+        p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
+        self.assertEqual(p.move.spot.guid, 5002)
+
+    def test_a_creature_ender_walk_is_still_a_creature_walk(self):
+        member = mirra(quest_log={3: 1})
+        p = questers.plan(world(), member, questers.Clock(), 0.0)
+        self.assertEqual(p.move.kind, classquest.TURN_IN)
+        step = questers.step_for(member, p.move, 0, world().quest(3))
+        self.assertTrue(step.walk.command.startswith("walk-to-spawn creature:1003"))
+
+    def test_an_object_with_no_spawn_breaks_the_quest_with_its_reason(self):
+        cat = object_world(object_ended(40, 270))
+        p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
+        self.assertEqual(
+            [(b.quest, b.reason) for b in p.broken],
+            [(40, questers.OBJECT_ENDER_MISSING)],
+        )
+        self.assertNotEqual(p.move.kind, classquest.ABANDON)
+        self.assertNotEqual(p.move.quest, 40)
+
+    def _object_walk_rows(self, member, reason=questers.GONE):
+        """The command log rows the realm writes for the hand-in walk this
+        plan sends, ended by the module with `reason`, read as the bridge reads
+        them (questers.attempts)."""
+        cat = object_world(object_ended(40, 270, guid=5001, x=300.0))
+        p = questers.plan(cat, member, questers.Clock(), 0.0)
+        step = questers.step_for(member, p.move, 0, cat.quest(40))
+        row = {
+            "id": 9,
+            "target_name": member.name,
+            "command": step.walk.command,
+            "source": step.walk.source,
+            "status": "error",
+            "result": '{"outcome":"refused","reason":"%s","retryable":true}' % reason,
+            "age": 5,
+        }
+        return cat, questers.attempts([row])
+
+    def test_every_object_spawn_gone_breaks_the_quest_with_its_reason(self):
+        member = mirra(quest_log={40: 1})
+        cat, tried = self._object_walk_rows(member)
+        self.assertEqual(
+            [(a.spawn, a.spawn_kind) for a in tried], [(5001, questers.OBJECT_KIND)]
+        )
+        p = questers.plan(cat, member, questers.Clock(), 0.0, tried=tried)
+        self.assertEqual(
+            [(b.quest, b.reason) for b in p.broken],
+            [(40, questers.OBJECT_ENDER_MISSING)],
+        )
+        self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+    def test_a_gone_object_spawn_never_stands_for_a_creature_spawn(self):
+        member = mirra(quest_log={40: 1})
+        _cat, tried = self._object_walk_rows(member)
+        self.assertEqual(questers.gone_spawns("Mirra", tried), frozenset())
+        self.assertEqual(
+            questers.gone_spawns("Mirra", tried, questers.OBJECT_KIND),
+            frozenset({5001}),
+        )
+
+    def test_a_gone_creature_spawn_never_hides_an_object_spawn(self):
+        cat = object_world(object_ended(40, 270, guid=1003, x=300.0))
+        tried = questers.attempts([walk_row(questers.GONE, 5, spawn=1003)])
+        p = questers.plan(
+            cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0, tried=tried
+        )
+        self.assertNotIn(40, [b.quest for b in p.broken])
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TURN_IN, 40))
+
+    def test_a_hand_in_the_world_keeps_refusing_is_broken_and_never_dropped(self):
+        cat = object_world(object_ended(40, 270, guid=5001, x=300.0))
+        tried = [
+            questers.Attempt(
+                "Mirra",
+                "turnin quest:40",
+                "error",
+                reason="no quest ender in reach",
+                age_minutes=10 * i,
+            )
+            for i in range(questers.FAILS_BEFORE_BROKEN)
+        ]
+        p = questers.plan(
+            cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0, tried=tried
+        )
+        self.assertEqual([b.quest for b in p.broken], [40])
+        self.assertTrue(p.broken[0].reason.startswith(questers.REFUSED_TURN_IN))
+        p = questers.plan(
+            cat,
+            mirra(quest_log={40: 1}),
+            questers.Clock(),
+            0.0,
+            tried=tried,
+            broken=frozenset({40}),
+        )
+        self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+    def test_a_quest_held_broken_by_the_ledger_is_never_dropped(self):
+        cat = object_world(object_ended(40, 270))
+        p = questers.plan(
+            cat,
+            mirra(quest_log={40: 1}),
+            questers.Clock(),
+            0.0,
+            broken=frozenset({40}),
+        )
+        self.assertNotEqual(p.move.kind, classquest.ABANDON)

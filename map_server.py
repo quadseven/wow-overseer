@@ -28,6 +28,7 @@ from apiv2 import presence as v2_presence
 from apiv2._context import Context as _V2Context
 import agenda
 import appbuild
+import deployinfo
 import armory
 import gearupgrades
 import bag_pressure
@@ -39,6 +40,7 @@ import chat
 import council
 import crossing
 import decree
+import priorities
 import director
 import dungeonplan
 import eye
@@ -51,6 +53,7 @@ import guildcraft
 import places
 import guildgear
 import guildroute
+import seatmeter
 import jevview
 import levelroute
 import llmmode
@@ -61,6 +64,7 @@ import lootstory
 import modelviewer
 import needs
 import partystatus
+import partyvoice
 import questlog
 import raidgoals
 import holdings
@@ -74,6 +78,7 @@ import raidready
 import raidsupply
 import readcache
 import recap
+import runreport
 import realm
 import realmread
 import runtimeline
@@ -3545,8 +3550,27 @@ def _fetch_run_timeline() -> dict:
                 (*names, runtimeline.WINDOW_HOURS, runtimeline.ROW_LIMIT),
                 what="overseer_death")
         bosses = _run_bosses(rd) if deaths else frozenset()
+        reports = _run_reports(rd, rows, len(families) * runtimeline.RUNS_PER_FAMILY)
     return {"rows": rows, "families": families, "present": present,
-            "deaths": deaths, "bosses": bosses}
+            "deaths": deaths, "bosses": bosses, "reports": reports}
+
+
+def _run_reports(rd, rows: list, limit: int) -> dict:
+    """Each recent run's post-run report (mod-overseer#152), by run id: the
+    newest `limit` run ids in the timeline rows, read through runreport.read,
+    the same read the bridge posts to Discord. A realm without the summary
+    view shows no report rather than one that says nothing dropped."""
+    ids = sorted({int(r.get("run_id") or 0) for r in rows} - {0}, reverse=True)[:limit]
+    reports: dict = {}
+    try:
+        for run_id in ids:
+            report = runreport.read(rd.must, run_id)
+            if report is not None:
+                reports[run_id] = report
+    except realmread.Gap:
+        log.info("run reports unavailable (no overseer_dungeon_run_summary yet)")
+        return {}
+    return reports
 
 
 # --- the live dungeon recap and the loot board (infra#2597) ------------------
@@ -3806,6 +3830,37 @@ _INSTANCE_SQL = (
 )
 
 
+# THE NEWEST EVENT OF EACH KIND, grouped per (character, kind) and folded to
+# per kind in Python (#1333). Grouping by kind alone cannot use an index: a
+# family's names are an IN range, so MySQL walked a whole kind index - every
+# family's rows - for each agenda read (about 170 ms of it on a live realm
+# with 60k events). Grouped by (character_name, kind), MAX(last_seen) is a
+# loose index scan of the bridge's idx_character_kind_last_seen, a few hundred
+# index entries. Without that index (a realm whose bridge has not started
+# since) it is the same scan as before, so the answer never depends on it.
+# S608: `holes` is a run of placeholders sized by the roster, and every VALUE
+# is bound by the driver.
+_EVENT_NEWEST_SQL = (
+    "SELECT character_name, kind, MAX(last_seen) AS last_seen "
+    "FROM overseer_event WHERE character_name IN ({holes}) "
+    "GROUP BY character_name, kind"
+)
+
+
+def _newest_per_kind(rows) -> list[dict]:
+    """{kind, last_seen} per kind, the newest of any member's: the rows the
+    old GROUP BY kind statement returned, from _EVENT_NEWEST_SQL's."""
+    newest: dict = {}
+    for row in rows:
+        kind, seen = row.get("kind"), row.get("last_seen")
+        if kind not in newest or (
+            seen is not None
+            and (newest[kind] is None or seen > newest[kind])
+        ):
+            newest[kind] = seen
+    return [{"kind": kind, "last_seen": seen} for kind, seen in newest.items()]
+
+
 def _leader_now(name: str | None):
     """nowstatus.compose's reading of one character, the sentence the wall and
     /api/v2/roster print for it; None when it cannot be read."""
@@ -3861,14 +3916,11 @@ def _fetch_agenda(names=None) -> dict:
             (), what="overseer_trade")
         # ONE ROW PER EVENT KIND, not the feed. The banner asks the event
         # table exactly one question - when did anything last actually
-        # happen - and grouping in SQL answers it in seven rows instead of
-        # ten thousand. S608: `holes` is a run of placeholders sized by the
-        # roster, and every VALUE is bound by the driver below.
-        event_rows = rd.rows(
-            "SELECT kind, MAX(last_seen) AS last_seen "  # noqa: S608
-            f"FROM overseer_event WHERE character_name IN ({holes}) "
-            "GROUP BY kind",
-            tuple(names), what="overseer_event")
+        # happen - and grouping in SQL answers it in a hundred rows instead
+        # of ten thousand; _newest_per_kind folds those to one per kind.
+        event_rows = _newest_per_kind(rd.rows(
+            _EVENT_NEWEST_SQL.format(holes=holes),
+            tuple(names), what="overseer_event"))
         # THE NEWEST BOSS CREDIT, fed in as one more event row (agenda.BOSS_KIND).
         # A campaign repeating one dungeon writes no quest, level or equip, and
         # the encounter credit in the run's event log is its only progress. Only
@@ -4079,6 +4131,51 @@ def _fetch_thoughts(name: str, before: int | None, limit: int) -> tuple[list[dic
         conn.close()
 
 
+# One page of the party and raid feed. A council burst is a handful of lines;
+# the page polls every few seconds, so twenty rows a read is never behind.
+_CHAT_PARTY_PAGE = 20
+
+
+def _fetch_chat_party(names: list[str], after: int) -> list[dict]:
+    """Party and raid rows said by `names` since row `after`, oldest first.
+
+    `names` is a roster from the database, never the request. The age comes
+    from MySQL's own clock, the one that stamped created_at, so the page can
+    drop a stale line without comparing two clocks.
+    """
+    if not names:
+        return []
+    holes = ", ".join(["%s"] * len(names))
+    channels = ", ".join(["%s"] * len(partyvoice.CHANNELS))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # S608: `holes` and `channels` are placeholders only; every value
+            # is bound by the driver.
+            cur.execute(
+                "SELECT id, sender_name, channel, text, created_at, "  # noqa: S608
+                "TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age_s "
+                f"FROM overseer_chat WHERE channel IN ({channels}) "
+                f"AND sender_name IN ({holes}) AND id > %s "
+                "ORDER BY id LIMIT %s",
+                (*partyvoice.CHANNELS, *names, after, _CHAT_PARTY_PAGE),
+            )
+            return list(cur.fetchall())
+    finally:
+        conn.close()
+
+
+def _fetch_chat_newest() -> int:
+    """The newest overseer_chat row id, 0 for an empty table."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COALESCE(MAX(id), 0) AS newest FROM overseer_chat")
+            return int(cur.fetchone()["newest"])
+    finally:
+        conn.close()
+
+
 def _fetch_chat_grounding(name: str) -> dict | None:
     """Snapshot + personality + recent thoughts, or None if no such character.
 
@@ -4234,8 +4331,11 @@ _APP_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; charset=
 # ETag and `no-cache`, because _send runs for every caller.
 SHARED_READ_SECONDS = 5.0
 SHARED_READS = readcache.ReadCache(SHARED_READ_SECONDS)
+# /api/runtimeline reads one post-run report per recent run id (#1603), so it
+# is shared too rather than read once per open family page.
 SHARED_GET_PATHS = frozenset({
     "/api/map", "/api/wall", "/api/guildgear", "/api/raidgoals", "/api/wealth",
+    "/api/runtimeline",
 })
 
 
@@ -4263,10 +4363,17 @@ def _shared_key(path: str, query: dict) -> str:
         "%s=%s" % (k, v) for k in sorted(query) for v in query[k])
 
 
-# What a /api/v2 handler is given: the request's realm reader, this server's
-# own module, and the shared reads for a build two endpoints have in common.
+# What a /api/v2 handler is given: the request's realm reader (S2), the
+# families (S3) and a bound presence reader (#718). The server module is kept
+# as a narrow escape hatch for the world data that is none of those.
 def _v2_context(read) -> _V2Context:
-    return _V2Context(read=read, server=sys.modules[__name__], shared=SHARED_READS)
+    return _V2Context(
+        read=read,
+        server=sys.modules[__name__],
+        families=FAMILIES,
+        presence=lambda names: v2_presence.of(read, names),
+        shared=SHARED_READS,
+    )
 
 
 def _etag(body: bytes) -> str:
@@ -4313,8 +4420,13 @@ def _fetch_decree() -> dict:
         # bridge predates it reads as nothing queued.
         queue_rows = rd.rows(campaignqueue.SELECT_PENDING_SQL,
                              (), what=campaignqueue.TABLE)
+        # The family's priority order (#1559). The bridge's table too, so a
+        # realm whose bridge predates it reads as the default order.
+        priority_rows = rd.rows(priorities.SELECT_SQL, (),
+                                what=priorities.TABLE)
     return {"roster_rows": roster_rows, "command_rows": command_rows,
-            "newest_job_rows": newest_job_rows, "queue_rows": queue_rows}
+            "newest_job_rows": newest_job_rows, "queue_rows": queue_rows,
+            "priority_rows": priority_rows}
 
 
 def _with_family(rd, roster_rows: list) -> list:
@@ -4382,6 +4494,31 @@ def _apply_queue(cur, plan) -> int:
     return changed
 
 
+def _apply_priorities(cur, order: tuple) -> int:
+    """Store the family's priority order, one row (#1559).
+
+    The statement is priorities.UPSERT_SQL and the value is the order
+    decree.plan_order already validated; nothing is decided here. 1 when the
+    row changed, 0 when it already held this order (no CLIENT_FOUND_ROWS) or
+    when this realm has no table yet - the bridge creates it when it starts,
+    exactly as it does the campaign queue's.
+    """
+    try:
+        cur.execute(priorities.UPSERT_SQL,
+                    (priorities.stored_value(order), WEB_SOURCE))
+    except pymysql.err.MySQLError as exc:
+        if not (exc.args and exc.args[0] in _DEGRADED):
+            raise
+        log.warning("decree: %s is not writable on this realm (%s) - the "
+                    "bridge creates it when it starts", priorities.TABLE,
+                    exc.args[0])
+        return 0
+    changed = 1 if (cur.rowcount or 0) > 0 else 0
+    log.info("decree: priorities %s (changed=%d): %s",
+             priorities.trace(order), changed, priorities.prompt_line(order))
+    return changed
+
+
 
 # --- the console's write path (infra#3345) -----------------------------------
 #
@@ -4446,17 +4583,34 @@ def _fetch_roster_rows() -> list:
         return _with_family(rd, rows)
 
 
-def _fetch_guild_members() -> tuple[list, dict]:
-    """Fresh commandable guild membership and guild names for one decree."""
+def _fetch_guild_members(guild=None) -> tuple[list, dict]:
+    """Fresh commandable members of the named guild, and every guild's name.
+
+    BOUNDED: only the named guild's live bots are read, and no more than one
+    past the muster cap, since decree.plan_order only needs to know the guild
+    is over the cap, not by how much. A name that matches no guild reads no
+    membership, and plan_order refuses it in its own words.
+    """
     with realmread.Session(_connect) as rd:
         guilds = rd.must("SELECT guildid, name FROM guild")
+        names = {int(row["guildid"]): row["name"] for row in guilds}
+        wanted = guild.strip().lower() if isinstance(guild, str) else ""
+        guild_id = next(
+            (gid for gid, name in sorted(names.items()) if name.lower() == wanted),
+            None,
+        )
+        if guild_id is None:
+            return [], names
         members = rd.must(
             "SELECT c.name, s.level, s.is_bot, gm.guildid AS guild_id "
             "FROM guild_member gm JOIN characters c ON c.guid = gm.guid "
             "JOIN overseer_snapshot s ON s.name = c.name "
-            "WHERE s.updated_at > NOW() - INTERVAL 60 SECOND"
+            "WHERE gm.guildid = %s AND s.is_bot "
+            "AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+            "ORDER BY s.level DESC, c.name LIMIT %s",
+            (guild_id, decree.fanout.MAX_FANOUT_TARGETS + 1),
         )
-    return members, {int(row["guildid"]): row["name"] for row in guilds}
+    return members, names
 
 
 def _apply_order(order) -> int:
@@ -4525,6 +4679,8 @@ def _apply_order(order) -> int:
                 changed += cur.rowcount
             if order.queue is not None:
                 changed += _apply_queue(cur, order.queue)
+            if order.priorities is not None:
+                changed += _apply_priorities(cur, order.priorities)
     finally:
         conn.close()
     return changed
@@ -4827,6 +4983,8 @@ class Handler(BaseHTTPRequestHandler):
             # The page and every app script and stylesheet (appbuild.py):
             # a deploy that changes only app/ moves this and not `page`.
             payload["app_build"] = appbuild.fingerprint(HERE)
+            # Which commit this process runs and how long (deployinfo.py).
+            payload["deploy"] = deployinfo.info()
             payload.update(_realm_families())
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
@@ -5073,6 +5231,31 @@ class Handler(BaseHTTPRequestHandler):
         payload = chat.build_timeline(name, rows, db_now, limit)
         self._send(200, "application/json", json.dumps(payload).encode())
 
+    def _chat_party(self, query: dict) -> None:
+        """GET /api/chat/party?family=<key>&after=<id> - lines to read aloud.
+
+        Without `after` it answers only where the chat ends, so switching the
+        reader on never reads the last three hours aloud. With it, the
+        family's party and raid lines since that row, one per utterance
+        (partyvoice.feed), each with its speaker's voice.
+        """
+        names, _chosen, _known = self._family_scope(query)
+        raw_after = query.get("after", [""])[0]
+        if raw_after and not raw_after.isdigit():
+            self._send(400, "application/json", b'{"error": "bad cursor"}')
+            return
+        try:
+            if not raw_after:
+                payload = {"rows": [], "after": _fetch_chat_newest()}
+            else:
+                after = int(raw_after)
+                payload = partyvoice.feed(_fetch_chat_party(names, after), after)
+        except Exception:
+            log.exception("party chat query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+            return
+        self._send(200, "application/json", json.dumps(payload).encode())
+
     def _trade_crafts(self, query: dict) -> None:
         """GET /api/trades?skill=<id>[&family=<key>] - one profession's crafts.
 
@@ -5200,7 +5383,7 @@ class Handler(BaseHTTPRequestHandler):
             payload = runtimeline.build_run_timeline(
                 fetched["rows"], fetched["families"], present=fetched["present"],
                 deaths=fetched["deaths"], bosses=fetched["bosses"],
-                zones=recap.zone_names(GEO.continents))
+                zones=recap.zone_names(GEO.continents), reports=fetched["reports"])
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # The tab keeps what it has drawn and says it may be stale.
@@ -5626,7 +5809,8 @@ class Handler(BaseHTTPRequestHandler):
                 _note_module_crossing()
                 roster_rows = _fetch_roster_rows()
                 members, guild_names = (
-                    _fetch_guild_members() if request.get("section") == decree.MUSTER
+                    _fetch_guild_members(request.get("guild"))
+                    if request.get("section") == decree.MUSTER
                     else ([], {})
                 )
                 order = decree.plan_order(request, roster_rows, members, guild_names)
@@ -6046,6 +6230,24 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("guild runs query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _guild_seats(self, _query: dict) -> None:
+        """GET /api/guildseats - the carry-ready tanks and healers per door (#784).
+
+        The bridge counts them every few minutes and leaves one memo row per
+        guild (seatmeter.bench); this reads those rows. A guild the bridge has
+        not written lately is absent, a world without the memo table answers
+        empty rather than 503.
+        """
+        try:
+            with realmread.Session(_connect) as rd:
+                rows = rd.rows(seatmeter.BENCH_READ_SQL, (seatmeter.BENCH_KIND,),
+                               what="overseer_bridge_memo")
+            self._send(200, "application/json",
+                       json.dumps(seatmeter.page(rows), default=str).encode())
+        except Exception:
+            log.exception("guild seats query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _guild_chat(self, query: dict) -> None:
         """GET /api/guildchat?guild=X&limit=N - the guild's asks and answers.
 
@@ -6275,9 +6477,11 @@ class Handler(BaseHTTPRequestHandler):
         "/api/levelroute": _levelroute,
         "/api/party-status": _party_status,
         "/api/guildruns": _guild_runs,
+        "/api/guildseats": _guild_seats,
         "/api/guildchat": _guild_chat,
         "/api/decree": _decree,
         "/api/thoughts": _thoughts,
+        "/api/chat/party": _chat_party,
         "/api/watch": _watch_state,
         "/api/director": _director_state,
         "/": _index,

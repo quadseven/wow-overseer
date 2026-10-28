@@ -183,6 +183,13 @@ MAX_DEATH_KNIGHT_QUEST_LEVEL = 60
 
 # The core's QuestStatus values a character_queststatus row carries.
 STATUS_COMPLETE, STATUS_INCOMPLETE = 1, 3
+# A FAILED QUEST STAYS IN THE LOG (#781). A timed quest whose clock
+# ran out (The Affray, 1719, TimeAllowed 600) is held at status 5 until it is
+# dropped, and the core refuses to take a quest the log holds. Read as never
+# taken, a warrior that failed it was sent to take The Affray again pass
+# after pass. A failed class quest is an ABANDON: the member
+# drops it and takes it again, and the quest's clock starts anew.
+STATUS_FAILED = 5
 
 # The step's action word, in the command log's source (guildjobs.source_for).
 ACTION = "classquest"
@@ -767,13 +774,14 @@ SPAWNS_SQL = (
 )
 
 # What one member holds: the quests in its log, the quests it has been
-# rewarded, and the spells it knows (guildjobs reads the last already).
+# rewarded, and the spells it knows (guildjobs reads the last already). A
+# failed quest (STATUS_FAILED) is read too: it holds its log slot until dropped.
 LOG_SQL = (
     "SELECT guid, quest, status, "
     "(mobcount1 + mobcount2 + mobcount3 + mobcount4 + itemcount1 + itemcount2 + "
     "itemcount3 + itemcount4 + itemcount5 + itemcount6) AS progress "
     "FROM character_queststatus "
-    "WHERE guid IN ({guids}) AND quest IN ({quests}) AND status IN (1, 3)"
+    "WHERE guid IN ({guids}) AND quest IN ({quests}) AND status IN (1, 3, 5)"
 )
 REWARDED_SQL = (
     "SELECT guid, quest FROM character_queststatus_rewarded "
@@ -1760,6 +1768,8 @@ def _variant_move(book: Book, member, reward_id: int, seen=frozenset()):
         return TURN_IN, quest, _nearest(member, quest.enders), reward_id
     if status == STATUS_INCOMPLETE:
         return HUNT, quest, None, reward_id
+    if status == STATUS_FAILED:
+        return ABANDON, quest, None, reward_id
     return TAKE, quest, _nearest(member, quest.starters), reward_id
 
 
@@ -1942,6 +1952,12 @@ def _move_of(member, option, key, avoid=None, held_off=frozenset()) -> Move:
     )
     if kind == HUNT:
         return _hunt_move(member, quest, why, (avoid or {}).get(quest.id, ()), held_off)
+    if kind == ABANDON:
+        said = "%s drops %s, which it failed, to take it again" % (
+            member.name,
+            quest.title,
+        )
+        return Move(ABANDON, quest.id, quest.klass, None, said, "", why)
     if spot is None:
         ends = quest.enders if kind == TURN_IN else quest.starters
         word = "ender" if kind == TURN_IN else "giver"

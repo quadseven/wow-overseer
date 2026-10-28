@@ -18,10 +18,11 @@ Not read line per source that could not be read, then the family's runs of
 that map started in the last --hours (the finding's LOOP_HOURS by default),
 newest first: id, start and end, outcome, furthest encounter mask, the last
 phase change, the `stalled` row's detail, and every "Dungeon clear stopped"
-line a family member logged during the run (identical reasons merged, with
-their members). Plain ASCII, under MAX_LINES lines; the oldest runs give way.
-Any other key prints "no diagnosis for this kind of finding". Exit 0 either
-way: a source that could not be read is part of the diagnosis.
+or "dungeon clear disabled: All bosses cleared!" line a family member logged
+during the run (identical reasons merged, with their members). Plain ASCII,
+under MAX_LINES lines; the oldest runs give way. Any other key prints "no
+diagnosis for this kind of finding". Exit 0 either way: a source that could
+not be read is part of the diagnosis.
 
 THE SOURCES, all read-only. Each failure is named on stdout by source and a
 reason that carries no host, path or credential; the full error goes to
@@ -75,7 +76,13 @@ MOD_REPO = "quadseven/mod-overseer"
 ENV_LOGS = "OVERSEER_REALM_LOGS"
 WORKLOAD = "worldserver"
 GH_TIMEOUT = 60
+ARCHIVE_TIMEOUT = 120
 STOP_TEXT = "Dungeon clear stopped: "
+# A clear the module finished is logged as a disable, not a stop (#1570).
+CLEARED_REASON = "All bosses cleared!"
+DISABLED_TEXT = "dungeon clear disabled: "
+CLEARED_TEXT = DISABLED_TEXT + CLEARED_REASON
+STOP_TEXTS = (STOP_TEXT, CLEARED_TEXT)
 NO_STOP = "no Dungeon clear stopped line"
 # How a mod-overseer pull request cites a ticket here: "wow-overseer#N", or
 # the issue's URL.
@@ -107,6 +114,16 @@ _STOP = re.compile(
     r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)\S*\s.*?\[DC:([A-Za-z]+)\].*?"
     + re.escape(STOP_TEXT)
     + r"(.+?)\.?(?:\s+\(present \d+ of \d+ alive.*)?$"
+)
+# "<time> stdout F <date> INFO [playerbots.dungeonclear] [DC:<bot>] dungeon
+# clear disabled: All bosses cleared!" (DisableDungeonClear). Only this
+# disable is a stop reason; the others ("Dungeon clear disabled.") are the
+# cleanup switching the module off.
+_CLEARED = re.compile(
+    r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)\S*\s.*?\[DC:([A-Za-z]+)\] "
+    + re.escape(DISABLED_TEXT)
+    + "(%s)" % re.escape(CLEARED_REASON)
+    + r"\s*$"
 )
 _WAITING = re.compile(r"Waiting on [A-Za-z]+ \(([^()]+)\)")
 
@@ -182,10 +199,21 @@ def archived_logs(since: str) -> list:
         text=True,
         errors="replace",
     ) as proc:
-        kept = [line for line in proc.stdout or () if STOP_TEXT in line]
+        try:
+            out, _ = proc.communicate(timeout=ARCHIVE_TIMEOUT)
+        except subprocess.TimeoutExpired as exc:
+            proc.kill()
+            raise Unreadable("the log archive helper timed out") from exc
+        except BaseException:
+            proc.kill()
+            raise
     if proc.returncode:
         raise Unreadable("the log archive helper exited %d" % proc.returncode)
-    return kept
+    return [
+        line
+        for line in (out or "").splitlines()
+        if any(text in line for text in STOP_TEXTS)
+    ]
 
 
 def declared_revision() -> str:
@@ -246,13 +274,25 @@ def real_sources() -> Sources:
     )
 
 
+# What a source read can truly raise; a programming fault is not one of them
+# and surfaces instead of printing as a missing source.
+READ_ERRORS = (
+    Unreadable,
+    OSError,
+    getattr(pymysql, "MySQLError", OSError),  # a test's stub may lack it
+    realmread.Gap,
+    json.JSONDecodeError,
+    subprocess.SubprocessError,
+)
+
+
 def read(unread: list, err, name: str, how: Callable):
     """`how()`, or None with `name` noted in `unread`. The note carries an
     Unreadable's own reason, else only the error's class: a driver's message
     can name the host it could not reach. The whole error goes to `err`."""
     try:
         return how()
-    except Exception as exc:  # noqa: BLE001 - named on stdout, whole on stderr
+    except READ_ERRORS as exc:  # named on stdout, whole on stderr
         traceback.print_exception(exc, file=err)
         why = str(exc) if isinstance(exc, Unreadable) else type(exc).__name__
         unread.append("Not read: %s (%s)" % (name, why))
@@ -285,7 +325,8 @@ def read_realm(open_reader: Callable, family: str, map_id: int, hours: int) -> R
 
 def stop_of(line: str) -> Stop | None:
     """The stop a log line records, or None for any other line."""
-    found = _STOP.match(str(line).strip())
+    text = str(line).strip()
+    found = _STOP.match(text) or _CLEARED.match(text)
     if not found:
         return None
     at = calendar.timegm(time.strptime(found.group(1), "%Y-%m-%dT%H:%M:%S"))

@@ -23,6 +23,7 @@ import dungeonpath  # noqa: E402
 import jev  # noqa: E402
 import jev_choices  # noqa: E402
 import jobs  # noqa: E402
+import priorities  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
@@ -436,6 +437,10 @@ class TheBridgePass(unittest.TestCase):
                 "_planner_facts": lambda key, fam, level_rows: facts(),
                 "_append_planned": append,
                 "_insert_jev_judgment": recorded.append,
+                "_planner_dry": lambda names: None,
+                "_finish_planned": lambda finish: 0,
+                "dataclasses": __import__("dataclasses"),
+                "priorities": priorities,
             },
         )
         fake = FakeJev(
@@ -445,6 +450,12 @@ class TheBridgePass(unittest.TestCase):
             _jev=jev.Client(key, transport=fake), _planner_said={}
         )
         me._plan_campaign = types.MethodType(ns["_plan_campaign"], me)
+
+        async def default_priorities():
+            return priorities.DEFAULT_ORDER
+
+        # The family's priorities (#1559): never set on this realm.
+        me._priority_order = default_priorities
 
         async def no_situation(*_args):
             return None
@@ -554,3 +565,72 @@ def _node(name):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ADoorThatTeachesNothing(unittest.TestCase):
+    """#1400: Zug's family, all five at 35, on run 20 of 27 at Gnomeregan
+    (ceiling 38), gained about six hundred experience a member a run."""
+
+    GNOMEREGAN_MAP = campaignplan.BY_KEYWORD["gnomeregan"].map_id
+
+    def head(self, source=campaignplan.SOURCE):
+        return {
+            "id": 50,
+            "family": "Zug",
+            "position": 5,
+            "keyword": "gnomeregan",
+            "runs_wanted": 27,
+            "status": "active",
+            "source": source,
+        }
+
+    def dry(self, n):
+        return campaignplan.dry_doors([{"map_id": self.GNOMEREGAN_MAP, "n": n}])
+
+    def test_the_planned_entry_ends_after_the_dry_runs(self):
+        due = campaignplan.due(
+            [self.head()],
+            {"dungeon_runs_done": 20},
+            list(rows(level=35)),
+            self.dry(campaignplan.DRY_RUNS),
+        )
+        self.assertIn("teaches nothing", due.reason)
+        self.assertEqual(due.finish, 50)
+        self.assertTrue(due.dry)
+
+    def test_fewer_runs_or_no_read_leave_it_running(self):
+        for dry in (self.dry(campaignplan.DRY_RUNS - 1), None, {}):
+            due = campaignplan.due(
+                [self.head()], {"dungeon_runs_done": 20}, list(rows(level=35)), dry
+            )
+            self.assertEqual(due.reason, "", dry)
+
+    def test_an_operators_order_runs_to_its_count(self):
+        due = campaignplan.due(
+            [self.head(source="web:overseer")],
+            {"dungeon_runs_done": 20},
+            list(rows(level=35)),
+            self.dry(9),
+        )
+        self.assertEqual(due.reason, "")
+
+    def test_the_dry_door_is_not_offered_again(self):
+        f = facts(
+            level=35, map_id=EASTERN_KINGDOMS, dry=self.dry(campaignplan.DRY_RUNS)
+        )
+        kinds = campaignplan.refusal_kinds(f)
+        self.assertEqual(kinds["gnomeregan"][0], campaignplan.REFUSED_DRY)
+        self.assertNotIn("gnomeregan", keywords(campaignplan.options(f)))
+
+    def test_a_shared_map_names_no_door(self):
+        armory = campaignplan.BY_KEYWORD["scarlet-armory"].map_id
+        self.assertEqual(campaignplan.dry_doors([{"map_id": armory, "n": 9}]), {})
+
+    def test_at_the_cap_nothing_is_dry(self):
+        self.assertEqual(
+            campaignplan._dry(self.dry(9), "gnomeregan", campaignplan.LEVEL_CAP), ""
+        )
+
+    def test_the_bridge_reads_it_and_ends_the_entry_with_nothing_to_follow(self):
+        self.assertIn('_planner_dry, list(fam["names"])', BRIDGE)
+        self.assertIn("if pick is None and due.dry:", BRIDGE)

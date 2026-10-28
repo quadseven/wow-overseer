@@ -964,7 +964,7 @@ def _roster(ctx) -> dict:
     if names:
         sql = MEMBERS_SQL.format(holes=holes(len(names)))
         found = ctx.read.rows(sql, tuple(names), what="guild_member")
-    out = {n: "" for n in ctx.server.FAMILIES.names()}
+    out = {n: "" for n in ctx.families.names()}
     out.update({r["name"]: r["guild"] for r in found})
     return out
 

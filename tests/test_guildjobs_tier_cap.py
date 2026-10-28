@@ -13,9 +13,11 @@ member only waiting in a queue walks too).
 Pure unit tests against guildjobs.plan.
 """
 
+import json
 import unittest
 
 import guildjobs
+import modsource
 import pvpgear
 
 H, M, S = guildjobs.HERBALISM, guildjobs.MINING, guildjobs.SKINNING
@@ -179,6 +181,195 @@ class TheRankWalkHasItsOwnAllowance(unittest.TestCase):
         result = guildjobs.plan(capped)
         trains = [s for s in result.steps if s.action == "train"]
         self.assertEqual(guildjobs.TRAIN_STEPS_PER_GUILD, len(trains))
+
+
+def walk_row(reason, age, outcome="refused", retryable=True):
+    """A trainer row the way the realm writes it (MailWalkJson): status error,
+    the module's reason, and whether it calls the reason retryable."""
+    result = json.dumps(
+        {
+            "outcome": outcome,
+            "reason": reason,
+            "retryable": retryable,
+            "goal": "trainer",
+            "character": "Funkymon",
+        },
+        separators=(",", ":"),
+    )
+    return {
+        "id": age + 1,
+        "target_name": "Funkymon",
+        "command": "walk-to-trainer skill:%d max:3000" % H,
+        "source": guildjobs.source_for("train", "Funkymon"),
+        "status": "error",
+        "result": result,
+        "age": age,
+    }
+
+
+def walks(reason, *ages, outcome="refused"):
+    return guildjobs.recent_from_rows([walk_row(reason, a, outcome) for a in ages])
+
+
+IN_COMBAT = "character is in combat"
+COMBAT_ON_THE_WAY = "entered combat on the way to the trainer"
+TOO_FAR = "the nearest trainer that will teach it is beyond the cap"
+GROUND = "the ground toward the trainer does not hold"
+
+
+class AWalkThatEndedInAFightIsAskedAgain(unittest.TestCase):
+    """A rank walk the world refused for a fight is no failed trainer walk:
+    it does not double the wait, and it is asked again after the base wait."""
+
+    def test_fights_do_not_double_the_wait(self):
+        rows = walks(IN_COMBAT, 5, 65, 125, 185, 245)
+        self.assertEqual(60, guildjobs.train_cooldown("Funkymon", rows, H))
+
+    def test_the_capped_member_is_sent_again_after_the_base_wait(self):
+        m = member(skills={H: (75, 75)})
+        result = guildjobs.plan([m], recent=walks(IN_COMBAT, 65, 125, 185, 245))
+        self.assertEqual(1, len(train_steps(result, "Funkymon")), result.notes)
+
+    def test_a_fight_still_waits_one_cycle_before_the_walk_is_asked_again(self):
+        m = member(skills={H: (75, 75)})
+        result = guildjobs.plan([m], recent=walks(IN_COMBAT, 16))
+        self.assertEqual([], train_steps(result, "Funkymon"))
+
+    def test_a_fight_on_the_way_counts_as_passing(self):
+        rows = walks(COMBAT_ON_THE_WAY, 65, 125, 185, outcome="abandoned")
+        self.assertEqual(60, guildjobs.train_cooldown("Funkymon", rows, H))
+        m = member(skills={H: (75, 75)})
+        result = guildjobs.plan([m], recent=rows)
+        self.assertEqual(1, len(train_steps(result, "Funkymon")), result.notes)
+        early = guildjobs.plan(
+            [m], recent=walks(COMBAT_ON_THE_WAY, 16, outcome="abandoned")
+        )
+        self.assertEqual([], train_steps(early, "Funkymon"))
+
+
+IN_INSTANCE = "character is inside an instance or battleground"
+FLIGHT_ON_THE_WAY = "took a flight on the way to the trainer"
+LEFT_WORLD_ON_THE_WAY = "left the world on the way to the trainer"
+
+
+class AShortLivedEndingIsAskedAgain(unittest.TestCase):
+    """An instance or battleground wall at the gate, a flight taken on the way
+    and leaving the world on the way are all moments that pass (#1389)."""
+
+    def test_an_instance_refusal_waits_the_base_sixty_minutes(self):
+        rows = walks(IN_INSTANCE, 65, 125, 185, 245)
+        self.assertEqual(60, guildjobs.train_cooldown("Funkymon", rows, H))
+        m = member(skills={H: (75, 75)})
+        self.assertEqual(
+            1, len(train_steps(guildjobs.plan([m], recent=rows), "Funkymon"))
+        )
+        early = guildjobs.plan([m], recent=walks(IN_INSTANCE, 16))
+        self.assertEqual([], train_steps(early, "Funkymon"))
+
+    def test_a_flight_or_leaving_the_world_mid_walk_counts_as_passing(self):
+        for reason in (FLIGHT_ON_THE_WAY, LEFT_WORLD_ON_THE_WAY):
+            with self.subTest(reason=reason):
+                rows = walks(reason, 65, 125, 185, outcome="abandoned")
+                self.assertEqual(60, guildjobs.train_cooldown("Funkymon", rows, H))
+                m = member(skills={H: (75, 75)})
+                result = guildjobs.plan([m], recent=rows)
+                self.assertEqual(1, len(train_steps(result, "Funkymon")))
+
+
+class APermanentRefusalStillBacksOff(unittest.TestCase):
+    """The module marks many trainer walls retryable that the next pass will
+    not change (a trainer beyond the cap, the ground, Outland, a follower, a
+    dead character); each still doubles the wait, so a capped member is not
+    sent the same refused walk every pass and reaches the rungs below."""
+
+    def test_a_trainer_beyond_the_cap_doubles_the_wait(self):
+        rows = walks(TOO_FAR, 16, 31, 46)
+        self.assertEqual(480, guildjobs.train_cooldown("Funkymon", rows, H))
+
+    def test_a_trainer_beyond_the_cap_yields_no_train_step_next_pass(self):
+        m = member(skills={H: (75, 75)})
+        result = guildjobs.plan([m], recent=walks(TOO_FAR, 16))
+        self.assertEqual([], train_steps(result, "Funkymon"))
+
+    def test_other_retryable_walls_back_off_too(self):
+        for reason in (
+            GROUND,
+            "character stands in Outland or Northrend, outside the classic world",
+            "character is grouped as a follower",
+            "character is dead",
+        ):
+            with self.subTest(reason=reason):
+                rows = walks(reason, 75)
+                self.assertEqual(120, guildjobs.train_cooldown("Funkymon", rows, H))
+                m = member(skills={H: (75, 75)})
+                result = guildjobs.plan([m], recent=rows)
+                self.assertEqual([], train_steps(result, "Funkymon"))
+
+    def test_a_reason_that_only_mentions_combat_is_not_passing(self):
+        row = guildjobs.Recent(
+            "Funkymon",
+            "train",
+            75,
+            "error",
+            H,
+            result='{"outcome":"refused","note":"was in combat earlier",'
+            '"reason":"the ground toward the trainer does not hold"}',
+        )
+        self.assertEqual(120, guildjobs.train_cooldown("Funkymon", (row,), H))
+
+
+class AWalkThatFailedForTheRoadStillBacksOff(unittest.TestCase):
+    """The road refused at the gate (TrainerGround, TrainerTooFar, both written
+    `refused` with retryable:true) and the road failing mid-walk both double
+    the wait."""
+
+    def test_the_gate_refusing_the_road_backs_off(self):
+        for reason in (GROUND, TOO_FAR):
+            with self.subTest(reason=reason):
+                rows = walks(reason, 5)
+                self.assertEqual(120, guildjobs.train_cooldown("Funkymon", rows, H))
+                m = member(skills={H: (75, 75)})
+                result = guildjobs.plan([m], recent=walks(reason, 65))
+                self.assertEqual([], train_steps(result, "Funkymon"))
+
+    def test_a_walk_that_stalled_on_the_road_backs_off(self):
+        rows = walks("stopped getting nearer the trainer", 65, outcome="abandoned")
+        self.assertEqual(120, guildjobs.train_cooldown("Funkymon", rows, H))
+        m = member(skills={H: (75, 75)})
+        result = guildjobs.plan([m], recent=rows)
+        self.assertEqual([], train_steps(result, "Funkymon"))
+
+
+def absent_from(source: str, reasons) -> list:
+    """The reasons that do not appear in `source` as a whole C++ string
+    literal, sorted."""
+    return sorted(r for r in reasons if '"%s"' % r not in source)
+
+
+class ThePassingListIsPinnedToTheModule(unittest.TestCase):
+    """PASSING_TRAIN_REASONS is matched exactly (#1389), so a module that
+    rewords a reason would quietly put it back on the doubling backoff."""
+
+    def test_a_reason_the_source_does_not_have_is_reported(self):
+        src = 'constexpr char const* A = "character is in combat";'
+        self.assertEqual(["gone"], absent_from(src, {"character is in combat", "gone"}))
+        self.assertEqual([], absent_from(src, {"character is in combat"}))
+
+    def test_a_substring_of_a_longer_literal_is_not_a_match(self):
+        src = 'x = "entered combat on the way to the trainer today";'
+        self.assertEqual(
+            ["entered combat on the way to the trainer"],
+            absent_from(src, {"entered combat on the way to the trainer"}),
+        )
+
+    def test_every_passing_reason_is_a_literal_in_the_pinned_module(self):
+        src = modsource.read(modsource.DECISIONS_H, encoding="utf-8")
+        if "on the way to the trainer" not in src:
+            self.skipTest(
+                "the pinned mod-overseer predates the trainer walk endings; "
+                "this runs once the submodule is bumped"
+            )
+        self.assertEqual([], absent_from(src, guildjobs.PASSING_TRAIN_REASONS))
 
 
 if __name__ == "__main__":

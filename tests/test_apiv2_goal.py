@@ -77,6 +77,7 @@ class Ctx:
     def __init__(self, answers):
         self.read = realmread.Memory(answers)
         self.server = types.SimpleNamespace(FAMILIES=FAMILIES)
+        self.families = FAMILIES
 
 
 def _base_answers(guild="Cave"):

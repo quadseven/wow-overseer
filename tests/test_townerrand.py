@@ -199,6 +199,44 @@ class TheStates(unittest.TestCase):
         self.assertEqual(HUB, te.choose_hub({}, HUB, _at(3000, 3000)))
         self.assertEqual({}, te.choose_hub({}, {}, _at(0, 0)))
 
+    def test_a_bag_room_errand_from_kalimdor_does_not_cross_the_sea(self):
+        # Grug's family, wow-dev 2026-10-24: door on Kalimdor, head bound in
+        # Stormwind (map 0), a Ratchet mailbox (map 1) on the head's map.
+        ratchet = {"map_id": 1, "x": -956.0, "y": -3745.0, "z": 5.0}
+        door = _at(-4600, -2400, 1)
+        pick = te.choose_hub(STORMWIND_BIND, ratchet, door, te.BAG_PRESSURE_WHY)
+        self.assertEqual(ratchet, pick)
+        # Other errands keep the home town, and a home on the head's own map
+        # is still home.
+        self.assertEqual(STORMWIND_BIND, te.choose_hub(STORMWIND_BIND, ratchet, door))
+        self.assertEqual(HOME, te.choose_hub(HOME, ratchet, door, te.BAG_PRESSURE_WHY))
+        # With no capital mailbox on his map the home town is the only choice.
+        self.assertEqual(
+            STORMWIND_BIND,
+            te.choose_hub(STORMWIND_BIND, {}, door, te.BAG_PRESSURE_WHY),
+        )
+
+    def test_a_bag_room_errand_from_inside_an_instance_does_not_cross_the_sea(self):
+        # Grug's family, wow-dev 2026-10-24: inside Razorfen Downs (map 129),
+        # head bound in Stormwind (map 0). He stands, for the errand, at the
+        # door on Kalimdor, so the Kalimdor capital wins over the Stormwind
+        # home.
+        entrances = {"129": {"map": 1, "x": -4666.5, "y": -2536.8}}
+        ratchet = {"map_id": 1, "x": -956.0, "y": -3745.0, "z": 5.0}
+        inside = _at(2593.9, 1124.6, 129)
+        standing = te.errand_standing(inside, entrances)
+        self.assertEqual(_at(-4666.5, -2536.8, 1), standing)
+        pick = te.choose_hub(STORMWIND_BIND, ratchet, standing, te.BAG_PRESSURE_WHY)
+        self.assertEqual(ratchet, pick)
+        # On a continent, in an instance with no known door, and with no
+        # reading, he stands where he is read.
+        on_kalimdor = _at(-4600, -2400, 1)
+        self.assertIs(on_kalimdor, te.errand_standing(on_kalimdor, entrances))
+        unknown = _at(10, 10, 999)
+        self.assertIs(unknown, te.errand_standing(unknown, entrances))
+        self.assertIsNone(te.errand_standing(None, entrances))
+        self.assertIs(inside, te.errand_standing(inside, {}))
+
     def test_members_beyond_a_walk_from_home_hearth(self):
         positions = {
             "Grug": _at(3000, 3000),
@@ -449,8 +487,14 @@ class TheAdapter(unittest.TestCase):
             "_fetch_teams": lambda names: {"Grug": "alliance"},
             # The capital is read on the leader's own fresh snapshot, so an
             # absent leader finds none, as _ERRAND_AUCTIONEERS_SQL does.
-            "_fetch_capital_hub": lambda leader, team: (
-                dict(HUB) if leader in self.positions else {}
+            # Without a standing it reads the leader's own snapshot map.
+            "_fetch_capital_hub": lambda leader, team, standing=None: (
+                self.capital(standing or self.positions[leader])
+                if leader in self.positions
+                else {}
+            ),
+            "guildjobs": types.SimpleNamespace(
+                entrances=lambda: {"129": {"map": 1, "x": -4666.5, "y": -2536.8}}
             ),
             "_fetch_positions": lambda names: {
                 n: self.positions[n] for n in names if n in self.positions
@@ -509,6 +553,9 @@ class TheAdapter(unittest.TestCase):
 
     setup = None
 
+    def capital(self, standing):
+        return dict(HUB)
+
     def tick(self, seconds=30.0):
         self.now += seconds
         asyncio.run(self.ns["_town_errand_once"](self.fam))
@@ -520,6 +567,43 @@ class TheAdapter(unittest.TestCase):
         self.assertEqual(["town run"], self.jobs)
         self.assertIn("town errand", self.fam.slot.reserved)
         self.assertEqual(("town errand", "Grug", "at:0:100,100,10"), self.fam.aims[-1])
+
+    def test_a_bag_room_errand_inside_an_instance_goes_to_the_door_continent(self):
+        # wow-dev 2026-10-24: the family in Razorfen Downs (map 129), the head
+        # bound in Stormwind. The capital is looked up from the door on
+        # Kalimdor, and the errand goes to its mailbox, not Stormwind's.
+        ratchet = {"map_id": 1, "x": -956.0, "y": -3745.0, "z": 5.0}
+        asked = []
+
+        def capital(standing):
+            asked.append(standing)
+            # Map 129 has no auctioneer; Kalimdor has the Ratchet one.
+            return dict(ratchet) if standing.get("map_id") == 1 else {}
+
+        self.capital = capital
+        self.home = dict(STORMWIND_BIND)
+        # Every stone is bound in Stormwind, so the old hub was reached by
+        # hearthing the whole family across the sea.
+        stormwind = situation.Point(0, STORMWIND_BIND["x"], STORMWIND_BIND["y"], 96.0)
+        self.binds = {"Bork": stormwind, "Grug": stormwind}
+        self.positions = {
+            "Grug": _at(2593.9, 1124.6, 129),
+            "Bork": _at(2595.0, 1124.0, 129),
+        }
+        self.ns["_mail_gear_holders"] = lambda names: {}
+        self.ns["_campaign_waiting"] = lambda names: True
+        self.ns["_fetch_free_slots"] = lambda names: {"Bork": 0, "Grug": 0}
+        self.ns["_bag_hold_stuck"] = lambda names, free_slots: False
+        state = asyncio.run(
+            self.fam._town_errand_start(
+                te.State(), ["Bork", "Grug"], "Grug", False, self.now, ""
+            )
+        )
+        self.assertEqual(ratchet, state.hub)
+        self.assertEqual(te.GO, state.phase)
+        self.assertEqual(te.BAG_PRESSURE_WHY, state.why)
+        self.assertEqual([_at(-4666.5, -2536.8, 1)], asked)
+        self.assertEqual([], self.hearths)
 
     def test_usable_vendor_supply_gap_starts_the_errand_between_runs(self):
         self.ns["_mail_gear_holders"] = lambda names: {}
@@ -786,6 +870,75 @@ class TheAdapter(unittest.TestCase):
         self.assertEqual(["Bork"], self.hearths)  # its row stands; not twice
 
 
+class TheCapitalLookup(unittest.TestCase):
+    """bridge._fetch_capital_hub reads the auctioneers on the map it is given."""
+
+    def setUp(self):
+        self.calls = []
+        results = [
+            [{"map_id": 1, "x": -900.0, "y": -3700.0, "name": "Kiln", "faction": 35}],
+            {"map_id": 1, "x": -956.0, "y": -3745.0, "z": 5.0, "d2": 4000.0},
+        ]
+        calls = self.calls
+
+        class Cur:
+            def execute(self, sql, args):
+                calls.append((sql, args))
+
+            def fetchall(self):
+                return results[0]
+
+            def fetchone(self):
+                return results[1]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        class Conn(Cur):
+            def cursor(self):
+                return Cur()
+
+        ns = {
+            "auction": types.SimpleNamespace(
+                TEAM_HOUSE={"alliance": 2},
+                reachable_house=lambda team, faction: 2,
+            ),
+            "pymysql": types.SimpleNamespace(
+                err=types.SimpleNamespace(MySQLError=RuntimeError)
+            ),
+            "travel": types.SimpleNamespace(MAILBOX_GO_TYPE=19),
+            "_connect": Conn,
+            "NPC_FLAG_AUCTIONEER": 2097152,
+            "ERRAND_HUB_MAILBOX_YARDS": 120.0,
+            "_ERRAND_AUCTIONEERS_SQL": "AUCTIONEERS",
+            "_ERRAND_MAILBOX_SQL": "MAILBOX",
+        }
+        module = ast.Module(body=_functions("_fetch_capital_hub"), type_ignores=[])
+        exec(compile(module, "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+        self.fetch = ns["_fetch_capital_hub"]
+
+    def test_inside_an_instance_the_auctioneers_are_read_at_the_door(self):
+        # Razorfen Downs (map 129): the lookup runs on Kalimdor (map 1) from
+        # the door, not on the instance map, which has no auctioneer.
+        inside = _at(2593.9, 1124.6, 129)
+        standing = te.errand_standing(
+            inside, {"129": {"map": 1, "x": -4666.5, "y": -2536.8}}
+        )
+        hub = self.fetch("Grug", "alliance", standing)
+        sql, args = self.calls[0]
+        self.assertEqual("AUCTIONEERS", sql)
+        self.assertEqual((-4666.5, -2536.8, 1, "Grug", 2097152), args)
+        self.assertEqual(1, hub["map_id"])
+        self.assertEqual("the auctioneer Kiln", hub["place"])
+
+    def test_no_reading_reads_nothing(self):
+        self.assertEqual({}, self.fetch("Grug", "alliance", None))
+        self.assertEqual([], self.calls)
+
+
 class TheCutOffVendorAimAdapter(unittest.TestCase):
     def setUp(self):
         self.current = {"Ugga": ""}
@@ -905,3 +1058,48 @@ class TheMovementChoice(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ATwoHanderFillsTheOffHand(unittest.TestCase):
+    """#1375: a paladin with a two-handed axe was "4 empty" every cooldown."""
+
+    WORN = (
+        "head",
+        "neck",
+        "shoulder",
+        "shirt",
+        "chest",
+        "waist",
+        "legs",
+        "feet",
+        "wrist",
+        "hands",
+        "finger1",
+        "finger2",
+        "back",
+    )
+
+    def fact(self, subclass, cls="paladin"):
+        equipped = {slot: {"item_level": 45} for slot in self.WORN}
+        equipped["mainhand"] = {
+            "item_level": 42,
+            "item_class": 2,
+            "item_subclass": subclass,
+        }
+        return {"Grog": {"class": cls, "equipped": equipped, "purse": 147483}}
+
+    def test_the_measured_paladin_is_not_short(self):
+        self.assertEqual([], te.short_of_gear(self.fact(1)))
+
+    def test_a_one_hander_still_leaves_the_off_hand_empty(self):
+        self.assertEqual(
+            ["Grog (4 empty)"], te.short_of_gear(self.fact(0, cls="warrior"))
+        )
+
+    def test_a_warriors_ranged_slot_still_counts(self):
+        self.assertEqual(
+            ["Grog (3 empty)"], te.short_of_gear(self.fact(1, cls="warrior"))
+        )
+
+    def test_the_subclasses_are_gearups(self):
+        self.assertEqual(set(te.TWO_HAND_SUBCLASSES), set(gearup.TWO_HAND_SUBCLASSES))

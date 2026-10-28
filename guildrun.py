@@ -30,7 +30,7 @@ WHAT IT DECIDES, and what Jev decides.
 
 THE LEARNING LOOP. Every run is a row in overseer_guild_run, beside the
 decision that made it: the options, Jev's answer and confidence, who acted,
-and the outcome (cleared, wiped, abandoned, timed out, not entered), deaths,
+and the outcome (cleared, wiped, abandoned, timed out, stalled, not entered), deaths,
 time inside, bosses, loot and gear. `rates` folds the last ROLLING runs of each
 (dungeon, level band, composition) into a smoothed success rate, (cleared + 1)
 / (runs + 2). Each option Jev is shown says its own record, and the heuristic
@@ -123,18 +123,20 @@ TANK, HEALER, DPS = raidroles.SEAT_TANK, raidroles.SEAT_HEALER, raidroles.SEAT_D
 # Run states and outcomes, as overseer_guild_run holds them.
 QUEUED, INSIDE, ENDED = "queued", "inside", "ended"
 CLEARED = "cleared"
+PROGRESS_BOSSES = 3
 OUTCOMES = (
     CLEARED,
     "wiped",
     "abandoned",
     "timed out",
+    "stalled",
     "not entered",
     "refused",
     "lost",
 )
 # The outcomes of a run that went in. Only these say anything about the
 # dungeon, and only these rest the members afterwards.
-WENT_IN = (CLEARED, "wiped", "abandoned", "timed out")
+WENT_IN = (CLEARED, "wiped", "abandoned", "timed out", "stalled")
 
 
 def enabled(environ=None) -> bool:
@@ -1149,6 +1151,9 @@ class Rate:
     runs: int
     cleared: int
     deaths: int
+    progress: int = 0
+    seconds_inside: int = 0
+    bosses_done: int = 0
 
     @property
     def smoothed(self) -> float:
@@ -1157,23 +1162,38 @@ class Rate:
     def words(self) -> str:
         if not self.runs:
             return "no runs yet"
-        return "%d cleared of %d run%s (%.0f%%), %.1f deaths a run" % (
+        words = "%d cleared of %d run%s (%.0f%%), %.1f deaths a run" % (
             self.cleared,
             self.runs,
             "" if self.runs == 1 else "s",
             100.0 * self.cleared / self.runs,
             self.deaths / float(self.runs),
         )
+        if self.bosses_done:
+            seconds_per_boss = self.seconds_inside // self.bosses_done
+            if seconds_per_boss < 60:
+                pace = "about %d seconds a boss" % seconds_per_boss
+            else:
+                pace = "about %d minutes a boss" % round(seconds_per_boss / 60)
+            words += "; %s" % pace
+        return words
 
 
 NO_RATE = Rate(0, 0, 0)
+
+
+def _progress_run(row: dict, outcome: str) -> bool:
+    return (
+        outcome == "timed out" and int(row.get("bosses_done") or 0) >= PROGRESS_BOSSES
+    )
 
 
 def rates(rows: list, rolling: int = ROLLING) -> dict:
     """(keyword, band, composition) -> Rate over the last `rolling` ended
     runs of each. Rows are overseer_guild_run rows, newest first. A run that
     never entered (refused, not entered, lost) says nothing about the dungeon
-    and is not counted."""
+    and is not counted. A timeout with at least PROGRESS_BOSSES counts as
+    progress, while the smoothed clear rate still counts clears only."""
     counted: dict = {}
     out: dict = {}
     for row in rows:
@@ -1192,10 +1212,15 @@ def rates(rows: list, rolling: int = ROLLING) -> dict:
             continue
         counted[key] = n + 1
         rate = out.get(key, NO_RATE)
+        bosses_done = int(row.get("bosses_done") or 0)
         out[key] = Rate(
             rate.runs + 1,
             rate.cleared + (1 if outcome == CLEARED else 0),
             rate.deaths + int(row.get("deaths") or 0),
+            rate.progress + int(_progress_run(row, outcome)),
+            rate.seconds_inside
+            + (int(row.get("seconds_inside") or 0) if bosses_done > 0 else 0),
+            rate.bosses_done + bosses_done,
         )
     return out
 
@@ -1207,13 +1232,16 @@ def door_rate(table: dict, keyword: str, band: str, composition: str = "") -> Ra
         exact = table.get((keyword, band, composition))
         if exact and exact.runs:
             return exact
-    runs = cleared = deaths = 0
+    runs = cleared = deaths = progress = seconds_inside = bosses_done = 0
     for (k, b, _c), rate in table.items():
         if k == keyword and b == band:
             runs += rate.runs
             cleared += rate.cleared
             deaths += rate.deaths
-    return Rate(runs, cleared, deaths)
+            progress += rate.progress
+            seconds_inside += rate.seconds_inside
+            bosses_done += rate.bosses_done
+    return Rate(runs, cleared, deaths, progress, seconds_inside, bosses_done)
 
 
 # THE RECORD BY SHAPE, COUNTING THE RUNS THAT NEVER GOT IN (#583, #584). The
@@ -1222,7 +1250,8 @@ def door_rate(table: dict, keyword: str, band: str, composition: str = "") -> Ra
 # healer or not (Member.plays). `rates` drops a run the finder turned away, yet
 # Ragefire at 10 to 14 ran 92 times and 72 never got in; that is the strongest
 # record there is, so it is counted here. A door is closed for a shape after
-# FAILING_RUNS runs in with no clear, or TURNED_AWAY_RUNS turn-aways in a row.
+# FAILING_RUNS runs in with no clear or three-boss timeout progress, or
+# TURNED_AWAY_RUNS turn-aways in a row.
 # Only RECORD_DAYS of runs count: the record moves only when the door is run,
 # so a door closed for a shape opens again a week after its last run.
 RECORD_DAYS = 7
@@ -1246,17 +1275,18 @@ class ShapeRecord:
     went_in: int = 0
     cleared: int = 0
     deaths: int = 0
+    progress: int = 0
     turned_away: int = 0
     streak: int = 0
 
     @property
     def rate(self) -> Rate:
-        return Rate(self.went_in, self.cleared, self.deaths)
+        return Rate(self.went_in, self.cleared, self.deaths, self.progress)
 
     @property
     def failing(self) -> bool:
         return (
-            self.went_in >= FAILING_RUNS and self.cleared == 0
+            self.went_in >= FAILING_RUNS and self.cleared == 0 and self.progress == 0
         ) or self.streak >= TURNED_AWAY_RUNS
 
     def words(self) -> str:
@@ -1301,6 +1331,7 @@ def _counted(rec: ShapeRecord, row: dict, entered: bool, streaking: bool):
             went_in=rec.went_in + 1,
             cleared=rec.cleared + (1 if outcome == CLEARED else 0),
             deaths=rec.deaths + int(row.get("deaths") or 0),
+            progress=rec.progress + int(_progress_run(row, outcome)),
         )
     return replace(
         rec, turned_away=rec.turned_away + 1, streak=rec.streak + int(streaking)
@@ -1345,13 +1376,16 @@ def cleared_doors(rows: list) -> set:
 
 
 def comp_rate(table: dict, composition: str, band: str) -> Rate:
-    runs = cleared = deaths = 0
+    runs = cleared = deaths = progress = seconds_inside = bosses_done = 0
     for (_k, b, c), rate in table.items():
         if c == composition and b == band:
             runs += rate.runs
             cleared += rate.cleared
             deaths += rate.deaths
-    return Rate(runs, cleared, deaths)
+            progress += rate.progress
+            seconds_inside += rate.seconds_inside
+            bosses_done += rate.bosses_done
+    return Rate(runs, cleared, deaths, progress, seconds_inside, bosses_done)
 
 
 # --- the plan for one pool, and the heuristic -------------------------------------
@@ -1368,6 +1402,9 @@ class Plan:
     table: dict = field(default_factory=dict)
     # map id -> raid recipes nobody in the pool's guild knows (unknown_recipes).
     recipes: dict = field(default_factory=dict)
+    # place -> (preraid.Gain per pool member): what one run of each level 60
+    # dungeon is worth to each seated raider (#760). Empty when unread.
+    gains: dict = field(default_factory=dict)
 
     @property
     def labels(self) -> tuple:
@@ -1378,9 +1415,14 @@ class Plan:
 
 
 def plan_for(
-    pool: Pool, all_doors: list, table: dict, recipes: dict | None = None
+    pool: Pool,
+    all_doors: list,
+    table: dict,
+    recipes: dict | None = None,
+    gains: dict | None = None,
 ) -> Plan | None:
-    """The plan for one pool. `recipes` is unknown_recipes for its guild."""
+    """The plan for one pool. `recipes` is unknown_recipes for its guild;
+    `gains` is preraid.run_gains over the pool's members (#760)."""
     comps = compositions(list(pool.members))
     if not comps:
         return None
@@ -1404,14 +1446,15 @@ def plan_for(
         band=band_of(comps[0].levels),
         table=dict(table),
         recipes=dict(recipes or {}),
+        gains=dict(gains or {}),
     )
 
 
 # A DOOR THAT KEEPS FAILING IS RETIRED AT THAT BAND (#575). Wailing Caverns
 # was 0 cleared of 48 runs over 30 days, and the heuristic kept re-picking it by
 # level fit because no single composition had MIN_SAMPLES runs. A door with at
-# least FAILING_RUNS runs at the band, pooled over compositions, and no clear is
-# skipped while any other door fits.
+# least FAILING_RUNS runs at the band, pooled over compositions, no clear and
+# no three-boss timeout progress is skipped while any other door fits.
 #
 # IT IS A PREFERENCE, NOT A BAN. When the failing door is the ONLY door that
 # fits the band it is still chosen: the record is a rolling window that only
@@ -1422,11 +1465,12 @@ FAILING_RUNS = 6
 
 def failing_doors(plan: Plan) -> set:
     """Keywords of doors that have failed FAILING_RUNS times at this band with
-    no clear. Callers prefer other doors over these; see FAILING_RUNS."""
+    no clear or three-boss timeout progress. Callers prefer other doors over
+    these; see FAILING_RUNS."""
     out = set()
     for door in plan.doors:
         rate = door_rate(plan.table, door.keyword, plan.band)
-        if rate.runs >= FAILING_RUNS and rate.cleared == 0:
+        if rate.runs >= FAILING_RUNS and rate.cleared == 0 and rate.progress == 0:
             out.add(door.keyword)
     return out
 
@@ -1444,6 +1488,47 @@ def _door_score(rate: Rate) -> float:
     return rate.smoothed if rate.runs >= MIN_SAMPLES else UNTRIED_PRIOR
 
 
+# PRE-RAID UPGRADES FOR THE SEATED RAIDERS (#760). From UPGRADE_FLOOR (the
+# level preraid starts reading, preraid.FIRE_FLOOR) a group's door is also
+# weighed by what one run drops for the five members in it: preraid.run_gains
+# per member, read by the bridge for the pool. It breaks a tie between doors
+# and is named in the choice's reason, so the bridge log says what a run was
+# chosen for. It never overrides a record: no gain moves a door past one that
+# scores better by its clear rate.
+UPGRADE_FLOOR = 52
+MAX_UPGRADE_NAMES = 3
+
+
+def _seat_gains(plan: Plan, door: Door, composition: Composition) -> list:
+    """The Gain of each member of `composition` for one run of `door`, or []
+    below UPGRADE_FLOOR or when the gains are unread."""
+    if not plan.gains or min(composition.levels) < UPGRADE_FLOOR:
+        return []
+    seated = set(composition.names)
+    return [g for g in plan.gains.get(door.keyword, ()) if g.name in seated]
+
+
+def upgrade_levels(plan: Plan, door: Door, composition: Composition) -> float:
+    """Expected item levels one run of `door` adds across the composition."""
+    return round(sum(float(g.levels) for g in _seat_gains(plan, door, composition)), 2)
+
+
+def upgrade_words(plan: Plan, door: Door, composition: Composition) -> str:
+    """ "upgrades for Name (best piece), ...", the members a run of `door`
+    helps most; "" when none or unread."""
+    helped = sorted(
+        (g for g in _seat_gains(plan, door, composition) if g.upgrades and g.best),
+        key=lambda g: (-g.levels, g.name),
+    )
+    if not helped:
+        return ""
+    shown = ", ".join(
+        "%s (%s)" % (g.name, g.best.split(" (")[0]) for g in helped[:MAX_UPGRADE_NAMES]
+    )
+    more = len(helped) - MAX_UPGRADE_NAMES
+    return "upgrades for %s%s" % (shown, " and %d more" % more if more > 0 else "")
+
+
 def heuristic_door(plan: Plan, composition: Composition) -> tuple:
     """(keyword, why). The best score among the doors that fit (_door_score:
     the smoothed rate at this band, or the untried prior under MIN_SAMPLES
@@ -1459,16 +1544,22 @@ def heuristic_door(plan: Plan, composition: Composition) -> tuple:
         rate = door_rate(plan.table, door.keyword, plan.band, composition.key)
         scored.append((_door_score(rate), door, rate))
     # Stable: on a tie the earlier door, the closer level fit, stays first.
-    scored.sort(key=lambda t: -t[0])
+    # With the seats' pre-raid gains read (#760), a tie goes to the door that
+    # drops the most for them first.
+    scored.sort(key=lambda t: (-t[0], -upgrade_levels(plan, t[1], composition)))
     _score, door, rate = scored[0]
+    said = upgrade_words(plan, door, composition)
     if rate.runs >= MIN_SAMPLES:
-        return door.keyword, "the best record at band %s: %s" % (
+        return door.keyword, "the best record at band %s: %s%s" % (
             plan.band,
             rate.words(),
+            "; " + said if said else "",
         )
     recipe = door_recipe(door, plan.recipes, composition.levels)
     if recipe:
-        return door.keyword, recipe_words(recipe)
+        return door.keyword, recipe_words(recipe) + ("; " + said if said else "")
+    if said:
+        return door.keyword, "the most pre-raid upgrades for the seats: %s" % said
     if door.keyword != doors[0].keyword:
         return door.keyword, "untried at band %s, over records that lose" % plan.band
     return door.keyword, "the closest level fit (%s wants %d to %d)" % (

@@ -324,6 +324,14 @@ RUN_473 = dm_run(
 )
 
 
+RUN_STALLED = dict(
+    RUN_473,
+    outcome="stalled",
+    why="the dungeon brain could not reach the next boss",
+    seconds_inside=1800,
+)
+
+
 def dm_story(run, deaths, boss_levels=DM_BOSSES):
     return runstory.guild_story(
         run, deaths, frozenset(), {38: "Loch Modan"}, boss_levels
@@ -419,6 +427,15 @@ class TheDeadminesCausesNameRealFaults(unittest.TestCase):
     def test_a_wipe_with_no_death_rows_says_cause_not_measured(self):
         told = dm_story(RUN_482, [])
         self.assertEqual(told["cause"], "Cause not measured.")
+
+
+class TheStalledRun(unittest.TestCase):
+    def test_a_stalled_run_is_worded_as_a_stall_not_lost(self):
+        told = dm_story(RUN_STALLED, [])
+        self.assertIn("The run stalled after 30 minutes inside", told["story"])
+        self.assertIn("could not reach the next boss", told["story"])
+        self.assertIn("stalled", told["causes"])
+        self.assertNotIn("lost", told["story"].lower())
 
 
 class TheRagefireClear(unittest.TestCase):

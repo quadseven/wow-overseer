@@ -38,6 +38,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Answers: current aura samples for the fixed family rosters.
 - Example: `overseer get /api/auras`
 
+## `GET /api/chat/party`
+
+- Query: `family`, `after`
+- Answers: lines to read aloud.
+- Example: `overseer get /api/chat/party family=grug`
+
 ## `GET /api/client/bags`
 
 - Query: `name`
@@ -115,6 +121,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Query: none
 - Answers: the guild coordinator's groups (guildrun).
 - Example: `overseer get /api/guildruns`
+
+## `GET /api/guildseats`
+
+- Query: none
+- Answers: the carry-ready tanks and healers per door.
+- Example: `overseer get /api/guildseats`
 
 ## `GET /api/item`
 
@@ -217,6 +229,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Query: `name`
 - Answers: the commands a member was given, with the realm's answers.
 - Example: `overseer get /api/v2/activity name=Grug`
+
+## `GET /api/v2/audit`
+
+- Query: none
+- Answers: the six fields for every roster and online guild member.
+- Example: `overseer get /api/v2/audit`
 
 ## `GET /api/v2/chronicle`
 
@@ -341,7 +359,7 @@ Each entry: path, query parameters, what it answers, one example.
 ## `GET /api/v2/training`
 
 - Query: `name`
-- Answers: what a member has learned, can train now, and cannot yet.
+- Answers: what a member has learned, can train now, cannot yet, and the recipes known per trade.
 - Example: `overseer get /api/v2/training name=Grug`
 
 ## `GET /api/v2/upgrades`

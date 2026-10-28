@@ -1,4 +1,4 @@
-"""GET /api/v2/training?name=X: what a member has learned, can train now, and cannot yet.
+"""GET /api/v2/training?name=X: what a member has learned, can train now, cannot yet, and the recipes known per trade.
 
 The profile's Standing card. Two kinds of thing a trainer sells:
 
@@ -17,13 +17,20 @@ The profile's Standing card. Two kinds of thing a trainer sells:
                  higher level), or waits on more skill. A trade at its top rank,
                  or one with no rank table, is learned.
 
+Each held trade also lists the recipes the member knows (craft spell id and
+name, from craftbook.json; read-only from character_spell), by name then id,
+capped at MAX_RECIPES with `recipe_count` giving the full number.
+
 Gated like every v2 read that takes a name: a family guild member, or a 404.
 The trainer rows do not change under a running server and are kept per class.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import threading
+from functools import lru_cache
 
 import campaignplan
 import classtrain
@@ -45,6 +52,9 @@ TRAINER_SQL = (
     "JOIN acore_world.trainer t ON t.Id = ts.TrainerId "
     "WHERE t.Type = 0 AND t.Requirement = %s GROUP BY ts.SpellId"
 )
+
+# Most recipes listed per trade; recipe_count still says how many are known.
+MAX_RECIPES = 300
 
 _TRAINERS: dict = {}
 _LOCK = threading.Lock()
@@ -118,6 +128,10 @@ def trade_state(skill: int, value: int, ceiling: int, level: int) -> dict:
         "cap": upper.cap,
         "level": upper.level,
         "needs": upper.needs,
+        # The skill at which the bridge buys this rank: the rank's own ask, or
+        # the margin below the ceiling when that is higher (next_rank). A
+        # trade at 58 of 75 with the rank asking 50 is not yet due.
+        "buys_at": max(upper.needs, ceiling - guildjobs.RANK_UP_MARGIN),
         "cost": upper.cost,
     }
     if rank is not None:
@@ -127,8 +141,36 @@ def trade_state(skill: int, value: int, ceiling: int, level: int) -> dict:
     return {"state": "skill", "next": nxt}
 
 
-def trades(skill_rows: list, level: int) -> list:
-    """Every held trade the bridge names, with its state."""
+@lru_cache(maxsize=1)
+def _craftbook() -> dict:
+    """skill id -> {craft spell id: name}, from the committed craftbook.json."""
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "..", "craftbook.json")) as f:
+            book = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return {
+        int(skill): {int(sp): str(entry[0]) for sp, entry in spells.items()}
+        for skill, spells in book.items()
+    }
+
+
+def recipes(skill: int, known: set, book: dict | None = None) -> dict:
+    """The recipes a member knows in one trade: spell id and name, by name then
+    id, at most MAX_RECIPES listed (`count` is the full number known)."""
+    crafts = (_craftbook() if book is None else book).get(skill, {})
+    mine = sorted(
+        ((name, sp) for sp, name in crafts.items() if sp in known),
+        key=lambda r: (r[0].lower(), r[1]),
+    )
+    return {
+        "recipe_count": len(mine),
+        "recipes": [{"spell": sp, "name": name} for name, sp in mine[:MAX_RECIPES]],
+    }
+
+
+def trades(skill_rows: list, level: int, known: set | None = None) -> list:
+    """Every held trade the bridge names, with its state and known recipes."""
     out = []
     for row in skill_rows or ():
         skill = int(row["skill"])
@@ -143,6 +185,7 @@ def trades(skill_rows: list, level: int) -> list:
                 name=name,
                 value=value,
                 max=ceiling,
+                **recipes(skill, known or set()),
             )
         )
     out.sort(key=lambda t: t["name"])
@@ -154,7 +197,7 @@ def build(name: str, f: dict, cap: int = campaignplan.LEVEL_CAP) -> dict:
     level = int(char.get("level") or 0)
     known = {int(r["spell"]) for r in f.get("known") or ()}
     s = spells(f.get("trainer") or [], known, level, cap)
-    t = trades(f.get("skills") or [], level)
+    t = trades(f.get("skills") or [], level, known)
     line = "%d learned, %d trainable now, %d above level" % (
         len(s["learned"]) + sum(1 for x in t if x["state"] == "learned"),
         len(s["trainable"]) + sum(1 for x in t if x["state"] == "trainable"),

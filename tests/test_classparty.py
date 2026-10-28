@@ -1296,6 +1296,63 @@ class TheHeldMeeting(unittest.TestCase):
             )
         )
 
+    def test_full_bags_stop_the_party_hunt_with_the_reason(self):
+        hunt = classparty.PartyHunt("hunt-spawn creature:1 item:2 count:1")
+        hunt.row_id = 7
+        said = "Whakk's hunt is refused: the character has no free bag slot"
+        hunt.ended(classhunt.Answer(classhunt.BAGS_FULL, said), 100.0)
+        self.assertEqual(hunt.command, "")
+        self.assertEqual(hunt.stop_why, said)
+        self.assertFalse(hunt.due(1000.0))
+
+    def test_a_final_hunt_refusal_stops_the_party_with_the_reason(self):
+        # #871: the module refusing the hunt for good (never) or for this pack
+        # (elsewhere) left the party standing idle until its 28 minute clock
+        # ran out, and the ask then read "timed out before quest credit".
+        for state, said in (
+            (classhunt.NEVER, "Whakk cannot hunt: the quest creature is not huntable"),
+            (classhunt.ELSEWHERE, "Whakk cannot hunt here: no pack of it in reach"),
+        ):
+            hunt = classparty.PartyHunt("hunt-spawn creature:1 count:1")
+            hunt.row_id = 7
+            hunt.ended(classhunt.Answer(state, said), 100.0)
+            self.assertEqual(hunt.command, "", state)
+            self.assertEqual(hunt.stop_why, said, state)
+
+    def test_a_worldserver_that_does_not_hunt_leaves_the_party_standing(self):
+        hunt = classparty.PartyHunt("hunt-spawn creature:1 count:1")
+        hunt.row_id = 7
+        hunt.ended(classhunt.Answer(classhunt.UNSUPPORTED, "old worldserver"), 100.0)
+        self.assertEqual(hunt.command, "")
+        self.assertEqual(hunt.stop_why, "")
+
+    def test_an_ordinary_refusal_waits_and_hunts_again(self):
+        hunt = classparty.PartyHunt("hunt-spawn creature:1 item:2 count:1")
+        hunt.row_id = 7
+        hunt.ended(classhunt.Answer(classhunt.LATER, "busy", 60.0), 100.0)
+        self.assertEqual(hunt.stop_why, "")
+        self.assertTrue(hunt.due(161.0))
+
+    def test_the_watch_ends_on_a_stopped_hunt(self):
+        source = classparty_bridge_source()
+        self.assertIn('if getattr(hunt, "stop_why", ""):', source)
+
+    def test_a_busy_walker_is_held_too(self):
+        # #1375: Whakk's Klaven's Tower meeting failed on these two.
+        for said in (
+            "Whakk cannot walk to Malformed Defias Drone: character is in combat",
+            "Whakk cannot walk to Malformed Defias Drone: character is on a "
+            "flight path",
+            "character is logging out",
+            "character is not in the world",
+            "a walk is already under way for this character",
+        ):
+            self.assertTrue(classparty.held_refusal(said), said)
+
+    def test_a_dead_or_unreachable_walker_is_not_held(self):
+        self.assertFalse(classparty.held_refusal("character is dead"))
+        self.assertFalse(classparty.held_refusal("no path to the target"))
+
     def test_other_endings_are_not_held(self):
         self.assertFalse(classparty.held_refusal("cut off after 2110 seconds"))
         self.assertFalse(classparty.held_refusal(""))
@@ -1319,3 +1376,11 @@ class TheHeldMeeting(unittest.TestCase):
     def test_the_held_retry_is_bounded(self):
         self.assertTrue(classparty.MEET_HELD_RETRIES >= 1)
         self.assertTrue(classparty.MEET_HELD_WAIT_SECONDS > 0)
+
+
+def classparty_bridge_source():
+    import pathlib
+
+    return (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
+        encoding="utf-8"
+    )

@@ -4,6 +4,7 @@
 
 import { html, raw, ago } from "./ui.js";
 import { families, guilds } from "./families.js";
+import { marker } from "./deploy.js";
 
 const NAV = [
   { key: "now", label: "Now", icon: "pulse", href: "#/now" },
@@ -31,10 +32,12 @@ const SUBS = {
 // Badges set by sections: {members: {n, tone, href}, guilds: {n, tone}}.
 const badges = {};
 let realmTag = "";
+let deployInfo;
 let operatorOn = false;
 
 export function setBadge(section, badge) { badges[section] = badge || null; }
 export function setRealmTag(tag) { realmTag = tag || ""; }
+export function setDeploy(d) { deployInfo = d || undefined; }
 export function setOperator(on) { operatorOn = !!on; }
 
 function hrefFor(n) {
@@ -72,6 +75,7 @@ export function mount(root) {
   <nav aria-label="Sections" data-slot="sidenav"></nav>
   <div class="sidebar-foot">
     <div class="age" data-slot="age"></div>
+    <div class="age deploy" data-slot="deploy" hidden></div>
     <a class="op-link" href="#/operator" data-slot="op"></a>
     <button type="button" class="btn btn-secondary theme-btn" data-action="theme"></button>
   </div>
@@ -80,6 +84,7 @@ export function mount(root) {
   <header class="topbar">
     <span class="brand-name">Overseer</span><span class="tag tag-neutral" data-slot="realm"></span>
     <span class="age" data-slot="age-short"></span>
+    <span class="age deploy" data-slot="deploy" hidden></span>
     <button type="button" class="btn btn-icon" aria-label="Search" data-action="search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i></button>
     <button type="button" class="btn btn-icon" data-action="theme" data-slot="theme-icon"></button>
   </header>
@@ -96,6 +101,10 @@ export function update(root, opts) {
   root.querySelector('[data-slot="tabbar"]').innerHTML = tabBar(section).map(String).join("");
   root.querySelectorAll('[data-slot="realm"]').forEach((el) => { el.textContent = realmTag; el.hidden = !realmTag; });
   updateAge(root, health);
+  const dep = marker(deployInfo, health && health.state);
+  root.querySelectorAll('[data-slot="deploy"]').forEach((el) => {
+    el.textContent = dep.text; el.hidden = !dep.text; el.setAttribute("data-restarting", dep.restarting ? "1" : "0");
+  });
   const themeLabel = theme === "light" ? "Dark theme" : "Light theme";
   const themeIcon = theme === "light" ? "ph ph-moon" : "ph ph-sun";
   root.querySelectorAll('[data-action="theme"]').forEach((b) => {

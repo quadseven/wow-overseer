@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""Loom live-evidence SQL adapter: one read-only statement on the dev realm (#1463).
+
+    .loom/live-evidence/sql <statement>
+
+Loom's station (its bus/live_adapter.py) runs this from a
+private copy to prove a shipped ticket's `sql:<SELECT ...>` Live line. It:
+
+1. refuses anything but one SELECT (or WITH ... SELECT) or one SHOW, the
+   same rule Loom applies before it calls this;
+2. opens `kubectl port-forward` to the realm database pod on a free local
+   port kubectl picks, as the identity of the kubeconfig the station passes
+   (the read-only agent reader);
+3. runs the statement once with the mysql client from PATH as the
+   SELECT-only database user, with no password and no option files read,
+   database acore_characters unless the statement names another;
+4. prints one line per row, `col=value` pairs separated by spaces (the
+   client's batch escaping, so a row is always one line; NULL as NULL);
+5. always ends the port-forward, on success, error, timeout or SIGTERM.
+
+Exit 0 with at least one row, 1 with none, 2 on any error (a refused
+statement, a missing kubectl or mysql, a port-forward that never opened, a
+client error, a deadline passed). Diagnostics go to stderr only.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+NAMESPACE = "wow-dev"
+POD = "mysql-0"
+DB_PORT = 3306
+DB_USER = "agent_reader"
+DATABASE = "acore_characters"
+LOCAL = "127.0.0.1"
+# Under the manifest's 60 second timeout, so this script reports its own
+# failure (and closes the port-forward) before the station kills it.
+FORWARD_WAIT = 15
+QUERY_WAIT = 35
+MAX_SQL = 1000
+MAX_ROWS = 200
+MAX_BYTES = 60 * 1024
+FORWARDING_RE = re.compile(r"^Forwarding from 127\.0\.0\.1:([0-9]+) -> %d\b" % DB_PORT)
+
+# The read-only rule, as Loom's live_proof.sql_refusal states it: one SELECT
+# with a FROM (or WITH ... SELECT), or one SHOW of the forms below, with no
+# second statement and no word that could write.
+_SELECT_RE = re.compile(r"^(?:select|with)\b.*\bfrom\b", re.I | re.S)
+_WRITE_RE = re.compile(
+    r"\b(?:insert|update|delete|drop|alter|create|truncate|grant|revoke|replace|merge"
+    r"|pragma|attach|detach|vacuum|reindex|into|lock|call|exec|execute|copy|set"
+    r"|load|handler|outfile|dumpfile|sleep|benchmark|get_lock)\b",
+    re.I,
+)
+_SHOW_RE = re.compile(
+    r"^show\s+(?:full\s+)?(?:databases|schemas|tables|columns|fields|index|indexes|keys"
+    r"|create\s+table|table\s+status|grants|variables|status|processlist)\b[^;]*$",
+    re.I,
+)
+
+
+class ReadError(Exception):
+    """The statement could not be answered."""
+
+
+def fail(message: str) -> int:
+    print("live-evidence sql: %s" % message, file=sys.stderr)
+    return 2
+
+
+def refusal(statement: str) -> str:
+    """Why a statement may not run here, or "" when it is one read-only
+    SELECT or SHOW."""
+    body = statement.strip().rstrip(";").strip()
+    if not body or not body.isascii() or len(body) > MAX_SQL:
+        return "the statement is not plain ASCII of 1 to %d characters" % MAX_SQL
+    if any(ord(char) < 32 and char not in "\t\n" for char in body):
+        return "the statement has a control character"
+    if ";" in body or "--" in body or "/*" in body or "#" in body:
+        return "the statement has a second statement or a comment"
+    if _SHOW_RE.match(body):
+        return ""
+    if _SELECT_RE.match(body) and not _WRITE_RE.search(body):
+        return ""
+    return "only one read-only SELECT or SHOW runs"
+
+
+def tool(name: str) -> str:
+    found = shutil.which(name)
+    if found is None:
+        raise ReadError("`%s` is not on PATH; install it on the station host" % name)
+    return found
+
+
+def _drain(stream, sink) -> None:
+    for raw in iter(stream.readline, b""):
+        sink.append(raw.decode("utf-8", "replace").rstrip("\n"))
+
+
+def open_forward(kubectl: str):
+    """(the port-forward process, the local port it listens on). The child
+    stays in this script's process group, so the station's timeout, which
+    ends the group, ends it too."""
+    process = subprocess.Popen(
+        [
+            kubectl,
+            "-n",
+            NAMESPACE,
+            "port-forward",
+            "pod/" + POD,
+            ":%d" % DB_PORT,
+            "--address",
+            LOCAL,
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    out, err = [], []
+    threading.Thread(target=_drain, args=(process.stdout, out), daemon=True).start()
+    threading.Thread(target=_drain, args=(process.stderr, err), daemon=True).start()
+    deadline = time.monotonic() + FORWARD_WAIT
+    while time.monotonic() < deadline:
+        for line in list(out):
+            found = FORWARDING_RE.match(line)
+            if found:
+                return process, int(found.group(1))
+        if process.poll() is not None:
+            break
+        time.sleep(0.05)
+    close_forward(process)
+    why = (err[-1:] or ["no message"])[0]
+    raise ReadError("the port-forward to %s/%s did not open (%s)" % (NAMESPACE, POD, why))
+
+
+def close_forward(process) -> None:
+    if process is None or process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def rows_of(batch: str):
+    """mysql --batch output (a tab-separated header, then rows) as
+    `col=value` lines."""
+    lines = batch.splitlines()
+    if not lines:
+        return []
+    header = lines[0].split("\t")
+    out = []
+    for line in lines[1:]:
+        values = line.split("\t")
+        out.append(" ".join("%s=%s" % pair for pair in zip(header, values)))
+    return out
+
+
+def run_query(mysql: str, port: int, statement: str):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("MYSQL")}
+    argv = [
+        mysql,
+        "--no-defaults",
+        "--protocol=TCP",
+        "--host=" + LOCAL,
+        "--port=%d" % port,
+        "--user=" + DB_USER,
+        "--database=" + DATABASE,
+        "--connect-timeout=10",
+        "--batch",
+        "--execute=" + statement,
+    ]
+    try:
+        done = subprocess.run(
+            argv,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=QUERY_WAIT,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        raise ReadError("the statement did not finish in %d seconds" % QUERY_WAIT) from None
+    if done.returncode != 0:
+        tail = done.stderr.decode("utf-8", "replace").strip().splitlines()[-1:] or ["no message"]
+        raise ReadError("mysql exited %d (%s)" % (done.returncode, tail[0]))
+    return rows_of(done.stdout.decode("utf-8", "replace"))
+
+
+def _terminated(signum, frame):
+    raise SystemExit(2)
+
+
+def main(argv) -> int:
+    if len(argv) != 1:
+        return fail("usage: sql <statement>")
+    statement = argv[0].strip().rstrip(";").strip()
+    why = refusal(statement)
+    if why:
+        return fail("refused: %s" % why)
+    signal.signal(signal.SIGTERM, _terminated)
+    forward = None
+    try:
+        kubectl, mysql = tool("kubectl"), tool("mysql")
+        forward, port = open_forward(kubectl)
+        rows = run_query(mysql, port, statement)
+    except (ReadError, OSError) as err:
+        return fail(str(err))
+    finally:
+        close_forward(forward)
+    printed = 0
+    for row in rows[:MAX_ROWS]:
+        printed += len(row) + 1
+        if printed > MAX_BYTES:
+            print("live-evidence sql: output cut at %d bytes" % MAX_BYTES, file=sys.stderr)
+            break
+        print(row)
+    if len(rows) > MAX_ROWS:
+        print("live-evidence sql: %d rows, %d printed" % (len(rows), MAX_ROWS), file=sys.stderr)
+    return 0 if rows else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

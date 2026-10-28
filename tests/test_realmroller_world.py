@@ -337,14 +337,16 @@ class DryRun(unittest.TestCase):
             lines[-1],
         )
 
-    def test_unpaused_with_a_family_inside_waits_on_the_family(self):
+    def test_unpaused_without_the_retired_keys_rolls_without_waiting(self):
         ch = json.loads((self.roller / "channel.json").read_text())
         ch["paused"] = False
+        for key in ("min_interval", "settle", "families", "guild_run_states"):
+            del ch["policy"][key]
         (self.roller / "channel.json").write_text(json.dumps(ch))
         _, lines = self.run_cli()
         self.assertEqual(
             lines[-1],
-            "dry-run  would wait r2026.10.04-2: 2 family member(s) in an instance",
+            "dry-run  would roll r2026.10.04-2: one commit: worldserver digests + banner + deployed_dev",
         )
 
     def test_a_release_on_the_realm_is_not_called_a_rollback(self):

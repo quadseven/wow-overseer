@@ -132,6 +132,7 @@ import mountbuy
 import purse
 import pvpgear
 import raidroles
+import raidrun
 import recipebook
 import restsupply
 import situation
@@ -318,12 +319,19 @@ ALCHEMIST_EVERY = 5
 # set the crew, the family and the stand-in read. Any other recipe is cast
 # only once `character_spell` says the member knows it.
 AUTO_LEARNED = craft.AUTO_LEARNED
-# EVERY CRAFTING TRADE craft.RECIPES COVERS (2026-10-05). First Aid first, a
-# secondary trade every member may hold, then Tailoring, then the rest by
-# skill line. A trade with no recipe castable in place (Mining's smelts need a
-# forge; Cooking needs a fire) simply never yields a cast.
-CRAFT_SKILLS = (FIRST_AID, TAILORING) + tuple(
-    sorted(s for s in craft.RECIPES if s not in (FIRST_AID, TAILORING))
+# EVERY CRAFTING TRADE craft.RECIPES COVERS (2026-10-05). Cooking first, then
+# First Aid, a secondary trade every member may hold, then Tailoring, then the
+# rest by skill line. A trade with no recipe castable in place (Mining's smelts
+# need a forge) simply never yields a cast.
+#
+# COOKING GOES FIRST (#761). One craft step is written per pass and the craft
+# cooldown follows it, so the first trade with materials in the bags takes
+# every turn. A cook carries a stack of Linen Cloth for weeks, and with First
+# Aid first its meat was never reached: on 2026-10-27 the Bonkers cook stood at
+# Cooking 1/75 and every craft step it took was a Linen Bandage. Meat arrives a
+# few pieces at a time, so casting it when it is there costs First Aid little.
+CRAFT_SKILLS = (COOKING, FIRST_AID, TAILORING) + tuple(
+    sorted(s for s in craft.RECIPES if s not in (COOKING, FIRST_AID, TAILORING))
 )
 CRAFT_SPELLS = frozenset(
     r.spell_id for skill in CRAFT_SKILLS for r in craft.RECIPES.get(skill, ())
@@ -402,9 +410,10 @@ TOOL_WEAPON_SUBCLASSES = frozenset({14, 20})
 WORN_ARMOR_SUBCLASSES = frozenset({1, 2, 3, 4, 5, 6})
 
 # THE BAR FOR A POST, per role: a stack must hold at least this many before it
-# is worth thirty copper of postage and a walk. Maintenance posts soonest, a
-# raider only a real haul. MAX_LETTERS per stand keeps one stop short.
-POST_MIN = {MAINTENANCE: 5, SUMMONER: 10, RAIDER: 20}
+# is worth thirty copper of postage and a walk. A maintenance member posts any
+# gathered yield so field materials reach the guild; a raider still needs a
+# real haul. MAX_LETTERS per stand keeps one stop short.
+POST_MIN = {MAINTENANCE: 1, SUMMONER: 10, RAIDER: 20}
 MAX_LETTERS = 6
 POSTAGE_COPPER = 30
 
@@ -792,9 +801,58 @@ def _cooling(member: Member, action: str, recent) -> bool:
     elif action == "gear" and not last_gear_failed(member.name, recent):
         minutes = GEAR_SUCCESS_COOLDOWN_MINUTES
     return any(
-        r.name == member.name and r.action == action and int(r.age_minutes) < minutes
+        r.name == member.name
+        and r.action == action
+        and int(r.age_minutes) < _train_row_wait(r, minutes)
         for r in recent or ()
     )
+
+
+# THE TRAINER GATE'S PASSING WALLS (#1116), the module's own literals
+# (MailWalkRefusal and ErrandWalkRefusal in mod-overseer's
+# overseer_decisions.h) for a member that was busy when the row was served: in
+# a fight, on a flight, logging out, out of the world, inside an instance or
+# battleground, already walking, or held by another verb, and the mid-walk
+# endings of a fight, a flight and leaving the world (#1389). Matched exactly. The
+# module calls many more trainer refusals retryable (a trainer beyond the cap,
+# ground that does not hold, Outland, a grouped follower, a dead character, the
+# far walk budget); those say the same walk will be refused again for a while,
+# and they keep the doubling backoff below.
+PASSING_TRAIN_REASONS = frozenset(
+    {
+        "character is in combat",
+        "entered combat on the way to the trainer",
+        "character is on a flight path",
+        "character is logging out",
+        "character is not in the world",
+        "character is inside an instance or battleground",
+        "took a flight on the way to the trainer",
+        "left the world on the way to the trainer",
+        "a walk is already under way for this character",
+        "character is held by another verb",
+    }
+)
+
+
+def passing_train_row(r) -> bool:
+    """Whether a failed trainer row ended for a reason the next moment changes
+    (#1116): one of PASSING_TRAIN_REASONS, read exactly from the module's
+    `reason`. Such a row learned nothing about the trainer or the road, so it
+    does not double the wait (train_cooldown); it still waits the base
+    COOLDOWN_MINUTES["train"] (_train_row_wait), so the same walk is not asked
+    every pass. Counting a fight as a failed walk once sat a member at a tier
+    cap out up to twelve hours behind a fight it had already won."""
+    if r.status not in TRAIN_FAILED:
+        return False
+    return (r.refusal or r.reason) in PASSING_TRAIN_REASONS
+
+
+def _train_row_wait(r, minutes: int) -> int:
+    """The minutes `r` holds its step back: the base trainer wait for a passing
+    trainer row, `minutes` for every other row."""
+    if r.action == "train" and passing_train_row(r):
+        return min(minutes, COOLDOWN_MINUTES["train"])
+    return minutes
 
 
 def train_cooldown(name: str, recent, skill_id: int | None = None) -> int:
@@ -802,6 +860,8 @@ def train_cooldown(name: str, recent, skill_id: int | None = None) -> int:
 
     Rows without a skill id predate skill-scoped cooldowns and remain
     character-wide so older facts and callers preserve their prior behavior.
+    A passing row (passing_train_row) neither doubles the wait nor ends the
+    run of failures it sits in.
     """
     rows = sorted(
         (
@@ -809,6 +869,7 @@ def train_cooldown(name: str, recent, skill_id: int | None = None) -> int:
             for r in recent or ()
             if r.name == name
             and r.action == "train"
+            and not passing_train_row(r)
             and (skill_id is None or r.skill_id is None or r.skill_id == skill_id)
         ),
         key=lambda r: int(r.age_minutes),
@@ -831,7 +892,7 @@ def _training_cooling(name: str, skill_id: int, recent) -> bool:
         and (r.skill_id is None or r.skill_id == skill_id)
     )
     minutes = train_cooldown(name, rows, skill_id)
-    return any(int(r.age_minutes) < minutes for r in rows)
+    return any(int(r.age_minutes) < _train_row_wait(r, minutes) for r in rows)
 
 
 # ---------------------------------------------------------------------------
@@ -1034,14 +1095,26 @@ def choose_alchemists(members, tailors=frozenset(), recent=()) -> frozenset:
     return frozenset(out)
 
 
-def choose_cooks(members, recent=()) -> frozenset:
-    """Choose one maintenance cook per guild, keeping a trainer walk stable."""
+def choose_cooks(
+    members, recent=(), tailors=frozenset(), alchemists=frozenset()
+) -> frozenset:
+    """Choose one maintenance cook per guild, keeping a trainer walk stable.
+
+    NEVER A TAILOR OR AN ALCHEMIST PICK (#761). guildcorps.plan_corps gives a
+    member one post and fills the tailor and alchemist posts before the cook's,
+    so a cook that is also one of those picks leaves the cook post empty the
+    day its other trade outranks a guildmate's. And the two choices sort the
+    same way (fewest primaries, then name), so without this the same member
+    was both: on 2026-10-27 Cave's pick was its tailor pick, which had learned
+    neither trade, and the corps line named no cook.
+    """
     picked = {
         r.name for r in recent or () if r.action == "train" and r.skill_id == COOKING
     }
+    others = frozenset(tailors or ()) | frozenset(alchemists or ())
     crews = {}
     for m in members or ():
-        if m.role == MAINTENANCE:
+        if m.role == MAINTENANCE and m.name not in others:
             crews.setdefault(m.guild, []).append(m)
     out = set()
     for crew in crews.values():
@@ -1478,11 +1551,53 @@ def _weave_recipe(member, skill, spell):
     return (recipe, min(casts, CRAFT_BATCH)) if casts > 0 else (None, 0)
 
 
+# THE COOK COOKS THE MEAT IT CARRIES (#761). The ladder routes Charred Wolf
+# Meat at 1-49 and Roasted Boar Meat at 50-74, one meat each, but the realm
+# grants a point for either from 1 to 85 (SkillLineAbility: learn 1, yellow 45,
+# grey 85, the MEASURED_BANDS rows in tests/test_craft.py) and a new cook knows
+# both without a trainer. A cook levelling past 20 kills no wolves that drop
+# Stringy Wolf Meat, so on 2026-10-27 the Bonkers cook held Cooking 1/75 and
+# not one cooking cast was ever written. Each auto-learned rung is castable
+# across its whole band, so whichever of the two meats the bags hold is
+# cooked, and both are kept from the sale.
+COOK_BANDS = {2538: (1, 85), 2540: (1, 85)}
+
+
+def _open_recipes(member, skill) -> tuple:
+    """Every recipe this member may cast toward `skill` now, materials aside.
+
+    The route's own rung first (`_open_recipe`), then for Cooking every other
+    known rung whose COOK_BANDS band holds the member's value.
+    """
+    first = _open_recipe(member, skill)
+    out = [first] if first is not None else []
+    if skill != COOKING:
+        return tuple(out)
+    value, ceiling = member.skill(skill)
+    if ceiling <= 0 or value >= ceiling:
+        return tuple(out)
+    for recipe in craft.RECIPES.get(COOKING, ()):
+        low, grey = COOK_BANDS.get(recipe.spell_id, (0, 0))
+        if recipe in out or not low <= value < grey:
+            continue
+        if recipe.spell_id not in AUTO_LEARNED and recipe.spell_id not in member.known:
+            continue
+        if craft_rhythm.GATHERED.get(recipe.spell_id):
+            out.append(recipe)
+    return tuple(out)
+
+
 def _craft_recipe(member, skill):
     """(recipe, casts) this member can cast now toward `skill`, or (None, 0)."""
-    recipe = _open_recipe(member, skill)
-    if recipe is None:
-        return None, 0
+    for recipe in _open_recipes(member, skill):
+        made, casts = _recipe_casts(member, skill, recipe)
+        if made is not None:
+            return made, casts
+    return None, 0
+
+
+def _recipe_casts(member, skill, recipe):
+    """(recipe, casts) of one open recipe, or of the earlier rung it eats."""
     fed = craft_rhythm.BOLT_FED.get(recipe.spell_id)
     if fed is not None and member.count(fed[1].entry) < fed[1].per_cast:
         # The rung eats its own earlier output (a Cured Heavy Hide, a Minor
@@ -1499,8 +1614,7 @@ def craft_entries(member) -> frozenset:
     """The gathered items this member's next casts eat, which it keeps."""
     out = set()
     for skill in CRAFT_SKILLS:
-        recipe = _open_recipe(member, skill)
-        if recipe is not None:
+        for recipe in _open_recipes(member, skill):
             out.update(int(r.entry) for r in craft_rhythm.GATHERED[recipe.spell_id])
             fed = craft_rhythm.BOLT_FED.get(recipe.spell_id)
             if fed is not None:
@@ -1781,6 +1895,17 @@ def junk_sales(member, kept, action="gear") -> tuple:
     )
 
 
+def sale_notes(stacks) -> tuple:
+    """One vendorsale.Sale per stack sold on a `guid:<n>` row, for the step's
+    `sales`: what the bridge names when the world delivers each row (#1592)."""
+    return tuple(vendorsale.sale_of("guid:%d" % int(c.guid), c) for c in stacks)
+
+
+def junk_notes(member, kept) -> tuple:
+    """The Sales of the rows junk_sales writes, in the same order."""
+    return sale_notes(_junk(member, kept))
+
+
 def spendable(member, kind, copper) -> int:
     """Copper of `copper` (the purse and what its sales bring) that `kind` may
     spend under the member's purchase order (purse.py): everything above what
@@ -1852,14 +1977,68 @@ def riding_step(m, recent):
     )
 
 
-def mount_step(m, facts, recent, cap):
+def mount_refused_for_bags(name, recent) -> bool:
+    """Whether the member's newest mount buy (not its walk) came back
+    mountbuy.BAGS_FULL_REASON."""
+    buys = [
+        r
+        for r in recent or ()
+        if r.name == name
+        and r.action == mountbuy.ACTION
+        and not r.walk
+        and str(r.command or "").startswith("entry:")
+    ]
+    if not buys:
+        return False
+    newest = min(buys, key=lambda r: (int(r.age_minutes), -int(r.row_id)))
+    reason = mountbuy.BAGS_FULL_REASON
+    return reason in (newest.refusal, newest.reason) or reason in str(
+        newest.result or ""
+    )
+
+
+def mount_room_short(m, recent) -> bool:
+    """Whether the mount buy has no bag slot to land in: the bags read full,
+    or the last buy was refused for full bags and no free slot has been read
+    since (#1593)."""
+    if m.free_slots is not None and int(m.free_slots) >= 1:
+        return False
+    return m.free_slots is not None or mount_refused_for_bags(m.name, recent)
+
+
+def _mount_room(m, offer, recent, cap, kept, book, crafters, master):
+    """(room step or None, a note) for a member whose mount buy has no bag
+    slot: one make-room step (_room_ladder) before the vendor walk, or the walk
+    held with the reason."""
+    said = "%s makes room in its bags (%s free, 1 needed) for %s" % (
+        m.name,
+        "none" if m.free_slots is None else int(m.free_slots),
+        offer.name or "mount item %d" % offer.entry,
+    )
+    if not _cooling(m, ROOM_ACTION, recent):
+        step = _room_ladder(m, said, 1, kept, book, cap, crafters, master)
+        if step is not None:
+            return step, ""
+        return None, (
+            "%s holds its mount walk: its bags have no free slot for %s and "
+            "nothing it may sell, mail or destroy"
+            % (m.name, offer.name or "item %d" % offer.entry)
+        )
+    return None, (
+        "%s holds its mount walk until a bag slot is free for %s"
+        % (m.name, offer.name or "item %d" % offer.entry)
+    )
+
+
+def mount_step(m, facts, recent, cap, kept=None, book=None, crafters=None, master=""):
     """(step or None, a note): a member with Apprentice Riding and no mount
     walks to its race's mount vendor, buys the cheapest mount it can ride with
     its own gold above its class spell reserve, and uses the item to learn the
     mount (mountbuy.decide, #779). A member carrying an unused mount item only
     uses it. `facts` is a mountbuy.Facts, None for a member the bridge did not
     read. Never while offline, dead or fighting, and once per
-    COOLDOWN_MINUTES[mountbuy.ACTION]."""
+    COOLDOWN_MINUTES[mountbuy.ACTION]. With no bag slot for the item
+    (mount_room_short, #1593) it makes room first or holds the walk."""
     if facts is None:
         return None, ""
     order = m.purse
@@ -1894,6 +2073,8 @@ def mount_step(m, facts, recent, cap):
         return guildcorps.Step(
             m.name, mountbuy.ACTION, int(offer.entry), said, rows=(use,)
         ), ""
+    if mount_room_short(m, recent):
+        return _mount_room(m, offer, recent, cap, kept, book, crafters, master)
     said = "%s walks to its race's mount vendor to buy %s for %s of its own" % (
         m.name,
         offer.name or "item %d" % offer.entry,
@@ -1926,6 +2107,9 @@ def mount_step(m, facts, recent, cap):
 
 
 WEAPON_ACTION = "weapon"
+# The crossing to a weapon master across the water (weaponskill.choose_far_master):
+# its row shares every crossing's clock and walls (CROSS_ACTIONS).
+WEAPON_CROSS_ACTION = WEAPON_ACTION + "-cross"
 # The walk ends this near the weapon master's spawn: the module's train-weapon
 # looks for a trainer it can talk to from where the member stands.
 WEAPON_MASTER_NEAR_YARDS = 3
@@ -1970,7 +2154,7 @@ def weapon_step(m, offer, recent, cap):
     if not offer.spawn:
         return None, (
             "%s carries %s (%s) and has no skill %d for it; no weapon master of "
-            "its side on this map teaches it"
+            "its side on this map or across the water teaches it"
             % (m.name, need.item, need.why, need.skill)
         )
     if weapon_purse(m, need) < int(offer.cost):
@@ -1981,6 +2165,8 @@ def weapon_step(m, offer, recent, cap):
             need.item,
             purse.money(weapon_purse(m, need)),
         )
+    if m.map_id is not None and int(offer.map_id) != int(m.map_id):
+        return weapon_cross_step(m, offer, recent)
     said = "%s walks to %s to buy skill %d for %s of its own, to wield %s (%s)" % (
         m.name,
         offer.master or "a weapon master",
@@ -2018,6 +2204,63 @@ def weapon_step(m, offer, recent, cap):
             source_for(WEAPON_ACTION + "-walk", m.name),
         ),
         goal=offer.master or "the weapon master",
+    )
+    return step, ""
+
+
+def weapon_cross_step(m, offer, recent):
+    """(step or None, a note) for a weapon master on the other classic continent
+    (weaponskill.choose_far_master, #793): one `cross-to-map map:<id>` row, no
+    walk, as the level step crosses (level_cross_step). Once the member stands
+    on that map, the next pass finds the master there and walks to it. Held
+    with no row while its last crossing is young (crossing_cooling); a crossing
+    the module refused for good (class_walls) is named and not asked."""
+    need, to_map = offer.need, int(offer.map_id)
+    where = classquest.CONTINENTS.get(to_map, "map %d" % to_map)
+    wall = class_walls(m.name, recent).get(to_map)
+    if wall:
+        return None, (
+            "%s carries %s (%s) and has no skill %d for it; %s teaches it on %s, "
+            "and the module will not cross it there (%s)"
+            % (
+                m.name,
+                need.item,
+                need.why,
+                need.skill,
+                offer.master or "a weapon master",
+                where,
+                wall,
+            )
+        )
+    if crossing_cooling(m.name, recent):
+        return None, ""
+    said = (
+        "%s crosses to %s by its faction's boat or zeppelin to buy skill %d at %s "
+        "for %s of its own, to wield %s (%s)"
+        % (
+            m.name,
+            where,
+            need.skill,
+            offer.master or "a weapon master",
+            purse.money(offer.cost),
+            need.item,
+            need.why,
+        )
+    )
+    step = guildcorps.Step(
+        m.name,
+        WEAPON_ACTION,
+        int(need.skill),
+        said,
+        rows=(
+            guildcorps.Row(
+                "job",
+                classquest.cross_command(to_map),
+                "",
+                source_for(WEAPON_CROSS_ACTION, m.name),
+            ),
+        ),
+        goal=where,
     )
     return step, ""
 
@@ -2101,6 +2344,7 @@ def gear_step(member, character, vendor_rows, cap, kept=None):
             "",
             source_for("gear", member.name),
         ),
+        sales=junk_notes(member, kept),
     )
     return step, ""
 
@@ -2150,6 +2394,7 @@ def supply_step(member, vendor_rows, cap, kept=None):
                 "",
                 source_for(restsupply.ACTION, member.name),
             ),
+            sales=junk_notes(member, kept),
         ),
         "",
     )
@@ -2421,6 +2666,7 @@ def postable(member: Member, kept, crafting=False, bar=None) -> list:
         c
         for c in member.carried
         if c.material
+        and not c.junk
         and int(c.count) >= bar
         and int(c.entry) not in eaten
         and not _kept(member.name, c, kept)
@@ -2526,6 +2772,7 @@ def _sell_step(member, kept, cap):
             "",
             source_for("sell-walk", member.name),
         ),
+        sales=sale_notes(junk),
     )
 
 
@@ -2570,13 +2817,24 @@ def entrances() -> dict:
         return json.load(f)
 
 
+# The level a raid night's on-call summoner is held to as a ceiling: the cap.
+RAID_CEILING = 60
+
+
+def _door_map(keyword: str):
+    """The map a door keyword opens: a portal's, or the raid door's."""
+    if raidrun.is_raid(keyword):
+        return raidrun.MOLTEN_CORE_MAP
+    return dungeonpath.PORTAL_MAPS.get(keyword)
+
+
 def stone_for(keyword: str, entrances: dict, stones) -> Spot | None:
     """The meeting stone nearest the door's entrance, within STONE_YARDS.
 
     `entrances` is entrances.json (dungeon map id -> the entrance on its
     continent); `stones` are the world's meeting stone spawns as Spots.
     """
-    map_id = dungeonpath.PORTAL_MAPS.get(keyword)
+    map_id = _door_map(keyword)
     door = (entrances or {}).get(str(map_id)) if map_id is not None else None
     if not door:
         return None
@@ -2649,29 +2907,37 @@ def _spread_door(m, entrances, stones, load):
     return Door(keyword, run.place, run.floor, run.ceiling, stone)
 
 
+def _campaign_door_of(member, campaign_door):
+    """The Door `member` can hold for the family's campaign door, without a
+    stone, or None. A raid night's door is held by any warlock at the raid's
+    minimum level (a raid is not in campaignplan.RUNS)."""
+    if raidrun.is_raid(campaign_door):
+        floor = raidrun.MIN_LEVEL[campaign_door]
+        if member.level < floor:
+            return None
+        return Door(campaign_door, raidrun.place(campaign_door), floor, RAID_CEILING)
+    for candidate in doors_for(member):
+        if candidate.keyword == campaign_door:
+            return Door(
+                campaign_door, candidate.place, candidate.floor, candidate.ceiling
+            )
+    return None
+
+
 def _assign_campaign_door(casters, entrances, stones, campaign_door):
     """Reserve the family's campaign door for its highest-level eligible caster."""
     load, out = {}, {}
     if not campaign_door:
         return None, load, out
-    stone = run = on_call = None
+    stone = door = None
     for member in casters:
-        for candidate in doors_for(member):
-            if candidate.keyword != campaign_door:
-                continue
-            stone = stone_for(candidate.keyword, entrances, stones)
-            if stone is not None:
-                on_call, run = member, candidate
-                break
-        if on_call is not None:
-            break
-    if on_call is None or run is None or stone is None:
-        return None, load, out
-    out[on_call.name] = Door(
-        campaign_door, run.place, run.floor, run.ceiling, stone, True
-    )
-    load[stone.spawn] = 1
-    return on_call, load, out
+        door = _campaign_door_of(member, campaign_door)
+        stone = stone_for(campaign_door, entrances, stones) if door else None
+        if stone is not None:
+            out[member.name] = replace(door, stone=stone, on_call=True)
+            load[stone.spawn] = 1
+            return member, load, out
+    return None, load, out
 
 
 # ---------------------------------------------------------------------------
@@ -3020,6 +3286,7 @@ def plan(
     weapons=None,
     equip_room=None,
     mounts=None,
+    loops=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -3054,7 +3321,9 @@ def plan(
     `mounts` name -> mountbuy.Facts for a member with riding and no mount
     (mount_step);
     `equip_room` name -> (free slots needed, what for) for members too full to
-    put an upgrade on (gear.equip_room, equip_room_step).
+    put an upgrade on (gear.equip_room, equip_room_step);
+    `loops` name -> deathloop.Loop for a member dying over and over in one zone
+    (death_loop_first), None or {} for none.
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -3064,7 +3333,7 @@ def plan(
     pending = {str(n) for n in pending or ()}
     tailors = choose_tailors(members)
     alchemists = choose_alchemists(members, tailors, recent)
-    cooks = choose_cooks(members, recent)
+    cooks = choose_cooks(members, recent, tailors, alchemists)
     trades = cloth_trades(
         split_trades(members, tailors, alchemists), tailors, alchemists, cooks
     )
@@ -3122,6 +3391,7 @@ def plan(
             if counters["room"].get(m.guild, 0) < ROOM_STEPS_PER_GUILD
             else None,
             _offer_for(mounts, m.name),
+            _offer_for(loops, m.name),
         )
         asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
         helps += asked
@@ -3303,7 +3573,19 @@ def _quest_first(
 
 
 def _upkeep_first(
-    m, offer, supply, leveling, kept, recent, cap, quest_note, weapon=None, mount=None
+    m,
+    offer,
+    supply,
+    leveling,
+    kept,
+    recent,
+    cap,
+    quest_note,
+    weapon=None,
+    mount=None,
+    book=None,
+    crafters=None,
+    master="",
 ):
     """(the member's step as _member_step returns it, or None; the supply
     note; the gear note): food for a member with nothing to eat or drink, then
@@ -3329,7 +3611,7 @@ def _upkeep_first(
     step, riding_note = riding_step(m, recent)
     if step is not None:
         return (step, step.said, quest_note, ""), supply_note, ""
-    step, mount_note = mount_step(m, mount, recent, cap)
+    step, mount_note = mount_step(m, mount, recent, cap, kept, book, crafters, master)
     if step is not None:
         return (step, step.said, quest_note, ""), supply_note, ""
     riding_note = _join(riding_note, mount_note)
@@ -3410,8 +3692,10 @@ def _member_step(
     weapon=None,
     equip_room=None,
     mount=None,
+    loop=None,
 ):
-    """A class quest first, then a hunter's first pet, then a hearth out of a
+    """A death loop's way out of its zone first (death_loop_first, #1464),
+    then a class quest, then a hunter's first pet, then a hearth out of a
     spot it cannot leave, then room in the bags for an upgrade the world
     cannot put on without it (_room_first, #1088), then food for a member
     with nothing to eat or drink,
@@ -3441,6 +3725,9 @@ def _member_step(
     A member that has stood on one spot for standstill.STILL_MINUTES
     (`still_for`) with nothing asked of it hearths home before anything else
     is asked (stood_still_step)."""
+    found = death_loop_first(m, loop, leveling, recent, cap)
+    if found is not None:
+        return found
     found, quest_note = _quest_first(
         m,
         classes,
@@ -3476,7 +3763,19 @@ def _member_step(
         return found
     quest_note = _join(quest_note, room_note)
     found, supply_note, gear_note = _upkeep_first(
-        m, offer, supply, leveling, kept, recent, cap, quest_note, weapon, mount
+        m,
+        offer,
+        supply,
+        leveling,
+        kept,
+        recent,
+        cap,
+        quest_note,
+        weapon,
+        mount,
+        classes,
+        crafters,
+        master,
     )
     if found is not None:
         return found
@@ -3493,7 +3792,7 @@ def _member_step(
     step = _collect_first(m, mail, recent, cap)
     if step is not None:
         return step, step.said, supply_note, gear_note
-    step, doing, level_note = level_step(m, leveling, recent, cap)
+    step, doing, level_note = level_step(m, leveling, recent, cap, loop)
     if step is not None or doing:
         return step, doing, supply_note, gear_note
     step, doing, note = _plan_member(
@@ -3528,7 +3827,7 @@ def _join_once(*parts) -> str:
     return "; ".join(said)
 
 
-def level_step(m, world, recent, cap):
+def level_step(m, world, recent, cap, loop=None):
     """(step or None, what it does, a note): a member that has outgrown
     where it stands (its quests there have run out, or its band) walks to the
     flight master of a quest hub where it has open quests (guildlevel.py).
@@ -3540,6 +3839,9 @@ def level_step(m, world, recent, cap):
     pass's cap. When the hub lies across the water, from map 530 or from a
     continent, the step is its side's boat or zeppelin (level_cross_step) or
     orb (level_orb_step) instead.
+
+    With `loop` (a deathloop.Loop) the loop's zone is never the hub chosen,
+    and a member standing in it has outgrown it on the deaths alone.
     """
     # EVERY MEMBER, NATURAL OR NOT (2026-10-05). The natural reset gates what
     # a member contributes, not where it walks: on the dev realm 1 of Cave's
@@ -3553,7 +3855,9 @@ def level_step(m, world, recent, cap):
     # A ZONE IS LEFT WHEN ITS QUESTS RUN OUT (2026-10-10): its open quests for
     # this member (guildlevel.open_quests), once its rewarded quests are read.
     opens = guildlevel.member_opens(world, m.race, m.level, m.rewarded)
-    why = guildlevel.outgrown(m.level, m.race, m.map_id, m.zone_id, bands, opens)
+    why = guildlevel.outgrown(
+        m.level, m.race, m.map_id, m.zone_id, bands, opens
+    ) or _loop_why(m, loop)
     if not why:
         return None, "", ""
     # A GHOST IS WALKED NOWHERE (2026-10-09). On the dev realm 45 of 207 level
@@ -3572,6 +3876,7 @@ def level_step(m, world, recent, cap):
         orbs=getattr(world, "orbs", None),
         opens=opens,
         nodes=m.taxi_nodes,
+        avoid=loop.zone if loop is not None else None,
     )
     if choice.refused:
         return None, "", guildlevel.refused_note(m.name, m.level, why, choice)
@@ -3598,6 +3903,72 @@ def level_step(m, world, recent, cap):
         why=why,
     )
     return _spot_step(m, spot, guildlevel.ACTION, cap, said), said, ""
+
+
+def _loop_why(m, loop) -> str:
+    """Why a member in its death loop's zone leaves it, or ""."""
+    if not _in_loop_zone(m, loop):
+        return ""
+    return "it died %d times in %s within an hour with no level gained" % (
+        loop.deaths,
+        loop.place,
+    )
+
+
+def _in_loop_zone(m, loop) -> bool:
+    """The member stands in the zone of its death loop."""
+    return (
+        loop is not None and m.zone_id is not None and int(m.zone_id) == int(loop.zone)
+    )
+
+
+# A MEMBER THAT DIES FIVE TIMES AN HOUR IN ONE ZONE LEAVES IT (#1464). Measured
+# on the dev realm on 2026-10-25: a level 21 priest of Cave died 167 times in a
+# day in Redridge Mountains and the Wetlands, mostly to creatures under its
+# level, and gained no level. Every spirit healer and corpse run put it back
+# where its own AI kept choosing to quest. A player in that loop stops, goes to
+# town to repair, sell and train, and quests somewhere else.
+def death_loop_hearth(m, loop, recent):
+    """The hearth home of a member in its death loop's zone, or None.
+
+    Only a member online, alive and out of combat, in the open world, that is
+    in the loop's zone, with no hearth inside the hearth cooldown."""
+    if not _in_loop_zone(m, loop):
+        return None
+    if not (m.online and m.alive and not m.in_combat) or not _in_the_open(m):
+        return None
+    if _cooling(m, "hearth", recent):
+        return None
+    return guildcorps.Step(
+        m.name,
+        "hearth",
+        0,
+        "%s hearths home to town for a town errand (repair, sell, train): %s"
+        % (m.name, loop.reason()),
+        rows=(guildcorps.Row("hearth", "use", "", source_for("hearth", m.name)),),
+    )
+
+
+def death_loop_first(m, loop, leveling, recent, cap):
+    """(the member's step as _member_step returns it), or None: the way out of
+    the zone a member keeps dying in (deathloop.Loop), ahead of every quest.
+
+    In the loop's zone: the hearth to its town first (death_loop_hearth), then
+    the level walk to a hub of another zone (level_step), and while neither can
+    start, no step at all, so no quest or grind of that zone is planned for it.
+    Out of the zone, None: the pass plans as usual, and its level walk never
+    chooses the loop's zone (level_step). The loop clears by itself
+    (deathloop.loops), and the planning with it."""
+    if not _in_loop_zone(m, loop):
+        return None
+    step = death_loop_hearth(m, loop, recent)
+    if step is not None:
+        return step, step.said, "", ""
+    step, doing, note = level_step(m, leveling, recent, cap, loop)
+    if step is not None:
+        return step, doing, note, ""
+    held = "%s plans no quest in %s: %s" % (m.name, loop.place, loop.reason())
+    return None, held, _join(note, held), ""
 
 
 def inn_step(m, world, recent, cap):
@@ -4185,7 +4556,11 @@ def class_asking(m, book, hunts=None, now=0.0, recent=(), asks=()) -> tuple:
             continue
         left, count, yeses = class_ask_streak(m.name, h.quest, asks)
         if left:
-            yields.append(_streak_yield(m, h, left, count, yeses))
+            why = class_road_refusal(m.name, h.quest, asks)
+            if why:
+                yields.append(_road_yield(m, h, left, why))
+            else:
+                yields.append(_streak_yield(m, h, left, count, yeses))
             continue
         helps.append(
             classquest.Help(m.name, m.guild, int(m.level), int(m.map_id), h, count)
@@ -4279,6 +4654,17 @@ def _outlevel_yield(m, move, book, hunts, now) -> tuple:
     return (m.name, move.quest, "outlevel", move.blocker), line
 
 
+def _road_yield(m, move, left, why) -> tuple:
+    """(key, line) for a quest whose last party stopped because the member's
+    own walk to the objective was refused for good (class_road_refusal)."""
+    line = (
+        "class ask: %s stops asking for %s: its own walk to the objective was "
+        "refused (%s), which no helper can change; it levels for %d minute(s)"
+        % (m.name, move.title, why, left)
+    )
+    return (m.name, move.quest, "road", why), line
+
+
 def _streak_yield(m, move, left, count, yeses) -> tuple:
     line = (
         "class ask: %s stops asking for %s after %d asks that did not get it done "
@@ -4332,6 +4718,39 @@ class QuestAsk:
     yeses: int = 0
     failed: bool = False
     timed_out: bool = False
+    # The module's lasting refusal of the asker's OWN meeting walk, when its
+    # party stopped on one (asker_road_refusal), else "".
+    road_why: str = ""
+
+
+# AN ASKER WHOSE OWN WAY TO THE OBJECTIVE IS REFUSED FOR GOOD IS NOT ASKED FOR
+# AGAIN AT ONCE (#1345). From 2026-10-10 to 2026-10-23 a level 20 warlock asked
+# the guild 27 times for Surena Caledon, a level 9 creature: one party ever
+# formed, and 11 asks stopped because the asker itself did not reach the
+# meeting. Its meeting walks were refused 11 times in 39 on "the road to the
+# spawn crosses ground far above its level", the module's refusal that holds
+# until the member has levelled (classquest.LETHAL_ROAD_REASON, #1295). No
+# guildmate can fix that road: the party meets at the objective, so each new
+# ask pulled three more helpers across the map to wait for an asker that could
+# not come. The solo walks read that refusal as lasting (refused_marks), but
+# the meeting walks are the ask's rows, not this pass's, so the ask never did.
+# An ask whose meeting failed on the asker's own lasting refusal
+# (classquest.SPAWN_REFUSALS that are not SPAWN_SHORT_REFUSALS) starts the
+# stall hold at once: the member levels, which is what opens the road.
+def asker_road_refusal(reason, asker) -> str:
+    """The lasting refusal of `asker`'s own meeting walk named in an ask's
+    reason column ("stopped: the meeting failed: <asker> did not reach <spot>
+    (<why>)"), else "". A helper's refusal, a short one (a stall, a death) or a
+    passing one (a fight, a flight, a far walk wall) is not one."""
+    head = classask.STOPPED + "the meeting failed: %s did not reach " % asker
+    text = str(reason or "")
+    if not asker or not text.startswith(head):
+        return ""
+    lasting = classquest.SPAWN_REFUSALS - classquest.SPAWN_SHORT_REFUSALS
+    for why in sorted(lasting):
+        if text.endswith("(%s)" % why):
+            return why
+    return ""
 
 
 def quest_asks_from_rows(rows) -> tuple:
@@ -4353,6 +4772,7 @@ def quest_asks_from_rows(rows) -> tuple:
                 timed_out=str(row.get("reason") or "").startswith(
                     classask.FAILED + "party timed out"
                 ),
+                road_why=asker_road_refusal(row.get("reason"), row.get("asker")),
             )
         )
     return tuple(out)
@@ -4362,8 +4782,10 @@ def class_ask_streak(name, quest, asks) -> tuple:
     """(minutes left of the hold, asks in the run, yeses they drew) for one
     member's quest: the closed asks for it since the newest whose party got
     it done, newest first, inside CLASS_ASK_STREAK_WINDOW_MINUTES. The hold is 0 while the run
-    is short of CLASS_ASK_STREAK_MAX without three consecutive party timeouts,
-    or CLASS_STALL_HOLD_MINUTES have passed since its newest ask."""
+    is short of CLASS_ASK_STREAK_MAX without three consecutive party timeouts
+    and its newest ask did not stop on the asker's own lasting walk refusal
+    (asker_road_refusal), or CLASS_STALL_HOLD_MINUTES have passed since its
+    newest ask."""
     rows = sorted(
         (
             a
@@ -4387,10 +4809,31 @@ def class_ask_streak(name, quest, asks) -> tuple:
     repeated_timeouts = len(run) >= CLASS_PARTY_TIMEOUT_STREAK_MAX and all(
         a.timed_out for a in run[:CLASS_PARTY_TIMEOUT_STREAK_MAX]
     )
-    if len(run) < CLASS_ASK_STREAK_MAX and not repeated_timeouts:
+    road_refused = bool(run) and bool(run[0].road_why)
+    if len(run) < CLASS_ASK_STREAK_MAX and not repeated_timeouts and not road_refused:
         return 0, len(run), yeses
     left = max(0, CLASS_STALL_HOLD_MINUTES - int(run[0].age_minutes))
     return left, len(run), yeses
+
+
+def class_road_refusal(name, quest, asks) -> str:
+    """The lasting refusal of the member's own meeting walk that stopped its
+    newest closed ask for `quest` inside CLASS_ASK_STREAK_WINDOW_MINUTES
+    (asker_road_refusal), else ""."""
+    closed = sorted(
+        (
+            a
+            for a in asks or ()
+            if a.asker == name
+            and a.quest == int(quest)
+            and a.state not in _ASK_LIVE
+            and int(a.age_minutes) < CLASS_ASK_STREAK_WINDOW_MINUTES
+        ),
+        key=lambda a: int(a.age_minutes),
+    )
+    if not closed or (closed[0].state == _ASK_RAN and not closed[0].failed):
+        return ""
+    return closed[0].road_why
 
 
 def class_ask_held(name, asks) -> frozenset:
@@ -4409,7 +4852,12 @@ def class_ask_held(name, asks) -> frozenset:
 # here because questers imports this module; questers takes it from here.
 QUESTER_CROSS_ACTION = "quester-cross"
 CROSS_ACTIONS = frozenset(
-    {classquest.CROSS_ACTION, guildlevel.CROSS_ACTION, QUESTER_CROSS_ACTION}
+    {
+        classquest.CROSS_ACTION,
+        guildlevel.CROSS_ACTION,
+        QUESTER_CROSS_ACTION,
+        WEAPON_CROSS_ACTION,
+    }
 )
 
 
@@ -4799,6 +5247,7 @@ def _room_vendor_step(m, said, stacks, cap):
             "",
             source_for(ROOM_ACTION + "-walk", m.name),
         ),
+        sales=sale_notes(stacks),
     )
 
 
@@ -5289,6 +5738,7 @@ def pvp_step(m, aim, move, cap, kept=None):
                 source_for("pvp-walk", m.name),
             ),
             goal=aim.vendor,
+            sales=junk_notes(m, kept),
         )
     return None
 

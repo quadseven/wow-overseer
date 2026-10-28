@@ -242,3 +242,7 @@ failures and skips that CI never sees, so do not judge a change by it.
 
 `scripts/check-locally.sh lint` runs the lint job's pinned ruff
 (`ruff check` and `ruff format --check`), and `all` runs both.
+
+## Filing issues: every ticket names its area of play
+
+Every open ticket and every epic in this repo and in mod-overseer carries exactly one `area:` label, plus topic labels such as `dungeon:blackfathom` or `trade:leatherworking`. An epic sits in one area, holds at most 15 tickets, and splits by topic when it outgrows that. Never file into a generic intake epic. The areas, the topic labels and the reasons are in `docs/agents/area-taxonomy.md`.
