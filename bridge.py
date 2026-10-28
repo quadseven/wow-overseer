@@ -20471,10 +20471,7 @@ class Bridge(discord.Client):
             facts["rows"], facts["busy"], facts["resting"],
             facts["family"], facts["benched"], owed=frozenset(_class_owed_names(self)))
         # ROOM TO LOOT BEFORE THE DOOR (#1568).
-        short = _bag_room_short(self, facts)
-        if any(m.name in short for m in members):
-            skipped[guildrun.SHORT_OF_BAG_ROOM] = sum(m.name in short for m in members)
-            members = [m for m in members if m.name not in short]
+        members = _skip_bag_room(members, skipped, _bag_room_short(self, facts))
         pools = guildrun.pools(members, doors)
         if not pools:
             log.info("guild runs: %d free member(s) in %s, and no five of one guild and one "
@@ -26498,6 +26495,15 @@ def _bag_room_short(owner, facts: dict) -> frozenset:
         time.monotonic())
     owner._bag_room_since = clock
     return short
+
+
+def _skip_bag_room(members: list, skipped: dict, short) -> list:
+    """The old picker's free members less those short of bag room, each one
+    left out counted in `skipped` under its reason (#1568)."""
+    kept = [m for m in members if m.name not in short]
+    if len(kept) < len(members):
+        skipped[guildrun.SHORT_OF_BAG_ROOM] = len(members) - len(kept)
+    return kept
 
 
 def _hold_bag_room(held: dict, lent, needs: dict, short) -> tuple:
