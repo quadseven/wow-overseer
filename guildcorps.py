@@ -495,6 +495,9 @@ class Step:
     # The spawn the walk goes to (a guildjobs.Spot), for a step the bridge may
     # have to leave for another pack (a class quest hunt, classhunt.py).
     spot: object = None
+    # One vendorsale.Sale per sell row, so the bridge can name the item and the
+    # price of each sale the world delivers (#1592). Empty: no sale is named.
+    sales: tuple = ()
 
 
 def source_for(action, key) -> str:
