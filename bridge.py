@@ -20470,6 +20470,11 @@ class Bridge(discord.Client):
         members, skipped = guildrun.free_members(
             facts["rows"], facts["busy"], facts["resting"],
             facts["family"], facts["benched"], owed=frozenset(_class_owed_names(self)))
+        # ROOM TO LOOT BEFORE THE DOOR (#1568).
+        short = _bag_room_short(self, facts)
+        if any(m.name in short for m in members):
+            skipped[guildrun.SHORT_OF_BAG_ROOM] = sum(m.name in short for m in members)
+            members = [m for m in members if m.name not in short]
         pools = guildrun.pools(members, doors)
         if not pools:
             log.info("guild runs: %d free member(s) in %s, and no five of one guild and one "
@@ -20571,6 +20576,9 @@ class Bridge(discord.Client):
             held, mates, facts.get("lendable", ()), facts["busy"],
             facts["resting"],
             facts["benched"] | facts.get("family_benched", set()))
+        # ROOM TO LOOT BEFORE THE DOOR (#1568): a member short of bag room is
+        # held, within a bound, while the guild jobs pass sends it to sell.
+        held, lent, needs = _hold_bag_room(held, lent, needs, _bag_room_short(self, facts))
         log.info("guild social: %s", guildsocial.census(mates, held))
         # PICK-UP GROUPS (guildpug, #591): a pug who said yes counts as free.
         pugs_on = guildpug.enabled()
@@ -25893,6 +25901,15 @@ def _fetch_guild_run_facts(bounds) -> dict:
         cur.execute(_GUILD_RUN_MEMBERS_SQL.format(holes=",".join(["%s"] * len(guilds))),
                     guilds)
         rows = list(cur.fetchall())
+        # Each member's free general-bag slots, for the hold that sends a
+        # member to make room before a run (guildrun.bag_room_holds, #1568).
+        names = sorted({str(r["name"]) for r in rows if r.get("name")})
+        bag_room = {}
+        if names:
+            marks = ",".join(["%s"] * len(names))
+            cur.execute(_BAG_ROOM_SQL.format(marks=marks), names + names)
+            bag_room = {name: free for name, (free, _slots)
+                        in bag_pressure.general_bag_room(cur.fetchall()).items()}
         cur.execute("SELECT name, tree FROM overseer_raid_spec")
         spec = {r["name"]: r["tree"] for r in cur.fetchall()}
         for row in rows:
@@ -25949,7 +25966,8 @@ def _fetch_guild_run_facts(bounds) -> dict:
             "resting": resting,
             "benched": benched, "family_benched": family_benched,
             "in_flight_by_guild": by_guild, "history": history,
-            "finder_floors": floors, "boss_levels": boss_levels, "recipes": recipes}
+            "finder_floors": floors, "boss_levels": boss_levels, "recipes": recipes,
+            "bag_room": bag_room}
 
 
 # WHERE THE RAID RECIPES DROP (guildrun.RECIPE_DROPS_SQL, #893), read once per
@@ -26468,6 +26486,35 @@ def _hold_owed(held: dict, needs: dict, owed) -> tuple:
     return held, {n: v for n, v in needs.items() if n not in owed}
 
 
+_ON_A_GUILD_JOB = "on a guild job"
+
+
+def _bag_room_short(owner, facts: dict) -> frozenset:
+    """The members held this pass to make bag room before a run
+    (guildrun.bag_room_holds, #1568), the wait's clock kept on the bridge so
+    the hold is bounded across passes."""
+    short, clock = guildrun.bag_room_holds(
+        facts.get("bag_room") or {}, getattr(owner, "_bag_room_since", None) or {},
+        time.monotonic())
+    owner._bag_room_since = clock
+    return short
+
+
+def _hold_bag_room(held: dict, lent, needs: dict, short) -> tuple:
+    """(held, lent, needs) with every member short of bag room held for it: no
+    ask of its own, no seat lent, and its yes taken back. Held, it is not
+    spoken for (_guild_social_names), so the guild jobs pass is free to send it
+    to a vendor. A member held for anything else keeps that reason, except a
+    guild job, which may be that very sale: the census then says why."""
+    short = set(short or ())
+    held = dict(held)
+    for name in short:
+        if held.get(name) in (None, _ON_A_GUILD_JOB):
+            held[name] = guildrun.SHORT_OF_BAG_ROOM
+    return (held, set(lent or ()) - short,
+            {n: v for n, v in needs.items() if n not in short})
+
+
 def _class_party_names(owner) -> set:
     """The members of the class quest parties that are up, for the passes that
     leave them alone (a bridge with no board holds nobody)."""
@@ -26505,7 +26552,7 @@ def _guild_social_mates(facts: dict, mid_job: set, doors: list) -> tuple:
         why = guildrun.why_not(mate.member, facts["busy"], facts["resting"],
                                facts["family"], facts["benched"])
         if not why and mate.name in mid_job:
-            why = "on a guild job"
+            why = _ON_A_GUILD_JOB
         if why:
             held[mate.name] = why
     factions = {g: guildrun.faction_of([m.member for m in mates if m.member.guild == g])
