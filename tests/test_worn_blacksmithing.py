@@ -112,6 +112,32 @@ def hammer_unwalked():
     return mock.patch.object(craft, "TOOL_WALKS", frozenset())
 
 
+class TheGateStillShutsWithNoToolWalk(unittest.TestCase):
+    """The shut gate's own answers, kept: with TOOL_WALKS empty (no tool walk
+    live), nothing walks a smith to an Anvil, so no hammer recipe is handed
+    out and the Anvil gaps stay None. #1590 opens the gate on the realm; these
+    pin that the gate still shuts (hammer_unwalked)."""
+
+    def test_the_gate_is_shut_today(self):
+        with hammer_unwalked():
+            self.assertNotIn(HAMMER, craft.TOOL_WALKS)
+
+    def test_recipe_for_never_returns_a_hammer_recipe(self):
+        with hammer_unwalked():
+            for _spell, name, low, high in WORN:
+                for value in (low, high):
+                    with self.subTest(name=name, value=value):
+                        recipe = craft.recipe_for(BLACKSMITHING, value)
+                        self.assertTrue(recipe is None or not recipe.tool)
+
+    def test_a_smith_in_an_anvil_gap_gets_no_hammer_errand(self):
+        with hammer_unwalked():
+            spell = craft.craft_errand(
+                "Grug", {"blacksmithing": 110}, ("blacksmithing",)
+            )
+            self.assertNotEqual(craft.tool_for(spell), HAMMER)
+
+
 class TheAnvilWalkIsLive(unittest.TestCase):
     """mod-overseer#524's Anvil walk (walk to an Anvil, take the hammer out of
     the bank, bank it again) is in what the dev realm runs, so the hammer is a

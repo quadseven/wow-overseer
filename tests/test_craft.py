@@ -472,6 +472,18 @@ class RecipeForTests(unittest.TestCase):
         self.assertIsNotNone(recipe)
         self.assertEqual(recipe.spell_id, 2660)
 
+    def test_blacksmithing_returns_none_in_an_anvil_gated_gap(self):
+        # With no tool walk (TOOL_WALKS empty), 100-124 and the other Anvil
+        # bands must stay None rather than fall back to a stone recipe past
+        # its own grey, which would grant no skill-up (#1590 keeps this).
+        with mock.patch.object(craft, "TOOL_WALKS", frozenset()):
+            self.assertNotIn(craft.BLACKSMITH_HAMMER, craft.TOOL_WALKS)
+            for value in (100, 124, 150, 199, 210, 249, 260, 300):
+                with self.subTest(value=value):
+                    self.assertIsNone(
+                        craft.recipe_for(goals.SKILL_IDS["blacksmithing"], value)
+                    )
+
     def test_blacksmithing_anvil_bands_are_the_worn_hammer_recipes(self):
         # 100-124 and the other Anvil bands are real skill range with real
         # recipes (Runed Copper Belt, Silver Rod, Rough Bronze Leggings), all
