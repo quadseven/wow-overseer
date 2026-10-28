@@ -92,12 +92,63 @@ class WhatALoopIs(unittest.TestCase):
         rows = deaths(5, start=70, zone=WETLANDS) + deaths(5, start=2)
         self.assertEqual(deathloop.loops(rows, {"Clunk": 21})["Clunk"].zone, REDRIDGE)
 
+    def test_the_window_start_is_the_current_loops_first_death(self):
+        # Older deaths in the zone, more than an hour before the newest, and a
+        # newer death elsewhere: the loop starts at its own window's first death.
+        rows = deaths(5, every=8) + deaths(2, start=100) + [death(1, zone=WETLANDS)]
+        loop = deathloop.loops(rows, {"Clunk": 21})["Clunk"]
+        self.assertEqual((loop.first_age, loop.last_age), (34 * MINUTE, 2 * MINUTE))
+
     def test_the_read_covers_a_window_that_ended_two_hours_ago(self):
         self.assertEqual(
             deathloop.READ_SECONDS, deathloop.WINDOW_SECONDS + deathloop.QUIET_SECONDS
         )
         self.assertIn("FROM overseer_death", deathloop.SQL)
         self.assertIn("TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age", deathloop.SQL)
+
+
+# ---- the quiet clock is the loop zone's own (#1569) ------------------------------
+
+
+FERALAS, DUSKWOOD, STRANGLETHORN = 357, 10, 33
+
+
+def feralas_loop(shift=0):
+    """A Feralas loop from 178 to 161 minutes ago (a 17-minute loop read
+    about three hours after it began), then one death in each of three other
+    zones. `shift` minutes come off every age: the same deaths read earlier."""
+    loop = [
+        death(age - shift, zone=FERALAS, level=44) for age in (161, 165, 170, 174, 178)
+    ]
+    elsewhere = [
+        death(140 - shift, zone=DUSKWOOD, level=44, killer="Nightbane Worgen"),
+        death(90 - shift, zone=STRANGLETHORN, level=44, killer="Bloodscalp Hunter"),
+        death(30 - shift, zone=WETLANDS, level=44, killer="Mottled Raptor"),
+    ]
+    return loop + elsewhere
+
+
+class TheQuietClockIsTheZones(unittest.TestCase):
+    def test_a_loop_left_behind_clears_after_the_quiet_time_despite_deaths_elsewhere(
+        self,
+    ):
+        self.assertEqual(deathloop.loops(feralas_loop(), {"Clunk": 44}), {})
+
+    def test_before_the_quiet_time_it_is_still_listed(self):
+        found = deathloop.loops(feralas_loop(shift=60), {"Clunk": 44})
+        self.assertEqual(found["Clunk"].zone, FERALAS)
+
+    def test_a_member_still_dying_in_the_loop_zone_stays_listed(self):
+        rows = feralas_loop() + [death(20, zone=FERALAS, level=44)]
+        loop = deathloop.loops(rows, {"Clunk": 44})["Clunk"]
+        self.assertEqual((loop.zone, loop.deaths), (FERALAS, 5))
+        self.assertEqual(loop.first_age, 178 * MINUTE)
+
+    def test_the_stuck_entry_since_is_the_loop_windows_start(self):
+        loop = deathloop.loops(feralas_loop(shift=60), {"Clunk": 44})["Clunk"]
+        entry = members.loop_blocker(loop, NOW)
+        self.assertEqual(entry["since"], NOW - (178 - 60) * MINUTE)
+        self.assertEqual(entry["step"], "Dying in Feralas")
 
 
 # ---- the stuck reader lists it ---------------------------------------------------

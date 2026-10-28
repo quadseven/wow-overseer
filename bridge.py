@@ -1538,29 +1538,47 @@ def _strategy_start_seen():
 
 def _reapply_strategies(reapplier) -> int:
     """One pass of the strategy replay (#1553): read the start and the book,
-    send what is owed to members back in the world. Returns rows written."""
+    send what is owed to members back in the world. Returns rows written.
+
+    A member is paid only once all its rows are written; a refused row
+    leaves it owed for the next pass. The new start is saved only once
+    nobody is owed, so a bridge restart before every member is back owes
+    the replay again instead of losing it (#1584)."""
     start = _worldserver_start()
     pages = strategybook.book(_memo_read(strategybook.MEMO_KIND))
     owed_before = reapplier.owed()
     in_world = _bot_held_names(sorted(pages)) if pages else []
-    commands, new_start = reapplier.due(start, pages, in_world)
-    if new_start is not None:
+    commands = reapplier.due(start, pages, in_world)
+    if reapplier.owed() - owed_before:
+        log.info("strategy reapply: worldserver start %s - %s owed a replay",
+                 reapplier.seen, ", ".join(sorted(reapplier.owed())))
+    leads = _roster_leads() if commands else set()
+    by_name: dict = {}
+    for name, command in commands:
+        by_name.setdefault(name, []).append(command)
+    sent = 0
+    paid = []
+    for name, owed in by_name.items():
+        written = 0
+        try:
+            for command in leadcmd.for_character(owed, name in leads):
+                _insert_command(core.InsertCommand(name, command, strategybook.REAPPLY_SOURCE))
+                written += 1
+        except pymysql.err.MySQLError:
+            log.exception("strategy reapply: a row for %s was refused; "
+                          "retrying next pass", name)
+            continue
+        sent += written
+        reapplier.paid(name)
+        paid.append(name)
+    if paid:
+        log.info("strategy reapply: %d command(s) sent to %s", sent,
+                 ", ".join(sorted(paid)))
+    settled = reapplier.settled()
+    if settled is not None:
         now = time.time()
         _memo_upsert(strategybook.START_MEMO_KIND, strategybook.START_SUBJECT,
-                     new_start, now, now + STRATEGY_BOOK_SECONDS)
-        if reapplier.owed() - owed_before:
-            log.info("strategy reapply: worldserver start %s - %s owed a replay",
-                     new_start, ", ".join(sorted(reapplier.owed())))
-    leads = _roster_leads() if commands else set()
-    sent = 0
-    for name, command in commands:
-        if not leadcmd.for_character([command], name in leads):
-            continue
-        _insert_command(core.InsertCommand(name, command, strategybook.REAPPLY_SOURCE))
-        sent += 1
-    if commands:
-        log.info("strategy reapply: %d command(s) sent to %s", sent,
-                 ", ".join(sorted({n for n, _ in commands})))
+                     settled, now, now + STRATEGY_BOOK_SECONDS)
     return sent
 
 
@@ -17219,8 +17237,10 @@ class Bridge(discord.Client):
     async def _job_weapon_offers(self, members, recent) -> dict:
         """name -> weaponskill.Offer for each guild member carrying a weapon it
         has no skill for (#793): weaponskill decides the need, and the nearest
-        weapon master of its side on its map that teaches it is read here, else
-        one on the other classic continent (weaponskill.choose_far_master).
+        weapon master of its side on its map and its ground (never an island
+        across the water, #1585) that teaches it is read here, else one on the
+        other classic continent nearest its side's landing there
+        (weaponskill.choose_far_master).
 
         Only members guildjobs.weapon_candidate passes are read, and at most
         GUILD_WEAPON_READS_PER_PASS weapon master reads, in turn.
@@ -17246,7 +17266,7 @@ class Bridge(discord.Client):
                 weaponskill.far_maps(m.map_id))
             team = auction.team_of(m.race)
             master = (weaponskill.choose_master(
-                masters, {need.spell}, team, int(m.map_id))
+                masters, {need.spell}, team, int(m.map_id), at)
                 or weaponskill.choose_far_master(
                     masters, {need.spell}, team, int(m.map_id)))
             offers[name] = weaponskill.offer(need, master)
@@ -18639,7 +18659,7 @@ class Bridge(discord.Client):
         master = weaponskill.choose_master(
             await asyncio.to_thread(_fetch_weapon_masters, at,
                                     sorted({n.spell for n in needs})),
-            {n.spell for n in needs}, teams.get(leader, ""), int(at["map_id"]))
+            {n.spell for n in needs}, teams.get(leader, ""), int(at["map_id"]), at)
         said = "; ".join("%s carries %s (%s) and has no skill %d for it" % (
             n.name, n.item, n.why, n.skill) for n in needs)
         if not master:
@@ -22034,7 +22054,7 @@ class Bridge(discord.Client):
                 _fetch_weapon_masters, at,
                 sorted({n.spell for n in critical})),
             {n.spell for n in critical}, teams.get(leader, ""),
-            int(at["map_id"]))
+            int(at["map_id"]), at)
         option = "errand:%d" % int(master["entry"]) if master else ""
         return option
 
@@ -24084,22 +24104,34 @@ _SHARE_PARTY_SQL = (
 
 
 def _fetch_parties(names: list):
-    """name -> party key for questshare.plan(), or None when this world's
-    snapshot has no group column or no table (1054, 1146), and party is
-    then left to the worldserver's own gate as before (mod-overseer#969)."""
+    """name -> party key for questshare.plan(), or None when the party read
+    fails, and party is then left to the worldserver's own gate as before
+    (mod-overseer#969).
+
+    A world whose snapshot has no group column or no table (1054, 1146)
+    falls back quietly, as it always has. Any other MySQL error (a dropped
+    connection, a lock wait, a timeout) falls back too, with one warning:
+    the party read only narrows which holder is asked, so one failed read
+    must not stop every share the pass would have made (#1586).
+    """
     if not names:
         return {}
     sql = _SHARE_PARTY_SQL % ",".join(["%s"] * len(names))
-    with _connect() as conn, conn.cursor() as cur:
-        try:
+    try:
+        with _connect() as conn, conn.cursor() as cur:
             cur.execute(sql, names)
-        except pymysql.err.MySQLError as exc:
-            if exc.args and exc.args[0] in (1054, 1146):
-                return None
-            raise
-        return {
-            str(row["name"]): int(row["group_leader"] or 0) for row in cur.fetchall()
-        }
+            return {
+                str(row["name"]): int(row["group_leader"] or 0)
+                for row in cur.fetchall()
+            }
+    except pymysql.err.MySQLError as exc:
+        if not (exc.args and exc.args[0] in (1054, 1146)):
+            log.warning(
+                "questshare: party read failed (%s); sharing without the party "
+                "check this pass, the worldserver's own gate still applies",
+                exc,
+            )
+        return None
 
 
 def _share_quests() -> questshare.Plan:
