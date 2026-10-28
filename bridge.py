@@ -16533,6 +16533,10 @@ class Bridge(discord.Client):
                      "; ".join("%s %s" % (p.name, p.said) for p in posts)
                      or "nobody on maintenance holds a corps trade")
         _log_capped("guild corps", plan.notes)
+        # Who the bags passed over because one waits in their mail (#1591),
+        # once per state (#1605), so the skip can be read from the log.
+        _log_changed("guild corps: bag in the mail", plan.mail_waits,
+                     _family_label(cohort))
         for step in plan.steps:
             # Reserved before the task starts and released when it ends, so a
             # holder is never read as free while one of its rows is in flight.
