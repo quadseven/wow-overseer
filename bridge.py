@@ -24081,22 +24081,34 @@ _SHARE_PARTY_SQL = (
 
 
 def _fetch_parties(names: list):
-    """name -> party key for questshare.plan(), or None when this world's
-    snapshot has no group column or no table (1054, 1146), and party is
-    then left to the worldserver's own gate as before (mod-overseer#969)."""
+    """name -> party key for questshare.plan(), or None when the party read
+    fails, and party is then left to the worldserver's own gate as before
+    (mod-overseer#969).
+
+    A world whose snapshot has no group column or no table (1054, 1146)
+    falls back quietly, as it always has. Any other MySQL error (a dropped
+    connection, a lock wait, a timeout) falls back too, with one warning:
+    the party read only narrows which holder is asked, so one failed read
+    must not stop every share the pass would have made (#1586).
+    """
     if not names:
         return {}
     sql = _SHARE_PARTY_SQL % ",".join(["%s"] * len(names))
-    with _connect() as conn, conn.cursor() as cur:
-        try:
+    try:
+        with _connect() as conn, conn.cursor() as cur:
             cur.execute(sql, names)
-        except pymysql.err.MySQLError as exc:
-            if exc.args and exc.args[0] in (1054, 1146):
-                return None
-            raise
-        return {
-            str(row["name"]): int(row["group_leader"] or 0) for row in cur.fetchall()
-        }
+            return {
+                str(row["name"]): int(row["group_leader"] or 0)
+                for row in cur.fetchall()
+            }
+    except pymysql.err.MySQLError as exc:
+        if not (exc.args and exc.args[0] in (1054, 1146)):
+            log.warning(
+                "questshare: party read failed (%s); sharing without the party "
+                "check this pass, the worldserver's own gate still applies",
+                exc,
+            )
+        return None
 
 
 def _share_quests() -> questshare.Plan:
