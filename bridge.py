@@ -4228,11 +4228,12 @@ def _legacy_facts(guilds: list) -> dungeonquests.LegacyFacts:
         log_rows, rewarded = [], []
         if names:
             holes = ", ".join(["%s"] * len(names))
-            cur.execute(dungeonquests.LEGACY_LOG_SQL.format(holes=holes), names)  # noqa: S608 - placeholders only
+            bound = dungeonquests.LEGACY_QUESTS + names
+            cur.execute(dungeonquests.LEGACY_LOG_SQL.format(holes=holes), bound)  # noqa: S608 - placeholders only
             log_rows = list(cur.fetchall())
-            cur.execute(dungeonquests.LEGACY_REWARDED_SQL.format(holes=holes), names)  # noqa: S608 - placeholders only
+            cur.execute(dungeonquests.LEGACY_REWARDED_SQL.format(holes=holes), bound)  # noqa: S608 - placeholders only
             rewarded = list(cur.fetchall())
-        cur.execute(dungeonquests.LEGACY_SPAWNS_SQL)
+        cur.execute(dungeonquests.LEGACY_SPAWNS_SQL, dungeonquests.LEGACY_SPAWN_IDS)
         spawns = list(cur.fetchall())
         cur.execute(dungeonquests.LEGACY_RUNS_SQL)
         runs = list(cur.fetchall())

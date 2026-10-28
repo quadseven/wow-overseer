@@ -396,21 +396,24 @@ LEGACY_MEMBERS_SQL = (
 )
 LEGACY_LOG_SQL = (
     "SELECT c.name, q.quest, q.status FROM character_queststatus q "
-    "JOIN characters c ON c.guid = q.guid WHERE q.quest IN (%d, %d) "
-    "AND c.name IN ({holes})" % (LEGACY_TALE, LEGACY)
+    "JOIN characters c ON c.guid = q.guid WHERE q.quest IN (%s, %s) "
+    "AND c.name IN ({holes})"
 )
 LEGACY_REWARDED_SQL = (
     "SELECT c.name, r.quest FROM character_queststatus_rewarded r "
-    "JOIN characters c ON c.guid = r.guid WHERE r.quest IN (%d, %d) "
-    "AND c.name IN ({holes})" % (LEGACY_TALE, LEGACY)
+    "JOIN characters c ON c.guid = r.guid WHERE r.quest IN (%s, %s) "
+    "AND c.name IN ({holes})"
 )
 LEGACY_SPAWNS_SQL = (
     "SELECT 'creature' AS kind, map AS map_id, position_x AS pos_x, "
     "position_y AS pos_y, position_z AS pos_z FROM acore_world.creature "
-    "WHERE id = %d UNION ALL SELECT 'object' AS kind, map AS map_id, "
+    "WHERE id = %s UNION ALL SELECT 'object' AS kind, map AS map_id, "
     "position_x AS pos_x, position_y AS pos_y, position_z AS pos_z "
-    "FROM acore_world.gameobject WHERE id = %d" % (FRANCLORN, SHRINE_OF_THAURISSAN)
+    "FROM acore_world.gameobject WHERE id = %s"
 )
+# The ids each statement above binds, ahead of any names for `{holes}`.
+LEGACY_QUESTS = (LEGACY_TALE, LEGACY)
+LEGACY_SPAWN_IDS = (FRANCLORN, SHRINE_OF_THAURISSAN)
 LEGACY_RUNS_SQL = (
     "SELECT keyword, members FROM overseer_guild_run "
     "WHERE state IN ('queued', 'inside')"
