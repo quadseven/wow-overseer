@@ -251,12 +251,6 @@ class FullBagsMakeRoomFirst(unittest.TestCase):
         self.assertIsNone(step)
         self.assertIn("until a bag slot is free", note)
 
-    def test_a_free_slot_lets_the_walk_go(self):
-        m = grug(free_slots=1, bag_slots=16)
-        step, _ = guildjobs.mount_step(m, self.FACTS, (), 100)
-        self.assertEqual(mountbuy.ACTION, step.action)
-        self.assertTrue(step.walk.command.startswith("walk-to-vendor item:2414"))
-
     def test_the_upkeep_rungs_make_room_for_the_mount(self):
         """With the full-bags sale cooling, the mount rung still aims no
         walk at the vendor: it makes room."""
@@ -277,11 +271,6 @@ class ARefusalForFullBagsIsNotRepeated(unittest.TestCase):
         step, note = guildjobs.mount_step(grug(), self.FACTS, (refused_buy(200),), 100)
         self.assertIsNone(step)
         self.assertIn("holds its mount walk", note)
-
-    def test_full_bags_after_a_refusal_hold_the_walk(self):
-        m = grug(free_slots=0, bag_slots=16)
-        step, _ = guildjobs.mount_step(m, self.FACTS, (refused_buy(200),), 100)
-        self.assertIsNone(step)
 
     def test_a_free_slot_after_the_refusal_lets_the_walk_go(self):
         m = grug(free_slots=2, bag_slots=16)

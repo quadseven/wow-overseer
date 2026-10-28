@@ -2026,14 +2026,8 @@ def mount_step(m, facts, recent, cap, kept=None, book=None, crafters=None, maste
     mount (mountbuy.decide, #779). A member carrying an unused mount item only
     uses it. `facts` is a mountbuy.Facts, None for a member the bridge did not
     read. Never while offline, dead or fighting, and once per
-    COOLDOWN_MINUTES[mountbuy.ACTION].
-
-    ROOM BEFORE THE WALK (#1593). Read live 2026-10-27: all 9 mount buys that
-    reached the vendor were refused with "bags cannot take the item", and the
-    same walk was aimed again. A member whose bags read full, or whose last
-    mount buy was refused for full bags with no free slot read since, makes
-    room first (the make-room ladder, _room_ladder) or holds the walk with a
-    reason."""
+    COOLDOWN_MINUTES[mountbuy.ACTION]. With no bag slot for the item
+    (mount_room_short, #1593) it makes room first or holds the walk."""
     if facts is None:
         return None, ""
     order = m.purse
