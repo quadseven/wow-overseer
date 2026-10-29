@@ -103,7 +103,14 @@ class Due:
 
 
 def due(trainer_rows, known, level, class_id=None) -> Due:
-    """The class spells trainable now, by `spell_state`, and what they cost.
+    """The class spells one trainer visit can teach, and what they cost.
+
+    A visit teaches in dependency order, so a spell counts not only when
+    every spell it requires is already known, but also when each one is
+    itself taught earlier in the same visit: a member several ranks
+    behind owes the whole chain up to its level at once (#792), not just
+    the next rank. A spell above the member's level, or one requiring a
+    spell no row in the chain teaches (a talent), stays out.
 
     With `class_id`, only the spells a member of that class casts or holds
     passively (classcasts.py): what the member's purchase order saves for
@@ -111,12 +118,28 @@ def due(trainer_rows, known, level, class_id=None) -> Due:
     """
     known = {_int(k) for k in known or ()}
     level = _int(level)
-    costs = [
-        _int(row.get("cost"))
+    pending = [
+        row
         for row in trainer_rows or ()
-        if spell_state(row, known, level, level) == "trainable"
+        if _int(row["spell"]) not in known
+        and _int(row.get("level")) <= level
         and (class_id is None or classcasts.casts(class_id, row["spell"]))
     ]
+    costs = []
+    taught = set(known)
+    counted = set()
+    progressed = True
+    while progressed:
+        progressed = False
+        for row in pending:
+            spell = _int(row["spell"])
+            if spell in counted:
+                continue
+            if all(n in taught for n in _needs(row)):
+                counted.add(spell)
+                taught.add(spell)
+                costs.append(_int(row.get("cost")))
+                progressed = True
     if not costs:
         return Due()
     return Due(sum(costs), len(costs), min(costs))
