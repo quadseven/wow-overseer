@@ -203,6 +203,32 @@ class TheSwitchAndTheLimits(unittest.TestCase):
             guildrun.guild_registry([candidate]), guildrun.guild_registry([])
         )
 
+    def test_a_guild_without_fire_resistance_sources_does_not_enrol(self):
+        # 8 tanks, 11 healers and 21 damage dealers, but no paladin or shaman:
+        # no group has a fire resistance source, so the template is not filled.
+        roster = (
+            [{"name": "tank%d" % i, "class_id": WARRIOR, "level": 60} for i in range(8)]
+            + [
+                {"name": "heal%d" % i, "class_id": PRIEST, "level": 60}
+                for i in range(11)
+            ]
+            + [
+                {"name": "damage%d" % i, "class_id": MAGE, "level": 60}
+                for i in range(21)
+            ]
+        )
+        candidate = {
+            "name": "NewA",
+            "faction": "Alliance",
+            "members": roster,
+            "naturalized": {member["name"] for member in roster},
+            "raid_nights": [],
+            "size_target": 40,
+        }
+        self.assertEqual(
+            guildrun.guild_registry([candidate]), guildrun.guild_registry([])
+        )
+
     def test_default_run_guilds_come_from_the_registry(self):
         rows = (
             {"name": "Cave"},
