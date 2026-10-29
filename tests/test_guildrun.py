@@ -1137,6 +1137,23 @@ class TheRecord(unittest.TestCase):
         ]
         self.assertEqual(guildrun.rates(rows), {})
 
+    def test_three_boss_timeout_counts_as_progress_and_boss_time(self):
+        rows = [
+            dict(ended("ragefire", "timed out"), bosses_done=3, seconds_inside=1800),
+            dict(ended("ragefire", "timed out"), bosses_done=2, seconds_inside=900),
+            dict(ended("ragefire", "abandoned"), bosses_done=5, seconds_inside=2000),
+            dict(ended("ragefire", "timed out"), seconds_inside=500),
+        ]
+        rate = guildrun.rates(rows)[("ragefire", "15-19", "spec-tank/spec-healer")]
+        pooled = guildrun.door_rate(guildrun.rates(rows), "ragefire", "15-19")
+        self.assertEqual((rate.runs, rate.progress), (4, 1))
+        self.assertEqual(pooled.progress, 1)
+        self.assertIn("about 8 minutes a boss", rate.words())
+        no_bosses = guildrun.rates([dict(ended("ragefire", "wiped"))])[
+            ("ragefire", "15-19", "spec-tank/spec-healer")
+        ]
+        self.assertNotIn("a boss", no_bosses.words())
+
 
 class TheRecordByShape(unittest.TestCase):
     """#584: the social layer's record, keyed by (door, band, shape) with the
@@ -1170,6 +1187,15 @@ class TheRecordByShape(unittest.TestCase):
         self.assertTrue(guildrun.shape_records(wipes)[key].failing)
         self.assertTrue(guildrun.shape_records(away)[key].failing)
         self.assertFalse(guildrun.shape_records(broken)[key].failing)
+
+    def test_progress_timeout_keeps_shape_open(self):
+        key = ("ragefire", "15-19", "spec-tank/spec-healer")
+        wipes = [ended("ragefire", "wiped")] * guildrun.FAILING_RUNS
+        progress = dict(ended("ragefire", "timed out"), bosses_done=3)
+        self.assertTrue(guildrun.shape_records(wipes)[key].failing)
+        record = guildrun.shape_records([progress] + wipes[:-1])[key]
+        self.assertEqual(record.progress, 1)
+        self.assertFalse(record.failing)
 
     def test_an_old_run_ages_out(self):
         now = datetime.datetime(2026, 10, 4, 20, 0, 0)
@@ -1263,6 +1289,23 @@ class AFailingDoorIsRetired(unittest.TestCase):
     def test_one_clear_keeps_it(self):
         rows = [ended("ragefire", "wiped")] * 6 + [ended("ragefire", "cleared")]
         self.assertEqual(guildrun.failing_doors(plan(rows)), set())
+
+    def test_progress_timeout_keeps_door_open(self):
+        wipes = [ended("ragefire", "wiped")] * guildrun.FAILING_RUNS
+        self.assertEqual(guildrun.failing_doors(plan(wipes)), {"ragefire"})
+        progress = dict(ended("ragefire", "timed out"), bosses_done=3)
+        self.assertEqual(guildrun.failing_doors(plan([progress] + wipes[:-1])), set())
+
+    def test_door_option_shows_time_per_boss_only_when_bosses_are_down(self):
+        p = plan(
+            [dict(ended("ragefire", "timed out"), bosses_done=3, seconds_inside=1800)]
+        )
+        text = guildrun.questions(p)["dungeon"]["criteria"]["ragefire"]
+        self.assertIn("about 10 minutes a boss", text)
+        empty = guildrun.questions(plan([ended("ragefire", "wiped")]))["dungeon"][
+            "criteria"
+        ]["ragefire"]
+        self.assertNotIn("a boss", empty)
 
 
 class JevChoosesWithAConfidence(unittest.TestCase):

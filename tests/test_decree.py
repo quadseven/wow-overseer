@@ -361,6 +361,7 @@ class WhatThisConsoleMayWrite(unittest.TestCase):
                 decree.QUEUE: decree.QUEUE_STORE,
                 decree.TRAVEL: decree.ROSTER,
                 decree.WILL: decree.CHAT,
+                decree.PRIORITIES: decree.PRIORITY_STORE,
             },
         )
         for section in decree.SECTIONS:

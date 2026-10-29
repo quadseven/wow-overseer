@@ -125,6 +125,7 @@ TANK, HEALER, DPS = raidroles.SEAT_TANK, raidroles.SEAT_HEALER, raidroles.SEAT_D
 # Run states and outcomes, as overseer_guild_run holds them.
 QUEUED, INSIDE, ENDED = "queued", "inside", "ended"
 CLEARED = "cleared"
+PROGRESS_BOSSES = 3
 OUTCOMES = (
     CLEARED,
     "wiped",
@@ -456,6 +457,51 @@ def free_members(
             continue
         free.append(member)
     return free, held
+
+
+# ROOM TO LOOT BEFORE THE DOOR (#1568). Three Deadmines guild runs stalled at
+# the Iron Clad Door on 2026-10-27 because every member out of combat that
+# knew Opening had full bags, so nobody could loot the Defias Gunpowder. A
+# member with fewer than BAG_ROOM_FREE_SLOTS free general-bag slots is held
+# out of a run, its ask or yes taken back, so it is no longer spoken for and
+# the guild jobs pass sends it to sell (guildjobs.loot_room_short already asks
+# a sale of it there); with room again it is free to ask or answer. The wait
+# is bounded: once a member has been short for BAG_ROOM_WAIT_SECONDS it is
+# free to a run again, so one who cannot reach a vendor, or carries nothing a
+# vendor will buy, does not hold the run for ever. The family's own campaign has its hold at the resume
+# floor (bag_pressure.campaign_resume_short).
+SHORT_OF_BAG_ROOM = "short of bag room"
+BAG_ROOM_FREE_SLOTS = 4
+BAG_ROOM_WAIT_SECONDS = 20 * 60
+
+
+def bag_room_holds(
+    free_slots: dict,
+    since: dict,
+    now: float,
+    floor: int = BAG_ROOM_FREE_SLOTS,
+    wait: float = BAG_ROOM_WAIT_SECONDS,
+) -> tuple:
+    """(names held for bag room now, the clock to keep for the next pass).
+
+    `free_slots` is name -> free general-bag slots; `since` is the clock this
+    returned last time (name -> when it was first read short). A member short
+    of `floor` is held until it has been short for `wait` seconds; a member
+    with room, or one whose bags were not read, is forgotten, so a later
+    shortage starts a new wait. An unread or negative reading holds nobody: a
+    broken read must not keep a guild out of its dungeons."""
+    clock = {}
+    held = set()
+    for name, free in (free_slots or {}).items():
+        if not isinstance(free, int) or isinstance(free, bool):
+            continue
+        if free < 0 or free >= floor:
+            continue
+        start = (since or {}).get(name, now)
+        clock[name] = start
+        if now - start < wait:
+            held.add(name)
+    return frozenset(held), clock
 
 
 def settling(uptime_seconds, settle_seconds: int = SETTLE_SECONDS) -> bool:
@@ -1218,6 +1264,9 @@ class Rate:
     runs: int
     cleared: int
     deaths: int
+    progress: int = 0
+    seconds_inside: int = 0
+    bosses_done: int = 0
 
     @property
     def smoothed(self) -> float:
@@ -1226,23 +1275,38 @@ class Rate:
     def words(self) -> str:
         if not self.runs:
             return "no runs yet"
-        return "%d cleared of %d run%s (%.0f%%), %.1f deaths a run" % (
+        words = "%d cleared of %d run%s (%.0f%%), %.1f deaths a run" % (
             self.cleared,
             self.runs,
             "" if self.runs == 1 else "s",
             100.0 * self.cleared / self.runs,
             self.deaths / float(self.runs),
         )
+        if self.bosses_done:
+            seconds_per_boss = self.seconds_inside // self.bosses_done
+            if seconds_per_boss < 60:
+                pace = "about %d seconds a boss" % seconds_per_boss
+            else:
+                pace = "about %d minutes a boss" % round(seconds_per_boss / 60)
+            words += "; %s" % pace
+        return words
 
 
 NO_RATE = Rate(0, 0, 0)
+
+
+def _progress_run(row: dict, outcome: str) -> bool:
+    return (
+        outcome == "timed out" and int(row.get("bosses_done") or 0) >= PROGRESS_BOSSES
+    )
 
 
 def rates(rows: list, rolling: int = ROLLING) -> dict:
     """(keyword, band, composition) -> Rate over the last `rolling` ended
     runs of each. Rows are overseer_guild_run rows, newest first. A run that
     never entered (refused, not entered, lost) says nothing about the dungeon
-    and is not counted."""
+    and is not counted. A timeout with at least PROGRESS_BOSSES counts as
+    progress, while the smoothed clear rate still counts clears only."""
     counted: dict = {}
     out: dict = {}
     for row in rows:
@@ -1261,10 +1325,15 @@ def rates(rows: list, rolling: int = ROLLING) -> dict:
             continue
         counted[key] = n + 1
         rate = out.get(key, NO_RATE)
+        bosses_done = int(row.get("bosses_done") or 0)
         out[key] = Rate(
             rate.runs + 1,
             rate.cleared + (1 if outcome == CLEARED else 0),
             rate.deaths + int(row.get("deaths") or 0),
+            rate.progress + int(_progress_run(row, outcome)),
+            rate.seconds_inside
+            + (int(row.get("seconds_inside") or 0) if bosses_done > 0 else 0),
+            rate.bosses_done + bosses_done,
         )
     return out
 
@@ -1276,13 +1345,16 @@ def door_rate(table: dict, keyword: str, band: str, composition: str = "") -> Ra
         exact = table.get((keyword, band, composition))
         if exact and exact.runs:
             return exact
-    runs = cleared = deaths = 0
+    runs = cleared = deaths = progress = seconds_inside = bosses_done = 0
     for (k, b, _c), rate in table.items():
         if k == keyword and b == band:
             runs += rate.runs
             cleared += rate.cleared
             deaths += rate.deaths
-    return Rate(runs, cleared, deaths)
+            progress += rate.progress
+            seconds_inside += rate.seconds_inside
+            bosses_done += rate.bosses_done
+    return Rate(runs, cleared, deaths, progress, seconds_inside, bosses_done)
 
 
 # THE RECORD BY SHAPE, COUNTING THE RUNS THAT NEVER GOT IN (#583, #584). The
@@ -1291,7 +1363,8 @@ def door_rate(table: dict, keyword: str, band: str, composition: str = "") -> Ra
 # healer or not (Member.plays). `rates` drops a run the finder turned away, yet
 # Ragefire at 10 to 14 ran 92 times and 72 never got in; that is the strongest
 # record there is, so it is counted here. A door is closed for a shape after
-# FAILING_RUNS runs in with no clear, or TURNED_AWAY_RUNS turn-aways in a row.
+# FAILING_RUNS runs in with no clear or three-boss timeout progress, or
+# TURNED_AWAY_RUNS turn-aways in a row.
 # Only RECORD_DAYS of runs count: the record moves only when the door is run,
 # so a door closed for a shape opens again a week after its last run.
 RECORD_DAYS = 7
@@ -1315,17 +1388,18 @@ class ShapeRecord:
     went_in: int = 0
     cleared: int = 0
     deaths: int = 0
+    progress: int = 0
     turned_away: int = 0
     streak: int = 0
 
     @property
     def rate(self) -> Rate:
-        return Rate(self.went_in, self.cleared, self.deaths)
+        return Rate(self.went_in, self.cleared, self.deaths, self.progress)
 
     @property
     def failing(self) -> bool:
         return (
-            self.went_in >= FAILING_RUNS and self.cleared == 0
+            self.went_in >= FAILING_RUNS and self.cleared == 0 and self.progress == 0
         ) or self.streak >= TURNED_AWAY_RUNS
 
     def words(self) -> str:
@@ -1370,6 +1444,7 @@ def _counted(rec: ShapeRecord, row: dict, entered: bool, streaking: bool):
             went_in=rec.went_in + 1,
             cleared=rec.cleared + (1 if outcome == CLEARED else 0),
             deaths=rec.deaths + int(row.get("deaths") or 0),
+            progress=rec.progress + int(_progress_run(row, outcome)),
         )
     return replace(
         rec, turned_away=rec.turned_away + 1, streak=rec.streak + int(streaking)
@@ -1414,13 +1489,16 @@ def cleared_doors(rows: list) -> set:
 
 
 def comp_rate(table: dict, composition: str, band: str) -> Rate:
-    runs = cleared = deaths = 0
+    runs = cleared = deaths = progress = seconds_inside = bosses_done = 0
     for (_k, b, c), rate in table.items():
         if c == composition and b == band:
             runs += rate.runs
             cleared += rate.cleared
             deaths += rate.deaths
-    return Rate(runs, cleared, deaths)
+            progress += rate.progress
+            seconds_inside += rate.seconds_inside
+            bosses_done += rate.bosses_done
+    return Rate(runs, cleared, deaths, progress, seconds_inside, bosses_done)
 
 
 # --- the plan for one pool, and the heuristic -------------------------------------
@@ -1488,8 +1566,8 @@ def plan_for(
 # A DOOR THAT KEEPS FAILING IS RETIRED AT THAT BAND (#575). Wailing Caverns
 # was 0 cleared of 48 runs over 30 days, and the heuristic kept re-picking it by
 # level fit because no single composition had MIN_SAMPLES runs. A door with at
-# least FAILING_RUNS runs at the band, pooled over compositions, and no clear is
-# skipped while any other door fits.
+# least FAILING_RUNS runs at the band, pooled over compositions, no clear and
+# no three-boss timeout progress is skipped while any other door fits.
 #
 # IT IS A PREFERENCE, NOT A BAN. When the failing door is the ONLY door that
 # fits the band it is still chosen: the record is a rolling window that only
@@ -1500,11 +1578,12 @@ FAILING_RUNS = 6
 
 def failing_doors(plan: Plan) -> set:
     """Keywords of doors that have failed FAILING_RUNS times at this band with
-    no clear. Callers prefer other doors over these; see FAILING_RUNS."""
+    no clear or three-boss timeout progress. Callers prefer other doors over
+    these; see FAILING_RUNS."""
     out = set()
     for door in plan.doors:
         rate = door_rate(plan.table, door.keyword, plan.band)
-        if rate.runs >= FAILING_RUNS and rate.cleared == 0:
+        if rate.runs >= FAILING_RUNS and rate.cleared == 0 and rate.progress == 0:
             out.add(door.keyword)
     return out
 
