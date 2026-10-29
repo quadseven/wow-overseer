@@ -58,7 +58,9 @@ nothing. So each called ask nobody answers carries a Silence: how many random
 bots were read and the commonest reasons each could not answer, and the
 bridge logs it whenever the reasons change. It answers at least ANSWER_AFTER_MINUTES after the call, by a
 whisper to the asker ("I can heal Deadmines, inv"), one pug an ask a pass, and
-the asker tells the guild ("Got a healer from LFG, Thrall's coming."). The
+nobody announces the join to the guild (#1636: the announcement was finder
+bookkeeping wearing a chat costume; the formed group still gets the social
+layer's one heading-in line). The
 answer is an overseer_guild_answer row with stance `pug`, so the social layer
 seats it, withdraws it when the pug is no longer free, and forms the run as
 it forms any other: the tank leads, and the finder row names the pug
@@ -154,8 +156,12 @@ class Call:
 
 @dataclass(frozen=True)
 class Join:
-    """A pug's yes: an answer row (stance pug), the pug's whisper to the
-    asker, and the asker's line in guild chat."""
+    """A pug's yes: an answer row (stance pug) and the pug's whisper to the
+    asker. `told_guild` is a line the asker says in guild chat about the
+    join, or "" for none: this module's joins carry none (#1636 - "found a
+    tank in LFG" is bookkeeping, not something a person announces), while
+    another caller sharing this shape (the class quest escalation) carries
+    its own. The join's record is the answer row itself."""
 
     ask_id: int
     member: str
@@ -413,12 +419,6 @@ _ANSWER = {
         "Saw your LF, I'll heal. Inv?",
     ),
 }
-_TOLD = (
-    "Got a {seat} from LFG, {pug}'s coming along.",
-    "Found a {seat} in LFG: {pug}.",
-    "{pug} answered in LFG, they'll {verb} for us.",
-)
-_VERB = {TANK: "tank", HEALER: "heal"}
 
 
 def call_line(asker: str, door, seats: tuple) -> str:
@@ -439,13 +439,6 @@ def answer_line(pug: str, seat: str, door) -> str:
     template = _pick(_ANSWER[seat], pug, door.keyword)
     return guildsocial._fit(
         template.format(place=guildsocial.short_place(door.place)), 255
-    )
-
-
-def told_line(asker: str, pug: str, seat: str) -> str:
-    template = _pick(_TOLD, asker, pug, seat)
-    return guildsocial._fit(
-        template.format(seat=seat, pug=pug, verb=_VERB.get(seat, seat)), 255
     )
 
 
@@ -575,7 +568,7 @@ def plan(
                     role=seat,
                     said=answer_line(pug.name, seat, door),
                     asker=ask.asker,
-                    told_guild=told_line(ask.asker, pug.name, seat),
+                    told_guild="",
                 )
             )
     return PugPass(calls=tuple(new_calls), joins=tuple(joins), silences=tuple(silences))

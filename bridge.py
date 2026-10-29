@@ -26356,7 +26356,7 @@ def _fetch_guild_social_facts(bounds) -> dict:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT NOW() AS now")
         now = (cur.fetchone() or {}).get("now")
-        cur.execute(guildsocial.ASKS_SQL, (guildsocial.ASK_COOLDOWN_MINUTES,))
+        cur.execute(guildsocial.ASKS_SQL, (guildsocial.ASKS_READ_MINUTES,))
         asks = [guildsocial.ask_from_row(r) for r in cur.fetchall()]
         answers = []
         if asks:
@@ -26943,7 +26943,9 @@ def _start_social_run(form) -> int:
 def _write_guild_pugs(pugs) -> None:
     """Write one guildpug.PugPass: each call once (the asker says it in the
     faction's public channel), each pug's yes as an answer with stance pug
-    (the pug whispers the asker; the asker tells the guild)."""
+    (the pug whispers the asker; a join's told line, when its caller
+    carries one, is said in guild chat - guildpug's own joins carry none,
+    #1636)."""
     lines = []
     with _connect() as conn, conn.cursor() as cur:
         for call in pugs.calls:
@@ -26956,7 +26958,10 @@ def _write_guild_pugs(pugs) -> None:
             cur.execute(guildsocial.INSERT_ANSWER_SQL, (
                 join.ask_id, join.member[:12], join.role, guildsocial.PUG, join.said[:255]))
             lines.append((join.member, "whisper", join.said, join.asker))
-            lines.append((join.asker, "guild", join.told_guild, ""))
+            # A join with no told line (#1636: guildpug's own joins) says
+            # nothing in guild chat; a caller that carries one still does.
+            if join.told_guild:
+                lines.append((join.asker, "guild", join.told_guild, ""))
     for name, channel, text, to in lines:
         try:
             _insert_speak(relay.SpeakCommand(name, channel, text, to, guildpug.SOURCE))
