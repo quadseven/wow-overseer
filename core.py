@@ -234,8 +234,83 @@ def _digest_ask(text: str):
     return parse_ask(text)
 
 
+# THE REPORT ORDERS (quadseven/mod-overseer#1238). voice.VOCABULARY mixes
+# two kinds of entry: ones that only READ the world and ones that change
+# it. These four are the readers - "stats" reports gold, bag space and
+# experience, "quests" lists current quests, "talents" reports the talent
+# build, "los" lists what the character can see. Every other entry moves
+# the character, spends or
+# equips something, abandons a quest or clears its state. The split is what
+# a report-only order-giver's scope is made of, so it is named here, beside
+# the parser that enforces it, and pinned against the vocabulary by test:
+# an entry added to the vocabulary is state-changing until it is added here
+# on purpose.
+REPORT_COMMANDS = frozenset({"stats", "quests", "talents", "los"})
+
+# What a report-only giver is told when an order of theirs would change the
+# world. A refusal said out loud, not silence: to the giver, a dropped order
+# and a lost order look exactly alike, and only one of them is true. The
+# list it names is REPORT_COMMANDS itself, so the sentence cannot drift
+# from the scope it describes.
+REPORT_REFUSAL = (
+    "From you I take report orders only ("
+    + ", ".join(sorted(REPORT_COMMANDS))
+    + ", or who is in the world) - that one would change the world, and "
+    "world-changing orders stay the operator's to give."
+)
+
+
+def _voice_normalise(command: str) -> str:
+    # Late import, like _voice_is_raw: the folding is voice's, shared so the
+    # scope recognises a command exactly as the raw check does.
+    from voice import normalise_command
+
+    return normalise_command(command)
+
+
+def _is_report_command(command: str) -> bool:
+    """Is this raw command, whole, one of the report entries? Normalised
+    the way voice normalises, and matched WHOLE: "stats" is a report,
+    "stats please" is not - a report entry takes no arguments, so anything
+    after it is a different order wearing its name."""
+    return _voice_normalise(command) in REPORT_COMMANDS
+
+
+def _report_scope(directives: list) -> list:
+    """What survives of one message from a report-only giver.
+
+    Kept: the decisions that only read the world - a report command aimed
+    at one character or fanned out at a group, a roster, a digest - and
+    every Reply, replies being only words back to the channel (usage
+    answers and the grammar's own refusals included). Dropped: everything
+    that would change the world - a state-changing command, a natural-
+    language order (the inner voice may pick ANY vocabulary entry for one,
+    movement included, so no NL line is a report however it is phrased), a
+    spoken line, a GM command, a job, a queue, a watch. One refusal Reply
+    stands for however many were dropped.
+    """
+    kept = []
+    refused = False
+    for decision in directives:
+        if isinstance(decision, (Reply, RosterQuery, DigestQuery)):
+            kept.append(decision)
+        elif isinstance(decision, (InsertCommand, FanoutCommand)) and (
+            _is_report_command(decision.command)
+        ):
+            kept.append(decision)
+        else:
+            refused = True
+    if refused:
+        kept.append(Reply(REPORT_REFUSAL))
+    return kept
+
+
 def parse_directive(
-    text: str, author_id: str, allowed_ids: frozenset[str], dedicated: bool = False
+    text: str,
+    author_id: str,
+    allowed_ids: frozenset[str],
+    dedicated: bool = False,
+    report_ids: frozenset[str] = frozenset(),
 ) -> list:
     """Turn one Discord message into decisions.
 
@@ -245,8 +320,22 @@ def parse_directive(
     allowed user talking to the overseer itself always gets an answer: a
     roster when they ask who is in the world, and help otherwise - dead air
     in the overseer's own hall reads as breakage, because it is.
+
+    An author in `report_ids` but not `allowed_ids` is a report-only giver
+    (quadseven/mod-overseer#1238): parsed exactly as the operator's
+    message would be, then scoped by _report_scope, so the scope is a
+    property of the decisions rather than a second, drifting grammar. An
+    id in both sets is the operator, unscoped. A report-only giver is
+    heard ONLY in the dedicated channel - the ticket scopes it to the
+    overseer channel, which is narrower than the bridge's channel rule
+    (the chat channel too, and everywhere when none is configured: the
+    operator's contract, argued where OWNED_CHANNEL_IDS is defined, and
+    not extended to an identity that exists to be handed to an agent).
     """
-    if author_id not in allowed_ids:
+    if author_id not in allowed_ids and author_id not in report_ids:
+        return []
+    scoped = author_id not in allowed_ids
+    if scoped and not dedicated:
         return []
 
     directives = []
@@ -296,7 +385,13 @@ def parse_directive(
             directives.append(NLDirective(target, command, f"discord:{author_id}"))
 
     if not addressed:
-        return _unaddressed(text, dedicated, author_id)
+        unaddressed = _unaddressed(text, dedicated, author_id)
+        return _report_scope(unaddressed) if scoped else unaddressed
+    if scoped:
+        # Scoped BEFORE the flood cap below counts: a report buried among
+        # refused orders is still answered, and the cap then bounds what
+        # survives rather than what was typed.
+        directives = _report_scope(directives)
     # A fan-out line counts as one order here: the flood cap bounds how many
     # things one message may ask for, and MAX_FANOUT_TARGETS bounds how wide
     # each of those things may get.

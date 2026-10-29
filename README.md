@@ -102,6 +102,7 @@ ones a stranger must supply or will want first.
 | `MYSQL_ROOT_PASSWORD` | Password the bridge and site connect with. Required. |
 | `DISCORD_BOT_TOKEN` | The Discord bot token. Required unless headless. |
 | `DISCORD_ALLOWED_USERS` | Comma-separated Discord user IDs allowed to give orders. |
+| `DISCORD_REPORT_USERS` | Comma-separated Discord user IDs allowed to give report orders only (`stats`, `quests`, `talents`, `los`, roster and digest questions). Orders that would change the world are refused. For a bot identity that may ask after the family but never move it; never a substitute for `DISCORD_ALLOWED_USERS`. |
 | `OVERSEER_HEADLESS` | `1` runs the bridge loops with no Discord connection. |
 | `OVERSEER_CHANNEL_ID`, `CHAT_CHANNEL_ID` | Channels the bridge acts in; empty means every channel. |
 | `PORT` | Port `map_server.py` listens on (default `8080`). |
