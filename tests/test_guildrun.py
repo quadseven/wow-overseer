@@ -203,6 +203,18 @@ class TheSwitchAndTheLimits(unittest.TestCase):
             guildrun.guild_registry([candidate]), guildrun.guild_registry([])
         )
 
+    def test_default_run_guilds_come_from_the_registry(self):
+        rows = (
+            {"name": "Cave"},
+            {"name": "Bonkers"},
+            {"name": "NewA"},
+        )
+        with mock.patch.object(guildrun, "guild_registry", lambda *a, **k: rows):
+            self.assertEqual(guildrun.limits({}).guilds, ("Cave", "Bonkers", "NewA"))
+            override = guildrun.limits({"GUILD_RUNS_GUILDS": "Cave"})
+            self.assertEqual(override.guilds, ("Cave",))
+        self.assertEqual(guildrun.run_guild_names(), guildrun.DEFAULT_GUILDS)
+
     def test_off_unless_it_is_turned_on(self):
         self.assertFalse(guildrun.enabled({}))
         self.assertFalse(guildrun.enabled({"GUILD_RUNS": "off"}))

@@ -94,7 +94,8 @@ ROLLING = 20
 MIN_SAMPLES = 3
 MAX_OPTIONS = 3
 MAX_DUNGEONS = 4
-DEFAULT_GUILDS = ("Cave", "Bonkers")
+LEGACY_GUILDS = (("Cave", "Alliance"), ("Bonkers", "Horde"))
+DEFAULT_GUILDS = tuple(name for name, _ in LEGACY_GUILDS)
 MAX_EXTRA_GUILDS = 2
 # The continents a queue may start from: never from inside an instance.
 OPEN_WORLD_MAPS = (0, 1, 530)
@@ -180,8 +181,67 @@ def limits(environ=None) -> Limits:
         cooldown_minutes=_int_env(
             env, "GUILD_RUNS_COOLDOWN_MINUTES", COOLDOWN_MINUTES, 0, 1440
         ),
-        guilds=guilds or DEFAULT_GUILDS,
+        guilds=guilds or run_guild_names(),
     )
+
+
+def _legacy_rows() -> list:
+    """The two family guilds, always registered, with raidteams as lineup."""
+    return [
+        {
+            "name": name,
+            "faction": faction,
+            "raid_nights": (),
+            "size_target": 40,
+            "lineup_override": True,
+        }
+        for name, faction in LEGACY_GUILDS
+    ]
+
+
+def _natural_sixties(candidate: dict) -> list:
+    """The candidate's naturally levelled level-60 members, nobody else."""
+    naturalized = set(candidate.get("naturalized", ()))
+    return [
+        m
+        for m in candidate.get("members", ())
+        if m.get("level") == 60 and m.get("name") in naturalized
+    ]
+
+
+def _fills_template(members: list) -> bool:
+    """Do these members fill the Molten Core template: 8 tanks, 11 healers,
+    21 damage and a fire resistance source in every group."""
+    plan = raidlineup.plan_molten_core(members)
+    roles = [m.get("seat") for group in plan["groups"] for m in group["members"]]
+    return (
+        roles.count("tank") == 8
+        and roles.count("healer") == 11
+        and roles.count("dps") == 21
+        and all(group["fire_resistance"] for group in plan["groups"])
+    )
+
+
+def _enrol_row(candidate: dict, taken_names: set, taken_factions: set):
+    """The registry row for a candidate that qualifies, else None."""
+    name = str(candidate.get("name") or "").strip()
+    faction = candidate.get("faction")
+    if (
+        not name
+        or faction not in ("Alliance", "Horde")
+        or faction in taken_factions
+        or name in taken_names
+    ):
+        return None
+    if not _fills_template(_natural_sixties(candidate)):
+        return None
+    return {
+        "name": name,
+        "faction": faction,
+        "raid_nights": tuple(candidate.get("raid_nights", ())),
+        "size_target": int(candidate.get("size_target") or 40),
+        "lineup_override": False,
+    }
 
 
 def guild_registry(
@@ -192,62 +252,22 @@ def guild_registry(
     Candidate rows carry name, faction, raid_nights, size_target, members and
     naturalized names. Only naturally restarted level-60 characters count.
     """
-    registry = [
-        {
-            "name": "Cave",
-            "faction": "Alliance",
-            "raid_nights": (),
-            "size_target": 40,
-            "lineup_override": True,
-        },
-        {
-            "name": "Bonkers",
-            "faction": "Horde",
-            "raid_nights": (),
-            "size_target": 40,
-            "lineup_override": True,
-        },
-    ]
+    registry = _legacy_rows()
     allowed = max(0, int(max_extra))
     factions = set()
     for candidate in candidates or ():
-        if len(registry) - 2 >= allowed:
+        if len(registry) - len(LEGACY_GUILDS) >= allowed:
             break
-        name = str(candidate.get("name") or "").strip()
-        faction = candidate.get("faction")
-        naturalized = set(candidate.get("naturalized", ()))
-        members = [
-            m
-            for m in candidate.get("members", ())
-            if m.get("level") == 60 and m.get("name") in naturalized
-        ]
-        if (
-            not name
-            or faction not in ("Alliance", "Horde")
-            or faction in factions
-            or any(row["name"] == name for row in registry)
-        ):
-            continue
-        plan = raidlineup.plan_molten_core(members)
-        roles = [m.get("seat") for group in plan["groups"] for m in group["members"]]
-        if (
-            roles.count("tank") != 8
-            or roles.count("healer") != 11
-            or roles.count("dps") != 21
-            or not all(group["fire_resistance"] for group in plan["groups"])
-        ):
-            continue
-        registry.append(
-            {
-                "name": name,
-                "faction": faction,
-                "raid_nights": tuple(candidate.get("raid_nights", ())),
-                "size_target": int(candidate.get("size_target") or 40),
-                "lineup_override": False,
-            }
-        )
-        factions.add(faction)
+        row = _enrol_row(candidate, {r["name"] for r in registry}, factions)
+        if row:
+            registry.append(row)
+            factions.add(row["faction"])
     return tuple(registry)
+
+
+def run_guild_names(candidates=()) -> tuple:
+    """The names of the guilds the coordinator runs: the registry's rows."""
+    return tuple(row["name"] for row in guild_registry(candidates))
 
 
 # --- who can go -------------------------------------------------------------
