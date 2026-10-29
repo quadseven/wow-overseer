@@ -1,0 +1,73 @@
+Subject: [PATCH] Molten Core: melee step off a Majordomo add with Damage Shield
+
+WHY THIS PATCH EXISTS
+
+Every 30 seconds Majordomo Executus casts either Magic Reflection (20619) or
+Damage Shield (21075) on himself and the adds around him. While an add carries
+Damage Shield, every melee swing into it hurts the attacker. The moltencore
+strategy only keeps damage off Majordomo himself, so melee bots keep swinging
+into a shielded Flamewaker Healer (11663) or Flamewaker Elite (11664). This is
+patch 2 of 4 for the encounter and builds on patch 0017, which edits the same
+function.
+
+WHAT IT DOES
+
+For a melee bot's damage target selection, an add that carries Damage Shield
+is excluded in the same hook that already excludes Majordomo and the reflecting
+adds. The bot then takes another add that is not shielded, or has no target and
+waits until the aura drops. The aura id 21075 is SPELL_DAMAGE_REFLECTION in the
+core's Majordomo script.
+
+Melee bots have no timeout fallback: they wait out the shield window, which
+relies on the Damage Shield aura expiring. A live Majordomo run confirms it.
+
+WHAT THIS PATCH DELIBERATELY DOES NOT DO
+
+It does not touch casters (Magic Reflection is patch 0017), the kill order
+(patch 3) or the threat after Teleport Target (patch 4). It selects on the DPS
+target exclusion only, so tanks keep their own target selection. It keys on the
+aura by spell id on the two add entries only, so no other encounter is
+affected.
+
+WHEN THIS PATCH SHOULD BE DELETED
+
+When the fork's Molten Core strategy keeps melee off a Damage Shield target
+itself.
+
+diff --git a/src/Ai/Raid/MC/MCHelpers.h b/src/Ai/Raid/MC/MCHelpers.h
+index 1bc12c3..2b9a1aa 100644
+--- a/src/Ai/Raid/MC/MCHelpers.h
++++ b/src/Ai/Raid/MC/MCHelpers.h
+@@ -35,6 +35,8 @@ enum MoltenCoreSpells
+     // Majordomo Executus: every 30s he casts this on himself and the adds
+     // around him
+     SPELL_MAGIC_REFLECTION = 20619,
++    // The other half of the same cast: melee hitting its holder is hurt.
++    SPELL_DAMAGE_REFLECTION = 21075,
+ };
+ 
+ constexpr uint32 MAGMA_SPLASH_BACK_OFF_STACKS = 20;
+diff --git a/src/Ai/Raid/MC/MCStrategy.cpp b/src/Ai/Raid/MC/MCStrategy.cpp
+index cbde15a..e3edc39 100644
+--- a/src/Ai/Raid/MC/MCStrategy.cpp
++++ b/src/Ai/Raid/MC/MCStrategy.cpp
+@@ -125,6 +125,9 @@ void RaidMcStrategy::AppendTargetExclusions(GuidSet& exclusions, TargetValueExcl
+     Player* bot = botAI->GetBot();
+     bool const casterHolds = type == TargetValueExclusionType::Dps && PlayerbotAI::IsCaster(bot);
+     Unit* reflecting = nullptr;
++    // Damage Shield hurts every melee swing into its holder. Melee step off
++    // an add that carries it and take another add, or wait until it drops.
++    bool const meleeStepsOff = type == TargetValueExclusionType::Dps && PlayerbotAI::IsMelee(bot);
+     for (ObjectGuid const guid : AI_VALUE(GuidVector, "attackers"))
+     {
+         Unit* unit = botAI->GetUnit(guid);
+@@ -139,6 +142,9 @@ void RaidMcStrategy::AppendTargetExclusions(GuidSet& exclusions, TargetValueExcl
+             exclusions.insert(guid);
+             reflecting = unit;
+         }
++        else if (meleeStepsOff && unit->HasAura(SPELL_DAMAGE_REFLECTION) &&
++                 (unit->GetEntry() == NPC_FLAMEWAKER_HEALER || unit->GetEntry() == NPC_FLAMEWAKER_ELITE))
++            exclusions.insert(guid);
+     }
+ 
+     if (reflecting)
