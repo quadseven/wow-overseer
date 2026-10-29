@@ -498,6 +498,10 @@ class Step:
     # One vendorsale.Sale per sell row, so the bridge can name the item and the
     # price of each sale the world delivers (#1592). Empty: no sale is named.
     sales: tuple = ()
+    # The classquest.Move a class quest step carries out, for the shadow
+    # comparison of the step executor (steps.py). Not part of the step's
+    # identity: two steps that write the same rows are the same step.
+    move: object = field(default=None, compare=False, repr=False)
 
 
 def source_for(action, key) -> str:

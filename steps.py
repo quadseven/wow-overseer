@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import classhunt
 import classquest
 import guildjobs
@@ -55,3 +57,39 @@ def run(move: classquest.Move, orders_store) -> list[orders.Order] | str:
         return move.why
     orders.send(orders_store, order)
     return [order]
+
+
+# SHADOW MODE (quadseven/wow-overseer#739). The bridge still writes the class
+# quest rows itself. With CLASSQUEST_EXECUTOR=shadow (the default) it also asks
+# `run` what it would send, against a memory queue that never touches the realm,
+# and logs one line per move so the two can be compared before any writer goes.
+MODE_ENV = "CLASSQUEST_EXECUTOR"
+SHADOW = "shadow"
+OFF = "off"
+
+
+def mode(environ=None) -> str:
+    """SHADOW when the variable is unset or says shadow; OFF for any other word."""
+    value = (os.environ if environ is None else environ).get(MODE_ENV, SHADOW)
+    return SHADOW if value.strip().lower() in ("", SHADOW) else OFF
+
+
+def _shown(rows) -> str:
+    return " | ".join("%s/%s" % (kind, command) for kind, command in rows) or "-"
+
+
+def shadow_line(move: classquest.Move, old_rows) -> str:
+    """The comparison line for one move: what `run` sends to a MemoryStore
+    against `old_rows`, the rows (anything with .kind and .command) the bridge
+    writes for the same move. Reads and writes nothing else."""
+    store = orders.MemoryStore()
+    result = run(move, store)
+    new = [(o.kind, o.command) for o in result] if isinstance(result, list) else []
+    old = [(r.kind, r.command) for r in old_rows]
+    return "classquest executor: %s %s match=%s new=%s old=%s" % (
+        move.said.split(" ", 1)[0] if move.said else "?",
+        move.kind,
+        "true" if new == old else "false",
+        _shown(new),
+        _shown(old),
+    )
