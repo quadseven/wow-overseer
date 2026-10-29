@@ -157,6 +157,7 @@ import raidrun
 import raidsupply
 import recipebook
 import raidteams
+import readtimeout
 import recruit
 import realmread
 import relay
@@ -11155,7 +11156,8 @@ class Bridge(discord.Client):
             try:
                 await asyncio.to_thread(_share_quests)
             except Exception:
-                log.exception("quest sharing pass failed; retrying next cycle")
+                readtimeout.log_pass_failure(
+                    log, "quest sharing", "quest sharing pass failed; retrying next cycle")
 
     async def _move_materials_once(self, cohort=None) -> None:
         """One pass of infra#2830: reagents move to whoever is assigned the
@@ -15733,7 +15735,8 @@ class Bridge(discord.Client):
                 try:
                     await self._quester_once()
                 except Exception:
-                    log.exception("questers: pass failed; retrying next cycle")
+                    readtimeout.log_pass_failure(
+                        log, "questers", "questers: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _quester_once(self) -> None:
@@ -18135,7 +18138,8 @@ class Bridge(discord.Client):
                 await self._guild_jobs_once()
                 _mark_pass_completed("guild_jobs")
             except Exception:
-                log.exception("guild jobs pass failed; retrying next cycle")
+                readtimeout.log_pass_failure(
+                    log, "guild jobs", "guild jobs pass failed; retrying next cycle")
             await self._for_other_families("guild jobs", self._guild_jobs_once)
             await self._sleep_until_next_pass(cycle)
 
@@ -24043,7 +24047,8 @@ def _answered_share_rows(days: int, depth: int) -> list:
     eat the quiet time. The terminal write stamps updated_at. The index
     this reads through is 2026_09_02_00_overseer_share_backoff.sql."""
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(
+        readtimeout.timed_execute(
+            cur, "answered share rows",
             "SELECT target_name, target_arg, command, status, result, age_s "
             "FROM ("
             "  SELECT target_name, target_arg, command, status, result, "
@@ -29908,7 +29913,7 @@ def _class_member_reads(cur, book, everyone: str) -> tuple:
 def _job_read(cur, what: str, sql: str, params=()) -> list:
     """One job read; a schema without the table or column reads as empty."""
     try:
-        cur.execute(sql, params)
+        readtimeout.timed_execute(cur, what, sql, params)
     except pymysql.err.MySQLError as exc:
         if exc.args and exc.args[0] in (1054, 1146):
             log.warning("guild jobs: the %s read failed on this schema (%s): %s; the "
