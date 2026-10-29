@@ -85,7 +85,7 @@ class MajordomoDamageShieldPatchTest(unittest.TestCase):
     def test_melee_guard_is_dps_selection_for_a_melee_bot(self):
         folded = " ".join(self.added.split())
         self.assertIn(
-            "bool const meleeStepsOff = type == TargetValueExclusionType::Dps "
+            "bool const meleeStepsOff = type == TargetValueExclusionType::DpsTarget "
             "&& PlayerbotAI::IsMelee(bot);",
             folded,
         )
