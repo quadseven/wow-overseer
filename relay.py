@@ -358,7 +358,7 @@ _ID_MENTION = re.compile(r"<(@[!&]?|#)(\d+)>")
 _WOW_MARKUP = re.compile(
     r"\|\|"  # an escaped, literal pipe
     r"|\|H[A-Za-z]+:[^|\s]*\|h(?P<link>.*?)\|h"  # hyperlink, keep shown text
-    r"|\|T[^|\s]+\|t"  # texture
+    r"|\|T[^|\s]*[\\/:.][^|\s]*\|t"  # texture: a path-shaped body
     r"|\|c[0-9a-fA-F]{8}"  # colour start
     r"|\|r(?![A-Za-z0-9])"  # colour reset, not the start of a word
     r"|\|h(?![A-Za-z0-9])"  # stray link end left by a broken link

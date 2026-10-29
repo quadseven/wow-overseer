@@ -408,6 +408,31 @@ class Sanitize(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(relay.sanitize(raw), raw)
 
+    def test_a_pipe_t_word_pair_is_not_a_texture(self):
+        for raw in ("|Thanks|there", "|Tab|time", "x|Tfoo|tbar"):
+            with self.subTest(raw=raw):
+                self.assertEqual(relay.sanitize(raw), raw)
+
+    def test_real_textures_still_strip(self):
+        for raw, want in (
+            ("|TInterface\\Icons\\X:16|t Hi", " Hi"),
+            ("a |Tinterface/icons/x.blp:0|t b", "a  b"),
+            ("|Tx.tga|tHi", "Hi"),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(relay.sanitize(raw), want)
+
+    def test_other_near_markup_shapes_pass_through(self):
+        for raw in (
+            "|cfff0000 short colour",
+            "|Hfoo|hbar",
+            "|Hitem:1 never closed",
+            "the |rest and |hint",
+            "|Hi: you",
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(relay.sanitize(raw), raw)
+
     def test_a_doubled_pipe_is_one_literal_pipe(self):
         self.assertEqual(relay.sanitize("||cffff0000 literal"), "|cffff0000 literal")
         self.assertEqual(relay.sanitize("a || b"), "a | b")
