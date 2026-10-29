@@ -70,6 +70,7 @@ import classtrain
 import classparty
 import classhunt
 import classquest
+import steps as classquest_steps  # noqa: F401
 import classuse
 import guildbank
 import guildfund
