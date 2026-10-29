@@ -162,13 +162,20 @@ class TrainingIsAdditive(unittest.TestCase):
                 "supposed to be teaching",
             )
 
-    def test_training_learns_from_the_real_trainer_tables(self):
-        """InitAvailableSpells is the one that walks the trainer lists.
+    def test_training_no_longer_walks_the_trainer_tables_without_a_trainer(self):
+        """The premise this test pinned is gone, on purpose.
 
-        Without it a character learns only what the class-spell init grants and
-        still never sees a trainer's list, which is the exact hole this closes.
+        TrainRoster used to call PlayerbotFactory::InitAvailableSpells, which
+        walks the trainer lists and learns every rank with no trainer and no
+        gold. The module is natural-only now (operator ruling 2026-10-12): the
+        family learns at a real trainer and pays, and TrainRoster only spends
+        talent points. If the walk comes back, this is the test that says so.
         """
-        self.assertIn("InitAvailableSpells", _train_roster_source())
+        code = "\n".join(
+            line.split("//", 1)[0] for line in _train_roster_source().splitlines()
+        )
+        for grant in ("InitAvailableSpells", "InitClassSpells", "InitSkills"):
+            self.assertNotIn(grant, code, grant)
 
     def test_training_is_gated_so_it_does_not_run_every_poll(self):
         """The expensive walk runs on level change, not on every tick."""
