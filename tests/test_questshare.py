@@ -841,7 +841,6 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
                 disagreements += 1
         self.assertEqual(disagreements, 0)
 
-
     def _recent_only(self, rows):
         """What the bridge's read keeps once it skips every triple with no
         answered row inside the cap (the SQL IN-subquery): the triple's whole
@@ -867,7 +866,9 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
         self.assertEqual(self.held(rows), frozenset())
         self.assertEqual(self._recent_only(rows), [])
         # the cut that would NOT be safe: windowing the history itself
-        eight_days = [r for r in self.rows(self.PERMANENT, ages) if r[5] < 8 * 24 * self.H]
+        eight_days = [
+            r for r in self.rows(self.PERMANENT, ages) if r[5] < 8 * 24 * self.H
+        ]
         self.assertEqual(self.held(eight_days), frozenset())
 
     def test_skipping_triples_with_nothing_recent_decides_identically(self):
@@ -890,7 +891,11 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
             ("error", None),
             ("error", "{not json"),
         ]
-        keys = [self.KEY, ("Bork", "Ilhan", "share 1234"), ("Aiyla", "Bork", "share 77")]
+        keys = [
+            self.KEY,
+            ("Bork", "Ilhan", "share 1234"),
+            ("Aiyla", "Bork", "share 77"),
+        ]
         disagreements = filtered = 0
         for _ in range(600):
             rows = []

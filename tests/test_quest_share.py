@@ -459,7 +459,9 @@ class TheShareRetryLogic(unittest.TestCase):
         helper = bridge[
             bridge.index("def _answered_share_rows") : bridge.index("def _insert_share")
         ]
-        self.assertIn("def _answered_share_rows(days: int, depth: int, recent_hours: int)", helper)
+        self.assertIn(
+            "def _answered_share_rows(days: int, depth: int, recent_hours: int)", helper
+        )
         self.assertIn("ROW_NUMBER() OVER (", helper)
         self.assertIn("PARTITION BY target_name, target_arg, command, status, ", helper)
         self.assertIn("CASE WHEN JSON_VALID(result) ", helper)

@@ -24069,6 +24069,9 @@ def _answered_share_rows(days: int, depth: int, recent_hours: int) -> list:
             "  FROM overseer_command "
             "  WHERE kind = 'share' AND status IN ('delivered', 'error') "
             "    AND updated_at > NOW() - INTERVAL %s DAY"
+            # The three key columns are always set for share rows (_insert_share
+            # writes holder, taker and command), so a NULL cannot silently
+            # exclude a triple from this row-value IN.
             "    AND (target_name, target_arg, command) IN ("
             "      SELECT target_name, target_arg, command FROM overseer_command "
             "      WHERE kind = 'share' AND status IN ('delivered', 'error') "
