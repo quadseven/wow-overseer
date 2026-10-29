@@ -98,7 +98,7 @@ class TheBridgeAsksOnlyWithinAParty(unittest.TestCase):
             _fetch_family_quests=lambda names: (FAMILY, CATALOG),
             _fetch_parties=lambda names: parties,
             _recent_share_keys=lambda minutes: set(),
-            _answered_share_rows=lambda days, depth: [],
+            _answered_share_rows=lambda days, depth, recent_hours: [],
             _insert_share=lambda grant: inserted.append(grant) or 1,
         ):
             bridge._share_family_quests([m.name for m in FAMILY])
@@ -217,7 +217,7 @@ class APartyReadErrorFallsBack(unittest.TestCase):
                 bridge,
                 _fetch_family_quests=lambda names: (FAMILY, CATALOG),
                 _recent_share_keys=lambda minutes: set(),
-                _answered_share_rows=lambda days, depth: [],
+                _answered_share_rows=lambda days, depth, recent_hours: [],
                 _insert_share=lambda grant: inserted.append(grant) or 1,
             ),
             self.assertLogs(bridge.log, "WARNING"),
@@ -241,7 +241,7 @@ class APartyReadErrorFallsBack(unittest.TestCase):
                 bridge,
                 _fetch_family_quests=lambda names: (FAMILY, CATALOG),
                 _recent_share_keys=lambda minutes: set(),
-                _answered_share_rows=lambda days, depth: [],
+                _answered_share_rows=lambda days, depth, recent_hours: [],
                 _insert_share=lambda grant: inserted.append(grant) or 1,
             ),
         ):

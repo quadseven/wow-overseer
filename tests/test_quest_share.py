@@ -406,6 +406,7 @@ class TheShareRetryLogic(unittest.TestCase):
             "        _answered_share_rows(\n"
             "            SHARE_REFUSAL_MEMORY_DAYS,\n"
             "            questshare.history_depth(SHARE_RETRY_MINUTES, SHARE_BACKOFF_CAP_HOURS),\n"
+            "            SHARE_BACKOFF_CAP_HOURS,\n"
             "        ),\n"
             "        SHARE_RETRY_MINUTES,\n"
             "        SHARE_BACKOFF_CAP_HOURS,\n"
@@ -458,14 +459,29 @@ class TheShareRetryLogic(unittest.TestCase):
         helper = bridge[
             bridge.index("def _answered_share_rows") : bridge.index("def _insert_share")
         ]
-        self.assertIn("def _answered_share_rows(days: int, depth: int)", helper)
+        self.assertIn("def _answered_share_rows(days: int, depth: int, recent_hours: int)", helper)
         self.assertIn("ROW_NUMBER() OVER (", helper)
         self.assertIn("PARTITION BY target_name, target_arg, command, status, ", helper)
         self.assertIn("CASE WHEN JSON_VALID(result) ", helper)
         self.assertIn("THEN JSON_UNQUOTE(JSON_EXTRACT(result, '$.reason')) END", helper)
         self.assertIn("ORDER BY updated_at DESC) AS rn", helper)
         self.assertIn("WHERE rn <= %s", helper)
-        self.assertIn("(int(days), int(depth))", helper)
+        self.assertIn("(int(days), int(recent_hours), int(depth))", helper)
+
+    def test_only_triples_answered_inside_the_cap_are_read(self):
+        """backed_off() never holds a triple whose youngest counted answer is
+        older than the cap, so the read skips those triples entirely (the
+        steady-state table is mostly them) while a triple that does have a
+        recent answer keeps its whole ninety-day streak."""
+        bridge = self._bridge()
+        helper = bridge[
+            bridge.index("def _answered_share_rows") : bridge.index("def _insert_share")
+        ]
+        self.assertIn("AND (target_name, target_arg, command) IN (", helper)
+        self.assertIn("AND updated_at > NOW() - INTERVAL %s HOUR)", helper)
+        # the recent test is on the same statuses and kind as the main read
+        sub = helper[helper.index("AND (target_name, target_arg, command) IN (") :]
+        self.assertIn("kind = 'share' AND status IN ('delivered', 'error')", sub)
 
     def test_the_read_has_an_index_shaped_like_it(self):
         """overseer_command is never pruned and shipped with idx_status only;

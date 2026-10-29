@@ -24016,7 +24016,7 @@ def _recent_share_keys(minutes: int) -> set:
         }
 
 
-def _answered_share_rows(days: int, depth: int) -> list:
+def _answered_share_rows(days: int, depth: int, recent_hours: int) -> list:
     """The youngest `depth` answers per (holder, taker, quest, status,
     reason) the worldserver wrote inside the window - delivered or refused
     - with the JSON it wrote and how long ago it ANSWERED, by the
@@ -24033,6 +24033,14 @@ def _answered_share_rows(days: int, depth: int) -> list:
     hourly transient retries - a party split for a season would otherwise
     hand this loop two hundred thousand rows every five minutes and the
     read timeout would stop EVERY share, not just the backed-off ones.
+    `recent_hours` is the backoff cap: backed_off() only holds a triple
+    whose youngest counted answer is younger than the cap (the quiet time
+    never exceeds it), so a triple with no answer inside `recent_hours` can
+    never be held and its history is not read at all. Triples that do have
+    one keep their full `days` of history, so the streak length (which sets
+    the quiet time) is unchanged. One statement, so one snapshot: a row
+    landing later is simply seen by the next pass.
+
     The partition key extracts result.reason with JSON_VALID guarding
     JSON_EXTRACT (a row the worldserver never answered has NULL there,
     and JSON_EXTRACT on non-JSON is an error, not a NULL).
@@ -24056,9 +24064,13 @@ def _answered_share_rows(days: int, depth: int) -> list:
             "  FROM overseer_command "
             "  WHERE kind = 'share' AND status IN ('delivered', 'error') "
             "    AND updated_at > NOW() - INTERVAL %s DAY"
+            "    AND (target_name, target_arg, command) IN ("
+            "      SELECT target_name, target_arg, command FROM overseer_command "
+            "      WHERE kind = 'share' AND status IN ('delivered', 'error') "
+            "        AND updated_at > NOW() - INTERVAL %s HOUR)"
             ") AS answered "
             "WHERE rn <= %s",
-            (int(days), int(depth)),
+            (int(days), int(recent_hours), int(depth)),
         )
         return [
             (
@@ -24190,6 +24202,7 @@ def _share_family_quests(names: list, zone: int = 0, label: str = "") -> questsh
         _answered_share_rows(
             SHARE_REFUSAL_MEMORY_DAYS,
             questshare.history_depth(SHARE_RETRY_MINUTES, SHARE_BACKOFF_CAP_HOURS),
+            SHARE_BACKOFF_CAP_HOURS,
         ),
         SHARE_RETRY_MINUTES,
         SHARE_BACKOFF_CAP_HOURS,
