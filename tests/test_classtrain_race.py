@@ -35,6 +35,26 @@ class RaceMasks(unittest.TestCase):
         self.assertTrue(racespells.fits(HEROISM, None, SHAMAN))
 
 
+class ClassMaskSemantics(unittest.TestCase):
+    """A row with a race mask AND a class mask needs both (the core's rule)."""
+
+    def setUp(self):
+        self.spell = 900001
+        racespells.ROWS[self.spell] = ((1 << (ORC - 1), 1 << (SHAMAN - 1)),)
+        self.addCleanup(racespells.ROWS.pop, self.spell, None)
+
+    def test_right_race_wrong_class_does_not_fit(self):
+        self.assertFalse(racespells.fits(self.spell, ORC, 8))
+
+    def test_right_race_and_class_fits(self):
+        self.assertTrue(racespells.fits(self.spell, ORC, SHAMAN))
+
+    def test_a_class_mask_of_zero_means_any_class(self):
+        racespells.ROWS[self.spell] = ((1 << (ORC - 1), 0),)
+        self.assertTrue(racespells.fits(self.spell, ORC, 8))
+        self.assertFalse(racespells.fits(self.spell, DRAENEI, 8))
+
+
 class DueLeavesOutSpellsARaceCannotLearn(unittest.TestCase):
     def test_an_orc_shaman_does_not_owe_heroism(self):
         due = classtrain.due(ROWS, set(), 30, race_id=ORC, own_class=SHAMAN)
@@ -58,7 +78,46 @@ class BridgePassesTheMembersRace(unittest.TestCase):
     def test_the_known_spells_read_carries_race_into_due(self):
         src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
         self.assertIn("c.race AS race_id", src)
-        self.assertIn("race[name] or None, klass[name])", src)
+
+    def test_the_bridge_filters_by_the_members_race(self):
+        from unittest import mock
+
+        from test_guildsocial_bridge import bridge
+
+        trainer = [
+            {"class_id": SHAMAN, "spell": s, "level": lv, "cost": c}
+            for s, lv, c in ((100, 4, 10), (BLOODLUST, 20, 90), (HEROISM, 20, 90))
+        ]
+        known = [
+            {
+                "name": "Orcy",
+                "class_id": SHAMAN,
+                "race_id": ORC,
+                "level": 30,
+                "spell": None,
+            },
+            {
+                "name": "Draney",
+                "class_id": SHAMAN,
+                "race_id": DRAENEI,
+                "level": 30,
+                "spell": None,
+            },
+        ]
+
+        def read(cur, what, sql, params=()):
+            return trainer if what == "class trainer spells" else known
+
+        conn = mock.MagicMock()
+        conn.__enter__.return_value = conn
+        with (
+            mock.patch.object(bridge, "_connect", return_value=conn),
+            mock.patch.object(bridge, "_corps_read", side_effect=read),
+            mock.patch.dict(bridge._CLASS_TRAINER_ROWS, clear=True),
+        ):
+            got = bridge._class_training_due(["Orcy", "Draney"])
+        self.assertEqual(classtrain.Due(100, 2, 10), got["Orcy"])
+        self.assertEqual(classtrain.Due(100, 2, 10), got["Draney"])
 
 
 if __name__ == "__main__":
