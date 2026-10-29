@@ -63,6 +63,17 @@ class TheMaps(unittest.TestCase):
         self.assertFalse(classic.is_starting_land(530, None))
         self.assertFalse(classic.is_starting_land(None, 3524))
 
+    def test_the_veiled_sea_is_a_starting_land_like_the_module_says(self):
+        """The sea zone beside Azuremyst, where boat crossings berth. The
+        module's IsStartingLand accepts it, so the bridge must, or the planner
+        and the module disagree about the same character."""
+        self.assertTrue(classic.is_starting_land(530, 3479))
+        self.assertIn(classic.VEILED_SEA, classic.STARTING_LAND_ZONES)
+        self.assertEqual(3479, classic.VEILED_SEA)
+        # Still only on map 530, and an unread zone is still not one.
+        self.assertFalse(classic.is_starting_land(571, 3479))
+        self.assertFalse(classic.is_starting_land(530, None))
+
     def test_an_unknown_map_is_not_judged(self):
         self.assertFalse(classic.outside_classic(None))
         self.assertFalse(classic.outside_classic(999))

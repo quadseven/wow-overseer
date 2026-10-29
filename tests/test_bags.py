@@ -114,15 +114,56 @@ class TheModuleDoesNotHandOutBags(unittest.TestCase):
     def test_the_module_can_remove_nothing_from_a_bag(self):
         """The bags hold live quest items that are quality-1 whites and look
         exactly like junk, so there is no exclusion list that could be got
-        right. The guarantee is that no disposal call exists at all."""
-        src = _strip_comments(modsource.read(MODULE, encoding="utf-8"))
+        right. The guarantee used to be that no disposal call exists at all.
+
+        It is narrower now, and still structural: the module removes an item
+        from a bag in exactly three places and nowhere else, and each has its
+        own gate. DoDestroy is the operator's destroy row (`sell` kind,
+        #614), which goes through the core's own destroy handler and only
+        past OverseerDecisions::DestroyRefusal. NaturalizeReset and
+        NaturalizeStrip are the operator's naturalize kind, which never runs
+        on the family (off by default). Any other call site, and every call
+        that bulk-clears or sells, is still refused.
+        """
+        raw = modsource.read(MODULE, encoding="utf-8")
+        src = _strip_comments(raw)
+        sanctioned = []
+        for signature in (
+            "static char const* DoDestroy(",
+            "bool NaturalizeReset(",
+            "bool NaturalizeStrip(",
+        ):
+            start = src.index(signature)
+            depth = 0
+            for i in range(src.index("{", start), len(src)):
+                if src[i] == "{":
+                    depth += 1
+                elif src[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        sanctioned.append((start, i))
+                        break
         for call in DISPOSAL:
-            self.assertNotIn(
-                call,
-                src,
-                f"mod_overseer.cpp contains {call}: nothing in this module may "
-                "remove an item from a bag",
-            )
+            for m in re.finditer(re.escape(call), src):
+                inside = any(a <= m.start() <= b for a, b in sanctioned)
+                if call == "DestroyItem":
+                    self.assertTrue(
+                        inside,
+                        "mod_overseer.cpp removes an item from a bag outside the "
+                        "three sanctioned paths (offset %d)" % m.start(),
+                    )
+                else:
+                    self.fail(
+                        f"mod_overseer.cpp contains {call}: nothing in this module "
+                        "may bulk-clear or sell items out of a bag"
+                    )
+        # The destroy row cannot skip its gate.
+        do_destroy = src[sanctioned[0][0] : sanctioned[0][1]]
+        self.assertIn("OverseerDecisions::DestroyRefusal(", do_destroy)
+        self.assertLess(
+            do_destroy.index("OverseerDecisions::DestroyRefusal("),
+            do_destroy.index("HandleDestroyItemOpcode("),
+        )
 
 
 def _patch_lines(path: pathlib.Path):

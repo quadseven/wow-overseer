@@ -63,6 +63,16 @@ def _code(text: str) -> str:
     return re.sub(r"//.*", "", text)
 
 
+def _own_handler_kinds() -> set:
+    """The kinds KindSharesChatTrigger exempts from the bot trigger hold. The
+    hold is OverseerDecisions::HoldForSharedTrigger now, and the exemption is
+    the OWN_HANDLER list in overseer_decisions.cpp."""
+    src = modsource.read(modsource.DECISIONS, encoding="utf-8")
+    start = src.index("bool KindSharesChatTrigger(")
+    body = src[start : src.index("\n}\n", start)]
+    return set(re.findall(r'"([a-z]+)"', body.split("OWN_HANDLER", 1)[1]))
+
+
 class TheSharePathIsReachable(unittest.TestCase):
     def test_the_command_loop_dispatches_it(self):
         """A DoShare nobody calls is a feature that exists only in the diff."""
@@ -73,7 +83,12 @@ class TheSharePathIsReachable(unittest.TestCase):
     def test_it_is_exempt_from_the_bot_trigger_hold(self):
         """kind='share' shares no ChatCommandTrigger, so holding it would only
         delay it - the same exemption chat, gm, probe and give have."""
-        self.assertIn('&& kind != "share"', _source())
+        # The module asks HoldForSharedTrigger before running a row, and the
+        # kinds with a handler of their own are exempt from it.
+        self.assertIn("OverseerDecisions::HoldForSharedTrigger(", _source())
+        exempt = _own_handler_kinds()
+        self.assertIn("share", exempt)
+        self.assertTrue({"chat", "gm", "probe"} <= exempt, exempt)
 
     def test_the_holder_is_target_name_and_the_taker_is_target_arg(self):
         """The same column roles kind='give' already uses."""
