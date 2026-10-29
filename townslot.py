@@ -1904,8 +1904,7 @@ class Slot:
             now=now,
             distance=distance,
             stop=stop,
-            earned=priority_after is not None
-            and now - _own_wait(claimant, self.wants, now) >= priority_after,
+            earned=self._earned(claimant, priority_after, now),
         )
         if gate is not None:
             return gate
@@ -1957,10 +1956,7 @@ class Slot:
             last_served=self._served,
             now=now,
             urgent=urgent,
-            priority=(
-                priority_after is not None
-                and now - _own_wait(claimant, self.wants, now) >= priority_after
-            ),
+            priority=self._earned(claimant, priority_after, now),
             lease=lease,
             orphan_lease=orphan_lease,
             long_leases=long_leases,
@@ -1973,6 +1969,12 @@ class Slot:
         if decision.verdict == SLOT_HOLD and distance is not None:
             return self._measure(decision, float(distance), now)
         return decision
+
+    def _earned(self, claimant: str, priority_after: float | None, now: float) -> bool:
+        """Whether `claimant` has waited its `priority_after` bound (#1452)."""
+        if priority_after is None:
+            return False
+        return now - _own_wait(claimant, self.wants, now) >= priority_after
 
     def _gate(
         self,
