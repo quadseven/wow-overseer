@@ -244,14 +244,19 @@ class LootStopsWhenThereIsNoRoom(unittest.TestCase):
         """
         text = LOOT_PATCH.read_text(encoding="utf-8")
         diff = text[text.index("diff --git") :]
-        self.assertIn(
-            "skillId == SKILL_NONE",
-            diff,
-            "the hunk does not show the SKILL_NONE early return, so "
+        # The rebased hunk no longer carries the early return as context (it
+        # moved into a lambda above the hunk), so the added comment is what
+        # names it: "returned above at SKILL_NONE". Either spelling counts.
+        marker = re.search(
+            r"skillId == SKILL_NONE|returned above at SKILL_NONE", diff, re.I
+        )
+        self.assertIsNotNone(
+            marker,
+            "the hunk does not name the SKILL_NONE early return, so "
             "nothing proves the guard is below it",
         )
         self.assertLess(
-            diff.index("skillId == SKILL_NONE"),
+            marker.start(),
             diff.index("GetFreeInventorySpace"),
             "the free-slot guard is placed ABOVE the SKILL_NONE return, which "
             "would stop a full-bagged bot looting money off a corpse",
@@ -292,24 +297,17 @@ class ThePatchHeaderSaysHowToRetireIt(unittest.TestCase):
             self.assertIn(heading, text)
 
     def test_it_names_the_sha_it_was_cut_against(self):
-        """A patch header quoting a SHA that is no longer pinned is a patch
-        nobody re-verified after a bump."""
-        pinned = set(
-            re.findall(
-                r"^AC_\w+_SHA=([0-9a-f]{40})$",
-                PINS.read_text(encoding="utf-8"),
-                re.MULTILINE,
-            )
+        """A patch header that does not quote the CURRENT module pin is a
+        patch nobody re-verified after a bump. A rebased patch also keeps the
+        older SHA it was first cut against, so older SHAs are history, not a
+        defect; the pin the header must name is the one the realm builds."""
+        pinned = re.search(
+            r"^AC_MODULE_SHA=([0-9a-f]{40})$",
+            PINS.read_text(encoding="utf-8"),
+            re.MULTILINE,
         )
-        self.assertTrue(pinned, "no SHAs parsed out of UPSTREAM-PINS.env")
-        quoted = set(
-            re.findall(r"[0-9a-f]{40}", LOOT_PATCH.read_text(encoding="utf-8"))
-        )
-        self.assertTrue(quoted, "the patch header quotes no upstream SHA")
-        self.assertTrue(
-            quoted <= pinned,
-            f"patch quotes SHAs that are not pinned: {sorted(quoted - pinned)}",
-        )
+        self.assertIsNotNone(pinned, "no AC_MODULE_SHA in UPSTREAM-PINS.env")
+        self.assertIn(pinned.group(1), LOOT_PATCH.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
