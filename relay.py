@@ -352,16 +352,28 @@ _ID_MENTION = re.compile(r"<(@[!&]?|#)(\d+)>")
 # machinery. A link that arrives already broken (the talent-spec line whose
 # |H head never made it, leaving each number in its own colour span) still
 # reads correctly once every escape is stripped: "(0/8/0)".
-_WOW_LINK = re.compile(r"\|H[^|]*\|h(.*?)\|h")
-_WOW_TEXTURE = re.compile(r"\|T[^|]*\|t")
-_WOW_ESCAPE = re.compile(r"\|c[0-9a-fA-F]{8}|\|r|\|h|\|H[^|]*")
+# Only well-formed markup is touched; a pipe that starts anything else is
+# ordinary text ("|Hello", "a |hop", "help|hint"). One pass, so a literal
+# pipe written as || is never re-read as the start of an escape.
+_WOW_MARKUP = re.compile(
+    r"\|\|"  # an escaped, literal pipe
+    r"|\|H[A-Za-z]+:[^|\s]*\|h(?P<link>.*?)\|h"  # hyperlink, keep shown text
+    r"|\|T[^|\s]+\|t"  # texture
+    r"|\|c[0-9a-fA-F]{8}"  # colour start
+    r"|\|r(?![A-Za-z0-9])"  # colour reset, not the start of a word
+    r"|\|h(?![A-Za-z0-9])"  # stray link end left by a broken link
+)
 
 
 def _plain_world_text(text: str) -> str:
     """World markup -> the words a player in the client would have read."""
-    text = _WOW_LINK.sub(lambda m: m.group(1), text)
-    text = _WOW_TEXTURE.sub("", text)
-    return _WOW_ESCAPE.sub("", text)
+
+    def swap(m: re.Match) -> str:
+        if m.group(0) == "||":
+            return "|"
+        return m.group("link") or ""
+
+    return _WOW_MARKUP.sub(swap, text)
 
 
 def sanitize(text: str) -> str:

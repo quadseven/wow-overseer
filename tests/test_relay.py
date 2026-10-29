@@ -378,9 +378,7 @@ class Sanitize(unittest.TestCase):
         # yellow quest link, Discord has no client, so the raw escape codes
         # are what a reader got.
         raw = "Need help with |cFFFFFF00|Hquest:605:35|h[Singing Blue Shards]|h|r?"
-        self.assertEqual(
-            relay.sanitize(raw), "Need help with [Singing Blue Shards]?"
-        )
+        self.assertEqual(relay.sanitize(raw), "Need help with [Singing Blue Shards]?")
 
     def test_a_broken_spec_link_reads_as_its_numbers(self):
         # The talent link arrives in fragments, each number wrapped in its
@@ -396,6 +394,27 @@ class Sanitize(unittest.TestCase):
 
     def test_colour_spans_keep_their_words(self):
         self.assertEqual(relay.sanitize("|cffff0000red|r text"), "red text")
+
+    def test_words_that_merely_start_with_a_pipe_letter_are_kept(self):
+        # Not markup: a pipe followed by letters that happen to be h, H, r.
+        for raw in (
+            "|Hello there, friend",
+            "a |hop",
+            "the help|hint",
+            "a|b",
+            "go |run now",
+            "|Thanks |there",
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(relay.sanitize(raw), raw)
+
+    def test_a_doubled_pipe_is_one_literal_pipe(self):
+        self.assertEqual(relay.sanitize("||cffff0000 literal"), "|cffff0000 literal")
+        self.assertEqual(relay.sanitize("a || b"), "a | b")
+
+    def test_nested_colours_and_textures_still_strip(self):
+        raw = "|cffff0000a |cff00ff00b|r c|r |TInterface\\Icons\\x:16|t done"
+        self.assertEqual(relay.sanitize(raw), "a b c  done")
 
 
 class FormatLine(unittest.TestCase):
