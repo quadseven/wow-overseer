@@ -279,23 +279,34 @@ class TheSubmodulePin(unittest.TestCase):
             result = self._run_gate(checkout)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
+    def _depth_one_submodule(self, root, remote, pin):
+        """The checkout CI makes: clone the module at depth 1 (main's tip),
+        then fetch the pinned commit at depth 1 and check it out. The pin
+        and main's tip are then two separate shallow roots, and fetching
+        main again adds nothing, so the pin is not in the tip's history until
+        the checkout is deepened."""
+        checkout = root / "checkout"
+        self._git(root, "clone", "--quiet", "--depth=1", remote.as_uri(), str(checkout))
+        self._git(checkout, "fetch", "--quiet", "--depth=1", "origin", pin)
+        self._git(checkout, "checkout", "--quiet", pin)
+        # Assert the fixture really is shallow, so it can never silently go
+        # full again and stop exercising the fix.
+        self.assertEqual(
+            "true",
+            self._git(checkout, "rev-parse", "--is-shallow-repository").stdout.strip(),
+        )
+        return checkout
+
     def test_a_pin_on_main_passes_in_a_depth_one_checkout(self):
-        """CI checks the submodule out shallow. The gate must still see that
-        the pin is an ancestor of main, not call every pin off main."""
+        """The pin is an ancestor of main but NOT its tip, in a checkout that
+        is shallow before the gate runs. Without the unshallow fetch the pin
+        never appears in the tip's history and the gate calls it off main."""
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
-            remote, shas = self._remote_with_history(root)
-            checkout = root / "checkout"
-            self._git(root, "init", str(checkout))
-            self._git(checkout, "remote", "add", "origin", remote.as_uri())
-            self._git(checkout, "fetch", "--depth", "1", "origin", shas[0])
-            self._git(checkout, "checkout", "--quiet", shas[0])
-            self.assertEqual(
-                "true",
-                self._git(
-                    checkout, "rev-parse", "--is-shallow-repository"
-                ).stdout.strip(),
-            )
+            remote, shas = self._remote_with_history(root, commits=6)
+            pin = shas[1]
+            self.assertNotEqual(pin, shas[-1])
+            checkout = self._depth_one_submodule(root, remote, pin)
             result = self._run_gate(checkout)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
@@ -316,6 +327,12 @@ class TheSubmodulePin(unittest.TestCase):
             self._git(checkout, "remote", "add", "origin", remote.as_uri())
             self._git(checkout, "fetch", "--depth", "1", "origin", off_main)
             self._git(checkout, "checkout", "--quiet", off_main)
+            self.assertEqual(
+                "true",
+                self._git(
+                    checkout, "rev-parse", "--is-shallow-repository"
+                ).stdout.strip(),
+            )
             result = self._run_gate(checkout)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
