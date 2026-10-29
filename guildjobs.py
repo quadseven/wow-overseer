@@ -5469,6 +5469,20 @@ def class_step(
     note = "; ".join(blocked)
     if move is None:
         return None, "", note
+    step, doing, note = _class_move_step(
+        m, move, note, book, recent, cap, hunts, now, far, kept, crafters, master
+    )
+    if step is not None:
+        # The move rides on the step so the bridge can set the step executor's
+        # orders beside the rows (steps.py, shadow mode).
+        step = replace(step, move=move)
+    return step, doing, note
+
+
+def _class_move_step(
+    m, move, note, book, recent, cap, hunts, now, far, kept, crafters, master
+):
+    """(step or None, what it does, note) for the move class_step chose."""
     first = _no_walk_step(m, move, book, recent, cap, kept, crafters, master)
     if first is not None:
         step, doing, why = first
