@@ -9,7 +9,9 @@ they need no network, and read the real vendored file for the shape checks.
 """
 
 import importlib.util
+import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -104,6 +106,47 @@ class TheVendoredFile(unittest.TestCase):
             text = patch.read_text(encoding="utf-8")
             if "mod-playerbots @" in text or "Verified against the pins" in text:
                 self.assertIn(sha, text, f"{patch.name} does not name the pin")
+
+
+ENUM_FILE = pathlib.Path("src/Bot/Engine/Strategy/Strategy.h")
+USED = re.compile(r"TargetValueExclusionType::(\w+)")
+
+
+def enum_members(text):
+    body = re.search(
+        r"enum class TargetValueExclusionType[^{]*\{(.*?)\};", text, re.S
+    ).group(1)
+    body = re.sub(r"//[^\n]*", "", body)
+    return {m.strip() for m in body.split(",") if m.strip()}
+
+
+class TheEnumFixture(unittest.TestCase):
+    def test_members_are_read_past_comments(self):
+        text = (
+            "enum class TargetValueExclusionType : uint8\n{\n"
+            "    TankTarget,\n    DpsTarget,  // also x, y\n    Aoe,\n};\n"
+        )
+        self.assertEqual({"TankTarget", "DpsTarget", "Aoe"}, enum_members(text))
+
+
+@unittest.skipUnless(
+    os.environ.get("PLAYERBOTS_SRC"),
+    "set PLAYERBOTS_SRC to a checkout of the pinned fork for the real check",
+)
+class ThePatchesUseTheForksEnum(unittest.TestCase):
+    """A patch can apply cleanly and still not compile: the exclusion type was
+    renamed in the fork and the patches kept the old spelling. Every
+    TargetValueExclusionType member the patches name must exist at the pin."""
+
+    def test_every_member_a_patch_names_exists_at_the_pin(self):
+        src = pathlib.Path(os.environ["PLAYERBOTS_SRC"])
+        members = enum_members((src / ENUM_FILE).read_text(encoding="utf-8"))
+        self.assertTrue(members)
+        for patch in sorted((REPO / "patches" / "mod-playerbots").glob("*.patch")):
+            for name in USED.findall(patch.read_text(encoding="utf-8")):
+                self.assertIn(
+                    name, members, f"{patch.name} uses a member the fork lacks"
+                )
 
 
 if __name__ == "__main__":

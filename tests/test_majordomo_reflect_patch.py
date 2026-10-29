@@ -75,7 +75,7 @@ class MajordomoReflectPatchTest(unittest.TestCase):
     def test_caster_guard_is_dps_selection_for_a_caster(self):
         folded = " ".join(self.added.split())
         self.assertIn(
-            "bool const casterHolds = type == TargetValueExclusionType::Dps "
+            "bool const casterHolds = type == TargetValueExclusionType::DpsTarget "
             "&& PlayerbotAI::IsCaster(bot);",
             folded,
         )
@@ -100,7 +100,7 @@ class MajordomoReflectPatchTest(unittest.TestCase):
 
     def test_only_casters_hold(self):
         self.assertIn("PlayerbotAI::IsCaster(bot)", self.added)
-        self.assertIn("TargetValueExclusionType::Dps", self.added)
+        self.assertIn("TargetValueExclusionType::DpsTarget", self.added)
 
     def test_reflecting_add_is_excluded_from_damage_targets(self):
         self.assertIn("exclusions.insert(guid);", self.added)
