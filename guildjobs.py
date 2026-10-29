@@ -107,6 +107,7 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import math
 import os
 import re
@@ -139,6 +140,8 @@ import situation
 import standstill
 import vendorsale
 import weaponskill
+
+log = logging.getLogger(__name__)
 
 HERBALISM = guildcorps.HERBALISM
 MINING = guildcorps.MINING
@@ -730,6 +733,9 @@ class Recent:
     # Why the module refused the row, "" when it did not, and whether it said
     # the refusal would pass (the realm's far walk walls, a dead character).
     refusal: str = ""
+    # Raw refusal text from the JSON result, for unrecognized "no trainer"
+    # refusals that don't exactly match NO_TRAINER_ON_MAP_REFUSAL.
+    raw_refusal: str = ""
     retryable: bool = False
     # The module's reason for ANY ending ("stopped getting nearer the spawn",
     # "died on the way to the spawn"), "" when the row gave none, and the spawn
@@ -745,6 +751,10 @@ class Recent:
     # For a `cross-to-map map:<id>` or `ride-to-stop map:<id> ...` row, the map
     # id it asked for (0 otherwise).
     dest: int = 0
+    # The map id the member was on when this trainer walk was attempted (0 when
+    # not a trainer walk or not read). Used to detect "no trainer on this map"
+    # refusals that persist while the member stays on the same map.
+    map_id: int = 0
     # Original command text, needed to distinguish an accepted battleground
     # queue from other PvP work.
     command: str = ""
@@ -1312,7 +1322,7 @@ def _train_step(member, trades, cap, recent=(), held=None):
     """
     if member.level < TRAIN_MIN_LEVEL and trades.get(member.name):
         return None, "%s learns a trade from level %d" % (member.name, TRAIN_MIN_LEVEL)
-    wants, cooling = [], []
+    wants, cooling, stranded = [], [], []
     if held is None:
         held = tuple(trades.get(member.name, ()))
         held += tuple(s for s in RANKED_CRAFTS if member.holds(s) and s not in held)
@@ -1320,11 +1330,18 @@ def _train_step(member, trades, cap, recent=(), held=None):
         value, ceiling = member.skill(skill)
         rank = next_rank(skill, value, ceiling, member.level)
         if rank is not None:
-            if _training_cooling(member.name, skill, recent):
+            if _stranded_by_no_trainer(member.name, skill, member.map_id, recent):
+                stranded.append(skill)
+            elif _training_cooling(member.name, skill, recent):
                 cooling.append(skill)
             else:
                 wants.append((rank.cost, skill, rank))
     if not wants:
+        if stranded:
+            return None, "%s waits on the map change before walking to a %s trainer" % (
+                member.name,
+                ", ".join(SKILL_NAMES[s] for s in stranded),
+            )
         if cooling:
             return None, "%s waits to retry %s after a failed trainer walk" % (
                 member.name,
@@ -1356,7 +1373,7 @@ def _train_step(member, trades, cap, recent=(), held=None):
             guildcorps.Row(
                 "cast",
                 "walk-to-trainer skill:%d%s" % (skill, _cap_word(cap)),
-                "",
+                str(member.map_id or 0),
                 source_for("train", member.name),
             ),
         ),
@@ -1475,6 +1492,8 @@ def _learn_step(member, cap, recent=()):
         recipe = recipe_to_learn(member, skill)
         if recipe is None or _training_cooling(member.name, skill, recent):
             continue
+        if _stranded_by_no_trainer(member.name, skill, member.map_id, recent):
+            continue
         return guildcorps.Step(
             member.name,
             "train",
@@ -1486,7 +1505,7 @@ def _learn_step(member, cap, recent=()):
                     "cast",
                     "walk-to-trainer skill:%d learn:%d%s"
                     % (skill, recipe.spell_id, _cap_word(cap)),
-                    "",
+                    str(member.map_id or 0),
                     source_for("train", member.name),
                 ),
             ),
@@ -1920,6 +1939,39 @@ def spendable(member, kind, copper) -> int:
 
 RIDING_ACTION = "riding"
 
+# The exact refusal text for "no trainer on this map will teach this
+# character that skill" (from mod-overseer fixtures/walk_refusals.json).
+# Non-retryable: the member must move to a different map before trying again.
+NO_TRAINER_ON_MAP_REFUSAL = (
+    "no trainer on this map will teach this character that skill"
+)
+
+
+def _no_trainer_refusal(name: str, skill_id: int, recent) -> bool:
+    return any(
+        r.name == name
+        and r.action in ("train", RIDING_ACTION)
+        and r.skill_id == skill_id
+        and r.refusal == NO_TRAINER_ON_MAP_REFUSAL
+        for r in recent or ()
+    )
+
+
+def _stranded_by_no_trainer(
+    name: str, skill_id: int, current_map_id: int | None, recent
+) -> bool:
+    """Whether the member's refused trainer walk still has the same map."""
+    if current_map_id is None or not current_map_id:
+        return False
+    return any(
+        r.name == name
+        and r.action in ("train", RIDING_ACTION)
+        and r.skill_id == skill_id
+        and r.refusal == NO_TRAINER_ON_MAP_REFUSAL
+        and r.map_id == current_map_id
+        for r in recent or ()
+    )
+
 
 def riding_step(m, recent):
     """(step or None, a note): a member whose purchase order reaches riding
@@ -1946,7 +1998,16 @@ def riding_step(m, recent):
                 purse.money(order.money),
             ),
         )
-    if not m.online or not m.alive or m.in_combat or _cooling(m, RIDING_ACTION, recent):
+    if not m.online or not m.alive or m.in_combat:
+        return None, ""
+    if _stranded_by_no_trainer(m.name, purse.RIDING_SKILL, m.map_id, recent):
+        return (
+            None,
+            "%s waits on the map change before walking to a riding trainer" % m.name,
+        )
+    if _cooling(m, RIDING_ACTION, recent) and not _no_trainer_refusal(
+        m.name, purse.RIDING_SKILL, recent
+    ):
         return None, ""
     said = "%s walks to a riding trainer to buy %s for %s of its own" % (
         m.name,
@@ -1968,7 +2029,7 @@ def riding_step(m, recent):
                         want.spell,
                         _cap_word(guildroute.FAR_WALK_YARDS),
                     ),
-                    "",
+                    str(m.map_id or 0),
                     source_for(RIDING_ACTION, m.name),
                 ),
             ),
@@ -6541,30 +6602,44 @@ def carried_from_rows(rows) -> dict:
     return {k: tuple(v) for k, v in out.items()}
 
 
-def recent_from_rows(rows) -> tuple:
+def recent_from_rows(rows, map_id_by_name: dict[str, int] | None = None) -> tuple:
     out = []
     for row in rows or ():
         action = action_of(row.get("source"))
         if not action:
             continue
+        name = str(row.get("target_name") or "")
+        map_id = 0
+        command = str(row.get("command") or "")
+        trainer_walk = action in ("train", RIDING_ACTION) and command.startswith(
+            "walk-to-trainer"
+        )
+        if trainer_walk:
+            target_arg = row.get("target_arg")
+            if target_arg is not None:
+                try:
+                    map_id = int(target_arg)
+                except (ValueError, TypeError):
+                    map_id = 0
+        elif action in ("train", RIDING_ACTION) and map_id_by_name is not None:
+            map_id = map_id_by_name.get(name, 0)
         out.append(
             Recent(
-                name=str(row.get("target_name") or ""),
+                name=name,
                 action=action.replace("-walk", ""),
                 age_minutes=_int(row.get("age"), 10**6),
                 status=str(row.get("status") or ""),
-                command=str(row.get("command") or ""),
+                command=command,
                 result=str(row.get("result") or ""),
-                skill_id=(
-                    _trainer_skill_id(row.get("command")) if action == "train" else None
-                ),
+                skill_id=(_trainer_skill_id(command) if trainer_walk else None),
                 walk=action.endswith("-walk"),
                 reason=_reason_of(row),
-                spawn=_spawn_of(row.get("command")),
-                abandoned=_abandoned_of(row.get("command")),
-                taken=_taken_of(row.get("command"), row.get("status")),
-                dest=_cross_dest_of(row.get("command")),
+                spawn=_spawn_of(command),
+                abandoned=_abandoned_of(command),
+                taken=_taken_of(command, row.get("status")),
+                dest=_cross_dest_of(command),
                 row_id=_int(row.get("id"), 0),
+                map_id=map_id,
                 **_hunt_of(row),
                 **_refusal_of(row),
             )
@@ -6635,8 +6710,18 @@ def _refusal_of(row) -> dict:
     if '"outcome":"refused"' not in result:
         return {}
     found = re.search(r'"reason":"((?:[^"\\]|\\.)*)"', result)
+    refusal = found.group(1) if found else ""
+    raw_refusal = ""
+    if "no trainer" in refusal.lower() and refusal != NO_TRAINER_ON_MAP_REFUSAL:
+        log.warning(
+            "trainer refusal text drift: %r (expected %r)",
+            refusal,
+            NO_TRAINER_ON_MAP_REFUSAL,
+        )
+        raw_refusal = refusal
     return {
-        "refusal": found.group(1) if found else "",
+        "refusal": refusal,
+        "raw_refusal": raw_refusal,
         "retryable": '"retryable":true' in result or '"retry":true' in result,
     }
 
