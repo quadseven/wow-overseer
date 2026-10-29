@@ -343,9 +343,30 @@ _MASS_MENTION = re.compile(r"@(everyone|here)\b", re.IGNORECASE)
 # role form is exactly what an @everyone-only filter misses.
 _ID_MENTION = re.compile(r"<(@[!&]?|#)(\d+)>")
 
+# The client's own markup: a hyperlink is |H<target>|h<shown text>|h, usually
+# wrapped in a colour span |c<8 hex digits> ... |r. The game client renders
+# all of that as one coloured, clickable phrase; Discord has no client, so a
+# relayed line arrived as raw escapes ("Need help with |cFFFFFF00|Hquest:
+# 605:35|h[Singing Blue Shards]|h|r?") and read as gibberish rather than as
+# the sentence a player in the client saw. Keep the shown text, drop the
+# machinery. A link that arrives already broken (the talent-spec line whose
+# |H head never made it, leaving each number in its own colour span) still
+# reads correctly once every escape is stripped: "(0/8/0)".
+_WOW_LINK = re.compile(r"\|H[^|]*\|h(.*?)\|h")
+_WOW_TEXTURE = re.compile(r"\|T[^|]*\|t")
+_WOW_ESCAPE = re.compile(r"\|c[0-9a-fA-F]{8}|\|r|\|h|\|H[^|]*")
+
+
+def _plain_world_text(text: str) -> str:
+    """World markup -> the words a player in the client would have read."""
+    text = _WOW_LINK.sub(lambda m: m.group(1), text)
+    text = _WOW_TEXTURE.sub("", text)
+    return _WOW_ESCAPE.sub("", text)
+
 
 def sanitize(text: str) -> str:
     """Make world text safe to post, without changing what it says."""
+    text = _plain_world_text(text)
     text = _MASS_MENTION.sub(lambda m: "@" + ZERO_WIDTH + m.group(1), text)
     text = _ID_MENTION.sub(
         lambda m: "<" + ZERO_WIDTH + m.group(1) + m.group(2) + ">", text

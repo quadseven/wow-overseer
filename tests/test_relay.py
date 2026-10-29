@@ -373,6 +373,30 @@ class Sanitize(unittest.TestCase):
     def test_ordinary_text_is_left_alone(self):
         self.assertEqual(relay.sanitize("hail, traveller"), "hail, traveller")
 
+    def test_a_quest_link_reads_as_its_title_not_its_markup(self):
+        # Seen live in the relayed guild feed: the client renders this as a
+        # yellow quest link, Discord has no client, so the raw escape codes
+        # are what a reader got.
+        raw = "Need help with |cFFFFFF00|Hquest:605:35|h[Singing Blue Shards]|h|r?"
+        self.assertEqual(
+            relay.sanitize(raw), "Need help with [Singing Blue Shards]?"
+        )
+
+    def test_a_broken_spec_link_reads_as_its_numbers(self):
+        # The talent link arrives in fragments, each number wrapped in its
+        # own colour span and no |H head left; stripping the escapes still
+        # leaves the sentence a person would have read in the client.
+        raw = (
+            "holy (0|h|cffffffff/|h|cff00ff008|h|cffffffff/0|h|cffffffff)|r "
+            "priest is looking for guild."
+        )
+        self.assertEqual(
+            relay.sanitize(raw), "holy (0/8/0) priest is looking for guild."
+        )
+
+    def test_colour_spans_keep_their_words(self):
+        self.assertEqual(relay.sanitize("|cffff0000red|r text"), "red text")
+
 
 class FormatLine(unittest.TestCase):
     def line(self, **kw):
