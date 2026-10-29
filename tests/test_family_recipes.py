@@ -56,6 +56,11 @@ def ugga(value, cap=150):
     return {ALCHEMY: (value, cap), HERBALISM: (164, 225)}
 
 
+# Mithril Spurs, Imperial Plate Bracers and Imperial Plate Boots have no
+# trainer_spell row; a plan item teaches each.
+PLAN_TAUGHT = frozenset({9964, 16649, 16657})
+
+
 class AFamilyCrafterIsDueATrainerRecipe(unittest.TestCase):
     def test_og_at_81_is_due_bolt_of_woolen_cloth(self):
         self.assertEqual(
@@ -135,7 +140,7 @@ class AFamilyCrafterIsDueATrainerRecipe(unittest.TestCase):
             if skill == goals.SKILL_IDS["cooking"]:
                 continue  # quest/vendor cooking recipes are learned elsewhere
             for recipe in recipes:
-                if recipe.spell_id in craft.AUTO_LEARNED:
+                if recipe.spell_id in craft.AUTO_LEARNED | PLAN_TAUGHT:
                     continue
                 with self.subTest(skill=skill, recipe=recipe.name):
                     self.assertIn(recipe.spell_id, craft.TRAINER_RECIPES)

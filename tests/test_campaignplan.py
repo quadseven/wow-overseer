@@ -23,6 +23,7 @@ import dungeonpath  # noqa: E402
 import jev  # noqa: E402
 import jev_choices  # noqa: E402
 import jobs  # noqa: E402
+import priorities  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
@@ -439,6 +440,7 @@ class TheBridgePass(unittest.TestCase):
                 "_planner_dry": lambda names: None,
                 "_finish_planned": lambda finish: 0,
                 "dataclasses": __import__("dataclasses"),
+                "priorities": priorities,
             },
         )
         fake = FakeJev(
@@ -448,6 +450,12 @@ class TheBridgePass(unittest.TestCase):
             _jev=jev.Client(key, transport=fake), _planner_said={}
         )
         me._plan_campaign = types.MethodType(ns["_plan_campaign"], me)
+
+        async def default_priorities():
+            return priorities.DEFAULT_ORDER
+
+        # The family's priorities (#1559): never set on this realm.
+        me._priority_order = default_priorities
 
         async def no_situation(*_args):
             return None

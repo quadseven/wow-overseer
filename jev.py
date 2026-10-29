@@ -84,6 +84,14 @@ and never delays or changes the active answer. A compare backend that cannot be
 built (a URL the client refuses) is logged once at error level and the client
 runs with compare off; it never stops the active backend or the bridge.
 
+Where the active backend gives no answer (Jev answering 402 on every call), a
+caller that passes `heuristic` (its own answer per question) has the
+comparison set against the heuristic instead, which is what acted, so
+agreement is still measured; a caller that also passes `subject` and
+`before` (its outcome snapshot) has each such disagreement recorded in
+overseer_jev_outcome as the heuristic arm and scored later (#820, see
+jev_outcomes, which also holds the stored scorecard queries).
+
 HOURLY TALLY. `TALLY` counts answered, disagreed and error per backend and
 kind, with the p50 and p95 round-trip milliseconds of the answered calls (and
 the service's own p50 and p95 where the backend reports one), and `maybe_log`
@@ -811,14 +819,33 @@ def _confidence_of(answer):
     return getattr(answer, "confidence", None)
 
 
-def compare_rows(kind, questions, active, shadow, active_name, shadow_name) -> list:
+# A comparison row's `against` when the active backend gave no answer and the
+# comparison was set against the heuristic's own answer instead (#820).
+AGAINST_HEURISTIC = "heuristic"
+
+
+def compare_rows(
+    kind, questions, active, shadow, active_name, shadow_name, heuristic=None
+) -> list:
     """One row per question: both backends' answers on the identical
-    question. `agree` is None unless both answered."""
+    question. `agree` is None unless both answered.
+
+    `heuristic` maps a question id to the heuristic's own answer, in the
+    shape `top_answer` gives. Where the active backend gave no answer (an
+    outage: Jev answering 402 on every call), the comparison is set against
+    the heuristic, which is what acted, so agreement is still measured
+    (#820). `against` names the side compared with: the active backend's
+    name, or AGAINST_HEURISTIC.
+    """
     rows = []
+    heuristic = heuristic or {}
     for qid in questions:
         a = (active.answers or {}).get(qid)
         b = (shadow.answers or {}).get(qid)
         mine, theirs = top_answer(a), top_answer(b)
+        against = active_name
+        if not mine and str(heuristic.get(qid) or ""):
+            mine, against = str(heuristic[qid]), AGAINST_HEURISTIC
         probs = getattr(b, "probabilities", None)
         rows.append(
             {
@@ -826,6 +853,7 @@ def compare_rows(kind, questions, active, shadow, active_name, shadow_name) -> l
                 "question": qid,
                 "backend": shadow_name,
                 "active_backend": active_name,
+                "against": against,
                 "active_answer": mine,
                 "answer": theirs,
                 "confidence": _confidence_of(b),
@@ -1044,25 +1072,49 @@ class Client:
         return True
 
     async def ask(
-        self, kind: str, state, questions: dict, wait: float = 0.0
+        self,
+        kind: str,
+        state,
+        questions: dict,
+        wait: float = 0.0,
+        *,
+        heuristic: dict | None = None,
+        subject: str = "",
+        before=None,
     ) -> Outcome:
         """The active backend's answer; with a comparison backend set, the
-        same question is also put to it, off this call's path."""
+        same question is also put to it, off this call's path.
+
+        Only the comparison reads the keywords (#820). `heuristic` maps a
+        question id to the heuristic's answer (see `compare_rows`). `before`
+        is the kind's outcome snapshot as a function of the comparison
+        backend's answer: a comparison that disagrees with the heuristic
+        (the side that acted) carries `subject` and that snapshot, so the
+        sink can record it in overseer_jev_outcome as the heuristic arm.
+        """
         outcome = await self._ask_one(kind, state, questions, wait)
         if self.shadow is not None and self.compare_sink is not None:
-            self._start_compare(kind, state, questions, outcome)
+            self._start_compare(
+                kind, state, questions, outcome, heuristic, subject, before
+            )
         return outcome
 
-    def _start_compare(self, kind, state, questions, active: Outcome) -> None:
+    def _start_compare(
+        self, kind, state, questions, active: Outcome, heuristic, subject, before
+    ) -> None:
         # Bounded: the comparison client has its own slots and answers `busy`
         # at once, and no more tasks than four times its slots are held.
         if len(self._compares) >= 4 * self.shadow.concurrency:
             return
-        task = asyncio.ensure_future(self._compare(kind, state, questions, active))
+        task = asyncio.ensure_future(
+            self._compare(kind, state, questions, active, heuristic, subject, before)
+        )
         self._compares.add(task)
         task.add_done_callback(self._compares.discard)
 
-    async def _compare(self, kind, state, questions, active: Outcome) -> None:
+    async def _compare(
+        self, kind, state, questions, active: Outcome, heuristic, subject, before
+    ) -> None:
         try:
             other = await self.shadow._ask_one(kind, state, questions)
             # A repeat (cached) was recorded when it was first asked; busy
@@ -1076,7 +1128,16 @@ class Client:
                 other,
                 self.backend.name,
                 self.shadow.backend.name,
+                heuristic,
             )
+            for row in rows:
+                if (
+                    before is not None
+                    and row["against"] == AGAINST_HEURISTIC
+                    and row["agree"] is False
+                ):
+                    row["subject"] = str(subject or "")
+                    row["before"] = before(row["answer"])
             for row in rows:
                 TALLY.agreement(kind, row["agree"], row["backend"])
             await self.compare_sink(rows)

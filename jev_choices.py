@@ -28,6 +28,13 @@ and the quest aim (#95).
 Both are recorded in overseer_jev_judgment beside the heuristic's answer,
 with `acted` saying which one the world got.
 
+THE FAMILY'S PRIORITIES RIDE ON EVERY ONE OF THEM (#1559). Each ask takes
+`ranked`, the operator's stored order (priorities.py), and the request then
+carries the ranked sentences word for word: in the state as `priorities` and
+in the instructions as priorities.prompt_line. The record's facts start with
+the same order by id, so a judgment says which ranking it was asked under.
+None leaves the request exactly as it was before the list existed.
+
 PURE: facts in, questions and Judgments out; the only I/O is the client the
 caller hands in.
 """
@@ -40,6 +47,7 @@ from dataclasses import dataclass, replace
 import campaignplan
 import jev
 import levelroute
+import priorities
 import situation
 from jev_items import Judgment
 
@@ -191,6 +199,31 @@ def _unknown(value):
     return "unknown" if value is None else value
 
 
+def with_priorities(state: dict, questions: dict, ranked) -> tuple:
+    """(state, questions) with the ranked priorities added, or unchanged.
+
+    The sentences go in verbatim, highest first, and the prompt line is
+    appended to every question's instructions, so the model reads exactly
+    what the operator's page shows.
+    """
+    if ranked is None:
+        return state, questions
+    state = dict(state, priorities=list(priorities.sentences(ranked)))
+    line = priorities.INSTRUCTION + " " + priorities.prompt_line(ranked)
+    questions = {
+        qid: dict(q, instructions=q["instructions"] + line)
+        for qid, q in questions.items()
+    }
+    return state, questions
+
+
+def facts_with_priorities(line: str, ranked) -> str:
+    """The record's facts line, led by the order it was asked under."""
+    if ranked is None:
+        return line
+    return ("priorities %s; %s" % (priorities.trace(ranked), line))[:1000]
+
+
 def _record(o) -> dict:
     """One run's fit and the family's record there, for the question."""
     return {
@@ -326,7 +359,9 @@ def facts_line(facts, opts, where=None) -> str:
     return line[:1000]
 
 
-async def dungeon_ask(client, facts, opts, pick, rule, why_now: str = "", where=None):
+async def dungeon_ask(
+    client, facts, opts, pick, rule, why_now: str = "", where=None, ranked=None
+):
     """The dungeon_choice judgment, acted on per `rule`, or None when there is
     nothing to ask: the kind is off, or there is one run or none."""
     if rule.mode == jev.OFF or pick is None or len(opts) < 2:
@@ -338,9 +373,9 @@ async def dungeon_ask(client, facts, opts, pick, rule, why_now: str = "", where=
         mode=rule.mode,
         status="",
         item_name=why_now,
-        facts=facts_line(facts, opts, where),
+        facts=facts_with_priorities(facts_line(facts, opts, where), ranked),
     )
-    state, questions = dungeon_question(facts, opts, where)
+    state, questions = with_priorities(*dungeon_question(facts, opts, where), ranked)
     outcome = await client.ask(KIND_DUNGEON, state, questions)
     if outcome.answers is None:
         return replace(base, status=outcome.status, latency_ms=outcome.latency_ms)
@@ -468,7 +503,7 @@ def zone_facts_line(facts, opts) -> str:
     return "; ".join(parts)[:1000]
 
 
-async def zone_ask(client, facts, opts, pick, rule, why_now: str = ""):
+async def zone_ask(client, facts, opts, pick, rule, why_now: str = "", ranked=None):
     """The leveling_zone judgment, acted on per `rule`, or None when there is
     nothing to ask: the kind is off, or there is one hub or none."""
     if rule.mode == jev.OFF or pick is None or len(opts) < 2:
@@ -480,11 +515,11 @@ async def zone_ask(client, facts, opts, pick, rule, why_now: str = ""):
         mode=rule.mode,
         status="",
         item_name=why_now,
-        facts=zone_facts_line(facts, opts),
+        facts=facts_with_priorities(zone_facts_line(facts, opts), ranked),
         kind=KIND_ZONE,
         prefix="levelroute",
     )
-    state, questions = zone_question(facts, opts)
+    state, questions = with_priorities(*zone_question(facts, opts), ranked)
     outcome = await client.ask(KIND_ZONE, state, questions)
     if outcome.answers is None:
         return replace(base, status=outcome.status, latency_ms=outcome.latency_ms)
@@ -564,7 +599,9 @@ def quest_question(candidates, beneficiary: str, held: dict, levels: dict):
     return state, {"quest": jev.choice(instructions, criteria)}
 
 
-async def quest_shadow(client, candidates, chosen, beneficiary, held, levels, mode):
+async def quest_shadow(
+    client, candidates, chosen, beneficiary, held, levels, mode, ranked=None
+):
     """The quest_pick Judgment, or None when there is nothing to choose."""
     if mode == jev.OFF or not chosen or len(candidates) < 2:
         return None
@@ -576,6 +613,8 @@ async def quest_shadow(client, candidates, chosen, beneficiary, held, levels, mo
         "beneficiary's catch-up plan",
         mode,
     )
-    state, questions = quest_question(candidates, beneficiary, held, levels)
+    state, questions = with_priorities(
+        *quest_question(candidates, beneficiary, held, levels), ranked
+    )
     outcome = await client.ask(KIND_QUEST, state, questions)
     return _judged(base, outcome, "quest")
