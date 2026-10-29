@@ -1,7 +1,10 @@
 import ast
+import logging
 import pathlib
 import unittest
+from unittest import mock
 
+import bag_pressure
 import disposition
 from bag_pressure import (
     ItemForSale,
@@ -450,6 +453,63 @@ class RedundantCarriedBags(unittest.TestCase):
         broken = bag()
         del broken["container_slots"]
         self.assertEqual(bag_candidates([broken], GRUG_EQUIPPED_BAGS), ())
+
+
+class TheSurplusBagReadCarriesTheCorpsFacts(unittest.TestCase):
+    """#1667: corps_bag_kept swallows a missing key and answers False, so the
+    two columns and the log line must be pinned or their loss is silent.
+    bridge.py is read as source (it needs discord and pymysql to import)."""
+
+    @staticmethod
+    def _tree():
+        return ast.parse(BRIDGE.read_text(encoding="utf-8"))
+
+    def _sql(self):
+        for node in self._tree().body:
+            if (
+                isinstance(node, ast.Assign)
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "_SURPLUS_BAGS_SQL"
+            ):
+                return ast.literal_eval(node.value)
+        self.fail("_SURPLUS_BAGS_SQL not found")
+
+    def test_the_surplus_bag_sql_reads_the_entry_and_the_crafter(self):
+        sql = self._sql()
+        self.assertIn("ii.itemEntry AS entry", sql)
+        self.assertIn("(ii.creatorGuid = ci.guid) AS self_made", sql)
+
+    def test_a_kept_corps_bag_is_named_in_one_log_line(self):
+        fn = next(
+            n
+            for n in self._tree().body
+            if isinstance(n, ast.FunctionDef) and n.name == "_fetch_surplus_bags"
+        )
+        rows = [
+            bag(name="Woolen Bag", entry=4240, self_made=1, holder="Og"),
+            bag(name="Linen Bag", entry=4238, self_made=0, holder="Og"),
+        ]
+        cursor = mock.MagicMock()
+        cursor.fetchall.return_value = rows
+        conn = mock.MagicMock()
+        conn.__enter__.return_value = conn
+        conn.cursor.return_value.__enter__.return_value = cursor
+        logger = logging.getLogger("test_1667_bridge")
+        ns = {
+            "bag_pressure": bag_pressure,
+            "_connect": lambda: conn,
+            "_SURPLUS_BAGS_SQL": "%s",
+            "log": logger,
+            "pymysql": mock.MagicMock(),
+        }
+        exec(compile(ast.Module([fn], type_ignores=[]), str(BRIDGE), "exec"), ns)
+        with self.assertLogs(logger, level="INFO") as seen:
+            got = ns["_fetch_surplus_bags"](["Og"])
+        self.assertEqual(len(got), 2)
+        kept = [m for m in seen.output if "keeps its crafted" in m]
+        self.assertEqual(len(kept), 1)
+        self.assertIn("Woolen Bag", kept[0])
+        self.assertIn("#1667", kept[0])
 
 
 if __name__ == "__main__":
