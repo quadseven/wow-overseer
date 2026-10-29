@@ -56,6 +56,44 @@ class MajordomoReflectPatchTest(unittest.TestCase):
         self.assertIn("SPELL_MAGIC_REFLECTION = 20619", self.added)
         self.assertIn("unit->HasAura(SPELL_MAGIC_REFLECTION)", self.added)
 
+    def _hold_condition(self):
+        """The one `else if (...)` the patch adds, whitespace folded."""
+        folded = " ".join(self.added.split())
+        found = re.findall(r"else if \((.*?)\) \{ exclusions\.insert", folded)
+        self.assertEqual(1, len(found), "expected exactly one added else-if")
+        return found[0]
+
+    def test_hold_condition_needs_caster_aura_and_either_add(self):
+        cond = self._hold_condition()
+        self.assertEqual(
+            "casterHolds && unit->HasAura(SPELL_MAGIC_REFLECTION) && "
+            "(unit->GetEntry() == NPC_FLAMEWAKER_HEALER || "
+            "unit->GetEntry() == NPC_FLAMEWAKER_ELITE)",
+            cond,
+        )
+
+    def test_caster_guard_is_dps_selection_for_a_caster(self):
+        folded = " ".join(self.added.split())
+        self.assertIn(
+            "bool const casterHolds = type == TargetValueExclusionType::Dps "
+            "&& PlayerbotAI::IsCaster(bot);",
+            folded,
+        )
+
+    def test_majordomo_and_core_rager_branches_are_untouched_context(self):
+        context = [line[1:] for line in self.text.splitlines() if line.startswith(" ")]
+        wanted = (
+            "        if ((golemaggAlive && unit->GetEntry() == NPC_CORE_RAGER) "
+            "|| unit->GetEntry() == NPC_MAJORDOMO_EXECUTUS)"
+        )
+        self.assertIn(wanted, context)
+        self.assertIn("            exclusions.insert(guid);", context)
+
+    def test_logged_count_is_the_casters_that_held(self):
+        self.assertIn("heldAtMs[bot->GetGUID()] = nowMs;", self.added)
+        self.assertIn("heldAtMs.size(),", self.added)
+        self.assertNotIn("++holding", self.added)
+
     def test_patch_names_both_add_entries(self):
         self.assertIn("NPC_FLAMEWAKER_HEALER = 11663", self.added)
         self.assertIn("NPC_FLAMEWAKER_ELITE = 11664", self.added)
