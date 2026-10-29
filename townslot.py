@@ -1678,7 +1678,10 @@ class Slot:
             return "%s carrying %r" % (holder.claimant or "unknown", holder.aim)
         r = self.reservation
         if r is not None and r.live(now):
-            return "%s reserving the traveller (%s)" % (r.claimant, r.why)
+            return "%s reserving the traveller (%s)" % (
+                r.claimant or "an unknown pass",
+                r.why or "no reason given",
+            )
         if self.campaign:
             return "the campaign (%s)" % self.campaign
         if self.town_first:

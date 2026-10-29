@@ -2443,6 +2443,176 @@ class GuildBankPriorityTurnPassesAReservation(unittest.TestCase):
         self.assertIn("bags owns the traveller", decision.reason)
 
 
+class AnEarnedTurnKeepsEveryOtherGate(unittest.TestCase):
+    """#1635: the earned bank turn passes a reservation and nothing else.
+
+    Each test registers a real wait for the bank at t=0 (behind a reservation),
+    then asks at a time past its 1200s bound while exactly one other gate is
+    closed, and expects a wait until that gate opens.
+    """
+
+    EARNED = 1300.0
+
+    def _slot(self, **kw):
+        slot = townslot.Slot(lease=300.0, releasable=economy, **kw)
+        slot.reserve("bags", 0.0, "the family's campaign is withheld")
+        first = self._ask(slot, 0.0, "")
+        self.assertEqual(townslot.SLOT_WAIT, first.verdict)
+        slot.reservation = None
+        return slot
+
+    def _ask(self, slot, now, column, claimant="guild bank", aim="vault"):
+        return slot.want(
+            claimant=claimant,
+            character="Grug",
+            aim=aim,
+            leader="Grug",
+            column=column,
+            retaskable=("", aim),
+            now=now,
+            priority_after=1200.0,
+        )
+
+    def test_waits_inside_a_live_holders_lease_then_is_granted(self):
+        slot = self._slot()
+        owner = slot.want(
+            claimant="town errand",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=(),
+            now=self.EARNED,
+        )
+        slot.settle(owner, True, self.EARNED)
+        held = self._ask(slot, self.EARNED + 150.0, "vendor")
+        self.assertEqual(townslot.SLOT_WAIT, held.verdict)
+        self.assertIn("150s of a 300s lease", held.reason)
+        after = self._ask(slot, self.EARNED + 350.0, "vendor")
+        self.assertTrue(after.granted)
+
+    def test_waits_while_a_campaign_owns_the_traveller_then_is_granted(self):
+        slot = self._slot()
+        slot.yield_to_campaign("staging")
+        blocked = self._ask(slot, self.EARNED, "")
+        self.assertEqual(townslot.SLOT_WAIT, blocked.verdict)
+        self.assertIn("campaign owns the traveller", blocked.reason)
+        slot.campaign_over()
+        self.assertTrue(self._ask(slot, self.EARNED + 10.0, "").granted)
+
+    def test_a_campaign_lets_an_earned_short_stop_through_once(self):
+        slot = self._slot()
+        slot.yield_to_campaign("staging")
+        stop = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="vault",
+            leader="Grug",
+            column="",
+            retaskable=("", "vault"),
+            now=self.EARNED,
+            distance=40.0,
+            priority_after=1200.0,
+        )
+        self.assertEqual(townslot.SLOT_TAKE, stop.verdict)
+        self.assertTrue(stop.stop)
+        slot.settle(stop, True, self.EARNED)
+        slot.holder = None
+        again = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="vault",
+            leader="Grug",
+            column="",
+            retaskable=("", "vault"),
+            now=self.EARNED + 5.0,
+            distance=40.0,
+            priority_after=1200.0,
+        )
+        self.assertEqual(townslot.SLOT_WAIT, again.verdict)
+        self.assertIn("one stop per", again.reason)
+
+    def test_waits_behind_an_orphan_holder_inside_its_lease(self):
+        slot = self._slot()
+        aim = "at:1:1,2,3"
+        blocked = self._ask(slot, self.EARNED, aim)
+        self.assertEqual(townslot.SLOT_WAIT, blocked.verdict)
+        self.assertEqual("", slot.holder.claimant)
+        self.assertEqual(
+            townslot.SLOT_WAIT, self._ask(slot, self.EARNED + 600.0, aim).verdict
+        )
+        late = self._ask(slot, self.EARNED + townslot.ORPHAN_LEASE_SECONDS, aim)
+        self.assertTrue(late.granted)
+
+    def _starved(self, slot, now):
+        for name, since in (("bags", 0.0), ("auction", 10.0), ("guild bank", 1000.0)):
+            slot._wants[name] = townslot.Want(
+                claimant=name, waiting_since=since, last_asked=now
+            )
+
+    def test_waits_behind_a_starved_pass_on_a_free_column(self):
+        now = townslot.STARVED_SECONDS + 100.0
+        slot = townslot.Slot(lease=300.0, releasable=economy)
+        self._starved(slot, now)
+        blocked = self._ask(slot, now, "")
+        self.assertEqual(townslot.SLOT_WAIT, blocked.verdict)
+        self.assertIn("bags has waited", blocked.reason)
+        second = self._ask(slot, now, "", claimant="auction", aim="auctioneer")
+        self.assertEqual(townslot.SLOT_WAIT, second.verdict)
+        first = self._ask(slot, now, "", claimant="bags", aim="vendor")
+        self.assertTrue(first.granted)
+
+    def test_waits_behind_a_starved_pass_on_an_expired_lease(self):
+        now = townslot.STARVED_SECONDS + 100.0
+        slot = townslot.Slot(lease=300.0, releasable=economy)
+        slot.holder = townslot.Holder(
+            claimant="mail", character="Grug", aim="at:0:2,0,0", since=now - 400.0
+        )
+        self._starved(slot, now)
+        blocked = self._ask(slot, now, "at:0:2,0,0")
+        self.assertEqual(townslot.SLOT_WAIT, blocked.verdict)
+        self.assertIn("bags has waited", blocked.reason)
+
+    def test_waits_while_its_own_walk_is_spent(self):
+        slot = self._slot()
+        slot._spent[("guild bank", "vault")] = self.EARNED - 10.0
+        blocked = self._ask(slot, self.EARNED, "")
+        self.assertEqual(townslot.SLOT_WAIT, blocked.verdict)
+        self.assertIn("gave up", blocked.reason)
+        later = self._ask(slot, self.EARNED + townslot.SPENT_SECONDS, "")
+        self.assertTrue(later.granted)
+
+    def test_two_earned_passes_are_not_both_granted(self):
+        slot = townslot.Slot(lease=300.0, releasable=economy)
+        for name in ("guild bank", "mail"):
+            slot._wants[name] = townslot.Want(
+                claimant=name, waiting_since=0.0, last_asked=1300.0
+            )
+        first = self._ask(slot, 1300.0, "")
+        self.assertTrue(first.granted)
+        slot.settle(first, True, 1300.0)
+        second = self._ask(slot, 1301.0, "vault", claimant="mail", aim="mailbox")
+        self.assertEqual(townslot.SLOT_WAIT, second.verdict)
+
+
+class TheBlockerNamesWhoIsInTheWay(unittest.TestCase):
+    def test_nothing_blocking_reads_none(self):
+        self.assertEqual("none", townslot.Slot().blocker(0.0))
+
+    def test_a_reservation_with_no_owner_name_is_not_rendered_empty(self):
+        slot = townslot.Slot()
+        slot.reservation = townslot.Reservation(claimant="", since=0.0, why="")
+        said = slot.blocker(1.0)
+        self.assertNotIn("()", said)
+        self.assertNotIn("  ", said)
+        self.assertIn("unknown", said)
+
+    def test_a_lapsed_reservation_blocks_nothing(self):
+        slot = townslot.Slot()
+        slot.reserve("bags", 0.0, "x")
+        self.assertEqual("none", slot.blocker(townslot.RESERVE_SECONDS + 1.0))
+
+
 class EveryPassGetsTheColumnWithinTheBound(unittest.TestCase):
     """#1601: no town slot consumer waits longer than 6906s (#1235).
 
