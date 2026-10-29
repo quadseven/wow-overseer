@@ -80,7 +80,7 @@ index 2584b9f..cbde15a 100644
 +    // leave a reflecting add alone: they take another add that is not
 +    // reflecting, or they have no target and wait until the aura drops.
 +    Player* bot = botAI->GetBot();
-+    bool const casterHolds = type == TargetValueExclusionType::Dps && PlayerbotAI::IsCaster(bot);
++    bool const casterHolds = type == TargetValueExclusionType::DpsTarget && PlayerbotAI::IsCaster(bot);
 +    Unit* reflecting = nullptr;
      for (ObjectGuid const guid : AI_VALUE(GuidVector, "attackers"))
      {

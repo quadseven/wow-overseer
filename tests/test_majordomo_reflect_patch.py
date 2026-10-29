@@ -75,7 +75,7 @@ class MajordomoReflectPatchTest(unittest.TestCase):
     def test_caster_guard_is_dps_selection_for_a_caster(self):
         folded = " ".join(self.added.split())
         self.assertIn(
-            "bool const casterHolds = type == TargetValueExclusionType::Dps "
+            "bool const casterHolds = type == TargetValueExclusionType::DpsTarget "
             "&& PlayerbotAI::IsCaster(bot);",
             folded,
         )
@@ -100,7 +100,7 @@ class MajordomoReflectPatchTest(unittest.TestCase):
 
     def test_only_casters_hold(self):
         self.assertIn("PlayerbotAI::IsCaster(bot)", self.added)
-        self.assertIn("TargetValueExclusionType::Dps", self.added)
+        self.assertIn("TargetValueExclusionType::DpsTarget", self.added)
 
     def test_reflecting_add_is_excluded_from_damage_targets(self):
         self.assertIn("exclusions.insert(guid);", self.added)
@@ -175,6 +175,23 @@ class MajordomoReflectPatchAppliesTest(unittest.TestCase):
         "set PLAYERBOTS_SRC to a checkout of the pinned fork for the real check",
     )
     def test_patch_applies_cleanly_to_the_pinned_fork(self):
+        # The revision comes from the vendored pins file, never from here, so
+        # one bump of AC_MODULE_SHA moves this check with it. A checkout at
+        # any other revision would prove nothing about what the realm builds.
+        pinned = re.search(
+            r"^AC_MODULE_SHA=([0-9a-f]{40})$",
+            (ROOT / "UPSTREAM-PINS.env").read_text(encoding="utf-8"),
+            re.M,
+        ).group(1)
+        head = subprocess.run(
+            ["git", "-C", os.environ["PLAYERBOTS_SRC"], "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        self.assertEqual(
+            pinned, head, "PLAYERBOTS_SRC is not at the vendored AC_MODULE_SHA"
+        )
         result = self._git_apply_check(os.environ["PLAYERBOTS_SRC"])
         self.assertEqual(0, result.returncode, result.stderr)
 

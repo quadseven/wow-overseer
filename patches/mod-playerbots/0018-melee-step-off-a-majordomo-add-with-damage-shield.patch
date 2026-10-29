@@ -53,11 +53,11 @@ index cbde15a..e3edc39 100644
 +++ b/src/Ai/Raid/MC/MCStrategy.cpp
 @@ -125,6 +125,9 @@ void RaidMcStrategy::AppendTargetExclusions(GuidSet& exclusions, TargetValueExcl
      Player* bot = botAI->GetBot();
-     bool const casterHolds = type == TargetValueExclusionType::Dps && PlayerbotAI::IsCaster(bot);
+     bool const casterHolds = type == TargetValueExclusionType::DpsTarget && PlayerbotAI::IsCaster(bot);
      Unit* reflecting = nullptr;
 +    // Damage Shield hurts every melee swing into its holder. Melee step off
 +    // an add that carries it and take another add, or wait until it drops.
-+    bool const meleeStepsOff = type == TargetValueExclusionType::Dps && PlayerbotAI::IsMelee(bot);
++    bool const meleeStepsOff = type == TargetValueExclusionType::DpsTarget && PlayerbotAI::IsMelee(bot);
      for (ObjectGuid const guid : AI_VALUE(GuidVector, "attackers"))
      {
          Unit* unit = botAI->GetUnit(guid);
