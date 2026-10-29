@@ -2367,6 +2367,82 @@ class AgedGuildBankWantGetsATurn(unittest.TestCase):
         self.assertEqual("town errand", decision.release.claimant)
 
 
+class GuildBankPriorityTurnPassesAReservation(unittest.TestCase):
+    """#1635: the earned bank turn must not stop at a live reservation.
+
+    WHAT WAS MEASURED, on the dev realm after #1452 shipped: 75 "could not be
+    aimed at the vault" lines in 24 hours against a limit of 6 per 6 hours,
+    each wait reading "bags owns the traveller ... while the family's campaign
+    is withheld for bag space (Ns of 1200s)". The earned priority turn skipped
+    the queue but `_gate` answered the reservation wait first, so the bank
+    waited behind every reservation, and bags and the town errand reserve the
+    traveller back to back for as long as the bags stay full.
+    """
+
+    BANK_CYCLE = 120.0
+    BOUND = 1200.0 + townslot.LEASE_SECONDS + BANK_CYCLE
+
+    def _run(self, hours=3.0, step=10.0):
+        slot = townslot.Slot(lease=townslot.LEASE_SECONDS, releasable=economy)
+        order = ("bags", "town errand")
+        turn = 0
+        next_bank = 0.0
+        first_ask = granted_at = None
+        now = 0.0
+        while now < hours * 3600.0:
+            r = slot.reservation
+            if r is None or not r.live(now):
+                # The passes hand the reservation to each other with no gap.
+                slot.reservation = None
+                slot.reserve(
+                    order[turn % 2],
+                    now,
+                    "the family's campaign is withheld for bag space",
+                )
+                turn += 1
+            if now >= next_bank:
+                next_bank = now + self.BANK_CYCLE
+                decision = slot.want(
+                    claimant="guild bank",
+                    character="Grug",
+                    aim="vault",
+                    leader="Grug",
+                    column="",
+                    retaskable=("", "vault"),
+                    now=now,
+                    priority_after=1200.0,
+                )
+                if first_ask is None:
+                    first_ask = now
+                if decision.granted:
+                    granted_at = now
+                    break
+            now += step
+        return first_ask, granted_at
+
+    def test_bank_gets_the_column_within_its_bound_despite_chained_reservations(self):
+        first_ask, granted_at = self._run()
+        self.assertIsNotNone(
+            granted_at, "the guild bank pass was never granted the column in 3h"
+        )
+        self.assertLessEqual(granted_at - first_ask, self.BOUND)
+
+    def test_a_pass_without_priority_still_waits_behind_a_reservation(self):
+        slot = townslot.Slot(releasable=economy)
+        slot.reserve("bags", 0.0, "the family's campaign is withheld for bag space")
+        decision = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="vault",
+            leader="Grug",
+            column="",
+            retaskable=("", "vault"),
+            now=100.0,
+        )
+        self.assertEqual(townslot.SLOT_WAIT, decision.verdict)
+        self.assertIn("bags owns the traveller", decision.reason)
+
+
 class EveryPassGetsTheColumnWithinTheBound(unittest.TestCase):
     """#1601: no town slot consumer waits longer than 6906s (#1235).
 

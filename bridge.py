@@ -15076,11 +15076,7 @@ class Bridge(discord.Client):
         actions, deposits, items, withdrawals = queued
         wants = getattr(self, "_fund_wants", {})
         fund_wants = sum(1 for n in names if wants.get(n, 0) > 0)
-        holder = self._cohort_town_slot(cohort).holder
-        holder_label = (
-            "%s carrying %r" % (holder.claimant or "unknown", holder.aim)
-            if holder else "none"
-        )
+        holder_label = self._cohort_town_slot(cohort).blocker(time.monotonic())
         log.info(
             "guild bank: leader=%s could not be aimed at the vault (%s) "
             "this pass, so no work is queued (%d setup action(s), %d gold "

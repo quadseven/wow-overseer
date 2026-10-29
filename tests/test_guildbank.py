@@ -16,6 +16,7 @@ import types
 import unittest
 
 import guildbank
+import townslot
 import travel
 import modsource
 from test_campaign_owns_travel import FakeWorld, Clock, _Log, _bridge_self, _load
@@ -403,11 +404,17 @@ class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
         refusal = refusal[: refusal.index("if not at_the_vault:")]
         self.assertIn("self._log_bank_unaimed(", refusal)
         log = _Log()
-        holder = types.SimpleNamespace(claimant="bags", aim="vendor")
-        ns = _load(["_log_bank_unaimed"], {"log": log})
+        ns = _load(
+            ["_log_bank_unaimed"],
+            {"log": log, "time": types.SimpleNamespace(monotonic=lambda: 0.0)},
+        )
+        slot = townslot.Slot()
+        slot.holder = townslot.Holder(
+            claimant="bags", character="Zug", aim="vendor", since=0.0
+        )
         bank = types.SimpleNamespace(
             _fund_wants={"Zug": 500, "Grug": 0, "Ug": 200},
-            _cohort_town_slot=lambda _cohort: types.SimpleNamespace(holder=holder),
+            _cohort_town_slot=lambda _cohort: slot,
         )
         ns["_log_bank_unaimed"](
             bank,
@@ -424,6 +431,33 @@ class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
             "slot holder=bags carrying 'vendor')",
             line,
         )
+
+    def test_refusal_names_a_reservation_or_campaign_never_none(self):
+        """#1635: 4 live lines read holder=none while bags owned the column."""
+        ns = _load(
+            ["_log_bank_unaimed"],
+            {
+                "log": (log := _Log()),
+                "time": types.SimpleNamespace(monotonic=lambda: 0.0),
+            },
+        )
+        for setup, expect in (
+            (
+                lambda s: s.reserve("bags", 0.0, "the campaign is withheld"),
+                "bags reserving",
+            ),
+            (lambda s: s.yield_to_campaign("staging"), "the campaign (staging)"),
+        ):
+            slot = townslot.Slot()
+            setup(slot)
+            bank = types.SimpleNamespace(
+                _fund_wants={}, _cohort_town_slot=lambda _cohort, slot=slot: slot
+            )
+            ns["_log_bank_unaimed"](
+                bank, "Zug", "Zug", "vault", ("Zug",), ((), (), (), ("w",))
+            )
+            self.assertIn("slot holder=" + expect, log.lines[-1])
+            self.assertNotIn("slot holder=none", log.lines[-1])
 
     def test_queued_work_claim_uses_the_bounded_turn(self):
         claim = self.body[self.body.index("aimed = await self._claim_town_slot(") :]
