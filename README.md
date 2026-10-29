@@ -74,11 +74,15 @@ These are the commands `check.yml` runs, from the repo root:
 
 ```sh
 git submodule update --init
+python3 .github/scripts/check_mod_overseer_pin.py
 python3 .github/scripts/compile_check.py --min-python 3.12
 uv run --no-project --python 3.12 --with-requirements tests/requirements.txt python3 .github/scripts/unittest_parallel.py
 uvx ruff@0.15.10 check .
 uvx ruff@0.15.10 format --check .
 ```
+
+The first check fails when the submodule pin is not an ancestor of the module's
+main branch; it fetches that branch, so it needs network access.
 
 `python3 -m unittest discover -s tests -p 'test_*.py'` also works and runs
 the suite on one core. `build.yml` builds the image on every pull request and
