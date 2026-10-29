@@ -27294,6 +27294,7 @@ def _fetch_equipped_bag_slots(names: list) -> dict:
 # THEMSELVES sit, and this query is only for the ones nobody is using.
 _SURPLUS_BAGS_SQL = (
     "SELECT c.name AS holder, ii.guid AS item_guid, ii.count AS count, "
+    "ii.itemEntry AS entry, (ii.creatorGuid = ci.guid) AS self_made, "
     "ii.flags AS instance_flags, it.name AS name, it.Quality AS quality, "
     "it.SellPrice AS sell_price, it.bonding AS bonding, "
     "it.class AS item_class, it.ContainerSlots AS container_slots "
@@ -27489,7 +27490,13 @@ def _fetch_surplus_bags(names: list) -> list:
                 log.warning("surplus bag facts unavailable on this world image")
                 return []
             raise
-        return [dict(row) for row in cur.fetchall()]
+        rows = [dict(row) for row in cur.fetchall()]
+    # One line per crafted corps bag the vendor pass leaves with its master (#1667).
+    for kept in rows:
+        if bag_pressure.corps_bag_kept(kept):
+            log.info("economy: %s keeps its crafted %s for the guild corps "
+                     "(not sold, #1667)", kept.get("holder"), kept.get("name"))
+    return rows
 
 
 # Carried lockboxes (#88): the vendor half's carried scope, item class 15

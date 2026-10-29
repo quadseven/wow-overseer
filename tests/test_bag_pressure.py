@@ -433,6 +433,19 @@ class RedundantCarriedBags(unittest.TestCase):
     def test_a_non_container_item_class_is_never_treated_as_a_bag(self):
         self.assertEqual(bag_candidates([bag(item_class=12)], GRUG_EQUIPPED_BAGS), ())
 
+    def test_a_bag_the_master_crafted_for_the_guild_is_kept(self):
+        """#1667: a Woolen Bag (4240) the holder sewed is the corps' stock for
+        a guildmate; the vendor pass sold 47 of them."""
+        made = bag(name="Woolen Bag", entry=4240, self_made=True, sell_price=300)
+        self.assertEqual(bag_candidates([made], GRUG_EQUIPPED_BAGS), ())
+
+    def test_a_plain_spare_bag_is_still_sold(self):
+        """A Woolen Bag the holder did not craft, and a crafted bag that is
+        not a ladder bag, are ordinary spares."""
+        bought = bag(name="Woolen Bag", entry=4240, self_made=False, sell_price=300)
+        other = bag(entry=5571, self_made=True)
+        self.assertEqual(len(bag_candidates([bought, other], GRUG_EQUIPPED_BAGS)), 2)
+
     def test_a_row_missing_the_facts_is_dropped_not_guessed_at(self):
         broken = bag()
         del broken["container_slots"]
