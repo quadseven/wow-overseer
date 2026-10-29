@@ -247,6 +247,22 @@ class TheRowIsComplete(unittest.TestCase):
         )
         self.assertEqual(enroll.ROSTER_DEFAULTS["dungeon_runs_wanted"], 0)
 
+    def test_the_two_errand_columns_say_no_errand_exactly_as_the_module_declares(self):
+        """buy_recipe_item and lockpick are the module's, so their defaults are
+        read out of its migrations and compared with what enroll writes: the
+        same 'unset' the module reads back ('' and 0), never a value this side
+        invented."""
+        declared = declared_columns()
+        self.assertEqual(declared["buy_recipe_item"], "''")
+        self.assertEqual(enroll.ROSTER_DEFAULTS["buy_recipe_item"], "")
+        self.assertEqual(declared["lockpick"], "0")
+        self.assertEqual(enroll.ROSTER_DEFAULTS["lockpick"], 0)
+        row = enroll.row_for("Mozkisdo", "Bonkers")
+        self.assertEqual(row["buy_recipe_item"], "")
+        self.assertEqual(row["lockpick"], 0)
+        self.assertIn("`buy_recipe_item`", enroll.INSERT_SQL)
+        self.assertIn("`lockpick`", enroll.INSERT_SQL)
+
     def test_the_job_default_is_overridden_away_from_the_driving_value(self):
         declared = declared_columns()
         self.assertEqual(declared["job"], "'quest'")
@@ -422,9 +438,28 @@ class TheModuleReadsTheRosterPerFamily(unittest.TestCase):
         feature and nothing else (test_schema_degrade pins the other half)."""
         naming = [q for q in self.queries if "family" in q]
         self.assertTrue(naming, "no roster query names `family` any more")
+        # The one query allowed to name `family` beside other late columns is
+        # the training stop's own read (DriveTrainingStop). It is a drive of
+        # its own, it returns early on a null result, and an older schema
+        # costs the training stop and nothing else, which is the same
+        # guarantee the rule exists for. Anything else naming `lead` beside
+        # `family` is the family read creeping into a main roster query.
+        training_stop = (
+            "SELECT name, family, `lead`, job, learn_skill "
+            "FROM overseer_roster WHERE enabled = 1"
+        )
         for query in naming:
+            if query.strip('"') == training_stop:
+                continue
             self.assertNotIn(
                 "`lead`", query, "the family read has crept into a main roster query"
+            )
+        if '"' + training_stop + '"' in naming:
+            start = self.code.index(training_stop)
+            self.assertIn(
+                "if (!result)",
+                self.code[start : start + 200],
+                "the training stop's family read must return early on a null result",
             )
 
     def test_keep_roster_grouped_partitions_by_family(self):
@@ -437,7 +472,13 @@ class TheModuleReadsTheRosterPerFamily(unittest.TestCase):
     def test_the_campaign_drives_read_one_family(self):
         """Home binds, town trips, dungeon runs and guild founding go through
         one census that returns a single family's roster."""
-        uses = self.code.count("LoadCampaignRoster(")
+        # The callers now take a family's roster two ways: through
+        # LoadCampaignRoster, or by asking OverseerDecisions::CampaignRosters
+        # for the per-family rosters directly. Either is a single-family read;
+        # what must not come back is a caller reading the whole table.
+        uses = self.code.count("LoadCampaignRoster(") + self.code.count(
+            "OverseerDecisions::CampaignRosters("
+        )
         self.assertGreaterEqual(
             uses,
             5,
@@ -582,6 +623,10 @@ _CREATE = (
     "  dungeon_runs_done INTEGER NOT NULL DEFAULT 0,"
     "  craft_spell INTEGER NOT NULL DEFAULT 0,"
     "  learn_fishing INTEGER NOT NULL DEFAULT 0,"
+    # The module's own declarations: VARCHAR(32) NOT NULL DEFAULT '' and
+    # TINYINT(1) UNSIGNED NOT NULL DEFAULT 0.
+    "  buy_recipe_item TEXT NOT NULL DEFAULT '',"
+    "  lockpick INTEGER NOT NULL DEFAULT 0,"
     # NOT NULL DEFAULT 'Grug', exactly as mod-overseer#506 declares it, which
     # is what backfills Cave's rows into one cohort with no statement to run.
     "  family TEXT NOT NULL DEFAULT 'Grug')"
@@ -601,7 +646,7 @@ _SEED = (
 _COMPARED = (
     "name, enabled, note, `lead`, spec_tab, trained_level, drive_quest, "
     "travel_npc, professions, learn_skill, unlearn_skill, unlearn_max, job, "
-    "dungeon_runs_wanted, dungeon_runs_done, craft_spell, learn_fishing, family"
+    "dungeon_runs_wanted, dungeon_runs_done, craft_spell, learn_fishing, buy_recipe_item, lockpick, family"
 )
 
 

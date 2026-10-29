@@ -134,7 +134,19 @@ def _probe_source() -> str:
     """Everything from the first probe function to the end of DoProbe."""
     src = modsource.read(MODULE, encoding="utf-8")
     start = src.index("static std::string ProbeState(")
-    end = src.index("// Run a dot-command through the character's OWN session")
+    # The dot-command runner that used to follow DoProbe is gone from the
+    # module, so the span ends where DoProbe itself ends (braces balanced).
+    do_probe = src.index("static char const* DoProbe(", start)
+    depth = 0
+    end = 0
+    for i in range(src.index("{", do_probe), len(src)):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
     assert end > start
     return src[start:end]
 
