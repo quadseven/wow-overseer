@@ -10,10 +10,20 @@ def main(argv=None):
     parser.add_argument("submodule", nargs="?", default="mod-overseer")
     args = parser.parse_args(argv)
 
-    subprocess.run(
-        ["git", "-C", args.submodule, "fetch", "--quiet", "origin", "main"],
+    # CI checks the submodule out at depth 1. Fetching main into such a
+    # checkout makes main's tip a new shallow root, so the pin never shows up
+    # in its history and every pin looks off main. Deepen to the full history
+    # first when the checkout is shallow.
+    shallow = subprocess.run(
+        ["git", "-C", args.submodule, "rev-parse", "--is-shallow-repository"],
         check=True,
-    )
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    fetch = ["git", "-C", args.submodule, "fetch", "--quiet"]
+    if shallow == "true":
+        fetch.append("--unshallow")
+    subprocess.run([*fetch, "origin", "main"], check=True)
     result = subprocess.run(
         [
             "git",

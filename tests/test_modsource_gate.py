@@ -242,6 +242,83 @@ class TheSubmodulePin(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def _remote_with_history(self, root, commits=3):
+        """A bare remote whose main has `commits` commits; returns (remote, shas)."""
+        remote = root / "remote.git"
+        seed = root / "seed"
+        self._git(root, "init", "--bare", str(remote))
+        self._git(root, "init", str(seed))
+        self._git(seed, "config", "user.name", "Test")
+        self._git(seed, "config", "user.email", "test@example.com")
+        self._git(seed, "branch", "-M", "main")
+        shas = []
+        for number in range(commits):
+            (seed / "file").write_text("%d\n" % number, encoding="utf-8")
+            self._git(seed, "add", "file")
+            self._git(seed, "commit", "-m", "commit %d" % number)
+            shas.append(self._git(seed, "rev-parse", "HEAD").stdout.strip())
+        self._git(seed, "remote", "add", "origin", str(remote))
+        self._git(seed, "push", "origin", "main")
+        return remote, shas
+
+    def _run_gate(self, checkout):
+        return subprocess.run(
+            [sys.executable, str(PIN_CHECK), str(checkout)],
+            capture_output=True,
+            text=True,
+        )
+
+    def test_a_pin_on_main_passes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            remote, shas = self._remote_with_history(root)
+            checkout = root / "checkout"
+            self._git(root, "clone", str(remote), str(checkout))
+            # An older commit of main, not its tip: still an ancestor.
+            self._git(checkout, "checkout", shas[0])
+            result = self._run_gate(checkout)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_a_pin_on_main_passes_in_a_depth_one_checkout(self):
+        """CI checks the submodule out shallow. The gate must still see that
+        the pin is an ancestor of main, not call every pin off main."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            remote, shas = self._remote_with_history(root)
+            checkout = root / "checkout"
+            self._git(root, "init", str(checkout))
+            self._git(checkout, "remote", "add", "origin", remote.as_uri())
+            self._git(checkout, "fetch", "--depth", "1", "origin", shas[0])
+            self._git(checkout, "checkout", "--quiet", shas[0])
+            self.assertEqual(
+                "true",
+                self._git(
+                    checkout, "rev-parse", "--is-shallow-repository"
+                ).stdout.strip(),
+            )
+            result = self._run_gate(checkout)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_a_pin_outside_main_fails_in_a_depth_one_checkout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            remote, shas = self._remote_with_history(root)
+            seed = root / "seed"
+            self._git(seed, "checkout", "--orphan", "off-main")
+            self._git(seed, "rm", "-rf", ".")
+            (seed / "file").write_text("off\n", encoding="utf-8")
+            self._git(seed, "add", "file")
+            self._git(seed, "commit", "-m", "off main")
+            off_main = self._git(seed, "rev-parse", "HEAD").stdout.strip()
+            self._git(seed, "push", "origin", "HEAD:off-main")
+            checkout = root / "checkout"
+            self._git(root, "init", str(checkout))
+            self._git(checkout, "remote", "add", "origin", remote.as_uri())
+            self._git(checkout, "fetch", "--depth", "1", "origin", off_main)
+            self._git(checkout, "checkout", "--quiet", off_main)
+            result = self._run_gate(checkout)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
