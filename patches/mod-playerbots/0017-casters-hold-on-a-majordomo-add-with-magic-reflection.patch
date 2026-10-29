@@ -1,0 +1,104 @@
+Subject: [PATCH] Molten Core: casters hold on a Majordomo add with Magic Reflection
+
+WHY THIS PATCH EXISTS
+
+Every 30 seconds Majordomo Executus casts either Magic Reflection (20619) or
+Damage Shield (21075) on himself and the adds around him. While an add carries
+Magic Reflection, a spell a caster aims at it comes back at the caster. The
+moltencore strategy only keeps damage off Majordomo himself, so casters keep
+casting into a reflecting Flamewaker Healer (11663) or Flamewaker Elite (11664)
+and are killed by their own spells. This is patch 1 of 4 for the encounter.
+
+WHAT IT DOES
+
+For a caster's damage target selection, an add that carries Magic Reflection
+is excluded in the same hook that already excludes Majordomo. The caster then
+takes another add that is not reflecting, or has no target and waits until the
+aura drops. When a caster holds, one line is logged at most every three
+seconds for the whole raid:
+
+    [MC] majordomo: N casters holding, magic reflection on <add>
+
+WHAT THIS PATCH DELIBERATELY DOES NOT DO
+
+It does not touch melee or tanks (Damage Shield is patch 2), the kill order
+(patch 3) or the threat after Teleport Target (patch 4). It keys on the aura by
+spell id on the two add entries only, so no other encounter is affected.
+
+WHEN THIS PATCH SHOULD BE DELETED
+
+When the fork's Molten Core strategy keeps casters off a reflecting target
+itself.
+
+diff --git a/src/Ai/Raid/MC/MCHelpers.h b/src/Ai/Raid/MC/MCHelpers.h
+index 0c90fcd..932a974 100644
+--- a/src/Ai/Raid/MC/MCHelpers.h
++++ b/src/Ai/Raid/MC/MCHelpers.h
+@@ -16,6 +16,8 @@ enum MoltenCoreNPCs
+ 
+     // Majordomo Executus
+     NPC_MAJORDOMO_EXECUTUS = 12018,
++    NPC_FLAMEWAKER_HEALER = 11663,
++    NPC_FLAMEWAKER_ELITE = 11664,
+ 
+     // Core Hound (trash)
+     NPC_CORE_HOUND = 11671,
+@@ -29,6 +31,10 @@ enum MoltenCoreSpells
+     // Golemagg
+     SPELL_GOLEMAGGS_TRUST = 20553,
+     SPELL_MAGMA_SPLASH = 13880,
++
++    // Majordomo Executus: every 30s he casts this on himself and the adds
++    // around him
++    SPELL_MAGIC_REFLECTION = 20619,
+ };
+ 
+ constexpr uint32 MAGMA_SPLASH_BACK_OFF_STACKS = 20;
+diff --git a/src/Ai/Raid/MC/MCStrategy.cpp b/src/Ai/Raid/MC/MCStrategy.cpp
+index 2584b9f..a50da55 100644
+--- a/src/Ai/Raid/MC/MCStrategy.cpp
++++ b/src/Ai/Raid/MC/MCStrategy.cpp
+@@ -116,6 +116,12 @@ void RaidMcStrategy::AppendTargetExclusions(GuidSet& exclusions, TargetValueExcl
+     // through their own target selection.
+     AiObjectContext* context = botAI->GetAiObjectContext();
+     bool const golemaggAlive = AI_VALUE2(Unit*, "find target", "golemagg the incinerator") != nullptr;
++    // Magic Reflection returns a caster's own spell to the caster. Casters
++    // leave a reflecting add alone: they take another add that is not
++    // reflecting, or they have no target and wait until the aura drops.
++    Player* bot = botAI->GetBot();
++    bool const casterHolds = type == TargetValueExclusionType::Dps && PlayerbotAI::IsCaster(bot);
++    Unit* reflecting = nullptr;
+     for (ObjectGuid const guid : AI_VALUE(GuidVector, "attackers"))
+     {
+         Unit* unit = botAI->GetUnit(guid);
+@@ -124,5 +130,30 @@ void RaidMcStrategy::AppendTargetExclusions(GuidSet& exclusions, TargetValueExcl
+ 
+         if ((golemaggAlive && unit->GetEntry() == NPC_CORE_RAGER) || unit->GetEntry() == NPC_MAJORDOMO_EXECUTUS)
+             exclusions.insert(guid);
++        else if (casterHolds && unit->HasAura(SPELL_MAGIC_REFLECTION) &&
++                 (unit->GetEntry() == NPC_FLAMEWAKER_HEALER || unit->GetEntry() == NPC_FLAMEWAKER_ELITE))
++        {
++            exclusions.insert(guid);
++            reflecting = unit;
++        }
++    }
++
++    if (reflecting)
++    {
++        // One line per few seconds for the whole raid, not one per bot per tick.
++        static uint32 lastLogMs = 0;
++        uint32 const nowMs = getMSTime();
++        if (getMSTimeDiff(lastLogMs, nowMs) >= 3000)
++        {
++            lastLogMs = nowMs;
++            uint32 holding = 0;
++            if (Group* group = bot->GetGroup())
++                for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
++                    if (Player* member = itr->GetSource())
++                        if (member->IsAlive() && PlayerbotAI::IsCaster(member))
++                            ++holding;
++            LOG_INFO("playerbots", "[MC] majordomo: {} casters holding, magic reflection on {}", holding,
++                     reflecting->GetName());
++        }
+     }
+ }
