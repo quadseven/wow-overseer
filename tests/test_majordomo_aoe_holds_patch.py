@@ -1,4 +1,4 @@
-"""Follow-up to patches 0017 and 0018: the holds also cover area targets.
+"""Follow-up to patches 0017 and 0018: the holds also count for the AoE checks.
 
 The patch lives under patches/mod-playerbots/ and is applied to the pinned
 fork when the realm image is built, after patches 0017 to 0020, which edit the
@@ -11,9 +11,11 @@ patch as text and prove the series applies two ways:
 - when a checkout of the pinned fork is given in PLAYERBOTS_SRC: the whole
   series from 0004 on, in order, applied to a copy of that tree.
 
-At the pinned fork the base function returns early only for `Aoe` of a tank
-(patch 0020 narrows it to that), so every `Aoe` selection that reaches the
-chain is a non-tank. The caster hold and the melee step-off accept `Aoe` as
+At the pinned fork the Aoe exclusion type is used only by
+HasEnoughAoeTargets, which subtracts excluded adds from a count for the AoE
+trigger and the channel-cancel checks; it never picks or aims a target. The
+base function returns early only for `Aoe` of a tank (patch 0020 narrows it to
+that), so every `Aoe` check that reaches the chain is a non-tank. The caster hold and the melee step-off accept `Aoe` as
 well as `DpsTarget`; each guard is pinned below as one statement. Nothing here
 is compiled: no compile of the fork is possible where these tests run.
 """
