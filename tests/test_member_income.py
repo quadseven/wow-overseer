@@ -498,7 +498,7 @@ class TheRidingWalk(unittest.TestCase):
         ):
             with self.subTest(reason=reason):
 
-                def refusal_at(age):
+                def refusal_at(age, reason=reason):
                     return guildjobs.recent_from_rows(
                         (
                             {
