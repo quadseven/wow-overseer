@@ -211,7 +211,12 @@ window.addEventListener("pagehide", stampVisit);
 // Back on the network: read at once, as api.js does when the page is shown again.
 window.addEventListener("online", () => { if (!document.hidden) api.refreshNow(); });
 // The data age counts up by the second, between the reads that reset it.
-window.setInterval(() => { if (!document.hidden) shell.updateAge(root, api.health(ageReads())); }, shell.AGE_TICK_MS);
+window.setInterval(() => {
+  if (document.hidden) return;
+  const health = api.health(ageReads());
+  shell.updateAge(root, health);
+  shell.updateDeploy(root, health);
+}, shell.AGE_TICK_MS);
 
 // ---- realm tag and operator flag (read once) ------------------------------------
 api.load("/api/realm").then((e) => {
