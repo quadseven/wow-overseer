@@ -199,25 +199,23 @@ class TwoStallsRunning(unittest.TestCase):
 
 
 class ActiveRunSilence(unittest.TestCase):
-    def test_active_run_without_progress_gets_a_named_course_change_at_two_hours(self):
-        row = {
-            "id": 73,
-            "map_id": 90,
-            "portal_keyword": "gnomeregan",
-            "silent_seconds": 2 * 60 * 60,
-        }
-        got = stall.silent_run(row)
+    def test_a_silent_family_gets_a_named_course_change_at_two_hours(self):
+        got = stall.silent_run("gnomeregan", 2 * 60 * 60)
         self.assertEqual("gnomeregan", got.door)
         self.assertIn("no quest, level, gear, or boss progress event", got.why)
         self.assertIn("no stall reason recorded", got.why)
 
-    def test_active_run_silence_does_not_trip_early_or_without_a_clock(self):
-        row = {"id": 73, "map_id": 90, "portal_keyword": "gnomeregan"}
-        self.assertIsNone(stall.silent_run({**row, "silent_seconds": 7199}))
-        self.assertIsNone(stall.silent_run(row))
+    def test_silence_does_not_trip_early_or_without_a_clock(self):
+        self.assertIsNone(stall.silent_run("gnomeregan", 7199))
+        self.assertIsNone(stall.silent_run("gnomeregan", None))
 
-    def test_no_active_run_is_not_a_silent_stall(self):
-        self.assertIsNone(stall.silent_run(None))
+    def test_an_alternate_door_counts_toward_its_wing(self):
+        door = next(iter(campaignplan.ALTERNATES))
+        got = stall.silent_run(door, 2 * 60 * 60)
+        self.assertEqual(campaignplan.wing_of(door), got.door)
+
+    def test_a_keyword_with_no_run_is_not_a_silent_stall(self):
+        self.assertIsNone(stall.silent_run("nowhere", 2 * 60 * 60))
 
 
 def queue_row(qid, keyword, status="active", position=0):
@@ -409,13 +407,19 @@ class StallWorld(FakeWorld):
         self.commits = 0
         self.held_left = None
         self.hold_said = {}
-        self.silent_run = None
+        self.silent_seconds = None
         self.world = self
 
     def cancel(self, qid):
         for r in self.queue:
             if r["id"] == qid and r["status"] in campaignqueue.PENDING:
                 r["status"] = "cancelled"
+
+    def member_job(self, name):
+        return next(
+            (str(r.get("job") or "") for r in self.roster if r.get("name") == name),
+            "",
+        )
 
 
 def _pass(world):
@@ -433,6 +437,7 @@ def _pass(world):
             "_stall_reads",
             "_stall_held",
             "_stall_write",
+            "_silent_stall",
             "_stuck_doors",
             "_planner_rows",
         ],
@@ -447,7 +452,8 @@ def _pass(world):
             "log": log,
             "pymysql": __import__("pymysql"),
             "_connect": lambda: StoreConn(world),
-            "_silent_dungeon_run": lambda names: world.silent_run,
+            "_silent_seconds": lambda head_id, names: world.silent_seconds,
+            "_jobs_of": lambda names: {n: world.member_job(n) for n in names},
             "_fetch_queue_rows": world.fetch_queue,
             "_fetch_queue_roster": world.fetch_roster,
             "_fetch_module_crossing": lambda: "",
@@ -531,16 +537,15 @@ class TheCampaignDoesNotStartAThirdRun(unittest.TestCase):
         self.assertNotIn("dungeon:shadowfang", self.zug_jobs(w))
         self.assertFalse([j for j in w.jobs if j[1] == "dungeon:shadowfang"])
 
-    def test_two_hours_without_a_progress_event_releases_an_active_run(self):
-        w = StallWorld([_q(7, "gnomeregan", 27, "active", 0)], [], [])
+    def silent_family(self, status="active"):
+        w = StallWorld([_q(7, "gnomeregan", 27, status, 0)], [], [])
         for row in w.family("Zug"):
             row["job"] = "dungeon:gnomeregan"
-        w.silent_run = {
-            "id": 73,
-            "map_id": 90,
-            "portal_keyword": "gnomeregan",
-            "silent_seconds": 2 * 60 * 60,
-        }
+        w.silent_seconds = 2 * 60 * 60
+        return w
+
+    def test_two_hours_without_a_progress_event_releases_the_family(self):
+        w = self.silent_family()
 
         lines = _pass(w)
 
@@ -548,6 +553,37 @@ class TheCampaignDoesNotStartAThirdRun(unittest.TestCase):
         self.assertEqual({jobs.DEFAULT}, self.zug_jobs(w))
         self.assertIn("no stall reason recorded", w.records[0][7])
         self.assertTrue([line for line in lines if "no stall reason recorded" in line])
+
+    def test_silence_needs_no_run_row_only_the_active_head(self):
+        # No ledger row and no run timeline at all: the family never reached a
+        # run, the shape a clock that starts from the run row cannot see.
+        w = self.silent_family()
+        self.assertEqual([], w.runs)
+        _pass(w)
+        self.assertEqual("cancelled", w.queue[0]["status"])
+
+    def test_a_quiet_family_inside_two_hours_keeps_its_door(self):
+        w = self.silent_family()
+        w.silent_seconds = 2 * 60 * 60 - 1
+        _pass(w)
+        self.assertEqual("active", w.queue[0]["status"])
+        self.assertEqual([], w.records)
+
+    def test_a_family_taken_off_the_dungeon_job_is_not_silent(self):
+        # A hold that took the job away (town first, the bag hold) has recorded
+        # its reason: the family is not sitting on a dungeon job.
+        w = self.silent_family()
+        for row in w.family("Zug"):
+            row["job"] = "quest"
+        _pass(w)
+        self.assertEqual([], w.records)
+        self.assertEqual("active", w.queue[0]["status"])
+
+    def test_a_head_not_started_is_not_silent(self):
+        w = self.silent_family("queued")
+        _pass(w)
+        self.assertEqual([], w.records)
+        self.assertEqual("active", w.queue[0]["status"])
 
     def test_the_campaign_moves_on_to_its_next_dungeon(self):
         w = self.world(
@@ -711,24 +747,39 @@ class TheBridgeOrder(unittest.TestCase):
         body = BRIDGE[BRIDGE.index("    async def _stall_breaker(") :]
         self.assertLess(body.index("_stall_write"), body.index("_apply_queue_move"))
 
-    def test_active_run_silence_uses_progress_events_and_the_two_hour_rule(self):
-        read = BRIDGE[BRIDGE.index("def _silent_dungeon_run(") :]
-        read = read[: read.index("\ndef ", 10)]
+    def silence_read(self):
+        read = BRIDGE[BRIDGE.index("def _silent_seconds(") :]
+        return read[: read.index("\ndef ", 10)]
+
+    def test_silence_uses_progress_events_and_the_two_hour_rule(self):
+        read = self.silence_read()
         self.assertIn("TIMESTAMPDIFF(SECOND", read)
         self.assertIn("'level_up'", read)
         self.assertIn("'item_equip'", read)
         self.assertIn("re.kind = 'boss'", read)
         body = BRIDGE[BRIDGE.index("    async def _stall_breaker(") :]
         body = body[: body.index("\n    async def ", 10)]
-        self.assertIn("_silent_dungeon_run", body)
-        self.assertIn("dungeonstall.silent_run", body)
+        self.assertIn("_silent_stall", body)
+        helper = BRIDGE[BRIDGE.index("def _silent_stall(") :]
+        helper = helper[: helper.index("\ndef ", 10)]
+        self.assertIn("_silent_seconds", helper)
+        self.assertIn("dungeonstall.silent_run", helper)
+
+    def test_the_silence_clock_starts_at_the_head_not_at_a_run(self):
+        # The stuck read's clock runs across runs. A clock restarted by each
+        # run opening never reaches two hours on a campaign of short runs,
+        # and an active-run filter or the portal_keyword column blinds it.
+        read = self.silence_read()
+        self.assertIn("COALESCE(q.started_at, q.created_at)", read)
+        self.assertNotIn("r.state = 'active'", read)
+        self.assertNotIn("GREATEST(r.started_at", read)
+        self.assertNotIn("portal_keyword", read)
 
     def test_silent_run_event_read_keeps_the_name_index_usable(self):
         # wow-overseer#1513: overseer_event.character_name is
         # utf8mb4_unicode_ci and indexed (idx_character_last_seen). A COLLATE
         # on the column makes MySQL scan the table; collate the names instead.
-        read = BRIDGE[BRIDGE.index("def _silent_dungeon_run(") :]
-        read = read[: read.index("\ndef ", 10)]
+        read = self.silence_read()
         self.assertIn(
             "e.character_name IN (%s COLLATE utf8mb4_unicode_ci{more_names})", read
         )
