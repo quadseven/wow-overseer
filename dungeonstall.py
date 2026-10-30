@@ -36,6 +36,26 @@ HOW LONG. As long as the two stalls are the door's latest fought runs inside
 WINDOW_HOURS, the same window the pace ladder reads. A door that has aged out
 of it is offered again, on the chance the module that stalled it has changed.
 
+WHY IT IS THE HEAD'S CLOCK (`silent_run`, #1374). The realm's stuck read gave
+one family 4 hours 3 minutes with no quest, level or gear change on "the
+gnomeregan dungeon job (run 7 of 27)", the longest stuck line for four ticks
+running on 2026-10-22/23, and no reason recorded. The first breaker for it
+timed the ACTIVE RUN from its own start, so it saw neither shape that reading
+can be: each new run began the clock again, so a campaign of short runs never
+reached two hours, and a family with no open run (between runs, or the phases
+before a run row exists) had no clock at all. It also read `portal_keyword`,
+which a realm before the worldserver roll cannot answer, and that read as no
+silence. The head of the queue is what puts a family on the job, so the clock
+is the head's and the family's, like the stuck read's own.
+
+WHAT CAUSED THAT READING is not fully measured: no run or event rows from those
+hours were read for it. Two parts are known from code and later measurements.
+The stuck read then counted no boss credit (Members page fixed in #1473), so
+runs clearing bosses read as still, and a repeat campaign writes no quest,
+level or equip. The same family measured the next night (#1400) spent most of
+its hours held at the bag floor with one run completed, and then repeated a
+door that taught nothing, which the dry-door rule (#1400) now ends.
+
 PURE MODULE: rows in, decisions and sentences out. The bridge reads and writes.
 """
 
@@ -201,27 +221,23 @@ class Stuck:
         )
 
 
-def silent_run(row: dict | None) -> Stuck | None:
-    """Name an active run with no progress evidence for two hours.
+def silent_run(keyword: str, seconds) -> Stuck | None:
+    """Name a dungeon job with no progress evidence for two hours.
 
-    `silent_seconds` is measured from the run start or the newest quest,
-    level, equip, or boss progress event. The run table's presence heartbeat
-    is deliberately not accepted as progress.
+    `seconds` is measured from the queue head's start or the family's newest
+    quest, level, equip, or boss progress event. The run table's presence
+    heartbeat is deliberately not accepted as progress.
     """
-    if row is None:
-        return None
-    seconds = row.get("silent_seconds")
     if seconds is None or float(seconds) < NO_PROGRESS_AFTER.total_seconds():
         return None
-    door = door_of(row)
+    door = campaignplan.wing_of(keyword)
     if not door:
         return None
-    rid = int(row.get("id") or 0)
     reason = (
         "no quest, level, gear, or boss progress event and no stall reason "
         "recorded for at least 2 hours"
     )
-    stall = Stall(rid, 0, reason)
+    stall = Stall(0, 0, reason)
     return Stuck(door, stall, stall)
 
 
