@@ -1,0 +1,183 @@
+Subject: [PATCH] Molten Core: the tank re-takes the Majordomo adds it held after Teleport Target
+
+WHY THIS PATCH EXISTS
+
+Majordomo Executus casts Teleport Target (20534) on his victim every 30
+seconds, and the victim is the tank: it is thrown into the fire pit and the
+Flamewaker Healers (11663) and Flamewaker Elites (11664) it held turn on the
+raid. The moltencore strategy returns early for tank target selection, so
+nothing tells the tank to go back for them, and stock tank selection can pick
+Majordomo himself. This is patch 4 of 4 for the encounter and builds on
+patches 0017, 0018 and 0019, which edit the same function. The context of the
+hunk below deliberately spans the kill order block of patch 0019, so the patch
+cannot apply to a tree that lacks the earlier ones.
+
+WHAT IT DOES
+
+For tank target selection only, while a Flamewaker add is attacking a player
+who is not a tank (a "loose" add), Majordomo himself and every add whose
+current victim is a tank are excluded. The tank's own selection then takes
+the nearest loose add, taunts it and holds it. Teleport Target leaves no
+aura on its victim, so the loose add, which is what the teleport leaves
+behind, is the observable key; the spell id is named here and in the tests.
+The exclusion is recomputed on every call and ends the moment no add is loose,
+so tank selection goes back to the stock one and a tank is never left without
+a target. Majordomo is excluded only while an add is loose, so a tank is not
+pulled onto him while the raid is being eaten. The fork's old early return
+for tanks is narrowed to the area-target case.
+
+WHAT THIS PATCH DELIBERATELY DOES NOT DO
+
+It does not touch the reflect hold (patch 0017), the Damage Shield step-off
+(patch 0018) or the kill order (patch 0019). Damage and area target
+selection for non-tanks is unchanged. It keys on the two add entries by id, so
+no other encounter is affected. Nothing here was compiled or run: the fork
+build is not available where this was written, and a live Majordomo run
+confirms it.
+
+WHEN THIS PATCH SHOULD BE DELETED
+
+When the fork's Molten Core strategy re-establishes the tank's threat on the
+Majordomo adds itself.
+
+diff --git a/src/Ai/Raid/MC/MCStrategy.cpp b/src/Ai/Raid/MC/MCStrategy.cpp
+index f7604b3..e23dc68 100644
+--- a/src/Ai/Raid/MC/MCStrategy.cpp
++++ b/src/Ai/Raid/MC/MCStrategy.cpp
+@@ -69,92 +69,134 @@ void RaidMcStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
+                         { NextAction("mc golemagg mark boss", ACTION_RAID) }));
+     triggers.push_back(
+         new TriggerNode("mc golemagg is main tank",
+                         { NextAction("mc golemagg main tank attack golemagg", ACTION_RAID) }));
+     triggers.push_back(
+         new TriggerNode("mc golemagg is assist tank",
+                         { NextAction("mc golemagg assist tank attack core rager", ACTION_RAID) }));
+     triggers.push_back(
+         new TriggerNode("mc golemagg magma splash",
+                         { NextAction("mc golemagg back off", ACTION_RAID + 1) }));
+     triggers.push_back(
+         new TriggerNode("mc golemagg is healer",
+                         { NextAction("mc golemagg healer position", ACTION_RAID) }));
+ 
+     // Majordomo Executus
+     triggers.push_back(
+         new TriggerNode("mc majordomo shadow resistance",
+                         { NextAction("mc majordomo shadow resistance", ACTION_RAID) }));
+ 
+     // Ragnaros
+     triggers.push_back(
+         new TriggerNode("mc ragnaros fire resistance",
+                         { NextAction("mc ragnaros fire resistance", ACTION_RAID) }));
+ 
+     // Trash
+     triggers.push_back(
+         new TriggerNode("mc core hound mark",
+                         { NextAction("mc core hound mark", ACTION_RAID) }));
+ 
+     // Anywhere in MC: escaping a lava pool outranks everything else.
+     triggers.push_back(
+         new TriggerNode("mc in lava",
+                         { NextAction("mc move from lava", ACTION_RAID + 1) }));
+ }
+ 
+ void RaidMcStrategy::InitMultipliers(std::vector<Multiplier*>& multipliers)
+ {
+     multipliers.push_back(new GarrDisableDpsAoeMultiplier(botAI));
+     multipliers.push_back(new BaronGeddonAbilityMultiplier(botAI));
+     multipliers.push_back(new GolemaggMultiplier(botAI));
+ }
+ 
+ void RaidMcStrategy::AppendTargetExclusions(GuidSet& exclusions, TargetValueExclusionType type)
+ {
+-    if (type == TargetValueExclusionType::TankTarget ||
+-        (type == TargetValueExclusionType::Aoe && PlayerbotAI::IsTank(botAI->GetBot())))
++    if (type == TargetValueExclusionType::Aoe && PlayerbotAI::IsTank(botAI->GetBot()))
+         return;
+ 
++    if (type == TargetValueExclusionType::TankTarget)
++    {
++        // Majordomo's Teleport Target throws his victim, the tank, into the
++        // pit, and the Flamewaker adds it held turn on the raid. Tank target
++        // selection takes its pick from what is left after these exclusions,
++        // so while an add is attacking a player who is not a tank, Majordomo
++        // himself and the adds a tank already holds are excluded. The tank
++        // re-takes the loose add. With no loose add nothing is excluded and
++        // tank selection is the stock one, so a tank is never left without a
++        // target and never pulls Majordomo while an add is loose.
++        AiObjectContext* context = botAI->GetAiObjectContext();
++        bool looseAdd = false;
++        for (ObjectGuid const guid : AI_VALUE(GuidVector, "attackers"))
++        {
++            Unit* unit = botAI->GetUnit(guid);
++            Unit* victim = unit ? unit->GetVictim() : nullptr;
++            Player* victimPlayer = victim ? victim->ToPlayer() : nullptr;
++            if (unit && (unit->GetEntry() == NPC_FLAMEWAKER_HEALER || unit->GetEntry() == NPC_FLAMEWAKER_ELITE) &&
++                victimPlayer && !PlayerbotAI::IsTank(victimPlayer))
++            {
++                looseAdd = true;
++                break;
++            }
++        }
++        if (looseAdd)
++        {
++            for (ObjectGuid const guid : AI_VALUE(GuidVector, "attackers"))
++            {
++                Unit* unit = botAI->GetUnit(guid);
++                if (!unit)
++                    continue;
++
++                Unit* victim = unit->GetVictim();
++                Player* victimPlayer = victim ? victim->ToPlayer() : nullptr;
++                if (unit->GetEntry() == NPC_MAJORDOMO_EXECUTUS ||
++                    ((unit->GetEntry() == NPC_FLAMEWAKER_HEALER || unit->GetEntry() == NPC_FLAMEWAKER_ELITE) &&
++                     victimPlayer && PlayerbotAI::IsTank(victimPlayer)))
++                    exclusions.insert(guid);
++            }
++        }
++        return;
++    }
++
+     // Damage into these is wasted: Core Ragers are unkillable while Golemagg
+     // lives (full heal at 50%), and Majordomo reflects and cannot die; his
+     // encounter ends when the eight adds are dead. Tanks still pick them up
+     // through their own target selection.
+     AiObjectContext* context = botAI->GetAiObjectContext();
+     bool const golemaggAlive = AI_VALUE2(Unit*, "find target", "golemagg the incinerator") != nullptr;
+     // Magic Reflection returns a caster's own spell to the caster. Casters
+     // leave a reflecting add alone: they take another add that is not
+     // reflecting, or they have no target and wait until the aura drops.
+     Player* bot = botAI->GetBot();
+     bool const casterHolds = type == TargetValueExclusionType::DpsTarget && PlayerbotAI::IsCaster(bot);
+     Unit* reflecting = nullptr;
+     // Damage Shield hurts every melee swing into its holder. Melee step off
+     // an add that carries it and take another add, or wait until it drops.
+     bool const meleeStepsOff = type == TargetValueExclusionType::DpsTarget && PlayerbotAI::IsMelee(bot);
+     for (ObjectGuid const guid : AI_VALUE(GuidVector, "attackers"))
+     {
+         Unit* unit = botAI->GetUnit(guid);
+         if (!unit)
+             continue;
+ 
+         if ((golemaggAlive && unit->GetEntry() == NPC_CORE_RAGER) || unit->GetEntry() == NPC_MAJORDOMO_EXECUTUS)
+             exclusions.insert(guid);
+         else if (casterHolds && unit->HasAura(SPELL_MAGIC_REFLECTION) &&
+                  (unit->GetEntry() == NPC_FLAMEWAKER_HEALER || unit->GetEntry() == NPC_FLAMEWAKER_ELITE))
+         {
+             exclusions.insert(guid);
+             reflecting = unit;
+         }
+         else if (meleeStepsOff && unit->HasAura(SPELL_DAMAGE_REFLECTION) &&
+                  (unit->GetEntry() == NPC_FLAMEWAKER_HEALER || unit->GetEntry() == NPC_FLAMEWAKER_ELITE))
+             exclusions.insert(guid);
+     }
+ 
+     // Kill order: the Flamewaker Healers die first, the Elites after. While a
+     // healer is alive, this bot can see it, and it is not itself excluded
+     // above, the Elites are left alone. A healer that is excluded, out of
+     // spell range, out of line of sight, dead or immune does not count (the
+     // attackers list holds only valid targets), so the Elites are open to
+     // the bot again and it never waits on a healer it cannot reach.
+     bool const healersFirst = type == TargetValueExclusionType::DpsTarget;
+     bool healerInReach = false;
+     if (healersFirst)
+     {

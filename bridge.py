@@ -70,6 +70,7 @@ import classtrain
 import classparty
 import classhunt
 import classquest
+import steps as classquest_steps
 import classuse
 import guildbank
 import guildfund
@@ -157,6 +158,7 @@ import raidrun
 import raidsupply
 import recipebook
 import raidteams
+import readtimeout
 import recruit
 import realmread
 import relay
@@ -4690,6 +4692,8 @@ def _pace_reads(key: str, fam: dict, level_rows: list, ids: list) -> dict:
                               args, "the main-hand weapons")
         runs = _planner_rows(cur, dungeonpace.RUNS_SQL.format(holes=marks),
                              args + (dungeonpace.WINDOW_HOURS,), "the run ledger")
+        world_start = _planner_rows(cur, dungeonpace.WORLD_START_SQL, (),
+                                    "the worldserver start time")
         keys = _planner_rows(cur, campaignplan.KEYS_SQL.format(holes=marks), args,
                              "the door keys")
         started = _planner_rows(
@@ -4703,6 +4707,7 @@ def _pace_reads(key: str, fam: dict, level_rows: list, ids: list) -> dict:
     return {
         "members": dungeonpace.members_from_rows(level_rows, gear, armed),
         "runs": runs or [],
+        "world_started_at": dungeonpace.world_start(world_start),
         "keys": _read_or_none(campaignplan.keys_held, keys),
         "started": {int(r["id"]): r.get("started_at") for r in started},
         "open": (opened or [None])[0],
@@ -7114,6 +7119,29 @@ PASSES = (
     _Pass("_watch_loop"),
     _Pass("_quest_ledger_loop"),
 )
+
+
+_SHADOW_FAILED = False
+
+
+def _shadow_class_step(step) -> None:
+    """Log the class quest step executor's comparison for a step about to run
+    (steps.py, quadseven/wow-overseer#739). It sends nothing to the realm and
+    reads nothing: the move rode in on the step. A failure here is logged once
+    and never reaches the real pass."""
+    global _SHADOW_FAILED
+    move = getattr(step, "move", None)
+    if move is None or step.action != classquest.ACTION:
+        return
+    try:
+        if classquest_steps.mode() != classquest_steps.SHADOW:
+            return
+        log.info("%s", classquest_steps.shadow_line(move, step.rows))
+    except Exception:
+        if not _SHADOW_FAILED:
+            _SHADOW_FAILED = True
+            log.exception("classquest executor: the shadow comparison failed; "
+                          "the real class quest pass is not affected")
 
 
 class Bridge(discord.Client):
@@ -11154,7 +11182,8 @@ class Bridge(discord.Client):
             try:
                 await asyncio.to_thread(_share_quests)
             except Exception:
-                log.exception("quest sharing pass failed; retrying next cycle")
+                readtimeout.log_pass_failure(
+                    log, "quest sharing", "quest sharing pass failed; retrying next cycle")
 
     async def _move_materials_once(self, cohort=None) -> None:
         """One pass of infra#2830: reagents move to whoever is assigned the
@@ -13519,7 +13548,15 @@ class Bridge(discord.Client):
 
     async def _jev_guild_once(self, asks: list, candidates: list,
                               family_names: list, mode: str) -> list:
-        """The guild recipient questions; the judgments, recorded by the caller."""
+        """The guild recipient questions; the judgments, recorded by the caller.
+
+        Earlier choices whose route has had its time are scored first
+        (_score_recipient_outcomes, #820). A database failure there is
+        logged and the questions are still asked."""
+        try:
+            await asyncio.to_thread(_score_recipient_outcomes)
+        except pymysql.err.MySQLError:
+            log.exception("guild recipient: earlier choices were not scored")
         people = [c.character for c in candidates]
         worn_items = await asyncio.to_thread(
             _fetch_jev_worn, [c.name for c in people])
@@ -15067,11 +15104,7 @@ class Bridge(discord.Client):
         actions, deposits, items, withdrawals = queued
         wants = getattr(self, "_fund_wants", {})
         fund_wants = sum(1 for n in names if wants.get(n, 0) > 0)
-        holder = self._cohort_town_slot(cohort).holder
-        holder_label = (
-            "%s carrying %r" % (holder.claimant or "unknown", holder.aim)
-            if holder else "none"
-        )
+        holder_label = self._cohort_town_slot(cohort).blocker(time.monotonic())
         log.info(
             "guild bank: leader=%s could not be aimed at the vault (%s) "
             "this pass, so no work is queued (%d setup action(s), %d gold "
@@ -15728,7 +15761,8 @@ class Bridge(discord.Client):
                 try:
                     await self._quester_once()
                 except Exception:
-                    log.exception("questers: pass failed; retrying next cycle")
+                    readtimeout.log_pass_failure(
+                        log, "questers", "questers: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _quester_once(self) -> None:
@@ -17355,6 +17389,7 @@ class Bridge(discord.Client):
             if (step.action == "sell" or vendor_walk) and not sale_walks:
                 continue
             self._job_steps[step.holder] = now
+            _shadow_class_step(step)
             task = asyncio.create_task(self._run_job_step(step, cap))
             self._mail_walk_tasks.add(task)
             task.add_done_callback(self._mail_walk_task_done)
@@ -18159,7 +18194,8 @@ class Bridge(discord.Client):
                 await self._guild_jobs_once()
                 _mark_pass_completed("guild_jobs")
             except Exception:
-                log.exception("guild jobs pass failed; retrying next cycle")
+                readtimeout.log_pass_failure(
+                    log, "guild jobs", "guild jobs pass failed; retrying next cycle")
             await self._for_other_families("guild jobs", self._guild_jobs_once)
             await self._sleep_until_next_pass(cycle)
 
@@ -21176,7 +21212,9 @@ class Bridge(discord.Client):
             changed = dungeonpace.named_change(str(opened.get("baseline") or ""), members)
         return dungeonpace.Facts(
             family=key, head=head, door=door, door_row=door_row,
-            record=dungeonpace.viability(reads["runs"], _pace_map(head_kw), since),
+            record=dungeonpace.viability(
+                reads["runs"], _pace_map(head_kw), since,
+                world_started_at=reads["world_started_at"]),
             members=members, gates=gates, notes=notes, open=opened, changed=changed,
             done=fam["leader"].get("dungeon_runs_done"),
             # A door the family stalled at twice running is no rung to step to.
@@ -24038,7 +24076,7 @@ def _recent_share_keys(minutes: int) -> set:
         }
 
 
-def _answered_share_rows(days: int, depth: int) -> list:
+def _answered_share_rows(days: int, depth: int, recent_hours: int) -> list:
     """The youngest `depth` answers per (holder, taker, quest, status,
     reason) the worldserver wrote inside the window - delivered or refused
     - with the JSON it wrote and how long ago it ANSWERED, by the
@@ -24055,6 +24093,14 @@ def _answered_share_rows(days: int, depth: int) -> list:
     hourly transient retries - a party split for a season would otherwise
     hand this loop two hundred thousand rows every five minutes and the
     read timeout would stop EVERY share, not just the backed-off ones.
+    `recent_hours` is the backoff cap: backed_off() only holds a triple
+    whose youngest counted answer is younger than the cap (the quiet time
+    never exceeds it), so a triple with no answer inside `recent_hours` can
+    never be held and its history is not read at all. Triples that do have
+    one keep their full `days` of history, so the streak length (which sets
+    the quiet time) is unchanged. One statement, so one snapshot: a row
+    landing later is simply seen by the next pass.
+
     The partition key extracts result.reason with JSON_VALID guarding
     JSON_EXTRACT (a row the worldserver never answered has NULL there,
     and JSON_EXTRACT on non-JSON is an error, not a NULL).
@@ -24065,7 +24111,8 @@ def _answered_share_rows(days: int, depth: int) -> list:
     eat the quiet time. The terminal write stamps updated_at. The index
     this reads through is 2026_09_02_00_overseer_share_backoff.sql."""
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(
+        readtimeout.timed_execute(
+            cur, "answered share rows",
             "SELECT target_name, target_arg, command, status, result, age_s "
             "FROM ("
             "  SELECT target_name, target_arg, command, status, result, "
@@ -24078,9 +24125,16 @@ def _answered_share_rows(days: int, depth: int) -> list:
             "  FROM overseer_command "
             "  WHERE kind = 'share' AND status IN ('delivered', 'error') "
             "    AND updated_at > NOW() - INTERVAL %s DAY"
+            # The three key columns are always set for share rows (_insert_share
+            # writes holder, taker and command), so a NULL cannot silently
+            # exclude a triple from this row-value IN.
+            "    AND (target_name, target_arg, command) IN ("
+            "      SELECT target_name, target_arg, command FROM overseer_command "
+            "      WHERE kind = 'share' AND status IN ('delivered', 'error') "
+            "        AND updated_at > NOW() - INTERVAL %s HOUR)"
             ") AS answered "
             "WHERE rn <= %s",
-            (int(days), int(depth)),
+            (int(days), int(recent_hours), int(depth)),
         )
         return [
             (
@@ -24212,6 +24266,7 @@ def _share_family_quests(names: list, zone: int = 0, label: str = "") -> questsh
         _answered_share_rows(
             SHARE_REFUSAL_MEMORY_DAYS,
             questshare.history_depth(SHARE_RETRY_MINUTES, SHARE_BACKOFF_CAP_HOURS),
+            SHARE_BACKOFF_CAP_HOURS,
         ),
         SHARE_RETRY_MINUTES,
         SHARE_BACKOFF_CAP_HOURS,
@@ -25312,6 +25367,10 @@ def _create_jev_store() -> None:
         if not (cur.fetchone() or {}).get("n"):
             cur.execute(jev_outcomes.ADD_ACTED_SQL)
             log.info("overseer_jev_outcome: added acted")
+        cur.execute(jev_outcomes.BACKEND_COLUMN_SQL)
+        if not (cur.fetchone() or {}).get("n"):
+            cur.execute(jev_outcomes.ADD_BACKEND_SQL)
+            log.info("overseer_jev_outcome: added backend")
         cur.execute(
             "DELETE FROM overseer_jev_outcome "
             "WHERE created_at < NOW() - INTERVAL %s DAY",
@@ -25341,10 +25400,38 @@ def _jev_outcome_history(kind: str, subject: str, score, wait_minutes: int) -> l
         return jev_outcomes.history(list(cur.fetchall()))
 
 
+def _score_recipient_outcomes() -> int:
+    """Score guild_recipient's open overseer_jev_outcome rows that have had
+    jev_items.RECIPIENT_OUTCOME_MINUTES, each by where its item is now (#820).
+    Returns how many were scored; a world without the table scores none."""
+    scored = 0
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(jev_outcomes.OPEN_KIND_SQL, (
+                jev_items.KIND_GUILD, jev_items.RECIPIENT_OUTCOME_MINUTES,
+                jev_items.RECIPIENT_OUTCOME_LIMIT))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1146:
+                return 0
+            raise
+        for row in list(cur.fetchall()):
+            before = jev_outcomes.before_of(row)
+            guid = before.get("guid")
+            where = None
+            if isinstance(guid, int) and guid > 0:
+                cur.execute(jev_items.RECIPIENT_WHERE_SQL, (guid,))
+                where = cur.fetchone()
+            line = jev_items.recipient_outcome_words(
+                before, where, int(row.get("minutes") or 0))
+            cur.execute(jev_outcomes.SCORE_SQL, (line[:255], row["id"]))
+            scored += 1
+    return scored
+
+
 def _record_jev_override(judgment, before: dict) -> None:
     """One overseer_jev_outcome row for every disagreement, whichever side
     acted, and a sample of agreements (jev_outcomes.record_args, #820)."""
-    args = jev_outcomes.record_args(judgment, before)
+    args = jev_outcomes.record_args(judgment, before, backend=JEV_ACTIVE_BACKEND)
     if args is None:
         return
     with _connect() as conn, conn.cursor() as cur:
@@ -25411,10 +25498,21 @@ def _insert_jev_judgment(judgment) -> None:
         )
 
 
+def _compare_why(row: dict) -> str:
+    """What a comparison row's `heuristic` column holds: the active backend's
+    answer, or the heuristic's where the active backend gave none (#820)."""
+    if row.get("against") == jev.AGAINST_HEURISTIC:
+        return "heuristic; active backend %s gave no answer" % row["active_backend"]
+    return "active backend " + row["active_backend"]
+
+
 def _insert_jev_comparisons(rows: list) -> None:
     """Comparison rows (jev.compare_rows): one per question, the comparison
-    backend's answer beside the active backend's, mode `compare`. They never
-    act; jevview keeps them out of the per-kind lines."""
+    backend's answer beside the active backend's (or the heuristic's, when
+    the active backend gave none), mode `compare`. They never act; jevview
+    keeps them out of the per-kind lines. A disagreement with the heuristic
+    that carries a snapshot is also an overseer_jev_outcome row, the
+    heuristic arm (jev_outcomes.compare_record_args, #820)."""
     with _connect() as conn, conn.cursor() as cur:
         for row in rows:
             probabilities = row.get("probabilities")
@@ -25427,7 +25525,7 @@ def _insert_jev_comparisons(rows: list) -> None:
                 (
                     row["kind"][:32], row["question"][:120],
                     row["active_answer"][:40],
-                    ("active backend " + row["active_backend"])[:300],
+                    _compare_why(row)[:300],
                     row["answer"][:40] or None, row["confidence"],
                     json.dumps(probabilities, sort_keys=True)[:1000]
                     if probabilities else None,
@@ -25436,6 +25534,9 @@ def _insert_jev_comparisons(rows: list) -> None:
                     row["model"][:40], row["backend"][:12],
                 ),
             )
+            outcome = jev_outcomes.compare_record_args(row)
+            if outcome is not None:
+                cur.execute(jev_outcomes.INSERT_SQL, outcome)
 
 
 async def _jev_compare_sink(rows: list) -> None:
@@ -27249,6 +27350,7 @@ def _fetch_equipped_bag_slots(names: list) -> dict:
 # THEMSELVES sit, and this query is only for the ones nobody is using.
 _SURPLUS_BAGS_SQL = (
     "SELECT c.name AS holder, ii.guid AS item_guid, ii.count AS count, "
+    "ii.itemEntry AS entry, (ii.creatorGuid = ci.guid) AS self_made, "
     "ii.flags AS instance_flags, it.name AS name, it.Quality AS quality, "
     "it.SellPrice AS sell_price, it.bonding AS bonding, "
     "it.class AS item_class, it.ContainerSlots AS container_slots "
@@ -27444,7 +27546,13 @@ def _fetch_surplus_bags(names: list) -> list:
                 log.warning("surplus bag facts unavailable on this world image")
                 return []
             raise
-        return [dict(row) for row in cur.fetchall()]
+        rows = [dict(row) for row in cur.fetchall()]
+    # One line per crafted corps bag the vendor pass leaves with its master (#1667).
+    for kept in rows:
+        if bag_pressure.corps_bag_kept(kept):
+            log.info("economy: %s keeps its crafted %s for the guild corps "
+                     "(not sold, #1667)", kept.get("holder"), kept.get("name"))
+    return rows
 
 
 # Carried lockboxes (#88): the vendor half's carried scope, item class 15
@@ -29691,7 +29799,7 @@ def _job_supplies(cur, guids: str):
 
 _JOB_RECENT_SQL = (
     # The head of `result` carries the module's refusal and its reason.
-    "SELECT id, target_name, command, source, status, "
+    "SELECT id, target_name, command, source, status, target_arg, "
     "LEFT(result, 400) AS result, "
     "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
     "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY"
@@ -29884,7 +29992,7 @@ def _class_member_reads(cur, book, everyone: str) -> tuple:
 def _job_read(cur, what: str, sql: str, params=()) -> list:
     """One job read; a schema without the table or column reads as empty."""
     try:
-        cur.execute(sql, params)
+        readtimeout.timed_execute(cur, what, sql, params)
     except pymysql.err.MySQLError as exc:
         if exc.args and exc.args[0] in (1054, 1146):
             log.warning("guild jobs: the %s read failed on this schema (%s): %s; the "
@@ -30121,9 +30229,10 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
         _rewarded_of(rewarded_rows), bag_slots or {}, worn or {})
     pending = {str(r.get(k) or "") for r in pending_rows
                for k in ("target_name", "target_arg")} - {""}
+    map_id_by_name = {m.name: m.map_id for m in members if m.map_id is not None}
     return {
         "members": members, "masters": masters, "crafters": crafters,
-        "recent": guildjobs.recent_from_rows(recent_rows), "pending": pending,
+        "recent": guildjobs.recent_from_rows(recent_rows, map_id_by_name), "pending": pending,
         "stones": guildjobs.spots_from_rows(_JOB_STONES),
     }
 
