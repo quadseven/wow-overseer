@@ -158,6 +158,14 @@ ROSTER_DEFAULTS: dict[str, object] = {
     # scope alone.
     "craft_spell": 0,
     "learn_fishing": 0,
+    # NO STANDING ERRAND, in the module's own words: `buy_recipe_item` is
+    # "<item entry>:<vendor entry>; empty = no standing errand" and the module
+    # declares VARCHAR(32) NOT NULL DEFAULT ''. Empty is that default and the
+    # only value that keeps a new row out of a recipe-buying pass.
+    "buy_recipe_item": "",
+    # NO LOCKPICK ERRAND: TINYINT(1) UNSIGNED NOT NULL DEFAULT 0 in the
+    # module's migration, "0 = no standing lockpick errand".
+    "lockpick": 0,
 }
 
 # The columns the enrollment supplies per candidate rather than by default.
@@ -193,6 +201,8 @@ ROSTER_COLUMNS: tuple[str, ...] = (
     "dungeon_runs_done",
     "craft_spell",
     "learn_fishing",
+    "buy_recipe_item",
+    "lockpick",
 )
 
 

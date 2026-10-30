@@ -1721,6 +1721,27 @@ def gear_candidates(
     return tuple(out)
 
 
+def corps_bag_kept(row: dict) -> bool:
+    """Is this carried bag one the guild corps sewed and still owes a guildmate?
+
+    A corps bag is a ladder bag (guildcorps.BAG_ITEMS) whose crafter is the
+    holder: the master made it to post, so it is stock, not a spare (#1667).
+    The vendor pass runs in a different cycle from the corps and cannot see
+    who is waiting, so the rule is conservative: a master's own crafted
+    ladder bag is never sold. A bag the holder bought or looted has no
+    crafter and stays sellable.
+
+    guildcorps is imported here, not at the top: it reaches armory through
+    guildroute, and armory imports this module, so a top import is a cycle.
+    """
+    import guildcorps
+
+    try:
+        return int(row["entry"]) in guildcorps.BAG_ITEMS and bool(row["self_made"])
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def bag_candidates(
     rows: Iterable[dict], equipped_slots: dict, keep_names=()
 ) -> tuple[SellCandidate, ...]:
@@ -1748,6 +1769,8 @@ def bag_candidates(
     out = []
     for row in rows:
         if owner_keeps(row.get("name", ""), keep_names):
+            continue
+        if corps_bag_kept(row):
             continue
         try:
             if int(row["item_class"]) != 1:
