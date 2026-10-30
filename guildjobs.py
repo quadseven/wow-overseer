@@ -3929,9 +3929,9 @@ def _member_step(
     step, doing, held = _pvp_first(
         m, pvp, recent, cap, kept, pet_due(m, pet, recent, cap, far)
     )
-    if step is not None or held or doing:
+    if step is not None or held:
         return step, doing, _join(supply_note, cap_note), gear_note
-    supply_note = _join(supply_note, cap_note)
+    supply_note = _join(supply_note, cap_note, doing)
     supply_note = _cohort_note(supply_note, pvp)
     step = _collect_first(m, mail, recent, cap)
     if step is not None:
@@ -5967,7 +5967,8 @@ def pvp_step(m, aim, move, cap, kept=None):
 
 def _pvp_full_bags(m, aim, cap, kept):
     """(step, doing, held) for an honor buy with no free bag slot: the make-room
-    step, or no step and the reason the buy is held."""
+    step, or no step and the reason the walk waits. The member is not held: the
+    reason becomes its note and it goes about its other work."""
     room_step = _pvp_room_step(m, aim, cap, kept)
     if room_step is not None:
         return room_step, f"{aim.line}: makes room for PvP buy", False
@@ -5992,7 +5993,9 @@ def _pvp_first(m, pvp, recent, cap, kept=None, pet_wanted=False):
     a leave queues nobody and the member goes about its ordinary job. A queue or a buy whose last row failed inside the
     PvP cooldown waits it out doing its ordinary job, and so does a buy whose
     walks to the vendor failed, for pvp_walk_cooldown. A bought item still in
-    the bags is the equip drive's, and the member goes about its job.
+    the bags is the equip drive's, and the member goes about its job. So does
+    a buy with no free bag slot and nothing to sell: no step and not held, with
+    `doing` the reason, which _member_step keeps as a note.
     """
     if not pvp or not m.eligible or not m.online:
         return None, "", False

@@ -12,10 +12,13 @@ import pathlib
 import unittest
 
 import guildjobs
+import guildroute
 import guildrun
 import guildsocial
 import pvpgear
 from guildjobs import Carried
+from test_guildlevel import member as level_member
+from test_guildlevel import world as level_world
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
@@ -401,7 +404,7 @@ class TheJobStep(unittest.TestCase):
             any(s.action == "pvp" for s in plan_full.steps),
             "Past the cooldown the buy still waits for a free slot",
         )
-        self.assertIn("no free bag slot", plan_full.lines["Auren"])
+        self.assertTrue(any("no free bag slot" in note for note in plan_full.notes))
 
         self.assertEqual(1, member.free_slots)
         plan2 = guildjobs.plan([member], pvp=pvp_for(held=6000), recent=recent_past)
@@ -416,7 +419,22 @@ class TheJobStep(unittest.TestCase):
         member = job_member(free_slots=0, bag_slots=16, carried=())
         plan = guildjobs.plan([member], pvp=pvp_for(held=6000))
         self.assertFalse(any(s.action in ("pvp", "room") for s in plan.steps))
-        self.assertIn("nothing to sell", plan.lines["Auren"])
+        self.assertTrue(any("nothing to sell" in note for note in plan.notes))
+
+    def test_a_buy_held_for_full_bags_leaves_the_member_at_its_other_work(self):
+        """The walk waits, not the member: a full bag with nothing to sell has
+        no timeout, so holding the member would stop its levelling for good."""
+        member = level_member("Auren", free_slots=0, bag_slots=16, carried=())
+        plan = guildjobs.plan(
+            [member],
+            masters={"Cave": "Grug"},
+            leveling=level_world(),
+            cap=guildroute.FAR_WALK_YARDS,
+            pvp=pvp_for(held=6000),
+        )
+        self.assertEqual(["level"], [s.action for s in plan.steps])
+        self.assertFalse(any(s.action == "pvp" for s in plan.steps))
+        self.assertTrue(any("no free bag slot" in note for note in plan.notes))
 
     def test_a_refused_buy_is_not_re_aimed_while_the_bags_stay_full(self):
         member = job_member(free_slots=0, bag_slots=16, carried=())
