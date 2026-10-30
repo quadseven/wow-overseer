@@ -2493,21 +2493,81 @@ def gear_step(member, character, vendor_rows, cap, kept=None):
     return step, ""
 
 
-def supply_step(member, vendor_rows, cap, kept=None):
+# ROOM FOR FOOD IS WORTH A SPARE STACK (#1675). Read on the dev realm on
+# 2026-10-30: 170 of 215 supply buys were refused "bags cannot take the item",
+# and only 5 sell rows ran, because a full member's slots hold what the sale
+# verdict keeps. The 117 members with no free slot took 3,419 of 4,189 solo
+# deaths in the day: no food, no rest, the next pull at half health. A player
+# with full bags at the innkeeper sells something to buy a meal. In this order,
+# lowest value first in each: trade goods, gems and recipes, spare consumables.
+_SPARE_CONSUMABLES = frozenset({4, 8})  # scrolls and other consumables
+
+
+def _spare_rank(c):
+    """Which tier of the spare order a stack is in, or None for a stack that is
+    never sold for room: unpriced, rare or better, or any other kind."""
+    if int(c.sell_price) <= 0 or int(c.quality) >= vendorsale.RARE:
+        return None
+    item_class = int(c.item_class)
+    if item_class == vendorsale.TRADE_GOODS:
+        return 0
+    if item_class in (vendorsale.GEM, vendorsale.RECIPE):
+        return 1
+    if item_class == vendorsale.CONSUMABLE:
+        return 2 if int(c.subclass) in _SPARE_CONSUMABLES else None
+    return None
+
+
+def room_for_rations(member, kept, book, need) -> list:
+    """The stacks a member short of `need` bag slots sells for food beyond its
+    junk: lowest in the spare order first, never reserved, never a class
+    quest's, never a tool, never what its own trade casts eat."""
+    sold = {int(c.guid) for c in _junk(member, kept)}
+    eaten = craft_entries(member) if member.role == MAINTENANCE else frozenset()
+    stacks = [
+        c
+        for c in _room_rows(member, member.carried or (), kept, book)
+        if int(c.guid) not in sold
+        and int(c.entry) not in eaten
+        and _spare_rank(c) is not None
+    ]
+    stacks.sort(
+        key=lambda c: (_spare_rank(c), int(c.sell_price) * int(c.count), int(c.guid))
+    )
+    return stacks[: max(0, int(need))]
+
+
+def supply_step(member, vendor_rows, cap, kept=None, book=None):
     """(step or None, why not): a member short of food or drink walks to a
     friendly vendor in reach, sells its junk there and buys some with its own
-    gold (restsupply.py). `vendor_rows` are the food and drink sold in reach of
-    where it stands (bridge._SUPPLY_VENDOR_SQL)."""
+    gold (restsupply.py). Bags too full for the buys sell spare stacks too
+    (room_for_rations); with no room to be had, no walk. `vendor_rows` are the
+    food and drink sold in reach of where it stands
+    (bridge._SUPPLY_VENDOR_SQL)."""
     if member.map_id is None:
         return None, ""
     rows = friendly_vendor_rows(member, vendor_rows)
     if vendor_rows and not rows:
         return None, "no vendor in reach will sell %s food or drink" % member.name
     junk = junk_value(member, kept)
-    left = spendable(member, purse.FOOD, int(member.money) + junk)
+    spare, room = [], None
+    if member.free_slots is not None:
+        room = int(member.free_slots) + len(_junk(member, kept))
+        short = len(restsupply.wanted(member)) - room
+        spare = room_for_rations(member, kept, book, short)
+        room += len(spare)
+        if room <= 0:
+            return None, "%s has no room for food and nothing it may sell" % (
+                member.name
+            )
+    left = spendable(
+        member, purse.FOOD, int(member.money) + junk + vendorsale.worth(spare)
+    )
     buys, why = restsupply.plan(replace(member, money=left), rows, 0)
     if not buys:
         return None, why
+    if room is not None:
+        buys = buys[:room]
     # The walk names the item the chosen vendor is the nearest seller of, so
     # the module's nearest-stockist walk ends at that counter.
     nearest = {}
@@ -2528,6 +2588,15 @@ def supply_step(member, vendor_rows, cap, kept=None):
             rows=junk_sales(member, kept, restsupply.ACTION)
             + tuple(
                 guildcorps.Row(
+                    "sell",
+                    "guid:%d" % int(c.guid),
+                    "",
+                    source_for(restsupply.ACTION, member.name),
+                )
+                for c in spare
+            )
+            + tuple(
+                guildcorps.Row(
                     "buy", b.command, "", source_for(restsupply.ACTION, member.name)
                 )
                 for b in buys
@@ -2538,7 +2607,7 @@ def supply_step(member, vendor_rows, cap, kept=None):
                 "",
                 source_for(restsupply.ACTION, member.name),
             ),
-            sales=junk_notes(member, kept),
+            sales=junk_notes(member, kept) + sale_notes(spare),
         ),
         "",
     )
@@ -2653,7 +2722,7 @@ def pet_step(m, beasts, recent, cap, far=None):
     return step, said, ""
 
 
-def _supply_first(m, offer, recent, cap, kept=None):
+def _supply_first(m, offer, recent, cap, kept=None, book=None):
     """A member with no food or drink buys some before any other job but the
     class quest and the stood-still hearth: a member that cannot rest between
     fights dies in them (restsupply.py)."""
@@ -2661,7 +2730,7 @@ def _supply_first(m, offer, recent, cap, kept=None):
         return None, "", ""
     if not restsupply.wanted(m) or _cooling(m, restsupply.ACTION, recent):
         return None, "", ""
-    step, why = supply_step(m, offer, cap, kept)
+    step, why = supply_step(m, offer, cap, kept, book)
     if step is None:
         return None, "", why
     return step, step.said, ""
@@ -3743,7 +3812,7 @@ def _upkeep_first(
     hungry = restsupply.empty(m)
     supply_note = ""
     if hungry:
-        step, doing, supply_note = _supply_first(m, supply, recent, cap, kept)
+        step, doing, supply_note = _supply_first(m, supply, recent, cap, kept, book)
         if step is not None:
             return (step, doing, quest_note, ""), supply_note, ""
     step = (
@@ -3764,7 +3833,7 @@ def _upkeep_first(
         return (step, step.said, quest_note, ""), supply_note, ""
     riding_note = _join(riding_note, weapon_note)
     if not hungry:
-        step, doing, supply_note = _supply_first(m, supply, recent, cap, kept)
+        step, doing, supply_note = _supply_first(m, supply, recent, cap, kept, book)
         if step is not None:
             return (step, doing, quest_note, ""), supply_note, ""
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
