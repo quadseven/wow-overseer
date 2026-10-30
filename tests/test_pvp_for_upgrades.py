@@ -395,11 +395,21 @@ class TheJobStep(unittest.TestCase):
                 walk=False,
             ),
         )
+        full = job_member(free_slots=0, bag_slots=16, carried=())
+        plan_full = guildjobs.plan([full], pvp=pvp_for(held=6000), recent=recent_past)
+        self.assertFalse(
+            any(s.action == "pvp" for s in plan_full.steps),
+            "Past the cooldown the buy still waits for a free slot",
+        )
+        self.assertIn("no free bag slot", plan_full.lines["Auren"])
+
+        self.assertEqual(1, member.free_slots)
         plan2 = guildjobs.plan([member], pvp=pvp_for(held=6000), recent=recent_past)
         pvp_steps = [s for s in plan2.steps if s.action == "pvp"]
-        self.assertTrue(
-            pvp_steps,
-            "Should re-aim and generate PvP step after cooldown with free slot",
+        self.assertEqual(
+            ["walk-to-vendor item:19325"],
+            [s.walk.command for s in pvp_steps],
+            "Should re-aim the same buy after cooldown once a slot is free",
         )
 
     def test_a_buy_with_full_bags_and_nothing_to_sell_holds_with_a_reason(self):
