@@ -253,6 +253,23 @@ def _realm_families() -> dict:
         return {"families": None, "guilds": None}
 
 
+def _bridge_started() -> float | None:
+    """When the bridge process began, from the row it renews (deployinfo.py).
+
+    None when no fresh row stands or the read fails, logged: the banner does
+    not depend on the bridge, and only the uptime goes unknown.
+    """
+    try:
+        with realmread.Session(_connect) as rd:
+            rows = rd.rows(deployinfo.BRIDGE_READ_SQL,
+                           (deployinfo.MEMO_KIND, deployinfo.MEMO_SUBJECT),
+                           what="overseer_bridge_memo")
+    except Exception:  # noqa: BLE001 - the banner must stand; logged below
+        log.exception("realm: the bridge start read failed; uptime goes unknown")
+        return None
+    return float(rows[0]["since"]) if rows else None
+
+
 # --- which realm this is (quadseven/mod-overseer#184) ------------------------
 #
 # FIRST AMONG THE FETCHES ON PURPOSE, and the handler is likewise first among
@@ -4983,8 +5000,8 @@ class Handler(BaseHTTPRequestHandler):
             # The page and every app script and stylesheet (appbuild.py):
             # a deploy that changes only app/ moves this and not `page`.
             payload["app_build"] = appbuild.fingerprint(HERE)
-            # Which commit this process runs and how long (deployinfo.py).
-            payload["deploy"] = deployinfo.info()
+            # Which commit runs, and how long the bridge has (deployinfo.py).
+            payload["deploy"] = deployinfo.info(_bridge_started())
             payload.update(_realm_families())
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:

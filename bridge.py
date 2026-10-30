@@ -3022,6 +3022,12 @@ def _memo_upsert(kind: str, subject: str, value, since: float, expires: float) -
         log.exception("bridge memo: could not write %s memo for %s", kind, subject)
 
 
+def _deploy_beat() -> None:
+    """Renew this process's start time for the site's marker (deployinfo.py)."""
+    _memo_upsert(deployinfo.MEMO_KIND, deployinfo.MEMO_SUBJECT, {},
+                 deployinfo.PROCESS_STARTED, time.time() + deployinfo.KEEP_SECONDS)
+
+
 def _memo_read(kind: str) -> dict:
     try:
         with _connect() as conn, conn.cursor() as cur:
@@ -7075,6 +7081,7 @@ class _Pass:
 # forever, burying the lines that matter. _poll_outcomes is harmless headless:
 # its _pending map is filled by on_message, which never fires.
 PASSES = (
+    _Pass("_deploy_beat_loop"),
     _Pass("_poll_outcomes"),
     _Pass("_protect_characters"),
     _Pass("_narrate_events"),
@@ -12792,7 +12799,10 @@ class Bridge(discord.Client):
         # no other. A late, absent or unsure answer changes nothing. With
         # every kind in shadow nothing waits at all.
         jev_plan = await self._jev_items_plan(jev_rows, worn, names)
-        await self._hand_gear(gear_rows, worn, names, jev_plan)
+        await self._hand_gear(
+            gear_rows, worn, names, jev_plan,
+            freeables=bag_pressure.freeable_greys(rows, OWNER_KEEPS),
+        )
         # AND WHAT THE HOLDER WOULD WEAR IS PUT ON (#146). The same two reads,
         # the same opinion (`gear.claimant` naming the holder), and like the
         # hand-off it needs no vendor, leader or counter, so it runs above the
@@ -13073,7 +13083,7 @@ class Bridge(discord.Client):
         )
 
     async def _hand_gear(self, gear_rows: list, worn: list, names: list,
-                         jev_plan=None) -> None:
+                         jev_plan=None, freeables=None) -> None:
         """Move every carried piece that suits a sibling better (infra#3464).
 
         THE VERB FOLLOWS WHERE THE TWO OF THEM ARE STANDING. It was always
@@ -13099,6 +13109,13 @@ class Bridge(discord.Client):
         `gear.is_upgrade_for` refuses a soulbound item outright, so a piece
         that cannot legally reach a sibling never becomes a grant, and both
         DoTrade and DoGive refuse one again on their own side.
+
+        A FULL TAKER BESIDE THE GIVER GIVES A JUNK STACK FIRST (#550).
+        `freeables` is the pass's own vendor read (`freeable_greys`), and
+        `gear.deliverable` attaches the make-room step to the grant. The
+        frees are written before the grants, so DoGive has moved the stack
+        out before a trade row can be refused for room. This is the shield
+        that stayed with Grog because Erg's bags were at zero.
         """
         # Both facts are read here rather than passed down from _vendor_once,
         # because this pass is reached on cycles that return before the
@@ -13111,7 +13128,7 @@ class Bridge(discord.Client):
         plan = bag_pressure.family_gifts(
             gear_rows, worn, names, keep_names=OWNER_KEEPS,
             position_rows=positions, free_slots=free_slots,
-            at_mailbox=at_mailbox,
+            at_mailbox=at_mailbox, freeables=freeables,
         )
         # A piece Jev acted on stays with its holder (#95): it is being put
         # on, or Jev judged it one to keep. Each one becomes a note.
@@ -13129,8 +13146,26 @@ class Bridge(discord.Client):
             )
             return
         seen = await asyncio.to_thread(_recent_trade_keys, GIVE_RETRY_MINUTES)
+        # The make-room steps go first. Each is a DoGive of the taker's own
+        # junk to the giver, so the trade that follows has the slot it needs;
+        # writing the hand-off first would queue the same doomed row the bag
+        # floor refused on main. If a step cannot be written - reserved by
+        # the owner, or the world lacks the migration - the hand-off waits
+        # with it instead of taking a slot that was never made.
+        freed = 0
         fresh = []
         for grant in plan.grants:
+            ready = True
+            for free in grant.frees:
+                if (free.holder, free.taker, free.command) in seen:
+                    continue
+                if await asyncio.to_thread(_insert_gear_handoff, free):
+                    freed += 1
+                    log.info("gear: %s", free.said)
+                else:
+                    ready = False
+            if not ready:
+                continue
             if (grant.holder, grant.taker, grant.command) in seen:
                 continue
             if await asyncio.to_thread(_insert_gear_handoff, grant):
@@ -13140,11 +13175,11 @@ class Bridge(discord.Client):
                      grant.taker, grant.verb, grant.name, grant.reason)
         log.info(
             "gear: queued %d/%d hand-off(s) (%d trade, %d give), "
-            "%d held back, %d already queued",
+            "%d make-room step(s), %d held back, %d already queued",
             len(fresh), decided,
             sum(1 for g in fresh if g.verb == "trade"),
             sum(1 for g in fresh if g.verb == "give"),
-            len(plan.notes), len(plan.grants) - len(fresh),
+            freed, len(plan.notes), len(plan.grants) - len(fresh),
         )
 
     async def _equip_upgrades(self, gear_rows: list, worn: list,
@@ -16256,6 +16291,16 @@ class Bridge(discord.Client):
             if status not in ("", "pending", "claimed", "verifying"):
                 return status, str((row or {}).get("detail") or "")
         return "", ""
+
+    async def _deploy_beat_loop(self) -> None:
+        """The start time the site reads for its deploy marker, kept fresh."""
+        await self.wait_until_ready()
+        while not self.is_closed():
+            try:
+                await asyncio.to_thread(_deploy_beat)
+            except Exception:
+                log.exception("deploy beat failed; retrying next cycle")
+            await asyncio.sleep(deployinfo.BEAT_SECONDS)
 
     async def _guild_post_loop(self) -> None:
         """The guild's own post (#625), on its own clock."""
