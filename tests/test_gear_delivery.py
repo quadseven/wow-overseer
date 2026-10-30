@@ -244,6 +244,82 @@ class NobodyIsSentAnythingTheyCannotHold(unittest.TestCase):
         self.assertTrue(plan.notes)
 
 
+TOGETHER_ERG_AND_GROG = {
+    "Erg": at(KALIMDOR, 100.0, 100.0),
+    "Grog": at(KALIMDOR, 104.0, 103.0),
+}
+
+
+class AFullTankFreesASlotForTheShield(unittest.TestCase):
+    """The shield that stayed with Grog because Erg's bags stood at zero
+    (#550). The plan gives Grog one of Erg's grey stacks first; the make-room
+    step is a DoGive the world executes before the shield's trade, so the
+    one-for-one shield swap has the slot it needs."""
+
+    def _pieces(self):
+        # Erg is the Protection seat and wears no shield; Grog's off hand is
+        # a better shield, so the spare is no upgrade for him.
+        tank = worn("Erg", WARRIOR, 43, i13=20)
+        tank[0]["tank_seat"] = 1
+        holder = worn("Grog", PALADIN, 39, i13=30, i14=58)
+        spare = carried(
+            holder="Grog",
+            item_guid=7101,
+            entry=14777,
+            name="Ravager's Shield",
+            item_level=44,
+            required_level=30,
+            item_class=gear.ITEM_CLASS_ARMOR,
+            item_subclass=gear.ARMOR_SHIELD,
+            inventory_type=gear.INVTYPE_SHIELD,
+        )
+        grey = {
+            "holder": "Erg",
+            "item_guid": 7200,
+            "entry": 2589,
+            "count": 1,
+            "name": "Bent Buckler",
+            "quality": 0,
+            "sell_price": 12,
+            "quest_item": False,
+            "reagent": False,
+            "profession_needed": False,
+        }
+        return tank + holder, spare, bag_pressure.freeable_greys([grey])
+
+    def test_the_plan_frees_a_slot_and_hands_the_shield_over(self):
+        equipped, spare, freeables = self._pieces()
+        plan = bag_pressure.family_gifts(
+            [spare],
+            equipped,
+            ["Erg", "Grog"],
+            position_rows=TOGETHER_ERG_AND_GROG,
+            free_slots={"Erg": 0, "Grog": 4},
+            freeables=freeables,
+        )
+        self.assertEqual(
+            [(g.holder, g.taker, g.name) for g in plan.grants],
+            [("Grog", "Erg", "Ravager's Shield")],
+        )
+        self.assertEqual(
+            [(f.holder, f.taker, f.name) for f in plan.grants[0].frees],
+            [("Erg", "Grog", "Bent Buckler")],
+        )
+        self.assertEqual(plan.grants[0].frees[0].verb, gear.GIVE)
+
+    def test_without_a_freeable_stack_the_plan_still_refuses(self):
+        equipped, spare, _freeables = self._pieces()
+        plan = bag_pressure.family_gifts(
+            [spare],
+            equipped,
+            ["Erg", "Grog"],
+            position_rows=TOGETHER_ERG_AND_GROG,
+            free_slots={"Erg": 0, "Grog": 4},
+        )
+        self.assertEqual(plan.grants, ())
+        self.assertIn("no free bag slot", " ".join(plan.notes))
+
+
 # ---------------------------------------------------------------------------
 # THE RANKING DECIDED WHETHER, WHEN IT WAS ONLY EVER ASKED TO DECIDE BETWEEN
 #
@@ -529,6 +605,16 @@ class ThePassSaysWhatItDecided(unittest.TestCase):
     def test_every_refusal_is_logged_and_not_only_counted(self):
         body = _block("    async def _hand_gear(self")
         self.assertIn(".notes", body)
+
+    def test_the_make_room_step_is_written_before_the_hand_off(self):
+        """DoGive moves the grey out before the trade needs the slot, and a
+        step that cannot be written stops its hand-off rather than sending
+        the same doomed row the bag floor refused."""
+        body = _block("    async def _hand_gear(self")
+        self.assertLess(
+            body.index("for free in grant.frees"),
+            body.index("_insert_gear_handoff, grant"),
+        )
 
 
 class TheFactsAreReadBeforeTheRowIsWritten(unittest.TestCase):
