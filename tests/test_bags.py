@@ -38,8 +38,12 @@ far stronger guarantee than an exclusion list: there is nothing to exclude
 from, because nothing here can remove an item from a bag.
 """
 
+import os
 import pathlib
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 import modsource
 
@@ -114,15 +118,56 @@ class TheModuleDoesNotHandOutBags(unittest.TestCase):
     def test_the_module_can_remove_nothing_from_a_bag(self):
         """The bags hold live quest items that are quality-1 whites and look
         exactly like junk, so there is no exclusion list that could be got
-        right. The guarantee is that no disposal call exists at all."""
-        src = _strip_comments(modsource.read(MODULE, encoding="utf-8"))
+        right. The guarantee used to be that no disposal call exists at all.
+
+        It is narrower now, and still structural: the module removes an item
+        from a bag in exactly three places and nowhere else, and each has its
+        own gate. DoDestroy is the operator's destroy row (`sell` kind,
+        #614), which goes through the core's own destroy handler and only
+        past OverseerDecisions::DestroyRefusal. NaturalizeReset and
+        NaturalizeStrip are the operator's naturalize kind, which never runs
+        on the family (off by default). Any other call site, and every call
+        that bulk-clears or sells, is still refused.
+        """
+        raw = modsource.read(MODULE, encoding="utf-8")
+        src = _strip_comments(raw)
+        sanctioned = []
+        for signature in (
+            "static char const* DoDestroy(",
+            "bool NaturalizeReset(",
+            "bool NaturalizeStrip(",
+        ):
+            start = src.index(signature)
+            depth = 0
+            for i in range(src.index("{", start), len(src)):
+                if src[i] == "{":
+                    depth += 1
+                elif src[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        sanctioned.append((start, i))
+                        break
         for call in DISPOSAL:
-            self.assertNotIn(
-                call,
-                src,
-                f"mod_overseer.cpp contains {call}: nothing in this module may "
-                "remove an item from a bag",
-            )
+            for m in re.finditer(re.escape(call), src):
+                inside = any(a <= m.start() <= b for a, b in sanctioned)
+                if call == "DestroyItem":
+                    self.assertTrue(
+                        inside,
+                        "mod_overseer.cpp removes an item from a bag outside the "
+                        "three sanctioned paths (offset %d)" % m.start(),
+                    )
+                else:
+                    self.fail(
+                        f"mod_overseer.cpp contains {call}: nothing in this module "
+                        "may bulk-clear or sell items out of a bag"
+                    )
+        # The destroy row cannot skip its gate.
+        do_destroy = src[sanctioned[0][0] : sanctioned[0][1]]
+        self.assertIn("OverseerDecisions::DestroyRefusal(", do_destroy)
+        self.assertLess(
+            do_destroy.index("OverseerDecisions::DestroyRefusal("),
+            do_destroy.index("HandleDestroyItemOpcode("),
+        )
 
 
 def _patch_lines(path: pathlib.Path):
@@ -201,20 +246,67 @@ class LootStopsWhenThereIsNoRoom(unittest.TestCase):
         `if (skillId == SKILL_NONE) return true;`, which is the corpse/plain
         chest path out of the function.
         """
+        # The rebased hunk no longer shows the early return, so the offline
+        # proof is the structure the hunk does pin, line for line: the guard
+        # is added at lambda-body indent (8 spaces), right after the context
+        # that closes the bag-space block and right before the skill check.
         text = LOOT_PATCH.read_text(encoding="utf-8")
-        diff = text[text.index("diff --git") :]
-        self.assertIn(
-            "skillId == SKILL_NONE",
-            diff,
-            "the hunk does not show the SKILL_NONE early return, so "
-            "nothing proves the guard is below it",
+        hunk = text[text.index("diff --git") :].splitlines()
+        guard = [
+            "+        if (bot->GetFreeInventorySpace() == 0)",
+            "+            return false;",
+        ]
+        at = hunk.index(guard[0])
+        self.assertEqual(guard, hunk[at : at + 2])
+        top = next(i for i, line in enumerate(hunk) if line.startswith("@@ "))
+        self.assertEqual(
+            ["                return false;", "        }", ""],
+            [line[1:].rstrip() for line in hunk[top + 1 : top + 4]],
+            "the context before the guard is no longer the bag-space block",
         )
-        self.assertLess(
-            diff.index("skillId == SKILL_NONE"),
-            diff.index("GetFreeInventorySpace"),
-            "the free-slot guard is placed ABOVE the SKILL_NONE return, which "
-            "would stop a full-bagged bot looting money off a corpse",
+        comment = hunk[top + 4 : at]
+        self.assertTrue(comment)
+        for line in comment:
+            self.assertTrue(line.startswith("+        //"), line)
+        self.assertEqual("+", hunk[at + 2], "a blank line follows the guard")
+        self.assertEqual(
+            " "
+            "        if (requirement.SkillId == SKILL_FISHING || "
+            "!botAI->HasSkill((SkillType)requirement.SkillId) ||",
+            hunk[at + 3],
+            "the skill check no longer follows the guard",
         )
+
+    @unittest.skipUnless(
+        os.environ.get("PLAYERBOTS_SRC"),
+        "set PLAYERBOTS_SRC to a checkout of the pinned fork for the real check",
+    )
+    def test_the_guard_sits_after_the_skill_none_return_in_the_patched_fork(self):
+        """Apply the patch to a scratch copy of the fork's file and read the
+        PATCHED source: inside canUseRequirement, after the SKILL_NONE early
+        return that lets a corpse through, and before the lambda ends."""
+        rel = "src/Mgr/Item/LootObjectStack.cpp"
+        src = pathlib.Path(os.environ["PLAYERBOTS_SRC"]) / rel
+        with tempfile.TemporaryDirectory() as tmp:
+            dst = pathlib.Path(tmp) / rel
+            dst.parent.mkdir(parents=True)
+            shutil.copy(src, dst)
+            subprocess.run(["git", "init", "-q"], cwd=tmp, check=True)
+            result = subprocess.run(
+                ["git", "apply", str(LOOT_PATCH)],
+                cwd=tmp,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            code = dst.read_text(encoding="utf-8")
+        lam = code.index("auto canUseRequirement")
+        early = code.index("SkillId == SKILL_NONE", lam)
+        guard = code.index("if (bot->GetFreeInventorySpace() == 0)", lam)
+        end = code.index("\n    };", lam)
+        self.assertEqual(1, code.count("GetFreeInventorySpace() == 0"))
+        self.assertLess(early, guard, "the guard is above the SKILL_NONE return")
+        self.assertLess(guard, end, "the guard is outside canUseRequirement")
 
     def test_the_patch_can_remove_nothing_from_a_bag(self):
         added, _ = _patch_lines(LOOT_PATCH)
@@ -251,24 +343,17 @@ class ThePatchHeaderSaysHowToRetireIt(unittest.TestCase):
             self.assertIn(heading, text)
 
     def test_it_names_the_sha_it_was_cut_against(self):
-        """A patch header quoting a SHA that is no longer pinned is a patch
-        nobody re-verified after a bump."""
-        pinned = set(
-            re.findall(
-                r"^AC_\w+_SHA=([0-9a-f]{40})$",
-                PINS.read_text(encoding="utf-8"),
-                re.MULTILINE,
-            )
+        """A patch header that does not quote the CURRENT module pin is a
+        patch nobody re-verified after a bump. A rebased patch also keeps the
+        older SHA it was first cut against, so older SHAs are history, not a
+        defect; the pin the header must name is the one the realm builds."""
+        pinned = re.search(
+            r"^AC_MODULE_SHA=([0-9a-f]{40})$",
+            PINS.read_text(encoding="utf-8"),
+            re.MULTILINE,
         )
-        self.assertTrue(pinned, "no SHAs parsed out of UPSTREAM-PINS.env")
-        quoted = set(
-            re.findall(r"[0-9a-f]{40}", LOOT_PATCH.read_text(encoding="utf-8"))
-        )
-        self.assertTrue(quoted, "the patch header quotes no upstream SHA")
-        self.assertTrue(
-            quoted <= pinned,
-            f"patch quotes SHAs that are not pinned: {sorted(quoted - pinned)}",
-        )
+        self.assertIsNotNone(pinned, "no AC_MODULE_SHA in UPSTREAM-PINS.env")
+        self.assertIn(pinned.group(1), LOOT_PATCH.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

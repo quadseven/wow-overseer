@@ -278,12 +278,19 @@ function lesson(d) {
   return d.lesson.outcome + " " + d.lesson.n + "x" + (d.lesson.why ? ": " + d.lesson.why : "");
 }
 
+// The post-run report (mod-overseer#152): the same lines the bridge posted to
+// Discord for this run id, from the same read, so the two cannot disagree.
+function runReport(rep) {
+  if (!rep || !rep.lines || !rep.lines.length) return "";
+  return html`<div class="g-steps g-tl-report" aria-label="${"Run report " + rep.run_id}">${rep.lines.map((l, i) => html`<div class="g-step" data-gt="${i === 0 && rep.wipe ? "bad" : ""}"><span>${l}</span></div>`)}</div>`;
+}
+
 function timelines(ctx, tl) {
   const wait = pendingRead(tl, 2);
   if (wait) return wait;
   const fam = (tl.data.families || []).find((f) => f.title === family(ctx));
   if (!fam || !(fam.runs || []).length) return state("empty", "No run of " + family(ctx) + "'s family in the last 14 days.");
-  return html`<p class="muted g-lede">${family(ctx)}'s family. ${fam.line || ""}</p><div class="g-timelines">${fam.runs.map((r) => html`<div class="card g-timeline"><span class="g-name">${r.title}</span><span class="muted">${r.line}</span>${r.cause ? html`<span class="g-tl-cause">${r.cause}</span>` : ""}<div class="g-steps">${(r.events || []).map((e) => html`<div class="g-step" data-gt="${e.tone || ""}"><span class="g-step-t">${e.at}</span><span>${e.line}</span></div>`)}</div></div>`)}</div>`;
+  return html`<p class="muted g-lede">${family(ctx)}'s family. ${fam.line || ""}</p><div class="g-timelines">${fam.runs.map((r) => html`<div class="card g-timeline"><span class="g-name">${r.title}</span><span class="muted">${r.line}</span>${r.cause ? html`<span class="g-tl-cause">${r.cause}</span>` : ""}${runReport(r.report)}<div class="g-steps">${(r.events || []).map((e) => html`<div class="g-step" data-gt="${e.tone || ""}"><span class="g-step-t">${e.at}</span><span>${e.line}</span></div>`)}</div></div>`)}</div>`;
 }
 
 // ---- chronicle ----------------------------------------------------------------

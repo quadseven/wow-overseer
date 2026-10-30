@@ -84,18 +84,24 @@ applying, rebase it; if upstream ever adds an aimable ChangeToWanderNpc of its
 own, delete this and adapt the call to upstream's signature in the same commit.
 
 Verified against the pins in UPSTREAM-PINS.env:
-  module 60e6555e4e4b552ee4c6551b466aff648916f38b
+  module 40884e9c135c1daf27ffd894a6047502a5701130
 Every upstream member used here is already used by this same file at this same
 pin: MoveFarTo, INTERACTION_DISTANCE, Player::FindNearestCreature,
 Unit::IsAlive and WorldPosition's default-comparison all appear in
 NewRpgTravelFlightAction at :645-655, and `WorldPosition() !=` in the GO_GRIND
 assert at :244. Nothing new is asked of the compiler.
 
+REBASED 2026-09-24 onto mod-playerbots @ 7a593fa254840221f1d63b7beb8d9735e55309ba
+(quadseven/mod-playerbots branch rebase-2026-09-24: upstream master plus the
+two fork fall commits). Only the diff below was regenerated, from a three-way
+rebase of this patch onto that tree; the reasoning above is unchanged, and any
+file:line it cites is at the SHA it was first written against.
+
 diff --git a/src/Ai/World/Rpg/Action/NewRpgAction.cpp b/src/Ai/World/Rpg/Action/NewRpgAction.cpp
-index 8880159..8b521d3 100644
+index d4bfafe7..4f188205 100644
 --- a/src/Ai/World/Rpg/Action/NewRpgAction.cpp
 +++ b/src/Ai/World/Rpg/Action/NewRpgAction.cpp
-@@ -375,6 +375,47 @@ bool NewRpgWanderNpcAction::Execute(Event /*event*/)
+@@ -382,6 +382,47 @@ bool NewRpgWanderNpcAction::Execute(Event /*event*/)
      if (!dataPtr)
          return false;
      auto& data = *dataPtr;
@@ -144,7 +150,7 @@ index 8880159..8b521d3 100644
      {
          // No npc can be found, switch to IDLE
 diff --git a/src/Ai/World/Rpg/NewRpgInfo.cpp b/src/Ai/World/Rpg/NewRpgInfo.cpp
-index a01bcec..7db0ba8 100644
+index 0e432055..13f778a4 100644
 --- a/src/Ai/World/Rpg/NewRpgInfo.cpp
 +++ b/src/Ai/World/Rpg/NewRpgInfo.cpp
 @@ -26,6 +26,21 @@ void NewRpgInfo::ChangeToWanderNpc()
@@ -178,11 +184,11 @@ index a01bcec..7db0ba8 100644
 +            // identical in `rpg status`, and telling those two apart is the
 +            // whole diagnostic.
 +            out << "\naimedNpcEntry: " << arg.npcEntry;
-             out << "\nnpcOrGoEntry: " << arg.npcOrGo.GetCounter();
+             out << "\nnpcOrGo: entry " << arg.npcOrGo.GetEntry() << " (guid " << arg.npcOrGo.GetCounter()
+                 << ")";
              out << "\nlastWanderNpc: " << startT;
-             out << "\nlastReachNpcOrGo: " << arg.lastReach;
 diff --git a/src/Ai/World/Rpg/NewRpgInfo.h b/src/Ai/World/Rpg/NewRpgInfo.h
-index 53a4c62..415002c 100644
+index 84feab56..1216b81c 100644
 --- a/src/Ai/World/Rpg/NewRpgInfo.h
 +++ b/src/Ai/World/Rpg/NewRpgInfo.h
 @@ -37,6 +37,17 @@ struct NewRpgInfo
@@ -210,5 +216,5 @@ index 53a4c62..415002c 100644
 +    // infra#2783: the aimable form. See WanderNpc above.
 +    void ChangeToWanderNpc(uint32 npcEntry, WorldPosition pos);
      void ChangeToWanderRandom();
-     void ChangeToDoQuest(uint32 questId, const Quest* quest);
+     void ChangeToDoQuest(uint32 questId, Quest const* quest);
      void ChangeToTravelFlight(uint32 flightMasterEntry, WorldPosition flightMasterPos, std::vector<uint32> path);

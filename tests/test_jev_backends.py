@@ -12,6 +12,7 @@ import tempfile
 import unittest
 
 import jev
+import jev_outcomes as jo
 from test_jev import Transport, reply, good_choice, ROUTE
 
 SCORE = jev.score("How bad?", ["low", "mid", "high"])
@@ -371,8 +372,8 @@ class BridgeWiring(unittest.TestCase):
         self.assertIn("ADD_ACTED_SQL", store)
 
     def test_a_comparison_row_binds_each_value_to_its_column(self):
-        insert = self.BRIDGE[self.BRIDGE.index("def _insert_jev_comparisons(") :]
-        insert = insert[: insert.index("\n\n\n")]
+        insert = self.BRIDGE[self.BRIDGE.index("def _compare_why(") :]
+        insert = insert[: insert.index("\n\n\nasync def _jev_compare_sink")]
         executed = []
 
         class Cursor:
@@ -389,7 +390,7 @@ class BridgeWiring(unittest.TestCase):
             def cursor(self):
                 return Cursor()
 
-        scope = {"_connect": Conn, "json": json}
+        scope = {"_connect": Conn, "json": json, "jev": jev, "jev_outcomes": jo}
         exec(insert, scope)  # noqa: S102 - bridge.py's own source
         scope["_insert_jev_comparisons"](
             [

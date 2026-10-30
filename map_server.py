@@ -78,6 +78,7 @@ import raidready
 import raidsupply
 import readcache
 import recap
+import runreport
 import realm
 import realmread
 import runtimeline
@@ -3549,8 +3550,27 @@ def _fetch_run_timeline() -> dict:
                 (*names, runtimeline.WINDOW_HOURS, runtimeline.ROW_LIMIT),
                 what="overseer_death")
         bosses = _run_bosses(rd) if deaths else frozenset()
+        reports = _run_reports(rd, rows, len(families) * runtimeline.RUNS_PER_FAMILY)
     return {"rows": rows, "families": families, "present": present,
-            "deaths": deaths, "bosses": bosses}
+            "deaths": deaths, "bosses": bosses, "reports": reports}
+
+
+def _run_reports(rd, rows: list, limit: int) -> dict:
+    """Each recent run's post-run report (mod-overseer#152), by run id: the
+    newest `limit` run ids in the timeline rows, read through runreport.read,
+    the same read the bridge posts to Discord. A realm without the summary
+    view shows no report rather than one that says nothing dropped."""
+    ids = sorted({int(r.get("run_id") or 0) for r in rows} - {0}, reverse=True)[:limit]
+    reports: dict = {}
+    try:
+        for run_id in ids:
+            report = runreport.read(rd.must, run_id)
+            if report is not None:
+                reports[run_id] = report
+    except realmread.Gap:
+        log.info("run reports unavailable (no overseer_dungeon_run_summary yet)")
+        return {}
+    return reports
 
 
 # --- the live dungeon recap and the loot board (infra#2597) ------------------
@@ -3810,6 +3830,37 @@ _INSTANCE_SQL = (
 )
 
 
+# THE NEWEST EVENT OF EACH KIND, grouped per (character, kind) and folded to
+# per kind in Python (#1333). Grouping by kind alone cannot use an index: a
+# family's names are an IN range, so MySQL walked a whole kind index - every
+# family's rows - for each agenda read (about 170 ms of it on a live realm
+# with 60k events). Grouped by (character_name, kind), MAX(last_seen) is a
+# loose index scan of the bridge's idx_character_kind_last_seen, a few hundred
+# index entries. Without that index (a realm whose bridge has not started
+# since) it is the same scan as before, so the answer never depends on it.
+# S608: `holes` is a run of placeholders sized by the roster, and every VALUE
+# is bound by the driver.
+_EVENT_NEWEST_SQL = (
+    "SELECT character_name, kind, MAX(last_seen) AS last_seen "
+    "FROM overseer_event WHERE character_name IN ({holes}) "
+    "GROUP BY character_name, kind"
+)
+
+
+def _newest_per_kind(rows) -> list[dict]:
+    """{kind, last_seen} per kind, the newest of any member's: the rows the
+    old GROUP BY kind statement returned, from _EVENT_NEWEST_SQL's."""
+    newest: dict = {}
+    for row in rows:
+        kind, seen = row.get("kind"), row.get("last_seen")
+        if kind not in newest or (
+            seen is not None
+            and (newest[kind] is None or seen > newest[kind])
+        ):
+            newest[kind] = seen
+    return [{"kind": kind, "last_seen": seen} for kind, seen in newest.items()]
+
+
 def _leader_now(name: str | None):
     """nowstatus.compose's reading of one character, the sentence the wall and
     /api/v2/roster print for it; None when it cannot be read."""
@@ -3865,14 +3916,11 @@ def _fetch_agenda(names=None) -> dict:
             (), what="overseer_trade")
         # ONE ROW PER EVENT KIND, not the feed. The banner asks the event
         # table exactly one question - when did anything last actually
-        # happen - and grouping in SQL answers it in seven rows instead of
-        # ten thousand. S608: `holes` is a run of placeholders sized by the
-        # roster, and every VALUE is bound by the driver below.
-        event_rows = rd.rows(
-            "SELECT kind, MAX(last_seen) AS last_seen "  # noqa: S608
-            f"FROM overseer_event WHERE character_name IN ({holes}) "
-            "GROUP BY kind",
-            tuple(names), what="overseer_event")
+        # happen - and grouping in SQL answers it in a hundred rows instead
+        # of ten thousand; _newest_per_kind folds those to one per kind.
+        event_rows = _newest_per_kind(rd.rows(
+            _EVENT_NEWEST_SQL.format(holes=holes),
+            tuple(names), what="overseer_event"))
         # THE NEWEST BOSS CREDIT, fed in as one more event row (agenda.BOSS_KIND).
         # A campaign repeating one dungeon writes no quest, level or equip, and
         # the encounter credit in the run's event log is its only progress. Only
@@ -4283,8 +4331,11 @@ _APP_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; charset=
 # ETag and `no-cache`, because _send runs for every caller.
 SHARED_READ_SECONDS = 5.0
 SHARED_READS = readcache.ReadCache(SHARED_READ_SECONDS)
+# /api/runtimeline reads one post-run report per recent run id (#1603), so it
+# is shared too rather than read once per open family page.
 SHARED_GET_PATHS = frozenset({
     "/api/map", "/api/wall", "/api/guildgear", "/api/raidgoals", "/api/wealth",
+    "/api/runtimeline",
 })
 
 
@@ -5332,7 +5383,7 @@ class Handler(BaseHTTPRequestHandler):
             payload = runtimeline.build_run_timeline(
                 fetched["rows"], fetched["families"], present=fetched["present"],
                 deaths=fetched["deaths"], bosses=fetched["bosses"],
-                zones=recap.zone_names(GEO.continents))
+                zones=recap.zone_names(GEO.continents), reports=fetched["reports"])
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # The tab keeps what it has drawn and says it may be stale.
