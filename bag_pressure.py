@@ -195,6 +195,38 @@ def vendor_refusal(row: dict, keep_names=()) -> str:
     return _vendor_reading(row, keep_names)[1]
 
 
+def freeable_greys(rows, keep_names=()) -> dict:
+    """name -> (gear.Freeable,) for the cheapest grey a vendor would buy.
+
+    The make-room half of a full receiver's hand-off (#550). One per member,
+    lowest total value first and guid to break a tie, so two passes over
+    unchanged bags propose the same stack. Quality 0 is the "grey" a player
+    throws away; quest items, reagents, profession stock and the owner's keep
+    mark are already refused by `_vendor_reading`, and an unreadable row is
+    left out rather than guessed at.
+    """
+    best: dict = {}
+    for row in rows or ():
+        candidate, _why = _vendor_reading(row, keep_names)
+        if candidate is None or int(candidate.item.quality) != 0:
+            continue
+        try:
+            name = str(row["name"])
+            entry = int(row["entry"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        key = (
+            int(candidate.item.sell_price) * int(candidate.count),
+            int(candidate.item_guid),
+        )
+        if candidate.holder not in best or key < best[candidate.holder][0]:
+            best[candidate.holder] = (
+                key,
+                gear.Freeable(guid=int(candidate.item_guid), entry=entry, name=name),
+            )
+    return {name: (free,) for name, (_key, free) in best.items()}
+
+
 # How many kept items a floor reason names by name.
 FLOOR_REASON_EXAMPLES = 3
 
@@ -2022,6 +2054,7 @@ def family_gifts(
     position_rows=None,
     free_slots=None,
     at_mailbox=None,
+    freeables=None,
 ):
     """The carried pieces a sibling should be handed, and who should have them.
 
@@ -2069,6 +2102,11 @@ def family_gifts(
     piece nobody in the family can use, which on a measured cycle is most of
     the bag and is the VENDOR half's business - it is already reported there,
     and repeating it here would bury the six lines that are actionable.
+
+    `freeables` is the `bag_pressure.freeable_greys` read for the same
+    family, handed through to `gear.deliverable` unchanged: a full sibling
+    who stands beside the giver can give the giver a junk stack first, which
+    is the one slot the hand-off needs (#550). None keeps the old refusal.
     """
     kept = [
         row for row in gear_rows if not owner_keeps(row.get("name", ""), keep_names)
@@ -2080,6 +2118,7 @@ def family_gifts(
         position_rows=position_rows,
         free_slots=free_slots,
         at_mailbox=at_mailbox,
+        freeables=freeables,
     )
 
 
