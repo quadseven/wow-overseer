@@ -298,6 +298,56 @@ def destroy_command(candidate: SellCandidate) -> str:
     return "destroy guid:%d count:%d" % (candidate.item_guid, candidate.count)
 
 
+# ITEM_QUALITY_POOR: a grey, the only stack destroyed to make room (#550).
+GREY_QUALITY = 0
+
+
+def spare_slots(rows: Iterable[dict], keep_names=()) -> dict:
+    """holder -> the grey stacks that may be destroyed to make room, cheapest
+    first, from carried rows shaped like _VENDOR_ITEMS_SQL's.
+
+    A full shield tank is cleared one slot for a shield (`gear.deliverable`),
+    and a grey is what a player throws away for that slot. Only quality 0,
+    only a row that says `quest_item` is false, never an owner-kept name.
+    """
+    out: dict = {}
+    for row in rows:
+        if owner_keeps(row.get("name", ""), keep_names):
+            continue
+        try:
+            if int(row["quality"]) != GREY_QUALITY:
+                continue
+            if "quest_item" not in row or bool(row["quest_item"]):
+                continue
+            count = int(row["count"])
+            spare = gear.Spare(
+                holder=str(row["holder"]),
+                guid=int(row["item_guid"]),
+                count=count,
+                name=str(row["name"]),
+                value=int(row["sell_price"] or 0) * count,
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+        if spare.holder and spare.guid > 0 and spare.count > 0:
+            out.setdefault(spare.holder, []).append(spare)
+    return {
+        name: tuple(sorted(held, key=lambda s: (s.value, s.guid)))
+        for name, held in out.items()
+    }
+
+
+def clear_candidate(spare: gear.Spare) -> SellCandidate:
+    """The destroy row's stack for one Spare, so `destroy_command` and the
+    bridge's `_insert_destroy` serve the make-room step unchanged."""
+    return SellCandidate(
+        holder=spare.holder,
+        item_guid=int(spare.guid),
+        count=int(spare.count),
+        item=ItemForSale(quality=GREY_QUALITY, sell_price=int(spare.value)),
+    )
+
+
 def vendor_batch(
     candidates: Iterable[SellCandidate],
 ) -> tuple[str, tuple[SellCandidate, ...]]:
@@ -2208,6 +2258,7 @@ def guild_gear_gifts(
     position_rows=None,
     free_slots=None,
     at_mailbox=None,
+    spares=None,
 ):
     """Return useful BoE gear in family-first, guild-second order.
 
@@ -2216,6 +2267,9 @@ def guild_gear_gifts(
     gets first claim, then only observed-online non-family guild members see
     pieces left unclaimed. A guild name without observed presence is never
     evidence that a `give` can land.
+
+    `spares` are the greys `spare_slots` found in the takers' bags; a full
+    shield tank has one destroyed to make room for a shield (#550).
     """
     family = {str(name) for name in (family_names or ())}
     by_name = {str(member.name): member for member in (members or ())}
@@ -2244,6 +2298,7 @@ def guild_gear_gifts(
         position_rows=position_rows,
         free_slots=free_slots,
         at_mailbox=at_mailbox,
+        spares=spares,
     )
 
 
@@ -2255,6 +2310,7 @@ def guild_gear_gifts_from_rows(
     position_rows=None,
     free_slots=None,
     at_mailbox=None,
+    spares=None,
 ):
     """Parse bridge rows and apply the guild BoE policy.
 
@@ -2264,11 +2320,13 @@ def guild_gear_gifts_from_rows(
     """
     names = [str(member.name) for member in (members or ())]
     # The family carries its party role, the same one every family pass in
-    # this module reads; a guildmate has none and keeps the off-hand guard.
-    roles = {
-        c.name: c.role
-        for c in family_characters(equipped_rows, [str(n) for n in family_names or ()])
-    }
+    # this module reads. A guildmate whose roster tree or raid seat makes it a
+    # tank is one here too (#550): that is the off tank a spare shield is
+    # for. Any other guildmate has no role and keeps the off-hand guard.
+    family = [str(n) for n in family_names or ()]
+    roles = {c.name: c.role for c in family_characters(equipped_rows, family)}
+    guild_tanks, _ = tree_tanks(equipped_rows, [n for n in names if n not in family])
+    roles.update({name: gear.ROLE_TANK for name in guild_tanks})
     characters = gear.characters_from_rows(equipped_rows, names, roles=roles)
     holdings = gear.holdings_from_rows(gear_rows)
     return guild_gear_gifts(
@@ -2279,6 +2337,7 @@ def guild_gear_gifts_from_rows(
         position_rows=position_rows,
         free_slots=free_slots,
         at_mailbox=at_mailbox,
+        spares=spares,
     )
 
 

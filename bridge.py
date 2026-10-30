@@ -11749,10 +11749,19 @@ class Bridge(discord.Client):
         at_mailbox = await asyncio.to_thread(
             _holders_at_mailbox, list(family_names), positions,
         )
+        # A FULL MEMBER'S GREYS (#550): a shield tank with no free slot has
+        # its cheapest grey destroyed to make room for a spare shield. Read
+        # only for members with no room, and only for the ones the AI drives
+        # now: nothing is ever destroyed in the bags of a character a person
+        # is playing.
+        full = [name for name in all_names if free_slots.get(name, 0) <= 0]
+        driven = await asyncio.to_thread(_bot_held_names, full)
+        greys = await asyncio.to_thread(_fetch_carried_greys, driven)
         plan = bag_pressure.guild_gear_gifts_from_rows(
             gear_rows, equipped, family_names, roster,
             position_rows=positions, free_slots=free_slots,
             at_mailbox=at_mailbox,
+            spares=bag_pressure.spare_slots(greys, keep_names=OWNER_KEEPS),
         )
         for note in plan.notes:
             log.info("guild gear: %s", note)
@@ -11763,7 +11772,7 @@ class Bridge(discord.Client):
         for grant in plan.grants:
             if (grant.holder, grant.taker, grant.command) in seen:
                 continue
-            if await asyncio.to_thread(_insert_gear_handoff, grant):
+            if await self._clear_then_hand(grant):
                 fresh.append(grant)
         for grant in fresh:
             log.info("guild gear: %s -> %s by %s, %s - %s",
@@ -11771,6 +11780,34 @@ class Bridge(discord.Client):
                      grant.reason)
         log.info("guild gear: queued %d/%d hand-off(s), %d already queued",
                  len(fresh), len(plan.grants), len(plan.grants) - len(fresh))
+
+    async def _clear_then_hand(self, grant) -> int:
+        """Write one guild gear hand-off, destroying its grey first (#550).
+
+        `grant.clears` is the grey `gear.deliverable` chose to make room in a
+        full shield tank's bags. Its destroy row is written BEFORE the trade
+        row: the world takes pending rows in id order, so the slot is free
+        when the trade lands. A destroy the world image cannot take (0) holds
+        the hand-off too, because the trade would only fail on a full bag.
+
+        A hand-off the keep mark blocks destroys nothing. A trade that fails
+        after its destroy leaves the slot free, and the next pass reads that
+        room, so it clears nothing more for the same shield.
+        """
+        if _KEEP.blocks(grant.holder, grant.command):
+            log.info("not writing %r for %s: the item is reserved to be kept "
+                     "(overseer_keep)", grant.command, grant.holder)
+            return 0
+        if grant.clears is not None:
+            candidate = bag_pressure.clear_candidate(grant.clears)
+            if not await asyncio.to_thread(_insert_destroy, candidate):
+                log.info(
+                    "guild gear: %s stays with %s: %s has no free bag slot and "
+                    "the destroy of %s to make room was not written",
+                    grant.name, grant.holder, grant.taker, grant.clears.name,
+                )
+                return 0
+        return await asyncio.to_thread(_insert_gear_handoff, grant)
 
     async def _guild_route_once(self, family_names: list, roster: list) -> None:
         """Hand a guildmate's loot to the guild member who gains most (#174).
@@ -27219,6 +27256,21 @@ def _reagent_trades() -> dict:
 
 
 REAGENT_TRADES = _reagent_trades()
+
+
+# The greys among the same carried rows, for the make-room step (#550).
+_CARRIED_GREYS_SQL = _VENDOR_ITEMS_SQL + " AND it.Quality = 0"
+
+
+def _fetch_carried_greys(names: list) -> list:
+    """Read the grey stacks these members carry; bag_pressure.spare_slots
+    decides which may be destroyed."""
+    if not names:
+        return []
+    sql = _CARRIED_GREYS_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        return [dict(row) for row in cur.fetchall()]
 
 
 def _fetch_vendor_items(names: list) -> list:
