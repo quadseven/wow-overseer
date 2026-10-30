@@ -116,7 +116,7 @@ QUEST_TARGET = 0
 # (infra dungeon-decision gap): a family-wide plan to run a named dungeon,
 # stored the same way 'quest' is - see Goal.dungeon_keyword below and
 # _persist_council_plan's comment on what each column holds for it.
-GOAL_KINDS = ("level", "skill", "quest", "dungeon")
+GOAL_KINDS = ("level", "skill", "quest", "dungeon", "guild_count", "guild_items")
 KIND_COLUMN = "ENUM(%s) NOT NULL" % ",".join("'%s'" % k for k in GOAL_KINDS)
 
 
@@ -193,6 +193,18 @@ class Goal:
     skill_name: str | None = None
     # kind='quest' only. The id mod-overseer aims a bot at; 0 everywhere else.
     quest_id: int = 0
+
+
+@dataclass(frozen=True)
+class GuildGoal:
+    """A guild objective, before the store attaches its identity."""
+
+    mode: str
+    instance: str
+    target: int
+    item_ids: tuple[int, ...] = ()
+    item_class: int = 0
+    quality: int = 0
 
 
 @dataclass(frozen=True)
@@ -362,6 +374,24 @@ _LEVEL_RE = re.compile(
 # repeating. A trailing "for <someone>" is tolerated and ignored: the goal is
 # already attached to the character the directive was addressed to.
 _QUEST_RE = re.compile(r"\bwork\s+quest\s+(\d{1,6})\b", re.IGNORECASE)
+_GUILD_COUNT_RE = re.compile(
+    r"\brun\s+([a-z][a-z' -]{1,39}?)\s+(\d{1,4})\s+times\b", re.IGNORECASE
+)
+_GUILD_ITEMS_RE = re.compile(
+    r"\bevery\s+(common|uncommon|rare|epic|legendary)\s+"
+    r"(recipe|recipes|weapon|weapons|armor|armour)\s+from\s+"
+    r"([a-z][a-z' -]{1,39})\s*$",
+    re.IGNORECASE,
+)
+_ITEM_QUALITY = {"common": 1, "uncommon": 2, "rare": 3, "epic": 4, "legendary": 5}
+_ITEM_CLASS = {
+    "recipe": 9,
+    "recipes": 9,
+    "weapon": 2,
+    "weapons": 2,
+    "armor": 4,
+    "armour": 4,
+}
 
 # Bounded gap so 'forget'/'cancel' only binds to a nearby 'goal', not one
 # three sentences away in an unrelated order.
@@ -371,7 +401,7 @@ _CANCEL_RE = re.compile(
 )
 
 
-def parse_goal(text: str) -> Goal | CancelGoal | None:
+def parse_goal(text: str, item_resolver=None) -> Goal | GuildGoal | CancelGoal | None:
     """Recognize a goal-shaped order inside a natural-language directive.
 
     Skill shapes are checked before level shapes so 'level your cooking to
@@ -380,6 +410,36 @@ def parse_goal(text: str) -> Goal | CancelGoal | None:
     """
     if _CANCEL_RE.search(text):
         return CancelGoal()
+    m = _GUILD_COUNT_RE.search(text)
+    if m:
+        count = int(m.group(2))
+        if count > 0:
+            return GuildGoal("count", " ".join(m.group(1).lower().split()), count)
+        return None
+    m = _GUILD_ITEMS_RE.search(text)
+    if m and item_resolver is not None:
+        quality, item_class, instance = m.groups()
+        quality_id = _ITEM_QUALITY[quality.lower()]
+        class_id = _ITEM_CLASS[item_class.lower()]
+        item_ids = tuple(
+            sorted(
+                set(
+                    item_resolver(
+                        " ".join(instance.lower().split()), class_id, quality_id
+                    )
+                )
+            )
+        )
+        if item_ids:
+            return GuildGoal(
+                "items",
+                " ".join(instance.lower().split()),
+                0,
+                item_ids,
+                class_id,
+                quality_id,
+            )
+        return None
     m = _QUEST_RE.search(text)
     if m:
         quest_id = int(m.group(1))
@@ -400,6 +460,14 @@ def parse_goal(text: str) -> Goal | CancelGoal | None:
         if 2 <= target <= MAX_LEVEL:
             return Goal("level", target)
     return None
+
+
+def guild_item_progress(
+    goal: GuildGoal, member_items: Mapping[str, set[int]]
+) -> tuple[int, int]:
+    """Count target items known or held by at least one guild member."""
+    available = set().union(*member_items.values()) if member_items else set()
+    return len(available.intersection(goal.item_ids)), len(goal.item_ids)
 
 
 def observed_from_left(left: int | None) -> int | None:

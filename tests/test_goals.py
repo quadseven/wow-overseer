@@ -150,6 +150,33 @@ class ParseNonGoalTest(unittest.TestCase):
             self.assertIsNone(parse_goal(text), text)
 
 
+class ParseGuildGoalTest(unittest.TestCase):
+    def test_run_count_goal(self):
+        self.assertEqual(
+            parse_goal("run Blackrock Depths 50 times"),
+            goals.GuildGoal("count", "blackrock depths", 50),
+        )
+
+    def test_drop_table_item_set_goal_uses_resolver(self):
+        def resolver(instance, item_class, quality):
+            return [101, 102]
+
+        self.assertEqual(
+            parse_goal("every rare recipe from Stratholme", resolver),
+            goals.GuildGoal("items", "stratholme", 0, (101, 102), 9, 3),
+        )
+
+    def test_unrecognized_guild_goal_falls_through(self):
+        self.assertIsNone(parse_goal("maybe run something sometime"))
+
+    def test_item_set_progress_unions_known_and_held_items(self):
+        goal = goals.GuildGoal("items", "stratholme", 0, (101, 102, 103), 9, 3)
+        self.assertEqual(
+            goals.guild_item_progress(goal, {"a": {101}, "b": {102, 104}}),
+            (2, 3),
+        )
+
+
 def make_row(**over):
     row = {
         "id": 7,
