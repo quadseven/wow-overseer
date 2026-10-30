@@ -267,9 +267,11 @@ class AFullTankFreesASlotForTheShield(unittest.TestCase):
                     grants,
                     position_rows=TOGETHER_ERG_AND_GROG,
                     free_slots={"Erg": 0, "Grog": 4},
-                    freeables={"Erg": tuple(
-                        gear.Freeable(guid, 999, "Bent Buckler") for guid in guids
-                    )},
+                    freeables={
+                        "Erg": tuple(
+                            gear.Freeable(guid, 999, "Bent Buckler") for guid in guids
+                        )
+                    },
                 )
                 self.assertEqual(len(plan.grants), len(guids))
                 self.assertEqual(
