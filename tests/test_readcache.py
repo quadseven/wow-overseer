@@ -227,6 +227,7 @@ class TheSharedGets(unittest.TestCase):
             "/api/guildgear",
             "/api/raidgoals",
             "/api/wealth",
+            "/api/runtimeline",
         ):
             self.assertIn(path, map_server.SHARED_GET_PATHS)
             self.assertIn(path, map_server.Handler.GET_ROUTES)
@@ -249,6 +250,40 @@ class TheSharedGets(unittest.TestCase):
             self.assertEqual(h.status(), 200)
             self.assertEqual(h.header("Cache-Control"), "no-cache")
             self.assertRegex(h.header("ETag"), r'^"[0-9a-f]{24}"$')
+
+    def test_the_run_timeline_reads_its_reports_once_for_two_asks(self):
+        # wow-overseer#1603: every /api/runtimeline GET read up to
+        # families x RUNS_PER_FAMILY run reports. Two asks inside the shared
+        # window build once and get the same body.
+        fetched = {
+            "rows": [],
+            "families": {},
+            "present": True,
+            "deaths": [],
+            "bosses": frozenset(),
+            "reports": {},
+        }
+        with mock.patch.object(
+            map_server, "_fetch_run_timeline", return_value=fetched
+        ) as fetch:
+            first = get("/api/runtimeline")
+            second = get("/api/runtimeline")
+        self.assertEqual(fetch.call_count, 1)
+        self.assertEqual(first.status(), 200)
+        self.assertEqual(second.status(), 200)
+        self.assertEqual(first.body, second.body)
+        self.assertEqual(
+            json.loads(second.body),
+            map_server.runtimeline.build_run_timeline(
+                [],
+                {},
+                present=True,
+                deaths=[],
+                bosses=frozenset(),
+                zones=map_server.recap.zone_names(map_server.GEO.continents),
+                reports={},
+            ),
+        )
 
     def test_an_unchanged_answer_is_still_a_304(self):
         with (

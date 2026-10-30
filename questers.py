@@ -63,6 +63,11 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
     no gameobject or item starts it either;
   * ENDER_MISSING: nothing is named to hand it in to, or the creature named is
     not spawned, or the world refused every spawn of it as gone;
+  * OBJECT_ENDER_MISSING: only a gameobject is named to hand it in to, and it
+    has no spawn in the world, or the world refused every spawn of it as gone
+    (#1594). An incomplete quest one of whose enders is an object with no
+    static spawn is not judged on its ender at all: a script or an event
+    summons that object, so it is worked and only a stall breaks it (#1606);
   * SOURCE_MISSING: the world refused every spawn of its objective as gone.
     A quest whose objective no spawned creature is or drops is not judged on
     that alone (a script may summon it, a chest or a vendor may hold the
@@ -163,6 +168,9 @@ FAILED = "the quest failed in the log"
 STALLED = "its objectives did not move for 2 hours of play"
 GIVER_MISSING = "the quest giver is not in the world"
 ENDER_MISSING = "the turn-in NPC is not in the world"
+OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
+# The kind of spawn a gameobject ender's walk names (`walk-to-spawn gameobject:`).
+OBJECT_KIND = "gameobject"
 SOURCE_MISSING = "an objective's creature or item is never found in the world"
 STALLED_UNSOURCED = STALLED + ", and no spawned creature is or drops what it asks for"
 REFUSED_TAKE = "the quest giver would not give it"
@@ -248,12 +256,20 @@ STARTERS_SQL = (
     "WHERE s.quest IN ({quests})"
 )
 
-# Everything named to hand each quest in to: a creature or a gameobject.
+# Everything named to hand each quest in to: a creature or a gameobject. A
+# gameobject comes with each of its spawns (guid 0 when it has none), since
+# classquest.GIVERS_SQL reads creature spawns only: a quest whose only ender is
+# a gameobject had nowhere to walk to and sat complete in the log (#1594).
 ENDERS_SQL = (
-    "SELECT e.quest AS quest, 'creature' AS kind, e.id AS entry "
+    "SELECT e.quest AS quest, 'creature' AS kind, e.id AS entry, 0 AS guid, "
+    "0 AS map_id, 0 AS x, 0 AS y, '' AS name "
     "FROM acore_world.creature_questender e WHERE e.quest IN ({quests}) "
     "UNION ALL "
-    "SELECT e.quest, 'gameobject', e.id FROM acore_world.gameobject_questender e "
+    "SELECT e.quest, 'gameobject', e.id, COALESCE(o.guid, 0), COALESCE(o.map, 0), "
+    "COALESCE(o.position_x, 0), COALESCE(o.position_y, 0), COALESCE(gt.name, '') "
+    "FROM acore_world.gameobject_questender e "
+    "LEFT JOIN acore_world.gameobject o ON o.id = e.id "
+    "LEFT JOIN acore_world.gameobject_template gt ON gt.entry = e.id "
     "WHERE e.quest IN ({quests})"
 )
 
@@ -380,6 +396,17 @@ class Facts:
     # What is named to hand it in to: creatures, gameobjects.
     ender_npcs: bool = False
     ender_objects: bool = False
+    # The spawns of the gameobjects named to take it (ObjectSpawn), #1594.
+    object_enders: tuple = ()
+    # A gameobject named to take it has no static spawn: a script or an event
+    # summons it, so its absence says nothing of the quest (#1606).
+    object_unspawned: bool = False
+
+
+@dataclass(frozen=True)
+class ObjectSpawn(classquest.Spawn):
+    """A gameobject's spawn a quest is handed in at: its walk is a walk to a
+    gameobject spawn, not a creature's (#1594)."""
 
 
 @dataclass(frozen=True)
@@ -416,6 +443,8 @@ def catalogue(quest_rows, giver_rows, spawn_rows, loot_rows, start_rows, ender_r
         rows, giver_rows, spawn_rows, loot_rows, start_rows=start_rows, every=True
     )
     named, npc_enders, object_enders = _named(start_rows, ender_rows)
+    object_spots = _object_ender_spots(ender_rows)
+    summoned = _unspawned_object_enders(ender_rows)
     zones = {_int(r.get("id")): zone_of(r.get("zone")) for r in rows}
     classic_zones = _classic_zones(book, zones)
     facts = {}
@@ -434,6 +463,8 @@ def catalogue(quest_rows, giver_rows, spawn_rows, loot_rows, start_rows, ender_r
             giver_named=qid in named,
             ender_npcs=qid in npc_enders,
             ender_objects=qid in object_enders,
+            object_enders=object_spots.get(qid, ()),
+            object_unspawned=qid in summoned,
         )
         kept[qid] = quest
         band_rows.append(
@@ -462,6 +493,38 @@ def _named(start_rows, ender_rows) -> tuple:
         kind = str(r.get("kind") or "")
         (npc_enders if kind == "creature" else object_enders).add(_int(r.get("quest")))
     return named, npc_enders, object_enders
+
+
+def _object_ender_spots(ender_rows) -> dict:
+    """quest -> the ObjectSpawn of each spawn of a gameobject named to take it,
+    from ENDERS_SQL's rows (a row with guid 0 is an object with no spawn)."""
+    out: dict = {}
+    for r in ender_rows or ():
+        guid = _int(r.get("guid"))
+        if str(r.get("kind") or "") != "gameobject" or not guid:
+            continue
+        spot = ObjectSpawn(
+            guid,
+            _int(r.get("entry")),
+            _int(r.get("map_id")),
+            float(r.get("x") or 0.0),
+            float(r.get("y") or 0.0),
+            str(r.get("name") or ""),
+        )
+        spots = out.setdefault(_int(r.get("quest")), [])
+        if spot not in spots:
+            spots.append(spot)
+    return {qid: tuple(spots) for qid, spots in out.items()}
+
+
+def _unspawned_object_enders(ender_rows) -> set:
+    """The quests a gameobject with no spawn in the world is named to take
+    (ENDERS_SQL's guid 0 rows): one a script or an event summons (#1606)."""
+    return {
+        _int(r.get("quest"))
+        for r in ender_rows or ()
+        if str(r.get("kind") or "") == "gameobject" and not _int(r.get("guid"))
+    }
 
 
 def _classic_zones(book, zones) -> set:
@@ -528,6 +591,10 @@ class Attempt:
     reason: str = ""
     spawn: int = 0
     age_minutes: int = 0
+    # What `spawn` is a spawn of: a creature's or a gameobject's. The two
+    # number their spawns apart, so a gone object spawn never stands for a
+    # creature spawn of the same id (#1594).
+    spawn_kind: str = "creature"
     # False only when the module said so (`"retryable":false` in the row's
     # result). A refusal without the field, from a world image older than
     # mod-overseer#19, is retryable, so it keeps the three-strike
@@ -554,13 +621,15 @@ def attempts(rows) -> tuple:
             continue
         read = guildjobs.recent_from_rows([row])
         recent = read[0] if read else None
+        spawn, kind = _spawn_named(row.get("command"), recent)
         out.append(
             Attempt(
                 name=str(row.get("target_name") or ""),
                 command=str(row.get("command") or ""),
                 status=str(row.get("status") or ""),
                 reason=(recent.reason or recent.refusal) if recent else "",
-                spawn=recent.spawn if recent else 0,
+                spawn=spawn,
+                spawn_kind=kind,
                 age_minutes=_int(row.get("age"), 10**6),
                 retryable='"retryable":false' not in str(row.get("result") or ""),
             )
@@ -568,14 +637,28 @@ def attempts(rows) -> tuple:
     return tuple(out)
 
 
-def gone_spawns(name, tried) -> frozenset:
-    """The spawn ids the world told this quester are not in the world."""
+def _spawn_named(command, recent) -> tuple:
+    """(spawn id, kind) a walk row named: guildjobs reads a creature walk's
+    spawn only (`_spawn_of`), so a walk to a gameobject ender's spawn
+    (`walk-to-spawn gameobject:<id>`, #1594) is read here, else the world's
+    "no such spawn" for it never reached the quest's broken check."""
+    if recent is not None and recent.spawn:
+        return int(recent.spawn), "creature"
+    found = re.match(r"walk-to-spawn gameobject:(\d+)\b", str(command or ""))
+    return (int(found.group(1)), OBJECT_KIND) if found else (0, "creature")
+
+
+def gone_spawns(name, tried, kind="creature") -> frozenset:
+    """The spawn ids of `kind` the world told this quester are not in the
+    world."""
     return frozenset(
-        a.spawn for a in tried or () if a.name == name and a.spawn and a.reason == GONE
+        a.spawn
+        for a in tried or ()
+        if a.name == name and a.spawn and a.reason == GONE and a.spawn_kind == kind
     )
 
 
-def left_spawns(name, tried) -> frozenset:
+def left_spawns(name, tried, kind="creature") -> frozenset:
     """The spawn ids this quester leaves for now: the gone ones, and those a
     walk was refused for a lasting reason (classquest.SPAWN_REFUSALS: a drop on
     the way, the other side's ground, a road through ground far above its
@@ -583,9 +666,11 @@ def left_spawns(name, tried) -> frozenset:
     or for a short one (stopped getting nearer, died on the way) inside
     classquest.SPAWN_SHORT_MINUTES. Only the gone ones say the quest is broken:
     the rest say the way there is, for now."""
-    out = set(gone_spawns(name, tried))
+    out = set(gone_spawns(name, tried, kind))
     for a in tried or ():
         if a.name != name or not a.spawn or a.reason not in classquest.SPAWN_REFUSALS:
+            continue
+        if a.spawn_kind != kind:
             continue
         short = a.reason in classquest.SPAWN_SHORT_REFUSALS
         hold = (
@@ -837,12 +922,26 @@ def _fields_gone(quest, gone) -> bool:
     return bool(quest.fields) and all(s.guid in gone for s in quest.fields)
 
 
-def _ender_missing(quest, facts: Facts, gone) -> bool:
-    """Nothing to hand the quest in to: no gameobject is named, and no named
-    creature is spawned (or every spawn of it was refused as gone)."""
-    if facts.ender_objects:
-        return False
-    return not [s for s in quest.enders if s.guid not in gone]
+def _ender_missing(quest, facts: Facts, gone, object_gone=frozenset()) -> str:
+    """Why there is nothing to hand the quest in to, "" when there is: no
+    named creature is spawned and no named gameobject is either (or every
+    spawn of them was refused as gone). A quest only a gameobject takes is
+    missing its object, not its NPC (#1594)."""
+    if _ender_spots(quest, facts, gone, object_gone):
+        return ""
+    if facts.ender_objects and not facts.ender_npcs:
+        return OBJECT_ENDER_MISSING
+    return ENDER_MISSING
+
+
+def _ender_spots(quest, facts, gone=frozenset(), object_gone=frozenset()) -> tuple:
+    """Every spawn the quest is handed in at: its creature enders' not in
+    `gone` and, after them, its gameobject enders' (ObjectSpawn) not in
+    `object_gone`. Each kind is weighed against its own spawn ids."""
+    objects = facts.object_enders if facts is not None else ()
+    return tuple(s for s in quest.enders if s.guid not in gone) + tuple(
+        s for s in objects if s.guid not in object_gone
+    )
 
 
 def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list:
@@ -851,6 +950,7 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
     does not hold, or a take or a hand-in the world keeps refusing. The clock
     is told every quest in the log, so it must be asked once a pass."""
     gone = gone_spawns(member.name, tried)
+    object_gone = gone_spawns(member.name, tried, OBJECT_KIND)
     refused = refusals(member.name, tried)
     final = cannot_turn_in(member.name, tried)
     working = _working(cat, member, last_quest)
@@ -863,7 +963,9 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
         quest, facts = cat.quest(qid), cat.facts.get(qid)
         if quest is None or facts is None:
             continue
-        reason = _broken_reason(quest, facts, status, played, gone, refused, final)
+        reason = _broken_reason(
+            quest, facts, status, played, gone, refused, final, object_gone
+        )
         if reason:
             out.append(Broken(member.name, qid, quest.title, reason, held=True))
     clock.forget(member.name, member.quest_log)
@@ -871,15 +973,26 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
 
 
 def _broken_reason(
-    quest, facts: Facts, status, played, gone, refused, final=None
+    quest,
+    facts: Facts,
+    status,
+    played,
+    gone,
+    refused,
+    final=None,
+    object_gone=frozenset(),
 ) -> str:
     """Why a quest the quester holds is broken, "" when it is not (yet). A
     complete quest's objectives cannot move, so stillness never stalls it:
     it is due a turn-in, not a drop (#1085)."""
     if status == STATUS_FAILED:
         return FAILED
-    if _ender_missing(quest, facts, gone):
-        return ENDER_MISSING
+    missing = _ender_missing(quest, facts, gone, object_gone)
+    # An incomplete quest one of whose enders is an object with no static
+    # spawn is not judged on its ender: a script or an event summons that
+    # object, so the quest is worked, and only a stall breaks it (#1606).
+    if missing and not (status == STATUS_INCOMPLETE and facts.object_unspawned):
+        return missing
     if status == STATUS_INCOMPLETE and _fields_gone(quest, gone):
         return SOURCE_MISSING
     if quest.id in (final or {}):
@@ -1096,9 +1209,10 @@ def next_move(
     # missing is left, and so is one whose hand-in the world keeps refusing,
     # until its hold is over (`turn_in_held`), the module-complete ones too.
     hand_skip = turn_in_held(member.name, tried) | {
-        b.quest for b in found if b.reason == ENDER_MISSING
+        b.quest for b in found if b.reason in (ENDER_MISSING, OBJECT_ENDER_MISSING)
     }
-    move = _hand_in(cat, member, hand_skip, left, complete)
+    object_left = left_spawns(member.name, tried, OBJECT_KIND)
+    move = _hand_in(cat, member, hand_skip, left, complete, object_left)
     if move is not None:
         return move, "", []
     # 3. A quest in reach in its zone, the nearest giver first, while the log
@@ -1166,16 +1280,22 @@ def _held(cat: Catalogue, member, status, skip):
             yield qid, quest
 
 
-def _hand_in(cat: Catalogue, member, skip, left, complete=frozenset()):
-    """The hand-in of the complete quest whose turn-in NPC is nearest, or
-    None. A quest the module called complete is handed in even when its log
+def _hand_in(
+    cat: Catalogue, member, skip, left, complete=frozenset(), object_left=frozenset()
+):
+    """The hand-in of the complete quest whose turn-in NPC or object is
+    nearest, or None. A quest the module called complete is handed in even when its log
     row still says otherwise (#1085); `skip` leaves it as it leaves any other."""
     due = {qid for qid, _quest in _held(cat, member, STATUS_COMPLETE, skip)}
     due |= {qid for qid in complete if qid in member.quest_log and qid not in skip}
     ready = []
     for qid in due:
         quest = cat.quest(qid)
-        spot = _nearest(member, quest.enders, left) if quest is not None else None
+        spot = (
+            _nearest(member, _ender_spots(quest, cat.facts.get(qid), left, object_left))
+            if quest is not None
+            else None
+        )
         if spot is not None:
             ready.append((_yards(member, spot), qid, quest, spot))
     if not ready:
@@ -1286,7 +1406,7 @@ def _walk_row(member, move, cap):
     if move.spot is None:
         return None
     spot = guildjobs.Spot(
-        "creature",
+        OBJECT_KIND if isinstance(move.spot, ObjectSpawn) else "creature",
         int(move.spot.guid),
         int(move.spot.map_id),
         float(move.spot.x),
@@ -1378,14 +1498,14 @@ def plan(
         held = crossing_held(member.name, move, crossings)
         if held:
             move, why = None, held
-    if (
-        move is not None
-        and move.spot is not None
-        and _yards(member, move.spot) > guildroute.TRAINER_WALK_YARDS
-    ):
-        # Only a far walk waits out a far walk wall; a drop does not walk.
+    if move is not None and move.spot is not None:
+        # A drop does not walk. Only a far walk waits out the far walk
+        # ceiling and budget, but another verb's hold is on the character, so
+        # a near walk waits it out too (#1295: a 170-yard hunt walk was refused
+        # as held every pass, about every two minutes).
         wall, wait = walk_wall(member.name, tried)
-        if wall:
+        far = _yards(member, move.spot) > guildroute.TRAINER_WALK_YARDS
+        if wall and (far or wall == classquest.HELD_REASON):
             move, why = (
                 None,
                 "%s waits %d more minute%s to walk: %s"

@@ -373,6 +373,74 @@ class Sanitize(unittest.TestCase):
     def test_ordinary_text_is_left_alone(self):
         self.assertEqual(relay.sanitize("hail, traveller"), "hail, traveller")
 
+    def test_a_quest_link_reads_as_its_title_not_its_markup(self):
+        # Seen live in the relayed guild feed: the client renders this as a
+        # yellow quest link, Discord has no client, so the raw escape codes
+        # are what a reader got.
+        raw = "Need help with |cFFFFFF00|Hquest:605:35|h[Singing Blue Shards]|h|r?"
+        self.assertEqual(relay.sanitize(raw), "Need help with [Singing Blue Shards]?")
+
+    def test_a_broken_spec_link_reads_as_its_numbers(self):
+        # The talent link arrives in fragments, each number wrapped in its
+        # own colour span and no |H head left; stripping the escapes still
+        # leaves the sentence a person would have read in the client.
+        raw = (
+            "holy (0|h|cffffffff/|h|cff00ff008|h|cffffffff/0|h|cffffffff)|r "
+            "priest is looking for guild."
+        )
+        self.assertEqual(
+            relay.sanitize(raw), "holy (0/8/0) priest is looking for guild."
+        )
+
+    def test_colour_spans_keep_their_words(self):
+        self.assertEqual(relay.sanitize("|cffff0000red|r text"), "red text")
+
+    def test_words_that_merely_start_with_a_pipe_letter_are_kept(self):
+        # Not markup: a pipe followed by letters that happen to be h, H, r.
+        for raw in (
+            "|Hello there, friend",
+            "a |hop",
+            "the help|hint",
+            "a|b",
+            "go |run now",
+            "|Thanks |there",
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(relay.sanitize(raw), raw)
+
+    def test_a_pipe_t_word_pair_is_not_a_texture(self):
+        for raw in ("|Thanks|there", "|Tab|time", "x|Tfoo|tbar"):
+            with self.subTest(raw=raw):
+                self.assertEqual(relay.sanitize(raw), raw)
+
+    def test_real_textures_still_strip(self):
+        for raw, want in (
+            ("|TInterface\\Icons\\X:16|t Hi", " Hi"),
+            ("a |Tinterface/icons/x.blp:0|t b", "a  b"),
+            ("|Tx.tga|tHi", "Hi"),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(relay.sanitize(raw), want)
+
+    def test_other_near_markup_shapes_pass_through(self):
+        for raw in (
+            "|cfff0000 short colour",
+            "|Hfoo|hbar",
+            "|Hitem:1 never closed",
+            "the |rest and |hint",
+            "|Hi: you",
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(relay.sanitize(raw), raw)
+
+    def test_a_doubled_pipe_is_one_literal_pipe(self):
+        self.assertEqual(relay.sanitize("||cffff0000 literal"), "|cffff0000 literal")
+        self.assertEqual(relay.sanitize("a || b"), "a | b")
+
+    def test_nested_colours_and_textures_still_strip(self):
+        raw = "|cffff0000a |cff00ff00b|r c|r |TInterface\\Icons\\x:16|t done"
+        self.assertEqual(relay.sanitize(raw), "a b c  done")
+
 
 class FormatLine(unittest.TestCase):
     def line(self, **kw):

@@ -123,6 +123,124 @@ class OnlyDamageDealersFillDamageSeats(unittest.TestCase):
 
 
 class TheSwitchAndTheLimits(unittest.TestCase):
+    def test_registry_enrols_only_template_ready_guilds_within_faction_cap(self):
+        roster = (
+            [{"name": "tank%d" % i, "class_id": WARRIOR, "level": 60} for i in range(8)]
+            + [
+                {"name": "heal%d" % i, "class_id": PRIEST, "level": 60}
+                for i in range(11)
+            ]
+            + [
+                {"name": "damage%d" % i, "class_id": MAGE, "level": 60}
+                for i in range(19)
+            ]
+            + [
+                {"name": "source%d" % i, "class_id": PALADIN, "level": 60}
+                for i in range(8)
+            ]
+        )
+        natural = {m["name"] for m in roster}
+        candidates = [
+            {
+                "name": "NewA",
+                "faction": "Alliance",
+                "members": roster,
+                "naturalized": natural,
+                "raid_nights": ["Tuesday"],
+                "size_target": 40,
+            },
+            {
+                "name": "NewB",
+                "faction": "Horde",
+                "members": roster,
+                "naturalized": natural,
+                "raid_nights": ["Wednesday"],
+                "size_target": 40,
+            },
+            {
+                "name": "NewC",
+                "faction": "Alliance",
+                "members": roster,
+                "naturalized": natural,
+                "raid_nights": ["Thursday"],
+                "size_target": 40,
+            },
+        ]
+        registry = guildrun.guild_registry(candidates)
+        run_guilds = tuple(row["name"] for row in registry)
+        self.assertEqual(run_guilds, ("Cave", "Bonkers", "NewA", "NewB"))
+
+    def test_factory_made_or_short_guild_does_not_enrol(self):
+        roster = (
+            [{"name": "tank%d" % i, "class_id": WARRIOR, "level": 60} for i in range(8)]
+            + [
+                {"name": "heal%d" % i, "class_id": PRIEST, "level": 60}
+                for i in range(11)
+            ]
+            + [
+                {"name": "damage%d" % i, "class_id": MAGE, "level": 60}
+                for i in range(13)
+            ]
+            + [
+                {"name": "source%d" % i, "class_id": PALADIN, "level": 60}
+                for i in range(8)
+            ]
+        )
+        candidate = {
+            "name": "NewA",
+            "faction": "Alliance",
+            "members": roster,
+            "naturalized": set(),
+            "raid_nights": [],
+            "size_target": 40,
+        }
+        self.assertEqual(
+            guildrun.guild_registry([candidate]), guildrun.guild_registry([])
+        )
+        candidate["naturalized"] = {member["name"] for member in roster}
+        candidate["members"] = roster[:39]
+        self.assertEqual(
+            guildrun.guild_registry([candidate]), guildrun.guild_registry([])
+        )
+
+    def test_a_guild_without_fire_resistance_sources_does_not_enrol(self):
+        # 8 tanks, 11 healers and 21 damage dealers, but no paladin or shaman:
+        # no group has a fire resistance source, so the template is not filled.
+        roster = (
+            [{"name": "tank%d" % i, "class_id": WARRIOR, "level": 60} for i in range(8)]
+            + [
+                {"name": "heal%d" % i, "class_id": PRIEST, "level": 60}
+                for i in range(11)
+            ]
+            + [
+                {"name": "damage%d" % i, "class_id": MAGE, "level": 60}
+                for i in range(21)
+            ]
+        )
+        candidate = {
+            "name": "NewA",
+            "faction": "Alliance",
+            "members": roster,
+            "naturalized": {member["name"] for member in roster},
+            "raid_nights": [],
+            "size_target": 40,
+        }
+        self.assertEqual(
+            guildrun.guild_registry([candidate]), guildrun.guild_registry([])
+        )
+
+    def test_default_run_guilds_come_from_the_registry(self):
+        rows = (
+            {"name": "Cave"},
+            {"name": "Bonkers"},
+            {"name": "NewA"},
+        )
+        with mock.patch.object(guildrun, "guild_registry", lambda *a, **k: rows):
+            self.assertEqual(guildrun.limits({}).guilds, ("Cave", "Bonkers", "NewA"))
+            override = guildrun.limits({"GUILD_RUNS_GUILDS": "Cave"})
+            self.assertEqual(override.guilds, ("Cave",))
+        self.assertEqual(guildrun.run_guild_names(), guildrun.DEFAULT_GUILDS)
+
     def test_off_unless_it_is_turned_on(self):
         self.assertFalse(guildrun.enabled({}))
         self.assertFalse(guildrun.enabled({"GUILD_RUNS": "off"}))
@@ -1057,6 +1175,23 @@ class TheRecord(unittest.TestCase):
         ]
         self.assertEqual(guildrun.rates(rows), {})
 
+    def test_three_boss_timeout_counts_as_progress_and_boss_time(self):
+        rows = [
+            dict(ended("ragefire", "timed out"), bosses_done=3, seconds_inside=1800),
+            dict(ended("ragefire", "timed out"), bosses_done=2, seconds_inside=900),
+            dict(ended("ragefire", "abandoned"), bosses_done=5, seconds_inside=2000),
+            dict(ended("ragefire", "timed out"), seconds_inside=500),
+        ]
+        rate = guildrun.rates(rows)[("ragefire", "15-19", "spec-tank/spec-healer")]
+        pooled = guildrun.door_rate(guildrun.rates(rows), "ragefire", "15-19")
+        self.assertEqual((rate.runs, rate.progress), (4, 1))
+        self.assertEqual(pooled.progress, 1)
+        self.assertIn("about 8 minutes a boss", rate.words())
+        no_bosses = guildrun.rates([dict(ended("ragefire", "wiped"))])[
+            ("ragefire", "15-19", "spec-tank/spec-healer")
+        ]
+        self.assertNotIn("a boss", no_bosses.words())
+
 
 class TheRecordByShape(unittest.TestCase):
     """#584: the social layer's record, keyed by (door, band, shape) with the
@@ -1090,6 +1225,15 @@ class TheRecordByShape(unittest.TestCase):
         self.assertTrue(guildrun.shape_records(wipes)[key].failing)
         self.assertTrue(guildrun.shape_records(away)[key].failing)
         self.assertFalse(guildrun.shape_records(broken)[key].failing)
+
+    def test_progress_timeout_keeps_shape_open(self):
+        key = ("ragefire", "15-19", "spec-tank/spec-healer")
+        wipes = [ended("ragefire", "wiped")] * guildrun.FAILING_RUNS
+        progress = dict(ended("ragefire", "timed out"), bosses_done=3)
+        self.assertTrue(guildrun.shape_records(wipes)[key].failing)
+        record = guildrun.shape_records([progress] + wipes[:-1])[key]
+        self.assertEqual(record.progress, 1)
+        self.assertFalse(record.failing)
 
     def test_an_old_run_ages_out(self):
         now = datetime.datetime(2026, 10, 4, 20, 0, 0)
@@ -1183,6 +1327,23 @@ class AFailingDoorIsRetired(unittest.TestCase):
     def test_one_clear_keeps_it(self):
         rows = [ended("ragefire", "wiped")] * 6 + [ended("ragefire", "cleared")]
         self.assertEqual(guildrun.failing_doors(plan(rows)), set())
+
+    def test_progress_timeout_keeps_door_open(self):
+        wipes = [ended("ragefire", "wiped")] * guildrun.FAILING_RUNS
+        self.assertEqual(guildrun.failing_doors(plan(wipes)), {"ragefire"})
+        progress = dict(ended("ragefire", "timed out"), bosses_done=3)
+        self.assertEqual(guildrun.failing_doors(plan([progress] + wipes[:-1])), set())
+
+    def test_door_option_shows_time_per_boss_only_when_bosses_are_down(self):
+        p = plan(
+            [dict(ended("ragefire", "timed out"), bosses_done=3, seconds_inside=1800)]
+        )
+        text = guildrun.questions(p)["dungeon"]["criteria"]["ragefire"]
+        self.assertIn("about 10 minutes a boss", text)
+        empty = guildrun.questions(plan([ended("ragefire", "wiped")]))["dungeon"][
+            "criteria"
+        ]["ragefire"]
+        self.assertNotIn("a boss", empty)
 
 
 class JevChoosesWithAConfidence(unittest.TestCase):

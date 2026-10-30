@@ -58,7 +58,7 @@ FREE = {"Zug": 30, "Oz": 30}
 OUT = set()
 
 
-def run_pass(granted, sellable=None, names=("Zug", "Oz")):
+def run_pass(granted, sellable=None, names=("Zug", "Oz"), column=""):
     fam = {"leader": {"name": "Zug"}, "names": list(names)}
     rows = [{"status": campaignqueue.QUEUED, "keyword": "ragefire"}]
     with (
@@ -67,6 +67,7 @@ def run_pass(granted, sellable=None, names=("Zug", "Oz")):
         ),
         mock.patch.object(bridge, "_guild_run_members_out", lambda: set(OUT)),
         mock.patch.dict(bridge._VENDOR_SELLABLE, sellable or {}, clear=True),
+        mock.patch.object(bridge, "_current_travel_npc", lambda name: column),
         mock.patch.object(bridge, "_dungeonquest_facts", lambda *a: None),
         mock.patch.object(bridge.dungeonquests, "step", lambda facts: WALK),
         mock.patch.object(bridge.log, "info") as info,
@@ -231,6 +232,63 @@ class TheVendorPassJudgesThePresentMembersTest(unittest.TestCase):
             self.assertEqual(
                 ["Uzza", "Zug"], bridge._present_members(["Uzza", "Zug"], "Zug")
             )
+
+
+class TownErrandsHoldTheColumnTest(unittest.TestCase):
+    """#1243: the bag-room hold yields when a town errand holds the column.
+
+    On the dev realm 2026-10-26, Zug's family (Oz, Uzza, Zork, Zrog, Zug)
+    read "waits for bag room; the vendor trip keeps the travel column" for
+    32 minutes: Zrog sat at two free slots with seven sellable stacks, but
+    Zug's town errand to Camp Taurajo held the travel column while it walked
+    to the hub and waited for Zork at the mailbox, so the vendor trip that
+    would sell Zrog's stacks could not go. Holding for the vendor trip while
+    another errand owns the column holds the family for the whole town errand
+    instead of letting the walk proceed as soon as the column is free.
+
+    The hold waits for the vendor trip only while the column is free or is
+    already carried by the vendor trip itself; a town errand's ground aim
+    means the sale cannot happen yet.
+    """
+
+    def setUp(self):
+        global FREE
+        self._saved = dict(FREE)
+        FREE["Oz"] = 0
+        self.addCleanup(lambda: (FREE.clear(), FREE.update(self._saved)))
+
+    def test_the_hold_yields_when_a_town_errand_holds_the_column(self):
+        held, said = run_pass(
+            True,
+            {"Zug": 0, "Oz": 4},
+            names=("Zug", "Oz"),
+            column="at:1:100.0,200.0,0.0",
+        )
+        # The vendor trip cannot go while the town errand owns the column, so
+        # the family is not held for bag room and the walk goes.
+        self.assertTrue(held)
+        self.assertFalse([s for s in said if "waits for bag room" in s], said)
+        self.assertTrue([s for s in said if "walk the family" in s], said)
+
+    def test_the_hold_still_waits_when_the_column_is_free(self):
+        held, said = run_pass(
+            True,
+            {"Zug": 0, "Oz": 4},
+            names=("Zug", "Oz"),
+            column="",
+        )
+        self.assertFalse(held)
+        self.assertTrue([s for s in said if "waits for bag room" in s], said)
+
+    def test_the_hold_still_waits_when_the_vendor_trip_owns_the_column(self):
+        held, said = run_pass(
+            True,
+            {"Zug": 0, "Oz": 4},
+            names=("Zug", "Oz"),
+            column="vendor",
+        )
+        self.assertFalse(held)
+        self.assertTrue([s for s in said if "waits for bag room" in s], said)
 
 
 if __name__ == "__main__":

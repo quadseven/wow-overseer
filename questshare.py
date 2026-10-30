@@ -74,6 +74,15 @@ QUEST_FLAGS_SHARABLE = 0x8
 NOT_SHARABLE = "not-sharable"
 LOG_FULL = "log-full"
 UNKNOWN = "unknown-quest"
+# Nobody carrying the quest is in the taker's party. DoShare refuses a share
+# across parties ("holder and taker are not in the same party", the
+# Group::IsMember check), so proposing one is proposing a refusal. Measured
+# on the live realm (mod-overseer#969): 7452 of 7824 kind='share' errors in a
+# day were that refusal, offered hourly per pair, about ten errors for every
+# delivery. It is transient - the pair regroups and the next pass offers it -
+# so it is a refusal here, never a backoff: once a holder shares the taker's
+# party, the share is proposed on that very pass.
+NOT_GROUPED = "not-grouped"
 
 
 def is_sharable(quest: questbook.Quest) -> bool:
@@ -140,7 +149,25 @@ def holders(quest_id: int, members) -> tuple:
     return tuple(sorted(m.name for m in members if int(quest_id) in m.held))
 
 
-def donor(quest_id: int, members) -> str:
+def grouped(a: str, b: str, parties) -> bool:
+    """Are `a` and `b` in one party, by `parties` (name -> party key)?
+
+    The key is the party leader's guid, as overseer_snapshot.group_leader
+    writes it: 0 for a character in no party, and absent for one with no
+    fresh snapshot (offline, or not seen yet). Both read as "in no party",
+    because the worldserver refuses either share: an ungrouped holder has no
+    Group, and an offline taker is refused before the party is even checked.
+    `parties` None means the caller has no party facts at all, and then
+    every pair is taken to be grouped - the old behaviour, which the
+    worldserver's own gate still backstops.
+    """
+    if parties is None:
+        return True
+    key = parties.get(a)
+    return bool(key) and key == parties.get(b)
+
+
+def donor(quest_id: int, members, taker: str = "", parties=None) -> str:
     """Which holder should be named as the one handing it over.
 
     Any of them would do - the family stands within three yards of itself and
@@ -148,8 +175,12 @@ def donor(quest_id: int, members) -> str:
     quest giver. Lowest name wins so that identical facts produce an identical
     command row, and a plan recomputed every few minutes does not churn the
     queue with a different giver each time.
+
+    Only a holder in the taker's party can hand it over (DoShare's
+    Group::IsMember gate), so with `parties` the choice is among those, and
+    "" when there is none - the pair the plan refuses as NOT_GROUPED.
     """
-    found = holders(quest_id, members)
+    found = [h for h in holders(quest_id, members) if grouped(h, taker, parties)]
     return found[0] if found else ""
 
 
@@ -197,8 +228,14 @@ def _takers(members) -> list:
     return sorted(members, key=lambda m: (len(m.rewarded), m.name))
 
 
-def plan(members, catalog) -> Plan:
-    """Every share worth making right now, and every one that was refused."""
+def plan(members, catalog, parties=None) -> Plan:
+    """Every share worth making right now, and every one that was refused.
+
+    `parties` is name -> party key (see grouped()). Given, a share whose
+    every holder is outside the taker's party is refused as NOT_GROUPED
+    instead of granted for the worldserver to refuse, and it takes no log
+    slot from a share that can land. Left None, party is not judged here.
+    """
     members = list(members)
     grants = []
     refusals = []
@@ -219,6 +256,8 @@ def plan(members, catalog) -> Plan:
             # rewarded quest is not a candidate - so nothing is filtered out
             # of it here.
             reasons.extend(questbook.blockers(taker, quest, catalog=catalog))
+            if not donor(quest_id, members, taker.name, parties):
+                reasons.append(NOT_GROUPED)
             if reasons:
                 refusals.append(
                     Refusal(
@@ -247,7 +286,7 @@ def plan(members, catalog) -> Plan:
                 continue
             grants.append(
                 Grant(
-                    holder=donor(quest_id, members),
+                    holder=donor(quest_id, members, taker.name, parties),
                     taker=taker.name,
                     quest_id=quest_id,
                     title=quest.title,

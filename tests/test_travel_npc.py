@@ -105,7 +105,12 @@ def _clear() -> str:
     """The one release path. It used to be a free ClearTravelAim(); it is
     TravelAimBook::Release now, on the book that also owns the errand memory
     and the hand-back clock (mod_overseer.cpp, `class TravelAimBook`)."""
-    return _function("void Release(std::string const& name)")
+    # Release is a thin entry point now; the body that escapes the name, erases
+    # the state and stamps the hand-back clock is ReleaseImpl. Both are the one
+    # release path.
+    return _function(
+        "void Release(std::string const& name, std::string const& why = std::string())"
+    ) + _function("void ReleaseImpl(std::string const& name, std::string const& why,")
 
 
 def _book() -> str:
@@ -145,7 +150,11 @@ def _ratchet() -> str:
 
 
 def _resolve() -> str:
-    return _function("bool ResolveTravelTarget(")
+    """The resolve is a classic-ruleset wrapper plus the per-map body it calls
+    (ResolveTravelTargetOnMap). The tests below describe both together."""
+    return _function("bool ResolveTravelTarget(") + _function(
+        "bool ResolveTravelTargetOnMap("
+    )
 
 
 def _index() -> str:
@@ -237,6 +246,22 @@ class TheVocabularyIsSharedBetweenPythonAndTheModule(unittest.TestCase):
 
     def test_the_two_tables_agree_on_which_npc_flag_each_keyword_means(self):
         self.assertEqual(travel.ROLES, _cpp_roles())
+
+    def test_the_guild_petitioner_is_a_keyword_python_can_write_and_say(self):
+        """The module's Guild Master role (both flags). Python must be able to
+        produce it, resolve it as typed, say it out loud, and keep it inside
+        the column; and the single-flag petitioner must stay a different role."""
+        self.assertEqual(
+            "UNIT_NPC_FLAG_PETITIONER | UNIT_NPC_FLAG_TABARDDESIGNER",
+            travel.ROLES["guild petitioner"],
+        )
+        self.assertEqual("guild petitioner", travel.resolve("Guild  Petitioner"))
+        self.assertTrue(travel.is_target("guild petitioner"))
+        self.assertEqual(
+            "the nearest guild petitioner", travel.describe("guild petitioner")
+        )
+        self.assertEqual("petitioner", travel.resolve("guild charter"))
+        self.assertLessEqual(len("guild petitioner"), travel.COLUMN_WIDTH)
 
     def test_every_alias_resolves_to_a_real_role(self):
         for alias, canonical in travel.ALIASES.items():
@@ -833,7 +858,7 @@ class TheErrandIsBounded(unittest.TestCase):
     def test_arriving_releases_it(self):
         code = _code(_drive())
         self.assertIn("TRAVEL_ARRIVED_YARDS", code)
-        self.assertIn("_travelAims.Release(name)", code)
+        self.assertIn("_travelAims.Release(name, ", code)
 
     def test_arrival_is_measured_by_distance_and_not_by_bot_state(self):
         """The bot's own state stops naming the target eight seconds after it
@@ -870,8 +895,10 @@ class TheErrandIsBounded(unittest.TestCase):
         code = _code(_drive())
         self.assertRegex(
             code,
-            r"OverseerDecisions::Ratchet\(\s*state\.progress,"
-            r"\s*distance,\s*std::time\(nullptr\),\s*limits\)",
+            r"OverseerDecisions::RatchetAlongRoute\(\s*state\.progress,"
+            r"\s*state\.progressRoute,\s*distance,"
+            r"\s*_travelAims\.RouteMarkOf\(name\),"
+            r"\s*std::time\(nullptr\),\s*limits\)",
         )
         self.assertRegex(
             _code(_source()),
@@ -916,7 +943,7 @@ class TheErrandIsBounded(unittest.TestCase):
         self.assertIn("now - state.since > limits.patienceSeconds", ratchet)
         code = _code(_drive())
         stalled = code.index("if (progress.stalled)")
-        self.assertIn("_travelAims.Release(name)", code[stalled : stalled + 600])
+        self.assertIn("_travelAims.Release(name, ", code[stalled : stalled + 1400])
 
     def test_the_best_distance_is_forgotten_when_the_errand_changes(self):
         """A closest approach carried into the NEXT errand is a clock that never
@@ -1087,9 +1114,9 @@ class TheTwoDriversDoNotFightOverTheWheel(unittest.TestCase):
         self.assertIn("CanBeSentToNpc(botAI)", _code(_wheel()))
 
 
-# How many `_travelAims.Release(name)` calls DriveTravel holds. The census test
+# How many `_travelAims.Release(name, <why>)` calls DriveTravel holds. The census test
 # below asserts it against the source, and its docstring names each one.
-RELEASE_CENSUS = 12
+RELEASE_CENSUS = 14
 _NUMBER_WORDS = {
     10: "Ten",
     11: "Eleven",
@@ -1111,7 +1138,7 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         self.assertIn("_state.erase(name)", _code(_clear()))
 
     def test_every_release_path_goes_through_the_one_that_erases(self):
-        """Twelve releases inside DriveTravel, and none of them may erase, or
+        """Fourteen releases inside DriveTravel, and none of them may erase, or
         forget to erase, on its own. In source order:
 
           1-2. the death-rate breaker's two (mod-overseer#272);
@@ -1126,7 +1153,13 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
           8-9. mod-overseer#388's flight-discovery pair;
           10.  arrival;
           11.  the backstop;
-          12.  the footing refusal's own bound (mod-overseer#312).
+          12.  the footing refusal's own bound (mod-overseer#312);
+          13.  a respec done on arrival;
+          14.  a training stop leg done on arrival.
+
+        The thirteenth and fourteenth were added after the module's pin moved to
+        the deployed revision: both are successes that end by arriving at a
+        stop the drive was sent to, and both release through the one book.
 
         `test_the_census_lead_names_the_asserted_count` holds the first word
         of this docstring to the number asserted below, so the two cannot
@@ -1208,7 +1241,7 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         the killing here, so there is no shorter version of this walk to wait
         for."""
         code = _code(_drive())
-        self.assertEqual(RELEASE_CENSUS, code.count("_travelAims.Release(name)"))
+        self.assertEqual(RELEASE_CENSUS, code.count("_travelAims.Release(name, "))
         self.assertNotIn("_state.erase(", code)
         # Stronger than "the drive does not erase": it cannot. The memory is a
         # private member of the book, so the only way out is Release.

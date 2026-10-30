@@ -30,6 +30,8 @@ on:
       - '.dockerignore'
       - '.github/workflows/check.yml'
       - '.github/scripts/compile_check.py'
+      - '.github/scripts/check_mod_overseer_pin.py'
+      - '.github/scripts/check_fork_pin_parity.py'
       - '.github/scripts/unittest_parallel.py'
       - 'ruff.toml'
       - 'tests/requirements.txt'
@@ -44,6 +46,8 @@ on:
       - '.dockerignore'
       - '.github/workflows/check.yml'
       - '.github/scripts/compile_check.py'
+      - '.github/scripts/check_mod_overseer_pin.py'
+      - '.github/scripts/check_fork_pin_parity.py'
       - '.github/scripts/unittest_parallel.py'
       - 'ruff.toml'
       - 'tests/requirements.txt'
@@ -77,7 +81,7 @@ jobs:
       # unittest_parallel.py (#1290) runs each tests/test_*.py module in its own
       # process across the runner's cores: discover ran the ~12,600 tests on
       # one core for about nine minutes. Locally, discover still works as is.
-      test-cmd: "python3 .github/scripts/compile_check.py --min-python 3.12 && uv run --no-project --python 3.12 --with-requirements tests/requirements.txt python3 .github/scripts/unittest_parallel.py"
+      test-cmd: "python3 .github/scripts/check_mod_overseer_pin.py && python3 .github/scripts/check_fork_pin_parity.py && python3 .github/scripts/compile_check.py --min-python 3.12 && uv run --no-project --python 3.12 --with-requirements tests/requirements.txt python3 .github/scripts/unittest_parallel.py"
       timeout-minutes: 10
 
   lint:

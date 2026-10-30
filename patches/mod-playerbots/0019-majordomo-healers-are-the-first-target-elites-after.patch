@@ -1,0 +1,79 @@
+Subject: [PATCH] Molten Core: Majordomo Flamewaker Healers are the first target, Elites after
+
+WHY THIS PATCH EXISTS
+
+Majordomo Executus brings 8 adds, 4 Flamewaker Healers (11663) and 4
+Flamewaker Elites (11664), and the encounter ends when all 8 are dead. The
+moltencore strategy only keeps damage off Majordomo himself, so the bots split
+their damage over healers and elites alike, and the healers keep the elites
+alive. This is patch 3 of 4 for the encounter and builds on patches 0017 and
+0018, which edit the same function.
+
+WHAT IT DOES
+
+For damage target selection, the Flamewaker Elites are excluded in the same
+hook that already excludes Majordomo, the reflecting adds and the shielded
+adds, while a Flamewaker Healer is alive and within reach of this bot. Reach
+means: in the bot's attackers list (alive and not immune), not excluded for
+this bot by the Magic Reflection or Damage Shield branches, within spell
+distance, and in line of sight. The exclusion is recomputed on every call, so
+it ends the moment the last reachable healer dies, goes out of reach or is
+excluded: the bot is never left without a target because of a healer it
+cannot hit. This repo's tests pin the single condition for "a healer is in
+reach".
+
+WHAT THIS PATCH DELIBERATELY DOES NOT DO
+
+It does not touch the reflect hold (patch 0017), the Damage Shield step-off
+(patch 0018) or the threat after Teleport Target (patch 4). It uses the DPS
+target exclusion only, so tanks keep their own target selection. It keys on
+the two add entries by id, so no other encounter is affected. It is an
+exclusion, not a priority: the fork exposes no priority hook, so the first
+target is whichever healer the fork's own selection picks.
+
+WHEN THIS PATCH SHOULD BE DELETED
+
+When the fork's Molten Core strategy orders the Majordomo adds itself.
+
+diff --git a/src/Ai/Raid/MC/MCStrategy.cpp b/src/Ai/Raid/MC/MCStrategy.cpp
+index 1a31df1..f7604b3 100644
+--- a/src/Ai/Raid/MC/MCStrategy.cpp
++++ b/src/Ai/Raid/MC/MCStrategy.cpp
+@@ -148,6 +148,37 @@ void RaidMcStrategy::AppendTargetExclusions(GuidSet& exclusions, TargetValueExcl
+             exclusions.insert(guid);
+     }
+ 
++    // Kill order: the Flamewaker Healers die first, the Elites after. While a
++    // healer is alive, this bot can see it, and it is not itself excluded
++    // above, the Elites are left alone. A healer that is excluded, out of
++    // spell range, out of line of sight, dead or immune does not count (the
++    // attackers list holds only valid targets), so the Elites are open to
++    // the bot again and it never waits on a healer it cannot reach.
++    bool const healersFirst = type == TargetValueExclusionType::DpsTarget;
++    bool healerInReach = false;
++    if (healersFirst)
++    {
++        for (ObjectGuid const guid : AI_VALUE(GuidVector, "attackers"))
++        {
++            Unit* unit = botAI->GetUnit(guid);
++            if (unit && unit->GetEntry() == NPC_FLAMEWAKER_HEALER && exclusions.find(guid) == exclusions.end() &&
++                bot->GetDistance(unit) <= sPlayerbotAIConfig.SpellDistance && bot->IsWithinLOSInMap(unit))
++            {
++                healerInReach = true;
++                break;
++            }
++        }
++    }
++    if (healerInReach)
++    {
++        for (ObjectGuid const guid : AI_VALUE(GuidVector, "attackers"))
++        {
++            Unit* unit = botAI->GetUnit(guid);
++            if (unit && unit->GetEntry() == NPC_FLAMEWAKER_ELITE)
++                exclusions.insert(guid);
++        }
++    }
++
+     if (reflecting)
+     {
+         // Casters that held in the last three seconds, counted across the

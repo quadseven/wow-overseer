@@ -1,0 +1,192 @@
+Subject: [PATCH] Molten Core: the Majordomo add holds also count for the AoE checks
+
+WHY THIS PATCH EXISTS
+
+Patches 0017 (casters hold off a Magic Reflection add) and 0018 (melee step
+off a Damage Shield add) take effect only for the damage target exclusion
+type. At the pinned fork revision the Aoe exclusion type is used in one place,
+HasEnoughAoeTargets, which subtracts the excluded adds from the count of
+attackers around a point. It never picks or aims a target. Its callers are
+the generic AoE trigger (a "fire AoE" gate) and the channel checks (Blizzard,
+Mind Sear, Hurricane and the Hunter and Warlock ones) that cancel a running
+channel. Because the two holds did not fire for the Aoe type, a Flamewaker
+Healer (11663) or Flamewaker Elite (11664) carrying Magic Reflection (20619)
+or Damage Shield (21075) still counted for a caster's or a melee bot's AoE
+trigger, so the bot kept area damage going into the pack. This is a
+follow-up to patches 0017 and 0018 and builds on 0017 to 0020, which edit
+the same function. The context of the hunk below deliberately spans the top
+of the function (patch 0020) and the kill order block (patch 0019), so the
+patch cannot apply to a tree that lacks them.
+
+WHAT IT DOES
+
+The caster hold and the melee step-off each accept the Aoe type as well as the
+damage target type. Nothing else changes: the same bot class, the same aura
+ids and the same two add entries, so the conditions are the ones the damage
+target path already uses. A caster with a reflecting add, or a melee bot with
+a Damage Shield add, in the pack sees a lower count for the AoE trigger and
+the channel-cancel checks, so the trigger does not fire or a running channel
+is cancelled sooner, and the bot falls back to its normal single-target
+damage, which already leaves that add alone. The Aoe check of a tank never
+gets here (the function returns early for it, see patch 0020), so every Aoe
+check that does is a non-tank. The Majordomo and Core Rager exclusion already
+applied to it and is unchanged. The kill order (patch 0019) stays on the
+damage target type, and the tank block of patch 0020 is untouched.
+
+The exclusions are recomputed on every call and a hold ends the moment the
+aura drops, so a bot never stays on single-target damage for longer than the
+aura lasts and cannot go idle because of this patch.
+
+KNOWN COST
+
+Ground-targeted or persistent area spells (Blizzard, Hurricane, Mind Sear)
+may not be reflected by Magic Reflection, so cancelling them can lose some
+damage. Melee Whirlwind and Cleave are physical and do take Damage Shield, so
+that half is right.
+
+WHAT THIS PATCH DELIBERATELY DOES NOT DO
+
+It does not touch the kill order, the tank retake, the log line or the aura
+ids, and it does not change how the fork picks targets. Nothing here was
+compiled or run: the fork build is not available where this was written, and
+a live Majordomo run confirms it.
+
+WHEN THIS PATCH SHOULD BE DELETED
+
+When the fork's Molten Core strategy applies the reflect hold and the Damage
+Shield step-off to its AoE checks itself.
+
+diff --git a/src/Ai/Raid/MC/MCStrategy.cpp b/src/Ai/Raid/MC/MCStrategy.cpp
+index e23dc68..8d7fd21 100644
+--- a/src/Ai/Raid/MC/MCStrategy.cpp
++++ b/src/Ai/Raid/MC/MCStrategy.cpp
+@@ -111,121 +111,127 @@ void RaidMcStrategy::InitMultipliers(std::vector<Multiplier*>& multipliers)
+ void RaidMcStrategy::AppendTargetExclusions(GuidSet& exclusions, TargetValueExclusionType type)
+ {
+     if (type == TargetValueExclusionType::Aoe && PlayerbotAI::IsTank(botAI->GetBot()))
+         return;
+ 
+     if (type == TargetValueExclusionType::TankTarget)
+     {
+         // Majordomo's Teleport Target throws his victim, the tank, into the
+         // pit, and the Flamewaker adds it held turn on the raid. Tank target
+         // selection takes its pick from what is left after these exclusions,
+         // so while an add is attacking a player who is not a tank, Majordomo
+         // himself and the adds a tank already holds are excluded. The tank
+         // re-takes the loose add. With no loose add nothing is excluded and
+         // tank selection is the stock one, so a tank is never left without a
+         // target and never pulls Majordomo while an add is loose.
+         AiObjectContext* context = botAI->GetAiObjectContext();
+         bool looseAdd = false;
+         for (ObjectGuid const guid : AI_VALUE(GuidVector, "attackers"))
+         {
+             Unit* unit = botAI->GetUnit(guid);
+             Unit* victim = unit ? unit->GetVictim() : nullptr;
+             Player* victimPlayer = victim ? victim->ToPlayer() : nullptr;
+             if (unit && (unit->GetEntry() == NPC_FLAMEWAKER_HEALER || unit->GetEntry() == NPC_FLAMEWAKER_ELITE) &&
+                 victimPlayer && !PlayerbotAI::IsTank(victimPlayer))
+             {
+                 looseAdd = true;
+                 break;
+             }
+         }
+         if (looseAdd)
+         {
+             for (ObjectGuid const guid : AI_VALUE(GuidVector, "attackers"))
+             {
+                 Unit* unit = botAI->GetUnit(guid);
+                 if (!unit)
+                     continue;
+ 
+                 Unit* victim = unit->GetVictim();
+                 Player* victimPlayer = victim ? victim->ToPlayer() : nullptr;
+                 if (unit->GetEntry() == NPC_MAJORDOMO_EXECUTUS ||
+                     ((unit->GetEntry() == NPC_FLAMEWAKER_HEALER || unit->GetEntry() == NPC_FLAMEWAKER_ELITE) &&
+                      victimPlayer && PlayerbotAI::IsTank(victimPlayer)))
+                     exclusions.insert(guid);
+             }
+         }
+         return;
+     }
+ 
+     // Damage into these is wasted: Core Ragers are unkillable while Golemagg
+     // lives (full heal at 50%), and Majordomo reflects and cannot die; his
+     // encounter ends when the eight adds are dead. Tanks still pick them up
+     // through their own target selection.
+     AiObjectContext* context = botAI->GetAiObjectContext();
+     bool const golemaggAlive = AI_VALUE2(Unit*, "find target", "golemagg the incinerator") != nullptr;
+     // Magic Reflection returns a caster's own spell to the caster. Casters
+     // leave a reflecting add alone: they take another add that is not
+     // reflecting, or they have no target and wait until the aura drops.
+     Player* bot = botAI->GetBot();
+-    bool const casterHolds = type == TargetValueExclusionType::DpsTarget && PlayerbotAI::IsCaster(bot);
++    // The Aoe type is only counted here for a bot that is not a tank: a held
++    // add then no longer counts toward its AoE trigger and channel checks.
++    bool const casterHolds =
++        (type == TargetValueExclusionType::DpsTarget || type == TargetValueExclusionType::Aoe) &&
++        PlayerbotAI::IsCaster(bot);
+     Unit* reflecting = nullptr;
+     // Damage Shield hurts every melee swing into its holder. Melee step off
+     // an add that carries it and take another add, or wait until it drops.
+-    bool const meleeStepsOff = type == TargetValueExclusionType::DpsTarget && PlayerbotAI::IsMelee(bot);
++    bool const meleeStepsOff =
++        (type == TargetValueExclusionType::DpsTarget || type == TargetValueExclusionType::Aoe) &&
++        PlayerbotAI::IsMelee(bot);
+     for (ObjectGuid const guid : AI_VALUE(GuidVector, "attackers"))
+     {
+         Unit* unit = botAI->GetUnit(guid);
+         if (!unit)
+             continue;
+ 
+         if ((golemaggAlive && unit->GetEntry() == NPC_CORE_RAGER) || unit->GetEntry() == NPC_MAJORDOMO_EXECUTUS)
+             exclusions.insert(guid);
+         else if (casterHolds && unit->HasAura(SPELL_MAGIC_REFLECTION) &&
+                  (unit->GetEntry() == NPC_FLAMEWAKER_HEALER || unit->GetEntry() == NPC_FLAMEWAKER_ELITE))
+         {
+             exclusions.insert(guid);
+             reflecting = unit;
+         }
+         else if (meleeStepsOff && unit->HasAura(SPELL_DAMAGE_REFLECTION) &&
+                  (unit->GetEntry() == NPC_FLAMEWAKER_HEALER || unit->GetEntry() == NPC_FLAMEWAKER_ELITE))
+             exclusions.insert(guid);
+     }
+ 
+     // Kill order: the Flamewaker Healers die first, the Elites after. While a
+     // healer is alive, this bot can see it, and it is not itself excluded
+     // above, the Elites are left alone. A healer that is excluded, out of
+     // spell range, out of line of sight, dead or immune does not count (the
+     // attackers list holds only valid targets), so the Elites are open to
+     // the bot again and it never waits on a healer it cannot reach.
+     bool const healersFirst = type == TargetValueExclusionType::DpsTarget;
+     bool healerInReach = false;
+     if (healersFirst)
+     {
+         for (ObjectGuid const guid : AI_VALUE(GuidVector, "attackers"))
+         {
+             Unit* unit = botAI->GetUnit(guid);
+             if (unit && unit->GetEntry() == NPC_FLAMEWAKER_HEALER && exclusions.find(guid) == exclusions.end() &&
+                 bot->GetDistance(unit) <= sPlayerbotAIConfig.SpellDistance && bot->IsWithinLOSInMap(unit))
+             {
+                 healerInReach = true;
+                 break;
+             }
+         }
+     }
+     if (healerInReach)
+     {
+         for (ObjectGuid const guid : AI_VALUE(GuidVector, "attackers"))
+         {
+             Unit* unit = botAI->GetUnit(guid);
+             if (unit && unit->GetEntry() == NPC_FLAMEWAKER_ELITE)
+                 exclusions.insert(guid);
+         }
+     }
+ 
+     if (reflecting)
+     {
+         // Casters that held in the last three seconds, counted across the
+         // raid, and one line per three seconds, not one per bot per tick.
+         static std::mutex holdMutex;
+         static std::unordered_map<ObjectGuid, uint32> heldAtMs;
+         static uint32 lastLogMs = 0;
+         uint32 const nowMs = getMSTime();

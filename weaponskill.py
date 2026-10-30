@@ -136,7 +136,9 @@ class Need:
 @dataclass(frozen=True)
 class Offer:
     """One guild member's weapon-master trip: the need, and the master's spawn
-    (0 when no master of its side on its map teaches the skill)."""
+    (0 when no master of its side teaches the skill on its map or across the
+    water). A map_id other than the member's is a master across the water
+    (choose_far_master): the member crosses first."""
 
     need: Need
     spawn: int = 0
@@ -276,14 +278,38 @@ def _need(name, fact, row):
     )
 
 
-def choose_master(masters, wanted, team: str, map_id: int) -> dict:
-    """The weapon master on `map_id`, of `team`'s side, that teaches the most
-    of `wanted` (trainer spell ids), nearest first. {} when none.
+# THE GROUND A WALK REACHES (#1585). Teldrassil, with Darnassus on it, stands
+# on map 1 but off the Kalimdor mainland: it is reached only by the boat from
+# Auberdine to Rut'theran Village, and a walk from the mainland to a master
+# there ends at the shore without arriving. The pre-ship review of the bridge
+# ship of 846499d8 found an Alliance member could be sent there from
+# Auberdine. Each island is a box of zones.json (its continent's zone box:
+# top/bottom bound x, left/right bound y); a master is walked to only on the
+# ground the walker stands on, and never across the water to an island.
+MAINLAND = ""
+ISLANDS = {
+    1: (("Teldrassil", 8437.5, 11831.25, -1277.083251953125, 3814.583251953125),),
+}
 
-    `masters` rows: entry, name, faction, map_id, x, y, yards, spell, and
-    (bridge._WEAPON_MASTERS_SQL) the spawn guid and the spell's cost. Rows come
-    nearest first, so an entry keeps its nearest spawn.
-    """
+
+def ground_of(map_id, x, y) -> str:
+    """The island (ISLANDS) a point of `map_id` lies on, MAINLAND for any
+    other point, and for one that cannot be read."""
+    try:
+        here, px, py = int(map_id), float(x), float(y)
+    except (TypeError, ValueError):
+        return MAINLAND
+    for name, bottom, top, right, left in ISLANDS.get(here, ()):
+        if bottom <= px <= top and right <= py <= left:
+            return name
+    return MAINLAND
+
+
+def _best_master(masters, wanted, team, map_id, ground, yards) -> dict:
+    """Of `masters` on `map_id`, of `team`'s side, standing on `ground` (None:
+    any), the one that teaches the most of `wanted`, then the fewest `yards`
+    (a function of the row). An entry keeps its spawn of fewest yards, and the
+    row's `yards` is that number."""
     by: dict = {}
     for row in masters or ():
         try:
@@ -291,19 +317,131 @@ def choose_master(masters, wanted, team: str, map_id: int) -> dict:
                 continue
             if MASTER_TEAM.get(int(row["faction"])) != str(team or "").lower():
                 continue
-            if int(row["spell"]) not in wanted:
+            spell = int(row["spell"])
+            if spell not in wanted:
                 continue
+            if ground is not None and ground_of(map_id, row["x"], row["y"]) != ground:
+                continue
+            far = float(yards(row))
+            entry = int(row["entry"])
         except (KeyError, TypeError, ValueError):
             continue
-        entry = int(row["entry"])
-        seen = by.setdefault(entry, dict(row, spells=set()))
-        seen["spells"].add(int(row["spell"]))
+        seen = by.get(entry)
+        spells = (seen["spells"] if seen else set()) | {spell}
+        if seen is None or far < float(seen["yards"]):
+            seen = dict(row, yards=far)
+        seen["spells"] = spells
+        by[entry] = seen
     if not by:
         return {}
     return min(
         by.values(),
         key=lambda r: (-len(r["spells"]), float(r["yards"]), int(r["entry"])),
     )
+
+
+def choose_master(masters, wanted, team: str, map_id: int, at=None) -> dict:
+    """The weapon master on `map_id`, of `team`'s side, that teaches the most
+    of `wanted` (trainer spell ids), nearest first. {} when none.
+
+    `masters` rows: entry, name, faction, map_id, x, y, yards, spell, and
+    (bridge._WEAPON_MASTERS_SQL) the spawn guid and the spell's cost. The
+    yards are from the walker, so an entry keeps its nearest spawn. With `at`
+    (a snapshot reading: pos_x, pos_y) only a master on the walker's own
+    ground (ground_of) is chosen: never one on an island across the water.
+    """
+    ground = None
+    if at:
+        ground = ground_of(map_id, at.get("pos_x"), at.get("pos_y"))
+    return _best_master(
+        masters, wanted, team, map_id, ground, lambda r: float(r["yards"])
+    )
+
+
+# A WEAPON MASTER ACROSS THE WATER (#793). Each side's masters do not all teach
+# every skill, and they stand on both classic continents: on the dev realm the
+# guild passes noted 362 times in a day that no master of the member's side on
+# its map taught the skill it lacked. When none does, the master on the other
+# classic continent is chosen, and the member crosses by its faction's boat or
+# zeppelin (guildjobs.weapon_step, the module's `cross-to-map`). Off the two
+# classic continents nothing is far: the member stays put and the note stands.
+CLASSIC_CONTINENTS = (0, 1)
+
+
+def far_maps(map_id) -> list:
+    """The classic continent a member on `map_id` could cross to for a weapon
+    master: the other one, or none off the classic continents."""
+    try:
+        here = int(map_id)
+    except (TypeError, ValueError):
+        return []
+    if here not in CLASSIC_CONTINENTS:
+        return []
+    return [m for m in CLASSIC_CONTINENTS if m != here]
+
+
+# WHERE A CROSSING SETS THE MEMBER DOWN (#1585). The rows' yards are from the
+# member on its own continent, so they rank nothing on the other one: the
+# master across the water is chosen by its yards from the side's landings
+# there. The module picks the boat or zeppelin by its own price, so each
+# port a side's crossing may land at counts, and a master is ranked from the
+# nearest of them. Each landing is the port's flight point (taxinodes.json
+# node id, x, y): the berth itself is in no table here (crossing.py). Every
+# landing is on the mainland, so a master on an island (ISLANDS) needs a
+# second crossing nothing plans, and is never chosen.
+LANDINGS = {
+    ("alliance", 0): (
+        (7, -3792.260009765625, -783.2899780273438),  # Menethil Harbor
+        (19, -14473.0498046875, 464.1499938964844),  # Booty Bay
+    ),
+    ("alliance", 1): (
+        (26, 6341.3798828125, 557.6799926757812),  # Auberdine
+        (32, -3825.3701171875, -4516.580078125),  # Theramore
+        (80, -894.5900268554688, -3773.010009765625),  # Ratchet
+    ),
+    ("horde", 0): (
+        (11, 1568.6199951171875, 267.9700012207031),  # the Undercity
+        (20, -12414.1796875, 146.2899932861328),  # Grom'gol
+        (18, -14444.2900390625, 509.6199951171875),  # Booty Bay
+    ),
+    ("horde", 1): (
+        (23, 1677.5899658203125, -4315.7099609375),  # Orgrimmar
+        (80, -894.5900268554688, -3773.010009765625),  # Ratchet
+    ),
+}
+
+
+def landing_yards(team, map_id, x, y) -> float:
+    """Yards from (x, y) on `map_id` to the nearest landing of `team`'s
+    crossing there (LANDINGS)."""
+    points = LANDINGS.get((str(team or "").lower(), int(map_id)), ())
+    if not points:
+        raise ValueError("no landing of %r on map %r" % (team, map_id))
+    return min(
+        ((float(x) - lx) ** 2 + (float(y) - ly) ** 2) ** 0.5 for _node, lx, ly in points
+    )
+
+
+def choose_far_master(masters, wanted, team: str, map_id: int) -> dict:
+    """The weapon master of `team`'s side on the classic continent across from
+    `map_id` (far_maps) that teaches the most of `wanted`, nearest the side's
+    landing there (LANDINGS), on the mainland the crossing sets it down on.
+    {} when the member is off the classic continents or none there teaches
+    it. A master on `map_id` itself is choose_master's, never this one's. The
+    chosen row's `yards` are from the landing."""
+    chosen: dict = {}
+    for there in far_maps(map_id):
+        got = _best_master(
+            masters,
+            wanted,
+            team,
+            there,
+            MAINLAND,
+            lambda r, there=there: landing_yards(team, there, r["x"], r["y"]),
+        )
+        if got and (not chosen or len(got["spells"]) > len(chosen["spells"])):
+            chosen = got
+    return chosen
 
 
 def in_reach(master: dict, at: dict, yards: float = IN_REACH_YARDS) -> bool:
