@@ -13,7 +13,8 @@ export function uptime(secs) {
 
 // {text, restarting} for the footer. `deploy` is the realm's field (or
 // undefined before it is known); `state` is api.health's: a stale or error
-// read means the bridge stopped answering, which mid-rollout is a restart.
+// read means the site stopped answering, which mid-rollout is a restart. A
+// null uptime means the bridge has left no fresh start time to read.
 export function marker(deploy, state) {
   const down = state === "stale" || state === "error";
   const starting = !!(deploy && deploy.starting);
@@ -23,5 +24,6 @@ export function marker(deploy, state) {
   }
   if (!deploy || !deploy.commit) return { restarting: false, text: "" };
   const pr = deploy.ship_pr ? " PR #" + deploy.ship_pr : "";
-  return { restarting: false, text: "Build " + deploy.commit + pr + ", up " + uptime(deploy.uptime_seconds) };
+  const up = deploy.uptime_seconds == null ? "uptime unknown" : "up " + uptime(deploy.uptime_seconds);
+  return { restarting: false, text: "Build " + deploy.commit + pr + ", " + up };
 }

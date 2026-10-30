@@ -498,6 +498,10 @@ class Step:
     # One vendorsale.Sale per sell row, so the bridge can name the item and the
     # price of each sale the world delivers (#1592). Empty: no sale is named.
     sales: tuple = ()
+    # The classquest.Move a class quest step carries out, for the shadow
+    # comparison of the step executor (steps.py). Not part of the step's
+    # identity: two steps that write the same rows are the same step.
+    move: object = field(default=None, compare=False, repr=False)
 
 
 def source_for(action, key) -> str:
@@ -693,6 +697,29 @@ def _takers(tailor, members):
 def _bag_in_mail(member) -> bool:
     """Whether a crafted-ladder bag waits in this member's mail, delivered or not."""
     return any(int(x.entry) in BAG_ITEMS for x in member.mail)
+
+
+def _mail_waits(tailor, members) -> list:
+    """One line per member this tailor's bag passes over because a ladder bag
+    already waits in their mail (#1591), naming the member and the bag, so the
+    skip can be read from the log (#1605)."""
+    out = []
+    for m in members or ():
+        if (
+            m.name == tailor.name
+            or not (m.worn_bags or m.family)
+            or (tailor.family and m.family)
+        ):
+            continue
+        waiting = [
+            BAG_ITEMS[int(x.entry)].name for x in m.mail if int(x.entry) in BAG_ITEMS
+        ]
+        if waiting:
+            out.append(
+                "%s is passed over for a bag: a %s waits in its mail"
+                % (m.name, ", a ".join(sorted(set(waiting))))
+            )
+    return out
 
 
 def _recipient(bag, takers):
@@ -1406,6 +1433,8 @@ class CorpsPlan:
     corps: dict
     steps: tuple = ()
     notes: tuple = ()
+    # Members a bag passed over because one waits in their mail (#1605).
+    mail_waits: tuple = ()
 
 
 def _supply_for(tailor, crew, facts, busy, room, recent, travel) -> list:
@@ -1458,8 +1487,11 @@ def _guild_steps(
     notes,
     travel=(NEAR, None),
     at_mailbox=frozenset(),
+    waits=None,
 ) -> None:
-    """One guild's tailors: a step each, or letters from their guildmates."""
+    """One guild's tailors: a step each, or letters from their guildmates.
+
+    `waits`, when given, collects `_mail_waits` for every working tailor."""
     crew, family, trainable_by_map, vendors_by_map = guild_facts
     named = {m.name: m for m in crew}
     letters = 0
@@ -1467,6 +1499,8 @@ def _guild_steps(
         tailor = _working_tailor(post, named, busy, notes)
         if tailor is None:
             continue
+        if waits is not None:
+            waits.extend(_mail_waits(tailor, crew))
         trainable = frozenset((trainable_by_map or {}).get(tailor.map_id, ()))
         vendors = frozenset((vendors_by_map or {}).get(tailor.map_id, ()))
         by_post = patterns_by_post(tailor, crew, vendors_by_map)
@@ -1529,7 +1563,7 @@ def plan(
     for m in members or ():
         by_guild.setdefault(m.guild, []).append(m)
     busy = set(busy or ())
-    steps, notes = [], []
+    steps, notes, waits = [], [], []
     travel = (float(walk_yards), mailbox_yards)
     for guild, posts in sorted(corps.items()):
         facts = (
@@ -1547,9 +1581,13 @@ def plan(
             notes,
             travel,
             frozenset(at_mailbox or ()),
+            waits,
         )
     return CorpsPlan(
-        corps=corps, steps=tuple(steps), notes=tuple(n for n in notes if n)
+        corps=corps,
+        steps=tuple(steps),
+        notes=tuple(n for n in notes if n),
+        mail_waits=tuple(dict.fromkeys(waits)),
     )
 
 

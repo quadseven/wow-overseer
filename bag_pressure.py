@@ -195,6 +195,38 @@ def vendor_refusal(row: dict, keep_names=()) -> str:
     return _vendor_reading(row, keep_names)[1]
 
 
+def freeable_greys(rows, keep_names=()) -> dict:
+    """name -> (gear.Freeable,) for the cheapest grey a vendor would buy.
+
+    The make-room half of a full receiver's hand-off (#550). One per member,
+    lowest total value first and guid to break a tie, so two passes over
+    unchanged bags propose the same stack. Quality 0 is the "grey" a player
+    throws away; quest items, reagents, profession stock and the owner's keep
+    mark are already refused by `_vendor_reading`, and an unreadable row is
+    left out rather than guessed at.
+    """
+    best: dict = {}
+    for row in rows or ():
+        candidate, _why = _vendor_reading(row, keep_names)
+        if candidate is None or int(candidate.item.quality) != 0:
+            continue
+        try:
+            name = str(row["name"])
+            entry = int(row["entry"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        key = (
+            int(candidate.item.sell_price) * int(candidate.count),
+            int(candidate.item_guid),
+        )
+        if candidate.holder not in best or key < best[candidate.holder][0]:
+            best[candidate.holder] = (
+                key,
+                gear.Freeable(guid=int(candidate.item_guid), entry=entry, name=name),
+            )
+    return {name: (free,) for name, (_key, free) in best.items()}
+
+
 # How many kept items a floor reason names by name.
 FLOOR_REASON_EXAMPLES = 3
 
@@ -296,56 +328,6 @@ def destroy_candidates(
 def destroy_command(candidate: SellCandidate) -> str:
     """The world's destroy grammar: the whole stack, nothing allowed."""
     return "destroy guid:%d count:%d" % (candidate.item_guid, candidate.count)
-
-
-# ITEM_QUALITY_POOR: a grey, the only stack destroyed to make room (#550).
-GREY_QUALITY = 0
-
-
-def spare_slots(rows: Iterable[dict], keep_names=()) -> dict:
-    """holder -> the grey stacks that may be destroyed to make room, cheapest
-    first, from carried rows shaped like _VENDOR_ITEMS_SQL's.
-
-    A full shield tank is cleared one slot for a shield (`gear.deliverable`),
-    and a grey is what a player throws away for that slot. Only quality 0,
-    only a row that says `quest_item` is false, never an owner-kept name.
-    """
-    out: dict = {}
-    for row in rows:
-        if owner_keeps(row.get("name", ""), keep_names):
-            continue
-        try:
-            if int(row["quality"]) != GREY_QUALITY:
-                continue
-            if "quest_item" not in row or bool(row["quest_item"]):
-                continue
-            count = int(row["count"])
-            spare = gear.Spare(
-                holder=str(row["holder"]),
-                guid=int(row["item_guid"]),
-                count=count,
-                name=str(row["name"]),
-                value=int(row["sell_price"] or 0) * count,
-            )
-        except (KeyError, TypeError, ValueError):
-            continue
-        if spare.holder and spare.guid > 0 and spare.count > 0:
-            out.setdefault(spare.holder, []).append(spare)
-    return {
-        name: tuple(sorted(held, key=lambda s: (s.value, s.guid)))
-        for name, held in out.items()
-    }
-
-
-def clear_candidate(spare: gear.Spare) -> SellCandidate:
-    """The destroy row's stack for one Spare, so `destroy_command` and the
-    bridge's `_insert_destroy` serve the make-room step unchanged."""
-    return SellCandidate(
-        holder=spare.holder,
-        item_guid=int(spare.guid),
-        count=int(spare.count),
-        item=ItemForSale(quality=GREY_QUALITY, sell_price=int(spare.value)),
-    )
 
 
 def vendor_batch(
@@ -1739,6 +1721,27 @@ def gear_candidates(
     return tuple(out)
 
 
+def corps_bag_kept(row: dict) -> bool:
+    """Is this carried bag one the guild corps sewed and still owes a guildmate?
+
+    A corps bag is a ladder bag (guildcorps.BAG_ITEMS) whose crafter is the
+    holder: the master made it to post, so it is stock, not a spare (#1667).
+    The vendor pass runs in a different cycle from the corps and cannot see
+    who is waiting, so the rule is conservative: a master's own crafted
+    ladder bag is never sold. A bag the holder bought or looted has no
+    crafter and stays sellable.
+
+    guildcorps is imported here, not at the top: it reaches armory through
+    guildroute, and armory imports this module, so a top import is a cycle.
+    """
+    import guildcorps
+
+    try:
+        return int(row["entry"]) in guildcorps.BAG_ITEMS and bool(row["self_made"])
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def bag_candidates(
     rows: Iterable[dict], equipped_slots: dict, keep_names=()
 ) -> tuple[SellCandidate, ...]:
@@ -1766,6 +1769,8 @@ def bag_candidates(
     out = []
     for row in rows:
         if owner_keeps(row.get("name", ""), keep_names):
+            continue
+        if corps_bag_kept(row):
             continue
         try:
             if int(row["item_class"]) != 1:
@@ -2049,6 +2054,7 @@ def family_gifts(
     position_rows=None,
     free_slots=None,
     at_mailbox=None,
+    freeables=None,
 ):
     """The carried pieces a sibling should be handed, and who should have them.
 
@@ -2096,6 +2102,11 @@ def family_gifts(
     piece nobody in the family can use, which on a measured cycle is most of
     the bag and is the VENDOR half's business - it is already reported there,
     and repeating it here would bury the six lines that are actionable.
+
+    `freeables` is the `bag_pressure.freeable_greys` read for the same
+    family, handed through to `gear.deliverable` unchanged: a full sibling
+    who stands beside the giver can give the giver a junk stack first, which
+    is the one slot the hand-off needs (#550). None keeps the old refusal.
     """
     kept = [
         row for row in gear_rows if not owner_keeps(row.get("name", ""), keep_names)
@@ -2107,6 +2118,7 @@ def family_gifts(
         position_rows=position_rows,
         free_slots=free_slots,
         at_mailbox=at_mailbox,
+        freeables=freeables,
     )
 
 
@@ -2235,7 +2247,7 @@ def guild_gear_gifts(
     position_rows=None,
     free_slots=None,
     at_mailbox=None,
-    spares=None,
+    freeables=None,
 ):
     """Return useful BoE gear in family-first, guild-second order.
 
@@ -2245,8 +2257,9 @@ def guild_gear_gifts(
     pieces left unclaimed. A guild name without observed presence is never
     evidence that a `give` can land.
 
-    `spares` are the greys `spare_slots` found in the takers' bags; a full
-    shield tank has one destroyed to make room for a shield (#550).
+    `freeables` is the `freeable_greys` read of the takers' bags. Only a
+    taker with a shield due may spend it (#550): a full shield tank beside the
+    giver gives the giver a grey first, and no other guildmate is touched.
     """
     family = {str(name) for name in (family_names or ())}
     by_name = {str(member.name): member for member in (members or ())}
@@ -2270,12 +2283,22 @@ def guild_gear_gifts(
     # guild pass must never duplicate the family handoff writer.
     # A guildmate is rarely beside the family, so a holder standing at a
     # mailbox posts it instead (#189); otherwise the piece waits.
+    shielding = {
+        option.taker
+        for grant in guild_grants
+        for option in (grant,) + tuple(grant.alternates)
+        if option.makes_room
+    }
     return gear.deliverable(
         guild_grants,
         position_rows=position_rows,
         free_slots=free_slots,
         at_mailbox=at_mailbox,
-        spares=spares,
+        freeables={
+            name: stacks
+            for name, stacks in dict(freeables or {}).items()
+            if name in shielding
+        },
     )
 
 
@@ -2287,7 +2310,7 @@ def guild_gear_gifts_from_rows(
     position_rows=None,
     free_slots=None,
     at_mailbox=None,
-    spares=None,
+    freeables=None,
 ):
     """Parse bridge rows and apply the guild BoE policy.
 
@@ -2314,7 +2337,7 @@ def guild_gear_gifts_from_rows(
         position_rows=position_rows,
         free_slots=free_slots,
         at_mailbox=at_mailbox,
-        spares=spares,
+        freeables=freeables,
     )
 
 

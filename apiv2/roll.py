@@ -24,14 +24,25 @@ What the realm can and cannot tell:
 Beside those, `uptime_seconds` is the worldserver's uptime from
 acore_auth.uptime, which the Now strip shows next to the build. Any field that
 cannot be read is null and `unmeasured` says why, so the app can say "not
-measured" instead of inventing a value.
+measured" instead of inventing a value. A failed uptime read (the auth
+database unreachable) fails soft the same way: the route still answers.
+
+`deploy` is this overseer process's own build (deployinfo.info(), the fields
+/api/realm also carries, there timed from the bridge): its commit, the previous
+one, when it was built and how long it has run, so "is merge X live?" is
+answered by comparing deploy.commit with the merge commit. Unset values read
+"unknown".
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
+import deployinfo
 import realm
+
+log = logging.getLogger(__name__)
 
 BUILD_SQL = "SELECT name, value, source, reported_at FROM overseer_build"
 VERSION_SQL = "SELECT core_version FROM acore_world.version LIMIT 1"
@@ -49,6 +60,10 @@ WHY = {
     "with mod-overseer#1071 reports the commit its deployment declares.",
     "uptime_seconds": "The worldserver's uptime table (acore_auth.uptime) has no row.",
 }
+UPTIME_UNREAD = (
+    "The worldserver's uptime table (acore_auth.uptime) could not be read: "
+    "the auth database did not answer."
+)
 
 
 def _module_commit(banner: dict) -> str | None:
@@ -86,6 +101,9 @@ def build_roll(
     version_rows: list,
     uptime_rows: list,
     now: datetime | None = None,
+    *,
+    uptime_unread: bool = False,
+    deploy: dict | None = None,
 ) -> dict:
     """Rows in, the roll's JSON out. Pure: every input may be empty."""
     banner = realm.build_realm(build_rows, version_rows, [], now=now)
@@ -101,6 +119,10 @@ def build_roll(
         "core_revision": banner["core_revision"] or None,
     }
     payload["unmeasured"] = {k: why for k, why in WHY.items() if payload[k] is None}
+    if uptime_unread and payload["uptime_seconds"] is None:
+        payload["unmeasured"]["uptime_seconds"] = UPTIME_UNREAD
+    if deploy is not None:
+        payload["deploy"] = deploy
     return payload
 
 
@@ -108,8 +130,19 @@ def roll(_query: dict, ctx) -> tuple[int, dict]:
     rd = ctx.read
     build_rows = rd.rows(BUILD_SQL, what="overseer_build")
     version_rows = rd.rows(VERSION_SQL, what="acore_world.version")
-    uptime_rows = rd.rows(UPTIME_SQL, what="acore_auth.uptime")
-    return 200, build_roll(build_rows, version_rows, uptime_rows)
+    unread = False
+    try:
+        uptime_rows = rd.rows(UPTIME_SQL, what="acore_auth.uptime")
+    except Exception:  # noqa: BLE001 - the start time fails soft, the route answers
+        log.warning("acore_auth.uptime unreadable; uptime not measured", exc_info=True)
+        uptime_rows, unread = [], True
+    return 200, build_roll(
+        build_rows,
+        version_rows,
+        uptime_rows,
+        uptime_unread=unread,
+        deploy=deployinfo.info(deployinfo.PROCESS_STARTED),
+    )
 
 
 ROUTES = {"/api/v2/roll": roll}

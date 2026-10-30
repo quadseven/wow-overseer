@@ -828,9 +828,21 @@ class UpstreamWallTest(unittest.TestCase):
     ROOT = pathlib.Path(__file__).resolve().parents[1]
     MODULE = modsource.MODULE
 
-    def test_train_roster_still_calls_initskills(self):
-        source = modsource.read(self.MODULE, encoding="utf-8")
-        self.assertIn("factory.InitSkills();", source)
+    def test_train_roster_no_longer_calls_initskills(self):
+        """The premise this test once pinned is gone, on purpose.
+
+        TrainRoster used to call PlayerbotFactory::InitSkills (and
+        InitClassSpells, InitAvailableSpells) on every level change, which
+        granted skills and spells with no trainer and no gold. The module is
+        natural-only now (operator ruling 2026-10-12): TrainRoster only spends
+        talent points. If a reader puts any of those factory grants back, this
+        is the test that says the family is being handed skills again.
+        """
+        code = _strip_comments(modsource.read(self.MODULE, encoding="utf-8"))
+        for grant in ("InitSkills", "InitClassSpells", "InitAvailableSpells"):
+            self.assertNotIn(grant, code, grant)
+        train = _strip_comments(_module_function("void TrainRoster("))
+        self.assertIn("SpendTalents(bot, static_cast<uint32>(specTab));", train)
 
     def test_the_module_grants_no_profession_without_a_trainer(self):
         """A profession may only ever arrive by being bought from a trainer.
@@ -865,21 +877,46 @@ class UpstreamWallTest(unittest.TestCase):
         for cheat in ("bot->learnSpell(", "InitTradeSkills"):
             self.assertNotIn(cheat, code, cheat)
 
-        # 2. THE ONLY SetSkill IS THE ZEROING ONE. A SetSkill with a non-zero
-        #    value would be a granted skill wearing an unlearn's clothes.
-        self.assertEqual(
-            ["bot->SetSkill(static_cast<uint16>(skill), 0, 0, 0);"],
-            [
-                line.strip()
-                for line in code.splitlines()
-                if "->SetSkill(" in line and not line.lstrip().startswith("//")
-            ],
-        )
+        # 2. EVERY SetSkill ONLY TAKES AWAY. A SetSkill with a non-zero
+        #    value would be a granted skill wearing an unlearn's clothes. The
+        #    module now also carries the operator's naturalize paths, which
+        #    lower a skill under its cap and never raise one; those are the
+        #    only non-zeroing calls allowed, by exact statement, and each must
+        #    sit under a comment that says it is natural-only.
+        zeroing = {
+            "bot->SetSkill(static_cast<uint16>(skill), 0, 0, 0);",
+            "player->SetSkill(SKILL_RIDING, 0, 0, 0);",
+            "player->SetSkill(skill, 0, 0, 0);",
+        }
+        lowering = {
+            "player->SetSkill(skill, player->GetSkillStep(skill), value, max);",
+            "player->SetSkill(skill, player->GetSkillStep(skill), "
+            "static_cast<uint16>(value), player->GetPureMaxSkillValue(skill));",
+            "player->SetSkill(skill, player->GetSkillStep(skill), "
+            "static_cast<uint16>(d.value), player->GetPureMaxSkillValue(skill));",
+        }
+        calls = [
+            " ".join(m.group(0).split())
+            for m in re.finditer(r"[\w>-]+->SetSkill\([^;]*;", code)
+        ]
+        self.assertTrue(calls, "no SetSkill found at all")
+        self.assertEqual([], [c for c in calls if c not in zeroing | lowering])
+        raw_lines = source.splitlines()
+        for m in re.finditer(r"[\w>-]+->SetSkill\(", code):
+            statement = " ".join(
+                code[m.start() : code.index(";", m.start()) + 1].split()
+            )
+            if statement in lowering:
+                line = code.count("\n", 0, m.start())
+                above = "\n".join(raw_lines[max(0, line - 6) : line + 1])
+                self.assertIn("natural-only", above, statement)
 
         # 3. THE DECLARED END STATE IS THE ONLY PERMISSION. Both verbs consult
         #    it, in opposite directions: nothing outside `wanted` is learned,
         #    and nothing inside it is ever unlearned.
-        learn = _module_function("bool TrainOnArrival(")
+        # TrainOnArrival delegates the rank purchase to TrainRankOnArrival,
+        # which is where the permission is consulted.
+        learn = _module_function("bool TrainRankOnArrival(")
         unlearn = _module_function("void UnlearnProfession(")
         self.assertIn("if (!secondary && !plan.wanted.count(skill))", learn)
         self.assertIn("if (plan.wanted.count(skill))", unlearn)
@@ -899,14 +936,15 @@ class UpstreamWallTest(unittest.TestCase):
         Without the guard, freeing Og's slot for tailoring would have handed it
         straight back to the sweep within sixty seconds, forever.
         """
-        train = _module_function("void TrainRoster(")
-        shut = train.index("bot->SetFreePrimaryProfessions(0);")
-        sweep = train.index("factory.InitAvailableSpells();")
-        restore = train.index(
-            "bot->SetFreePrimaryProfessions(static_cast<uint16>(freeProfessionSlots));"
-        )
-        self.assertLess(shut, sweep, "the slots must be shut BEFORE the sweep")
-        self.assertLess(sweep, restore, "and reopened after it")
+        # The sweep is gone from the module (natural-only, operator ruling
+        # 2026-10-12), so the slot juggling that guarded it is gone too. What
+        # has to hold now is the thing that guard existed for: nothing in the
+        # module walks the trainer templates and learns without an NPC.
+        code = _strip_comments(modsource.read(self.MODULE, encoding="utf-8"))
+        self.assertNotIn("InitAvailableSpells", code)
+        self.assertNotIn("SetFreePrimaryProfessions(0)", code)
+        train = _strip_comments(_module_function("void TrainRoster("))
+        self.assertNotIn("factory.", train)
 
     def test_an_unlearn_refuses_a_cost_nobody_agreed_to(self):
         """Dropping a profession destroys skill progress, so the request has to
@@ -926,8 +964,12 @@ class UpstreamWallTest(unittest.TestCase):
         fishing trainers too, so the nearest one to Elwynn is very unlikely to
         be a tailor. Resolving without narrowing would walk a mage confidently
         to a cook, log an arrival, and teach him nothing."""
-        resolve = _module_function("bool ResolveTravelTarget(")
-        self.assertIn("uint32 wantSkill = 0", resolve)
+        # The per-map body is its own function behind the classic-ruleset
+        # wrapper; the signature default is on the wrapper, the narrowing in
+        # the body.
+        wrapper = _module_function("bool ResolveTravelTarget(")
+        self.assertIn("uint32 wantSkill = 0", wrapper)
+        resolve = _module_function("bool ResolveTravelTargetOnMap(")
         self.assertIn(
             "if (narrowToSkill && !TrainerStartedSkills(spawn.entry).count(wantSkill))",
             resolve,
