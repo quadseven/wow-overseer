@@ -5965,6 +5965,19 @@ def pvp_step(m, aim, move, cap, kept=None):
     return None
 
 
+def _pvp_full_bags(m, aim, cap, kept):
+    """(step, doing, held) for an honor buy with no free bag slot: the make-room
+    step, or no step and the reason the buy is held."""
+    room_step = _pvp_room_step(m, aim, cap, kept)
+    if room_step is not None:
+        return room_step, f"{aim.line}: makes room for PvP buy", False
+    return (
+        None,
+        f"{aim.line}: no free bag slot for PvP buy and nothing to sell",
+        False,
+    )
+
+
 def _pvp_first(m, pvp, recent, cap, kept=None, pet_wanted=False):
     """(step, doing, held): a member playing PvP for an upgrade.
 
@@ -5992,19 +6005,11 @@ def _pvp_first(m, pvp, recent, cap, kept=None, pet_wanted=False):
         return None, "", False
     if _cooling(m, pvpgear.ACTION, recent):
         return None, "", False
-    if move.kind == pvpgear.BUY and _pvp_walk_cooling(m.name, recent):
-        return None, "", False
-    if move.kind == pvpgear.BUY and _pvp_buy_cooling(m.name, recent):
-        return None, "", False
-    if move.kind == pvpgear.BUY and m.free_slots is not None and m.free_slots < 1:
-        room_step = _pvp_room_step(m, aim, cap, kept)
-        if room_step is not None:
-            return room_step, f"{aim.line}: makes room for PvP buy", False
-        return (
-            None,
-            f"{aim.line}: no free bag slot for PvP buy and nothing to sell",
-            False,
-        )
+    if move.kind == pvpgear.BUY:
+        if _pvp_walk_cooling(m.name, recent) or _pvp_buy_cooling(m.name, recent):
+            return None, "", False
+        if m.free_slots is not None and m.free_slots < 1:
+            return _pvp_full_bags(m, aim, cap, kept)
     step = pvp_step(m, aim, move, cap, kept)
     return step, (aim.line + ": " + move.said) if step else "", move.holds
 

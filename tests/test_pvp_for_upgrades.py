@@ -402,6 +402,28 @@ class TheJobStep(unittest.TestCase):
             "Should re-aim and generate PvP step after cooldown with free slot",
         )
 
+    def test_a_buy_with_full_bags_and_nothing_to_sell_holds_with_a_reason(self):
+        member = job_member(free_slots=0, bag_slots=16, carried=())
+        plan = guildjobs.plan([member], pvp=pvp_for(held=6000))
+        self.assertFalse(any(s.action in ("pvp", "room") for s in plan.steps))
+        self.assertIn("nothing to sell", plan.lines["Auren"])
+
+    def test_a_refused_buy_is_not_re_aimed_while_the_bags_stay_full(self):
+        member = job_member(free_slots=0, bag_slots=16, carried=())
+        old = (
+            guildjobs.Recent(
+                name="Auren",
+                action="pvp",
+                age_minutes=61,
+                status="error",
+                command="buy 19325",
+                result="bags cannot take the item",
+                walk=False,
+            ),
+        )
+        plan = guildjobs.plan([member], pvp=pvp_for(held=6000), recent=old)
+        self.assertFalse(any(s.action == "pvp" for s in plan.steps))
+
 
 class GuildChat(unittest.TestCase):
     def test_the_first_asks_and_a_guildmate_answers(self):
