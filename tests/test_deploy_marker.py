@@ -1,6 +1,7 @@
 """The bridge says which commit it runs; the dashboard shows it and a rollout.
 
-Pins the startup line, the /api/realm `deploy` fields, the Dockerfile and
+Pins the startup line, the /api/realm `deploy` fields and the bridge start
+they read, the Dockerfile and
 build workflow wiring, and the dashboard marker (app/deploy.js, under node).
 """
 
@@ -85,14 +86,13 @@ class DeployFields(unittest.TestCase):
             "OVERSEER_SHIP_PR": "1400",
         }
         with mock.patch.dict(os.environ, env, clear=True):
-            fresh = deployinfo.info(now=deployinfo._started + 5)
-            settled = deployinfo.info(
-                now=deployinfo._started + deployinfo.STARTING_SECONDS + 1
-            )
+            fresh = deployinfo.info(1000, now=1005)
+            settled = deployinfo.info(1000, now=1000 + deployinfo.STARTING_SECONDS + 1)
         self.assertEqual(fresh["commit"], "0123456789ab")
         self.assertEqual(fresh["previous"], "fedcba987654")
         self.assertEqual(fresh["ship_pr"], 1400)
         self.assertEqual(fresh["uptime_seconds"], 5)
+        self.assertEqual(fresh["started_at"], 1000)
         self.assertTrue(fresh["starting"])
         self.assertFalse(settled["starting"])
         self.assertEqual(
@@ -108,13 +108,26 @@ class DeployFields(unittest.TestCase):
             },
         )
 
-    def test_realm_reports_deploy(self):
+    def test_unknown_start_reports_no_uptime(self):
+        got = deployinfo.info(None, now=1005)
+        self.assertIsNone(got["started_at"])
+        self.assertIsNone(got["uptime_seconds"])
+        self.assertFalse(got["starting"])
+
+    def realm_deploy(self, answer, now):
+        """/api/realm's `deploy`, the memo read answering `answer`. The map
+        server's own clock sits far from any bridge start, so a marker read
+        from this process cannot pass."""
         import test_app_shell as shell
 
+        reader = shell.map_server.realmread.Memory({deployinfo.BRIDGE_READ_SQL: answer})
         h = shell.FakeHandler("/api/realm")
         with (
             mock.patch.object(shell.map_server, "_fetch_realm", return_value={}),
             mock.patch.object(shell.map_server.realm, "build_realm", return_value={}),
+            mock.patch.object(
+                shell.map_server.realmread, "Session", lambda _connect: reader
+            ),
             mock.patch.dict(
                 os.environ,
                 {
@@ -124,17 +137,64 @@ class DeployFields(unittest.TestCase):
                 },
                 clear=False,
             ),
-            mock.patch.object(deployinfo, "_started", 1000),
-            mock.patch.object(deployinfo.time, "time", return_value=1012),
+            mock.patch.object(deployinfo, "PROCESS_STARTED", 1),
+            mock.patch.object(deployinfo.time, "time", return_value=now),
         ):
             h._realm({})
-        deploy = json.loads(h.body())["deploy"]
+        return json.loads(h.body())["deploy"]
+
+    def test_realm_reports_the_bridge_start(self):
+        deploy = self.realm_deploy([{"since": 1000.0}], now=1012)
         self.assertEqual(deploy["commit"], "0123456789ab")
         self.assertEqual(deploy["previous"], "fedcba987654")
         self.assertEqual(deploy["ship_pr"], 1400)
         self.assertEqual(deploy["uptime_seconds"], 12)
         self.assertTrue(deploy["starting"])
         self.assertEqual(deploy["started_at"], 1000)
+
+    def test_bridge_only_restart_moves_uptime(self):
+        before = self.realm_deploy([{"since": 1000.0}], now=9000)
+        self.assertEqual(before["uptime_seconds"], 8000)
+        self.assertFalse(before["starting"])
+        after = self.realm_deploy([{"since": 8995.0}], now=9000)
+        self.assertEqual(after["uptime_seconds"], 5)
+        self.assertTrue(after["starting"])
+
+    def test_no_bridge_row_reports_no_uptime(self):
+        deploy = self.realm_deploy([], now=9000)
+        self.assertIsNone(deploy["uptime_seconds"])
+        self.assertFalse(deploy["starting"])
+
+    def test_failed_bridge_read_keeps_the_banner(self):
+        with self.assertLogs("wow-map", level="ERROR"):
+            deploy = self.realm_deploy(RuntimeError("down"), now=9000)
+        self.assertEqual(deploy["commit"], "0123456789ab")
+        self.assertIsNone(deploy["uptime_seconds"])
+
+    def test_beat_leaves_this_process_start_in_the_memo(self):
+        bridge = _import_bridge()
+        with (
+            mock.patch.object(bridge, "_memo_upsert") as upsert,
+            mock.patch.object(deployinfo, "PROCESS_STARTED", 1000),
+            mock.patch.object(bridge.time, "time", return_value=5000),
+        ):
+            bridge._deploy_beat()
+        upsert.assert_called_once_with(
+            deployinfo.MEMO_KIND,
+            deployinfo.MEMO_SUBJECT,
+            {},
+            1000,
+            5000 + deployinfo.KEEP_SECONDS,
+        )
+
+    def test_beat_runs_in_both_start_modes(self):
+        bridge = _import_bridge()
+        beat = [p for p in bridge.PASSES if p.name == "_deploy_beat_loop"]
+        self.assertEqual(len(beat), 1)
+        self.assertTrue(beat[0].headless)
+
+    def test_row_outlives_a_missed_beat(self):
+        self.assertGreater(deployinfo.KEEP_SECONDS, 2 * deployinfo.BEAT_SECONDS)
 
     def test_image_and_workflow_carry_the_commit(self):
         docker = (HERE / "Dockerfile").read_text(encoding="utf-8")
@@ -176,6 +236,21 @@ class DashboardMarker(unittest.TestCase):
         self.assertEqual(
             self.marker(d, "fresh"),
             {"restarting": False, "text": "Build 0123456789ab PR #1400, up 2h"},
+        )
+
+    def test_unknown_uptime_is_said_not_shown_as_zero(self):
+        d = {
+            "commit": "0123456789ab",
+            "ship_pr": 1400,
+            "uptime_seconds": None,
+            "starting": False,
+        }
+        self.assertEqual(
+            self.marker(d, "fresh"),
+            {
+                "restarting": False,
+                "text": "Build 0123456789ab PR #1400, uptime unknown",
+            },
         )
 
     def test_starting_says_restarting(self):

@@ -3022,6 +3022,12 @@ def _memo_upsert(kind: str, subject: str, value, since: float, expires: float) -
         log.exception("bridge memo: could not write %s memo for %s", kind, subject)
 
 
+def _deploy_beat() -> None:
+    """Renew this process's start time for the site's marker (deployinfo.py)."""
+    _memo_upsert(deployinfo.MEMO_KIND, deployinfo.MEMO_SUBJECT, {},
+                 deployinfo.PROCESS_STARTED, time.time() + deployinfo.KEEP_SECONDS)
+
+
 def _memo_read(kind: str) -> dict:
     try:
         with _connect() as conn, conn.cursor() as cur:
@@ -7061,6 +7067,7 @@ class _Pass:
 # forever, burying the lines that matter. _poll_outcomes is harmless headless:
 # its _pending map is filled by on_message, which never fires.
 PASSES = (
+    _Pass("_deploy_beat_loop"),
     _Pass("_poll_outcomes"),
     _Pass("_protect_characters"),
     _Pass("_narrate_events"),
@@ -16242,6 +16249,16 @@ class Bridge(discord.Client):
             if status not in ("", "pending", "claimed", "verifying"):
                 return status, str((row or {}).get("detail") or "")
         return "", ""
+
+    async def _deploy_beat_loop(self) -> None:
+        """The start time the site reads for its deploy marker, kept fresh."""
+        await self.wait_until_ready()
+        while not self.is_closed():
+            try:
+                await asyncio.to_thread(_deploy_beat)
+            except Exception:
+                log.exception("deploy beat failed; retrying next cycle")
+            await asyncio.sleep(deployinfo.BEAT_SECONDS)
 
     async def _guild_post_loop(self) -> None:
         """The guild's own post (#625), on its own clock."""
