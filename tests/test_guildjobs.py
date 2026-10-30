@@ -108,6 +108,33 @@ class TheTradeSplit(unittest.TestCase):
         )
         self.assertEqual(sum(guildjobs.COOKING in v for v in trades.values()), 2)
 
+    def test_the_cook_is_never_the_tailor_or_alchemist_pick(self):
+        """#761: Cave's cook pick was its tailor pick (both sort by fewest
+        primaries, then name), and plan_corps gives a member one post with the
+        tailor's first, so the cook post stood empty."""
+        none = {guildjobs.COOKING: (0, 0)}
+        crew = [
+            member("Able", skills={**none, M: (60, 75)}),
+            member("Baker", skills={**none, M: (60, 75)}),
+            member("Cutter", skills={**none, H: (40, 75), S: (40, 75)}),
+            member("Digger", skills={**none, H: (40, 75), M: (40, 75)}),
+        ]
+        tailors = frozenset({"Able"})
+        alchemists = frozenset({"Baker"})
+        cooks = guildjobs.choose_cooks(crew, (), tailors, alchemists)
+        self.assertEqual(cooks, frozenset({"Cutter"}))
+
+    def test_plan_keeps_the_cook_off_the_tailor_and_alchemist_picks(self):
+        none = {guildjobs.COOKING: (0, 0)}
+        crew = [member("M%d" % i, level=20, skills=dict(none)) for i in range(10)]
+        trades = plan(crew).trades
+        tailors = {n for n, t in trades.items() if guildjobs.TAILORING in t}
+        alchemists = {n for n, t in trades.items() if guildjobs.ALCHEMY in t}
+        cooks = {n for n, t in trades.items() if guildjobs.COOKING in t}
+        self.assertTrue(tailors and alchemists)
+        self.assertEqual(len(cooks), 1)
+        self.assertFalse(cooks & (tailors | alchemists))
+
     def test_cooking_ranks_start_and_advance_at_the_rank_thresholds(self):
         self.assertEqual(guildjobs.next_rank(guildjobs.COOKING, 0, 0, 5).spell, 2550)
         self.assertEqual(guildjobs.next_rank(guildjobs.COOKING, 72, 75, 10).spell, 3102)
@@ -501,6 +528,46 @@ class TheLeatherAndAlchemyLadders(unittest.TestCase):
         self.assertEqual([row.command for row in step.rows], ["818", "2538"])
         self.assertEqual(step.repeat, 1)
 
+    def test_a_new_cook_cooks_the_boar_meat_it_carries(self):
+        """#761: the Bonkers cook stood at Cooking 1/75 with no cooking cast,
+        because the 1-49 route eats only Stringy Wolf Meat. Roasted Boar Meat
+        is auto-learned and grants points from 1 to 85, so it is cooked too."""
+        m = member(
+            "Cook",
+            level=29,
+            skills={guildjobs.COOKING: (1, 75), H: (40, 75)},
+            carried=(stack(1, 769, 3, subclass=8),),
+        )
+        step = guildjobs._craft_step(m)
+        self.assertIsNotNone(step)
+        self.assertEqual([row.command for row in step.rows], ["818", "2540"])
+        self.assertLessEqual({769, 2672}, guildjobs.craft_entries(m))
+
+    def test_the_cook_casts_its_meat_before_bandaging_its_linen(self):
+        """One craft step per pass: with First Aid first, a cook carrying
+        cloth never reached the meat in its bags (#761)."""
+        m = member(
+            "Cook",
+            level=29,
+            skills={
+                guildjobs.COOKING: (1, 75),
+                guildjobs.FIRST_AID: (40, 75),
+                H: (40, 75),
+            },
+            carried=(stack(1, LINEN, 20, subclass=5), stack(2, 2672, 2, subclass=8)),
+        )
+        step = guildjobs._craft_step(m)
+        self.assertEqual([row.command for row in step.rows], ["818", "2538"])
+
+    def test_past_the_meat_band_no_auto_learned_rung_is_cast(self):
+        m = member(
+            "Cook",
+            level=29,
+            skills={guildjobs.COOKING: (85, 150), H: (40, 75)},
+            carried=(stack(1, 769, 3, subclass=8), stack(2, 2672, 3, subclass=8)),
+        )
+        self.assertIsNone(guildjobs._craft_recipe(m, guildjobs.COOKING)[0])
+
     def test_a_failed_learn_walk_cools_down_on_the_skill(self):
         failed = (guildjobs.Recent("Maker", "train", 30, "error", LEATHER),)
         step = only_step(plan([self.maker(LEATHER, 60, 75)], recent=failed), "Maker")
@@ -761,7 +828,79 @@ class ATrainerWalkThatKeepsFailing(unittest.TestCase):
             )
         )
         self.assertIsNone(malformed.skill_id)
-        self.assertIn('"SELECT id, target_name, command, source, status, "', BRIDGE)
+        self.assertIn(
+            '"SELECT id, target_name, command, source, status, target_arg, "', BRIDGE
+        )
+
+    def test_riding_refusal_waits_on_its_recorded_map_and_resumes_after_a_map_change(
+        self,
+    ):
+        refusal = "no trainer on this map will teach this character that skill"
+        (recent,) = guildjobs.recent_from_rows(
+            (
+                {
+                    "target_name": "Keeper",
+                    "command": "walk-to-trainer skill:762 learn:33388 max:20000",
+                    "source": "guildjobs:riding:Keeper",
+                    "status": "error",
+                    "age": 5,
+                    "target_arg": "530",
+                    "result": json.dumps(
+                        {
+                            "outcome": "refused",
+                            "reason": refusal,
+                            "retryable": False,
+                        },
+                        separators=(",", ":"),
+                    ),
+                },
+            )
+        )
+        order = guildjobs.purse.order("Keeper", 60, 80000, 37600, 9, 0)
+        stranded = member("Keeper", level=60, money=80000, map_id=530, purse=order)
+
+        step, note = guildjobs.riding_step(stranded, (recent,))
+
+        self.assertIsNone(step)
+        self.assertEqual(
+            note, "Keeper waits on the map change before walking to a riding trainer"
+        )
+
+        moved = member("Keeper", level=60, money=80000, map_id=1, purse=order)
+        step, note = guildjobs.riding_step(moved, (recent,))
+
+        self.assertEqual(guildjobs.RIDING_ACTION, step.action)
+        self.assertEqual("", note)
+
+    def test_another_riding_refusal_keeps_the_180_minute_cooldown(self):
+        order = guildjobs.purse.order("Keeper", 60, 80000, 37600, 9, 0)
+        m = member("Keeper", level=60, money=80000, map_id=530, purse=order)
+
+        def refusal_at(age):
+            return guildjobs.recent_from_rows(
+                (
+                    {
+                        "target_name": "Keeper",
+                        "command": "walk-to-trainer skill:762 learn:33388 max:20000",
+                        "source": "guildjobs:riding:Keeper",
+                        "status": "error",
+                        "age": age,
+                        "target_arg": "530",
+                        "result": (
+                            '{"outcome":"refused","reason":"died on the way",'
+                            '"retryable":true}'
+                        ),
+                    },
+                )
+            )
+
+        step, note = guildjobs.riding_step(m, refusal_at(5))
+        self.assertIsNone(step)
+        self.assertEqual("", note)
+
+        step, note = guildjobs.riding_step(m, refusal_at(181))
+        self.assertEqual(guildjobs.RIDING_ACTION, step.action)
+        self.assertEqual("", note)
 
 
 class ASkinnersField(unittest.TestCase):
@@ -808,6 +947,21 @@ class ASkinnersField(unittest.TestCase):
 
 
 class WhereMaterialsGo(unittest.TestCase):
+    def test_a_maintenance_member_posts_a_single_gathered_herb(self):
+        m = member(
+            "Keeper",
+            skills={H: (40, 75), M: (40, 75)},
+            carried=(
+                stack(11, 2447, 1, subclass=9, name="Peacebloom"),
+                stack(12, 2901, 1, item_class=2),
+            ),
+        )
+
+        step = only_step(plan([m]), "Keeper")
+
+        self.assertEqual(step.action, "post")
+        self.assertEqual(step.rows[0].command, "send item:11 subject:Guild materials")
+
     def test_herbs_go_to_the_guilds_alchemist_and_ore_to_the_bank(self):
         m = member(
             "Keeper",
@@ -909,10 +1063,12 @@ class WhereMaterialsGo(unittest.TestCase):
     def test_a_guild_with_no_bank_tab_posts_nothing_to_its_master(self):
         """#395: Bonkers owned no bank tab on 2026-09-28, and every pass posted
         meat, eggs and linen to Zug 'for the Materials tab'."""
+        # A cook past the meat's band: below 85 it casts its Chunk of Boar
+        # Meat instead of posting it (#761).
         m = member(
             "Keeper",
             guild="Bonkers",
-            skills={H: (40, 75), M: (40, 75)},
+            skills={H: (40, 75), M: (40, 75), guildjobs.COOKING: (85, 150)},
             carried=(
                 stack(21, 769, 20, subclass=8, name="Chunk of Boar Meat"),
                 stack(13, 2901, 1, item_class=2),
@@ -1046,6 +1202,28 @@ class Summoners(unittest.TestCase):
         self.assertEqual(doors["A"].keyword, "ragefire")
         self.assertTrue(doors["A"].on_call)
         self.assertFalse(doors["B"].on_call)
+
+    def test_a_raid_night_puts_a_summoner_on_call_at_blackrock_mountain(self):
+        stones = (
+            guildjobs.Spot("gameobject", 900, 0, -7480.0, -1020.0, "Meeting Stone"),
+        )
+        crew = [self.warlock("A", level=55, map_id=0), self.warlock("B", level=40)]
+        doors = guildjobs.assign_doors(
+            crew, guildjobs.entrances(), stones, "moltencore"
+        )
+        self.assertEqual(doors["A"].keyword, "moltencore")
+        self.assertEqual(doors["A"].stone.spawn, 900)
+        self.assertTrue(doors["A"].on_call)
+        self.assertFalse(doors["B"].on_call if "B" in doors else False)
+
+    def test_a_warlock_under_the_raid_floor_is_not_put_on_call_for_it(self):
+        stones = (
+            guildjobs.Spot("gameobject", 900, 0, -7480.0, -1020.0, "Meeting Stone"),
+        )
+        doors = guildjobs.assign_doors(
+            [self.warlock("B", level=40)], guildjobs.entrances(), stones, "moltencore"
+        )
+        self.assertFalse(any(d.on_call for d in doors.values()))
 
     def test_on_call_stands_close_and_is_released_when_campaign_door_changes(self):
         w = self.warlock("A", level=21, x=1811.0, y=-4389.0)

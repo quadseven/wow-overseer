@@ -31,6 +31,7 @@ world.
 
 from __future__ import annotations
 
+import mcencounters
 import raidroles
 import raidteams
 
@@ -400,7 +401,9 @@ def build_lineup(
     (the tree the seat needs), `respec` (it plays another tree now), `buff`
     and `label`. Each group carries `buffs` and `missing_buffs`. The lineup
     carries `gaps` (seats no class in the guild can fill), `recruit_classes`
-    (the classes to recruit for them) and `buff_cover`.
+    (the classes to recruit for them), `buff_cover`, and `encounters` with
+    `encounter_line` (what each Molten Core boss asks for and what the
+    lineup lacks for it, mcencounters.py).
     """
     guaranteed = frozenset(guaranteed)
     # AN APPROVED GUILD IS SEATED AS APPROVED (raidteams, 2026-10-05): the
@@ -444,6 +447,7 @@ def build_lineup(
         "damage": max(0, wanted["damage"] - len(damage)),
     }
     cover = _buff_cover(groups, placed)
+    encounters = mcencounters.compose(placed)
     recruit = _recruit_classes(gaps, cover, count)
     return {
         "groups": groups,
@@ -463,6 +467,8 @@ def build_lineup(
         "gaps": gaps,
         "recruit_classes": recruit,
         "buff_cover": cover,
+        "encounters": encounters,
+        "encounter_line": mcencounters.encounter_line(encounters),
         "counts": {
             "raiders": len(placed),
             "maintenance": len(upkeep),
@@ -474,6 +480,67 @@ def build_lineup(
         "composition": _composition(placed),
         "roles_line": roles_line(groups, wanted),
         "gap_line": gap_line(gaps, recruit, cover, count),
+    }
+
+
+def plan_molten_core(members: list) -> dict:
+    """Plan an unapproved guild roster into the 8/11/21 Molten Core template."""
+    pool = [raidroles.with_spec(m) for m in members if m.get("name")]
+    groups = [[] for _ in range(8)]
+    sources = _take(pool, 8, frozenset({PALADIN, SHAMAN}))
+    tanks = _take(pool, 8, TANKS)
+    healers = _take(pool, 11, HEALERS)
+    damage = sources + _take(pool, 21 - len(sources))
+    roles = [
+        [
+            _placed(member, raidroles.SEAT_TANK, OFF_TANK, frozenset())
+            for member in tanks
+        ],
+        [
+            _placed(member, raidroles.SEAT_HEALER, HEALER_WORD, frozenset())
+            for member in healers
+        ],
+        [
+            _placed(member, raidroles.SEAT_DAMAGE, DAMAGE_WORD, frozenset())
+            for member in damage
+        ],
+    ]
+    assigned = set()
+    for group in groups:
+        source = next(
+            (
+                m
+                for role in roles
+                for m in role
+                if m["name"] not in assigned and m.get("class_id") in (PALADIN, SHAMAN)
+            ),
+            None,
+        )
+        if source:
+            group.append(source)
+            assigned.add(source["name"])
+    for role in roles:
+        for member in role:
+            if member["name"] in assigned:
+                continue
+            group = min(
+                groups, key=lambda current: (len(current), groups.index(current))
+            )
+            group.append(member)
+            assigned.add(member["name"])
+    return {
+        "groups": [
+            {
+                "number": index + 1,
+                "members": group,
+                "fire_resistance": any(
+                    member.get("class_id") in (PALADIN, SHAMAN) for member in group
+                ),
+            }
+            for index, group in enumerate(groups)
+        ],
+        "wanted": {"tanks": 8, "healers": 11, "damage": 21},
+        "surplus": pool,
     }
 
 
@@ -585,6 +652,7 @@ def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
     wanted.update(_seat_counts(raidteams.seats(team)))
     gaps = _seat_counts(open_seats)
     cover = _buff_cover(groups, placed)
+    encounters = mcencounters.compose(placed)
     recruit = list(dict.fromkeys(s.class_id for s in open_seats))
     return {
         "groups": groups,
@@ -604,6 +672,8 @@ def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
         "recruits": [s._asdict() for s in open_seats],
         "approved": team,
         "buff_cover": cover,
+        "encounters": encounters,
+        "encounter_line": mcencounters.encounter_line(encounters),
         "counts": {
             "raiders": len(placed),
             "maintenance": len(upkeep),

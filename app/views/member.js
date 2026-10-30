@@ -26,6 +26,7 @@ import { guildSlug } from "../families.js";
 import { badgesCard, CSS as ACH_CSS } from "./_achievements.js";
 import { pageKey, since, markSeen } from "../models/gearchanges.js";
 import { renderFeed } from "./gearchanges.js";
+import { classSpellName, wowheadSpellUrl } from "../models/spellnames.js";
 
 const TABS = [["overview", "Overview"], ["gear", "Gear"], ["quests", "Quests"], ["bags", "Inventory"], ["activity", "Activity"]];
 const TAB_OF = { upgrades: "gear", bank: "bags" };
@@ -144,7 +145,7 @@ function overview(ctx, m, roster) {
 // ---- Gear and Standing --------------------------------------------------------------------
 
 function spellChip(s, tone) {
-  return html`<a class="${"st-spell " + tone}" href="${"https://www.wowhead.com/wotlk/spell=" + s.spell}" target="_blank" rel="noopener"><i class="${tone === "warn" ? "ph ph-coins" : "ph ph-circle"}" aria-hidden="true"></i>Spell ${s.spell} <span class="dim mb-s">L${s.level}${s.cost ? " | " + gold(s.cost) : ""}</span></a>`;
+  return html`<a class="${"st-spell " + tone}" href="${wowheadSpellUrl(s.spell)}" target="_blank" rel="noopener" title="Spell ${s.spell}"><i class="${tone === "warn" ? "ph ph-coins" : "ph ph-circle"}" aria-hidden="true"></i>${classSpellName(s.spell)} <span class="dim mb-s">L${s.level}${s.cost ? " | " + gold(s.cost) : ""}</span></a>`;
 }
 
 function tradeLine(t) {
@@ -164,9 +165,9 @@ function standing(tr, name) {
   const s = tr.spells || {};
   const tradeRows = (tr.trades || []).map(tradeLine);
   return html`<div class="card st-card"><div class="row mb-between"><span class="mb-b">Standing: what ${name} has learned, and has not</span><span class="muted mb-s">${tr.line}</span></div>
-<div class="st-groups"><div class="st-group"><span class="mb-kick ok">Learned</span><span>${plural((s.learned || []).length, "class spell")} from the trainer</span></div>
+<div class="st-groups"><div class="st-group"><span class="mb-kick ok">Learned</span><span>${plural((s.learned || []).length, "class spell")} from the trainer</span>${(s.learned || []).length ? html`<div class="st-spells">${s.learned.map((x) => spellChip(x, ""))}</div>` : ""}</div>
 <div class="st-group"><span class="mb-kick warn">Trainable now</span>${(s.trainable || []).length ? html`<span class="muted mb-s">${plural(s.trainable.length, "spell")}, ${gold(s.trainable_cost || 0)} at a class trainer</span><div class="st-spells">${s.trainable.map((x) => spellChip(x, "warn"))}</div>` : html`<span class="muted">nothing waiting at the trainer</span>`}${(s.needs || []).length ? html`<span class="dim mb-s">${plural(s.needs.length, "spell")} at this level need another spell or talent first</span>` : ""}</div>
-<div class="st-group"><span class="mb-kick">Above level</span>${(s.above || []).length ? html`<span class="muted mb-s">${plural(s.above.length, "spell")} up to level ${tr.cap}, the next at level ${s.next_level}</span><div class="st-spells">${s.above.slice(0, 8).map((x) => spellChip(x, "dim"))}</div>` : html`<span class="muted">nothing more up to level ${tr.cap}</span>`}</div></div>
+<div class="st-group"><span class="mb-kick">Above level</span>${(s.above || []).length ? html`<span class="muted mb-s">${plural(s.above.length, "spell")} up to level ${tr.cap}, the next at level ${s.next_level}</span><div class="st-spells">${s.above.map((x) => spellChip(x, "dim"))}</div>` : html`<span class="muted">nothing more up to level ${tr.cap}</span>`}</div></div>
 ${tradeRows.length ? html`<div class="st-trades"><span class="mb-kick">Trades</span>${tradeRows}</div>` : ""}<span class="dim mb-s">${tr.basis}</span></div>`;
 }
 
@@ -199,6 +200,7 @@ const STEP = {
   done: ["var(--ok)", "ph-fill ph-check-circle", "Turned in."],
   ready: ["var(--ok)", "ph ph-check-circle", "Complete, waiting to be handed in."],
   "in progress": ["var(--color-accent-300)", "ph ph-circle-dashed", "In the quest log."],
+  failed: ["var(--warn)", "ph-fill ph-x-circle", "Failed in the quest log: dropped and taken again."],
   blocked: ["var(--warn)", "ph-fill ph-hand-palm", ""],
   open: ["var(--color-neutral-400)", "ph ph-circle", "Open at this level, not taken."],
   locked: ["var(--color-neutral-500)", "ph ph-lock-simple", ""],

@@ -171,6 +171,7 @@ a.g-row:hover { background: var(--color-neutral-900); color: var(--color-text); 
 .g-carried { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; color: var(--color-neutral-300); }
 .g-chat { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px; box-shadow: 0 1px 0 var(--color-neutral-900); }
 .g-chat-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.g-chat-meta { display: inline-flex; gap: 8px; align-items: baseline; flex-shrink: 0; }
 .g-said { color: var(--color-neutral-200); overflow-wrap: anywhere; }
 .g-answers {
   display: flex; flex-direction: column; gap: 2px; padding-left: 12px; font-size: var(--fs-2);

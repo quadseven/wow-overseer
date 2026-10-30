@@ -38,6 +38,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Answers: current aura samples for the fixed family rosters.
 - Example: `overseer get /api/auras`
 
+## `GET /api/chat/party`
+
+- Query: `family`, `after`
+- Answers: lines to read aloud.
+- Example: `overseer get /api/chat/party family=grug`
+
 ## `GET /api/client/bags`
 
 - Query: `name`
@@ -223,6 +229,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Query: `name`
 - Answers: the commands a member was given, with the realm's answers.
 - Example: `overseer get /api/v2/activity name=Grug`
+
+## `GET /api/v2/audit`
+
+- Query: none
+- Answers: the six fields for every roster and online guild member.
+- Example: `overseer get /api/v2/audit`
 
 ## `GET /api/v2/chronicle`
 

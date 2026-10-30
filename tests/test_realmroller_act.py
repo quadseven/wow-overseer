@@ -715,12 +715,14 @@ class Roll(Harness):
         self.step(5)
         self.assertFalse(self.gh.prs[pr["number"]]["merged"])
 
-    def test_a_closed_gate_holds_a_ready_pr(self):
+    def test_family_members_inside_do_not_hold_a_ready_pr(self):
+        # The family gate is retired: family members in an instance no longer
+        # block a ready roll.
         pr = self.open_roll()
         self.site = _site(grug=2)
         notes = self.step(5)
-        self.assertFalse(self.gh.prs[pr["number"]]["merged"])
-        self.assertIn("in an instance", " ".join(notes))
+        self.assertTrue(self.gh.prs[pr["number"]]["merged"])
+        self.assertNotIn("in an instance", " ".join(notes))
 
     def test_failed_checks_close_the_roll_and_pause(self):
         pr = self.open_roll()

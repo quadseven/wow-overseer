@@ -467,10 +467,97 @@ class AStalledFamilyIsStuck(unittest.TestCase):
         self.assertNotIn("death", str([p for q, p in log if q == sql]))
 
 
+class ABossCreditIsMovement(unittest.TestCase):
+    """#1314, 2026-10-21 03:42Z: the Members page called Zug stuck 33 minutes
+    ("No quest, level or gear change for the family for 32 minutes") on his
+    ninth Blackfathom run, while the run's event log credited encounters at
+    03:33Z and 03:39Z. A tenth run of one dungeon gives no quest, level or
+    equip; a boss falling is its progress."""
+
+    def stuck(self, moved, credits=None):
+        view = members.stuck_view(family_roster(moved=moved, credits=credits))
+        return {m["name"]: m for m in view["members"]}
+
+    def test_a_boss_credit_six_minutes_ago_is_not_a_stall(self):
+        by = self.stuck(
+            {"Zug": NOW - 40 * 60},
+            {"Zug": {"at": NOW - 6 * 60, "detail": "1 encounter credited"}},
+        )
+        self.assertNotIn("Zug", by)
+
+    def test_no_boss_credit_for_25_minutes_inside_is_still_a_stall(self):
+        # The dungeon run's phase changes and dc_on rows are never read: only a
+        # `boss` row reaches `credits`, so a party standing still inside or
+        # wiping on a loop is still stalled.
+        by = self.stuck(
+            {"Zug": NOW - 40 * 60},
+            {"Zug": {"at": NOW - 25 * 60, "detail": "1 encounter credited"}},
+        )
+        self.assertEqual(
+            ("stall", NOW - 25 * 60), (by["Zug"]["kind"], by["Zug"]["since"])
+        )
+
+    def test_the_stall_names_the_last_boss_credit_when_it_is_newest(self):
+        by = self.stuck(
+            {"Zug": NOW - 40 * 60},
+            {
+                "Zug": {
+                    "at": NOW - 25 * 60,
+                    "detail": "1 encounter credited, 2 in all (mask 1 -> 3)",
+                }
+            },
+        )
+        self.assertTrue(
+            by["Zug"]["blocker"].startswith(
+                "No quest, level, gear change or boss credit for the family for "
+                "25 minutes (last boss credit: 1 encounter credited, 2 in all). "
+            ),
+            by["Zug"]["blocker"],
+        )
+
+    def test_an_older_boss_credit_is_not_named(self):
+        by = self.stuck(
+            {"Zug": NOW - 25 * 60},
+            {"Zug": {"at": NOW - 50 * 60, "detail": "1 encounter credited"}},
+        )
+        self.assertEqual(NOW - 25 * 60, by["Zug"]["since"])
+        self.assertTrue(
+            by["Zug"]["blocker"].startswith("No quest, level or gear change for")
+        )
+
+    def test_the_read_counts_only_boss_rows_of_the_run_log(self):
+        rules = roster_rules() + [
+            (("FROM overseer_event",), [{"name": "Grug", "at": NOW - 3600}]),
+            (
+                ("FROM overseer_dungeon_run_event",),
+                lambda params: (
+                    [
+                        {
+                            "name": "Grug",
+                            "at": NOW - 300,
+                            "detail": "1 encounter credited",
+                        }
+                    ]
+                    if params and params[-1] == "boss"
+                    else []
+                ),
+            ),
+        ]
+        ctx, log = ctx_for(rules, server())
+        code, payload = members.stuck({}, ctx)
+        self.assertEqual(200, code)
+        self.assertNotIn("Grug", {m["name"] for m in payload["members"]})
+        sql, params = next(
+            (q, p) for q, p in log if "FROM overseer_dungeon_run_event" in q
+        )
+        self.assertIn("kind = %s", sql)
+        self.assertEqual("boss", params[-1])
+
+
 # ---- upgrades now --------------------------------------------------------------------
 
 
-def family_roster(asks=(), moved=None):
+def family_roster(asks=(), moved=None, credits=None):
     """Two families as the stuck read of 2026-10-16 02:59Z saw them (#1059):
     Zug's four followers by a leader holding nothing, three at 0 yards and one
     on another map, and Grug held on a vendor with Grog at his side and Og
@@ -518,7 +605,16 @@ def family_roster(asks=(), moved=None):
     chars = [{"name": n, "level": 30, "class_id": 1, "race": 2} for n in names]
     readings = {n: {"online": True, "life": "alive", "fresh_at": NOW} for n in names}
     return members.build(
-        fams, [], chars, [], asks, facts, NOW, readings=readings, moved=moved
+        fams,
+        [],
+        chars,
+        [],
+        asks,
+        facts,
+        NOW,
+        readings=readings,
+        moved=moved,
+        credits=credits,
     )
 
 
@@ -902,6 +998,21 @@ class TheClassChain(unittest.TestCase):
         self.assertEqual(steps["The Islander"], "locked")
         blocked = classchain.chains(self.book(), char, status, {1}, set(), 3)
         self.assertEqual(blocked[0]["steps"][2]["state"], "blocked")
+
+    def test_a_failed_quest_is_failed_not_in_progress(self):
+        # LOG_SQL reads status 5 (failed) since #1497; it was drawn as
+        # "in progress" until the member dropped it (#1511).
+        char = {"class_id": 1, "race": 1, "level": 20}
+        status = {2: classchain.classquest.STATUS_FAILED}
+        found = classchain.chains(self.book(), char, status, {1}, set(), 0)
+        steps = {s["title"]: s["state"] for c in found for s in c["steps"]}
+        self.assertEqual(steps["Bartleby the Drunk"], "failed")
+
+    def test_the_chain_view_draws_a_failed_step(self):
+        src = (HERE / "app" / "views" / "member.js").read_text(encoding="utf-8")
+        table = src[src.index("const STEP = {") :]
+        table = table[: table.index("};")]
+        self.assertIn("  failed: [", table)
 
     def test_a_known_reward_spell_is_a_done_chain(self):
         char = {"class_id": 1, "race": 1, "level": 40}

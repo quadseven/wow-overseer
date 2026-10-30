@@ -363,3 +363,18 @@ def plan(candidates, attempts, at_vendor=False) -> Plan:
             else dataclasses.replace(candidate, count=count)
         )
     return Plan(write=tuple(write), skipped=skipped)
+
+
+def all_answered(candidates, attempts) -> bool:
+    """True when the world has already answered every one of these candidates.
+
+    Asked as if the holder stood at a vendor, so a range refusal does not
+    count as an answer, and an open row does not either: a queued sale still
+    needs its holder at a counter. What is left is a stack already sold or
+    refused for good, which no vendor visit can change (#1261).
+    """
+    candidates = tuple(candidates)
+    if not candidates:
+        return False
+    answer = plan(candidates, attempts, at_vendor=True)
+    return not answer.write and "already queued" not in answer.skipped
