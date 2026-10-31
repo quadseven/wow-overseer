@@ -1364,6 +1364,8 @@ def deliverable(
                 walls[wall].append(option.taker)
                 continue
             chosen = replace(option, frees=frees)
+            if frees:
+                giveable[option.taker] = giveable[option.taker][1:]
             break
         if chosen is None:
             notes.append(
