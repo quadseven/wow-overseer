@@ -5,6 +5,7 @@ out, bytes over HTTP. No logic here that tests would want to reach.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import hmac
 import json
@@ -4393,6 +4394,36 @@ def _v2_context(read) -> _V2Context:
     )
 
 
+# THE ONE 503 AND SEND for a GET answered as handler(query, ctx) -> (status,
+# payload): /api/v2 through apiv2.handle, and every v1 route moved to that shape
+# (_get_route). One reader per request: it connects on the first read, so a
+# request refused before any read opens nothing. A handler that raises is
+# logged as `what` and answers 503, so a dead database reads as "world
+# unreachable", never a blank page. `sender` is the request handler, or the
+# stand-in a shared read builds against (_Captured).
+def _answer(sender, handler, query: dict, what: str) -> None:
+    try:
+        with realmread.Session(_connect) as rd:
+            code, payload = handler(query, _v2_context(rd))
+        body = json.dumps(payload).encode()
+    except Exception:
+        log.exception("%s", what)
+        sender._send(503, "application/json", b'{"error": "world unreachable"}')
+        return
+    sender._send(code, "application/json", body)
+
+
+def _get_route(what: str):
+    """A v1 GET handler(query, ctx) -> (status, payload) as the method
+    GET_ROUTES calls, answered by _answer; `what` is its failure's log line."""
+    def wrap(handler):
+        @functools.wraps(handler)
+        def route(sender, query: dict) -> None:
+            _answer(sender, handler, query, what)
+        return route
+    return wrap
+
+
 def _etag(body: bytes) -> str:
     """A strong validator for a response body: same bytes, same tag."""
     return '"' + hashlib.sha256(body).hexdigest()[:24] + '"'
@@ -4932,16 +4963,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _v2(self, path: str, query: dict) -> None:
         """GET /api/v2/... - the reads the operations app adds (apiv2/)."""
-        try:
-            # One reader per request: it connects on the first read, so a
-            # request refused before any read opens nothing.
-            with realmread.Session(_connect) as rd:
-                code, payload = apiv2.handle(path, query, _v2_context(rd))
-        except Exception:
-            log.exception("v2 read failed: %s", path)
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
-            return
-        self._send(code, "application/json", json.dumps(payload).encode())
+        _answer(self, lambda q, ctx: apiv2.handle(path, q, ctx), query,
+                "v2 read failed: " + path)
 
     def _jquery_file(self, _query: dict) -> None:
         # Wowhead's model viewer needs jQuery. Vendored (3.7.1, verified
@@ -4971,7 +4994,8 @@ class Handler(BaseHTTPRequestHandler):
         # the same committed geometry.
         self._send_file("shapes.json", "application/json")
 
-    def _realm(self, _query: dict) -> None:
+    @_get_route("realm query failed")
+    def _realm(_query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/realm - which world this page is showing, and its build.
 
         FIRST AMONG THE HANDLERS, above even the map, and outside every window
@@ -4990,37 +5014,33 @@ class Handler(BaseHTTPRequestHandler):
         page rather than here: index.html ships the not-verified state as its
         static markup, so a page that never hears from this endpoint at all
         shows the alarm rather than nothing.
+
+        A read that fails answers 503 (_answer), and the page keeps its banner.
         """
-        try:
-            payload = realm.build_realm(**_fetch_realm())
-            # The page this server would serve now; an open tab compares it
-            # with the one it was served as (basepath.PAGE_PLACEHOLDER).
-            payload["page"] = _page_version()
-            payload["app_page"] = _page_version("index.html")
-            # The page and every app script and stylesheet (appbuild.py):
-            # a deploy that changes only app/ moves this and not `page`.
-            payload["app_build"] = appbuild.fingerprint(HERE)
-            # Which commit runs, and how long the bridge has (deployinfo.py).
-            payload["deploy"] = deployinfo.info(_bridge_started())
-            payload.update(_realm_families())
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            log.exception("realm query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        payload = realm.build_realm(**_fetch_realm())
+        # The page this server would serve now; an open tab compares it
+        # with the one it was served as (basepath.PAGE_PLACEHOLDER).
+        payload["page"] = _page_version()
+        payload["app_page"] = _page_version("index.html")
+        # The page and every app script and stylesheet (appbuild.py):
+        # a deploy that changes only app/ moves this and not `page`.
+        payload["app_build"] = appbuild.fingerprint(HERE)
+        # Which commit runs, and how long the bridge has (deployinfo.py).
+        payload["deploy"] = deployinfo.info(_bridge_started())
+        payload.update(_realm_families())
+        return 200, payload
 
     def _healthz(self, _query: dict) -> None:
         self._send(200, "text/plain", b"ok")
 
-    def _map(self, _query: dict) -> None:
-        """GET /api/map - every fresh snapshot row as placed dots."""
-        try:
-            payload = build_payload(_fetch_rows(), GEO)
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # The page shows its stale banner on failed polls; a dead
-            # database must read as "stale", never a blank page.
-            log.exception("map query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+    @_get_route("map query failed")
+    def _map(_query: dict, _ctx) -> tuple[int, dict]:
+        """GET /api/map - every fresh snapshot row as placed dots.
+
+        A failed read is _answer's 503: the page shows its stale banner on
+        failed polls, so a dead database reads as "stale", never a blank page.
+        """
+        return 200, build_payload(_fetch_rows(), GEO)
 
     def _family(self, query: dict) -> None:
         """GET /api/family[?family=X] - a five, with enough to decide whether to look.
