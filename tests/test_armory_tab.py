@@ -147,7 +147,7 @@ class TheTwoFamiliesAndTheGuilds(unittest.TestCase):
         member = self.server[self.server.index("def _armory_member") :]
         member = member[: member.index("def _read_json_body")]
         self.assertIn("if not FAMILIES.may_answer(wanted):", member)
-        self.assertIn("self._send(404", member)
+        self.assertIn('return 404, {"error": "not a guild member"}', member)
 
 
 if __name__ == "__main__":

@@ -640,5 +640,99 @@ class TheWallIsAHandler(unittest.TestCase):
         self.assertIn("wall status feed failed", logs.output[0])
 
 
+# Each frame: (route, what its log lines call it, the read it starts with).
+FRAMES = (
+    ("/api/client/bags", "bags", "_fetch_client_inventory"),
+    ("/api/client/bank", "bank", "_fetch_client_inventory"),
+    ("/api/client/guildbank", "guild bank", "_fetch_client_guild_bank"),
+    ("/api/client/quests", "quests", "_fetch_questlog"),
+)
+
+
+class TheClientFramesAnswerThroughTheSharedAnswer(unittest.TestCase):
+    """The frames keep their 404, their 503 and their 500 with the same bytes
+    and log lines; only the outage is called an outage."""
+
+    def setUp(self):
+        families = mock.patch.object(map_server, "FAMILIES")
+        self.families = families.start()
+        self.families.families.return_value = {"a": ["Grug"]}
+        self.families.may_answer.return_value = False
+        self.addCleanup(families.stop)
+        driver = mock.patch.object(map_server, "pymysql", fake_driver())
+        self.driver = driver.start()
+        self.addCleanup(driver.stop)
+        policy = mock.patch.object(map_server, "_fetch_bank_policy", return_value={})
+        policy.start()
+        self.addCleanup(policy.stop)
+
+    def test_a_stranger_or_a_bad_name_is_the_same_404_before_any_read(self):
+        for path, _what, fetch in FRAMES:
+            for name in ("Nobody", "x1"):
+                with (
+                    self.subTest(path, name=name),
+                    mock.patch.object(map_server, fetch) as read,
+                ):
+                    h = shell.get(path + "?name=" + name)
+                self.assertEqual(h.status(), 404, path)
+                self.assertEqual(h.body(), b'{"error": "not a family member"}')
+                read.assert_not_called()
+
+    def test_a_guildmate_is_a_family_of_one_with_no_key(self):
+        self.families.may_answer.return_value = True
+        self.assertEqual(
+            map_server._client_scope({"name": ["Thog"]}), ("Thog", "", ["Thog"])
+        )
+
+    def test_the_frame_is_stamped_with_its_name_and_family(self):
+        got = map_server._client_frame({"name": ["Grug"]}, lambda *scope: {"s": 1})
+        self.assertEqual(got, (200, {"s": 1, "name": "Grug", "family_key": "a"}))
+
+    def test_an_outage_is_the_503(self):
+        for failure in (OSError("down"), self.driver.err.MySQLError("gone")):
+            for path, what, fetch in FRAMES:
+                with (
+                    self.subTest(path, failure=failure),
+                    mock.patch.object(map_server, fetch, side_effect=failure),
+                    self.assertLogs(map_server.log, "ERROR") as logs,
+                ):
+                    h = shell.get(path + "?name=Grug")
+                self.assertEqual(h.status(), 503, path)
+                self.assertEqual(h.body(), b'{"error": "world unreachable"}')
+                self.assertIn("client %s query failed" % what, logs.output[0])
+
+    def test_a_failed_roster_read_is_the_503_too(self):
+        self.families.families.side_effect = OSError("down")
+        with self.assertLogs(map_server.log, "ERROR") as logs:
+            h = shell.get("/api/client/bags?name=Grug")
+        self.assertEqual(h.status(), 503)
+        self.assertIn("client bags query failed", logs.output[0])
+
+    def test_a_bug_is_the_500(self):
+        for path, what, fetch in FRAMES:
+            with (
+                self.subTest(path),
+                mock.patch.object(map_server, fetch, side_effect=KeyError("bug")),
+                self.assertLogs(map_server.log, "ERROR") as logs,
+            ):
+                h = shell.get(path + "?name=Grug")
+            self.assertEqual(h.status(), 500, path)
+            self.assertEqual(h.body(), b'{"error": "frame failed to build"}')
+            self.assertIn("client %s frame failed to build" % what, logs.output[0])
+
+    def test_a_frame_that_is_not_json_is_the_500_and_no_outage(self):
+        """Encoding was inside the old catch, so it is still called a bug."""
+        with (
+            mock.patch.object(map_server, "_fetch_client_guild_bank", return_value={}),
+            mock.patch.object(
+                map_server.vclient, "build_guild_bank", return_value={"b": object()}
+            ),
+            self.assertLogs(map_server.log, "ERROR") as logs,
+        ):
+            h = shell.get("/api/client/guildbank?name=Grug")
+        self.assertEqual(h.status(), 500)
+        self.assertIn("client guild bank frame failed to build", logs.output[0])
+
+
 if __name__ == "__main__":
     unittest.main()

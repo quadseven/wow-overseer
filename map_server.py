@@ -4422,7 +4422,8 @@ def _answer(sender, handler, query: dict, what: str, failed=_unreachable,
 
 def _get_route(what: str, failed=_unreachable, **dumps):
     """A v1 GET handler(query, ctx) -> (status, payload) as the method
-    GET_ROUTES calls, answered by _answer; `what` is its failure's log line."""
+    GET_ROUTES calls, answered by _answer; `what` is its failure's log line,
+    or what a route's own `failed` makes of it."""
     def wrap(handler):
         @functools.wraps(handler)
         def route(sender, query: dict) -> None:
@@ -4874,6 +4875,44 @@ def _with_bank_reasons(rows, placed: dict) -> list:
             row["why"] = placement.line
         out.append(row)
     return out
+
+
+def _client_scope(query: dict):
+    """(name, family key, family names) for a roster name, else None."""
+    wanted = query.get("name", [""])[0]
+    if not _NAME_RE.fullmatch(wanted):
+        return None
+    for key, names in FAMILIES.families().items():
+        if wanted in names:
+            return wanted, key, names
+    # A MEMBER OF A FAMILY GUILD gets the same frames, as a family of one
+    # with no family key: the Lineup tab's gear table opens them. Still a
+    # closed set: FAMILIES.may_answer, the guilds the families are in.
+    if FAMILIES.may_answer(wanted):
+        return wanted, "", [wanted]
+    return None
+
+
+def _client_frame(query: dict, build) -> tuple[int, dict]:
+    """Scope the name and build the frame; 404 off the roster."""
+    scope = _client_scope(query)
+    if scope is None:
+        return 404, {"error": "not a family member"}
+    payload = build(*scope)
+    payload.setdefault("name", scope[0])
+    payload["family_key"] = scope[1]
+    return 200, payload
+
+
+def _client_failed(exc: Exception, what: str) -> tuple[int, bytes]:
+    """The `failed` of a client frame; `what` names the frame."""
+    if isinstance(exc, (pymysql.err.MySQLError, OSError)):
+        # The world, or the way to it, is down: the frame says so.
+        log.exception("client %s query failed", what)
+        return 503, b'{"error": "world unreachable"}'
+    # A bug in building the frame is not an outage and is not called one.
+    log.exception("client %s frame failed to build", what)
+    return 500, b'{"error": "frame failed to build"}'
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -6150,42 +6189,8 @@ class Handler(BaseHTTPRequestHandler):
     # slice this class between two handlers and assert that no request
     # parameter is read inside the slice. Every one of these takes a name,
     # and the name is only ever compared against the family rosters.
-    def _client_scope(self, query: dict):
-        """(name, family key, family names) for a roster name, else None."""
-        wanted = query.get("name", [""])[0]
-        if not _NAME_RE.fullmatch(wanted):
-            return None
-        for key, names in FAMILIES.families().items():
-            if wanted in names:
-                return wanted, key, names
-        # A MEMBER OF A FAMILY GUILD gets the same frames, as a family of one
-        # with no family key: the Lineup tab's gear table opens them. Still a
-        # closed set: FAMILIES.may_answer, the guilds the families are in.
-        if FAMILIES.may_answer(wanted):
-            return wanted, "", [wanted]
-        return None
-
-    def _client_frame(self, query: dict, build, what: str) -> None:
-        """Scope the name, build the frame, and send it; 404 off the roster."""
-        try:
-            scope = self._client_scope(query)
-            if scope is None:
-                self._send(404, "application/json", b'{"error": "not a family member"}')
-                return
-            payload = build(*scope)
-            payload.setdefault("name", scope[0])
-            payload["family_key"] = scope[1]
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except (pymysql.err.MySQLError, OSError):
-            # The world, or the way to it, is down: the frame says so.
-            log.exception("client %s query failed", what)
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
-        except Exception:
-            # A bug in building the frame is not an outage and is not called one.
-            log.exception("client %s frame failed to build", what)
-            self._send(500, "application/json", b'{"error": "frame failed to build"}')
-
-    def _client_bags(self, query: dict) -> None:
+    @_get_route("bags", failed=_client_failed)
+    def _client_bags(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/client/bags?name=X - the backpack and the four bags, each
         stack the bank policy files carrying where it goes and why (#320)."""
         def build(name, _key, names):
@@ -6193,25 +6198,28 @@ class Handler(BaseHTTPRequestHandler):
             rows = _with_bank_reasons(f["rows"], _fetch_bank_policy(names))
             return vclient.build_inventory(rows, CLIENT_ICONS, vclient.BAGS,
                                            money=f["money"])
-        self._client_frame(query, build, "bags")
+        return _client_frame(query, build)
 
-    def _client_bank(self, query: dict) -> None:
+    @_get_route("bank", failed=_client_failed)
+    def _client_bank(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/client/bank?name=X - the bank and its seven bag slots, a
         kept set saying why it is kept (#320)."""
         def build(name, _key, names):
             f = _fetch_client_inventory(name)
             rows = _with_bank_reasons(f["rows"], _fetch_bank_policy(names))
             return vclient.build_inventory(rows, CLIENT_ICONS, vclient.BANK)
-        self._client_frame(query, build, "bank")
+        return _client_frame(query, build)
 
-    def _client_guild_bank(self, query: dict) -> None:
+    @_get_route("guild bank", failed=_client_failed)
+    def _client_guild_bank(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/client/guildbank?name=X - the guild bank, tab by tab."""
         def build(name, _key, _names):
             return vclient.build_guild_bank(**_fetch_client_guild_bank(name),
                                             icons=CLIENT_ICONS)
-        self._client_frame(query, build, "guild bank")
+        return _client_frame(query, build)
 
-    def _client_quests(self, query: dict) -> None:
+    @_get_route("quests", failed=_client_failed)
+    def _client_quests(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/client/quests?name=X - one character's quest log, for the
         frame. By name rather than by family key, so a guildmate opened from
         the Lineup tab has one too; the name is scoped like every frame's."""
@@ -6220,7 +6228,7 @@ class Handler(BaseHTTPRequestHandler):
             member = next((m for m in log_.get("members") or ()
                            if m.get("name") == name), None)
             return {"member": member}
-        self._client_frame(query, build, "quests")
+        return _client_frame(query, build)
 
     @_get_route("guild runs query failed", default=str)
     def _guild_runs(_query: dict, ctx) -> tuple[int, dict]:
