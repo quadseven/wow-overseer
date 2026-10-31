@@ -37,6 +37,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import guildcorps
+import disposition
 
 SLOT_PRICES = (1000, 10000, 100000, 250000, 250000, 250000, 250000)
 BANK_BAG_SLOTS = len(SLOT_PRICES)
@@ -64,6 +65,7 @@ class Bag:
     guid: int
     entry: int
     slots: int
+    bound: bool = False
 
 
 @dataclass(frozen=True)
@@ -113,8 +115,9 @@ def family_floor(family) -> int:
 def placeable(facts: Facts, floor=None) -> list:
     """The spare bags this character may put in the bank, biggest first.
 
-    `floor` is the family's smallest worn bag (`family_floor`); a bag bigger
-    than it is worn by somebody before it is banked.
+    `floor` is the family's smallest worn bag (`family_floor`); a tradable
+    bag bigger than it is worn by somebody before it is banked. A soulbound
+    bag cannot reach a sibling, so only its holder's worn bags take priority.
     """
     own = _smallest_worn(facts)
     floor = own if floor is None else min(own, int(floor))
@@ -122,7 +125,8 @@ def placeable(facts: Facts, floor=None) -> list:
         (
             b
             for b in facts.spare
-            if b.slots <= floor and b.entry not in facts.protected_entries
+            if b.slots <= (own if b.bound else floor)
+            and b.entry not in facts.protected_entries
         ),
         key=lambda b: (-b.slots, b.guid),
     )
@@ -142,6 +146,20 @@ def supply_needs(family) -> list[SupplyNeed]:
         for f in family
         if f.bought > f.placed and not placeable(f, floor)
     ]
+
+
+def reserved_guids(family) -> frozenset[int]:
+    """Placeable carried bags promised to bought, still-empty bank positions.
+
+    Reserve only the number of positions that can take them, largest first.
+    Once placed, the bag is no longer carried and the reservation disappears.
+    """
+    floor = family_floor(family)
+    return frozenset(
+        b.guid
+        for f in family
+        for b in placeable(f, floor)[: max(0, f.bought - f.placed)]
+    )
 
 
 def step(facts: Facts, floor=None):
@@ -210,11 +228,18 @@ def _where(row, worn_guids) -> str:
 
 
 def _facts_for(person, rows, worn_guids, crafters) -> Facts:
+    from bag_pressure import item_binding
+
     name = str(person["name"])
     worn, spare, placed = [], [], 0
     for r in rows:
         where = _where(r, worn_guids)
-        bag = Bag(_int(r.get("item_guid")), _int(r.get("entry")), _int(r.get("slots")))
+        bag = Bag(
+            _int(r.get("item_guid")),
+            _int(r.get("entry")),
+            _int(r.get("slots")),
+            bound=item_binding(r) == disposition.BIND_ON_PICKUP,
+        )
         if where == "worn":
             worn.append(bag.slots)
         elif where == "banked":
