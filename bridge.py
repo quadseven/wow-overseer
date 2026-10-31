@@ -16097,7 +16097,8 @@ class Bridge(discord.Client):
             self._dues_walks, now, guildroute.GUILD_STEP_SECONDS)
         posted = await asyncio.to_thread(_dues_recent_holders)
         busy = set(getattr(self, "_guild_run_names", ())) | (set(self._dues_walks)
-                | set(self._guild_mail_runs) | set(getattr(self, "_train_walks", ())))
+                | set(self._guild_mail_runs) | set(getattr(self, "_job_steps", ()))
+                | set(getattr(self, "_train_walks", ())))
         # NATURALLY EARNED ONLY (the operator, 2026-09-24): a member posts dues
         # only once it has been reset to level 1; natural.py has the rule.
         eligible = await asyncio.to_thread(
@@ -16236,7 +16237,8 @@ class Bridge(discord.Client):
         receivers = sorted({x.receiver for x in letters})
         free_slots = await asyncio.to_thread(_fetch_free_slots, receivers)
         busy = set(getattr(self, "_guild_run_names", ())) | (set(self._crafter_walks) | set(self._guild_mail_runs)
-                | set(self._dues_walks) | set(getattr(self, "_train_walks", ())))
+                | set(self._dues_walks) | set(getattr(self, "_job_steps", ()))
+                | set(getattr(self, "_train_walks", ())))
         plan, notes = crafters.visits(letters, designated, known,
                                       frozenset(busy), free_slots)
         notes += await self._start_crafter_walks(plan, names, now)
@@ -16391,6 +16393,7 @@ class Bridge(discord.Client):
         busy = (set(getattr(self, "_guild_run_names", ())) | set(self._post_walks)
                 | set(self._crafter_walks) | set(self._guild_mail_runs)
                 | set(self._dues_walks) | set(self._corps_steps)
+                | set(getattr(self, "_job_steps", ()))
                 | set(getattr(self, "_train_walks", ())))
         sitting = await asyncio.to_thread(_sitting_out_to_walk, names)
         plan, notes = guildpost.visits(letters, online, busy, free_slots, roster,
@@ -16673,6 +16676,7 @@ class Bridge(discord.Client):
         # step's cooldown.
         busy = set(getattr(self, "_guild_run_names", ())) | (set(self._corps_steps) | set(self._dues_walks)
                 | set(self._guild_mail_runs) | set(self._crafter_walks)
+                | set(getattr(self, "_job_steps", ()))
                 | set(getattr(self, "_train_walks", ())))
         cap = self._guild_walk_cap()
         near = await self._corps_mailbox_yards(members, names, busy, now)
