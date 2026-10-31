@@ -133,12 +133,14 @@ class AppToken:
         run=subprocess.run,
         clock=time.time,
         api: str = "https://api.github.com",
+        permissions: dict | None = None,
     ):
         self.app_id = app_id.strip()
         self.installation_id = installation_id.strip()
         self.key_path = key_path
         self.repo_name = repo.split("/", 1)[1]
         self.http, self.run, self.clock, self.api = http, run, clock, api
+        self.permissions = TOKEN_PERMISSIONS if permissions is None else permissions
         self._token, self._expires = None, 0.0
 
     def jwt(self) -> str:
@@ -165,7 +167,7 @@ class AppToken:
             return self._token
         url = "%s/app/installations/%s/access_tokens" % (self.api, self.installation_id)
         body = json.dumps(
-            {"repositories": [self.repo_name], "permissions": TOKEN_PERMISSIONS}
+            {"repositories": [self.repo_name], "permissions": self.permissions}
         ).encode()
         resp = self.http(
             "POST",
