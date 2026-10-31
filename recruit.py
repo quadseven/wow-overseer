@@ -55,6 +55,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+__all__ = [
+    "AD_INTERVAL_MINUTES",
+    "MIN_RAID_LEVEL",
+    "RETENTION_DAYS",
+    "may_post_ad",
+    "prune_surplus_members",
+    "rank_raid_candidates",
+    "recruiting_ad",
+]
+
 # How many names to ask mod-overseer for. Comfortably more than one pass can
 # use, so that a shortlist survives several invites before it goes stale and
 # a few already-asked names near the top do not exhaust it. The module's own
@@ -104,6 +114,55 @@ MIN_MINUTES_BETWEEN_INVITES = 5
 # situation has changed is reachable again. infra#3650 chose 30 days for the
 # same reasons and this keeps its number rather than inventing a second one.
 ASKED_MEMORY_DAYS = 30
+
+# Public recruitment policy. These values are intentionally easy to tune.
+AD_INTERVAL_MINUTES = 60
+MIN_RAID_LEVEL = 55
+RETENTION_DAYS = 7
+
+
+def recruiting_ad(guild: str, missing_roles: list, raid_nights: list) -> str:
+    """Build one short public line describing the guild's current vacancies."""
+    roles = ", ".join(str(role) for role in missing_roles) or "raiders"
+    nights = ", ".join(str(night) for night in raid_nights) or "scheduled nights"
+    return "%s LF %s, raid nights %s" % (guild, roles, nights)
+
+
+def may_post_ad(minutes_since_last_post: float | None) -> bool:
+    """Allow at most one recruiting post per guild per hour."""
+    return (
+        minutes_since_last_post is None
+        or minutes_since_last_post >= AD_INTERVAL_MINUTES
+    )
+
+
+def rank_raid_candidates(candidates: list, missing_roles: set) -> list:
+    """Drop below-level candidates and rank role fit, level eligibility, then gear."""
+    eligible = [
+        candidate
+        for candidate in candidates
+        if int(candidate.get("level", 0)) >= MIN_RAID_LEVEL
+    ]
+    return sorted(
+        eligible,
+        key=lambda candidate: (
+            candidate.get("role") not in missing_roles,
+            -int(candidate.get("level", 0)),
+            -float(candidate.get("gear", 0)),
+            str(candidate.get("name", "")),
+        ),
+    )
+
+
+def prune_surplus_members(members: list, now, surplus: set) -> list:
+    """Return surplus members offline for more than the retention window."""
+    return [
+        member
+        for member in members
+        if member.get("name") in surplus
+        and member.get("last_seen") is not None
+        and (now - member["last_seen"]).total_seconds() > RETENTION_DAYS * 86400
+    ]
 
 
 @dataclass(frozen=True)
