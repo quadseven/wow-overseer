@@ -7760,7 +7760,8 @@ class Bridge(discord.Client):
         Either end of the conversation being in the run is enough; the party
         chat window is the same window whoever is standing where.
         """
-        run = await asyncio.to_thread(_active_dungeon_run)
+        run = await asyncio.to_thread(
+            _active_dungeon_run, [ask.crafter, ask.asker])
         if not run:
             return False
         roster_jobs = await asyncio.to_thread(_roster_jobs)
@@ -11425,7 +11426,7 @@ class Bridge(discord.Client):
         Fresh member snapshots keep every pass from treating that gap as an
         invitation to change jobs mid-run.
         """
-        run = await asyncio.to_thread(_active_dungeon_run)
+        run = await asyncio.to_thread(_active_dungeon_run, names)
         live_maps = await asyncio.to_thread(_fetch_live_maps, names)
         dungeon_maps = set(dungeonpath.PORTAL_MAPS.values()) | {
             raidrun.MOLTEN_CORE_MAP
@@ -12437,7 +12438,7 @@ class Bridge(discord.Client):
                 in (await asyncio.to_thread(_standing_travel_aims)).items()
                 if name in names}
         if run_doors:
-            run = await asyncio.to_thread(_active_dungeon_run)
+            run = await asyncio.to_thread(_active_dungeon_run, names)
             doors = await asyncio.to_thread(
                 _dungeon_doors, (run or {}).get("map_id"))
             if not doors:
@@ -28615,22 +28616,40 @@ def _ground_exit_leads_to(aim: str, target_map: int) -> bool:
     )
 
 
-def _active_dungeon_run() -> dict | None:
-    """The run the family is in the middle of, or None.
+def _active_dungeon_run(names: list) -> dict | None:
+    """An active row owning a named participant, never a global newest row.
 
-    `overseer_dungeon_run` is written by the C++ side and can legitimately be
-    absent on a world whose image predates it - map_server.py already treats
-    it that way ("overseer_dungeon_run absent; achievements run without it").
-    Absent means "no run", which is the answer that lets the family carry on
-    talking rather than going silent forever.
+    New ledgers carry stable family ownership. Before that migration, recorded
+    members still scope the read; a renamed leader cannot override a nonempty
+    foreign member list. An absent table or older missing columns are unknown.
     """
+    names = tuple(sorted(set(names)))
+    if not names:
+        return None
+    holes = ",".join(["%s"] * len(names))
+    present = " OR ".join(["FIND_IN_SET(%s, members) > 0"] * len(names))
+    # Only generated placeholders reach SQL text; every character name is bound.
+    common = (
+        "SELECT leader_name, map_id, state, members FROM overseer_dungeon_run "
+        "WHERE state = 'active' AND (" + present
+        + " OR (COALESCE(members, '') = '' AND leader_name IN (" + holes + ")))"
+    )
+    scoped = common + (
+        " AND family IN (SELECT family FROM overseer_roster "
+        "WHERE enabled = 1 AND name IN (" + holes + ")) ORDER BY id DESC LIMIT 1"
+    )
+    parameters = names + names
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(
-                "SELECT leader_name, map_id, state, members "
-                "FROM overseer_dungeon_run WHERE state = 'active' "
-                "ORDER BY id DESC LIMIT 1"
-            )
+            cur.execute(scoped, parameters + names)
+            return cur.fetchone()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1146:
+                return None
+            if not exc.args or exc.args[0] != 1054:
+                raise
+        try:
+            cur.execute(common + " ORDER BY id DESC LIMIT 1", parameters)
             return cur.fetchone()
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
