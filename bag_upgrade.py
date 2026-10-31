@@ -36,6 +36,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+import disposition
+
 
 @dataclass(frozen=True)
 class Bag:
@@ -65,6 +67,7 @@ class Bag:
     inside: int = 0
     # Inventory position for worn bags; EquipAction uses this to break ties.
     position: int = 0
+    bound: bool = False
 
 
 @dataclass(frozen=True)
@@ -270,7 +273,7 @@ class Handover:
 
 
 def _spares(members):
-    """Every carried bag in the family, largest first, as (member, bag).
+    """Empty, tradable carried bags, largest first, as (member, bag).
 
     Sorted so the biggest bag reaches the first empty position rather than
     whichever member happens to sort first, and tie-broken by holder name so
@@ -280,7 +283,7 @@ def _spares(members):
     # spare would enqueue a command that can never free space, then make the
     # real recovery look like another receiver-full loop.  `used` comes from
     # the bridge's fill count and is deliberately part of this pure seam.
-    held = [(m, b) for m in members for b in m.carried if b.used == 0]
+    held = [(m, b) for m in members for b in m.carried if b.used == 0 and not b.bound]
     return sorted(
         held,
         key=lambda pair: (-pair[1].slots, pair[0].name, pair[1].name, pair[1].guid),
@@ -774,6 +777,8 @@ def _worn_guids(rows, by_name) -> dict:
 
 def _bag_from_row(row) -> Bag:
     """One Bag from one container row."""
+    from bag_pressure import item_binding
+
     return Bag(
         row["name"],
         int(row["slots"]),
@@ -783,6 +788,7 @@ def _bag_from_row(row) -> Bag:
         general=int(row.get("subclass", 0) or 0) == 0,
         inside=int(row["bag"]),
         position=int(row["slot"]),
+        bound=item_binding(row) == disposition.BIND_ON_PICKUP,
     )
 
 

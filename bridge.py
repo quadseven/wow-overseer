@@ -27584,6 +27584,10 @@ def _fetch_surplus_bags(names: list) -> list:
                 return []
             raise
         rows = [dict(row) for row in cur.fetchall()]
+    bank_keeps = bankbags.reserved_guids(_fetch_bank_bag_facts(names))
+    # Both the sale and the sellable-stack count use these same rows.
+    for row in rows:
+        row["bank_reserved"] = int(row["item_guid"]) in bank_keeps
     # One line per crafted corps bag the vendor pass leaves with its master (#1667).
     for kept in rows:
         if bag_pressure.corps_bag_kept(kept):
@@ -31067,7 +31071,8 @@ _BAG_STATE_SQL = (
     "       COALESCE(fill.n, 0) AS used, "
     # The entry the equip verb names and the subclass that says whether the
     # bag is a general one (bag_upgrade.self_equips, #88).
-    "       ii.itemEntry AS entry, it.subclass AS subclass "
+    "       ii.itemEntry AS entry, it.subclass AS subclass, "
+    "       ii.flags AS instance_flags, it.bonding AS bonding "
     "FROM character_inventory ci "
     "JOIN characters c                  ON c.guid = ci.guid "
     "JOIN item_instance ii              ON ii.guid = ci.item "
@@ -33610,7 +33615,8 @@ _BANK_BAG_PEOPLE_SQL = (
 )
 _BANK_BAG_ROWS_SQL = (
     "SELECT c.name AS holder, ci.item AS item_guid, ii.itemEntry AS entry, "
-    "it.ContainerSlots AS slots, ci.bag, ci.slot FROM characters c "
+    "it.ContainerSlots AS slots, ci.bag, ci.slot, "
+    "ii.flags AS instance_flags, it.bonding AS bonding FROM characters c "
     "JOIN character_inventory ci ON ci.guid = c.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
