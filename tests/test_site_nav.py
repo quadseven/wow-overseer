@@ -35,7 +35,7 @@ class TheWatchWallIsBothHeads(unittest.TestCase):
         self.assertIn("_fetch_family(everyone)", handler)
         self.assertIn("watchwall.build_heads(", handler)
         self.assertNotIn("query.get", handler)
-        self.assertIn("self._send(503", handler)
+        self.assertIn('@_get_route("wall query failed")\n    def _wall(', SERVER)
 
     def test_each_family_is_built_on_its_own_rows(self):
         """build_family finds the leader by guid among the rows it is handed;

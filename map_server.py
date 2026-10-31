@@ -4402,27 +4402,44 @@ def _v2_context(read) -> _V2Context:
 # unreachable", never a blank page. `sender` is the request handler, or the
 # stand-in a shared read builds against (_Captured). `dumps` goes to json.dumps:
 # default=str for a payload that carries database values such as datetimes.
-def _answer(sender, handler, query: dict, what: str, **dumps) -> None:
+# `failed` says what a raise answers, as (status, body): _unreachable unless the
+# route has its own (_probe_failed).
+def _unreachable(_exc: Exception, what: str) -> tuple[int, bytes]:
+    log.exception("%s", what)
+    return 503, b'{"error": "world unreachable"}'
+
+
+def _answer(sender, handler, query: dict, what: str, failed=_unreachable,
+            **dumps) -> None:
     try:
         with realmread.Session(_connect) as rd:
             code, payload = handler(query, _v2_context(rd))
         body = json.dumps(payload, **dumps).encode()
-    except Exception:
-        log.exception("%s", what)
-        sender._send(503, "application/json", b'{"error": "world unreachable"}')
-        return
+    except Exception as exc:
+        code, body = failed(exc, what)
     sender._send(code, "application/json", body)
 
 
-def _get_route(what: str, **dumps):
+def _get_route(what: str, failed=_unreachable, **dumps):
     """A v1 GET handler(query, ctx) -> (status, payload) as the method
     GET_ROUTES calls, answered by _answer; `what` is its failure's log line."""
     def wrap(handler):
         @functools.wraps(handler)
         def route(sender, query: dict) -> None:
-            _answer(sender, handler, query, what, **dumps)
+            _answer(sender, handler, query, what, failed, **dumps)
         return route
     return wrap
+
+
+def _probe_failed(body: bytes):
+    """The `failed` of a live probe: the database or the way to it going down
+    answers 503 with `body`. Any other raise is no outage and goes on up."""
+    def failed(exc: Exception, what: str) -> tuple[int, bytes]:
+        if not isinstance(exc, (pymysql.err.MySQLError, OSError)):
+            raise exc
+        log.exception("%s", what)
+        return 503, body
+    return failed
 
 
 def _etag(body: bytes) -> str:
@@ -5072,7 +5089,8 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("family query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
-    def _wall(self, query: dict) -> None:
+    @_get_route("wall query failed")
+    def _wall(_query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/wall - the Watch wall: every family's streamed characters.
 
         TAKES NO PARAMETERS. The families come from the roster table and the
@@ -5082,65 +5100,55 @@ class Handler(BaseHTTPRequestHandler):
         build_family finds a family's leader by guid among the rows it is
         handed and a merged set would hand one family the other's leader.
         """
+        # A failed read answers 503 (_answer).
+        # The same contract as /api/family: the wall keeps the tiles it
+        # already has and says it may be stale.
+        rosters = FAMILIES.families()
+        everyone = FAMILIES.names()
+        rows = _fetch_family(everyone)
+        profiles = _fetch_profiles(everyone)
+        built = []
+        for key, names in rosters.items():
+            mine = [r for r in rows if r["name"] in names]
+            built.append((key, family.build_family(
+                mine, GEO, names, {n: profiles[n] for n in names if n in profiles})))
         try:
-            rosters = FAMILIES.families()
-            everyone = FAMILIES.names()
-            rows = _fetch_family(everyone)
-            profiles = _fetch_profiles(everyone)
-            built = []
-            for key, names in rosters.items():
-                mine = [r for r in rows if r["name"] in names]
-                built.append((key, family.build_family(
-                    mine, GEO, names, {n: profiles[n] for n in names if n in profiles})))
-            try:
-                facts = _fetch_now_facts(everyone + [director.WATCHER_NAME])
-            except (pymysql.err.MySQLError, OSError):
-                # The tiles still draw; each says its sentence is unavailable.
-                log.exception("wall status feed failed")
-                facts = False
-            payload = watchwall.build_heads(built, family.build_observers(
-                _fetch_family([director.WATCHER_NAME]), GEO, (director.WATCHER_NAME,)),
-                facts=facts)
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # The same contract as /api/family: the wall keeps the tiles it
-            # already has and says it may be stale.
-            log.exception("wall query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+            facts = _fetch_now_facts(everyone + [director.WATCHER_NAME])
+        except (pymysql.err.MySQLError, OSError):
+            # The tiles still draw; each says its sentence is unavailable.
+            log.exception("wall status feed failed")
+            facts = False
+        return 200, watchwall.build_heads(built, family.build_observers(
+            _fetch_family([director.WATCHER_NAME]), GEO, (director.WATCHER_NAME,)),
+            facts=facts)
 
-    def _auras(self, query: dict) -> None:
+    @_get_route("aura probe failed",
+                failed=_probe_failed(b'{"error": "aura sample unavailable"}'))
+    def _auras(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/auras - current aura samples for the fixed family rosters.
 
         This endpoint deliberately takes no character or family selector. The
         only targets are names read from the server-owned family roster, and
         the short cache keeps this live probe separate from the fast snapshot
-        polling performed by /api/family and /api/wall.
+        polling performed by /api/family and /api/wall. A failed probe is its
+        own 503 (_probe_failed).
         """
         if query:
-            self._send(400, "application/json", b'{"error": "no query parameters accepted"}')
-            return
-        try:
-            payload = _cached_auras_payload(FAMILIES.families())
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except (pymysql.err.MySQLError, OSError):
-            log.exception("aura probe failed")
-            self._send(503, "application/json", b'{"error": "aura sample unavailable"}')
+            return 400, {"error": "no query parameters accepted"}
+        return 200, _cached_auras_payload(FAMILIES.families())
 
-    def _meter(self, query: dict) -> None:
+    @_get_route("meter probe failed",
+                failed=_probe_failed(b'{"error": "meter unavailable"}'))
+    def _meter(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/meter - each family's damage, healing and threat this fight.
 
         No selector, like /api/auras: the families come from the roster. One
-        live probe per family, cached for METER_CACHE_SECONDS.
+        live probe per family, cached for METER_CACHE_SECONDS. A failed probe
+        is its own 503 (_probe_failed).
         """
         if query:
-            self._send(400, "application/json", b'{"error": "no query parameters accepted"}')
-            return
-        try:
-            payload = _cached_meter_payload(FAMILIES.families())
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except (pymysql.err.MySQLError, OSError):
-            log.exception("meter probe failed")
-            self._send(503, "application/json", b'{"error": "meter unavailable"}')
+            return 400, {"error": "no query parameters accepted"}
+        return 200, _cached_meter_payload(FAMILIES.families())
 
     @_get_route("armory query failed")
     def _armory(query: dict, _ctx) -> tuple[int, dict]:

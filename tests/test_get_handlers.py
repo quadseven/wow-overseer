@@ -493,5 +493,152 @@ class TheArmoryReadsAreHandlers(unittest.TestCase):
             self.assertEqual(h.body(), body, path)
 
 
+def fake_driver():
+    """A pymysql whose error class exists whether or not the driver does."""
+    error = type("MySQLError", (Exception,), {})
+    return types.SimpleNamespace(err=types.SimpleNamespace(MySQLError=error))
+
+
+# Each probe: (route, its cached read, its failure's log line, its 503 body).
+PROBES = (
+    (
+        "/api/auras",
+        "_cached_auras_payload",
+        "aura probe failed",
+        b'{"error": "aura sample unavailable"}',
+    ),
+    (
+        "/api/meter",
+        "_cached_meter_payload",
+        "meter probe failed",
+        b'{"error": "meter unavailable"}',
+    ),
+)
+
+
+class TheProbesAnswerThroughTheSharedAnswer(unittest.TestCase):
+    """/api/auras and /api/meter keep their own 503 body and their narrow catch
+    through _probe_failed; anything that is no outage still goes on up."""
+
+    def setUp(self):
+        families = mock.patch.object(map_server, "FAMILIES")
+        families.start().families.return_value = {"a": ["Grug"]}
+        self.addCleanup(families.stop)
+        driver = mock.patch.object(map_server, "pymysql", fake_driver())
+        self.driver = driver.start()
+        self.addCleanup(driver.stop)
+
+    def test_a_query_is_the_same_400_before_any_read(self):
+        for path, read, _what, _body in PROBES:
+            with self.subTest(path), mock.patch.object(map_server, read) as sample:
+                h = shell.get(path + "?name=Grug")
+            self.assertEqual(h.status(), 400, path)
+            self.assertEqual(h.body(), b'{"error": "no query parameters accepted"}')
+            sample.assert_not_called()
+
+    def test_a_sample_goes_out_with_its_exact_bytes(self):
+        for path, read, _what, _body in PROBES:
+            with (
+                self.subTest(path),
+                mock.patch.object(map_server, read, return_value={"a": 1}),
+            ):
+                h = shell.get(path)
+            self.assertEqual(h.status(), 200, path)
+            self.assertEqual(h.body(), b'{"a": 1}', path)
+            self.assertEqual(h.header("Cache-Control"), "no-cache", path)
+
+    def test_an_outage_is_its_own_503(self):
+        for failure in (OSError("down"), self.driver.err.MySQLError("gone")):
+            for path, read, what, body in PROBES:
+                with (
+                    self.subTest(path, failure=failure),
+                    mock.patch.object(map_server, read, side_effect=failure),
+                    self.assertLogs(map_server.log, "ERROR") as logs,
+                ):
+                    h = shell.get(path)
+                self.assertEqual(h.status(), 503, path)
+                self.assertEqual(h.body(), body, path)
+                self.assertEqual(h.header("Content-Type"), "application/json")
+                self.assertIn(what, logs.output[0], path)
+
+    def test_a_bug_is_no_outage_and_goes_on_up(self):
+        for path, read, _what, _body in PROBES:
+            h = shell.FakeHandler(path)
+            with (
+                self.subTest(path),
+                mock.patch.object(map_server, read, side_effect=KeyError("bug")),
+                self.assertRaises(KeyError),
+            ):
+                h.do_GET()
+            self.assertEqual(h.sent, [], path)
+
+    def test_a_payload_that_is_not_json_goes_on_up_too(self):
+        for path, read, _what, _body in PROBES:
+            h = shell.FakeHandler(path)
+            with (
+                self.subTest(path),
+                mock.patch.object(map_server, read, return_value={"bad": object()}),
+                self.assertRaises(TypeError),
+            ):
+                h.do_GET()
+            self.assertEqual(h.sent, [], path)
+
+
+class TheWallIsAHandler(unittest.TestCase):
+    """/api/wall returns its heads, shares a 200 and keeps its two failures."""
+
+    def setUp(self):
+        map_server.SHARED_READS.clear()
+        self.addCleanup(map_server.SHARED_READS.clear)
+        families = mock.patch.object(map_server, "FAMILIES")
+        self.families = families.start()
+        self.families.families.return_value = {"a": ["Grug"]}
+        self.families.names.return_value = ["Grug"]
+        self.addCleanup(families.stop)
+        driver = mock.patch.object(map_server, "pymysql", fake_driver())
+        driver.start()
+        self.addCleanup(driver.stop)
+        for name, value in (
+            ("_fetch_family", []),
+            ("_fetch_profiles", {}),
+            ("_fetch_now_facts", {}),
+        ):
+            patcher = mock.patch.object(map_server, name, return_value=value)
+            setattr(self, name, patcher.start())
+            self.addCleanup(patcher.stop)
+
+    def test_the_heads_go_out_and_are_shared(self):
+        with mock.patch.object(
+            map_server.watchwall, "build_heads", return_value={"heads": []}
+        ) as build:
+            first = shell.get("/api/wall")
+            second = shell.get("/api/wall")
+        self.assertEqual(first.status(), 200)
+        self.assertEqual(first.body(), b'{"heads": []}')
+        self.assertEqual(second.body(), b'{"heads": []}')
+        build.assert_called_once()
+
+    def test_a_failed_read_is_the_shared_503(self):
+        self._fetch_family.side_effect = OSError("down")
+        with self.assertLogs(map_server.log, "ERROR") as logs:
+            h = shell.get("/api/wall")
+        self.assertEqual(h.status(), 503)
+        self.assertEqual(h.body(), b'{"error": "world unreachable"}')
+        self.assertIn("wall query failed", logs.output[0])
+
+    def test_a_failed_status_feed_costs_only_the_sentences(self):
+        self._fetch_now_facts.side_effect = OSError("down")
+        with (
+            mock.patch.object(
+                map_server.watchwall, "build_heads", return_value={"heads": []}
+            ) as build,
+            self.assertLogs(map_server.log, "ERROR") as logs,
+        ):
+            h = shell.get("/api/wall")
+        self.assertEqual(h.status(), 200)
+        self.assertIs(build.call_args.kwargs["facts"], False)
+        self.assertIn("wall status feed failed", logs.output[0])
+
+
 if __name__ == "__main__":
     unittest.main()
