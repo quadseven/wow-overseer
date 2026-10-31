@@ -321,5 +321,110 @@ class TheGuildReadsAreHandlers(unittest.TestCase):
         )
 
 
+SIDES = [{"family": "Grug", "names": ["Grug"], "faction": "Alliance", "heading": "h"}]
+CRAFT_READ = {
+    "craft_rows": [],
+    "families": {"Grug": {"skill_rows": [], "spell_rows": [], "member_rows": []}},
+    **{
+        k: []
+        for k in (
+            "recipe_rows",
+            "trainer_rows",
+            "vendor_rows",
+            "drop_rows",
+            "quest_rows",
+        )
+    },
+}
+
+
+class TheRunAndTradeReadsAreHandlers(unittest.TestCase):
+    """The run timeline, recap, trades and trade crafts return (status,
+    payload); /api/trades picks the crafts handler when `skill` is asked."""
+
+    def setUp(self):
+        map_server.SHARED_READS.clear()
+        self.addCleanup(map_server.SHARED_READS.clear)
+
+    def test_a_failed_read_leaves_the_handler(self):
+        for name, fetch in (
+            ("_run_timeline", "_fetch_run_timeline"),
+            ("_guild_trades", "_faction_sides"),
+            ("_recap", "_faction_sides"),
+        ):
+            with (
+                self.subTest(name),
+                mock.patch.object(map_server, fetch, side_effect=OSError("down")),
+            ):
+                with self.assertRaises(OSError):
+                    getattr(map_server.Handler, name).__wrapped__({}, None)
+
+    def test_a_failed_read_is_the_shared_503(self):
+        for path, fetch, what in (
+            ("/api/runtimeline", "_fetch_run_timeline", "run timeline query failed"),
+            ("/api/recap", "_faction_sides", "recap query failed"),
+            ("/api/trades", "_faction_sides", "guild trades query failed"),
+            (
+                "/api/trades?skill=1",
+                "_faction_sides",
+                "guild trade crafts query failed",
+            ),
+        ):
+            with (
+                self.subTest(path),
+                mock.patch.object(
+                    map_server.tradespec, "parse_skill", return_value=(1, "")
+                ),
+                mock.patch.object(map_server, fetch, side_effect=OSError("down")),
+                self.assertLogs(map_server.log, "ERROR") as logs,
+            ):
+                h = shell.get(path)
+            self.assertEqual(h.status(), 503, path)
+            self.assertIn(what, logs.output[0], path)
+
+    def test_the_recap_returns_one_per_family(self):
+        with (
+            mock.patch.object(map_server, "_faction_sides", return_value=SIDES),
+            mock.patch.object(
+                map_server.Handler,
+                "_recap_for",
+                staticmethod(lambda _map, names: {"live": False, "names": names}),
+            ),
+        ):
+            code, payload = map_server.Handler._recap.__wrapped__({"map": ["x"]}, None)
+        self.assertEqual(code, 200)
+        self.assertEqual(payload["names"], ["Grug"])
+        self.assertEqual([f["family"] for f in payload["families"]], ["Grug"])
+
+    def test_a_bad_skill_is_a_400_before_any_read(self):
+        with (
+            mock.patch.object(
+                map_server.tradespec, "parse_skill", return_value=(None, "bad")
+            ),
+            mock.patch.object(map_server, "_faction_sides") as sides,
+        ):
+            got = map_server.Handler._trade_crafts.__wrapped__({"skill": ["x"]}, None)
+        self.assertEqual(got, (400, {"error": "bad"}))
+        sides.assert_not_called()
+
+    def test_the_craft_list_is_still_sent_compact(self):
+        with (
+            mock.patch.object(
+                map_server.tradespec, "parse_skill", return_value=(1, "")
+            ),
+            mock.patch.object(
+                map_server.tradespec, "parse_family", return_value=("", "")
+            ),
+            mock.patch.object(map_server, "_faction_sides", return_value=SIDES),
+            mock.patch.object(map_server, "_fetch_guildcraft", return_value=CRAFT_READ),
+            mock.patch.object(
+                map_server.tradespec, "build_craft_list", return_value={"a": 1}
+            ),
+        ):
+            h = shell.get("/api/trades?skill=1")
+        self.assertEqual(h.status(), 200)
+        self.assertEqual(h.body(), b'{"a":1,"family":"Grug"}')
+
+
 if __name__ == "__main__":
     unittest.main()
