@@ -5172,7 +5172,8 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("armory query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
-    def _raidgoals(self, _query: dict) -> None:
+    @_get_route("raid goals query failed")
+    def _raidgoals(_query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/raidgoals - what the guild still needs before it can raid.
 
         NO PARAMETERS AT ALL, and that is the shape of the view rather than an
@@ -5181,92 +5182,81 @@ class Handler(BaseHTTPRequestHandler):
         bonds and to the world's own guild tables, exactly as /api/armory and
         /api/family refuse a name.
         """
-        try:
-            fetched = _fetch_raidgoals()
-            families = fetched.pop("families")
-            attuned = fetched.pop("attuned_rows")
-            quest_rows = fetched.pop("quest_rows")
-            min_level = fetched.pop("min_level")
-            guild_rows = fetched.pop("guild_rows")
-            supply = fetched.pop("supply")
-            snapshots = _metric_snapshots()
-            prep = fetched.pop("preraid")
-            list_items = fetched.pop("list_items")
-            # ONE CARD PER GUILD. raidgoals counts one roster at a time, so it
-            # is handed one guild's rows and that guild's family as the
-            # fallback; handed both guilds at once it would see a family split
-            # across two guilds and count neither.
-            cards = []
-            for group in raidready.group_guilds(guild_rows, families):
-                goals = raidgoals.build_raidgoals(
-                    **fetched, guild_rows=group["rows"],
-                    roster=group["family_names"])
-                cards.append(raidready.build_guild(
-                    group, fetched["char_rows"], fetched["worn_rows"],
-                    attuned, min_level, goals, quest_rows=quest_rows,
-                    holding_rows=fetched["holding_rows"],
-                    item_rows=list_items,
-                    supply=dict(supply.get(group["guildid"]) or {},
-                                snapshots=snapshots),
-                    preraid=preraid.family_view(
-                        list(group["family_names"]), **prep)))
-            payload = raidready.build_readiness(cards)
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll: the tab keeps what it has
-            # drawn and says it may be stale. A blanked list here would read
-            # as "there is nothing left to farm", which is the one claim this
-            # view must never make by accident.
-            log.exception("raid goals query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        # Same contract as every other poll: the tab keeps what it has
+        # drawn and says it may be stale. A blanked list here would read
+        # as "there is nothing left to farm", which is the one claim this
+        # view must never make by accident.
+        fetched = _fetch_raidgoals()
+        families = fetched.pop("families")
+        attuned = fetched.pop("attuned_rows")
+        quest_rows = fetched.pop("quest_rows")
+        min_level = fetched.pop("min_level")
+        guild_rows = fetched.pop("guild_rows")
+        supply = fetched.pop("supply")
+        snapshots = _metric_snapshots()
+        prep = fetched.pop("preraid")
+        list_items = fetched.pop("list_items")
+        # ONE CARD PER GUILD. raidgoals counts one roster at a time, so it
+        # is handed one guild's rows and that guild's family as the
+        # fallback; handed both guilds at once it would see a family split
+        # across two guilds and count neither.
+        cards = []
+        for group in raidready.group_guilds(guild_rows, families):
+            goals = raidgoals.build_raidgoals(
+                **fetched, guild_rows=group["rows"],
+                roster=group["family_names"])
+            cards.append(raidready.build_guild(
+                group, fetched["char_rows"], fetched["worn_rows"],
+                attuned, min_level, goals, quest_rows=quest_rows,
+                holding_rows=fetched["holding_rows"],
+                item_rows=list_items,
+                supply=dict(supply.get(group["guildid"]) or {},
+                            snapshots=snapshots),
+                preraid=preraid.family_view(
+                    list(group["family_names"]), **prep)))
+        payload = raidready.build_readiness(cards)
+        return 200, payload
 
-    def _loot(self, query: dict) -> None:
+    @_get_route("loot query failed")
+    def _loot(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/loot - the story of every notable item, newest first.
 
         Both guilds in one list, because an item can cross between families
         and its story should not be cut in half at the border. Every sentence
         comes from lootstory; the page draws them.
         """
-        try:
-            fetched = _fetch_loot()
-            council = fetched.get("council_rows") or []
-            payload = lootstory.build_loot(
-                fetched["rows"], recap.zone_names(GEO.continents),
-                items=fetched["items"], icons=fetched["icons"], book=fetched["book"],
-                council=lootcouncil.by_item_guid(council))
-            payload["council"] = lootcouncil.board(council)
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # The Chronicle keeps the list it has drawn and says it may be
-            # stale, like every other poll on the page.
-            log.exception("loot query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        # The Chronicle keeps the list it has drawn and says it may be
+        # stale, like every other poll on the page.
+        fetched = _fetch_loot()
+        council = fetched.get("council_rows") or []
+        payload = lootstory.build_loot(
+            fetched["rows"], recap.zone_names(GEO.continents),
+            items=fetched["items"], icons=fetched["icons"], book=fetched["book"],
+            council=lootcouncil.by_item_guid(council))
+        payload["council"] = lootcouncil.board(council)
+        return 200, payload
 
-    def _thoughts(self, query: dict) -> None:
-        """GET /api/thoughts?name=X&before=<id>&limit=N - one page, newest first."""
+    @_get_route("thought query failed")
+    def _thoughts(query: dict, _ctx) -> tuple[int, dict]:
+        """GET /api/thoughts?name=X&before=<id>&limit=N - one page, newest first.
+
+        A failed read answers 503 (_answer)."""
         name = query.get("name", [""])[0]
         if not _NAME_RE.fullmatch(name):
-            self._send(400, "application/json", b'{"error": "not a character name"}')
-            return
+            return 400, {"error": "not a character name"}
         raw_before = query.get("before", [""])[0]
         if raw_before and not raw_before.isdigit():
             # Silently ignoring a malformed cursor would restart the page at
             # the newest thought and read as "history ends here".
-            self._send(400, "application/json", b'{"error": "bad cursor"}')
-            return
+            return 400, {"error": "bad cursor"}
         limit = chat.page_size(query.get("limit", [""])[0])
-        try:
-            fetched = _fetch_thoughts(name, int(raw_before) if raw_before else None, limit)
-        except Exception:
-            log.exception("thought query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
-            return
+        fetched = _fetch_thoughts(name, int(raw_before) if raw_before else None, limit)
         if fetched is None:
-            self._send(404, "application/json", b'{"error": "no such character"}')
-            return
+            return 404, {"error": "no such character"}
         rows, db_now = fetched
-        payload = chat.build_timeline(name, rows, db_now, limit)
-        self._send(200, "application/json", json.dumps(payload).encode())
+        return 200, chat.build_timeline(name, rows, db_now, limit)
 
     def _chat_party(self, query: dict) -> None:
         """GET /api/chat/party?family=<key>&after=<id> - lines to read aloud.
@@ -5499,7 +5489,8 @@ class Handler(BaseHTTPRequestHandler):
             ITEMS.icons, names, skill_rows, ITEMS)
         return payload
 
-    def _council(self, query: dict) -> None:
+    @_get_route("council query failed")
+    def _council(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/council - the last sitting, what it carried, where next.
 
         Deliberately BELOW the thought handler and ABOVE the wealth one. Four
@@ -5519,19 +5510,17 @@ class Handler(BaseHTTPRequestHandler):
         No name parameter, like every other family endpoint: WHO the family is
         belongs to bonds.
         """
-        try:
-            cards = achievements.build_achievements(**_fetch_achievements())["cards"]
-            payload = council.build_council(**_fetch_council(), cards=cards)
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll: the view keeps the transcript
-            # it has drawn and says it may be stale. A blanked council reads as
-            # "the family has stopped talking", which is a far stronger claim
-            # than "this one read failed".
-            log.exception("council query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        # Same contract as every other poll: the view keeps the transcript
+        # it has drawn and says it may be stale. A blanked council reads as
+        # "the family has stopped talking", which is a far stronger claim
+        # than "this one read failed".
+        cards = achievements.build_achievements(**_fetch_achievements())["cards"]
+        payload = council.build_council(**_fetch_council(), cards=cards)
+        return 200, payload
 
-    def _eye(self, query: dict) -> None:
+    @_get_route("eye query failed")
+    def _eye(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/eye - the server rollup, tier by tier, honestly.
 
         Beside the council handler, in the same unclaimed window and for the
@@ -5540,17 +5529,15 @@ class Handler(BaseHTTPRequestHandler):
         No name parameter: this asks about the realm as one thing, and the one
         roster clause it does have comes from bonds.
         """
-        try:
-            payload = eye.build_eye(**_fetch_eye())
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Blanking this one would be the worst failure on the page: a
-            # rollup that exists to say what is NOT real, rendering empty,
-            # reads as a realm where nothing is real at all.
-            log.exception("eye query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        # Blanking this one would be the worst failure on the page: a
+        # rollup that exists to say what is NOT real, rendering empty,
+        # reads as a realm where nothing is real at all.
+        payload = eye.build_eye(**_fetch_eye())
+        return 200, payload
 
-    def _wealth(self, query: dict) -> None:
+    @_get_route("wealth query failed")
+    def _wealth(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/wealth - what the five are carrying, and what it is worth.
 
         Deliberately BELOW _thoughts rather than beside _armory: the Armory
@@ -5564,27 +5551,24 @@ class Handler(BaseHTTPRequestHandler):
         here would turn this into a general character query wearing a
         friendly name.
         """
-        try:
-            # Both families, from the roster, never from the request.
-            groups = list(FAMILIES.families().items())
-            names = [n for _key, group in groups for n in group]
-            payload = wealth.build_wealth(**_fetch_wealth(names), icons=ITEMS.icons,
-                                          families=groups)
-            payload["guild_routes"] = _fetch_guild_routes()
-            payload["loot_council"] = _fetch_loot_council_view()
-            lootcouncil.annotate_tips(payload, payload["loot_council"]["by_guid"])
-            # WHERE EACH KEPT STACK GOES AND WHY (#320), per family.
-            for _key, group in groups:
-                bankpolicy.annotate_tips(payload, _fetch_bank_policy(group))
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll: the view keeps the bags it
-            # has already drawn and says they may be stale. A blank wealth
-            # panel reads as "they own nothing", and an empty bag grid reads
-            # as "they have plenty of room", which is the exact opposite of
-            # the finding this view exists to surface.
-            log.exception("wealth query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        # Same contract as every other poll: the view keeps the bags it
+        # has already drawn and says they may be stale. A blank wealth
+        # panel reads as "they own nothing", and an empty bag grid reads
+        # as "they have plenty of room", which is the exact opposite of
+        # the finding this view exists to surface.
+        # Both families, from the roster, never from the request.
+        groups = list(FAMILIES.families().items())
+        names = [n for _key, group in groups for n in group]
+        payload = wealth.build_wealth(**_fetch_wealth(names), icons=ITEMS.icons,
+                                      families=groups)
+        payload["guild_routes"] = _fetch_guild_routes()
+        payload["loot_council"] = _fetch_loot_council_view()
+        lootcouncil.annotate_tips(payload, payload["loot_council"]["by_guid"])
+        # WHERE EACH KEPT STACK GOES AND WHY (#320), per family.
+        for _key, group in groups:
+            bankpolicy.annotate_tips(payload, _fetch_bank_policy(group))
+        return 200, payload
 
     def _needs(self, query: dict) -> None:
         """GET /api/needs - what the five need, and what is being done about it.

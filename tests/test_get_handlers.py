@@ -140,5 +140,94 @@ class TheMovedRoutesReturnStatusAndPayload(unittest.TestCase):
         self.assertIn("realm query failed", logs.output[0])
 
 
+# Each moved read: (route, handler, the read it starts with, its failure's log line).
+FAMILY_READS = (
+    ("/api/raidgoals", "_raidgoals", "_fetch_raidgoals", "raid goals query failed"),
+    ("/api/loot", "_loot", "_fetch_loot", "loot query failed"),
+    ("/api/council", "_council", "_fetch_achievements", "council query failed"),
+    ("/api/eye", "_eye", "_fetch_eye", "eye query failed"),
+    ("/api/wealth", "_wealth", "_fetch_wealth", "wealth query failed"),
+)
+
+
+class TheFamilyReadsAreHandlers(unittest.TestCase):
+    """The raid, loot, council, eye and wealth reads return (status, payload)
+    and leave a failed read to _answer, which answers it with the same 503."""
+
+    def setUp(self):
+        map_server.SHARED_READS.clear()
+        self.addCleanup(map_server.SHARED_READS.clear)
+        families = mock.patch.object(map_server, "FAMILIES")
+        families.start().families.return_value = {"a": ["Grug"]}
+        self.addCleanup(families.stop)
+
+    def test_a_failed_read_leaves_the_handler(self):
+        for path, name, fetch, _what in FAMILY_READS:
+            with (
+                self.subTest(path),
+                mock.patch.object(map_server, fetch, side_effect=OSError("down")),
+            ):
+                with self.assertRaises(OSError):
+                    getattr(map_server.Handler, name).__wrapped__({}, None)
+
+    def test_a_failed_read_is_the_shared_503(self):
+        for path, _name, fetch, what in FAMILY_READS:
+            with (
+                self.subTest(path),
+                mock.patch.object(map_server, fetch, side_effect=OSError("down")),
+                self.assertLogs(map_server.log, "ERROR") as logs,
+            ):
+                h = shell.get(path)
+            self.assertEqual(h.status(), 503, path)
+            self.assertEqual(json.loads(h.body()), UNREACHABLE, path)
+            self.assertIn(what, logs.output[0], path)
+
+    def test_the_eye_returns_its_rollup(self):
+        with (
+            mock.patch.object(map_server, "_fetch_eye", return_value={"x": 1}),
+            mock.patch.object(
+                map_server.eye, "build_eye", return_value={"tiers": []}
+            ) as build,
+        ):
+            got = map_server.Handler._eye.__wrapped__({}, None)
+        self.assertEqual(got, (200, {"tiers": []}))
+        build.assert_called_once_with(x=1)
+
+
+class TheThoughtsAreAHandler(unittest.TestCase):
+    def thoughts(self, query, ctx):
+        return map_server.Handler._thoughts.__wrapped__(query, ctx)
+
+    def test_a_bad_name_or_cursor_is_a_400(self):
+        self.assertEqual(
+            self.thoughts({"name": ["x1"]}, None),
+            (400, {"error": "not a character name"}),
+        )
+        self.assertEqual(
+            self.thoughts({"name": ["Grug"], "before": ["z"]}, None),
+            (400, {"error": "bad cursor"}),
+        )
+
+    def test_an_unknown_character_is_a_404(self):
+        with mock.patch.object(map_server, "_fetch_thoughts", return_value=None):
+            got = self.thoughts({"name": ["Grug"]}, None)
+        self.assertEqual(got, (404, {"error": "no such character"}))
+
+    def test_a_page_is_the_timeline(self):
+        with (
+            mock.patch.object(map_server, "_fetch_thoughts", return_value=([], "now")),
+            mock.patch.object(
+                map_server.chat, "build_timeline", return_value={"t": []}
+            ),
+        ):
+            got = self.thoughts({"name": ["Grug"], "before": ["5"]}, None)
+        self.assertEqual(got, (200, {"t": []}))
+
+    def test_the_400_bytes_are_unchanged(self):
+        h = shell.get("/api/thoughts?name=x1")
+        self.assertEqual(h.status(), 400)
+        self.assertEqual(h.body(), b'{"error": "not a character name"}')
+
+
 if __name__ == "__main__":
     unittest.main()
