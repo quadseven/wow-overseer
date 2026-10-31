@@ -41,9 +41,8 @@ from dataclasses import dataclass, replace
 class Bag:
     """One bag, either worn in a position or carried loose in the inventory.
 
-    `used` is meaningful only for a worn bag, and it is the reason a swap can
-    be refused: emptying a bag that is holding things requires somewhere to put
-    them.
+    `used` counts occupied slots. A carried bag must be empty to trade; a
+    worn bag's contents must fit in the bag that replaces it.
     """
 
     name: str
@@ -249,8 +248,8 @@ class Member:
     positions: int
     worn: tuple = ()
     carried: tuple = ()
-    # Free backpack slots, 0 when the caller did not read them. Only the move
-    # of a spare out of the bag it would replace (`move_out_spare`) reads it.
+    # Free backpack slots, 0 when unread. Moves out of a worn bag and incoming
+    # upgrades both need actual storage before the equip pass can act.
     backpack_free: int = 0
 
 
@@ -288,18 +287,22 @@ def _spares(members):
     )
 
 
-def plan_family_bags(members):
+def plan_family_bags(members, reserved=()):
     """Hand the family's idle bags to whoever has somewhere to put them.
 
-    Each empty position is filled once and each spare bag is given once. The
+    Empty positions come first, followed by one upgrade per receiver. Bags
+    reserved for a holder's own equip are left alone with that holder. The
     gain is the bag's own capacity PLUS the slot it stops occupying in the
-    giver's bags, which is why a transfer helps BOTH characters and why doing
-    this before any vendor run is worth the ordering.
+    giver's bags for an empty position; upgrades gain the capacity difference
+    because the receiver keeps the displaced bag as cargo.
     """
     spares = _spares(members)
-    taken = set()
+    taken = set(reserved)
+    settling = {m.name for m in members if any(b.guid in taken for b in m.carried)}
     moves = []
     for member in sorted(members, key=lambda m: m.name):
+        if member.name in settling:
+            continue
         empty = member.positions - len(member.worn)
         for _ in range(max(0, empty)):
             choice = next(
@@ -326,6 +329,60 @@ def plan_family_bags(members):
                     % (member.name, holder.name, bag.name),
                 )
             )
+    moves.extend(_family_bag_upgrades(members, spares, taken, settling))
+    return moves
+
+
+def _family_bag_upgrades(members, spares, taken, settling):
+    """Send one upgrade per receiver after empty positions have first choice.
+
+    With four positions worn, DoGive stores the bag as cargo. The receiver
+    needs a free general slot now; the existing self-equip pass swaps it for
+    the smallest worn bag on the next read. The displaced bag remains cargo,
+    so the net family gain is the capacity difference, without another slot.
+    """
+    moves = []
+    for member in sorted(members, key=lambda m: m.name):
+        if (
+            member.name in settling
+            or len(member.worn) != member.positions
+            or not member.worn
+        ):
+            continue
+        size, _target = _smallest_worn(member.worn)
+        free = member.backpack_free + sum(
+            b.slots - b.used for b in member.worn if b.general
+        )
+        if free <= 0 or any(b.slots > size for b in _nameable_spares(member)):
+            continue
+        choice = next(
+            (
+                (holder, bag)
+                for holder, bag in spares
+                if holder.name != member.name
+                and bag.guid not in taken
+                and bag.general
+                and bag.guid > 0
+                and bag.entry > 0
+                and bag.slots > size
+            ),
+            None,
+        )
+        if choice is None:
+            continue
+        holder, bag = choice
+        taken.add(bag.guid)
+        moves.append(
+            Handover(
+                holder.name,
+                member.name,
+                bag.name,
+                bag.guid,
+                bag.slots - size,
+                "%s carries %s as cargo; %s can replace its %d-slot bag "
+                "after receiving it" % (holder.name, bag.name, member.name, size),
+            )
+        )
     return moves
 
 
