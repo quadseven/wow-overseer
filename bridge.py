@@ -12193,6 +12193,8 @@ class Bridge(discord.Client):
         step = bag_pressure.vendor_errand_step(
             bool(leader_town.vendor), outstanding,
             pressure=pressure,
+            sale_counts={name: globals().get("_VENDOR_SELLABLE", {}).get(name)
+                         for name in names},
         )
         if (step == bag_pressure.VENDOR_ERRAND_HOLD
                 and outstanding == 0
