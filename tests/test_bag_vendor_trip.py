@@ -17,6 +17,7 @@ slot, from npc_vendor and never a hand-written list).
 import pathlib
 import re
 import unittest
+from dataclasses import replace
 
 import bag_pressure
 import jobs
@@ -177,8 +178,13 @@ class NotRepeatedOnceEveryoneWhoCanAffordOneHasOne(unittest.TestCase):
         got = trip(buyers=[buyer(name="Zug", level=20, money=2149), buyer()])
         self.assertEqual(got.buyers, ("Uzza",))
 
-    def test_a_full_backpack_has_nowhere_to_put_the_bag(self):
-        self.assertEqual(trip(buyers=[buyer(free_slots=0)]).target, "")
+    def test_a_full_backpack_can_walk_for_an_empty_worn_position(self):
+        self.assertNotEqual(trip(buyers=[buyer(free_slots=0)]).target, "")
+
+    def test_a_bank_bag_with_no_cargo_room_has_no_trip(self):
+        self.assertEqual(
+            trip(buyers=[replace(buyer(free_slots=0), bank=True)]).target, ""
+        )
 
     def test_no_empty_position_is_no_trip(self):
         self.assertEqual(trip(buyers=[buyer(open_positions=0)]).target, "")

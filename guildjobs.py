@@ -431,7 +431,9 @@ LOOT_ROOM_SHARE = (1, 4)
 
 # HOW OFTEN EACH KIND OF STEP MAY BE ASKED OF ONE MEMBER, in minutes, counted
 # from the command log so a restart forgets nothing.
+BAG_ACTION = "bag"
 COOLDOWN_MINUTES = {
+    BAG_ACTION: 20,
     "gear": 60,
     "collect": 60,
     "hearth": 60,
@@ -3500,6 +3502,7 @@ def plan(
     equip_room=None,
     mounts=None,
     loops=None,
+    bags=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -3511,6 +3514,7 @@ def plan(
     materials post still unopened in their mailbox (`without_unclaimed`);
     `banks` the guilds that own a guild bank tab, None when unread; `gear`
     name -> (gearup facts, vendor rows in reach) for gear-short members;
+    `bags` name -> a capacity-recovery step (guildbags), after class quests;
     `mail` name -> the mail commands (mailrun) waiting at its mailbox;
     `pvp` name -> (pvpgear.Aim, pvpgear.Move) for members playing PvP for an
     upgrade (#589); `leveling` the guildlevel.World a member who has outgrown
@@ -3605,6 +3609,7 @@ def plan(
             else None,
             _offer_for(mounts, m.name),
             _offer_for(loops, m.name),
+            _offer_for(bags, m.name),
         )
         asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
         helps += asked
@@ -3878,6 +3883,15 @@ def _room_first(
     return None, note
 
 
+def _bag_first(member, recovery, recent, far):
+    """A due capacity step, reserving a far-walk slot only when one is needed."""
+    if recovery is None or _cooling(member, BAG_ACTION, recent):
+        return None
+    if recovery.far and far is not None and not far.take(member.name):
+        return None
+    return recovery.step
+
+
 def _member_step(
     m,
     offer,
@@ -3906,11 +3920,13 @@ def _member_step(
     equip_room=None,
     mount=None,
     loop=None,
+    bag=None,
 ):
     """A death loop's way out of its zone first (death_loop_first, #1464),
     then a class quest, then a hunter's first pet, then a hearth out of a
     spot it cannot leave, then room in the bags for an upgrade the world
-    cannot put on without it (_room_first, #1088), then food for a member
+    cannot put on without it (_room_first, #1088), then an owned or paid bag
+    for maintenance members short of space (guildbags), then food for a member
     with nothing to eat or drink,
     then a sale for bags that leave loot on the corpse (loot_room_short), then
     the inn, then riding, then a mount (`mount`, a mountbuy.Facts), then the
@@ -3975,6 +3991,9 @@ def _member_step(
     if found is not None:
         return found
     quest_note = _join(quest_note, room_note)
+    step = _bag_first(m, bag, recent, far)
+    if step is not None:
+        return step, step.said, quest_note, ""
     found, supply_note, gear_note = _upkeep_first(
         m,
         offer,

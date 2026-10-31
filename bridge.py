@@ -34,6 +34,7 @@ import achievements
 import armory
 import auction
 import bag_market
+import guildbags
 import bag_pressure
 import bag_upgrade
 import bank
@@ -17136,6 +17137,8 @@ class Bridge(discord.Client):
         gear = await self._job_gear_offers(members, facts["recent"])
         # Food and drink for a member with none (restsupply.py).
         supply = await self._job_supply_offers(members, facts["recent"])
+        bags = (await self._job_bag_steps(members, facts["recent"], busy, cap)
+                if spawn_walks else {})
         # A hunter's first pet (hunterpet.py): the beasts around each hunter
         # that knows Tame Beast and has none.
         pets = await self._job_pet_offers(members, facts["recent"])
@@ -17166,6 +17169,7 @@ class Bridge(discord.Client):
             gear=gear, supply=supply, pets=pets, mail=mail, pvp=pvp,
             weapons=weapons,
             mounts=mounts,
+            bags=bags,
             leveling=leveling,
             focus=focus,
             # The class quest is a spawn walk and a quest row (classquest.py).
@@ -17331,6 +17335,25 @@ class Bridge(discord.Client):
             offers[name] = (facts[name], await asyncio.to_thread(
                 _fetch_gear_vendors, by_name[name], guildjobs.GUILD_GEAR_VENDOR_YARDS))
         return offers
+
+    async def _job_bag_steps(self, members, recent, busy, cap) -> dict:
+        wanted = [m for m in members
+                  if m.name not in busy and guildbags.eligible(m, recent)]
+        chosen, self._bag_read_offset = guildjobs.rotate_reads(
+            [m.name for m in wanted], getattr(self, "_bag_read_offset", 0),
+            GUILD_SUPPLY_READS_PER_PASS)
+        if not chosen:
+            return {}
+        members = [m for m in wanted if m.name in chosen]
+        containers = bag_upgrade.members_from_rows(
+            await asyncio.to_thread(_fetch_bag_state, chosen), chosen)
+        vendors = {}
+        for member in members:
+            vendors[member.name] = bag_pressure.bag_vendors_from_rows(
+                await asyncio.to_thread(_fetch_bag_vendors, member, cap))
+        steps, notes = guildbags.plan(members, containers, vendors, cap)
+        _log_capped("guild bags", notes)
+        return steps
 
     async def _job_supply_offers(self, members, recent) -> dict:
         """name -> the food and drink sold in reach, for members short of them
@@ -31779,13 +31802,13 @@ def _fetch_pvp_facts(names: list, busy=()) -> dict:
     }
 
 
-def _fetch_bag_vendors(here) -> list:
+def _fetch_bag_vendors(here, max_yards=bag_pressure.BAG_VENDOR_MAX_YARDS) -> list:
     """Rows for bag_pressure.bag_vendors_from_rows, measured from `here`.
 
     `here` is the leader's bag_pressure.Standing. Degrades to no rows on
     1054/1146, which walks nobody anywhere.
     """
-    cap = float(bag_pressure.BAG_VENDOR_MAX_YARDS)
+    cap = float(max_yards)
     x, y = float(here.x), float(here.y)
     with _connect() as conn, conn.cursor() as cur:
         try:

@@ -38,7 +38,7 @@ COPY core.py bridge.py voice.py transform.py \
      dungeonprogression.py dungeonquests.py \
      dungeonprogression.py dungeonquests.py \
      guildcraft.py tradespec.py guildbank.py guildshare.py guildroute.py orders.py guildpost.py guildwork.py workorders.py guildfund.py classtrain.py classcasts.py racespells.py purse.py vendorsale.py bankbags.py natural.py guildcorps.py guildjobs.py guildlevel.py classquest.py steps.py classask.py classparty.py classuse.py classhunt.py guildrun.py guildpug.py familyseat.py seatmeter.py guildsocial.py crafters.py recruit.py interview.py \
-     bag_pressure.py bag_upgrade.py bag_economy.py bag_market.py disposition.py bagfate.py tidy.py \
+     bag_pressure.py bag_upgrade.py bag_economy.py bag_market.py guildbags.py disposition.py bagfate.py tidy.py \
      lockbox.py clearance.py \
      item_plan.py \
      jev.py jev_items.py jev_choices.py jev_recovery.py jev_activity.py jev_keep.py jevview.py \
