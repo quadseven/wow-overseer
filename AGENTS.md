@@ -132,117 +132,98 @@ a scanner doesn't have.
 <!-- Everything above the next line is synced from quadseven/infra-public and replaced on every sync. Put this repo's own content below it. -->
 <!-- repo-specific below -->
 
-# This directory is public. Write it accordingly.
+# wow-overseer
 
-This is the Overseer website and its bridge. It was extracted from a private
-monorepo into its own repository, and that repository is public: the site and
-`quadseven/mod-overseer` are one product split across two repos, and the site
-is the natural companion to the module whose tables it reads.
+The Discord bridge and live website for a World of Warcraft realm run by bots. `quadseven/mod-overseer` runs inside the worldserver; this service writes its `overseer_command` rows and renders what it records. The two repos are one product. This file holds the rules for agents; `README.md` holds the stranger's guide.
 
-The move has happened. What was a forward-looking discipline is now simply
-true, so the rule below is no longer about **stopping the gap from widening**
-between this code and code that could be published tomorrow. It was published.
+## Layout
 
-## Why this matters more than it sounds
+- Repo root: flat Python modules. `bridge.py` is the entrypoint (the `Dockerfile` `CMD`). `map_server.py` serves the map, the site and the API.
+- `app/` and `index.html`: the operations site. `apiv2/`: the versioned read API, listed in `docs/API.md`.
+- `tests/`: the unit suite. `tools/`, `scripts/`: maintenance and local checks, not in the image.
+- `mod-overseer/`: pinned submodule, read as text by tests only. `services/strands-decider/`: a separate image.
+- `patches/`: patches carried against the fork. `UPSTREAM-PINS.env`: a test fixture, not a build input.
+- `docs/ROLLS.md`: the ship procedure. `docs/agents/area-taxonomy.md`: the label taxonomy.
 
-The blocker on publishing was never architecture. It is that ordinary writing
-in this directory assumed a private audience for a long time, and that
-assumption is baked into thousands of lines. Measured on 2026-09-03:
+## Build, test, lint
 
-    21,069 lines of Python
-        55 files naming the operator personally
-         3 files naming internal hostnames
-         1 file carrying a private IP address
+`scripts/check-locally.sh` is the local check. It reads `test-cmd` straight out of `.github/workflows/check.yml`, so it cannot drift from CI. It needs `uv` and a `python3` of at least 3.12.
 
-Re-measured on 2026-09-19, immediately before the repository went public. The
-private IP is gone, and so is every internal hostname that sat in a comment or
-a docstring. What remains:
+    scripts/check-locally.sh        # the unittest job: pin checks, compile check, suite; a few minutes
+    scripts/check-locally.sh lint   # the lint job: pinned ruff check and format check
+    scripts/check-locally.sh all    # both
+    scripts/check-locally.sh print  # show the commands and run nothing
 
-        47 files naming the operator personally (first name only: no
-           surname, no email address, no location appears anywhere here)
-         3 call sites where an internal hostname is a FUNCTIONAL DEFAULT,
-           not prose - `LLM_URL` in bridge.py and map_server.py, and
-           `WOW_STREAM_BASE` in family.py
+A new worktree has no submodule. The script initializes `mod-overseer` and warns when the checked-out commit is not the pin. A bare `python3 -m unittest` without the submodule and pinned requirements reports hundreds of failures and skips that CI never sees, so do not judge a change by it.
 
-That second group is deliberately still here. Nothing in the deployment sets
-those three variables, so the defaults are what production actually runs on;
-blanking them to scrub a hostname would silently break the language model
-calls and every stream URL on the site. Paying that down means setting the
-variables in the deployment FIRST and neutralising the defaults second, in
-that order, as its own change.
+`docker build -t wow-overseer .` builds the bridge image.
 
-None of that is a secret in the scanner sense. No key, no token, nothing a
-secret scan would stop. It is a real person's name in a comment explaining why
-a timeout exists, an internal hostname in a docstring, a home network address
-in a default. Every one is individually harmless and collectively they are the
-reason "just move the directory" is a scrub of a twenty-thousand-line codebase
-rather than a `git mv`.
+## Checks on a pull request
 
-The debt is already written. The rule below exists so it stops growing.
+Required by ruleset on `main`: a PR, `Grug - Chief` and `Grug - Elder`. Force pushes and branch deletion are refused. Approvals are not required.
 
-## The rule
+Not required, but the merge gate below binds them: `unittest / check`, `lint / check`, `overseer image (build + publish)`, `leak-scan`, and CodeQL. `check.yml` and `build.yml` carry path filters, so a Markdown-only PR runs neither; run the tests that read a changed doc yourself. `tests/test_check_locally.py` requires this file to name `scripts/check-locally.sh`.
 
-**Write every new line in this directory for a stranger.** Same discipline as
-`quadseven/mod-overseer/AGENTS.md`, which is the canonical version and worth
-reading in full: it was written after real names, a real home network's
-addresses, and a live credential reached a public tracker through ordinary
-conversational writing rather than through careless code.
+## Traps
 
-Concretely, in anything you add here:
+- The file above `<!-- repo-specific below -->` is synced from `quadseven/infra-public` and replaced on every sync. Edit below the marker only.
+- `bridge.py` and `map_server.py` are read as text by about 110 source-shape tests. The formatter skips both (`ruff.toml`). Do not reflow them.
+- The `Dockerfile` lists each module by hand. A new module imported by the bridge or site goes in that list or the image breaks.
+- `AC_OVERSEER_SHA` in `UPSTREAM-PINS.env` must equal the `mod-overseer` submodule pin. `AC_MODULE_SHA` must equal the deploy repo's value; `check_fork_pin_parity.py` compares them. After a bump, re-run `git apply --check` for every file under `patches/` against the fork at the new revision.
+- `check_mod_overseer_pin.py` fetches the module's main branch, so the unittest job needs network access.
+- Inside a lane sandbox, the tests that serve a fake site on localhost skip; CI runs them.
 
-- **No real personal names.** Say "the operator", "a reviewer", "a
-  collaborator". The existing 55 files are debt to be paid down, not a
-  precedent to follow.
-- **No internal hostnames.** Not a tailnet name, not a registry host, not a
-  box name. Take them from config or environment, and in prose say "the
-  streaming host" or "the private registry".
-- **No private IPs or device identifiers.**
-- **No credentials of any kind**, including in a test fixture, and including
-  one you believe is already rotated.
+## How it ships
 
-This applies to code, comments, docstrings, test fixtures, commit messages that
-touch these paths, and PR bodies describing them.
+Merging deploys nothing. A push to `main` publishes `ghcr.io/quadseven/wow-overseer:sha-<12>`, and a private deploy repo pins the image by digest. `docs/ROLLS.md` is the whole procedure: a bridge ship restarts the bridge and site, and a worldserver roll logs every bot out. Label a merged, undeployed ticket `loom:merged`. `loom:shipped` means it is on the realm and its proof line was seen.
 
-## When you touch a file that already violates it
+## Write every new line for a stranger
 
-Fix the lines you are already editing. Do not embark on a directory-wide scrub
-as a side quest in an unrelated change: a 55-file rename buried inside a bugfix
-is unreviewable, and the reviewer cannot tell the rename from the fix.
+This repo was extracted from a private monorepo, and the old code still carries debt: files that name the operator, and three functional defaults that hold an internal hostname (`LLM_URL` in `bridge.py` and `map_server.py`, `WOW_STREAM_BASE` in `family.py`). Production may rely on those defaults. Set the variable in the deployment first and neutralize the default second, as a change of its own.
 
-If you want to pay the debt down deliberately, that is its own change with its
-own PR, and it is welcome.
+The debt is not a precedent. In anything added here, including code, comments, fixtures, commit messages and PR bodies:
 
-## What this file is not
+- No real personal names. Say "the operator", "a reviewer", "a collaborator".
+- No internal hostnames. Take them from config or the environment. In prose, say "the streaming host" or "the private registry".
+- No private IPs or device identifiers.
+- No credentials of any kind, including in a test fixture, and including one believed rotated.
 
-It is not permission to relax. The repository being public does not make the
-remaining debt harmless. It makes it visible. The rule above is now load
-bearing rather than anticipatory: a personal detail or an internal hostname
-added here is disclosed the moment it is pushed, with no private window in
-which to catch it.
+When a file already violates this, fix the lines being edited. Do not scrub a whole directory inside an unrelated change; paying the debt down is its own PR, and welcome.
 
-The one thing that did get easier: the decision to publish is made, so it is
-no longer a project hanging over every change.
+## Filing issues
 
-## Running the tests
+Give every ticket and epic in this repo and in `quadseven/mod-overseer` exactly one `area:` label, plus topic labels such as `dungeon:blackfathom` or `trade:leatherworking`. An epic sits in one area, holds at most 15 tickets, and splits by topic when it outgrows that. Never file into a generic intake epic. The areas, topic labels and reasons are in `docs/agents/area-taxonomy.md`.
 
-Run `scripts/check-locally.sh` from any checkout or `git worktree add`. It
-runs the same command CI's unittest job runs, read straight out of
-`.github/workflows/check.yml`: a compile check against the Python 3.12
-floor, then the whole suite under uv's Python 3.12 with
-`tests/requirements.txt`, one process per test module
-(`.github/scripts/unittest_parallel.py`). It takes a few minutes and needs
-`uv` and a `python3` of at least 3.12 on PATH.
+## How work moves here
 
-The suite reads the `mod-overseer` submodule's sources as text, and a new
-worktree has no submodule. The script runs
-`git submodule update --init mod-overseer` when it is missing and warns when
-the checked-out commit is not the pinned one. A bare `python3 -m unittest`
-without the submodule and the pinned requirements reports hundreds of
-failures and skips that CI never sees, so do not judge a change by it.
+Several AI brains work this repo beside the operator: Claude Code, Muse, Dot and the Loom factory. Loom has a station that dispatches, a brain that briefs and merges, and lanes that build. No brain outranks another. Each acts under its own GitHub App, never a person's account, and signs posts `-- <name>`.
 
-`scripts/check-locally.sh lint` runs the lint job's pinned ruff
-(`ruff check` and `ruff format --check`), and `all` runs both.
+**Claims.** Put `claim:<name>` on a ticket before starting, and create the label if this repo lacks it. Check first and skip a ticket already held. One claim per ticket: the station keeps the earliest and removes the rest. A claim expires after 2 hours with no real activity, unless a comment holds it with `waiting: <what> until <time>`, or an open PR the claimer wrote and referenced holds it for up to 7 days. `claim:quadseven` is a person: leave those tickets alone. On stopping, push the work and say what is done, what is next, and the branch and head. Take over only an expired or plainly dead claim, after reading the holder's comments and open PRs.
 
-## Filing issues: every ticket names its area of play
+**Labels.** Loom sets one state label per ticket:
 
-Every open ticket and every epic in this repo and in mod-overseer carries exactly one `area:` label, plus topic labels such as `dungeon:blackfathom` or `trade:leatherworking`. An epic sits in one area, holds at most 15 tickets, and splits by topic when it outgrows that. Never file into a generic intake epic. The areas, the topic labels and the reasons are in `docs/agents/area-taxonomy.md`.
+`loom:triage` (not ready) -> `loom:queued` (no lane) -> `loom:briefed` + `lane:<name>` -> `loom:running` -> `loom:pr` -> `loom:merged` -> `loom:shipped` -> `loom:verified`, then closed.
+
+`loom:ticket` marks every ticket. `loom:failed` means the runner gave up; the reason is on the ticket. `wait:*` names why a ticket is held. `needs:human` is an ask for a person. `loom:factory` marks a fault in the factory itself.
+
+**CI and required checks.** Required checks differ per repo, so read them live: `gh api repos/<owner>/<repo>/rules/branches/<default-branch>`. Every repo needs a PR and `Grug - Chief`; most add test jobs; some add `Grug - Elder`. Run each command in `.loom/validation.conf` before pushing, and read the failing workflow file before guessing at a red check.
+
+- Shared workflows come from `quadseven/infra-public`, pinned by full SHA.
+- Leak scan: reads the diff and the PR title and body, and a scan that cannot run is red. It has 9 rules: tailnet hosts, tailnet IPs, private-range IPs, server names, node names, user paths, MAC addresses, the stray mention, and cross-repo refs. A ref of the form `name#N` or `owner/name#N` to any other repo fails, public or not, unless `allowed-repo-refs` in `check.leak-scan.yml` lists it. Bare `#N` means this repo. A line with `leak-guard-allow` is exempt and visible in review; use it only for a real false positive.
+- Trust gate: none here. Every job in this repo runs on a GitHub-hosted runner.
+- Other guards, where a repo calls them: workflow hygiene, size ratchet, CI config freshness, and close completeness, which reopens an issue closed with unticked boxes.
+- Agent Apps cannot push `.github/workflows` changes.
+
+**`grug`.** The bot is `grug-tribe[bot]`, driven by slash commands in a PR comment. Its handle takes no at-sign.
+
+- `Grug - Chief` reads the PR body. It wants `## Why` (5+ words), `## Acceptance criteria` (3+ bullets), `## Out of scope`, `Size: XS|S|M|L`, and `Refs <owner>/<repo>#N` or `Refs #N` to a ticket that is an epic or sits under one. Text in HTML comments does not count. Closing keywords are out: tickets close when their boxes are ticked.
+- A body with an agent marker (such as a session link) from an App author, or a Loom lane footer, gets a neutral Chief: `Hunt Plan skipped`. Neutral passes. A body with no marker gets the full check, so write the full shape every time.
+- `Grug - Elder` reviews the code by LLM. `/grug improve` re-runs it. `/grug recheck` re-runs Chief only. Five pushes in ten minutes pause Elder until `/grug resume`.
+- A degraded or partial review says `Degraded review (<reason>): not a verdict`. It is not a pass, whether it concludes failure or neutral. Run `/grug improve` once the backend recovers.
+- `Grug - Guard` scans for security problems and is advisory unless the repo turns on blocking. Haunt, once called Sentinel, comments when a PR closes over an unresolved critical finding. It posts no check; answer its comment and re-verify.
+
+**Merge gate.** Rulesets enforce less than this, and this binds: CI green, `Grug - Elder` success on the head (neutral is not enough), `Grug - Chief` success or neutral, not behind base, every bot thread answered, and a test that fails without the fix. `gh pr checks` does not show threads, so read `reviewThreads` by GraphQL and `pulls/<n>/reviews`. Anyone merges what they built. Loom merges docs, test and app code tiers alone and holds deploy, security and cross-repo tiers for the operator. A change to how brains merge, close or rewrite needs a fleet chat line and a 5 minute wait. Never use `--admin`.
+
+**Human line.** People do: permanent deletion of records, creating, rotating or entering credentials, access grants, new spending, accepting terms. People decide: another brain's role and the fleet goal text. A second brain must agree, in writing, to clear a lane demotion, lift another brain's hold, or reopen a sound close. Everything else needs nobody. Ask with `needs:human` and one exact question. A relayed yes is not a yes. Never print a credential.
+
+**When stuck.** Labels and stages: `docs/BRAIN.md` in `quadseven/loom`. Reusable workflows: `docs/reusables.md` in `quadseven/infra-public`. Chief's rules and every `/grug` verb: the README in `quadseven/grug`, whose `make chief-check` tests a body before posting. Fleet log: issue 30 in `quadseven/loom`. File a factory fault there as `loom:factory`. Poll `gh` at most once per 5 minutes.
