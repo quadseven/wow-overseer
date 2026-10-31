@@ -12,6 +12,8 @@ safety checks that still gate a roll in the file.
 """
 
 import pathlib
+import json
+import re
 import unittest
 
 ROLLS = pathlib.Path(__file__).resolve().parent.parent / "docs" / "ROLLS.md"
@@ -67,6 +69,35 @@ class RollsDocTest(unittest.TestCase):
         for kept in ("build.yml", "Pre-roll adversarial review"):
             with self.subTest(kept=kept):
                 self.assertTrue(kept in bridge_ship, f"ROLLS.md 1a lost: {kept!r}")
+
+    def test_roll_source_pins_cover_every_location_in_step_two(self):
+        blocks = re.findall(r"```loom-roll-pins\s*\n(.*?)\n\s*```", self.text, re.S)
+        self.assertEqual(len(blocks), 1, "ROLLS.md must contain exactly one pin block")
+        pins = json.loads(blocks[0])
+        self.assertIn("deployment_repo", pins)
+        self.assertIn("build_workflow", pins)
+        sources = pins["sources"]
+        declared = json.dumps(sources)
+        step = self.text.split("**Bump the source pins only**", 1)[1].split(
+            "3. **Read", 1
+        )[0]
+        required = (
+            "AC_OVERSEER_SHA",
+            "AC_DUNGEON_CLEAR_SHA",
+            "AC_CORE_SHA",
+            "AC_MODULE_SHA",
+            "AC_OLLAMA_CHAT_SHA",
+            "production/docker/azerothcore-playerbots/",
+            ".github/scripts/wow_promotion_drift.py",
+            '"dev"',
+            "revision_repo",
+            "revision_ref",
+            "dict_dev",
+        )
+        for location in required:
+            with self.subTest(location=location):
+                self.assertIn(location, step)
+                self.assertIn(location, declared, f"source pins omit {location}")
 
 
 if __name__ == "__main__":
