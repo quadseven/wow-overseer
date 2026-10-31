@@ -15,6 +15,70 @@ import towntrip
 
 
 class BankBagsReachThePurchasePath(unittest.TestCase):
+    def test_a_placeable_bank_bag_survives_the_vendor_reader(self):
+        bag = bankbags.Bag(200, 4496, 6)
+        facts = [bankbags.Facts("Og", bought=1, worn=(12,) * 4, spare=(bag,))]
+        row = dict(
+            holder="Og",
+            item_guid=200,
+            entry=4496,
+            name="Pouch",
+            item_class=1,
+            bonding=0,
+            instance_flags=0,
+            count=1,
+            container_slots=6,
+            sell_price=125,
+            quality=1,
+        )
+
+        class Read:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def cursor(self):
+                return self
+
+            def execute(self, *args):
+                pass
+
+            def fetchall(self):
+                return [row]
+
+        env = dict(
+            _connect=Read,
+            _SURPLUS_BAGS_SQL="SELECT %s",
+            bankbags=bankbags,
+            bag_pressure=bag_pressure,
+            _fetch_bank_bag_facts=lambda names: facts,
+            log=SimpleNamespace(info=lambda *a: None, warning=lambda *a: None),
+        )
+        source = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
+        tree = ast.parse(source.read_text())
+        fn = next(
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "_fetch_surplus_bags"
+        )
+        exec(compile(ast.Module(body=[fn], type_ignores=[]), str(source), "exec"), env)
+        rows = env["_fetch_surplus_bags"](["Og"])
+        self.assertEqual(bag_pressure.bag_candidates(rows, {"Og": [12] * 4}), ())
+        count = next(
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "_sellable_per_holder"
+        )
+        env["OWNER_KEEPS"] = ()
+        exec(
+            compile(ast.Module(body=[count], type_ignores=[]), str(source), "exec"), env
+        )
+        self.assertEqual(
+            env["_sellable_per_holder"]([], rows, {"Og": [12] * 4}, ["Og"]), {"Og": 0}
+        )
+
     def buy(self, *, facts=None, offer=None, free=1, at_vendor=True, seen=()):
         rows = [
             dict(
@@ -193,6 +257,93 @@ class BankBagsReachThePurchasePath(unittest.TestCase):
             [buyer], [small, replace(larger, price=300001)]
         )
         self.assertEqual([p.entry for p in purchases], [1])
+
+
+class BankReservationsAreBounded(unittest.TestCase):
+    def test_a_bound_spare_only_fills_its_owners_empty_worn_position(self):
+        holder = bag_upgrade.Member(
+            "Og",
+            4,
+            worn=(bag_upgrade.Bag("Worn", 12),) * 4,
+            carried=(bag_upgrade.Bag("Bound", 10, guid=200, entry=6446, bound=True),),
+        )
+        sibling = bag_upgrade.Member("Ugga", 4, worn=(bag_upgrade.Bag("Worn", 8),) * 3)
+        self.assertEqual(
+            bag_pressure.open_bag_positions([holder, sibling]), {"Og": 0, "Ugga": 1}
+        )
+        holder = replace(holder, worn=holder.worn[:3])
+        self.assertEqual(
+            bag_pressure.open_bag_positions([holder, sibling]), {"Og": 0, "Ugga": 1}
+        )
+
+    def test_a_soulbound_spare_uses_its_holders_bank_instead_of_a_family_gift(self):
+        rows = [
+            dict(
+                holder="Og",
+                guid=100 + i,
+                item_guid=100 + i,
+                name="Worn",
+                entry=4499,
+                slots=12,
+                bag=0,
+                slot=19 + i,
+                instance_flags=0,
+                bonding=0,
+            )
+            for i in range(4)
+        ]
+        rows.append(
+            dict(
+                holder="Og",
+                guid=200,
+                item_guid=200,
+                name="Snakeskin Bag",
+                entry=6446,
+                slots=10,
+                bag=0,
+                slot=23,
+                instance_flags=1,
+                bonding=1,
+            )
+        )
+        (holder,) = bag_upgrade.members_from_rows(rows, ["Og"])
+        sibling = bag_upgrade.Member(
+            "Ugga",
+            4,
+            worn=tuple(bag_upgrade.Bag("Worn", n) for n in (8, 10, 10, 12)),
+            backpack_free=1,
+        )
+        self.assertEqual(bag_upgrade.plan_family_bags([holder, sibling]), [])
+        (facts,) = bankbags.facts_from_rows([dict(name="Og", bank_slots=1)], rows)
+        other = bankbags.Facts("Ugga", worn=(8, 10, 10, 12))
+        step, _ = bankbags.step(facts, 8)
+        self.assertEqual(step.command, "place-bag guid:200")
+        self.assertEqual(bankbags.reserved_guids([facts, other]), frozenset({200}))
+        self.assertEqual(bankbags.supply_needs([facts, other]), [])
+
+    def test_only_empty_bought_positions_reserve_the_largest_placeable_bags(self):
+        f = bankbags.Facts(
+            "Og",
+            bought=2,
+            worn=(12,) * 4,
+            spare=(
+                bankbags.Bag(1, 4496, 6),
+                bankbags.Bag(2, 4498, 8),
+                bankbags.Bag(3, 6446, 10),
+            ),
+        )
+        self.assertEqual(bankbags.reserved_guids([f]), frozenset({2, 3}))
+        self.assertEqual(bankbags.reserved_guids([replace(f, placed=2)]), frozenset())
+
+    def test_a_family_upgrade_and_a_corps_bag_do_not_become_bank_reservations(self):
+        f = bankbags.Facts(
+            "Og", bought=1, worn=(12,) * 4, spare=(bankbags.Bag(1, 6446, 10),)
+        )
+        sibling = bankbags.Facts("Ugga", worn=(8, 10, 10, 12))
+        self.assertEqual(bankbags.reserved_guids([f, sibling]), frozenset())
+        f = replace(f, crafter=True)
+        f = replace(f, spare=(bankbags.Bag(2, next(iter(f.protected_entries)), 6),))
+        self.assertEqual(bankbags.reserved_guids([f]), frozenset())
 
 
 if __name__ == "__main__":

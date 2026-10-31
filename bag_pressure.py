@@ -1170,10 +1170,18 @@ def open_bag_positions(members) -> dict:
     family already owns. The spares are counted against the family's open
     positions in name order, the order bag_upgrade.plan_family_bags fills them.
     """
-    spares = sum(1 for m in members for bag in m.carried if bag.used == 0)
+    spares = sum(
+        1 for m in members for bag in m.carried if bag.used == 0 and not bag.bound
+    )
     out = {}
     for member in sorted(members, key=lambda m: m.name):
         empty = max(0, int(member.positions) - len(member.worn))
+        own_bound = sum(
+            1
+            for b in member.carried
+            if b.bound and b.used == 0 and b.general and b.entry > 0
+        )
+        empty = max(0, empty - own_bound)
         filled = min(empty, spares)
         spares -= filled
         out[member.name] = empty - filled
@@ -1811,6 +1819,8 @@ def bag_candidates(
     """
     out = []
     for row in rows:
+        if row.get("bank_reserved"):
+            continue
         if owner_keeps(row.get("name", ""), keep_names):
             continue
         if corps_bag_kept(row):
