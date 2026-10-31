@@ -12,6 +12,7 @@ say.
 
 import json
 import pathlib
+import re
 import sys
 import unittest
 
@@ -172,6 +173,10 @@ MUTATORS = [
 
 
 class ProbesAreReadOnly(unittest.TestCase):
+    def test_every_module_probe_is_available_from_the_tool(self):
+        handled = set(re.findall(r'\bwhat == "([^"]+)"', _probe_source()))
+        self.assertSetEqual(set(probe.PROBES), handled)
+
     def test_no_probe_mutates_the_character(self):
         body = _probe_source()
         for call in MUTATORS:
