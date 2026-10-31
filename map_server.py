@@ -4400,12 +4400,13 @@ def _v2_context(read) -> _V2Context:
 # request refused before any read opens nothing. A handler that raises is
 # logged as `what` and answers 503, so a dead database reads as "world
 # unreachable", never a blank page. `sender` is the request handler, or the
-# stand-in a shared read builds against (_Captured).
-def _answer(sender, handler, query: dict, what: str) -> None:
+# stand-in a shared read builds against (_Captured). `dumps` goes to json.dumps:
+# default=str for a payload that carries database values such as datetimes.
+def _answer(sender, handler, query: dict, what: str, **dumps) -> None:
     try:
         with realmread.Session(_connect) as rd:
             code, payload = handler(query, _v2_context(rd))
-        body = json.dumps(payload).encode()
+        body = json.dumps(payload, **dumps).encode()
     except Exception:
         log.exception("%s", what)
         sender._send(503, "application/json", b'{"error": "world unreachable"}')
@@ -4413,13 +4414,13 @@ def _answer(sender, handler, query: dict, what: str) -> None:
     sender._send(code, "application/json", body)
 
 
-def _get_route(what: str):
+def _get_route(what: str, **dumps):
     """A v1 GET handler(query, ctx) -> (status, payload) as the method
     GET_ROUTES calls, answered by _answer; `what` is its failure's log line."""
     def wrap(handler):
         @functools.wraps(handler)
         def route(sender, query: dict) -> None:
-            _answer(sender, handler, query, what)
+            _answer(sender, handler, query, what, **dumps)
         return route
     return wrap
 
@@ -6090,17 +6091,15 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("levelroute query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
-    def _guild_gear(self, _query: dict) -> None:
+    @_get_route("guild gear query failed")
+    def _guild_gear(_query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/guildgear - every family-guild member's gear, one table.
 
         No parameters: it answers about the guilds the families are in and
         nothing else (guildgear.py has the rules)."""
-        try:
-            payload = guildgear.build(_fetch_guild_gear())
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            log.exception("guild gear query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        payload = guildgear.build(_fetch_guild_gear())
+        return 200, payload
 
     def _armory_member(self, query: dict) -> None:
         """GET /api/armory/member?name=X - one guildmate's full profile.
@@ -6233,70 +6232,60 @@ class Handler(BaseHTTPRequestHandler):
             return {"member": member}
         self._client_frame(query, build, "quests")
 
-    def _guild_runs(self, _query: dict) -> None:
+    @_get_route("guild runs query failed", default=str)
+    def _guild_runs(_query: dict, ctx) -> tuple[int, dict]:
         """GET /api/guildruns - the guild coordinator's groups (guildrun).
 
         The groups in flight, the last thirty that ended with their outcomes,
         and each (dungeon, band, composition) record the coordinator learns
         from. No parameters: it is one realm's guild runs. A world without the
-        table (the bridge creates it) answers empty rather than 503.
+        table (the bridge creates it) answers empty rather than 503; any other
+        failed read is _answer's 503.
         """
-        try:
-            with realmread.Session(_connect) as rd:
-                payload = guildrun.page(guildrun.recent(rd, n=GUILD_RUNS_LIMIT))
-                # Why each run that came back went the way it did.
-                guildrun.with_stories(rd, payload["recent"])
-            self._send(200, "application/json", json.dumps(payload, default=str).encode())
-        except Exception:
-            log.exception("guild runs query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        rd = ctx.read
+        payload = guildrun.page(guildrun.recent(rd, n=GUILD_RUNS_LIMIT))
+        # Why each run that came back went the way it did.
+        guildrun.with_stories(rd, payload["recent"])
+        return 200, payload
 
-    def _guild_seats(self, _query: dict) -> None:
+    @_get_route("guild seats query failed", default=str)
+    def _guild_seats(_query: dict, ctx) -> tuple[int, dict]:
         """GET /api/guildseats - the carry-ready tanks and healers per door (#784).
 
         The bridge counts them every few minutes and leaves one memo row per
         guild (seatmeter.bench); this reads those rows. A guild the bridge has
         not written lately is absent, a world without the memo table answers
-        empty rather than 503.
+        empty rather than 503; any other failed read is _answer's 503.
         """
-        try:
-            with realmread.Session(_connect) as rd:
-                rows = rd.rows(seatmeter.BENCH_READ_SQL, (seatmeter.BENCH_KIND,),
-                               what="overseer_bridge_memo")
-            self._send(200, "application/json",
-                       json.dumps(seatmeter.page(rows), default=str).encode())
-        except Exception:
-            log.exception("guild seats query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        rows = ctx.read.rows(seatmeter.BENCH_READ_SQL, (seatmeter.BENCH_KIND,),
+                             what="overseer_bridge_memo")
+        return 200, seatmeter.page(rows)
 
-    def _guild_chat(self, query: dict) -> None:
+    @_get_route("guild chat query failed", default=str)
+    def _guild_chat(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/guildchat?guild=X&limit=N - the guild's asks and answers.
 
         `guild` must be one of the configured guilds (guildrun.limits), else
         400; absent, it is the first one. `limit` is clamped to 1..100 and
         defaults to 30. Newest ask first, each with its answers and, for an
         ask that became a run, that run's outcome. A world without the ask
-        tables answers an empty list with `ready: false`, not a 503.
+        tables answers an empty list with `ready: false`, not a 503; any other
+        failed read is _answer's 503.
         """
+        guilds = guildrun.limits().guilds
+        wanted = query.get("guild", [""])[0] or guilds[0]
+        if wanted not in guilds:
+            return 400, {"error": "not a guild"}
+        limit = _guildchat_limit(query.get("limit", [""])[0])
         try:
-            guilds = guildrun.limits().guilds
-            wanted = query.get("guild", [""])[0] or guilds[0]
-            if wanted not in guilds:
-                self._send(400, "application/json", b'{"error": "not a guild"}')
-                return
-            limit = _guildchat_limit(query.get("limit", [""])[0])
-            try:
-                payload = _fetch_guild_chat(wanted, limit)
-                payload["guilds"] = list(guilds)
-            except realmread.Gap as gap:
-                if gap.code != realmread.MISSING_TABLE:
-                    raise
-                payload = {"guild": wanted, "guilds": list(guilds),
-                           "ready": False, "asks": []}
-            self._send(200, "application/json", json.dumps(payload, default=str).encode())
-        except Exception:
-            log.exception("guild chat query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+            payload = _fetch_guild_chat(wanted, limit)
+            payload["guilds"] = list(guilds)
+        except realmread.Gap as gap:
+            if gap.code != realmread.MISSING_TABLE:
+                raise
+            payload = {"guild": wanted, "guilds": list(guilds),
+                       "ready": False, "asks": []}
+        return 200, payload
 
     def _director_state(self, _query: dict) -> None:
         """GET /api/director - what the Watcher has been told, and what it is doing.
