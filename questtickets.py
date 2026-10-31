@@ -229,8 +229,9 @@ class SqlStore:
 
 
 def run(store, client, catalogue, site: str = "") -> dict:
-    """One pass: {filed, copied, stuck}. A refused filing frees its quest for
-    the next pass and is raised, so the pass stops and the bridge logs it."""
+    """One pass: {filed, copied, stuck, unlinked}. A refused filing frees its
+    quest for the next pass and is raised, so the pass stops and the bridge
+    logs it. unlinked lists issues filed but not linked under the epic."""
     todo = plan(store.broken())
     for quest, ticket in todo.copies:
         store.take(quest, ticket)
@@ -247,15 +248,23 @@ def run(store, client, catalogue, site: str = "") -> dict:
             raise
         store.filed(quest, number)
         filed += 1
-    return {"filed": filed, "copied": len(todo.copies), "stuck": list(todo.stuck)}
+    unlinked, client.unlinked = client.unlinked, []
+    return {
+        "filed": filed,
+        "copied": len(todo.copies),
+        "stuck": list(todo.stuck),
+        "unlinked": unlinked,
+    }
 
 
 class Client:
     """Files an issue and links it under the epic. The link is best kept
-    apart: the issue exists by then, so a refused link never files twice."""
+    apart: the issue exists by then, so a refused link never files twice. It
+    goes on unlinked for the pass to report, not silently."""
 
     def __init__(self, github, log=None):
         self.github, self.log = github, log
+        self.unlinked: list = []
 
     def file(self, heading: str, text: str) -> int:
         made = self.github.call(
@@ -272,6 +281,7 @@ class Client:
                 ok=(201,),
             )
         except Exception:
+            self.unlinked.append(int(made["number"]))
             if self.log:
                 self.log.exception(
                     "quest tickets: #%d is not linked under #%d", made["number"], EPIC

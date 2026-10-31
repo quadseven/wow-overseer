@@ -23248,6 +23248,9 @@ class Bridge(discord.Client):
                 if done["stuck"]:
                     log.error("quest tickets: a filing never finished for quests %s; "
                               "check for an issue, then set their ticket", done["stuck"])
+                if done["unlinked"]:
+                    log.error("quest tickets: issues %s are filed but not under the epic; "
+                              "link them by hand", done["unlinked"])
             except Exception:
                 log.exception("quest tickets: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)

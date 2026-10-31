@@ -103,8 +103,12 @@ class Filing(unittest.TestCase):
 
     def test_a_refused_link_keeps_the_issue_it_filed(self):
         store = Store([row(1)])
-        self.run_pass(store, FakeGitHub(refuse="sub_issues"))
+        done = self.run_pass(store, FakeGitHub(refuse="sub_issues"))
         self.assertEqual(store.rows[0]["ticket"], 1001)
+        self.assertEqual(done["unlinked"], [1001])
+
+    def test_a_linked_issue_is_not_reported_unlinked(self):
+        self.assertEqual(self.run_pass(Store([row(1)]))["unlinked"], [])
 
     def test_a_filing_that_never_finished_is_reported_and_not_retried(self):
         done = self.run_pass(Store([row(1, ticket=qt.FILING)]))
