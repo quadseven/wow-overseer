@@ -39,6 +39,7 @@ import classcasts
 import classic
 import dungeonplan
 import guildroute
+import racespells
 
 LOG_PREFIX = "guild training:"
 # The command log's source for a class trainer walk: `guildtrain:<member>`.
@@ -102,7 +103,7 @@ class Due:
         return self.count > 0 and _int(money) >= self.cheapest
 
 
-def due(trainer_rows, known, level, class_id=None) -> Due:
+def due(trainer_rows, known, level, class_id=None, race_id=None, own_class=None) -> Due:
     """The class spells one trainer visit can teach, and what they cost.
 
     A visit teaches in dependency order, so a spell counts not only when
@@ -111,6 +112,11 @@ def due(trainer_rows, known, level, class_id=None) -> Due:
     behind owes the whole chain up to its level at once (#792), not just
     the next rank. A spell above the member's level, or one requiring a
     spell no row in the chain teaches (a talent), stays out.
+
+    With `race_id` and `own_class` (the member's race and class), a spell
+    the member's race can never learn is left out (racespells.py, #792):
+    the core refuses it, so counting it walked the member to a trainer that
+    would not teach it.
 
     With `class_id`, only the spells a member of that class casts or holds
     passively (classcasts.py): what the member's purchase order saves for
@@ -124,6 +130,7 @@ def due(trainer_rows, known, level, class_id=None) -> Due:
         if _int(row["spell"]) not in known
         and _int(row.get("level")) <= level
         and (class_id is None or classcasts.casts(class_id, row["spell"]))
+        and (race_id is None or racespells.fits(row["spell"], race_id, own_class))
     ]
     costs = []
     taught = set(known)
