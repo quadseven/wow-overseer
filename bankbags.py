@@ -19,6 +19,10 @@ ONE STEP A VISIT, at a banker, in a player's order:
   2. Every bought slot holds a bag and the next slot costs at most a
      PURSE_SHARE of the purse: buy it.
 
+If a bought position has no placeable bag, supply_needs asks the ordinary
+vendor-bag pass for one. The vendor charges the normal price, and the bank
+pass places it on arrival. A bank bag is not equipped into a worn position.
+
 THE PRICES ARE THE REALM'S OWN. Read from the worldserver's
 BankBagSlotPrices.dbc on wow-dev 2026-10-05: 10 silver, 1 gold, 10 gold, then
 25 gold for each of the last four. The core reads the same file and refuses a
@@ -74,6 +78,19 @@ class Facts:
     spare: tuple = ()  # Bag, carried and not worn
     crafter: bool = False  # holds tailoring: its ladder bags are the guild's
 
+    @property
+    def protected_entries(self) -> frozenset[int]:
+        return frozenset(guildcorps.BAG_ITEMS) if self.crafter else frozenset()
+
+
+@dataclass(frozen=True)
+class SupplyNeed:
+    """A bag that can fill an already bought bank position."""
+
+    name: str
+    max_slots: int
+    excluded_entries: frozenset[int]
+
 
 @dataclass(frozen=True)
 class Step:
@@ -105,11 +122,26 @@ def placeable(facts: Facts, floor=None) -> list:
         (
             b
             for b in facts.spare
-            if b.slots <= floor
-            and not (facts.crafter and b.entry in guildcorps.BAG_ITEMS)
+            if b.slots <= floor and b.entry not in facts.protected_entries
         ),
         key=lambda b: (-b.slots, b.guid),
     )
+
+
+def supply_needs(family) -> list[SupplyNeed]:
+    """Buy a placeable bag when an empty bank position has none coming.
+
+    Worn positions and the family's existing spare bags come first. The
+    size cap and corps exclusions are the same ones placement will enforce.
+    """
+    floor = family_floor(family)
+    if floor <= 0:
+        return []
+    return [
+        SupplyNeed(f.name, floor, f.protected_entries)
+        for f in family
+        if f.bought > f.placed and not placeable(f, floor)
+    ]
 
 
 def step(facts: Facts, floor=None):
