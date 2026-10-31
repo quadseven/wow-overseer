@@ -658,7 +658,7 @@ class TheBridgeWiring(unittest.TestCase):
         )
         self.assertLess(
             body.index("self._auction_bag_upgrades("),
-            body.index("if not shoppers:"),
+            body.index("if not shoppers and not buys:"),
         )
 
     def test_the_auction_half_buys_only_at_a_counter_of_the_planned_house(self):

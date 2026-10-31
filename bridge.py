@@ -3200,6 +3200,9 @@ TRIP_CLOCK_MEMO_SECONDS = 6 * 3600
 # borrower past ERRAND_LEAD_HOURS must stay skipped, so its memo is kept for a
 # week like the owed clock's; borrow_clock drops it once no errand is left.
 LEAD_CLOCK_MEMO_SECONDS = 7 * 24 * 3600
+# A material request's route is kept as long as its event is read (#476), so a
+# deploy does not route a request it already acted on a second time.
+MATERIAL_REQUEST_MEMO_SECONDS = craft_rhythm.READ_SECONDS
 
 
 def _trip_clock(movement) -> float:
@@ -7332,6 +7335,12 @@ class Bridge(discord.Client):
             "lead_borrow", "borrowed lead", tradechoice.borrow_clock_memo,
             tradechoice.borrow_clock_from_memo, lambda since: min(since.values()),
             LEAD_CLOCK_MEMO_SECONDS)
+        # Material requests routed to a gather or a buy errand (#476),
+        # "character:entry" -> craft_rhythm.Route, so each is acted on once.
+        self._material_requests: dict = _ClockMemo(
+            "material_request", "material request route", craft_rhythm.route_memo,
+            craft_rhythm.route_from_memo, lambda route: route.since,
+            MATERIAL_REQUEST_MEMO_SECONDS)
         # Equip rows whose outcome has already been logged, by row id, so each
         # answer is said once (#146).
         self._equip_reported: set = set()
@@ -7550,7 +7559,8 @@ class Bridge(discord.Client):
         await asyncio.to_thread(_restore_bag_holds)
         # The stall and borrow clocks a deploy must not restart (#817).
         for name in ("_vendor_movement", "_vendor_family_movement",
-                     "_bank_family_movement", "_family_lead_since"):
+                     "_bank_family_movement", "_family_lead_since",
+                     "_material_requests"):
             # A _ClockMemo; anything else (a test's plain dict) has nothing
             # to restore.
             restore = getattr(self.__dict__.get(name), "restore", None)
@@ -9858,6 +9868,10 @@ class Bridge(discord.Client):
             )
             for name in names
         ]
+        # A MATERIAL REQUEST ROUTED TO GATHERING (#476) makes its gatherer
+        # short, which sends the family out for it.
+        stands = craft_rhythm.requested_stands(
+            stands, await self._material_routes(names))
         plan = craft_rhythm.rhythm(stands, standing)
         if cohort is not None:
             log.info("craft_rhythm: family %s: %s", cohort.key,
@@ -9866,6 +9880,33 @@ class Bridge(discord.Client):
             return
         log.info("craft_rhythm: %s", craft_rhythm.report(plan))
         await self._own_rhythm_moves(plan, names, skills)
+
+    async def _material_routes(self, names: list) -> list:
+        """The open material-request routes of `names` (#476).
+
+        Reads what DriveCraft has asked for, then lets craft_rhythm close the
+        routes the bags now answer, move a stale gather to the house, forget
+        what has aged out and route each new request once. The routes live in
+        `_material_requests`, a memo, so a deploy does not act twice.
+        """
+        requests = await asyncio.to_thread(_fetch_material_requests, names)
+        pending = self._material_requests
+        mine = [route.request for route in pending.values()
+                if route.request.character in names]
+        pairs = sorted({(r.character, r.entry) for r in [*requests, *mine]})
+        held = await asyncio.to_thread(_fetch_item_counts, pairs)
+        kinds = await asyncio.to_thread(
+            _fetch_item_kinds, sorted({r.entry for r in requests}))
+        skills = await asyncio.to_thread(_fetch_trade_skills, names)
+        now = time.monotonic()
+        _log_material_routes("forgotten", craft_rhythm.expire_requests(pending, now))
+        _log_material_routes("answered", craft_rhythm.settle_requests(pending, held))
+        _log_material_routes("moved", craft_rhythm.escalate_requests(pending, now))
+        _log_material_routes("routed", craft_rhythm.take_requests(
+            pending, requests, kinds, skills, held, now))
+        return craft_rhythm.open_routes(
+            {key: route for key, route in pending.items()
+             if route.request.character in names})
 
     async def _own_rhythm_moves(self, plan, names: list, skills: dict) -> None:
         """What this bridge's own family does with its rhythm's answer."""
@@ -10169,7 +10210,10 @@ class Bridge(discord.Client):
             for name, (spell_id, _money) in spells.items()
             if auction.supply_spell(spell_id)
         }
-        if not shoppers:
+        # A MATERIAL REQUEST ROUTED TO THE HOUSE (#476) is bought here too.
+        buys = [route for route in await self._material_routes(names)
+                if route.how == craft_rhythm.ROUTE_BUY]
+        if not shoppers and not buys:
             log.info("auction: nobody is on a craft errand this pass can supply")
             return
 
@@ -10178,7 +10222,7 @@ class Bridge(discord.Client):
         # carrying twenty casts' worth needs no journey, and taking one would
         # be a walk with nothing at the end of it. Same separation
         # `craft_supply.reagent_need` draws from `reagent_errand`.
-        entries, needs = await self._auction_shortfall(shoppers)
+        entries, needs = await self._auction_shortfall(shoppers, buys)
         if not needs:
             log.info(
                 "auction: every craft errand is stocked for %d casts, so no "
@@ -10235,18 +10279,17 @@ class Bridge(discord.Client):
         # near THAT character - the same per-holder reading `_vendor_once`
         # already does - so a straggler who has not arrived simply buys nothing
         # this cycle instead of queueing a row that can only be refused.
-        teams = await asyncio.to_thread(_fetch_teams, list(shoppers))
+        buyers = sorted({need.shopper for need in needs})
+        teams = await asyncio.to_thread(_fetch_teams, buyers)
         seen = await asyncio.to_thread(_recent_auction_keys, GIVE_RETRY_MINUTES)
-        free_slots = await asyncio.to_thread(_fetch_free_slots, list(shoppers))
+        free_slots = await asyncio.to_thread(_fetch_free_slots, buyers)
         queued = 0
         spent = 0
-        for name in sorted(shoppers):
+        for name in buyers:
             mine = [need for need in needs if need.shopper == name]
-            if not mine:
-                continue
             rows, cost = await self._shop_for(
                 name, mine, entries, teams.get(name, ""),
-                purse=spells[name][1],
+                purse=spells.get(name, (0, 0))[1],
                 slots=free_slots.get(name, 0),
                 seen=seen,
             )
@@ -10257,7 +10300,7 @@ class Bridge(discord.Client):
             "auction: queued %d purchase(s) worth %d copper across %d "
             "shopper(s), leader=%s aimed=%s%s. Bought reagents arrive by MAIL "
             "and are not craftable until a mailbox pass collects them.",
-            queued, spent, len(shoppers), leader, aimed, _family_label(cohort),
+            queued, spent, len(buyers), leader, aimed, _family_label(cohort),
         )
 
     async def _gearup_facts_and_tanks(self, names):
@@ -10861,7 +10904,7 @@ class Bridge(discord.Client):
                          upgrade.command, upgrade.why)
         return queued
 
-    async def _auction_shortfall(self, shoppers: dict) -> tuple:
+    async def _auction_shortfall(self, shoppers: dict, buys=()) -> tuple:
         """Who is short of what, counting the bags and the mail separately.
 
         Returns `(entries, needs)` - the distinct item entries worth reading
@@ -10881,13 +10924,16 @@ class Bridge(discord.Client):
         BATCHED ACROSS THE FAMILY, not one query per character: two round
         trips total, whatever the roster size, the same batching discipline
         `_fetch_item_counts` and `_fetch_free_slots` already hold to.
+
+        `buys` are the material requests routed to the house (#476); each is
+        one more Need unless the standing errand already needs that reagent.
         """
         entries = sorted({
             reagent.entry
             for spell_id in shoppers.values()
             for reagent in auction.GATHERED[spell_id]
-        })
-        names = list(shoppers)
+        } | {route.request.entry for route in buys})
+        names = sorted(set(shoppers) | {route.request.character for route in buys})
         carried = await asyncio.to_thread(
             _fetch_counts, _CARRIED_COUNTS_SQL, names, entries, "bags",
         )
@@ -10906,6 +10952,7 @@ class Bridge(discord.Client):
                              label=need.label, short=need.short)
                 for need in short
             )
+        needs.extend(auction.requested_needs(buys, carried, in_mail, needs))
         return entries, needs
 
     async def _shop_for(self, name: str, needs: list, entries: list,
@@ -34255,6 +34302,67 @@ def _fetch_craft_spells(names: list) -> dict:
             names,
         )
         return {row["name"]: (row["craft_spell"], row["money"]) for row in cur.fetchall()}
+
+
+# THE MATERIAL REQUESTS DriveCraft WROTE (#476), within the read window.
+# `item_guid` carries the reagent's item entry on this kind; mod-overseer
+# writes it so two reagents of one recipe are two rows.
+_MATERIAL_REQUEST_SQL = (
+    "SELECT id, occurrences, character_name, subject_id, item_guid, detail "
+    "FROM overseer_event WHERE kind = 'material-request' "
+    "AND character_name IN (%s) AND last_seen > NOW() - INTERVAL %%s SECOND"
+)
+
+
+def _fetch_material_requests(names: list) -> list:
+    """craft_rhythm.MaterialRequest for each request row of `names`."""
+    if not names:
+        return []
+    sql = _MATERIAL_REQUEST_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, (*names, craft_rhythm.READ_SECONDS))
+            rows = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("material request: overseer_event cannot be read "
+                            "for requests on this world image: %s", exc)
+                return []
+            raise
+    requests = []
+    for row in rows:
+        request = craft_rhythm.material_request(row)
+        if request is None:
+            log.warning("material request: event %s is not a request this "
+                        "bridge can read: %r", row.get("id"), row.get("detail"))
+            continue
+        requests.append(request)
+    return requests
+
+
+def _fetch_item_kinds(entries: list) -> dict:
+    """entry -> (item class, subclass); an entry not in item_template is absent."""
+    if not entries:
+        return {}
+    marks = ",".join(["%s"] * len(entries))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT entry, class, subclass FROM acore_world.item_template "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "WHERE entry IN (%s)" % marks,
+            [int(entry) for entry in entries],
+        )
+        return {int(row["entry"]): (int(row["class"]), int(row["subclass"]))
+                for row in cur.fetchall()}
+
+
+def _log_material_routes(what: str, routes) -> None:
+    """One line per material request route that changed this pass."""
+    for route in routes:
+        request = route.request
+        log.info("material request: %s short %dx %s (item %d) for spell %d %s: "
+                 "%s by %s - %s", request.character, request.short,
+                 request.label, request.entry, request.recipe, what, route.how,
+                 route.who, route.why)
 
 
 def _fetch_standing_crafts(names: list) -> dict:
