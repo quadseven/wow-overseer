@@ -256,6 +256,30 @@ class AFullTankFreesASlotForTheShield(unittest.TestCase):
     step is a DoGive the world executes before the shield's trade, so the
     one-for-one shield swap has the slot it needs."""
 
+    def test_each_junk_stack_makes_room_for_only_one_upgrade(self):
+        grants = tuple(
+            gear.Grant("Grog", "Erg", 14777, "Shield", guid, "upgrade", "upgrade")
+            for guid in (7101, 7102)
+        )
+        for guids in ((7200,), (7200, 7201)):
+            with self.subTest(junk=guids):
+                plan = gear.deliverable(
+                    grants,
+                    position_rows=TOGETHER_ERG_AND_GROG,
+                    free_slots={"Erg": 0, "Grog": 4},
+                    freeables={
+                        "Erg": tuple(
+                            gear.Freeable(guid, 999, "Bent Buckler") for guid in guids
+                        )
+                    },
+                )
+                self.assertEqual(len(plan.grants), len(guids))
+                self.assertEqual(
+                    [free.guid for grant in plan.grants for free in grant.frees],
+                    list(guids),
+                )
+                self.assertEqual(len(plan.notes), 2 - len(guids))
+
     def _pieces(self):
         # Erg is the Protection seat and wears no shield; Grog's off hand is
         # a better shield, so the spare is no upgrade for him.

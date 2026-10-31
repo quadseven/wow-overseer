@@ -2896,6 +2896,11 @@ def _note_vendor_sellable(names, sellable: dict) -> None:
         _VENDOR_SELLABLE[str(name)] = int((sellable or {}).get(name, 0))
 
 
+def _vendor_sale_counts(names) -> dict[str, int | None]:
+    """Latest sale counts for this family; an unread member remains unknown."""
+    return {name: _VENDOR_SELLABLE.get(name) for name in names}
+
+
 def _bag_hold_reads(names: list, leader: str) -> tuple:
     """The members present, their free slots and the leader's travel column,
     read together in one worker thread for the dungeon-quest bag hold (#1243).
@@ -7755,7 +7760,8 @@ class Bridge(discord.Client):
         Either end of the conversation being in the run is enough; the party
         chat window is the same window whoever is standing where.
         """
-        run = await asyncio.to_thread(_active_dungeon_run)
+        run = await asyncio.to_thread(
+            _active_dungeon_run, [ask.crafter, ask.asker])
         if not run:
             return False
         roster_jobs = await asyncio.to_thread(_roster_jobs)
@@ -11331,7 +11337,7 @@ class Bridge(discord.Client):
                  cohort.key, given, len(material_plan.grants))
 
     async def _hand_bags_once(self, names: list) -> None:
-        """Give every idle bag to whoever has an empty bag position.
+        """Give idle bags to empty positions, then to siblings they upgrade.
 
         Measured on the dev family: four of five had no free bag position
         while carrying spare bags as cargo, and the fifth had an empty
@@ -11363,9 +11369,7 @@ class Bridge(discord.Client):
         # carried from the next save on, where the hand-over below or the
         # vendor pass's `bag_candidates` takes it.
         own = await self._equip_own_bags(members)
-        moves = bag_upgrade.plan_family_bags(
-            bag_upgrade.without_bags(members, own)
-        )
+        moves = bag_upgrade.plan_family_bags(members, reserved=own)
         if not moves:
             log.info("bags: nothing to hand over")
             return
@@ -11422,7 +11426,7 @@ class Bridge(discord.Client):
         Fresh member snapshots keep every pass from treating that gap as an
         invitation to change jobs mid-run.
         """
-        run = await asyncio.to_thread(_active_dungeon_run)
+        run = await asyncio.to_thread(_active_dungeon_run, names)
         live_maps = await asyncio.to_thread(_fetch_live_maps, names)
         dungeon_maps = set(dungeonpath.PORTAL_MAPS.values()) | {
             raidrun.MOLTEN_CORE_MAP
@@ -12195,6 +12199,7 @@ class Bridge(discord.Client):
         step = bag_pressure.vendor_errand_step(
             bool(leader_town.vendor), outstanding,
             pressure=pressure,
+            sale_counts=_vendor_sale_counts(names),
         )
         if (step == bag_pressure.VENDOR_ERRAND_HOLD
                 and outstanding == 0
@@ -12433,7 +12438,7 @@ class Bridge(discord.Client):
                 in (await asyncio.to_thread(_standing_travel_aims)).items()
                 if name in names}
         if run_doors:
-            run = await asyncio.to_thread(_active_dungeon_run)
+            run = await asyncio.to_thread(_active_dungeon_run, names)
             doors = await asyncio.to_thread(
                 _dungeon_doors, (run or {}).get("map_id"))
             if not doors:
@@ -14376,7 +14381,8 @@ class Bridge(discord.Client):
         purchase is a kind='buy' town-trip row (DoBuy pays the vendor), and it
         is written only for a character whose OWN vendors in reach stock the
         bag, because DoBuy refuses on the buyer's range. Right behind it goes
-        one kind='bot' `e` row that puts the new bag into the empty position.
+        one kind='bot' `e` row for a worn position. A bought bank position
+        instead leaves its new bag as cargo for `_bank_bag_slots`.
         No travel aim is written here; `_aim_at_bag_vendor` owns that (#206).
 
         Returns the BagBuyers who want a bag and whose own reach stocks none,
@@ -14384,24 +14390,35 @@ class Bridge(discord.Client):
         """
         members = bag_upgrade.members_from_rows(
             await asyncio.to_thread(_fetch_bag_state, names), names)
+        open_positions = bag_pressure.open_bag_positions(members)
+        bank_needs = {n.name: n for n in bankbags.supply_needs(
+            await asyncio.to_thread(_fetch_bank_bag_facts, names))
+            if open_positions.get(n.name, 0) == 0}
         try:
-            await self._vendor_bag_upgrades(members, auction_too, held=held)
+            # One purchase per member: fill bought bank space before another
+            # worn-bag upgrade can spend the same purse and landing slot.
+            await self._vendor_bag_upgrades(
+                [m for m in members if m.name not in bank_needs], auction_too, held=held)
         except Exception:
             log.exception("bag upgrade: vendor half failed; retrying next cycle")
-        open_positions = bag_pressure.open_bag_positions(members)
+        open_positions.update({name: 1 for name in bank_needs})
         wanting = sorted(name for name, n in open_positions.items() if n > 0)
         if not wanting:
-            log.info("bags: nobody in %s has an empty bag position the "
+            log.info("bags: nobody in %s has an empty worn or bank bag position the "
                      "family's own spare bags will not fill", names)
             return ()
         everyone, at_vendor = await asyncio.to_thread(
             _bag_buyers, wanting, open_positions)
+        everyone = [dataclasses.replace(
+            b, bank=True, max_slots=bank_needs[b.name].max_slots,
+            excluded_entries=bank_needs[b.name].excluded_entries)
+            if b.name in bank_needs else b for b in everyone]
         buyers = [b for b in everyone if b.name in at_vendor]
         stocked = sorted({entry for b in buyers for entry in b.stocks})
         offers = (await asyncio.to_thread(_fetch_bag_offers, stocked)
                   if stocked else [])
-        bagged = {offer.entry for offer in offers}
-        needy = tuple(b for b in everyone if not (b.stocks & bagged))
+        needy = tuple(b for b in everyone if not any(
+            o.entry in b.stocks and bag_pressure.bag_offer_fits(b, o) for o in offers))
         if not buyers:
             log.info("bags: %d want a bag (%s) and none is at a vendor",
                      len(wanting), ", ".join(wanting))
@@ -14425,7 +14442,8 @@ class Bridge(discord.Client):
             if not await asyncio.to_thread(_insert_town_errand, errand):
                 continue
             bought += 1
-            await asyncio.to_thread(_insert_bag_equip, purchase)
+            if not purchase.bank:
+                await asyncio.to_thread(_insert_bag_equip, purchase)
             log.info("bags: %s buys %s (%d slots) for up to %d copper - %s",
                      purchase.buyer, purchase.name, purchase.slots,
                      purchase.price, purchase.why)
@@ -27573,6 +27591,10 @@ def _fetch_surplus_bags(names: list) -> list:
                 return []
             raise
         rows = [dict(row) for row in cur.fetchall()]
+    bank_keeps = bankbags.reserved_guids(_fetch_bank_bag_facts(names))
+    # Both the sale and the sellable-stack count use these same rows.
+    for row in rows:
+        row["bank_reserved"] = int(row["item_guid"]) in bank_keeps
     # One line per crafted corps bag the vendor pass leaves with its master (#1667).
     for kept in rows:
         if bag_pressure.corps_bag_kept(kept):
@@ -28594,22 +28616,40 @@ def _ground_exit_leads_to(aim: str, target_map: int) -> bool:
     )
 
 
-def _active_dungeon_run() -> dict | None:
-    """The run the family is in the middle of, or None.
+def _active_dungeon_run(names: list) -> dict | None:
+    """An active row owning a named participant, never a global newest row.
 
-    `overseer_dungeon_run` is written by the C++ side and can legitimately be
-    absent on a world whose image predates it - map_server.py already treats
-    it that way ("overseer_dungeon_run absent; achievements run without it").
-    Absent means "no run", which is the answer that lets the family carry on
-    talking rather than going silent forever.
+    New ledgers carry stable family ownership. Before that migration, recorded
+    members still scope the read; a renamed leader cannot override a nonempty
+    foreign member list. An absent table or older missing columns are unknown.
     """
+    names = tuple(sorted(set(names)))
+    if not names:
+        return None
+    holes = ",".join(["%s"] * len(names))
+    present = " OR ".join(["FIND_IN_SET(%s, members) > 0"] * len(names))
+    # Only generated placeholders reach SQL text; every character name is bound.
+    common = (
+        "SELECT leader_name, map_id, state, members FROM overseer_dungeon_run "
+        "WHERE state = 'active' AND (" + present
+        + " OR (COALESCE(members, '') = '' AND leader_name IN (" + holes + ")))"
+    )
+    scoped = common + (
+        " AND family IN (SELECT family FROM overseer_roster "
+        "WHERE enabled = 1 AND name IN (" + holes + ")) ORDER BY id DESC LIMIT 1"
+    )
+    parameters = names + names
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(
-                "SELECT leader_name, map_id, state, members "
-                "FROM overseer_dungeon_run WHERE state = 'active' "
-                "ORDER BY id DESC LIMIT 1"
-            )
+            cur.execute(scoped, parameters + names)
+            return cur.fetchone()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1146:
+                return None
+            if not exc.args or exc.args[0] != 1054:
+                raise
+        try:
+            cur.execute(common + " ORDER BY id DESC LIMIT 1", parameters)
             return cur.fetchone()
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
@@ -31056,7 +31096,8 @@ _BAG_STATE_SQL = (
     "       COALESCE(fill.n, 0) AS used, "
     # The entry the equip verb names and the subclass that says whether the
     # bag is a general one (bag_upgrade.self_equips, #88).
-    "       ii.itemEntry AS entry, it.subclass AS subclass "
+    "       ii.itemEntry AS entry, it.subclass AS subclass, "
+    "       ii.flags AS instance_flags, it.bonding AS bonding "
     "FROM character_inventory ci "
     "JOIN characters c                  ON c.guid = ci.guid "
     "JOIN item_instance ii              ON ii.guid = ci.item "
@@ -31254,13 +31295,25 @@ _BAG_VENDOR_SQL = (
 # THE VENDORS NEAR THE LEADER THAT SELL EQUIPMENT, one row per (vendor, item),
 # the bag trip's query with the item filter `_fetch_gear_offers` uses. Read
 # from the world's spawn and stock tables, never authored.
+# Holdables need an actual benefit; item level alone also ranks florist bouquets.
+# Random-property items can gain their stats from the instance rather than template.
+_GEAR_ITEM_EFFECT_COLUMNS = (
+    "(it.armor > 0 OR it.block > 0 OR it.RandomProperty <> 0 "
+    "OR it.RandomSuffix <> 0 OR "
+    + " OR ".join(f"it.stat_value{n} > 0" for n in range(1, 11))
+    + " OR "
+    + " OR ".join(f"it.spellid_{n} > 0" for n in range(1, 6))
+    + ") AS has_item_effect, "
+)
+
+
 _GEAR_VENDOR_SQL = (
     "SELECT cr.id AS vendor, ct.name AS vendor_name, cr.map AS map_id, "
     "MIN(SQRT(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2))) AS yards, "
     "it.entry AS entry, it.BuyPrice AS buyout, it.InventoryType AS InventoryType, "
     "it.class AS class, it.subclass AS subclass, it.RequiredLevel AS RequiredLevel, "
     "it.AllowableClass AS AllowableClass, it.ItemLevel AS ItemLevel, "
-    "it.Quality AS Quality, ft.EnemyGroup AS enemy_group "
+    "it.Quality AS Quality, " + _GEAR_ITEM_EFFECT_COLUMNS + "ft.EnemyGroup AS enemy_group "
     "FROM acore_world.npc_vendor nv "
     "JOIN acore_world.creature cr ON cr.id = nv.entry "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
@@ -31272,7 +31325,7 @@ _GEAR_VENDOR_SQL = (
     "AND ABS(cr.position_x - %s) <= %s AND ABS(cr.position_y - %s) <= %s "
     "GROUP BY cr.id, ct.name, cr.map, it.entry, it.BuyPrice, it.InventoryType, "
     "it.class, it.subclass, it.RequiredLevel, it.AllowableClass, it.ItemLevel, "
-    "it.Quality, ft.EnemyGroup "
+    "it.Quality, has_item_effect, ft.EnemyGroup "
     "HAVING yards <= %s ORDER BY yards, vendor"
 )
 
@@ -33599,7 +33652,8 @@ _BANK_BAG_PEOPLE_SQL = (
 )
 _BANK_BAG_ROWS_SQL = (
     "SELECT c.name AS holder, ci.item AS item_guid, ii.itemEntry AS entry, "
-    "it.ContainerSlots AS slots, ci.bag, ci.slot FROM characters c "
+    "it.ContainerSlots AS slots, ci.bag, ci.slot, "
+    "ii.flags AS instance_flags, it.bonding AS bonding FROM characters c "
     "JOIN character_inventory ci ON ci.guid = c.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -34733,8 +34787,9 @@ def _fetch_gear_offers(entries: list) -> list:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT entry, BuyPrice AS buyout, InventoryType, class, subclass, "
-            "RequiredLevel, AllowableClass, ItemLevel, Quality "
-            "FROM acore_world.item_template WHERE entry IN (%s) "  # noqa: S608 - placeholders from a COUNT
+            "RequiredLevel, AllowableClass, ItemLevel, Quality, "
+            + _GEAR_ITEM_EFFECT_COLUMNS.rstrip(", ")
+            + " FROM acore_world.item_template it WHERE entry IN (%s) "  # noqa: S608 - placeholders from a COUNT
             "AND class IN (2,4) AND InventoryType BETWEEN 1 AND 28 "
             "AND BuyPrice > 0" % marks, [int(e) for e in entries])
         return [dict(row) for row in cur.fetchall()]
@@ -34745,7 +34800,9 @@ def _fetch_gearup_listings(house: int) -> list:
         cur.execute(
             "SELECT a.id AS listing_id, a.buyoutprice AS buyout, ii.itemEntry AS entry, "
             "it.name, it.InventoryType, it.class, it.subclass, it.RequiredLevel, "
-            "it.AllowableClass, it.ItemLevel, it.Quality FROM auctionhouse a "
+            "it.AllowableClass, it.ItemLevel, it.Quality, "
+            + _GEAR_ITEM_EFFECT_COLUMNS.rstrip(", ")
+            + " FROM auctionhouse a "
             "JOIN item_instance ii ON ii.guid=a.itemguid "
             "JOIN acore_world.item_template it ON it.entry=ii.itemEntry "
             "WHERE a.houseid=%s AND a.buyoutprice>0 AND it.class IN (2,4) "

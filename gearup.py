@@ -194,6 +194,8 @@ def _allowed(character, item):
     kind = int(_get(item, "class", "item_class", default=-1) or 0)
     sub = int(_get(item, "subclass", default=-1) or 0)
     inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
+    if inv == 23 and not _get(item, "has_item_effect", default=False):
+        return False
     if kind == 4:
         return _armor_ok(cls_id, sub, inv, level)
     if kind == 2:

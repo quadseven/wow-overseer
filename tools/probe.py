@@ -19,6 +19,7 @@ it can never be the reason an experiment appears to have succeeded.
 USAGE
     probe.py Grug                     # every probe
     probe.py Grug state strategies    # just these
+    probe.py Grug auras meter         # current buffs and combat meters
     probe.py --all talents            # every roster character
 
 Connection comes from the same environment the bridge uses, so this runs inside
@@ -34,7 +35,7 @@ import os
 import sys
 import time
 
-PROBES = ("state", "spells", "talents", "strategies", "gear", "bags")
+PROBES = ("state", "spells", "talents", "strategies", "gear", "bags", "auras", "meter")
 
 # The module polls its command queue every COMMAND_POLL_MS (2s), so anything
 # under a few seconds is just racing the tick. Ten seconds is long enough to
@@ -152,7 +153,9 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=TIMEOUT_SECONDS)
     args = ap.parse_args()
 
-    wanted = [p for p in (args.probes or PROBES)]
+    # With --all, argparse puts the first probe in the optional name slot.
+    selected = ([args.name] if args.all and args.name else []) + (args.probes or [])
+    wanted = selected or list(PROBES)
     bad = [p for p in wanted if p not in PROBES]
     if bad:
         print(

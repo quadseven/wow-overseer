@@ -296,13 +296,6 @@ class TheBridgeWiring(unittest.TestCase):
             body.index("await self._aim_at_bag_vendor(needy, names, cohort)"),
         )
 
-    def test_the_purchase_hands_back_who_still_needs_a_vendor(self):
-        body = _statements("    async def _buy_bags_once(")
-        self.assertIn(
-            "needy = tuple(b for b in everyone if not (b.stocks & bagged))", body
-        )
-        self.assertIn("return needy", body)
-
     def test_the_trip_goes_through_the_town_slot_on_the_leader(self):
         body = _statements("    async def _aim_at_bag_vendor(")
         self.assertIn("bag_pressure.bag_vendor_trip(", body)

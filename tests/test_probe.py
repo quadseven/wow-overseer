@@ -12,8 +12,12 @@ say.
 
 import json
 import pathlib
+import re
 import sys
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools"))
 
@@ -127,6 +131,39 @@ class PlaceholdersCarryNoData(unittest.TestCase):
             probe.placeholders(0)
 
 
+class CliKeepsRequestedProbes(unittest.TestCase):
+    def test_all_asks_exactly_the_selected_probes_for_each_member(self):
+        for selection in (("auras",), ("auras", "meter", "bags"), ()):
+            with self.subTest(selection=selection):
+                conn = MagicMock()
+                with (
+                    patch.object(sys, "argv", ["probe.py", "--all", *selection]),
+                    patch.object(probe, "_connect", return_value=conn),
+                    patch.object(probe, "roster", return_value=["Grug", "Ugga"]),
+                    patch.object(probe, "ask", side_effect=range(1, 17)) as ask,
+                    patch.object(probe, "collect", return_value={}),
+                    redirect_stdout(StringIO()),
+                ):
+                    self.assertEqual(0, probe.main())
+                self.assertEqual(
+                    [
+                        (n, p)
+                        for n in ("Grug", "Ugga")
+                        for p in selection or probe.PROBES
+                    ],
+                    [(c.args[1], c.args[2]) for c in ask.call_args_list],
+                )
+
+    def test_all_rejects_an_unknown_first_probe_before_connecting(self):
+        with (
+            patch.object(sys, "argv", ["probe.py", "--all", "unknown"]),
+            patch.object(probe, "_connect") as connect,
+            patch.object(sys, "stderr", StringIO()),
+        ):
+            self.assertEqual(2, probe.main())
+        connect.assert_not_called()
+
+
 MODULE = modsource.MODULE
 
 
@@ -172,6 +209,10 @@ MUTATORS = [
 
 
 class ProbesAreReadOnly(unittest.TestCase):
+    def test_every_module_probe_is_available_from_the_tool(self):
+        handled = set(re.findall(r'\bwhat == "([^"]+)"', _probe_source()))
+        self.assertSetEqual(set(probe.PROBES), handled)
+
     def test_no_probe_mutates_the_character(self):
         body = _probe_source()
         for call in MUTATORS:
