@@ -120,7 +120,7 @@ class TheHandler(unittest.TestCase):
     def test_the_skill_is_validated_before_any_read(self):
         h = self.HANDLER
         self.assertLess(h.index("tradespec.parse_skill("), h.index("_faction_sides()"))
-        self.assertLess(h.index("self._send(400"), h.index("_fetch_guildcraft("))
+        self.assertLess(h.index("return 400"), h.index("_fetch_guildcraft("))
 
     def test_a_caller_value_is_never_bound_or_formatted_into_a_query(self):
         h = self.HANDLER
