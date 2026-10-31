@@ -157,6 +157,24 @@ class ThePosts(unittest.TestCase):
 
 
 class ATailorsNextStep(unittest.TestCase):
+    def test_auto_learned_linen_bolt_need_not_be_in_saved_spells(self):
+        t = tailor("Tailor", 21, 75, known=frozenset({3908}), carried=(held(2589, 19),))
+        step, _ = step_of(t)
+        self.assertIsNotNone(step)
+        self.assertEqual((step.action, step.key, step.repeat), ("craft", 2963, 9))
+
+    def test_a_bought_bag_uses_its_auto_learned_bolt(self):
+        t = tailor(
+            "Tailor",
+            45,
+            75,
+            known=frozenset({3908, 3755}),
+            carried=(held(2589, 6), held(2320, 3)),
+        )
+        step, _ = step_of(t, fam=[family("Recipient", (0, 0, 0, 0))])
+        self.assertIsNotNone(step)
+        self.assertEqual((step.action, step.key, step.repeat), ("craft", 2963, 3))
+
     def test_at_its_ceiling_below_artisan_it_walks_to_a_trainer_for_the_next_rank(self):
         t = tailor("Xohjaz", 225, 225, guild="Bonkers")
         step, _ = step_of(t)
