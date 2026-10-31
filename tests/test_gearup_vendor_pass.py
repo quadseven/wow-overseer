@@ -62,7 +62,8 @@ class VendorHalfOfTheGearErrand(unittest.TestCase):
                 columns = ", ".join(f":{key} AS {key}" for key in row)
                 with self.subTest(benefit=benefit):
                     result = conn.execute(
-                        f"SELECT {expression} FROM (SELECT {columns}) it", row
+                        f"SELECT {expression} FROM (SELECT {columns}) it",
+                        row,  # noqa: S608 - repository expression and fixed fixture column names; values bound
                     ).fetchone()[0]
                     self.assertEqual(int(benefit is not None), result)
 
