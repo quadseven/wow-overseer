@@ -44,7 +44,9 @@ class GuildJobReservations(unittest.TestCase):
                     )
                 )
                 expression = compile(ast.Expression(assignment.value), name, "eval")
-                self.assertIn("Tailor", eval(expression, {"self": member}))
+                # The expression comes only from checked-in bridge code.
+                busy = eval(expression, {"self": member})  # noqa: S307
+                self.assertIn("Tailor", busy)
 
 
 class CorpsDuringJobWalk(unittest.IsolatedAsyncioTestCase):
