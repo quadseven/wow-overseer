@@ -4859,6 +4859,20 @@ def _with_bank_reasons(rows, placed: dict) -> list:
     return out
 
 
+def _family_scope(query: dict):
+    """(names, family key, every family) for a request's `family` key.
+
+    The one place the per-family panels read the request, so the rule
+    /api/family was written with holds for all of them: the key selects
+    among families the DATABASE reports and nothing else from the request
+    reaches a reader.
+    """
+    which = query.get("family", [""])[0]
+    rosters = FAMILIES.families()
+    chosen = which if which in rosters else FAMILIES.default()
+    return rosters.get(chosen, []), chosen, list(rosters)
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 (stdlib naming)
         # A lookup and nothing else. Every GET endpoint takes the parsed
@@ -5043,7 +5057,8 @@ class Handler(BaseHTTPRequestHandler):
         """
         return 200, build_payload(_fetch_rows(), GEO)
 
-    def _family(self, query: dict) -> None:
+    @_get_route("family query failed")
+    def _family(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/family[?family=X] - a five, with enough to decide whether to look.
 
         STILL NO NAME PARAMETER, which was the original rule here and is worth
@@ -5054,23 +5069,20 @@ class Handler(BaseHTTPRequestHandler):
         a friendly name - it has become a choice between families the server
         already knows about.
         """
-        try:
-            names, chosen, known = self._family_scope(query)
-            payload = family.build_family(
-                _fetch_family(names), GEO, names, _fetch_profiles(names))
-            # The page builds one tab per family off these, so it never has to
-            # be told in advance how many there are.
-            payload["family"] = chosen
-            payload["families"] = known
-            payload["observers"] = family.build_observers(
-                _fetch_family([director.WATCHER_NAME]), GEO, (director.WATCHER_NAME,))
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as /api/map: the tab shows its stale banner on a
-            # failed poll and keeps the last cards it drew. A blank Family tab
-            # is indistinguishable from a family who all logged out.
-            log.exception("family query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        # Same contract as /api/map: the tab shows its stale banner on a
+        # failed poll and keeps the last cards it drew. A blank Family tab
+        # is indistinguishable from a family who all logged out.
+        names, chosen, known = _family_scope(query)
+        payload = family.build_family(
+            _fetch_family(names), GEO, names, _fetch_profiles(names))
+        # The page builds one tab per family off these, so it never has to
+        # be told in advance how many there are.
+        payload["family"] = chosen
+        payload["families"] = known
+        payload["observers"] = family.build_observers(
+            _fetch_family([director.WATCHER_NAME]), GEO, (director.WATCHER_NAME,))
+        return 200, payload
 
     def _wall(self, query: dict) -> None:
         """GET /api/wall - the Watch wall: every family's streamed characters.
@@ -5264,23 +5276,22 @@ class Handler(BaseHTTPRequestHandler):
         reader on never reads the last three hours aloud. With it, the
         family's party and raid lines since that row, one per utterance
         (partyvoice.feed), each with its speaker's voice.
+
+        The family scope stays outside _answer: it was never inside this
+        read's catch, so a roster read that fails is not this route's 503.
         """
-        names, _chosen, _known = self._family_scope(query)
-        raw_after = query.get("after", [""])[0]
-        if raw_after and not raw_after.isdigit():
-            self._send(400, "application/json", b'{"error": "bad cursor"}')
-            return
-        try:
+        names, _chosen, _known = _family_scope(query)
+
+        def read(query: dict, _ctx) -> tuple[int, dict]:
+            raw_after = query.get("after", [""])[0]
+            if raw_after and not raw_after.isdigit():
+                return 400, {"error": "bad cursor"}
             if not raw_after:
-                payload = {"rows": [], "after": _fetch_chat_newest()}
-            else:
-                after = int(raw_after)
-                payload = partyvoice.feed(_fetch_chat_party(names, after), after)
-        except Exception:
-            log.exception("party chat query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
-            return
-        self._send(200, "application/json", json.dumps(payload).encode())
+                return 200, {"rows": [], "after": _fetch_chat_newest()}
+            after = int(raw_after)
+            return 200, partyvoice.feed(_fetch_chat_party(names, after), after)
+
+        _answer(self, read, query, "party chat query failed")
 
     @_get_route("guild trade crafts query failed", separators=(",", ":"))
     def _trade_crafts(query: dict, _ctx) -> tuple[int, dict]:
@@ -5560,7 +5571,8 @@ class Handler(BaseHTTPRequestHandler):
             bankpolicy.annotate_tips(payload, _fetch_bank_policy(group))
         return 200, payload
 
-    def _needs(self, query: dict) -> None:
+    @_get_route("needs query failed")
+    def _needs(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/needs - what the five need, and what is being done about it.
 
         Deliberately BELOW _thoughts and beside _wealth, for exactly the
@@ -5573,21 +5585,19 @@ class Handler(BaseHTTPRequestHandler):
         by _family_scope; never a name. Without it the second family's tab
         showed the first family's bags and bonds.
         """
-        try:
-            names, chosen, known = self._family_scope(query)
-            payload = needs.build_needs(**_fetch_needs(names), roster=names)
-            payload["family"] = chosen
-            payload["families"] = known
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll: the view keeps the bars it
-            # has already drawn and says they may be stale. A blank needs
-            # panel reads as "there is nothing wrong with any of them", which
-            # is the one claim this view exists to be able to disprove.
-            log.exception("needs query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        # Same contract as every other poll: the view keeps the bars it
+        # has already drawn and says they may be stale. A blank needs
+        # panel reads as "there is nothing wrong with any of them", which
+        # is the one claim this view exists to be able to disprove.
+        names, chosen, known = _family_scope(query)
+        payload = needs.build_needs(**_fetch_needs(names), roster=names)
+        payload["family"] = chosen
+        payload["families"] = known
+        return 200, payload
 
-    def _agenda(self, query: dict) -> None:
+    @_get_route("agenda query failed")
+    def _agenda(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/agenda - what the family is trying to do right now.
 
         Below _wealth for the same reason _wealth is below _thoughts: the
@@ -5602,34 +5612,31 @@ class Handler(BaseHTTPRequestHandler):
         family as one thing - a per-character agenda is the split it exists
         to report.
         """
-        try:
-            names, chosen, known = self._family_scope(query)
-            rows = _fetch_agenda(names)
-            payload = agenda.build_agenda(**rows, members=names)
-            if payload["stalled"]:
-                # A STALLED family names its hold: the leader's own reading,
-                # the sentence the wall prints for him (agenda.stall_blocker).
-                payload = agenda.build_agenda(
-                    **rows, members=names, leader_now=_leader_now(payload["leader"]))
-            payload["family"] = chosen
-            payload["families"] = known
-            # THE FAMILY'S CAMPAIGN QUEUE (#209), first under the headline:
-            # "Queue: Ragefire Chasm 12 of 50, then Wailing Caverns 50."
-            queue = _fetch_queue_views().get(chosen or "")
-            payload["queue"] = queue or campaignqueue.view([], None, chosen or "")
-            if payload["queue"]["line"]:
-                payload["detail"] = [payload["queue"]["line"],
-                                     *(payload.get("detail") or [])]
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll, and it matters more here than
-            # anywhere else on the page. This banner is the first thing read
-            # and the most confidently worded; blanking it on a failed poll
-            # would read as "the family has no goal", and replacing it with a
-            # cheerful default would be the page inventing one. So the last
-            # good answer stays up and the page marks it stale.
-            log.exception("agenda query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        # Same contract as every other poll, and it matters more here than
+        # anywhere else on the page. This banner is the first thing read
+        # and the most confidently worded; blanking it on a failed poll
+        # would read as "the family has no goal", and replacing it with a
+        # cheerful default would be the page inventing one. So the last
+        # good answer stays up and the page marks it stale.
+        names, chosen, known = _family_scope(query)
+        rows = _fetch_agenda(names)
+        payload = agenda.build_agenda(**rows, members=names)
+        if payload["stalled"]:
+            # A STALLED family names its hold: the leader's own reading,
+            # the sentence the wall prints for him (agenda.stall_blocker).
+            payload = agenda.build_agenda(
+                **rows, members=names, leader_now=_leader_now(payload["leader"]))
+        payload["family"] = chosen
+        payload["families"] = known
+        # THE FAMILY'S CAMPAIGN QUEUE (#209), first under the headline:
+        # "Queue: Ragefire Chasm 12 of 50, then Wailing Caverns 50."
+        queue = _fetch_queue_views().get(chosen or "")
+        payload["queue"] = queue or campaignqueue.view([], None, chosen or "")
+        if payload["queue"]["line"]:
+            payload["detail"] = [payload["queue"]["line"],
+                                 *(payload.get("detail") or [])]
+        return 200, payload
 
     def do_POST(self):  # noqa: N802 (stdlib naming)
         handler = self.POST_ROUTES.get(self.path.split("?", 1)[0])
@@ -5638,11 +5645,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         handler(self)
 
-    def _questlog(self, query: dict) -> None:
+    @_get_route("questlog query failed")
+    def _questlog(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/questlog[?family=X] - what each of a family is working on.
 
-        BELOW do_POST, with _family_scope, because it now takes the family
-        key: the suites for the Armory and the Wealth view
+        BELOW do_POST, because it takes the family key: the suites for the
+        Armory and the Wealth view
         each read a run of handlers above this as endpoints that take no
         query at all.
 
@@ -5651,32 +5659,16 @@ class Handler(BaseHTTPRequestHandler):
         to the default. No name reaches the SQL from the request. Before this
         read the key, every family's tab was handed the first family's board.
         """
-        try:
-            names, chosen, known = self._family_scope(query)
-            payload = questlog.build_questlog(**_fetch_questlog(names), roster=names)
-            payload["family"] = chosen
-            payload["families"] = known
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll: the tab keeps the logs it has
-            # already drawn and says they may be stale. A blank quest log
-            # reads as "they have nothing to do", which is the opposite of
-            # what this view exists to report.
-            log.exception("questlog query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
-
-    def _family_scope(self, query: dict):
-        """(names, family key, every family) for a request's `family` key.
-
-        The one place the per-family panels read the request, so the rule
-        /api/family was written with holds for all of them: the key selects
-        among families the DATABASE reports and nothing else from the request
-        reaches a reader.
-        """
-        which = query.get("family", [""])[0]
-        rosters = FAMILIES.families()
-        chosen = which if which in rosters else FAMILIES.default()
-        return rosters.get(chosen, []), chosen, list(rosters)
+        # A failed read answers 503 (_answer).
+        # Same contract as every other poll: the tab keeps the logs it has
+        # already drawn and says they may be stale. A blank quest log
+        # reads as "they have nothing to do", which is the opposite of
+        # what this view exists to report.
+        names, chosen, known = _family_scope(query)
+        payload = questlog.build_questlog(**_fetch_questlog(names), roster=names)
+        payload["family"] = chosen
+        payload["families"] = known
+        return 200, payload
 
     def _chat_post(self) -> None:
         """POST /api/chat - the Overseer speaks, and one character answers.
@@ -6061,24 +6053,22 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("party status query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
-    def _levelroute(self, query: dict) -> None:
+    @_get_route("levelroute query failed")
+    def _levelroute(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/levelroute[?family=X] - where the family levels, and next.
 
         The family key, never a name, resolved by _family_scope like every
         per-family panel. levelroute.page_view says it; this only reads.
         """
-        try:
-            names, chosen, known = self._family_scope(query)
-            payload = _fetch_levelroute(names, chosen or "")
-            payload["family"] = chosen
-            payload["families"] = known
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # The block keeps the route it has drawn and says it may be stale:
-            # a blank route reads as "nowhere to go", which is not what a
-            # failed read found out.
-            log.exception("levelroute query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        # The block keeps the route it has drawn and says it may be stale:
+        # a blank route reads as "nowhere to go", which is not what a
+        # failed read found out.
+        names, chosen, known = _family_scope(query)
+        payload = _fetch_levelroute(names, chosen or "")
+        payload["family"] = chosen
+        payload["families"] = known
+        return 200, payload
 
     @_get_route("guild gear query failed")
     def _guild_gear(_query: dict, _ctx) -> tuple[int, dict]:

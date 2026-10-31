@@ -426,6 +426,149 @@ class TheRunAndTradeReadsAreHandlers(unittest.TestCase):
         self.assertEqual(h.body(), b'{"a":1,"family":"Grug"}')
 
 
+# Each family-scoped read: (route, handler, the read it starts with, its log line).
+SCOPED_READS = (
+    ("/api/family", "_family", "_fetch_family", "family query failed"),
+    ("/api/questlog", "_questlog", "_fetch_questlog", "questlog query failed"),
+    ("/api/needs", "_needs", "_fetch_needs", "needs query failed"),
+    ("/api/agenda", "_agenda", "_fetch_agenda", "agenda query failed"),
+    ("/api/levelroute", "_levelroute", "_fetch_levelroute", "levelroute query failed"),
+)
+
+
+class TheFamilyScopedReadsAreHandlers(unittest.TestCase):
+    """The reads that take a family key return (status, payload) and leave a
+    failed read to _answer, which answers it with the same 503."""
+
+    def setUp(self):
+        families = mock.patch.object(map_server, "FAMILIES")
+        self.families = families.start()
+        self.families.families.return_value = {"a": ["Grug"], "b": ["Thog"]}
+        self.families.default.return_value = "a"
+        self.addCleanup(families.stop)
+
+    def test_a_failed_read_leaves_the_handler(self):
+        for path, name, fetch, _what in SCOPED_READS:
+            with (
+                self.subTest(path),
+                mock.patch.object(map_server, fetch, side_effect=OSError("down")),
+            ):
+                with self.assertRaises(OSError):
+                    getattr(map_server.Handler, name).__wrapped__({}, None)
+
+    def test_a_failed_read_is_the_shared_503(self):
+        for path, _name, fetch, what in SCOPED_READS:
+            with (
+                self.subTest(path),
+                mock.patch.object(map_server, fetch, side_effect=OSError("down")),
+                self.assertLogs(map_server.log, "ERROR") as logs,
+            ):
+                h = shell.get(path)
+            self.assertEqual(h.status(), 503, path)
+            self.assertEqual(h.body(), b'{"error": "world unreachable"}', path)
+            self.assertIn(what, logs.output[0], path)
+
+    def test_a_failed_roster_read_is_the_shared_503(self):
+        """The scope sits inside these routes' catch: a dead roster is a 503."""
+        self.families.families.side_effect = OSError("down")
+        for path, _name, _fetch, what in SCOPED_READS:
+            with self.subTest(path), self.assertLogs(map_server.log, "ERROR") as logs:
+                h = shell.get(path)
+            self.assertEqual(h.status(), 503, path)
+            self.assertIn(what, logs.output[0], path)
+
+    def test_a_family_key_scopes_the_read_and_the_payload(self):
+        with (
+            mock.patch.object(
+                map_server, "_fetch_levelroute", return_value={"zone": "Z"}
+            ) as fetch,
+        ):
+            got = map_server.Handler._levelroute.__wrapped__({"family": ["b"]}, None)
+        fetch.assert_called_once_with(["Thog"], "b")
+        self.assertEqual(
+            got, (200, {"zone": "Z", "family": "b", "families": ["a", "b"]})
+        )
+
+    def test_an_unknown_key_falls_back_to_the_default(self):
+        self.assertEqual(
+            map_server._family_scope({"family": ["nope"]}),
+            (["Grug"], "a", ["a", "b"]),
+        )
+
+    def test_the_questlog_goes_out_with_its_exact_bytes(self):
+        with (
+            mock.patch.object(map_server, "_fetch_questlog", return_value={}),
+            mock.patch.object(
+                map_server.questlog, "build_questlog", return_value={"members": []}
+            ),
+        ):
+            h = shell.get("/api/questlog")
+        self.assertEqual(h.status(), 200)
+        self.assertEqual(
+            h.body(), b'{"members": [], "family": "a", "families": ["a", "b"]}'
+        )
+
+
+class ThePartyChatAnswersThroughTheSharedAnswer(unittest.TestCase):
+    """/api/chat/party keeps its order: the scope, then the cursor, then the
+    read. Only the read is inside the catch, as it always was."""
+
+    def setUp(self):
+        families = mock.patch.object(map_server, "FAMILIES")
+        self.families = families.start()
+        self.families.families.return_value = {"a": ["Grug"]}
+        self.families.default.return_value = "a"
+        self.addCleanup(families.stop)
+
+    def test_a_bad_cursor_is_the_same_400(self):
+        h = shell.get("/api/chat/party?after=x")
+        self.assertEqual(h.status(), 400)
+        self.assertEqual(h.body(), b'{"error": "bad cursor"}')
+
+    def test_no_cursor_answers_where_the_chat_ends(self):
+        with mock.patch.object(map_server, "_fetch_chat_newest", return_value=9):
+            h = shell.get("/api/chat/party")
+        self.assertEqual(h.status(), 200)
+        self.assertEqual(h.body(), b'{"rows": [], "after": 9}')
+
+    def test_a_cursor_reads_the_familys_lines_past_it(self):
+        with mock.patch.object(
+            map_server, "_fetch_chat_party", return_value=[]
+        ) as fetch:
+            h = shell.get("/api/chat/party?after=7")
+        fetch.assert_called_once_with(["Grug"], 7)
+        self.assertEqual(h.body(), b'{"rows": [], "after": 7}')
+
+    def test_a_failed_read_is_the_shared_503(self):
+        with (
+            mock.patch.object(
+                map_server, "_fetch_chat_newest", side_effect=OSError("down")
+            ),
+            self.assertLogs(map_server.log, "ERROR") as logs,
+        ):
+            h = shell.get("/api/chat/party")
+        self.assertEqual(h.status(), 503)
+        self.assertEqual(h.body(), b'{"error": "world unreachable"}')
+        self.assertIn("party chat query failed", logs.output[0])
+
+    def test_a_digit_int_refuses_is_the_shared_503_too(self):
+        """str.isdigit passes a superscript and int() refuses it, inside the
+        catch before and after."""
+        with self.assertLogs(map_server.log, "ERROR") as logs:
+            h = shell.get("/api/chat/party?after=%C2%B2")
+        self.assertEqual(h.status(), 503)
+        self.assertIn("party chat query failed", logs.output[0])
+
+    def test_a_failed_roster_read_is_not_this_routes_503(self):
+        """The scope was never inside this route's catch, so it still escapes
+        to the server rather than answering."""
+        self.families.families.side_effect = OSError("down")
+        h = shell.FakeHandler("/api/chat/party")
+        with self.assertRaises(OSError):
+            h.do_GET()
+        self.assertEqual(h.sent, [])
+
+
 class TheArmoryReadsAreHandlers(unittest.TestCase):
     """The armory, armory member, upgrades and item reads return (status,
     payload); the refusals are payloads with the same bytes as before."""
