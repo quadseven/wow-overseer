@@ -6,6 +6,7 @@ turns a raise into the 503 every read had copied for itself. /api/v2's
 dispatch goes through the same function.
 """
 
+import datetime
 import json
 import pathlib
 import sys
@@ -227,6 +228,97 @@ class TheThoughtsAreAHandler(unittest.TestCase):
         h = shell.get("/api/thoughts?name=x1")
         self.assertEqual(h.status(), 400)
         self.assertEqual(h.body(), b'{"error": "not a character name"}')
+
+
+class TheGuildReadsAreHandlers(unittest.TestCase):
+    """The guild gear, runs, seats and chat reads return (status, payload);
+    the runs and seats read through the request's reader, and the payloads
+    that carry database values still encode them with default=str."""
+
+    def setUp(self):
+        map_server.SHARED_READS.clear()
+        self.addCleanup(map_server.SHARED_READS.clear)
+
+    def test_a_failed_gear_read_leaves_the_handler_and_is_the_shared_503(self):
+        with mock.patch.object(
+            map_server, "_fetch_guild_gear", side_effect=OSError("down")
+        ):
+            with self.assertRaises(OSError):
+                map_server.Handler._guild_gear.__wrapped__({}, None)
+            with self.assertLogs(map_server.log, "ERROR") as logs:
+                h = shell.get("/api/guildgear")
+        self.assertEqual(h.status(), 503)
+        self.assertIn("guild gear query failed", logs.output[0])
+
+    def test_the_runs_read_through_the_request_reader(self):
+        ctx = types.SimpleNamespace(read=realmread.Memory({}))
+        with (
+            mock.patch.object(
+                map_server.guildrun, "recent", return_value=["r"]
+            ) as recent,
+            mock.patch.object(map_server.guildrun, "page", return_value={"recent": []}),
+            mock.patch.object(map_server.guildrun, "with_stories") as stories,
+        ):
+            got = map_server.Handler._guild_runs.__wrapped__({}, ctx)
+        self.assertEqual(got, (200, {"recent": []}))
+        self.assertIs(recent.call_args.args[0], ctx.read)
+        self.assertIs(stories.call_args.args[0], ctx.read)
+
+    def test_the_seats_read_through_the_request_reader(self):
+        rows = [{"subject": "g"}]
+        ctx = types.SimpleNamespace(
+            read=realmread.Memory({map_server.seatmeter.BENCH_READ_SQL: rows})
+        )
+        with mock.patch.object(
+            map_server.seatmeter, "page", return_value={"p": 1}
+        ) as page:
+            got = map_server.Handler._guild_seats.__wrapped__({}, ctx)
+        self.assertEqual(got, (200, {"p": 1}))
+        page.assert_called_once_with(rows)
+
+    def test_a_database_value_still_encodes_as_text(self):
+        when = datetime.datetime(2026, 1, 2, 3, 4, 5)
+        with mock.patch.object(map_server.seatmeter, "page", return_value={"at": when}):
+            with mock.patch.object(
+                map_server.realmread,
+                "Session",
+                lambda _connect: realmread.Memory(
+                    {map_server.seatmeter.BENCH_READ_SQL: []}
+                ),
+            ):
+                h = shell.get("/api/guildseats")
+        self.assertEqual(h.status(), 200)
+        self.assertEqual(json.loads(h.body()), {"at": str(when)})
+
+    def test_the_shared_answer_takes_the_encoder_default(self):
+        h = shell.FakeHandler("/api/x")
+        map_server._answer(
+            h,
+            lambda q, c: (200, {"at": datetime.date(2026, 1, 2)}),
+            {},
+            "x",
+            default=str,
+        )
+        self.assertEqual(json.loads(h.body()), {"at": "2026-01-02"})
+
+    def test_the_chat_refuses_a_guild_outside_the_set(self):
+        limits = types.SimpleNamespace(guilds=("Cave",))
+        with mock.patch.object(map_server.guildrun, "limits", return_value=limits):
+            got = map_server.Handler._guild_chat.__wrapped__({"guild": ["Other"]}, None)
+        self.assertEqual(got, (400, {"error": "not a guild"}))
+
+    def test_the_chat_without_its_tables_is_not_ready(self):
+        limits = types.SimpleNamespace(guilds=("Cave",))
+        gap = realmread.Gap(realmread.MISSING_TABLE)
+        with (
+            mock.patch.object(map_server.guildrun, "limits", return_value=limits),
+            mock.patch.object(map_server, "_fetch_guild_chat", side_effect=gap),
+        ):
+            got = map_server.Handler._guild_chat.__wrapped__({}, None)
+        self.assertEqual(
+            got,
+            (200, {"guild": "Cave", "guilds": ["Cave"], "ready": False, "asks": []}),
+        )
 
 
 if __name__ == "__main__":
