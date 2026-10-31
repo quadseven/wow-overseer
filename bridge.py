@@ -29328,7 +29328,7 @@ _CLASS_TRAINER_SQL = (
     "WHERE t.Type = 0 GROUP BY t.Requirement, ts.SpellId"
 )
 _CLASS_KNOWN_SQL = (
-    "SELECT c.name, c.class AS class_id, c.level, cs.spell "
+    "SELECT c.name, c.class AS class_id, c.race AS race_id, c.level, cs.spell "
     "FROM characters c LEFT JOIN character_spell cs ON cs.guid = c.guid "
     "AND cs.spell IN (SELECT ts.SpellId FROM acore_world.trainer_spell ts "
     "JOIN acore_world.trainer t ON t.Id = ts.TrainerId WHERE t.Type = 0) "
@@ -29356,16 +29356,18 @@ def _class_training_due(names: list, casts_only: bool = False) -> dict:
         trainer = _class_trainer_rows(cur)
         rows = _corps_read(cur, "known class spells",
                            _CLASS_KNOWN_SQL % ",".join(["%s"] * len(names)), list(names))
-    known, level, klass = {}, {}, {}
+    known, level, klass, race = {}, {}, {}, {}
     for row in rows:
         name = str(row["name"])
         level[name] = int(row.get("level") or 0)
         klass[name] = int(row.get("class_id") or 0)
+        race[name] = int(row.get("race_id") or 0)
         spells = known.setdefault(name, set())
         if row.get("spell"):
             spells.add(int(row["spell"]))
     return {name: classtrain.due(trainer.get(klass[name], ()), known[name], level[name],
-                                 klass[name] if casts_only else None)
+                                 klass[name] if casts_only else None,
+                                 race[name] or None, klass[name])
             for name in known}
 
 
