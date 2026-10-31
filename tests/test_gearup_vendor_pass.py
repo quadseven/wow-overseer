@@ -10,6 +10,7 @@ marked worn so the auction half does not buy it again.
 import ast
 import pathlib
 import re
+import sqlite3
 import unittest
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
@@ -24,6 +25,47 @@ def _block(signature: str) -> str:
 
 
 class VendorHalfOfTheGearErrand(unittest.TestCase):
+    def test_holdable_effect_projection_preserves_stats_randoms_and_spells(self):
+        module = ast.parse(BRIDGE.read_text(encoding="utf-8"))
+        node = next(
+            n
+            for n in module.body
+            if isinstance(n, ast.Assign)
+            and isinstance(n.targets[0], ast.Name)
+            and n.targets[0].id == "_GEAR_ITEM_EFFECT_COLUMNS"
+        )
+        namespace = {}
+        exec(
+            compile(ast.Module(body=[node], type_ignores=[]), "bridge.py", "exec"),
+            namespace,
+        )
+        expression = namespace["_GEAR_ITEM_EFFECT_COLUMNS"].rstrip(", ")
+        fields = dict.fromkeys(
+            ["armor", "block", "RandomProperty", "RandomSuffix"]
+            + [f"stat_value{n}" for n in range(1, 11)]
+            + [f"spellid_{n}" for n in range(1, 6)],
+            0,
+        )
+        with sqlite3.connect(":memory:") as conn:
+            for benefit in (
+                None,
+                "armor",
+                "block",
+                "RandomProperty",
+                "RandomSuffix",
+                "stat_value10",
+                "spellid_5",
+            ):
+                row = dict(fields)
+                if benefit:
+                    row[benefit] = 1
+                columns = ", ".join(f":{key} AS {key}" for key in row)
+                with self.subTest(benefit=benefit):
+                    result = conn.execute(
+                        f"SELECT {expression} FROM (SELECT {columns}) it", row
+                    ).fetchone()[0]
+                    self.assertEqual(int(benefit is not None), result)
+
     def test_a_short_family_is_walked_to_a_vendor_before_the_auctioneer(self):
         body = _block("    async def _gearup_once(")
         self.assertIn("_gearup_vendor_trip(names, leader, facts, cohort)", body)
