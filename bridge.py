@@ -2896,6 +2896,11 @@ def _note_vendor_sellable(names, sellable: dict) -> None:
         _VENDOR_SELLABLE[str(name)] = int((sellable or {}).get(name, 0))
 
 
+def _vendor_sale_counts(names) -> dict[str, int | None]:
+    """Latest sale counts for this family; an unread member remains unknown."""
+    return {name: _VENDOR_SELLABLE.get(name) for name in names}
+
+
 def _bag_hold_reads(names: list, leader: str) -> tuple:
     """The members present, their free slots and the leader's travel column,
     read together in one worker thread for the dungeon-quest bag hold (#1243).
@@ -12193,6 +12198,7 @@ class Bridge(discord.Client):
         step = bag_pressure.vendor_errand_step(
             bool(leader_town.vendor), outstanding,
             pressure=pressure,
+            sale_counts=_vendor_sale_counts(names),
         )
         if (step == bag_pressure.VENDOR_ERRAND_HOLD
                 and outstanding == 0
