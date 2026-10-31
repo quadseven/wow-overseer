@@ -5284,7 +5284,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(200, "application/json", json.dumps(payload).encode())
 
-    def _trade_crafts(self, query: dict) -> None:
+    @_get_route("guild trade crafts query failed", separators=(",", ":"))
+    def _trade_crafts(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/trades?skill=<id>[&family=<key>] - one profession's crafts.
 
         THE ONE OPT-IN PARAMETER THIS ENDPOINT HAS, and it keeps the property
@@ -5294,45 +5295,37 @@ class Handler(BaseHTTPRequestHandler):
         is a 400 (tradespec.parse_skill, parse_family); a bad skill never
         reaches the database at all.
         The same whole-world reads run as for the plain form, filtered in
-        Python, so the cost of a profession is the cost of the page.
+        Python, so the cost of a profession is the cost of the page. The list
+        is sent compact (separators), and a failed read is _answer's 503.
         """
-        try:
-            skill, error = tradespec.parse_skill(query, CRAFTBOOK)
-            if error:
-                self._send(400, "application/json",
-                           json.dumps({"error": error}).encode())
-                return
-            sides = _faction_sides()
-            wanted, error = tradespec.parse_family(
-                query, [side["family"] for side in sides])
-            if error:
-                body = json.dumps({"error": error}).encode()
-                self._send(400, "application/json", body)
-                return
-            fetched = _fetch_guildcraft(
-                [(side["family"], side["names"]) for side in sides])
-            crafts = fetched.pop("craft_rows")
-            per_family = fetched.pop("families")
-            built = []
-            for side in sides:
-                if wanted and side["family"] != wanted:
-                    continue
-                mine = per_family[side["family"]]
-                payload = tradespec.build_craft_list(
-                    skill, CRAFTBOOK, crafts, mine["skill_rows"],
-                    mine["spell_rows"], mine["member_rows"], side["names"],
-                    fetched["recipe_rows"], fetched["trainer_rows"],
-                    fetched["vendor_rows"], fetched["drop_rows"],
-                    fetched["quest_rows"], achievements.MAP_NAMES, GEO)
-                payload["family"] = side["family"]
-                built.append(payload)
-            # ONE FAMILY'S LIST, flat: the page always names the family it
-            # is drawing, and with none named the first (Alliance) answers.
-            self._send(200, "application/json",
-                       json.dumps(built[0], separators=(",", ":")).encode())
-        except Exception:
-            log.exception("guild trade crafts query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        skill, error = tradespec.parse_skill(query, CRAFTBOOK)
+        if error:
+            return 400, {"error": error}
+        sides = _faction_sides()
+        wanted, error = tradespec.parse_family(
+            query, [side["family"] for side in sides])
+        if error:
+            return 400, {"error": error}
+        fetched = _fetch_guildcraft(
+            [(side["family"], side["names"]) for side in sides])
+        crafts = fetched.pop("craft_rows")
+        per_family = fetched.pop("families")
+        built = []
+        for side in sides:
+            if wanted and side["family"] != wanted:
+                continue
+            mine = per_family[side["family"]]
+            payload = tradespec.build_craft_list(
+                skill, CRAFTBOOK, crafts, mine["skill_rows"],
+                mine["spell_rows"], mine["member_rows"], side["names"],
+                fetched["recipe_rows"], fetched["trainer_rows"],
+                fetched["vendor_rows"], fetched["drop_rows"],
+                fetched["quest_rows"], achievements.MAP_NAMES, GEO)
+            payload["family"] = side["family"]
+            built.append(payload)
+        # ONE FAMILY'S LIST, flat: the page always names the family it
+        # is drawing, and with none named the first (Alliance) answers.
+        return 200, built[0]
 
     def _trades(self, query: dict) -> None:
         """GET /api/trades - who can make what, and where the rest comes from.
@@ -5349,76 +5342,77 @@ class Handler(BaseHTTPRequestHandler):
         if "skill" in query:
             self._trade_crafts(query)
             return
-        try:
-            # ONE GUILD PER FAMILY, Alliance first: Cave's trades on the left
-            # and Bonkers' on the right. Before this the tab was bonds' one
-            # family and its guild, and the Horde guild had no trades page.
-            sides = _faction_sides()
-            fetched = _fetch_guildcraft(
-                [(side["family"], side["names"]) for side in sides])
-            # LIFTED OUT BEFORE THE SPLAT. These rows answer tradespec's two
-            # questions (what rank does a craft ask for, which specialization
-            # gates it) and are not a build_guildcraft argument; leaving them in
-            # would be a TypeError on every poll.
-            crafts = fetched.pop("craft_rows")
-            per_family = fetched.pop("families")
-            roster_rows = fetched.pop("roster_rows")
-            built = []
-            for side in sides:
-                roster = side["names"]
-                mine = per_family[side["family"]]
-                # Only this family's assignments: the roster column names
-                # characters, and the other family's are not this guild's.
-                ours = set(roster)
-                assigned = [r for r in roster_rows if r.get("name") in ours]
-                payload = guildcraft.build_guildcraft(
-                    **mine, **fetched, roster_rows=assigned, icons=ITEMS.icons,
-                    book=ITEMS, roster=roster, names=achievements.MAP_NAMES,
-                    geo=GEO)
-                # THE SECOND HALF OF THE VIEW, and it is built from the SAME
-                # rows rather than from a second read. guildcraft answers "what
-                # can the guild make and where does a missing recipe come
-                # from"; this answers "how far along the whole road are we, and
-                # who is first in line". They are separate modules because they
-                # are separate questions, and one payload because they are one
-                # tab.
-                payload["goal"] = tradespec.build_tradespec(
-                    CRAFTBOOK, crafts, mine["skill_rows"],
-                    mine["spell_rows"], mine["member_rows"], roster)
-                payload.update(family=side["family"], faction=side["faction"],
-                               heading=side["heading"])
-                built.append(payload)
-            # The top level is the first family's (Alliance), for a page that
-            # predates the list; the page draws `families`.
-            payload = dict(built[0])
-            payload["families"] = built
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll: the tab keeps what it has
-            # drawn and says it may be stale. A blanked list reads as "the
-            # guild can make nothing and needs nothing", which is a far
-            # stronger claim than "this one read failed".
-            log.exception("guild trades query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        self._guild_trades(query)
 
-    def _run_timeline(self, _query: dict) -> None:
+    # The plain /api/trades, the form without `skill` (_trades picks).
+    @_get_route("guild trades query failed")
+    def _guild_trades(_query: dict, _ctx) -> tuple[int, dict]:
+        # A failed read answers 503 (_answer).
+        # Same contract as every other poll: the tab keeps what it has
+        # drawn and says it may be stale. A blanked list reads as "the
+        # guild can make nothing and needs nothing", which is a far
+        # stronger claim than "this one read failed".
+        # ONE GUILD PER FAMILY, Alliance first: Cave's trades on the left
+        # and Bonkers' on the right. Before this the tab was bonds' one
+        # family and its guild, and the Horde guild had no trades page.
+        sides = _faction_sides()
+        fetched = _fetch_guildcraft(
+            [(side["family"], side["names"]) for side in sides])
+        # LIFTED OUT BEFORE THE SPLAT. These rows answer tradespec's two
+        # questions (what rank does a craft ask for, which specialization
+        # gates it) and are not a build_guildcraft argument; leaving them in
+        # would be a TypeError on every poll.
+        crafts = fetched.pop("craft_rows")
+        per_family = fetched.pop("families")
+        roster_rows = fetched.pop("roster_rows")
+        built = []
+        for side in sides:
+            roster = side["names"]
+            mine = per_family[side["family"]]
+            # Only this family's assignments: the roster column names
+            # characters, and the other family's are not this guild's.
+            ours = set(roster)
+            assigned = [r for r in roster_rows if r.get("name") in ours]
+            payload = guildcraft.build_guildcraft(
+                **mine, **fetched, roster_rows=assigned, icons=ITEMS.icons,
+                book=ITEMS, roster=roster, names=achievements.MAP_NAMES,
+                geo=GEO)
+            # THE SECOND HALF OF THE VIEW, and it is built from the SAME
+            # rows rather than from a second read. guildcraft answers "what
+            # can the guild make and where does a missing recipe come
+            # from"; this answers "how far along the whole road are we, and
+            # who is first in line". They are separate modules because they
+            # are separate questions, and one payload because they are one
+            # tab.
+            payload["goal"] = tradespec.build_tradespec(
+                CRAFTBOOK, crafts, mine["skill_rows"],
+                mine["spell_rows"], mine["member_rows"], roster)
+            payload.update(family=side["family"], faction=side["faction"],
+                           heading=side["heading"])
+            built.append(payload)
+        # The top level is the first family's (Alliance), for a page that
+        # predates the list; the page draws `families`.
+        payload = dict(built[0])
+        payload["families"] = built
+        return 200, payload
+
+    @_get_route("run timeline query failed")
+    def _run_timeline(_query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/runtimeline - each family's recent dungeon runs, step by step.
 
         No parameters: the families come from the roster.
         """
-        try:
-            fetched = _fetch_run_timeline()
-            payload = runtimeline.build_run_timeline(
-                fetched["rows"], fetched["families"], present=fetched["present"],
-                deaths=fetched["deaths"], bosses=fetched["bosses"],
-                zones=recap.zone_names(GEO.continents), reports=fetched["reports"])
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # The tab keeps what it has drawn and says it may be stale.
-            log.exception("run timeline query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        # The tab keeps what it has drawn and says it may be stale.
+        fetched = _fetch_run_timeline()
+        payload = runtimeline.build_run_timeline(
+            fetched["rows"], fetched["families"], present=fetched["present"],
+            deaths=fetched["deaths"], bosses=fetched["bosses"],
+            zones=recap.zone_names(GEO.continents), reports=fetched["reports"])
+        return 200, payload
 
-    def _recap(self, query: dict) -> None:
+    @_get_route("recap query failed")
+    def _recap(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/recap[?map=N] - what is happening in there right now, and
         what can drop where.
 
@@ -5440,30 +5434,27 @@ class Handler(BaseHTTPRequestHandler):
         map_id = int(asked) if asked and asked.isdigit() else None
         if map_id not in achievements.MAP_NAMES:
             map_id = None
-        try:
-            # ONE RECAP PER FAMILY, Alliance first. Each is built from that
-            # family's own runs and its own five, so a Horde run is drawn
-            # with the Horde party and the loot board weighs drops against
-            # the family that would wear them.
-            recaps = []
-            for side in _faction_sides():
-                built = self._recap_for(map_id, side["names"])
-                built.update(family=side["family"], faction=side["faction"],
-                             heading=side["heading"])
-                recaps.append(built)
-            # The top level is the family with a live run (the first, when
-            # both are in), else the first: what a page that predates the
-            # families list draws, and never the wrong party for the run.
-            live = [r for r in recaps if r.get("live")]
-            payload = dict((live or recaps)[0])
-            payload["families"] = recaps
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll: the tab keeps what it has
-            # drawn and says it may be stale. A blank recap reads as "nothing
-            # is happening", which is the one thing this view exists to answer.
-            log.exception("recap query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        # Same contract as every other poll: the tab keeps what it has
+        # drawn and says it may be stale. A blank recap reads as "nothing
+        # is happening", which is the one thing this view exists to answer.
+        # ONE RECAP PER FAMILY, Alliance first. Each is built from that
+        # family's own runs and its own five, so a Horde run is drawn
+        # with the Horde party and the loot board weighs drops against
+        # the family that would wear them.
+        recaps = []
+        for side in _faction_sides():
+            built = Handler._recap_for(map_id, side["names"])
+            built.update(family=side["family"], faction=side["faction"],
+                         heading=side["heading"])
+            recaps.append(built)
+        # The top level is the family with a live run (the first, when
+        # both are in), else the first: what a page that predates the
+        # families list draws, and never the wrong party for the run.
+        live = [r for r in recaps if r.get("live")]
+        payload = dict((live or recaps)[0])
+        payload["families"] = recaps
+        return 200, payload
 
     @staticmethod
     def _recap_for(map_id: int | None, names: list[str]) -> dict:
