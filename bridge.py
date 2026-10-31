@@ -11331,7 +11331,7 @@ class Bridge(discord.Client):
                  cohort.key, given, len(material_plan.grants))
 
     async def _hand_bags_once(self, names: list) -> None:
-        """Give every idle bag to whoever has an empty bag position.
+        """Give idle bags to empty positions, then to siblings they upgrade.
 
         Measured on the dev family: four of five had no free bag position
         while carrying spare bags as cargo, and the fifth had an empty
@@ -11363,9 +11363,7 @@ class Bridge(discord.Client):
         # carried from the next save on, where the hand-over below or the
         # vendor pass's `bag_candidates` takes it.
         own = await self._equip_own_bags(members)
-        moves = bag_upgrade.plan_family_bags(
-            bag_upgrade.without_bags(members, own)
-        )
+        moves = bag_upgrade.plan_family_bags(members, reserved=own)
         if not moves:
             log.info("bags: nothing to hand over")
             return
