@@ -73,7 +73,9 @@ class TheEndpoint(unittest.TestCase):
     def test_a_dead_database_is_a_503_rather_than_a_hang(self):
         handler = self.server[self.server.index("def _armory") :]
         handler = handler[: handler.index("def _thoughts")]
-        self.assertIn("self._send(503", handler)
+        self.assertIn(
+            '@_get_route("armory query failed")\n    def _armory(', self.server
+        )
 
     def test_the_talent_book_is_read_once_at_import_not_per_request(self):
         """It is 117KB of JSON and it never changes. Loading it inside the
