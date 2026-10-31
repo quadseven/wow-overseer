@@ -200,7 +200,7 @@ class ReadTheRoomTest(unittest.TestCase):
             "chat": chat,
             "dungeonpath": dungeonpath,
             "raidrun": raidrun,
-            "_active_dungeon_run": lambda: None,
+            "_active_dungeon_run": lambda names: None,
             "_fetch_live_maps": lambda names: {
                 "Zug": raidrun.MOLTEN_CORE_MAP,
                 "Oz": raidrun.MOLTEN_CORE_MAP,
