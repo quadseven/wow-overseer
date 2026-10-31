@@ -2896,6 +2896,11 @@ def _note_vendor_sellable(names, sellable: dict) -> None:
         _VENDOR_SELLABLE[str(name)] = int((sellable or {}).get(name, 0))
 
 
+def _vendor_sale_counts(names) -> dict[str, int | None]:
+    """Latest sale counts for this family; an unread member remains unknown."""
+    return {name: _VENDOR_SELLABLE.get(name) for name in names}
+
+
 def _bag_hold_reads(names: list, leader: str) -> tuple:
     """The members present, their free slots and the leader's travel column,
     read together in one worker thread for the dungeon-quest bag hold (#1243).
@@ -12193,6 +12198,7 @@ class Bridge(discord.Client):
         step = bag_pressure.vendor_errand_step(
             bool(leader_town.vendor), outstanding,
             pressure=pressure,
+            sale_counts=_vendor_sale_counts(names),
         )
         if (step == bag_pressure.VENDOR_ERRAND_HOLD
                 and outstanding == 0
@@ -31270,13 +31276,25 @@ _BAG_VENDOR_SQL = (
 # THE VENDORS NEAR THE LEADER THAT SELL EQUIPMENT, one row per (vendor, item),
 # the bag trip's query with the item filter `_fetch_gear_offers` uses. Read
 # from the world's spawn and stock tables, never authored.
+# Holdables need an actual benefit; item level alone also ranks florist bouquets.
+# Random-property items can gain their stats from the instance rather than template.
+_GEAR_ITEM_EFFECT_COLUMNS = (
+    "(it.armor > 0 OR it.block > 0 OR it.RandomProperty <> 0 "
+    "OR it.RandomSuffix <> 0 OR "
+    + " OR ".join(f"it.stat_value{n} > 0" for n in range(1, 11))
+    + " OR "
+    + " OR ".join(f"it.spellid_{n} > 0" for n in range(1, 6))
+    + ") AS has_item_effect, "
+)
+
+
 _GEAR_VENDOR_SQL = (
     "SELECT cr.id AS vendor, ct.name AS vendor_name, cr.map AS map_id, "
     "MIN(SQRT(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2))) AS yards, "
     "it.entry AS entry, it.BuyPrice AS buyout, it.InventoryType AS InventoryType, "
     "it.class AS class, it.subclass AS subclass, it.RequiredLevel AS RequiredLevel, "
     "it.AllowableClass AS AllowableClass, it.ItemLevel AS ItemLevel, "
-    "it.Quality AS Quality, ft.EnemyGroup AS enemy_group "
+    "it.Quality AS Quality, " + _GEAR_ITEM_EFFECT_COLUMNS + "ft.EnemyGroup AS enemy_group "
     "FROM acore_world.npc_vendor nv "
     "JOIN acore_world.creature cr ON cr.id = nv.entry "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
@@ -31288,7 +31306,7 @@ _GEAR_VENDOR_SQL = (
     "AND ABS(cr.position_x - %s) <= %s AND ABS(cr.position_y - %s) <= %s "
     "GROUP BY cr.id, ct.name, cr.map, it.entry, it.BuyPrice, it.InventoryType, "
     "it.class, it.subclass, it.RequiredLevel, it.AllowableClass, it.ItemLevel, "
-    "it.Quality, ft.EnemyGroup "
+    "it.Quality, has_item_effect, ft.EnemyGroup "
     "HAVING yards <= %s ORDER BY yards, vendor"
 )
 
@@ -34750,8 +34768,9 @@ def _fetch_gear_offers(entries: list) -> list:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT entry, BuyPrice AS buyout, InventoryType, class, subclass, "
-            "RequiredLevel, AllowableClass, ItemLevel, Quality "
-            "FROM acore_world.item_template WHERE entry IN (%s) "  # noqa: S608 - placeholders from a COUNT
+            "RequiredLevel, AllowableClass, ItemLevel, Quality, "
+            + _GEAR_ITEM_EFFECT_COLUMNS.rstrip(", ")
+            + " FROM acore_world.item_template it WHERE entry IN (%s) "  # noqa: S608 - placeholders from a COUNT
             "AND class IN (2,4) AND InventoryType BETWEEN 1 AND 28 "
             "AND BuyPrice > 0" % marks, [int(e) for e in entries])
         return [dict(row) for row in cur.fetchall()]
@@ -34762,7 +34781,9 @@ def _fetch_gearup_listings(house: int) -> list:
         cur.execute(
             "SELECT a.id AS listing_id, a.buyoutprice AS buyout, ii.itemEntry AS entry, "
             "it.name, it.InventoryType, it.class, it.subclass, it.RequiredLevel, "
-            "it.AllowableClass, it.ItemLevel, it.Quality FROM auctionhouse a "
+            "it.AllowableClass, it.ItemLevel, it.Quality, "
+            + _GEAR_ITEM_EFFECT_COLUMNS.rstrip(", ")
+            + " FROM auctionhouse a "
             "JOIN item_instance ii ON ii.guid=a.itemguid "
             "JOIN acore_world.item_template it ON it.entry=ii.itemEntry "
             "WHERE a.houseid=%s AND a.buyoutprice>0 AND it.class IN (2,4) "
