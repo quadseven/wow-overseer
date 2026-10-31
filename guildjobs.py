@@ -5931,17 +5931,29 @@ def _pvp_walk_cooling(name, recent) -> bool:
     )  # fmt: skip
 
 
-def pvp_buy_cooldown(name, recent) -> int:
-    """Minutes to wait after this member's failed honor buys due to full bags,
-    0 when its newest such buy did not fail with 'bags cannot take the item'."""
-    rows = sorted(
+def _pvp_honor_buys(name, recent) -> list:
+    """This member's honor buy rows, newest first: not its walks, junk sales or
+    battleground queues."""
+    return sorted(
         (r for r in recent or () if r.name == name and r.action == pvpgear.ACTION
-         and not r.walk and "bags cannot take the item" in (r.result or "")),
+         and not r.walk and str(r.command or "").startswith("entry:")),
         key=lambda r: int(r.age_minutes),
     )  # fmt: skip
+
+
+def _pvp_refused_for_bags(row) -> bool:
+    return row.status in TRAIN_FAILED and mountbuy.BAGS_FULL_REASON in (
+        row.result or ""
+    )
+
+
+def pvp_buy_cooldown(name, recent) -> int:
+    """Minutes to wait after this member's honor buys refused for full bags, 0
+    when its newest honor buy was not. Each refusal in a row (newest first,
+    until a buy that was not refused for bags) doubles the wait."""
     failed = 0
-    for r in rows:
-        if r.status not in TRAIN_FAILED:
+    for r in _pvp_honor_buys(name, recent):
+        if not _pvp_refused_for_bags(r):
             break
         failed += 1
     if not failed:
@@ -5952,11 +5964,9 @@ def pvp_buy_cooldown(name, recent) -> int:
 def _pvp_buy_cooling(name, recent) -> bool:
     minutes = pvp_buy_cooldown(name, recent)
     return any(
-        r.name == name and r.action == pvpgear.ACTION and not r.walk
-        and "bags cannot take the item" in (r.result or "")
-        and int(r.age_minutes) < minutes
-        for r in recent or ()
-    )  # fmt: skip
+        _pvp_refused_for_bags(r) and int(r.age_minutes) < minutes
+        for r in _pvp_honor_buys(name, recent)
+    )
 
 
 def _pvp_room_step(m, aim, cap, kept=None):

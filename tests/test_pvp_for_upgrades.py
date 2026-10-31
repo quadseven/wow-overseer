@@ -294,6 +294,11 @@ class WhenToStopAndBuy(unittest.TestCase):
             )
 
 
+HONOR_BUY = "entry:19325 count:1 honor:5000"
+BAGS_FULL = '{"outcome":"refused","reason":"bags cannot take the item"}'
+YARDS = guildroute.FAR_WALK_YARDS
+
+
 def job_member(**kw):
     base = dict(
         name="Auren", guild="Cave", role=guildjobs.RAIDER, level=60, class_id=ROGUE,
@@ -374,7 +379,7 @@ class TheJobStep(unittest.TestCase):
                 action="pvp",
                 age_minutes=5,
                 status="error",
-                command="buy 19325",
+                command=HONOR_BUY,
                 result="bags cannot take the item",
                 walk=False,
             ),
@@ -393,7 +398,7 @@ class TheJobStep(unittest.TestCase):
                 action="pvp",
                 age_minutes=61,
                 status="error",
-                command="buy 19325",
+                command=HONOR_BUY,
                 result="bags cannot take the item",
                 walk=False,
             ),
@@ -406,8 +411,8 @@ class TheJobStep(unittest.TestCase):
         )
         self.assertTrue(any("no free bag slot" in note for note in plan_full.notes))
 
-        self.assertEqual(1, member.free_slots)
-        plan2 = guildjobs.plan([member], pvp=pvp_for(held=6000), recent=recent_past)
+        freed = job_member(free_slots=1, bag_slots=16)
+        plan2 = guildjobs.plan([freed], pvp=pvp_for(held=6000), recent=recent_past)
         pvp_steps = [s for s in plan2.steps if s.action == "pvp"]
         self.assertEqual(
             ["walk-to-vendor item:19325"],
@@ -444,13 +449,102 @@ class TheJobStep(unittest.TestCase):
                 action="pvp",
                 age_minutes=61,
                 status="error",
-                command="buy 19325",
+                command=HONOR_BUY,
                 result="bags cannot take the item",
                 walk=False,
             ),
         )
         plan = guildjobs.plan([member], pvp=pvp_for(held=6000), recent=old)
         self.assertFalse(any(s.action == "pvp" for s in plan.steps))
+
+
+def honor_buy(age, status="error", result=BAGS_FULL, **kw):
+    row = dict(
+        name="Auren", action="pvp", age_minutes=age, status=status, command=HONOR_BUY,
+        result=result,
+    )  # fmt: skip
+    row.update(kw)
+    return guildjobs.Recent(**row)
+
+
+class TheBagRefusalBackoff(unittest.TestCase):
+    def test_no_refused_buy_is_no_wait(self):
+        self.assertEqual(0, guildjobs.pvp_buy_cooldown("Auren", ()))
+        self.assertEqual(0, guildjobs.pvp_buy_cooldown("Auren", None))
+
+    def test_each_refusal_in_a_row_doubles_the_wait_up_to_the_cap(self):
+        for count, minutes in ((1, 60), (2, 120), (3, 240), (6, 720), (9, 720)):
+            rows = tuple(honor_buy(age) for age in range(count))
+            self.assertEqual(minutes, guildjobs.pvp_buy_cooldown("Auren", rows), count)
+
+    def test_a_delivered_buy_resets_the_wait(self):
+        rows = (honor_buy(20, "done", '{"outcome":"delivered"}'), honor_buy(30))
+        self.assertEqual(0, guildjobs.pvp_buy_cooldown("Auren", rows))
+        member = job_member(free_slots=1, bag_slots=16)
+        plan = guildjobs.plan([member], pvp=pvp_for(held=6000), recent=rows)
+        self.assertEqual(["pvp"], [s.action for s in plan.steps])
+
+    def test_a_delivered_buy_ends_the_run_of_refusals_behind_it(self):
+        rows = (
+            honor_buy(5),
+            honor_buy(10, "done", '{"outcome":"delivered"}'),
+            honor_buy(30),
+            honor_buy(40),
+        )
+        self.assertEqual(60, guildjobs.pvp_buy_cooldown("Auren", rows))
+
+    def test_a_buy_that_failed_for_another_reason_is_no_bag_refusal(self):
+        rows = (honor_buy(5, result='{"reason":"not enough honor"}'), honor_buy(30))
+        self.assertEqual(0, guildjobs.pvp_buy_cooldown("Auren", rows))
+
+    def test_only_this_members_honor_buys_count(self):
+        rows = (
+            honor_buy(5, name="Brug"),
+            honor_buy(6, walk=True),
+            honor_buy(7, action="gear"),
+        )
+        self.assertEqual(0, guildjobs.pvp_buy_cooldown("Auren", rows))
+
+    def test_a_junk_sale_or_queue_row_does_not_reset_the_wait(self):
+        rows = (
+            honor_buy(1, "done", "", command="guid:7"),
+            honor_buy(2, "done", "", command="bg-queue av"),
+            honor_buy(5),
+        )
+        self.assertEqual(60, guildjobs.pvp_buy_cooldown("Auren", rows))
+
+
+class FullBagsAtTheHonorVendor(unittest.TestCase):
+    JUNK = (Carried(guid=1, entry=2589, count=10, quality=0, sell_price=500),)
+
+    def test_no_room_step_when_a_slot_is_free_or_the_bags_are_unread(self):
+        for free_slots in (None, 1):
+            member = job_member(free_slots=free_slots, carried=self.JUNK)
+            self.assertIsNone(guildjobs._pvp_room_step(member, aim(), YARDS))
+
+    def test_a_dead_member_makes_no_room(self):
+        member = job_member(free_slots=0, carried=self.JUNK, alive=False)
+        self.assertIsNone(guildjobs._pvp_room_step(member, aim(), YARDS))
+
+    def test_unread_bags_do_not_stop_the_walk(self):
+        member = job_member(free_slots=None)
+        (step,) = guildjobs.plan([member], pvp=pvp_for(held=6000)).steps
+        self.assertEqual("walk-to-vendor item:19325", step.walk.command)
+
+    def test_full_bags_with_junk_give_the_room_step_and_do_not_hold(self):
+        member = job_member(free_slots=0, carried=self.JUNK)
+        step, doing, held = guildjobs._pvp_full_bags(member, aim(), YARDS, None)
+        self.assertEqual(guildjobs.ROOM_ACTION, step.action)
+        self.assertEqual(("sell", "guid:1"), (step.rows[0].kind, step.rows[0].command))
+        self.assertIn("makes room", doing)
+        self.assertFalse(held)
+
+    def test_full_bags_with_no_room_step_give_the_reason_and_do_not_hold(self):
+        member = job_member(free_slots=0, carried=())
+        step, doing, held = guildjobs._pvp_full_bags(member, aim(), YARDS, None)
+        self.assertIsNone(step)
+        self.assertIn("nothing to sell", doing)
+        self.assertFalse(held)
 
 
 class GuildChat(unittest.TestCase):
