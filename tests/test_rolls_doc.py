@@ -77,27 +77,52 @@ class RollsDocTest(unittest.TestCase):
         self.assertIn("deployment_repo", pins)
         self.assertIn("build_workflow", pins)
         sources = pins["sources"]
-        declared = json.dumps(sources)
         step = self.text.split("**Bump the source pins only**", 1)[1].split(
             "3. **Read", 1
         )[0]
-        required = (
-            "AC_OVERSEER_SHA",
-            "AC_DUNGEON_CLEAR_SHA",
-            "AC_CORE_SHA",
-            "AC_MODULE_SHA",
-            "AC_OLLAMA_CHAT_SHA",
-            "production/docker/azerothcore-playerbots/",
-            ".github/scripts/wow_promotion_drift.py",
-            '"dev"',
-            "revision_repo",
-            "revision_ref",
-            "dict_dev",
+        locations = re.findall(r"`([^`]+)`", step)
+        env_location = next(
+            location for location in locations if location.endswith("UPSTREAM-PINS.env")
         )
-        for location in required:
-            with self.subTest(location=location):
-                self.assertIn(location, step)
-                self.assertIn(location, declared, f"source pins omit {location}")
+        drift_location = next(
+            location
+            for location in locations
+            if location.endswith("wow_promotion_drift.py")
+        )
+        env_keys = set(re.findall(r"\bAC_[A-Z_]+\b", step))
+        env_sources = [
+            source for source in sources if source.get("location") == env_location
+        ]
+        declared_keys = {
+            key for source in env_sources for key in source.get("keys", [])
+        }
+        self.assertEqual(
+            env_keys, declared_keys, "source pins omit an env key from step 2"
+        )
+        self.assertTrue(
+            any(
+                source.get("repository") == "mod-overseer"
+                and source.get("location", "").endswith("gitlink")
+                for source in sources
+            ),
+            "source pins omit the mod-overseer gitlink from step 2",
+        )
+        self.assertTrue(
+            any(
+                source.get("location") == drift_location
+                and source.get("entry") == "dev"
+                and source.get("dict_dev") is True
+                for source in sources
+            ),
+            "source pins omit the dev dict entry from step 2",
+        )
+        dungeon_source = next(
+            source
+            for source in sources
+            if source.get("repository") == "mod-dungeon-clear"
+        )
+        self.assertEqual(dungeon_source.get("revision_repo"), "mod-dungeon-clear")
+        self.assertTrue(dungeon_source.get("revision_ref"))
 
 
 if __name__ == "__main__":
