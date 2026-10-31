@@ -341,6 +341,33 @@ class ThePass(unittest.TestCase):
         self.assertNotIn("buy", [s.action for s in plan.steps if s.holder == "Derred"])
         self.assertTrue(any("cooldown" in n for n in plan.notes))
 
+    def test_cooling_collection_leaves_carried_linen_available_to_craft(self):
+        t = tailor(
+            "Tailor",
+            21,
+            75,
+            known=frozenset({3908, 2963}),
+            carried=(held(2589, 19),),
+            mail=(gc.Letter(55, 5001, 2589, 20),),
+        )
+        for age, action, key, repeat in (
+            (1, "craft", 2963, 9),
+            (31, "collect", 2589, 1),
+        ):
+            with self.subTest(collection_age=age):
+                plan = gc.plan(
+                    [t],
+                    {},
+                    TRAINABLE,
+                    VENDORS,
+                    {("Tailor", "collect", 2589): age},
+                    set(),
+                )
+                self.assertEqual(
+                    [(s.action, s.key, s.repeat) for s in plan.steps],
+                    [(action, key, repeat)],
+                )
+
     def test_a_busy_tailor_is_left_alone(self):
         plan = gc.plan(self.crew(), {}, TRAINABLE, VENDORS, {}, {"Derred"})
         self.assertNotIn("Derred", [s.holder for s in plan.steps])
