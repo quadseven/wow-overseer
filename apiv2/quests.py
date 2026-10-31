@@ -41,6 +41,7 @@ from __future__ import annotations
 import questcatalogue
 import questledger
 import questlog
+import questtickets
 
 # Read only catalogue quest ids, in bounded batches. Each result has at most
 # one count per quest and state, regardless of how many questers attempted it.
@@ -50,9 +51,11 @@ LEDGER_SQL = (
     "WHERE quest IN ({holes}) GROUP BY quest, state"
 )
 QUEST_LEDGER_SQL = (
-    "SELECT quest, guid, character_name, state, first_taken, finished, reason "
+    "SELECT quest, guid, character_name, state, first_taken, finished, reason, ticket "
     "FROM overseer_quest_ledger WHERE quest = %s ORDER BY first_taken, guid"
 )
+# A realm whose bridge has not added the ticket column yet.
+QUEST_LEDGER_THIN_SQL = QUEST_LEDGER_SQL.replace(", ticket ", " ")
 COUNTS_SQL = (
     "SELECT guid, state, COUNT(*) AS n FROM overseer_quest_ledger "
     "WHERE guid IN ({holes}) GROUP BY guid, state"
@@ -190,13 +193,14 @@ def build_quest(quest, ledger_rows) -> dict:
             **quest.view(),
             "status": questledger.quest_status(states),
             "attempts": len(states),
+            "ticket": questtickets.ticket_of(ledger_rows),
         },
         "attempts": [_attempt(r) for r in ledger_rows or ()],
     }
 
 
 def quest(query: dict, ctx) -> tuple[int, dict]:
-    """GET /api/v2/quests/{id} - one classic quest and every quester attempt."""
+    """GET /api/v2/quests/{id} - one classic quest, its ticket and every quester attempt."""
     try:
         quest_id = int(_one(query, "id"))
     except ValueError:
@@ -204,7 +208,12 @@ def quest(query: dict, ctx) -> tuple[int, dict]:
     found = next((q for q in _catalogue(ctx) if q.id == quest_id), None)
     if found is None:
         return 404, {"error": "quest %d is not in the classic catalogue" % quest_id}
-    rows = ctx.read.rows(QUEST_LEDGER_SQL, (quest_id,), what="overseer_quest_ledger")
+    rows = ctx.read.rows(
+        QUEST_LEDGER_SQL,
+        (quest_id,),
+        fallback=QUEST_LEDGER_THIN_SQL,
+        what="overseer_quest_ledger",
+    )
     return 200, build_quest(found, rows)
 
 

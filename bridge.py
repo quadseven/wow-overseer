@@ -144,7 +144,9 @@ import priorities
 import professions
 import protect
 import questbook
+import questcatalogue
 import questledger
+import questtickets
 import questers
 import questshare
 import quests
@@ -3914,6 +3916,7 @@ def _ensure_quest_ledger_store() -> None:
     try:
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(questledger.TABLE_SQL)
+            questtickets.ensure_column(cur)
         _quest_ledger_ready = True
     except pymysql.err.MySQLError:
         log.exception("quest ledger: overseer_quest_ledger unavailable; each "
@@ -3928,6 +3931,7 @@ def _record_quests() -> int:
     with _connect() as conn, conn.cursor() as cur:
         if not _quest_ledger_ready:
             cur.execute(questledger.TABLE_SQL)
+            questtickets.ensure_column(cur)
             _quest_ledger_ready = True
         cur.execute(questledger.CHARACTERS_SQL.format(
             holes=questledger.holes(len(names))), tuple(names))
@@ -3947,6 +3951,23 @@ def _record_quests() -> int:
         if written:
             cur.executemany(questledger.WRITE_SQL, [e.args() for e in written])
     return len(written)
+
+
+def _file_quest_tickets(client) -> dict:
+    """One filing pass (questtickets.py) on one connection."""
+    with _connect() as conn, conn.cursor() as cur:
+        questtickets.ensure_column(cur)
+
+        def read(sql):
+            cur.execute(sql)
+            return cur.fetchall()
+
+        return questtickets.run(
+            questtickets.SqlStore(cur),
+            client,
+            questcatalogue.load(read),
+            os.environ.get("QUEST_SITE_URL", ""),
+        )
 
 
 # --- the Watcher (director.py) -------------------------------------------
@@ -7144,6 +7165,7 @@ PASSES = (
     _Pass("_now_loop"),
     _Pass("_watch_loop"),
     _Pass("_quest_ledger_loop"),
+    _Pass("_quest_tickets_loop"),
 )
 
 
@@ -23231,6 +23253,29 @@ class Bridge(discord.Client):
                     log.info("quest ledger: %d quest row(s) moved", written)
             except Exception:
                 log.exception("quest ledger: pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _quest_tickets_loop(self) -> None:
+        """File one issue per newly broken quest, daily (questtickets.py)."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("QUEST_TICKET_SECONDS", "86400"))
+        client = questtickets.client_from_env(log)
+        if client is None:
+            log.info("quest tickets: no GitHub App is configured, so no issue is filed")
+            return
+        await asyncio.sleep(min(cycle, 300.0))
+        while not self.is_closed():
+            try:
+                done = await asyncio.to_thread(_file_quest_tickets, client)
+                log.info("quest tickets: %s", done)
+                if done["stuck"]:
+                    log.error("quest tickets: a filing never finished for quests %s; "
+                              "check for an issue, then set their ticket", done["stuck"])
+                if done["unlinked"]:
+                    log.error("quest tickets: issues %s are filed but not under the epic; "
+                              "link them by hand", done["unlinked"])
+            except Exception:
+                log.exception("quest tickets: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _watch_loop(self) -> None:

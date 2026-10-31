@@ -305,7 +305,7 @@ Each entry: path, query parameters, what it answers, one example.
 ## `GET /api/v2/quests/{id}`
 
 - Query: none
-- Answers: one classic quest and every quester attempt.
+- Answers: one classic quest, its ticket and every quester attempt.
 - Example: `overseer get /api/v2/quests/{id}`
 
 ## `GET /api/v2/raidteams`
