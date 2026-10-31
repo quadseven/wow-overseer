@@ -4234,11 +4234,11 @@ def _dungeonquest_facts(family: dict, keyword: str, leader: str,
         givers, recent, due=due, mid_run=mid_run)
 
 
-def _insert_dungeonquest_row(name: str, command: str) -> int:
+def _insert_dungeonquest_row(name: str, command: str,
+                             source: str = "overseer:dungeon-quests") -> int:
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(dungeonquests.INSERT_SQL,
-                        (name, command, "overseer:dungeon-quests"))
+            cur.execute(dungeonquests.INSERT_SQL, (name, command, source))
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] == 1265:
                 log.warning("dungeon quests: command kind is unavailable; %s for %s "
@@ -4247,6 +4247,33 @@ def _insert_dungeonquest_row(name: str, command: str) -> int:
                 return 0
             raise
         return cur.lastrowid or 0
+
+
+def _legacy_facts(guilds: list) -> dungeonquests.LegacyFacts:
+    """Everything the Dark Iron Legacy pass reads (#811), on one connection;
+    no judgement here."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(dungeonquests.LEGACY_MEMBERS_SQL.format(  # noqa: S608 - placeholders only
+            holes=", ".join(["%s"] * len(guilds))), tuple(guilds))
+        snaps = list(cur.fetchall())
+        names = tuple(str(row["name"]) for row in snaps)
+        log_rows, rewarded = [], []
+        if names:
+            holes = ", ".join(["%s"] * len(names))
+            bound = dungeonquests.LEGACY_QUESTS + names
+            cur.execute(dungeonquests.LEGACY_LOG_SQL.format(holes=holes), bound)  # noqa: S608 - placeholders only
+            log_rows = list(cur.fetchall())
+            cur.execute(dungeonquests.LEGACY_REWARDED_SQL.format(holes=holes), bound)  # noqa: S608 - placeholders only
+            rewarded = list(cur.fetchall())
+        cur.execute(dungeonquests.LEGACY_SPAWNS_SQL, dungeonquests.LEGACY_SPAWN_IDS)
+        spawns = list(cur.fetchall())
+        cur.execute(dungeonquests.LEGACY_RUNS_SQL)
+        runs = list(cur.fetchall())
+        cur.execute(dungeonquests.RECENT_SQL, (dungeonquests.LEGACY_SOURCE,
+                                               dungeonquests.LEGACY_RETRY_SECONDS))
+        recent = list(cur.fetchall())
+    return dungeonquests.legacy_facts_from_rows(
+        snaps, log_rows, rewarded, spawns, runs, recent)
 
 
 def _queue_level_rows(family: dict) -> list:
@@ -20538,6 +20565,11 @@ class Bridge(discord.Client):
                     set(active) | set(getattr(self, "_guild_social_names", ()))
                     | _class_party_names(self))
                 await asyncio.to_thread(_hearth_stranded_guild_members)
+                # Its own failure does not cost the cycle its runs.
+                try:
+                    await self._dark_iron_legacy_pass()
+                except Exception:
+                    log.exception("dark iron legacy: pass failed; retrying next cycle")
                 if guildrun.enabled():
                     said_off = False
                     # ONE PICKER, NEVER BOTH (#569): with GUILD_SOCIAL on, a
@@ -20554,6 +20586,33 @@ class Bridge(discord.Client):
             except Exception:
                 log.exception("guild runs: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
+
+    async def _dark_iron_legacy_pass(self) -> None:
+        """Dark Iron Legacy, the Shadowforge Key's one source (#811).
+
+        dungeonquests decides; this writes its take and turnin rows, says
+        whose they are, and says who carries the key once the Shrine's
+        hand-in it wrote is rewarded. `_legacy_handed` is the members it sent
+        to the Shrine and has not yet seen rewarded."""
+        guilds = list(guildrun.limits().guilds)
+        facts = await asyncio.to_thread(_legacy_facts, guilds)
+        handed = self.__dict__.setdefault("_legacy_handed", set())
+        shrine = dungeonquests.command(dungeonquests.TURN_IN, dungeonquests.LEGACY)
+        for name, said in dungeonquests.legacy_rows(facts):
+            written = await asyncio.to_thread(
+                _insert_dungeonquest_row, name, said, dungeonquests.LEGACY_SOURCE)
+            if not written:
+                continue
+            if said == shrine:
+                handed.add(name)
+                log.info("dark iron legacy: %s lays Ironfel at the Shrine of "
+                         "Thaurissan: %s (%d)", name, said, written)
+            else:
+                log.info("dark iron legacy: %s, a ghost at Franclorn Forgewright, "
+                         "by the bridge's own choice: %s (%d)", name, said, written)
+        for name in dungeonquests.key_holders(facts, handed):
+            handed.discard(name)
+            log.info("dark iron legacy: %s now carries the Shadowforge Key", name)
 
     async def _guild_run_once(self) -> None:
         if not _pass_completed("guild_jobs"):
