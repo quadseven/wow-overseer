@@ -5,6 +5,7 @@ out, bytes over HTTP. No logic here that tests would want to reach.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import hmac
 import json
@@ -251,6 +252,23 @@ def _realm_families() -> dict:
     except Exception:  # noqa: BLE001 - the banner must stand; logged below
         log.exception("realm: the families read failed; the app draws no family")
         return {"families": None, "guilds": None}
+
+
+def _bridge_started() -> float | None:
+    """When the bridge process began, from the row it renews (deployinfo.py).
+
+    None when no fresh row stands or the read fails, logged: the banner does
+    not depend on the bridge, and only the uptime goes unknown.
+    """
+    try:
+        with realmread.Session(_connect) as rd:
+            rows = rd.rows(deployinfo.BRIDGE_READ_SQL,
+                           (deployinfo.MEMO_KIND, deployinfo.MEMO_SUBJECT),
+                           what="overseer_bridge_memo")
+    except Exception:  # noqa: BLE001 - the banner must stand; logged below
+        log.exception("realm: the bridge start read failed; uptime goes unknown")
+        return None
+    return float(rows[0]["since"]) if rows else None
 
 
 # --- which realm this is (quadseven/mod-overseer#184) ------------------------
@@ -4376,6 +4394,37 @@ def _v2_context(read) -> _V2Context:
     )
 
 
+# THE ONE 503 AND SEND for a GET answered as handler(query, ctx) -> (status,
+# payload): /api/v2 through apiv2.handle, and every v1 route moved to that shape
+# (_get_route). One reader per request: it connects on the first read, so a
+# request refused before any read opens nothing. A handler that raises is
+# logged as `what` and answers 503, so a dead database reads as "world
+# unreachable", never a blank page. `sender` is the request handler, or the
+# stand-in a shared read builds against (_Captured). `dumps` goes to json.dumps:
+# default=str for a payload that carries database values such as datetimes.
+def _answer(sender, handler, query: dict, what: str, **dumps) -> None:
+    try:
+        with realmread.Session(_connect) as rd:
+            code, payload = handler(query, _v2_context(rd))
+        body = json.dumps(payload, **dumps).encode()
+    except Exception:
+        log.exception("%s", what)
+        sender._send(503, "application/json", b'{"error": "world unreachable"}')
+        return
+    sender._send(code, "application/json", body)
+
+
+def _get_route(what: str, **dumps):
+    """A v1 GET handler(query, ctx) -> (status, payload) as the method
+    GET_ROUTES calls, answered by _answer; `what` is its failure's log line."""
+    def wrap(handler):
+        @functools.wraps(handler)
+        def route(sender, query: dict) -> None:
+            _answer(sender, handler, query, what, **dumps)
+        return route
+    return wrap
+
+
 def _etag(body: bytes) -> str:
     """A strong validator for a response body: same bytes, same tag."""
     return '"' + hashlib.sha256(body).hexdigest()[:24] + '"'
@@ -4915,16 +4964,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _v2(self, path: str, query: dict) -> None:
         """GET /api/v2/... - the reads the operations app adds (apiv2/)."""
-        try:
-            # One reader per request: it connects on the first read, so a
-            # request refused before any read opens nothing.
-            with realmread.Session(_connect) as rd:
-                code, payload = apiv2.handle(path, query, _v2_context(rd))
-        except Exception:
-            log.exception("v2 read failed: %s", path)
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
-            return
-        self._send(code, "application/json", json.dumps(payload).encode())
+        _answer(self, lambda q, ctx: apiv2.handle(path, q, ctx), query,
+                "v2 read failed: " + path)
 
     def _jquery_file(self, _query: dict) -> None:
         # Wowhead's model viewer needs jQuery. Vendored (3.7.1, verified
@@ -4954,7 +4995,8 @@ class Handler(BaseHTTPRequestHandler):
         # the same committed geometry.
         self._send_file("shapes.json", "application/json")
 
-    def _realm(self, _query: dict) -> None:
+    @_get_route("realm query failed")
+    def _realm(_query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/realm - which world this page is showing, and its build.
 
         FIRST AMONG THE HANDLERS, above even the map, and outside every window
@@ -4973,37 +5015,33 @@ class Handler(BaseHTTPRequestHandler):
         page rather than here: index.html ships the not-verified state as its
         static markup, so a page that never hears from this endpoint at all
         shows the alarm rather than nothing.
+
+        A read that fails answers 503 (_answer), and the page keeps its banner.
         """
-        try:
-            payload = realm.build_realm(**_fetch_realm())
-            # The page this server would serve now; an open tab compares it
-            # with the one it was served as (basepath.PAGE_PLACEHOLDER).
-            payload["page"] = _page_version()
-            payload["app_page"] = _page_version("index.html")
-            # The page and every app script and stylesheet (appbuild.py):
-            # a deploy that changes only app/ moves this and not `page`.
-            payload["app_build"] = appbuild.fingerprint(HERE)
-            # Which commit this process runs and how long (deployinfo.py).
-            payload["deploy"] = deployinfo.info()
-            payload.update(_realm_families())
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            log.exception("realm query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        payload = realm.build_realm(**_fetch_realm())
+        # The page this server would serve now; an open tab compares it
+        # with the one it was served as (basepath.PAGE_PLACEHOLDER).
+        payload["page"] = _page_version()
+        payload["app_page"] = _page_version("index.html")
+        # The page and every app script and stylesheet (appbuild.py):
+        # a deploy that changes only app/ moves this and not `page`.
+        payload["app_build"] = appbuild.fingerprint(HERE)
+        # Which commit runs, and how long the bridge has (deployinfo.py).
+        payload["deploy"] = deployinfo.info(_bridge_started())
+        payload.update(_realm_families())
+        return 200, payload
 
     def _healthz(self, _query: dict) -> None:
         self._send(200, "text/plain", b"ok")
 
-    def _map(self, _query: dict) -> None:
-        """GET /api/map - every fresh snapshot row as placed dots."""
-        try:
-            payload = build_payload(_fetch_rows(), GEO)
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # The page shows its stale banner on failed polls; a dead
-            # database must read as "stale", never a blank page.
-            log.exception("map query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+    @_get_route("map query failed")
+    def _map(_query: dict, _ctx) -> tuple[int, dict]:
+        """GET /api/map - every fresh snapshot row as placed dots.
+
+        A failed read is _answer's 503: the page shows its stale banner on
+        failed polls, so a dead database reads as "stale", never a blank page.
+        """
+        return 200, build_payload(_fetch_rows(), GEO)
 
     def _family(self, query: dict) -> None:
         """GET /api/family[?family=X] - a five, with enough to decide whether to look.
@@ -5135,7 +5173,8 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("armory query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
-    def _raidgoals(self, _query: dict) -> None:
+    @_get_route("raid goals query failed")
+    def _raidgoals(_query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/raidgoals - what the guild still needs before it can raid.
 
         NO PARAMETERS AT ALL, and that is the shape of the view rather than an
@@ -5144,92 +5183,81 @@ class Handler(BaseHTTPRequestHandler):
         bonds and to the world's own guild tables, exactly as /api/armory and
         /api/family refuse a name.
         """
-        try:
-            fetched = _fetch_raidgoals()
-            families = fetched.pop("families")
-            attuned = fetched.pop("attuned_rows")
-            quest_rows = fetched.pop("quest_rows")
-            min_level = fetched.pop("min_level")
-            guild_rows = fetched.pop("guild_rows")
-            supply = fetched.pop("supply")
-            snapshots = _metric_snapshots()
-            prep = fetched.pop("preraid")
-            list_items = fetched.pop("list_items")
-            # ONE CARD PER GUILD. raidgoals counts one roster at a time, so it
-            # is handed one guild's rows and that guild's family as the
-            # fallback; handed both guilds at once it would see a family split
-            # across two guilds and count neither.
-            cards = []
-            for group in raidready.group_guilds(guild_rows, families):
-                goals = raidgoals.build_raidgoals(
-                    **fetched, guild_rows=group["rows"],
-                    roster=group["family_names"])
-                cards.append(raidready.build_guild(
-                    group, fetched["char_rows"], fetched["worn_rows"],
-                    attuned, min_level, goals, quest_rows=quest_rows,
-                    holding_rows=fetched["holding_rows"],
-                    item_rows=list_items,
-                    supply=dict(supply.get(group["guildid"]) or {},
-                                snapshots=snapshots),
-                    preraid=preraid.family_view(
-                        list(group["family_names"]), **prep)))
-            payload = raidready.build_readiness(cards)
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll: the tab keeps what it has
-            # drawn and says it may be stale. A blanked list here would read
-            # as "there is nothing left to farm", which is the one claim this
-            # view must never make by accident.
-            log.exception("raid goals query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        # Same contract as every other poll: the tab keeps what it has
+        # drawn and says it may be stale. A blanked list here would read
+        # as "there is nothing left to farm", which is the one claim this
+        # view must never make by accident.
+        fetched = _fetch_raidgoals()
+        families = fetched.pop("families")
+        attuned = fetched.pop("attuned_rows")
+        quest_rows = fetched.pop("quest_rows")
+        min_level = fetched.pop("min_level")
+        guild_rows = fetched.pop("guild_rows")
+        supply = fetched.pop("supply")
+        snapshots = _metric_snapshots()
+        prep = fetched.pop("preraid")
+        list_items = fetched.pop("list_items")
+        # ONE CARD PER GUILD. raidgoals counts one roster at a time, so it
+        # is handed one guild's rows and that guild's family as the
+        # fallback; handed both guilds at once it would see a family split
+        # across two guilds and count neither.
+        cards = []
+        for group in raidready.group_guilds(guild_rows, families):
+            goals = raidgoals.build_raidgoals(
+                **fetched, guild_rows=group["rows"],
+                roster=group["family_names"])
+            cards.append(raidready.build_guild(
+                group, fetched["char_rows"], fetched["worn_rows"],
+                attuned, min_level, goals, quest_rows=quest_rows,
+                holding_rows=fetched["holding_rows"],
+                item_rows=list_items,
+                supply=dict(supply.get(group["guildid"]) or {},
+                            snapshots=snapshots),
+                preraid=preraid.family_view(
+                    list(group["family_names"]), **prep)))
+        payload = raidready.build_readiness(cards)
+        return 200, payload
 
-    def _loot(self, query: dict) -> None:
+    @_get_route("loot query failed")
+    def _loot(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/loot - the story of every notable item, newest first.
 
         Both guilds in one list, because an item can cross between families
         and its story should not be cut in half at the border. Every sentence
         comes from lootstory; the page draws them.
         """
-        try:
-            fetched = _fetch_loot()
-            council = fetched.get("council_rows") or []
-            payload = lootstory.build_loot(
-                fetched["rows"], recap.zone_names(GEO.continents),
-                items=fetched["items"], icons=fetched["icons"], book=fetched["book"],
-                council=lootcouncil.by_item_guid(council))
-            payload["council"] = lootcouncil.board(council)
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # The Chronicle keeps the list it has drawn and says it may be
-            # stale, like every other poll on the page.
-            log.exception("loot query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        # The Chronicle keeps the list it has drawn and says it may be
+        # stale, like every other poll on the page.
+        fetched = _fetch_loot()
+        council = fetched.get("council_rows") or []
+        payload = lootstory.build_loot(
+            fetched["rows"], recap.zone_names(GEO.continents),
+            items=fetched["items"], icons=fetched["icons"], book=fetched["book"],
+            council=lootcouncil.by_item_guid(council))
+        payload["council"] = lootcouncil.board(council)
+        return 200, payload
 
-    def _thoughts(self, query: dict) -> None:
-        """GET /api/thoughts?name=X&before=<id>&limit=N - one page, newest first."""
+    @_get_route("thought query failed")
+    def _thoughts(query: dict, _ctx) -> tuple[int, dict]:
+        """GET /api/thoughts?name=X&before=<id>&limit=N - one page, newest first.
+
+        A failed read answers 503 (_answer)."""
         name = query.get("name", [""])[0]
         if not _NAME_RE.fullmatch(name):
-            self._send(400, "application/json", b'{"error": "not a character name"}')
-            return
+            return 400, {"error": "not a character name"}
         raw_before = query.get("before", [""])[0]
         if raw_before and not raw_before.isdigit():
             # Silently ignoring a malformed cursor would restart the page at
             # the newest thought and read as "history ends here".
-            self._send(400, "application/json", b'{"error": "bad cursor"}')
-            return
+            return 400, {"error": "bad cursor"}
         limit = chat.page_size(query.get("limit", [""])[0])
-        try:
-            fetched = _fetch_thoughts(name, int(raw_before) if raw_before else None, limit)
-        except Exception:
-            log.exception("thought query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
-            return
+        fetched = _fetch_thoughts(name, int(raw_before) if raw_before else None, limit)
         if fetched is None:
-            self._send(404, "application/json", b'{"error": "no such character"}')
-            return
+            return 404, {"error": "no such character"}
         rows, db_now = fetched
-        payload = chat.build_timeline(name, rows, db_now, limit)
-        self._send(200, "application/json", json.dumps(payload).encode())
+        return 200, chat.build_timeline(name, rows, db_now, limit)
 
     def _chat_party(self, query: dict) -> None:
         """GET /api/chat/party?family=<key>&after=<id> - lines to read aloud.
@@ -5462,7 +5490,8 @@ class Handler(BaseHTTPRequestHandler):
             ITEMS.icons, names, skill_rows, ITEMS)
         return payload
 
-    def _council(self, query: dict) -> None:
+    @_get_route("council query failed")
+    def _council(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/council - the last sitting, what it carried, where next.
 
         Deliberately BELOW the thought handler and ABOVE the wealth one. Four
@@ -5482,19 +5511,17 @@ class Handler(BaseHTTPRequestHandler):
         No name parameter, like every other family endpoint: WHO the family is
         belongs to bonds.
         """
-        try:
-            cards = achievements.build_achievements(**_fetch_achievements())["cards"]
-            payload = council.build_council(**_fetch_council(), cards=cards)
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll: the view keeps the transcript
-            # it has drawn and says it may be stale. A blanked council reads as
-            # "the family has stopped talking", which is a far stronger claim
-            # than "this one read failed".
-            log.exception("council query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        # Same contract as every other poll: the view keeps the transcript
+        # it has drawn and says it may be stale. A blanked council reads as
+        # "the family has stopped talking", which is a far stronger claim
+        # than "this one read failed".
+        cards = achievements.build_achievements(**_fetch_achievements())["cards"]
+        payload = council.build_council(**_fetch_council(), cards=cards)
+        return 200, payload
 
-    def _eye(self, query: dict) -> None:
+    @_get_route("eye query failed")
+    def _eye(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/eye - the server rollup, tier by tier, honestly.
 
         Beside the council handler, in the same unclaimed window and for the
@@ -5503,17 +5530,15 @@ class Handler(BaseHTTPRequestHandler):
         No name parameter: this asks about the realm as one thing, and the one
         roster clause it does have comes from bonds.
         """
-        try:
-            payload = eye.build_eye(**_fetch_eye())
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Blanking this one would be the worst failure on the page: a
-            # rollup that exists to say what is NOT real, rendering empty,
-            # reads as a realm where nothing is real at all.
-            log.exception("eye query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        # Blanking this one would be the worst failure on the page: a
+        # rollup that exists to say what is NOT real, rendering empty,
+        # reads as a realm where nothing is real at all.
+        payload = eye.build_eye(**_fetch_eye())
+        return 200, payload
 
-    def _wealth(self, query: dict) -> None:
+    @_get_route("wealth query failed")
+    def _wealth(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/wealth - what the five are carrying, and what it is worth.
 
         Deliberately BELOW _thoughts rather than beside _armory: the Armory
@@ -5527,27 +5552,24 @@ class Handler(BaseHTTPRequestHandler):
         here would turn this into a general character query wearing a
         friendly name.
         """
-        try:
-            # Both families, from the roster, never from the request.
-            groups = list(FAMILIES.families().items())
-            names = [n for _key, group in groups for n in group]
-            payload = wealth.build_wealth(**_fetch_wealth(names), icons=ITEMS.icons,
-                                          families=groups)
-            payload["guild_routes"] = _fetch_guild_routes()
-            payload["loot_council"] = _fetch_loot_council_view()
-            lootcouncil.annotate_tips(payload, payload["loot_council"]["by_guid"])
-            # WHERE EACH KEPT STACK GOES AND WHY (#320), per family.
-            for _key, group in groups:
-                bankpolicy.annotate_tips(payload, _fetch_bank_policy(group))
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll: the view keeps the bags it
-            # has already drawn and says they may be stale. A blank wealth
-            # panel reads as "they own nothing", and an empty bag grid reads
-            # as "they have plenty of room", which is the exact opposite of
-            # the finding this view exists to surface.
-            log.exception("wealth query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        # Same contract as every other poll: the view keeps the bags it
+        # has already drawn and says they may be stale. A blank wealth
+        # panel reads as "they own nothing", and an empty bag grid reads
+        # as "they have plenty of room", which is the exact opposite of
+        # the finding this view exists to surface.
+        # Both families, from the roster, never from the request.
+        groups = list(FAMILIES.families().items())
+        names = [n for _key, group in groups for n in group]
+        payload = wealth.build_wealth(**_fetch_wealth(names), icons=ITEMS.icons,
+                                      families=groups)
+        payload["guild_routes"] = _fetch_guild_routes()
+        payload["loot_council"] = _fetch_loot_council_view()
+        lootcouncil.annotate_tips(payload, payload["loot_council"]["by_guid"])
+        # WHERE EACH KEPT STACK GOES AND WHY (#320), per family.
+        for _key, group in groups:
+            bankpolicy.annotate_tips(payload, _fetch_bank_policy(group))
+        return 200, payload
 
     def _needs(self, query: dict) -> None:
         """GET /api/needs - what the five need, and what is being done about it.
@@ -6069,17 +6091,15 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("levelroute query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
-    def _guild_gear(self, _query: dict) -> None:
+    @_get_route("guild gear query failed")
+    def _guild_gear(_query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/guildgear - every family-guild member's gear, one table.
 
         No parameters: it answers about the guilds the families are in and
         nothing else (guildgear.py has the rules)."""
-        try:
-            payload = guildgear.build(_fetch_guild_gear())
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            log.exception("guild gear query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        payload = guildgear.build(_fetch_guild_gear())
+        return 200, payload
 
     def _armory_member(self, query: dict) -> None:
         """GET /api/armory/member?name=X - one guildmate's full profile.
@@ -6212,70 +6232,60 @@ class Handler(BaseHTTPRequestHandler):
             return {"member": member}
         self._client_frame(query, build, "quests")
 
-    def _guild_runs(self, _query: dict) -> None:
+    @_get_route("guild runs query failed", default=str)
+    def _guild_runs(_query: dict, ctx) -> tuple[int, dict]:
         """GET /api/guildruns - the guild coordinator's groups (guildrun).
 
         The groups in flight, the last thirty that ended with their outcomes,
         and each (dungeon, band, composition) record the coordinator learns
         from. No parameters: it is one realm's guild runs. A world without the
-        table (the bridge creates it) answers empty rather than 503.
+        table (the bridge creates it) answers empty rather than 503; any other
+        failed read is _answer's 503.
         """
-        try:
-            with realmread.Session(_connect) as rd:
-                payload = guildrun.page(guildrun.recent(rd, n=GUILD_RUNS_LIMIT))
-                # Why each run that came back went the way it did.
-                guildrun.with_stories(rd, payload["recent"])
-            self._send(200, "application/json", json.dumps(payload, default=str).encode())
-        except Exception:
-            log.exception("guild runs query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        rd = ctx.read
+        payload = guildrun.page(guildrun.recent(rd, n=GUILD_RUNS_LIMIT))
+        # Why each run that came back went the way it did.
+        guildrun.with_stories(rd, payload["recent"])
+        return 200, payload
 
-    def _guild_seats(self, _query: dict) -> None:
+    @_get_route("guild seats query failed", default=str)
+    def _guild_seats(_query: dict, ctx) -> tuple[int, dict]:
         """GET /api/guildseats - the carry-ready tanks and healers per door (#784).
 
         The bridge counts them every few minutes and leaves one memo row per
         guild (seatmeter.bench); this reads those rows. A guild the bridge has
         not written lately is absent, a world without the memo table answers
-        empty rather than 503.
+        empty rather than 503; any other failed read is _answer's 503.
         """
-        try:
-            with realmread.Session(_connect) as rd:
-                rows = rd.rows(seatmeter.BENCH_READ_SQL, (seatmeter.BENCH_KIND,),
-                               what="overseer_bridge_memo")
-            self._send(200, "application/json",
-                       json.dumps(seatmeter.page(rows), default=str).encode())
-        except Exception:
-            log.exception("guild seats query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        rows = ctx.read.rows(seatmeter.BENCH_READ_SQL, (seatmeter.BENCH_KIND,),
+                             what="overseer_bridge_memo")
+        return 200, seatmeter.page(rows)
 
-    def _guild_chat(self, query: dict) -> None:
+    @_get_route("guild chat query failed", default=str)
+    def _guild_chat(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/guildchat?guild=X&limit=N - the guild's asks and answers.
 
         `guild` must be one of the configured guilds (guildrun.limits), else
         400; absent, it is the first one. `limit` is clamped to 1..100 and
         defaults to 30. Newest ask first, each with its answers and, for an
         ask that became a run, that run's outcome. A world without the ask
-        tables answers an empty list with `ready: false`, not a 503.
+        tables answers an empty list with `ready: false`, not a 503; any other
+        failed read is _answer's 503.
         """
+        guilds = guildrun.limits().guilds
+        wanted = query.get("guild", [""])[0] or guilds[0]
+        if wanted not in guilds:
+            return 400, {"error": "not a guild"}
+        limit = _guildchat_limit(query.get("limit", [""])[0])
         try:
-            guilds = guildrun.limits().guilds
-            wanted = query.get("guild", [""])[0] or guilds[0]
-            if wanted not in guilds:
-                self._send(400, "application/json", b'{"error": "not a guild"}')
-                return
-            limit = _guildchat_limit(query.get("limit", [""])[0])
-            try:
-                payload = _fetch_guild_chat(wanted, limit)
-                payload["guilds"] = list(guilds)
-            except realmread.Gap as gap:
-                if gap.code != realmread.MISSING_TABLE:
-                    raise
-                payload = {"guild": wanted, "guilds": list(guilds),
-                           "ready": False, "asks": []}
-            self._send(200, "application/json", json.dumps(payload, default=str).encode())
-        except Exception:
-            log.exception("guild chat query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+            payload = _fetch_guild_chat(wanted, limit)
+            payload["guilds"] = list(guilds)
+        except realmread.Gap as gap:
+            if gap.code != realmread.MISSING_TABLE:
+                raise
+            payload = {"guild": wanted, "guilds": list(guilds),
+                       "ready": False, "asks": []}
+        return 200, payload
 
     def _director_state(self, _query: dict) -> None:
         """GET /api/director - what the Watcher has been told, and what it is doing.

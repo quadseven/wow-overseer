@@ -195,6 +195,38 @@ def vendor_refusal(row: dict, keep_names=()) -> str:
     return _vendor_reading(row, keep_names)[1]
 
 
+def freeable_greys(rows, keep_names=()) -> dict:
+    """name -> (gear.Freeable,) for the cheapest grey a vendor would buy.
+
+    The make-room half of a full receiver's hand-off (#550). One per member,
+    lowest total value first and guid to break a tie, so two passes over
+    unchanged bags propose the same stack. Quality 0 is the "grey" a player
+    throws away; quest items, reagents, profession stock and the owner's keep
+    mark are already refused by `_vendor_reading`, and an unreadable row is
+    left out rather than guessed at.
+    """
+    best: dict = {}
+    for row in rows or ():
+        candidate, _why = _vendor_reading(row, keep_names)
+        if candidate is None or int(candidate.item.quality) != 0:
+            continue
+        try:
+            name = str(row["name"])
+            entry = int(row["entry"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        key = (
+            int(candidate.item.sell_price) * int(candidate.count),
+            int(candidate.item_guid),
+        )
+        if candidate.holder not in best or key < best[candidate.holder][0]:
+            best[candidate.holder] = (
+                key,
+                gear.Freeable(guid=int(candidate.item_guid), entry=entry, name=name),
+            )
+    return {name: (free,) for name, (_key, free) in best.items()}
+
+
 # How many kept items a floor reason names by name.
 FLOOR_REASON_EXAMPLES = 3
 
@@ -823,7 +855,10 @@ VENDOR_ERRAND_RELEASE = "release"
 
 
 def vendor_errand_step(
-    at_counter: bool, sales_outstanding: int, pressure: bool = False
+    at_counter: bool,
+    sales_outstanding: int,
+    pressure: bool = False,
+    sale_counts: dict[str, int | None] | None = None,
 ) -> str:
     """What to do with the leader's `travel_npc` this pass (infra#3708).
 
@@ -859,7 +894,13 @@ def vendor_errand_step(
     # family is still under the pressure that caused this trip.  The bridge
     # can observe the leader at a vendor before follower sellers have arrived;
     # releasing here would send the party back to questing with the bags full.
-    if pressure:
+    # A measured empty sale plan cannot relieve protected inventory. Keep the
+    # counter for unread members and pending follower sales, but let banking
+    # take its turn once every member has no remaining vendor work.
+    known_empty = bool(sale_counts) and all(
+        count == 0 for count in sale_counts.values()
+    )
+    if pressure and not known_empty:
         return VENDOR_ERRAND_HOLD
     # THE SAME QUESTION `stranded_errand_step` ANSWERS, ASKED IN ONE PLACE. A
     # leader standing at the counter and a follower nobody is walking differ in
@@ -1089,8 +1130,9 @@ class BagBuyer:
     """One character's side of a purchase, as the caller measured it.
 
     `stocks` is what the vendors in reach of THIS character sell, because
-    DoBuy answers on the buyer's own range. `open_positions` is empty bag
-    positions less the spare bags already coming to fill them.
+    DoBuy answers on the buyer's own range. `open_positions` counts empty worn
+    positions, or one bought bank position when `bank` is true. A bank buyer's
+    size cap and excluded entries match the placement pass.
     """
 
     name: str
@@ -1099,11 +1141,14 @@ class BagBuyer:
     open_positions: int
     free_slots: int
     stocks: frozenset = frozenset()
+    bank: bool = False
+    max_slots: int = 0  # 0 leaves worn-bag purchases unrestricted
+    excluded_entries: frozenset = frozenset()
 
 
 @dataclass(frozen=True)
 class BagPurchase:
-    """One bag to buy: a kind='buy' row, then an equip into the position."""
+    """A paid bag purchase. Bank bags wait as cargo for the bank-placement pass."""
 
     buyer: str
     entry: int
@@ -1111,6 +1156,7 @@ class BagPurchase:
     slots: int
     price: int
     why: str
+    bank: bool = False
 
     @property
     def command(self) -> str:
@@ -1133,10 +1179,18 @@ def open_bag_positions(members) -> dict:
     family already owns. The spares are counted against the family's open
     positions in name order, the order bag_upgrade.plan_family_bags fills them.
     """
-    spares = sum(1 for m in members for bag in m.carried if bag.used == 0)
+    spares = sum(
+        1 for m in members for bag in m.carried if bag.used == 0 and not bag.bound
+    )
     out = {}
     for member in sorted(members, key=lambda m: m.name):
         empty = max(0, int(member.positions) - len(member.worn))
+        own_bound = sum(
+            1
+            for b in member.carried
+            if b.bound and b.used == 0 and b.general and b.entry > 0
+        )
+        empty = max(0, empty - own_bound)
         filled = min(empty, spares)
         spares -= filled
         out[member.name] = empty - filled
@@ -1166,14 +1220,28 @@ def reserve_yields(buyer: BagBuyer, campaign_waiting: bool) -> bool:
     return bool(campaign_waiting) and 0 <= buyer.free_slots <= TOWN_RUN_FREE_SLOTS
 
 
+def bag_offer_fits(buyer: BagBuyer, offer: BagOffer) -> bool:
+    """The purchase and the vendor walk agree on usable bank bags."""
+    return (
+        offer.price > 0
+        and offer.slots > 0
+        and (not buyer.max_slots or offer.slots <= buyer.max_slots)
+        and offer.entry not in buyer.excluded_entries
+    )
+
+
 def bag_purchases(buyers, offers, campaign_waiting: bool = False) -> tuple:
-    """The cheapest bag each buyer can afford, and a note for each who cannot.
+    """A usable bag each buyer can afford, and a note for each who cannot.
 
     One bag per buyer per pass: the next pass sees the bag it bought. The
     cheapest offer the buyer's own vendors stock is the only one considered
     (ties go to the bigger bag, then the lower entry), and it is bought only
     when `bag_purchase_allowed` says the reserve survives it and there is a
     free slot for it to land in. Returns (purchases, notes).
+
+    A bank buyer instead takes the largest usable bag the same reserve
+    permits: bank bag positions are limited, and a cheap tiny bag consumes
+    one just as surely as a larger bag. Ties go to the cheaper offer.
 
     `campaign_waiting` says an operator-ordered dungeon campaign is queued
     for this family; `reserve_yields` decides which buyers it frees from the
@@ -1188,7 +1256,11 @@ def bag_purchases(buyers, offers, campaign_waiting: bool = False) -> tuple:
         if buyer.open_positions <= 0:
             continue
         stocked = sorted(
-            (by_entry[e] for e in buyer.stocks if e in by_entry),
+            (
+                by_entry[e]
+                for e in buyer.stocks
+                if e in by_entry and bag_offer_fits(buyer, by_entry[e])
+            ),
             key=lambda o: (o.price, -o.slots, o.entry),
         )
         if not stocked:
@@ -1202,6 +1274,14 @@ def bag_purchases(buyers, offers, campaign_waiting: bool = False) -> tuple:
         yielded = reserve_yields(buyer, campaign_waiting)
         if yielded:
             reserve = 0
+        if buyer.bank:
+            affordable = [
+                o
+                for o in stocked
+                if bag_purchase_allowed(buyer.money, o.price, True, reserve=reserve)
+            ]
+            if affordable:
+                offer = min(affordable, key=lambda o: (-o.slots, o.price, o.entry))
         if not bag_purchase_allowed(buyer.money, offer.price, True, reserve=reserve):
             notes.append(
                 "%s cannot spare %d copper for %s (%d in the purse, "
@@ -1230,8 +1310,14 @@ def bag_purchases(buyers, offers, campaign_waiting: bool = False) -> tuple:
                 slots=offer.slots,
                 price=offer.price,
                 why=(
-                    "%d empty bag position(s), %d copper in the purse, %d kept "
-                    "back" % (buyer.open_positions, buyer.money, reserve)
+                    "%d empty %sbag position(s), %d copper in the purse, %d kept "
+                    "back"
+                    % (
+                        buyer.open_positions,
+                        "bank " if buyer.bank else "",
+                        buyer.money,
+                        reserve,
+                    )
                 )
                 + (
                     "; the reserve yields because %d free slot(s) hold back "
@@ -1239,6 +1325,7 @@ def bag_purchases(buyers, offers, campaign_waiting: bool = False) -> tuple:
                     if yielded
                     else ""
                 ),
+                bank=buyer.bank,
             )
         )
     return tuple(purchases), tuple(notes)
@@ -1488,12 +1575,17 @@ def _trip_vendors(vendors, map_id: int, max_yards: float) -> list:
 
 
 def _served_at(vendor: BagVendor, walkers) -> tuple:
-    """Who can buy this vendor's cheapest bag and keep the level reserve."""
-    price = vendor.offers[0].price
+    """Who can buy a usable bag at this vendor and keep the level reserve."""
     return tuple(
         b.name
         for b in walkers
-        if bag_purchase_allowed(b.money, price, True, reserve=bag_reserve(b.level))
+        if any(
+            bag_offer_fits(b, o)
+            and bag_purchase_allowed(
+                b.money, o.price, True, reserve=bag_reserve(b.level)
+            )
+            for o in vendor.offers
+        )
     )
 
 
@@ -1736,6 +1828,8 @@ def bag_candidates(
     """
     out = []
     for row in rows:
+        if row.get("bank_reserved"):
+            continue
         if owner_keeps(row.get("name", ""), keep_names):
             continue
         if corps_bag_kept(row):
@@ -2022,6 +2116,7 @@ def family_gifts(
     position_rows=None,
     free_slots=None,
     at_mailbox=None,
+    freeables=None,
 ):
     """The carried pieces a sibling should be handed, and who should have them.
 
@@ -2069,6 +2164,11 @@ def family_gifts(
     piece nobody in the family can use, which on a measured cycle is most of
     the bag and is the VENDOR half's business - it is already reported there,
     and repeating it here would bury the six lines that are actionable.
+
+    `freeables` is the `bag_pressure.freeable_greys` read for the same
+    family, handed through to `gear.deliverable` unchanged: a full sibling
+    who stands beside the giver can give the giver a junk stack first, which
+    is the one slot the hand-off needs (#550). None keeps the old refusal.
     """
     kept = [
         row for row in gear_rows if not owner_keeps(row.get("name", ""), keep_names)
@@ -2080,6 +2180,7 @@ def family_gifts(
         position_rows=position_rows,
         free_slots=free_slots,
         at_mailbox=at_mailbox,
+        freeables=freeables,
     )
 
 
