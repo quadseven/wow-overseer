@@ -45,8 +45,14 @@ def settle(sellable, outstanding=0, at_counter=True):
         "_VENDOR_SELLABLE": sellable,
         "log": types.SimpleNamespace(info=quiet, warning=quiet, debug=quiet),
     }
+    counts = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_vendor_sale_counts"
+    )
     exec(
-        compile(ast.Module(body=[fn], type_ignores=[]), "bridge.py", "exec"), namespace
+        compile(ast.Module(body=[counts, fn], type_ignores=[]), "bridge.py", "exec"),
+        namespace,
     )
 
     async def no_recovery(*args):
