@@ -63,7 +63,7 @@ def settle(sellable, outstanding=0, at_counter=True):
 
 class EmptyVendorHandsBackTheAim(unittest.TestCase):
     def test_full_protected_bags_do_not_hold_an_empty_vendor(self):
-        step, released = settle({"Grug": 0, "Bork": 0, "Og": 0})
+        step, released = settle({"Grug": 0, "Bork": 0, "Og": 0, "Zug": 12})
         self.assertEqual(step, bag_pressure.VENDOR_ERRAND_RELEASE)
         self.assertEqual(released, [("Grug", "vendor")])
 
