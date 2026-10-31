@@ -328,7 +328,7 @@ class TheRoute(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.server = (HERE / "map_server.py").read_text()
-        start = cls.server.index("    def _item(self")
+        start = cls.server.index('    @_get_route("item query failed")\n    def _item(')
         cls.handler = cls.server[start : cls.server.index("    GET_ROUTES", start)]
 
     def test_it_is_routed(self):
@@ -337,11 +337,11 @@ class TheRoute(unittest.TestCase):
     def test_entry_must_be_a_positive_integer(self):
         self.assertIn("isdigit()", self.handler)
         self.assertIn("0 < int(wanted)", self.handler)
-        self.assertIn("send(400", self.handler.replace("self._", ""))
+        self.assertIn("return 400", self.handler)
 
     def test_unknown_item_is_404_and_a_failed_read_is_503(self):
-        self.assertIn("send(404", self.handler.replace("self._", ""))
-        self.assertIn("send(503", self.handler.replace("self._", ""))
+        self.assertIn("return 404", self.handler)
+        self.assertIn('@_get_route("item query failed")', self.handler)
 
     def test_the_sql_is_parameterized(self):
         start = self.server.index("def _fetch_item_sources")
