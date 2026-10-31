@@ -5142,36 +5142,34 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("meter probe failed")
             self._send(503, "application/json", b'{"error": "meter unavailable"}')
 
-    def _armory(self, query: dict) -> None:
+    @_get_route("armory query failed")
+    def _armory(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/armory - what the five are wearing, and how they are specced.
 
         No name parameter, for the same reason /api/family takes none: WHO the
         family is belongs to bonds, and accepting a roster here would turn this
         into a general character query wearing a friendly name.
         """
-        try:
-            # BOTH FAMILIES, from the roster, never from the request.
-            groups = list(FAMILIES.families().items())
-            names = [n for _key, group in groups for n in group]
-            fetched = _fetch_armory(names)
-            # WHERE each worn item was first seen worn, from the same equip
-            # record the Chronicle reads and by the same rule. The adapter
-            # hands over rows; recap decides which row is the first one, what
-            # the place is called and what to say when there is no row at all.
-            equip_rows = fetched.pop("equip_event_rows")
-            payload = armory.build_armory(**fetched, book=BOOK, items=ITEMS,
-                                          families=groups,
-                                          guild_sizes=_fetch_guild_sizes(names))
-            payload["provenance"] = recap.provenance_index(
-                equip_rows, fetched["equipment_rows"], achievements.MAP_NAMES,
-                recap.zone_names(GEO.continents))
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll: the tab keeps the grid it has
-            # already drawn and says it may be stale. A blank Armory tab reads
-            # as "they are wearing nothing", which is a worse lie than silence.
-            log.exception("armory query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        # Same contract as every other poll: the tab keeps the grid it has
+        # already drawn and says it may be stale. A blank Armory tab reads
+        # as "they are wearing nothing", which is a worse lie than silence.
+        # BOTH FAMILIES, from the roster, never from the request.
+        groups = list(FAMILIES.families().items())
+        names = [n for _key, group in groups for n in group]
+        fetched = _fetch_armory(names)
+        # WHERE each worn item was first seen worn, from the same equip
+        # record the Chronicle reads and by the same rule. The adapter
+        # hands over rows; recap decides which row is the first one, what
+        # the place is called and what to say when there is no row at all.
+        equip_rows = fetched.pop("equip_event_rows")
+        payload = armory.build_armory(**fetched, book=BOOK, items=ITEMS,
+                                      families=groups,
+                                      guild_sizes=_fetch_guild_sizes(names))
+        payload["provenance"] = recap.provenance_index(
+            equip_rows, fetched["equipment_rows"], achievements.MAP_NAMES,
+            recap.zone_names(GEO.continents))
+        return 200, payload
 
     @_get_route("raid goals query failed")
     def _raidgoals(_query: dict, _ctx) -> tuple[int, dict]:
@@ -6092,43 +6090,40 @@ class Handler(BaseHTTPRequestHandler):
         payload = guildgear.build(_fetch_guild_gear())
         return 200, payload
 
-    def _armory_member(self, query: dict) -> None:
+    @_get_route("armory member query failed")
+    def _armory_member(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/armory/member?name=X - one guildmate's full profile.
 
         The same profile a family member gets, for one member of a family
         guild at a time. `name` must pass the world's name rule AND be on
         the roster of a family guild as the database reports it; anything
         else is a 404. This is what keeps it from being a general character
-        query: the set it can answer about is the families' guilds.
+        query: the set it can answer about is the families' guilds. Any other
+        failed read is _answer's 503.
         """
+        wanted = query.get("name", [""])[0]
+        if not FAMILIES.may_answer(wanted):
+            return 404, {"error": "not a guild member"}
+        fetched = _fetch_armory([wanted])
+        fetched.pop("equip_event_rows")
+        payload = armory.build_armory(**fetched, book=BOOK, items=ITEMS,
+                                      families=[("", [wanted])])
+        # Where each worn item came from (#371): gearorigin decides, from
+        # the rows this reads. A failed read costs the tooltip its origin
+        # line and nothing else: the sheet still draws.
         try:
-            wanted = query.get("name", [""])[0]
-            if not FAMILIES.may_answer(wanted):
-                self._send(404, "application/json", b'{"error": "not a guild member"}')
-                return
-            fetched = _fetch_armory([wanted])
-            fetched.pop("equip_event_rows")
-            payload = armory.build_armory(**fetched, book=BOOK, items=ITEMS,
-                                          families=[("", [wanted])])
-            # Where each worn item came from (#371): gearorigin decides, from
-            # the rows this reads. A failed read costs the tooltip its origin
-            # line and nothing else: the sheet still draws.
-            try:
-                origin = gearorigin.origins(
-                    wanted, **_fetch_gear_origin(wanted), craftbook=CRAFTBOOK,
-                    zones=recap.zone_names(GEO.continents))
-            except Exception:
-                log.exception("gear origin read failed for %s; the sheet "
-                              "draws without origin lines", wanted)
-                origin = {}
-            self._send(200, "application/json", json.dumps(
-                {"member": payload["members"][0], "doll": payload["doll"],
-                 "origin": origin}).encode())
+            origin = gearorigin.origins(
+                wanted, **_fetch_gear_origin(wanted), craftbook=CRAFTBOOK,
+                zones=recap.zone_names(GEO.continents))
         except Exception:
-            log.exception("armory member query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+            log.exception("gear origin read failed for %s; the sheet "
+                          "draws without origin lines", wanted)
+            origin = {}
+        return 200, {"member": payload["members"][0], "doll": payload["doll"],
+                     "origin": origin}
 
-    def _upgrades(self, query: dict) -> None:
+    @_get_route("upgrades query failed")
+    def _upgrades(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/upgrades?name=X - one guildmate's gear against their spec's lists.
 
         The upgrade tracker (#541). The same gate as /api/armory/member: `name`
@@ -6137,14 +6132,10 @@ class Handler(BaseHTTPRequestHandler):
         reads saved gear, not overseer_snapshot, so it is not subject to the
         60s freshness rule and answers for someone offline. Every score is
         gearscore's; gearupgrades only lays the slots out. The payload is
-        _upgrades_payload's, which /api/v2/upgrades extends.
+        _upgrades_payload's, which /api/v2/upgrades extends. A failed read is
+        _answer's 503.
         """
-        try:
-            code, payload = _upgrades_payload(query.get("name", [""])[0])
-            self._send(code, "application/json", json.dumps(payload).encode())
-        except Exception:
-            log.exception("upgrades query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        return _upgrades_payload(query.get("name", [""])[0])
 
     # --- the virtual game client (vclient.py) ---------------------------
     # Below _armory_member for the same reason it sits here: several suites
@@ -6424,27 +6415,22 @@ class Handler(BaseHTTPRequestHandler):
     # The tables sit at the foot of the class so every method they name is
     # already defined. Values are plain functions, called with the handler
     # instance - a new endpoint is one row, and an unknown path is one miss.
-    def _item(self, query: dict) -> None:
+    @_get_route("item query failed")
+    def _item(query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/item?entry=N - one item, with where it comes from.
 
         `entry` must be a positive integer (400 otherwise) and the world must
         know it (404 otherwise). Item data is static, so answers are cached in
         process. The same refusal to take a name as /api/armory: this answers
-        about items and nothing else.
+        about items and nothing else. A failed read is _answer's 503.
         """
         wanted = query.get("entry", [""])[0]
         if not (wanted.isascii() and wanted.isdigit() and 0 < int(wanted) < 2**31):
-            self._send(400, "application/json", b'{"error": "not an item entry"}')
-            return
-        try:
-            payload = _item_payload(int(wanted))
-            if payload is None:
-                self._send(404, "application/json", b'{"error": "no such item"}')
-                return
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            log.exception("item query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+            return 400, {"error": "not an item entry"}
+        payload = _item_payload(int(wanted))
+        if payload is None:
+            return 404, {"error": "no such item"}
+        return 200, payload
 
     GET_ROUTES = {
         # First, because it is the question every other row here answers

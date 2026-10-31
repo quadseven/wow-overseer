@@ -426,5 +426,72 @@ class TheRunAndTradeReadsAreHandlers(unittest.TestCase):
         self.assertEqual(h.body(), b'{"a":1,"family":"Grug"}')
 
 
+class TheArmoryReadsAreHandlers(unittest.TestCase):
+    """The armory, armory member, upgrades and item reads return (status,
+    payload); the refusals are payloads with the same bytes as before."""
+
+    def test_a_failed_read_leaves_the_handler(self):
+        for name, query, fetch in (
+            ("_armory", {}, "_fetch_armory"),
+            ("_armory_member", {"name": ["Grug"]}, "_fetch_armory"),
+            ("_upgrades", {"name": ["Grug"]}, "_upgrades_payload"),
+            ("_item", {"entry": ["5"]}, "_item_payload"),
+        ):
+            with (
+                self.subTest(name),
+                mock.patch.object(map_server, "FAMILIES") as families,
+                mock.patch.object(map_server, fetch, side_effect=OSError("down")),
+            ):
+                families.families.return_value = {"a": ["Grug"]}
+                families.may_answer.return_value = True
+                with self.assertRaises(OSError):
+                    getattr(map_server.Handler, name).__wrapped__(query, None)
+
+    def test_the_upgrades_are_the_shared_payload(self):
+        with mock.patch.object(
+            map_server, "_upgrades_payload", return_value=(404, {"error": "e"})
+        ) as built:
+            got = map_server.Handler._upgrades.__wrapped__({"name": ["Grug"]}, None)
+        self.assertEqual(got, (404, {"error": "e"}))
+        built.assert_called_once_with("Grug")
+
+    def test_the_item_refusals_are_payloads(self):
+        item = map_server.Handler._item.__wrapped__
+        self.assertEqual(
+            item({"entry": ["x"]}, None), (400, {"error": "not an item entry"})
+        )
+        with mock.patch.object(map_server, "_item_payload", return_value=None):
+            self.assertEqual(
+                item({"entry": ["5"]}, None), (404, {"error": "no such item"})
+            )
+        with mock.patch.object(map_server, "_item_payload", return_value={"entry": 5}):
+            self.assertEqual(item({"entry": ["5"]}, None), (200, {"entry": 5}))
+
+    def test_a_stranger_is_a_404_before_any_read(self):
+        with (
+            mock.patch.object(map_server, "FAMILIES") as families,
+            mock.patch.object(map_server, "_fetch_armory") as fetch,
+        ):
+            families.may_answer.return_value = False
+            got = map_server.Handler._armory_member.__wrapped__(
+                {"name": ["Nobody"]}, None
+            )
+        self.assertEqual(got, (404, {"error": "not a guild member"}))
+        fetch.assert_not_called()
+
+    def test_the_refusal_bytes_are_unchanged(self):
+        for path, body in (
+            ("/api/item?entry=x", b'{"error": "not an item entry"}'),
+            ("/api/armory/member?name=Nobody", b'{"error": "not a guild member"}'),
+        ):
+            with (
+                self.subTest(path),
+                mock.patch.object(map_server, "FAMILIES") as families,
+            ):
+                families.may_answer.return_value = False
+                h = shell.get(path)
+            self.assertEqual(h.body(), body, path)
+
+
 if __name__ == "__main__":
     unittest.main()

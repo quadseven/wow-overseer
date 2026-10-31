@@ -116,8 +116,12 @@ class BridgePassesTheMembersRace(unittest.TestCase):
             mock.patch.dict(bridge._CLASS_TRAINER_ROWS, clear=True),
         ):
             got = bridge._class_training_due(["Orcy", "Draney"])
-        self.assertEqual(classtrain.Due(100, 2, 10), got["Orcy"])
-        self.assertEqual(classtrain.Due(100, 2, 10), got["Draney"])
+        # Compare fields, not Due objects: other test modules drop the bridge
+        # from sys.modules and re-import it, which can leave a second copy of
+        # classtrain loaded, and a frozen dataclass only equals its own class.
+        for name in ("Orcy", "Draney"):
+            due = got[name]
+            self.assertEqual((100, 2, 10), (due.copper, due.count, due.cheapest), name)
 
 
 if __name__ == "__main__":
