@@ -855,7 +855,10 @@ VENDOR_ERRAND_RELEASE = "release"
 
 
 def vendor_errand_step(
-    at_counter: bool, sales_outstanding: int, pressure: bool = False
+    at_counter: bool,
+    sales_outstanding: int,
+    pressure: bool = False,
+    sale_counts: dict[str, int | None] | None = None,
 ) -> str:
     """What to do with the leader's `travel_npc` this pass (infra#3708).
 
@@ -891,7 +894,13 @@ def vendor_errand_step(
     # family is still under the pressure that caused this trip.  The bridge
     # can observe the leader at a vendor before follower sellers have arrived;
     # releasing here would send the party back to questing with the bags full.
-    if pressure:
+    # A measured empty sale plan cannot relieve protected inventory. Keep the
+    # counter for unread members and pending follower sales, but let banking
+    # take its turn once every member has no remaining vendor work.
+    known_empty = bool(sale_counts) and all(
+        count == 0 for count in sale_counts.values()
+    )
+    if pressure and not known_empty:
         return VENDOR_ERRAND_HOLD
     # THE SAME QUESTION `stranded_errand_step` ANSWERS, ASKED IN ONE PLACE. A
     # leader standing at the counter and a follower nobody is walking differ in
