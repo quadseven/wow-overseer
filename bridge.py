@@ -814,7 +814,7 @@ LEVEL_ASK_SECONDS = float(os.environ.get("LEVEL_ASK_SECONDS", "1800"))
 # A zone quest aimed this long without being handed in is put aside for
 # LEVEL_SKIP_SECONDS: mod-overseer releases an aim that never lands after its
 # own half-hour backstop, and re-aiming it at once would pin the family to it.
-LEVEL_AIM_SECONDS = 1800.0
+LEVEL_AIM_SECONDS = goals.QUEST_HOLD_SECONDS
 LEVEL_SKIP_SECONDS = 7200.0
 
 # The bag pass's name in the town slot (#206), and the pass that owns the
@@ -20263,6 +20263,9 @@ class Bridge(discord.Client):
         parsed = goals.parse_goal(d.text)
         if parsed is None:
             return False
+        if isinstance(parsed, goals.GuildGoal):
+            await self._take_guild_goal(d, parsed, channel)
+            return True
         if isinstance(parsed, goals.CancelGoal):
             cancelled = await asyncio.to_thread(_cancel_goals, d.target_name)
             await _note_order(
@@ -20283,12 +20286,27 @@ class Bridge(discord.Client):
         log.info("goal %s persisted for %s: %s", row_id, d.target_name, goals.describe(parsed))
         return True
 
+    async def _take_guild_goal(self, d: core.NLDirective, parsed, channel) -> None:
+        """Queue a guild goal, or say why there is nothing to queue."""
+        row_id, goal = await asyncio.to_thread(
+            _queue_guild_goal, d.target_name, parsed, str(channel.id)
+        )
+        await _note_order(
+            orderrecord.GOAL, d.source, channel,
+            orderrecord.ids("overseer_goal", [row_id]) if row_id else ())
+        if not row_id:
+            await channel.send(goals.guild_refusal_text(d.target_name, goal))
+            return
+        await channel.send(goals.ack_text(d.target_name, goal))
+        log.info("goal %s queued for %s", row_id, goals.describe(goal))
+
     async def _supervise_goals(self) -> None:
         """Reconcile every active goal once a minute; decisions in goals.py."""
         await self.wait_until_ready()
         while not self.is_closed():
             await asyncio.sleep(GOAL_INTERVAL)
             try:
+                await asyncio.to_thread(_admit_queued_goals)
                 rows = await asyncio.to_thread(_fetch_active_goals)
             except Exception:
                 # A database restart must never kill the supervisor; the
@@ -20396,6 +20414,7 @@ class Bridge(discord.Client):
             goals.Report: self._goal_report,
             goals.RecordProgress: self._goal_record,
             goals.MarkComplete: self._goal_complete,
+            goals.ReleaseGoal: self._goal_release,
         }
         handler = handlers.get(type(action))
         if handler is None:
@@ -22758,6 +22777,10 @@ class Bridge(discord.Client):
     async def _goal_complete(self, row: dict, action) -> None:
         await asyncio.to_thread(_complete_goal, action.goal_id)
 
+    async def _goal_release(self, row: dict, action) -> None:
+        await asyncio.to_thread(_release_goal, action.goal_id)
+        log.warning("goal %s released: %s", action.goal_id, action.reason)
+
     async def _gather_destination(self, cohort=None):
         """Where the family should go to gather, or a Choice saying why not.
 
@@ -23755,12 +23778,13 @@ def _ensure_goal_store() -> None:
             " skill_name VARCHAR(32) NULL,"
             " target SMALLINT UNSIGNED NOT NULL,"
             " quest_id INT UNSIGNED NOT NULL DEFAULT 0,"
-            " status ENUM('active','completed','cancelled') NOT NULL DEFAULT 'active',"
+            " status " + goals.STATUS_COLUMN + ","
             " channel_id VARCHAR(32) NOT NULL DEFAULT '',"
             " last_report TEXT NULL,"
             " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
             " completed_at TIMESTAMP NULL DEFAULT NULL,"
-            " PRIMARY KEY (id), KEY idx_char_status (character_name, status)"
+            + "".join(" %s %s," % column for column in goals.GUILD_COLUMNS.items())
+            + " PRIMARY KEY (id), KEY idx_char_status (character_name, status)"
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
         )
         # CREATE TABLE IF NOT EXISTS IS A NO-OP ON A TABLE THAT ALREADY EXISTS,
@@ -23784,7 +23808,8 @@ def _ensure_goal_store() -> None:
             "SELECT COLUMN_NAME AS c, COLUMN_TYPE AS t "
             "FROM information_schema.COLUMNS "
             "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'overseer_goal' "
-            "  AND COLUMN_NAME IN ('kind', 'quest_id')"
+            "  AND COLUMN_NAME IN ('kind', 'quest_id', 'status', "
+            "'guild', 'item_set', 'started_at')"
         )
         shape = {row["c"]: row["t"] for row in cur.fetchall()}
         # The DECISION is goals.goal_migrations, where it can be tested against
@@ -23794,7 +23819,7 @@ def _ensure_goal_store() -> None:
         # "it should have been applied" becomes an argument instead of a fact.
         for statement in goals.goal_migrations(
             shape.get("kind", ""), "quest_id" in shape
-        ):
+        ) + goals.guild_goal_migrations(shape):
             cur.execute(statement)
             log.info("overseer_goal migration: %s", statement)
 
@@ -23820,11 +23845,149 @@ def _insert_goal(name: str, goal: goals.Goal, channel_id: str) -> int:
         return cur.lastrowid
 
 
+# The items of one kind and quality that drop in one instance: direct loot rows
+# and everything reached through reference_loot_template, which nests. Most of
+# what an instance drops is there (Stratholme's rare class 9 items, read live
+# on 2026-10-31: 7 direct, 19 through references), so the direct-only read the
+# trade pages use would list a fraction of the set. References do not narrow
+# by themselves, so a world drop reached from a creature in the instance is on
+# the list: the drop tables are what #94 chose as the definition.
+#
+# The spell is what proves a recipe known, as on the trades page. Only a recipe
+# has one: spellid_2 on a weapon is a proc, and knowing that proves nothing.
+# Arguments: map, class, quality, map.
+_GUILD_ITEM_SET_SQL = (
+    "WITH RECURSIVE refs (entry) AS ("
+    " SELECT clt.Reference FROM acore_world.creature_loot_template clt"
+    " JOIN acore_world.creature_template ct ON ct.lootid = clt.Entry"
+    " JOIN acore_world.creature cr ON cr.id = ct.entry"
+    " WHERE cr.map = %s AND clt.Reference <> 0"
+    " UNION"
+    " SELECT r.Reference FROM acore_world.reference_loot_template r"
+    " JOIN refs ON r.Entry = refs.entry WHERE r.Reference <> 0"
+    ") SELECT it.entry AS item,"
+    " CASE WHEN it.class = " + str(goals.RECIPE_CLASS) + " THEN it.spellid_2"
+    " ELSE 0 END AS spell"
+    " FROM acore_world.item_template it"
+    " WHERE it.class = %s AND it.Quality = %s AND (it.entry IN ("
+    " SELECT clt.Item FROM acore_world.creature_loot_template clt"
+    " JOIN acore_world.creature_template ct ON ct.lootid = clt.Entry"
+    " JOIN acore_world.creature cr ON cr.id = ct.entry"
+    " WHERE cr.map = %s AND clt.Reference = 0"
+    ") OR it.entry IN ("
+    " SELECT r.Item FROM acore_world.reference_loot_template r"
+    " JOIN refs ON r.Entry = refs.entry WHERE r.Reference = 0"
+    ")) ORDER BY it.entry"
+)
+_GUILD_NAME_SQL = "SELECT name FROM guild WHERE name = %s"
+_GUILD_OF_SQL = (
+    "SELECT g.name FROM guild g "
+    "JOIN guild_member gm ON gm.guildid = g.guildid "
+    "JOIN characters c ON c.guid = gm.guid WHERE c.name = %s"
+)
+_GUILD_MEMBERS_SQL = (
+    "SELECT g.name AS guild, c.name AS name FROM guild g "
+    "JOIN guild_member gm ON gm.guildid = g.guildid "
+    "JOIN characters c ON c.guid = gm.guid"
+)
+# A run counts for the guild its leader is in, and only if it finished.
+_GUILD_RUNS_SQL = (
+    "SELECT COUNT(*) AS n FROM overseer_dungeon_run r "
+    "JOIN characters c ON c.name = r.leader_name "
+    "JOIN guild_member gm ON gm.guid = c.guid "
+    "JOIN guild g ON g.guildid = gm.guildid "
+    "WHERE g.name = %s AND r.map_id = %s AND r.outcome = 'complete' "
+    "AND r.ended_at >= %s"
+)
+# Known is a character_spell row, the proof the trades page takes. Held covers
+# bags and bank alike: both are character_inventory.
+_GUILD_KNOWN_SQL = (
+    "SELECT DISTINCT cs.spell AS id FROM guild g "  # noqa: S608 - placeholders from a COUNT, values still bound
+    "JOIN guild_member gm ON gm.guildid = g.guildid "
+    "JOIN character_spell cs ON cs.guid = gm.guid "
+    "WHERE g.name = %s AND cs.spell IN ({holes})"
+)
+_GUILD_HELD_SQL = (
+    "SELECT DISTINCT ii.itemEntry AS id FROM guild g "  # noqa: S608 - placeholders from a COUNT, values still bound
+    "JOIN guild_member gm ON gm.guildid = g.guildid "
+    "JOIN character_inventory ci ON ci.guid = gm.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE g.name = %s AND ii.itemEntry IN ({holes})"
+)
+
+
+def _guild_for(cur, name: str, goal: goals.GuildGoal) -> str:
+    """The guild as stored: the one the order named, else the addressee's."""
+    if goal.guild:
+        cur.execute(_GUILD_NAME_SQL, (goal.guild,))
+    else:
+        cur.execute(_GUILD_OF_SQL, (name,))
+    found = cur.fetchone()
+    return str(found["name"]) if found else ""
+
+
+def _queue_guild_goal(name: str, goal: goals.GuildGoal, channel_id: str) -> tuple:
+    """(row id, the goal as resolved); id 0 when there is nothing to queue.
+
+    Always 'queued': _admit_queued_goals is the one place a goal starts.
+    goals.guild_refusal_text says why from the goal returned with id 0.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        guild = _guild_for(cur, name, goal)
+        if not guild:
+            return 0, goal
+        goal = dataclasses.replace(goal, guild=guild)
+        item_set = None
+        if goal.kind == goals.GUILD_ITEMS:
+            map_id = goals.INSTANCE_MAPS[goal.instance]
+            cur.execute(
+                _GUILD_ITEM_SET_SQL, (map_id, goal.item_class, goal.quality, map_id)
+            )
+            rows = cur.fetchall()
+            goal = dataclasses.replace(goal, target=len(rows))
+            if not rows:
+                return 0, goal
+            item_set = goals.encode_item_set(rows)
+        cur.execute(
+            "INSERT INTO overseer_goal "
+            "(character_name, kind, skill_name, target, status, channel_id, "
+            "guild, item_set) VALUES (%s, %s, %s, %s, 'queued', %s, %s, %s)",
+            (name, goal.kind, goal.instance, goal.target, channel_id, guild, item_set),
+        )
+        return cur.lastrowid, goal
+
+
+def _admit_queued_goals() -> list:
+    """Start each queued guild goal whose members are free; the ids started."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, guild, status FROM overseer_goal "
+            "WHERE status IN ('active', 'queued') AND kind IN (%s, %s)",
+            goals.GUILD_KINDS,
+        )
+        rows = cur.fetchall()
+        if not any(row["status"] == "queued" for row in rows):
+            return []
+        cur.execute(_GUILD_MEMBERS_SQL)
+        members: dict = {}
+        for row in cur.fetchall():
+            members.setdefault(row["guild"], set()).add(row["name"])
+        started = goals.goals_to_start(rows, members)
+        for goal_id in started:
+            cur.execute(
+                "UPDATE overseer_goal SET status = 'active', started_at = NOW() "
+                "WHERE id = %s AND status = 'queued'",
+                (goal_id,),
+            )
+            log.info("goal %s leaves the queue and starts", goal_id)
+    return started
+
+
 def _cancel_goals(name: str) -> int:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE overseer_goal SET status = 'cancelled' "
-            "WHERE character_name = %s AND status = 'active'",
+            "WHERE character_name = %s AND status IN ('active', 'queued')",
             (name,),
         )
         return cur.rowcount
@@ -23834,18 +23997,45 @@ def _fetch_active_goals() -> list[dict]:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT id, character_name, kind, skill_name, target, quest_id, "
-            "status, channel_id, last_report FROM overseer_goal "
-            "WHERE status = 'active'"
+            "status, channel_id, last_report, guild, item_set, started_at "
+            "FROM overseer_goal WHERE status = 'active'"
         )
         return list(cur.fetchall())
 
 
+def _guild_ids(cur, sql: str, guild: str, values: list) -> set:
+    """The ids `sql` finds among `values` for a guild; nothing to ask, none."""
+    if not values:
+        return set()
+    holes = ", ".join(["%s"] * len(values))
+    cur.execute(sql.format(holes=holes), (guild, *values))
+    return {int(row["id"]) for row in cur.fetchall()}
+
+
+def _observe_guild_goal(row: dict) -> int:
+    """Finished runs since the goal started, or listed items done."""
+    guild = row["guild"]
+    with _connect() as conn, conn.cursor() as cur:
+        if row["kind"] == goals.GUILD_COUNT:
+            map_id = goals.INSTANCE_MAPS[row["skill_name"]]
+            cur.execute(_GUILD_RUNS_SQL, (guild, map_id, row["started_at"]))
+            return int(cur.fetchone()["n"])
+        item_set = goals.decode_item_set(row["item_set"])
+        spells = [spell for spell in item_set.values() if spell]
+        known = _guild_ids(cur, _GUILD_KNOWN_SQL, guild, spells)
+        held = _guild_ids(cur, _GUILD_HELD_SQL, guild, list(item_set))
+        return len(goals.items_done(item_set, known, held))
+
+
 def _observe_goal(row: dict) -> int | None:
-    """The character's current level, skill value, or quest progress.
+    """The character's current level, skill value, or quest progress, or a
+    guild goal's count.
 
     None whenever the answer cannot be seen, which reconcile treats as "say
     nothing this cycle" rather than as a zero.
     """
+    if row["kind"] in goals.GUILD_KINDS:
+        return _observe_guild_goal(row)
     with _connect() as conn, conn.cursor() as cur:
         if row["kind"] == "quest":
             quest_id = int(row.get("quest_id") or 0)
@@ -35928,6 +36118,15 @@ def _complete_goal(goal_id: int) -> None:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE overseer_goal SET status = 'completed', completed_at = NOW() "
+            "WHERE id = %s",
+            (goal_id,),
+        )
+
+
+def _release_goal(goal_id: int) -> None:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE overseer_goal SET status = 'released', completed_at = NOW() "
             "WHERE id = %s",
             (goal_id,),
         )

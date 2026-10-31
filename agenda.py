@@ -616,7 +616,13 @@ def orders(goal_rows: list[dict], quest_titles: dict, err: dict | None) -> dict 
     """
     if err and err["leads"] and err["reason"]:
         return _errand_order(err)
-    live = [g for g in goal_rows if str(g.get("status") or "") == "active"]
+    # A guild goal is not "the family council put <name> on it".
+    live = [
+        g
+        for g in goal_rows
+        if str(g.get("status") or "") == "active"
+        and str(g.get("kind") or "") not in goals.GUILD_KINDS
+    ]
     if live:
         newest = max(live, key=lambda g: g.get("created_at") or datetime.min)
         return _goal_order(newest, quest_titles)
