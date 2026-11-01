@@ -501,9 +501,7 @@ class TheRaidTab(unittest.TestCase):
         self.assertIn("Breastplate of Valor", chest[4])
         closed = " ".join(view["closed"])
         self.assertIn("Stratholme (the main gate): withheld", closed)
-        self.assertIn(
-            "Upper Blackrock Spire: it is a ten-seat raid", closed
-        )
+        self.assertIn("Upper Blackrock Spire: it is a ten-seat raid", closed)
         self.assertIn("Blackrock Depths: on the Eastern Kingdoms", closed)
         self.assertTrue(view["runs"][0].startswith("Dire Maul"))
         # Inner Maraudon is closed because both wings are, never "no door".

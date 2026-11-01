@@ -96,7 +96,9 @@ class TheSeats(unittest.TestCase):
         self.assertIn("Zz", seated(lineup))
 
     def test_the_seat_rows_are_what_the_raid_table_takes(self):
-        rows = raidrun.seat_rows("Head", raidrun.UPPER_SPIRE, spirerun.lineup(guild(), FAMILY).as_dict())
+        rows = raidrun.seat_rows(
+            "Head", raidrun.UPPER_SPIRE, spirerun.lineup(guild(), FAMILY).as_dict()
+        )
         self.assertEqual(len(rows), 10)
         self.assertEqual({r[3] for r in rows}, {0, 1})
         self.assertEqual({r[1] for r in rows}, {raidrun.UPPER_SPIRE})
@@ -152,7 +154,11 @@ class ReviewFindings(unittest.TestCase):
         self.assertIn("Death Knight", lineup.short)
 
     def test_every_shortfall_is_said(self):
-        rows = [r for r in guild(Shaman={"class_id": HUNTER, "spec": ""}) if r["name"] != "Ee"]
+        rows = [
+            r
+            for r in guild(Shaman={"class_id": HUNTER, "spec": ""})
+            if r["name"] != "Ee"
+        ]
         lineup = spirerun.lineup(rows, FAMILY)
         self.assertIn("healer", lineup.short)
         self.assertIn("9 of 10", lineup.short)
@@ -185,11 +191,15 @@ class ReviewFindings(unittest.TestCase):
 
 class AStopSticks(unittest.TestCase):
     def test_a_cancelled_entry_stops_the_order_for_its_whole_wait(self):
-        stopped = spirerun.Last(finished_at=NOW - 86400 * 6, cleared=False, cancelled=True)
+        stopped = spirerun.Last(
+            finished_at=NOW - 86400 * 6, cleared=False, cancelled=True
+        )
         self.assertIsNone(spirerun.order_slot([], stopped, NOW))
 
     def test_a_cancel_stops_it_longer_than_a_failed_night(self):
-        self.assertGreater(spirerun.AFTER_CANCEL_SECONDS, spirerun.AFTER_FAILURE_SECONDS)
+        self.assertGreater(
+            spirerun.AFTER_CANCEL_SECONDS, spirerun.AFTER_FAILURE_SECONDS
+        )
         over = spirerun.Last(
             finished_at=NOW - spirerun.AFTER_CANCEL_SECONDS - 1,
             cleared=False,
@@ -230,7 +240,8 @@ class AnEntryThatNeverStarted(unittest.TestCase):
 
     def test_the_age_ceiling_withdraws_it(self):
         self.assertEqual(
-            spirerun.withdrawal([self.waiting()], "", spirerun.QUEUED_CEILING_SECONDS), 9
+            spirerun.withdrawal([self.waiting()], "", spirerun.QUEUED_CEILING_SECONDS),
+            9,
         )
 
     def test_a_full_lineup_inside_the_ceiling_keeps_it(self):

@@ -198,7 +198,9 @@ def lineup(members: list, family: list) -> Lineup:
         placed += [_seated(m, seat) for m in fits]
         pool = [m for m in pool if m not in fits]
         if len(fits) < owed:
-            shortfalls.append("%d more %s at level %d" % (owed - len(fits), seat, FLOOR))
+            shortfalls.append(
+                "%d more %s at level %d" % (owed - len(fits), seat, FLOOR)
+            )
     room = SEATS - len(placed)
     placed += [_seated(m, raidroles.SEAT_DAMAGE) for m in pool[:room]]
     if len(placed) < SEATS:
