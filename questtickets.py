@@ -25,6 +25,7 @@ PURE but for `SqlStore` (a cursor) and `client_from_env` (HTTPS).
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 
 import questledger
@@ -35,6 +36,8 @@ REPO = os.environ.get("QUEST_TICKET_REPO", "quadseven/wow-overseer")
 LABELS = ("loom:ticket", "loom:queued")
 MAX_PER_PASS = 5
 FILING = 0
+MEMO_KIND = "quest_tickets"
+MEMO_SUBJECT = "last_pass"
 # Asked for at mint time, whatever the App could grant: sub-issues are part
 # of the issues permission.
 TOKEN_PERMISSIONS = {"issues": "write"}
@@ -50,6 +53,18 @@ ADD_COLUMN_SQL = (
 BROKEN_SQL = (
     "SELECT quest, guid, character_name, reason, ticket FROM overseer_quest_ledger "
     "WHERE state = %s ORDER BY quest, guid"
+)
+TICKET_SQL = (
+    "SELECT ticket FROM overseer_quest_ledger "
+    "WHERE quest = %s AND ticket IS NOT NULL ORDER BY ticket DESC LIMIT 1"
+)
+LAST_PASS_SQL = (
+    "SELECT since FROM overseer_bridge_memo WHERE kind = %s AND subject = %s"
+)
+RECORD_PASS_SQL = (
+    "INSERT INTO overseer_bridge_memo (kind, subject, value, since, expires) "
+    "VALUES (%s, %s, '{}', %s, %s) "
+    "ON DUPLICATE KEY UPDATE since = VALUES(since), expires = VALUES(expires)"
 )
 SET_TICKET_SQL = (
     "UPDATE overseer_quest_ledger SET ticket = %s "
@@ -96,23 +111,62 @@ class Plan:
     stuck: tuple  # quest ids left at FILING by a filing that never finished
 
 
-def plan(rows) -> Plan:
+def _quest_ticket(group, quest: int, ticket_for) -> tuple[int | None, bool]:
+    """(filed_ticket, has_filing_in_flight) for a quest's rows."""
+    tickets = [r["ticket"] for r in group if r.get("ticket") is not None]
+    filed = next((int(t) for t in tickets if int(t) != FILING), None)
+    if filed is not None:
+        return filed, False
+    if tickets:
+        return None, True
+    if ticket_for:
+        num = ticket_for(quest) if callable(ticket_for) else ticket_for.get(quest)
+        if num is not None:
+            if int(num) == FILING:
+                return None, True
+            return int(num), False
+    return None, False
+
+
+def plan(rows, ticket_for=None) -> Plan:
     """What a pass does with the broken rows of the ledger."""
     by_quest: dict = {}
     for row in rows or ():
         by_quest.setdefault(int(row["quest"]), []).append(row)
     new, copies, stuck = [], [], []
     for quest, group in sorted(by_quest.items()):
+        filed, has_filing = _quest_ticket(group, quest, ticket_for)
         tickets = [r["ticket"] for r in group if r.get("ticket") is not None]
-        filed = next((int(t) for t in tickets if int(t) != FILING), None)
         if filed is not None:
             if len(tickets) < len(group):
                 copies.append((quest, filed))
-        elif tickets:
+        elif has_filing:
             stuck.append(quest)
         else:
             new.append((quest, tuple(group)))
     return Plan(tuple(new), tuple(copies), tuple(stuck))
+
+
+def initial_delay(
+    last_pass: float | None,
+    cycle: float,
+    now: float,
+    startup: float = 300.0,
+) -> float:
+    """How long the loop sleeps before its first pass.
+
+    A fresh realm or an idle one waits min(cycle, startup) so the realm is
+    up before the pass runs. When a pass ran inside cycle, a restart waits
+    the rest of the cycle so a restart never starts a second pass inside a day.
+    """
+    if last_pass is None:
+        return min(cycle, startup)
+    elapsed = now - last_pass
+    if elapsed < 0:
+        return min(cycle, max(startup, cycle))
+    if elapsed >= cycle:
+        return min(cycle, startup)
+    return max(min(cycle, startup), cycle - elapsed)
 
 
 def url(number: int) -> str:
@@ -218,6 +272,22 @@ class SqlStore:
         self.cur.execute(OBJECTIVES_SQL, (quest,))
         return list(self.cur.fetchall())
 
+    def ticket(self, quest: int) -> int | None:
+        self.cur.execute(TICKET_SQL, (quest,))
+        row = self.cur.fetchone()
+        return int(row["ticket"]) if row and row.get("ticket") is not None else None
+
+    def last_pass(self) -> float | None:
+        self.cur.execute(LAST_PASS_SQL, (MEMO_KIND, MEMO_SUBJECT))
+        row = self.cur.fetchone()
+        return float(row["since"]) if row and row.get("since") is not None else None
+
+    def record_pass(self, when: float) -> None:
+        self.cur.execute(
+            RECORD_PASS_SQL,
+            (MEMO_KIND, MEMO_SUBJECT, float(when), float(when) + 30 * 86400.0),
+        )
+
     def take(self, quest: int, ticket: int) -> None:
         self.cur.execute(SET_TICKET_SQL, (ticket, quest, questledger.BROKEN))
 
@@ -228,11 +298,28 @@ class SqlStore:
         self.cur.execute(RELEASE_SQL, (quest, FILING))
 
 
-def run(store, client, catalogue, site: str = "") -> dict:
+def _is_timeout(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    reason = getattr(exc, "reason", None)
+    if isinstance(reason, TimeoutError):
+        return True
+    return False
+
+
+def run(
+    store,
+    client,
+    catalogue,
+    site: str = "",
+    now: float | None = None,
+) -> dict:
     """One pass: {filed, copied, stuck, unlinked}. A refused filing frees its
     quest for the next pass and is raised, so the pass stops and the bridge
-    logs it. unlinked lists issues filed but not linked under the epic."""
-    todo = plan(store.broken())
+    logs it. A timed-out filing stays at FILING so it is not retried before a
+    person looks. unlinked lists issues filed but not linked under the epic."""
+    ticket_for = getattr(store, "ticket", None)
+    todo = plan(store.broken(), ticket_for=ticket_for)
     for quest, ticket in todo.copies:
         store.take(quest, ticket)
     known = {q.id: q for q in catalogue or ()}
@@ -243,11 +330,14 @@ def run(store, client, catalogue, site: str = "") -> dict:
         store.take(quest, FILING)
         try:
             number = client.file(title(quest, info), text)
-        except Exception:
-            store.release(quest)
+        except Exception as exc:
+            if not _is_timeout(exc):
+                store.release(quest)
             raise
         store.filed(quest, number)
         filed += 1
+    if hasattr(store, "record_pass"):
+        store.record_pass(time.time() if now is None else float(now))
     unlinked, client.unlinked = client.unlinked, []
     return {
         "filed": filed,
