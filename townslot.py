@@ -1666,6 +1666,28 @@ class Slot:
         if released and self.holder is not None and self.holder.aim == holder.aim:
             self.holder = None
 
+    def blocker(self, now: float) -> str:
+        """Who is holding the column up, in words, or "none" (#1635).
+
+        The holder alone said "none" whenever the wait was a reservation or
+        the campaign, because neither is a value in the column. A pass logging
+        why it could not be aimed names whichever of them is in its way.
+        """
+        holder = self.holder
+        if holder is not None:
+            return "%s carrying %r" % (holder.claimant or "unknown", holder.aim)
+        r = self.reservation
+        if r is not None and r.live(now):
+            return "%s reserving the traveller (%s)" % (
+                r.claimant or "an unknown pass",
+                r.why or "no reason given",
+            )
+        if self.campaign:
+            return "the campaign (%s)" % self.campaign
+        if self.town_first:
+            return "the campaign held in town (%s)" % self.town_first
+        return "none"
+
     def stop_live(self, now: float) -> Holder | None:
         """The holder when it is a short town stop still inside its window."""
         holder = self.holder
@@ -1885,6 +1907,7 @@ class Slot:
             now=now,
             distance=distance,
             stop=stop,
+            earned=self._earned(claimant, priority_after, now),
         )
         if gate is not None:
             return gate
@@ -1936,10 +1959,7 @@ class Slot:
             last_served=self._served,
             now=now,
             urgent=urgent,
-            priority=(
-                priority_after is not None
-                and now - _own_wait(claimant, self.wants, now) >= priority_after
-            ),
+            priority=self._earned(claimant, priority_after, now),
             lease=lease,
             orphan_lease=orphan_lease,
             long_leases=long_leases,
@@ -1953,6 +1973,12 @@ class Slot:
             return self._measure(decision, float(distance), now)
         return decision
 
+    def _earned(self, claimant: str, priority_after: float | None, now: float) -> bool:
+        """Whether `claimant` has waited its `priority_after` bound (#1452)."""
+        if priority_after is None:
+            return False
+        return now - _own_wait(claimant, self.wants, now) >= priority_after
+
     def _gate(
         self,
         *,
@@ -1963,8 +1989,14 @@ class Slot:
         now: float,
         distance,
         stop: bool,
+        earned: bool = False,
     ) -> Decision | None:
         """What answers before the queue is asked, or None to ask it.
+
+        An `earned` priority turn (#1635) is not held at a reservation: bags
+        and the town errand hand the reservation to each other with no gap,
+        so a pass that waited its bound behind it never got in. The holder
+        and orphan leases still apply to it in `decide`.
 
         In order: the campaign (which lets only a short town stop through),
         a walk this claimant gave up on, a reservation, and another
@@ -2019,7 +2051,11 @@ class Slot:
                 aim=aim,
                 character=character,
             )
-        held = reserved_wait(claimant, character, aim, self.reservation, now)
+        held = (
+            None
+            if earned
+            else reserved_wait(claimant, character, aim, self.reservation, now)
+        )
         if held is not None:
             self._note_wait(claimant, now)
             return held

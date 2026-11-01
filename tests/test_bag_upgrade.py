@@ -8,6 +8,7 @@ the arithmetic was wrong - there was no arithmetic at all.
 """
 
 import unittest
+from dataclasses import replace
 
 from bag_pressure import ItemForSale, sellable
 from bag_upgrade import (
@@ -285,6 +286,89 @@ class TheFamilyHandsBorkABag(unittest.TestCase):
         for move in plan_family_bags(FAMILY):
             self.assertTrue(move.why.strip())
             self.assertIn(move.receiver, move.why)
+
+
+class ASiblingsSpareCanUpgradeAWornBag(unittest.TestCase):
+    def family(self, free=1, spare=10):
+        return [
+            Member(
+                "Og",
+                4,
+                worn=tuple(Bag("Worn", 12, used=12) for _ in range(4)),
+                carried=(Bag("Spare", spare, guid=101, entry=6446),),
+            ),
+            Member(
+                "Ugga",
+                4,
+                worn=tuple(Bag("Worn", n, used=n) for n in (8, 10, 10, 12)),
+                backpack_free=free,
+            ),
+        ]
+
+    def test_the_spare_reaches_a_sibling_with_four_worn_bags(self):
+        moves = plan_family_bags(self.family())
+        self.assertEqual(
+            [(m.giver, m.receiver, m.guid, m.slots_gained) for m in moves],
+            [("Og", "Ugga", 101, 2)],
+        )
+
+    def test_the_received_bag_can_be_put_on_by_the_existing_equip_pass(self):
+        family = self.family()
+        self.assertEqual(len(plan_family_bags(family)), 1)
+        receiver = replace(family[1], carried=family[0].carried, backpack_free=0)
+        self.assertEqual(
+            [(m.guid, m.slots_gained) for m in self_equips([receiver])], [(101, 2)]
+        )
+
+    def test_a_full_receiver_cannot_take_the_bag_as_cargo(self):
+        self.assertEqual(plan_family_bags(self.family(free=0)), [])
+
+    def test_an_equal_or_smaller_bag_is_not_sent(self):
+        for slots in (6, 8):
+            with self.subTest(slots=slots):
+                self.assertEqual(plan_family_bags(self.family(spare=slots)), [])
+
+    def test_empty_positions_take_priority_over_upgrades(self):
+        family = self.family() + [Member("Zed", 4)]
+        self.assertEqual([m.receiver for m in plan_family_bags(family)], ["Zed"])
+
+    def test_one_spare_is_not_promised_to_two_siblings(self):
+        family = self.family()
+        family.append(replace(family[1], name="Zed"))
+        self.assertEqual([m.receiver for m in plan_family_bags(family)], ["Ugga"])
+
+    def test_only_one_upgrade_is_in_flight_to_a_receiver(self):
+        family = self.family()
+        family[0] = replace(
+            family[0],
+            carried=family[0].carried + (Bag("Another", 12, guid=102, entry=4499),),
+        )
+        self.assertEqual(len(plan_family_bags(family)), 1)
+
+    def test_a_receiver_with_its_own_upgrade_gets_no_second_bag(self):
+        family = self.family()
+        family[1] = replace(family[1], carried=(Bag("Own", 12, guid=102, entry=4499),))
+        self.assertEqual(plan_family_bags(family, reserved={102}), [])
+
+    def test_a_reserved_spare_is_not_given_away(self):
+        self.assertEqual(plan_family_bags(self.family(), reserved={101}), [])
+
+    def test_nonempty_and_specialized_spares_are_not_sent_as_upgrades(self):
+        for change in ({"used": 1}, {"general": False}):
+            family = self.family()
+            family[0] = replace(
+                family[0], carried=(replace(family[0].carried[0], **change),)
+            )
+            with self.subTest(change=change):
+                self.assertEqual(plan_family_bags(family), [])
+
+    def test_a_free_specialized_slot_cannot_receive_a_general_bag(self):
+        family = self.family(free=0)
+        family[1] = replace(
+            family[1],
+            worn=family[1].worn[:3] + (Bag("Herbs", 20, used=0, general=False),),
+        )
+        self.assertEqual(plan_family_bags(family), [])
 
 
 class NothingIsPlannedTwice(unittest.TestCase):

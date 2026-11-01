@@ -86,38 +86,41 @@ APPLIES TO
     `Player*` everywhere else in this function, which calls `bot->HasItemCount`
     and `bot->GetSkillValue` a few lines further down.
 
+REBASED 2026-10-19 onto mod-playerbots @ 40884e9c135c1daf27ffd894a6047502a5701130
+(quadseven/mod-playerbots branch rebase-2026-10-19: upstream master d750b4b3
+plus the two fork-only fall-damage commits).
+
+Upstream #2638 ("Fix/infinite gathering loop") and #2807 (alternative
+gameobject locks) rewrote IsLootPossible: the skill checks now live in a
+canUseRequirement lambda, and #2638 refuses a herbalism, mining, skinning or
+engineering node once "bag space" is over 80% - but only for a bot WITHOUT a
+real-player master. So upstream now covers this defect for an unmastered bot
+and not for a bot whose master is a real player. The zero-free-slot refusal is
+kept, moved into the lambda just after #2638's block, so it still covers every
+skill-gated node for every bot; corpses and plain chests still return at
+SKILL_NONE above it. This patch can now be deleted once upstream drops the
+real-player-master exemption from #2638's check.
+
 diff --git a/src/Mgr/Item/LootObjectStack.cpp b/src/Mgr/Item/LootObjectStack.cpp
-index 6911b5c..90376e8 100644
+index a704c579..ecc790fd 100644
 --- a/src/Mgr/Item/LootObjectStack.cpp
 +++ b/src/Mgr/Item/LootObjectStack.cpp
-@@ -315,12 +315,30 @@ bool LootObject::IsLootPossible(Player* bot)
-     if (go && go->HasFlag(GAMEOBJECT_FLAGS, GO_FLAG_INTERACT_COND) && !go->ActivateToQuest(bot))
-         return false;
+@@ -336,6 +336,18 @@ bool LootObject::IsLootPossible(Player* bot)
+                 return false;
+         }
  
-+    // BELOW THIS LINE IS GATHERING ONLY. A corpse or a plain chest returns
-+    // here, and it must: a corpse can hold MONEY, which needs no bag slot,
-+    // so a bot with full bags should still walk over and take the copper.
-     if (skillId == SKILL_NONE)
-         return true;
- 
-     if (skillId == SKILL_FISHING)
-         return false;
- 
-+    // infra#2813 / infra#2800: a gathering node yields ITEMS ONLY, so with
-+    // no free bag slot there is nothing it can produce that the bot can
-+    // accept. Without this the loot never completes, `add all loot` re-adds
-+    // the node every tick, and `open loot` at relevance 8.0 preempts
-+    // `new rpg do quest` at 3.0 forever - measured as one character
-+    // motionless within 2.98 yards of a Silverleaf node for 8h31m with
-+    // 40/40 bag slots used.
-+    //
-+    // At exactly zero this also refuses a node whose herb would have
-+    // stacked onto a partial stack already carried; the loot contents are
-+    // not knowable before the object is opened, and erring toward refusing
-+    // to loot can never lose anything.
-+    if (bot->GetFreeInventorySpace() == 0)
-+        return false;
++        // A skill-gated node yields ITEMS ONLY, so
++        // with no free bag slot there is nothing it can produce that the bot
++        // can accept. Upstream #2638 (the block above) now refuses a nearly
++        // full bag, but only for a bot with no real-player master; this keeps
++        // the zero-slot refusal for the bot that has one too, where the loot
++        // would otherwise never complete and `open loot` at relevance 8.0
++        // would preempt `new rpg do quest` at 3.0 forever. Corpses and plain
++        // chests returned above at SKILL_NONE: a corpse can hold MONEY, which
++        // needs no bag slot, so a bot with full bags still takes the copper.
++        if (bot->GetFreeInventorySpace() == 0)
++            return false;
 +
-     if (!botAI->HasSkill((SkillType)skillId))
-         return false;
- 
+         if (requirement.SkillId == SKILL_FISHING || !botAI->HasSkill((SkillType)requirement.SkillId) ||
+             requirement.ReqSkillValue > uint32(bot->GetSkillValue(requirement.SkillId)))
+             return false;

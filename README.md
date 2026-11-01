@@ -74,11 +74,18 @@ These are the commands `check.yml` runs, from the repo root:
 
 ```sh
 git submodule update --init
+python3 .github/scripts/check_mod_overseer_pin.py
+python3 .github/scripts/check_fork_pin_parity.py
 python3 .github/scripts/compile_check.py --min-python 3.12
 uv run --no-project --python 3.12 --with-requirements tests/requirements.txt python3 .github/scripts/unittest_parallel.py
 uvx ruff@0.15.10 check .
 uvx ruff@0.15.10 format --check .
 ```
+
+The first check fails when the submodule pin is not an ancestor of the module's
+main branch; it fetches that branch, so it needs network access. The second
+fails when the vendored `AC_MODULE_SHA` differs from the deploy repo's; it reads
+that file with `gh api` and says so and skips when the file is not readable.
 
 `python3 -m unittest discover -s tests -p 'test_*.py'` also works and runs
 the suite on one core. `build.yml` builds the image on every pull request and
@@ -95,6 +102,7 @@ ones a stranger must supply or will want first.
 | `MYSQL_ROOT_PASSWORD` | Password the bridge and site connect with. Required. |
 | `DISCORD_BOT_TOKEN` | The Discord bot token. Required unless headless. |
 | `DISCORD_ALLOWED_USERS` | Comma-separated Discord user IDs allowed to give orders. |
+| `DISCORD_REPORT_USERS` | Comma-separated Discord user IDs allowed to give report orders only (`stats`, `quests`, `talents`, `los`, roster and digest questions). Orders that would change the world are refused. For a bot identity that may ask after the family but never move it; never a substitute for `DISCORD_ALLOWED_USERS`. |
 | `OVERSEER_HEADLESS` | `1` runs the bridge loops with no Discord connection. |
 | `OVERSEER_CHANNEL_ID`, `CHAT_CHANNEL_ID` | Channels the bridge acts in; empty means every channel. |
 | `PORT` | Port `map_server.py` listens on (default `8080`). |

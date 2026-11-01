@@ -96,7 +96,9 @@ class TheEndpoint(unittest.TestCase):
         self.assertNotIn("query.get", HANDLER)
 
     def test_a_dead_database_is_a_503_that_keeps_what_is_drawn(self):
-        self.assertIn("self._send(503", HANDLER)
+        self.assertIn(
+            '@_get_route("guild trades query failed")\n    def _guild_trades(', HANDLER
+        )
 
     def test_the_tooltip_book_and_the_icons_are_handed_over(self):
         """This page ranks nothing on stats, so the tooltip is how a reader

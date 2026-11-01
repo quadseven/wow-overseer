@@ -21,7 +21,7 @@ COPY core.py bridge.py voice.py transform.py \
      panel.py family.py families.py goals.py protect.py fanout.py chat.py \
      kin.py keep.py cast.py bonds.py council.py family_value.py persona.py \
      bonkers.py retire.py \
-     quests.py overhear.py questbook.py questcatalogue.py questledger.py \
+     quests.py overhear.py questbook.py questcatalogue.py questledger.py questtickets.py \
      questshare.py questers.py travel.py stream.py frames.py \
      professions.py craft.py craft_supply.py auction.py gearup.py weaponskill.py jobs.py trainjob.py \
      craft_rhythm.py \
@@ -33,12 +33,12 @@ COPY core.py bridge.py voice.py transform.py \
      gear.py gearorigin.py itemsource.py handover.py \
      armory.py wealth.py questlog.py modelviewer.py \
      relay.py digest.py \
-     achievements.py recap.py agenda.py eye.py decree.py priorities.py meter.py \
-     dungeonplan.py dungeonpath.py raidgoals.py raidcraft.py raidprep.py raidlineup.py mcencounters.py raidgear.py raidroles.py raidteams.py teamsync.py attunestep.py raidready.py raidrun.py raidsupply.py readcache.py \
+     achievements.py recap.py agenda.py eye.py decree.py priorities.py meter.py zone_danger.py \
+     dungeonplan.py dungeonpath.py raidgoals.py raidcraft.py raidprep.py raidlineup.py mcencounters.py raidgear.py raidroles.py raidteams.py teamsync.py attunestep.py raidready.py raidrun.py raidsupply.py readcache.py readtimeout.py \
      dungeonprogression.py dungeonquests.py \
      dungeonprogression.py dungeonquests.py \
-     guildcraft.py tradespec.py guildbank.py guildshare.py guildroute.py orders.py guildpost.py guildwork.py workorders.py guildfund.py classtrain.py classcasts.py purse.py vendorsale.py bankbags.py natural.py guildcorps.py guildjobs.py guildlevel.py classquest.py classask.py classparty.py classuse.py classhunt.py guildrun.py guildpug.py familyseat.py seatmeter.py guildsocial.py crafters.py recruit.py interview.py \
-     bag_pressure.py bag_upgrade.py bag_economy.py bag_market.py disposition.py bagfate.py tidy.py \
+     guildcraft.py tradespec.py guildbank.py guildshare.py guildroute.py orders.py guildpost.py guildwork.py workorders.py guildfund.py classtrain.py classcasts.py racespells.py purse.py vendorsale.py bankbags.py natural.py guildcorps.py guildjobs.py guildlevel.py classquest.py steps.py classask.py classparty.py classuse.py classhunt.py guildrun.py guildpug.py familyseat.py seatmeter.py guildsocial.py crafters.py recruit.py interview.py \
+     bag_pressure.py bag_upgrade.py bag_economy.py bag_market.py guildbags.py disposition.py bagfate.py tidy.py \
      lockbox.py clearance.py \
      item_plan.py \
      jev.py jev_items.py jev_choices.py jev_recovery.py jev_activity.py jev_keep.py jevview.py \
