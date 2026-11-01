@@ -59,10 +59,10 @@ TICKET_SQL = (
     "WHERE quest = %s AND ticket IS NOT NULL ORDER BY ticket DESC LIMIT 1"
 )
 LAST_PASS_SQL = (
-    "SELECT since FROM overseer_bridge_memo WHERE kind = %s AND subject = %s"
+    "SELECT since FROM overseer_bridge_memo WHERE kind = %s AND subject = %s"  # noqa: S105 - filing pass time, not a password
 )
 RECORD_PASS_SQL = (
-    "INSERT INTO overseer_bridge_memo (kind, subject, value, since, expires) "
+    "INSERT INTO overseer_bridge_memo (kind, subject, value, since, expires) "  # noqa: S105 - filing pass time, not a password
     "VALUES (%s, %s, '{}', %s, %s) "
     "ON DUPLICATE KEY UPDATE since = VALUES(since), expires = VALUES(expires)"
 )
