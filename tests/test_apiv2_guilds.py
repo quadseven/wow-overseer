@@ -641,9 +641,70 @@ class TheChronicle(unittest.TestCase):
         self.assertEqual(
             (a["kind"], a["who"], a["run"]), ("clear", ["Crag", "Totta"], 9)
         )
-        self.assertEqual(a["text"], "Cave cleared The Deadmines, 7 of 7 bosses.")
+        self.assertEqual(a["text"], "Cave cleared The Deadmines, 7 of 7 bosses down.")
         self.assertEqual(b["kind"], "run")
-        self.assertIn("wiped, 2 of 7 bosses", b["text"])
+        self.assertEqual(
+            b["text"], "Cave wiped in Wailing Caverns, 2 of 7 bosses down."
+        )
+
+    def text(self, outcome, done, total, keyword="razorfen-kraul"):
+        row = {
+            "id": 1,
+            "guild": "Cave",
+            "keyword": keyword,
+            "outcome": outcome,
+            "members": "",
+            "bosses_done": done,
+            "bosses_total": total,
+            "at": NOW,
+        }
+        return chronicle.run_items([row])[0]["text"]
+
+    def test_cleared_is_said_only_when_every_boss_fell(self):
+        self.assertEqual(
+            self.text("cleared", 5, 6),
+            "Cave finished Razorfen Kraul with its last boss down, 5 of 6 bosses.",
+        )
+
+    def test_a_finished_run_with_no_count_does_not_claim_none_fell(self):
+        self.assertEqual(
+            self.text("cleared", 0, 7, "zulfarrak"),
+            "Cave finished Zul'Farrak with its last boss down; "
+            "the boss count was not recorded.",
+        )
+
+    def test_a_finished_run_with_no_total_says_only_that(self):
+        self.assertEqual(
+            self.text("cleared", 0, 0),
+            "Cave finished Razorfen Kraul with its last boss down.",
+        )
+
+    def test_a_short_run_still_files_as_a_clear(self):
+        row = {
+            "id": 1,
+            "guild": "Cave",
+            "keyword": "razorfen-kraul",
+            "outcome": "cleared",
+            "members": "",
+            "bosses_done": 5,
+            "bosses_total": 6,
+            "at": NOW,
+        }
+        self.assertEqual(chronicle.run_items([row])[0]["kind"], "clear")
+
+    def test_each_way_of_failing_is_said_in_words(self):
+        self.assertEqual(
+            self.text("timed out", 5, 7, "uldaman"),
+            "Cave ran out of time in Uldaman, 5 of 7 bosses down.",
+        )
+        self.assertEqual(
+            self.text("stalled", 1, 8, "shadowfang"),
+            "Cave stalled in Shadowfang Keep, 1 of 8 bosses down.",
+        )
+        self.assertEqual(
+            self.text("abandoned", 2, 3, "razorfen-downs"),
+            "Cave abandoned Razorfen Downs, 2 of 3 bosses down.",
+        )
 
     def test_dungeon_deaths_group_by_dungeon_and_hour(self):
         rows = [

@@ -333,7 +333,7 @@ class TheRunPageBosses(unittest.TestCase):
         # appears for the first kill.
         self.assertRegex(got, r"\d{1,2}:\d{2}\s*(AM|PM)")
         self.assertIn('class="g-r-boss killed"', got)
-        self.assertIn("not killed", got)
+        self.assertIn("no kill recorded", got)
 
 
 @unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
@@ -351,7 +351,7 @@ class TheRunPageTimeline(unittest.TestCase):
             "views/run.js",
             "console.log(JSON.stringify(String(M.timeline(%s))));" % json.dumps(RUN),
         )
-        self.assertIn("The group wiped on Sneed&#39;s Shredder; 3 deaths.", got)
+        self.assertIn("3 deaths to Sneed&#39;s Shredder.", got)
 
 
 # The /api/guildruns row of RUN: the same run_view, without the gear, bosses
@@ -396,7 +396,7 @@ class TheRunPageOfARecentRun(unittest.TestCase):
     def test_its_boss_and_wipe_lines_come_from_the_one_run_read(self):
         got = draw_run(dict(RUN, gear=GEAR))
         self.assertIn("The group killed Rhahk&#39;Zor.", got)
-        self.assertIn("The group wiped on Sneed&#39;s Shredder; 3 deaths.", got)
+        self.assertIn("3 deaths to Sneed&#39;s Shredder.", got)
 
     def test_while_the_one_run_read_is_on_its_way_the_gear_is_being_read(self):
         got = draw_run(None)

@@ -89,11 +89,10 @@ def _gear(reader, view: dict) -> list:
 
 # Boss kills for this run: overseer_event rows of kind 'boss_kill' (subject_id
 # the boss's creature entry, character_name who landed the killing blow),
-# narrowed to the run's map and window. NOTHING WRITES THIS KIND YET: the
-# module counts bosses_done off the instance script and never names a boss,
-# and the writer is part of quadseven/mod-overseer#971. Until it lands every
-# run reads no kill rows, which _bosses below answers as "not recorded"
-# rather than "alive" (#1130).
+# narrowed to the run's map and window. THE MODULE WRITES THIS ONLY FOR A ROSTER
+# KILLER (RecordBossKill), so a guild run usually holds few or none of these
+# rows, which _bosses below answers as "not recorded" rather than "alive"
+# (#1130).
 _BOSS_KILLS_SQL = (
     "SELECT character_name AS member, subject_id AS entry, subject_name AS name, "
     "last_seen AS at FROM overseer_event "
@@ -328,7 +327,10 @@ def _bosses(reader, view: dict) -> tuple[list, list]:
             }
         )
     killed = sum(1 for boss in out if boss["killed"])
-    if killed < int(view.get("bosses_done") or 0):
+    # A cleared run's last boss is down whatever its count says, so a cleared
+    # run with no kill row at all is also one the rows do not account for.
+    cleared_unrecorded = view.get("outcome") == guildrun.CLEARED and not killed
+    if killed < int(view.get("bosses_done") or 0) or cleared_unrecorded:
         out = []
     # Wipes are only read for ended runs: a run still out has not wiped yet.
     if view.get("state") != "ended":

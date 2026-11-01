@@ -70,6 +70,9 @@ COPY app /app/app
 COPY apiv2 /app/apiv2
 
 # The scheduled metric collector is another runtime entry point.
+# AI-REVIEW 2026-11-01 [codex/in-process/release-sequence] METRIC-IMAGE-891
+# (standard-ai-review-provenance, PR #1765): scheduled jobs use this image;
+# omitting the CLI or its dependency prevents every snapshot from starting.
 COPY tools/metric_watcher.py tools/realm_state_audit.py /app/tools/
 
 # It stays VENDORED. map_server._jquery_file says why - the page reaches no

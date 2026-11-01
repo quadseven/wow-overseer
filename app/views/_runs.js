@@ -21,6 +21,9 @@ const STATE = {
 // queued, inside, or how it came back.
 export function runState(r) {
   const key = r.run_state || "";
+  // `cleared` is the finder's word for the last boss down; with bosses left
+  // over the tag says what the run's own line says.
+  if (key === "cleared" && r.bosses_total && r.bosses_done < r.bosses_total) return { ...STATE.cleared, text: "finished" };
   return STATE[key] || { text: String(key || "state not recorded").replace(/_/g, " "), tone: "warn", icon: "ph ph-warning-circle" };
 }
 
