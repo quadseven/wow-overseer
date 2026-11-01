@@ -51,7 +51,24 @@ class VendorWaitTrip(unittest.TestCase):
     def test_no_trip_without_a_sustained_wait_or_goods(self):
         self.assertFalse(bag_pressure.vendor_wait_trip(29 * 60, {"Leader": 2}, False))
         self.assertFalse(bag_pressure.vendor_wait_trip(30 * 60, {"Leader": 0}, False))
-        self.assertFalse(bag_pressure.vendor_wait_trip(30 * 60, {"Leader": 2}, True))
+        # The wait is not gated on in_run: a member walking to a dungeon door
+        # does not stop the family's sellers from getting their trip. The
+        # banker wait (#872) is not gated this way, and neither is this one.
+        self.assertTrue(bag_pressure.vendor_wait_trip(30 * 60, {"Leader": 2}, True))
+
+    def test_vendor_wait_times_out_into_a_trip_even_in_a_run(self):
+        # A sustained vendor wait trips into an ordinary sale route regardless
+        # of whether a family member is in a dungeon run. The wait does not
+        # sit for ever with no route out.
+        namespace = _vendor_pass_mode(
+            {"_fetch_vendor_wait_seconds": lambda names: 30 * 60}
+        )
+        mode = asyncio.run(
+            namespace["_vendor_pass_mode"](
+                None, ["Leader"], {"Leader": 12}, {"Leader": 2}, True
+            )
+        )
+        self.assertEqual(bag_pressure.VENDOR_MODE_TRIP, mode)
 
     def test_vendor_wait_times_out_into_a_trip_on_a_town_errand(self):
         # Once the wait exceeds 30 minutes, an ordinary town errand claims a
@@ -71,6 +88,27 @@ class VendorWaitTrip(unittest.TestCase):
         mode = asyncio.run(
             namespace["_vendor_pass_mode"](
                 None, ["Leader"], {"Leader": 12}, {"Leader": 2}, False
+            )
+        )
+        self.assertEqual(bag_pressure.VENDOR_MODE_TRIP, mode)
+
+    def test_a_family_whose_leader_stands_at_the_vendor_and_whose_sellers_are_held_far_away_makes_progress_within_the_wait_trip(
+        self,
+    ):
+        # Leader stands at the vendor with no sale of its own; the sellers are
+        # held far away with their range retries spent. The 30-minute vendor
+        # wait trip still takes the family to a sale route, so the wait does not
+        # sit past the trip.
+        namespace = _vendor_pass_mode(
+            {"_fetch_vendor_wait_seconds": lambda names: 30 * 60}
+        )
+        mode = asyncio.run(
+            namespace["_vendor_pass_mode"](
+                None,
+                ["Leader", "Seller1", "Seller2"],
+                {"Leader": 0, "Seller1": 0, "Seller2": 0},
+                {"Leader": 0, "Seller1": 2, "Seller2": 1},
+                True,
             )
         )
         self.assertEqual(bag_pressure.VENDOR_MODE_TRIP, mode)

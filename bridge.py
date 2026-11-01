@@ -12559,7 +12559,7 @@ class Bridge(discord.Client):
             log.info("economy: the family is at the floor and a vendor trip "
                      "would free %d slot(s) between its members at the floor "
                      "(sellable %s), so the trip goes", freed, sellable_counts)
-        if not trip_worth and not in_run and any(sellable_counts.values()):
+        if not trip_worth and any(sellable_counts.values()):
             waited = await asyncio.to_thread(_fetch_vendor_wait_seconds, names)
             if bag_pressure.vendor_wait_trip(waited, sellable_counts, in_run):
                 trip_worth = True
@@ -27796,6 +27796,18 @@ async def _queue_vendor_sales(
             holder, len(plan.write), len(holder_candidates),
             item_plan.reasons(plan.skipped),
         )
+        if (not plan.write and any(
+                "refused" in reason and "vendor" in reason
+                for reason in (plan.skipped or {})
+        )):
+            # A seller whose stacks are all held back for range is still
+            # waiting for a vendor, even while the leader stands at one, so
+            # the wait ages and the vendor-wait trip can take over.
+            log.info(
+                "economy: %d carried candidate(s) for %s but no vendor "
+                "within reach - leader=%s aim taken=%s",
+                len(holder_candidates), holder, leader, aimed,
+            )
     log.info("economy: queued %d/%d vendor sale(s) across %d holder(s), "
              "one errand on leader=%s (taken=%s)",
              inserted, considered, len(by_holder), leader, aimed)
