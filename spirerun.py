@@ -167,6 +167,37 @@ def family_short(level_rows: list, family: list) -> str:
     return ""
 
 
+def _level(member: dict) -> int:
+    return int(member.get("level") or 0)
+
+
+def _class(member: dict) -> int:
+    return int(member.get("class_id") or 0)
+
+
+def _pool(rows: list, family: list) -> list:
+    """The guild's natural members at the floor, highest level first."""
+    fits = [
+        m
+        for m in rows
+        if m.get("name") not in set(family)
+        and _level(m) >= FLOOR
+        and _class(m) != DEATH_KNIGHT
+    ]
+    return sorted(fits, key=lambda m: (-_level(m), str(m.get("name"))))
+
+
+def _fill_role(placed: list, pool: list, seat: str, wanted: int) -> str:
+    """Seat `wanted` of `seat` out of `pool`, in place; what is still owed."""
+    owed = wanted - sum(1 for m in placed if m["role"] == seat)
+    fits = [m for m in pool if _seat_of(m) == seat][: max(owed, 0)]
+    placed += [_seated(m, seat) for m in fits]
+    pool[:] = [m for m in pool if m not in fits]
+    if len(fits) < owed:
+        return "%d more %s at level %d" % (owed - len(fits), seat, FLOOR)
+    return ""
+
+
 def lineup(members: list, family: list) -> Lineup:
     """Ten seats from `members` (a guild), the family guaranteed, or why not."""
     short = family_short(members, family)
@@ -174,39 +205,21 @@ def lineup(members: list, family: list) -> Lineup:
         return Lineup((), short)
     rows = [raidroles.with_spec(m) for m in members]
     mine = [m for m in rows if m.get("name") in set(family)]
-    knights = [m for m in mine if int(m.get("class_id") or 0) == DEATH_KNIGHT]
+    knights = [m for m in mine if _class(m) == DEATH_KNIGHT]
     if knights:
         return Lineup((), "a Death Knight never sits: %s" % _names(knights))
-    pool = sorted(
-        (
-            m
-            for m in rows
-            if m.get("name") not in set(family)
-            and int(m.get("level") or 0) >= FLOOR
-            and int(m.get("class_id") or 0) != DEATH_KNIGHT
-        ),
-        key=lambda m: (-int(m.get("level") or 0), str(m.get("name"))),
-    )
+    pool = _pool(rows, family)
     placed = [_seated(m, _seat_of(m)) for m in mine]
-    shortfalls = []
-    for seat, wanted in (
-        (raidroles.SEAT_TANK, TANKS_NEEDED),
-        (raidroles.SEAT_HEALER, HEALERS_NEEDED),
-    ):
-        owed = wanted - sum(1 for m in placed if m["role"] == seat)
-        fits = [m for m in pool if _seat_of(m) == seat][: max(owed, 0)]
-        placed += [_seated(m, seat) for m in fits]
-        pool = [m for m in pool if m not in fits]
-        if len(fits) < owed:
-            shortfalls.append(
-                "%d more %s at level %d" % (owed - len(fits), seat, FLOOR)
-            )
-    room = SEATS - len(placed)
-    placed += [_seated(m, raidroles.SEAT_DAMAGE) for m in pool[:room]]
+    shortfalls = [
+        _fill_role(placed, pool, raidroles.SEAT_TANK, TANKS_NEEDED),
+        _fill_role(placed, pool, raidroles.SEAT_HEALER, HEALERS_NEEDED),
+    ]
+    placed += [_seated(m, raidroles.SEAT_DAMAGE) for m in pool[: SEATS - len(placed)]]
     if len(placed) < SEATS:
         shortfalls.append("%d of %d seats at level %d" % (len(placed), SEATS, FLOOR))
-    if shortfalls:
-        return Lineup((), "; ".join(shortfalls))
+    said = "; ".join(line for line in shortfalls if line)
+    if said:
+        return Lineup((), said)
     groups = tuple(
         {"number": n + 1, "members": placed[n * GROUP_SIZE : (n + 1) * GROUP_SIZE]}
         for n in range(SEATS // GROUP_SIZE)
