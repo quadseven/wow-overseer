@@ -447,13 +447,13 @@ class TheRagefireClear(unittest.TestCase):
     def test_the_story(self):
         self.assertEqual(
             self.told["story"],
-            "Cleared Ragefire Chasm in 25 minutes at levels 15 to 17 with nobody "
-            "dying. The finder called it finished after 2 of 4 bosses.",
+            "Finished Ragefire Chasm in 25 minutes at levels 15 to 17 with nobody "
+            "dying. Its last boss fell with 2 of 4 bosses counted down.",
         )
 
     def test_the_cause_is_the_finders_word_and_no_failure_tag(self):
         self.assertEqual(
-            self.told["cause"], "Cleared: the finder says the dungeon is finished."
+            self.told["cause"], "Finished: the finder says the dungeon is finished."
         )
         self.assertEqual(self.told["causes"], [])
 

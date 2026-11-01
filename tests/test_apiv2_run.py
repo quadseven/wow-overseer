@@ -5,7 +5,10 @@ the last thirty back), so every older run the chronicle links to said "Not
 found". This reads the one row, shaped as /api/guildruns shapes a run.
 """
 
+import json
 import pathlib
+import shutil
+import subprocess
 import sys
 import types
 import unittest
@@ -321,6 +324,14 @@ class TheBosses(unittest.TestCase):
         self.assertEqual(payload["run"]["bosses_done"], 7)
         self.assertEqual(payload["run"]["bosses"], [])
 
+    def test_a_cleared_run_counted_at_nothing_lists_no_boss_as_alive(self):
+        # Run 3607: Zul'Farrak finished at 0 of 7, and all eight bosses read
+        # "not killed" because no kill row and no count disagreed.
+        finished = dict(ROW, outcome="cleared", bosses_done=0)
+        code, payload, _rd = ask("398", rows=(finished,))
+        self.assertEqual(code, 200)
+        self.assertEqual(payload["run"]["bosses"], [])
+
     def test_kill_rows_short_of_the_count_leave_the_list_empty(self):
         kills = [
             {
@@ -500,6 +511,74 @@ class TheWipes(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(payload["run"]["wipes"], [])
         self.assertEqual(reads(rd, "overseer_death"), [])
+
+
+def timeline_events(run):
+    """bossEvents and bossRows, run under node on one run."""
+    uri = (HERE / "app" / "views" / "run.js").as_uri()
+    code = (
+        "globalThis.window = {setTimeout: (f) => f(), addEventListener() {},"
+        " matchMedia: () => ({matches: false})};\n"
+        "globalThis.location = {hash: ''};\n"
+        "globalThis.document = {querySelector: () => null, addEventListener() {}};\n"
+        "const V = await import(%s);\n"
+        "const run = %s;\n"
+        "console.log(JSON.stringify({events: V.bossEvents(run).map((e) => e.text),"
+        " rows: String(V.bossRows(run).s), timeline: String(V.timeline(run).s),"
+        " missing: V.readFailed({error: new Error('HTTP 404')}),"
+        " down: V.readFailed({error: new Error('HTTP 502')}),"
+        " answered: V.readFailed({error: null})}));\n"
+    ) % (json.dumps(uri), json.dumps(run))
+    out = subprocess.run(
+        [shutil.which("node"), "--input-type=module", "-e", code],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if out.returncode != 0:
+        raise AssertionError(out.stderr)
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's views")
+class TheRunPageSaysWhatTheRowsHold(unittest.TestCase):
+    def test_a_cluster_of_deaths_is_told_as_deaths_and_not_a_wipe(self):
+        run = {
+            "wipes": [{"at": "2026-11-01 10:00:00", "name": "Ragnaros", "deaths": 2}]
+        }
+        self.assertEqual(timeline_events(run)["events"], ["2 deaths to Ragnaros."])
+
+    def test_a_death_with_no_killer_name_does_not_leave_a_hole(self):
+        run = {"wipes": [{"at": "2026-11-01 10:00:00", "name": "", "deaths": 3}]}
+        self.assertEqual(timeline_events(run)["events"], ["3 deaths to a boss."])
+
+    def test_a_boss_with_no_kill_row_is_not_said_to_have_lived(self):
+        run = {"bosses": [{"name": "Hogger", "killed": False}]}
+        rows = timeline_events(run)["rows"]
+        self.assertIn("no kill recorded", rows)
+        self.assertNotIn("not killed", rows)
+
+    def test_a_run_the_server_does_not_have_is_not_an_outage(self):
+        got = timeline_events({})
+        self.assertEqual(
+            (got["missing"], got["down"], got["answered"]), (False, True, False)
+        )
+
+    def test_a_council_award_is_not_called_looted(self):
+        run = {
+            "gear": [
+                {
+                    "at": "2026-11-01 10:00:00",
+                    "member": "Grug",
+                    "name": "Destiny",
+                    "source": "won by loot council",
+                }
+            ]
+        }
+        got = timeline_events(run)["timeline"]
+        self.assertIn("was awarded Destiny by the loot council.", got)
+        self.assertNotIn("looted Destiny", got)
 
 
 class TheRunPageAsksForIt(unittest.TestCase):

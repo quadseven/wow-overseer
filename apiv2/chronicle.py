@@ -4,15 +4,21 @@
 
 The feed the Guilds view's Chronicle draws, and the count behind the Guilds
 nav badge (items newer than a device's last visit). Without `guild` it covers
-both managed guilds, which is what the badge reads.
+every family guild, which is what the badge reads.
 
 FOUR KINDS, each read straight off a table the realm writes:
 
   level   overseer_level: the members who reached a new level, one item per
           guild per hour so a busy hour is one line, not forty.
-  clear   a guild run that went in and cleared (guildrun.came_back).
+  clear   a guild run that went in and came out `cleared` (guildrun.came_back):
+          the module's word for its last boss down. The line says cleared only
+          when the count holds every boss the run expects, and finished when
+          side bosses were left. That total is the map's encounters less those
+          only an event brings out (the module's EventGatedEncounterMask:
+          Tuten'kash, Grubbis, Mutanus, Gahz'rilla), by wing where a map has
+          independent wings, so Razorfen Downs is 3 and not 4.
   run     a guild run that went in and did not clear (wiped, abandoned,
-          timed out). Runs that never went in are not history.
+          timed out, stalled). Runs that never went in are not history.
   death   overseer_death inside a dungeon the site knows (achievements.MAP_NAMES),
           one item per guild, dungeon and hour. Deaths in the open world run
           to thousands a day and are counted on the Progress tab instead.
@@ -102,36 +108,51 @@ def level_items(rows: list, guild_of: dict) -> list:
     return items
 
 
+# A run that went in and did not clear, as the words after the guild's name.
+_FAILED = {
+    "wiped": "wiped in %s",
+    "abandoned": "abandoned %s",
+    "timed out": "ran out of time in %s",
+    "stalled": "stalled in %s",
+}
+
+
+def run_text(guild: str, place: str, outcome: str, done: int, total: int) -> str:
+    """One run as a sentence. A count of nothing on a finished run is a count
+    that failed, since its last boss is down, so it is not told as bosses."""
+    if outcome == guildrun.CLEARED:
+        if guildrun.every_boss_fell(done, total):
+            return "%s cleared %s, %d of %d bosses down." % (guild, place, done, total)
+        line = "%s finished %s with its last boss down" % (guild, place)
+        if not total:
+            return line + "."
+        if not done:
+            return line + "; the boss count was not recorded."
+        return line + ", %d of %d bosses." % (done, total)
+    said = _FAILED.get(outcome, "came back from %s") % place
+    counted = ", %d of %d bosses down" % (done, total) if total else ""
+    return "%s %s%s." % (guild, said, counted)
+
+
 def run_items(rows: list) -> list:
     items = []
     for r in rows:
         place = council.keyword_place(r["keyword"])
         # "Crag:tank:warrior:23,Ortimo:healer:paladin:19,..."
         who = [s.split(":")[0] for s in (r["members"] or "").split(",") if s]
-        bosses = ""
-        if r["bosses_total"]:
-            bosses = ", %d of %d bosses" % (
-                int(r["bosses_done"] or 0),
-                int(r["bosses_total"]),
-            )
-        if r["outcome"] == guildrun.CLEARED:
-            text = "%s cleared %s%s." % (r["guild"], place, bosses)
-            kind = "clear"
-        else:
-            text = "%s came back from %s: %s%s." % (
-                r["guild"],
-                place,
-                r["outcome"],
-                bosses,
-            )
-            kind = "run"
         items.append(
             {
-                "kind": kind,
+                "kind": "clear" if r["outcome"] == guildrun.CLEARED else "run",
                 "at": int(r["at"]),
                 "guild": r["guild"],
                 "who": who,
-                "text": text,
+                "text": run_text(
+                    r["guild"],
+                    place,
+                    r["outcome"],
+                    int(r["bosses_done"] or 0),
+                    int(r["bosses_total"] or 0),
+                ),
                 "place": place,
                 "run": int(r["id"]),
             }
