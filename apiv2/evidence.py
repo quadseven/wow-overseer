@@ -187,7 +187,7 @@ _CARRIED = (
     "WHERE wb.guid = ci.guid AND wb.bag = 0 AND wb.slot BETWEEN 19 AND 22))"
 )
 DEATHS_BY_MEMBER_SQL = (
-    "SELECT d.id, d.created_at AS died_at, d.character_name AS name, "
+    "SELECT d.id, d.created_at AS died_at, d.character_name AS name, "  # noqa: S608 - only module constants are joined; request values are bound %s
     "c.class AS class_id, " + _CLASS_NAME + " AS class_name, d.level, d.map, "
     "d.zone, d.killer_type, d.killer_name AS killer, d.killer_entry, "
     "ct.minlevel AS killer_min_level, ct.maxlevel AS killer_max_level, "
@@ -230,7 +230,7 @@ DEATHS_BY_MEMBER_SQL = (
 # Per class over the window: deaths, members, deaths per member, and the
 # deaths whose member now has no current pet and carries no Soul Shard.
 DEATH_LOOP_SUMMARY_SQL = (
-    "SELECT c.class AS class_id, " + _CLASS_NAME + " AS class_name, "
+    "SELECT c.class AS class_id, " + _CLASS_NAME + " AS class_name, "  # noqa: S608 - only module constants are joined; request values are bound %s
     "COUNT(*) AS deaths, COUNT(DISTINCT d.character_guid) AS members, "
     "ROUND(COUNT(*) / COUNT(DISTINCT d.character_guid), 2) AS deaths_per_member, "
     "SUM(p.owner IS NULL AND COALESCE(s.shards, 0) = 0) "
@@ -271,8 +271,17 @@ QUERIES = {
     "deaths_by_member": Query(
         sql=DEATHS_BY_MEMBER_SQL,
         params=(
-            "soul_shard", "pet_slot", "pet_slot", "food", "drink", "since",
-            "member", "member", "class", "class", "limit",
+            "soul_shard",
+            "pet_slot",
+            "pet_slot",
+            "food",
+            "drink",
+            "since",
+            "member",
+            "member",
+            "class",
+            "class",
+            "limit",
         ),
         takes={
             "since": Param(_since),

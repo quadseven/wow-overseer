@@ -234,26 +234,62 @@ class EvidenceTests(unittest.TestCase):
         first = body["rows"][0]
         self.assertEqual(first["died_at"], "2026-11-01 06:05:00")
         self.assertEqual((first["name"], first["class_name"]), ("Zug", "Warlock"))
-        self.assertEqual((first["killer"], first["killer_min_level"]), ("Great Goretusk", 20))
+        self.assertEqual(
+            (first["killer"], first["killer_min_level"]), ("Great Goretusk", 20)
+        )
         self.assertIsNone(body["rows"][1]["killer_min_level"])
         self.assertEqual(
-            {k: first[k] for k in ("shards_now", "pet_now", "free_slots_now", "food_now", "drink_now")},
-            {"shards_now": 0, "pet_now": None, "free_slots_now": 3, "food_now": 0, "drink_now": 4},
+            {
+                k: first[k]
+                for k in (
+                    "shards_now",
+                    "pet_now",
+                    "free_slots_now",
+                    "food_now",
+                    "drink_now",
+                )
+            },
+            {
+                "shards_now": 0,
+                "pet_now": None,
+                "free_slots_now": 3,
+                "food_now": 0,
+                "drink_now": 4,
+            },
         )
-        self.assertEqual(body["params"], {"since": "2026-11-01 00:00:00", "member": "", "class": 0, "limit": 50})
+        self.assertEqual(
+            body["params"],
+            {"since": "2026-11-01 00:00:00", "member": "", "class": 0, "limit": 50},
+        )
         self.assertEqual((body["count"], body["capped"]), (2, False))
 
     def test_deaths_by_member_filters_one_member_and_class(self):
         for given, cls in (("warlock", 9), ("9", 9), ("Death Knight", 6)):
             with self.subTest(given=given):
                 code, _, asked = self.get(
-                    q(name="deaths_by_member", since="2026-11-01T06:00", limit="5",
-                      **{"member": "Zug", "class": given})
+                    q(
+                        name="deaths_by_member",
+                        since="2026-11-01T06:00",
+                        limit="5",
+                        **{"member": "Zug", "class": given},
+                    )
                 )
                 self.assertEqual(code, 200)
                 self.assertEqual(
                     asked[0][1],
-                    (6265, 0, 0, 11, 59, "2026-11-01 06:00:00", "Zug", "Zug", cls, cls, 6),
+                    (
+                        6265,
+                        0,
+                        0,
+                        11,
+                        59,
+                        "2026-11-01 06:00:00",
+                        "Zug",
+                        "Zug",
+                        cls,
+                        cls,
+                        6,
+                    ),
                 )
 
     def test_deaths_by_member_cap_holds(self):
@@ -268,7 +304,11 @@ class EvidenceTests(unittest.TestCase):
     def test_deaths_by_member_rows_never_pass_max_rows(self):
         many = [dict(DEATHS[0], id=i) for i in range(evidence.MAX_ROWS + 5)]
         code, body, _ = self.get(
-            q(name="deaths_by_member", since="2026-11-01", limit=str(evidence.MAX_ROWS)),
+            q(
+                name="deaths_by_member",
+                since="2026-11-01",
+                limit=str(evidence.MAX_ROWS),
+            ),
             {evidence.DEATHS_BY_MEMBER_SQL: many},
         )
         self.assertEqual(code, 200)
@@ -288,7 +328,10 @@ class EvidenceTests(unittest.TestCase):
             ],
         )
         warlock = body["rows"][0]
-        self.assertEqual((warlock["class_name"], warlock["deaths"], warlock["members"]), ("Warlock", 40, 4))
+        self.assertEqual(
+            (warlock["class_name"], warlock["deaths"], warlock["members"]),
+            ("Warlock", 40, 4),
+        )
         self.assertEqual(warlock["share_no_pet_no_shard_now"], "0.750")
         self.assertEqual(body["rows"][1]["class_name"], "Mage")
         self.assertFalse(body["capped"])
@@ -309,7 +352,13 @@ class EvidenceTests(unittest.TestCase):
     def test_state_not_recorded_at_death_is_named_now(self):
         for sql in (evidence.DEATHS_BY_MEMBER_SQL, evidence.DEATH_LOOP_SUMMARY_SQL):
             self.assertNotIn("at_death", sql)
-        for field in ("shards_now", "pet_now", "free_slots_now", "food_now", "drink_now"):
+        for field in (
+            "shards_now",
+            "pet_now",
+            "free_slots_now",
+            "food_now",
+            "drink_now",
+        ):
             self.assertIn(f"AS {field}", evidence.DEATHS_BY_MEMBER_SQL)
         self.assertIn("AS share_no_pet_no_shard_now", evidence.DEATH_LOOP_SUMMARY_SQL)
 
@@ -354,7 +403,11 @@ class EvidenceTests(unittest.TestCase):
             q(name="death_loop_summary"),
             q(name="death_loop_summary", since="2026-11-01", limit="5"),
             q(name="death_loop_summary", since="2026-11-01", **{"class": "9"}),
-            {"name": ["deaths_by_member"], "since": ["2026-11-01"], "class": ["9", "8"]},
+            {
+                "name": ["deaths_by_member"],
+                "since": ["2026-11-01"],
+                "class": ["9", "8"],
+            },
         ]
         for query in bad:
             with self.subTest(query=query):
