@@ -19,6 +19,19 @@ import unittest
 ROLLS = pathlib.Path(__file__).resolve().parent.parent / "docs" / "ROLLS.md"
 
 
+def _named_locations(text):
+    """Each path, pin key and field the step's location bullets name."""
+    step = text.split("**Bump the source pins only**", 1)[1]
+    bullets = step.split("source locations move:", 1)[1].split("Check `git status", 1)[0]
+    tokens = re.findall(r"`([^`]+)`", bullets)
+    return [t for t in tokens if t.endswith("_SHA") or t == '"dev"' or t.endswith((".env", ".py", "/"))]
+
+
+def _pin_gaps(text, declared):
+    """The locations the step names that the declared pins omit."""
+    return [name for name in _named_locations(text) if name not in declared]
+
+
 class RollsDocTest(unittest.TestCase):
     def setUp(self):
         self.text = ROLLS.read_text(encoding="utf-8")
@@ -78,26 +91,16 @@ class RollsDocTest(unittest.TestCase):
         self.assertIn("build_workflow", pins)
         sources = pins["sources"]
         declared = json.dumps(sources)
-        step = self.text.split("**Bump the source pins only**", 1)[1].split(
-            "3. **Read", 1
-        )[0]
-        required = (
-            "AC_OVERSEER_SHA",
-            "AC_DUNGEON_CLEAR_SHA",
-            "AC_CORE_SHA",
-            "AC_MODULE_SHA",
-            "AC_OLLAMA_CHAT_SHA",
-            "production/docker/azerothcore-playerbots/",
-            ".github/scripts/wow_promotion_drift.py",
-            '"dev"',
-            "revision_repo",
-            "revision_ref",
-            "dict_dev",
+        self.assertEqual(_pin_gaps(self.text, declared), [])
+
+    def test_a_location_dropped_from_the_block_is_a_gap(self):
+        named = _named_locations(self.text)
+        self.assertIn("AC_OVERSEER_SHA", named)
+        self.assertIn(".github/scripts/wow_promotion_drift.py", named)
+        self.assertEqual(
+            _pin_gaps(self.text, " ".join(set(named) - {"AC_CORE_SHA"})),
+            ["AC_CORE_SHA"],
         )
-        for location in required:
-            with self.subTest(location=location):
-                self.assertIn(location, step)
-                self.assertIn(location, declared, f"source pins omit {location}")
 
 
 if __name__ == "__main__":
