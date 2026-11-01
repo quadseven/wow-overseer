@@ -72,7 +72,13 @@ def _needs(row) -> list:
     return [_int(row.get(k)) for k in ("req1", "req2", "req3") if _int(row.get(k))]
 
 
-def spell_state(row, known, level, cap) -> str:
+PROFICIENCY_SPELLS = {
+    750: 293,  # Plate Mail
+    8737: 413,  # Mail
+}
+
+
+def spell_state(row, known, level, cap, skills=None) -> str:
     """'learned', 'trainable', 'needs', 'above' or '' (past the level cap).
 
     `row` is one class trainer spell: its id, the level it asks and the spells
@@ -80,7 +86,9 @@ def spell_state(row, known, level, cap) -> str:
     reached, and every spell it requires is known.
     """
     spell = _int(row["spell"])
-    if spell in known:
+    if spell in known or PROFICIENCY_SPELLS.get(spell) in {
+        _int(k) for k in skills or ()
+    }:
         return "learned"
     asks = _int(row.get("level"))
     if asks > level:
@@ -103,7 +111,15 @@ class Due:
         return self.count > 0 and _int(money) >= self.cheapest
 
 
-def due(trainer_rows, known, level, class_id=None, race_id=None, own_class=None) -> Due:
+def due(
+    trainer_rows,
+    known,
+    level,
+    class_id=None,
+    race_id=None,
+    own_class=None,
+    skills=None,
+) -> Due:
     """The class spells one trainer visit can teach, and what they cost.
 
     A visit teaches in dependency order, so a spell counts not only when
@@ -123,6 +139,11 @@ def due(trainer_rows, known, level, class_id=None, race_id=None, own_class=None)
     first (purse.py, #771).
     """
     known = {_int(k) for k in known or ()}
+    known.update(
+        spell
+        for spell, skill in PROFICIENCY_SPELLS.items()
+        if skill in {_int(k) for k in skills or ()}
+    )
     level = _int(level)
     pending = [
         row
