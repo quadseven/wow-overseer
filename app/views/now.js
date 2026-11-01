@@ -250,7 +250,7 @@ function campaigns(agendas) {
     if (!D.ok(read)) return html`<div class="crow"><span class="b">${f}'s family</span><span class="muted">Campaign ${notMeasured()}</span></div>`;
     const c = D.campaign(read.data);
     if (!c) return html`<div class="crow"><span class="b">${f}'s family</span><span class="muted">No campaign queued.</span></div>`;
-    return html`<div class="crow"><div class="crow-top"><span class="b">${f}'s family: ${c.name}</span><span class="dim small nowrap">${c.step ? "step " + c.step : html`step ${notMeasured()}`}</span></div><span class="muted">Next: ${c.next || "nothing queued after it"}</span></div>`;
+    return html`<div class="crow"><div class="crow-top"><span class="b">${f}'s family: ${c.name}</span><span class="dim small nowrap">${c.step ? c.step : html`Progress ${notMeasured()}`}</span></div><span class="muted">Next: ${c.next || "nothing queued after it"}</span></div>`;
   });
   return html`<h2 class="kicker">Campaigns</h2><div class="card rows">${rows}</div>`;
 }

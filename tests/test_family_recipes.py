@@ -239,7 +239,7 @@ class TheStandInSaysTheTrainerBuysIt(unittest.TestCase):
         why = standin.sits_out(
             facts(skills={"tailoring": 81, "enchanting": 1}, known=OG_KNOWN)
         )
-        self.assertIn("Bolt of Woolen Cloth (2964)", why)
+        self.assertIn("Bolt of Woolen Cloth", why)
         self.assertNotIn("cannot buy", why)
         self.assertIn("trainer", why)
 

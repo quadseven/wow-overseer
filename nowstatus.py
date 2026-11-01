@@ -103,6 +103,13 @@ class Step:
     waiting: str = ""
 
 
+def _standin_words(why: str) -> str:
+    """How a stand-in log line is said. Most of them are the pass explaining
+    why nobody sits out, so only one that names a short party says so."""
+    said = re.sub(r" ?\(spell \d+\)", "", why)
+    return ("Running short-handed: " if "-handed" in why else "Stand-in: ") + said
+
+
 # Each rule: pattern over the bridge's INFO message, then how to say it. The
 # patterns are anchored on the start of the message so another line that merely
 # mentions a name never matches. Every message here is one the bridge writes
@@ -168,7 +175,7 @@ _RULES = (
         re.compile(r"^standin: (?P<s>\w+)'s family: (?P<why>.+)$"),
         "family",
         "standin",
-        lambda m: ("Running short-handed: " + m["why"], ""),
+        lambda m: (_standin_words(m["why"]), ""),
     ),
     (
         re.compile(r"^activity: (?P<s>\w+)'s family waits in town for its campaign"),
@@ -348,8 +355,8 @@ def intent_steps(
             Step(
                 who,
                 "character",
-                "intent",
-                "%s ended %s" % (_owner(prev), _walk_words(prev, creatures)),
+                INTENT_ENDED,
+                "%s ended (it was %s)" % (_owner(prev), _walk_words(prev, creatures)),
             )
         )
     if held:
@@ -494,6 +501,24 @@ _MEMBER_STATES = {
         "Held back from a deadly walk",
         "{leader} to find a safer way",
     ),
+    # mod-overseer MemberStateWord's words, as it writes them today.
+    "held off a walk that kept killing it": (
+        "Held back from a walk that kept killing it",
+        "{leader} to find a safer way",
+    ),
+    "held where it stands, too far to walk back": (
+        "Held where it stands, too far to walk back",
+        "{leader} to come back for it",
+    ),
+    "walking back to the leader": (
+        "Walking back to {leader}",
+        "to catch up with {leader}",
+    ),
+    "walking to the inn": ("Walking to the inn", ""),
+    "held still": ("Held still", "the hold to end"),
+    "fighting": ("Fighting", "the fight to end"),
+    "not in the world": ("Not in the world", "a login"),
+    "dead": ("Dead", "a release or a resurrection"),
 }
 
 
@@ -593,7 +618,10 @@ def build_facts(names, roster, intents, steps, now_at=None, creatures=None) -> d
 # Steps that note a side hold and never say what the character is doing: the
 # equip pass holding a piece back rides along while the member walks, fights or
 # runs a dungeon, and read as its whole state it showed ten members "stuck".
-SIDE_KINDS = frozenset({"equip_held", "bank_wait"})
+# A stand-in note is the craft pass talking about one member and an ended walk
+# is the past: neither says what anyone is doing now, and both stay on the sheet.
+INTENT_ENDED = "intent_end"
+SIDE_KINDS = frozenset({"equip_held", "bank_wait", "standin", INTENT_ENDED})
 # The side notes that may still speak when nothing else does. The bank bag slot
 # note is left out on purpose: the slot is bought on any banker visit and holds
 # nothing, so "waiting for a banker" is never a true answer, even alone.
@@ -727,13 +755,27 @@ def followed(facts: dict | None, now: dict) -> tuple[str, str] | None:
     return leader, state[2]
 
 
-def _from_job(roster: dict):
+_JOB_WORDS = {"craft": "Crafting", "town run": "On a town run"}
+
+
+def _from_job(roster: dict, creatures: dict | None = None):
+    """The roster's word when no live source spoke. A travel aim is a walk
+    outside a campaign; on one the coordinator parks members with aims that
+    stay set while they stand still (agenda.errand)."""
     job = str(roster.get("job") or "")
+    aim = str(roster.get("travel_npc") or "")
+    if aim and not job.startswith("dungeon:"):
+        return _cap("A", "walking " + places.walk_words(aim, creatures)), "", None
     if job.startswith("dungeon:"):
         done = roster.get("dungeon_runs_done")
         wanted = roster.get("dungeon_runs_wanted")
         run = " (run %d of %d)" % (int(done) + 1, int(wanted)) if wanted else ""
-        return "On the " + job.split(":", 1)[1] + " dungeon job" + run, "", None
+        import council  # armory, which council pulls in, imports this module
+
+        place = council.keyword_place(job.split(":", 1)[1])
+        return "On the " + place + " campaign" + run, "", None
+    if job in _JOB_WORDS:
+        return _JOB_WORDS[job], "", None
     if job and job != "quest":
         return "On the '" + job + "' job", "", None
     return "", "", None
@@ -767,7 +809,7 @@ def _from_scopes(f, fresh):
         mine = [s for s in fresh if s.get("scope") == scope]
         if mine:
             return _from_step(mine[0])
-    return _from_job(f.get("roster") or {})
+    return _from_job(f.get("roster") or {}, f.get("creatures"))
 
 
 def _from_restarts(intent, steps, now_at, creatures: dict | None = None):
