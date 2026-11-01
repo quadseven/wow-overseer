@@ -502,7 +502,7 @@ class TheRaidTab(unittest.TestCase):
         closed = " ".join(view["closed"])
         self.assertIn("Stratholme (the main gate): withheld", closed)
         self.assertIn(
-            "Upper Blackrock Spire: it starts behind the Dragonspine Door", closed
+            "Upper Blackrock Spire: it is a ten-seat raid", closed
         )
         self.assertIn("Blackrock Depths: on the Eastern Kingdoms", closed)
         self.assertTrue(view["runs"][0].startswith("Dire Maul"))

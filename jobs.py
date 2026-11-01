@@ -131,7 +131,7 @@ def dungeon_job(keyword: str) -> str | None:
 # is the whole vocabulary. DELIBERATELY APART FROM PORTAL_KEYWORDS: the council
 # and the campaign planner choose among portal keywords, and a raid is only
 # ever an operator's order.
-RAID_KEYWORDS = frozenset({"moltencore"})
+RAID_KEYWORDS = frozenset({"moltencore", "ubrs"})
 RAID_PREFIX = "raid:"
 
 
