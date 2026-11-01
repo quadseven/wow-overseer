@@ -30,7 +30,19 @@ SEED = {
     },
     "/api/guildruns": [],
     "/api/v2/chronicle?guild=cave": {"items": []},
-    "/api/loot": {"stories": [], "empty": "none", "basis": ""},
+    "/api/loot": {
+        "stories": [
+            {
+                "guild": "Cave",
+                "at": "2026-11-01T17:29:12",
+                "line": "Sogg won Buzzer Blade on a need roll from Sneed's "
+                "Shredder in The Deadmines and equipped it.",
+                "item": {"entry": 5196, "name": "Buzzer Blade", "quality": 3},
+            }
+        ],
+        "empty": "none",
+        "basis": "",
+    },
     "/api/recap": {"families": []},
     "/api/council": {"families": []},
     "/api/guildchat?guild=Cave": {
@@ -155,6 +167,15 @@ class TheGuildChatFeed(unittest.TestCase):
             with self.subTest(ask=said):
                 self.assertNotIn("No answer", got[said])
                 self.assertIn(">%s</span>" % st, got[said])
+
+    def test_a_loot_line_holds_the_item_link_where_it_names_the_item(self):
+        rendered = render()
+        self.assertIn("Sogg won <a ", rendered)
+        self.assertIn(
+            "Buzzer Blade</span></a> on a need roll from Sneed&#39;s Shredder",
+            rendered,
+        )
+        self.assertNotIn("Sogg won Buzzer Blade", rendered)
 
     def test_run_link_renders_for_an_ask_that_ran(self):
         got = asks(render())

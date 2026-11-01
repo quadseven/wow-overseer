@@ -320,13 +320,22 @@ const FEED_ICON = {
   run: ["ph ph-door-open", "warn"], loot: ["ph-fill ph-sword", "accent"], death: ["ph ph-skull", "bad"],
 };
 
+// A loot sentence from the server, with the item link drawn where the sentence
+// names the item. The search starts after the subject so that a character whose
+// name holds the item's name cannot take the link.
+function lootLine(line, it) {
+  const at = it.name ? line.indexOf(it.name, line.indexOf(" ")) : -1;
+  if (at < 0) return html`${item(it)} <span>${line}</span>`;
+  return html`${line.slice(0, at)}${item(it)}${line.slice(at + it.name.length)}`;
+}
+
 function feedRow(ctx, x) {
   const seen = fromClock(ctx.previousVisit);
   const fresh = seen && x.at && x.at > seen;
   if (x.kind === "achievement") return achRow(x.ach, { fresh, cls: (n) => model(ctx).classOf(n) });
   const [icon, tone] = FEED_ICON[x.kind] || ["ph ph-circle", ""];
   const body = x.kind === "loot" && x.item
-    ? html`${item({ entry: x.item.entry, name: x.item.name, quality: x.item.quality, icon: x.item.icon })} <span>${x.text}</span>`
+    ? lootLine(x.text, x.item)
     : x.run ? html`<a href="${runHref({ id: x.run })}" class="g-feed-link">${x.text}</a>` : x.text;
   return html`<div class="g-row g-feed"><i class="${icon}" data-gt="${tone}" aria-hidden="true"></i><span class="g-grow">${body}</span>${fresh ? html`<span class="tag tag-accent">New</span>` : ""}<span class="muted g-when">${since(x.at)}</span></div>`;
 }
@@ -397,7 +406,7 @@ function lootSection(ctx) {
   const wait = pendingRead(l, 2);
   if (wait) return { loot: wait, council: wait };
   const stories = (l.data.stories || []).filter((s) => s.guild === gname(ctx)).slice(0, 12);
-  const loot = html`<div class="card g-list">${stories.length ? stories.map((s) => html`<div class="g-row g-loot"><span class="g-loot-top">${item(s.item)}<span class="muted g-when">${since(s.at)}</span></span><span class="muted">${s.line}</span></div>`) : html`<div class="g-row muted">${l.data.empty || "No notable loot yet."}</div>`}</div>
+  const loot = html`<div class="card g-list">${stories.length ? stories.map((s) => html`<div class="g-row g-loot"><span class="g-loot-top"><span>${lootLine(s.line, s.item)}</span><span class="muted g-when">${since(s.at)}</span></span></div>`) : html`<div class="g-row muted">${l.data.empty || "No notable loot yet."}</div>`}</div>
 <details class="fold"><summary>How this is worked out</summary><p class="muted g-basis">${l.data.basis || ""}</p></details>`;
   const c = l.data.council || {};
   const awards = (c.awards || []).filter((a) => a.family === family(ctx)).slice(0, 12);
