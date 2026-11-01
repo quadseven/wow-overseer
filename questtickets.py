@@ -302,10 +302,8 @@ def _is_timeout(exc: Exception) -> bool:
     if isinstance(exc, TimeoutError) or "Timeout" in type(exc).__name__:
         return True
     reason = getattr(exc, "reason", None)
-    if isinstance(reason, (TimeoutError, Exception)) and (
-        isinstance(reason, TimeoutError) or "Timeout" in type(reason).__name__
-    ):
-        return True
+    if isinstance(reason, Exception) and reason is not exc:
+        return _is_timeout(reason)
     return False
 
 

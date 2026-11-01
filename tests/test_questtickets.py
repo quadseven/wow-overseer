@@ -261,11 +261,21 @@ class Filing(unittest.TestCase):
     def test_is_timeout_recognition(self):
         import urllib.error
 
+        class CustomTimeout(Exception):
+            pass
+
         self.assertTrue(qt._is_timeout(TimeoutError("request timed out")))
         self.assertTrue(
             qt._is_timeout(urllib.error.URLError(TimeoutError("connection timed out")))
         )
+        self.assertTrue(qt._is_timeout(CustomTimeout("custom timeout")))
+        self.assertTrue(
+            qt._is_timeout(urllib.error.URLError(CustomTimeout("nested timeout")))
+        )
         self.assertFalse(qt._is_timeout(RuntimeError("refused")))
+        self.assertFalse(
+            qt._is_timeout(urllib.error.URLError(RuntimeError("connection refused")))
+        )
         self.assertFalse(qt._is_timeout(ValueError("bad format")))
 
 
