@@ -432,6 +432,7 @@ LOOT_ROOM_SHARE = (1, 4)
 # HOW OFTEN EACH KIND OF STEP MAY BE ASKED OF ONE MEMBER, in minutes, counted
 # from the command log so a restart forgets nothing.
 BAG_ACTION = "bag"
+LEVEL_TRANSIENT_RETRY_MINUTES = 5
 COOLDOWN_MINUTES = {
     BAG_ACTION: 20,
     "gear": 60,
@@ -815,7 +816,7 @@ def _cooling(member: Member, action: str, recent) -> bool:
     return any(
         r.name == member.name
         and r.action == action
-        and int(r.age_minutes) < _train_row_wait(r, minutes)
+        and int(r.age_minutes) < _step_row_wait(r, minutes)
         for r in recent or ()
     )
 
@@ -851,7 +852,7 @@ def passing_train_row(r) -> bool:
     (#1116): one of PASSING_TRAIN_REASONS, read exactly from the module's
     `reason`. Such a row learned nothing about the trainer or the road, so it
     does not double the wait (train_cooldown); it still waits the base
-    COOLDOWN_MINUTES["train"] (_train_row_wait), so the same walk is not asked
+    COOLDOWN_MINUTES["train"] (_step_row_wait), so the same walk is not asked
     every pass. Counting a fight as a failed walk once sat a member at a tier
     cap out up to twelve hours behind a fight it had already won."""
     if r.status not in TRAIN_FAILED:
@@ -859,9 +860,19 @@ def passing_train_row(r) -> bool:
     return (r.refusal or r.reason) in PASSING_TRAIN_REASONS
 
 
-def _train_row_wait(r, minutes: int) -> int:
-    """The minutes `r` holds its step back: the base trainer wait for a passing
-    trainer row, `minutes` for every other row."""
+def _step_row_wait(r, minutes: int) -> int:
+    """Keep long waits for completed walks and persistent failures.
+
+    A temporary level-walk refusal learned nothing about the destination;
+    retry after a short wait once the member becomes available again.
+    """
+    if (
+        r.action == guildlevel.ACTION
+        and r.status == "error"
+        and r.retryable
+        and (r.refusal or r.reason) in PASSING_TRAIN_REASONS
+    ):
+        return min(minutes, LEVEL_TRANSIENT_RETRY_MINUTES)
     if r.action == "train" and passing_train_row(r):
         return min(minutes, COOLDOWN_MINUTES["train"])
     return minutes
@@ -904,7 +915,7 @@ def _training_cooling(name: str, skill_id: int, recent) -> bool:
         and (r.skill_id is None or r.skill_id == skill_id)
     )
     minutes = train_cooldown(name, rows, skill_id)
-    return any(int(r.age_minutes) < _train_row_wait(r, minutes) for r in rows)
+    return any(int(r.age_minutes) < _step_row_wait(r, minutes) for r in rows)
 
 
 # ---------------------------------------------------------------------------
