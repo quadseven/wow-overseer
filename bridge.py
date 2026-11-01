@@ -222,6 +222,23 @@ OWNED_CHANNEL_IDS = frozenset(
     cid for cid in (OVERSEER_CHANNEL_ID, CHAT_CHANNEL_ID) if cid
 )
 
+# THE REPORT-ONLY ORDER-GIVER (quadseven/mod-overseer#1238). A second
+# Discord identity may give orders, but only ones that READ the world:
+# the `stats` fan-out lines are the model. Its user id is named here, in
+# its own variable, and
+# never added to DISCORD_ALLOWED_USERS: that list is the operator's, and an
+# id on it can move characters, speak through them and spend their gold.
+# The scope itself lives in core.parse_directive (REPORT_COMMANDS and the
+# report_ids parameter); this set only says WHO is scoped. The channel rule
+# above binds it too, and the parser narrows it further, to the overseer
+# channel alone - the ticket's own words for the scope. Empty, which is
+# every install that does not name one, means there is no such giver.
+REPORT_ONLY_IDS = frozenset(
+    part.strip()
+    for part in os.environ.get("DISCORD_REPORT_USERS", "").split(",")
+    if part.strip()
+)
+
 # The Discord message being acted on, as typed (#1499). The order record needs
 # the words and the writers are handed only the parsed directive. A context
 # variable, not an attribute, because discord.py runs each on_message in its
@@ -7592,7 +7609,14 @@ class Bridge(discord.Client):
         return [getattr(self, p.name) for p in PASSES if p.headless or not headless]
 
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.bot:
+        # Bot-authored messages are refused unread, this bridge's own
+        # included, with ONE exception: the report-only order-giver
+        # (REPORT_ONLY_IDS) is a bot by construction, so the blanket
+        # refusal is the whole reason its lines never landed. The exception
+        # admits its messages to the parser and no further - the scope is
+        # the decision core's, which answers that id's report orders and
+        # refuses everything that would change the world.
+        if message.author.bot and str(message.author.id) not in REPORT_ONLY_IDS:
             return
         # Not mine, not my business. See OWNED_CHANNEL_IDS: without this, a
         # directive typed in the dev channel is executed by BOTH bridges, and
@@ -7602,7 +7626,11 @@ class Bridge(discord.Client):
         _HEARD.set(message.content or "")
         dedicated = OVERSEER_CHANNEL_ID and str(message.channel.id) == OVERSEER_CHANNEL_ID
         decisions = core.parse_directive(
-            message.content, str(message.author.id), self._allowed, dedicated=bool(dedicated)
+            message.content,
+            str(message.author.id),
+            self._allowed,
+            dedicated=bool(dedicated),
+            report_ids=REPORT_ONLY_IDS,
         )
         for decision in decisions:
             await self._act_on(decision, message.channel)
