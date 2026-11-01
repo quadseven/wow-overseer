@@ -623,7 +623,7 @@ class WhatThePagesShow(unittest.TestCase):
             rows, {}, council=lootcouncil.by_item_guid([AWARD])
         )
         line = payload["stories"][0]["line"]
-        self.assertIn("Grug was awarded it by the loot council from Lucifron", line)
+        self.assertIn("from Lucifron by the loot council.", line)
         self.assertIn("Loot council: Jev (0.88)", line)
 
 

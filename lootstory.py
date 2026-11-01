@@ -6,6 +6,17 @@ roll), `item_given` (a module give, trade or mail moved it), and `item_equip`
 (somebody put it on). This module joins them into one sentence per item and
 hands the Chronicle a list of them, newest first.
 
+THE ORDER OF EVENTS THE DATABASE CANNOT GIVE. `first_seen` is not when a thing
+happened: it is when the module's five-second flush wrote it, and one flush is
+one INSERT, so every row of a flush holds the same second. Nor does `id` break
+the tie, because the module's queue is a map keyed by character and then kind,
+which writes `item_equip` ahead of `item_loot`. Within one second the steps are
+told in the order an item normally moves: looted, handed on, worn (KINDS). An
+item cannot be worn before it is got, because the guid on an equip row exists
+only once the loot or the roll has stored the item. A character who wears an
+item and trades it inside one flush is told the other way round; a worn item
+has to come off first, so that second is rare, and the record cannot tell.
+
 EVERY WORD A READER SEES IS WRITTEN HERE, not in the page. The page draws the
 item name in its quality colour, the reader's clock, and the sentence it is
 given; "looted", "traded" and "mailed" are judgements about what happened and
@@ -16,12 +27,12 @@ from a mailbox are things a player could do. A module `give` moves an item
 across any distance with no range check, so the sentence says it was done by
 overseer command rather than letting it read like a trade.
 
-JOINING. By item guid wherever the row carries one. A row without one (an
-equip written before the module recorded guids, or any row from a database
+JOINING. By item guid wherever the row carries one. A row without one (a
+row written before the module recorded guids, or any row from a database
 that has not applied the migration yet) joins the newest story for the same
 item entry whose current holder is the character on the row, and otherwise
 starts a story of its own. That is a guess made only where the guid is
-missing, and it can only ever attach an equip to the character who was last
+missing, and it can only ever attach a step to the character who was last
 known to hold that item.
 """
 
@@ -36,6 +47,7 @@ from armory import QUALITY_NAMES, UNKNOWN_QUALITY
 ITEM_LOOT = "item_loot"
 ITEM_GIVEN = "item_given"
 ITEM_EQUIP = "item_equip"
+# In the order an item moves, which breaks a tie inside one flush (see above).
 KINDS = (ITEM_LOOT, ITEM_GIVEN, ITEM_EQUIP)
 
 # ItemTemplate::Quality: 3 rare, 4 epic, 5 legendary. The module writes loot
@@ -90,24 +102,27 @@ def place(row: dict, zones: dict) -> str:
     return recap.place_name(map_id, zone_id, achievements.MAP_NAMES, zones)
 
 
-def _loot_clause(via: str, source: str, where: str) -> str:
+def _loot_clause(via: str, source: str, where: str, thing: str) -> str:
     """How the item was first got: looted, won on a roll, or awarded by the
     loot council (#194), from what and where."""
     if via in (VIA_NEED, VIA_GREED):
-        text = "won it on a %s roll" % via
+        text = "won %s on a %s roll" % (thing, via)
     elif via == VIA_COUNCIL:
-        text = "was awarded it by the loot council"
+        text = "was awarded " + thing
     else:
-        text = "looted it"
+        text = "looted " + thing
     if source:
         text += " from " + source
     if where:
         text += " in " + where
+    if via == VIA_COUNCIL:
+        text += " by the loot council"
     return text
 
 
-def clause(row: dict, zones: dict) -> str:
-    """One step of the story, with the item as "it" and no subject.
+def clause(row: dict, zones: dict, thing: str) -> str:
+    """One step of the story, with no subject. `thing` is what the step calls
+    the item: its name the first time the sentence meets it, "it" after.
 
     The subject is added by `sentence`, which drops it when the same
     character did the step before.
@@ -117,41 +132,54 @@ def clause(row: dict, zones: dict) -> str:
     where = place(row, zones)
     source = row.get("source") or ""
     if kind == ITEM_LOOT:
-        return _loot_clause(via, source, where)
+        return _loot_clause(via, source, where, thing)
     if kind == ITEM_GIVEN:
         to = row.get("counterpart") or "somebody"
         if via == VIA_TRADE:
-            text = "traded it to " + to
+            text = "traded %s to %s" % (thing, to)
             if where:
                 text += " in " + where
             return text
         if via == VIA_MAIL:
-            text = "mailed it to " + to
+            text = "mailed %s to %s" % (thing, to)
             if where:
                 text += " from " + where
             return text
         if via == VIA_GIVE:
-            return "gave it to %s by overseer command" % to
-        return "handed it to " + to
+            return "gave %s to %s by overseer command" % (thing, to)
+        return "handed %s to %s" % (thing, to)
     if kind == ITEM_EQUIP:
-        return "equipped it"
+        return "equipped " + thing
     return ""
 
 
-def sentence(steps: list[dict], zones: dict) -> str:
-    """The whole story of one item, oldest step first, as one sentence."""
-    parts: list[str] = []
-    previous = None
+def _in_a_row(clauses: list[str]) -> str:
+    """ "A", "A and B", "A, B and C"."""
+    if len(clauses) == 1:
+        return clauses[0]
+    return ", ".join(clauses[:-1]) + " and " + clauses[-1]
+
+
+def sentence(steps: list[dict], zones: dict, item_name: str) -> str:
+    """The whole story of one item, oldest step first, as one sentence that
+    names the item once and calls it "it" after. A character's steps in a row
+    share one subject; the next character's follow ", then"."""
+    turns: list[tuple[str, list[str]]] = []
+    thing = item_name
     for row in steps:
-        text = clause(row, zones)
+        text = clause(row, zones, thing)
         if not text:
             continue
+        thing = "it"
         who = row.get("character_name") or "somebody"
-        parts.append(text if who == previous else "%s %s" % (who, text))
-        previous = who
-    if not parts:
+        if turns and turns[-1][0] == who:
+            turns[-1][1].append(text)
+        else:
+            turns.append((who, [text]))
+    if not turns:
         return ""
-    return ", then ".join(parts) + "."
+    told = ("%s %s" % (who, _in_a_row(said)) for who, said in turns)
+    return ", then ".join(told) + "."
 
 
 def _holder(steps: list[dict]) -> str | None:
@@ -220,7 +248,11 @@ def stories(rows: list[dict]) -> list[dict]:
     """
     ordered = sorted(
         (r for r in rows if r.get("kind") in KINDS),
-        key=lambda r: (r.get("first_seen") or datetime.min, _int(r.get("id"))),
+        key=lambda r: (
+            r.get("first_seen") or datetime.min,
+            KINDS.index(r["kind"]),
+            _int(r.get("id")),
+        ),
     )
     by_guid: dict[int, dict] = {}
     everything: list[dict] = []
@@ -276,8 +308,8 @@ def build_loot(
     `rows` are overseer_event rows of the three kinds, each optionally with a
     `guild` (the guild name of the character on the row). `council` is
     lootcouncil.by_item_guid over the loot council's rows: a story whose item
-    the council handed out ends with who it went to and why (#194). `zones` is area id
-    to zone name, recap.zone_names. `items`, `icons` and `book` are what
+    the council handed out ends with why, when the council gave a reason (#194).
+    `zones` is area id to zone name, recap.zone_names. `items`, `icons` and `book` are what
     achievements.item_payload draws an item from; without them an item still
     renders by the name the event row recorded.
     """
@@ -287,12 +319,6 @@ def build_loot(
     for story in stories(rows):
         if story["quality"] < NOTABLE_QUALITY:
             continue
-        line = sentence(story["steps"], zones)
-        if not line:
-            continue
-        award = _council_for(story, council or {})
-        if award and award.get("reason"):
-            line += " Loot council: %s" % award["reason"]
         item = achievements.item_payload(story["entry"], items, icons, book)
         if story["entry"] not in items:
             # The world database did not answer for this entry, so the name
@@ -300,6 +326,12 @@ def build_loot(
             item["name"] = story["name"] or item["name"]
             item["quality"] = story["quality"]
             item["quality_name"] = QUALITY_NAMES.get(story["quality"], UNKNOWN_QUALITY)
+        line = sentence(story["steps"], zones, item["name"])
+        if not line:
+            continue
+        award = _council_for(story, council or {})
+        if award and award.get("reason"):
+            line += " Loot council: %s" % award["reason"]
         latest = _latest(story)
         out.append(
             {
