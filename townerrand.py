@@ -93,6 +93,10 @@ GATHER_SECONDS = 300.0
 TOTAL_SECONDS = 3600.0
 # Two errands per family are at least this far apart, however the first ended.
 COOLDOWN_SECONDS = 7200.0
+# A released bag hold with stacks a vendor will now buy tries again sooner: the
+# two-hour cooldown is as long as the hold's own bound, so one failed walk would
+# leave the sale that ends the hold unreachable (#1678).
+FLOOR_SALE_COOLDOWN_SECONDS = 1800.0
 # How long a campaign may have waited for its run before no errand holds it any
 # longer. The same 45 minutes as bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS,
 # which the gear gate and the town-first gate already use; kept as its own
@@ -179,6 +183,7 @@ def should_start(
     supply_gaps: tuple = (),
     stalled: float = 0.0,
     bag_pressure_needed: bool = False,
+    floor_sale: bool = False,
 ) -> str:
     """Why this family should go to town now, or '' when it should not.
 
@@ -201,10 +206,14 @@ def should_start(
     The gear gate lets a campaign go once it has waited HOLD_CEILING_SECONDS;
     this errand must not take its job off `dungeon` after that release and hold
     it for up to another hour.
+
+    `floor_sale` means a released hold has stacks to sell, and shortens the
+    cooldown to FLOOR_SALE_COOLDOWN_SECONDS.
     """
     if state.active or in_run:
         return ""
-    if state.ended and now - state.ended < COOLDOWN_SECONDS:
+    cooldown = FLOOR_SALE_COOLDOWN_SECONDS if floor_sale else COOLDOWN_SECONDS
+    if state.ended and now - state.ended < cooldown:
         return ""
     if bag_pressure_needed:
         return BAG_PRESSURE_WHY

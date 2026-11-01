@@ -2052,6 +2052,106 @@ def family_fits(gear_rows, equipped_rows, names) -> dict:
     return fits
 
 
+def floor_release_fits(
+    fits, gear_rows, equipped_rows, names, held, plan, keep_names=()
+) -> dict:
+    """`fits` with what a member held at the floor will not wear let go (#1678).
+
+    `gear.claimant` answers by item level, so a piece that beats the worn one
+    is FIT_HOLDER and a ring is FIT_UNJUDGEABLE, and both are kept for ever.
+    The equip pass answers by the spec's gear score (`equipscore.plan`), and on
+    the dev realm on 2026-11-01 it chose 5 of the 29 pieces the first answer
+    kept for a shaman at 1 free slot. Nothing wears the other 24 and nothing
+    could sell them, so no town pass could make room.
+
+    Only a member in `held` is judged again: `_bag_hold_stuck` puts it there
+    once no town pass has given it a slot in BAG_HOLD_STUCK_SECONDS, so the
+    second answer is asked only when the first one has cost the family a wait.
+    A member `plan` could not score keeps every piece. A piece `plan` will put
+    on or holds for a weapon skill stays, as do an owner-kept name and a piece
+    above its holder's level, which the auction pass would not otherwise stop.
+    So do a trade tool and a tradable piece gear.py cannot judge, a ring say,
+    since a sibling's score was never asked. A piece a sibling would wear
+    becomes FIT_SIBLING, which is not for sale. The rest are FIT_NOBODY. Bank keeps are applied after this, as for any sale.
+    """
+    out = dict(fits)
+    characters = family_characters(equipped_rows, names)
+    kept = _floor_kept_guids(gear_rows, plan) | _floor_above_level(
+        gear_rows, characters
+    )
+    held = set(held) & set(plan.scored)
+    for holding in gear.holdings_from_rows(gear_rows):
+        guid = int(holding.guid)
+        if (
+            holding.holder in held
+            and guid not in kept
+            and not owner_keeps(holding.name, keep_names)
+            and _floor_may_judge_again(fits.get(guid), holding)
+        ):
+            out[guid] = _floor_new_fit(holding, characters)
+    return out
+
+
+def _floor_kept_guids(gear_rows, plan) -> set:
+    """Guids the gear score chose or holds for a skill, and every trade tool."""
+    waiting = {(str(member), str(item)) for member, item, _skill in plan.waiting}
+    kept = {int(equip.guid) for equip in plan.equips}
+    for row in gear_rows or ():
+        tool = disposition.tool_trades(
+            int(row.get("entry", 0) or 0), int(row.get("bag_family", 0) or 0)
+        )
+        if tool or (str(row["holder"]), str(row["name"])) in waiting:
+            kept.add(int(row["item_guid"]))
+    return kept
+
+
+def _floor_above_level(gear_rows, characters) -> set:
+    """Guids of pieces their holder has not reached the level of."""
+    levels = {c.name: int(c.level) for c in characters}
+    return {
+        int(row["item_guid"])
+        for row in gear_rows or ()
+        if int(row["required_level"]) > levels.get(str(row["holder"]), 0)
+    }
+
+
+def _floor_may_judge_again(fit, holding) -> bool:
+    """Is this kept answer one the gear score may overrule? A tradable piece
+    gear.py cannot judge is not: no sibling's score was asked about it."""
+    if fit == disposition.FIT_UNJUDGEABLE:
+        return bool(holding.soulbound)
+    return fit == disposition.FIT_HOLDER
+
+
+def _floor_new_fit(holding, characters) -> str:
+    """FIT_SIBLING when a sibling would wear the piece, else FIT_NOBODY."""
+    for character in characters:
+        if (
+            character.name != holding.holder
+            and gear.is_upgrade_for(holding, character)[0]
+        ):
+            return disposition.FIT_SIBLING
+    return disposition.FIT_NOBODY
+
+
+def floor_release_lines(before, after, gear_rows) -> list:
+    """One log line per stack `floor_release_fits` changed, with its reason."""
+    lines = []
+    for row in gear_rows or ():
+        guid = int(row["item_guid"])
+        if before.get(guid) == after.get(guid):
+            continue
+        if after.get(guid) == disposition.FIT_NOBODY:
+            ending = "nobody in the family takes it, so it may be sold or listed"
+        else:
+            ending = "a sibling would wear it, so it stays in the family"
+        lines.append(
+            "%s's %s (guid %d): held at the floor and the gear score does not "
+            "choose it; %s" % (row["holder"], row["name"], guid, ending)
+        )
+    return lines
+
+
 # gear.claims' two answers that are not a name, re-exported so a reader of
 # claimants never imports gear itself (this module is its one adapter).
 CLAIM_NOBODY = gear.NOBODY
