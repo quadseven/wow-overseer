@@ -224,6 +224,8 @@ The debt is not a precedent. In anything added here, including code, comments, f
 
 When a file already violates this, fix the lines being edited. Do not scrub a whole directory inside an unrelated change; paying the debt down is its own PR, and welcome.
 
+Keep README.md to the sections its test pins, plus How it deploys, Layout and Docs, with a last-checked date; a change that makes it false fixes it in the same PR.
+
 ## Filing issues
 
 Give every ticket and epic in this repo and in `quadseven/mod-overseer` exactly one `area:` label, plus topic labels such as `dungeon:blackfathom` or `trade:leatherworking`. An epic sits in one area, holds at most 15 tickets, and splits by topic when it outgrows that. Never file into a generic intake epic. The areas, topic labels and reasons are in `docs/agents/area-taxonomy.md`.
