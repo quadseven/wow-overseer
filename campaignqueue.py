@@ -368,6 +368,22 @@ def combined_plan(
             False,
             "",
         )
+    factions = {
+        achievements.faction_of(r.get("race") for r in rows)
+        for rows in (level_rows_a, level_rows_b)
+    }
+    if len(factions - {""}) > 1:
+        # AllowTwoSide.Interaction.Group = 0: the core refuses this group, so a
+        # combined step would stand two families at a door neither can enter.
+        return Plan(
+            family_a,
+            "Not queued: %s and %s are opposite factions, and the realm refuses "
+            "a group holding both. Nothing was written."
+            % (_family(family_a), _family(family_b)),
+            (),
+            False,
+            "",
+        )
     for entry in entries:
         for level_rows in (level_rows_a, level_rows_b):
             why = (
