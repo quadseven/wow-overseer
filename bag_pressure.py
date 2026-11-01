@@ -1230,6 +1230,11 @@ def bag_offer_fits(buyer: BagBuyer, offer: BagOffer) -> bool:
     )
 
 
+def bag_purchase_has_room(buyer: BagBuyer) -> bool:
+    """A worn bag can land directly in its empty position; bank bags are cargo."""
+    return buyer.free_slots >= 1 or (not buyer.bank and buyer.open_positions > 0)
+
+
 def bag_purchases(buyers, offers, campaign_waiting: bool = False) -> tuple:
     """A usable bag each buyer can afford, and a note for each who cannot.
 
@@ -1237,7 +1242,8 @@ def bag_purchases(buyers, offers, campaign_waiting: bool = False) -> tuple:
     cheapest offer the buyer's own vendors stock is the only one considered
     (ties go to the bigger bag, then the lower entry), and it is bought only
     when `bag_purchase_allowed` says the reserve survives it and there is a
-    free slot for it to land in. Returns (purchases, notes).
+    valid destination for it: backpack space or an empty worn bag position.
+    Returns (purchases, notes).
 
     A bank buyer instead takes the largest usable bag the same reserve
     permits: bank bag positions are limited, and a cheap tiny bag consumes
@@ -1296,7 +1302,7 @@ def bag_purchases(buyers, offers, campaign_waiting: bool = False) -> tuple:
                 )
             )
             continue
-        if buyer.free_slots < 1:
+        if not bag_purchase_has_room(buyer):
             notes.append(
                 "%s has no free slot for %s to land in; a sell pass "
                 "has to run first" % (buyer.name, offer.name)
@@ -1546,14 +1552,14 @@ def trip_blocked(leader: str, standing: dict, in_run: bool) -> str:
 
 
 def _trip_walkers(buyers, standing: dict, map_id: int) -> list:
-    """Buyers with a position to fill and a slot to land a bag in, who stand
+    """Buyers with a position to fill and a valid bag destination, who stand
     on the leader's map and so can follow it to a counter."""
     out = []
     for buyer in sorted(buyers or (), key=lambda b: b.name):
         spot = standing.get(buyer.name)
         if (
             buyer.open_positions > 0
-            and buyer.free_slots >= 1
+            and bag_purchase_has_room(buyer)
             and spot is not None
             and spot.map_id is not None
             and int(spot.map_id) == map_id
@@ -1604,7 +1610,7 @@ def bag_vendor_trip(
     BagVendors measured from the leader. The nearest vendor within
     `max_yards` on the leader's map at which at least one buyer can afford
     that vendor's cheapest bag (with the level reserve kept back and a free
-    slot for it to land in) is chosen; ties go to the lower entry.
+    valid destination for it) is chosen; ties go to the lower entry.
 
     NEVER OVER SOMETHING MORE IMPORTANT. No trip while a dungeon run is in
     progress, while anybody in the family is fighting, or while a campaign

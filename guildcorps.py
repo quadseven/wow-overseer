@@ -1277,6 +1277,7 @@ def tailor_step(
     cap=NEAR,
     by_post=frozenset(),
     at_mailbox=frozenset(),
+    recent=None,
 ):
     """(Step or None, note): this tailor's one step this pass, and why."""
     if tailor.family:
@@ -1287,7 +1288,7 @@ def tailor_step(
     if step:
         return step, ""
     step = _collect_step(tailor, cap)
-    if step:
+    if step and not _cooling(step, recent):
         return step, ""
     bag, reach = target_bag(tailor, members, trainable, vendors, by_post)
     bolt = skillup_bolt(tailor, members, trainable)
@@ -1521,6 +1522,7 @@ def _guild_steps(
             travel[0],
             by_post,
             at_mailbox,
+            recent,
         )
         if step is not None and not _cooling(step, recent):
             steps.append(step)
