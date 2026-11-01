@@ -50,9 +50,13 @@ in DEATH_HOURS) before one it has. Then, for a levelling family, a run that
 drops a planned fire resistance piece for one of its tanks (from
 preraid.FIRE_FLOOR, Blackrock Depths' band: preraid.fire_plan, #759), because
 the tanks reach the cap short of Molten Core's fire resistance otherwise;
-then the run they will outgrow soonest, because a group levelling through a
-band uses a dungeon before it loses it; then the one with the least of its
-target done; then path order.
+then a run the family as a whole is not outgrowing (`Option.outgrowing`, the
+mean level within OUTGROWING_LEVELS of the ceiling, because the xp falls away:
+measured over the week to 2026-11-01, a family at 45 to 49 made about 2,100 xp
+a member-hour in Razorfen Downs against about 6,300 in Uldaman; a run under way
+keeps its count, and DRY_RUNS ends a door that stops teaching); then the run
+they will outgrow soonest, because a group levelling through a band uses a dungeon before it
+loses it; then the one with the least of its target done; then path order.
 
 AT THE LEVEL CAP THE GEAR DECIDES, the way a raid guild gears for Molten
 Core (#280). preraid.py reads every level 60 dungeon's loot tables against
@@ -163,6 +167,10 @@ REFUSED_LOCKED = "locked"
 REFUSED_STALLED = "stalled"
 
 LEVEL_CAP = 60
+
+# How close the family's mean level may come to a door's ceiling before the
+# next door goes first (see WHICH ONE above).
+OUTGROWING_LEVELS = 1
 
 # Runs of a level-appropriate dungeon it takes the weakest member to gain a
 # level. An estimate for sizing an entry, not a promise: the planner looks
@@ -574,6 +582,16 @@ class Facts:
     dry: dict | None = None
 
     @property
+    def mean_level(self) -> float:
+        """The family's mean level, 0.0 when unread."""
+        known = [
+            int(r.get("level") or 0)
+            for r in self.level_rows
+            if str(r.get("name") or "") and int(r.get("level") or 0) > 0
+        ]
+        return sum(known) / len(known) if known else 0.0
+
+    @property
     def weakest(self) -> tuple:
         """(name, level) of the lowest member, or ("", 0) when unread."""
         known = [
@@ -611,11 +629,17 @@ class Option:
     continent: str = ""  # the continent the door stands on
     crossing: bool = False  # the door is across a continent crossing
     level: int = 0  # the weakest member's level
+    mean_level: float = 0.0  # the family's mean level
     bosses: tuple | None = None  # (lowest, highest) boss level, None unread
     deaths: int | None = None  # the family's deaths on its map, DEATH_HOURS
     wipes: int = 0  # ledger runs that ended in a wipe
     staged: int = 0  # ledger runs that never got in (staging_failed)
     won: int | None = None  # pieces the loot council gave a member there
+
+    @property
+    def outgrowing(self) -> bool:
+        """The family as a whole is within OUTGROWING_LEVELS of the ceiling."""
+        return self.ceiling - self.mean_level <= OUTGROWING_LEVELS
 
     @property
     def troubled(self) -> bool:
@@ -904,6 +928,7 @@ def _history_facts(facts: Facts, run: Run) -> dict:
     won = own(facts.won)
     return {
         "level": facts.weakest[1],
+        "mean_level": facts.mean_level,
         "bosses": own(facts.bosses),
         "deaths": None if facts.deaths is None or shares_map(run) else int(deaths or 0),
         "wipes": int(tally.get(WIPE, 0)),
@@ -983,6 +1008,7 @@ def rank(option: Option) -> tuple:
         not option.ready,
         option.troubled,
         not option.fire,
+        option.outgrowing,
         option.ceiling,
         option.done / max(option.target, 1),
         _order(option),
@@ -1033,10 +1059,13 @@ def _heuristic_why(pick: Option) -> str:
                 pick.why,
             )
         )
-    return "%s the weakest member %s, and the soonest outgrown of those (%s)" % (
-        pick.place,
-        "is ready for" if pick.ready else "would be carried through",
-        pick.why,
+    return (
+        "%s the weakest member %s, and the soonest outgrown of those the family is not already outgrowing (%s)"
+        % (
+            pick.place,
+            "is ready for" if pick.ready else "would be carried through",
+            pick.why,
+        )
     )
 
 

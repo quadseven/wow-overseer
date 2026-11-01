@@ -230,6 +230,7 @@ def _record(o) -> dict:
         "boss_levels": _unknown(None if o.bosses is None else "%d to %d" % o.bosses),
         "level_fit": o.fit or "unknown",
         "weakest_member_ready": o.ready,
+        "family_is_outgrowing_it": o.outgrowing,
         "completed_runs": o.done,
         "failed_attempts": o.failed,
         "wiped_runs": o.wipes,
@@ -312,7 +313,8 @@ def dungeon_question(facts, opts, where=None):
         "family's deaths there in the last week, and how many pieces the loot "
         "council has already handed a member from it. Choose the dungeon a "
         "sensible group would run next: one "
-        "that suits the weakest member's level, levels and gears the party, "
+        "that suits the weakest member's level, that the family is not already "
+        "outgrowing, levels and gears the party, "
         "moves the raid's attunement or key along when it can, finishes open "
         "quests, does not cross a continent for little, and is not one they "
         "have run to exhaustion or keep dying or failing at. When unsure, "
