@@ -29618,7 +29618,13 @@ def _class_training_due(names: list, casts_only: bool = False) -> dict:
         trainer = _class_trainer_rows(cur)
         rows = _corps_read(cur, "known class spells",
                            _CLASS_KNOWN_SQL % ",".join(["%s"] * len(names)), list(names))
-    known, level, klass, race = {}, {}, {}, {}
+        skills_sql = (
+            "SELECT c.name, cs.skill FROM characters c "
+            "JOIN character_skills cs ON cs.guid = c.guid WHERE c.name IN (%s)"
+        ) % ",".join(["%s"] * len(names))
+        skill_rows = _corps_read(cur, "known skills", skills_sql, list(names))
+
+    known, level, klass, race, skills = {}, {}, {}, {}, {}
     for row in rows:
         name = str(row["name"])
         level[name] = int(row.get("level") or 0)
@@ -29627,9 +29633,16 @@ def _class_training_due(names: list, casts_only: bool = False) -> dict:
         spells = known.setdefault(name, set())
         if row.get("spell"):
             spells.add(int(row["spell"]))
+
+    for row in skill_rows:
+        name = str(row["name"])
+        char_skills = skills.setdefault(name, set())
+        if row.get("skill"):
+            char_skills.add(int(row["skill"]))
+
     return {name: classtrain.due(trainer.get(klass[name], ()), known[name], level[name],
                                  klass[name] if casts_only else None,
-                                 race[name] or None, klass[name])
+                                 race[name] or None, klass[name], skills.get(name))
             for name in known}
 
 
