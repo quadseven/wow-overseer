@@ -431,7 +431,9 @@ LOOT_ROOM_SHARE = (1, 4)
 
 # HOW OFTEN EACH KIND OF STEP MAY BE ASKED OF ONE MEMBER, in minutes, counted
 # from the command log so a restart forgets nothing.
+BAG_ACTION = "bag"
 COOLDOWN_MINUTES = {
+    BAG_ACTION: 20,
     "gear": 60,
     "collect": 60,
     "hearth": 60,
@@ -2038,13 +2040,13 @@ def riding_step(m, recent):
     )
 
 
-def _newest_mount_buy(name, recent):
-    """The member's newest mount buy row (not its walk), or None."""
+def _newest_buy(name, action, recent):
+    """The member's newest buy row of `action` (not its walk), or None."""
     buys = [
         r
         for r in recent or ()
         if r.name == name
-        and r.action == mountbuy.ACTION
+        and r.action == action
         and not r.walk
         and str(r.command or "").startswith("entry:")
     ]
@@ -2053,10 +2055,10 @@ def _newest_mount_buy(name, recent):
     return min(buys, key=lambda r: (int(r.age_minutes), -int(r.row_id)))
 
 
-def mount_refused_for_bags(name, recent) -> bool:
-    """Whether the member's newest mount buy (not its walk) came back
+def buy_refused_for_bags(name, action, recent) -> bool:
+    """Whether the member's newest buy of `action` (not its walk) came back
     mountbuy.BAGS_FULL_REASON."""
-    newest = _newest_mount_buy(name, recent)
+    newest = _newest_buy(name, action, recent)
     if newest is None:
         return False
     reason = mountbuy.BAGS_FULL_REASON
@@ -2065,19 +2067,19 @@ def mount_refused_for_bags(name, recent) -> bool:
     )
 
 
-def mount_room_short(m, recent) -> bool:
-    """Whether the mount buy has no bag slot to land in: the bags read full,
-    or the last buy was refused for full bags and no free slot has been read
-    since (#1593)."""
+def buy_room_short(m, action, recent) -> bool:
+    """Whether a vendor buy of `action` has no bag slot to land in: the bags
+    read full, or the last such buy was refused for full bags and no free slot
+    has been read since (#1593, #1455)."""
     if m.free_slots is not None and int(m.free_slots) >= 1:
         return False
-    return m.free_slots is not None or mount_refused_for_bags(m.name, recent)
+    return m.free_slots is not None or buy_refused_for_bags(m.name, action, recent)
 
 
-def _mount_room(m, offer, recent, cap, kept, book, crafters, master):
-    """(room step or None, a note) for a member whose mount buy has no bag
-    slot: one make-room step (_room_ladder) before the vendor walk, or the walk
-    held with the reason.
+def _buy_room(m, action, item, recent, cap, kept, book, crafters, master):
+    """(room step or None, a note) for a member whose vendor buy of `action`
+    (mount_step, _pvp_room) has no bag slot for `item`: one make-room step
+    (_room_ladder) before the vendor walk, or the walk held with the reason.
 
     The same per-state cap as equip_room_step (#1607): the bags' state is the
     one the newest buy was refused in, so ROOM_STEPS_PER_STATE make-room steps
@@ -2087,11 +2089,11 @@ def _mount_room(m, offer, recent, cap, kept, book, crafters, master):
     said = "%s makes room in its bags (%s free, 1 needed) for %s" % (
         m.name,
         "none" if m.free_slots is None else int(m.free_slots),
-        offer.name or "mount item %d" % offer.entry,
+        item,
     )
     refused = (
-        _newest_mount_buy(m.name, recent)
-        if mount_refused_for_bags(m.name, recent)
+        _newest_buy(m.name, action, recent)
+        if buy_refused_for_bags(m.name, action, recent)
         else None
     )
     if (
@@ -2101,24 +2103,18 @@ def _mount_room(m, offer, recent, cap, kept, book, crafters, master):
         return None, (
             "%s made room %d time(s) for %s since its buy was refused for full "
             "bags and has read no free slot; no more until its bags change"
-            % (
-                m.name,
-                ROOM_STEPS_PER_STATE,
-                offer.name or "item %d" % offer.entry,
-            )
+            % (m.name, ROOM_STEPS_PER_STATE, item)
         )
     if not _cooling(m, ROOM_ACTION, recent):
         step = _room_ladder(m, said, 1, kept, book, cap, crafters, master)
         if step is not None:
             return step, ""
         return None, (
-            "%s holds its mount walk: its bags have no free slot for %s and "
-            "nothing it may sell, mail or destroy"
-            % (m.name, offer.name or "item %d" % offer.entry)
+            "%s holds its %s walk: its bags have no free slot for %s and "
+            "nothing it may sell, mail or destroy" % (m.name, action, item)
         )
     return None, (
-        "%s holds its mount walk until a bag slot is free for %s"
-        % (m.name, offer.name or "item %d" % offer.entry)
+        "%s holds its %s walk until a bag slot is free for %s" % (m.name, action, item)
     )
 
 
@@ -2130,7 +2126,7 @@ def mount_step(m, facts, recent, cap, kept=None, book=None, crafters=None, maste
     uses it. `facts` is a mountbuy.Facts, None for a member the bridge did not
     read. Never while offline, dead or fighting, and once per
     COOLDOWN_MINUTES[mountbuy.ACTION]. With no bag slot for the item
-    (mount_room_short, #1593) it makes room first or holds the walk."""
+    (buy_room_short, #1593) it makes room first or holds the walk."""
     if facts is None:
         return None, ""
     order = m.purse
@@ -2165,8 +2161,11 @@ def mount_step(m, facts, recent, cap, kept=None, book=None, crafters=None, maste
         return guildcorps.Step(
             m.name, mountbuy.ACTION, int(offer.entry), said, rows=(use,)
         ), ""
-    if mount_room_short(m, recent):
-        return _mount_room(m, offer, recent, cap, kept, book, crafters, master)
+    if buy_room_short(m, mountbuy.ACTION, recent):
+        item = offer.name or "item %d" % offer.entry
+        return _buy_room(
+            m, mountbuy.ACTION, item, recent, cap, kept, book, crafters, master
+        )
     said = "%s walks to its race's mount vendor to buy %s for %s of its own" % (
         m.name,
         offer.name or "item %d" % offer.entry,
@@ -2493,21 +2492,81 @@ def gear_step(member, character, vendor_rows, cap, kept=None):
     return step, ""
 
 
-def supply_step(member, vendor_rows, cap, kept=None):
+# ROOM FOR FOOD IS WORTH A SPARE STACK (#1675). Read on the dev realm on
+# 2026-10-30: 170 of 215 supply buys were refused "bags cannot take the item",
+# and only 5 sell rows ran, because a full member's slots hold what the sale
+# verdict keeps. The 117 members with no free slot took 3,419 of 4,189 solo
+# deaths in the day: no food, no rest, the next pull at half health. A player
+# with full bags at the innkeeper sells something to buy a meal. In this order,
+# lowest value first in each: trade goods, gems and recipes, spare consumables.
+_SPARE_CONSUMABLES = frozenset({4, 8})  # scrolls and other consumables
+
+
+def _spare_rank(c):
+    """Which tier of the spare order a stack is in, or None for a stack that is
+    never sold for room: unpriced, rare or better, or any other kind."""
+    if int(c.sell_price) <= 0 or int(c.quality) >= vendorsale.RARE:
+        return None
+    item_class = int(c.item_class)
+    if item_class == vendorsale.TRADE_GOODS:
+        return 0
+    if item_class in (vendorsale.GEM, vendorsale.RECIPE):
+        return 1
+    if item_class == vendorsale.CONSUMABLE:
+        return 2 if int(c.subclass) in _SPARE_CONSUMABLES else None
+    return None
+
+
+def room_for_rations(member, kept, book, need) -> list:
+    """The stacks a member short of `need` bag slots sells for food beyond its
+    junk: lowest in the spare order first, never reserved, never a class
+    quest's, never a tool, never what its own trade casts eat."""
+    sold = {int(c.guid) for c in _junk(member, kept)}
+    eaten = craft_entries(member) if member.role == MAINTENANCE else frozenset()
+    stacks = [
+        c
+        for c in _room_rows(member, member.carried or (), kept, book)
+        if int(c.guid) not in sold
+        and int(c.entry) not in eaten
+        and _spare_rank(c) is not None
+    ]
+    stacks.sort(
+        key=lambda c: (_spare_rank(c), int(c.sell_price) * int(c.count), int(c.guid))
+    )
+    return stacks[: max(0, int(need))]
+
+
+def supply_step(member, vendor_rows, cap, kept=None, book=None):
     """(step or None, why not): a member short of food or drink walks to a
     friendly vendor in reach, sells its junk there and buys some with its own
-    gold (restsupply.py). `vendor_rows` are the food and drink sold in reach of
-    where it stands (bridge._SUPPLY_VENDOR_SQL)."""
+    gold (restsupply.py). Bags too full for the buys sell spare stacks too
+    (room_for_rations); with no room to be had, no walk. `vendor_rows` are the
+    food and drink sold in reach of where it stands
+    (bridge._SUPPLY_VENDOR_SQL)."""
     if member.map_id is None:
         return None, ""
     rows = friendly_vendor_rows(member, vendor_rows)
     if vendor_rows and not rows:
         return None, "no vendor in reach will sell %s food or drink" % member.name
     junk = junk_value(member, kept)
-    left = spendable(member, purse.FOOD, int(member.money) + junk)
+    spare, room = [], None
+    if member.free_slots is not None:
+        room = int(member.free_slots) + len(_junk(member, kept))
+        short = len(restsupply.wanted(member)) - room
+        spare = room_for_rations(member, kept, book, short)
+        room += len(spare)
+        if room <= 0:
+            return None, "%s has no room for food and nothing it may sell" % (
+                member.name
+            )
+    left = spendable(
+        member, purse.FOOD, int(member.money) + junk + vendorsale.worth(spare)
+    )
     buys, why = restsupply.plan(replace(member, money=left), rows, 0)
     if not buys:
         return None, why
+    if room is not None:
+        buys = buys[:room]
     # The walk names the item the chosen vendor is the nearest seller of, so
     # the module's nearest-stockist walk ends at that counter.
     nearest = {}
@@ -2528,6 +2587,15 @@ def supply_step(member, vendor_rows, cap, kept=None):
             rows=junk_sales(member, kept, restsupply.ACTION)
             + tuple(
                 guildcorps.Row(
+                    "sell",
+                    "guid:%d" % int(c.guid),
+                    "",
+                    source_for(restsupply.ACTION, member.name),
+                )
+                for c in spare
+            )
+            + tuple(
+                guildcorps.Row(
                     "buy", b.command, "", source_for(restsupply.ACTION, member.name)
                 )
                 for b in buys
@@ -2538,7 +2606,7 @@ def supply_step(member, vendor_rows, cap, kept=None):
                 "",
                 source_for(restsupply.ACTION, member.name),
             ),
-            sales=junk_notes(member, kept),
+            sales=junk_notes(member, kept) + sale_notes(spare),
         ),
         "",
     )
@@ -2653,7 +2721,7 @@ def pet_step(m, beasts, recent, cap, far=None):
     return step, said, ""
 
 
-def _supply_first(m, offer, recent, cap, kept=None):
+def _supply_first(m, offer, recent, cap, kept=None, book=None):
     """A member with no food or drink buys some before any other job but the
     class quest and the stood-still hearth: a member that cannot rest between
     fights dies in them (restsupply.py)."""
@@ -2661,7 +2729,7 @@ def _supply_first(m, offer, recent, cap, kept=None):
         return None, "", ""
     if not restsupply.wanted(m) or _cooling(m, restsupply.ACTION, recent):
         return None, "", ""
-    step, why = supply_step(m, offer, cap, kept)
+    step, why = supply_step(m, offer, cap, kept, book)
     if step is None:
         return None, "", why
     return step, step.said, ""
@@ -3431,6 +3499,7 @@ def plan(
     equip_room=None,
     mounts=None,
     loops=None,
+    bags=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -3442,6 +3511,7 @@ def plan(
     materials post still unopened in their mailbox (`without_unclaimed`);
     `banks` the guilds that own a guild bank tab, None when unread; `gear`
     name -> (gearup facts, vendor rows in reach) for gear-short members;
+    `bags` name -> a capacity-recovery step (guildbags), after class quests;
     `mail` name -> the mail commands (mailrun) waiting at its mailbox;
     `pvp` name -> (pvpgear.Aim, pvpgear.Move) for members playing PvP for an
     upgrade (#589); `leveling` the guildlevel.World a member who has outgrown
@@ -3536,6 +3606,7 @@ def plan(
             else None,
             _offer_for(mounts, m.name),
             _offer_for(loops, m.name),
+            _offer_for(bags, m.name),
         )
         asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
         helps += asked
@@ -3743,7 +3814,7 @@ def _upkeep_first(
     hungry = restsupply.empty(m)
     supply_note = ""
     if hungry:
-        step, doing, supply_note = _supply_first(m, supply, recent, cap, kept)
+        step, doing, supply_note = _supply_first(m, supply, recent, cap, kept, book)
         if step is not None:
             return (step, doing, quest_note, ""), supply_note, ""
     step = (
@@ -3764,7 +3835,7 @@ def _upkeep_first(
         return (step, step.said, quest_note, ""), supply_note, ""
     riding_note = _join(riding_note, weapon_note)
     if not hungry:
-        step, doing, supply_note = _supply_first(m, supply, recent, cap, kept)
+        step, doing, supply_note = _supply_first(m, supply, recent, cap, kept, book)
         if step is not None:
             return (step, doing, quest_note, ""), supply_note, ""
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
@@ -3809,6 +3880,15 @@ def _room_first(
     return None, note
 
 
+def _bag_first(member, recovery, recent, far):
+    """A due capacity step, reserving a far-walk slot only when one is needed."""
+    if recovery is None or _cooling(member, BAG_ACTION, recent):
+        return None
+    if recovery.far and far is not None and not far.take(member.name):
+        return None
+    return recovery.step
+
+
 def _member_step(
     m,
     offer,
@@ -3837,11 +3917,13 @@ def _member_step(
     equip_room=None,
     mount=None,
     loop=None,
+    bag=None,
 ):
     """A death loop's way out of its zone first (death_loop_first, #1464),
     then a class quest, then a hunter's first pet, then a hearth out of a
     spot it cannot leave, then room in the bags for an upgrade the world
-    cannot put on without it (_room_first, #1088), then food for a member
+    cannot put on without it (_room_first, #1088), then an owned or paid bag
+    for maintenance members short of space (guildbags), then food for a member
     with nothing to eat or drink,
     then a sale for bags that leave loot on the corpse (loot_room_short), then
     the inn, then riding, then a mount (`mount`, a mountbuy.Facts), then the
@@ -3906,6 +3988,9 @@ def _member_step(
     if found is not None:
         return found
     quest_note = _join(quest_note, room_note)
+    step = _bag_first(m, bag, recent, far)
+    if step is not None:
+        return step, step.said, quest_note, ""
     found, supply_note, gear_note = _upkeep_first(
         m,
         offer,
@@ -3927,11 +4012,19 @@ def _member_step(
     if step is not None:
         return step, step.said, supply_note, gear_note
     step, doing, held = _pvp_first(
-        m, pvp, recent, cap, kept, pet_due(m, pet, recent, cap, far)
+        m,
+        pvp,
+        recent,
+        cap,
+        kept,
+        pet_due(m, pet, recent, cap, far),
+        classes,
+        crafters,
+        master,
     )
     if step is not None or held:
         return step, doing, _join(supply_note, cap_note), gear_note
-    supply_note = _join(supply_note, cap_note)
+    supply_note = _join(supply_note, cap_note, doing)
     supply_note = _cohort_note(supply_note, pvp)
     step = _collect_first(m, mail, recent, cap)
     if step is not None:
@@ -5469,6 +5562,20 @@ def class_step(
     note = "; ".join(blocked)
     if move is None:
         return None, "", note
+    step, doing, note = _class_move_step(
+        m, move, note, book, recent, cap, hunts, now, far, kept, crafters, master
+    )
+    if step is not None:
+        # The move rides on the step so the bridge can set the step executor's
+        # orders beside the rows (steps.py, shadow mode).
+        step = replace(step, move=move)
+    return step, doing, note
+
+
+def _class_move_step(
+    m, move, note, book, recent, cap, hunts, now, far, kept, crafters, master
+):
+    """(step or None, what it does, note) for the move class_step chose."""
     first = _no_walk_step(m, move, book, recent, cap, kept, crafters, master)
     if first is not None:
         step, doing, why = first
@@ -5887,7 +5994,30 @@ def pvp_step(m, aim, move, cap, kept=None):
     return None
 
 
-def _pvp_first(m, pvp, recent, cap, kept=None, pet_wanted=False):
+def _pvp_room(m, aim, recent, cap, kept, book, crafters, master):
+    """(step, doing, held) for an honor buy with no bag slot (#1455): the
+    make-room step, or no step and the reason the walk waits as `doing`. The
+    member is never held for it: full bags with nothing to part with have no
+    timeout, so only the walk waits."""
+    if not m.alive:
+        return None, "", False
+    step, note = _buy_room(
+        m, pvpgear.ACTION, aim.item, recent, cap, kept, book, crafters, master
+    )
+    return step, (aim.line + ": " + step.said) if step else note, False
+
+
+def _pvp_first(
+    m,
+    pvp,
+    recent,
+    cap,
+    kept=None,
+    pet_wanted=False,
+    book=None,
+    crafters=None,
+    master="",
+):
     """(step, doing, held): a member playing PvP for an upgrade.
 
     A hunter with a pet walk due (`pet_wanted`, pet_due) queues for no
@@ -5901,7 +6031,10 @@ def _pvp_first(m, pvp, recent, cap, kept=None, pet_wanted=False):
     a leave queues nobody and the member goes about its ordinary job. A queue or a buy whose last row failed inside the
     PvP cooldown waits it out doing its ordinary job, and so does a buy whose
     walks to the vendor failed, for pvp_walk_cooldown. A bought item still in
-    the bags is the equip drive's, and the member goes about its job.
+    the bags is the equip drive's, and the member goes about its job. A buy
+    with no bag slot for the item (buy_room_short) makes room first; with no
+    room step it returns no step, not held, and `doing` the reason, which
+    _member_step keeps as a note while the member goes about its job.
     """
     if not pvp or not m.eligible or not m.online:
         return None, "", False
@@ -5916,6 +6049,8 @@ def _pvp_first(m, pvp, recent, cap, kept=None, pet_wanted=False):
         return None, "", False
     if move.kind == pvpgear.BUY and _pvp_walk_cooling(m.name, recent):
         return None, "", False
+    if move.kind == pvpgear.BUY and buy_room_short(m, pvpgear.ACTION, recent):
+        return _pvp_room(m, aim, recent, cap, kept, book, crafters, master)
     step = pvp_step(m, aim, move, cap, kept)
     return step, (aim.line + ": " + move.said) if step else "", move.holds
 

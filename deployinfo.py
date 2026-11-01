@@ -7,9 +7,13 @@ workflow); the deploy may also pass OVERSEER_PREVIOUS_COMMIT and
 OVERSEER_SHIP_PR. Anything unset reads "unknown" (tests, local runs), never an
 error.
 
-The bridge logs startup_line() once at start. /api/realm reports info() as
-`deploy`; `starting` is true for STARTING_SECONDS after the process begins, so
-the dashboard can say "restarting" while a rollout settles.
+The bridge logs startup_line() once at start. The site is a separate process
+that can outlive a bridge crash, so the bridge renews a memo row carrying its
+own start time every BEAT_SECONDS, and /api/realm reports info(started) from
+that row as `deploy`. `starting` is true for STARTING_SECONDS after the bridge
+begins, so the dashboard can say "restarting" while a rollout settles. A bridge
+that stops renewing loses the row after KEEP_SECONDS, and then the uptime is
+null rather than a count over a dead process.
 """
 
 from __future__ import annotations
@@ -21,7 +25,17 @@ UNKNOWN = "unknown"
 STARTING_SECONDS = 90
 SHA_LEN = 12
 
-_started = time.time()
+# The bridge's row in its memo store (overseer_bridge_memo); `since` is its start.
+MEMO_KIND = "deploy"
+MEMO_SUBJECT = "bridge"
+BEAT_SECONDS = 30
+KEEP_SECONDS = 3 * BEAT_SECONDS
+BRIDGE_READ_SQL = (
+    "SELECT since FROM overseer_bridge_memo "
+    "WHERE kind = %s AND subject = %s AND expires > UNIX_TIMESTAMP()"
+)
+
+PROCESS_STARTED = time.time()
 
 
 def _env(name: str) -> str:
@@ -47,14 +61,17 @@ def startup_line() -> str:
     )
 
 
-def info(now: float | None = None) -> dict:
-    up = max(0, int((time.time() if now is None else now) - _started))
+def info(started: float | None, now: float | None = None) -> dict:
+    """The `deploy` field for a bridge that began at `started`, None if unknown."""
+    up = None
+    if started is not None:
+        up = max(0, int((time.time() if now is None else now) - started))
     return {
         "commit": _sha("OVERSEER_COMMIT"),
         "previous": _sha("OVERSEER_PREVIOUS_COMMIT"),
         "built": _env("OVERSEER_BUILT"),
         "ship_pr": _pr(),
-        "started_at": int(_started),
+        "started_at": None if started is None else int(started),
         "uptime_seconds": up,
-        "starting": up < STARTING_SECONDS,
+        "starting": up is not None and up < STARTING_SECONDS,
     }

@@ -112,6 +112,19 @@ channel is PAUSED and its seed releases are stale (it needs a GitHub App, infra#
 the steps above by hand. `tools/realm_roller.py validate` and `dry-run` are read-only and safe to run: dry-run
 prints the gates it sees and what it would do. Turning the roller on is an operator decision.
 
+### 1c. Addon ship (the stream clients' in-game panels)
+
+`wow-addons/` is not in any image, so neither ship above carries it. Merging changes nothing on a stream.
+
+1. Copy each changed file from the merged main to the client container, into `base`, and into each streamed
+   character's folder under `/opt/wow/<Name>/Interface/AddOns/`. Those folders are hard links into `base`, so
+   overwrite an existing file in place (`cat new > old`), which keeps the links, and link a new one with `ln`.
+2. Restart each client: `systemctl restart wow-session@<Name>`. A file added to the `.toc` needs a restart
+   because a client reads the addon list when it launches. The character stays in the world and its stream
+   comes back with the session, in about two minutes. Nothing here touches a campaign.
+3. Prove it with a frame from the stream: `ffmpeg -rtsp_transport tcp -i rtsp://127.0.0.1:8554/dev<name>
+   -frames:v 1 out.jpg` inside the container, while the character does what the panel reports.
+
 ## 2. Before any ship
 
 ### No window (operator ruling, 2026-10-20)

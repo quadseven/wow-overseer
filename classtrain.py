@@ -39,6 +39,7 @@ import classcasts
 import classic
 import dungeonplan
 import guildroute
+import racespells
 
 LOG_PREFIX = "guild training:"
 # The command log's source for a class trainer walk: `guildtrain:<member>`.
@@ -71,7 +72,13 @@ def _needs(row) -> list:
     return [_int(row.get(k)) for k in ("req1", "req2", "req3") if _int(row.get(k))]
 
 
-def spell_state(row, known, level, cap) -> str:
+PROFICIENCY_SPELLS = {
+    750: 293,  # Plate Mail
+    8737: 413,  # Mail
+}
+
+
+def spell_state(row, known, level, cap, skills=None) -> str:
     """'learned', 'trainable', 'needs', 'above' or '' (past the level cap).
 
     `row` is one class trainer spell: its id, the level it asks and the spells
@@ -79,7 +86,9 @@ def spell_state(row, known, level, cap) -> str:
     reached, and every spell it requires is known.
     """
     spell = _int(row["spell"])
-    if spell in known:
+    if spell in known or PROFICIENCY_SPELLS.get(spell) in {
+        _int(k) for k in skills or ()
+    }:
         return "learned"
     asks = _int(row.get("level"))
     if asks > level:
@@ -102,7 +111,15 @@ class Due:
         return self.count > 0 and _int(money) >= self.cheapest
 
 
-def due(trainer_rows, known, level, class_id=None) -> Due:
+def due(
+    trainer_rows,
+    known,
+    level,
+    class_id=None,
+    race_id=None,
+    own_class=None,
+    skills=None,
+) -> Due:
     """The class spells one trainer visit can teach, and what they cost.
 
     A visit teaches in dependency order, so a spell counts not only when
@@ -112,11 +129,21 @@ def due(trainer_rows, known, level, class_id=None) -> Due:
     the next rank. A spell above the member's level, or one requiring a
     spell no row in the chain teaches (a talent), stays out.
 
+    With `race_id` and `own_class` (the member's race and class), a spell
+    the member's race can never learn is left out (racespells.py, #792):
+    the core refuses it, so counting it walked the member to a trainer that
+    would not teach it.
+
     With `class_id`, only the spells a member of that class casts or holds
     passively (classcasts.py): what the member's purchase order saves for
     first (purse.py, #771).
     """
     known = {_int(k) for k in known or ()}
+    known.update(
+        spell
+        for spell, skill in PROFICIENCY_SPELLS.items()
+        if skill in {_int(k) for k in skills or ()}
+    )
     level = _int(level)
     pending = [
         row
@@ -124,6 +151,7 @@ def due(trainer_rows, known, level, class_id=None) -> Due:
         if _int(row["spell"]) not in known
         and _int(row.get("level")) <= level
         and (class_id is None or classcasts.casts(class_id, row["spell"]))
+        and (race_id is None or racespells.fits(row["spell"], race_id, own_class))
     ]
     costs = []
     taught = set(known)

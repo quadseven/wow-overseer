@@ -34,6 +34,7 @@ import achievements
 import armory
 import auction
 import bag_market
+import guildbags
 import bag_pressure
 import bag_upgrade
 import bank
@@ -70,7 +71,7 @@ import classtrain
 import classparty
 import classhunt
 import classquest
-import steps as classquest_steps  # noqa: F401
+import steps as classquest_steps
 import classuse
 import guildbank
 import guildfund
@@ -143,7 +144,9 @@ import priorities
 import professions
 import protect
 import questbook
+import questcatalogue
 import questledger
+import questtickets
 import questers
 import questshare
 import quests
@@ -831,7 +834,7 @@ LEVEL_ASK_SECONDS = float(os.environ.get("LEVEL_ASK_SECONDS", "1800"))
 # A zone quest aimed this long without being handed in is put aside for
 # LEVEL_SKIP_SECONDS: mod-overseer releases an aim that never lands after its
 # own half-hour backstop, and re-aiming it at once would pin the family to it.
-LEVEL_AIM_SECONDS = 1800.0
+LEVEL_AIM_SECONDS = goals.QUEST_HOLD_SECONDS
 LEVEL_SKIP_SECONDS = 7200.0
 
 # The bag pass's name in the town slot (#206), and the pass that owns the
@@ -2913,6 +2916,11 @@ def _note_vendor_sellable(names, sellable: dict) -> None:
         _VENDOR_SELLABLE[str(name)] = int((sellable or {}).get(name, 0))
 
 
+def _vendor_sale_counts(names) -> dict[str, int | None]:
+    """Latest sale counts for this family; an unread member remains unknown."""
+    return {name: _VENDOR_SELLABLE.get(name) for name in names}
+
+
 def _bag_hold_reads(names: list, leader: str) -> tuple:
     """The members present, their free slots and the leader's travel column,
     read together in one worker thread for the dungeon-quest bag hold (#1243).
@@ -3037,6 +3045,12 @@ def _memo_upsert(kind: str, subject: str, value, since: float, expires: float) -
                         (kind, subject, json.dumps(value), since, expires))
     except pymysql.err.MySQLError:
         log.exception("bridge memo: could not write %s memo for %s", kind, subject)
+
+
+def _deploy_beat() -> None:
+    """Renew this process's start time for the site's marker (deployinfo.py)."""
+    _memo_upsert(deployinfo.MEMO_KIND, deployinfo.MEMO_SUBJECT, {},
+                 deployinfo.PROCESS_STARTED, time.time() + deployinfo.KEEP_SECONDS)
 
 
 def _memo_read(kind: str) -> dict:
@@ -3919,6 +3933,7 @@ def _ensure_quest_ledger_store() -> None:
     try:
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(questledger.TABLE_SQL)
+            questtickets.ensure_column(cur)
         _quest_ledger_ready = True
     except pymysql.err.MySQLError:
         log.exception("quest ledger: overseer_quest_ledger unavailable; each "
@@ -3933,6 +3948,7 @@ def _record_quests() -> int:
     with _connect() as conn, conn.cursor() as cur:
         if not _quest_ledger_ready:
             cur.execute(questledger.TABLE_SQL)
+            questtickets.ensure_column(cur)
             _quest_ledger_ready = True
         cur.execute(questledger.CHARACTERS_SQL.format(
             holes=questledger.holes(len(names))), tuple(names))
@@ -3952,6 +3968,23 @@ def _record_quests() -> int:
         if written:
             cur.executemany(questledger.WRITE_SQL, [e.args() for e in written])
     return len(written)
+
+
+def _file_quest_tickets(client) -> dict:
+    """One filing pass (questtickets.py) on one connection."""
+    with _connect() as conn, conn.cursor() as cur:
+        questtickets.ensure_column(cur)
+
+        def read(sql):
+            cur.execute(sql)
+            return cur.fetchall()
+
+        return questtickets.run(
+            questtickets.SqlStore(cur),
+            client,
+            questcatalogue.load(read),
+            os.environ.get("QUEST_SITE_URL", ""),
+        )
 
 
 # --- the Watcher (director.py) -------------------------------------------
@@ -4883,8 +4916,13 @@ def _stall_reads(names: list) -> dict:
         return _stuck_doors(cur, names)
 
 
-def _silent_dungeon_run(names: list) -> dict | None:
-    """The active dungeon run with its age since actual progress evidence.
+def _silent_seconds(head_id: int, names: list) -> int | None:
+    """Seconds this family's active queue head has gone with no progress.
+
+    The clock runs from the head's start or the family's newest quest, level,
+    equip, or boss event, whichever is later. A run opening does not reset it,
+    and it needs no run row: dungeonstall's WHY IT IS THE HEAD'S CLOCK says why.
+    None when the realm cannot answer.
 
     The COLLATE sits on each bound name, never on `e.character_name`
     (wow-overseer#1513). overseer_event is utf8mb4_unicode_ci; collating the
@@ -4896,28 +4934,37 @@ def _silent_dungeon_run(names: list) -> dict | None:
     holes = dungeonstall.holes(len(names))
     more_names = ", %s COLLATE utf8mb4_unicode_ci" * (len(names) - 1)
     sql = (
-        "SELECT r.id, r.map_id, r.portal_keyword, "
-        "TIMESTAMPDIFF(SECOND, GREATEST(r.started_at, "
+        "SELECT TIMESTAMPDIFF(SECOND, GREATEST(COALESCE(q.started_at, q.created_at), "
         "COALESCE((SELECT MAX(e.last_seen) FROM overseer_event e "
         "WHERE e.character_name IN (%s COLLATE utf8mb4_unicode_ci{more_names}) "
         "AND e.kind IN "
         "('quest_accept', 'quest_complete', 'quest_reward', 'level_up', "
-        "'item_equip', 'unlearn')), r.started_at), "
-        "COALESCE((SELECT MAX(re.created_at) "
-        "FROM overseer_dungeon_run_event re WHERE re.run_id = r.id "
-        "AND re.kind = 'boss'), r.started_at)), NOW()) AS silent_seconds "
-        "FROM overseer_dungeon_run r WHERE r.state = 'active' "
-        "AND r.leader_name IN ({holes}) ORDER BY r.id DESC LIMIT 1"
+        "'item_equip', 'unlearn')), q.created_at), "
+        "COALESCE((SELECT MAX(re.created_at) FROM overseer_dungeon_run r "
+        "JOIN overseer_dungeon_run_event re ON re.run_id = r.id "
+        "WHERE r.leader_name IN ({holes}) "
+        "AND r.started_at >= COALESCE(q.started_at, q.created_at) "
+        "AND re.kind = 'boss'), q.created_at)), NOW()) AS silent_seconds "
+        "FROM overseer_dungeon_queue q WHERE q.id = %s"
     ).format(holes=holes, more_names=more_names)
     with _connect() as conn, conn.cursor() as cur:
-        try:
-            cur.execute(sql, tuple(names) + tuple(names))
-            rows = cur.fetchall()
-        except pymysql.err.MySQLError as exc:
-            if exc.args and exc.args[0] in (1054, 1146):
-                return None
-            raise
-    return dict(rows[0]) if rows else None
+        rows = _planner_rows(cur, sql, tuple(names) + tuple(names) + (head_id,),
+                             "the family's silence on its dungeon job")
+    return rows[0]["silent_seconds"] if rows else None
+
+
+def _silent_stall(head: dict, names: list):
+    """The Stuck for a family silent on the dungeon job `head` holds, or None.
+
+    Only a started head on a family still on a dungeon job: a hold that took
+    the job away (town first, the bag hold) has said why it did.
+    """
+    if head.get("status") != campaignqueue.ACTIVE:
+        return None
+    if not any(jobs.is_dungeon_job(job) for job in _jobs_of(names).values()):
+        return None
+    seconds = _silent_seconds(int(head["id"]), names)
+    return dungeonstall.silent_run(str(head.get("keyword") or ""), seconds)
 
 
 def _stall_held(key: str, door: str) -> dict | None:
@@ -7078,6 +7125,7 @@ class _Pass:
 # forever, burying the lines that matter. _poll_outcomes is harmless headless:
 # its _pending map is filled by on_message, which never fires.
 PASSES = (
+    _Pass("_deploy_beat_loop"),
     _Pass("_poll_outcomes"),
     _Pass("_protect_characters"),
     _Pass("_narrate_events"),
@@ -7134,7 +7182,31 @@ PASSES = (
     _Pass("_now_loop"),
     _Pass("_watch_loop"),
     _Pass("_quest_ledger_loop"),
+    _Pass("_quest_tickets_loop"),
 )
+
+
+_SHADOW_FAILED = False
+
+
+def _shadow_class_step(step) -> None:
+    """Log the class quest step executor's comparison for a step about to run
+    (steps.py, quadseven/wow-overseer#739). It sends nothing to the realm and
+    reads nothing: the move rode in on the step. A failure here is logged once
+    and never reaches the real pass."""
+    global _SHADOW_FAILED
+    move = getattr(step, "move", None)
+    if move is None or step.action != classquest.ACTION:
+        return
+    try:
+        if classquest_steps.mode() != classquest_steps.SHADOW:
+            return
+        log.info("%s", classquest_steps.shadow_line(move, step.rows))
+    except Exception:
+        if not _SHADOW_FAILED:
+            _SHADOW_FAILED = True
+            log.exception("classquest executor: the shadow comparison failed; "
+                          "the real class quest pass is not affected")
 
 
 class Bridge(discord.Client):
@@ -7739,7 +7811,8 @@ class Bridge(discord.Client):
         Either end of the conversation being in the run is enough; the party
         chat window is the same window whoever is standing where.
         """
-        run = await asyncio.to_thread(_active_dungeon_run)
+        run = await asyncio.to_thread(
+            _active_dungeon_run, [ask.crafter, ask.asker])
         if not run:
             return False
         roster_jobs = await asyncio.to_thread(_roster_jobs)
@@ -11315,7 +11388,7 @@ class Bridge(discord.Client):
                  cohort.key, given, len(material_plan.grants))
 
     async def _hand_bags_once(self, names: list) -> None:
-        """Give every idle bag to whoever has an empty bag position.
+        """Give idle bags to empty positions, then to siblings they upgrade.
 
         Measured on the dev family: four of five had no free bag position
         while carrying spare bags as cargo, and the fifth had an empty
@@ -11347,9 +11420,7 @@ class Bridge(discord.Client):
         # carried from the next save on, where the hand-over below or the
         # vendor pass's `bag_candidates` takes it.
         own = await self._equip_own_bags(members)
-        moves = bag_upgrade.plan_family_bags(
-            bag_upgrade.without_bags(members, own)
-        )
+        moves = bag_upgrade.plan_family_bags(members, reserved=own)
         if not moves:
             log.info("bags: nothing to hand over")
             return
@@ -11406,7 +11477,7 @@ class Bridge(discord.Client):
         Fresh member snapshots keep every pass from treating that gap as an
         invitation to change jobs mid-run.
         """
-        run = await asyncio.to_thread(_active_dungeon_run)
+        run = await asyncio.to_thread(_active_dungeon_run, names)
         live_maps = await asyncio.to_thread(_fetch_live_maps, names)
         dungeon_maps = set(dungeonpath.PORTAL_MAPS.values()) | {
             raidrun.MOLTEN_CORE_MAP
@@ -12179,6 +12250,7 @@ class Bridge(discord.Client):
         step = bag_pressure.vendor_errand_step(
             bool(leader_town.vendor), outstanding,
             pressure=pressure,
+            sale_counts=_vendor_sale_counts(names),
         )
         if (step == bag_pressure.VENDOR_ERRAND_HOLD
                 and outstanding == 0
@@ -12417,7 +12489,7 @@ class Bridge(discord.Client):
                 in (await asyncio.to_thread(_standing_travel_aims)).items()
                 if name in names}
         if run_doors:
-            run = await asyncio.to_thread(_active_dungeon_run)
+            run = await asyncio.to_thread(_active_dungeon_run, names)
             doors = await asyncio.to_thread(
                 _dungeon_doors, (run or {}).get("map_id"))
             if not doors:
@@ -12783,7 +12855,10 @@ class Bridge(discord.Client):
         # no other. A late, absent or unsure answer changes nothing. With
         # every kind in shadow nothing waits at all.
         jev_plan = await self._jev_items_plan(jev_rows, worn, names)
-        await self._hand_gear(gear_rows, worn, names, jev_plan)
+        await self._hand_gear(
+            gear_rows, worn, names, jev_plan,
+            freeables=bag_pressure.freeable_greys(rows, OWNER_KEEPS),
+        )
         # AND WHAT THE HOLDER WOULD WEAR IS PUT ON (#146). The same two reads,
         # the same opinion (`gear.claimant` naming the holder), and like the
         # hand-off it needs no vendor, leader or counter, so it runs above the
@@ -13064,7 +13139,7 @@ class Bridge(discord.Client):
         )
 
     async def _hand_gear(self, gear_rows: list, worn: list, names: list,
-                         jev_plan=None) -> None:
+                         jev_plan=None, freeables=None) -> None:
         """Move every carried piece that suits a sibling better (infra#3464).
 
         THE VERB FOLLOWS WHERE THE TWO OF THEM ARE STANDING. It was always
@@ -13090,6 +13165,13 @@ class Bridge(discord.Client):
         `gear.is_upgrade_for` refuses a soulbound item outright, so a piece
         that cannot legally reach a sibling never becomes a grant, and both
         DoTrade and DoGive refuse one again on their own side.
+
+        A FULL TAKER BESIDE THE GIVER GIVES A JUNK STACK FIRST (#550).
+        `freeables` is the pass's own vendor read (`freeable_greys`), and
+        `gear.deliverable` attaches the make-room step to the grant. The
+        frees are written before the grants, so DoGive has moved the stack
+        out before a trade row can be refused for room. This is the shield
+        that stayed with Grog because Erg's bags were at zero.
         """
         # Both facts are read here rather than passed down from _vendor_once,
         # because this pass is reached on cycles that return before the
@@ -13102,7 +13184,7 @@ class Bridge(discord.Client):
         plan = bag_pressure.family_gifts(
             gear_rows, worn, names, keep_names=OWNER_KEEPS,
             position_rows=positions, free_slots=free_slots,
-            at_mailbox=at_mailbox,
+            at_mailbox=at_mailbox, freeables=freeables,
         )
         # A piece Jev acted on stays with its holder (#95): it is being put
         # on, or Jev judged it one to keep. Each one becomes a note.
@@ -13120,8 +13202,26 @@ class Bridge(discord.Client):
             )
             return
         seen = await asyncio.to_thread(_recent_trade_keys, GIVE_RETRY_MINUTES)
+        # The make-room steps go first. Each is a DoGive of the taker's own
+        # junk to the giver, so the trade that follows has the slot it needs;
+        # writing the hand-off first would queue the same doomed row the bag
+        # floor refused on main. If a step cannot be written - reserved by
+        # the owner, or the world lacks the migration - the hand-off waits
+        # with it instead of taking a slot that was never made.
+        freed = 0
         fresh = []
         for grant in plan.grants:
+            ready = True
+            for free in grant.frees:
+                if (free.holder, free.taker, free.command) in seen:
+                    continue
+                if await asyncio.to_thread(_insert_gear_handoff, free):
+                    freed += 1
+                    log.info("gear: %s", free.said)
+                else:
+                    ready = False
+            if not ready:
+                continue
             if (grant.holder, grant.taker, grant.command) in seen:
                 continue
             if await asyncio.to_thread(_insert_gear_handoff, grant):
@@ -13131,11 +13231,11 @@ class Bridge(discord.Client):
                      grant.taker, grant.verb, grant.name, grant.reason)
         log.info(
             "gear: queued %d/%d hand-off(s) (%d trade, %d give), "
-            "%d held back, %d already queued",
+            "%d make-room step(s), %d held back, %d already queued",
             len(fresh), decided,
             sum(1 for g in fresh if g.verb == "trade"),
             sum(1 for g in fresh if g.verb == "give"),
-            len(plan.notes), len(plan.grants) - len(fresh),
+            freed, len(plan.notes), len(plan.grants) - len(fresh),
         )
 
     async def _equip_upgrades(self, gear_rows: list, worn: list,
@@ -14332,7 +14432,8 @@ class Bridge(discord.Client):
         purchase is a kind='buy' town-trip row (DoBuy pays the vendor), and it
         is written only for a character whose OWN vendors in reach stock the
         bag, because DoBuy refuses on the buyer's range. Right behind it goes
-        one kind='bot' `e` row that puts the new bag into the empty position.
+        one kind='bot' `e` row for a worn position. A bought bank position
+        instead leaves its new bag as cargo for `_bank_bag_slots`.
         No travel aim is written here; `_aim_at_bag_vendor` owns that (#206).
 
         Returns the BagBuyers who want a bag and whose own reach stocks none,
@@ -14340,24 +14441,35 @@ class Bridge(discord.Client):
         """
         members = bag_upgrade.members_from_rows(
             await asyncio.to_thread(_fetch_bag_state, names), names)
+        open_positions = bag_pressure.open_bag_positions(members)
+        bank_needs = {n.name: n for n in bankbags.supply_needs(
+            await asyncio.to_thread(_fetch_bank_bag_facts, names))
+            if open_positions.get(n.name, 0) == 0}
         try:
-            await self._vendor_bag_upgrades(members, auction_too, held=held)
+            # One purchase per member: fill bought bank space before another
+            # worn-bag upgrade can spend the same purse and landing slot.
+            await self._vendor_bag_upgrades(
+                [m for m in members if m.name not in bank_needs], auction_too, held=held)
         except Exception:
             log.exception("bag upgrade: vendor half failed; retrying next cycle")
-        open_positions = bag_pressure.open_bag_positions(members)
+        open_positions.update({name: 1 for name in bank_needs})
         wanting = sorted(name for name, n in open_positions.items() if n > 0)
         if not wanting:
-            log.info("bags: nobody in %s has an empty bag position the "
+            log.info("bags: nobody in %s has an empty worn or bank bag position the "
                      "family's own spare bags will not fill", names)
             return ()
         everyone, at_vendor = await asyncio.to_thread(
             _bag_buyers, wanting, open_positions)
+        everyone = [dataclasses.replace(
+            b, bank=True, max_slots=bank_needs[b.name].max_slots,
+            excluded_entries=bank_needs[b.name].excluded_entries)
+            if b.name in bank_needs else b for b in everyone]
         buyers = [b for b in everyone if b.name in at_vendor]
         stocked = sorted({entry for b in buyers for entry in b.stocks})
         offers = (await asyncio.to_thread(_fetch_bag_offers, stocked)
                   if stocked else [])
-        bagged = {offer.entry for offer in offers}
-        needy = tuple(b for b in everyone if not (b.stocks & bagged))
+        needy = tuple(b for b in everyone if not any(
+            o.entry in b.stocks and bag_pressure.bag_offer_fits(b, o) for o in offers))
         if not buyers:
             log.info("bags: %d want a bag (%s) and none is at a vendor",
                      len(wanting), ", ".join(wanting))
@@ -14381,7 +14493,8 @@ class Bridge(discord.Client):
             if not await asyncio.to_thread(_insert_town_errand, errand):
                 continue
             bought += 1
-            await asyncio.to_thread(_insert_bag_equip, purchase)
+            if not purchase.bank:
+                await asyncio.to_thread(_insert_bag_equip, purchase)
             log.info("bags: %s buys %s (%d slots) for up to %d copper - %s",
                      purchase.buyer, purchase.name, purchase.slots,
                      purchase.price, purchase.why)
@@ -16012,7 +16125,8 @@ class Bridge(discord.Client):
             self._dues_walks, now, guildroute.GUILD_STEP_SECONDS)
         posted = await asyncio.to_thread(_dues_recent_holders)
         busy = set(getattr(self, "_guild_run_names", ())) | (set(self._dues_walks)
-                | set(self._guild_mail_runs) | set(getattr(self, "_train_walks", ())))
+                | set(self._guild_mail_runs) | set(getattr(self, "_job_steps", ()))
+                | set(getattr(self, "_train_walks", ())))
         # NATURALLY EARNED ONLY (the operator, 2026-09-24): a member posts dues
         # only once it has been reset to level 1; natural.py has the rule.
         eligible = await asyncio.to_thread(
@@ -16151,7 +16265,8 @@ class Bridge(discord.Client):
         receivers = sorted({x.receiver for x in letters})
         free_slots = await asyncio.to_thread(_fetch_free_slots, receivers)
         busy = set(getattr(self, "_guild_run_names", ())) | (set(self._crafter_walks) | set(self._guild_mail_runs)
-                | set(self._dues_walks) | set(getattr(self, "_train_walks", ())))
+                | set(self._dues_walks) | set(getattr(self, "_job_steps", ()))
+                | set(getattr(self, "_train_walks", ())))
         plan, notes = crafters.visits(letters, designated, known,
                                       frozenset(busy), free_slots)
         notes += await self._start_crafter_walks(plan, names, now)
@@ -16248,6 +16363,16 @@ class Bridge(discord.Client):
                 return status, str((row or {}).get("detail") or "")
         return "", ""
 
+    async def _deploy_beat_loop(self) -> None:
+        """The start time the site reads for its deploy marker, kept fresh."""
+        await self.wait_until_ready()
+        while not self.is_closed():
+            try:
+                await asyncio.to_thread(_deploy_beat)
+            except Exception:
+                log.exception("deploy beat failed; retrying next cycle")
+            await asyncio.sleep(deployinfo.BEAT_SECONDS)
+
     async def _guild_post_loop(self) -> None:
         """The guild's own post (#625), on its own clock."""
         await self.wait_until_ready()
@@ -16296,6 +16421,7 @@ class Bridge(discord.Client):
         busy = (set(getattr(self, "_guild_run_names", ())) | set(self._post_walks)
                 | set(self._crafter_walks) | set(self._guild_mail_runs)
                 | set(self._dues_walks) | set(self._corps_steps)
+                | set(getattr(self, "_job_steps", ()))
                 | set(getattr(self, "_train_walks", ())))
         sitting = await asyncio.to_thread(_sitting_out_to_walk, names)
         plan, notes = guildpost.visits(letters, online, busy, free_slots, roster,
@@ -16578,6 +16704,7 @@ class Bridge(discord.Client):
         # step's cooldown.
         busy = set(getattr(self, "_guild_run_names", ())) | (set(self._corps_steps) | set(self._dues_walks)
                 | set(self._guild_mail_runs) | set(self._crafter_walks)
+                | set(getattr(self, "_job_steps", ()))
                 | set(getattr(self, "_train_walks", ())))
         cap = self._guild_walk_cap()
         near = await self._corps_mailbox_yards(members, names, busy, now)
@@ -17042,6 +17169,8 @@ class Bridge(discord.Client):
         gear = await self._job_gear_offers(members, facts["recent"])
         # Food and drink for a member with none (restsupply.py).
         supply = await self._job_supply_offers(members, facts["recent"])
+        bags = (await self._job_bag_steps(members, facts["recent"], busy, cap)
+                if spawn_walks else {})
         # A hunter's first pet (hunterpet.py): the beasts around each hunter
         # that knows Tame Beast and has none.
         pets = await self._job_pet_offers(members, facts["recent"])
@@ -17072,6 +17201,7 @@ class Bridge(discord.Client):
             gear=gear, supply=supply, pets=pets, mail=mail, pvp=pvp,
             weapons=weapons,
             mounts=mounts,
+            bags=bags,
             leveling=leveling,
             focus=focus,
             # The class quest is a spawn walk and a quest row (classquest.py).
@@ -17238,6 +17368,25 @@ class Bridge(discord.Client):
                 _fetch_gear_vendors, by_name[name], guildjobs.GUILD_GEAR_VENDOR_YARDS))
         return offers
 
+    async def _job_bag_steps(self, members, recent, busy, cap) -> dict:
+        wanted = [m for m in members
+                  if m.name not in busy and guildbags.eligible(m, recent)]
+        chosen, self._bag_read_offset = guildjobs.rotate_reads(
+            [m.name for m in wanted], getattr(self, "_bag_read_offset", 0),
+            GUILD_SUPPLY_READS_PER_PASS)
+        if not chosen:
+            return {}
+        members = [m for m in wanted if m.name in chosen]
+        containers = bag_upgrade.members_from_rows(
+            await asyncio.to_thread(_fetch_bag_state, chosen), chosen)
+        vendors = {}
+        for member in members:
+            vendors[member.name] = bag_pressure.bag_vendors_from_rows(
+                await asyncio.to_thread(_fetch_bag_vendors, member, cap))
+        steps, notes = guildbags.plan(members, containers, vendors, cap)
+        _log_capped("guild bags", notes)
+        return steps
+
     async def _job_supply_offers(self, members, recent) -> dict:
         """name -> the food and drink sold in reach, for members short of them
         (restsupply.wanted): online, alive, out of combat, placed and off the
@@ -17362,6 +17511,7 @@ class Bridge(discord.Client):
             if (step.action == "sell" or vendor_walk) and not sale_walks:
                 continue
             self._job_steps[step.holder] = now
+            _shadow_class_step(step)
             task = asyncio.create_task(self._run_job_step(step, cap))
             self._mail_walk_tasks.add(task)
             task.add_done_callback(self._mail_walk_task_done)
@@ -20190,6 +20340,9 @@ class Bridge(discord.Client):
         parsed = goals.parse_goal(d.text)
         if parsed is None:
             return False
+        if isinstance(parsed, goals.GuildGoal):
+            await self._take_guild_goal(d, parsed, channel)
+            return True
         if isinstance(parsed, goals.CancelGoal):
             cancelled = await asyncio.to_thread(_cancel_goals, d.target_name)
             await _note_order(
@@ -20210,12 +20363,27 @@ class Bridge(discord.Client):
         log.info("goal %s persisted for %s: %s", row_id, d.target_name, goals.describe(parsed))
         return True
 
+    async def _take_guild_goal(self, d: core.NLDirective, parsed, channel) -> None:
+        """Queue a guild goal, or say why there is nothing to queue."""
+        row_id, goal = await asyncio.to_thread(
+            _queue_guild_goal, d.target_name, parsed, str(channel.id)
+        )
+        await _note_order(
+            orderrecord.GOAL, d.source, channel,
+            orderrecord.ids("overseer_goal", [row_id]) if row_id else ())
+        if not row_id:
+            await channel.send(goals.guild_refusal_text(d.target_name, goal))
+            return
+        await channel.send(goals.ack_text(d.target_name, goal))
+        log.info("goal %s queued for %s", row_id, goals.describe(goal))
+
     async def _supervise_goals(self) -> None:
         """Reconcile every active goal once a minute; decisions in goals.py."""
         await self.wait_until_ready()
         while not self.is_closed():
             await asyncio.sleep(GOAL_INTERVAL)
             try:
+                await asyncio.to_thread(_admit_queued_goals)
                 rows = await asyncio.to_thread(_fetch_active_goals)
             except Exception:
                 # A database restart must never kill the supervisor; the
@@ -20323,6 +20491,7 @@ class Bridge(discord.Client):
             goals.Report: self._goal_report,
             goals.RecordProgress: self._goal_record,
             goals.MarkComplete: self._goal_complete,
+            goals.ReleaseGoal: self._goal_release,
         }
         handler = handlers.get(type(action))
         if handler is None:
@@ -21109,8 +21278,7 @@ class Bridge(discord.Client):
             return False
         names = list(fam["names"])
         stuck = await asyncio.to_thread(_stall_reads, names)
-        silent = await asyncio.to_thread(_silent_dungeon_run, names)
-        silent_stall = dungeonstall.silent_run(silent)
+        silent_stall = await asyncio.to_thread(_silent_stall, rows[0], names)
         if silent_stall is not None:
             stuck[silent_stall.door] = silent_stall
         leave = dungeonstall.leave(rows, stuck)
@@ -22686,6 +22854,10 @@ class Bridge(discord.Client):
     async def _goal_complete(self, row: dict, action) -> None:
         await asyncio.to_thread(_complete_goal, action.goal_id)
 
+    async def _goal_release(self, row: dict, action) -> None:
+        await asyncio.to_thread(_release_goal, action.goal_id)
+        log.warning("goal %s released: %s", action.goal_id, action.reason)
+
     async def _gather_destination(self, cohort=None):
         """Where the family should go to gather, or a Choice saying why not.
 
@@ -23113,6 +23285,29 @@ class Bridge(discord.Client):
                     log.info("quest ledger: %d quest row(s) moved", written)
             except Exception:
                 log.exception("quest ledger: pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _quest_tickets_loop(self) -> None:
+        """File one issue per newly broken quest, daily (questtickets.py)."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("QUEST_TICKET_SECONDS", "86400"))
+        client = questtickets.client_from_env(log)
+        if client is None:
+            log.info("quest tickets: no GitHub App is configured, so no issue is filed")
+            return
+        await asyncio.sleep(min(cycle, 300.0))
+        while not self.is_closed():
+            try:
+                done = await asyncio.to_thread(_file_quest_tickets, client)
+                log.info("quest tickets: %s", done)
+                if done["stuck"]:
+                    log.error("quest tickets: a filing never finished for quests %s; "
+                              "check for an issue, then set their ticket", done["stuck"])
+                if done["unlinked"]:
+                    log.error("quest tickets: issues %s are filed but not under the epic; "
+                              "link them by hand", done["unlinked"])
+            except Exception:
+                log.exception("quest tickets: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _watch_loop(self) -> None:
@@ -23683,12 +23878,13 @@ def _ensure_goal_store() -> None:
             " skill_name VARCHAR(32) NULL,"
             " target SMALLINT UNSIGNED NOT NULL,"
             " quest_id INT UNSIGNED NOT NULL DEFAULT 0,"
-            " status ENUM('active','completed','cancelled') NOT NULL DEFAULT 'active',"
+            " status " + goals.STATUS_COLUMN + ","
             " channel_id VARCHAR(32) NOT NULL DEFAULT '',"
             " last_report TEXT NULL,"
             " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
             " completed_at TIMESTAMP NULL DEFAULT NULL,"
-            " PRIMARY KEY (id), KEY idx_char_status (character_name, status)"
+            + "".join(" %s %s," % column for column in goals.GUILD_COLUMNS.items())
+            + " PRIMARY KEY (id), KEY idx_char_status (character_name, status)"
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
         )
         # CREATE TABLE IF NOT EXISTS IS A NO-OP ON A TABLE THAT ALREADY EXISTS,
@@ -23712,7 +23908,8 @@ def _ensure_goal_store() -> None:
             "SELECT COLUMN_NAME AS c, COLUMN_TYPE AS t "
             "FROM information_schema.COLUMNS "
             "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'overseer_goal' "
-            "  AND COLUMN_NAME IN ('kind', 'quest_id')"
+            "  AND COLUMN_NAME IN ('kind', 'quest_id', 'status', "
+            "'guild', 'item_set', 'started_at')"
         )
         shape = {row["c"]: row["t"] for row in cur.fetchall()}
         # The DECISION is goals.goal_migrations, where it can be tested against
@@ -23722,7 +23919,7 @@ def _ensure_goal_store() -> None:
         # "it should have been applied" becomes an argument instead of a fact.
         for statement in goals.goal_migrations(
             shape.get("kind", ""), "quest_id" in shape
-        ):
+        ) + goals.guild_goal_migrations(shape):
             cur.execute(statement)
             log.info("overseer_goal migration: %s", statement)
 
@@ -23748,11 +23945,149 @@ def _insert_goal(name: str, goal: goals.Goal, channel_id: str) -> int:
         return cur.lastrowid
 
 
+# The items of one kind and quality that drop in one instance: direct loot rows
+# and everything reached through reference_loot_template, which nests. Most of
+# what an instance drops is there (Stratholme's rare class 9 items, read live
+# on 2026-10-31: 7 direct, 19 through references), so the direct-only read the
+# trade pages use would list a fraction of the set. References do not narrow
+# by themselves, so a world drop reached from a creature in the instance is on
+# the list: the drop tables are what #94 chose as the definition.
+#
+# The spell is what proves a recipe known, as on the trades page. Only a recipe
+# has one: spellid_2 on a weapon is a proc, and knowing that proves nothing.
+# Arguments: map, class, quality, map.
+_GUILD_ITEM_SET_SQL = (
+    "WITH RECURSIVE refs (entry) AS ("
+    " SELECT clt.Reference FROM acore_world.creature_loot_template clt"
+    " JOIN acore_world.creature_template ct ON ct.lootid = clt.Entry"
+    " JOIN acore_world.creature cr ON cr.id = ct.entry"
+    " WHERE cr.map = %s AND clt.Reference <> 0"
+    " UNION"
+    " SELECT r.Reference FROM acore_world.reference_loot_template r"
+    " JOIN refs ON r.Entry = refs.entry WHERE r.Reference <> 0"
+    ") SELECT it.entry AS item,"
+    " CASE WHEN it.class = " + str(goals.RECIPE_CLASS) + " THEN it.spellid_2"
+    " ELSE 0 END AS spell"
+    " FROM acore_world.item_template it"
+    " WHERE it.class = %s AND it.Quality = %s AND (it.entry IN ("
+    " SELECT clt.Item FROM acore_world.creature_loot_template clt"
+    " JOIN acore_world.creature_template ct ON ct.lootid = clt.Entry"
+    " JOIN acore_world.creature cr ON cr.id = ct.entry"
+    " WHERE cr.map = %s AND clt.Reference = 0"
+    ") OR it.entry IN ("
+    " SELECT r.Item FROM acore_world.reference_loot_template r"
+    " JOIN refs ON r.Entry = refs.entry WHERE r.Reference = 0"
+    ")) ORDER BY it.entry"
+)
+_GUILD_NAME_SQL = "SELECT name FROM guild WHERE name = %s"
+_GUILD_OF_SQL = (
+    "SELECT g.name FROM guild g "
+    "JOIN guild_member gm ON gm.guildid = g.guildid "
+    "JOIN characters c ON c.guid = gm.guid WHERE c.name = %s"
+)
+_GUILD_MEMBERS_SQL = (
+    "SELECT g.name AS guild, c.name AS name FROM guild g "
+    "JOIN guild_member gm ON gm.guildid = g.guildid "
+    "JOIN characters c ON c.guid = gm.guid"
+)
+# A run counts for the guild its leader is in, and only if it finished.
+_GUILD_RUNS_SQL = (
+    "SELECT COUNT(*) AS n FROM overseer_dungeon_run r "
+    "JOIN characters c ON c.name = r.leader_name "
+    "JOIN guild_member gm ON gm.guid = c.guid "
+    "JOIN guild g ON g.guildid = gm.guildid "
+    "WHERE g.name = %s AND r.map_id = %s AND r.outcome = 'complete' "
+    "AND r.ended_at >= %s"
+)
+# Known is a character_spell row, the proof the trades page takes. Held covers
+# bags and bank alike: both are character_inventory.
+_GUILD_KNOWN_SQL = (
+    "SELECT DISTINCT cs.spell AS id FROM guild g "  # noqa: S608 - placeholders from a COUNT, values still bound
+    "JOIN guild_member gm ON gm.guildid = g.guildid "
+    "JOIN character_spell cs ON cs.guid = gm.guid "
+    "WHERE g.name = %s AND cs.spell IN ({holes})"
+)
+_GUILD_HELD_SQL = (
+    "SELECT DISTINCT ii.itemEntry AS id FROM guild g "  # noqa: S608 - placeholders from a COUNT, values still bound
+    "JOIN guild_member gm ON gm.guildid = g.guildid "
+    "JOIN character_inventory ci ON ci.guid = gm.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE g.name = %s AND ii.itemEntry IN ({holes})"
+)
+
+
+def _guild_for(cur, name: str, goal: goals.GuildGoal) -> str:
+    """The guild as stored: the one the order named, else the addressee's."""
+    if goal.guild:
+        cur.execute(_GUILD_NAME_SQL, (goal.guild,))
+    else:
+        cur.execute(_GUILD_OF_SQL, (name,))
+    found = cur.fetchone()
+    return str(found["name"]) if found else ""
+
+
+def _queue_guild_goal(name: str, goal: goals.GuildGoal, channel_id: str) -> tuple:
+    """(row id, the goal as resolved); id 0 when there is nothing to queue.
+
+    Always 'queued': _admit_queued_goals is the one place a goal starts.
+    goals.guild_refusal_text says why from the goal returned with id 0.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        guild = _guild_for(cur, name, goal)
+        if not guild:
+            return 0, goal
+        goal = dataclasses.replace(goal, guild=guild)
+        item_set = None
+        if goal.kind == goals.GUILD_ITEMS:
+            map_id = goals.INSTANCE_MAPS[goal.instance]
+            cur.execute(
+                _GUILD_ITEM_SET_SQL, (map_id, goal.item_class, goal.quality, map_id)
+            )
+            rows = cur.fetchall()
+            goal = dataclasses.replace(goal, target=len(rows))
+            if not rows:
+                return 0, goal
+            item_set = goals.encode_item_set(rows)
+        cur.execute(
+            "INSERT INTO overseer_goal "
+            "(character_name, kind, skill_name, target, status, channel_id, "
+            "guild, item_set) VALUES (%s, %s, %s, %s, 'queued', %s, %s, %s)",
+            (name, goal.kind, goal.instance, goal.target, channel_id, guild, item_set),
+        )
+        return cur.lastrowid, goal
+
+
+def _admit_queued_goals() -> list:
+    """Start each queued guild goal whose members are free; the ids started."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, guild, status FROM overseer_goal "
+            "WHERE status IN ('active', 'queued') AND kind IN (%s, %s)",
+            goals.GUILD_KINDS,
+        )
+        rows = cur.fetchall()
+        if not any(row["status"] == "queued" for row in rows):
+            return []
+        cur.execute(_GUILD_MEMBERS_SQL)
+        members: dict = {}
+        for row in cur.fetchall():
+            members.setdefault(row["guild"], set()).add(row["name"])
+        started = goals.goals_to_start(rows, members)
+        for goal_id in started:
+            cur.execute(
+                "UPDATE overseer_goal SET status = 'active', started_at = NOW() "
+                "WHERE id = %s AND status = 'queued'",
+                (goal_id,),
+            )
+            log.info("goal %s leaves the queue and starts", goal_id)
+    return started
+
+
 def _cancel_goals(name: str) -> int:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE overseer_goal SET status = 'cancelled' "
-            "WHERE character_name = %s AND status = 'active'",
+            "WHERE character_name = %s AND status IN ('active', 'queued')",
             (name,),
         )
         return cur.rowcount
@@ -23762,18 +24097,45 @@ def _fetch_active_goals() -> list[dict]:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT id, character_name, kind, skill_name, target, quest_id, "
-            "status, channel_id, last_report FROM overseer_goal "
-            "WHERE status = 'active'"
+            "status, channel_id, last_report, guild, item_set, started_at "
+            "FROM overseer_goal WHERE status = 'active'"
         )
         return list(cur.fetchall())
 
 
+def _guild_ids(cur, sql: str, guild: str, values: list) -> set:
+    """The ids `sql` finds among `values` for a guild; nothing to ask, none."""
+    if not values:
+        return set()
+    holes = ", ".join(["%s"] * len(values))
+    cur.execute(sql.format(holes=holes), (guild, *values))
+    return {int(row["id"]) for row in cur.fetchall()}
+
+
+def _observe_guild_goal(row: dict) -> int:
+    """Finished runs since the goal started, or listed items done."""
+    guild = row["guild"]
+    with _connect() as conn, conn.cursor() as cur:
+        if row["kind"] == goals.GUILD_COUNT:
+            map_id = goals.INSTANCE_MAPS[row["skill_name"]]
+            cur.execute(_GUILD_RUNS_SQL, (guild, map_id, row["started_at"]))
+            return int(cur.fetchone()["n"])
+        item_set = goals.decode_item_set(row["item_set"])
+        spells = [spell for spell in item_set.values() if spell]
+        known = _guild_ids(cur, _GUILD_KNOWN_SQL, guild, spells)
+        held = _guild_ids(cur, _GUILD_HELD_SQL, guild, list(item_set))
+        return len(goals.items_done(item_set, known, held))
+
+
 def _observe_goal(row: dict) -> int | None:
-    """The character's current level, skill value, or quest progress.
+    """The character's current level, skill value, or quest progress, or a
+    guild goal's count.
 
     None whenever the answer cannot be seen, which reconcile treats as "say
     nothing this cycle" rather than as a zero.
     """
+    if row["kind"] in goals.GUILD_KINDS:
+        return _observe_guild_goal(row)
     with _connect() as conn, conn.cursor() as cur:
         if row["kind"] == "quest":
             quest_id = int(row.get("quest_id") or 0)
@@ -27322,6 +27684,7 @@ def _fetch_equipped_bag_slots(names: list) -> dict:
 # THEMSELVES sit, and this query is only for the ones nobody is using.
 _SURPLUS_BAGS_SQL = (
     "SELECT c.name AS holder, ii.guid AS item_guid, ii.count AS count, "
+    "ii.itemEntry AS entry, (ii.creatorGuid = ci.guid) AS self_made, "
     "ii.flags AS instance_flags, it.name AS name, it.Quality AS quality, "
     "it.SellPrice AS sell_price, it.bonding AS bonding, "
     "it.class AS item_class, it.ContainerSlots AS container_slots "
@@ -27517,7 +27880,17 @@ def _fetch_surplus_bags(names: list) -> list:
                 log.warning("surplus bag facts unavailable on this world image")
                 return []
             raise
-        return [dict(row) for row in cur.fetchall()]
+        rows = [dict(row) for row in cur.fetchall()]
+    bank_keeps = bankbags.reserved_guids(_fetch_bank_bag_facts(names))
+    # Both the sale and the sellable-stack count use these same rows.
+    for row in rows:
+        row["bank_reserved"] = int(row["item_guid"]) in bank_keeps
+    # One line per crafted corps bag the vendor pass leaves with its master (#1667).
+    for kept in rows:
+        if bag_pressure.corps_bag_kept(kept):
+            log.info("economy: %s keeps its crafted %s for the guild corps "
+                     "(not sold, #1667)", kept.get("holder"), kept.get("name"))
+    return rows
 
 
 # Carried lockboxes (#88): the vendor half's carried scope, item class 15
@@ -28533,22 +28906,40 @@ def _ground_exit_leads_to(aim: str, target_map: int) -> bool:
     )
 
 
-def _active_dungeon_run() -> dict | None:
-    """The run the family is in the middle of, or None.
+def _active_dungeon_run(names: list) -> dict | None:
+    """An active row owning a named participant, never a global newest row.
 
-    `overseer_dungeon_run` is written by the C++ side and can legitimately be
-    absent on a world whose image predates it - map_server.py already treats
-    it that way ("overseer_dungeon_run absent; achievements run without it").
-    Absent means "no run", which is the answer that lets the family carry on
-    talking rather than going silent forever.
+    New ledgers carry stable family ownership. Before that migration, recorded
+    members still scope the read; a renamed leader cannot override a nonempty
+    foreign member list. An absent table or older missing columns are unknown.
     """
+    names = tuple(sorted(set(names)))
+    if not names:
+        return None
+    holes = ",".join(["%s"] * len(names))
+    present = " OR ".join(["FIND_IN_SET(%s, members) > 0"] * len(names))
+    # Only generated placeholders reach SQL text; every character name is bound.
+    common = (
+        "SELECT leader_name, map_id, state, members FROM overseer_dungeon_run "
+        "WHERE state = 'active' AND (" + present
+        + " OR (COALESCE(members, '') = '' AND leader_name IN (" + holes + ")))"
+    )
+    scoped = common + (
+        " AND family IN (SELECT family FROM overseer_roster "
+        "WHERE enabled = 1 AND name IN (" + holes + ")) ORDER BY id DESC LIMIT 1"
+    )
+    parameters = names + names
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(
-                "SELECT leader_name, map_id, state, members "
-                "FROM overseer_dungeon_run WHERE state = 'active' "
-                "ORDER BY id DESC LIMIT 1"
-            )
+            cur.execute(scoped, parameters + names)
+            return cur.fetchone()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1146:
+                return None
+            if not exc.args or exc.args[0] != 1054:
+                raise
+        try:
+            cur.execute(common + " ORDER BY id DESC LIMIT 1", parameters)
             return cur.fetchone()
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
@@ -29227,7 +29618,7 @@ _CLASS_TRAINER_SQL = (
     "WHERE t.Type = 0 GROUP BY t.Requirement, ts.SpellId"
 )
 _CLASS_KNOWN_SQL = (
-    "SELECT c.name, c.class AS class_id, c.level, cs.spell "
+    "SELECT c.name, c.class AS class_id, c.race AS race_id, c.level, cs.spell "
     "FROM characters c LEFT JOIN character_spell cs ON cs.guid = c.guid "
     "AND cs.spell IN (SELECT ts.SpellId FROM acore_world.trainer_spell ts "
     "JOIN acore_world.trainer t ON t.Id = ts.TrainerId WHERE t.Type = 0) "
@@ -29255,16 +29646,31 @@ def _class_training_due(names: list, casts_only: bool = False) -> dict:
         trainer = _class_trainer_rows(cur)
         rows = _corps_read(cur, "known class spells",
                            _CLASS_KNOWN_SQL % ",".join(["%s"] * len(names)), list(names))
-    known, level, klass = {}, {}, {}
+        skills_sql = (
+            "SELECT c.name, cs.skill FROM characters c "
+            "JOIN character_skills cs ON cs.guid = c.guid WHERE c.name IN (%s)"
+        ) % ",".join(["%s"] * len(names))
+        skill_rows = _corps_read(cur, "known skills", skills_sql, list(names))
+
+    known, level, klass, race, skills = {}, {}, {}, {}, {}
     for row in rows:
         name = str(row["name"])
         level[name] = int(row.get("level") or 0)
         klass[name] = int(row.get("class_id") or 0)
+        race[name] = int(row.get("race_id") or 0)
         spells = known.setdefault(name, set())
         if row.get("spell"):
             spells.add(int(row["spell"]))
+
+    for row in skill_rows:
+        name = str(row["name"])
+        char_skills = skills.setdefault(name, set())
+        if row.get("skill"):
+            char_skills.add(int(row["skill"]))
+
     return {name: classtrain.due(trainer.get(klass[name], ()), known[name], level[name],
-                                 klass[name] if casts_only else None)
+                                 klass[name] if casts_only else None,
+                                 race[name] or None, klass[name], skills.get(name))
             for name in known}
 
 
@@ -30995,7 +31401,8 @@ _BAG_STATE_SQL = (
     "       COALESCE(fill.n, 0) AS used, "
     # The entry the equip verb names and the subclass that says whether the
     # bag is a general one (bag_upgrade.self_equips, #88).
-    "       ii.itemEntry AS entry, it.subclass AS subclass "
+    "       ii.itemEntry AS entry, it.subclass AS subclass, "
+    "       ii.flags AS instance_flags, it.bonding AS bonding "
     "FROM character_inventory ci "
     "JOIN characters c                  ON c.guid = ci.guid "
     "JOIN item_instance ii              ON ii.guid = ci.item "
@@ -31193,13 +31600,25 @@ _BAG_VENDOR_SQL = (
 # THE VENDORS NEAR THE LEADER THAT SELL EQUIPMENT, one row per (vendor, item),
 # the bag trip's query with the item filter `_fetch_gear_offers` uses. Read
 # from the world's spawn and stock tables, never authored.
+# Holdables need an actual benefit; item level alone also ranks florist bouquets.
+# Random-property items can gain their stats from the instance rather than template.
+_GEAR_ITEM_EFFECT_COLUMNS = (
+    "(it.armor > 0 OR it.block > 0 OR it.RandomProperty <> 0 "
+    "OR it.RandomSuffix <> 0 OR "
+    + " OR ".join(f"it.stat_value{n} > 0" for n in range(1, 11))
+    + " OR "
+    + " OR ".join(f"it.spellid_{n} > 0" for n in range(1, 6))
+    + ") AS has_item_effect, "
+)
+
+
 _GEAR_VENDOR_SQL = (
     "SELECT cr.id AS vendor, ct.name AS vendor_name, cr.map AS map_id, "
     "MIN(SQRT(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2))) AS yards, "
     "it.entry AS entry, it.BuyPrice AS buyout, it.InventoryType AS InventoryType, "
     "it.class AS class, it.subclass AS subclass, it.RequiredLevel AS RequiredLevel, "
     "it.AllowableClass AS AllowableClass, it.ItemLevel AS ItemLevel, "
-    "it.Quality AS Quality, ft.EnemyGroup AS enemy_group "
+    "it.Quality AS Quality, " + _GEAR_ITEM_EFFECT_COLUMNS + "ft.EnemyGroup AS enemy_group "
     "FROM acore_world.npc_vendor nv "
     "JOIN acore_world.creature cr ON cr.id = nv.entry "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
@@ -31211,7 +31630,7 @@ _GEAR_VENDOR_SQL = (
     "AND ABS(cr.position_x - %s) <= %s AND ABS(cr.position_y - %s) <= %s "
     "GROUP BY cr.id, ct.name, cr.map, it.entry, it.BuyPrice, it.InventoryType, "
     "it.class, it.subclass, it.RequiredLevel, it.AllowableClass, it.ItemLevel, "
-    "it.Quality, ft.EnemyGroup "
+    "it.Quality, has_item_effect, ft.EnemyGroup "
     "HAVING yards <= %s ORDER BY yards, vendor"
 )
 
@@ -31428,13 +31847,13 @@ def _fetch_pvp_facts(names: list, busy=()) -> dict:
     }
 
 
-def _fetch_bag_vendors(here) -> list:
+def _fetch_bag_vendors(here, max_yards=bag_pressure.BAG_VENDOR_MAX_YARDS) -> list:
     """Rows for bag_pressure.bag_vendors_from_rows, measured from `here`.
 
     `here` is the leader's bag_pressure.Standing. Degrades to no rows on
     1054/1146, which walks nobody anywhere.
     """
-    cap = float(bag_pressure.BAG_VENDOR_MAX_YARDS)
+    cap = float(max_yards)
     x, y = float(here.x), float(here.y)
     with _connect() as conn, conn.cursor() as cur:
         try:
@@ -33538,7 +33957,8 @@ _BANK_BAG_PEOPLE_SQL = (
 )
 _BANK_BAG_ROWS_SQL = (
     "SELECT c.name AS holder, ci.item AS item_guid, ii.itemEntry AS entry, "
-    "it.ContainerSlots AS slots, ci.bag, ci.slot FROM characters c "
+    "it.ContainerSlots AS slots, ci.bag, ci.slot, "
+    "ii.flags AS instance_flags, it.bonding AS bonding FROM characters c "
     "JOIN character_inventory ci ON ci.guid = c.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -34672,8 +35092,9 @@ def _fetch_gear_offers(entries: list) -> list:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT entry, BuyPrice AS buyout, InventoryType, class, subclass, "
-            "RequiredLevel, AllowableClass, ItemLevel, Quality "
-            "FROM acore_world.item_template WHERE entry IN (%s) "  # noqa: S608 - placeholders from a COUNT
+            "RequiredLevel, AllowableClass, ItemLevel, Quality, "
+            + _GEAR_ITEM_EFFECT_COLUMNS.rstrip(", ")
+            + " FROM acore_world.item_template it WHERE entry IN (%s) "  # noqa: S608 - placeholders from a COUNT
             "AND class IN (2,4) AND InventoryType BETWEEN 1 AND 28 "
             "AND BuyPrice > 0" % marks, [int(e) for e in entries])
         return [dict(row) for row in cur.fetchall()]
@@ -34684,7 +35105,9 @@ def _fetch_gearup_listings(house: int) -> list:
         cur.execute(
             "SELECT a.id AS listing_id, a.buyoutprice AS buyout, ii.itemEntry AS entry, "
             "it.name, it.InventoryType, it.class, it.subclass, it.RequiredLevel, "
-            "it.AllowableClass, it.ItemLevel, it.Quality FROM auctionhouse a "
+            "it.AllowableClass, it.ItemLevel, it.Quality, "
+            + _GEAR_ITEM_EFFECT_COLUMNS.rstrip(", ")
+            + " FROM auctionhouse a "
             "JOIN item_instance ii ON ii.guid=a.itemguid "
             "JOIN acore_world.item_template it ON it.entry=ii.itemEntry "
             "WHERE a.houseid=%s AND a.buyoutprice>0 AND it.class IN (2,4) "
@@ -35808,6 +36231,15 @@ def _complete_goal(goal_id: int) -> None:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE overseer_goal SET status = 'completed', completed_at = NOW() "
+            "WHERE id = %s",
+            (goal_id,),
+        )
+
+
+def _release_goal(goal_id: int) -> None:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE overseer_goal SET status = 'released', completed_at = NOW() "
             "WHERE id = %s",
             (goal_id,),
         )

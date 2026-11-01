@@ -48,7 +48,8 @@ class EquipQualityScopeTest(unittest.TestCase):
             body,
         )
         self.assertIn("_jev_items_plan(jev_rows, worn, names)", body)
-        self.assertIn("_hand_gear(gear_rows, worn, names, jev_plan)", body)
+        self.assertIn("await self._hand_gear(", body)
+        self.assertIn("freeables=bag_pressure.freeable_greys(rows, OWNER_KEEPS)", body)
         self.assertIn("_equip_upgrades(equip_rows, worn, names, jev_plan)", body)
 
 

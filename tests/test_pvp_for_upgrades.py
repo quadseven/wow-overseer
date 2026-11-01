@@ -12,9 +12,12 @@ import pathlib
 import unittest
 
 import guildjobs
+import guildroute
 import guildrun
 import guildsocial
 import pvpgear
+from test_guildlevel import member as level_member
+from test_guildlevel import world as level_world
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
@@ -341,6 +344,172 @@ class TheJobStep(unittest.TestCase):
     def test_a_member_not_yet_natural_plays_no_pvp(self):
         plan = guildjobs.plan([job_member(eligible=False)], pvp=pvp_for())
         self.assertEqual((), plan.steps)
+
+
+JUNK = guildjobs.Carried(guid=11, entry=900, count=1, quality=0, sell_price=50)
+BUY_COMMAND = "entry:19325 count:1 honor:5000"
+# A cooling sale: the full-bags sale rung runs ahead of PvP, so with this row the
+# plan reaches the honor buy's own make-room step.
+SOLD = guildjobs.Recent("Auren", "sell", 30)
+
+
+def refused_buy(age, row_id=1):
+    """The honor buy row the module refused for full bags, `age` minutes old."""
+    return guildjobs.Recent(
+        "Auren",
+        pvpgear.ACTION,
+        age,
+        status="error",
+        command=BUY_COMMAND,
+        result="bags cannot take the item",
+        row_id=row_id,
+    )
+
+
+def actions(plan):
+    return [s.action for s in plan.steps]
+
+
+class FullBagsBeforeTheHonorWalk(unittest.TestCase):
+    """Read on the dev realm over 2026-10-20 to 2026-10-24 (#1455): 40 honor
+    buys walked to the vendor with full bags and came back "bags cannot take
+    the item". The walk is no longer aimed at a member with no free slot."""
+
+    def test_full_bags_make_room_before_the_walk(self):
+        m = job_member(free_slots=0, bag_slots=16, carried=(JUNK,))
+        plan = guildjobs.plan([m], pvp=pvp_for(held=6000), recent=(SOLD,))
+        (step,) = plan.steps
+        self.assertEqual(guildjobs.ROOM_ACTION, step.action)
+        self.assertEqual(["guid:11"], [r.command for r in step.rows])
+        self.assertEqual("walk-to-vendor any", step.walk.command)
+        self.assertIn("Don Julio's Band", step.said)
+
+    def test_the_full_bags_sale_ahead_of_pvp_aims_no_honor_walk(self):
+        m = job_member(free_slots=0, bag_slots=16, carried=(JUNK,))
+        (step,) = guildjobs.plan([m], pvp=pvp_for(held=6000)).steps
+        self.assertEqual("sell", step.action)
+        self.assertEqual("walk-to-vendor any", step.walk.command)
+
+    def test_the_room_step_is_the_whole_ladder_not_only_the_junk_sale(self):
+        cloth = guildjobs.Carried(
+            guid=12,
+            entry=901,
+            count=5,
+            item_class=guildjobs.TRADE_GOODS,
+            subclass=5,
+            sell_price=20,
+        )
+        m = job_member(free_slots=0, bag_slots=16, carried=(cloth,))
+        (step,) = guildjobs.plan([m], pvp=pvp_for(held=6000)).steps
+        self.assertEqual(guildjobs.ROOM_ACTION, step.action)
+        self.assertEqual(["guid:12"], [r.command for r in step.rows])
+
+    def test_a_cooling_room_step_holds_the_walk_with_a_reason(self):
+        m = job_member(free_slots=0, bag_slots=16, carried=(JUNK,))
+        recent = (SOLD, guildjobs.Recent("Auren", guildjobs.ROOM_ACTION, 5))
+        plan = guildjobs.plan([m], pvp=pvp_for(held=6000), recent=recent)
+        self.assertEqual([], actions(plan))
+        self.assertTrue(any("until a bag slot is free" in n for n in plan.notes))
+
+    def test_nothing_to_part_with_holds_the_walk_with_a_reason(self):
+        m = job_member(free_slots=0, bag_slots=16)
+        plan = guildjobs.plan([m], pvp=pvp_for(held=6000))
+        self.assertEqual([], actions(plan))
+        self.assertTrue(any("holds its pvp walk" in n for n in plan.notes))
+
+    def test_the_walk_waits_and_the_member_goes_on_with_its_other_work(self):
+        """A full bag with nothing to part with has no timeout, so holding
+        the member would stop its levelling for good."""
+        m = level_member("Auren", free_slots=0, bag_slots=16)
+        plan = guildjobs.plan(
+            [m],
+            masters={"Cave": "Grug"},
+            leveling=level_world(),
+            cap=guildroute.FAR_WALK_YARDS,
+            pvp=pvp_for(held=6000),
+        )
+        self.assertEqual(["level"], actions(plan))
+        self.assertTrue(any("holds its pvp walk" in n for n in plan.notes))
+
+    def test_a_dead_member_with_full_bags_is_walked_nowhere(self):
+        m = job_member(free_slots=0, bag_slots=16, carried=(JUNK,), alive=False)
+        plan = guildjobs.plan([m], pvp=pvp_for(held=6000), recent=(SOLD,))
+        self.assertEqual([], actions(plan))
+
+    def test_a_free_slot_walks_as_before(self):
+        m = job_member(free_slots=1, bag_slots=16)
+        (step,) = guildjobs.plan([m], pvp=pvp_for(held=6000)).steps
+        self.assertEqual("walk-to-vendor item:19325", step.walk.command)
+        self.assertEqual(BUY_COMMAND, step.rows[-1].command)
+
+    def test_a_short_member_still_queues_with_full_bags(self):
+        """Only the buy needs a slot: honor is earned with the bags full."""
+        m = job_member(free_slots=0, bag_slots=16)
+        (step,) = guildjobs.plan([m], pvp=pvp_for()).steps
+        self.assertEqual("bg-queue av", step.rows[0].command)
+
+
+class ARefusedHonorBuyIsNotAimedAgain(unittest.TestCase):
+    """The ages are past the PvP cooldown: on main the same buy was aimed again
+    as soon as that ran out."""
+
+    AGE = pvpgear.QUEUE_MINUTES + 5
+
+    def plan(self, m, *rows):
+        return guildjobs.plan([m], pvp=pvp_for(held=6000), recent=rows)
+
+    def test_unread_bags_after_a_refusal_hold_the_walk(self):
+        self.assertEqual([], actions(self.plan(job_member(), refused_buy(self.AGE))))
+
+    def test_full_bags_after_a_refusal_make_room_and_aim_no_walk(self):
+        m = job_member(free_slots=0, bag_slots=16, carried=(JUNK,))
+        plan = self.plan(m, refused_buy(self.AGE), SOLD)
+        self.assertEqual([guildjobs.ROOM_ACTION], actions(plan))
+
+    def test_a_free_slot_after_the_refusal_lets_the_walk_go(self):
+        m = job_member(free_slots=2, bag_slots=16)
+        (step,) = self.plan(m, refused_buy(self.AGE)).steps
+        self.assertEqual("walk-to-vendor item:19325", step.walk.command)
+
+    def test_the_refusal_is_read_from_the_command_rows(self):
+        rows = (
+            {
+                "source": "guildjobs:pvp:Auren",
+                "target_name": "Auren",
+                "age": self.AGE,
+                "status": "error",
+                "command": BUY_COMMAND,
+                "result": '{"outcome":"refused","reason":"bags cannot take the '
+                'item","retryable":true}',
+                "id": 1088097,
+            },
+        )
+        recent = guildjobs.recent_from_rows(rows)
+        self.assertEqual([], actions(self.plan(job_member(), *recent)))
+
+    def test_only_the_newest_buy_counts(self):
+        bought_after = guildjobs.Recent(
+            "Auren", pvpgear.ACTION, self.AGE, status="done", command=BUY_COMMAND
+        )
+        (step,) = self.plan(job_member(), refused_buy(500), bought_after).steps
+        self.assertEqual("walk-to-vendor item:19325", step.walk.command)
+
+    def test_a_later_queue_row_does_not_hide_the_refusal(self):
+        queue = guildjobs.Recent(
+            "Auren", pvpgear.ACTION, self.AGE, status="error", command="bg-queue av"
+        )
+        plan = self.plan(job_member(), refused_buy(500), queue)
+        self.assertEqual([], actions(plan))
+
+    def test_room_steps_that_free_nothing_stop_at_the_cap(self):
+        m = job_member(free_slots=0, bag_slots=16, carried=(JUNK,))
+        rooms = tuple(
+            guildjobs.Recent("Auren", guildjobs.ROOM_ACTION, age)
+            for age in (100, 200, 300)[: guildjobs.ROOM_STEPS_PER_STATE]
+        )
+        plan = self.plan(m, refused_buy(400), SOLD, *rooms)
+        self.assertEqual([], actions(plan))
+        self.assertTrue(any("no more until" in n for n in plan.notes))
 
 
 class GuildChat(unittest.TestCase):

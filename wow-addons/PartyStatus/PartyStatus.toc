@@ -1,8 +1,9 @@
 ## Interface: 30300
 ## Title: Party Status
-## Notes: What each family member is doing, beside their name, and a card for what they win.
+## Notes: What each family member is doing, beside their name, a card for what they win, and a threat and damage meter.
 ## Author: quadseven
 ## Version: 1.0
 PartyStatus.lua
 LootCard.lua
 RollQuiet.lua
+Meter.lua
