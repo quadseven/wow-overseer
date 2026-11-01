@@ -1157,10 +1157,9 @@ def stand(name: str, craft_spell: int, held: dict) -> Stand:
     if casts < SHORT_CASTS:
         verdict = SHORT
         why = (
-            "%s holds %d %s against %d per cast of spell %d, which is %d "
-            "more cast(s) - short of the %d it takes to be worth staying "
-            "put"
-            % (name, carried, thin.label, thin.per_cast, spell, casts, SHORT_CASTS)
+            "%s holds %d %s against %d per cast, enough for %d more - short "
+            "of the %d it takes to be worth staying put"
+            % (name, carried, thin.label, thin.per_cast, casts, SHORT_CASTS)
         )
     elif casts >= STOCK_CASTS:
         verdict = STOCKED

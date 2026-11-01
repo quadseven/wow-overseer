@@ -112,7 +112,7 @@ class ACraftThatCannotMoveIsNoReasonToSitOut(unittest.TestCase):
 
     def test_og_at_a_trainer_recipe_he_does_not_hold_does_not_sit_out(self):
         why = standin.sits_out(facts(skills=self.OG, known=frozenset({8776})))
-        self.assertIn("Bolt of Woolen Cloth (2964)", why)
+        self.assertIn("Bolt of Woolen Cloth", why)
         self.assertIn("tailoring 81", why)
 
     def test_his_four_handed_row_is_cleared_so_he_rejoins(self):
@@ -120,7 +120,7 @@ class ACraftThatCannotMoveIsNoReasonToSitOut(unittest.TestCase):
             facts(skills=self.OG, known=frozenset({8776}), current=seated(in_name=""))
         )
         self.assertEqual(standin.CLEAR, step.action)
-        self.assertIn("2964", step.why)
+        self.assertIn("Bolt of Woolen Cloth", step.why)
 
     def test_a_guests_row_is_cleared_too(self):
         step = standin.step(
@@ -143,7 +143,7 @@ class ACraftThatCannotMoveIsNoReasonToSitOut(unittest.TestCase):
             )
             self.assertEqual(standin.KEEP, step.action, step.why)
             self.assertIn("inside", step.why)
-            self.assertIn("2964", step.why)
+            self.assertIn("Bolt of Woolen Cloth", step.why)
 
     def test_no_row_is_written_while_the_craft_cannot_move(self):
         step = standin.step(facts(skills=self.OG, known=frozenset({8776})))
@@ -203,7 +203,7 @@ class NothingToCraftWithIsNoReasonToSitOut(unittest.TestCase):
         why = standin.sits_out(facts(reagents=stocked(0)))
         self.assertIn("too little to craft with", why)
         self.assertIn("0 Wool Cloth", why)
-        self.assertIn("2964", why)
+        self.assertIn("Wool Cloth", why)
 
     def test_no_row_is_written_while_he_is_starved(self):
         step = standin.step(facts(reagents=stocked(0)))
@@ -993,7 +993,8 @@ class TheBridgePass(unittest.TestCase):
         self.assertEqual([("Og", "dungeon:deadmines", standin.SOURCE)], jobs_told)
         self.assertTrue(
             any(
-                "nobody is released and Og rejoins" in line and "3757" in line
+                "nobody is released and Og rejoins" in line
+                and "a trainer recipe" in line
                 for line in lines
             ),
             lines,

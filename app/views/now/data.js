@@ -56,7 +56,7 @@ export function campaign(agenda) {
   const next = entries[i + 1];
   return {
     name: cur.place,
-    step: (q.done === null || q.done === undefined ? null : q.done + " of " + cur.runs),
+    step: (cur.status !== "active" ? "starting" : q.done === null || q.done === undefined ? null : q.done + " of " + cur.runs + " done"),
     next: next ? next.place + ", " + next.runs + " runs" : null,
     line: q.line || "",
   };

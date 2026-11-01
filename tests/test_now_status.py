@@ -340,7 +340,7 @@ class TheSentenceNamesTheWork(unittest.TestCase):
     def test_the_job_speaks_when_nothing_else_does(self):
         solo = nowstatus.build_facts(["Zug"], ROSTER, [], [], NOW)["Zug"]
         got = nowstatus.compose({"name": "Zug", "present": True}, solo)
-        self.assertIn("On the shadowfang dungeon job (run 4 of 10)", got["doing"])
+        self.assertIn("On the Shadowfang Keep campaign (run 4 of 10)", got["doing"])
         self.assertIn("Waiting for: nothing it reports.", got["line"])
 
     def test_urgent_states_come_first(self):
@@ -540,7 +540,7 @@ class AHeldEquipIsNotWhatTheMemberIsDoing(unittest.TestCase):
     def test_the_job_wins_over_the_hold(self):
         solo = nowstatus.build_facts(["Zug"], ROSTER, [], [self.held()], NOW)["Zug"]
         got = nowstatus.compose({"name": "Zug", "present": True}, solo)
-        self.assertIn("dungeon job", got["doing"])
+        self.assertIn("campaign", got["doing"])
         self.assertNotIn("the game to accept it", got["line"])
 
     def test_alone_the_hold_still_speaks(self):
