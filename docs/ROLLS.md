@@ -79,8 +79,8 @@ before opening the PR.
    - the mod-overseer submodule gitlink under `production/docker/azerothcore-playerbots/` (set it with
      `git update-index --cacheinfo 160000,<sha>,<path>`);
    - the `"dev"` fields of the matching entries in `.github/scripts/wow_promotion_drift.py`.
-   Check `git status --short` shows exactly those three paths. The banner (`overseer-pin.yaml`),
-   `deployed_dev` and the banner test literal move with the IMAGE in step 4, not here, so this PR restarts
+   Check `git status --short` shows exactly those three paths. The banner (`overseer-pin.yaml`)
+   and `deployed_dev` move with the IMAGE in step 4, not here, so this PR restarts
    nothing. Run the wow-dev tests, the promotion tests and `python3 .github/scripts/wow_promotion_drift.py`
    ("All four views agree"). Merge it. This merge starts the image build workflow
    (`build.azerothcore-playerbots.yml`).
@@ -135,8 +135,8 @@ before opening the PR.
    text from the diff). Every string must be found. A build that lacks the symbol is a stale layer: do not pin.
 5. **Pin the pair** in a second infra PR: in `wow-dev/kustomization.yaml` set the worldserver AND db-import
    digests together (the worldserver comment block stays 3 lines), and move the banner
-   (`production/oke/manifests/wow-dev/overseer-pin.yaml`), `deployed_dev` in the drift entries and the banner
-   test literal in `wow-dev/tests/test_dev_world_isolation.py` to the new SHAs. Pinning one image without the
+   (`production/oke/manifests/wow-dev/overseer-pin.yaml`) and `deployed_dev` in the drift entries to the new
+   SHAs. Pinning one image without the
    other is a binary asking for a table its schema step never created; the drift check fails on it. Run the
    drift check again, open the PR in Chief format, then merge it as soon as the merge bar holds (section 2).
 6. Watch `kubectl -n wow-dev rollout status deploy/worldserver` and confirm the running image equals the new
@@ -280,7 +280,7 @@ blocked, ghosts, stuck, deaths in 24 hours, next dungeon) before and after a rol
 - Class quests come first for every class (the mandatory quests), ahead of leveling throughput and raid prep.
 - The coupled pins move together: the five source pins (`AC_CORE_SHA`, `AC_MODULE_SHA`, `AC_OVERSEER_SHA`,
   `AC_DUNGEON_CLEAR_SHA`, `AC_OLLAMA_CHAT_SHA`; core, playerbots and ollama-chat move as a set), the
-  mod-overseer gitlink, the drift entries, the banner and its test literal; and the worldserver and db-import
+  mod-overseer gitlink, the drift entries and the banner; and the worldserver and db-import
   digests always come from one build and change in one PR.
 - Public repos: no hosts, addresses, node names, personal names or credentials. Cite the private repo bare
   (infra#N). Never write the bot handle with an at-sign; the bot is the `grug-tribe` app and its commands are
