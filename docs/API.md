@@ -374,6 +374,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Answers: how far behind each pinned dependency is.
 - Example: `overseer get /api/v2/upstream`
 
+## `GET /api/v2/zone-danger`
+
+- Query: none
+- Answers: the routing rule's current family danger lists.
+- Example: `overseer get /api/v2/zone-danger`
+
 ## `GET /api/wall`
 
 - Query: none
