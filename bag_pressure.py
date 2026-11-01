@@ -2075,39 +2075,63 @@ def floor_release_fits(
     becomes FIT_SIBLING, which is not for sale. The rest are FIT_NOBODY. Bank keeps are applied after this, as for any sale.
     """
     out = dict(fits)
-    tools = {
-        int(row["item_guid"])
-        for row in gear_rows or ()
-        if disposition.tool_trades(
-            int(row.get("entry", 0) or 0), int(row.get("bag_family", 0) or 0)
-        )
-    }
-    wanted = {int(equip.guid) for equip in plan.equips}
-    waiting = {(str(member), str(item)) for member, item, _skill in plan.waiting}
     characters = family_characters(equipped_rows, names)
-    levels = {c.name: int(c.level) for c in characters}
+    kept = _floor_kept_guids(gear_rows, plan) | _floor_above_level(
+        gear_rows, characters
+    )
     held = set(held) & set(plan.scored)
     for holding in gear.holdings_from_rows(gear_rows):
         guid = int(holding.guid)
         if (
-            holding.holder not in held
-            or fits.get(guid)
-            not in (disposition.FIT_HOLDER, disposition.FIT_UNJUDGEABLE)
-            or guid in wanted
-            or (holding.holder, holding.name) in waiting
-            or owner_keeps(holding.name, keep_names)
-            or int(holding.required_level) > levels.get(holding.holder, 0)
-            or guid in tools
-            or (fits[guid] == disposition.FIT_UNJUDGEABLE and not holding.soulbound)
+            holding.holder in held
+            and guid not in kept
+            and not owner_keeps(holding.name, keep_names)
+            and _floor_may_judge_again(fits.get(guid), holding)
         ):
-            continue
-        takers = [
-            c
-            for c in characters
-            if c.name != holding.holder and gear.is_upgrade_for(holding, c)[0]
-        ]
-        out[guid] = disposition.FIT_SIBLING if takers else disposition.FIT_NOBODY
+            out[guid] = _floor_new_fit(holding, characters)
     return out
+
+
+def _floor_kept_guids(gear_rows, plan) -> set:
+    """Guids the gear score chose or holds for a skill, and every trade tool."""
+    waiting = {(str(member), str(item)) for member, item, _skill in plan.waiting}
+    kept = {int(equip.guid) for equip in plan.equips}
+    for row in gear_rows or ():
+        tool = disposition.tool_trades(
+            int(row.get("entry", 0) or 0), int(row.get("bag_family", 0) or 0)
+        )
+        if tool or (str(row["holder"]), str(row["name"])) in waiting:
+            kept.add(int(row["item_guid"]))
+    return kept
+
+
+def _floor_above_level(gear_rows, characters) -> set:
+    """Guids of pieces their holder has not reached the level of."""
+    levels = {c.name: int(c.level) for c in characters}
+    return {
+        int(row["item_guid"])
+        for row in gear_rows or ()
+        if int(row["required_level"]) > levels.get(str(row["holder"]), 0)
+    }
+
+
+def _floor_may_judge_again(fit, holding) -> bool:
+    """Is this kept answer one the gear score may overrule? A tradable piece
+    gear.py cannot judge is not: no sibling's score was asked about it."""
+    if fit == disposition.FIT_UNJUDGEABLE:
+        return bool(holding.soulbound)
+    return fit == disposition.FIT_HOLDER
+
+
+def _floor_new_fit(holding, characters) -> str:
+    """FIT_SIBLING when a sibling would wear the piece, else FIT_NOBODY."""
+    for character in characters:
+        if (
+            character.name != holding.holder
+            and gear.is_upgrade_for(holding, character)[0]
+        ):
+            return disposition.FIT_SIBLING
+    return disposition.FIT_NOBODY
 
 
 def floor_release_lines(before, after, gear_rows) -> list:
