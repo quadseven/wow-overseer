@@ -38,14 +38,14 @@ class CampaignLeaderDoesNotGrind(unittest.TestCase):
 
     def test_an_errand_still_walks_the_campaign_leader(self):
         self.assertEqual(
-            goals.life_strategies(leads=True, travelling=True),
+            goals.life_strategies(leads=True, travelling=True) + [goals.GRIND_OFF],
             goals.life_strategies(leads=True, travelling=True, campaign=True),
         )
 
-    def test_followers_are_unchanged(self):
+    def test_followers_keep_movement_and_withdraw_old_grind(self):
         for aimed in (True, False):
             self.assertEqual(
-                goals.life_strategies(leads=False, aimed=aimed),
+                goals.life_strategies(leads=False, aimed=aimed) + [goals.GRIND_OFF],
                 goals.life_strategies(leads=False, aimed=aimed, campaign=True),
             )
 

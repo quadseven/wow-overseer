@@ -20669,6 +20669,15 @@ class Bridge(discord.Client):
         await handler(row, action)
 
     async def _goal_strategy(self, row: dict, action) -> None:
+        # AI-REVIEW 2026-11-01 [codex/in-process/runtime-trace] GOAL-GRIND-1735 (PR #1736):
+        # Level observations still advance during a campaign; only the
+        # competing movement command stands down, as quest goals already do.
+        if row.get("kind") == "level":
+            family = await asyncio.to_thread(_cohort_of, action.target_name)
+            if family and await asyncio.to_thread(_queue_owns_job, family, False):
+                log.info("goal %s: level strategy stands down for the dungeon campaign",
+                         row.get("id"))
+                return
         await asyncio.to_thread(
             _insert_command,
             core.InsertCommand(action.target_name, action.command, "overseer:goal"),
