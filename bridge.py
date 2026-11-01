@@ -4055,6 +4055,16 @@ def _file_quest_tickets(client) -> dict:
         )
 
 
+def _read_last_quest_tickets_pass() -> float | None:
+    """The last time the filing pass ran, from the persistent memo store."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            return questtickets.SqlStore(cur).last_pass()
+    except pymysql.err.MySQLError:
+        log.exception("quest tickets: could not read last pass time")
+        return None
+
+
 # --- the Watcher (director.py) -------------------------------------------
 
 
@@ -23479,7 +23489,8 @@ class Bridge(discord.Client):
         if client is None:
             log.info("quest tickets: no GitHub App is configured, so no issue is filed")
             return
-        await asyncio.sleep(min(cycle, 300.0))
+        last_pass = await asyncio.to_thread(_read_last_quest_tickets_pass)
+        await asyncio.sleep(questtickets.initial_delay(last_pass, cycle, time.time()))
         while not self.is_closed():
             try:
                 done = await asyncio.to_thread(_file_quest_tickets, client)
