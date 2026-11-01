@@ -95,7 +95,7 @@ SHIFT_SQL = (
 # because a person's order runs the same pass, and the table has no unique key.
 ORDER_SQL = (
     "INSERT INTO overseer_dungeon_queue (family, position, keyword, runs_wanted, source) "
-    "SELECT %s, %s, %s, %s, %s FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM "
+    "SELECT %s, %s, %s, %s, %s FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM "
     "overseer_dungeon_queue p WHERE p.family = %s AND p.keyword = %s "
     "AND p.status IN ('queued', 'active'))"
 )
