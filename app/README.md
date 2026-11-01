@@ -2,6 +2,11 @@
 
 A read-only operations app for the realm: plain HTML, CSS and ES modules served by `map_server.py`. No framework and no build step. `index.html` loads `app/main.js`, and everything else is imported from there.
 
+The family board's Travel danger section reads `/api/v2/zone-danger`: the
+worldserver's current routing result, including counted deaths and party-level
+context. It reports missing or stale snapshots as not measured; a measured
+empty list means no zone met the routing threshold on the sampled member's map.
+
 ## Files
 
 | File | What it holds |
