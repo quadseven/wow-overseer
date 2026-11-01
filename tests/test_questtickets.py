@@ -161,20 +161,58 @@ class Filing(unittest.TestCase):
     def test_a_restart_does_not_start_a_second_pass_inside_a_day(self):
         now = 1_000_000.0
         cycle = 86400.0
+        # Elapsed < cycle yields remainder cycle - elapsed
         self.assertEqual(
             qt.initial_delay(now - 7200.0, cycle, now),
             79200.0,
         )
         self.assertEqual(qt.initial_delay(None, cycle, now), 300.0)
         self.assertEqual(qt.initial_delay(now - 90000.0, cycle, now), 300.0)
-        store = Store([row(1)])
-        self.assertIsNone(store.last_pass())
-        self.run_pass(store, now=now)
-        self.assertEqual(store.last_pass(), now)
+        self.assertEqual(qt.initial_delay(now - 86300.0, cycle, now), 300.0)
+        self.assertEqual(qt.initial_delay(now + 1000.0, cycle, now), cycle)
+
+        # Drive a restart against a populated pass-time memo in the store
+        store = Store([row(1)], last_pass=now - 7200.0)
+        # On bridge restart inside a day (2 hours after previous pass), the delay
+        # is the remainder of the 24-hour cycle (22 hours), preventing a duplicate pass
+        restart_delay = qt.initial_delay(store.last_pass(), cycle, now)
+        self.assertEqual(restart_delay, 79200.0)
+
+        # When a day has passed since the recorded pass, restart only waits startup
+        later = now - 7200.0 + cycle + 10.0
+        self.assertEqual(qt.initial_delay(store.last_pass(), cycle, later), 300.0)
+
+        # Running the pass updates the memo to now
+        self.run_pass(store, now=later)
+        self.assertEqual(store.last_pass(), later)
         self.assertEqual(
-            qt.initial_delay(store.last_pass(), cycle, now + 3600.0),
+            qt.initial_delay(store.last_pass(), cycle, later + 3600.0),
             cycle - 3600.0,
         )
+
+    def test_plan_with_earlier_row_in_non_broken_state_carrying_ticket(self):
+        earlier_completed = row(1, guid=7, ticket=55, state=ql.COMPLETED)
+        new_broken = row(1, guid=8, name="Mirra", ticket=None, state=ql.BROKEN)
+
+        all_ledger = [earlier_completed, new_broken]
+
+        def ticket_lookup(quest_id):
+            for r in all_ledger:
+                if r["quest"] == quest_id and r.get("ticket") is not None:
+                    return r["ticket"]
+            return None
+
+        # Driving plan with broken rows only and ticket_for from non-broken row
+        p = qt.plan([new_broken], ticket_for=ticket_lookup)
+        self.assertEqual(p.new, ())
+        self.assertEqual(p.copies, ((1, 55),))
+        self.assertEqual(p.stuck, ())
+
+        # If earlier row had FILING in flight, it is marked stuck
+        p_stuck = qt.plan([new_broken], ticket_for=lambda q: qt.FILING)
+        self.assertEqual(p_stuck.new, ())
+        self.assertEqual(p_stuck.copies, ())
+        self.assertEqual(p_stuck.stuck, (1,))
 
     def test_a_quest_filed_once_is_never_filed_again_after_its_row_leaves_broken(self):
         store = Store(
@@ -188,20 +226,47 @@ class Filing(unittest.TestCase):
         self.assertEqual(self.github.issues(), [])
         self.assertEqual(store.rows[1]["ticket"], 55)
 
+    def test_client_file_timeout_propagates_timeout_error(self):
+        github = FakeGitHub(timeout="/issues")
+        client = qt.Client(github)
+        with self.assertRaises(TimeoutError):
+            client.file("Quest 1", "Body")
+
     def test_a_timed_out_post_files_nothing_further(self):
         store = Store([row(1), row(2)])
         github = FakeGitHub(timeout="/issues")
+        client = qt.Client(github)
         with self.assertRaises(TimeoutError):
-            self.run_pass(store, github)
+            qt.run(store, client, (), "")
         self.assertEqual(store.rows[0]["ticket"], qt.FILING)
         self.assertIsNone(store.rows[1]["ticket"])
 
         github2 = FakeGitHub()
-        done = self.run_pass(store, github2)
+        client2 = qt.Client(github2)
+        done = qt.run(store, client2, (), "")
         self.assertEqual(done["stuck"], [1])
         self.assertEqual(done["filed"], 1)
         self.assertEqual(len(github2.issues()), 1)
         self.assertIn("Quest 2", github2.issues()[0][2]["title"])
+        self.assertEqual(store.rows[0]["ticket"], qt.FILING)
+
+    def test_a_refused_post_releases_the_row(self):
+        store = Store([row(1), row(2)])
+        github = FakeGitHub(refuse="/issues")
+        client = qt.Client(github)
+        with self.assertRaises(RuntimeError):
+            qt.run(store, client, (), "")
+        self.assertIsNone(store.rows[0]["ticket"])
+
+    def test_is_timeout_recognition(self):
+        import urllib.error
+
+        self.assertTrue(qt._is_timeout(TimeoutError("request timed out")))
+        self.assertTrue(
+            qt._is_timeout(urllib.error.URLError(TimeoutError("connection timed out")))
+        )
+        self.assertFalse(qt._is_timeout(RuntimeError("refused")))
+        self.assertFalse(qt._is_timeout(ValueError("bad format")))
 
 
 class Plumbing(unittest.TestCase):

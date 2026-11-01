@@ -299,10 +299,12 @@ class SqlStore:
 
 
 def _is_timeout(exc: Exception) -> bool:
-    if isinstance(exc, TimeoutError):
+    if isinstance(exc, TimeoutError) or "Timeout" in type(exc).__name__:
         return True
     reason = getattr(exc, "reason", None)
-    if isinstance(reason, TimeoutError):
+    if isinstance(reason, (TimeoutError, Exception)) and (
+        isinstance(reason, TimeoutError) or "Timeout" in type(reason).__name__
+    ):
         return True
     return False
 
