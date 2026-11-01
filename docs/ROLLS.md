@@ -89,6 +89,43 @@ before opening the PR.
    mod-overseer carries a patch under its `patches/` that infra does not apply, and names the file. A fast
    failure at that step means a missing patch port to infra's `patches/` tree, not a flake: port the patch, do
    not rerun.
+   The source locations and workflow are declared for the Loom station here:
+
+   ```loom-roll-pins
+   {
+     "deployment_repo": "infra",
+     "build_workflow": "build.azerothcore-playerbots.yml",
+     "sources": [
+       {
+         "repository": "mod-overseer",
+         "location": "production/docker/azerothcore-playerbots/UPSTREAM-PINS.env",
+         "keys": ["AC_OVERSEER_SHA"]
+       },
+       {
+         "repository": "mod-dungeon-clear",
+         "location": "production/docker/azerothcore-playerbots/UPSTREAM-PINS.env",
+         "keys": ["AC_DUNGEON_CLEAR_SHA"],
+         "revision_repo": "mod-dungeon-clear",
+         "revision_ref": "deployed fork branch"
+       },
+       {
+         "repository": "azerothcore",
+         "location": "production/docker/azerothcore-playerbots/UPSTREAM-PINS.env",
+         "keys": ["AC_CORE_SHA", "AC_MODULE_SHA", "AC_OLLAMA_CHAT_SHA"]
+       },
+       {
+         "repository": "mod-overseer",
+         "location": "production/docker/azerothcore-playerbots/ gitlink"
+       },
+       {
+         "repository": "mod-overseer",
+         "location": ".github/scripts/wow_promotion_drift.py",
+         "entry": "dev",
+         "dict_dev": true
+       }
+     ]
+   }
+   ```
 3. **Read both digests from the build run's push lines**, each under its own `The push refers to repository
    [ghcr.io/quadseven/<image>]` line: `ac-playerbots-worldserver` and `ac-playerbots-db-import`. A digest read
    from the wrong repository line is the classic mistake.
