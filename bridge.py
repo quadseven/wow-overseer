@@ -2930,6 +2930,13 @@ def _bag_hold_reads(names: list, leader: str) -> tuple:
     return here, _fetch_free_slots(here), _current_travel_npc(leader)
 
 
+def _at_floor(names, free_slots: dict) -> list:
+    """The members of `names` read at or under the town-run trigger."""
+    return [name for name in names
+            if isinstance(free_slots.get(name), int)
+            and 0 <= free_slots[name] <= bag_pressure.TOWN_RUN_FREE_SLOTS]
+
+
 def _vendor_trip_makes_room(names, free_slots: dict) -> bool:
     """Whether the family's bag-room hold is waiting on a vendor trip that
     would make room (#1243).
@@ -2937,9 +2944,7 @@ def _vendor_trip_makes_room(names, free_slots: dict) -> bool:
     A member at the floor the vendor pass has not read yet (the first cycle
     after a restart) keeps the hold, as it stood before this was asked.
     """
-    at_floor = [name for name in names
-                if isinstance(free_slots.get(name), int)
-                and 0 <= free_slots[name] <= bag_pressure.TOWN_RUN_FREE_SLOTS]
+    at_floor = _at_floor(names, free_slots)
     if any(name not in _VENDOR_SELLABLE for name in at_floor):
         return True
     return bag_pressure.vendor_trip_makes_room(
@@ -3298,6 +3303,40 @@ def _bag_hold_released(names) -> bool:
     return any(_BAG_HOLD_STUCK.get(str(name)) for name in names or ())
 
 
+def _released_floor_members(names) -> frozenset:
+    """The members a released hold of this family named when last judged."""
+    return frozenset(member for name in names or ()
+                     for member in _BAG_HOLD_STUCK.get(str(name), ()))
+
+
+def _released_floor_fits(fits: dict, gear_rows: list, worn: list, names) -> dict:
+    """`fits` with what a released hold's members will not wear let go (#1678).
+
+    `bag_pressure.floor_release_fits` decides; this reads its facts and logs
+    each stack. Rows the gear score cannot read leave `fits` as they are, so
+    a failed read keeps every piece. Blocking.
+    """
+    held = _released_floor_members(names)
+    if not held:
+        return fits
+    # The hold is only re-judged while a campaign waits, so its record can be
+    # old: only a member still at the floor loses anything.
+    held = frozenset(_at_floor(held, _fetch_free_slots(sorted(held))))
+    if not held:
+        return fits
+    wearers = _fetch_wearers(list(names))
+    scored = _fetch_scored_gear(list(names))
+    if not wearers or not scored:
+        return fits
+    plan = equipscore.plan((), wearers, scored, names, keep_names=OWNER_KEEPS,
+                           book=_jev_item_book())
+    released = bag_pressure.floor_release_fits(
+        fits, gear_rows, worn, names, held, plan, keep_names=OWNER_KEEPS)
+    _log_changed("bag floor", bag_pressure.floor_release_lines(
+        fits, released, gear_rows), tuple(sorted(names)), capped=False)
+    return released
+
+
 def _bag_hold_read(names) -> tuple:
     """Read the bags of a family whose campaign a Jev interlude holds, so an
     interlude does not end its bag hold (#872).
@@ -3359,6 +3398,11 @@ def _quest_while_stuck(names: list, mode: str, stuck) -> int:
     an errand that ends hands the family back with its town run standing),
     so an operator's own orders stand. Returns the rows written.
     """
+    # A town errand a released hold reopened is the way out (#1678): moving
+    # its family back to questing would end it on the walk to the counter.
+    errand = globals().get("_town_errand_active")
+    if errand and errand(names):
+        return 0
     moved = [n for n, job in _jobs_of(names).items()
              if job == mode or (job == jobs.TOWN_RUN
                                 and _last_job_source(n) in (
@@ -3398,13 +3442,29 @@ def _town_errand_heartbeat(said, now: float):
 def _bag_errand_needed(names, free_slots: dict, campaign_waiting: bool) -> bool:
     """Whether the town errand still runs for bag room past its ceiling.
 
-    Not once the hold is stuck: the family is questing then, and an errand
-    that took it back to town every cooldown for an hour would be the same
-    wait in instalments.
+    Not once the hold is stuck, unless a vendor can now end it: otherwise the
+    family is questing, and an errand that took it back to town every cooldown
+    for an hour would be the same wait in instalments.
     """
     return (bool(campaign_waiting)
             and bag_pressure.family_town_run_needed(free_slots)
-            and not _bag_hold_stuck(names, free_slots))
+            and (not _bag_hold_stuck(names, free_slots)
+                 # Looked up: the campaign tests load this function in isolation.
+                 or globals().get("_sale_reopens_hold", lambda *a: False)(
+                     names, free_slots)))
+
+
+def _sale_reopens_hold(names, free_slots: dict) -> bool:
+    """Whether a released hold has stacks to sell after all (#1678).
+
+    Releasing the hold makes the gear score's leavings saleable, so one town
+    trip can now end it. A member the vendor pass has not read yet reads as no.
+    """
+    at_floor = _at_floor(names, free_slots)
+    sellable = globals().get("_VENDOR_SELLABLE", {})
+    return bool(at_floor) and all(name in sellable for name in at_floor) and (
+        bag_pressure.vendor_trip_makes_room(
+            free_slots, {name: sellable.get(name, 0) for name in names}))
 
 
 # THE FAMILY STAND-IN (standin.py). Who sits out its family's campaign to
@@ -10692,6 +10752,9 @@ class Bridge(discord.Client):
         equipped = (await asyncio.to_thread(_fetch_family_equipped, names)
                     if gear_rows else [])
         fits = bag_pressure.family_fits(gear_rows, equipped, names)
+        # Looked up: the economy tests load this pass in isolation.
+        release = globals().get("_released_floor_fits", lambda fits, *_: fits)
+        fits = await asyncio.to_thread(release, fits, gear_rows, equipped, names)
         # A piece no member can ever wear (#375): gear.py abstains on relics,
         # so `fits` never calls one FIT_NOBODY.
         members = tidy.members_from_rows(equipped)
@@ -12961,6 +13024,9 @@ class Bridge(discord.Client):
         await self._equip_upgrades(equip_rows, worn, names, jev_plan)
 
         fits = bag_pressure.family_fits(gear_rows, worn, names)
+        # Looked up: the economy tests load this pass in isolation.
+        release = globals().get("_released_floor_fits", lambda fits, *_: fits)
+        fits = await asyncio.to_thread(release, fits, gear_rows, worn, names)
         gear_sales = bag_pressure.gear_candidates(
             gear_rows, disposition.Family(vendor_reachable=True),
             available=SELL_ROUTES, fits=fits, keep_names=OWNER_KEEPS,
@@ -19217,9 +19283,13 @@ class Bridge(discord.Client):
         campaign_waiting = await asyncio.to_thread(_campaign_waiting, names)
         bag_pressure_needed = _bag_errand_needed(names, free_slots,
                                                  campaign_waiting)
+        # Looked up: the adapter tests load this method in isolation.
+        released = globals().get("_released_floor_members", lambda names: ())
+        floor_sale = bag_pressure_needed and bool(released(names))
         why = townerrand.should_start(
             state, now=now, in_run=in_run, mail_gear=mail_gear, facts=facts,
-            stalled=stalled, bag_pressure_needed=bag_pressure_needed)
+            stalled=stalled, bag_pressure_needed=bag_pressure_needed,
+            floor_sale=floor_sale)
         if (not why and not in_run
                 and stalled < townerrand.HOLD_CEILING_SECONDS
                 and not (state.ended and now - state.ended
@@ -19238,7 +19308,8 @@ class Bridge(discord.Client):
             why = townerrand.should_start(
                 state, now=now, in_run=in_run, mail_gear=mail_gear,
                 facts=facts, supply_gaps=towntrip.shop_supply_gaps(members),
-                stalled=stalled, bag_pressure_needed=bag_pressure_needed)
+                stalled=stalled, bag_pressure_needed=bag_pressure_needed,
+                floor_sale=floor_sale)
         if not why:
             return state
         # AN ABSENT HEAD IS A WAIT, NOT A FAILED START. mod-overseer holds the
