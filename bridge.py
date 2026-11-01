@@ -20504,7 +20504,7 @@ class Bridge(discord.Client):
         await handler(row, action)
 
     async def _goal_strategy(self, row: dict, action) -> None:
-        # AI-REVIEW 2026-11-01 [codex/in-process/runtime-trace] GOAL-GRIND-1735:
+        # AI-REVIEW 2026-11-01 [codex/in-process/runtime-trace] GOAL-GRIND-1735 (PR #1736):
         # Level observations still advance during a campaign; only the
         # competing movement command stands down, as quest goals already do.
         if row.get("kind") == "level":
