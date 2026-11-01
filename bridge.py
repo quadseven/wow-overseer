@@ -15750,6 +15750,14 @@ class Bridge(discord.Client):
             log.info("recruit: nothing this pass - %s", action.reason)
             return
 
+        if action.verb == "invite":
+            exchange = await asyncio.to_thread(_interview_candidate, action.target_arg)
+            if exchange:
+                log.info(
+                    "recruit interview: %s - Q: %s | A: %s",
+                    exchange.candidate, exchange.question, exchange.reply,
+                )
+
         row = await asyncio.to_thread(
             _insert_guild, action.actor, action.command, "recruit", action.target_arg,
         )

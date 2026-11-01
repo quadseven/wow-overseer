@@ -15,10 +15,16 @@ these tests is what should make it look out of place.
 """
 
 import ast
+import asyncio
 import pathlib
+import sys
+import types
 import unittest
+from unittest import mock
 
-import recruit
+sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+
+import recruit  # noqa: E402
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
@@ -513,6 +519,12 @@ class TheLoopIsActuallyWired(unittest.TestCase):
     def test_the_pass_writes_through_insert_guild(self):
         self.assertIn("_insert_guild", self._names_in("_recruit_once"))
 
+    def test_the_pass_calls_interview_candidate_before_invite(self):
+        """_interview_candidate is called with the target name when the
+        action is an invite, and the exchange is logged."""
+        names = self._names_in("_recruit_once")
+        self.assertIn("_interview_candidate", names)
+
     def test_insert_guild_can_write_target_arg(self):
         """Without this column no invite this bridge writes can ever run."""
         fn = next(
@@ -535,6 +547,140 @@ class TheLoopIsActuallyWired(unittest.TestCase):
         body = ast.get_source_segment(self.source, fn)
         self.assertIn("1265", body)
         self.assertIn("MySQLError", body)
+
+
+class TheInterviewIntegration(unittest.TestCase):
+    """Integration tests for _interview_candidate wired into _recruit_once.
+
+    These tests drive the bridge's _recruit_once with mocked database and LLM,
+    verifying the interview exchange is logged and the invite proceeds
+    regardless of the interview result.
+    """
+
+    def _import_bridge(self):
+        import sys
+        import types
+
+        stub = types.ModuleType("discord")
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+        stub.Client = Client
+        with mock.patch.dict(sys.modules, {"discord": stub}):
+            sys.modules.pop("bridge", None)
+            import bridge as bridge_module
+        return bridge_module
+
+    def setUp(self):
+        self.bridge = self._import_bridge()
+
+        # Mock database functions and LLM
+        self.patches = mock.patch.multiple(
+            self.bridge,
+            _online_guild_members=mock.DEFAULT,
+            _recruit_prefer=mock.DEFAULT,
+            _latest_guild_shortlist=mock.DEFAULT,
+            _minutes_since_shortlist_asked=mock.DEFAULT,
+            _guild_invites_asked=mock.DEFAULT,
+            _minutes_since_last_guild_invite=mock.DEFAULT,
+            _insert_guild=mock.DEFAULT,
+            _interview_candidate=mock.DEFAULT,
+        )
+        self.mocks = self.patches.start()
+        self.addCleanup(self.patches.stop)
+
+        # Patch the logger
+        self.log_patcher = mock.patch.object(self.bridge.log, "info")
+        self.mock_log_info = self.log_patcher.start()
+        self.addCleanup(self.log_patcher.stop)
+
+        # Default mock returns
+        self.mocks["_online_guild_members"].return_value = ["ActingMember"]
+        self.mocks["_recruit_prefer"].return_value = ()
+        self.mocks["_latest_guild_shortlist"].return_value = (
+            {"shortlist": [{"name": "Candidate1", "class": 1}]},
+            5.0,
+        )
+        self.mocks["_minutes_since_shortlist_asked"].return_value = 20.0
+        self.mocks["_guild_invites_asked"].return_value = set()
+        self.mocks["_minutes_since_last_guild_invite"].return_value = 10.0
+        self.mocks["_insert_guild"].return_value = 1
+
+    def _make_client(self):
+        client = object.__new__(self.bridge.Bridge)
+        client.wait_until_ready = lambda: None
+        client.is_closed = lambda: True  # Run once
+        return client
+
+    def test_invite_logs_interview_exchange(self):
+        """When the action is invite, _interview_candidate is called and
+        the exchange is logged on one bridge log line."""
+        exchange = self.bridge.interview.InterviewExchange(
+            candidate="Candidate1",
+            question="What brings you to look for a guild, Candidate1? You are a level 20 Human Warrior, last seen in Elwynn Forest - what are you hoping to find here, and what would you bring to it?",
+            reply="I seek a guild that values honor and teamwork.",
+            reason="shortlisted and online",
+        )
+        self.mocks["_interview_candidate"].return_value = exchange
+
+        client = self._make_client()
+        asyncio.run(client._recruit_once())
+
+        self.mocks["_interview_candidate"].assert_called_once_with("Candidate1")
+
+        # Python logging uses lazy formatting - check format string and args separately
+        interview_calls = [
+            call
+            for call in self.mock_log_info.call_args_list
+            if call[0] and "recruit interview:" in call[0][0]
+        ]
+        self.assertEqual(len(interview_calls), 1)
+        fmt, *args = interview_calls[0][0]
+        self.assertEqual(fmt, "recruit interview: %s - Q: %s | A: %s")
+        self.assertEqual(
+            tuple(args),
+            (
+                "Candidate1",
+                "What brings you to look for a guild, Candidate1? You are a level 20 Human Warrior, last seen in Elwynn Forest - what are you hoping to find here, and what would you bring to it?",
+                "I seek a guild that values honor and teamwork.",
+            ),
+        )
+
+    def test_invite_proceeds_when_interview_returns_none(self):
+        """When the candidate is offline (interview returns None), the invite
+        still proceeds - the LLM never gates the invite."""
+        self.mocks["_interview_candidate"].return_value = None
+
+        client = self._make_client()
+        asyncio.run(client._recruit_once())
+
+        self.mocks["_interview_candidate"].assert_called_once_with("Candidate1")
+        self.mocks["_insert_guild"].assert_called_once()
+
+    def test_shortlist_action_does_not_call_interview(self):
+        """When the action is shortlist, _interview_candidate is not called."""
+        self.mocks["_latest_guild_shortlist"].return_value = (None, None)
+        self.mocks["_minutes_since_shortlist_asked"].return_value = None
+
+        client = self._make_client()
+        asyncio.run(client._recruit_once())
+
+        self.mocks["_interview_candidate"].assert_not_called()
+        self.mocks["_insert_guild"].assert_called_once_with(
+            "ActingMember", "shortlist 20", "recruit", ""
+        )
+
+    def test_wait_action_does_not_call_interview(self):
+        """When the action is wait, _interview_candidate is not called."""
+        self.mocks["_online_guild_members"].return_value = []
+
+        client = self._make_client()
+        asyncio.run(client._recruit_once())
+
+        self.mocks["_interview_candidate"].assert_not_called()
+        self.mocks["_insert_guild"].assert_not_called()
 
 
 class TheModuleShipsInTheImage(unittest.TestCase):
