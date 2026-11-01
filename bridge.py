@@ -34,6 +34,7 @@ import achievements
 import armory
 import auction
 import bag_market
+import guildbags
 import bag_pressure
 import bag_upgrade
 import bank
@@ -143,7 +144,9 @@ import priorities
 import professions
 import protect
 import questbook
+import questcatalogue
 import questledger
+import questtickets
 import questers
 import questshare
 import quests
@@ -3913,6 +3916,7 @@ def _ensure_quest_ledger_store() -> None:
     try:
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(questledger.TABLE_SQL)
+            questtickets.ensure_column(cur)
         _quest_ledger_ready = True
     except pymysql.err.MySQLError:
         log.exception("quest ledger: overseer_quest_ledger unavailable; each "
@@ -3927,6 +3931,7 @@ def _record_quests() -> int:
     with _connect() as conn, conn.cursor() as cur:
         if not _quest_ledger_ready:
             cur.execute(questledger.TABLE_SQL)
+            questtickets.ensure_column(cur)
             _quest_ledger_ready = True
         cur.execute(questledger.CHARACTERS_SQL.format(
             holes=questledger.holes(len(names))), tuple(names))
@@ -3946,6 +3951,23 @@ def _record_quests() -> int:
         if written:
             cur.executemany(questledger.WRITE_SQL, [e.args() for e in written])
     return len(written)
+
+
+def _file_quest_tickets(client) -> dict:
+    """One filing pass (questtickets.py) on one connection."""
+    with _connect() as conn, conn.cursor() as cur:
+        questtickets.ensure_column(cur)
+
+        def read(sql):
+            cur.execute(sql)
+            return cur.fetchall()
+
+        return questtickets.run(
+            questtickets.SqlStore(cur),
+            client,
+            questcatalogue.load(read),
+            os.environ.get("QUEST_SITE_URL", ""),
+        )
 
 
 # --- the Watcher (director.py) -------------------------------------------
@@ -7143,6 +7165,7 @@ PASSES = (
     _Pass("_now_loop"),
     _Pass("_watch_loop"),
     _Pass("_quest_ledger_loop"),
+    _Pass("_quest_tickets_loop"),
 )
 
 
@@ -16074,7 +16097,8 @@ class Bridge(discord.Client):
             self._dues_walks, now, guildroute.GUILD_STEP_SECONDS)
         posted = await asyncio.to_thread(_dues_recent_holders)
         busy = set(getattr(self, "_guild_run_names", ())) | (set(self._dues_walks)
-                | set(self._guild_mail_runs) | set(getattr(self, "_train_walks", ())))
+                | set(self._guild_mail_runs) | set(getattr(self, "_job_steps", ()))
+                | set(getattr(self, "_train_walks", ())))
         # NATURALLY EARNED ONLY (the operator, 2026-09-24): a member posts dues
         # only once it has been reset to level 1; natural.py has the rule.
         eligible = await asyncio.to_thread(
@@ -16213,7 +16237,8 @@ class Bridge(discord.Client):
         receivers = sorted({x.receiver for x in letters})
         free_slots = await asyncio.to_thread(_fetch_free_slots, receivers)
         busy = set(getattr(self, "_guild_run_names", ())) | (set(self._crafter_walks) | set(self._guild_mail_runs)
-                | set(self._dues_walks) | set(getattr(self, "_train_walks", ())))
+                | set(self._dues_walks) | set(getattr(self, "_job_steps", ()))
+                | set(getattr(self, "_train_walks", ())))
         plan, notes = crafters.visits(letters, designated, known,
                                       frozenset(busy), free_slots)
         notes += await self._start_crafter_walks(plan, names, now)
@@ -16368,6 +16393,7 @@ class Bridge(discord.Client):
         busy = (set(getattr(self, "_guild_run_names", ())) | set(self._post_walks)
                 | set(self._crafter_walks) | set(self._guild_mail_runs)
                 | set(self._dues_walks) | set(self._corps_steps)
+                | set(getattr(self, "_job_steps", ()))
                 | set(getattr(self, "_train_walks", ())))
         sitting = await asyncio.to_thread(_sitting_out_to_walk, names)
         plan, notes = guildpost.visits(letters, online, busy, free_slots, roster,
@@ -16650,6 +16676,7 @@ class Bridge(discord.Client):
         # step's cooldown.
         busy = set(getattr(self, "_guild_run_names", ())) | (set(self._corps_steps) | set(self._dues_walks)
                 | set(self._guild_mail_runs) | set(self._crafter_walks)
+                | set(getattr(self, "_job_steps", ()))
                 | set(getattr(self, "_train_walks", ())))
         cap = self._guild_walk_cap()
         near = await self._corps_mailbox_yards(members, names, busy, now)
@@ -17114,6 +17141,8 @@ class Bridge(discord.Client):
         gear = await self._job_gear_offers(members, facts["recent"])
         # Food and drink for a member with none (restsupply.py).
         supply = await self._job_supply_offers(members, facts["recent"])
+        bags = (await self._job_bag_steps(members, facts["recent"], busy, cap)
+                if spawn_walks else {})
         # A hunter's first pet (hunterpet.py): the beasts around each hunter
         # that knows Tame Beast and has none.
         pets = await self._job_pet_offers(members, facts["recent"])
@@ -17144,6 +17173,7 @@ class Bridge(discord.Client):
             gear=gear, supply=supply, pets=pets, mail=mail, pvp=pvp,
             weapons=weapons,
             mounts=mounts,
+            bags=bags,
             leveling=leveling,
             focus=focus,
             # The class quest is a spawn walk and a quest row (classquest.py).
@@ -17309,6 +17339,25 @@ class Bridge(discord.Client):
             offers[name] = (facts[name], await asyncio.to_thread(
                 _fetch_gear_vendors, by_name[name], guildjobs.GUILD_GEAR_VENDOR_YARDS))
         return offers
+
+    async def _job_bag_steps(self, members, recent, busy, cap) -> dict:
+        wanted = [m for m in members
+                  if m.name not in busy and guildbags.eligible(m, recent)]
+        chosen, self._bag_read_offset = guildjobs.rotate_reads(
+            [m.name for m in wanted], getattr(self, "_bag_read_offset", 0),
+            GUILD_SUPPLY_READS_PER_PASS)
+        if not chosen:
+            return {}
+        members = [m for m in wanted if m.name in chosen]
+        containers = bag_upgrade.members_from_rows(
+            await asyncio.to_thread(_fetch_bag_state, chosen), chosen)
+        vendors = {}
+        for member in members:
+            vendors[member.name] = bag_pressure.bag_vendors_from_rows(
+                await asyncio.to_thread(_fetch_bag_vendors, member, cap))
+        steps, notes = guildbags.plan(members, containers, vendors, cap)
+        _log_capped("guild bags", notes)
+        return steps
 
     async def _job_supply_offers(self, members, recent) -> dict:
         """name -> the food and drink sold in reach, for members short of them
@@ -23208,6 +23257,29 @@ class Bridge(discord.Client):
                     log.info("quest ledger: %d quest row(s) moved", written)
             except Exception:
                 log.exception("quest ledger: pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _quest_tickets_loop(self) -> None:
+        """File one issue per newly broken quest, daily (questtickets.py)."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("QUEST_TICKET_SECONDS", "86400"))
+        client = questtickets.client_from_env(log)
+        if client is None:
+            log.info("quest tickets: no GitHub App is configured, so no issue is filed")
+            return
+        await asyncio.sleep(min(cycle, 300.0))
+        while not self.is_closed():
+            try:
+                done = await asyncio.to_thread(_file_quest_tickets, client)
+                log.info("quest tickets: %s", done)
+                if done["stuck"]:
+                    log.error("quest tickets: a filing never finished for quests %s; "
+                              "check for an issue, then set their ticket", done["stuck"])
+                if done["unlinked"]:
+                    log.error("quest tickets: issues %s are filed but not under the epic; "
+                              "link them by hand", done["unlinked"])
+            except Exception:
+                log.exception("quest tickets: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _watch_loop(self) -> None:
@@ -29546,7 +29618,13 @@ def _class_training_due(names: list, casts_only: bool = False) -> dict:
         trainer = _class_trainer_rows(cur)
         rows = _corps_read(cur, "known class spells",
                            _CLASS_KNOWN_SQL % ",".join(["%s"] * len(names)), list(names))
-    known, level, klass, race = {}, {}, {}, {}
+        skills_sql = (
+            "SELECT c.name, cs.skill FROM characters c "
+            "JOIN character_skills cs ON cs.guid = c.guid WHERE c.name IN (%s)"
+        ) % ",".join(["%s"] * len(names))
+        skill_rows = _corps_read(cur, "known skills", skills_sql, list(names))
+
+    known, level, klass, race, skills = {}, {}, {}, {}, {}
     for row in rows:
         name = str(row["name"])
         level[name] = int(row.get("level") or 0)
@@ -29555,9 +29633,16 @@ def _class_training_due(names: list, casts_only: bool = False) -> dict:
         spells = known.setdefault(name, set())
         if row.get("spell"):
             spells.add(int(row["spell"]))
+
+    for row in skill_rows:
+        name = str(row["name"])
+        char_skills = skills.setdefault(name, set())
+        if row.get("skill"):
+            char_skills.add(int(row["skill"]))
+
     return {name: classtrain.due(trainer.get(klass[name], ()), known[name], level[name],
                                  klass[name] if casts_only else None,
-                                 race[name] or None, klass[name])
+                                 race[name] or None, klass[name], skills.get(name))
             for name in known}
 
 
@@ -31734,13 +31819,13 @@ def _fetch_pvp_facts(names: list, busy=()) -> dict:
     }
 
 
-def _fetch_bag_vendors(here) -> list:
+def _fetch_bag_vendors(here, max_yards=bag_pressure.BAG_VENDOR_MAX_YARDS) -> list:
     """Rows for bag_pressure.bag_vendors_from_rows, measured from `here`.
 
     `here` is the leader's bag_pressure.Standing. Degrades to no rows on
     1054/1146, which walks nobody anywhere.
     """
-    cap = float(bag_pressure.BAG_VENDOR_MAX_YARDS)
+    cap = float(max_yards)
     x, y = float(here.x), float(here.y)
     with _connect() as conn, conn.cursor() as cur:
         try:

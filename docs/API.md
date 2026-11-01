@@ -305,7 +305,7 @@ Each entry: path, query parameters, what it answers, one example.
 ## `GET /api/v2/quests/{id}`
 
 - Query: none
-- Answers: one classic quest and every quester attempt.
+- Answers: one classic quest, its ticket and every quester attempt.
 - Example: `overseer get /api/v2/quests/{id}`
 
 ## `GET /api/v2/raidteams`
@@ -373,6 +373,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Query: none
 - Answers: how far behind each pinned dependency is.
 - Example: `overseer get /api/v2/upstream`
+
+## `GET /api/v2/zone-danger`
+
+- Query: none
+- Answers: the routing rule's current family danger lists.
+- Example: `overseer get /api/v2/zone-danger`
 
 ## `GET /api/wall`
 
