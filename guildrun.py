@@ -142,6 +142,12 @@ OUTCOMES = (
 WENT_IN = (CLEARED, "wiped", "abandoned", "timed out", "stalled")
 
 
+def every_boss_fell(done: int, total: int) -> bool:
+    """Does the count hold every boss the run expects? `cleared` alone does not
+    say: the finder finishes a dungeon on its last boss, side bosses standing."""
+    return total > 0 and done >= total
+
+
 def enabled(environ=None) -> bool:
     """On only when GUILD_RUNS says so: this sends bots into dungeons."""
     env = os.environ if environ is None else environ
@@ -1757,7 +1763,7 @@ def state_for(plan: Plan) -> dict:
         ],
         "how_runs_are_judged": (
             "cleared = the dungeon finder marks the dungeon finished; a wipe, an "
-            "abandoned run or a timeout is a failure"
+            "abandoned run, a stall or a timeout is a failure"
         ),
     }
 
@@ -2115,10 +2121,19 @@ def outcome_from_row(row: dict) -> dict | None:
     if status == "verifying":
         if str(result.get("phase") or "") != "inside":
             return None
-        return dict(_progress(result), state=INSIDE)
+        return _count_kept(row, dict(_progress(result), state=INSIDE))
     if status not in ("applied", "error", "delivered", "unchanged"):
         return None
-    return _ended(row, result)
+    return _count_kept(row, _ended(row, result))
+
+
+def _count_kept(row: dict, seen: dict) -> dict:
+    """A boss once down stays down. The module reads bosses_done off the tank's
+    instance bind on each poll, and that reads nothing while the tank stands
+    outside the dungeon, so a run's last word can be a lower count than it
+    reached. `row` carries what the run's row already holds."""
+    seen["bosses_done"] = max(_num(row, "bosses_done"), _num(seen, "bosses_done"))
+    return seen
 
 
 # --- the Guild tab ---------------------------------------------------------------
@@ -2243,6 +2258,13 @@ def _extra_words(extra: str) -> str:
     return "%s (%s)" % (extra, "a seat kind this page does not know")
 
 
+def _prior_cleared(view: dict) -> int:
+    """The clears behind the stored rate, which is Rate.smoothed and so never
+    0%: (cleared + 1) / (runs + 2)."""
+    runs = view["prior_runs"]
+    return max(0, round((view["prior"] or 0.0) * (runs + 2) - 1))
+
+
 def _run_lines(view: dict) -> list:
     if view["dungeon"]["by"] == ASKED:
         return _asked_lines(view) + _outcome_lines(view)
@@ -2263,8 +2285,8 @@ def _run_lines(view: dict) -> list:
     ]
     if view["prior_runs"]:
         lines.append(
-            "record before this run: %d%% over %s"
-            % (round(100 * (view["prior"] or 0.0)), _n(view["prior_runs"], "run"))
+            "record before this run: %d cleared of %s"
+            % (_prior_cleared(view), _n(view["prior_runs"], "run"))
         )
     return lines + _outcome_lines(view)
 

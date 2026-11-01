@@ -26865,6 +26865,7 @@ def _follow_guild_runs() -> int:
         try:
             cur.execute(
                 "SELECT r.id, r.state, r.keyword, r.tank, r.members, r.why AS last_room, "
+                "r.bosses_done, r.bosses_total, "
                 "TIMESTAMPDIFF(SECOND, r.last_boss_at, NOW()) AS seconds_since_boss, "
                 "r.created_at < NOW() - INTERVAL %s MINUTE AS stale, "
                 "c.status, c.detail, c.result FROM overseer_guild_run r "
@@ -26886,7 +26887,9 @@ def _follow_guild_runs() -> int:
             if seen is None and row.get("stale"):
                 seen = {"state": guildrun.ENDED, "outcome": "lost",
                         "why": "no outcome from the worldserver within %d minutes"
-                        % guildrun.LOST_AFTER_MINUTES}
+                        % guildrun.LOST_AFTER_MINUTES,
+                        "bosses_done": row["bosses_done"],
+                        "bosses_total": row["bosses_total"]}
             if seen is None:
                 continue
             if seen["state"] == guildrun.INSIDE:

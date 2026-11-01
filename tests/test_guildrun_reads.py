@@ -161,6 +161,13 @@ class TheRunState(unittest.TestCase):
         self.assertEqual(self.state_of(state="ended", outcome=""), "lost")
         self.assertEqual(self.state_of(state="ended", outcome="sweep"), "lost")
 
+    def test_the_record_before_a_run_is_counted_not_smoothed(self):
+        # The row stores (cleared + 1) / (runs + 2), so 0 of 10 is 8%.
+        lines = guildrun.run_view(dict(ROW, prior_rate=1 / 12, prior_runs=10))["lines"]
+        self.assertIn("record before this run: 0 cleared of 10 runs", lines)
+        lines = guildrun.run_view(dict(ROW, prior_rate=7 / 12, prior_runs=10))["lines"]
+        self.assertIn("record before this run: 6 cleared of 10 runs", lines)
+
     def test_the_old_fields_stay_for_compatibility(self):
         view = guildrun.run_view(dict(ROW))
         self.assertEqual(
