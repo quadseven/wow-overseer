@@ -42,7 +42,7 @@ flowchart LR
   B -.-> L[LLM endpoint]
 ```
 
-`bridge.py` is the image entrypoint. `map_server.py` runs from the same image with a different command.
+`bridge.py` is the image entrypoint. The same image also runs `map_server.py` and the scheduled `tools/metric_watcher.py` collector with different commands.
 
 ## Run and test locally
 
@@ -84,7 +84,7 @@ Live. The bridge and site run as two deployments in the `wow-dev` namespace, the
 - Open work: [Goal: our guild one-shots Ragnaros](https://github.com/quadseven/wow-overseer/issues/512).
 - Stubbed: `services/strands-decider` is built and deployed at zero replicas. The realm roller job is suspended on an older image.
 - Retired: the `wow` and `wow-hardcore` realms.
-- Unverified: whether the metric watcher in `systemd/` runs anywhere. The deploy config does not mention it.
+- Metric snapshots require a scheduled `tools/metric_watcher.py` process and a JSONL file shared with the site. Runtime proof remains tracked in [#891](https://github.com/quadseven/wow-overseer/issues/891).
 
 ## Contributing
 

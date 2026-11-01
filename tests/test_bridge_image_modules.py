@@ -1,10 +1,9 @@
-"""The image ships the modules the bridge imports, and no dead module.
+"""The image ships its runtime entry points and their imports, and no dead module.
 
-The Dockerfile's own comment states the image ships only what bridge.py
-imports. `death_dismiss.py` used to violate that: it was copied into the
-image but imported by nothing, so it shipped no behavior. This test pins
-the invariant: every module bridge.py imports is present in the image, and
-a module nothing imports is not shipped.
+The Dockerfile copies runtime modules explicitly. The bridge's imports must
+be present, and the scheduled collector must start from those copied files.
+`death_dismiss.py` used to be copied without any runtime caller; that dead
+module stays outside the image.
 
 The bridge is headless - it owns no pixels, no client and no screen
 capture - so a death-dialog dismissal (which needs a detector measuring a
@@ -15,9 +14,13 @@ That decision lives with the screen-owning client, not here.
 from __future__ import annotations
 
 import ast
+import os
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
 
 THIRD_PARTY = {"discord", "pymysql", "apiv2"}
@@ -55,7 +58,7 @@ def bridge_modules() -> set[str]:
 
 
 # Shipped today but reached by no import from the image's entry points
-# (bridge.py, map_server.py, the apiv2 endpoints). Each is used only by
+# (bridge.py, map_server.py, the apiv2 endpoints and the metric collector). Each is used only by
 # tools/ or by tests, or is not wired yet. The list may only shrink: wire a
 # module in or stop copying it, then delete its name here.
 KNOWN_UNREACHED = {
@@ -94,9 +97,10 @@ def _source_for(name: str) -> pathlib.Path | None:
 def reached_modules() -> set[str]:
     """Module names reachable by imports from the image's entry points.
 
-    apiv2 endpoints are loaded by the package, so each is a root too.
+    apiv2 endpoints and the scheduled metric collector are roots too.
     """
     roots = [pathlib.Path("bridge.py"), pathlib.Path("map_server.py")]
+    roots.append(pathlib.Path("tools/metric_watcher.py"))
     roots += sorted(pathlib.Path("apiv2").glob("*.py"))
     seen: set[pathlib.Path] = set()
     todo = list(roots)
@@ -113,6 +117,31 @@ def reached_modules() -> set[str]:
 
 
 class ImageModuleWiring(unittest.TestCase):
+    def test_scheduled_metric_watcher_starts_from_image_files(self):
+        dockerfile = pathlib.Path("Dockerfile").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            target = root / "tools"
+            target.mkdir()
+            for sources in re.findall(r"^COPY (.+) /app/tools/$", dockerfile, re.M):
+                for source in sources.split():
+                    shutil.copyfile(source, target / pathlib.Path(source).name)
+            env = dict(os.environ)
+            env.pop("PYTHONPATH", None)
+            for args in (["tools/metric_watcher.py"], ["-m", "tools.metric_watcher"]):
+                with self.subTest(args=args):
+                    result = subprocess.run(
+                        [sys.executable, "-u", *args, "--help"],
+                        cwd=root,
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("--api-root", result.stdout)
+
     def test_every_module_bridge_imports_is_in_the_image(self):
         image = dockerfile_modules()
         missing = sorted(bridge_modules() - image)

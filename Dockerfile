@@ -8,8 +8,8 @@
 # synthetic `_shared/` directory. This build is a plain `docker build .`
 # against this repo's own tree (build.yml, GitHub-hosted runner), so that
 # indirection is gone; the explicit file list below is unchanged in spirit -
-# still hand-maintained, still excludes tests/, tools/, mod-overseer/ and
-# patches/ on purpose, so the image ships only what bridge.py imports.
+# still hand-maintained. Tests, module sources and patches stay outside the
+# image; the scheduled watcher and its dependency are copied separately below.
 FROM python:3.12-slim
 
 RUN pip install --no-cache-dir discord.py==2.4.0 PyMySQL==1.1.1
@@ -68,6 +68,9 @@ COPY core.py bridge.py voice.py transform.py \
 # file and not a new line here.
 COPY app /app/app
 COPY apiv2 /app/apiv2
+
+# The scheduled metric collector is another runtime entry point.
+COPY tools/metric_watcher.py tools/realm_state_audit.py /app/tools/
 
 # It stays VENDORED. map_server._jquery_file says why - the page reaches no
 # third host for it - and moving it to a CDN to save the same bytes would have
