@@ -15,9 +15,10 @@ Two halves here:
   reading the source (so a new read is checked the day it is written), must
   carry a bound the table's keys serve. A death read needs a key that leads an
   index (character_name, zone, driver or killer_type) AND a time bound, or be
-  one row by a key. overseer_death has no key on created_at alone yet
-  (mod-overseer#908 adds one with the next worldserver roll), so a time bound
-  alone still walks the table. An ask read may use its created_at key, the
+  one row by a key. mod-overseer#908 (2026_10_10_02_overseer_growth_indexes)
+  added `idx_created_at`, so a `created_at` bound alone is now a range on that
+  key and counts too (#1733's realm-wide death evidence reads); a test below
+  holds the pinned module to defining it. An ask read may use its created_at key, the
   live states, one id, or one guild's newest LIMIT rows.
 - THE BEHAVIOUR of each read this ticket bounded, and that model calls run on
   threads of their own.
@@ -38,6 +39,7 @@ from unittest import mock
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import achievements  # noqa: E402
+import modsource  # noqa: E402
 import jev  # noqa: E402
 import jev_activity  # noqa: E402
 import llmpool  # noqa: E402
@@ -128,7 +130,8 @@ def bounded(table: str, clause: str) -> bool:
     if table == "overseer_death":
         if _ONE_ROW.search(clause):
             return True
-        return bool(_DEATH_KEY.search(clause) and _TIME.search(clause))
+        # idx_created_at (mod-overseer#908) serves a time bound on its own.
+        return bool(_TIME.search(clause))
     return bool(_TIME.search(clause) or _LIVE in clause or _ONE_GUILD.search(clause))
 
 
@@ -160,6 +163,24 @@ class EveryReadIsBounded(unittest.TestCase):
         ]
         self.assertEqual(loose, [], "\n".join(loose))
 
+    def test_a_time_bound_alone_rests_on_the_created_at_key(self):
+        """The rule takes a bare created_at bound on overseer_death only
+        because the pinned module keys that column (mod-overseer#908)."""
+        modsource.require()
+        migration = modsource.read(
+            modsource.SQL_DIR / "2026_10_10_02_overseer_growth_indexes.sql"
+        )
+        self.assertIn(
+            "ALTER TABLE `overseer_death` ADD KEY `idx_created_at` (`created_at`)",
+            migration,
+        )
+        self.assertTrue(
+            bounded(
+                "overseer_death",
+                "FROM overseer_death d WHERE d.created_at >= %s",
+            )
+        )
+
     def test_the_rule_catches_the_reads_this_ticket_bounded(self):
         """The shapes that grew, as they were, are refused."""
         for table, clause in (
@@ -176,8 +197,7 @@ class EveryReadIsBounded(unittest.TestCase):
             (
                 "overseer_death",
                 "FROM overseer_death d JOIN guild_member gm ON gm.guid = "
-                "d.character_guid WHERE gm.guildid IN ({holes}) AND "
-                "d.created_at >= NOW() - INTERVAL %s DAY",
+                "d.character_guid WHERE gm.guildid IN ({holes})",
             ),
             ("overseer_guild_ask", "FROM overseer_guild_ask WHERE kind = 'quest'"),
         ):
