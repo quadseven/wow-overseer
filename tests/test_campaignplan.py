@@ -227,6 +227,28 @@ class WhichOne(unittest.TestCase):
         )
         self.assertEqual(campaignplan.heuristic(opts).keyword, "razorfen-kraul")
 
+    def test_a_door_the_family_is_outgrowing_gives_way(self):
+        """Measured 2026-11-01: a family at 45 to 49 made about 2,100 xp a
+        member-hour in Razorfen Downs and about 6,300 in Uldaman. Uldaman is
+        across the sea from Kalimdor, so Zul'Farrak is the next door here."""
+        family = (
+            ("Grug", 49, 1),
+            ("Grog", 47, 3),
+            ("Bork", 46, 7),
+            ("Ugga", 46, 1),
+            ("Og", 45, 1),
+        )
+        opts = campaignplan.options(facts(family, KALIMDOR))
+        self.assertIn("razorfen-downs", keywords(opts))
+        pick = campaignplan.heuristic(opts)
+        self.assertEqual(pick.keyword, "zulfarrak")
+        self.assertIn("not already outgrowing", campaignplan.heuristic_why(pick))
+
+    def test_a_door_well_inside_its_band_keeps_the_old_order(self):
+        family = (("Zug", 41, 2), ("Oz", 40, 8), ("Uzza", 40, 8))
+        opts = campaignplan.options(facts(family, KALIMDOR))
+        self.assertEqual(campaignplan.heuristic(opts).keyword, "razorfen-downs")
+
     def test_at_the_cap_the_least_run_first(self):
         opts = campaignplan.options(
             facts(ALLIANCE, KALIMDOR, done={"dire-maul-east-east": 4}, keys=CRESCENT)
