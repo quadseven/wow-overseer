@@ -20,8 +20,8 @@ def page(query: dict, ctx) -> tuple[int, dict]:
     names = [members[0] for members in rosters.values() if members]
     rows = (
         ctx.read.rows(
-            "SELECT name,result,UNIX_TIMESTAMP() AS now_at FROM overseer_zone_danger "
-            f"WHERE name IN ({holes(len(names))}) "  # noqa: S608 - fixed-roster bound names
+            "SELECT name,result,UNIX_TIMESTAMP() AS now_at FROM overseer_zone_danger "  # noqa: S608 - only generated placeholders; names are bound
+            f"WHERE name IN ({holes(len(names))}) "
             "AND updated_at >= NOW() - INTERVAL 30 SECOND",
             tuple(names),
             what="overseer_zone_danger",

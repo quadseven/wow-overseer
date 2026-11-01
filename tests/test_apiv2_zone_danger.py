@@ -78,3 +78,9 @@ class DangerRead(unittest.TestCase):
         import apiv2
 
         self.assertIs(zone_danger.page, apiv2.ROUTES["/api/v2/zone-danger"])
+        ctx = context(
+            [{"name": "Leader", "result": json.dumps(ANSWER), "now_at": 1001}]
+        )
+        code, payload = apiv2.handle("/api/v2/zone-danger", {}, ctx)
+        self.assertEqual(200, code)
+        self.assertEqual(ANSWER, payload["families"][0]["danger"])
