@@ -74,44 +74,86 @@ class Book(unittest.TestCase):
         self.assertEqual({"Ana": {"nc": {"grind": "+"}}}, strategybook.book(memo))
 
 
+def _pay(r, start, book, in_world):
+    """One pass where every row is written: what was sent."""
+    commands = r.due(start, book, in_world)
+    for name in {n for n, _ in commands}:
+        r.paid(name)
+    return commands
+
+
 class Reapply(unittest.TestCase):
     BOOK = {"Ana": {"nc": {"grind": "+"}}, "Bo": {"co": {"flee": "-"}}}
 
     def test_a_recorded_strategy_is_sent_again_after_a_restart(self):
         r = strategybook.Reapplier(seen=1000)
-        commands, new_start = r.due(2000, self.BOOK, ["Ana", "Bo"])
+        commands = _pay(r, 2000, self.BOOK, ["Ana", "Bo"])
         self.assertEqual([("Ana", "nc +grind"), ("Bo", "co -flee")], commands)
-        self.assertEqual(2000, new_start)
+        self.assertEqual(2000, r.settled())
 
     def test_nothing_is_sent_when_no_restart_happened(self):
         r = strategybook.Reapplier(seen=1000)
-        self.assertEqual(([], None), r.due(1000, self.BOOK, ["Ana", "Bo"]))
+        self.assertEqual([], _pay(r, 1000, self.BOOK, ["Ana", "Bo"]))
+        self.assertIsNone(r.settled())
 
     def test_it_is_not_sent_twice_for_one_restart(self):
         r = strategybook.Reapplier(seen=1000)
-        r.due(2000, self.BOOK, ["Ana", "Bo"])
-        self.assertEqual(([], None), r.due(2000, self.BOOK, ["Ana", "Bo"]))
+        _pay(r, 2000, self.BOOK, ["Ana", "Bo"])
+        self.assertEqual([], _pay(r, 2000, self.BOOK, ["Ana", "Bo"]))
 
     def test_it_waits_until_the_member_is_back_in_world(self):
         r = strategybook.Reapplier(seen=1000)
-        commands, _ = r.due(2000, self.BOOK, ["Ana"])
-        self.assertEqual([("Ana", "nc +grind")], commands)
+        self.assertEqual([("Ana", "nc +grind")], _pay(r, 2000, self.BOOK, ["Ana"]))
         self.assertEqual({"Bo"}, r.owed())
-        commands, new_start = r.due(2000, self.BOOK, ["Ana", "Bo"])
-        self.assertEqual([("Bo", "co -flee")], commands)
-        self.assertIsNone(new_start)
+        self.assertEqual([("Bo", "co -flee")], _pay(r, 2000, self.BOOK, ["Ana", "Bo"]))
         self.assertEqual(set(), r.owed())
 
     def test_a_first_look_only_seeds(self):
         r = strategybook.Reapplier(seen=None)
-        self.assertEqual(([], 2000), r.due(2000, self.BOOK, ["Ana", "Bo"]))
-        commands, _ = r.due(3000, self.BOOK, ["Ana", "Bo"])
-        self.assertEqual(2, len(commands))
+        self.assertEqual([], _pay(r, 2000, self.BOOK, ["Ana", "Bo"]))
+        self.assertEqual(2000, r.settled())
+        self.assertEqual(2, len(_pay(r, 3000, self.BOOK, ["Ana", "Bo"])))
 
     def test_an_unreadable_start_changes_nothing(self):
         r = strategybook.Reapplier(seen=1000)
-        self.assertEqual(([], None), r.due(None, self.BOOK, ["Ana", "Bo"]))
+        self.assertEqual([], _pay(r, None, self.BOOK, ["Ana", "Bo"]))
         self.assertEqual(1000, r.seen)
+        self.assertIsNone(r.settled())
+
+
+class OwedSurvivesABridgeRestart(unittest.TestCase):
+    """#1584: the owed set is in memory only, so the start must not be saved
+    while anyone is still owed, or a bridge restart loses their replay."""
+
+    BOOK = Reapply.BOOK
+
+    def test_the_start_is_saved_only_once_nobody_is_owed(self):
+        r = strategybook.Reapplier(seen=1000)
+        _pay(r, 2000, self.BOOK, ["Ana"])
+        self.assertIsNone(r.settled())
+        _pay(r, 2000, self.BOOK, ["Ana", "Bo"])
+        self.assertEqual(2000, r.settled())
+        self.assertIsNone(r.settled())
+
+    def test_a_bridge_restart_before_a_member_is_back_still_replays_it(self):
+        saved = 1000
+        r = strategybook.Reapplier(seen=saved)
+        _pay(r, 2000, self.BOOK, ["Ana"])
+        saved = r.settled() or saved
+        # The bridge restarts here; Bo logs in only afterwards.
+        r = strategybook.Reapplier(seen=saved)
+        self.assertIn(("Bo", "co -flee"), _pay(r, 2000, self.BOOK, ["Ana", "Bo"]))
+        self.assertEqual(2000, r.settled())
+
+    def test_a_row_not_written_is_offered_again(self):
+        r = strategybook.Reapplier(seen=1000)
+        first = r.due(2000, self.BOOK, ["Ana", "Bo"])
+        r.paid("Ana")  # Bo's row was refused
+        self.assertEqual({"Bo"}, r.owed())
+        self.assertIsNone(r.settled())
+        again = r.due(2000, self.BOOK, ["Ana", "Bo"])
+        self.assertEqual([("Bo", "co -flee")], again)
+        self.assertIn(("Bo", "co -flee"), first)
 
 
 class NameCase(unittest.TestCase):
@@ -121,10 +163,9 @@ class NameCase(unittest.TestCase):
     def test_an_order_given_in_another_case_is_replayed_once(self):
         pages = strategybook.book(_memo(("grug", "nc +grind")))
         r = strategybook.Reapplier(seen=1000)
-        commands, _ = r.due(2000, pages, ["Grug"])
-        self.assertEqual([("Grug", "nc +grind")], commands)
+        self.assertEqual([("Grug", "nc +grind")], _pay(r, 2000, pages, ["Grug"]))
         self.assertEqual(set(), r.owed())
-        self.assertEqual(([], None), r.due(2000, pages, ["Grug"]))
+        self.assertEqual([], _pay(r, 2000, pages, ["Grug"]))
 
     def test_spellings_of_one_member_share_one_page(self):
         pages = strategybook.book(
@@ -132,15 +173,13 @@ class NameCase(unittest.TestCase):
         )
         self.assertEqual({"Grug": {"nc": {"grind": "-", "loot": "+"}}}, pages)
         r = strategybook.Reapplier(seen=1000)
-        commands, _ = r.due(2000, pages, ["Grug"])
-        self.assertEqual([("Grug", "nc -grind,+loot")], commands)
+        self.assertEqual([("Grug", "nc -grind,+loot")], _pay(r, 2000, pages, ["Grug"]))
 
     def test_a_row_kept_under_an_old_spelling_still_replays(self):
         # Rows written before the book folded case keep their raw subject.
         pages = strategybook.book({"grug|nc|grind": ("+", 0.0)})
         r = strategybook.Reapplier(seen=1000)
-        commands, _ = r.due(2000, pages, ["Grug"])
-        self.assertEqual([("Grug", "nc +grind")], commands)
+        self.assertEqual([("Grug", "nc +grind")], _pay(r, 2000, pages, ["Grug"]))
 
 
 class TheBridgeWiresIt(unittest.TestCase):

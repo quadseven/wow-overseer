@@ -189,7 +189,9 @@ class TheEndpoint(unittest.TestCase):
         self.assertIn("names = family.roster()", self.fetch)
 
     def test_a_dead_database_is_a_503_rather_than_a_hang(self):
-        self.assertIn("self._send(503", self.handler)
+        self.assertIn(
+            '@_get_route("wealth query failed")\n    def _wealth(', self.server
+        )
 
     def test_the_icon_book_is_read_once_at_import_not_per_request(self):
         """It is the same frozen book the Armory already loads. Reading it

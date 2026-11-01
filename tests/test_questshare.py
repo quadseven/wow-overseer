@@ -841,6 +841,84 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
                 disagreements += 1
         self.assertEqual(disagreements, 0)
 
+    def _recent_only(self, rows):
+        """What the bridge's read keeps once it skips every triple with no
+        answered row inside the cap (the SQL IN-subquery): the triple's whole
+        history, or nothing."""
+        recent = {r[:3] for r in rows if r[5] < self.CAP * self.H}
+        return [r for r in rows if r[:3] in recent]
+
+    def test_a_triple_with_nothing_inside_the_cap_is_never_held(self):
+        # steady state at the cap: a refusal every week and an hour, eight
+        # deep. The youngest is 3 days old, so the triple is held on the
+        # strength of the OLD rows, which the recent filter keeps.
+        ages = [3 * 24 + i * (7 * 24 + 1) for i in range(8)]
+        rows = self.rows(self.PERMANENT, ages)
+        self.assertEqual(self.held(rows), frozenset({self.KEY}))
+        self.assertEqual(self.held(self._recent_only(rows)), frozenset({self.KEY}))
+        # quiet-then-resume: seven refusals a month old, then a fresh one
+        rows = self.rows(self.PERMANENT, [3] + [30 * 24 + i * 24 for i in range(7)])
+        self.assertEqual(self.held(rows), frozenset({self.KEY}))
+        self.assertEqual(self.held(self._recent_only(rows)), frozenset({self.KEY}))
+        # the same streak with nothing inside the cap: not held either way,
+        # and the filter drops the triple without changing that
+        rows = self.rows(self.PERMANENT, [8 * 24 + i * 24 for i in range(8)])
+        self.assertEqual(self.held(rows), frozenset())
+        self.assertEqual(self._recent_only(rows), [])
+        # the cut that would NOT be safe: windowing the history itself
+        eight_days = [
+            r for r in self.rows(self.PERMANENT, ages) if r[5] < 8 * 24 * self.H
+        ]
+        self.assertEqual(self.held(eight_days), frozenset())
+
+    def test_skipping_triples_with_nothing_recent_decides_identically(self):
+        """The bridge reads the full, depth-limited history only for triples
+        with an answer younger than the cap. Random histories over ninety
+        days, dense and sparse, with the cap-spaced and resumed streaks the
+        doubling produces: the held set is identical read in full or read
+        through the recent filter."""
+        import random
+
+        rng = random.Random(1664)
+        outcomes = [
+            ("error", json.dumps({"outcome": "refused", "reason": r}))
+            for gate in questshare.SHARE_GATES
+            for r in gate
+        ]
+        outcomes += [
+            ("error", json.dumps({"reason": "reworded", "retryable": False})),
+            ("delivered", json.dumps({"outcome": "shared"})),
+            ("error", None),
+            ("error", "{not json"),
+        ]
+        keys = [
+            self.KEY,
+            ("Bork", "Ilhan", "share 1234"),
+            ("Aiyla", "Bork", "share 77"),
+        ]
+        disagreements = filtered = 0
+        for _ in range(600):
+            rows = []
+            for key in keys:
+                style = rng.choice(("dense", "sparse", "cap-spaced", "old"))
+                for n in range(rng.randrange(0, 40)):
+                    status, result = rng.choice(outcomes)
+                    if style == "dense":
+                        age = rng.randrange(0, 90 * 24 * self.H)
+                    elif style == "sparse":
+                        age = rng.randrange(0, 12 * 24 * self.H)
+                    elif style == "cap-spaced":
+                        age = (rng.randrange(0, 200) + n * 7 * 24) * self.H
+                    else:
+                        age = rng.randrange(6 * 24 * self.H, 90 * 24 * self.H)
+                    rows.append((*key, status, result, age))
+            kept = self._recent_only(rows)
+            filtered += len(kept) < len(rows)
+            if self.held(rows) != self.held(kept):
+                disagreements += 1
+        self.assertEqual(disagreements, 0)
+        self.assertGreater(filtered, 50)  # the filter really dropped triples
+
 
 def _gate_literals(body):
     """The reason literals of every describe() refusal in a DoShare body, in

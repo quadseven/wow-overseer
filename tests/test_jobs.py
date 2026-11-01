@@ -307,7 +307,19 @@ class ImplementedMatchesTheModule(unittest.TestCase):
         self.assertIn("void DriveCraft()", self.source)
         self.assertIn("SELECT name, craft_spell FROM overseer_roster", self.source)
         self.assertIn("WHERE enabled = 1 AND craft_spell <> 0", self.source)
-        self.assertIn('jobIt->second != "craft"', self.source)
+        # The job gate is OverseerDecisions::MayCraftNow now. A `craft` job
+        # always crafts; the campaign jobs (town run, dungeon) may also craft,
+        # but only when idle (not in a run, alive, out of combat, standing
+        # still); every other job is refused.
+        self.assertIn("OverseerDecisions::MayCraftNow(jobIt->second,", self.source)
+        decisions = modsource.read(modsource.DECISIONS, encoding="utf-8")
+        start = decisions.index("bool MayCraftNow(")
+        gate = decisions[start : decisions.index("\n}\n", start)]
+        self.assertIn('if (job == "craft")\n        return true;', gate)
+        self.assertIn(
+            "return campaignJob && !inDungeonRun && alive && !inCombat && !moving;",
+            gate,
+        )
         self.assertIn("bot->CastSpell(bot, spellId, false)", self.source)
         self.assertIn("craft", jobs.IMPLEMENTED)
 

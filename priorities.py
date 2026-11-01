@@ -308,12 +308,15 @@ def read_stored(rows) -> tuple:
 # --- the scheduler's tie-break ---------------------------------------------------
 #
 # Which priority each goal kind serves (goals.GOAL_KINDS). A level or a quest
-# goal is questing; a skill goal is a profession; a dungeon goal is a dungeon.
+# goal is questing; a skill goal is a profession; a dungeon goal is a dungeon,
+# and so is a guild goal, whose runs and drops both happen inside one.
 GOAL_PRIORITY = {
     "level": QUEST,
     "quest": QUEST,
     "skill": PROFESSIONS,
     "dungeon": DUNGEONS,
+    "guild_count": DUNGEONS,
+    "guild_items": DUNGEONS,
 }
 
 

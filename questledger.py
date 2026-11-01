@@ -77,6 +77,7 @@ TABLE_SQL = (
     "first_taken DATETIME NULL, "
     "finished DATETIME NULL, "
     "reason VARCHAR(255) NOT NULL DEFAULT '', "
+    "ticket INT UNSIGNED NULL, "
     "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP "
     "ON UPDATE CURRENT_TIMESTAMP, "
     "PRIMARY KEY (quest, guid), KEY by_guid (guid)"
@@ -109,6 +110,10 @@ WRITE_SQL = (
 
 
 def holes(n: int) -> str:
+    """The placeholders of an IN list. An empty list is the caller's to skip:
+    `IN ()` is a syntax error, not an empty answer."""
+    if n < 1:
+        raise ValueError("holes needs at least one value")
     return ", ".join(["%s"] * n)
 
 
