@@ -4335,10 +4335,13 @@ def _spire_family(family: str, fam: dict, rows: list) -> bool:
     costs one small read until then.
     """
     names = list(fam["names"])
-    if rows and str(rows[0].get("keyword")) == spirerun.KEYWORD:
+    entry = next((r for r in rows if str(r.get("keyword")) == spirerun.KEYWORD), None)
+    if entry is not None:
         with _connect() as conn, conn.cursor() as cur:
-            cur.execute(spirerun.STANDING_SQL, (rows[0]["id"],))
+            cur.execute(spirerun.STANDING_SQL, (entry["id"],))
             standing = cur.fetchone() or {}
+        if entry.get("status") == campaignqueue.QUEUED:
+            return _spire_withdraw(family, names, rows, standing)
         move = spirerun.ending(rows, bool(standing.get("cleared")),
                                float(standing.get("age") or 0))
         if move is None:
@@ -4346,36 +4349,57 @@ def _spire_family(family: str, fam: dict, rows: list) -> bool:
         log.info("spire: %s: %s", campaignqueue._family(family),
                  _apply_queue_move(move, names, family))
         return True
-    if any(str(r.get("keyword")) == spirerun.KEYWORD for r in rows):
-        return False
     short = spirerun.family_short(_queue_level_rows(fam), names)
     if short:
         _spire_say(family, short)
         return False
-    holes = ", ".join(["%s"] * len(names))
-    with _connect() as conn, conn.cursor() as cur:
-        cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes=holes), tuple(names))  # noqa: S608
-        members = [dict(row) for row in cur.fetchall()]
-        cur.execute(spirerun.LAST_SQL, (family, spirerun.KEYWORD, spirerun.SOURCE))
-        done = cur.fetchone()
-    ten = spirerun.lineup(members, names)
+    ten = spirerun.lineup(_spire_guild(names), names)
     if ten.short:
         _spire_say(family, ten.short)
         return False
-    last = spirerun.Last(float(done["finished_at"] or 0), bool(done["cleared"])) if done else None
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(spirerun.LAST_SQL, (family, spirerun.KEYWORD, spirerun.SOURCE))
+        done = cur.fetchone()
+    last = None
+    if done:
+        last = spirerun.Last(float(done["finished_at"] or 0), bool(done["cleared"]),
+                             done["status"] == "cancelled")
     slot = spirerun.order_slot(rows, last, time.time())
     if slot is None:
-        _spire_say(family, "the last night is still resting")
+        _spire_say(family, "waits out its last run or a stop")
         return False
     with _connect() as conn, conn.cursor() as cur:
+        cur.execute(spirerun.ORDER_SQL,
+                    (family, slot.position, spirerun.KEYWORD, raidrun.RUNS_PER_ORDER,
+                     spirerun.SOURCE, family, spirerun.KEYWORD))
+        if not cur.rowcount:
+            return False
         for queue_id in slot.shift:
             cur.execute(spirerun.SHIFT_SQL, (queue_id,))
-        cur.execute(campaignqueue.INSERT_SQL,
-                    (family, slot.position, spirerun.KEYWORD,
-                     raidrun.RUNS_PER_ORDER, spirerun.SOURCE))
     log.warning("spire: %s has ten seats at level %d; the Upper Spire run is "
                 "ordered at position %d", campaignqueue._family(family),
                 spirerun.FLOOR, slot.position)
+    return True
+
+
+def _spire_guild(names: list) -> list:
+    """Every member of the family's guild, as the raid writer reads them."""
+    holes = ", ".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes=holes), tuple(names))  # noqa: S608
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _spire_withdraw(family: str, names: list, rows: list, standing: dict) -> bool:
+    """Take back this module's own unstarted entry when it cannot start."""
+    short = spirerun.lineup(_spire_guild(names), names).short
+    queue_id = spirerun.withdrawal(rows, short, float(standing.get("queued_age") or 0))
+    if queue_id is None:
+        return False
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(spirerun.WITHDRAW_SQL, (spirerun.SOURCE_WITHDRAWN, queue_id))
+    log.warning("spire: %s: the unstarted Upper Spire run is taken back: %s",
+                campaignqueue._family(family), short or "it waited too long")
     return True
 
 

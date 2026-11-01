@@ -15,7 +15,9 @@ What these pin:
 import pathlib
 import unittest
 
+import campaignplan
 import campaignqueue
+import guildjobs
 import jobs
 import preraid
 import raidrun
@@ -143,6 +145,113 @@ class TheOrder(unittest.TestCase):
         self.assertIsNotNone(spirerun.order_slot([], later, NOW))
 
 
+class ReviewFindings(unittest.TestCase):
+    def test_a_death_knight_in_the_family_holds_the_run(self):
+        lineup = spirerun.lineup(guild(Mage={"class_id": DK, "level": 60}), FAMILY)
+        self.assertEqual(lineup.groups, ())
+        self.assertIn("Death Knight", lineup.short)
+
+    def test_every_shortfall_is_said(self):
+        rows = [r for r in guild(Shaman={"class_id": HUNTER, "spec": ""}) if r["name"] != "Ee"]
+        lineup = spirerun.lineup(rows, FAMILY)
+        self.assertIn("healer", lineup.short)
+        self.assertIn("9 of 10", lineup.short)
+
+    def test_the_event_join_names_its_collation(self):
+        for sql in (spirerun.LAST_SQL, spirerun.STANDING_SQL):
+            self.assertIn("q.family COLLATE utf8mb4_unicode_ci", sql)
+
+    def test_the_insert_itself_refuses_a_second_pending_entry(self):
+        self.assertIn("NOT EXISTS", spirerun.ORDER_SQL)
+        self.assertIn("'queued', 'active'", spirerun.ORDER_SQL)
+
+    def test_a_step_down_keeps_the_door_row_behind_it(self):
+        rows = [
+            row(1, "zulfarrak", "active", 0, campaignplan.SOURCE_STEPDOWN),
+            row(2, "maraudon", "queued", 1, campaignplan.SOURCE),
+            row(3, "uldaman", "queued", 2, campaignplan.SOURCE),
+        ]
+        slot = spirerun.order_slot(rows, None, NOW)
+        self.assertEqual(slot.position, 2)
+        self.assertEqual(slot.shift, (3,))
+
+    def test_the_stone_lookup_uses_the_raids_own_map(self):
+        self.assertEqual(guildjobs._door_map("ubrs"), 229)
+        self.assertEqual(guildjobs._door_map("moltencore"), 409)
+
+    def test_the_image_carries_the_module(self):
+        self.assertIn("spirerun.py", (HERE / "Dockerfile").read_text(encoding="utf-8"))
+
+
+class AStopSticks(unittest.TestCase):
+    def test_a_cancelled_entry_stops_the_order_for_its_whole_wait(self):
+        stopped = spirerun.Last(finished_at=NOW - 86400 * 6, cleared=False, cancelled=True)
+        self.assertIsNone(spirerun.order_slot([], stopped, NOW))
+
+    def test_a_cancel_stops_it_longer_than_a_failed_night(self):
+        self.assertGreater(spirerun.AFTER_CANCEL_SECONDS, spirerun.AFTER_FAILURE_SECONDS)
+        over = spirerun.Last(
+            finished_at=NOW - spirerun.AFTER_CANCEL_SECONDS - 1,
+            cleared=False,
+            cancelled=True,
+        )
+        self.assertIsNotNone(spirerun.order_slot([], over, NOW))
+
+    def test_the_read_counts_a_cancel_and_not_its_own_withdrawal(self):
+        self.assertIn("'cancelled'", spirerun.LAST_SQL)
+        self.assertNotEqual(spirerun.SOURCE, spirerun.SOURCE_WITHDRAWN)
+
+    def test_an_operators_queued_entry_stays_in_front(self):
+        rows = [
+            row(1, "uldaman", "queued", 0, "discord:someone"),
+            row(2, "maraudon", "queued", 1, campaignplan.SOURCE),
+        ]
+        slot = spirerun.order_slot(rows, None, NOW)
+        self.assertEqual(slot.position, 1)
+        self.assertEqual(slot.shift, (2,))
+
+    def test_behind_an_active_entry_and_the_operators_after_it(self):
+        rows = [
+            row(1, "uldaman", "active", 0, campaignplan.SOURCE),
+            row(2, "maraudon", "queued", 1, "discord:someone"),
+            row(3, "zulfarrak", "queued", 2, campaignplan.SOURCE_JEV),
+        ]
+        slot = spirerun.order_slot(rows, None, NOW)
+        self.assertEqual(slot.position, 2)
+        self.assertEqual(slot.shift, (3,))
+
+
+class AnEntryThatNeverStarted(unittest.TestCase):
+    def waiting(self):
+        return row(9, raidrun.UPPER_SPIRE, "queued", 3, spirerun.SOURCE)
+
+    def test_a_short_lineup_withdraws_it(self):
+        self.assertEqual(spirerun.withdrawal([self.waiting()], "9 of 10 seats", 60), 9)
+
+    def test_the_age_ceiling_withdraws_it(self):
+        self.assertEqual(
+            spirerun.withdrawal([self.waiting()], "", spirerun.QUEUED_CEILING_SECONDS), 9
+        )
+
+    def test_a_full_lineup_inside_the_ceiling_keeps_it(self):
+        self.assertIsNone(spirerun.withdrawal([self.waiting()], "", 60))
+
+    def test_a_running_entry_is_never_withdrawn(self):
+        active = row(9, raidrun.UPPER_SPIRE, "active", 0, spirerun.SOURCE)
+        self.assertIsNone(spirerun.withdrawal([active], "short", 99999999))
+
+    def test_an_operators_entry_is_never_withdrawn(self):
+        mine = row(9, raidrun.UPPER_SPIRE, "queued", 0, "discord:someone")
+        self.assertIsNone(spirerun.withdrawal([mine], "short", 99999999))
+
+    def test_the_statement_can_only_touch_a_queued_row(self):
+        self.assertIn("status = 'queued'", spirerun.WITHDRAW_SQL)
+
+    def test_the_bridge_reads_it_behind_a_campaign_too(self):
+        source = (HERE / "bridge.py").read_text(encoding="utf-8")
+        self.assertIn("spirerun.withdrawal(rows,", source)
+
+
 class TheEnd(unittest.TestCase):
     def active(self):
         return row(9, raidrun.UPPER_SPIRE, "active", 0, spirerun.SOURCE)
@@ -205,7 +314,7 @@ class TheBridgeWiring(unittest.TestCase):
 
     def test_the_family_at_the_floor_is_written_once_with_the_modules_source(self):
         source = (HERE / "bridge.py").read_text(encoding="utf-8")
-        self.assertIn("raidrun.RUNS_PER_ORDER, spirerun.SOURCE", source)
+        self.assertIn("cur.execute(spirerun.ORDER_SQL,", source)
 
 
 class OppositeFactions(unittest.TestCase):
