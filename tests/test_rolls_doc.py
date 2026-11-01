@@ -22,9 +22,15 @@ ROLLS = pathlib.Path(__file__).resolve().parent.parent / "docs" / "ROLLS.md"
 def _named_locations(text):
     """Each path, pin key and field the step's location bullets name."""
     step = text.split("**Bump the source pins only**", 1)[1]
-    bullets = step.split("source locations move:", 1)[1].split("Check `git status", 1)[0]
+    bullets = step.split("source locations move:", 1)[1].split("Check `git status", 1)[
+        0
+    ]
     tokens = re.findall(r"`([^`]+)`", bullets)
-    return [t for t in tokens if t.endswith("_SHA") or t == '"dev"' or t.endswith((".env", ".py", "/"))]
+    return [
+        t
+        for t in tokens
+        if t.endswith("_SHA") or t == '"dev"' or t.endswith((".env", ".py", "/"))
+    ]
 
 
 def _pin_gaps(text, declared):
