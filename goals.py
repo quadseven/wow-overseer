@@ -947,13 +947,20 @@ def life_strategies(
     be able to loot a node exactly as much as the follower beside it does.
     """
     if in_town and not travelling:
-        return _in_town_strategies(leads)
-    if campaign and leads and not travelling:
-        return _with_gathering(_campaign_leader_strategies(), gathering)
-    return _with_gathering(
-        _life_strategies(leads=leads, aimed=aimed, travelling=travelling),
-        gathering,
-    )
+        base = _in_town_strategies(leads)
+    elif campaign and leads and not travelling:
+        base = _with_gathering(_campaign_leader_strategies(), gathering)
+    else:
+        base = _with_gathering(
+            _life_strategies(leads=leads, aimed=aimed, travelling=travelling),
+            gathering,
+        )
+    # A prior level goal can leave grind on any member, including a follower
+    # or a returning traveller. Withdraw that task without removing movement
+    # or combat defense supplied by the branches above.
+    if campaign and GRIND_OFF not in base:
+        base.append(GRIND_OFF)
+    return base
 
 
 def _campaign_leader_strategies() -> list:
