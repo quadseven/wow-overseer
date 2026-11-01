@@ -3036,7 +3036,7 @@ RAID_CEILING = 60
 def _door_map(keyword: str):
     """The map a door keyword opens: a portal's, or the raid door's."""
     if raidrun.is_raid(keyword):
-        return raidrun.MOLTEN_CORE_MAP
+        return raidrun.MAPS[keyword]
     return dungeonpath.PORTAL_MAPS.get(keyword)
 
 

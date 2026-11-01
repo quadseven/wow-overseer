@@ -157,6 +157,7 @@ import raidprep
 import raidroles
 import restsupply
 import raidrun
+import spirerun
 import raidsupply
 import recipebook
 import raidteams
@@ -3884,7 +3885,7 @@ def _log_raid_arrivals(cur, keyword: str, seats: list) -> None:
     decision: the raid's own warlocks summon, the rest walk). A failed read
     is logged and never holds the order."""
     names = [seat[2] for seat in seats]
-    door = guildjobs.entrances().get(str(raidrun.MOLTEN_CORE_MAP))
+    door = guildjobs.entrances().get(str(raidrun.MAPS.get(keyword)))
     try:
         cur.execute(raidrun.ARRIVAL_SQL.format(holes=", ".join(["%s"] * len(names))),  # noqa: S608
                     tuple(names))
@@ -3916,7 +3917,14 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
         cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes=holes),  # noqa: S608
                     tuple(names))
         members = _with_readiness(cur, [dict(row) for row in cur.fetchall()])
-        lineup = raidlineup.build_lineup(members, guaranteed=list(names))
+        if keyword == raidrun.UPPER_SPIRE:
+            ten = spirerun.lineup(members, list(names))
+            if ten.short:
+                log.info("raid: %s has no ten for %s: %s",
+                         campaignqueue._family(family), keyword, ten.short)
+            lineup = ten.as_dict()
+        else:
+            lineup = raidlineup.build_lineup(members, guaranteed=list(names))
         seats = raidrun.seat_rows(family, keyword, lineup)
         if not seats:
             log.warning("raid: %s has no lineup for %s - nobody in its guild "
@@ -4365,6 +4373,94 @@ def _queue_level_rows(family: dict) -> list:
     for row in rows:
         row["lead"] = 1 if row.get("name") == lead else 0
     return rows
+
+
+# --- the Upper Spire run (spirerun.py) -----------------------------------------
+
+_SPIRE_SAID: dict = {}
+
+
+def _spire_say(family: str, line: str) -> None:
+    """Log why a family's run waits, once per change of reason."""
+    if _SPIRE_SAID.get(family) != line:
+        _SPIRE_SAID[family] = line
+        log.info("spire: %s: %s", campaignqueue._family(family), line)
+
+
+def _spire_family(family: str, fam: dict, rows: list) -> bool:
+    """One pass of the Upper Spire run for one family. True when the queue moved.
+
+    Ends this module's standing entry, or writes a new one, and decides nothing
+    itself. The guild is read only once the family is at the floor, so a pass
+    costs one small read until then.
+    """
+    names = list(fam["names"])
+    entry = next((r for r in rows if str(r.get("keyword")) == spirerun.KEYWORD), None)
+    if entry is not None:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(spirerun.STANDING_SQL, (entry["id"],))
+            standing = cur.fetchone() or {}
+        if entry.get("status") == campaignqueue.QUEUED:
+            return _spire_withdraw(family, names, rows, standing)
+        move = spirerun.ending(rows, bool(standing.get("cleared")),
+                               float(standing.get("age") or 0))
+        if move is None:
+            return False
+        log.info("spire: %s: %s", campaignqueue._family(family),
+                 _apply_queue_move(move, names, family))
+        return True
+    short = spirerun.family_short(_queue_level_rows(fam), names)
+    if short:
+        _spire_say(family, short)
+        return False
+    ten = spirerun.lineup(_spire_guild(names), names)
+    if ten.short:
+        _spire_say(family, ten.short)
+        return False
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(spirerun.LAST_SQL, (family, spirerun.KEYWORD, spirerun.SOURCE))
+        done = cur.fetchone()
+    last = None
+    if done:
+        last = spirerun.Last(float(done["finished_at"] or 0), bool(done["cleared"]),
+                             done["status"] == "cancelled")
+    slot = spirerun.order_slot(rows, last, time.time())
+    if slot is None:
+        _spire_say(family, "waits out its last run or a stop")
+        return False
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(spirerun.ORDER_SQL,
+                    (family, slot.position, spirerun.KEYWORD, raidrun.RUNS_PER_ORDER,
+                     spirerun.SOURCE, family, spirerun.KEYWORD))
+        if not cur.rowcount:
+            return False
+        for queue_id in slot.shift:
+            cur.execute(spirerun.SHIFT_SQL, (queue_id,))
+    log.warning("spire: %s has ten seats at level %d; the Upper Spire run is "
+                "ordered at position %d", campaignqueue._family(family),
+                spirerun.FLOOR, slot.position)
+    return True
+
+
+def _spire_guild(names: list) -> list:
+    """Every member of the family's guild, as the raid writer reads them."""
+    holes = ", ".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes=holes), tuple(names))  # noqa: S608
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _spire_withdraw(family: str, names: list, rows: list, standing: dict) -> bool:
+    """Take back this module's own unstarted entry when it cannot start."""
+    short = spirerun.lineup(_spire_guild(names), names).short
+    queue_id = spirerun.withdrawal(rows, short, float(standing.get("queued_age") or 0))
+    if queue_id is None:
+        return False
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(spirerun.WITHDRAW_SQL, (spirerun.SOURCE_WITHDRAWN, queue_id))
+    log.warning("spire: %s: the unstarted Upper Spire run is taken back: %s",
+                campaignqueue._family(family), short or "it waited too long")
+    return True
 
 
 def _write_queue(plan, source: str, new_ids: list | None = None) -> int:
@@ -11542,9 +11638,7 @@ class Bridge(discord.Client):
         """
         run = await asyncio.to_thread(_active_dungeon_run, names)
         live_maps = await asyncio.to_thread(_fetch_live_maps, names)
-        dungeon_maps = set(dungeonpath.PORTAL_MAPS.values()) | {
-            raidrun.MOLTEN_CORE_MAP
-        }
+        dungeon_maps = set(dungeonpath.PORTAL_MAPS.values()) | set(raidrun.MAPS.values())
         inside = next(
             (
                 int(map_id)
@@ -21268,6 +21362,12 @@ class Bridge(discord.Client):
         if await self._plan_campaigns(pending, fams):
             pending = campaignqueue.pending_by_family(
                 await asyncio.to_thread(_fetch_queue_rows))
+        # THE UPPER SPIRE RUN ORDERS AND ENDS ITSELF (spirerun.py). After the
+        # planner, so the order sits among the entries it just wrote.
+        spire_pass = getattr(self, "_spire_pass", None)
+        if spire_pass is not None and await spire_pass(pending, fams):
+            pending = campaignqueue.pending_by_family(
+                await asyncio.to_thread(_fetch_queue_rows))
         # THE TRAVEL COLUMN FIRST, AND FOR EVERY FAMILY (#227): a family whose
         # queue emptied must get its town errands back this pass too.
         note_stalls = getattr(self, "_note_stalls", None)
@@ -21282,6 +21382,19 @@ class Bridge(discord.Client):
             return
         for key, rows in pending.items():
             await self._campaign_queue_family_once(key, rows, fams, held)
+
+    async def _spire_pass(self, pending: dict, fams: dict) -> bool:
+        """Each family's Upper Spire pass; True when any queue moved. A failed
+        read costs one family one pass."""
+        moved = False
+        for key, fam in fams.items():
+            try:
+                moved = await asyncio.to_thread(
+                    _spire_family, key, fam, pending.get(key, [])) or moved
+            except pymysql.err.MySQLError:
+                log.exception("spire: the pass for %s failed; retrying next cycle",
+                              campaignqueue._family(key))
+        return moved
 
     async def _family_lent_hold(self, key: str, fam: dict) -> bool:
         """Whether this family's queue waits for members lent to a guild run
