@@ -396,7 +396,8 @@ class Wiring(unittest.TestCase):
 
     def test_the_memo_kinds_fit_the_store(self):
         kinds = re.findall(r'_ClockMemo\(\s*"([^"]+)"', SOURCE)
-        self.assertEqual(5, len(set(kinds)), kinds)
+        self.assertIn("material_request", kinds)
+        self.assertEqual(4, len(set(kinds) - {"material_request"}), kinds)
         self.assertTrue(all(len(kind) <= 32 for kind in kinds))
 
 
