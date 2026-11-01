@@ -249,6 +249,49 @@ class GearupTests(unittest.TestCase):
             ],
         )
 
+    def test_decorative_holdable_is_not_gear_for_any_shopping_path(self):
+        character = {
+            "class": "rogue",
+            "level": 45,
+            "purse": 300000,
+            "equipped": {"mainhand": 40, "offhand": 19},
+        }
+        roses = item(23, entry=3423, ilvl=50, price=20000, has_item_effect=0)
+        for cls in ("rogue", "paladin", "mage", "priest"):
+            facts = {"T": dict(character, **{"class": cls})}
+            with self.subTest(cls=cls):
+                self.assertEqual((), gearup.plan_buys(facts, [roses]))
+                self.assertEqual((), gearup.plan_vendor_buys(facts, {"T": [roses]}))
+                trip = gearup.vendor_trip(
+                    facts,
+                    [
+                        dict(
+                            roses,
+                            vendor=1302,
+                            vendor_name="Florist",
+                            map_id=0,
+                            yards=100,
+                        )
+                    ],
+                    map_id=0,
+                )
+                self.assertEqual(0, trip.vendor)
+
+    def test_useful_holdable_remains_available_from_vendor_and_auction(self):
+        facts = {
+            "T": {
+                "class": "mage",
+                "level": 35,
+                "purse": 300000,
+                "equipped": {"mainhand": 30},
+            }
+        }
+        useful = item(23, has_item_effect=1)
+        self.assertEqual("offhand", gearup.plan_buys(facts, [useful])[0].slot)
+        self.assertEqual(
+            "offhand", gearup.plan_vendor_buys(facts, {"T": [useful]})[0].slot
+        )
+
     def test_tank_offhand_only_accepts_shield(self):
         c = {
             "class": "warrior",

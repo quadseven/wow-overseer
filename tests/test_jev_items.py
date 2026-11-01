@@ -537,7 +537,7 @@ class BridgeWiringTest(unittest.TestCase):
         plan = body.index(
             "jev_plan = await self._jev_items_plan(jev_rows, worn, names)"
         )
-        give = body.index("await self._hand_gear(gear_rows, worn, names, jev_plan)")
+        give = body.index("await self._hand_gear(")
         equip = body.index(
             "await self._equip_upgrades(equip_rows, worn, names, jev_plan)"
         )

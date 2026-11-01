@@ -182,7 +182,9 @@ class ThePageAndTheEndpoint(unittest.TestCase):
         self.assertIn('"/api/runtimeline": _run_timeline,', SERVER)
         handler = SERVER[SERVER.index("def _run_timeline") : SERVER.index("def _recap")]
         self.assertNotIn("query.get", handler)
-        self.assertIn("self._send(503", handler)
+        self.assertIn(
+            '@_get_route("run timeline query failed")\n    def _run_timeline(', SERVER
+        )
 
     def test_the_read_is_guarded_and_bounded(self):
         fetch = SERVER[SERVER.index("def _fetch_run_timeline") :]

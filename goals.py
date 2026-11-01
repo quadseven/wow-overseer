@@ -116,8 +116,133 @@ QUEST_TARGET = 0
 # (infra dungeon-decision gap): a family-wide plan to run a named dungeon,
 # stored the same way 'quest' is - see Goal.dungeon_keyword below and
 # _persist_council_plan's comment on what each column holds for it.
-GOAL_KINDS = ("level", "skill", "quest", "dungeon")
+#
+# The two guild kinds (#94) carry a guild's goal rather than one character's:
+# a count of finished runs, or an item set read from the drop tables. New
+# values go on the END of both enums here: MySQL stores an ENUM as its index,
+# so a value inserted earlier would renumber every stored row.
+GUILD_COUNT = "guild_count"
+GUILD_ITEMS = "guild_items"
+GUILD_KINDS = (GUILD_COUNT, GUILD_ITEMS)
+GOAL_KINDS = ("level", "skill", "quest", "dungeon", *GUILD_KINDS)
 KIND_COLUMN = "ENUM(%s) NOT NULL" % ",".join("'%s'" % k for k in GOAL_KINDS)
+
+# 'queued' waits behind a running guild goal and 'released' gave up on the
+# hold timeout. A per-character goal never takes either.
+GOAL_STATUSES = ("active", "completed", "cancelled", "queued", "released")
+STATUS_COLUMN = "ENUM(%s) NOT NULL DEFAULT 'active'" % ",".join(
+    "'%s'" % s for s in GOAL_STATUSES
+)
+
+# What a guild goal adds to overseer_goal, in column order. `guild` is the
+# target, `item_set` the set as queued ("item:spell,..."), and `started_at` is
+# when it left the queue, so a count never includes runs from before its turn.
+# The instance goes in skill_name, the way a dungeon goal's keyword does.
+GUILD_COLUMNS = {
+    "guild": "VARCHAR(24) NOT NULL DEFAULT ''",
+    "item_set": "TEXT NULL",
+    "started_at": "TIMESTAMP NULL DEFAULT NULL",
+}
+
+# How long a goal may make no progress before it is released: the half hour
+# mod-overseer holds a quest aim that never lands. bridge.LEVEL_AIM_SECONDS
+# reads this same number, because #94 reuses that precedent rather than
+# inventing a second one.
+#
+# It runs in supervision cycles, like SKILL_BARREN_CYCLES and for the same
+# reason: the count lives on the goal row, the one memory a restart keeps.
+# tests/test_guild_goal.py fails if bridge.GOAL_INTERVAL stops being 60. Thirty
+# cycles is also two of the 15-minute saves character_spell and
+# character_inventory are flushed on, so the save clock alone cannot release a
+# goal.
+QUEST_HOLD_SECONDS = 1800.0
+GUILD_HOLD_CYCLES = int(QUEST_HOLD_SECONDS // 60)
+
+# The instances a guild goal can name, each by its site name (achievements
+# .DUNGEONS, which this module sits below and cannot import;
+# tests/test_guild_goal.py holds the two together) and its common short forms.
+INSTANCE_MAPS = {
+    "deadmines": 36,
+    "vc": 36,
+    "wailing caverns": 43,
+    "wc": 43,
+    "ragefire chasm": 389,
+    "rfc": 389,
+    "shadowfang keep": 33,
+    "sfk": 33,
+    "stockade": 34,
+    "blackfathom deeps": 48,
+    "bfd": 48,
+    "gnomeregan": 90,
+    "gnomer": 90,
+    "razorfen kraul": 47,
+    "rfk": 47,
+    "scarlet monastery": 189,
+    "sm": 189,
+    "razorfen downs": 129,
+    "rfd": 129,
+    "uldaman": 70,
+    "ulda": 70,
+    "zul'farrak": 209,
+    "zf": 209,
+    "maraudon": 349,
+    "mara": 349,
+    "sunken temple": 109,
+    "st": 109,
+    "blackrock depths": 230,
+    "brd": 230,
+    "blackrock spire": 229,
+    "brs": 229,
+    "scholomance": 289,
+    "scholo": 289,
+    "stratholme": 329,
+    "strat": 329,
+    "dire maul": 429,
+    "dm": 429,
+}
+
+# Short forms -> the name a row stores, so "BRD" and "Blackrock Depths" are one
+# instance on the row and in every sentence that says it.
+_INSTANCE_NAMES = {
+    map_id: name
+    for name, map_id in sorted(INSTANCE_MAPS.items(), key=lambda kv: len(kv[0]))
+}
+
+# item_template.Quality and .class, in the words an order uses. Recipe, pattern,
+# plans, schematic and formula are all class 9.
+ITEM_QUALITIES = {"common": 1, "uncommon": 2, "rare": 3, "epic": 4, "legendary": 5}
+RECIPE_CLASS = 9
+ITEM_CLASSES = {
+    "recipe": RECIPE_CLASS,
+    "pattern": RECIPE_CLASS,
+    "plan": RECIPE_CLASS,
+    "schematic": RECIPE_CLASS,
+    "formula": RECIPE_CLASS,
+    "weapon": 2,
+    "armor": 4,
+    "armour": 4,
+}
+
+
+def guild_goal_migrations(shape: Mapping) -> list:
+    """The ALTERs a guild goal needs, from `shape`, the table's current
+    {column: type}. Empty `shape` means no table yet: CREATE TABLE makes it.
+
+    goal_migrations's own reasoning applies word for word, and these are
+    separate only because they read more of the table than its two inputs.
+    """
+    if not shape:
+        return []
+    out = []
+    status = str(shape.get("status", ""))
+    if any("'%s'" % value not in status for value in GOAL_STATUSES):
+        out.append("ALTER TABLE overseer_goal MODIFY status " + STATUS_COLUMN)
+    for column, definition in GUILD_COLUMNS.items():
+        if column not in shape:
+            out.append(
+                "ALTER TABLE overseer_goal ADD COLUMN %s %s" % (column, definition)
+            )
+    return out
 
 
 def goal_migrations(kind_column_type: str, has_quest_id: bool) -> list:
@@ -193,6 +318,24 @@ class Goal:
     skill_name: str | None = None
     # kind='quest' only. The id mod-overseer aims a bot at; 0 everywhere else.
     quest_id: int = 0
+
+
+@dataclass(frozen=True)
+class GuildGoal:
+    """A guild-scale goal, before persistence (#94).
+
+    `guild` is the name the order gave, or "" when it named none, which means
+    the guild of the character addressed; bridge._queue_guild_goal resolves
+    that, and for GUILD_ITEMS reads the set and sets `target` to its size.
+    Parsing touches no database, so `target` is 0 on an item goal until then.
+    """
+
+    kind: str  # GUILD_COUNT | GUILD_ITEMS
+    instance: str  # a key of INSTANCE_MAPS, its full name
+    target: int = 0
+    guild: str = ""
+    item_class: int = 0
+    quality: int = 0
 
 
 @dataclass(frozen=True)
@@ -340,6 +483,14 @@ class MarkComplete:
     goal_id: int
 
 
+@dataclass(frozen=True)
+class ReleaseGoal:
+    """Give up on a goal, so the one behind it can run; `reason` is logged."""
+
+    goal_id: int
+    reason: str
+
+
 # Longest names first so 'leatherworking' cannot half-match anything shorter.
 # Multi-word names ('first aid') tolerate any run of whitespace between words.
 _PROF_ALT = "|".join(
@@ -363,6 +514,33 @@ _LEVEL_RE = re.compile(
 # already attached to the character the directive was addressed to.
 _QUEST_RE = re.compile(r"\bwork\s+quest\s+(\d{1,6})\b", re.IGNORECASE)
 
+# Guild goals name a known instance or do not match at all, which is what keeps
+# "run to town 3 times" an ordinary order. Longest first, as with _PROF_ALT.
+_INSTANCE_ALT = "|".join(
+    r"\s+".join(re.escape(word) for word in name.split())
+    for name in sorted(INSTANCE_MAPS, key=len, reverse=True)
+)
+_QUALITY_ALT = "|".join(ITEM_QUALITIES)
+_CLASS_ALT = "|".join(ITEM_CLASSES)
+_ITEM_WORDS = rf"({_QUALITY_ALT})\s+({_CLASS_ALT})"
+_GUILD_COUNT_RE = re.compile(
+    rf"\b(?:run|clear|farm)\s+(?:the\s+)?({_INSTANCE_ALT})\s+(\d{{1,4}})\s+times\b",
+    re.IGNORECASE,
+)
+_GUILD_ITEMS_RE = re.compile(
+    rf"\b(?:every|all(?:\s+the)?)\s+{_ITEM_WORDS}s?\s+"
+    rf"from\s+(?:the\s+)?({_INSTANCE_ALT})\b",
+    re.IGNORECASE,
+)
+_GUILD_FARM_RE = re.compile(
+    rf"\bfarm\s+(?:the\s+)?({_INSTANCE_ALT})\s+until\b[^.!?]{{0,40}}?"
+    rf"\b(?:every|all(?:\s+the)?)\s+{_ITEM_WORDS}s?\b",
+    re.IGNORECASE,
+)
+_GUILD_NAME_RE = re.compile(r"\b([A-Za-z]+)\s+guild\b", re.IGNORECASE)
+# "<word> guild" where the word points at a guild rather than naming one.
+_NOT_A_GUILD_NAME = frozenset({"the", "our", "my", "your", "this", "that", "whole"})
+
 # Bounded gap so 'forget'/'cancel' only binds to a nearby 'goal', not one
 # three sentences away in an unrelated order.
 _CANCEL_RE = re.compile(
@@ -371,7 +549,47 @@ _CANCEL_RE = re.compile(
 )
 
 
-def parse_goal(text: str) -> Goal | CancelGoal | None:
+def _instance_name(said: str) -> str:
+    """The stored name of an instance, from any of the forms an order uses."""
+    return _INSTANCE_NAMES[INSTANCE_MAPS[" ".join(said.lower().split())]]
+
+
+def _guild_named(text: str) -> str:
+    m = _GUILD_NAME_RE.search(text)
+    if m is None or m.group(1).lower() in _NOT_A_GUILD_NAME:
+        return ""
+    return m.group(1)
+
+
+def _item_goal(text: str, instance: str, quality: str, item_class: str) -> GuildGoal:
+    return GuildGoal(
+        GUILD_ITEMS,
+        _instance_name(instance),
+        guild=_guild_named(text),
+        item_class=ITEM_CLASSES[item_class.lower()],
+        quality=ITEM_QUALITIES[quality.lower()],
+    )
+
+
+def _parse_guild_goal(text: str) -> GuildGoal | None:
+    m = _GUILD_COUNT_RE.search(text)
+    if m:
+        count = int(m.group(2))
+        if count < 1:
+            return None
+        return GuildGoal(
+            GUILD_COUNT, _instance_name(m.group(1)), count, _guild_named(text)
+        )
+    m = _GUILD_ITEMS_RE.search(text)
+    if m:
+        return _item_goal(text, m.group(3), m.group(1), m.group(2))
+    m = _GUILD_FARM_RE.search(text)
+    if m:
+        return _item_goal(text, m.group(1), m.group(2), m.group(3))
+    return None
+
+
+def parse_goal(text: str) -> Goal | GuildGoal | CancelGoal | None:
     """Recognize a goal-shaped order inside a natural-language directive.
 
     Skill shapes are checked before level shapes so 'level your cooking to
@@ -380,6 +598,9 @@ def parse_goal(text: str) -> Goal | CancelGoal | None:
     """
     if _CANCEL_RE.search(text):
         return CancelGoal()
+    guild_goal = _parse_guild_goal(text)
+    if guild_goal is not None:
+        return guild_goal
     m = _QUEST_RE.search(text)
     if m:
         quest_id = int(m.group(1))
@@ -400,6 +621,59 @@ def parse_goal(text: str) -> Goal | CancelGoal | None:
         if 2 <= target <= MAX_LEVEL:
             return Goal("level", target)
     return None
+
+
+def encode_item_set(rows) -> str:
+    """ "item:spell,..." from the item-set read, for overseer_goal.item_set.
+
+    The set is fixed when it is queued, so `target` and the list cannot part
+    company if the world database changes under a running goal.
+    """
+    return ",".join("%d:%d" % (int(r["item"]), int(r["spell"])) for r in rows)
+
+
+def decode_item_set(text: str | None) -> dict:
+    """item id -> the spell that proves it known, 0 for an item with none."""
+    pairs = (pair.split(":") for pair in (text or "").split(",") if pair)
+    return {int(item): int(spell) for item, spell in pairs}
+
+
+def items_done(item_set: Mapping, known_spells, held_items) -> frozenset:
+    """The listed items at least one member knows or holds.
+
+    `known_spells` and `held_items` are already the whole guild's, pooled: a
+    set is met by the guild, so who has what does not matter here.
+    """
+    return frozenset(
+        item
+        for item, spell in item_set.items()
+        if item in held_items or (spell and spell in known_spells)
+    )
+
+
+def goals_to_start(rows, members_by_guild: Mapping) -> list:
+    """Which queued guild goals may start: one goal per member at a time.
+
+    `rows` are the guild goals 'active' or 'queued'. A running goal holds every
+    member of its guild, and a queued goal that has to wait keeps its members
+    too, so nothing later slips past it. Per-character goals take no part:
+    the council keeps those on most of a family for weeks with no timeout, so
+    counting them would leave a guild goal waiting indefinitely.
+    """
+    ordered = sorted(rows, key=lambda r: int(r["id"]))
+    running = [r for r in ordered if r["status"] == "active"]
+    busy = set()
+    for row in running:
+        busy |= set(members_by_guild.get(row["guild"], ()))
+    start = []
+    for row in ordered:
+        if row["status"] != "queued":
+            continue
+        members = set(members_by_guild.get(row["guild"], ()))
+        if not members & busy:
+            start.append(int(row["id"]))
+        busy |= members
+    return start
 
 
 def observed_from_left(left: int | None) -> int | None:
@@ -846,6 +1120,10 @@ def _describe(kind: str, skill_name: str | None, target: int, quest_id: int = 0)
         # things is how a schema starts lying. The council's own sentence is
         # already in the goal's reason and says the title out loud.
         return f"quest {quest_id}"
+    if kind == GUILD_COUNT:
+        return f"{skill_name}, {target} run{'s' if target != 1 else ''}"
+    if kind == GUILD_ITEMS:
+        return f"{target} listed item{'s' if target != 1 else ''} from {skill_name}"
     if kind == "dungeon":
         # skill_name carries the job keyword here, not a skill - see
         # _persist_council_plan's comment on why that column holds it. A
@@ -855,15 +1133,37 @@ def _describe(kind: str, skill_name: str | None, target: int, quest_id: int = 0)
     return f"level {target}"
 
 
-def describe(goal: Goal) -> str:
+def describe(goal: Goal | GuildGoal) -> str:
+    if isinstance(goal, GuildGoal):
+        return f"{goal.guild}: {_describe(goal.kind, goal.instance, goal.target)}"
     return _describe(goal.kind, goal.skill_name, goal.target, goal.quest_id)
 
 
-def ack_text(name: str, goal: Goal) -> str:
+def ack_text(name: str, goal: Goal | GuildGoal) -> str:
+    if isinstance(goal, GuildGoal):
+        return (
+            f"{name} passes the charge to the guild: {describe(goal)}. It joins "
+            "the queue behind any goal already running, and I will report "
+            "progress here."
+        )
     return (
         f"{name} accepts the charge: {describe(goal)}. "
         "I will keep watch and report progress here."
     )
+
+
+def guild_refusal_text(name: str, goal: GuildGoal) -> str:
+    """Why bridge._queue_guild_goal queued nothing, from the goal it returned."""
+    if not goal.guild:
+        return f"{name} is in no guild, so that goal has nobody to run it."
+    if goal.kind == GUILD_ITEMS and not goal.target:
+        quality = next(k for k, v in ITEM_QUALITIES.items() if v == goal.quality)
+        item = next(k for k, v in ITEM_CLASSES.items() if v == goal.item_class)
+        return (
+            f"The drop tables list no {quality} {item} from {goal.instance}, "
+            "so that goal has nothing to collect."
+        )
+    return f"There is no guild called {goal.guild} on this realm."
 
 
 def cancel_text(name: str, cancelled: int) -> str:
@@ -892,6 +1192,8 @@ def milestone_text(row: Mapping, observed: int) -> str:
         # everybody, and the character_name on the row is who the council
         # named, not who is running it (see DriveDungeon's docstring).
         return f"The family advances: {observed} of {int(row['target'])} runs done on {what}."
+    if row["kind"] in GUILD_KINDS:
+        return f"{row['guild']} advances: {observed} of {int(row['target'])} on {what}."
     if row["kind"] == "skill":
         return f"{row['character_name']} advances: {row['skill_name']} {observed}, aiming for {what}."
     remaining = int(row["target"]) - observed
@@ -916,6 +1218,8 @@ def completion_text(row: Mapping, observed: int) -> str:
         )
     if row["kind"] == "dungeon":
         return f"Goal complete: the family finished its campaign on {what}."
+    if row["kind"] in GUILD_KINDS:
+        return f"Goal complete: {row['guild']} finished {what}."
     return f"Goal complete: {row['character_name']} reached {what} (now at {observed})."
 
 
@@ -988,6 +1292,8 @@ def reconcile(row: Mapping, observed: int | None) -> list:
         # `nc +grind` - see strategy_for's docstring for what that cost and
         # _reconcile_skill for what replaces it.
         return _reconcile_skill(row, observed)
+    if row.get("kind") in GUILD_KINDS:
+        return _reconcile_guild(row, observed)
     name = row["character_name"]
     goal_id = int(row["id"])
     target = int(row["target"])
@@ -1201,3 +1507,50 @@ def _reconcile_dungeon(row: Mapping, observed: int) -> list:
         actions.append(Report(text))
     actions.append(RecordProgress(goal_id, observed, 0 if renew else leases + 1))
     return actions
+
+
+def release_reason(row: Mapping, observed: int) -> str:
+    """The sentence a released goal is logged and reported under."""
+    what = _describe(row["kind"], row.get("skill_name"), int(row["target"]))
+    return (
+        f"{row['guild']}, {what}: no progress for {int(QUEST_HOLD_SECONDS)} seconds, "
+        f"the quest drive's hold timeout, at {observed} of {int(row['target'])}"
+    )
+
+
+def _reconcile_guild(row: Mapping, observed: int) -> list:
+    """One supervision cycle for a guild goal (#94).
+
+    It watches and commands nobody: nothing drives a guild goal yet, which is
+    the rest of map #88. So this is the two ends of one, completion and
+    release, and the stall counter between them.
+
+    ONLY A RISE IS PROGRESS. An item set's count can fall, when the one member
+    who held an item leaves the guild, and that must not hold off a release.
+    Unlike the skill branch, a fall here is a real event and not a bad read.
+
+    An unreadable cycle never gets here: reconcile returns on `observed` None,
+    so a database hiccup cannot count towards a release.
+    """
+    name = row["character_name"]
+    goal_id = int(row["id"])
+    if observed >= int(row["target"]):
+        text = completion_text(row, observed)
+        return [MilestoneThought(name, text), Report(text), MarkComplete(goal_id)]
+
+    last, stalls = _read_report(row)
+    if last is None:
+        return [RecordProgress(goal_id, observed)]
+    if observed > last:
+        text = milestone_text(row, observed)
+        return [
+            MilestoneThought(name, text),
+            Report(text),
+            RecordProgress(goal_id, observed),
+        ]
+    stalls += 1
+    if stalls < GUILD_HOLD_CYCLES:
+        return [RecordProgress(goal_id, observed, stalls)]
+    # The Report first, as with MarkComplete: a failed send retries next cycle.
+    reason = release_reason(row, observed)
+    return [Report(f"Goal released: {reason}."), ReleaseGoal(goal_id, reason)]

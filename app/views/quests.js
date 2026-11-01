@@ -257,6 +257,13 @@ function attempt(a) {
 ${when ? html`<span class="dim qs-s">${when}</span>` : ""}${a.reason ? html`<p class="qs-reason">${a.reason}</p>` : a.state === "broken" ? html`<p class="qs-reason">${notMeasured("no reason recorded")}</p>` : ""}</li>`;
 }
 
+// A ticket renders only as an object with an https url: the link comes from a
+// read, and anything else is not a link to follow.
+function ticketLink(ticket) {
+  if (!ticket || typeof ticket !== "object" || !/^https:\/\//.test(String(ticket.url || ""))) return "";
+  return html` <a class="qs-s" href="${ticket.url}" target="_blank" rel="noopener">Ticket #${ticket.number}</a>`;
+}
+
 function questPage(ctx) {
   // render() calls this only for a route with an id; #/quests uses the catalogue.
   const back = html`<a class="qs-back" href="${build(["quests"], kept(ctx.query))}"><i class="ph ph-arrow-left" aria-hidden="true"></i>All quests</a>`;
@@ -270,7 +277,7 @@ function questPage(ctx) {
   }
   const x = read.data.quest || {};
   const list = read.data.attempts || [];
-  const line = html`${statusTag(x.status)} <span class="dim">L${levelText(x)} | ${zoneOf(x) || "zone not measured"} | ${x.faction ? sideName(x.faction) : "faction not measured"}</span>`;
+  const line = html`${statusTag(x.status)} <span class="dim">L${levelText(x)} | ${zoneOf(x) || "zone not measured"} | ${x.faction ? sideName(x.faction) : "faction not measured"}</span>${ticketLink(x.ticket)}`;
   return html`${back}${pageHead(x.title || "Quest " + ctx.params.id, line)}${sectionHead("", "Attempts", plural(list.length, "attempt"))}${list.length ? html`<ol class="qs-attempts">${list.map(attempt)}</ol>` : state("empty", "No attempts yet", "No quester has tried this quest.")}`;
 }
 

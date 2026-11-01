@@ -89,6 +89,43 @@ before opening the PR.
    mod-overseer carries a patch under its `patches/` that infra does not apply, and names the file. A fast
    failure at that step means a missing patch port to infra's `patches/` tree, not a flake: port the patch, do
    not rerun.
+   The source locations and workflow are declared for the Loom station here:
+
+   ```loom-roll-pins
+   {
+     "deployment_repo": "infra",
+     "build_workflow": "build.azerothcore-playerbots.yml",
+     "sources": [
+       {
+         "repository": "mod-overseer",
+         "location": "production/docker/azerothcore-playerbots/UPSTREAM-PINS.env",
+         "keys": ["AC_OVERSEER_SHA"]
+       },
+       {
+         "repository": "mod-dungeon-clear",
+         "location": "production/docker/azerothcore-playerbots/UPSTREAM-PINS.env",
+         "keys": ["AC_DUNGEON_CLEAR_SHA"],
+         "revision_repo": "mod-dungeon-clear",
+         "revision_ref": "deployed fork branch"
+       },
+       {
+         "repository": "azerothcore",
+         "location": "production/docker/azerothcore-playerbots/UPSTREAM-PINS.env",
+         "keys": ["AC_CORE_SHA", "AC_MODULE_SHA", "AC_OLLAMA_CHAT_SHA"]
+       },
+       {
+         "repository": "mod-overseer",
+         "location": "production/docker/azerothcore-playerbots/ gitlink"
+       },
+       {
+         "repository": "mod-overseer",
+         "location": ".github/scripts/wow_promotion_drift.py",
+         "entry": "dev",
+         "dict_dev": true
+       }
+     ]
+   }
+   ```
 3. **Read both digests from the build run's push lines**, each under its own `The push refers to repository
    [ghcr.io/quadseven/<image>]` line: `ac-playerbots-worldserver` and `ac-playerbots-db-import`. A digest read
    from the wrong repository line is the classic mistake.
@@ -111,6 +148,19 @@ Its channel and release files live in infra under `production/realm-roller/wow-d
 channel is PAUSED and its seed releases are stale (it needs a GitHub App, infra#5027, an operator step), so run
 the steps above by hand. `tools/realm_roller.py validate` and `dry-run` are read-only and safe to run: dry-run
 prints the gates it sees and what it would do. Turning the roller on is an operator decision.
+
+### 1c. Addon ship (the stream clients' in-game panels)
+
+`wow-addons/` is not in any image, so neither ship above carries it. Merging changes nothing on a stream.
+
+1. Copy each changed file from the merged main to the client container, into `base`, and into each streamed
+   character's folder under `/opt/wow/<Name>/Interface/AddOns/`. Those folders are hard links into `base`, so
+   overwrite an existing file in place (`cat new > old`), which keeps the links, and link a new one with `ln`.
+2. Restart each client: `systemctl restart wow-session@<Name>`. A file added to the `.toc` needs a restart
+   because a client reads the addon list when it launches. The character stays in the world and its stream
+   comes back with the session, in about two minutes. Nothing here touches a campaign.
+3. Prove it with a frame from the stream: `ffmpeg -rtsp_transport tcp -i rtsp://127.0.0.1:8554/dev<name>
+   -frames:v 1 out.jpg` inside the container, while the character does what the panel reports.
 
 ## 2. Before any ship
 

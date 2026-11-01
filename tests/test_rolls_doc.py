@@ -12,9 +12,30 @@ safety checks that still gate a roll in the file.
 """
 
 import pathlib
+import json
+import re
 import unittest
 
 ROLLS = pathlib.Path(__file__).resolve().parent.parent / "docs" / "ROLLS.md"
+
+
+def _named_locations(text):
+    """Each path, pin key and field the step's location bullets name."""
+    step = text.split("**Bump the source pins only**", 1)[1]
+    bullets = step.split("source locations move:", 1)[1].split("Check `git status", 1)[
+        0
+    ]
+    tokens = re.findall(r"`([^`]+)`", bullets)
+    return [
+        t
+        for t in tokens
+        if t.endswith("_SHA") or t == '"dev"' or t.endswith((".env", ".py", "/"))
+    ]
+
+
+def _pin_gaps(text, declared):
+    """The locations the step names that the declared pins omit."""
+    return [name for name in _named_locations(text) if name not in declared]
 
 
 class RollsDocTest(unittest.TestCase):
@@ -67,6 +88,25 @@ class RollsDocTest(unittest.TestCase):
         for kept in ("build.yml", "Pre-roll adversarial review"):
             with self.subTest(kept=kept):
                 self.assertTrue(kept in bridge_ship, f"ROLLS.md 1a lost: {kept!r}")
+
+    def test_roll_source_pins_cover_every_location_in_step_two(self):
+        blocks = re.findall(r"```loom-roll-pins\s*\n(.*?)\n\s*```", self.text, re.S)
+        self.assertEqual(len(blocks), 1, "ROLLS.md must contain exactly one pin block")
+        pins = json.loads(blocks[0])
+        self.assertIn("deployment_repo", pins)
+        self.assertIn("build_workflow", pins)
+        sources = pins["sources"]
+        declared = json.dumps(sources)
+        self.assertEqual(_pin_gaps(self.text, declared), [])
+
+    def test_a_location_dropped_from_the_block_is_a_gap(self):
+        named = _named_locations(self.text)
+        self.assertIn("AC_OVERSEER_SHA", named)
+        self.assertIn(".github/scripts/wow_promotion_drift.py", named)
+        self.assertEqual(
+            _pin_gaps(self.text, " ".join(set(named) - {"AC_CORE_SHA"})),
+            ["AC_CORE_SHA"],
+        )
 
 
 if __name__ == "__main__":

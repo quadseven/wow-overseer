@@ -14,6 +14,7 @@ each corpse run he pulled again at half health and mana. 119 of the two guilds'
 import unittest
 
 import guildjobs
+import keep
 import member_rungs
 import restsupply
 
@@ -75,6 +76,18 @@ HARLY = [offer(2140, 1179, 125, 5, DRINK, yards=100.0, name="Edwin Harly")]
 def grey(guid, price, count=1):
     return guildjobs.Carried(
         guid=guid, entry=900 + guid, count=count, quality=0, sell_price=price
+    )
+
+
+def stack(guid, entry, count, item_class, subclass, price, quality=1):
+    return guildjobs.Carried(
+        guid=guid,
+        entry=entry,
+        count=count,
+        item_class=item_class,
+        subclass=subclass,
+        quality=quality,
+        sell_price=price,
     )
 
 
@@ -153,6 +166,97 @@ class TheStep(unittest.TestCase):
         step, _why = guildjobs.supply_step(carrying, BATES, 20000.0)
         self.assertEqual(step.rows[0].kind, "sell")
         self.assertEqual(step.rows[0].command, "guid:11")
+
+    def test_full_bags_sell_the_lowest_value_spare_stacks_first(self):
+        # Read live 2026-10-30: 170 of 215 supply buys were refused "bags cannot
+        # take the item", and a member with full bags and no junk never eats.
+        full = member(
+            free_slots=0,
+            bag_slots=16,
+            reserved=frozenset({2589, 2592, 2318}),
+            carried=(
+                stack(21, 2589, 4, 7, 5, 13),
+                stack(22, 2592, 2, 7, 5, 55),
+                stack(23, 2318, 9, 7, 6, 15),
+            ),
+        )
+        step, why = guildjobs.supply_step(full, BATES, 20000.0)
+        self.assertEqual(why, "")
+        self.assertEqual([r.kind for r in step.rows], ["sell", "sell", "buy", "buy"])
+        self.assertEqual([r.command for r in step.rows[:2]], ["guid:21", "guid:22"])
+        self.assertEqual(len(step.sales), 2)
+
+    def test_materials_go_before_recipes_and_recipes_before_scrolls(self):
+        full = member(
+            free_slots=0,
+            bag_slots=16,
+            carried=(
+                stack(41, 955, 1, 0, 4, 1),  # a scroll, cheapest of all
+                stack(42, 4345, 1, 9, 2, 5),  # a recipe
+                stack(43, 2589, 20, 7, 5, 13),  # cloth, dearest
+            ),
+            reserved=frozenset({4345, 2589}),
+        )
+        step, _why = guildjobs.supply_step(full, BATES, 20000.0)
+        self.assertEqual(
+            [r.command for r in step.rows if r.kind == "sell"], ["guid:43", "guid:42"]
+        )
+
+    def test_the_junk_sale_counts_toward_the_room(self):
+        full = member(
+            free_slots=1,
+            bag_slots=16,
+            reserved=frozenset({2589}),
+            carried=(grey(11, 30), stack(21, 2589, 4, 7, 5, 13)),
+        )
+        step, _why = guildjobs.supply_step(full, BATES, 20000.0)
+        self.assertEqual(
+            [r.command for r in step.rows if r.kind == "sell"], ["guid:11"]
+        )
+
+    def test_room_for_one_buys_the_one(self):
+        full = member(
+            free_slots=0,
+            bag_slots=16,
+            reserved=frozenset({2589}),
+            carried=(stack(21, 2589, 4, 7, 5, 13),),
+        )
+        step, _why = guildjobs.supply_step(full, BATES, 20000.0)
+        self.assertEqual([r.kind for r in step.rows], ["sell", "buy"])
+
+    def test_room_never_costs_food_quest_items_reagents_or_rare_gear(self):
+        full = member(
+            free_slots=0,
+            bag_slots=16,
+            carried=(
+                stack(31, 117, 3, 0, 5, 1),  # food
+                stack(32, 5000, 1, 12, 0, 5),  # a quest item
+                stack(33, 17030, 5, 5, 0, 10),  # a reagent
+                stack(34, 6000, 1, 2, 4, 900, quality=3),  # a rare weapon
+                stack(35, 9000, 1, 9, 2, 900, quality=3),  # a rare recipe
+                stack(36, guildjobs.SOUL_SHARD, 1, 7, 5, 5),
+            ),
+        )
+        step, why = guildjobs.supply_step(full, BATES, 20000.0)
+        self.assertIsNone(step)
+        self.assertIn("no room", why)
+
+    def test_a_stack_kept_in_overseer_keep_is_not_sold_for_room(self):
+        kept = keep.from_rows([{"character_name": "Femur", "item_guid": 21}])
+        full = member(
+            free_slots=0,
+            bag_slots=16,
+            reserved=frozenset({2589}),
+            carried=(stack(21, 2589, 4, 7, 5, 13),),
+        )
+        step, why = guildjobs.supply_step(full, BATES, 20000.0, kept)
+        self.assertIsNone(step)
+        self.assertIn("no room", why)
+
+    def test_unread_bags_change_nothing(self):
+        step, why = guildjobs.supply_step(member(), BATES, 20000.0)
+        self.assertEqual(why, "")
+        self.assertEqual({r.kind for r in step.rows}, {"buy"})
 
     def test_a_hostile_vendor_is_never_walked_to(self):
         alliance = member(race=1)
