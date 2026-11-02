@@ -1498,6 +1498,32 @@ class TheOutcomeIsReadOffTheRow(unittest.TestCase):
         self.assertEqual(
             (seen["deaths"], seen["bosses_done"], seen["loot_items"]), (2, 4, 17)
         )
+        # The module reads the count off the tank's instance bind, which reads
+        # nothing while the tank stands outside: a count never falls.
+        fell = guildrun.outcome_from_row(
+            {
+                "id": 1,
+                "bosses_done": 5,
+                "status": "applied",
+                "detail": "cleared",
+                "result": '{"phase":"done","outcome":"cleared",'
+                '"bosses_done":0,"bosses_total":7}',
+            }
+        )
+        self.assertEqual(fell["bosses_done"], 5)
+        inside = guildrun.outcome_from_row(
+            {
+                "id": 1,
+                "bosses_done": 5,
+                "status": "verifying",
+                "result": '{"phase":"inside","bosses_done":0,"bosses_total":7}',
+            }
+        )
+        self.assertEqual(inside["bosses_done"], 5)
+        bridge_src = (pathlib.Path(__file__).parent.parent / "bridge.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"r.bosses_done, r.bosses_total, "', bridge_src)
         self.assertEqual((seen["ilvl_gained"], seen["levels_gained"]), (12, 1))
         self.assertEqual(seen["loot_notable"], "1,2")
 

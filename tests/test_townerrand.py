@@ -1103,3 +1103,25 @@ class ATwoHanderFillsTheOffHand(unittest.TestCase):
 
     def test_the_subclasses_are_gearups(self):
         self.assertEqual(set(te.TWO_HAND_SUBCLASSES), set(gearup.TWO_HAND_SUBCLASSES))
+
+
+class TheFloorSaleCooldown(unittest.TestCase):
+    def _start(self, gap, floor_sale):
+        state = te.State(ended=1000.0)
+        return te.should_start(
+            state,
+            now=1000.0 + gap,
+            in_run=False,
+            mail_gear={},
+            facts={},
+            bag_pressure_needed=True,
+            floor_sale=floor_sale,
+        )
+
+    def test_a_released_hold_with_a_sale_tries_again_within_the_hour(self):
+        gap = te.FLOOR_SALE_COOLDOWN_SECONDS
+        self.assertEqual(te.BAG_PRESSURE_WHY, self._start(gap, True))
+        self.assertEqual("", self._start(gap, False))
+
+    def test_it_is_still_a_cooldown(self):
+        self.assertEqual("", self._start(60.0, True))
