@@ -1460,3 +1460,38 @@ class MultiObjectiveHunting(unittest.TestCase):
         self.assertEqual(p.move.quest, 56)
         self.assertEqual(p.move.spot.entry, 203)
         self.assertIn("Skeletal Mage", p.move.said)
+
+    def test_hunt_returns_no_hunt_when_all_targets_are_complete(self):
+        cat = world(
+            extra_quests=[
+                quest(
+                    56,
+                    DUSKWOOD,
+                    24,
+                    kill=48,
+                    count=8,
+                    title="The Night Watch",
+                    npc2=203,
+                    npc_count2=6,
+                )
+            ],
+            extra_givers=[
+                giver(56, "start", 1056, 264, 50, 0),
+                giver(56, "end", 1056, 264, 50, 0),
+            ],
+            extra_starts=[started(56, 264)],
+            extra_ends=[ended(56, 264)],
+            extra_spawns=[
+                spawn(2048, 48, 200, 0, name="Skeletal Warrior"),
+                spawn(2203, 203, 250, 0, name="Skeletal Mage"),
+            ],
+            drop={1001, 1002, 1003, 1006, 1020, 1030},
+        )
+        member = mirra(
+            x=200.0,
+            quest_log={56: questers.STATUS_INCOMPLETE},
+            quest_progress={56: 14},
+            quest_counts={56: {"mobcount1": 8, "mobcount2": 6}},
+        )
+        p = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertIsNone(p.move)
