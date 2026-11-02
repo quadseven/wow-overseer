@@ -25,8 +25,9 @@ def quest(
     kill=0,
     count=1,
     title="",
+    **extra,
 ):
-    return {
+    base = {
         "id": qid,
         "title": title or "Quest %d" % qid,
         "sort": zone,
@@ -45,6 +46,8 @@ def quest(
         "npc1": kill,
         "npc_count1": count,
     }
+    base.update(extra)
+    return base
 
 
 def giver(qid, role, guid, entry, x, y, map_id=0, name="Marshal"):
@@ -81,7 +84,14 @@ def ended(qid, entry, kind="creature"):
     return {"quest": qid, "kind": kind, "entry": entry}
 
 
-def world(extra_quests=(), extra_givers=(), extra_starts=(), extra_ends=(), drop=()):
+def world(
+    extra_quests=(),
+    extra_givers=(),
+    extra_starts=(),
+    extra_ends=(),
+    drop=(),
+    extra_spawns=(),
+):
     """Northshire (sorted under its area, 9), Goldshire in Elwynn (12), two
     zones further on, and quests a Human priest may not take."""
     quests = [
@@ -121,7 +131,10 @@ def world(extra_quests=(), extra_givers=(), extra_starts=(), extra_ends=(), drop
         giver(31, "start", 1030, 130, 2000, 0),
         giver(31, "end", 1030, 130, 2000, 0),
     ] + list(extra_givers)
-    spawns = [spawn(2001, 200, 150, 0), spawn(2002, 201, 250, 0, level=3)]
+    spawns = [
+        spawn(2001, 200, 150, 0),
+        spawn(2002, 201, 250, 0, level=3),
+    ] + list(extra_spawns)
     # What is named to give and take each quest, spawned or not.
     named = {g["quest"]: g["entry"] for g in givers if g["role"] == "start"}
     starts = [started(q, e) for q, e in sorted(named.items())] + list(extra_starts)
@@ -131,6 +144,22 @@ def world(extra_quests=(), extra_givers=(), extra_starts=(), extra_ends=(), drop
     # out of these while `starts` and `ends` still name it.
     givers = [g for g in givers if g["guid"] not in drop]
     return questers.catalogue(quests, givers, spawns, [], starts, ends)
+
+
+def durga(**kw):
+    base = dict(
+        name="Durga",
+        level=12,
+        race=HUMAN,
+        class_id=WARRIOR,
+        map_id=0,
+        x=0.0,
+        y=0.0,
+        zone_id=WESTFALL,
+        online=True,
+    )
+    base.update(kw)
+    return questers.Member(**base)
 
 
 def mirra(**kw):
@@ -768,6 +797,112 @@ class Steps(unittest.TestCase):
         self.assertIsNone(
             questers.step_for(member, p.move, 0, cat.quest(1), hunt=False)
         )
+
+    def test_multi_objective_quest_moves_to_next_objective_when_first_is_complete(self):
+        # Quest 12 (The People's Militia): 15 Defias Trappers, 15 Defias Smugglers.
+        q12 = quest(
+            12,
+            WESTFALL,
+            12,
+            min_level=10,
+            title="The People's Militia",
+            npc1=116,
+            npc_count1=15,
+            npc2=598,
+            npc_count2=15,
+        )
+        givers = [
+            giver(12, "start", 1010, 234, 0.0, 0.0, name="Gryan Stoutmantle"),
+            giver(12, "end", 1010, 234, 0.0, 0.0, name="Gryan Stoutmantle"),
+        ]
+        spawns = [
+            spawn(2116, 116, 10.0, 10.0, name="Defias Trapper"),
+            spawn(2598, 598, 500.0, 500.0, name="Defias Smuggler"),
+        ]
+        cat = world(
+            extra_quests=[q12],
+            extra_givers=givers,
+            extra_starts=[started(12, 234)],
+            extra_ends=[ended(12, 234)],
+            extra_spawns=spawns,
+        )
+        # Durga completed objective 1 (15 Defias Trappers) and stands at (10.0, 10.0).
+        # Without objective-aware hunting, Durga would stay at Defias Trapper and stall.
+        member = durga(
+            x=10.0,
+            y=10.0,
+            quest_log={12: 3},
+            quest_counts={12: {"mobcount1": 15, "mobcount2": 0}},
+            quest_progress={12: 15},
+            quests_done=frozenset({20, 21}),
+        )
+        p = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual(p.move.kind, classquest.HUNT)
+        self.assertEqual(p.move.spot.entry, 598)
+        self.assertIn("at Defias Smuggler", p.move.said)
+        step = questers.step_for(member, p.move, 0, cat.quest(12))
+        self.assertTrue(step.walk.command.startswith("walk-to-spawn creature:2598"))
+        self.assertEqual(
+            [r.command for r in step.rows], ["hunt-spawn creature:598 count:15 max:480"]
+        )
+
+        # Once both objectives are complete (15 Trappers, 15 Smugglers), turn in to Gryan.
+        done_member = durga(
+            x=500.0,
+            y=500.0,
+            quest_log={12: 1},
+            quest_counts={12: {"mobcount1": 15, "mobcount2": 15}},
+            quest_progress={12: 30},
+            quests_done=frozenset({20, 21}),
+        )
+        p_done = questers.plan(cat, done_member, questers.Clock(), 0.0)
+        self.assertEqual(p_done.move.kind, classquest.TURN_IN)
+        self.assertEqual(p_done.move.spot.guid, 1010)
+        self.assertIn("Gryan Stoutmantle", p_done.move.said)
+
+    def test_members_from_rows_reads_objective_counts(self):
+        char_rows = [
+            {
+                "guid": 100,
+                "name": "Durga",
+                "level": 12,
+                "race": HUMAN,
+                "class_id": WARRIOR,
+                "map_id": 0,
+                "pos_x": 10.0,
+                "pos_y": 10.0,
+                "zone_id": WESTFALL,
+                "online": 1,
+                "health": 200,
+                "has_corpse": 0,
+            }
+        ]
+        log_rows = [
+            {
+                "guid": 100,
+                "quest": 12,
+                "status": 3,
+                "mobcount1": 15,
+                "mobcount2": 4,
+                "mobcount3": 0,
+                "mobcount4": 0,
+                "itemcount1": 0,
+                "itemcount2": 0,
+                "itemcount3": 0,
+                "itemcount4": 0,
+                "itemcount5": 0,
+                "itemcount6": 0,
+                "progress": 19,
+            }
+        ]
+        members = questers.members_from_rows(char_rows, log_rows, [])
+        self.assertEqual(len(members), 1)
+        m = members[0]
+        self.assertEqual(m.name, "Durga")
+        self.assertEqual(m.quest_log, {12: 3})
+        self.assertEqual(m.quest_progress, {12: 19})
+        self.assertEqual(m.quest_counts[12]["mobcount1"], 15)
+        self.assertEqual(m.quest_counts[12]["mobcount2"], 4)
 
 
 class Broken(unittest.TestCase):
