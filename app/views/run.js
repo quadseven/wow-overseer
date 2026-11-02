@@ -31,6 +31,11 @@ function theRun(ctx) {
   return (one.data && one.data.run) || findRun(ctx.params.id) || null;
 }
 
+// A read that failed says nothing about the run; a 404 says there is no such run.
+export function readFailed(read) {
+  return Boolean(read.error) && read.error.message !== "HTTP 404";
+}
+
 // True while the one-run read has neither answered nor failed: the gear the
 // list row lacks is still being read, not missing.
 function byIdPending(ctx) {
@@ -83,7 +88,7 @@ export function bossEvents(r) {
     if (b.killed) out.push({ t: toSeconds(b.at), text: "The group killed " + b.name + "." });
   });
   (r.wipes || []).forEach((w) => {
-    out.push({ t: toSeconds(w.at), text: "The group wiped on " + w.name + "; " + w.deaths + " death" + (w.deaths === 1 ? "" : "s") + "." });
+    out.push({ t: toSeconds(w.at), text: w.deaths + " death" + (w.deaths === 1 ? "" : "s") + " to " + (w.name || "a boss") + "." });
   });
   return out;
 }
@@ -92,7 +97,9 @@ export function timeline(r) {
   const own = steps(r).filter((s) => s.t);
   const heard = said(r);
   const gear = (r.gear || []).map((g) => ({ t: toSeconds(g.at), who: g.member,
-    text: g.source === "equipped" ? "equipped " + g.name + "." : "looted " + g.name + "." }));
+    text: g.source === "equipped" ? "equipped " + g.name + "."
+      : g.source === "won by loot council" ? "was awarded " + g.name + " by the loot council."
+      : "looted " + g.name + "." }));
   const rows = own.concat(heard ? heard.list : [], gear, bossEvents(r)).sort((a, b) => (a.t || 0) - (b.t || 0));
   const lines = rows.map((s) => {
     const l = s.who ? seatLine(s.who, s.text, r.place) : { text: s.text };
@@ -130,7 +137,7 @@ export function bossPips(r) {
 export function bossRows(r) {
   const bosses = r.bosses || [];
   if (!bosses.length) return "";
-  return html`<div class="g-r-bosses">${bosses.map((b) => html`<div class="g-r-boss ${b.killed ? "killed" : ""}"><span class="g-r-boss-name">${b.name}</span>${b.killed ? html`<span class="muted">${clock(toSeconds(b.at))}${b.by ? " - " + member({ name: b.by }) : ""}</span>` : html`<span class="muted">not killed</span>`}</div>`)}</div>`;
+  return html`<div class="g-r-bosses">${bosses.map((b) => html`<div class="g-r-boss ${b.killed ? "killed" : ""}"><span class="g-r-boss-name">${b.name}</span>${b.killed ? html`<span class="muted">${clock(toSeconds(b.at))}${b.by ? " - " + member({ name: b.by }) : ""}</span>` : html`<span class="muted">no kill recorded</span>`}</div>`)}</div>`;
 }
 
 export default {
@@ -147,7 +154,8 @@ export default {
     const one = ctx.get(runPath(ctx.params.id));
     const r = theRun(ctx);
     const reading = byIdPending(ctx);
-    if (!r && reading) {
+    // A failed read says nothing about the run, so it is not told as a missing one.
+    if (!r && (reading || readFailed(one))) {
       return html`<header class="page-head"><h1>Run ${ctx.params.id}</h1></header>${pendingRead(one, 2)}`;
     }
     if (!r) {

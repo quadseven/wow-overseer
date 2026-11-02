@@ -1104,7 +1104,7 @@ class TheDecreeQueueCard(unittest.TestCase):
         console = decree.build_console(rows, [], queue_rows=queue)
         lines = {f["key"]: f["queue"]["line"] for f in console["families"]}
         self.assertEqual(
-            "Zug's family: Queue: Ragefire Chasm 12 of 50, then Wailing Caverns 50.",
+            "Zug's family: Queue: Ragefire Chasm 12 of 50 done, then Wailing Caverns 50.",
             lines["Zug"],
         )
         self.assertEqual("Grug's family: nothing is queued.", lines["Grug"])
@@ -1118,7 +1118,7 @@ class TheSiteShowsTheQueue(unittest.TestCase):
     def test_progress_reads_as_the_issue_asks(self):
         rows = [_q(1, "ragefire", 50, "active", 0), _q(2, "wailing", 50, "queued", 1)]
         self.assertEqual(
-            "Ragefire Chasm 12 of 50, then Wailing Caverns 50",
+            "Ragefire Chasm 12 of 50 done, then Wailing Caverns 50",
             campaignqueue.progress_line(rows, 12),
         )
 
@@ -1126,7 +1126,7 @@ class TheSiteShowsTheQueue(unittest.TestCase):
         rows = roster_rows()
         next(r for r in rows if r["name"] == "Zug")["dungeon_runs_done"] = 7
         views = campaignqueue.views([_q(1, "ragefire", 50, "active", 0)], rows)
-        self.assertEqual("Queue: Ragefire Chasm 7 of 50.", views["Zug"]["line"])
+        self.assertEqual("Queue: Ragefire Chasm 7 of 50 done.", views["Zug"]["line"])
         self.assertEqual("", views["Grug"]["line"])
 
 

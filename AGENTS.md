@@ -176,7 +176,7 @@ The Discord bridge and live website for a World of Warcraft realm run by bots. `
 - `app/` and `index.html`: the operations site. `apiv2/`: the versioned read API, listed in `docs/API.md`.
 - `tests/`: the unit suite. `tools/`, `scripts/`: maintenance and local checks, not in the image.
 - `mod-overseer/`: pinned submodule, read as text by tests only. `services/strands-decider/`: a separate image.
-- `patches/`: patches carried against the fork. `UPSTREAM-PINS.env`: a test fixture, not a build input.
+- `patches/`: test copies of realm patches and the Majordomo series; the realm applies patches only from the infrastructure repo's tree (`docs/HISTORY.md`). `UPSTREAM-PINS.env`: a test fixture, not a build input.
 - `docs/ROLLS.md`: the ship procedure. `docs/agents/area-taxonomy.md`: the label taxonomy.
 
 ## Build, test, lint
@@ -223,6 +223,8 @@ The debt is not a precedent. In anything added here, including code, comments, f
 - No credentials of any kind, including in a test fixture, and including one believed rotated.
 
 When a file already violates this, fix the lines being edited. Do not scrub a whole directory inside an unrelated change; paying the debt down is its own PR, and welcome.
+
+Keep README.md to the sections its test pins, plus How it deploys, Layout and Docs, with a last-checked date; a change that makes it false fixes it in the same PR.
 
 ## Filing issues
 

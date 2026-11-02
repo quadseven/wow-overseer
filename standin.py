@@ -199,7 +199,7 @@ def goal(skills: dict, cap: int = CAP) -> str:
 
 def walled(skills: dict, known) -> str:
     """Why the member's craft cannot move ("tailoring 81 needs Bolt of Woolen
-    Cloth (2964), a trainer recipe it does not hold"), or "" when it can.
+    Cloth, a trainer recipe it does not hold"), or "" when it can.
 
     The rung is the one craft.recipe_for names at the trade's value, the same
     rung the craft errand casts. It can move when the rung is granted with the
@@ -219,11 +219,10 @@ def walled(skills: dict, known) -> str:
         return "%s %d has no rung on its ladder to cast" % (trade, value)
     if recipe.spell_id in guildjobs.AUTO_LEARNED or recipe.spell_id in known:
         return ""
-    return "%s %d needs %s (%d), a trainer recipe it does not hold" % (
+    return "%s %d needs %s, a trainer recipe it does not hold" % (
         trade,
         value,
         recipe.name,
-        recipe.spell_id,
     )
 
 
@@ -558,7 +557,7 @@ def released(facts: Facts) -> str:
     if wall:
         return (
             "%s's craft cannot move (%s), so it rejoins its family, whose "
-            "training stop walks it to its trainer to buy it (#769)" % (name, wall)
+            "training stop walks it to its trainer to buy it" % (name, wall)
         )
     sitting = facts.current is not None and facts.current.out_name == name
     hunger = starved(facts.reagents, sitting)

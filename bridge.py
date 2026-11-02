@@ -157,6 +157,7 @@ import raidprep
 import raidroles
 import restsupply
 import raidrun
+import spirerun
 import raidsupply
 import recipebook
 import raidteams
@@ -2929,6 +2930,13 @@ def _bag_hold_reads(names: list, leader: str) -> tuple:
     return here, _fetch_free_slots(here), _current_travel_npc(leader)
 
 
+def _at_floor(names, free_slots: dict) -> list:
+    """The members of `names` read at or under the town-run trigger."""
+    return [name for name in names
+            if isinstance(free_slots.get(name), int)
+            and 0 <= free_slots[name] <= bag_pressure.TOWN_RUN_FREE_SLOTS]
+
+
 def _vendor_trip_makes_room(names, free_slots: dict) -> bool:
     """Whether the family's bag-room hold is waiting on a vendor trip that
     would make room (#1243).
@@ -2936,9 +2944,7 @@ def _vendor_trip_makes_room(names, free_slots: dict) -> bool:
     A member at the floor the vendor pass has not read yet (the first cycle
     after a restart) keeps the hold, as it stood before this was asked.
     """
-    at_floor = [name for name in names
-                if isinstance(free_slots.get(name), int)
-                and 0 <= free_slots[name] <= bag_pressure.TOWN_RUN_FREE_SLOTS]
+    at_floor = _at_floor(names, free_slots)
     if any(name not in _VENDOR_SELLABLE for name in at_floor):
         return True
     return bag_pressure.vendor_trip_makes_room(
@@ -3300,6 +3306,40 @@ def _bag_hold_released(names) -> bool:
     return any(_BAG_HOLD_STUCK.get(str(name)) for name in names or ())
 
 
+def _released_floor_members(names) -> frozenset:
+    """The members a released hold of this family named when last judged."""
+    return frozenset(member for name in names or ()
+                     for member in _BAG_HOLD_STUCK.get(str(name), ()))
+
+
+def _released_floor_fits(fits: dict, gear_rows: list, worn: list, names) -> dict:
+    """`fits` with what a released hold's members will not wear let go (#1678).
+
+    `bag_pressure.floor_release_fits` decides; this reads its facts and logs
+    each stack. Rows the gear score cannot read leave `fits` as they are, so
+    a failed read keeps every piece. Blocking.
+    """
+    held = _released_floor_members(names)
+    if not held:
+        return fits
+    # The hold is only re-judged while a campaign waits, so its record can be
+    # old: only a member still at the floor loses anything.
+    held = frozenset(_at_floor(held, _fetch_free_slots(sorted(held))))
+    if not held:
+        return fits
+    wearers = _fetch_wearers(list(names))
+    scored = _fetch_scored_gear(list(names))
+    if not wearers or not scored:
+        return fits
+    plan = equipscore.plan((), wearers, scored, names, keep_names=OWNER_KEEPS,
+                           book=_jev_item_book())
+    released = bag_pressure.floor_release_fits(
+        fits, gear_rows, worn, names, held, plan, keep_names=OWNER_KEEPS)
+    _log_changed("bag floor", bag_pressure.floor_release_lines(
+        fits, released, gear_rows), tuple(sorted(names)), capped=False)
+    return released
+
+
 def _bag_hold_read(names) -> tuple:
     """Read the bags of a family whose campaign a Jev interlude holds, so an
     interlude does not end its bag hold (#872).
@@ -3361,6 +3401,11 @@ def _quest_while_stuck(names: list, mode: str, stuck) -> int:
     an errand that ends hands the family back with its town run standing),
     so an operator's own orders stand. Returns the rows written.
     """
+    # A town errand a released hold reopened is the way out (#1678): moving
+    # its family back to questing would end it on the walk to the counter.
+    errand = globals().get("_town_errand_active")
+    if errand and errand(names):
+        return 0
     moved = [n for n, job in _jobs_of(names).items()
              if job == mode or (job == jobs.TOWN_RUN
                                 and _last_job_source(n) in (
@@ -3400,13 +3445,29 @@ def _town_errand_heartbeat(said, now: float):
 def _bag_errand_needed(names, free_slots: dict, campaign_waiting: bool) -> bool:
     """Whether the town errand still runs for bag room past its ceiling.
 
-    Not once the hold is stuck: the family is questing then, and an errand
-    that took it back to town every cooldown for an hour would be the same
-    wait in instalments.
+    Not once the hold is stuck, unless a vendor can now end it: otherwise the
+    family is questing, and an errand that took it back to town every cooldown
+    for an hour would be the same wait in instalments.
     """
     return (bool(campaign_waiting)
             and bag_pressure.family_town_run_needed(free_slots)
-            and not _bag_hold_stuck(names, free_slots))
+            and (not _bag_hold_stuck(names, free_slots)
+                 # Looked up: the campaign tests load this function in isolation.
+                 or globals().get("_sale_reopens_hold", lambda *a: False)(
+                     names, free_slots)))
+
+
+def _sale_reopens_hold(names, free_slots: dict) -> bool:
+    """Whether a released hold has stacks to sell after all (#1678).
+
+    Releasing the hold makes the gear score's leavings saleable, so one town
+    trip can now end it. A member the vendor pass has not read yet reads as no.
+    """
+    at_floor = _at_floor(names, free_slots)
+    sellable = globals().get("_VENDOR_SELLABLE", {})
+    return bool(at_floor) and all(name in sellable for name in at_floor) and (
+        bag_pressure.vendor_trip_makes_room(
+            free_slots, {name: sellable.get(name, 0) for name in names}))
 
 
 # THE FAMILY STAND-IN (standin.py). Who sits out its family's campaign to
@@ -3827,7 +3888,7 @@ def _log_raid_arrivals(cur, keyword: str, seats: list) -> None:
     decision: the raid's own warlocks summon, the rest walk). A failed read
     is logged and never holds the order."""
     names = [seat[2] for seat in seats]
-    door = guildjobs.entrances().get(str(raidrun.MOLTEN_CORE_MAP))
+    door = guildjobs.entrances().get(str(raidrun.MAPS.get(keyword)))
     try:
         cur.execute(raidrun.ARRIVAL_SQL.format(holes=", ".join(["%s"] * len(names))),  # noqa: S608
                     tuple(names))
@@ -3859,7 +3920,14 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
         cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes=holes),  # noqa: S608
                     tuple(names))
         members = _with_readiness(cur, [dict(row) for row in cur.fetchall()])
-        lineup = raidlineup.build_lineup(members, guaranteed=list(names))
+        if keyword == raidrun.UPPER_SPIRE:
+            ten = spirerun.lineup(members, list(names))
+            if ten.short:
+                log.info("raid: %s has no ten for %s: %s",
+                         campaignqueue._family(family), keyword, ten.short)
+            lineup = ten.as_dict()
+        else:
+            lineup = raidlineup.build_lineup(members, guaranteed=list(names))
         seats = raidrun.seat_rows(family, keyword, lineup)
         if not seats:
             log.warning("raid: %s has no lineup for %s - nobody in its guild "
@@ -3988,6 +4056,24 @@ def _file_quest_tickets(client) -> dict:
             questcatalogue.load(read),
             os.environ.get("QUEST_SITE_URL", ""),
         )
+
+
+def _read_last_quest_tickets_pass() -> float | None:
+    """The last time the filing pass ran, from the persistent memo store."""
+    with _connect() as conn, conn.cursor() as cur:
+        return questtickets.SqlStore(cur).last_pass()
+
+
+def _quest_tickets_first_delay(cycle: float) -> float:
+    """How long the filing loop waits before its first pass. A pass time that
+    cannot be read holds the first pass a whole cycle: a database too sick to
+    read is no proof that no pass ran today."""
+    try:
+        last_pass = _read_last_quest_tickets_pass()
+    except pymysql.err.MySQLError:
+        log.exception("quest tickets: could not read last pass time; waiting a full cycle")
+        return cycle
+    return questtickets.initial_delay(last_pass, cycle, time.time())
 
 
 # --- the Watcher (director.py) -------------------------------------------
@@ -4281,11 +4367,11 @@ def _dungeonquest_facts(family: dict, keyword: str, leader: str,
         givers, recent, due=due, mid_run=mid_run)
 
 
-def _insert_dungeonquest_row(name: str, command: str) -> int:
+def _insert_dungeonquest_row(name: str, command: str,
+                             source: str = "overseer:dungeon-quests") -> int:
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(dungeonquests.INSERT_SQL,
-                        (name, command, "overseer:dungeon-quests"))
+            cur.execute(dungeonquests.INSERT_SQL, (name, command, source))
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] == 1265:
                 log.warning("dungeon quests: command kind is unavailable; %s for %s "
@@ -4294,6 +4380,33 @@ def _insert_dungeonquest_row(name: str, command: str) -> int:
                 return 0
             raise
         return cur.lastrowid or 0
+
+
+def _legacy_facts(guilds: list) -> dungeonquests.LegacyFacts:
+    """Everything the Dark Iron Legacy pass reads (#811), on one connection;
+    no judgement here."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(dungeonquests.LEGACY_MEMBERS_SQL.format(  # noqa: S608 - placeholders only
+            holes=", ".join(["%s"] * len(guilds))), tuple(guilds))
+        snaps = list(cur.fetchall())
+        names = tuple(str(row["name"]) for row in snaps)
+        log_rows, rewarded = [], []
+        if names:
+            holes = ", ".join(["%s"] * len(names))
+            bound = dungeonquests.LEGACY_QUESTS + names
+            cur.execute(dungeonquests.LEGACY_LOG_SQL.format(holes=holes), bound)  # noqa: S608 - placeholders only
+            log_rows = list(cur.fetchall())
+            cur.execute(dungeonquests.LEGACY_REWARDED_SQL.format(holes=holes), bound)  # noqa: S608 - placeholders only
+            rewarded = list(cur.fetchall())
+        cur.execute(dungeonquests.LEGACY_SPAWNS_SQL, dungeonquests.LEGACY_SPAWN_IDS)
+        spawns = list(cur.fetchall())
+        cur.execute(dungeonquests.LEGACY_RUNS_SQL)
+        runs = list(cur.fetchall())
+        cur.execute(dungeonquests.RECENT_SQL, (dungeonquests.LEGACY_SOURCE,
+                                               dungeonquests.LEGACY_RETRY_SECONDS))
+        recent = list(cur.fetchall())
+    return dungeonquests.legacy_facts_from_rows(
+        snaps, log_rows, rewarded, spawns, runs, recent)
 
 
 def _queue_level_rows(family: dict) -> list:
@@ -4308,6 +4421,94 @@ def _queue_level_rows(family: dict) -> list:
     for row in rows:
         row["lead"] = 1 if row.get("name") == lead else 0
     return rows
+
+
+# --- the Upper Spire run (spirerun.py) -----------------------------------------
+
+_SPIRE_SAID: dict = {}
+
+
+def _spire_say(family: str, line: str) -> None:
+    """Log why a family's run waits, once per change of reason."""
+    if _SPIRE_SAID.get(family) != line:
+        _SPIRE_SAID[family] = line
+        log.info("spire: %s: %s", campaignqueue._family(family), line)
+
+
+def _spire_family(family: str, fam: dict, rows: list) -> bool:
+    """One pass of the Upper Spire run for one family. True when the queue moved.
+
+    Ends this module's standing entry, or writes a new one, and decides nothing
+    itself. The guild is read only once the family is at the floor, so a pass
+    costs one small read until then.
+    """
+    names = list(fam["names"])
+    entry = next((r for r in rows if str(r.get("keyword")) == spirerun.KEYWORD), None)
+    if entry is not None:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(spirerun.STANDING_SQL, (entry["id"],))
+            standing = cur.fetchone() or {}
+        if entry.get("status") == campaignqueue.QUEUED:
+            return _spire_withdraw(family, names, rows, standing)
+        move = spirerun.ending(rows, bool(standing.get("cleared")),
+                               float(standing.get("age") or 0))
+        if move is None:
+            return False
+        log.info("spire: %s: %s", campaignqueue._family(family),
+                 _apply_queue_move(move, names, family))
+        return True
+    short = spirerun.family_short(_queue_level_rows(fam), names)
+    if short:
+        _spire_say(family, short)
+        return False
+    ten = spirerun.lineup(_spire_guild(names), names)
+    if ten.short:
+        _spire_say(family, ten.short)
+        return False
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(spirerun.LAST_SQL, (family, spirerun.KEYWORD, spirerun.SOURCE))
+        done = cur.fetchone()
+    last = None
+    if done:
+        last = spirerun.Last(float(done["finished_at"] or 0), bool(done["cleared"]),
+                             done["status"] == "cancelled")
+    slot = spirerun.order_slot(rows, last, time.time())
+    if slot is None:
+        _spire_say(family, "waits out its last run or a stop")
+        return False
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(spirerun.ORDER_SQL,
+                    (family, slot.position, spirerun.KEYWORD, raidrun.RUNS_PER_ORDER,
+                     spirerun.SOURCE, family, spirerun.KEYWORD))
+        if not cur.rowcount:
+            return False
+        for queue_id in slot.shift:
+            cur.execute(spirerun.SHIFT_SQL, (queue_id,))
+    log.warning("spire: %s has ten seats at level %d; the Upper Spire run is "
+                "ordered at position %d", campaignqueue._family(family),
+                spirerun.FLOOR, slot.position)
+    return True
+
+
+def _spire_guild(names: list) -> list:
+    """Every member of the family's guild, as the raid writer reads them."""
+    holes = ", ".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes=holes), tuple(names))  # noqa: S608
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _spire_withdraw(family: str, names: list, rows: list, standing: dict) -> bool:
+    """Take back this module's own unstarted entry when it cannot start."""
+    short = spirerun.lineup(_spire_guild(names), names).short
+    queue_id = spirerun.withdrawal(rows, short, float(standing.get("queued_age") or 0))
+    if queue_id is None:
+        return False
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(spirerun.WITHDRAW_SQL, (spirerun.SOURCE_WITHDRAWN, queue_id))
+    log.warning("spire: %s: the unstarted Upper Spire run is taken back: %s",
+                campaignqueue._family(family), short or "it waited too long")
+    return True
 
 
 def _write_queue(plan, source: str, new_ids: list | None = None) -> int:
@@ -4506,6 +4707,13 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
         # A DOOR THE FAMILY STALLED AT TWICE RUNNING is not chosen again
         # (dungeonstall.py, #1041): the stall breaker just left it.
         stalled = dungeonstall.barred(_stuck_doors(cur, names))
+        # A DOOR THE GUILDS RARELY CLEAR gives way to a sound one
+        # (campaignplan.Option.poor).
+        record = _planner_rows(
+            cur, guildrun.DOOR_RECORD_SQL.format(
+                holes=campaignplan.holes(len(guildrun.WENT_IN))),
+            (campaignplan.CLEAR_RECORD_DAYS, *guildrun.WENT_IN),
+            "the guilds' door record")
     done, failed = campaignplan.ledger(runs, names)
     quests = (None if quest_rows is None or rewarded is None
               else campaignplan.open_quests(quest_rows, rewarded, level_rows))
@@ -4519,7 +4727,8 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
         won=_read_or_none(campaignplan.per_map, won),
         bosses=_PLANNER_BOSSES,
         keys=_read_or_none(campaignplan.keys_held, keys),
-        stalled=stalled)
+        stalled=stalled,
+        door_record=_read_or_none(guildrun.door_record, record))
 
 
 def _planner_catalog(cur) -> dict | None:
@@ -10650,6 +10859,9 @@ class Bridge(discord.Client):
         equipped = (await asyncio.to_thread(_fetch_family_equipped, names)
                     if gear_rows else [])
         fits = bag_pressure.family_fits(gear_rows, equipped, names)
+        # Looked up: the economy tests load this pass in isolation.
+        release = globals().get("_released_floor_fits", lambda fits, *_: fits)
+        fits = await asyncio.to_thread(release, fits, gear_rows, equipped, names)
         # A piece no member can ever wear (#375): gear.py abstains on relics,
         # so `fits` never calls one FIT_NOBODY.
         members = tidy.members_from_rows(equipped)
@@ -11537,9 +11749,7 @@ class Bridge(discord.Client):
         """
         run = await asyncio.to_thread(_active_dungeon_run, names)
         live_maps = await asyncio.to_thread(_fetch_live_maps, names)
-        dungeon_maps = set(dungeonpath.PORTAL_MAPS.values()) | {
-            raidrun.MOLTEN_CORE_MAP
-        }
+        dungeon_maps = set(dungeonpath.PORTAL_MAPS.values()) | set(raidrun.MAPS.values())
         inside = next(
             (
                 int(map_id)
@@ -12925,6 +13135,9 @@ class Bridge(discord.Client):
         await self._equip_upgrades(equip_rows, worn, names, jev_plan)
 
         fits = bag_pressure.family_fits(gear_rows, worn, names)
+        # Looked up: the economy tests load this pass in isolation.
+        release = globals().get("_released_floor_fits", lambda fits, *_: fits)
+        fits = await asyncio.to_thread(release, fits, gear_rows, worn, names)
         gear_sales = bag_pressure.gear_candidates(
             gear_rows, disposition.Family(vendor_reachable=True),
             available=SELL_ROUTES, fits=fits, keep_names=OWNER_KEEPS,
@@ -19181,9 +19394,13 @@ class Bridge(discord.Client):
         campaign_waiting = await asyncio.to_thread(_campaign_waiting, names)
         bag_pressure_needed = _bag_errand_needed(names, free_slots,
                                                  campaign_waiting)
+        # Looked up: the adapter tests load this method in isolation.
+        released = globals().get("_released_floor_members", lambda names: ())
+        floor_sale = bag_pressure_needed and bool(released(names))
         why = townerrand.should_start(
             state, now=now, in_run=in_run, mail_gear=mail_gear, facts=facts,
-            stalled=stalled, bag_pressure_needed=bag_pressure_needed)
+            stalled=stalled, bag_pressure_needed=bag_pressure_needed,
+            floor_sale=floor_sale)
         if (not why and not in_run
                 and stalled < townerrand.HOLD_CEILING_SECONDS
                 and not (state.ended and now - state.ended
@@ -19202,7 +19419,8 @@ class Bridge(discord.Client):
             why = townerrand.should_start(
                 state, now=now, in_run=in_run, mail_gear=mail_gear,
                 facts=facts, supply_gaps=towntrip.shop_supply_gaps(members),
-                stalled=stalled, bag_pressure_needed=bag_pressure_needed)
+                stalled=stalled, bag_pressure_needed=bag_pressure_needed,
+                floor_sale=floor_sale)
         if not why:
             return state
         # AN ABSENT HEAD IS A WAIT, NOT A FAILED START. mod-overseer holds the
@@ -20562,6 +20780,15 @@ class Bridge(discord.Client):
         await handler(row, action)
 
     async def _goal_strategy(self, row: dict, action) -> None:
+        # AI-REVIEW 2026-11-01 [codex/in-process/runtime-trace] GOAL-GRIND-1735 (PR #1736):
+        # Level observations still advance during a campaign; only the
+        # competing movement command stands down, as quest goals already do.
+        if row.get("kind") == "level":
+            family = await asyncio.to_thread(_cohort_of, action.target_name)
+            if family and await asyncio.to_thread(_queue_owns_job, family, False):
+                log.info("goal %s: level strategy stands down for the dungeon campaign",
+                         row.get("id"))
+                return
         await asyncio.to_thread(
             _insert_command,
             core.InsertCommand(action.target_name, action.command, "overseer:goal"),
@@ -20710,6 +20937,11 @@ class Bridge(discord.Client):
                     set(active) | set(getattr(self, "_guild_social_names", ()))
                     | _class_party_names(self))
                 await asyncio.to_thread(_hearth_stranded_guild_members)
+                # Its own failure does not cost the cycle its runs.
+                try:
+                    await self._dark_iron_legacy_pass()
+                except Exception:
+                    log.exception("dark iron legacy: pass failed; retrying next cycle")
                 if guildrun.enabled():
                     said_off = False
                     # ONE PICKER, NEVER BOTH (#569): with GUILD_SOCIAL on, a
@@ -20726,6 +20958,33 @@ class Bridge(discord.Client):
             except Exception:
                 log.exception("guild runs: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
+
+    async def _dark_iron_legacy_pass(self) -> None:
+        """Dark Iron Legacy, the Shadowforge Key's one source (#811).
+
+        dungeonquests decides; this writes its take and turnin rows, says
+        whose they are, and says who carries the key once the Shrine's
+        hand-in it wrote is rewarded. `_legacy_handed` is the members it sent
+        to the Shrine and has not yet seen rewarded."""
+        guilds = list(guildrun.limits().guilds)
+        facts = await asyncio.to_thread(_legacy_facts, guilds)
+        handed = self.__dict__.setdefault("_legacy_handed", set())
+        shrine = dungeonquests.command(dungeonquests.TURN_IN, dungeonquests.LEGACY)
+        for name, said in dungeonquests.legacy_rows(facts):
+            written = await asyncio.to_thread(
+                _insert_dungeonquest_row, name, said, dungeonquests.LEGACY_SOURCE)
+            if not written:
+                continue
+            if said == shrine:
+                handed.add(name)
+                log.info("dark iron legacy: %s lays Ironfel at the Shrine of "
+                         "Thaurissan: %s (%d)", name, said, written)
+            else:
+                log.info("dark iron legacy: %s, a ghost at Franclorn Forgewright, "
+                         "by the bridge's own choice: %s (%d)", name, said, written)
+        for name in dungeonquests.key_holders(facts, handed):
+            handed.discard(name)
+            log.info("dark iron legacy: %s now carries the Shadowforge Key", name)
 
     async def _guild_run_once(self) -> None:
         if not _pass_completed("guild_jobs"):
@@ -21255,6 +21514,12 @@ class Bridge(discord.Client):
         if await self._plan_campaigns(pending, fams):
             pending = campaignqueue.pending_by_family(
                 await asyncio.to_thread(_fetch_queue_rows))
+        # THE UPPER SPIRE RUN ORDERS AND ENDS ITSELF (spirerun.py). After the
+        # planner, so the order sits among the entries it just wrote.
+        spire_pass = getattr(self, "_spire_pass", None)
+        if spire_pass is not None and await spire_pass(pending, fams):
+            pending = campaignqueue.pending_by_family(
+                await asyncio.to_thread(_fetch_queue_rows))
         # THE TRAVEL COLUMN FIRST, AND FOR EVERY FAMILY (#227): a family whose
         # queue emptied must get its town errands back this pass too.
         note_stalls = getattr(self, "_note_stalls", None)
@@ -21269,6 +21534,19 @@ class Bridge(discord.Client):
             return
         for key, rows in pending.items():
             await self._campaign_queue_family_once(key, rows, fams, held)
+
+    async def _spire_pass(self, pending: dict, fams: dict) -> bool:
+        """Each family's Upper Spire pass; True when any queue moved. A failed
+        read costs one family one pass."""
+        moved = False
+        for key, fam in fams.items():
+            try:
+                moved = await asyncio.to_thread(
+                    _spire_family, key, fam, pending.get(key, [])) or moved
+            except pymysql.err.MySQLError:
+                log.exception("spire: the pass for %s failed; retrying next cycle",
+                              campaignqueue._family(key))
+        return moved
 
     async def _family_lent_hold(self, key: str, fam: dict) -> bool:
         """Whether this family's queue waits for members lent to a guild run
@@ -23353,7 +23631,7 @@ class Bridge(discord.Client):
         if client is None:
             log.info("quest tickets: no GitHub App is configured, so no issue is filed")
             return
-        await asyncio.sleep(min(cycle, 300.0))
+        await asyncio.sleep(await asyncio.to_thread(_quest_tickets_first_delay, cycle))
         while not self.is_closed():
             try:
                 done = await asyncio.to_thread(_file_quest_tickets, client)
@@ -26730,6 +27008,7 @@ def _follow_guild_runs() -> int:
         try:
             cur.execute(
                 "SELECT r.id, r.state, r.keyword, r.tank, r.members, r.why AS last_room, "
+                "r.bosses_done, r.bosses_total, "
                 "TIMESTAMPDIFF(SECOND, r.last_boss_at, NOW()) AS seconds_since_boss, "
                 "r.created_at < NOW() - INTERVAL %s MINUTE AS stale, "
                 "c.status, c.detail, c.result FROM overseer_guild_run r "
@@ -26751,7 +27030,9 @@ def _follow_guild_runs() -> int:
             if seen is None and row.get("stale"):
                 seen = {"state": guildrun.ENDED, "outcome": "lost",
                         "why": "no outcome from the worldserver within %d minutes"
-                        % guildrun.LOST_AFTER_MINUTES}
+                        % guildrun.LOST_AFTER_MINUTES,
+                        "bosses_done": row["bosses_done"],
+                        "bosses_total": row["bosses_total"]}
             if seen is None:
                 continue
             if seen["state"] == guildrun.INSIDE:
@@ -26822,7 +27103,7 @@ def _fetch_guild_social_facts(bounds) -> dict:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT NOW() AS now")
         now = (cur.fetchone() or {}).get("now")
-        cur.execute(guildsocial.ASKS_SQL, (guildsocial.ASK_COOLDOWN_MINUTES,))
+        cur.execute(guildsocial.ASKS_SQL, (guildsocial.ASKS_READ_MINUTES,))
         asks = [guildsocial.ask_from_row(r) for r in cur.fetchall()]
         answers = []
         if asks:
@@ -27409,7 +27690,9 @@ def _start_social_run(form) -> int:
 def _write_guild_pugs(pugs) -> None:
     """Write one guildpug.PugPass: each call once (the asker says it in the
     faction's public channel), each pug's yes as an answer with stance pug
-    (the pug whispers the asker; the asker tells the guild)."""
+    (the pug whispers the asker; a join's told line, when its caller
+    carries one, is said in guild chat - guildpug's own joins carry none,
+    #1636)."""
     lines = []
     with _connect() as conn, conn.cursor() as cur:
         for call in pugs.calls:
@@ -27422,7 +27705,10 @@ def _write_guild_pugs(pugs) -> None:
             cur.execute(guildsocial.INSERT_ANSWER_SQL, (
                 join.ask_id, join.member[:12], join.role, guildsocial.PUG, join.said[:255]))
             lines.append((join.member, "whisper", join.said, join.asker))
-            lines.append((join.asker, "guild", join.told_guild, ""))
+            # A join with no told line (#1636: guildpug's own joins) says
+            # nothing in guild chat; a caller that carries one still does.
+            if join.told_guild:
+                lines.append((join.asker, "guild", join.told_guild, ""))
     for name, channel, text, to in lines:
         try:
             _insert_speak(relay.SpeakCommand(name, channel, text, to, guildpug.SOURCE))

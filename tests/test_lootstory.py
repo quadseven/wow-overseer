@@ -53,8 +53,8 @@ class OneItemOneSentence(unittest.TestCase):
         story = payload["stories"][0]
         self.assertEqual(
             story["line"],
-            "Avenah looted it from Defias Pillager in Elwynn Forest, then gave it to "
-            "Grog by overseer command, then Grog equipped it.",
+            "Avenah looted Destiny from Defias Pillager in Elwynn Forest and gave it "
+            "to Grog by overseer command, then Grog equipped it.",
         )
         self.assertEqual(story["item"]["name"], "Destiny")
         self.assertEqual(story["item"]["quality"], 4)
@@ -64,7 +64,9 @@ class OneItemOneSentence(unittest.TestCase):
 
     def test_rows_arriving_newest_first_still_tell_it_in_order(self):
         payload = lootstory.build_loot(list(reversed(destiny())), ZONES)
-        self.assertTrue(payload["stories"][0]["line"].startswith("Avenah looted it"))
+        self.assertTrue(
+            payload["stories"][0]["line"].startswith("Avenah looted Destiny")
+        )
 
     def test_two_copies_of_one_item_are_two_stories(self):
         rows = [
@@ -101,12 +103,12 @@ class HowItMovedIsNamed(unittest.TestCase):
 
     def test_a_trade_says_where(self):
         self.assertIn(
-            "then traded it to Grog in Winterspring", self.one(via="trade", zone=618)
+            "and traded it to Grog in Winterspring", self.one(via="trade", zone=618)
         )
 
     def test_a_letter_says_where_it_was_posted_from(self):
         self.assertIn(
-            "then mailed it to Grog from Stormwind City",
+            "and mailed it to Grog from Stormwind City",
             self.one(via="mail", zone=1519),
         )
 
@@ -121,13 +123,122 @@ class HowItMovedIsNamed(unittest.TestCase):
         ]
         line = lootstory.build_loot(rows, ZONES)["stories"][0]["line"]
         self.assertEqual(
-            line, "Avenah won it on a need roll from Edwin VanCleef in The Deadmines."
+            line,
+            "Avenah won Destiny on a need roll from Edwin VanCleef in The Deadmines.",
         )
 
     def test_no_place_says_nothing_rather_than_map_zero(self):
         rows = [row("item_loot", "Avenah", 0, via="loot", zone=0, map=0)]
         line = lootstory.build_loot(rows, ZONES)["stories"][0]["line"]
-        self.assertEqual(line, "Avenah looted it.")
+        self.assertEqual(line, "Avenah looted Destiny.")
+
+
+class TheStoryIsToldInTheOrderItHappened(unittest.TestCase):
+    """The module writes one flush of events as one INSERT, so rows of a flush
+    share a first_seen, and its queue is keyed by character then kind, so
+    item_equip takes the lower id. Live, on 2026-11-01, this read "Sogg equipped
+    it, then won it on a need roll".
+    """
+
+    def one_flush(self, *rows):
+        return [
+            dict(r, id=i, first_seen=T0, last_seen=T0) for i, r in enumerate(rows, 1)
+        ]
+
+    def line(self, rows):
+        return lootstory.build_loot(rows, ZONES)["stories"][0]["line"]
+
+    def test_a_roll_won_and_worn_in_one_flush_is_won_first(self):
+        rows = self.one_flush(
+            row("item_equip", "Hugga", 0, subject_name="Ghamoo-ra's Bind"),
+            row(
+                "item_loot",
+                "Hugga",
+                0,
+                subject_name="Ghamoo-ra's Bind",
+                via="need",
+                source="Ghamoo-ra",
+                map=48,
+                zone=0,
+            ),
+        )
+        self.assertEqual(
+            self.line(rows),
+            "Hugga won Ghamoo-ra's Bind on a need roll from Ghamoo-ra in "
+            "Blackfathom Deeps and equipped it.",
+        )
+
+    def test_wearing_it_again_days_later_does_not_say_equipped_twice(self):
+        rows = self.one_flush(
+            row("item_equip", "Sogg", 0, subject_name="Buzzer Blade"),
+            row(
+                "item_loot",
+                "Sogg",
+                0,
+                subject_name="Buzzer Blade",
+                via="need",
+                source="Sneed's Shredder",
+                map=36,
+                zone=0,
+            ),
+        ) + [row("item_equip", "Sogg", 12960, subject_name="Buzzer Blade")]
+        self.assertEqual(
+            self.line(rows),
+            "Sogg won Buzzer Blade on a need roll from Sneed's Shredder in "
+            "The Deadmines and equipped it.",
+        )
+
+    def test_a_hand_over_in_one_flush_comes_between_loot_and_equip(self):
+        rows = self.one_flush(
+            row("item_equip", "Grog", 0),
+            row("item_given", "Avenah", 0, via="trade", counterpart="Grog", zone=0),
+            row("item_loot", "Avenah", 0, via="loot", zone=0),
+        )
+        self.assertEqual(
+            self.line(rows),
+            "Avenah looted Destiny and traded it to Grog, then Grog equipped it.",
+        )
+
+
+class TheSentenceReadsPlainly(unittest.TestCase):
+    def test_the_item_is_named_once_and_only_where_it_is_first_met(self):
+        line = lootstory.build_loot(destiny(), ZONES)["stories"][0]["line"]
+        self.assertEqual(line.count("Destiny"), 1)
+        self.assertLess(line.index("Destiny"), line.index("it to Grog"))
+
+    def test_an_equip_alone_names_the_item(self):
+        rows = [row("item_equip", "Grog", 0)]
+        self.assertEqual(
+            lootstory.build_loot(rows, ZONES)["stories"][0]["line"],
+            "Grog equipped Destiny.",
+        )
+
+    def test_three_steps_by_one_character_read_as_a_list(self):
+        rows = [
+            row("item_loot", "Avenah", 0, via="loot", zone=0),
+            row("item_equip", "Avenah", 1),
+            row("item_given", "Avenah", 2, via="trade", counterpart="Grog", zone=0),
+        ]
+        self.assertEqual(
+            lootstory.build_loot(rows, ZONES)["stories"][0]["line"],
+            "Avenah looted Destiny, equipped it and traded it to Grog.",
+        )
+
+    def test_a_council_award_says_who_decided_after_where_it_came_from(self):
+        rows = [
+            row(
+                "item_loot",
+                "Avenah",
+                0,
+                via="council",
+                source="Lucifron",
+                map=409,
+                zone=0,
+            )
+        ]
+        line = lootstory.build_loot(rows, ZONES)["stories"][0]["line"]
+        self.assertTrue(line.startswith("Avenah was awarded Destiny from Lucifron in "))
+        self.assertTrue(line.endswith(" by the loot council."))
 
 
 class WithoutAGuid(unittest.TestCase):

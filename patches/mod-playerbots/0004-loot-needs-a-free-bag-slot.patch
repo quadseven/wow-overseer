@@ -109,7 +109,7 @@ index a704c579..ecc790fd 100644
                  return false;
          }
  
-+        // A skill-gated node yields ITEMS ONLY, so
++        // infra#2813 / infra#2800: a skill-gated node yields ITEMS ONLY, so
 +        // with no free bag slot there is nothing it can produce that the bot
 +        // can accept. Upstream #2638 (the block above) now refuses a nearly
 +        // full bag, but only for a bot with no real-player master; this keeps
