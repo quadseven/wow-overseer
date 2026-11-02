@@ -81,7 +81,14 @@ def ended(qid, entry, kind="creature"):
     return {"quest": qid, "kind": kind, "entry": entry}
 
 
-def world(extra_quests=(), extra_givers=(), extra_starts=(), extra_ends=(), drop=()):
+def world(
+    extra_quests=(),
+    extra_givers=(),
+    extra_starts=(),
+    extra_ends=(),
+    extra_spawns=(),
+    drop=(),
+):
     """Northshire (sorted under its area, 9), Goldshire in Elwynn (12), two
     zones further on, and quests a Human priest may not take."""
     quests = [
@@ -121,7 +128,9 @@ def world(extra_quests=(), extra_givers=(), extra_starts=(), extra_ends=(), drop
         giver(31, "start", 1030, 130, 2000, 0),
         giver(31, "end", 1030, 130, 2000, 0),
     ] + list(extra_givers)
-    spawns = [spawn(2001, 200, 150, 0), spawn(2002, 201, 250, 0, level=3)]
+    spawns = [spawn(2001, 200, 150, 0), spawn(2002, 201, 250, 0, level=3)] + list(
+        extra_spawns
+    )
     # What is named to give and take each quest, spawned or not.
     named = {g["quest"]: g["entry"] for g in givers if g["role"] == "start"}
     starts = [started(q, e) for q, e in sorted(named.items())] + list(extra_starts)
@@ -824,6 +833,54 @@ class Broken(unittest.TestCase):
         )
         self.assertEqual((p.move.kind, p.move.quest), (classquest.ABANDON, 34))
         self.assertIn(questers.STALLED_UNSOURCED, p.move.said)
+
+    def test_quest_34_an_unwelcome_guest_is_completable(self):
+        """Quest 34 'An Unwelcome Guest' in Redridge is completable when the
+        correct creatures (Blackrock Spies/Sentries) have spawns in the world.
+        This verifies the fix for the missing creature spawns: the quest no
+        longer becomes STALLED_UNSOURCED because it has valid objectives."""
+        BLACKROCK_SPY = 440
+        BLACKROCK_SENTRY = 441
+        cat = world(
+            extra_quests=[
+                quest(
+                    34,
+                    REDRIDGE,
+                    24,
+                    kill=BLACKROCK_SPY,
+                    count=5,
+                    title="An Unwelcome Guest",
+                ),
+                quest(
+                    34,
+                    REDRIDGE,
+                    24,
+                    kill=BLACKROCK_SENTRY,
+                    count=3,
+                    title="An Unwelcome Guest",
+                ),
+            ],
+            extra_givers=[
+                giver(34, "start", 1034, BLACKROCK_SPY, 2000, 0),
+                giver(34, "end", 1034, BLACKROCK_SPY, 2000, 0),
+            ],
+            extra_starts=[started(34, BLACKROCK_SPY)],
+            extra_ends=[ended(34, BLACKROCK_SPY)],
+            extra_spawns=[
+                spawn(2034, BLACKROCK_SPY, 2000, 0, level=22, map_id=0),
+                spawn(2035, BLACKROCK_SENTRY, 2010, 10, level=23, map_id=0),
+            ],
+        )
+        member = mirra(level=24, quest_log={34: 3}, zone_id=REDRIDGE, x=2000.0, y=0.0)
+        clock = questers.Clock()
+        p, _ = self._play(
+            member,
+            120,
+            clock,
+            progress=lambda minute: {34: min(minute // 10, 5)},
+        )
+        self.assertEqual(p.broken, ())
+        self.assertNotIn(34, [b.quest for b in p.broken])
 
     def test_objectives_that_move_never_stall(self):
         p, _ = self._play(
