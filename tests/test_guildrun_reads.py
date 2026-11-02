@@ -420,5 +420,24 @@ console.log(JSON.stringify(runs.rows[0].sub));""",
         self.assertEqual(got, "Cave | lost | 2026-10-09 19:00")
 
 
+
+class DoorRecord(unittest.TestCase):
+    def test_outcomes_fold_into_cleared_of_went_in(self):
+        rows = [
+            {"keyword": "zulfarrak", "outcome": "cleared", "n": 2},
+            {"keyword": "zulfarrak", "outcome": "timed out", "n": 9},
+            {"keyword": "uldaman-back", "outcome": "cleared", "n": 1},
+            {"keyword": "uldaman", "outcome": "stalled", "n": 2},
+            {"keyword": "not-a-door", "outcome": "cleared", "n": 5},
+        ]
+        self.assertEqual(
+            guildrun.door_record(rows),
+            {"zulfarrak": (2, 11), "uldaman": (1, 3)},
+        )
+
+    def test_nothing_read_is_no_record(self):
+        self.assertEqual(guildrun.door_record(None), {})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -244,6 +244,56 @@ class WhichOne(unittest.TestCase):
         self.assertEqual(pick.keyword, "zulfarrak")
         self.assertIn("not already outgrowing", campaignplan.heuristic_why(pick))
 
+    ZUG = (
+        ("Zug", 47, 2),
+        ("Uzza", 46, 8),
+        ("Zrog", 46, 2),
+        ("Oz", 45, 8),
+        ("Zork", 45, 6),
+    )
+
+    def test_a_door_that_rarely_clears_does_not_win(self):
+        """Measured 2026-11-01: Zul'Farrak cleared 2 of 11 guild runs in a day
+        and neither family has ever cleared it."""
+        opts = campaignplan.options(
+            facts(self.ZUG, KALIMDOR, door_record={"zulfarrak": (2, 11)})
+        )
+        self.assertNotIn("zulfarrak", keywords(opts))
+        self.assertTrue(opts)
+
+    def test_a_sound_record_keeps_the_door(self):
+        opts = campaignplan.options(
+            facts(self.ZUG, KALIMDOR, door_record={"zulfarrak": (4, 11)})
+        )
+        self.assertIn("zulfarrak", keywords(opts))
+
+    def test_too_few_runs_say_nothing_about_a_door(self):
+        opts = campaignplan.options(
+            facts(self.ZUG, KALIMDOR, door_record={"zulfarrak": (0, 7)})
+        )
+        self.assertIn("zulfarrak", keywords(opts))
+
+    def test_a_family_that_has_cleared_the_door_keeps_it(self):
+        opts = campaignplan.options(
+            facts(
+                self.ZUG,
+                KALIMDOR,
+                done={"zulfarrak": 1},
+                door_record={"zulfarrak": (2, 11)},
+            )
+        )
+        self.assertIn("zulfarrak", keywords(opts))
+
+    def test_a_poor_door_stays_when_nothing_sound_is_left(self):
+        """The family still runs something: no door is better than a poor one
+        only when a sound one is there to take."""
+        record = {
+            run.keyword: (0, 20) for run in campaignplan.RUNS
+        }
+        opts = campaignplan.options(facts(self.ZUG, KALIMDOR, door_record=record))
+        self.assertTrue(opts)
+        self.assertTrue(all(o.poor for o in opts))
+
     def test_a_door_well_inside_its_band_keeps_the_old_order(self):
         family = (("Zug", 41, 2), ("Oz", 40, 8), ("Uzza", 40, 8))
         opts = campaignplan.options(facts(family, KALIMDOR))
