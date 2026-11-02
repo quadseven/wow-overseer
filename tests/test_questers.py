@@ -5,6 +5,7 @@ import unittest
 
 import classquest
 import guildjobs
+import questbook
 import questers
 
 ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE = 12, 9, 40, 44
@@ -1381,3 +1382,308 @@ class ASummonedObjectEnder(unittest.TestCase):
         p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
         self.assertEqual([b.quest for b in p.broken], [40])
         self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+
+# Quest 36 "Westfall Stew" - real world data from acore_world.quest_template
+# Based on WoW 3.3.5: QuestLevel=10, MinLevel=10, Westfall (zone 40)
+# Giver: Salma Saldean (entry 249) at Sentinel Hill, Westfall (map 0, ~-10500, -2000)
+NIGHT_ELF = 4
+GNOME = 7
+HUNTER = 3
+WARLOCK = 9
+PALADIN = 2
+ROGUE = 4
+COLDRIDGE_X, COLDRIDGE_Y = -6000.0, -4000.0
+NORTHSHIRE_X, NORTHSHIRE_Y = -8900.0, -130.0
+SHADOWGLEN_X, SHADOWGLEN_Y = 10000.0, 1000.0
+SENTINEL_HILL_X, SENTINEL_HILL_Y = -10500.0, -2000.0
+
+
+def quest36_world():
+    """World with real Quest 36 (Westfall Stew) and its giver spawned."""
+    quests = [
+        quest(36, WESTFALL, 10, min_level=10, title="Westfall Stew"),
+    ]
+    # Salma Saldean (entry 249) at Sentinel Hill, Westfall
+    givers = [
+        giver(36, "start", 1036, 249, SENTINEL_HILL_X, SENTINEL_HILL_Y, name="Salma Saldean"),
+        giver(36, "end", 1036, 249, SENTINEL_HILL_X, SENTINEL_HILL_Y, name="Salma Saldean"),
+    ]
+    spawns = [spawn(1036, 249, SENTINEL_HILL_X, SENTINEL_HILL_Y, level=10)]
+    named = {g["quest"]: g["entry"] for g in givers if g["role"] == "start"}
+    starts = [started(q, e) for q, e in sorted(named.items())]
+    enders = {g["quest"]: g["entry"] for g in givers if g["role"] == "end"}
+    ends = [ended(q, e) for q, e in sorted(enders.items())]
+    return questers.catalogue(quests, givers, spawns, [], starts, ends)
+
+
+def quest36_book_quest():
+    """A questbook.Quest with real Quest 36 data."""
+    return questbook.Quest(
+        id=36,
+        title="Westfall Stew",
+        quest_level=10,
+        min_level=10,
+        max_level=0,
+        allowable_classes=0,  # All classes
+        allowable_races=ALLIANCE_MASK,  # Alliance only (Human, Dwarf, Night Elf, Gnome, Draenei)
+        prev_quest_id=0,
+        next_quest_id=0,
+        exclusive_group=0,
+        flags=0,
+        zone=WESTFALL,
+    )
+
+
+def qb_durga(**kw):
+    """questbook.Member for eligibility tests."""
+    base = dict(
+        name="Durga",
+        level=3,
+        race_id=3,
+        class_id=HUNTER,
+        rewarded=frozenset(),
+        held=frozenset(),
+        zones=frozenset(),
+    )
+    base.update(kw)
+    return questbook.Member(**base)
+
+
+def qb_fizzik(**kw):
+    base = dict(
+        name="Fizzik",
+        level=3,
+        race_id=GNOME,
+        class_id=WARLOCK,
+        rewarded=frozenset(),
+        held=frozenset(),
+        zones=frozenset(),
+    )
+    base.update(kw)
+    return questbook.Member(**base)
+
+
+def qb_kellan(**kw):
+    base = dict(
+        name="Kellan",
+        level=1,
+        race_id=HUMAN,
+        class_id=1,
+        rewarded=frozenset(),
+        held=frozenset(),
+        zones=frozenset(),
+    )
+    base.update(kw)
+    return questbook.Member(**base)
+
+
+def qb_bromli(**kw):
+    base = dict(
+        name="Bromli",
+        level=2,
+        race_id=3,
+        class_id=PALADIN,
+        rewarded=frozenset(),
+        held=frozenset(),
+        zones=frozenset(),
+    )
+    base.update(kw)
+    return questbook.Member(**base)
+
+
+def qb_sylvi(**kw):
+    base = dict(
+        name="Sylvi",
+        level=4,
+        race_id=NIGHT_ELF,
+        class_id=ROGUE,
+        rewarded=frozenset(),
+        held=frozenset(),
+        zones=frozenset(),
+    )
+    base.update(kw)
+    return questbook.Member(**base)
+
+
+def qe_durga(**kw):
+    """questers.Member for in_reach/plan tests."""
+    base = dict(
+        name="Durga",
+        level=3,
+        race=3,
+        class_id=HUNTER,
+        map_id=0,
+        x=COLDRIDGE_X,
+        y=COLDRIDGE_Y,
+        zone_id=1,
+        online=True,
+    )
+    base.update(kw)
+    return questers.Member(**base)
+
+
+def qe_fizzik(**kw):
+    base = dict(
+        name="Fizzik",
+        level=3,
+        race=GNOME,
+        class_id=WARLOCK,
+        map_id=0,
+        x=COLDRIDGE_X,
+        y=COLDRIDGE_Y,
+        zone_id=1,
+        online=True,
+    )
+    base.update(kw)
+    return questers.Member(**base)
+
+
+def qe_kellan(**kw):
+    base = dict(
+        name="Kellan",
+        level=1,
+        race=HUMAN,
+        class_id=1,
+        map_id=0,
+        x=NORTHSHIRE_X,
+        y=NORTHSHIRE_Y,
+        zone_id=NORTHSHIRE,
+        online=True,
+    )
+    base.update(kw)
+    return questers.Member(**base)
+
+
+def qe_bromli(**kw):
+    base = dict(
+        name="Bromli",
+        level=2,
+        race=3,
+        class_id=PALADIN,
+        map_id=0,
+        x=COLDRIDGE_X,
+        y=COLDRIDGE_Y,
+        zone_id=1,
+        online=True,
+    )
+    base.update(kw)
+    return questers.Member(**base)
+
+
+def qe_sylvi(**kw):
+    base = dict(
+        name="Sylvi",
+        level=4,
+        race=NIGHT_ELF,
+        class_id=ROGUE,
+        map_id=1,
+        x=SHADOWGLEN_X,
+        y=SHADOWGLEN_Y,
+        zone_id=2,
+        online=True,
+    )
+    base.update(kw)
+    return questers.Member(**base)
+
+
+class Quest36WestfallStew(unittest.TestCase):
+    """Quest 36 (Westfall Stew) with the 5 Cave questers from raidteams.py."""
+
+    def test_quest36_eligibility_at_starting_levels(self):
+        """All 5 questers are too low level for Quest 36 (MinLevel=10)."""
+        quest36 = quest36_book_quest()
+
+        for q in [qb_durga(), qb_fizzik(), qb_kellan(), qb_bromli(), qb_sylvi()]:
+            blockers = questbook.blockers(q, quest36, catalog={})
+            self.assertIn("too-low", blockers,
+                          f"{q.name} should be too-low for Quest 36: {blockers}")
+
+    def test_quest36_eligibility_at_level_10(self):
+        """At level 10, all 5 questers should be eligible for Quest 36."""
+        quest36 = quest36_book_quest()
+
+        for q_factory in [qb_durga, qb_fizzik, qb_kellan, qb_bromli, qb_sylvi]:
+            q = q_factory(level=10)
+            blockers = questbook.blockers(q, quest36, catalog={})
+            self.assertEqual(blockers, (),
+                             f"{q.name} should have no blockers at level 10: {blockers}")
+
+    def test_quest36_in_reach_at_level_10(self):
+        """At level 10 in Westfall, questers should find Quest 36 in reach."""
+        cat = quest36_world()
+        for q_factory in [qe_durga, qe_fizzik, qe_kellan, qe_bromli]:
+            q = q_factory(level=10, zone_id=WESTFALL, x=SENTINEL_HILL_X, y=SENTINEL_HILL_Y)
+            in_reach = questers.in_reach(cat, q, WESTFALL)
+            self.assertIn(36, in_reach,
+                          f"{q.name} should have Quest 36 in reach in Westfall: {in_reach}")
+
+    def test_quest36_sylvi_crosses_to_westfall(self):
+        """Sylvi (Night Elf, map 1) should cross to map 0 for Quest 36."""
+        cat = quest36_world()
+        q = qe_sylvi(level=10)
+        # Sylvi is on map 1 (Kalimdor), Quest 36 giver is on map 0
+        # She should be able to cross to map 0 for this quest
+        in_reach = questers.in_reach(cat, q, WESTFALL)
+        # The quest should be in reach if she can cross
+        self.assertIn(36, in_reach,
+                      f"Sylvi should have Quest 36 in reach via crossing: {in_reach}")
+
+    def test_quest36_giver_missing_in_real_world(self):
+        """In the real world, Quest 36's giver (Salma Saldean, entry 249) is not spawned.
+        This test simulates that and expects GIVER_MISSING."""
+        # World with Quest 36 but NO spawn for Salma Saldean
+        quests = [
+            quest(36, WESTFALL, 10, min_level=10, title="Westfall Stew"),
+        ]
+        # Giver is NAMED but not SPAWNED
+        givers = [
+            giver(36, "start", 1036, 249, SENTINEL_HILL_X, SENTINEL_HILL_Y, name="Salma Saldean"),
+            giver(36, "end", 1036, 249, SENTINEL_HILL_X, SENTINEL_HILL_Y, name="Salma Saldean"),
+        ]
+        spawns = []  # NO spawn for entry 249
+        named = {g["quest"]: g["entry"] for g in givers if g["role"] == "start"}
+        starts = [started(q, e) for q, e in sorted(named.items())]
+        enders = {g["quest"]: g["entry"] for g in givers if g["role"] == "end"}
+        ends = [ended(q, e) for q, e in sorted(enders.items())]
+        cat = questers.catalogue(quests, givers, spawns, [], starts, ends)
+
+        q = qe_durga(level=10, zone_id=WESTFALL, x=SENTINEL_HILL_X, y=SENTINEL_HILL_Y)
+        in_reach = questers.in_reach(cat, q, WESTFALL)
+        # Quest should still be in reach (eligible) but giver is missing
+        self.assertIn(36, in_reach)
+
+        # Simulate the world refusing the walk to the giver with GONE reason
+        # This is what happens when the module tries to walk to a non-existent NPC
+        tried = [
+            questers.Attempt(
+                name="Durga",
+                command="walk to spawn 1036",
+                status="refused",
+                reason=questers.GONE,
+                spawn=1036,
+                spawn_kind="creature",
+                age_minutes=1,
+            )
+        ]
+        # Plan should report GIVER_MISSING for quest 36
+        p = questers.plan(cat, q, questers.Clock(), 0.0, tried=tried)
+        giver_missing = False
+        for b in p.broken:
+            if b.quest == 36 and b.reason == questers.GIVER_MISSING:
+                giver_missing = True
+                break
+        self.assertTrue(giver_missing, f"Quest 36 should have GIVER_MISSING: {p.broken}")
+
+    def test_quest36_no_giver_missing(self):
+        """Quest 36's giver should be spawned and not missing (when it IS spawned)."""
+        cat = quest36_world()
+        q = qe_durga(level=10, zone_id=WESTFALL, x=SENTINEL_HILL_X, y=SENTINEL_HILL_Y)
+        in_reach = questers.in_reach(cat, q, WESTFALL)
+        self.assertIn(36, in_reach)
+        # Plan should not report GIVER_MISSING for quest 36
+        p = questers.plan(cat, q, questers.Clock(), 0.0)
+        for b in p.broken:
+            if b.quest == 36:
+                self.assertNotEqual(b.reason, questers.GIVER_MISSING,
+                                    f"Quest 36 should not have missing giver: {b.reason}")
