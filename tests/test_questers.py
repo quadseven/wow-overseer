@@ -799,6 +799,28 @@ class Broken(unittest.TestCase):
         )
         self.assertEqual(p.broken, ())
 
+    def test_counters_at_the_required_total_are_handed_in_even_if_status_lags(self):
+        # LOG_SQL sums the objective counters. The core can leave status at
+        # incomplete after those counters reach the quest's required total.
+        cat = world(
+            extra_quests=[
+                quest(20, REDRIDGE, 18, kill=200, count=8, title="Blackrock Menace")
+            ]
+        )
+        member = mirra(
+            name="Quester",
+            level=21,
+            zone_id=REDRIDGE,
+            x=150.0,
+            quest_log={20: questers.STATUS_INCOMPLETE},
+            quest_progress={20: 8},
+        )
+        clock = questers.Clock()
+        questers.plan(cat, member, clock, 0.0)
+        p = questers.plan(cat, member, clock, 2 * 60 * 60)
+        self.assertEqual(p.broken, ())
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TURN_IN, 20))
+
     def test_time_offline_is_not_play(self):
         clock = questers.Clock()
         self._play(mirra(quest_log={1: 3}), 60, clock)
