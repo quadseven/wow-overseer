@@ -117,6 +117,25 @@ class Filing(unittest.TestCase):
             self.run_pass(store, FakeGitHub(refuse="/issues"))
         self.assertIsNone(store.rows[0]["ticket"])
 
+    def test_a_pass_that_fails_partway_still_records_its_pass_time(self):
+        # Elder on #1726: a refused POST after earlier filings must not leave
+        # the pass unrecorded, or a restart files five more inside the day.
+        store = Store([row(1), row(2)])
+        github = FakeGitHub()
+        real_call = github.call
+
+        def refuse_second_issue(method, path, body=None, ok=(200,)):
+            if path == "/issues" and github.issues():
+                github.calls.append((method, path, body))
+                raise RuntimeError("refused")
+            return real_call(method, path, body, ok)
+
+        github.call = refuse_second_issue
+        with self.assertRaises(RuntimeError):
+            self.run_pass(store, github, now=5000.0)
+        self.assertEqual(store.rows[0]["ticket"], 1001)
+        self.assertEqual(store.last_pass(), 5000.0)
+
     def test_a_refused_link_keeps_the_issue_it_filed(self):
         store = Store([row(1)])
         done = self.run_pass(store, FakeGitHub(refuse="sub_issues"))

@@ -322,6 +322,11 @@ def run(
     todo = plan(store.broken(), ticket_for=ticket_for)
     for quest, ticket in todo.copies:
         store.take(quest, ticket)
+    # The pass time is written before the first POST: a pass that files
+    # some issues and then fails has still spent the day, so a restart must
+    # not see it as never run.
+    if hasattr(store, "record_pass"):
+        store.record_pass(time.time() if now is None else float(now))
     known = {q.id: q for q in catalogue or ()}
     filed = 0
     for quest, rows in todo.new[:MAX_PER_PASS]:
@@ -336,8 +341,6 @@ def run(
             raise
         store.filed(quest, number)
         filed += 1
-    if hasattr(store, "record_pass"):
-        store.record_pass(time.time() if now is None else float(now))
     unlinked, client.unlinked = client.unlinked, []
     return {
         "filed": filed,
