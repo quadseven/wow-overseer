@@ -2415,6 +2415,7 @@ def guild_gear_gifts(
     position_rows=None,
     free_slots=None,
     at_mailbox=None,
+    freeables=None,
 ):
     """Return useful BoE gear in family-first, guild-second order.
 
@@ -2423,6 +2424,10 @@ def guild_gear_gifts(
     gets first claim, then only observed-online non-family guild members see
     pieces left unclaimed. A guild name without observed presence is never
     evidence that a `give` can land.
+
+    `freeables` is `freeable_greys` over the guildmates' carried rows: a full
+    guildmate beside the family holder gives its cheapest grey to the holder
+    first, then takes the piece, as the family pass does (#550).
     """
     family = {str(name) for name in (family_names or ())}
     by_name = {str(member.name): member for member in (members or ())}
@@ -2451,6 +2456,7 @@ def guild_gear_gifts(
         position_rows=position_rows,
         free_slots=free_slots,
         at_mailbox=at_mailbox,
+        freeables=freeables,
     )
 
 
@@ -2462,6 +2468,7 @@ def guild_gear_gifts_from_rows(
     position_rows=None,
     free_slots=None,
     at_mailbox=None,
+    freeables=None,
 ):
     """Parse bridge rows and apply the guild BoE policy.
 
@@ -2471,11 +2478,13 @@ def guild_gear_gifts_from_rows(
     """
     names = [str(member.name) for member in (members or ())]
     # The family carries its party role, the same one every family pass in
-    # this module reads; a guildmate has none and keeps the off-hand guard.
-    roles = {
-        c.name: c.role
-        for c in family_characters(equipped_rows, [str(n) for n in family_names or ()])
-    }
+    # this module reads. A guildmate whose roster tree or raid seat makes it a
+    # tank is one here too (#550): that is the off tank a spare shield is
+    # for. Any other guildmate has no role and keeps the off-hand guard.
+    family = [str(n) for n in family_names or ()]
+    roles = {c.name: c.role for c in family_characters(equipped_rows, family)}
+    guild_tanks, _ = tree_tanks(equipped_rows, [n for n in names if n not in family])
+    roles.update({name: gear.ROLE_TANK for name in guild_tanks})
     characters = gear.characters_from_rows(equipped_rows, names, roles=roles)
     holdings = gear.holdings_from_rows(gear_rows)
     return guild_gear_gifts(
@@ -2486,6 +2495,7 @@ def guild_gear_gifts_from_rows(
         position_rows=position_rows,
         free_slots=free_slots,
         at_mailbox=at_mailbox,
+        freeables=freeables,
     )
 
 
