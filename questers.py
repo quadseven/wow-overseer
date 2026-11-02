@@ -406,6 +406,9 @@ class Facts:
     # A gameobject named to take it has no static spawn: a script or an event
     # summons it, so its absence says nothing of the quest (#1606).
     object_unspawned: bool = False
+    # Creature spawns in the quest's zone, for fallback when quest.fields is
+    # empty but the quest has item objectives (missing loot table links).
+    zone_spawns: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -452,6 +455,14 @@ def catalogue(quest_rows, giver_rows, spawn_rows, loot_rows, start_rows, ender_r
     summoned = _unspawned_object_enders(ender_rows)
     zones = {_int(r.get("id")): zone_of(r.get("zone")) for r in rows}
     classic_zones = _classic_zones(book, zones)
+
+    # Group spawns by zone for fallback when quest.fields is empty
+    spawns_by_zone = {}
+    for s in spawn_rows or ():
+        z = zone_of(s.get("zone"))
+        if z:
+            spawns_by_zone.setdefault(z, []).append(s)
+
     facts = {}
     kept = {}
     band_rows = []
@@ -460,8 +471,26 @@ def catalogue(quest_rows, giver_rows, spawn_rows, loot_rows, start_rows, ender_r
         quest = book.quests.get(qid)
         if quest is None or zones.get(qid, 0) not in classic_zones:
             continue
+        quest_zone = zones[qid]
+        zone_spawns = tuple(
+            classquest.Spawn(
+                guid=_int(s.get("guid")),
+                entry=_int(s.get("entry")),
+                map_id=_int(s.get("map_id")),
+                x=float(s.get("x")),
+                y=float(s.get("y")),
+                name=s.get("name") or "",
+                rank=_int(s.get("rank")),
+                level=_int(s.get("level")),
+                respawn=_int(s.get("respawn")),
+                z=float(s.get("z")) if s.get("z") is not None else None,
+                near=_int(s.get("near")),
+                creature=bool(s.get("creature")),
+            )
+            for s in spawns_by_zone.get(quest_zone, ())
+        )
         facts[qid] = Facts(
-            zone=zones[qid],
+            zone=quest_zone,
             level=max(_int(r.get("level")), quest.min_level, 1),
             classes=_int(r.get("classes")),
             prev=_int(r.get("prev_signed")),
@@ -470,11 +499,12 @@ def catalogue(quest_rows, giver_rows, spawn_rows, loot_rows, start_rows, ender_r
             ender_objects=qid in object_enders,
             object_enders=object_spots.get(qid, ()),
             object_unspawned=qid in summoned,
+            zone_spawns=zone_spawns,
         )
         kept[qid] = quest
         band_rows.append(
             {
-                "zone": zones[qid],
+                "zone": quest_zone,
                 "level": facts[qid].level,
                 "races": quest.races,
                 "classes": facts[qid].classes,
@@ -1339,9 +1369,14 @@ def _hunt(cat: Catalogue, member, skip, left):
     an incomplete quest it holds, or None."""
     hunts = []
     for qid, quest in _held(cat, member, STATUS_INCOMPLETE, skip):
-        spot = _nearest(
-            member, classquest.within_level(member, classquest.solo_fields(quest)), left
-        )
+        fields = classquest.solo_fields(quest)
+        # Fallback: if quest has item objectives but no fields (no known droppers
+        # in loot table), use zone spawns of appropriate level.
+        if not fields and quest.items:
+            facts = cat.facts.get(qid)
+            if facts and facts.zone_spawns:
+                fields = classquest.within_level(member, facts.zone_spawns)
+        spot = _nearest(member, fields, left)
         if spot is not None:
             hunts.append((_yards(member, spot), qid, quest, spot))
     if not hunts:

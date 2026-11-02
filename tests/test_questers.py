@@ -24,6 +24,8 @@ def quest(
     prev=0,
     kill=0,
     count=1,
+    item=0,
+    item_count=0,
     title="",
 ):
     return {
@@ -44,6 +46,8 @@ def quest(
         "grp": 0,
         "npc1": kill,
         "npc_count1": count,
+        "item1": item,
+        "item_count1": item_count,
     }
 
 
@@ -60,7 +64,7 @@ def giver(qid, role, guid, entry, x, y, map_id=0, name="Marshal"):
     }
 
 
-def spawn(guid, entry, x, y, level=2, map_id=0, name="Wolf"):
+def spawn(guid, entry, x, y, level=2, map_id=0, name="Wolf", zone=0):
     return {
         "guid": guid,
         "entry": entry,
@@ -70,6 +74,7 @@ def spawn(guid, entry, x, y, level=2, map_id=0, name="Wolf"):
         "name": name,
         "rank": 0,
         "level": level,
+        "zone": zone,
     }
 
 
@@ -81,12 +86,18 @@ def ended(qid, entry, kind="creature"):
     return {"quest": qid, "kind": kind, "entry": entry}
 
 
+def loot(item_entry, creature_entry):
+    """A loot row linking an item to a creature that drops it."""
+    return {"item": item_entry, "entry": creature_entry}
+
+
 def world(
     extra_quests=(),
     extra_givers=(),
     extra_starts=(),
     extra_ends=(),
     extra_spawns=(),
+    extra_loot=(),
     drop=(),
 ):
     """Northshire (sorted under its area, 9), Goldshire in Elwynn (12), two
@@ -138,7 +149,7 @@ def world(
     # The spawned givers and enders catalogue() reads: `drop` takes the spawn
     # out of these while `starts` and `ends` still name it.
     givers = [g for g in givers if g["guid"] not in drop]
-    return questers.catalogue(quests, givers, spawns, [], starts, ends)
+    return questers.catalogue(quests, givers, spawns, list(extra_loot), starts, ends)
 
 
 def mirra(**kw):
@@ -1389,3 +1400,106 @@ class ASummonedObjectEnder(unittest.TestCase):
         p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
         self.assertEqual([b.quest for b in p.broken], [40])
         self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+
+def quest90_world(loot_rows=()):
+    """A minimal world for Quest 90 testing only."""
+    q90 = quest(90, 40, 25, item=1234, item_count=5, title="Seasoned Wolf Kabobs")
+    wolf_spawn = spawn(
+        3001, 5678, 100.0, 100.0, level=22, map_id=0, name="Duskwood Wolf", zone=40
+    )
+    giver_90 = giver(90, "start", 4001, 400, 50.0, 50.0, name="Cook")
+    ender_90 = giver(90, "end", 4002, 400, 50.0, 50.0, name="Cook")
+
+    # Create catalogue with ONLY quest 90
+    return questers.catalogue(
+        [q90],
+        [giver_90, ender_90],
+        [wolf_spawn],
+        list(loot_rows),
+        [started(90, 400)],  # start_rows
+        [ended(90, 400)],  # ender_rows
+    )
+
+
+class Quest90SeasonedWolfKabobs(unittest.TestCase):
+    """Quest 90 'Seasoned Wolf Kabobs' in Duskwood: collect wolf meat from wolves.
+
+    This quest has an item objective (wolf meat) but the loot table doesn't link
+    the item to the wolves in Duskwood. The quester hunts wolves but the item
+    count never progresses, so the quest stalls after STALL_SECONDS (2 hours).
+    """
+
+    def test_item_collection_quest_without_loot_links_stalls(self):
+        """An item collection quest with no loot table links cannot be completed."""
+        # Quest 90: requires 5 Wolf Meat (item 1234) from Wolves (entry 5678)
+        # But no loot row links item 1234 to creature 5678
+        cat = quest90_world(loot_rows=[])  # No loot link - this is the bug!
+
+        member = mirra(level=25, zone_id=40)  # Duskwood
+        clock = questers.Clock()
+
+        # First pass: quester should TAKE the quest
+        p = questers.plan(cat, member, clock, now=0.0)
+        self.assertEqual(p.move.kind, classquest.TAKE)
+        self.assertEqual(p.move.quest, 90)
+
+        # After taking, the quest is in log with STATUS_INCOMPLETE
+        log = {90: questers.STATUS_INCOMPLETE}
+        member = questers.Member(**{**member.__dict__, "quest_log": log})
+
+        # Second pass: should hunt the wolf (using fallback zone spawns)
+        p = questers.plan(cat, member, clock, now=60.0)
+        self.assertEqual(p.move.kind, classquest.HUNT)
+        self.assertEqual(p.move.quest, 90)
+
+        # Simulate multiple passes with no progress (item count never increases)
+        # Each pass advances time by PLAY_GAP_SECONDS (10 min) to accumulate play time
+        # STALL_SECONDS = 2 hours = 12 * 10 min. First observe at now=60 doesn't count.
+        # After 11 more observes (11 * 10 min = 110 min), played = 110 min < 120 min.
+        # The 12th observe (at 12 * 10 min = 120 min) reaches STALL_SECONDS.
+        now = 60.0
+        for _ in range(
+            11
+        ):  # 11 * 10 min = 110 min, still under 120 min stall threshold
+            now += questers.PLAY_GAP_SECONDS
+            p = questers.plan(cat, member, clock, now=now)
+            self.assertEqual(p.move.kind, classquest.HUNT)
+            self.assertEqual(p.move.quest, 90)
+
+        # Next pass: after 12 * 10 min = 120 min of play, quest should be stalled
+        now += questers.PLAY_GAP_SECONDS
+        p = questers.plan(cat, member, clock, now=now)
+        self.assertEqual(p.move.kind, classquest.ABANDON)
+        self.assertTrue(any(b.quest == 90 for b in p.broken))
+        stalled_reason = next(b.reason for b in p.broken if b.quest == 90)
+        self.assertIn(questers.STALLED, stalled_reason)
+
+    def test_item_collection_quest_with_loot_links_works(self):
+        """An item collection quest WITH loot table links can be completed."""
+        # Same quest but WITH loot row linking item to creature
+        cat = quest90_world(
+            loot_rows=[loot(1234, 5678)]
+        )  # Loot link exists - this works!
+
+        member = mirra(level=25, zone_id=40)  # Duskwood
+        clock = questers.Clock()
+
+        # First pass: take the quest
+        p = questers.plan(cat, member, clock, now=0.0)
+        self.assertEqual(p.move.kind, classquest.TAKE)
+        self.assertEqual(p.move.quest, 90)
+
+        # After taking
+        log = {90: questers.STATUS_INCOMPLETE}
+        member = questers.Member(**{**member.__dict__, "quest_log": log})
+
+        # Second pass: should hunt the wolf with item objective
+        p = questers.plan(cat, member, clock, now=60.0)
+        self.assertEqual(p.move.kind, classquest.HUNT)
+        self.assertEqual(p.move.quest, 90)
+
+        # Quest should have drops populated
+        q = cat.quest(90)
+        self.assertTrue(len(q.drops) > 0)
+        self.assertEqual(q.drops[0], (1234, 5678))
