@@ -74,6 +74,7 @@ import guildroute
 import jev
 import jev_choices
 import raidlineup
+import workorders
 
 SOURCE = "raidsupply"
 KIND = "raid_supply"
@@ -1286,6 +1287,19 @@ class SupplyPlan:
     fire: tuple
     steps: tuple = ()
     notes: tuple = ()
+
+
+def fire_potion_order(lines):
+    """The night's Greater Fire Protection Potion shortfall as a work order.
+
+    The first intake for work orders (#1487): a consumable order for what the
+    guild is short of the potion, requested by this module, or None when the
+    night is not short. workorderstore.request keeps one open order for it.
+    """
+    for line in lines or ():
+        if line.entry == GREATER_FIRE_PROTECTION and line.short:
+            return workorders.consumable(line.name, line.short, requested_by=SOURCE)
+    return None
 
 
 def with_letters(members, letter_rows) -> list:
