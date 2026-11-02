@@ -141,6 +141,14 @@ def world(
     return questers.catalogue(quests, givers, spawns, [], starts, ends)
 
 
+def quest_with_items(qid, zone, level, *, item=0, item_count=1, title=""):
+    """A quest fixture with item objectives (like Red Linen Goods)."""
+    q = quest(qid, zone, level, title=title)
+    q["item1"] = item
+    q["item_count1"] = item_count
+    return q
+
+
 def mirra(**kw):
     base = dict(
         name="Mirra",
@@ -1389,3 +1397,51 @@ class ASummonedObjectEnder(unittest.TestCase):
         p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
         self.assertEqual([b.quest for b in p.broken], [40])
         self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+
+class Quest83RedLinenGoods(unittest.TestCase):
+    """Quest 83 'Red Linen Goods' in Elwynn Forest (level 9) is broken:
+    it requires Red Linen Bandanas from Defias mobs, but those mobs
+    have no spawns in the world data, so the quest stalls as
+    STALLED_UNSOURCED after 2 hours of play. Questers Durga, Bromli,
+    and Kellan cannot complete it."""
+
+    def test_quest_83_stalls_unsourced_after_two_hours(self):
+        """Quest 83 has item objectives but no spawned creatures drop them."""
+        cat = world(
+            extra_quests=[
+                quest_with_items(
+                    83, ELWYNN, 9, item=2592, item_count=6, title="Red Linen Goods"
+                )
+            ],
+            extra_givers=[
+                giver(83, "start", 1083, 2083, 100.0, 0.0, name="Defias Messenger"),
+                giver(83, "end", 1083, 2083, 100.0, 0.0, name="Defias Messenger"),
+            ],
+        )
+        member = mirra(level=9, quest_log={83: questers.STATUS_INCOMPLETE})
+        clock = questers.Clock()
+        reasons = []
+        for minute in range(0, 2 * 60 + 10, 5):
+            p = questers.plan(cat, member, clock, minute * 60.0, last_quest=83)
+            reasons += [b.reason for b in p.broken if b.quest == 83]
+        self.assertTrue(
+            any(r == questers.STALLED_UNSOURCED for r in reasons),
+            f"Expected STALLED_UNSOURCED, got: {reasons}",
+        )
+
+    def test_quest_83_is_in_reach_for_elwynn_questers(self):
+        """Quest 83 is available to questers in Elwynn Forest."""
+        cat = world(
+            extra_quests=[
+                quest_with_items(
+                    83, ELWYNN, 9, item=2592, item_count=6, title="Red Linen Goods"
+                )
+            ],
+            extra_givers=[
+                giver(83, "start", 1083, 2083, 100.0, 0.0, name="Defias Messenger"),
+                giver(83, "end", 1083, 2083, 100.0, 0.0, name="Defias Messenger"),
+            ],
+        )
+        member = mirra(level=9)
+        self.assertIn(83, questers.in_reach(cat, member, ELWYNN))
