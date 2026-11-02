@@ -25,7 +25,7 @@ HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
 
-WARRIOR, PRIEST = 1, 5
+WARRIOR, PRIEST, ROGUE = 1, 5, 4
 ORC, UNDEAD, TROLL = 2, 5, 8
 KALIMDOR, EASTERN = 1, 0
 ORC_MASK = 690
@@ -78,6 +78,14 @@ SOREK = {
     "y": -4808.0,
     "name": "Sorek",
 }
+KALTUNK = {
+    "guid": 88888,
+    "entry": 3170,
+    "map_id": 1,
+    "x": 300.0,
+    "y": -4800.0,
+    "name": "Kaltunk",
+}
 LIZARD = {
     "guid": 4788,
     "entry": 3130,
@@ -117,6 +125,8 @@ def givers():
         (1818, "start", DILLINGER),
         (1818, "end", DILLINGER),
         (1819, "end", DILLINGER),
+        (8, "start", KALTUNK),
+        (8, "end", KALTUNK),
     ):
         out.append(dict(spawn, quest=quest, role=role))
     return out
@@ -130,6 +140,12 @@ def warrior_rows():
         ),
         qrow(1818, "Speak with Dillinger"),
         qrow(1819, "Ulag the Cleaver", prev=1818, reward=8121, npc1=6390, npc_count1=1),
+    ]
+
+
+def rogue_rows():
+    return [
+        qrow(8, "A Rogue's Deal", classes=8, reward=2274),  # Stealth spell
     ]
 
 
@@ -258,6 +274,30 @@ class TheNextMove(unittest.TestCase):
         self.assertIsNone(move)
         self.assertTrue(blocked)
         self.assertIn("map", blocked[0])
+
+    def test_a_rogue_quest_is_taken_at_kaltunk_in_valley_of_trials(self):
+        rogue_book = classquest.build(
+            quest_rows=rogue_rows(),
+            giver_rows=givers(),
+            spawn_rows=[],
+            loot_rows=[],
+        )
+        m = who(class_id=ROGUE, race=TROLL, map_id=KALIMDOR, x=300.0, y=-4800.0)
+        move, blocked = classquest.next_move(rogue_book, m)
+        self.assertEqual(
+            (move.kind, move.quest, move.spot.entry), (classquest.TAKE, 8, 3170)
+        )
+        self.assertEqual(blocked, [])
+
+    def test_a_non_rogue_has_no_rogue_quest(self):
+        rogue_book = classquest.build(
+            quest_rows=rogue_rows(),
+            giver_rows=givers(),
+            spawn_rows=[],
+            loot_rows=[],
+        )
+        self.assertIsNone(classquest.next_move(rogue_book, who(class_id=WARRIOR))[0])
+        self.assertIsNone(classquest.next_move(rogue_book, who(class_id=PRIEST))[0])
 
 
 class TheBlockers(unittest.TestCase):

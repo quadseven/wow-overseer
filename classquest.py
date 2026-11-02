@@ -650,9 +650,13 @@ GIVERS_SQL = (
     "WHERE e.quest IN ({quests})"
 )
 
-# The other ways a quest starts: a gameobject offers it, or an item starts it
-# when used. Neither has a verb, but the blocker names which one it is.
+# The other ways a quest starts: a creature offers it, a gameobject offers it,
+# or an item starts it when used. Neither has a verb, but the blocker names
+# which one it is.
 STARTERS_SQL = (
+    "SELECT s.quest AS quest, 'creature' AS kind, s.id AS entry "
+    "FROM acore_world.creature_queststarter s WHERE s.quest IN ({quests}) "
+    "UNION ALL "
     "SELECT s.quest AS quest, 'gameobject' AS kind, s.id AS entry "
     "FROM acore_world.gameobject_queststarter s WHERE s.quest IN ({quests}) "
     "UNION ALL "
