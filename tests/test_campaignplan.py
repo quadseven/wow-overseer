@@ -287,9 +287,7 @@ class WhichOne(unittest.TestCase):
     def test_a_poor_door_stays_when_nothing_sound_is_left(self):
         """The family still runs something: no door is better than a poor one
         only when a sound one is there to take."""
-        record = {
-            run.keyword: (0, 20) for run in campaignplan.RUNS
-        }
+        record = {run.keyword: (0, 20) for run in campaignplan.RUNS}
         opts = campaignplan.options(facts(self.ZUG, KALIMDOR, door_record=record))
         self.assertTrue(opts)
         self.assertTrue(all(o.poor for o in opts))

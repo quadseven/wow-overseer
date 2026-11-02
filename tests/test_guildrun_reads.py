@@ -420,7 +420,6 @@ console.log(JSON.stringify(runs.rows[0].sub));""",
         self.assertEqual(got, "Cave | lost | 2026-10-09 19:00")
 
 
-
 class DoorRecord(unittest.TestCase):
     def test_outcomes_fold_into_cleared_of_went_in(self):
         rows = [
