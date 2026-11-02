@@ -22,6 +22,10 @@ order is not open, so the next shortfall is a new order.
 The statements run on any DB-API cursor that takes `%s` placeholders and
 returns rows as dicts: the bridge's pymysql DictCursor, and the test suite's
 SQLite cursor. Nothing here crafts, gathers or writes a worldserver row.
+
+WHERE IT RUNS. bridge._ensure_order_store creates the table at start-up. The
+guild pass does not read or write it yet: reading the open orders into its
+plan, saving the assignments and taking reports is the next step.
 """
 
 from __future__ import annotations

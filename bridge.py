@@ -82,6 +82,7 @@ import orders
 import orderrecord
 import guildwork
 import workorders
+import workorderstore
 import gearup
 import weaponskill
 import natural
@@ -4528,7 +4529,8 @@ def _write_queue(plan, source: str, new_ids: list | None = None) -> int:
 
 
 def _ensure_order_store() -> None:
-    """The order record (#1499), created the way the queue store is.
+    """The order record (#1499) and the work order store (#1487), created
+    the way the queue store is.
 
     A FAILURE IS LOGGED AND SWALLOWED: an order is carried out whether or not
     it can be recorded, so a missing record table must not stop start-up.
@@ -4539,6 +4541,12 @@ def _ensure_order_store() -> None:
     except pymysql.err.MySQLError:
         log.exception("orders: the order record store is unavailable, so "
                       "Discord orders are carried out but not recorded")
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(workorderstore.CREATE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("workorders: the work order store is unavailable, so "
+                      "no consumable or farming order can be kept (#1487)")
 
 
 def _insert_order(record) -> int:

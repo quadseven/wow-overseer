@@ -10,7 +10,9 @@ A "pass" here is what the bridge's guild pass will do with the store: read the
 open orders, plan them with workorders.plan, and save the assignments.
 """
 
+import ast
 import dataclasses
+import pathlib
 import sqlite3
 import unittest
 
@@ -295,6 +297,23 @@ class ColumnsTest(unittest.TestCase):
         )
         self.assertIn("COLLATE=utf8mb4_0900_ai_ci", workorderstore.CREATE_SQL)
         self.assertEqual(workorderstore.TABLE, "overseer_work_order")
+
+
+class StartUpTest(unittest.TestCase):
+    """The bridge creates the table at start-up, beside the order record."""
+
+    def test_the_order_store_ensure_creates_the_work_order_table(self):
+        path = pathlib.Path(__file__).resolve().parent.parent / "bridge.py"
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        (node,) = [
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "_ensure_order_store"
+        ]
+        body = ast.get_source_segment(source, node)
+        self.assertIn("cur.execute(workorderstore.CREATE_SQL)", body)
+        self.assertIn("import workorderstore\n", source)
 
 
 if __name__ == "__main__":
