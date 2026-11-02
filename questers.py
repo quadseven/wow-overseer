@@ -166,6 +166,13 @@ STATUS_FAILED = questlog.FAILED
 # ledger's own words for it (questledger.FAILED_REASON, #923).
 FAILED = "the quest failed in the log"
 STALLED = "its objectives did not move for 2 hours of play"
+# Quest 62 is completed by exploring the mine, but the quester can only work
+# kill and item objectives. Keep the ledger's stall reason specific to that
+# unsupported objective so the quest cannot look like a missing spawn.
+FARGODEEP_UNSUPPORTED = (
+    STALLED
+    + "; it requires exploring the mine, and questers have no exploration action"
+)
 GIVER_MISSING = "the quest giver is not in the world"
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
@@ -1008,6 +1015,8 @@ def _broken_reason(
     if played < STALL_SECONDS or status == STATUS_COMPLETE:
         return ""
     unsourced = (quest.kills or quest.items) and not quest.fields
+    if quest.id == 62:
+        return FARGODEEP_UNSUPPORTED
     return STALLED_UNSOURCED if unsourced else STALLED
 
 

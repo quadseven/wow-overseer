@@ -801,6 +801,24 @@ class Broken(unittest.TestCase):
         self.assertEqual((p.move.kind, p.move.quest), (classquest.ABANDON, 1))
         self.assertIn(questers.STALLED, p.move.said)
 
+    def test_fargodeep_stall_explains_its_unsupported_exploration_objective(self):
+        fargodeep = quest(62, ELWYNN, 7, title="The Fargodeep Mine")
+        cat = world(
+            extra_quests=[fargodeep],
+            extra_givers=[
+                giver(62, "start", 1062, 162, 10, 0),
+                giver(62, "end", 1062, 162, 10, 0),
+            ],
+        )
+        clock = questers.Clock()
+        member = mirra(quest_log={62: 3})
+        for minute in range(0, 121, 5):
+            result = questers.plan(cat, member, clock, minute * 60.0)
+
+        self.assertEqual(len(result.broken), 1)
+        self.assertIn("exploring the mine", result.broken[0].reason)
+        self.assertIn("no exploration action", result.broken[0].reason)
+
     def test_objectives_that_move_never_stall(self):
         p, _ = self._play(
             mirra(quest_log={1: 3}), 240, progress=lambda minute: {1: minute // 60}
