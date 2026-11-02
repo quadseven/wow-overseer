@@ -1294,7 +1294,9 @@ def deliverable(
     for Erg, whose bags stood at zero - and it is deliberately a swap rather
     than a sale: a vendor or bank needs a walk this pass cannot arrange, and
     the giver is already beside the receiver with room. `None` means nobody
-    asked; the plan withholds exactly as it did before this gate.
+    asked; the plan withholds exactly as it did before this gate. When it was
+    asked and no slot could be freed, the refusal says which step failed, and
+    that no hand-over skips the bags: a trade and a letter both land there.
 
     `position_rows=None` and `free_slots=None` both mean NOBODY ASKED, and
     the result is what this pass did before either gate existed - the same
@@ -1349,12 +1351,16 @@ def deliverable(
             continue
         chosen, verb = None, TRADE
         walls = {"absent": [], "crowded": [], "apart": []}
+        unfreed = []
         facts = (here, spots, room, posting, asked_where, asked_room)
         for option in (grant,) + tuple(grant.alternates):
             verb, wall = _delivery_wall(option, *facts)
             frees = ()
             if wall == "crowded":
-                stack = _free_step(option, here, spots, room, giveable)
+                stack, why = _free_step(option, here, spots, room, giveable)
+                if stack is None and freeables is not None:
+                    unfreed.append((option.taker, why))
+                    continue
                 if stack is not None:
                     frees = (stack,)
                     room[option.taker] = room.get(option.taker, 0) + 1
@@ -1369,7 +1375,9 @@ def deliverable(
             break
         if chosen is None:
             notes.append(
-                _withheld(grant, walls["crowded"], walls["absent"], walls["apart"])
+                _withheld(
+                    grant, walls["crowded"], walls["absent"], walls["apart"], unfreed
+                )
             )
             continue
         if asked_room:
@@ -1379,7 +1387,7 @@ def deliverable(
 
 
 def _free_step(option, here, spots, room, giveable):
-    """The Free this taker can make to fit the piece, else None.
+    """(the Free this taker can make to fit the piece, ""), else (None, why).
 
     Called only after `_delivery_wall` has refused for room, so presence is
     already established. Only where the two stand together, because the junk
@@ -1389,19 +1397,25 @@ def _free_step(option, here, spots, room, giveable):
     """
     there = spots.get(option.taker)
     if here is None or there is None or not _within_trade_range(here, there):
-        return None
+        return None, "%s is not beside %s to give a junk stack" % (
+            option.taker,
+            option.holder,
+        )
     if room.get(option.holder, 0) <= 0:
-        return None
+        return None, "%s has no free slot to take a junk stack" % option.holder
     stacks = giveable.get(option.taker, ())
     if not stacks:
-        return None
+        return None, "%s carries no grey a vendor would buy" % option.taker
     stack = stacks[0]
-    return Free(
-        holder=option.taker,
-        taker=option.holder,
-        guid=int(stack.guid),
-        entry=int(stack.entry),
-        name=str(stack.name),
+    return (
+        Free(
+            holder=option.taker,
+            taker=option.holder,
+            guid=int(stack.guid),
+            entry=int(stack.entry),
+            name=str(stack.name),
+        ),
+        "",
     )
 
 
@@ -1430,18 +1444,28 @@ def _delivery_wall(option, here, spots, room, posting, asked_where, asked_room):
     return "", "apart"
 
 
-def _withheld(grant: Grant, crowded: list, absent: list, apart=()) -> str:
+def _withheld(grant: Grant, crowded: list, absent: list, apart=(), unfreed=()) -> str:
     """The one note for an item every ranked taker refused.
 
     Both walls are named when both were hit. A note that said only "no free
     bag slot" for a ranking where two takers were offline and one was full
     would send the next reader looking at bags for a presence problem.
+
+    `unfreed` is (taker, why) for each full taker whose make-room step
+    failed: the note names that step, and that no hand-over equips the piece
+    directly, so a reader knows both roads were tried (#550).
     """
     walls = []
     if crowded:
         walls.append(
             "%s %s no free bag slot to receive it"
             % (_joined(crowded), "have" if len(crowded) > 1 else "has")
+        )
+    for taker, why in unfreed:
+        walls.append(
+            "%s has no free bag slot to receive it, no slot could be freed "
+            "(%s), and no hand-over equips it directly (a trade or a letter "
+            "lands in the bags)" % (taker, why)
         )
     if absent:
         walls.append(
