@@ -309,7 +309,20 @@ class TheUsesAreReadFromTheWorld(unittest.TestCase):
         self.assertEqual(b.quests[6062].provided, (ROD,))
         self.assertEqual(b.quests[6062].sources, (4242,))
 
-    def test_trial_of_the_lake_fetches_and_uses_its_bauble_at_the_ender(self):
+    def test_a_source_item_with_no_use_is_still_never_sold(self):
+        b = classquest.build(
+            quest_rows=[qrow(28, "Trial of the Lake", sort=-263, source1=15877)],
+            giver_rows=[],
+            spawn_rows=[],
+            loot_rows=[],
+        )
+        self.assertIn(15877, guildjobs._protected_entries(b))
+
+    def test_a_source_item_needs_a_use_to_be_completable(self):
+        """The quest source comes from QUESTS_SQL; chest and ender rows come
+        from CHEST_SQL and GIVERS_SQL, with object spawns from
+        OBJECT_SPAWNS_SQL. These synthetic rows exercise those reader outputs.
+        """
         shrine = spawn(1, 90001, 1, 1, "Shrine of Remulos")
         urn = spawn(2, 90002, 2, 2, "Bauble Container")
         b = classquest.build(
