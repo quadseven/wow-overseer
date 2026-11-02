@@ -55,20 +55,23 @@ CREATE_SQL = (
     " COMMENT='Guild work orders and who took each (wow-overseer#1487)'"
 )
 
-_FIELDS = "id, kind, item, quantity, zone, requested_by, status, assigned_to"
-
 INSERT_SQL = (
     "INSERT INTO overseer_work_order"
     " (kind, item, quantity, zone, requested_by, status, assigned_to)"
     " VALUES (%s, %s, %s, %s, %s, 'requested', '')"
 )
 
+# The columns from_row reads, spelled out in each read: literal SQL only.
 SELECT_OPEN_SQL = (
-    "SELECT " + _FIELDS + " FROM overseer_work_order"
+    "SELECT id, kind, item, quantity, zone, requested_by, status, assigned_to"
+    " FROM overseer_work_order"
     " WHERE status IN ('requested', 'assigned') ORDER BY id"
 )
 
-SELECT_ONE_SQL = "SELECT " + _FIELDS + " FROM overseer_work_order WHERE id = %s"
+SELECT_ONE_SQL = (
+    "SELECT id, kind, item, quantity, zone, requested_by, status, assigned_to"
+    " FROM overseer_work_order WHERE id = %s"
+)
 
 ASSIGN_SQL = (
     "UPDATE overseer_work_order"
