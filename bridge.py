@@ -12024,18 +12024,46 @@ class Bridge(discord.Client):
         at_mailbox = await asyncio.to_thread(
             _holders_at_mailbox, list(family_names), positions,
         )
+        # A FULL GUILDMATE MAKES ITS OWN ROOM (#550), as a full sibling does
+        # in `_hand_gear`: it gives its cheapest grey to the family holder
+        # beside it, then takes the piece. Nothing is destroyed or sold. Only
+        # full guildmates the AI drives now are read, so nothing leaves the
+        # bags of a character a person is playing, and a stack the operator
+        # reserved (overseer_keep) is never offered, so the next grey is.
+        full = [name for name in all_names
+                if name not in family_names and free_slots.get(name, 0) <= 0]
+        driven = await asyncio.to_thread(_bot_held_names, full)
+        junk = await asyncio.to_thread(_fetch_vendor_items, driven)
+        junk = [row for row in junk
+                if not _KEEP.blocks(str(row.get("holder", "")),
+                                    "guid:%s" % row.get("item_guid"))]
         plan = bag_pressure.guild_gear_gifts_from_rows(
             gear_rows, equipped, family_names, roster,
             position_rows=positions, free_slots=free_slots,
             at_mailbox=at_mailbox,
+            freeables=bag_pressure.freeable_greys(junk, OWNER_KEEPS),
         )
         for note in plan.notes:
             log.info("guild gear: %s", note)
         if not plan.grants:
             return
         seen = await asyncio.to_thread(_recent_trade_keys, GIVE_RETRY_MINUTES)
+        # The make-room step goes first, so the trade that follows has its
+        # slot. A step that cannot be written holds its hand-off with it.
+        freed = 0
         fresh = []
         for grant in plan.grants:
+            ready = True
+            for free in grant.frees:
+                if (free.holder, free.taker, free.command) in seen:
+                    continue
+                if await asyncio.to_thread(_insert_gear_handoff, free):
+                    freed += 1
+                    log.info("guild gear: %s", free.said)
+                else:
+                    ready = False
+            if not ready:
+                continue
             if (grant.holder, grant.taker, grant.command) in seen:
                 continue
             if await asyncio.to_thread(_insert_gear_handoff, grant):
@@ -12044,8 +12072,9 @@ class Bridge(discord.Client):
             log.info("guild gear: %s -> %s by %s, %s - %s",
                      grant.holder, grant.taker, grant.verb, grant.name,
                      grant.reason)
-        log.info("guild gear: queued %d/%d hand-off(s), %d already queued",
-                 len(fresh), len(plan.grants), len(plan.grants) - len(fresh))
+        log.info("guild gear: queued %d/%d hand-off(s), %d make-room step(s), "
+                 "%d already queued", len(fresh), len(plan.grants), freed,
+                 len(plan.grants) - len(fresh))
 
     async def _guild_route_once(self, family_names: list, roster: list) -> None:
         """Hand a guildmate's loot to the guild member who gains most (#174).
