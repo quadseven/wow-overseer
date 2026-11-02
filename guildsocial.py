@@ -14,10 +14,12 @@ GUILD_DOORS): a boss drop it can use now that scores higher for its spec than
 what it wears (gearscore, gated by recap.verdict for class, proficiency, armor
 grade and required level), a pre-raid best-in-slot pick above all, or a quest
 for that dungeon in its log. One open ask per member, ASK_MINUTES to live,
-ASK_COOLDOWN_MINUTES before an ask that came to nothing is asked again, and the
-existing rest after a run (guildrun's resting set). At most
-MAX_OPEN_ASKS_PER_GUILD asks are open in a guild, one new one a pass, and none
-while every group the realm may run is already out or waiting.
+ASK_COOLDOWN_MINUTES before an ask that came to nothing is asked again (and
+ASK_REPEAT_COOLDOWN_MINUTES, #1636, before the SAME member asks for the SAME
+door again), and the existing rest after a run (guildrun's resting set). At
+most MAX_OPEN_ASKS_PER_GUILD asks are open in a guild, one new one a pass,
+and none while every group the realm may run is already out or waiting. An
+ask nobody answered expires silently: no line is said for it (#1636).
 
 THE DOOR'S RECORD AND JEV (#584). A member never asks for a door that is failing
 for the shape of group its guild can seat now (a real tank or not, a real healer
@@ -86,11 +88,23 @@ ASK_MINUTES = 10
 # A filled ask waits for the realm's run spacing; it is given this much longer.
 FILLED_GRACE_MINUTES = 10
 ASK_COOLDOWN_MINUTES = 15
+# THE SAME DOOR STAYS QUIET FOR HOURS (#1636). The 15 minutes above bar a
+# member from asking for anything right after an ask came to nothing; this
+# longer, per-(member, door) bar is what stops the cycle a reader watched in
+# the guild feed: ask, lapse, the identical ask again minutes later. It is
+# keyed on the INTENT (asker, door), in the spirit of chat.py's say-once, so
+# no rewording of the same ask gets around it. Four hours is longer than a
+# viewing sitting and shorter than a day: tomorrow the need is news again.
+ASK_REPEAT_COOLDOWN_MINUTES = 240
+# How far back the bridge reads ended asks: far enough for the longest bar
+# above to see the asks that carry it.
+ASKS_READ_MINUTES = max(ASK_COOLDOWN_MINUTES, ASK_REPEAT_COOLDOWN_MINUTES)
 # MANY GROUPS AT ONCE (operator, 2026-10-05: "let all groups run stuff at the
-# same time"). With the realm cap lifted to 30, two open asks per guild, one
-# new ask a pass and two answers per ask a pass still let only one group form
-# at a time from guilds with 40 to 50 members free.
-MAX_OPEN_ASKS_PER_GUILD = 8
+# same time") set this to 8, and the guild channel became mostly LFG posts
+# cycling. Three (#1636) still lets a guild of 40 to 50 free members form
+# groups in parallel - a formed ask leaves the open set at once - without
+# the channel reading as a noticeboard.
+MAX_OPEN_ASKS_PER_GUILD = 3
 NEW_ASKS_PER_PASS = 2
 ANSWERS_PER_PASS = 4
 
@@ -686,10 +700,15 @@ def worth(mate: Mate, door, value: float, entrances: dict) -> float:
 # --- the words ------------------------------------------------------------------------
 
 
-def _pick(options: tuple, *keys) -> str:
-    """A stable choice among templates, varied by who and what."""
+def _pick(options: tuple, *keys, vary: int = 0) -> str:
+    """A stable choice among templates, varied by who and what.
+
+    `vary` shifts the choice by that many templates (#1636): the same
+    member saying the same intent again - a re-ask after the long cooldown,
+    a second answer - lands on a different wording instead of repeating the
+    identical sentence, which is what made the feed read as a script."""
     seed = zlib.crc32("|".join(str(k) for k in keys).encode("utf-8"))
-    return options[seed % len(options)]
+    return options[(seed + vary) % len(options)]
 
 
 def roles_words(roles) -> str:
@@ -767,24 +786,20 @@ _FORMED_BY_SELF = (
     "Got everyone, heading into {place} now. Thanks all!",
     "Group's full, {place} here we come.",
 )
-_EXPIRED = (
-    "Never mind {place}, maybe later.",
-    "No luck for {place}, I'll try again later.",
-)
-
-
 def _fit(text: str, limit: int) -> str:
     text = " ".join(str(text).split())
     return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."
 
 
-def ask_line(asker: str, door, roles, need: Need | None) -> str:
+def ask_line(asker: str, door, roles, need: Need | None, vary: int = 0) -> str:
     n = len(roles)
     words = roles_words(roles)
     if need is not None and need.quest:
-        template = _pick(_ASK_QUEST, asker, door.keyword, need.quest)
+        template = _pick(_ASK_QUEST, asker, door.keyword, need.quest, vary=vary)
     else:
-        template = _pick(_ASK_ITEM, asker, door.keyword, need.entry if need else 0)
+        template = _pick(
+            _ASK_ITEM, asker, door.keyword, need.entry if need else 0, vary=vary
+        )
     return _fit(
         template.format(
             place=door.place,
@@ -807,11 +822,25 @@ def ask_reason(need: Need | None) -> str:
     return _fit("%s for my %s slot" % (need.item, need.slot or "gear"), 160)
 
 
-def answer_line(member: str, role: str, stance: str, door, need: Need | None) -> str:
-    if stance == NEED and need is not None and not need.quest:
-        template = _pick(_ANSWER_ITEM, member, door.keyword)
+def answer_line(
+    member: str, role: str, stance: str, door, need: Need | None, vary: int = 0
+) -> str:
+    # An answer names a drop only when the answerer would actually gain
+    # THAT drop at THIS door (#1636): a need at another door, or one with
+    # no gain scored at this door, is not a reason to name it - the feed
+    # showed a member answering with an item that belonged to neither the
+    # ask nor their own business at that dungeon. Anything else answers
+    # with the generic wording for its seat and stance.
+    gains_here = (
+        need is not None
+        and not need.quest
+        and need.keyword == door.keyword
+        and need.gain > 0
+    )
+    if stance == NEED and gains_here:
+        template = _pick(_ANSWER_ITEM, member, door.keyword, vary=vary)
     else:
-        template = _pick(_ANSWER[(role, stance)], member, door.keyword)
+        template = _pick(_ANSWER[(role, stance)], member, door.keyword, vary=vary)
     return _fit(template.format(place=door.place, item=need.item if need else ""), 255)
 
 
@@ -828,10 +857,6 @@ def formed_line(proposer: str, tank: str, door) -> str:
     # "Auren's Deadmines group", but "heading into The Deadmines".
     place = door.place if proposer == tank else short_place(door.place)
     return _fit(template.format(proposer=proposer, place=place), 255)
-
-
-def expired_line(asker: str, door) -> str:
-    return _fit(_pick(_EXPIRED, asker, door.keyword).format(place=door.place), 255)
 
 
 # --- one pass ---------------------------------------------------------------
@@ -1088,6 +1113,10 @@ class _Board:
     lent: set = field(default_factory=set)
     # guild -> guildrun.unknown_recipes: the raid recipes nobody knows (#893).
     recipes: dict = field(default_factory=dict)
+    # (asker, door keyword) pairs under the long repeat bar (#1636): an ask
+    # for one of these doors came to nothing within
+    # ASK_REPEAT_COOLDOWN_MINUTES, so the member is not offered it again yet.
+    recent_doors: set = field(default_factory=set)
 
     @property
     def free(self) -> dict:
@@ -1141,8 +1170,12 @@ def _ending(board: _Board, ask: Ask) -> tuple | None:
     """("expire", line) or ("cancel", "") for an ask that ends now, or None."""
     door = board.doors.get(ask.target)
     if ask.state == OPEN and _past(ask.expires_at, board.now):
-        said = door is not None and ask.asker in board.free_mates
-        return "expire", expired_line(ask.asker, door) if said else ""
+        # SILENT (#1636). An unanswered ask lapses the way a person's LFG
+        # post lapses: nobody announces "never mind" to the guild, and the
+        # announcement was half of the cycle that filled the feed - ask,
+        # never-mind, ask again. The ask still closes and its yeses are
+        # still withdrawn; only the line is gone.
+        return "expire", ""
     late = _minutes_since(ask.expires_at, board.now) > FILLED_GRACE_MINUTES
     if ask.state == FILLED and late:
         return "expire", ""
@@ -1283,7 +1316,13 @@ def _answers_to(board: _Board, ask: Ask, spoken: set) -> list:
         carriers += 1 if stance == CARRIES else 0
         out.append(
             Reply(
-                ask.id, name, role, stance, answer_line(name, role, stance, door, need)
+                ask.id,
+                name,
+                role,
+                stance,
+                # vary by the ask's id (#1636): the same member answering
+                # two asks does not say the identical sentence twice.
+                answer_line(name, role, stance, door, need, vary=ask.id),
             )
         )
         spoken.add(name)
@@ -1371,6 +1410,8 @@ def _tiered_options(
     for need in board.needs.get(name, []):
         door = board.doors.get(need.keyword)
         if door is None or door.keyword in seen or (guild, door.keyword) in asked:
+            continue
+        if (name, door.keyword) in board.recent_doors:
             continue
         if not _may_ask_for(mate.member, door, faction, guildmates):
             continue
@@ -1578,6 +1619,19 @@ def _recent_askers(asks: list, now) -> set:
     }
 
 
+def _recent_doors(asks: list, now) -> set:
+    """(asker, door) pairs whose ask EXPIRED within the long repeat bar
+    (#1636). Only an expiry counts: an ask that ran, or one cancelled
+    because its asker left, is not an ask that came to nothing, and the
+    member may be offered that door again on the short bar alone."""
+    return {
+        (a.asker, a.target)
+        for a in asks
+        if a.state == EXPIRED
+        and _minutes_since(a.created_at, now) < ASK_REPEAT_COOLDOWN_MINUTES
+    }
+
+
 def _best_askers(board: _Board, guild: str, barred: set, asked: set) -> list:
     """This guild's members with a need to ask for, strongest first."""
     choices = []
@@ -1621,7 +1675,24 @@ def _new_asks(board: _Board, asks: list, still: list, spoken: set, room: int) ->
         for _rank, name, mate, options, band, shape in _best_askers(
             board, guild, barred, asked
         )[:NEW_ASKS_PER_PASS]:
-            posts.append(_post(guild, name, mate, options, band, shape))
+            post = _post(guild, name, mate, options, band, shape)
+            # A member who has asked for this door before says it
+            # differently this time (#1636): the intent is the same, the
+            # sentence is not the one they used last time.
+            prior = sum(1 for a in asks if a.asker == name and a.target == post.target)
+            if prior:
+                door = board.doors[post.target]
+                post = replace(
+                    post,
+                    said=ask_line(
+                        name,
+                        door,
+                        list(roles_of(post.roles_needed)),
+                        options[0].need,
+                        vary=prior,
+                    ),
+                )
+            posts.append(post)
             spare -= 1
     return posts
 
@@ -1702,6 +1773,7 @@ def plan_pass(
         lent,
         recipes,
     )
+    board.recent_doors = _recent_doors(asks, now)
     live = [a for a in asks if a.state in LIVE_ASKS and a.kind == KIND_DUNGEON]
     expire, cancel, withdraw, still = _close(board, live)
     board.gone = set(withdraw)

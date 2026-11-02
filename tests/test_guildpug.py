@@ -207,8 +207,9 @@ class WhoAnswers(unittest.TestCase):
             (j.ask_id, j.member, j.role, j.asker), (7, "Mercy", "healer", "Auren")
         )
         self.assertIn("Deadmines", j.said)
-        self.assertIn("Mercy", j.told_guild)
-        self.assertIn("LFG", j.told_guild)
+        # #1636: no guild narration for a join - the record is the answer
+        # row, and the formed group gets the social layer's heading-in line.
+        self.assertEqual(j.told_guild, "")
 
     def test_who_does_not_qualify(self):
         cases = {
