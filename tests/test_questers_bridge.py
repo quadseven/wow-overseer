@@ -298,5 +298,238 @@ class TheQuesterPass(unittest.TestCase):
         self.assertEqual(run.run().started, [])
 
 
+class _Cursor:
+    """Answers reads in order and records every write."""
+
+    def __init__(self, answers, written):
+        self.answers = answers
+        self.written = written
+        self.last = None
+        self.executed = []
+
+    def execute(self, sql, args=()):
+        self.last = sql
+        self.executed.append(sql)
+
+    def fetchall(self):
+        for key, rows in self.answers.items():
+            if self.last.startswith(key):
+                return rows
+        raise AssertionError("no answer for " + self.last)
+
+    def fetchone(self):
+        return self.fetchall()[0]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _Conn:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def cursor(self):
+        return self._cursor
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class FetchQuesterFacts(unittest.TestCase):
+    """Tests for _fetch_quester_facts that exercise the carried-items read path."""
+
+    def setUp(self):
+        import sys
+        import types
+
+        stub = types.ModuleType("discord")
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+        stub.Client = Client
+        with mock.patch.dict(sys.modules, {"discord": stub}):
+            sys.modules.pop("bridge", None)
+            import bridge
+
+            self.bridge = bridge
+
+    def _make_catalogue_with_items(self):
+        """Build a catalogue that includes a quest with required items."""
+        # Quest 38 (Westfall Stew) requires items 501 (x3) and 502 (x3)
+        extra_quests = [
+            {
+                "id": 38,
+                "title": "Westfall Stew",
+                "sort": 40,
+                "zone": 40,
+                "level": 13,
+                "info": 0,
+                "min_level": 1,
+                "races": 0,
+                "classes": 0,
+                "prev_signed": 0,
+                "prev": 0,
+                "exclusive": 0,
+                "reward": 0,
+                "display": 0,
+                "grp": 0,
+                "npc1": 0,
+                "npc_count1": 0,
+                "item1": 501,
+                "item_count1": 3,
+                "item2": 502,
+                "item_count2": 3,
+            }
+        ]
+        extra_givers = [
+            giver(38, "start", 1038, 138, 3000, 0),
+            giver(38, "end", 1038, 138, 3000, 0),
+        ]
+        extra_starts = [started(38, 138)]
+        extra_ends = [ended(38, 138)]
+        extra_spawns = [spawn(2038, 238, 100, 0), spawn(2039, 239, 200, 0)]
+        extra_loot = [{"item": 501, "entry": 238}, {"item": 502, "entry": 239}]
+        return world(
+            extra_quests=extra_quests,
+            extra_givers=extra_givers,
+            extra_starts=extra_starts,
+            extra_ends=extra_ends,
+            extra_spawns=extra_spawns,
+            extra_loot=extra_loot,
+        )
+
+    def _base_answers(self):
+        """Common SQL answers needed by _fetch_quester_facts."""
+        return {
+            "SELECT id, target_name, command, source, status, target_arg, LEFT(result, 400) AS result, TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY": [],
+            "SELECT l.quest, c.name, l.state": [],
+            "SELECT COUNT(*) AS open_hunts FROM overseer_command WHERE command LIKE 'hunt-spawn %%' AND status IN ('pending', 'claimed', 'verifying') AND created_at > NOW() - INTERVAL 1800 SECOND": [
+                {"open_hunts": 0}
+            ],
+            "SELECT guid, name, map_id, x, y, zone_id, level, class_id, race, online, health, has_corpse": [],
+        }
+
+    def test_carried_items_are_fetched_and_folded_into_members(self):
+        """The ITEMS_SQL read runs, its rows are folded, and members carry them."""
+        names = ["Mirra", "Tharn"]
+
+        written = []
+        answers = self._base_answers()
+        answers.update(
+            {
+                "SELECT c.guid, c.name": [
+                    {
+                        "guid": 1,
+                        "name": "Mirra",
+                        "class_id": 5,
+                        "race": 1,
+                        "level": 13,
+                        "online": 1,
+                        "map_id": 0,
+                        "saved_zone": 40,
+                        "pos_x": 3000.0,
+                        "pos_y": 0.0,
+                        "zone_id": 40,
+                        "health": 100,
+                        "has_corpse": 0,
+                    },
+                    {
+                        "guid": 2,
+                        "name": "Tharn",
+                        "class_id": 1,
+                        "race": 1,
+                        "level": 13,
+                        "online": 1,
+                        "map_id": 0,
+                        "saved_zone": 40,
+                        "pos_x": 3100.0,
+                        "pos_y": 0.0,
+                        "zone_id": 40,
+                        "health": 100,
+                        "has_corpse": 0,
+                    },
+                ],
+                "SELECT guid, quest, status": [],
+                "SELECT guid, quest FROM character_queststatus_rewarded": [],
+                "SELECT c.name, ii.itemEntry AS item, SUM": [
+                    {"name": "Mirra", "item": 501, "count": 3},
+                    {"name": "Mirra", "item": 502, "count": 1},
+                    {"name": "Tharn", "item": 501, "count": 0},
+                ],
+            }
+        )
+        cursor = _Cursor(answers, written)
+        cat = self._make_catalogue_with_items()
+
+        with mock.patch.object(self.bridge, "_connect", lambda: _Conn(cursor)):
+            members, attempts, states, hunts, crossings = (
+                self.bridge._fetch_quester_facts(names, cat)
+            )
+
+        self.assertEqual(len(members), 2)
+        mirra = next(m for m in members if m.name == "Mirra")
+        tharn = next(m for m in members if m.name == "Tharn")
+        self.assertEqual(mirra.carried_items, {501: 3, 502: 1})
+        self.assertEqual(tharn.carried_items, {501: 0})
+        # Verify the ITEMS_SQL was executed with correct names and items
+        # cursor.last only holds the last query; check all queries that were executed
+        items_sql_executed = any(
+            "ii.itemEntry AS item" in sql and "SUM" in sql for sql in cursor.executed
+        )
+        self.assertTrue(items_sql_executed)
+
+    def test_no_item_ids_means_no_items_query(self):
+        """When the catalogue has no item quests, ITEMS_SQL is not run."""
+        names = ["Mirra"]
+        written = []
+        answers = self._base_answers()
+        answers.update(
+            {
+                "SELECT c.guid, c.name": [
+                    {
+                        "guid": 1,
+                        "name": "Mirra",
+                        "class_id": 5,
+                        "race": 1,
+                        "level": 2,
+                        "online": 1,
+                        "map_id": 0,
+                        "saved_zone": 12,
+                        "pos_x": 10.0,
+                        "pos_y": 0.0,
+                        "zone_id": 12,
+                        "health": 100,
+                        "has_corpse": 0,
+                    },
+                ],
+                "SELECT guid, quest, status": [],
+                "SELECT guid, quest FROM character_queststatus_rewarded": [],
+            }
+        )
+        cursor = _Cursor(answers, written)
+        cat = world()  # no item quests
+
+        with mock.patch.object(self.bridge, "_connect", lambda: _Conn(cursor)):
+            members, attempts, states, hunts, crossings = (
+                self.bridge._fetch_quester_facts(names, cat)
+            )
+
+        self.assertEqual(len(members), 1)
+        self.assertEqual(members[0].carried_items, {})
+        # ITEMS_SQL should not have been executed
+        items_sql_executed = any(
+            "ii.itemEntry AS item" in sql and "SUM" in sql for sql in cursor.executed
+        )
+        self.assertFalse(items_sql_executed)
+
+
 if __name__ == "__main__":
     unittest.main()
