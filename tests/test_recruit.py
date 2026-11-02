@@ -709,15 +709,57 @@ class TheInterviewIntegration(unittest.TestCase):
         )
 
     def test_a_failed_interview_call_does_not_stop_the_invite(self):
-        """An LLM error is not a verdict either: the invite still goes out."""
-        self.mocks["_interview_candidate"].side_effect = RuntimeError("llm down")
+        """An LLM or database error is not a verdict either: the invite
+        still goes out."""
+
+        # pymysql may be the empty stub some test modules install, so the
+        # bridge's pymysql is swapped for one whose MySQLError this test owns.
+        class FakeMySQLError(Exception):
+            pass
+
+        fake_pymysql = types.SimpleNamespace(
+            err=types.SimpleNamespace(MySQLError=FakeMySQLError)
+        )
+        patcher = mock.patch.object(self.bridge, "pymysql", fake_pymysql)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        for err in (
+            OSError("llm down"),
+            TimeoutError("llm slow"),
+            ValueError("bad json"),
+            KeyError("choices"),
+            self.bridge.llmmode.LLMOff("off"),
+            FakeMySQLError("db down"),
+        ):
+            with self.subTest(err=type(err).__name__):
+                self.mocks["_insert_guild"].reset_mock()
+                self.mocks["_interview_candidate"].side_effect = err
+
+                client = self._make_client()
+                asyncio.run(client._recruit_once())
+
+                self.mocks["_insert_guild"].assert_called_once_with(
+                    "ActingMember", "invite Candidate1", "recruit", "Candidate1"
+                )
+
+    def test_a_bug_in_the_interview_is_not_logged_away(self):
+        """A programming error is not a failed interview: it propagates and
+        no invite is written on the back of it."""
+        self.mocks["_interview_candidate"].side_effect = NameError("typo")
+        patcher = mock.patch.object(
+            self.bridge,
+            "pymysql",
+            types.SimpleNamespace(err=types.SimpleNamespace(MySQLError=LookupError)),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
         client = self._make_client()
-        asyncio.run(client._recruit_once())
+        with self.assertRaises(NameError):
+            asyncio.run(client._recruit_once())
 
-        self.mocks["_insert_guild"].assert_called_once_with(
-            "ActingMember", "invite Candidate1", "recruit", "Candidate1"
-        )
+        self.mocks["_insert_guild"].assert_not_called()
 
     def test_shortlist_action_does_not_call_interview(self):
         """When the action is shortlist, _interview_candidate is not called."""

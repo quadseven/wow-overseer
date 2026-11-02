@@ -1141,6 +1141,26 @@ def _fetch_grounding(name: str) -> dict | None:
         return cur.fetchone()
 
 
+def _interview_errors() -> tuple[type[BaseException], ...]:
+    """What one interview may fail with and still let the invite go out: the
+    snapshot read (MySQL), the LLM request (URLError and timeouts are OSError,
+    LLM_MODE=off is LLMOff) and a malformed reply (bad JSON is ValueError, a
+    missing field KeyError or IndexError). Anything else is a bug and must not
+    be logged away as a failed interview (Elder on wow-overseer#1532).
+
+    A function, not a module constant: pymysql.err is resolved at call time,
+    like every other MySQLError guard here, so a test that stubs pymysql can
+    still import this module."""
+    return (
+        pymysql.err.MySQLError,
+        OSError,
+        ValueError,
+        KeyError,
+        IndexError,
+        llmmode.LLMOff,
+    )
+
+
 def _interview_candidate(name: str) -> interview.InterviewExchange | None:
     """One interview exchange with a shortlisted candidate, as data.
 
@@ -16100,7 +16120,7 @@ class Bridge(discord.Client):
         while action.verb == "invite":
             try:
                 exchange = await asyncio.to_thread(_interview_candidate, action.target_arg)
-            except Exception as exc:  # noqa: BLE001 - the reply never gates the invite
+            except _interview_errors() as exc:
                 log.warning(
                     "recruit interview: %s - no exchange (%s); the invite does not wait on it",
                     action.target_arg, exc,
