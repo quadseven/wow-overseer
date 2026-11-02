@@ -906,12 +906,29 @@ def in_reach(cat: Catalogue, member, zone, broken=frozenset()) -> list:
 
 def _working(cat: Catalogue, member, last_quest=0) -> set:
     """The quests the quester is working now: those in its log of the zone it
-    stands in, and the quest its last move was for."""
+    stands in, and the quest its last move was for. Also includes quests whose
+    objective spawns the member is currently at (within HUNT_REACH), to handle
+    cases where the quest's assigned zone (from QuestSortID) differs from where
+    its objectives actually are."""
     out = {
         qid
         for qid in member.quest_log
         if (cat.facts.get(qid) is not None and cat.facts[qid].zone == member.zone)
     }
+    if not member.placed:
+        if last_quest and int(last_quest) in member.quest_log:
+            out.add(int(last_quest))
+        return out
+    for qid in member.quest_log:
+        if qid in out:
+            continue
+        quest = cat.book.quests.get(qid)
+        if quest is None:
+            continue
+        for spot in quest.fields:
+            if _yards(member, spot) <= classquest.HUNT_REACH:
+                out.add(qid)
+                break
     if last_quest and int(last_quest) in member.quest_log:
         out.add(int(last_quest))
     return out

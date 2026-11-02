@@ -1381,3 +1381,121 @@ class ASummonedObjectEnder(unittest.TestCase):
         p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
         self.assertEqual([b.quest for b in p.broken], [40])
         self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+
+class Quest33WolvesAcrossTheBorder(unittest.TestCase):
+    """Quest 33 'Wolves Across the Border' is a Human starter quest in Northshire
+    Valley (QuestSortID 9 -> zone 12 Elwynn Forest). If the database has it with
+    QuestSortID 132 (Coldridge Valley -> zone 1 Dun Morogh), Dwarf questers in
+    Coldridge Valley can take it but the objective wolves (entry 200) don't spawn
+    in Dun Morogh, causing a stall."""
+
+    def _world_with_wrong_zone_quest(self):
+        """Quest 33 with QuestSortID=132 (Coldridge Valley area) but objective
+        creature entry 200 only spawns in Elwynn Forest (zone 12)."""
+        quests = [
+            quest(
+                33,
+                132,  # QuestSortID = Coldridge Valley area -> zone 1 (Dun Morogh)
+                2,
+                kill=200,
+                count=8,
+                title="Wolves Across the Border",
+                races=1101,  # Alliance races including Dwarf (race 3)
+            ),
+        ]
+        givers = [
+            giver(33, "start", 1033, 133, 0, 0),  # In Coldridge Valley
+            giver(33, "end", 1033, 133, 0, 0),
+        ]
+        # Spawns only in Elwynn Forest (zone 12), NOT in Dun Morogh (zone 1)
+        # Coordinates (150, 0) on map 0 are in Elwynn Forest
+        spawns = [spawn(2001, 200, 150, 0, level=2, map_id=0)]
+        named = {33: 133}
+        starts = [started(33, 133)]
+        ends = [ended(33, 133)]
+        return questers.catalogue(quests, givers, spawns, [], starts, ends)
+
+    def _durga_in_coldridge(self, **kw):
+        base = dict(
+            name="Durga",
+            level=2,
+            race=3,  # Dwarf
+            class_id=3,  # Hunter
+            map_id=0,
+            x=-5000.0,  # Coldridge Valley coordinates
+            y=-500.0,
+            zone_id=132,  # Coldridge Valley area -> zone 1 (Dun Morogh)
+            online=True,
+        )
+        base.update(kw)
+        return questers.Member(**base)
+
+    def test_quest33_wrong_zone_causes_stall(self):
+        """Quest 33 assigned to Coldridge Valley zone but wolves only spawn in
+        Elwynn Forest -> Dwarf quester takes it, walks to Elwynn to hunt.
+        With the fix, _working() keeps the quest because member is at the
+        spawn (within HUNT_REACH), so stall clock tracks it -> STALLED after 2 hours."""
+        cat = self._world_with_wrong_zone_quest()
+        # Quest 33 is in zone 1 (Dun Morogh) due to QuestSortID 132
+        self.assertEqual(cat.facts[33].zone, 1)
+        # Durga is in zone 1 (Coldridge Valley / Dun Morogh)
+        durga = self._durga_in_coldridge()
+        self.assertEqual(durga.zone, 1)
+        # Quest is open to Durga (race, level, zone match)
+        self.assertIn(33, questers.in_reach(cat, durga, 1))
+
+        # Durga takes the quest
+        p = questers.plan(cat, durga, questers.Clock(), 0.0)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 33))
+
+        # Now Durga has the quest and tries to hunt
+        # The hunt finds the spawn in Elwynn Forest (same map 0)
+        durga_with_quest = questers.Member(
+            **{**durga.__dict__, "quest_log": {33: questers.STATUS_INCOMPLETE}}
+        )
+        clock = questers.Clock()
+        p = questers.plan(cat, durga_with_quest, clock, 0.0)
+        # Hunt move IS found because spawn is on same map (0)
+        self.assertEqual(p.move.kind, classquest.HUNT)
+        self.assertEqual(p.move.quest, 33)
+
+        # After walking to the spawn, Durga is now in Elwynn Forest (zone 12)
+        # The quest's assigned zone is 1, but member is now in zone 12
+        durga_at_spawn = questers.Member(
+            name="Durga",
+            level=2,
+            race=3,
+            class_id=3,
+            map_id=0,
+            x=150.0,  # At the spawn in Elwynn Forest
+            y=0.0,
+            zone_id=9,  # Northshire area -> zone 12 (Elwynn Forest)
+            online=True,
+            quest_log={33: questers.STATUS_INCOMPLETE},
+        )
+        # With the fix, _working() INCLUDES quest 33 because member is at the spawn
+        working = questers._working(cat, durga_at_spawn)
+        self.assertIn(33, working, "Quest should be in _working when at spawn")
+
+        # Simulate 2 hours of play at the spawn with no progress
+        # The quest IS in _working so stall clock tracks it
+        p, _ = self._play(durga_at_spawn, 120, clock)
+        # Quest IS marked STALLED because it's in _working
+        self.assertEqual(
+            [(b.quest, b.reason, b.held) for b in p.broken],
+            [(33, questers.STALLED, True)],
+        )
+        self.assertEqual(p.move.kind, classquest.ABANDON)
+        self.assertIn(questers.STALLED, p.move.said)
+
+    def _play(self, member, minutes, clock=None, step=5, progress=None):
+        clock = clock or questers.Clock()
+        p = None
+        for minute in range(0, minutes + 1, step):
+            if progress:
+                member = questers.Member(
+                    **{**member.__dict__, "quest_progress": progress(minute)}
+                )
+            p = questers.plan(self._world_with_wrong_zone_quest(), member, clock, minute * 60.0)
+        return p, clock
