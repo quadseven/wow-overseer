@@ -19886,37 +19886,30 @@ class Bridge(discord.Client):
         one: pulling the leader out is how the party spreads.
         """
         smelters = await asyncio.to_thread(_forge_errands, _cohort_key(cohort))
-        focus = travel.FORGE_FOCUS_ID
         town_stop = not smelters
         if town_stop:
             # A FAMILY ON A TOWN RUN (#1786): its crafts are written too, and
             # nothing else stands it at their station. The town slot decides
             # when; a station outside the town is deferred below.
-            smelters, focus = await self._town_stop_demand(cohort)
+            smelters = await self._town_stop_demand(cohort)
         if not smelters:
             return
         names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names or await self._mid_run(names):
             return
         where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
-        spawn = await asyncio.to_thread(_nearest_forge, leader, focus)
+        spawn = await asyncio.to_thread(_nearest_forge, leader)
         if town_stop and spawn and not travel.station_in_town(spawn):
             log.info(
-                "forge: %s wait for a town stop with a %s: the nearest is past "
-                "%d yards of leader=%s",
-                ", ".join(sorted(smelters)), craft.STATIONS[focus].name,
-                travel.TOWN_STATION_YARDS, leader,
+                "forge: %s wait for a town stop with a Forge: the nearest is "
+                "past %d yards of leader=%s",
+                ", ".join(sorted(smelters)), travel.TOWN_STATION_YARDS, leader,
             )
             return
         forge = travel.forge_aim(spawn, where.get("map_id") if where else None)
         if not forge.aim:
-            # THE FAILURE IS LEGIBLE HERE BECAUSE IT CANNOT BE LEGIBLE THERE.
-            # DriveCraft does not tell SPELL_FAILED_REQUIRES_SPELL_FOCUS from a
-            # cooldown - it logs a bare numeric SpellCastResult at INFO and
-            # retries every twenty seconds - so a smelt that never lands looks
-            # like a transient for ever. Filed as mod-overseer's own issue; this
-            # is the half that can be said from this side, and it names the
-            # characters it is costing rather than just the refusal.
+            # DriveCraft defers the smelt with its own reason (#1786); this
+            # half names why no walk will come, and who it is costing.
             log.info(
                 "forge: %s hold a focus-gated craft errand (%s) and nobody can "
                 "be sent to a forge - %s",
@@ -19949,8 +19942,7 @@ class Bridge(discord.Client):
             # has already named the holder, its lease and the queue - that is
             # the half infra#3702 added here and infra#3703 moved into one
             # place for all seven passes. What only this pass knows is WHO
-            # cannot smelt because of it, and DriveCraft cannot say that: it
-            # logs a bare numeric SpellCastResult and retries for ever.
+            # cannot smelt because of it.
             log.info(
                 "forge: leader=%s could not be aimed at the forge (%s) this "
                 "pass, so %s cannot smelt until the town slot comes round",
@@ -19963,12 +19955,8 @@ class Bridge(discord.Client):
             ", ".join("%s=%d" % pair for pair in sorted(smelters.items())),
         )
 
-    async def _town_stop_demand(self, cohort=None) -> tuple:
-        """(name -> craft_spell, focus) of the town stop's craft worth a walk.
-
-        One station a pass, forge first: the crafts of the other wait for the
-        next pass or the next stop, and the module defers them with a reason.
-        """
+    async def _town_stop_demand(self, cohort=None) -> dict:
+        """name -> craft_spell of the town stop's smelts with ore in the bags."""
         standing = await asyncio.to_thread(_town_stop_errands, _cohort_key(cohort))
         wanted = sorted(
             (name, reagent.entry)
@@ -19979,12 +19967,7 @@ class Bridge(discord.Client):
         held_by: dict = {}
         for (name, entry), count in counts.items():
             held_by.setdefault(name, {})[entry] = count
-        ready = craft_rhythm.town_stop_crafts(standing, held_by)
-        for focus in craft.TOWN_STOP_FOCI:
-            crafters = {n: s for n, s in ready.items() if craft.focus_for(s) == focus}
-            if crafters:
-                return crafters, focus
-        return {}, 0
+        return craft_rhythm.town_stop_crafts(standing, held_by)
 
     async def _forge_loop(self) -> None:
         """Keep a smelter standing at a forge (infra#3748).
@@ -33521,10 +33504,8 @@ _FORGE_SQL = (
 )
 
 
-def _nearest_forge(name: str, focus: int = travel.FORGE_FOCUS_ID):
+def _nearest_forge(name: str):
     """The nearest usable Forge spawn row on `name`'s own map, or None.
-
-    `focus` asks for another world station by its `SpellFocusObject` id.
 
     A ROW OUT OF THE SPAWN TABLE, NOT A COORDINATE THIS PROCESS INVENTED - the
     identical guarantee `_nearest_vault` gives, against the identical tables.
@@ -33542,7 +33523,7 @@ def _nearest_forge(name: str, focus: int = travel.FORGE_FOCUS_ID):
             cur.execute(_FORGE_SQL, (
                 name,
                 travel.SPELL_FOCUS_GO_TYPE,
-                int(focus),
+                travel.FORGE_FOCUS_ID,
                 travel.ARRIVED_POSITION_YARDS,
             ))
         except pymysql.err.MySQLError as exc:

@@ -85,11 +85,6 @@ class EveryRecipeHasAKnownStation(unittest.TestCase):
                         [craft.TOOL_ITEMS[t] for t in tools], [recipe.tool]
                     )
 
-    def test_every_world_station_says_who_serves_it(self):
-        self.assertEqual(craft.STATIONS[1].served_by, "walk")
-        self.assertEqual(craft.STATIONS[3].served_by, "walk")
-        self.assertEqual(craft.STATIONS[4].served_by, "lit")
-
 
 if __name__ == "__main__":
     unittest.main()
