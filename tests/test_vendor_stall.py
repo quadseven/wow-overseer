@@ -62,6 +62,29 @@ class VendorStallDecisionTests(unittest.TestCase):
     def test_no_pressure_is_held(self):
         self.assertEqual(self.decide(pressure=False).action, vendor_stall.HOLD)
 
+    def test_leader_idle_at_counter_with_far_sellers_yields_within_the_wait_trip(self):
+        # #1261: the leader reached the vendor, no sale is queued because the
+        # sellers are held 3,500+ yards away with their range retries spent.
+        held = self.decide(
+            at_counter=True,
+            bag_wait_seconds=vendor_stall.MAX_IDLE_COUNTER_SECONDS - 1,
+        )
+        self.assertEqual(held.action, vendor_stall.HOLD)
+        yielded = self.decide(
+            at_counter=True,
+            bag_wait_seconds=vendor_stall.MAX_IDLE_COUNTER_SECONDS,
+        )
+        self.assertEqual(yielded.action, vendor_stall.YIELD)
+        self.assertLessEqual(vendor_stall.MAX_IDLE_COUNTER_SECONDS, 30 * 60)
+
+    def test_counter_with_sales_outstanding_is_never_yielded(self):
+        decision = self.decide(
+            at_counter=True,
+            sales_outstanding=2,
+            bag_wait_seconds=vendor_stall.MAX_BAG_WAIT_SECONDS,
+        )
+        self.assertEqual(decision.action, vendor_stall.HOLD)
+
     def test_arrival_at_counter_is_held(self):
         self.assertEqual(self.decide(at_counter=True).action, vendor_stall.HOLD)
 
