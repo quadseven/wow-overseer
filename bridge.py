@@ -24673,7 +24673,12 @@ _LEDGER_HELD_SQL = (
     # on quest 3361 before anyone noticed, because a refusal is not an error
     # anywhere it would be seen (#2892). Same statuses _QUEST_SQL already uses;
     # the two reads must not disagree about what "held" means.
-    "SELECT c.name, q.quest FROM character_queststatus q "
+    # Quest progress: mobcount1..4 for kills and itemcount1..4 for items.
+    # This tracking allows the council to see how much of an objective remains.
+    "SELECT c.name, q.quest, "
+    "       q.mobcount1, q.mobcount2, q.mobcount3, q.mobcount4, "
+    "       q.itemcount1, q.itemcount2, q.itemcount3, q.itemcount4 "
+    "FROM character_queststatus q "
     "JOIN characters c ON c.guid = q.guid "
     "WHERE c.name IN (%s) AND q.status IN (1, 3)"
 )
