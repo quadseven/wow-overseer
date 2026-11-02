@@ -16421,8 +16421,9 @@ class Bridge(discord.Client):
             log.info("%s", line)
 
     async def _raid_spec_loop(self) -> None:
-        """Keep every family guild's seat targets current (the operator's
-        eight groups of one tank, one healer and three damage dealers).
+        """Keep every family guild's seat targets current (the lineup's
+        eight groups of five, its tank and healer totals from the encounter
+        table).
 
         Ten minutes by default: a target only matters at a level-up or a
         login, and the module reads the table once a minute.

@@ -8,7 +8,8 @@ tanks, curse and magic dispels, crowd control on adds, interrupts, fear
 protection, a Tranquilizing Shot and a fire resistance source. This module
 writes those asks down boss by boss and counts them against a lineup, so the
 Raid tab can say "Lucifron lacks 1 curse dispeller" instead of "group 6 has no
-healer".
+healer". The automatic lineup takes its tank and healer totals from here
+(RAID_TANKS, MIN_HEALERS, RAID_HEALERS).
 
 It reads, it never seats. Nothing here changes who sits where; an approved
 lineup stays exactly as the operator approved it (raidteams.py).
@@ -185,6 +186,15 @@ ENCOUNTERS = (
         "Sons of Flame are burned down by the raid.",
     ),
 )
+
+
+# THE RAID'S TANK AND HEALER TOTALS (#1483). The automatic lineup
+# (raidlineup.build_lineup) asks for the most tanks any one boss needs at once,
+# not one a group of five, and for a raid-wide healer count. Healing is a
+# judgement the scripts do not state: eight is the fewest a forty-raider pull
+# survives on, ten the number planned for so a death does not stop the fight.
+RAID_TANKS = max(e.needs.get(TANKS, 0) for e in ENCOUNTERS)
+MIN_HEALERS, RAID_HEALERS = 8, 10
 
 
 def _have(placed: list) -> dict:
