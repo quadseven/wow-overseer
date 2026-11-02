@@ -17010,7 +17010,12 @@ class Bridge(discord.Client):
         """Farming assignments (#479) for the reagents the raid is short of:
         who gathers what, where, and for how long, logged live. A task stands
         for its stint; meanwhile only the stacks its gatherer picked up are
-        mailed to the crafter, inside farmassign's own cooldown."""
+        mailed to the crafter, inside farmassign's own cooldown.
+
+        Synchronous on purpose: `_farm_tasks[guild]` is read and written back
+        with no `await` between, so two supply passes on the event loop can
+        never interleave inside it and drop each other's tasks. Keep any I/O
+        out of this method; tests pin that it stays a plain function."""
         guild = guild_facts.guild
         standing = {
             entry: (task, at)

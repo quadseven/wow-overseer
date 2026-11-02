@@ -69,73 +69,34 @@ class Material:
     duration: int  # minutes a bot should farm it
 
 
+def _herb(entry: int, name: str, zone: str, map_id: int) -> Material:
+    return Material(entry, name, HERBALISM, "herbalism", zone, map_id, HERB_DURATION)
+
+
+def _ore(entry: int, name: str, zone: str, map_id: int) -> Material:
+    return Material(entry, name, MINING, "mining", zone, map_id, ORE_DURATION)
+
+
 # Eastern Kingdoms = 0, Kalimdor = 1, the continent a gatherer stands on.
 # A material missing from this table has no known farmed source and is named
 # in the plan's notes instead of being dropped silently.
+# Each row is built once and keyed by its own entry, so a key can never
+# disagree with the material it names.
 MATERIALS: dict[int, Material] = {
-    13463: Material(
-        13463,
-        "Dreamfoil",
-        HERBALISM,
-        "herbalism",
-        "Eastern Plaguelands",
-        0,
-        HERB_DURATION,
-    ),
-    13464: Material(
-        13464,
-        "Golden Sansam",
-        HERBALISM,
-        "herbalism",
-        "Western Plaguelands",
-        0,
-        HERB_DURATION,
-    ),
-    13465: Material(
-        13465,
-        "Mountain Silversage",
-        HERBALISM,
-        "herbalism",
-        "Silithus",
-        1,
-        HERB_DURATION,
-    ),
-    13466: Material(
-        13466,
-        "Plaguebloom",
-        HERBALISM,
-        "herbalism",
-        "Eastern Plaguelands",
-        0,
-        HERB_DURATION,
-    ),
-    13467: Material(
-        13467, "Icecap", HERBALISM, "herbalism", "Winterspring", 1, HERB_DURATION
-    ),
-    13468: Material(
-        13468,
-        "Black Lotus",
-        HERBALISM,
-        "herbalism",
-        "Western Plaguelands",
-        0,
-        HERB_DURATION,
-    ),
-    8846: Material(
-        8846, "Gromsblood", HERBALISM, "herbalism", "Blasted Lands", 0, HERB_DURATION
-    ),
-    3818: Material(
-        3818, "Fadeleaf", HERBALISM, "herbalism", "Arathi Highlands", 0, HERB_DURATION
-    ),
-    7067: Material(
-        7067, "Elemental Earth", MINING, "mining", "Arathi Highlands", 0, ORE_DURATION
-    ),
-    7912: Material(
-        7912, "Solid Stone", MINING, "mining", "The Hinterlands", 0, ORE_DURATION
-    ),
-    12365: Material(
-        12365, "Dense Stone", MINING, "mining", "Western Plaguelands", 0, ORE_DURATION
-    ),
+    material.entry: material
+    for material in (
+        _herb(13463, "Dreamfoil", "Eastern Plaguelands", 0),
+        _herb(13464, "Golden Sansam", "Western Plaguelands", 0),
+        _herb(13465, "Mountain Silversage", "Silithus", 1),
+        _herb(13466, "Plaguebloom", "Eastern Plaguelands", 0),
+        _herb(13467, "Icecap", "Winterspring", 1),
+        _herb(13468, "Black Lotus", "Western Plaguelands", 0),
+        _herb(8846, "Gromsblood", "Blasted Lands", 0),
+        _herb(3818, "Fadeleaf", "Arathi Highlands", 0),
+        _ore(7067, "Elemental Earth", "Arathi Highlands", 0),
+        _ore(7912, "Solid Stone", "The Hinterlands", 0),
+        _ore(12365, "Dense Stone", "Western Plaguelands", 0),
+    )
 }
 
 # The trade whose crafter consumes each gathered material, for designating the

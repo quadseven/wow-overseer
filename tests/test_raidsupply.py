@@ -1186,6 +1186,14 @@ class TheBridgePassRuns(unittest.TestCase):
             any(line.startswith("farmassign: assigned") for line in log.lines)
         )
 
+    def test_the_farm_task_update_cannot_interleave_with_another_pass(self):
+        # `_farm_tasks` is read, merged and written back in one method; with
+        # no await inside it a second pass on the event loop cannot run in
+        # between and clobber the first pass's tasks.
+        (fn,) = _functions(("_farm_assign_guild",)).body
+        self.assertIsInstance(fn, ast.FunctionDef)
+        self.assertFalse(any(isinstance(n, ast.Await) for n in ast.walk(fn)))
+
     def test_a_second_pass_inside_the_cooldown_queues_no_mail(self):
         task = fa.Task("Hebus", 13463, "Dreamfoil", "Eastern Plaguelands", 0, 60)
         hebus = member(

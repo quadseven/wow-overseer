@@ -148,6 +148,19 @@ def standing_task(bot="Hebus", baseline=()):
     )
 
 
+class TheMaterialTable(unittest.TestCase):
+    def test_each_material_is_keyed_by_its_own_entry(self):
+        for entry, material in fa.MATERIALS.items():
+            self.assertEqual(entry, material.entry)
+
+    def test_each_material_names_the_trade_that_gathers_it(self):
+        trade = {fa.HERBALISM: "herbalism", fa.MINING: "mining"}
+        duration = {fa.HERBALISM: fa.HERB_DURATION, fa.MINING: fa.ORE_DURATION}
+        for material in fa.MATERIALS.values():
+            self.assertEqual(material.skill_name, trade[material.skill])
+            self.assertEqual(material.duration, duration[material.skill])
+
+
 class TheMailSteps(unittest.TestCase):
     """Only a stack the assigned gatherer picked up since its task was given
     is posted to the crafter; stock already in the guild never is."""
