@@ -94,6 +94,8 @@ COLLATIONS = {
     "overseer_family_priorities": "utf8mb4_0900_ai_ci",
     # Bridge-owned (#1499), named in orderrecord.CREATE_SQL the same way.
     "overseer_order": "utf8mb4_0900_ai_ci",
+    # Bridge-owned (#1487), named in workorderstore.CREATE_SQL the same way.
+    "overseer_work_order": "utf8mb4_0900_ai_ci",
     # Bridge-owned (the guild coordinator), named in
     # bridge._ensure_guild_run_store the same way overseer_jev_judgment is.
     "overseer_guild_run": "utf8mb4_0900_ai_ci",
@@ -284,6 +286,10 @@ STRING_COLUMNS = {
     "overseer_family_priorities": frozenset({"ranked", "source"}),
     # From its own DDL (orderrecord.CREATE_SQL): every VARCHAR column.
     "overseer_order": frozenset({"channel_id", "author", "text", "kind"}),
+    # From its own DDL (workorderstore.CREATE_SQL): every VARCHAR and ENUM column.
+    "overseer_work_order": frozenset(
+        {"kind", "item", "zone", "requested_by", "status", "assigned_to"}
+    ),
     # From its own DDL (standin.TABLE_SQL): every VARCHAR and ENUM column.
     "overseer_family_standin": frozenset(
         {"family", "out_name", "in_name", "seat", "reason"}
