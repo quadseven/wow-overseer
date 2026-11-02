@@ -19,7 +19,7 @@ import fireplan
 import gearscore
 import preraid
 import raidsupply as rs
-from test_campaign_queue import _load  # sets up the pymysql stub
+from test_campaign_queue import _load
 from test_preraid import ANCHORS, TEXTS, drop, item_row
 
 HERE = pathlib.Path(__file__).resolve().parent.parent

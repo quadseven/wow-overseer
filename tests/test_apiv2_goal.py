@@ -10,16 +10,17 @@ import sys
 import types
 import unittest
 
+from _stub_modules import PYMYSQL, stub_modules
+
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import apiv2  # noqa: E402
-import families  # noqa: E402
-import guildrun  # noqa: E402
-import raidteams  # noqa: E402
-import realmread  # noqa: E402
-from apiv2 import goal, members as roster, presence, series  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import apiv2
+    import families
+    import guildrun
+    import raidteams
+    import realmread
+    from apiv2 import goal, members as roster, presence, series
 
 NOW = 1_800_000_000
 HOUR = 3600

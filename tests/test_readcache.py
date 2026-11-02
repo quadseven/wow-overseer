@@ -13,20 +13,20 @@ import json
 import pathlib
 import sys
 import threading
-import types
 import unittest
 from unittest import mock
 
+from _stub_modules import PYMYSQL, stub_modules
+
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import gearscore  # noqa: E402
-import map_server  # noqa: E402
-import raidgear  # noqa: E402
-import readcache  # noqa: E402
-from apiv2 import members  # noqa: E402
-from apiv2._context import Context  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import gearscore
+    import map_server
+    import raidgear
+    import readcache
+    from apiv2 import members
+    from apiv2._context import Context
 
 
 class Clock:

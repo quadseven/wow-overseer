@@ -11,33 +11,33 @@ import asyncio
 import dataclasses
 import datetime
 import pathlib
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import classask  # noqa: E402
-import classparty  # noqa: E402
-import classquest  # noqa: E402
-import guildjobs  # noqa: E402
-import guildrun  # noqa: E402
-import guildsocial as gs  # noqa: E402
-from test_classquest import (  # noqa: E402
-    HIDE,
-    LIZARD,
-    book,
-    class_plan,
-    class_steps,
-    givers,
-    qrow,
-    who,
-)
-from test_classquest_use import WARLOCK, tome_book  # noqa: E402
-from test_classquest_use import who as use_who  # noqa: E402
-from test_guildsocial import NOW, ask, mate, yes  # noqa: E402
-from test_guildsocial_bridge import _Self, bridge, facts  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import classask
+    import classparty
+    import classquest
+    import guildjobs
+    import guildrun
+    import guildsocial as gs
+    from test_classquest import (
+        HIDE,
+        LIZARD,
+        book,
+        class_plan,
+        class_steps,
+        givers,
+        qrow,
+        who,
+    )
+    from test_classquest_use import WARLOCK, tome_book
+    from test_classquest_use import who as use_who
+    from test_guildsocial import NOW, ask, mate, yes
+    from test_guildsocial_bridge import _Self, bridge, facts
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")

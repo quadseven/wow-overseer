@@ -10,13 +10,12 @@ Python, so the banner sees the same rows as before.
 """
 
 import re
-import sys
 import types
 import unittest
 from datetime import datetime
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, fresh_import, stub_modules
 
 
 def _import_bridge():
@@ -27,16 +26,15 @@ def _import_bridge():
             pass
 
     stub.Client = Client
-    with mock.patch.dict(sys.modules, {"discord": stub}):
-        sys.modules.pop("bridge", None)
-        import bridge
+    bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
     return bridge
 
 
 bridge = _import_bridge()
 
-import map_server  # noqa: E402
-import realmread  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import map_server
+    import realmread
 
 T = datetime
 

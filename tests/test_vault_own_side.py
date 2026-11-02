@@ -21,13 +21,12 @@ faction. A neutral vault, or one with no faction row, is anybody's.
 """
 
 import pathlib
-import sys
-import types
 import unittest
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import travel  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import travel
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 HUMAN, NIGHT_ELF, ORC, TAUREN = 1, 4, 2, 6

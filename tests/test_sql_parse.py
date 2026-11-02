@@ -20,11 +20,11 @@ import re
 import sys
 import types
 import unittest
-from unittest import mock
+
+from _stub_modules import PYMYSQL, stub_modules
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 try:
     import sqlglot
@@ -82,11 +82,9 @@ def is_join(node):
 
 def load(name):
     """Import a module; the bridge only needs discord.Client to define Bridge."""
-    if name != "bridge":
-        return importlib.import_module(name)
     discord = types.ModuleType("discord")
     discord.Client = object
-    with mock.patch.dict(sys.modules, {"discord": discord}):
+    with stub_modules(discord=discord, pymysql=PYMYSQL):
         return importlib.import_module(name)
 
 

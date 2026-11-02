@@ -14,18 +14,18 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import types
 import unittest
 from unittest import mock
 
+from _stub_modules import PYMYSQL, stub_modules
+
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import apiv2  # noqa: E402
-import basepath  # noqa: E402
-import map_server  # noqa: E402
-from apiv2 import operator as v2operator  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import apiv2
+    import basepath
+    import map_server
+    from apiv2 import operator as v2operator
 
 PAGE = (HERE / "index.html").read_text(encoding="utf-8")
 APP = HERE / "app"

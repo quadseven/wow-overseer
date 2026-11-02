@@ -11,18 +11,18 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import types
 import unittest
+
+from _stub_modules import PYMYSQL, stub_modules
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 APP = HERE / "app"
 sys.path.insert(0, str(HERE))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import questcatalogue as qc  # noqa: E402
-import questledger as ql  # noqa: E402
-import questlog  # noqa: E402
-from apiv2 import quests as v2quests  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import questcatalogue as qc
+    import questledger as ql
+    import questlog
+    from apiv2 import quests as v2quests
 
 REALM = {
     "families": [{"key": "Grug", "names": ["Grug"]}, {"key": "Zug", "names": ["Zug"]}],

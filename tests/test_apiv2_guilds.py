@@ -10,16 +10,17 @@ import sys
 import types
 import unittest
 
+from _stub_modules import PYMYSQL, stub_modules
+
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import apiv2  # noqa: E402
-import families  # noqa: E402
-import guildrun  # noqa: E402
-import realmread  # noqa: E402
-import recap  # noqa: E402
-from apiv2 import chronicle, dungeonups, guild, presence, series  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import apiv2
+    import families
+    import guildrun
+    import realmread
+    import recap
+    from apiv2 import chronicle, dungeonups, guild, presence, series
 
 # Half past an hour, so a minute either side stays in the same hour.
 NOW = 1_800_001_800

@@ -3,15 +3,15 @@
 import ast
 import pathlib
 import re
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-from apiv2 import presence  # noqa: E402
-import guildjobs  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    from apiv2 import presence
+    import guildjobs
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FILES = [

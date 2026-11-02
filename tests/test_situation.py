@@ -13,7 +13,7 @@ import json
 import pathlib
 import unittest
 
-from test_campaign_queue import _load  # noqa: F401 - sets up the pymysql stub
+from test_campaign_queue import _load  # noqa: F401
 from test_jev_items import FakeJev
 
 import campaignplan  # noqa: E402

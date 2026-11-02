@@ -16,9 +16,11 @@ import pathlib
 import time
 import types
 import unittest
+
+from _stub_modules import PYMYSQL
 from unittest.mock import patch
 
-from test_campaign_queue import FakeWorld, _load, _Log, _q  # sets up the pymysql stub
+from test_campaign_queue import FakeWorld, _load, _Log, _q
 
 import campaignplan  # noqa: E402
 import campaignqueue  # noqa: E402
@@ -450,7 +452,7 @@ def _pass(world):
             "dungeonstall": stall,
             "jobs": jobs,
             "log": log,
-            "pymysql": __import__("pymysql"),
+            "pymysql": PYMYSQL,
             "_connect": lambda: StoreConn(world),
             "_silent_seconds": lambda head_id, names: world.silent_seconds,
             "_jobs_of": lambda names: {n: world.member_job(n) for n in names},

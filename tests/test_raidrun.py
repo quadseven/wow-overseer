@@ -18,7 +18,7 @@ import types
 import unittest
 import unittest.mock
 
-from test_decree_order import FakeConn, FakeCursor  # noqa: F401  (pymysql stub)
+from test_decree_order import FakeConn, FakeCursor  # noqa: F401
 
 import campaignqueue  # noqa: E402
 import jobs  # noqa: E402

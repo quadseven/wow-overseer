@@ -17,21 +17,21 @@ until the module handles its verb and the verb is listed.
 
 import ast
 import pathlib
-import sys
 import types
 import unittest
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import bank  # noqa: E402
-import classparty  # noqa: E402
-import guildbank  # noqa: E402
-import guildcorps  # noqa: E402
-import guildfund  # noqa: E402
-import guildjobs  # noqa: E402
-import guildrun  # noqa: E402
-import pvpgear  # noqa: E402
-import tabard  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import bank
+    import classparty
+    import guildbank
+    import guildcorps
+    import guildfund
+    import guildjobs
+    import guildrun
+    import pvpgear
+    import tabard
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # Not bridge code: the suites, the module's own checkout, the game addons.

@@ -7,22 +7,18 @@ and the in-memory one the other suites use.
 
 import pathlib
 import sys
-import types
 import unittest
+
+from _stub_modules import PYMYSQL, stub_modules
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-if not hasattr(sys.modules["pymysql"], "err"):
-    _err = types.ModuleType("pymysql.err")
-    _err.MySQLError = type("MySQLError", (Exception,), {})
-    sys.modules["pymysql"].err = _err
-ERR = sys.modules["pymysql"].err
-for _name in ("OperationalError", "ProgrammingError"):
-    if not hasattr(ERR, _name):
-        setattr(ERR, _name, type(_name, (ERR.MySQLError,), {}))
+with stub_modules(pymysql=PYMYSQL):
+    import realmread
 
-import realmread  # noqa: E402
+# The driver realmread catches: the stand-in, or the real one if realmread was
+# first imported where PyMySQL is installed.
+ERR = realmread.pymysql.err
 
 MISSING_TABLE = ERR.ProgrammingError(1146, "Table doesn't exist")
 # pymysql has no error_map entry for 1054, so a missing column arrives as
@@ -239,7 +235,8 @@ class TheServerOpensOneReaderPerRequest(unittest.TestCase):
     def serve(self, path, answers):
         from unittest import mock
 
-        import map_server
+        with stub_modules(pymysql=PYMYSQL):
+            import map_server
         from tests.test_app_shell import get
 
         db = Db(answers)
@@ -248,7 +245,8 @@ class TheServerOpensOneReaderPerRequest(unittest.TestCase):
         return handler, db
 
     def test_three_reads_are_one_connection_closed_once(self):
-        from apiv2 import roll
+        with stub_modules(pymysql=PYMYSQL):
+            from apiv2 import roll
 
         handler, db = self.serve(
             "/api/v2/roll",
@@ -259,7 +257,8 @@ class TheServerOpensOneReaderPerRequest(unittest.TestCase):
         self.assertEqual((db.opened, db.closed), (1, 1))
 
     def test_a_failed_read_still_closes_the_connection(self):
-        from apiv2 import roll
+        with stub_modules(pymysql=PYMYSQL):
+            from apiv2 import roll
 
         handler, db = self.serve("/api/v2/roll", {roll.BUILD_SQL: LOST})
         self.assertEqual(handler.status(), 503)
