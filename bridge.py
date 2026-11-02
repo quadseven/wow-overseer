@@ -1141,6 +1141,26 @@ def _fetch_grounding(name: str) -> dict | None:
         return cur.fetchone()
 
 
+def _interview_errors() -> tuple[type[BaseException], ...]:
+    """What one interview may fail with and still let the invite go out: the
+    snapshot read (MySQL), the LLM request (URLError and timeouts are OSError,
+    LLM_MODE=off is LLMOff) and a malformed reply (bad JSON is ValueError, a
+    missing field KeyError or IndexError). Anything else is a bug and must not
+    be logged away as a failed interview (Elder on wow-overseer#1532).
+
+    A function, not a module constant: pymysql.err is resolved at call time,
+    like every other MySQLError guard here, so a test that stubs pymysql can
+    still import this module."""
+    return (
+        pymysql.err.MySQLError,
+        OSError,
+        ValueError,
+        KeyError,
+        IndexError,
+        llmmode.LLMOff,
+    )
+
+
 def _interview_candidate(name: str) -> interview.InterviewExchange | None:
     """One interview exchange with a shortlisted candidate, as data.
 
@@ -1152,9 +1172,9 @@ def _interview_candidate(name: str) -> interview.InterviewExchange | None:
     caller to record. None when the candidate is offline: the caller tries
     the next shortlisted name rather than blocking.
 
-    NOT wired into any loop yet. The automatic loop that calls this is a
-    separate piece of work, and where the transcript is stored long-term is
-    another - so this writes nothing, it only returns the exchange.
+    Called by `_recruit_once` before every invite (wow-overseer#1157). Where
+    the transcript is stored long-term is separate work, so this writes
+    nothing, it only returns the exchange.
 
     Neither the LLM nor this function judges the candidate: the question is
     deterministic, the model only answers it in character, and
@@ -16075,7 +16095,7 @@ class Bridge(discord.Client):
         prefer = await asyncio.to_thread(_recruit_prefer, sorted(actors)[0]) if actors else ()
         result, age = await asyncio.to_thread(_latest_guild_shortlist)
         members, target = recruit.roster_from_shortlist(result or {})
-        action = recruit.plan_recruit(
+        plan_args = dict(
             actors=actors,
             prefer=prefer,
             shortlist=recruit.names_from_shortlist(result or {}, prefer),
@@ -16086,9 +16106,47 @@ class Bridge(discord.Client):
             member_count=members,
             target_size=target,
         )
+        action = recruit.plan_recruit(**plan_args)
+
+        # THE INTERVIEW COMES BEFORE EVERY INVITE (wow-overseer#1157). An
+        # offline candidate (no fresh snapshot, so _interview_candidate returns
+        # None) is skipped without an invite and the planner is asked again
+        # with that name set aside, so the next shortlisted name is tried. The
+        # loop ends because each round removes one name from a finite list.
+        # The REPLY never gates the invite: RecruitVerdictFor stays the only
+        # pass or fail decision, and a failed interview call does not hold the
+        # invite back either.
+        offline: set = set()
+        while action.verb == "invite":
+            try:
+                exchange = await asyncio.to_thread(_interview_candidate, action.target_arg)
+            except _interview_errors() as exc:
+                log.warning(
+                    "recruit interview: %s - no exchange (%s); the invite does not wait on it",
+                    action.target_arg, exc,
+                )
+                break
+            if exchange is not None:
+                log.info(
+                    "recruit interview: %s - Q: %s | A: %s",
+                    exchange.candidate, exchange.question, exchange.reply,
+                )
+                break
+            log.info(
+                "recruit: %s is offline (no fresh snapshot) - skipped, trying the next shortlisted name",
+                action.target_arg,
+            )
+            offline.add(action.target_arg)
+            action = recruit.plan_recruit(**{**plan_args, "asked": plan_args["asked"] | offline})
 
         if action.verb == "wait":
-            log.info("recruit: nothing this pass - %s", action.reason)
+            if offline:
+                log.info(
+                    "recruit: nothing this pass - %s (skipped offline: %s)",
+                    action.reason, ", ".join(sorted(offline)),
+                )
+            else:
+                log.info("recruit: nothing this pass - %s", action.reason)
             return
 
         row = await asyncio.to_thread(
