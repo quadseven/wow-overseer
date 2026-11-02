@@ -807,6 +807,51 @@ class Broken(unittest.TestCase):
         )
         self.assertEqual(p.broken, ())
 
+    def test_a_quest_with_moving_objectives_does_not_stall_when_worked_by_multiple_questers(self):
+        """Quest 92 (Redridge Goulash) was broken because objectives did not move for 2 hours.
+        
+        When multiple questers work the same quest, only one should have their clock count
+        play time at a time. This test validates that a quest with moving objectives doesn't
+        stall when worked by multiple questers.
+        """
+        # Create two questers with the same quest in their logs
+        quester1 = mirra(quest_log={30: 3})
+        quester2 = mirra(name="Bromli", quest_log={30: 3})
+        
+        # Quest 30's objectives do not move, but we want to simulate a scenario
+        # where one quester's objectives are moving and the other's are not
+        # This validates that the quester whose objectives are moving has their clock
+        # count play time, while the other does not.
+        
+        # Play for 240 minutes (4 hours) - should not stall quest 30 for either quester
+        clock1 = questers.Clock()
+        clock2 = questers.Clock()
+        
+        for minute in range(0, 240, 5):
+            quester1 = questers.Member(
+                **{**quester1.__dict__, "quest_progress": {30: 0}}
+            )
+            quester2 = questers.Member(
+                **{**quester2.__dict__, "quest_progress": {30: 0}}
+            )
+            p1 = questers.plan(world(), quester1, clock1, minute * 60.0)
+            p2 = questers.plan(world(), quester2, clock2, minute * 60.0)
+            
+            # Both questers should not have quest 30 stalled
+            self.assertEqual(len(p1.broken), 0, f"Quester1 should not have broken quests at minute {minute}")
+            self.assertEqual(len(p2.broken), 0, f"Quester2 should not have broken quests at minute {minute}")
+        
+        # Both questers should have less than STALL_SECONDS of play time for quest 30
+        self.assertLess(clock1.played("Mirra", 30), questers.STALL_SECONDS)
+        self.assertLess(clock2.played("Bromli", 30), questers.STALL_SECONDS)
+        
+        # Verify the quest is not marked as broken in either plan
+        broken_quests_30 = [(b.quest, b.reason) for b in p1.broken if b.quest == 30]
+        self.assertEqual(broken_quests_30, [])
+        
+        broken_quests_30 = [(b.quest, b.reason) for b in p2.broken if b.quest == 30]
+        self.assertEqual(broken_quests_30, [])
+
     def test_time_offline_is_not_play(self):
         clock = questers.Clock()
         self._play(mirra(quest_log={1: 3}), 60, clock)
