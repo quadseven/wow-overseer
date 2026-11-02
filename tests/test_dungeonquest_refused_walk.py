@@ -7,15 +7,15 @@ for 1800s". The family was not walking anywhere.
 """
 
 import asyncio
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, fresh_import, stub_modules
 
-import campaignqueue  # noqa: E402
-import dungeonquests  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import campaignqueue
+    import dungeonquests
 
 
 def _import_bridge():
@@ -26,9 +26,7 @@ def _import_bridge():
             pass
 
     stub.Client = Client
-    with mock.patch.dict(sys.modules, {"discord": stub}):
-        sys.modules.pop("bridge", None)
-        import bridge
+    bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
     return bridge
 
 

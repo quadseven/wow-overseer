@@ -22,7 +22,7 @@ import pathlib
 import types
 import unittest
 
-from test_decree_order import FakeConn, FakeCursor  # noqa: F401 - sets up the pymysql stub
+from test_decree_order import FakeConn, FakeCursor  # noqa: F401
 
 import guildbank  # noqa: E402
 import guildroute  # noqa: E402

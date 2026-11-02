@@ -18,17 +18,16 @@ Ticket: infra#2604.
 import io
 import json
 import logging
-import sys
-import types
 import unittest
 from datetime import datetime
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import chat  # noqa: E402  (must follow the pymysql stub)
-import map_server  # noqa: E402
-import voice  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import chat
+    import map_server
+    import voice
 
 # The outage and 503 paths log tracebacks on purpose; without a configured
 # root handler those reach stderr and make a passing run look like a wall of
