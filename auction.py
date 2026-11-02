@@ -1170,8 +1170,9 @@ def requested_needs(routes, carried: dict, in_mail: dict, already=()) -> list:
     """One `Need` per buy-routed material request (#476).
 
     `routes` are `craft_rhythm.Route`s routed to ROUTE_BUY; `carried` and
-    `in_mail` are `{(name, entry): count}`. Each asks for CASTS_PER_TRIP casts
-    of the count its request needs, counting the mail as `short_of` does. A
+    `in_mail` are `{(name, entry): count}`. `request.need` is the reagent count
+    ONE cast takes (the module's "needs N"), not the shortfall, so each Need
+    is CASTS_PER_TRIP casts of it less what the bags and the mail hold. A
     pair `already` has a Need for (the standing errand's own reagent) is left
     to that Need, so one reagent is never bought twice in one pass.
     """
@@ -1182,7 +1183,12 @@ def requested_needs(routes, carried: dict, in_mail: dict, already=()) -> list:
         pair = (request.character, int(request.entry))
         if pair in have:
             continue
-        short = short_of(request.need, carried.get(pair, 0), in_mail.get(pair, 0))
+        short = short_of(
+            request.need,
+            carried.get(pair, 0),
+            in_mail.get(pair, 0),
+            casts=CASTS_PER_TRIP,
+        )
         if short > 0:
             have.add(pair)
             needs.append(

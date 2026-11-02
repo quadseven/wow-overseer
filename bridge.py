@@ -9943,9 +9943,14 @@ class Bridge(discord.Client):
         """
         requests = await asyncio.to_thread(_fetch_material_requests, names)
         pending = self._material_requests
-        mine = [route.request for route in pending.values()
+        mine = [route for route in pending.values()
                 if route.request.character in names]
-        pairs = sorted({(r.character, r.entry) for r in [*requests, *mine]})
+        # EVERY MEMBER'S COUNT OF A REQUESTED REAGENT, not the requester's
+        # alone: a gather route given to another member closes on what that
+        # gatherer carries, and a new route records it as the route's base.
+        entries = {r.entry for r in requests} | {r.request.entry for r in mine}
+        pairs = sorted({(name, entry) for name in names for entry in entries}
+                       | {(r.who, r.request.entry) for r in mine})
         held = await asyncio.to_thread(_fetch_item_counts, pairs)
         kinds = await asyncio.to_thread(
             _fetch_item_kinds, sorted({r.entry for r in requests}))
@@ -10335,13 +10340,19 @@ class Bridge(discord.Client):
         teams = await asyncio.to_thread(_fetch_teams, buyers)
         seen = await asyncio.to_thread(_recent_auction_keys, GIVE_RETRY_MINUTES)
         free_slots = await asyncio.to_thread(_fetch_free_slots, buyers)
+        # A BUYER WITH NO STANDING ERRAND (#476: a material request routed to
+        # the house) is not in `spells`, so its purse is read here; a zero
+        # purse would plan no purchase at all.
+        purses = await asyncio.to_thread(
+            _fetch_purses, [name for name in buyers if name not in spells])
         queued = 0
         spent = 0
         for name in buyers:
             mine = [need for need in needs if need.shopper == name]
             rows, cost = await self._shop_for(
                 name, mine, entries, teams.get(name, ""),
-                purse=spells.get(name, (0, 0))[1],
+                purse=(spells[name][1] if name in spells
+                       else purses.get(name, (0, 0))[1]),
                 slots=free_slots.get(name, 0),
                 seen=seen,
             )
@@ -34630,9 +34641,11 @@ def _fetch_craft_spells(names: list) -> dict:
 
 # THE MATERIAL REQUESTS DriveCraft WROTE (#476), within the read window.
 # `item_guid` carries the reagent's item entry on this kind; mod-overseer
-# writes it so two reagents of one recipe are two rows.
+# writes it so two reagents of one recipe are two rows. `age` is how long ago
+# the row was last seen, so a route is kept on the event's clock.
 _MATERIAL_REQUEST_SQL = (
-    "SELECT id, occurrences, character_name, subject_id, item_guid, detail "
+    "SELECT id, occurrences, character_name, subject_id, item_guid, detail, "
+    "TIMESTAMPDIFF(SECOND, last_seen, NOW()) AS age "
     "FROM overseer_event WHERE kind = 'material-request' "
     "AND character_name IN (%s) AND last_seen > NOW() - INTERVAL %%s SECOND"
 )

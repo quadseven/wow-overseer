@@ -1360,7 +1360,9 @@ def short_of_nodes(stands, primaries: dict) -> bool:
 # PENDING IS KEYED BY CHARACTER AND REAGENT, not by recipe: two recipes short
 # of one reagent are one errand. A route stays pending until the bags hold what
 # the request needs, then it is closed and kept until its event ages out of the
-# read window, so re-reading the same row acts on nothing. The row's identity
+# read window, so re-reading the same row acts on nothing. The window runs on
+# the EVENT's clock (`Route.seen`, its last_seen), not the route's: a request
+# the module still reports keeps its route, so it is never routed twice. The row's identity
 # is its id AND its occurrence count: the module reuses one row per hour, so a
 # request that closes and opens again within the hour bumps the count.
 MATERIAL_REQUEST = "material-request"
@@ -1376,6 +1378,8 @@ KILL_DROPS = frozenset({5, 8})
 GATHER_SECONDS = 2 * 3600
 # How far back the bridge reads request rows, and so how long a route is kept.
 READ_SECONDS = 24 * 3600
+# A refreshed last_seen moves a route's `seen` only when it moves this much.
+SEEN_SLACK_SECONDS = 60
 
 _REQUEST_DETAIL = re.compile(r"^short (\d+)x (.+) \(needs (\d+), has (\d+)\)$")
 
@@ -1392,13 +1396,19 @@ class MaterialRequest:
     need: int = 0
     event_id: int = 0
     occurrence: int = 0
+    # Seconds since the row's last_seen when it was read; `take_requests`
+    # turns it into the caller's clock as `Route.seen`.
+    age: float = 0.0
 
 
 @dataclass(frozen=True)
 class Route:
     """Where one request went: `how` is ROUTE_GATHER or ROUTE_BUY, `who` the
     member gathering (or the requester buying), `since` the caller's clock
-    when it was routed, `closed` once the bags held what it needed."""
+    when it was routed, `closed` once the bags held what it needed. `seen` is
+    the caller's clock at the event's latest last_seen (None: `since`), and
+    `base` what a gatherer other than the requester already carried of the
+    reagent when it was routed, so only what it gathers since counts."""
 
     request: MaterialRequest
     how: str
@@ -1406,6 +1416,8 @@ class Route:
     why: str = ""
     since: float = 0.0
     closed: bool = False
+    seen: float | None = None
+    base: int = 0
 
 
 def material_request(row) -> MaterialRequest | None:
@@ -1424,6 +1436,7 @@ def material_request(row) -> MaterialRequest | None:
         need=int(match.group(3)),
         event_id=int(row.get("id") or 0),
         occurrence=int(row.get("occurrences") or 0),
+        age=max(0.0, float(row.get("age") or 0)),
     )
 
 
@@ -1492,6 +1505,30 @@ def _largest_per_key(requests) -> dict:
     return out
 
 
+def _seen(route: Route) -> float:
+    return route.since if route.seen is None else route.seen
+
+
+def _refresh(pending, requests, now: float) -> None:
+    """Move each route's `seen` up to the latest read of the request it answers.
+
+    An open route answers every request for its character and reagent (the
+    module may write a fresh row while the shortage lasts); a closed one only
+    the row it acted on, since a new row after it closed is a new request.
+    """
+    for request in requests or ():
+        key = _request_key(request)
+        route = pending.get(key)
+        if route is None or (route.closed and not _same_event(route, request)):
+            continue
+        seen = float(now) - request.age
+        # The age is whole seconds against a fractional clock, so an unchanged
+        # last_seen reads a little later each pass; only a real move counts,
+        # or every pass would rewrite the memo.
+        if seen > _seen(route) + SEEN_SLACK_SECONDS:
+            pending[key] = replace(route, seen=seen)
+
+
 def take_requests(
     pending, requests, kinds: dict, skills: dict, held: dict, now: float
 ) -> list:
@@ -1500,8 +1537,11 @@ def take_requests(
     `pending` is {key: Route} and is written in place. A request is skipped
     while a route for its character and reagent is open, when its own row was
     already acted on, or when `held` ({(name, entry): count}, the bags) already
-    answers it.
+    answers it. Every route a request still answers has its `seen` refreshed.
+    `held` should carry each possible gatherer's count too: a gatherer's count
+    at routing is its route's `base`.
     """
+    _refresh(pending, requests, now)
     routed = []
     for key, request in sorted(_largest_per_key(requests).items()):
         known = pending.get(key)
@@ -1510,20 +1550,44 @@ def take_requests(
         if int(held.get((request.character, request.entry), 0)) >= request.need:
             continue
         how, who, why = route_request(request, kinds.get(request.entry), skills)
-        pending[key] = Route(request, how, who, why, float(now))
+        base = (
+            int(held.get((who, request.entry), 0))
+            if how == ROUTE_GATHER and who != request.character
+            else 0
+        )
+        pending[key] = Route(
+            request,
+            how,
+            who,
+            why,
+            float(now),
+            seen=float(now) - request.age,
+            base=base,
+        )
         routed.append(pending[key])
     return routed
 
 
+def _answered(route: Route, held: dict) -> int:
+    """What counts toward a route: the requester's bags, plus what a gatherer
+    other than the requester has gathered since it was routed."""
+    request = route.request
+    count = int(held.get((request.character, request.entry), 0))
+    if route.how == ROUTE_GATHER and route.who != request.character:
+        count += max(0, int(held.get((route.who, request.entry), 0)) - route.base)
+    return count
+
+
 def settle_requests(pending, held: dict) -> list:
-    """Close every open route whose requester's bags now hold what it needs."""
+    """Close every open route the family's bags now answer.
+
+    A gather route assigned to another member closes on what that gatherer
+    has gathered for it as well as on the requester's own bags, so stock
+    already gathered is never escalated into a purchase.
+    """
     closed = []
     for key, route in sorted(pending.items()):
-        request = route.request
-        if (
-            route.closed
-            or int(held.get((request.character, request.entry), 0)) < request.need
-        ):
+        if route.closed or _answered(route, held) < route.request.need:
             continue
         pending[key] = replace(route, closed=True)
         closed.append(pending[key])
@@ -1552,11 +1616,15 @@ def escalate_requests(pending, now: float) -> list:
 
 
 def expire_requests(pending, now: float) -> list:
-    """Forget every route older than the read window; return them."""
+    """Forget every route whose event has left the read window; return them.
+
+    The age is the event's (`Route.seen`), not the route's: a request still
+    being read keeps its route however long ago it was routed.
+    """
     old = [
         key
         for key, route in sorted(pending.items())
-        if now - route.since >= READ_SECONDS
+        if now - _seen(route) >= READ_SECONDS
     ]
     return [pending.pop(key) for key in old]
 
@@ -1606,6 +1674,8 @@ def route_memo(route: Route, offset: float) -> dict:
         "why": route.why,
         "since": float(route.since) + offset,
         "closed": bool(route.closed),
+        "seen": None if route.seen is None else float(route.seen) + offset,
+        "base": int(route.base),
     }
 
 
@@ -1618,4 +1688,6 @@ def route_from_memo(value, offset: float) -> Route:
         why=str(value["why"]),
         since=float(value["since"]) - offset,
         closed=bool(value["closed"]),
+        seen=None if value.get("seen") is None else float(value["seen"]) - offset,
+        base=int(value.get("base") or 0),
     )
