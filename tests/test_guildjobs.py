@@ -12,6 +12,7 @@ import ast
 import json
 import pathlib
 import unittest
+from dataclasses import replace
 
 import guildjobs
 import guildroute
@@ -947,28 +948,94 @@ class ASkinnersField(unittest.TestCase):
 
 
 class WhereMaterialsGo(unittest.TestCase):
-    def test_a_maintenance_member_posts_a_single_gathered_herb(self):
+    def test_a_maintenance_member_does_not_post_a_single_herb(self):
+        """#1471: one herb worth 5 copper is not worth 30 copper of postage
+        and a walk to the mailbox."""
+        m = member(
+            "Keeper",
+            money=500,
+            skills={H: (40, 75), M: (40, 75)},
+            carried=(stack(11, 2447, 1, subclass=9, price=5, name="Peacebloom"),),
+        )
+
+        step, why = guildjobs._post_step(m, {}, "Grug", None, 600)
+
+        self.assertIsNone(step)
+        self.assertIn("worth less than its postage", why)
+
+    def test_a_full_stack_of_herbs_still_posts(self):
+        m = member(
+            "Keeper",
+            money=500,
+            skills={H: (40, 75), M: (40, 75)},
+            carried=(stack(11, 2447, 20, subclass=9, price=20, name="Peacebloom"),),
+        )
+
+        step, _why = guildjobs._post_step(m, {}, "Grug", None, 600)
+
+        self.assertEqual(step.action, "post")
+        self.assertEqual(step.rows[0].command, "send item:11 subject:Guild materials")
+
+    def test_a_low_value_letter_is_left_out_of_a_post(self):
+        m = member(
+            "Keeper",
+            money=500,
+            skills={H: (40, 75), M: (40, 75)},
+            carried=(
+                stack(11, 2447, 20, subclass=9, price=1, name="Peacebloom"),
+                stack(12, 2449, 1, subclass=9, price=5, name="Earthroot"),
+            ),
+        )
+
+        step, _why = guildjobs._post_step(m, {}, "Grug", None, 600)
+
+        self.assertEqual(
+            [r.command for r in step.rows], ["send item:11 subject:Guild materials"]
+        )
+
+    def test_the_plan_names_why_a_low_value_post_waits(self):
         m = member(
             "Keeper",
             skills={H: (40, 75), M: (40, 75)},
             carried=(
-                stack(11, 2447, 1, subclass=9, name="Peacebloom"),
+                stack(11, 2447, 1, subclass=9, price=5, name="Peacebloom"),
                 stack(12, 2901, 1, item_class=2),
             ),
         )
 
+        result = plan([m])
+
+        step = only_step(result, "Keeper")
+        self.assertTrue(step is None or step.action != "post", step)
+        self.assertIn(
+            "Keeper holds materials worth less than its postage; they wait for a "
+            "full stack",
+            result.notes,
+        )
+
+    def test_a_low_value_post_does_not_hold_back_a_sale(self):
+        grey = stack(30, 3300, 1, item_class=15, subclass=0, quality=0, price=900)
+        m = member(
+            "Keeper",
+            skills={H: (40, 75), M: (40, 75)},
+            carried=(
+                stack(11, 2447, 1, subclass=9, price=5, name="Peacebloom"),
+                stack(12, 2901, 1, item_class=2),
+            )
+            + tuple(replace(grey, guid=30 + i) for i in range(8)),
+        )
+
         step = only_step(plan([m]), "Keeper")
 
-        self.assertEqual(step.action, "post")
-        self.assertEqual(step.rows[0].command, "send item:11 subject:Guild materials")
+        self.assertEqual(step.action, "sell")
 
     def test_herbs_go_to_the_guilds_alchemist_and_ore_to_the_bank(self):
         m = member(
             "Keeper",
             skills={H: (40, 75), M: (40, 75)},
             carried=(
-                stack(11, 2447, 12, subclass=9, name="Peacebloom"),
-                stack(12, 2770, 8, subclass=7, name="Copper Ore"),
+                stack(11, 2447, 12, subclass=9, price=10, name="Peacebloom"),
+                stack(12, 2770, 8, subclass=7, price=15, name="Copper Ore"),
                 stack(13, 2901, 1, item_class=2),
             ),
         )
@@ -1042,7 +1109,7 @@ class WhereMaterialsGo(unittest.TestCase):
             "Keeper",
             skills={H: (40, 75), M: (40, 75)},
             carried=(
-                stack(11, 2447, 12, subclass=9, name="Peacebloom"),
+                stack(11, 2447, 12, subclass=9, price=10, name="Peacebloom"),
                 stack(13, 2901, 1, item_class=2),
             ),
         )
@@ -1104,7 +1171,7 @@ class WhereMaterialsGo(unittest.TestCase):
         m = member(
             "Keeper",
             skills={H: (40, 75), S: (1, 75)},
-            carried=(stack(11, 2447, 12), stack(1, 7005, 1, item_class=2)),
+            carried=(stack(11, 2447, 12, price=10), stack(1, 7005, 1, item_class=2)),
         )
         kept = keep.from_rows(
             [{"character_name": "keeper", "item_entry": 2447, "item_guid": 0}]
@@ -1134,7 +1201,7 @@ class WhereMaterialsGo(unittest.TestCase):
             "Keeper",
             money=10,
             skills={H: (40, 75), S: (1, 75)},
-            carried=(stack(11, 2447, 12), stack(1, 7005, 1, item_class=2)),
+            carried=(stack(11, 2447, 12, price=10), stack(1, 7005, 1, item_class=2)),
         )
         result = plan([m])
         self.assertIsNone(only_step(result, "Keeper"))
