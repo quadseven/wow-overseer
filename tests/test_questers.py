@@ -93,7 +93,7 @@ def world(extra_quests=(), extra_givers=(), extra_starts=(), extra_ends=(), drop
         quest(6, NORTHSHIRE, 3, prev=1, title="After the Wolves"),
         quest(7, NORTHSHIRE, 12, min_level=10, title="Too High For Now"),
         quest(20, WESTFALL, 4, title="The Westfall Stew"),
-        quest(21, WESTFALL, 12, title="The Defias Brotherhood"),
+        quest(21, WESTFALL, 12, kill=220, count=10, title="The Defias Brotherhood"),
         quest(30, REDRIDGE, 6, title="Redridge Goulash"),
         quest(31, REDRIDGE, 18, title="Blackrock Menace"),
     ] + list(extra_quests)
@@ -114,14 +114,14 @@ def world(extra_quests=(), extra_givers=(), extra_starts=(), extra_ends=(), drop
         giver(7, "end", 1001, 100, 0, 0),
         giver(20, "start", 1020, 120, 3000, 0),
         giver(20, "end", 1020, 120, 3000, 0),
-        giver(21, "start", 1020, 120, 3000, 0),
-        giver(21, "end", 1020, 120, 3000, 0),
+        giver(21, "start", 1030, 130, 2000, 0),
+        giver(21, "end", 1030, 130, 2000, 0),
         giver(30, "start", 1030, 130, 2000, 0),
         giver(30, "end", 1030, 130, 2000, 0),
         giver(31, "start", 1030, 130, 2000, 0),
         giver(31, "end", 1030, 130, 2000, 0),
     ] + list(extra_givers)
-    spawns = [spawn(2001, 200, 150, 0), spawn(2002, 201, 250, 0, level=3)]
+    spawns = [spawn(2001, 200, 150, 0), spawn(2002, 201, 250, 0, level=3), spawn(2003, 220, 160, 0)]
     # What is named to give and take each quest, spawned or not.
     named = {g["quest"]: g["entry"] for g in givers if g["role"] == "start"}
     starts = [started(q, e) for q, e in sorted(named.items())] + list(extra_starts)
