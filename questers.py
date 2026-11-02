@@ -292,7 +292,9 @@ MEMBERS_SQL = (
 LOG_SQL = (
     "SELECT guid, quest, status, "
     "(mobcount1 + mobcount2 + mobcount3 + mobcount4 + itemcount1 + itemcount2 + "
-    "itemcount3 + itemcount4 + itemcount5 + itemcount6) AS progress "
+    "itemcount3 + itemcount4 + itemcount5 + itemcount6) AS progress, "
+    "mobcount1, mobcount2, mobcount3, mobcount4, "
+    "itemcount1, itemcount2, itemcount3, itemcount4, itemcount5, itemcount6 "
     "FROM character_queststatus WHERE guid IN ({guids}) AND status IN (1, 3, 5)"
 )
 REWARDED_SQL = (
@@ -318,7 +320,7 @@ def members_from_rows(rows, log_rows, rewarded_rows) -> list:
     """Member rows from MEMBERS_SQL's, LOG_SQL's and REWARDED_SQL's rows. The
     position and zone come from a fresh snapshot only, so a walk is never judged
     from an old one; with none the quester is offline or unplaced."""
-    log_by, progress_by, done_by = _logs_by_guid(log_rows, rewarded_rows)
+    log_by, progress_by, done_by, counts_by = _logs_by_guid(log_rows, rewarded_rows)
     out = []
     for r in rows or ():
         guid = _int(r.get("guid"))
@@ -328,6 +330,7 @@ def members_from_rows(rows, log_rows, rewarded_rows) -> list:
                 log_by.get(guid, {}),
                 frozenset(done_by.get(guid, ())),
                 progress_by.get(guid, {}),
+                counts_by.get(guid, {}),
             )
         )
     return out
@@ -335,15 +338,26 @@ def members_from_rows(rows, log_rows, rewarded_rows) -> list:
 
 def _logs_by_guid(log_rows, rewarded_rows) -> tuple:
     """(guid -> {quest: status}, guid -> {quest: progress}, guid -> {quests
-    rewarded}) from LOG_SQL's and REWARDED_SQL's rows."""
-    log_by, progress_by, done_by = {}, {}, {}
+    rewarded}, guid -> {quest: counts}) from LOG_SQL's and REWARDED_SQL's rows."""
+    log_by, progress_by, done_by, counts_by = {}, {}, {}, {}
     for r in log_rows or ():
         guid, qid = _int(r.get("guid")), _int(r.get("quest"))
         log_by.setdefault(guid, {})[qid] = _int(r.get("status"))
         progress_by.setdefault(guid, {})[qid] = _int(r.get("progress"))
+        counts = {}
+        for i in range(1, 5):
+            k = "mobcount%d" % i
+            if k in r and r.get(k) is not None:
+                counts[k] = _int(r.get(k))
+        for i in range(1, 7):
+            k = "itemcount%d" % i
+            if k in r and r.get(k) is not None:
+                counts[k] = _int(r.get(k))
+        if counts:
+            counts_by.setdefault(guid, {})[qid] = counts
     for r in rewarded_rows or ():
         done_by.setdefault(_int(r.get("guid")), set()).add(_int(r.get("quest")))
-    return log_by, progress_by, done_by
+    return log_by, progress_by, done_by, counts_by
 
 
 def _alive(row) -> bool:
@@ -354,7 +368,7 @@ def _alive(row) -> bool:
     return _int(health) > 1 or (_int(health) == 1 and not row.get("has_corpse"))
 
 
-def _member_from_row(r, quest_log, quests_done, quest_progress):
+def _member_from_row(r, quest_log, quests_done, quest_progress, quest_counts=None):
     fresh = r.get("pos_x") is not None and r.get("pos_y") is not None
     map_id = r.get("map_id")
     return Member(
@@ -371,6 +385,7 @@ def _member_from_row(r, quest_log, quests_done, quest_progress):
         quest_log=quest_log,
         quests_done=quests_done,
         quest_progress=quest_progress,
+        quest_counts=dict(quest_counts or {}),
     )
 
 
@@ -406,6 +421,9 @@ class Facts:
     # A gameobject named to take it has no static spawn: a script or an event
     # summons it, so its absence says nothing of the quest (#1606).
     object_unspawned: bool = False
+    # The quest's countable targets: (("mob", slot, entry, count), ...) and
+    # (("item", slot, entry, count), ...).
+    targets: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -433,6 +451,23 @@ def _int(value, default=0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _quest_targets(r) -> tuple:
+    """(("mob", slot, creature_entry, count), ...) and (("item", slot,
+    item_entry, count), ...) of this quest's countable targets."""
+    targets = []
+    for i in range(1, 5):
+        npc = _int(r.get("npc%d" % i))
+        need = _int(r.get("npc_count%d" % i))
+        if npc > 0 and need > 0:
+            targets.append(("mob", i, npc, need))
+    for i in range(1, 7):
+        item = _int(r.get("item%d" % i))
+        need = _int(r.get("item_count%d" % i))
+        if item > 0 and need > 0:
+            targets.append(("item", i, item, need))
+    return tuple(targets)
 
 
 def catalogue(quest_rows, giver_rows, spawn_rows, loot_rows, start_rows, ender_rows):
@@ -470,6 +505,7 @@ def catalogue(quest_rows, giver_rows, spawn_rows, loot_rows, start_rows, ender_r
             ender_objects=qid in object_enders,
             object_enders=object_spots.get(qid, ()),
             object_unspawned=qid in summoned,
+            targets=_quest_targets(r),
         )
         kept[qid] = quest
         band_rows.append(
@@ -561,6 +597,8 @@ class Member:
     quests_done: frozenset = frozenset()
     # quest id -> the sum of its objective counters
     quest_progress: dict = field(default_factory=dict)
+    # quest id -> {mobcount1: n, mobcount2: n, ...}
+    quest_counts: dict = field(default_factory=dict)
 
     @property
     def zone(self) -> int:
@@ -1334,14 +1372,37 @@ def _takes(cat: Catalogue, member, skip, left, tried) -> tuple:
     return takes, never_held
 
 
+def _active_fields(cat: Catalogue, member: Member, qid: int, quest) -> tuple:
+    """The spawns of `quest`'s unmet objectives that `member` can hunt alone.
+    When per-objective counts are known, spawns for objectives already
+    completed are left out so a quester moves on to the others."""
+    fields = classquest.solo_fields(quest)
+    facts = cat.facts.get(qid)
+    if facts is None or not facts.targets:
+        return fields
+    counts = member.quest_counts.get(qid)
+    if not counts:
+        return fields
+    unmet_mobs, unmet_items = set(), set()
+    for kind, i, target_id, need in facts.targets:
+        key = ("mobcount" if kind == "mob" else "itemcount") + str(i)
+        have = _int(counts.get(key, counts.get(i)))
+        if have < need:
+            (unmet_mobs if kind == "mob" else unmet_items).add(target_id)
+    if not unmet_mobs and not unmet_items:
+        return ()
+    unmet_droppers = {e for item, e in quest.drops if item in unmet_items}
+    allowed = unmet_mobs | unmet_droppers
+    return tuple(s for s in fields if s.entry in allowed)
+
+
 def _hunt(cat: Catalogue, member, skip, left):
     """The hunt at the nearest objective spawn within the quester's level of
     an incomplete quest it holds, or None."""
     hunts = []
     for qid, quest in _held(cat, member, STATUS_INCOMPLETE, skip):
-        spot = _nearest(
-            member, classquest.within_level(member, classquest.solo_fields(quest)), left
-        )
+        fields = _active_fields(cat, member, qid, quest)
+        spot = _nearest(member, classquest.within_level(member, fields), left)
         if spot is not None:
             hunts.append((_yards(member, spot), qid, quest, spot))
     if not hunts:
