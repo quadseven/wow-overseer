@@ -62,6 +62,56 @@ class VendorStallDecisionTests(unittest.TestCase):
     def test_no_pressure_is_held(self):
         self.assertEqual(self.decide(pressure=False).action, vendor_stall.HOLD)
 
+    def test_leader_idle_at_counter_with_far_sellers_yields_within_the_wait_trip(self):
+        # #1261: the leader reached the vendor, no sale is queued because the
+        # sellers are held 3,500+ yards away with their range retries spent.
+        held = self.decide(
+            at_counter=True,
+            bag_wait_seconds=vendor_stall.MAX_IDLE_COUNTER_SECONDS - 1,
+        )
+        self.assertEqual(held.action, vendor_stall.HOLD)
+        yielded = self.decide(
+            at_counter=True,
+            bag_wait_seconds=vendor_stall.MAX_IDLE_COUNTER_SECONDS,
+        )
+        self.assertEqual(yielded.action, vendor_stall.YIELD)
+        self.assertLessEqual(vendor_stall.MAX_IDLE_COUNTER_SECONDS, 30 * 60)
+
+    def test_far_held_sellers_do_not_keep_the_leader_at_the_counter(self):
+        # #1261, driven as the bridge drives it: the sellers stand 3,500 and
+        # 5,500 yards from the leader and the module holds them as too far to
+        # walk, so they are not watched as a split family, the leader idles at
+        # the counter with no sale queued, and the wait trip yields the column.
+        names = ("Grug", "Ugga", "Zork")
+        rows = {
+            "Grug": {"map_id": 1, "pos_x": 0, "pos_y": 0},
+            "Ugga": {"map_id": 1, "pos_x": 3500, "pos_y": 0},
+            "Zork": {"map_id": 1, "pos_x": 5500, "pos_y": 0},
+        }
+        states = {"Ugga": "held too far to walk", "Zork": "held too far to walk"}
+        watched = vendor_stall.following(names, states)
+        self.assertEqual(watched, ("Grug",))
+        family = vendor_stall.family_progress(None, rows, watched, 10.0)
+        self.assertFalse(family.split)
+        everyone = vendor_stall.family_progress(None, rows, names, 10.0)
+        self.assertTrue(everyone.split)
+        decision = self.decide(
+            at_counter=True,
+            family_readable=family.readable,
+            family_split=family.split,
+            bag_wait_seconds=vendor_stall.MAX_IDLE_COUNTER_SECONDS,
+        )
+        self.assertEqual(decision.action, vendor_stall.YIELD)
+        self.assertIn("held sellers rejoin", decision.reason)
+
+    def test_counter_with_sales_outstanding_is_never_yielded(self):
+        decision = self.decide(
+            at_counter=True,
+            sales_outstanding=2,
+            bag_wait_seconds=vendor_stall.MAX_BAG_WAIT_SECONDS,
+        )
+        self.assertEqual(decision.action, vendor_stall.HOLD)
+
     def test_arrival_at_counter_is_held(self):
         self.assertEqual(self.decide(at_counter=True).action, vendor_stall.HOLD)
 
