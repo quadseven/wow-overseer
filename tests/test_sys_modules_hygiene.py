@@ -89,7 +89,7 @@ class TwoModulesInOneProcess(unittest.TestCase):
 # Imports every test module in turn, in one process, and reports what each
 # import did to sys.modules that outlives it:
 # - an entry it replaced or removed;
-# - a new entry that is not a module loaded from a file or spec (a stub);
+# - a new entry with no spec that a repository module holds (a stub);
 # - a module it holds, or a fresh copy it made holds, under a name
 #   sys.modules maps to a different object (a second copy of a module).
 # _stub_modules.FRESH_COPIES lists the private copies made on purpose.
@@ -98,8 +98,6 @@ GUARD = """
     sys.path.insert(0, "")
     ROOT = pathlib.Path.cwd().resolve()
     me = sys.argv[1]
-    # Pseudo-modules the standard library and Cython register themselves.
-    MADE_BY_LIBRARIES = ("typing.", "cython_runtime", "_cython_")
     names = sorted(
         p.stem for p in (ROOT / "tests").glob("test_*.py")
         if p.stem.isidentifier() and p.stem != me
@@ -128,14 +126,17 @@ GUARD = """
         for key, value in before.items():
             if sys.modules.get(key) is not value:
                 findings.append(f"{name}: replaced or removed sys.modules[{key!r}]")
-        for key, value in sys.modules.items():
-            if key in before:
-                continue
-            if key.startswith(MADE_BY_LIBRARIES):
-                continue
-            if not isinstance(value, types.ModuleType) or (
-                getattr(value, "__spec__", None) is None
-            ):
+        added = {k: v for k, v in sys.modules.items() if k not in before}
+        # A stand-in: a new entry with no spec that a repository module
+        # imported in the same step holds, directly or through a module it
+        # holds (a private bridge copy). Libraries register spec-less
+        # entries of their own (typing.io, a C extension's submodules);
+        # nothing here holds those.
+        holders = [m for m in added.values() if ours(m)]
+        holders += [v for m in holders for v in list(vars(m).values()) if ours(v)]
+        held = {id(v) for m in holders for v in list(vars(m).values())}
+        for key, value in added.items():
+            if getattr(value, "__spec__", None) is None and id(value) in held:
                 findings.append(f"{name}: left a stub in sys.modules[{key!r}]")
 
     copies = fresh()

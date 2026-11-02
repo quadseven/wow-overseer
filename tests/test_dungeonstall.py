@@ -16,10 +16,9 @@ import pathlib
 import time
 import types
 import unittest
-
-from _stub_modules import PYMYSQL
 from unittest.mock import patch
 
+from _stub_modules import PYMYSQL
 from test_campaign_queue import FakeWorld, _load, _Log, _q
 
 import campaignplan  # noqa: E402
