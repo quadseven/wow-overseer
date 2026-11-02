@@ -319,6 +319,35 @@ class TheUsesAreReadFromTheWorld(unittest.TestCase):
             loot_rows=[],
         )
         self.assertIn(15877, guildjobs._protected_entries(b))
+        # Verify quest 28 has no use verb and is not completable
+        quest = b.quests[28]
+        self.assertEqual(len(quest.uses), 0, "Quest 28 should not have a use verb")
+
+    def test_a_source_item_needs_a_use_to_be_completable(self):
+        # Trial of the Lake (28): when the Shrine Bauble (15877) has a use verb
+        # (a use-item-on target), the quest becomes completable.
+        b = classquest.build(
+            quest_rows=[qrow(28, "Trial of the Lake", sort=-263, source1=15877)],
+            giver_rows=[],
+            spawn_rows=[],
+            loot_rows=[],
+            use_rows=[
+                {
+                    'item': 15877,
+                    'target': 3099,  # Dire Mottled Boar
+                }
+            ],
+        )
+        # The shrine bauble is still protected (cannot be sold)
+        self.assertIn(15877, guildjobs._protected_entries(b))
+        # BUT now the quest has a use verb and is completable
+        quest = b.quests[28]
+        self.assertEqual(len(quest.uses), 1, "Quest 28 should have one use verb")
+        self.assertEqual(quest.uses[0].verb, classquest.USE_ITEM)
+        self.assertEqual(quest.uses[0].item, 15877)
+        self.assertEqual(quest.uses[0].targets, (3099,))
+        self.assertTrue(bool(quest.uses) or bool(quest.starters) or bool(quest.fields),
+                      "Quest 28 should now be completable with its use verb")
 
     def test_the_new_reads_name_the_world_database_and_the_spell_condition(self):
         for sql in (
