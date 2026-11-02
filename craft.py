@@ -249,6 +249,36 @@ BLACKSMITH_HAMMER = 5956
 TOOL_WALKS: frozenset = frozenset({BLACKSMITH_HAMMER})
 
 
+@dataclass(frozen=True)
+class Station:
+    """A `SpellFocusObject.dbc` id a recipe in this repo needs.
+
+    `served_by` is "walk" for a world object a crafter is stood at, "lit" for
+    one conjured where the crafter stands. tests/test_recipe_stations.py fails
+    on a recipe whose measured focus is not in `STATIONS`.
+    """
+
+    name: str
+    served_by: str
+
+
+STATIONS: dict = {
+    1: Station("Anvil", "walk"),
+    3: Station("Forge", "walk"),
+    4: Station("Cooking Fire", "lit"),
+}
+
+# The foci a family on a town stop walks to, forge before anvil.
+TOWN_STOP_FOCI: tuple = (3, 1)
+
+# `TotemCategory.dbc` id -> the item that answers it, the same test's table.
+TOOL_ITEMS: dict = {
+    10: 16207,  # Runed Arcanite Rod
+    14: 6219,  # Arclight Spanner
+    162: BLACKSMITH_HAMMER,
+}
+
+
 # One profession, one verified entry, per the module docstring's own
 # discipline. Grow this table by adding entries with the SAME care, not by
 # filling every profession at once from memory.

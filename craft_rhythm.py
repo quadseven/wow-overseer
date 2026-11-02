@@ -561,6 +561,22 @@ def casts_in_hand(craft_spell: int, held: dict) -> int | None:
     )
 
 
+def town_stop_crafts(standing: dict, held_by: dict) -> dict:
+    """name -> craft_spell of the standing crafts worth a walk on a town stop.
+
+    A town stop needs a world station and the gathered reagents in the bags; a
+    fire is lit where the cook stands, and a family is not walked to a forge
+    to stand there empty-handed. `held_by` is name -> `casts_in_hand`'s `held`.
+    """
+    out = {}
+    for name, spell in standing.items():
+        if craft.focus_for(spell) not in craft.TOWN_STOP_FOCI:
+            continue
+        if casts_in_hand(spell, held_by.get(name, {})):
+            out[name] = spell
+    return out
+
+
 @dataclass(frozen=True)
 class Errand:
     """Which of a character's two possible recipes it should be casting.

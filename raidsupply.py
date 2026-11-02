@@ -1143,11 +1143,16 @@ def craft_step(crafter, make, name, want, vendors, cap):
             make.spell,
             "raid supply: %s crafts %d %s for Molten Core" % (crafter.name, n, name),
             rows=(
+                *(
+                    (guildcorps.Row("cast", "818", "", source_for("craft", make.spell)),)
+                    if make.skill == COOKING
+                    else ()
+                ),
                 guildcorps.Row(
                     "cast", str(make.spell), "", source_for("craft", make.spell)
                 ),
             ),
-            repeat=n,
+            repeat=1 if make.skill == COOKING else n,
         )
     casts = min(_gathered_casts(crafter, make), CRAFT_BATCH, max(1, int(want)))
     for entry, per, price in make.vendor:
