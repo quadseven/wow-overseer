@@ -146,6 +146,98 @@ class TheQuesterPass(unittest.TestCase):
         )
         self.assertEqual(step.walk.command, "walk-to-spawn creature:2007 near:12")
 
+    def test_protect_the_frontier_switches_to_remaining_objective(self):
+        cat = world(
+            extra_quests=[
+                quest(
+                    52,
+                    ELWYNN,
+                    10,
+                    min_level=9,
+                    kill=118,
+                    count=8,
+                    npc2=822,
+                    npc_count2=5,
+                    title="Protect the Frontier",
+                )
+            ],
+            extra_givers=[
+                giver(52, "start", 261, 261, 100.0, 100.0, 0),
+                giver(52, "end", 261, 261, 100.0, 100.0, 0),
+            ],
+            extra_starts=[started(52, 261)],
+            extra_ends=[ended(52, 261)],
+            extra_spawns=[
+                spawn(1001, 118, 200.0, 200.0, 0),
+                spawn(1002, 822, 500.0, 500.0, 0),
+            ],
+            drop={1001},
+        )
+        done = frozenset({1, 2, 3, 6})
+        # Take
+        take_run = Pass([quester(level=10, x=100.0, quests_done=done)], cat=cat).run()
+        (step,) = take_run.started
+        self.assertEqual([r.command for r in step.rows], ["take quest:52"])
+        self.assertEqual(step.walk.command, "walk-to-spawn creature:261 near:12")
+
+        # Hunt initial (Prowler is nearest at (200, 200))
+        hunt_prowler = Pass(
+            [
+                quester(
+                    level=10,
+                    quest_log={52: questers.STATUS_INCOMPLETE},
+                    quests_done=done,
+                    x=190.0,
+                    y=190.0,
+                    quest_counts={52: {"mobcount1": 0, "mobcount2": 0}},
+                )
+            ],
+            cat=cat,
+        ).run()
+        (step,) = hunt_prowler.started
+        self.assertEqual(
+            [r.command for r in step.rows], ["hunt-spawn creature:118 count:8 max:480"]
+        )
+        self.assertEqual(step.walk.command, "walk-to-spawn creature:1001 near:12")
+
+        # When Prowlers (118) are 8/8, switch to Bears (822) even though standing at (200, 200)
+        hunt_bear = Pass(
+            [
+                quester(
+                    level=10,
+                    quest_log={52: questers.STATUS_INCOMPLETE},
+                    quests_done=done,
+                    x=200.0,
+                    y=200.0,
+                    quest_counts={52: {"mobcount1": 8, "mobcount2": 0}},
+                )
+            ],
+            cat=cat,
+        ).run()
+        (step,) = hunt_bear.started
+        self.assertEqual(
+            [r.command for r in step.rows], ["hunt-spawn creature:822 count:5 max:480"]
+        )
+        self.assertEqual(step.walk.command, "walk-to-spawn creature:1002 near:12")
+
+        # Turn in when complete
+        turn_in = Pass(
+            [
+                quester(
+                    level=10,
+                    quest_log={52: questers.STATUS_COMPLETE},
+                    quests_done=done,
+                    x=200.0,
+                    y=200.0,
+                    quest_counts={52: {"mobcount1": 8, "mobcount2": 5}},
+                )
+            ],
+            cat=cat,
+        ).run()
+        (step,) = turn_in.started
+        self.assertEqual([r.command for r in step.rows], ["turnin quest:52"])
+        self.assertEqual(step.walk.command, "walk-to-spawn creature:261 near:12")
+
     def test_it_moves_zones_only_when_nothing_in_its_zone_is_left(self):
         left = Pass([quester(level=5, quests_done=frozenset({1, 3, 6}))]).run()
         self.assertEqual([r.command for r in left.started[0].rows], ["take quest:2"])

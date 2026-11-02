@@ -25,8 +25,9 @@ def quest(
     kill=0,
     count=1,
     title="",
+    **extra,
 ):
-    return {
+    row = {
         "id": qid,
         "title": title or "Quest %d" % qid,
         "sort": zone,
@@ -45,6 +46,8 @@ def quest(
         "npc1": kill,
         "npc_count1": count,
     }
+    row.update(extra)
+    return row
 
 
 def giver(qid, role, guid, entry, x, y, map_id=0, name="Marshal"):
@@ -1389,3 +1392,89 @@ class ASummonedObjectEnder(unittest.TestCase):
         p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
         self.assertEqual([b.quest for b in p.broken], [40])
         self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+
+class ProtectTheFrontier(unittest.TestCase):
+    def cat(self):
+        q52 = quest(
+            52,
+            ELWYNN,
+            10,
+            min_level=9,
+            kill=118,
+            count=8,
+            npc2=822,
+            npc_count2=5,
+            title="Protect the Frontier",
+        )
+        return world(
+            extra_quests=[q52],
+            extra_givers=[
+                giver(52, "start", 261, 261, 100.0, 100.0, 0, name="Guard Thomas"),
+                giver(52, "end", 261, 261, 100.0, 100.0, 0, name="Guard Thomas"),
+            ],
+            extra_starts=[started(52, 261)],
+            extra_ends=[ended(52, 261)],
+            extra_spawns=[
+                spawn(1001, 118, 200.0, 200.0, 0, name="Prowler"),
+                spawn(1002, 822, 500.0, 500.0, 0, name="Young Forest Bear"),
+            ],
+            drop={1001},
+        )
+
+    def test_with_zero_kills_it_targets_the_nearest_spawn(self):
+        cat = self.cat()
+        member = mirra(
+            level=10,
+            x=190.0,
+            y=190.0,
+            quest_log={52: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({1, 2, 3, 6}),
+            quest_counts={52: {"mobcount1": 0, "mobcount2": 0}},
+        )
+        p = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual(p.move.spot.entry, 118)
+        self.assertEqual(p.move.spot.name, "Prowler")
+
+    def test_when_prowlers_are_done_it_targets_young_forest_bear(self):
+        cat = self.cat()
+        member = mirra(
+            level=10,
+            x=200.0,
+            y=200.0,
+            quest_log={52: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({1, 2, 3, 6}),
+            quest_counts={52: {"mobcount1": 8, "mobcount2": 0}},
+        )
+        p = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual(p.move.spot.entry, 822)
+        self.assertEqual(p.move.spot.name, "Young Forest Bear")
+
+    def test_when_bears_are_done_it_targets_prowler(self):
+        cat = self.cat()
+        member = mirra(
+            level=10,
+            x=500.0,
+            y=500.0,
+            quest_log={52: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({1, 2, 3, 6}),
+            quest_counts={52: {"mobcount1": 0, "mobcount2": 5}},
+        )
+        p = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual(p.move.spot.entry, 118)
+        self.assertEqual(p.move.spot.name, "Prowler")
+
+    def test_when_both_are_done_it_hands_in_to_guard_thomas(self):
+        cat = self.cat()
+        member = mirra(
+            level=10,
+            x=200.0,
+            y=200.0,
+            quest_log={52: questers.STATUS_COMPLETE},
+            quests_done=frozenset({1, 2, 3, 6}),
+            quest_counts={52: {"mobcount1": 8, "mobcount2": 5}},
+        )
+        p = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual(p.move.kind, classquest.TURN_IN)
+        self.assertEqual(p.move.quest, 52)
+        self.assertEqual(p.move.spot.entry, 261)
