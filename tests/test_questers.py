@@ -1464,6 +1464,46 @@ class ProtectTheFrontier(unittest.TestCase):
         self.assertEqual(p.move.spot.entry, 118)
         self.assertEqual(p.move.spot.name, "Prowler")
 
+    def test_database_objective_counts_reach_the_remaining_target(self):
+        cat = self.cat()
+        (member,) = questers.members_from_rows(
+            [
+                {
+                    "guid": 7,
+                    "name": "Mirra",
+                    "level": 10,
+                    "race": HUMAN,
+                    "class_id": PRIEST,
+                    "map_id": 0,
+                    "pos_x": 200.0,
+                    "pos_y": 200.0,
+                    "zone_id": ELWYNN,
+                    "online": 1,
+                }
+            ],
+            [
+                {
+                    "guid": 7,
+                    "quest": 52,
+                    "status": questers.STATUS_INCOMPLETE,
+                    "progress": 8,
+                    "mobcount1": 8,
+                    "mobcount2": 0,
+                    "mobcount3": 0,
+                    "mobcount4": 0,
+                    "itemcount1": 0,
+                    "itemcount2": 0,
+                    "itemcount3": 0,
+                    "itemcount4": 0,
+                    "itemcount5": 0,
+                    "itemcount6": 0,
+                }
+            ],
+            [{"guid": 7, "quest": qid} for qid in (1, 2, 3, 6)],
+        )
+        p = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual(p.move.spot.entry, 822)
+
     def test_when_both_are_done_it_hands_in_to_guard_thomas(self):
         cat = self.cat()
         member = mirra(
