@@ -186,6 +186,31 @@ def walk(member, cat, rounds=20, clock=None):
 
 
 class EveryQuestInReach(unittest.TestCase):
+    def test_red_linen_goods_routes_to_creatures_with_the_required_drop(self):
+        row = quest(
+            83, ELWYNN, 9, min_level=4, races=ALLIANCE_MASK, title="Red Linen Goods"
+        )
+        row.update(item1=2589, item_count1=6)
+        givers = [
+            giver(83, "start", 1083, 54, 10, 0),
+            giver(83, "end", 1083, 54, 10, 0),
+        ]
+        spawns = [spawn(1084, 95, 20, 0, level=8, name="Defias Bandit")]
+        cat = questers.catalogue(
+            [row],
+            givers,
+            spawns,
+            [{"item": 2589, "entry": 95}],
+            [started(83, 54)],
+            [ended(83, 54)],
+        )
+        member = mirra(level=9, x=20.0, quest_log={83: 3})
+
+        plan = questers.plan(cat, member, questers.Clock(), 0.0)
+
+        self.assertEqual((plan.move.kind, plan.move.quest), (classquest.HUNT, 83))
+        self.assertEqual(plan.move.spot.entry, 95)
+
     def test_a_starting_area_quest_is_of_the_zone_the_quester_stands_in(self):
         cat = world()
         self.assertEqual(cat.facts[1].zone, ELWYNN)

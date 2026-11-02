@@ -668,9 +668,19 @@ TRAINED_SQL = (
 
 # Which creatures drop a required item.
 LOOT_SQL = (
-    "SELECT l.Item AS item, ct.entry AS entry FROM acore_world.creature_loot_template l "
+    "WITH RECURSIVE refs (entry, reference) AS ("
+    "SELECT ct.entry, l.Reference FROM acore_world.creature_loot_template l "
     "JOIN acore_world.creature_template ct ON ct.lootid = l.Entry "
-    "WHERE l.Item IN ({items})"
+    "WHERE l.Reference <> 0 UNION "
+    "SELECT refs.entry, r.Reference FROM acore_world.reference_loot_template r "
+    "JOIN refs ON r.Entry = refs.reference WHERE r.Reference <> 0"
+    ") SELECT l.Item AS item, ct.entry AS entry "
+    "FROM acore_world.creature_loot_template l "
+    "JOIN acore_world.creature_template ct ON ct.lootid = l.Entry "
+    "WHERE l.Reference = 0 AND l.Item IN ({items}) UNION "
+    "SELECT r.Item AS item, refs.entry FROM acore_world.reference_loot_template r "
+    "JOIN refs ON r.Entry = refs.reference "
+    "WHERE r.Reference = 0 AND r.Item IN ({items})"
 )
 
 # The items whose on-use spell is bound to named creatures, in either of the

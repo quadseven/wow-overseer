@@ -188,6 +188,12 @@ class TheBook(unittest.TestCase):
             self.assertIn("acore_world.", sql)
         self.assertIn("AllowableClasses", classquest.QUESTS_SQL)
 
+    def test_quest_loot_read_follows_nested_reference_tables(self):
+        sql = classquest.LOOT_SQL
+        self.assertIn("WITH RECURSIVE", sql)
+        self.assertIn("reference_loot_template", sql)
+        self.assertIn("refs ON r.Entry = refs.reference", sql)
+
 
 class TheNextMove(unittest.TestCase):
     def move(self, m, b=None):
