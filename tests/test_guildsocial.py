@@ -302,7 +302,10 @@ class WhoAsks(unittest.TestCase):
             asks=[older],
             needs={"Auren": [cape_need("Auren")]},
         )
-        self.assertEqual(len(out.posts), 1)
+        # Past the short bar, the SAME door is still under the long repeat
+        # bar (#1636); test_guildchat_realism pins the door opening again
+        # after it, and another door being asked in the meantime.
+        self.assertEqual(out.posts, ())
 
     def test_no_ask_while_every_group_the_realm_may_run_is_out(self):
         out = plan(
@@ -683,7 +686,10 @@ class ATankOrHealerTreeNeverFillsADamageSeat(unittest.TestCase):
 
 
 class AsksEnd(unittest.TestCase):
-    def test_an_unanswered_ask_expires_and_the_asker_says_so(self):
+    def test_an_unanswered_ask_expires_silently(self):
+        # #1636: the asker used to announce the lapse ("Never mind ..."),
+        # which was half of the ask / never-mind / ask-again cycle in the
+        # guild feed. The ask still closes and its yeses are withdrawn.
         old = ask(7, "Auren", expires_at=NOW - datetime.timedelta(seconds=1))
         out = plan(
             [mate("Auren", 20, ROGUE), mate("Zappy", 20, MAGE)],
@@ -693,7 +699,7 @@ class AsksEnd(unittest.TestCase):
         self.assertEqual(len(out.expire), 1)
         ask_id, asker, line = out.expire[0]
         self.assertEqual((ask_id, asker), (7, "Auren"))
-        self.assertIn("Deadmines", line)
+        self.assertEqual(line, "")
         self.assertEqual(out.withdraw, (1,))
         self.assertEqual(out.replies, ())
 
@@ -1167,7 +1173,9 @@ class ManyGroupsAtOnce(unittest.TestCase):
     form at a time; a guild with 40 or more free members asks in parallel."""
 
     def test_a_guild_may_have_several_asks_open(self):
-        self.assertGreaterEqual(gs.MAX_OPEN_ASKS_PER_GUILD, 8)
+        # Several, not a noticeboard: #1636 lowered the 2026-10-05 cap of 8
+        # after the guild channel read as mostly LFG posts.
+        self.assertGreaterEqual(gs.MAX_OPEN_ASKS_PER_GUILD, 3)
         self.assertGreaterEqual(gs.NEW_ASKS_PER_PASS, 2)
 
     def test_one_pass_can_fill_an_ask(self):
