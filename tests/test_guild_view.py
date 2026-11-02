@@ -91,6 +91,29 @@ SEED = {
                 "answers": [{"member": "G", "said": "late"}],
                 "run": None,
             },
+            {
+                "id": 5,
+                "asker": "H",
+                "said": "unentered ask",
+                "created_at": "2026-10-04 12:00:00",
+                "state": "ran",
+                "answers": [{"member": "I", "said": "yes"}],
+                "run": {"outcome": "not entered", "state": "ended"},
+            },
+            {
+                "id": 6,
+                "asker": "J",
+                "said": "short ask",
+                "created_at": "2026-10-04 12:00:00",
+                "state": "ran",
+                "answers": [{"member": "K", "said": "yes"}],
+                "run": {
+                    "outcome": "cleared",
+                    "state": "ended",
+                    "bosses_done": 5,
+                    "bosses_total": 6,
+                },
+            },
         ],
     },
     "/api/v2/achievements?guild=cave": {"items": [], "guilds": ["Cave"]},
@@ -139,7 +162,14 @@ def asks(out):
     return {
         said: b
         for b in blocks
-        for said in ("open ask", "filled ask", "ran ask", "expired ask")
+        for said in (
+            "open ask",
+            "filled ask",
+            "ran ask",
+            "expired ask",
+            "unentered ask",
+            "short ask",
+        )
         if said in b
     }
 
@@ -152,6 +182,8 @@ class TheGuildChatFeed(unittest.TestCase):
             "open ask": ("accent", "open"),
             "filled ask": ("ok", "filled"),
             "ran ask": ("ok", "ran"),
+            "unentered ask": ("ok", "ran"),
+            "short ask": ("ok", "ran"),
             "expired ask": ("warn", "expired"),
         }
         self.assertEqual(set(got), set(want))
@@ -167,6 +199,14 @@ class TheGuildChatFeed(unittest.TestCase):
             with self.subTest(ask=said):
                 self.assertNotIn("No answer", got[said])
                 self.assertIn(">%s</span>" % st, got[said])
+
+    def test_a_run_with_bosses_left_is_not_called_cleared(self):
+        self.assertIn(
+            "The run finished, 5 of 6 bosses</a>", asks(render())["short ask"]
+        )
+
+    def test_a_run_that_never_went_in_reads_as_a_sentence(self):
+        self.assertIn("The run never went in</a>", asks(render())["unentered ask"])
 
     def test_a_loot_line_holds_the_item_link_where_it_names_the_item(self):
         rendered = render()

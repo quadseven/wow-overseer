@@ -176,7 +176,7 @@ The Discord bridge and live website for a World of Warcraft realm run by bots. `
 - `app/` and `index.html`: the operations site. `apiv2/`: the versioned read API, listed in `docs/API.md`.
 - `tests/`: the unit suite. `tools/`, `scripts/`: maintenance and local checks, not in the image.
 - `mod-overseer/`: pinned submodule, read as text by tests only. `services/strands-decider/`: a separate image.
-- `patches/`: patches carried against the fork. `UPSTREAM-PINS.env`: a test fixture, not a build input.
+- `patches/`: test copies of realm patches and the Majordomo series; the realm applies patches only from the infrastructure repo's tree (`docs/HISTORY.md`). `UPSTREAM-PINS.env`: a test fixture, not a build input.
 - `docs/ROLLS.md`: the ship procedure. `docs/agents/area-taxonomy.md`: the label taxonomy.
 
 ## Build, test, lint

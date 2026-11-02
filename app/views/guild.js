@@ -14,7 +14,7 @@ import {
   state, pendingRead, item, member, memberHref, plural, duration, classVar,
 } from "../ui.js";
 import { peek } from "../api.js";
-import { runCard, bindRunCards, runHref, seatChips } from "./_runs.js";
+import { runCard, bindRunCards, runHref, runState, seatChips } from "./_runs.js";
 import { guilds, guildName, guildFamily } from "../families.js";
 import { since, toSeconds, fromClock } from "../models/time.js";
 import { guild as guildModel } from "../models/guild.js";
@@ -295,6 +295,9 @@ function timelines(ctx, tl) {
 
 // ---- chronicle ----------------------------------------------------------------
 
+// Run outcomes that do not read after "The run".
+const RUN_SAID = { "not entered": "never went in", refused: "was refused", lost: "was lost" };
+
 function feedItems(ctx) {
   const c = peek(P.chronicle(ctx));
   const loot = peek(P.loot());
@@ -373,7 +376,7 @@ function rightNow(ctx) {
   const gr = peek(P.runs());
   const rc = peek(P.recap());
   const out = gr.data ? mine(ctx, gr.data.active) : [];
-  const cards = out.map((r) => html`<div class="card g-now stretch-card"><a class="g-name stretch-link" href="${runHref(r)}" data-run="${r.id}">${gname(ctx)} is in ${r.place}: ${r.bosses_total ? r.bosses_done + " of " + r.bosses_total + " bosses down" : "bosses not measured"}, ${plural(r.deaths || 0, "death")}${r.seconds_inside ? ", " + duration(r.seconds_inside) + " inside" : ""}.</a>${seatChips(r)}</div>`);
+  const cards = out.map((r) => html`<div class="card g-now stretch-card"><a class="g-name stretch-link" href="${runHref(r)}" data-run="${r.id}">${gname(ctx)} ${r.state === "queued" ? "is queued for" : "is in"} ${r.place}: ${r.bosses_total ? r.bosses_done + " of " + r.bosses_total + " bosses down" : "bosses not measured"}, ${plural(r.deaths || 0, "death")}${r.seconds_inside ? ", " + duration(r.seconds_inside) + " inside" : ""}.</a>${seatChips(r)}</div>`);
   const live = rc.data && rc.data.live && rc.data.family === family(ctx) ? recapCard(ctx, rc.data) : "";
   if (!cards.length && !live) {
     if (!gr.data) return pendingRead(gr, 1);
@@ -462,7 +465,7 @@ function chat(ctx) {
   if (!asks.length) return state("empty", "Nobody in " + gname(ctx) + " has asked for anything yet.");
   const row = (a) => {
     const answers = a.answers || [];
-    const out = a.run ? html`<a href="${runHref(a.run)}">${a.run.outcome ? "The run " + a.run.outcome : "The run is " + (a.run.state || "on")}${a.run.bosses_total ? ", " + a.run.bosses_done + " of " + a.run.bosses_total + " bosses" : ""}</a>` : "";
+    const out = a.run ? html`<a href="${runHref(a.run)}">${a.run.outcome ? "The run " + (RUN_SAID[a.run.outcome] || runState({ ...a.run, run_state: a.run.outcome }).text) : "The run is " + (a.run.state || "on")}${a.run.bosses_total ? ", " + a.run.bosses_done + " of " + a.run.bosses_total + " bosses" : ""}</a>` : "";
     return html`<div class="g-chat">
 <div class="g-chat-top"><span>${member({ name: a.asker })} <span class="g-said">${said(a.said)}</span></span><span class="g-chat-meta">${askBadge(a.state)}<span class="muted g-when">${since(a.created_at)}</span></span></div>
 <div class="g-answers">${answers.length ? answers.map((x) => html`<span>${member({ name: x.member })}: ${said(x.said)}</span>`) : html`<span data-gt="warn">${a.state === "open" ? "No answer yet." : "No answer: the ask " + a.state + "."}</span>`}${out}</div>

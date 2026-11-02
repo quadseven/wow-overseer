@@ -161,7 +161,9 @@ class TheLoopWakesForAChainRow(unittest.TestCase):
             await asyncio.gather(loop._sleep_until_next_pass(5.0), step_lands())
             return time.monotonic() - started
 
-        with mock.patch.object(guildjobs, "FOLLOW_UP_SECONDS", 0.01):
+        # Patch the module the bridge reads: in a batch another test module can
+        # leave a different `guildjobs` in sys.modules than the one imported here.
+        with mock.patch.object(bridge.guildjobs, "FOLLOW_UP_SECONDS", 0.01):
             took = asyncio.run(scenario())
         self.assertLess(took, 1.0)
         self.assertEqual(loop._follow_ups, 1)

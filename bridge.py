@@ -4669,6 +4669,13 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
         # A DOOR THE FAMILY STALLED AT TWICE RUNNING is not chosen again
         # (dungeonstall.py, #1041): the stall breaker just left it.
         stalled = dungeonstall.barred(_stuck_doors(cur, names))
+        # A DOOR THE GUILDS RARELY CLEAR gives way to a sound one
+        # (campaignplan.Option.poor).
+        record = _planner_rows(
+            cur, guildrun.DOOR_RECORD_SQL.format(
+                holes=campaignplan.holes(len(guildrun.WENT_IN))),
+            (campaignplan.CLEAR_RECORD_DAYS, *guildrun.WENT_IN),
+            "the guilds' door record")
     done, failed = campaignplan.ledger(runs, names)
     quests = (None if quest_rows is None or rewarded is None
               else campaignplan.open_quests(quest_rows, rewarded, level_rows))
@@ -4682,7 +4689,8 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
         won=_read_or_none(campaignplan.per_map, won),
         bosses=_PLANNER_BOSSES,
         keys=_read_or_none(campaignplan.keys_held, keys),
-        stalled=stalled)
+        stalled=stalled,
+        door_record=_read_or_none(guildrun.door_record, record))
 
 
 def _planner_catalog(cur) -> dict | None:
@@ -20679,6 +20687,15 @@ class Bridge(discord.Client):
         await handler(row, action)
 
     async def _goal_strategy(self, row: dict, action) -> None:
+        # AI-REVIEW 2026-11-01 [codex/in-process/runtime-trace] GOAL-GRIND-1735 (PR #1736):
+        # Level observations still advance during a campaign; only the
+        # competing movement command stands down, as quest goals already do.
+        if row.get("kind") == "level":
+            family = await asyncio.to_thread(_cohort_of, action.target_name)
+            if family and await asyncio.to_thread(_queue_owns_job, family, False):
+                log.info("goal %s: level strategy stands down for the dungeon campaign",
+                         row.get("id"))
+                return
         await asyncio.to_thread(
             _insert_command,
             core.InsertCommand(action.target_name, action.command, "overseer:goal"),
@@ -26867,6 +26884,7 @@ def _follow_guild_runs() -> int:
         try:
             cur.execute(
                 "SELECT r.id, r.state, r.keyword, r.tank, r.members, r.why AS last_room, "
+                "r.bosses_done, r.bosses_total, "
                 "TIMESTAMPDIFF(SECOND, r.last_boss_at, NOW()) AS seconds_since_boss, "
                 "r.created_at < NOW() - INTERVAL %s MINUTE AS stale, "
                 "c.status, c.detail, c.result FROM overseer_guild_run r "
@@ -26888,7 +26906,9 @@ def _follow_guild_runs() -> int:
             if seen is None and row.get("stale"):
                 seen = {"state": guildrun.ENDED, "outcome": "lost",
                         "why": "no outcome from the worldserver within %d minutes"
-                        % guildrun.LOST_AFTER_MINUTES}
+                        % guildrun.LOST_AFTER_MINUTES,
+                        "bosses_done": row["bosses_done"],
+                        "bosses_total": row["bosses_total"]}
             if seen is None:
                 continue
             if seen["state"] == guildrun.INSIDE:

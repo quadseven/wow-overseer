@@ -14,6 +14,11 @@ from collections.abc import Mapping
 
 STALL_AFTER_SECONDS = 1200.0
 MAX_BAG_WAIT_SECONDS = 2 * 60 * 60.0
+# A leader standing at a counter with no sale queued has nothing to do there
+# while its sellers are held far away (the range-refused stacks of #1261). The
+# same 30 minutes the sustained vendor wait takes a trip after
+# (bag_pressure.VENDOR_WAIT_TRIP_SECONDS), so the wait never outlasts the trip.
+MAX_IDLE_COUNTER_SECONDS = 30 * 60.0
 
 HOLD = "hold"
 RELEASE = "release"
@@ -215,6 +220,7 @@ def decide(
     stall_after_seconds: float = STALL_AFTER_SECONDS,
     bag_wait_seconds: float = 0.0,
     max_bag_wait_seconds: float = MAX_BAG_WAIT_SECONDS,
+    max_idle_counter_seconds: float = MAX_IDLE_COUNTER_SECONDS,
 ) -> Decision:
     """Decide whether a stalled vendor aim may be handed back.
 
@@ -231,6 +237,14 @@ def decide(
             YIELD, "bag room not freed within the bounded wait; yielding the walk"
         )
     if at_counter:
+        if sales_outstanding == 0 and bag_wait_seconds >= max(
+            0.0, float(max_idle_counter_seconds)
+        ):
+            return Decision(
+                YIELD,
+                "leader stood at the counter with no sale queued; yielding so "
+                "held sellers rejoin or another route takes the column",
+            )
         return Decision(HOLD, "leader is at the vendor counter")
     if sales_outstanding != 0:
         return Decision(HOLD, "vendor sale queue is outstanding or unreadable")

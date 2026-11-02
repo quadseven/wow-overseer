@@ -33,6 +33,15 @@ holds that to jobs.PORTAL_KEYWORDS. A run is offered when:
     further in than the earlier (`Facts.stalled`, dungeonstall.py): a third
     run would stall at the same wall.
   * it has not been run to its target count (`target`).
+  * it is not a poor door (`Option.poor`) while a sound one is ready: one the
+    family has never cleared, whose guild runs that went in cleared under
+    POOR_CLEAR_RATE of at least POOR_CLEAR_RUNS in the last CLEAR_RECORD_DAYS
+    (`Facts.door_record`). Measured 2026-11-01: Zul'Farrak cleared 2 of 11
+    guild runs in a day, neither family had cleared it in 9 ended runs, and Uldaman
+    earned about 6,300 xp a member-hour. With nothing sound ready a poor door
+    is still offered, and a door that advances the raid stays: the record
+    ages out, so the door is offered again once it improves. Jev is asked over
+    the same options, so it cannot pick one either.
 
 HOW MANY RUNS (`target`). Not a fixed fifty:
 
@@ -50,9 +59,13 @@ in DEATH_HOURS) before one it has. Then, for a levelling family, a run that
 drops a planned fire resistance piece for one of its tanks (from
 preraid.FIRE_FLOOR, Blackrock Depths' band: preraid.fire_plan, #759), because
 the tanks reach the cap short of Molten Core's fire resistance otherwise;
-then the run they will outgrow soonest, because a group levelling through a
-band uses a dungeon before it loses it; then the one with the least of its
-target done; then path order.
+then a run the family as a whole is not outgrowing (`Option.outgrowing`, the
+mean level within OUTGROWING_LEVELS of the ceiling, because the xp falls away:
+measured over the week to 2026-11-01, a family at 45 to 49 made about 2,100 xp
+a member-hour in Razorfen Downs against about 6,300 in Uldaman; a run under way
+keeps its count, and DRY_RUNS ends a door that stops teaching); then the run
+they will outgrow soonest, because a group levelling through a band uses a dungeon before it
+loses it; then the one with the least of its target done; then path order.
 
 AT THE LEVEL CAP THE GEAR DECIDES, the way a raid guild gears for Molten
 Core (#280). preraid.py reads every level 60 dungeon's loot tables against
@@ -163,6 +176,19 @@ REFUSED_LOCKED = "locked"
 REFUSED_STALLED = "stalled"
 
 LEVEL_CAP = 60
+
+# How close the family's mean level may come to a door's ceiling before the
+# next door goes first (see WHICH ONE above).
+OUTGROWING_LEVELS = 1
+
+# THE RECORD THAT MAKES A DOOR POOR (`Option.poor`). The rate and the run count
+# are the Health page's bar for a dungeon that does not clear (apiv2/health.py
+# reads these). The days are wider than that page's one, so a good or bad
+# evening does not flip the planner. Measured 2026-11-01 over a week, only
+# Zul'Farrak fell under this bar.
+POOR_CLEAR_RATE = 0.30
+POOR_CLEAR_RUNS = 8
+CLEAR_RECORD_DAYS = 7
 
 # Runs of a level-appropriate dungeon it takes the weakest member to gain a
 # level. An estimate for sizing an entry, not a promise: the planner looks
@@ -572,6 +598,19 @@ class Facts:
     # Run keyword -> completed runs since the family's last level (#1400,
     # `dry_doors`), or None when unread.
     dry: dict | None = None
+    # Run keyword -> (guild runs cleared, guild runs that went in) over
+    # CLEAR_RECORD_DAYS (guildrun.door_record), or None when unread.
+    door_record: dict | None = None
+
+    @property
+    def mean_level(self) -> float:
+        """The family's mean level, 0.0 when unread."""
+        known = [
+            int(r.get("level") or 0)
+            for r in self.level_rows
+            if str(r.get("name") or "") and int(r.get("level") or 0) > 0
+        ]
+        return sum(known) / len(known) if known else 0.0
 
     @property
     def weakest(self) -> tuple:
@@ -611,11 +650,28 @@ class Option:
     continent: str = ""  # the continent the door stands on
     crossing: bool = False  # the door is across a continent crossing
     level: int = 0  # the weakest member's level
+    mean_level: float = 0.0  # the family's mean level
     bosses: tuple | None = None  # (lowest, highest) boss level, None unread
     deaths: int | None = None  # the family's deaths on its map, DEATH_HOURS
     wipes: int = 0  # ledger runs that ended in a wipe
     staged: int = 0  # ledger runs that never got in (staging_failed)
     won: int | None = None  # pieces the loot council gave a member there
+    guild_cleared: int = 0  # guild runs cleared there, CLEAR_RECORD_DAYS
+    guild_went_in: int = 0  # guild runs that went in there, the same days
+
+    @property
+    def outgrowing(self) -> bool:
+        """The family as a whole is within OUTGROWING_LEVELS of the ceiling."""
+        return self.ceiling - self.mean_level <= OUTGROWING_LEVELS
+
+    @property
+    def poor(self) -> bool:
+        """The guilds rarely clear it and this family never has."""
+        return (
+            self.done == 0
+            and self.guild_went_in >= POOR_CLEAR_RUNS
+            and self.guild_cleared / self.guild_went_in < POOR_CLEAR_RATE
+        )
 
     @property
     def troubled(self) -> bool:
@@ -904,6 +960,7 @@ def _history_facts(facts: Facts, run: Run) -> dict:
     won = own(facts.won)
     return {
         "level": facts.weakest[1],
+        "mean_level": facts.mean_level,
         "bosses": own(facts.bosses),
         "deaths": None if facts.deaths is None or shares_map(run) else int(deaths or 0),
         "wipes": int(tally.get(WIPE, 0)),
@@ -937,6 +994,9 @@ def options(facts: Facts) -> list:
         if done >= want:
             continue
         loot_level = None if facts.loot is None else facts.loot.get(run.map_id)
+        guild_cleared, guild_went_in = (facts.door_record or {}).get(
+            run.keyword, (0, 0)
+        )
         below = ()
         if facts.gear is not None and loot_level:
             below = tuple(
@@ -957,11 +1017,21 @@ def options(facts: Facts) -> list:
                 loot_level=loot_level,
                 below=below,
                 capped=level >= LEVEL_CAP,
+                guild_cleared=guild_cleared,
+                guild_went_in=guild_went_in,
                 **_gear_facts(facts, run),
                 **_history_facts(facts, run),
             )
         )
-    return out
+    return _without_poor_doors(out)
+
+
+def _without_poor_doors(opts: list) -> list:
+    """`opts` less every poor door, when a ready, untroubled, sound one is
+    there to take. A door that advances the raid stays."""
+    if not any(o.ready and not o.troubled and not o.poor for o in opts):
+        return opts
+    return [o for o in opts if not o.poor or o.progress_rank]
 
 
 def _order(option: Option) -> int:
@@ -983,6 +1053,7 @@ def rank(option: Option) -> tuple:
         not option.ready,
         option.troubled,
         not option.fire,
+        option.outgrowing,
         option.ceiling,
         option.done / max(option.target, 1),
         _order(option),
@@ -1033,10 +1104,13 @@ def _heuristic_why(pick: Option) -> str:
                 pick.why,
             )
         )
-    return "%s the weakest member %s, and the soonest outgrown of those (%s)" % (
-        pick.place,
-        "is ready for" if pick.ready else "would be carried through",
-        pick.why,
+    return (
+        "%s the weakest member %s, and the soonest outgrown of those the family is not already outgrowing (%s)"
+        % (
+            pick.place,
+            "is ready for" if pick.ready else "would be carried through",
+            pick.why,
+        )
     )
 
 

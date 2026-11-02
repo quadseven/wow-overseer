@@ -566,26 +566,31 @@ def _deaths_said(n: int) -> str:
 def _tell_cleared(g: _GuildRun, zones: dict) -> dict:
     tale = _Tale()
     minutes = round(g.seconds_inside / 60.0)
+    whole = guildrun.every_boss_fell(g.done, g.total)
+    word = "cleared" if whole else "finished"
     tale.say(
-        "cleared %s%s%s with %s"
+        "%s %s%s%s with %s"
         % (
+            word,
             g.place,
             " in %d minutes" % minutes if minutes else "",
             " at " + _levels(g.levels) if g.levels else "",
             "nobody dying" if g.deaths == 0 else _deaths_said(g.deaths),
         )
     )
-    if "finder" in g.why and g.total:
+    if whole:
+        tale.say("all %d bosses went down" % g.total)
+    elif g.total and g.done:
         tale.say(
-            "the finder called it finished after %d of %d bosses" % (g.done, g.total)
+            "its last boss fell with %d of %d bosses counted down" % (g.done, g.total)
         )
     elif g.total:
-        tale.say("all %d bosses went down" % g.total)
+        tale.say("its last boss fell, and the boss count was not recorded")
     tale.way_in(g.way, zones)
     lines, _tags, _ = _tell_fights(g.inside, g.classes, wiped=False)
     for line in lines[:1]:
         tale.say(line)
-    return tale.told("Cleared: %s." % (g.why or "the run finished"))
+    return tale.told("%s: %s." % (word.capitalize(), g.why or "the run finished"))
 
 
 def _tell_lost(g: _GuildRun, zones: dict) -> dict:

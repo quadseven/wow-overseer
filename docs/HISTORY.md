@@ -24,10 +24,25 @@ apply to a service that now ships as a prebuilt, digest-pinned image.
 
 ## Vendored copies
 
-`patches/mod-playerbots/` holds copies of three upstream mod-playerbots
-patches (`0004`, `0005`, `0016`) that a few tests assert content against. The
-authoritative copies live with the deploy repository's server image build.
-The two can drift, and nothing here catches it yet.
+`patches/mod-playerbots/` holds two kinds of mod-playerbots patch, and no
+build here reads any of them (`.dockerignore` drops the directory):
+
+- `0004`, `0005`, `0016`: copies of patches from the infrastructure repo's
+  realm patch tree, kept because a few tests assert content against them.
+- `0017` to `0021`: the Majordomo series (#1650, #1651, #1652, #1659). They
+  were written here, and the tests apply them to the pinned fork in order.
+
+Realm patches are applied only from the infrastructure repo's tree,
+`production/docker/azerothcore-playerbots/patches/`. The Majordomo series
+ships from there as `0037` to `0041` (#1741). A patch merged here does not
+reach the realm until it is ported into that tree.
+
+The infrastructure repo's patch check runs its module patch coverage tool
+over this repo's main with `--module-name wow-overseer`. A patch here with no
+counterpart in that tree is an error. A same-named patch whose changed lines
+differ is a drift warning. So when a copy here and the applied one disagree,
+the applied one wins: make this copy match it. `0004` drifted on one comment
+line and was brought back in line with the applied copy (#1781).
 
 `UPSTREAM-PINS.env` is a vendored test fixture, not a build input. Read its
 header comment before changing it.
