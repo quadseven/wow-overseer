@@ -145,11 +145,43 @@ def reached_modules() -> set[str]:
 
 class ImageModuleWiring(unittest.TestCase):
     def test_copy_sources_include_dockerfile_continuations(self):
-        dockerfile = "COPY first.py \\\n    second.py \\\n    /app/tools/\n"
+        dockerfile = (
+            "COPY tools/first.py \\\n    tools/sub/second.py \\\n    /app/tools/\n"
+        )
         self.assertEqual(
             _copy_sources_for_destination(dockerfile, "/app/tools/"),
-            ["first.py", "second.py"],
+            ["tools/first.py", "tools/sub/second.py"],
         )
+
+    def test_nested_copy_source_uses_build_context_path_and_destination_basename(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            context = root / "context"
+            source = context / "tools" / "sub" / "audit.py"
+            source.parent.mkdir(parents=True)
+            source.write_text("value = 1\n", encoding="utf-8")
+            target = root / "image" / "tools"
+            target.mkdir(parents=True)
+
+            sources = _copy_sources_for_destination(
+                "COPY tools/sub/audit.py /app/tools/\n", "/app/tools/"
+            )
+            self.assertEqual(sources, ["tools/sub/audit.py"])
+            # Docker copies each file into a directory destination by basename.
+            for name in sources:
+                shutil.copyfile(context / name, target / pathlib.Path(name).name)
+
+            self.assertEqual(
+                (target / "audit.py").read_text(encoding="utf-8"), "value = 1\n"
+            )
+
+            missing = _copy_sources_for_destination(
+                "COPY tools/sub/missing.py /app/tools/\n", "/app/tools/"
+            )
+            with self.assertRaises(FileNotFoundError):
+                shutil.copyfile(
+                    context / missing[0], target / pathlib.Path(missing[0]).name
+                )
 
     def test_scheduled_metric_watcher_starts_from_image_files(self):
         dockerfile = pathlib.Path("Dockerfile").read_text(encoding="utf-8")
@@ -157,6 +189,7 @@ class ImageModuleWiring(unittest.TestCase):
             root = pathlib.Path(folder)
             target = root / "tools"
             target.mkdir()
+            # Source paths are build-context-relative; the destination is a directory.
             for source in _copy_sources_for_destination(dockerfile, "/app/tools/"):
                 shutil.copyfile(source, target / pathlib.Path(source).name)
             env = dict(os.environ)
