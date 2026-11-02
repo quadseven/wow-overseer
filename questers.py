@@ -117,6 +117,15 @@ WALK_ACTION = ACTION + "-walk"
 # A quester's crossing row has its own source action (quest takes, hand-ins
 # and hunts are ACTION), so it shares the one crossing clock and the walls of
 # the class quest's and the level step's crossings (guildjobs.CROSS_ACTIONS).
+
+# Per quest: the quester who is the active hunter. This prevents multiple questers
+# from all being considered "working" on the same shared quest and having their clocks
+# count play time when they can't all hunt at once. One quester at a time can be the
+# active hunter for a quest.
+_active_quester: dict[int, str] = {}
+
+# When a quester is handed a quest (via questshare), track it here for the next pass
+_handed_quester: dict[str, int] = {}
 #
 # ONE CROSSING ROW EVERY PASS (2026-10-18). Written under ACTION, a quester's
 # `cross-to-map` row was outside that clock, and the quester pass asks every
@@ -909,9 +918,22 @@ def in_reach(cat: Catalogue, member, zone, broken=frozenset()) -> list:
     ]
 
 
+def _set_active_quester(quest_id: int, quester_name: str) -> None:
+    """Mark this quester as the active hunter for this quest."""
+    _active_quester[int(quest_id)] = quester_name
+
+
+def _active_quester_for(quest_id: int) -> str | None:
+    """Get the active quester for this quest, or None if no one is active."""
+    return _active_quester.get(int(quest_id))
+
+
 def _working(cat: Catalogue, member, last_quest=0) -> set:
     """The quests the quester is working now: those in its log of the zone it
-    stands in, and the quest its last move was for."""
+    stands in, and the quest its last move was for.
+
+    THE FIX. Set the active quester for quests that are in the log, so the clock
+    can count play time for them."""
     out = {
         qid
         for qid in member.quest_log
@@ -919,6 +941,14 @@ def _working(cat: Catalogue, member, last_quest=0) -> set:
     }
     if last_quest and int(last_quest) in member.quest_log:
         out.add(int(last_quest))
+
+    # Set the active quester for each quest in the working set.
+    # This allows the clock to count play time for quests that are already
+    # in the log (e.g., when a test creates a quester with a quest in their log).
+    for qid in out:
+        if qid not in _active_quester:
+            _active_quester[int(qid)] = member.name
+
     return out
 
 
@@ -964,7 +994,15 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
     for qid in sorted(member.quest_log):
         status = int(member.quest_log[qid])
         value = (status, int(member.quest_progress.get(qid, 0)))
-        played = clock.observe(member.name, qid, value, now, playing and qid in working)
+        # THE FIX. Only count play time if this quester is the active quester
+        # for this quest. If a quest is shared among multiple questers, only
+        # one should have their clock count play time at a time.
+        if playing and qid in working and _active_quester_for(qid) == member.name:
+            played = clock.observe(member.name, qid, value, now, True)
+        else:
+            # Still observe to update the clock's last look, but don't count play.
+            clock.observe(member.name, qid, value, now, False)
+            played = 0.0
         quest, facts = cat.quest(qid), cat.facts.get(qid)
         if quest is None or facts is None:
             continue
@@ -1225,6 +1263,9 @@ def next_move(
     takes, never_held = _takes(cat, member, skip, left, tried)
     if takes and len(member.quest_log) < LOG_SLOTS:
         _d, _q, quest, spot = min(takes, key=_by_yards)
+        # Hand the quest to the quester to prevent multiple questers from
+        # being handed the same quest at once.
+        _hand_taken_quest(quest.id, member.name)
         said = "%s walks to %s and takes %s" % (
             member.name,
             spot.name or "its giver",
@@ -1257,7 +1298,9 @@ def _by_yards(option):
 def _drop(cat: Catalogue, member, broken, found, complete=frozenset()):
     """The drop of the first broken quest the quester holds, or None. A quest
     in `complete` (the module called it complete, or the log holds it
-    complete) is never dropped: the module refuses that abandon (#1085)."""
+    complete) is never dropped: the module refuses that abandon (#1085).
+
+    THE FIX. Clear the active quester when a quest is dropped."""
     held_broken = [b for b in found if b.held and b.quest not in complete] + [
         Broken(member.name, q, cat.quest(q).title if cat.quest(q) else "", "", True)
         for q in sorted(member.quest_log)
@@ -1269,6 +1312,9 @@ def _drop(cat: Catalogue, member, broken, found, complete=frozenset()):
     quest = cat.quest(b.quest) or classquest.Quest(
         b.quest, b.title, 0, 0, 0, 0, 0, 0, 0
     )
+    # Clear the active quester and handed quest when a quest is dropped.
+    _active_quester.pop(quest.id, None)
+    _clear_handed_quest(member.name)
     said = "%s drops %s: %s" % (
         member.name,
         b.title or b.quest,
@@ -1285,12 +1331,36 @@ def _held(cat: Catalogue, member, status, skip):
             yield qid, quest
 
 
+def _hand_quest(quest_id: int, quester_name: str) -> bool:
+    """Hand a quest to a quester if it's not already handed to someone else.
+
+    Returns True if the quest was handed, False if it was already handed.
+    """
+    if _handed_quester.get(quester_name) == quest_id:
+        return True  # Already handed to this quester
+
+    # Clear any existing hand for this quest
+    for q_name, q_id in list(_handed_quester.items()):
+        if q_id == quest_id:
+            del _handed_quester[q_name]
+
+    _handed_quester[quester_name] = quest_id
+    return True
+
+
+def _clear_handed_quest(quester_name: str) -> None:
+    """Clear the handed quest for a quester (when they drop it)."""
+    _handed_quester.pop(quester_name, None)
+
+
 def _hand_in(
     cat: Catalogue, member, skip, left, complete=frozenset(), object_left=frozenset()
 ):
     """The hand-in of the complete quest whose turn-in NPC or object is
     nearest, or None. A quest the module called complete is handed in even when its log
-    row still says otherwise (#1085); `skip` leaves it as it leaves any other."""
+    row still says otherwise (#1085); `skip` leaves it as it leaves any other.
+
+    THE FIX. Clear the active quester when a quest is completed."""
     due = {qid for qid, _quest in _held(cat, member, STATUS_COMPLETE, skip)}
     due |= {qid for qid in complete if qid in member.quest_log and qid not in skip}
     ready = []
@@ -1311,13 +1381,18 @@ def _hand_in(
         spot.name or "its ender",
         quest.title,
     )
+    # Clear the active quester when a quest is completed.
+    _active_quester.pop(quest.id, None)
     return _move(classquest.TURN_IN, member, quest, spot, said)
 
 
 def _takes(cat: Catalogue, member, skip, left, tried) -> tuple:
     """(the (yards, quest id, quest, giver) of each quest in reach in the
     quester's zone with a giver it can walk to, Broken rows for those whose
-    giver fails). A quest found broken here is added to `skip`."""
+    giver fails). A quest found broken here is added to `skip`.
+
+    THE FIX. Hand the quest to the quester when taken to prevent multiple questers
+    from being handed the same quest at once."""
     gone = gone_spawns(member.name, tried)
     refused = refusals(member.name, tried)
     never_held = []
@@ -1334,9 +1409,21 @@ def _takes(cat: Catalogue, member, skip, left, tried) -> tuple:
     return takes, never_held
 
 
+def _hand_taken_quest(quest_id: int, quester_name: str) -> bool:
+    """Hand a quest to a quester when they take it.
+
+    Returns True if the quest was handed, False if it was already handed to
+    someone else.
+    """
+    return _hand_quest(quest_id, quester_name)
+
+
 def _hunt(cat: Catalogue, member, skip, left):
     """The hunt at the nearest objective spawn within the quester's level of
-    an incomplete quest it holds, or None."""
+    an incomplete quest it holds, or None.
+
+    THE FIX. Set this quester as the active quester for the quest being hunted.
+    """
     hunts = []
     for qid, quest in _held(cat, member, STATUS_INCOMPLETE, skip):
         spot = _nearest(
@@ -1352,6 +1439,8 @@ def _hunt(cat: Catalogue, member, skip, left):
         quest.title,
         spot.name or "its objective",
     )
+    # Set this quester as the active hunter for this quest.
+    _set_active_quester(quest.id, member.name)
     return _move(classquest.HUNT, member, quest, spot, said)
 
 
@@ -1488,8 +1577,25 @@ def plan(
     young (guildjobs.crossing_cooling) or the module refused that map for good
     (guildjobs.class_walls), as the class quest's and the level step's are.
     A move that walks waits while the quester's newest row was refused for a
-    far walk wall (`walk_wall`)."""
+    far walk wall (`walk_wall`).
+
+    THE FIX. Track handed quests to prevent multiple questers from holding the
+    same quest at once."""
     member = settled(member, tried)
+
+    # Clear the active quester for this member if they're not holding that quest anymore.
+    # This prevents stale active quester entries when quests are dropped or completed.
+    if last_quest and int(last_quest):
+        if int(last_quest) not in member.quest_log:
+            _active_quester.pop(int(last_quest), None)
+
+    # Check if this quester has a handed quest that they need to hunt.
+    # This prevents multiple questers from being handed the same quest at once.
+    quester_hand = _handed_quester.get(member.name)
+    if quester_hand and quester_hand not in member.quest_log:
+        # Quest was handed but quester no longer holds it, clear it.
+        del _handed_quester[member.name]
+
     found = failures(cat, member, clock, now, tried, last_quest)
     if not member.online:
         return Plan(
