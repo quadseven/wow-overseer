@@ -12,6 +12,7 @@ import questers
 import raidteams
 from test_guildsocial_bridge import bridge
 from test_questers import (
+    DUSKWOOD,
     ELWYNN,
     NO_TRANSPORT,
     crossing_row,
@@ -145,6 +146,79 @@ class TheQuesterPass(unittest.TestCase):
             [r.command for r in step.rows], ["hunt-spawn creature:40 count:8 max:480"]
         )
         self.assertEqual(step.walk.command, "walk-to-spawn creature:2007 near:12")
+
+    def test_the_night_watch_hunts_skeletal_mages_after_skeletal_warriors_are_complete(
+        self,
+    ):
+        cat = world(
+            extra_quests=[
+                quest(
+                    56,
+                    DUSKWOOD,
+                    24,
+                    kill=48,
+                    count=8,
+                    title="The Night Watch",
+                    npc2=203,
+                    npc_count2=6,
+                )
+            ],
+            extra_givers=[
+                giver(56, "start", 1056, 264, 50, 0),
+                giver(56, "end", 1056, 264, 50, 0),
+            ],
+            extra_starts=[started(56, 264)],
+            extra_ends=[ended(56, 264)],
+            extra_spawns=[
+                spawn(2048, 48, 200, 0, name="Skeletal Warrior"),
+                spawn(2203, 203, 250, 0, name="Skeletal Mage"),
+            ],
+            drop={1001, 1002, 1003, 1006, 1020, 1030},
+        )
+        # 1. Fresh quest: at x=200, Skeletal Warrior (entry 48) is nearest.
+        run = Pass(
+            [
+                quester(
+                    x=200.0,
+                    quest_log={56: questers.STATUS_INCOMPLETE},
+                    quest_progress={56: 0},
+                    quest_counts={56: {"mobcount1": 0, "mobcount2": 0}},
+                )
+            ],
+            cat=cat,
+        ).run()
+        (step,) = run.started
+        self.assertEqual(
+            [r.command for r in step.rows], ["hunt-spawn creature:48 count:8 max:480"]
+        )
+
+        # 2. Objective 1 complete (8/8 Skeletal Warriors):
+        # Even while standing right beside the Skeletal Warrior spawn (x=200),
+        # the quester walks to and hunts Skeletal Mages (entry 203).
+        next_obj = Pass(
+            [
+                quester(
+                    x=200.0,
+                    quest_log={56: questers.STATUS_INCOMPLETE},
+                    quest_progress={56: 8},
+                    quest_counts={56: {"mobcount1": 8, "mobcount2": 0}},
+                )
+            ],
+            cat=cat,
+        ).run()
+        (step,) = next_obj.started
+        self.assertEqual(
+            [r.command for r in step.rows], ["hunt-spawn creature:203 count:6 max:480"]
+        )
+        self.assertEqual(step.walk.command, "walk-to-spawn creature:2203 near:12")
+
+        # 3. Objective 2 complete: quest is complete and turned in.
+        hand_in = Pass(
+            [quester(quest_log={56: questers.STATUS_COMPLETE})], cat=cat
+        ).run()
+        (step,) = hand_in.started
+        self.assertEqual([r.command for r in step.rows], ["turnin quest:56"])
+        self.assertEqual(step.walk.command, "walk-to-spawn creature:1056 near:12")
 
     def test_it_moves_zones_only_when_nothing_in_its_zone_is_left(self):
         left = Pass([quester(level=5, quests_done=frozenset({1, 3, 6}))]).run()
