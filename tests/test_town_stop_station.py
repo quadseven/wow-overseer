@@ -21,9 +21,6 @@ import travel  # noqa: E402
 
 SMELT_COPPER = 2657
 COPPER_ORE = craft_rhythm.GATHERED[SMELT_COPPER][0].entry
-RUNED_COPPER_BELT = next(
-    r.spell_id for r in craft.known_recipes() if r.focus == 1 and r.tool
-)
 
 
 def load_bridge():
@@ -102,7 +99,7 @@ class ThePass(unittest.TestCase):
             },
             "_family_of": lambda *_: (["Lead", "Kin"], "Lead"),
             "_fetch_positions": lambda names: {"Lead": {"map_id": 0}},
-            "_nearest_forge": lambda name, focus: spawn,
+            "_nearest_forge": lambda name: spawn,
             "_cohort_key": lambda cohort: None,
         }
         with mock.patch.multiple(bridge, **reads):
@@ -132,6 +129,8 @@ class TheRaidCook(unittest.TestCase):
         step = raidsupply.craft_step(crafter, cook, "Soup", 5, {}, 0)
         self.assertEqual([r.command for r in step.rows][0], "818")
         self.assertEqual([r.command for r in step.rows][1], str(cook.spell))
+        self.assertEqual(step.repeat, 1)
+        self.assertIn(" 1 ", step.said)
 
 
 if __name__ == "__main__":

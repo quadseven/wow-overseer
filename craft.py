@@ -249,27 +249,11 @@ BLACKSMITH_HAMMER = 5956
 TOOL_WALKS: frozenset = frozenset({BLACKSMITH_HAMMER})
 
 
-@dataclass(frozen=True)
-class Station:
-    """A `SpellFocusObject.dbc` id a recipe in this repo needs.
-
-    `served_by` is "walk" for a world object a crafter is stood at, "lit" for
-    one conjured where the crafter stands. tests/test_recipe_stations.py fails
-    on a recipe whose measured focus is not in `STATIONS`.
-    """
-
-    name: str
-    served_by: str
-
-
-STATIONS: dict = {
-    1: Station("Anvil", "walk"),
-    3: Station("Forge", "walk"),
-    4: Station("Cooking Fire", "lit"),
-}
-
-# The foci a family on a town stop walks to, forge before anvil.
-TOWN_STOP_FOCI: tuple = (3, 1)
+# Every `SpellFocusObject.dbc` id a recipe here needs, id -> its name.
+# tests/test_recipe_stations.py fails on a recipe whose measured focus is not a
+# key. A Forge is the bridge's walk, an Anvil is DriveCraft's and a Cooking Fire
+# is lit where the cook stands.
+STATIONS: dict = {1: "Anvil", 3: "Forge", 4: "Cooking Fire"}
 
 # `TotemCategory.dbc` id -> the item that answers it, the same test's table.
 TOOL_ITEMS: dict = {

@@ -1136,6 +1136,9 @@ def craft_step(crafter, make, name, want, vendors, cap):
                 )
         return None
     n = min(_can_make(crafter, make), CRAFT_BATCH, max(1, int(want)))
+    cooking = make.skill == COOKING
+    if cooking:
+        n = min(n, 1)  # one fire row, then one cast, the crew cook's shape
     if n > 0:
         return guildcorps.Step(
             crafter.name,
@@ -1145,14 +1148,14 @@ def craft_step(crafter, make, name, want, vendors, cap):
             rows=(
                 *(
                     (guildcorps.Row("cast", "818", "", source_for("craft", make.spell)),)
-                    if make.skill == COOKING
+                    if cooking
                     else ()
                 ),
                 guildcorps.Row(
                     "cast", str(make.spell), "", source_for("craft", make.spell)
                 ),
             ),
-            repeat=1 if make.skill == COOKING else n,
+            repeat=n,
         )
     casts = min(_gathered_casts(crafter, make), CRAFT_BATCH, max(1, int(want)))
     for entry, per, price in make.vendor:
