@@ -419,6 +419,11 @@ WORN_ARMOR_SUBCLASSES = frozenset({1, 2, 3, 4, 5, 6})
 POST_MIN = {MAINTENANCE: 1, SUMMONER: 10, RAIDER: 20}
 MAX_LETTERS = 6
 POSTAGE_COPPER = 30
+# THE WORTH OF A LETTER (#1471): a maintenance member's low bar let it pay
+# thirty copper to post a single herb. Each letter it sends carries a full
+# stack, or stacks worth POST_VALUE_MULT times the postage at the vendor.
+POST_FULL_STACK = 20
+POST_VALUE_MULT = 4
 
 # THE BAR FOR A SALE: this many stacks to sell, or this much worth, or bags
 # short of room for loot (loot_room_short).
@@ -2908,8 +2913,27 @@ def _kept(name, item, kept) -> bool:
     )
 
 
+def worth_its_postage(item) -> bool:
+    """A letter worth the walk: a full stack, or worth POST_VALUE_MULT times
+    the postage at the vendor."""
+    if int(item.count) >= POST_FULL_STACK:
+        return True
+    return vendorsale.worth((item,)) >= POST_VALUE_MULT * POSTAGE_COPPER
+
+
 def _post_step(member, crafters, master, kept, cap, crafting=False, bar=None):
-    stacks = postable(member, kept, crafting, bar)[:MAX_LETTERS]
+    stacks = postable(member, kept, crafting, bar)
+    # Only the role's own bar asks a letter to be worth its postage; a
+    # make-room post (bar given) clears the bags whatever the stack is worth.
+    if bar is None and member.role == MAINTENANCE and stacks:
+        worth = [c for c in stacks if worth_its_postage(c)]
+        if not worth:
+            return None, (
+                "%s holds materials worth less than its postage; they wait "
+                "for a full stack" % member.name
+            )
+        stacks = worth
+    stacks = stacks[:MAX_LETTERS]
     if not stacks:
         return None, ""
     if member.money < POSTAGE_COPPER:
@@ -3395,18 +3419,18 @@ def _gathering_step(m, spot, recent, cap):
 
 
 def _shared_step(m, crafters, master, kept, recent, cap, crafting=False):
-    """Post, then sell: what every role does with what it carries."""
+    """Post, then sell: what every role does with what it carries. A post
+    that waits names why, and the sale still goes."""
+    why = ""
     if not _cooling(m, "post", recent):
         step, why = _post_step(m, crafters, master, kept, cap, crafting)
         if step:
             return step, step.said, ""
-        if why:
-            return None, "", why
     if not _cooling(m, "sell", recent):
         step = _sell_step(m, kept, cap)
         if step:
             return step, step.said, ""
-    return None, "", ""
+    return None, "", why
 
 
 def _summoner_step(m, doors, pending, crafters, master, kept, recent, cap):
