@@ -15,17 +15,17 @@ no other test sees the stub.
 import asyncio
 import logging
 import os
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, fresh_import, stub_modules
 
-import events  # noqa: E402
-import llmmode  # noqa: E402
-import map_server  # noqa: E402
-from test_chat_endpoints import SNAPSHOT, post  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import events
+    import llmmode
+    import map_server
+    from test_chat_endpoints import SNAPSHOT, post
 
 
 def _import_bridge():
@@ -36,9 +36,7 @@ def _import_bridge():
             pass
 
     stub.Client = Client
-    with mock.patch.dict(sys.modules, {"discord": stub}):
-        sys.modules.pop("bridge", None)
-        import bridge
+    bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
     return bridge
 
 

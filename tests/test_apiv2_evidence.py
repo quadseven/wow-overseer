@@ -8,16 +8,17 @@ import sys
 import types
 import unittest
 
+from _stub_modules import PYMYSQL, stub_modules
+
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import apiv2  # noqa: E402
-import guildjobs  # noqa: E402
-import holdings  # noqa: E402
-import realmread  # noqa: E402
-import restsupply  # noqa: E402
-from apiv2 import evidence  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import apiv2
+    import guildjobs
+    import holdings
+    import realmread
+    import restsupply
+    from apiv2 import evidence
 
 STARTED = datetime.datetime(2026, 10, 12, 9, 30)
 RUNS = [

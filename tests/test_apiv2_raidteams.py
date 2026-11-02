@@ -7,15 +7,16 @@ import sys
 import types
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import apiv2  # noqa: E402
-import raidready  # noqa: E402
-import raidsupply  # noqa: E402
-import raidteams  # noqa: E402
-import realmread  # noqa: E402
-from apiv2 import raidteams as v2  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+with stub_modules(pymysql=PYMYSQL):
+    import apiv2
+    import raidready
+    import raidsupply
+    import raidteams
+    import realmread
+    from apiv2 import raidteams as v2
 
 GUILD_ID = 7
 

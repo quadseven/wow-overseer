@@ -8,18 +8,18 @@ pure decisions and drive the bridge's half with its reads stubbed.
 
 import asyncio
 import contextlib
-import sys
 import time
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import craft_rhythm  # noqa: E402
-import guildrun  # noqa: E402
-import standin  # noqa: E402
-from test_guildsocial_bridge import bridge, row  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import craft_rhythm
+    import guildrun
+    import standin
+    from test_guildsocial_bridge import bridge, row
 
 WARRIOR, HUNTER, ROGUE, PRIEST, MAGE, WARLOCK = 1, 3, 4, 5, 8, 9
 PROTECTION = "12301"

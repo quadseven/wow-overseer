@@ -10,18 +10,18 @@ import pathlib
 import shutil
 import subprocess
 import sys
-import types
 import unittest
+
+from _stub_modules import PYMYSQL, stub_modules
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import apiv2  # noqa: E402
-import guildrun  # noqa: E402
-from apiv2 import run as run_api  # noqa: E402
-import realmread  # noqa: E402
-from apiv2._context import Context  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import apiv2
+    import guildrun
+    from apiv2 import run as run_api
+    import realmread
+    from apiv2._context import Context
 
 ROW = {
     "id": 398,

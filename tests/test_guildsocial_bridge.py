@@ -10,19 +10,19 @@ import asyncio
 import contextlib
 import datetime
 import pathlib
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, fresh_import, stub_modules
 
-import guildrun  # noqa: E402
-import guildsocial as gs  # noqa: E402
-import jev  # noqa: E402
-from test_guildsocial import NOW, ask, five_yeses  # noqa: E402
-from test_guildsocial import two_door_post  # noqa: E402
-from test_jev_items import FakeJev  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import guildrun
+    import guildsocial as gs
+    import jev
+    from test_guildsocial import NOW, ask, five_yeses
+    from test_guildsocial import two_door_post
+    from test_jev_items import FakeJev
 
 
 def _import_bridge():
@@ -33,9 +33,7 @@ def _import_bridge():
             pass
 
     stub.Client = Client
-    with mock.patch.dict(sys.modules, {"discord": stub}):
-        sys.modules.pop("bridge", None)
-        import bridge
+    bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
     return bridge
 
 
