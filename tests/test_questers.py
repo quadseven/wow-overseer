@@ -7,7 +7,7 @@ import classquest
 import guildjobs
 import questers
 
-ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE = 12, 9, 40, 44
+ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE, DUSKWOOD = 12, 9, 40, 44, 10
 HUMAN, ORC = 1, 2
 PRIEST, WARRIOR = 5, 1
 ALLIANCE_MASK, HORDE_MASK = 1101, 690
@@ -25,8 +25,9 @@ def quest(
     kill=0,
     count=1,
     title="",
+    **kw,
 ):
-    return {
+    base = {
         "id": qid,
         "title": title or "Quest %d" % qid,
         "sort": zone,
@@ -45,6 +46,8 @@ def quest(
         "npc1": kill,
         "npc_count1": count,
     }
+    base.update(kw)
+    return base
 
 
 def giver(qid, role, guid, entry, x, y, map_id=0, name="Marshal"):
@@ -1389,3 +1392,71 @@ class ASummonedObjectEnder(unittest.TestCase):
         p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
         self.assertEqual([b.quest for b in p.broken], [40])
         self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+
+class MultiObjectiveHunting(unittest.TestCase):
+    def test_members_from_rows_reads_objective_counts(self):
+        rows = [
+            {
+                "guid": 1,
+                "name": "Durga",
+                "class_id": 3,
+                "race": 3,
+                "level": 24,
+                "online": 1,
+                "pos_x": 0.0,
+                "pos_y": 0.0,
+                "zone_id": 10,
+                "map_id": 0,
+            }
+        ]
+        log_rows = [
+            {
+                "guid": 1,
+                "quest": 56,
+                "status": 3,
+                "progress": 8,
+                "mobcount1": 8,
+                "mobcount2": 0,
+            }
+        ]
+        (member,) = questers.members_from_rows(rows, log_rows, [])
+        self.assertEqual(member.quest_counts[56], {"mobcount1": 8, "mobcount2": 0})
+
+    def test_hunt_skips_objective_spawns_already_completed(self):
+        cat = world(
+            extra_quests=[
+                quest(
+                    56,
+                    DUSKWOOD,
+                    24,
+                    kill=48,
+                    count=8,
+                    title="The Night Watch",
+                    npc2=203,
+                    npc_count2=6,
+                )
+            ],
+            extra_givers=[
+                giver(56, "start", 1056, 264, 50, 0),
+                giver(56, "end", 1056, 264, 50, 0),
+            ],
+            extra_starts=[started(56, 264)],
+            extra_ends=[ended(56, 264)],
+            extra_spawns=[
+                spawn(2048, 48, 200, 0, name="Skeletal Warrior"),
+                spawn(2203, 203, 250, 0, name="Skeletal Mage"),
+            ],
+            drop={1001, 1002, 1003, 1006, 1020, 1030},
+        )
+        member = mirra(
+            x=200.0,
+            quest_log={56: questers.STATUS_INCOMPLETE},
+            quest_progress={56: 8},
+            quest_counts={56: {"mobcount1": 8, "mobcount2": 0}},
+        )
+        p = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual(p.move.kind, classquest.HUNT)
+        self.assertEqual(p.move.quest, 56)
+        self.assertEqual(p.move.spot.entry, 203)
+        self.assertIn("Skeletal Mage", p.move.said)
