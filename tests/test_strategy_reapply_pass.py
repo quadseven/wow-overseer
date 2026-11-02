@@ -14,6 +14,7 @@ import unittest
 from unittest import mock
 
 import strategybook
+import test_orders  # noqa: F401  (gives a stubbed pymysql its err.MySQLError)
 
 
 def _import_bridge():

@@ -77,6 +77,21 @@ def _code(text: str) -> str:
     return "\n".join(line.split("//", 1)[0] for line in text.splitlines())
 
 
+def _function_of(signature: str) -> str:
+    """Any member function of the module, braces balanced."""
+    src = modsource.read(MODULE, encoding="utf-8")
+    start = src.index(signature)
+    depth = 0
+    for i in range(src.index("{", start), len(src)):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[start : i + 1]
+    raise AssertionError("%s has no closing brace" % signature)
+
+
 def _following() -> str:
     return _function("void KeepRosterFollowing(")
 
@@ -174,10 +189,15 @@ class TheLeaderFollowsNobody(unittest.TestCase):
         test on every poll, so the dungeon brain never armed. A leader whose
         master is itself follows nobody, which keeps the fixed point this
         class is about, and can issue the command."""
-        body = _code(_following())
+        # The leader block was extracted into KeepLeaderItsOwnMaster, which
+        # KeepRosterFollowing (and KeepFamilyGrouped, for a head who leads a
+        # group the core owns) both call.
+        self.assertIn("KeepLeaderItsOwnMaster(leader);", _code(_following()))
+        body = _code(_function_of("static void KeepLeaderItsOwnMaster("))
         self.assertIn("leaderAI->SetMaster(leader)", body)
         self.assertIn("IsSelfBot(leader)", body)
         self.assertNotIn("SetMaster(nullptr)", body)
+        self.assertNotIn("SetMaster(nullptr)", _code(_following()))
 
 
 class AMasterNobodyWalksTowardIsNotCohesion(unittest.TestCase):
@@ -247,9 +267,19 @@ class AMasterNobodyWalksTowardIsNotCohesion(unittest.TestCase):
     def test_the_module_never_resets_strategies(self):
         """A reset would discard every other strategy the bridge has applied and
         rebuild from class defaults. Only the master was missing."""
+        # The follow-master path never resets. The module's one reset is the
+        # guild raider's talent reset bought at a class trainer (#692), after
+        # which the playerbot has to choose its strategies from the new
+        # talents; it is a different path and a different character.
+        self.assertNotIn("ResetStrategies", _code(_following()))
         self.assertNotIn(
-            "ResetStrategies", _code(modsource.read(MODULE, encoding="utf-8"))
+            "ResetStrategies",
+            _code(_function_of("static void KeepLeaderItsOwnMaster(")),
         )
+        code = _code(modsource.read(MODULE, encoding="utf-8"))
+        self.assertEqual(1, code.count("ResetStrategies("))
+        reset = code.index("ResetStrategies(")
+        self.assertIn("InitTalentsBySpecNo(", code[reset - 700 : reset])
 
     def test_a_character_a_human_is_driving_is_left_entirely_alone(self):
         """Master AND strategies. The client-master guard has to come before

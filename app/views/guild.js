@@ -14,7 +14,7 @@ import {
   state, pendingRead, item, member, memberHref, plural, duration, classVar,
 } from "../ui.js";
 import { peek } from "../api.js";
-import { runCard, bindRunCards, runHref, seatChips } from "./_runs.js";
+import { runCard, bindRunCards, runHref, runState, seatChips } from "./_runs.js";
 import { guilds, guildName, guildFamily } from "../families.js";
 import { since, toSeconds, fromClock } from "../models/time.js";
 import { guild as guildModel } from "../models/guild.js";
@@ -295,6 +295,9 @@ function timelines(ctx, tl) {
 
 // ---- chronicle ----------------------------------------------------------------
 
+// Run outcomes that do not read after "The run".
+const RUN_SAID = { "not entered": "never went in", refused: "was refused", lost: "was lost" };
+
 function feedItems(ctx) {
   const c = peek(P.chronicle(ctx));
   const loot = peek(P.loot());
@@ -320,13 +323,22 @@ const FEED_ICON = {
   run: ["ph ph-door-open", "warn"], loot: ["ph-fill ph-sword", "accent"], death: ["ph ph-skull", "bad"],
 };
 
+// A loot sentence from the server, with the item link drawn where the sentence
+// names the item. The search starts after the subject so that a character whose
+// name holds the item's name cannot take the link.
+function lootLine(line, it) {
+  const at = it.name ? line.indexOf(it.name, line.indexOf(" ")) : -1;
+  if (at < 0) return html`${item(it)} <span>${line}</span>`;
+  return html`${line.slice(0, at)}${item(it)}${line.slice(at + it.name.length)}`;
+}
+
 function feedRow(ctx, x) {
   const seen = fromClock(ctx.previousVisit);
   const fresh = seen && x.at && x.at > seen;
   if (x.kind === "achievement") return achRow(x.ach, { fresh, cls: (n) => model(ctx).classOf(n) });
   const [icon, tone] = FEED_ICON[x.kind] || ["ph ph-circle", ""];
   const body = x.kind === "loot" && x.item
-    ? html`${item({ entry: x.item.entry, name: x.item.name, quality: x.item.quality, icon: x.item.icon })} <span>${x.text}</span>`
+    ? lootLine(x.text, x.item)
     : x.run ? html`<a href="${runHref({ id: x.run })}" class="g-feed-link">${x.text}</a>` : x.text;
   return html`<div class="g-row g-feed"><i class="${icon}" data-gt="${tone}" aria-hidden="true"></i><span class="g-grow">${body}</span>${fresh ? html`<span class="tag tag-accent">New</span>` : ""}<span class="muted g-when">${since(x.at)}</span></div>`;
 }
@@ -364,7 +376,7 @@ function rightNow(ctx) {
   const gr = peek(P.runs());
   const rc = peek(P.recap());
   const out = gr.data ? mine(ctx, gr.data.active) : [];
-  const cards = out.map((r) => html`<div class="card g-now stretch-card"><a class="g-name stretch-link" href="${runHref(r)}" data-run="${r.id}">${gname(ctx)} is in ${r.place}: ${r.bosses_total ? r.bosses_done + " of " + r.bosses_total + " bosses down" : "bosses not measured"}, ${plural(r.deaths || 0, "death")}${r.seconds_inside ? ", " + duration(r.seconds_inside) + " inside" : ""}.</a>${seatChips(r)}</div>`);
+  const cards = out.map((r) => html`<div class="card g-now stretch-card"><a class="g-name stretch-link" href="${runHref(r)}" data-run="${r.id}">${gname(ctx)} ${r.state === "queued" ? "is queued for" : "is in"} ${r.place}: ${r.bosses_total ? r.bosses_done + " of " + r.bosses_total + " bosses down" : "bosses not measured"}, ${plural(r.deaths || 0, "death")}${r.seconds_inside ? ", " + duration(r.seconds_inside) + " inside" : ""}.</a>${seatChips(r)}</div>`);
   const live = rc.data && rc.data.live && rc.data.family === family(ctx) ? recapCard(ctx, rc.data) : "";
   if (!cards.length && !live) {
     if (!gr.data) return pendingRead(gr, 1);
@@ -397,7 +409,7 @@ function lootSection(ctx) {
   const wait = pendingRead(l, 2);
   if (wait) return { loot: wait, council: wait };
   const stories = (l.data.stories || []).filter((s) => s.guild === gname(ctx)).slice(0, 12);
-  const loot = html`<div class="card g-list">${stories.length ? stories.map((s) => html`<div class="g-row g-loot"><span class="g-loot-top">${item(s.item)}<span class="muted g-when">${since(s.at)}</span></span><span class="muted">${s.line}</span></div>`) : html`<div class="g-row muted">${l.data.empty || "No notable loot yet."}</div>`}</div>
+  const loot = html`<div class="card g-list">${stories.length ? stories.map((s) => html`<div class="g-row g-loot"><span class="g-loot-top"><span>${lootLine(s.line, s.item)}</span><span class="muted g-when">${since(s.at)}</span></span></div>`) : html`<div class="g-row muted">${l.data.empty || "No notable loot yet."}</div>`}</div>
 <details class="fold"><summary>How this is worked out</summary><p class="muted g-basis">${l.data.basis || ""}</p></details>`;
   const c = l.data.council || {};
   const awards = (c.awards || []).filter((a) => a.family === family(ctx)).slice(0, 12);
@@ -453,7 +465,7 @@ function chat(ctx) {
   if (!asks.length) return state("empty", "Nobody in " + gname(ctx) + " has asked for anything yet.");
   const row = (a) => {
     const answers = a.answers || [];
-    const out = a.run ? html`<a href="${runHref(a.run)}">${a.run.outcome ? "The run " + a.run.outcome : "The run is " + (a.run.state || "on")}${a.run.bosses_total ? ", " + a.run.bosses_done + " of " + a.run.bosses_total + " bosses" : ""}</a>` : "";
+    const out = a.run ? html`<a href="${runHref(a.run)}">${a.run.outcome ? "The run " + (RUN_SAID[a.run.outcome] || runState({ ...a.run, run_state: a.run.outcome }).text) : "The run is " + (a.run.state || "on")}${a.run.bosses_total ? ", " + a.run.bosses_done + " of " + a.run.bosses_total + " bosses" : ""}</a>` : "";
     return html`<div class="g-chat">
 <div class="g-chat-top"><span>${member({ name: a.asker })} <span class="g-said">${said(a.said)}</span></span><span class="g-chat-meta">${askBadge(a.state)}<span class="muted g-when">${since(a.created_at)}</span></span></div>
 <div class="g-answers">${answers.length ? answers.map((x) => html`<span>${member({ name: x.member })}: ${said(x.said)}</span>`) : html`<span data-gt="warn">${a.state === "open" ? "No answer yet." : "No answer: the ask " + a.state + "."}</span>`}${out}</div>

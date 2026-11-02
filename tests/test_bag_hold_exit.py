@@ -453,6 +453,43 @@ class TheHoldEnds(unittest.TestCase):
         self.assertFalse(needed(NAMES, MEASURED, True))
         self.assertFalse(needed(NAMES, MEASURED, False))
 
+    def test_a_town_errand_under_way_is_not_sent_back_to_questing(self):
+        self._minutes(46)
+        self.world.jobs.update({name: jobs.TOWN_RUN for name in NAMES})
+        self.ns["_town_errand_active"] = lambda names: True
+        self._minutes(2)
+        self.assertEqual({jobs.TOWN_RUN}, set(self.world.jobs.values()))
+
+    def test_a_sale_the_release_opened_reopens_the_errand(self):
+        self.ns["_sale_reopens_hold"] = lambda names, free: True
+        self._minutes(46)
+        self.assertTrue(self.ns["_bag_errand_needed"](NAMES, MEASURED, True))
+
+
+class TheReleasedHoldSells(unittest.TestCase):
+    def _reopens(self, free, sellable):
+        ns = {"bag_pressure": bag_pressure, "_VENDOR_SELLABLE": sellable}
+        exec(  # noqa: S102 - bridge.py's own source
+            compile(
+                ast.Module(
+                    body=_functions("_at_floor", "_sale_reopens_hold"), type_ignores=[]
+                ),
+                "bridge.py",
+                "exec",
+            ),
+            ns,
+        )
+        return ns["_sale_reopens_hold"](list(free), free)
+
+    def test_stacks_that_lift_the_member_reopen_it(self):
+        self.assertTrue(self._reopens({"Zrog": 1, "Zug": 15}, {"Zrog": 25, "Zug": 0}))
+
+    def test_nothing_to_sell_does_not(self):
+        self.assertFalse(self._reopens({"Zrog": 1, "Zug": 15}, {"Zrog": 0, "Zug": 0}))
+
+    def test_an_unread_member_does_not(self):
+        self.assertFalse(self._reopens({"Zrog": 1, "Zug": 15}, {"Zug": 0}))
+
 
 if __name__ == "__main__":
     unittest.main()

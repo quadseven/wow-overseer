@@ -44,6 +44,7 @@ import bonds
 import classic
 import crossing
 import dungeonprogression
+import goals
 import jobs
 
 log = logging.getLogger(__name__)
@@ -1202,8 +1203,17 @@ OUTSIDE_LINE = (
 
 
 def _active(goal_rows: list[dict], members: list[str] | None) -> list[dict]:
-    """The goals still marked active, narrowed to one family when named."""
-    active = [row for row in goal_rows if str(row.get("status") or "") == "active"]
+    """The goals still marked active, narrowed to one family when named.
+
+    Not a guild goal: the operator orders those, and the council's card would
+    credit one to a sitting that never took it up.
+    """
+    active = [
+        row
+        for row in goal_rows
+        if str(row.get("status") or "") == "active"
+        and str(row.get("kind") or "") not in goals.GUILD_KINDS
+    ]
     if members is None:
         return active
     allowed = set(members)

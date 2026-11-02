@@ -63,6 +63,16 @@ def _code(text: str) -> str:
     return re.sub(r"//.*", "", text)
 
 
+def _own_handler_kinds() -> set:
+    """The kinds KindSharesChatTrigger exempts from the bot trigger hold. The
+    hold is OverseerDecisions::HoldForSharedTrigger now, and the exemption is
+    the OWN_HANDLER list in overseer_decisions.cpp."""
+    src = modsource.read(modsource.DECISIONS, encoding="utf-8")
+    start = src.index("bool KindSharesChatTrigger(")
+    body = src[start : src.index("\n}\n", start)]
+    return set(re.findall(r'"([a-z]+)"', body.split("OWN_HANDLER", 1)[1]))
+
+
 class TheSharePathIsReachable(unittest.TestCase):
     def test_the_command_loop_dispatches_it(self):
         """A DoShare nobody calls is a feature that exists only in the diff."""
@@ -73,7 +83,12 @@ class TheSharePathIsReachable(unittest.TestCase):
     def test_it_is_exempt_from_the_bot_trigger_hold(self):
         """kind='share' shares no ChatCommandTrigger, so holding it would only
         delay it - the same exemption chat, gm, probe and give have."""
-        self.assertIn('&& kind != "share"', _source())
+        # The module asks HoldForSharedTrigger before running a row, and the
+        # kinds with a handler of their own are exempt from it.
+        self.assertIn("OverseerDecisions::HoldForSharedTrigger(", _source())
+        exempt = _own_handler_kinds()
+        self.assertIn("share", exempt)
+        self.assertTrue({"chat", "gm", "probe"} <= exempt, exempt)
 
     def test_the_holder_is_target_name_and_the_taker_is_target_arg(self):
         """The same column roles kind='give' already uses."""
@@ -391,6 +406,7 @@ class TheShareRetryLogic(unittest.TestCase):
             "        _answered_share_rows(\n"
             "            SHARE_REFUSAL_MEMORY_DAYS,\n"
             "            questshare.history_depth(SHARE_RETRY_MINUTES, SHARE_BACKOFF_CAP_HOURS),\n"
+            "            SHARE_BACKOFF_CAP_HOURS,\n"
             "        ),\n"
             "        SHARE_RETRY_MINUTES,\n"
             "        SHARE_BACKOFF_CAP_HOURS,\n"
@@ -443,14 +459,31 @@ class TheShareRetryLogic(unittest.TestCase):
         helper = bridge[
             bridge.index("def _answered_share_rows") : bridge.index("def _insert_share")
         ]
-        self.assertIn("def _answered_share_rows(days: int, depth: int)", helper)
+        self.assertIn(
+            "def _answered_share_rows(days: int, depth: int, recent_hours: int)", helper
+        )
         self.assertIn("ROW_NUMBER() OVER (", helper)
         self.assertIn("PARTITION BY target_name, target_arg, command, status, ", helper)
         self.assertIn("CASE WHEN JSON_VALID(result) ", helper)
         self.assertIn("THEN JSON_UNQUOTE(JSON_EXTRACT(result, '$.reason')) END", helper)
         self.assertIn("ORDER BY updated_at DESC) AS rn", helper)
         self.assertIn("WHERE rn <= %s", helper)
-        self.assertIn("(int(days), int(depth))", helper)
+        self.assertIn("(int(days), int(recent_hours), int(depth))", helper)
+
+    def test_only_triples_answered_inside_the_cap_are_read(self):
+        """backed_off() never holds a triple whose youngest counted answer is
+        older than the cap, so the read skips those triples entirely (the
+        steady-state table is mostly them) while a triple that does have a
+        recent answer keeps its whole ninety-day streak."""
+        bridge = self._bridge()
+        helper = bridge[
+            bridge.index("def _answered_share_rows") : bridge.index("def _insert_share")
+        ]
+        self.assertIn("AND (target_name, target_arg, command) IN (", helper)
+        self.assertIn("AND updated_at > NOW() - INTERVAL %s HOUR)", helper)
+        # the recent test is on the same statuses and kind as the main read
+        sub = helper[helper.index("AND (target_name, target_arg, command) IN (") :]
+        self.assertIn("kind = 'share' AND status IN ('delivered', 'error')", sub)
 
     def test_the_read_has_an_index_shaped_like_it(self):
         """overseer_command is never pruned and shipped with idx_status only;

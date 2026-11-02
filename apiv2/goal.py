@@ -44,11 +44,14 @@ NOW_SQL = "SELECT UNIX_TIMESTAMP() AS now"
 CHARS_SQL = (
     "SELECT c.guid, c.name, c.level, c.xp FROM characters c WHERE c.name IN ({holes})"
 )
+_DEATHS_FROM = (
+    "FROM overseer_death "
+    "WHERE character_name IN ({holes}) AND created_at >= NOW() - INTERVAL 1 DAY "
+)
+DEATH_TOTAL_SQL = "SELECT COUNT(*) AS total " + _DEATHS_FROM
 DEATHS_SQL = (
     "SELECT character_name AS name, map, zone, killer_name AS killer, "
-    "COUNT(*) AS n FROM overseer_death "
-    "WHERE character_name IN ({holes}) AND created_at >= NOW() - INTERVAL 1 DAY "
-    "GROUP BY character_name, map, zone, killer_name "
+    "COUNT(*) AS n " + _DEATHS_FROM + "GROUP BY character_name, map, zone, killer_name "
     "ORDER BY n DESC LIMIT %s"
 )
 QUEST_ASKS_SQL = (
@@ -140,8 +143,8 @@ def _projected_60(seat_chars, rates_by_seat, table, now):
     return when.date().isoformat()
 
 
-def _deaths(rows):
-    total = sum(int(r["n"] or 0) for r in rows)
+def _deaths(rows, totals):
+    total = int(totals[0]["total"] or 0) if totals else 0
     repeated = [
         {
             "member": r["name"],
@@ -252,6 +255,13 @@ def fetch(rd, guild: str, now_at: float, missing: set):
         missing,
     )
     runs = guildrun.formed_since(rd, [guild], days=1, n=_MAX_RUNS)
+    death_totals = _safe_rows(
+        rd,
+        DEATH_TOTAL_SQL.format(holes=_scope.holes(len(seat_names))),
+        tuple(seat_names),
+        "overseer_death",
+        missing,
+    )
     deaths = _safe_rows(
         rd,
         DEATHS_SQL.format(holes=_scope.holes(len(seat_names))),
@@ -266,7 +276,18 @@ def fetch(rd, guild: str, now_at: float, missing: set):
         "overseer_guild_ask",
         missing,
     )
-    return seats, seat_chars, readings, table, events, asks, runs, deaths, quest_rows
+    return (
+        seats,
+        seat_chars,
+        readings,
+        table,
+        events,
+        asks,
+        runs,
+        deaths,
+        death_totals,
+        quest_rows,
+    )
 
 
 def build(rd, guild: str) -> dict:
@@ -275,9 +296,18 @@ def build(rd, guild: str) -> dict:
     now_rows = _safe_rows(rd, NOW_SQL, (), "clock", missing)
     now_at = float(now_rows[0]["now"]) if now_rows else 0.0
 
-    seats, seat_chars, readings, table, events, asks, runs, deaths, quest_rows = fetch(
-        rd, guild, now_at, missing
-    )
+    (
+        seats,
+        seat_chars,
+        readings,
+        table,
+        events,
+        asks,
+        runs,
+        deaths,
+        death_totals,
+        quest_rows,
+    ) = fetch(rd, guild, now_at, missing)
 
     events_by_guid: dict = {}
     for ev in events:
@@ -308,7 +338,7 @@ def build(rd, guild: str) -> dict:
         "gaining_xp": gaining,
         "runs": _runs(runs),
         "class_quests": _class_quests(quest_rows),
-        "deaths_24h": _deaths(deaths),
+        "deaths_24h": _deaths(deaths, death_totals),
         "ghosts": sum(1 for s in seat_rows if s["life"] in ("dead", "ghost")),
         "stuck": _stuck([seat.name for seat in seats], asks, int(now_at)),
         "offline": sum(1 for s in seat_rows if not s["online"]),

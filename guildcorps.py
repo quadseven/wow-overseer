@@ -345,6 +345,9 @@ class Member:
         value, cap = self.skills.get(int(skill_id), (0, 0))
         return int(value or 0), int(cap or 0)
 
+    def knows_recipe(self, spell: int) -> bool:
+        return spell in craft.AUTO_LEARNED or spell in self.known
+
     def count(self, entry) -> int:
         return sum(int(h.count) for h in self.carried if int(h.entry) == int(entry))
 
@@ -379,7 +382,8 @@ class Post:
 def _best_bag_known(member: Member) -> int:
     """The slots of the biggest classic bag this member already knows, 0 for none."""
     return max(
-        (b.slots for b in BAGS if b.spell in member.known and _classic(b)), default=0
+        (b.slots for b in BAGS if member.knows_recipe(b.spell) and _classic(b)),
+        default=0,
     )
 
 
@@ -498,6 +502,10 @@ class Step:
     # One vendorsale.Sale per sell row, so the bridge can name the item and the
     # price of each sale the world delivers (#1592). Empty: no sale is named.
     sales: tuple = ()
+    # The classquest.Move a class quest step carries out, for the shadow
+    # comparison of the step executor (steps.py). Not part of the step's
+    # identity: two steps that write the same rows are the same step.
+    move: object = field(default=None, compare=False, repr=False)
 
 
 def source_for(action, key) -> str:
@@ -547,7 +555,7 @@ def _reach(
     in a letter to it, one a guildmate carries, or one a guildmate standing on
     another map's vendor can buy (`patterns_by_post`).
     """
-    if bag.spell in tailor.known:
+    if tailor.knows_recipe(bag.spell):
         return "known"
     if bag.source == "trainer":
         return "trainer" if bag.spell in trainable else ""
@@ -561,7 +569,7 @@ def _reach(
 def _bolt_usable(bolt: Recipe, tailor: Member, trainable: frozenset) -> bool:
     value, _ = tailor.skill(TAILORING)
     return value >= bolt.learn_rank and (
-        bolt.spell in tailor.known or bolt.spell in trainable
+        tailor.knows_recipe(bolt.spell) or bolt.spell in trainable
     )
 
 
@@ -835,7 +843,7 @@ def _buy(tailor, entry, count, price, name, cap=NEAR) -> Step:
 
 def _can_make(tailor, recipe) -> int:
     """How many of this recipe the tailor's own bags can make now."""
-    if recipe.spell not in tailor.known:
+    if not tailor.knows_recipe(recipe.spell):
         return 0
     return min(tailor.count(e) // int(n) for e, n in recipe.reagents)
 
@@ -846,7 +854,7 @@ def _learnable(recipe, tailor, trainable) -> bool:
     return (
         recipe.source == "trainer"
         and recipe.spell in trainable
-        and recipe.spell not in tailor.known
+        and not tailor.knows_recipe(recipe.spell)
         and value >= recipe.learn_rank
     )
 
@@ -909,7 +917,7 @@ def _bolt_step(tailor, bag):
     for entry, need in bag.reagents:
         bolt = BOLT_OF.get(int(entry))
         short = int(need) - tailor.count(entry)
-        if bolt is None or short <= 0 or bolt.spell not in tailor.known:
+        if bolt is None or short <= 0 or not tailor.knows_recipe(bolt.spell):
             continue
         cloth, per = _cloth_for(bolt)
         n = min(short, tailor.count(cloth) // per)
@@ -999,7 +1007,7 @@ def _shortfall(tailor, bag, bolt) -> list:
     if (
         bag is not None
         and bag.source == "pattern"
-        and bag.spell not in tailor.known
+        and not tailor.knows_recipe(bag.spell)
         and not tailor.count(bag.pattern) + tailor.incoming(bag.pattern)
     ):
         need.append((int(bag.pattern), 1))
@@ -1269,6 +1277,7 @@ def tailor_step(
     cap=NEAR,
     by_post=frozenset(),
     at_mailbox=frozenset(),
+    recent=None,
 ):
     """(Step or None, note): this tailor's one step this pass, and why."""
     if tailor.family:
@@ -1279,7 +1288,7 @@ def tailor_step(
     if step:
         return step, ""
     step = _collect_step(tailor, cap)
-    if step:
+    if step and not _cooling(step, recent):
         return step, ""
     bag, reach = target_bag(tailor, members, trainable, vendors, by_post)
     bolt = skillup_bolt(tailor, members, trainable)
@@ -1299,7 +1308,7 @@ def tailor_step(
                 tailor.name,
                 bag.name,
             )
-    if bolt is not None and bolt.spell in tailor.known:
+    if bolt is not None and tailor.knows_recipe(bolt.spell):
         cloth, per = _cloth_for(bolt)
         n = min(CRAFT_BATCH, tailor.count(cloth) // per)
         if n > 0:
@@ -1513,6 +1522,7 @@ def _guild_steps(
             travel[0],
             by_post,
             at_mailbox,
+            recent,
         )
         if step is not None and not _cooling(step, recent):
             steps.append(step)

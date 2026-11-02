@@ -26,15 +26,21 @@ import math
 import jobs
 import raidroles
 
-# The one raid door mod-overseer has (RaidDoorFor in overseer_decisions).
+# The raid doors mod-overseer has (RaidDoorFor in overseer_decisions).
 MOLTEN_CORE = "moltencore"
 MOLTEN_CORE_MAP = 409
+# THE KEYWORD AND NOT THE PLACE: overseer_raid_seat.keyword is VARCHAR(20) and
+# `upper-blackrock-spire` is 21. spirerun.py says why this raid is here.
+UPPER_SPIRE = "ubrs"
+UPPER_SPIRE_MAP = 229
+MAPS = {MOLTEN_CORE: MOLTEN_CORE_MAP, UPPER_SPIRE: UPPER_SPIRE_MAP}
 
 # THE LEVEL THE INSTANCE'S OWN ACCESS ROW ASKS: dungeon_access_template for map
 # 409 says min_level 50 and carries no requirement rows. The site reads the row
 # live for the readiness card; this copy is only the queue's refusal, checked
 # before an order is written.
-MIN_LEVEL = {MOLTEN_CORE: 50}
+# The Upper Spire's is LFGDungeons.dbc row 44's minimum; see spirerun.py.
+MIN_LEVEL = {MOLTEN_CORE: 50, UPPER_SPIRE: 56}
 
 # ONE NIGHT PER ORDER. The queue counts an entry done off the leader's
 # `dungeon_runs_done`, which only the dungeon coordinator writes, so a raid
@@ -47,6 +53,9 @@ NAMES = {
     "moltencore": MOLTEN_CORE,
     "molten core": MOLTEN_CORE,
     "mc": MOLTEN_CORE,
+    "ubrs": UPPER_SPIRE,
+    "upper spire": UPPER_SPIRE,
+    "upper blackrock spire": UPPER_SPIRE,
 }
 
 # WHAT THE OVERSEER CAN DO WITH AN ORDERED RAID, stated rather than inferred,
@@ -249,7 +258,7 @@ def keyword_for(text: str) -> str | None:
 # How each raid keyword is said. Every jobs.RAID_KEYWORDS entry needs one, or
 # the queue would speak a bare keyword; tests/test_raidrun.py holds the two
 # sets equal so they move together.
-PLACES = {MOLTEN_CORE: "Molten Core"}
+PLACES = {MOLTEN_CORE: "Molten Core", UPPER_SPIRE: "Upper Blackrock Spire"}
 
 
 def place(keyword: str) -> str:

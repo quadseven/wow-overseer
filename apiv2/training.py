@@ -97,13 +97,13 @@ def fetch(ctx, name: str) -> dict | None:
 spell_state = classtrain.spell_state
 
 
-def spells(trainer: list, known: set, level: int, cap: int) -> dict:
+def spells(trainer: list, known: set, level: int, cap: int, skills: set = None) -> dict:
     """The class spells, sorted into the four states, each by level."""
     out: dict = {"learned": [], "trainable": [], "needs": [], "above": []}
     for row in sorted(
         trainer or (), key=lambda r: (int(r.get("level") or 0), int(r["spell"]))
     ):
-        state = spell_state(row, known, level, cap)
+        state = spell_state(row, known, level, cap, skills)
         if state:
             out[state].append(
                 {
@@ -196,7 +196,8 @@ def build(name: str, f: dict, cap: int = campaignplan.LEVEL_CAP) -> dict:
     char = f["char"]
     level = int(char.get("level") or 0)
     known = {int(r["spell"]) for r in f.get("known") or ()}
-    s = spells(f.get("trainer") or [], known, level, cap)
+    skills = {int(r["skill"]) for r in f.get("skills") or ()}
+    s = spells(f.get("trainer") or [], known, level, cap, skills)
     t = trades(f.get("skills") or [], level, known)
     line = "%d learned, %d trainable now, %d above level" % (
         len(s["learned"]) + sum(1 for x in t if x["state"] == "learned"),

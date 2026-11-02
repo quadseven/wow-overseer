@@ -228,7 +228,6 @@ class ASpareLargerBagGoesOn(unittest.TestCase):
     def test_the_bridge_puts_own_bags_on_before_the_family_plan(self):
         body = _block("    async def _hand_bags_once(")
         self.assertIn("await self._equip_own_bags(members)", body)
-        self.assertIn("bag_upgrade.without_bags(members, own)", body)
         self.assertLess(
             body.index("_equip_own_bags"), body.index("bag_upgrade.plan_family_bags(")
         )

@@ -27,10 +27,11 @@ cannot be read is null and `unmeasured` says why, so the app can say "not
 measured" instead of inventing a value. A failed uptime read (the auth
 database unreachable) fails soft the same way: the route still answers.
 
-`deploy` is this overseer process's own build (deployinfo.info(), the block
-/api/realm also carries): its commit, the previous one, when it was built and
-how long it has run, so "is merge X live?" is answered by comparing
-deploy.commit with the merge commit. Unset values read "unknown".
+`deploy` is this overseer process's own build (deployinfo.info(), the fields
+/api/realm also carries, there timed from the bridge): its commit, the previous
+one, when it was built and how long it has run, so "is merge X live?" is
+answered by comparing deploy.commit with the merge commit. Unset values read
+"unknown".
 """
 
 from __future__ import annotations
@@ -140,7 +141,7 @@ def roll(_query: dict, ctx) -> tuple[int, dict]:
         version_rows,
         uptime_rows,
         uptime_unread=unread,
-        deploy=deployinfo.info(),
+        deploy=deployinfo.info(deployinfo.PROCESS_STARTED),
     )
 
 

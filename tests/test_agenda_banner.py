@@ -45,7 +45,7 @@ class TheEndpointIsWiredUp(unittest.TestCase):
         both families' rows as one family."""
         handler = self.server[self.server.index("def _agenda") :]
         handler = handler[: handler.index("def do_POST")]
-        self.assertIn("self._family_scope(query)", handler)
+        self.assertIn("= _family_scope(query)", handler)
         self.assertIn("rows = _fetch_agenda(names)", handler)
         self.assertIn("agenda.build_agenda(**rows, members=names)", handler)
         self.assertNotIn("query.get", handler)
