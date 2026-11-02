@@ -264,19 +264,44 @@ class HardBlockers(unittest.TestCase):
         hard = [b["text"] for b in card["blockers"] if b["tone"] == "hard"]
         self.assertTrue(any("35 raiders short" in t for t in hard), hard)
         soft = [b["text"] for b in card["blockers"] if b["tone"] == "soft"]
-        # A warrior and a druid hold the two tank seats a raid cannot do
-        # without; the other six of the eight groups' are short, which is
-        # soft. A group without a healer is hard.
-        self.assertTrue(any("6 tanks short of the 8" in t for t in soft), soft)
-        self.assertFalse(any("tanks short" in t for t in hard), hard)
-        self.assertTrue(any("6 healers short" in t for t in hard), hard)
-        self.assertTrue(any("damage dealers short of the 24" in t for t in soft), soft)
-        self.assertIn("Short 6 tanks, 6 healers", card["gap_line"])
+        # The encounter table's minimums (#1483): a warrior holds one of the
+        # four tank seats the bosses ask for, and a priest, a shaman and a
+        # druid three of the eight healers the raid cannot do without. Both
+        # are hard; a damage shortfall is soft.
+        self.assertTrue(any("3 tanks short of the 4" in t for t in hard), hard)
+        self.assertTrue(any("5 healers short of the 8" in t for t in hard), hard)
+        self.assertFalse(any("tank" in t for t in soft), soft)
+        self.assertTrue(any("damage dealers short of the 26" in t for t in soft), soft)
+        self.assertIn("Short 3 tanks, 7 healers", card["gap_line"])
         self.assertEqual(8, len(card["groups"]))
         self.assertTrue(card["groups"][0]["line"].startswith("Group 1: "))
         self.assertTrue(any("below level 50" in t for t in hard), hard)
         self.assertIn("(Horde)", card["title"])
         self.assertIn("cannot raid Molten Core yet", card["headline"])
+
+    def test_staffing_blocks_below_the_encounter_minimums_not_one_a_group(self):
+        """Four tanks and nine healers: the raid meets the encounter table's
+        minimums (#1483), so no staffing line is hard; a healer short of the
+        raid-wide ten is soft. The old rule called this six groups without a
+        healer."""
+        rows = _guild(
+            "Cave",
+            23,
+            [(WARRIOR, 4), (PRIEST, 9), (MAGE, 15), (HUNTER, 12), (WARLOCK, 21)],
+        )
+        card = _card(rows, [rows[0]["name"]])
+        hard = [b["text"] for b in card["blockers"] if b["tone"] == raidready.HARD]
+        soft = [b["text"] for b in card["blockers"] if b["tone"] == raidready.SOFT]
+        self.assertFalse(any("tank" in t or "healer" in t for t in hard), hard)
+        self.assertTrue(any("1 healer short of the 10" in t for t in soft), soft)
+        three = _guild(
+            "Cave",
+            23,
+            [(WARRIOR, 3), (PRIEST, 9), (MAGE, 16), (HUNTER, 12), (WARLOCK, 21)],
+        )
+        card = _card(three, [three[0]["name"]])
+        hard = [b["text"] for b in card["blockers"] if b["tone"] == raidready.HARD]
+        self.assertTrue(any("1 tank short of the 4" in t for t in hard), hard)
 
     def test_no_access_row_means_no_level_gate_is_invented(self):
         rows = _guild("Bonkers", 24, FULL, level=10, race=2)
