@@ -303,6 +303,24 @@ class HardBlockers(unittest.TestCase):
         hard = [b["text"] for b in card["blockers"] if b["tone"] == raidready.HARD]
         self.assertTrue(any("1 tank short of the 4" in t for t in hard), hard)
 
+    def test_an_approved_team_above_the_minimums_is_thin_not_blocked(self):
+        """An approved team plans its own eight tanks and eleven healers
+        (raidteams.py). Five tanks and nine healers seated meet the encounter
+        minimums, so its open seats are soft, against its own plan."""
+        members = (
+            [{"role": "tank"}] * 5 + [{"role": "healer"}] * 9 + [{"role": "dps"}] * 21
+        )
+        lineup = {
+            "groups": [{"members": members}],
+            "wanted": {"raiders": 40, "tanks": 8, "healers": 11, "damage": 21},
+            "shortfall": {"raiders": 5, "tanks": 3, "healers": 2, "damage": 0},
+        }
+        hard = raidready._staffing_blockers(lineup, members, True)
+        self.assertFalse(any("tank" in t or "healer" in t for t in hard), hard)
+        soft = raidready._thin_role_blockers(lineup)
+        self.assertTrue(any("3 tanks short of the 8 planned" in t for t in soft), soft)
+        self.assertTrue(any("2 healers short of the 11" in t for t in soft), soft)
+
     def test_no_access_row_means_no_level_gate_is_invented(self):
         rows = _guild("Bonkers", 24, FULL, level=10, race=2)
         card = _card(rows, [rows[0]["name"]], min_level=None)
