@@ -11,6 +11,7 @@ The last class is a contract test over bridge.py's source, in the pattern
 test_craft_rhythm.py uses: the pure decision is only half of the change.
 """
 
+import dataclasses
 import pathlib
 import unittest
 
@@ -176,6 +177,12 @@ class PendingRequestsAreActedOnOnce(unittest.TestCase):
             len(cr.expire_requests(self.pending, seen + cr.READ_SECONDS)), 1
         )
 
+    def test_a_route_ages_by_its_event_clock_once_it_has_one(self):
+        self._take([_request(age=600)], now=1000.0)
+        route = next(iter(self.pending.values()))
+        self.assertEqual(cr.route_clock(route), 400.0)
+        self.assertEqual(cr.route_clock(dataclasses.replace(route, seen=None)), 1000.0)
+
     def test_an_unchanged_last_seen_does_not_rewrite_the_route(self):
         self._take([_request(age=600)], now=1000.4)
         before = dict(self.pending)
@@ -325,6 +332,11 @@ class TheBridgeRoutesTheRequests(unittest.TestCase):
         body = self._body("_auction_once")
         self.assertIn("_fetch_purses", body)
         self.assertNotIn("spells.get(name, (0, 0))", body)
+
+    def test_the_route_memo_ages_by_the_event_clock(self):
+        self.assertIn(
+            "craft_rhythm.route_from_memo, craft_rhythm.route_clock,", self.source
+        )
 
     def test_pending_requests_survive_a_restart(self):
         self.assertTrue('"material_request"' in self.source)

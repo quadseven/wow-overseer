@@ -1504,8 +1504,12 @@ def _largest_per_key(requests) -> dict:
     return out
 
 
-def _seen(route: Route) -> float:
+def route_clock(route: Route) -> float:
+    """The clock a route ages by: its event's latest read, else its routing."""
     return route.since if route.seen is None else route.seen
+
+
+_seen = route_clock
 
 
 def _refresh(pending, requests, now: float) -> None:

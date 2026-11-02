@@ -3227,7 +3227,9 @@ TRIP_CLOCK_MEMO_SECONDS = 6 * 3600
 # week like the owed clock's; borrow_clock drops it once no errand is left.
 LEAD_CLOCK_MEMO_SECONDS = 7 * 24 * 3600
 # A material request's route is kept as long as its event is read (#476), so a
-# deploy does not route a request it already acted on a second time.
+# deploy does not route a request it already acted on a second time. Its memo
+# ages by the event's clock (craft_rhythm.route_clock), and a refreshed
+# last_seen rewrites the memo, which pushes its expiry out with it.
 MATERIAL_REQUEST_MEMO_SECONDS = craft_rhythm.READ_SECONDS
 
 
@@ -7588,7 +7590,7 @@ class Bridge(discord.Client):
         # "character:entry" -> craft_rhythm.Route, so each is acted on once.
         self._material_requests: dict = _ClockMemo(
             "material_request", "material request route", craft_rhythm.route_memo,
-            craft_rhythm.route_from_memo, lambda route: route.since,
+            craft_rhythm.route_from_memo, craft_rhythm.route_clock,
             MATERIAL_REQUEST_MEMO_SECONDS)
         # Equip rows whose outcome has already been logged, by row id, so each
         # answer is said once (#146).
