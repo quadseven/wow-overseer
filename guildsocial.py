@@ -786,6 +786,8 @@ _FORMED_BY_SELF = (
     "Got everyone, heading into {place} now. Thanks all!",
     "Group's full, {place} here we come.",
 )
+
+
 def _fit(text: str, limit: int) -> str:
     text = " ".join(str(text).split())
     return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."

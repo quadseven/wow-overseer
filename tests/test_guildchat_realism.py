@@ -176,7 +176,11 @@ class PugNarrationIsNotGuildChat(unittest.TestCase):
         # empty one.
         sql, said = [], []
         pp = gp.PugPass(
-            joins=(gp.Join(8, "Mercy", "healer", "I can heal, inv", "Bree", "Got a healer"),)
+            joins=(
+                gp.Join(
+                    8, "Mercy", "healer", "I can heal, inv", "Bree", "Got a healer"
+                ),
+            )
         )
         with mock.patch.multiple(
             bridge,
