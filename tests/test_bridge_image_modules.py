@@ -17,6 +17,7 @@ import ast
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -55,6 +56,32 @@ def bridge_modules() -> set[str]:
     names = python_module_names(bridge)
     stdlib = set(sys.stdlib_module_names)
     return {n for n in names if n not in stdlib and n not in THIRD_PARTY}
+
+
+def _copy_sources_for_destination(dockerfile: str, destination: str) -> list[str]:
+    """Return source paths from COPY instructions targeting one directory."""
+    sources: list[str] = []
+    instruction: list[str] = []
+    for line in dockerfile.splitlines():
+        stripped = line.strip()
+        if not instruction:
+            if not stripped.upper().startswith("COPY "):
+                continue
+            instruction.append(stripped)
+        else:
+            instruction.append(stripped)
+
+        continued = instruction[-1].endswith("\\")
+        if continued:
+            instruction[-1] = instruction[-1][:-1].rstrip()
+            continue
+
+        parts = shlex.split(" ".join(instruction))
+        instruction.clear()
+        if len(parts) < 3 or parts[-1] != destination:
+            continue
+        sources.extend(part for part in parts[1:-1] if not part.startswith("--"))
+    return sources
 
 
 # Shipped today but reached by no import from the image's entry points
@@ -117,15 +144,21 @@ def reached_modules() -> set[str]:
 
 
 class ImageModuleWiring(unittest.TestCase):
+    def test_copy_sources_include_dockerfile_continuations(self):
+        dockerfile = "COPY first.py \\\n    second.py \\\n    /app/tools/\n"
+        self.assertEqual(
+            _copy_sources_for_destination(dockerfile, "/app/tools/"),
+            ["first.py", "second.py"],
+        )
+
     def test_scheduled_metric_watcher_starts_from_image_files(self):
         dockerfile = pathlib.Path("Dockerfile").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as folder:
             root = pathlib.Path(folder)
             target = root / "tools"
             target.mkdir()
-            for sources in re.findall(r"^COPY (.+) /app/tools/$", dockerfile, re.M):
-                for source in sources.split():
-                    shutil.copyfile(source, target / pathlib.Path(source).name)
+            for source in _copy_sources_for_destination(dockerfile, "/app/tools/"):
+                shutil.copyfile(source, target / pathlib.Path(source).name)
             env = dict(os.environ)
             env.pop("PYTHONPATH", None)
             for args in (["tools/metric_watcher.py"], ["-m", "tools.metric_watcher"]):
