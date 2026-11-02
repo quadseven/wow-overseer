@@ -961,7 +961,7 @@ def roll_body(
         "written. Roller design: %s.\n\n"
         "## What\n\n"
         "One commit for %s: the source pins, both digests from build run %d, "
-        "the runtime banner, deployed_dev and the banner test literal, and the "
+        "the runtime banner and deployed_dev, and the "
         "channel and release files.\n\n%s\n\nImages:\n\n%s\n\nChanges:\n\n%s\n%s\n"
         "## Acceptance\n\n"
         "- CI passes and no review thread is open; the roller merges only while every gate is open.\n"
