@@ -8,17 +8,18 @@ test_gearorigin: rows in the shape _fetch_armory and _fetch_upgrade_items read.
 import io
 import json
 import logging
+import sys
+import types
 import unittest
 from unittest import mock
 
-from _stub_modules import PYMYSQL, stub_modules
+sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
-with stub_modules(pymysql=PYMYSQL):
-    import armory
-    import gearscore
-    import gearupgrades
-    import families
-    import map_server
+import armory  # noqa: E402
+import gearscore  # noqa: E402
+import gearupgrades  # noqa: E402
+import families  # noqa: E402
+import map_server  # noqa: E402  (must follow the pymysql stub)
 
 map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())

@@ -9,24 +9,20 @@ import types
 import unittest
 from unittest import mock
 
+from _stub_modules import PYMYSQL, fresh_import, stub_modules
+
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-if not hasattr(sys.modules["pymysql"], "err"):
-    # CI keeps this suite stdlib-only; provide the driver's caught base type.
-    class _MySQLError(Exception):
-        pass
-
-    sys.modules["pymysql"].err = types.SimpleNamespace(MySQLError=_MySQLError)
-
-import questledger as ql  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import questledger as ql
 
 
 def _real_pymysql_err():
     """The installed driver's own err module, loaded past any stub an earlier
     suite put in sys.modules, or None where PyMySQL is not installed."""
-    if hasattr(sys.modules["pymysql"], "connect"):
-        return sys.modules["pymysql"].err
+    current = sys.modules.get("pymysql")
+    if hasattr(current, "connect"):
+        return current.err
     ours = [n for n in sys.modules if n == "pymysql" or n.startswith("pymysql.")]
     stubs = {n: sys.modules.pop(n) for n in ours}
     try:
@@ -174,9 +170,7 @@ def _import_bridge():
             pass
 
     stub.Client = Client
-    with mock.patch.dict(sys.modules, {"discord": stub}):
-        sys.modules.pop("bridge", None)
-        import bridge
+    bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
     return bridge
 
 

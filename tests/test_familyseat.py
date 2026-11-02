@@ -10,31 +10,31 @@ hold.
 
 import asyncio
 import inspect
+import sys
 import types
 import unittest
 from unittest import mock
 
-from _stub_modules import PYMYSQL, stub_modules
+sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
-with stub_modules(pymysql=PYMYSQL):
-    import familyseat as fs
-    import guildrun
-    import guildsocial as gs
-    from test_campaign_queue import FakeWorld, _q, _queue_pass
-    from test_guildsocial import (
-        HOLY,
-        MAGE,
-        PRIEST,
-        PROTECTION,
-        ROGUE,
-        WARLOCK,
-        WARRIOR,
-        ask,
-        mate,
-        plan,
-        yes,
-    )
-    from test_guildsocial_bridge import _Self, bridge, facts, row
+import familyseat as fs  # noqa: E402
+import guildrun  # noqa: E402
+import guildsocial as gs  # noqa: E402
+from test_campaign_queue import FakeWorld, _q, _queue_pass  # noqa: E402
+from test_guildsocial import (  # noqa: E402
+    HOLY,
+    MAGE,
+    PRIEST,
+    PROTECTION,
+    ROGUE,
+    WARLOCK,
+    WARRIOR,
+    ask,
+    mate,
+    plan,
+    yes,
+)
+from test_guildsocial_bridge import _Self, bridge, facts, row  # noqa: E402
 
 # The Deadmines' bosses stand at 20 (guildrun.carries, #721).
 BOSS_DOORS = guildrun.doors(None, {36: 20})

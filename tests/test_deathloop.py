@@ -11,20 +11,20 @@ sends the member to town and plans no quest in that zone while it lasts.
 
 import pathlib
 import sys
+import types
 import unittest
 
-from _stub_modules import PYMYSQL, stub_modules
+sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
-with stub_modules(pymysql=PYMYSQL):
-    HERE = pathlib.Path(__file__).resolve().parents[1]
-    sys.path.insert(0, str(HERE))
+HERE = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(HERE))
 
-    import deathloop
-    import guildjobs
-    import guildlevel
-    import guildroute
-    import levelroute
-    from apiv2 import health, members
+import deathloop  # noqa: E402
+import guildjobs  # noqa: E402
+import guildlevel  # noqa: E402
+import guildroute  # noqa: E402
+import levelroute  # noqa: E402
+from apiv2 import health, members  # noqa: E402
 
 NOW = 1_800_000_000
 MINUTE = 60

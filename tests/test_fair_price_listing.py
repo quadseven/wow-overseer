@@ -24,14 +24,15 @@ prices the candidate at it. A live listing still wins.
 
 import pathlib
 import re
+import sys
+import types
 import unittest
 
-from _stub_modules import PYMYSQL, stub_modules
+sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
-with stub_modules(pymysql=PYMYSQL):
-    import auction
-    import clearance
-    import guildshare
+import auction  # noqa: E402
+import clearance  # noqa: E402
+import guildshare  # noqa: E402
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 LINEN = 2589

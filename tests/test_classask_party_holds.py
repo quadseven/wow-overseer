@@ -12,21 +12,21 @@ walk that ended that way left only "did not reach the objective" behind.
 """
 
 import asyncio
+import sys
 import types
 import unittest
 from unittest import mock
 
-from _stub_modules import PYMYSQL, stub_modules
+sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
-with stub_modules(pymysql=PYMYSQL):
-    import classask
-    import classparty
-    import guildroute
-    from test_classask import friends, qask
-    from test_classask_party_forms import TWO_YES, helps_read, settled
-    from test_classparty import FORMED, _Bridge, a_run, answer, drive
-    from test_guildsocial import NOW, yes
-    from test_guildsocial_bridge import bridge
+import classask  # noqa: E402
+import classparty  # noqa: E402
+import guildroute  # noqa: E402
+from test_classask import friends, qask  # noqa: E402
+from test_classask_party_forms import TWO_YES, helps_read, settled  # noqa: E402
+from test_classparty import FORMED, _Bridge, a_run, answer, drive  # noqa: E402
+from test_guildsocial import NOW, yes  # noqa: E402
+from test_guildsocial_bridge import bridge  # noqa: E402
 
 HELD = "character is held by another verb"
 

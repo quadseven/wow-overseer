@@ -13,7 +13,7 @@ import pathlib
 import types
 import unittest
 
-from test_decree_order import FakeConn, FakeCursor  # noqa: F401
+from test_decree_order import FakeConn, FakeCursor  # noqa: F401 - sets up the pymysql stub
 
 import bag_pressure  # noqa: E402
 import craft  # noqa: E402

@@ -13,7 +13,6 @@ import asyncio
 import pathlib
 import re
 import sqlite3
-import sys
 import types
 import unittest
 from unittest import mock
@@ -24,7 +23,7 @@ import council
 import goals
 import priorities
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, fresh_import
 
 
 def _import_bridge():
@@ -35,9 +34,7 @@ def _import_bridge():
             pass
 
     stub.Client = Client
-    with mock.patch.dict(sys.modules, {"discord": stub}):
-        sys.modules.pop("bridge", None)
-        import bridge
+    bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
     return bridge
 
 

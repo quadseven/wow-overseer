@@ -1,4 +1,4 @@
-"""Test modules that share a process pass in either order (#1648).
+"""No test module leaves sys.modules different from how it found it (#1648).
 
 The parallel runner (#1290) puts several modules in one process, so a stub
 one module leaves in sys.modules, or a module it drops after importing it,
@@ -78,6 +78,95 @@ class TwoModulesInOneProcess(unittest.TestCase):
                 with self.subTest(order=order):
                     for got in _run(PAIR, *order):
                         self.assertTrue(got["ok"], "\n".join(got["problems"]))
+
+
+# Imports every test module in turn, in one process, and reports what each
+# import did to sys.modules that outlives it:
+# - an entry it replaced or removed;
+# - a new entry with no spec that a repository module holds (a stub);
+# - a module it holds, or a fresh copy it made holds, under a name
+#   sys.modules maps to a different object (a second copy of a module).
+# _stub_modules.FRESH_COPIES lists the private copies made on purpose.
+# The driver entry, "pymysql", is exempt until no module installs a stub of
+# its own and _stub_modules restores it too (#1648, part three).
+GUARD = """
+    import json, pathlib, sys, types
+    sys.path.insert(0, "")
+    ROOT = pathlib.Path.cwd().resolve()
+    me = sys.argv[1]
+    SHARED = {"pymysql"}
+    names = sorted(
+        p.stem for p in (ROOT / "tests").glob("test_*.py")
+        if p.stem.isidentifier() and p.stem != me
+    )
+
+    def fresh():
+        mod = sys.modules.get("_stub_modules")
+        return {id(m) for m in getattr(mod, "FRESH_COPIES", ())}
+
+    def ours(m):
+        path = getattr(m, "__file__", None)
+        if not isinstance(m, types.ModuleType) or not path:
+            return False
+        try:
+            return pathlib.Path(path).resolve().is_relative_to(ROOT)
+        except (OSError, ValueError):
+            return False
+
+    findings = []
+    for name in names:
+        before = dict(sys.modules)
+        try:
+            __import__(name)
+        except Exception:
+            pass
+        for key, value in before.items():
+            if key not in SHARED and sys.modules.get(key) is not value:
+                findings.append(f"{name}: replaced or removed sys.modules[{key!r}]")
+        added = {k: v for k, v in sys.modules.items() if k not in before}
+        # A stand-in: a new entry with no spec that a repository module
+        # imported in the same step holds, directly or through a module it
+        # holds (a private bridge copy). Libraries register spec-less
+        # entries of their own (typing.io, a C extension's submodules);
+        # nothing here holds those.
+        holders = [m for m in added.values() if ours(m)]
+        holders += [v for m in holders for v in list(vars(m).values()) if ours(v)]
+        held = {id(v) for m in holders for v in list(vars(m).values())}
+        for key, value in added.items():
+            if key in SHARED:
+                continue
+            if getattr(value, "__spec__", None) is None and id(value) in held:
+                findings.append(f"{name}: left a stub in sys.modules[{key!r}]")
+
+    copies = fresh()
+    todo = [m for m in list(sys.modules.values()) if ours(m)]
+    walked = {id(m) for m in todo}
+    flagged = set()
+    while todo:
+        root = todo.pop()
+        for attr, value in list(vars(root).items()):
+            if not ours(value):
+                continue
+            current = sys.modules.get(value.__name__)
+            if current is not value and id(value) not in walked:
+                # A copy sys.modules does not hold: walk what it holds too.
+                walked.add(id(value))
+                todo.append(value)
+            if id(value) in copies or id(value) in flagged:
+                continue
+            if current is not None and current is not value:
+                flagged.add(id(value))
+                findings.append(
+                    f"{root.__name__}.{attr}: a second copy of {value.__name__}"
+                )
+    print(json.dumps(findings))
+"""
+
+
+class EveryModuleRestoresSysModules(unittest.TestCase):
+    def test_no_module_import_leaves_sys_modules_changed(self):
+        findings = _run(GUARD, pathlib.Path(__file__).stem)
+        self.assertEqual([], findings, "\n".join(findings))
 
 
 if __name__ == "__main__":

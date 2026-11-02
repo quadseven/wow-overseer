@@ -15,26 +15,25 @@ import types
 import unittest
 from unittest import mock
 
-from _stub_modules import PYMYSQL, stub_modules
+sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
-with stub_modules(pymysql=PYMYSQL):
-    import classask
-    import classhunt
-    import classparty
-    import classquest
-    import guildroute
-    import guildsocial as gs
-    from test_classask import (
-        CAVE,
-        NEAR,
-        friends,
-        helps_of,
-        mates,
-        qask,
-    )
-    from test_classquest import LIZARD, givers, qrow
-    from test_guildsocial import NOW, yes
-    from test_guildsocial_bridge import bridge
+import classask  # noqa: E402
+import classhunt  # noqa: E402
+import classparty  # noqa: E402
+import classquest  # noqa: E402
+import guildroute  # noqa: E402
+import guildsocial as gs  # noqa: E402
+from test_classask import (  # noqa: E402
+    CAVE,
+    NEAR,
+    friends,
+    helps_of,
+    mates,
+    qask,
+)
+from test_classquest import LIZARD, givers, qrow  # noqa: E402
+from test_guildsocial import NOW, yes  # noqa: E402
+from test_guildsocial_bridge import bridge  # noqa: E402
 
 SPOT = classquest.Spawn(9, 3130, 1, -240.0, -4100.0, "Lizard")
 

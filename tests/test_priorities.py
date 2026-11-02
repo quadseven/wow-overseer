@@ -10,30 +10,22 @@ pass breaks a tie over the family's job with it.
 import asyncio
 import logging
 import pathlib
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-if not hasattr(sys.modules["pymysql"], "err"):
-    _err = types.ModuleType("pymysql.err")
+from _stub_modules import PYMYSQL, fresh_import, stub_modules
 
-    class _MySQLError(Exception):
-        pass
-
-    _err.MySQLError = _MySQLError
-    sys.modules["pymysql"].err = _err
-
-import campaignplan  # noqa: E402
-import decree  # noqa: E402
-import goals  # noqa: E402
-import jev  # noqa: E402
-import jev_choices  # noqa: E402
-import map_server  # noqa: E402
-import priorities  # noqa: E402
-from test_decree_order import FakeConn, FakeCursor, order, roster  # noqa: E402
-from test_jev_items import FakeJev  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import campaignplan
+    import decree
+    import goals
+    import jev
+    import jev_choices
+    import map_server
+    import priorities
+    from test_decree_order import FakeConn, FakeCursor, order, roster
+    from test_jev_items import FakeJev
 
 map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())
@@ -68,9 +60,7 @@ def _import_bridge():
             pass
 
     stub.Client = Client
-    with mock.patch.dict(sys.modules, {"discord": stub}):
-        sys.modules.pop("bridge", None)
-        import bridge  # noqa: PLC0415 - heavy; only one test needs it
+    bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
     return bridge
 
 

@@ -9,31 +9,32 @@ party that was meeting or up. And a party that did not form left nothing
 behind but "no party formed".
 """
 
+import sys
+import types
 import unittest
 from unittest import mock
 
-from _stub_modules import PYMYSQL, stub_modules
+sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
-with stub_modules(pymysql=PYMYSQL):
-    import classask
-    import classparty
-    import guildsocial as gs
-    from apiv2 import members
-    from test_classask import asker, friends, group_book, qask
-    from test_classparty import (
-        FORMED,
-        LOST,
-        THERE,
-        _Bridge,
-        a_run,
-        answer,
-        at,
-        drive,
-        free_of,
-    )
-    from test_classquest import class_plan
-    from test_guildsocial import NOW, yes
-    from test_guildsocial_bridge import bridge
+import classask  # noqa: E402
+import classparty  # noqa: E402
+import guildsocial as gs  # noqa: E402
+from apiv2 import members  # noqa: E402
+from test_classask import asker, friends, group_book, qask  # noqa: E402
+from test_classparty import (  # noqa: E402
+    FORMED,
+    LOST,
+    THERE,
+    _Bridge,
+    a_run,
+    answer,
+    at,
+    drive,
+    free_of,
+)
+from test_classquest import class_plan  # noqa: E402
+from test_guildsocial import NOW, yes  # noqa: E402
+from test_guildsocial_bridge import bridge  # noqa: E402
 
 TWO_YES = [yes(11, 1, "Chill", "dps", "help"), yes(12, 1, "Dread", "dps", "help")]
 

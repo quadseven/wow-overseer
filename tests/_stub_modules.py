@@ -13,8 +13,7 @@ import pulled in, so the next module imports a second copy of each.
 `fresh_import` makes a private copy of one module (bridge, whose module state
 a test may change) under stubs, and leaves sys.modules[name] as it found it.
 The modules the copy imports stay registered, so every test shares one copy
-of each. tests/test_sys_modules_hygiene.py runs two of the modules that use
-it in one process, in both orders.
+of each. tests/test_sys_modules_hygiene.py holds every test module to this.
 """
 
 from __future__ import annotations
