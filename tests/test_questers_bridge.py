@@ -146,6 +146,57 @@ class TheQuesterPass(unittest.TestCase):
         )
         self.assertEqual(step.walk.command, "walk-to-spawn creature:2007 near:12")
 
+    def test_goldtooth_quest_walks_to_giver_and_hunts_boars(self):
+        cat = world(
+            extra_quests=[
+                quest(87, ELWYNN, 8, kill=113, count=8, min_level=8, title="Goldtooth")
+            ],
+            extra_givers=[
+                giver(87, "start", 1087, 240, 400, 0, name="Marshal Dughan"),
+                giver(87, "end", 1087, 240, 400, 0, name="Marshal Dughan"),
+            ],
+            extra_starts=[started(87, 240)],
+            extra_ends=[ended(87, 240)],
+            extra_spawns=[
+                spawn(2087, 113, 450, 0, level=8, name="Fleshripper"),
+                spawn(2088, 113, 480, 50, level=8, name="Fleshripper"),
+            ],
+            drop={1001},
+        )
+        # Quester at level 8 in Elwynn Forest can take the quest
+        run = Pass(
+            [quester(x=380.0, level=8, quests_done=frozenset({1, 2, 3, 6}))], cat=cat
+        ).run()
+        (step,) = run.started
+        self.assertEqual([r.command for r in step.rows], ["take quest:87"])
+        self.assertEqual(step.walk.command, "walk-to-spawn creature:1087 near:12")
+
+        # Hand in the completed quest
+        hand_in = Pass(
+            [quester(quest_log={87: questers.STATUS_COMPLETE}, level=8)], cat=cat
+        ).run()
+        (step,) = hand_in.started
+        self.assertEqual([r.command for r in step.rows], ["turnin quest:87"])
+        self.assertEqual(step.walk.command, "walk-to-spawn creature:1087 near:12")
+
+        # Hunt the boars
+        hunt = Pass(
+            [
+                quester(
+                    quest_log={87: questers.STATUS_INCOMPLETE},
+                    quests_done=frozenset({1, 2, 3, 6}),
+                    x=300.0,
+                    level=8,
+                )
+            ],
+            cat=cat,
+        ).run()
+        (step,) = hunt.started
+        self.assertEqual(
+            [r.command for r in step.rows], ["hunt-spawn creature:113 count:8 max:480"]
+        )
+        self.assertEqual(step.walk.command, "walk-to-spawn creature:2087 near:12")
+
     def test_it_moves_zones_only_when_nothing_in_its_zone_is_left(self):
         left = Pass([quester(level=5, quests_done=frozenset({1, 3, 6}))]).run()
         self.assertEqual([r.command for r in left.started[0].rows], ["take quest:2"])
