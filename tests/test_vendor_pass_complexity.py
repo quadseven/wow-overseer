@@ -217,7 +217,9 @@ def _queue(vendor_at, queue_holders):
             "_fetch_town": lambda name: types.SimpleNamespace(vendor=name in vendor_at),
             "_insert_sell": lambda c: written.append(c.item_guid) or 1,
             "item_plan": types.SimpleNamespace(
-                plan=plan, reasons=lambda skipped: "nothing"
+                plan=plan,
+                reasons=lambda skipped: "nothing",
+                all_answered=lambda candidates, attempts: False,
             ),
             "bag_pressure": types.SimpleNamespace(
                 vendor_holders_to_queue=lambda *a, **k: set(queue_holders),

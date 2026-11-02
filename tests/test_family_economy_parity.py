@@ -106,11 +106,17 @@ class TheSelf:
     def __init__(self, world):
         self.world = world
         self.claims = []
+        self.forgotten_claims = []
         self._dues_walks = {}
         self._guild_mail_runs = {}
         self._mail_walk_unsupported_until = 0.0
         self._far_walk_unsupported_until = 0.0
         self._mail_walk_tasks = set()
+
+    def _cohort_town_slot(self, cohort=None):
+        return types.SimpleNamespace(
+            forget=lambda claimant: self.forgotten_claims.append(claimant)
+        )
 
     def _guild_walk_cap(self):
         # The near cap, which is what these fixtures' mailboxes are inside.
@@ -128,7 +134,14 @@ class TheSelf:
         return {n: {"map_id": 1} for n in names}
 
     async def _claim_town_slot(
-        self, claimant, character, aim, urgent=False, cohort=None, distance=None
+        self,
+        claimant,
+        character,
+        aim,
+        urgent=False,
+        cohort=None,
+        distance=None,
+        priority_after=None,
     ):
         self.claims.append((claimant, character, aim, cohort))
         if urgent:

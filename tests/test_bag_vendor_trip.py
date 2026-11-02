@@ -17,6 +17,7 @@ slot, from npc_vendor and never a hand-written list).
 import pathlib
 import re
 import unittest
+from dataclasses import replace
 
 import bag_pressure
 import jobs
@@ -177,8 +178,13 @@ class NotRepeatedOnceEveryoneWhoCanAffordOneHasOne(unittest.TestCase):
         got = trip(buyers=[buyer(name="Zug", level=20, money=2149), buyer()])
         self.assertEqual(got.buyers, ("Uzza",))
 
-    def test_a_full_backpack_has_nowhere_to_put_the_bag(self):
-        self.assertEqual(trip(buyers=[buyer(free_slots=0)]).target, "")
+    def test_a_full_backpack_can_walk_for_an_empty_worn_position(self):
+        self.assertNotEqual(trip(buyers=[buyer(free_slots=0)]).target, "")
+
+    def test_a_bank_bag_with_no_cargo_room_has_no_trip(self):
+        self.assertEqual(
+            trip(buyers=[replace(buyer(free_slots=0), bank=True)]).target, ""
+        )
 
     def test_no_empty_position_is_no_trip(self):
         self.assertEqual(trip(buyers=[buyer(open_positions=0)]).target, "")
@@ -295,13 +301,6 @@ class TheBridgeWiring(unittest.TestCase):
             body.index("await self._buy_bags_once(names, auction_too=cohort is None,"),
             body.index("await self._aim_at_bag_vendor(needy, names, cohort)"),
         )
-
-    def test_the_purchase_hands_back_who_still_needs_a_vendor(self):
-        body = _statements("    async def _buy_bags_once(")
-        self.assertIn(
-            "needy = tuple(b for b in everyone if not (b.stocks & bagged))", body
-        )
-        self.assertIn("return needy", body)
 
     def test_the_trip_goes_through_the_town_slot_on_the_leader(self):
         body = _statements("    async def _aim_at_bag_vendor(")

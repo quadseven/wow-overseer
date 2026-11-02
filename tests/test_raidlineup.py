@@ -34,6 +34,22 @@ def _roster(**counts):
     return out
 
 
+class EnrolledGuildTemplate(unittest.TestCase):
+    def test_non_family_roster_gets_molten_core_roles_and_resistance_per_group(self):
+        roster = (
+            [_member("tank%d" % i, WARRIOR) for i in range(8)]
+            + [_member("heal%d" % i, PRIEST) for i in range(11)]
+            + [_member("damage%d" % i, MAGE) for i in range(19)]
+            + [_member("source%d" % i, PALADIN) for i in range(8)]
+        )
+        plan = raidlineup.plan_molten_core(roster)
+        placed = [m for group in plan["groups"] for m in group["members"]]
+        self.assertEqual([m["seat"] for m in placed].count("tank"), 8)
+        self.assertEqual([m["seat"] for m in placed].count("healer"), 11)
+        self.assertEqual([m["seat"] for m in placed].count("dps"), 21)
+        self.assertTrue(all(group["fire_resistance"] for group in plan["groups"]))
+
+
 class AFullRosterFillsEveryPlace(unittest.TestCase):
     def setUp(self):
         self.lineup = raidlineup.build_lineup(

@@ -6,9 +6,9 @@ import datetime
 
 CHANGES_SQL = (
     "SELECT e.character_name AS member_name, COALESCE(g.name, '') AS guild, "
-    "e.kind, e.subject_name AS item, e.subject_quality AS quality, "
+    "e.kind, e.subject_id AS entry, e.subject_name AS item, e.subject_quality AS quality, "
     "e.subject_item_level AS item_level, e.prior_state, "
-    "e.prior_name AS prior_item, e.prior_quality, e.prior_item_level, "
+    "e.prior_id AS prior_entry, e.prior_name AS prior_item, e.prior_quality, e.prior_item_level, "
     "e.last_seen AS at FROM overseer_event e "
     "LEFT JOIN characters c ON c.name = e.character_name "
     "LEFT JOIN guild_member gm ON gm.guid = c.guid "
@@ -42,10 +42,12 @@ def _change(row: dict) -> dict:
         "character": str(row.get("member_name") or ""),
         "guild": str(row.get("guild") or ""),
         "kind": kind,
+        "entry": int(row.get("entry") or 0),
         "item": str(row.get("item") or ""),
         "quality": int(row.get("quality") or 0),
         "item_level": level,
         "replaced": replaced,
+        "prior_entry": int(row.get("prior_entry") or 0) if state == "item" else None,
         "prior_quality": int(row.get("prior_quality") or 0)
         if state == "item"
         else None,

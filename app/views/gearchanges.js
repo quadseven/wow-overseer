@@ -1,4 +1,5 @@
-import { html, pendingRead, state } from "../ui.js";
+import { html, pendingRead, state, item } from "../ui.js";
+import { load, peek } from "../api.js";
 import { pageKey, since, markSeen } from "../models/gearchanges.js";
 
 const pathFor = (key, member) => "/api/v2/gear/changes?since=" + encodeURIComponent(since(key)) + (member ? "&member=" + encodeURIComponent(member) : "");
@@ -18,8 +19,46 @@ function itemRow(row) {
   const level = row.item_level_change === null ? "item level not recorded" : "item level " + row.item_level + (row.item_level_change ? " (" + (row.item_level_change > 0 ? "+" : "") + row.item_level_change + ")" : "");
   const replaced = row.replaced === "was empty" || row.replaced === "not recorded"
     ? row.replaced
-    : "Replaced " + row.replaced + " (" + quality(row.prior_quality) + ", item level " + row.prior_item_level + ")";
-  return html`<div class="card gc-row"><span class="gc-label">${upgrade ? "Upgrade" : row.kind === "worn" ? "Worn" : "Looted"}</span><strong>${row.item}</strong><span class="dim">${quality(row.quality)}, ${level}</span><span class="muted">${row.kind === "worn" ? replaced : "Not recorded as worn"}</span><time>${row.at}</time></div>`;
+    : html`Replaced ${item({ entry: row.prior_entry, name: row.replaced, quality: row.prior_quality })} (${quality(row.prior_quality)}, item level ${row.prior_item_level})`;
+  const diff = row.kind === "worn" && row.prior_entry && row.entry
+    ? html`<span class="gc-diff" data-compare="${row.prior_entry},${row.entry}">Loading stat changes</span>` : "";
+  return html`<div class="card gc-row"><span class="gc-label">${upgrade ? "Upgrade" : row.kind === "worn" ? "Worn" : "Looted"}</span><strong>${item({ entry: row.entry, name: row.item, quality: row.quality })}</strong><span class="dim">${quality(row.quality)}, ${level}</span><span class="muted">${row.kind === "worn" ? replaced : "Not recorded as worn"}</span>${diff}<time>${row.at}</time></div>`;
+}
+
+function number(v) { return Number.isFinite(Number(v)) ? Number(v) : 0; }
+
+function statMap(lines) {
+  const values = {};
+  (lines || []).forEach((line) => {
+    const match = String(line).match(/^([+-]?\d+)\s+(.+)$/);
+    if (match) values[match[2]] = number(match[1]);
+  });
+  return values;
+}
+
+export function compareItems(prior, next) {
+  const a = prior && prior.tooltip || {}, b = next && next.tooltip || {};
+  const left = statMap(a.stats), right = statMap(b.stats);
+  const names = new Set([...Object.keys(left), ...Object.keys(right)]);
+  const changes = [...names].map((name) => [name, (right[name] || 0) - (left[name] || 0)]).filter(([, delta]) => delta);
+  [["Armor", number(b.armor) - number(a.armor)], ["DPS", number(b.damage && b.damage.dps) - number(a.damage && a.damage.dps)], ["item level", number(b.item_level) - number(a.item_level)]].forEach(([name, delta]) => { if (delta) changes.push([name, delta]); });
+  return changes.map(([name, delta]) => `${delta > 0 ? "+" : ""}${delta} ${name} ${delta > 0 ? "gain" : "loss"}`).join(", ") || "No stat changes";
+}
+
+function fillComparisons(main) {
+  main.querySelectorAll("[data-compare]").forEach((node) => {
+    const [prior, next] = node.getAttribute("data-compare").split(",").map(Number);
+    Promise.all([load("/api/item?entry=" + prior), load("/api/item?entry=" + next)]).then(() => {
+      const before = peek("/api/item?entry=" + prior).data;
+      const after = peek("/api/item?entry=" + next).data;
+      node.textContent = before && after ? compareItems(before, after) : "Stat changes unavailable";
+    }).catch((err) => {
+      // load() never rejects, but a malformed item answer can still throw in
+      // compareItems; say so rather than leave "Loading stat changes" up.
+      node.textContent = "Stat changes unavailable";
+      console.warn("gear stat comparison failed", err);
+    });
+  });
 }
 
 function quality(value) {
@@ -43,6 +82,7 @@ export default {
     return html`<h1>Gear since your last visit</h1>${wait || renderFeed(read.data, key)}`;
   },
   after(main) {
+    fillComparisons(main);
     main.querySelectorAll("[data-mark-seen]").forEach((button) => button.addEventListener("click", () => {
       markSeen(button.getAttribute("data-mark-seen"));
       window.location.reload();

@@ -136,8 +136,13 @@ class TheBackstopIsAdditiveNotReliedOn(unittest.TestCase):
         aimed-or-accompanied early return, not as an independent path."""
         guard = _guard()
         gate = guard.index("if (aimed || accompanied)")
-        backstop = guard.index("GetVictim()")
+        # The guard also reads GetVictim() earlier, for the tank's pursuit
+        # (#1049), which is a different drive inside the same poll. The
+        # backstop's own read is `Unit* victim = bot->GetVictim();`, and that
+        # is the one that must come after the gate.
+        backstop = guard.index("Unit* victim = bot->GetVictim();")
         self.assertLess(gate, backstop)
+        self.assertEqual(1, guard.count("Unit* victim = bot->GetVictim();"))
 
     def test_the_backstop_does_not_touch_a_bot_that_is_not_in_combat(self):
         code = _code(_guard())

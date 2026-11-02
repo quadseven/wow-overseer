@@ -27,6 +27,13 @@ never written here:
                                      for HOLD_STUCK_SECONDS or more. Its
                                      first-seen time is the step's own.
 
+A DEATH LOOP (deathloop.py, #1464) is a third record, the module's own
+overseer_death rows: deathloop.MIN_DEATHS deaths in one zone within an hour at
+one level, with no level gained since and a death in the last two hours. It
+is read for a dead or released member too, since a member in that loop is
+dead half the time, and it comes before the other two: the deaths are the
+cause. Its first-seen time is the window's first death.
+
 A MEMBER THAT ONLY FOLLOWS has neither record of its own. Near its leader it
 is stuck when the leader is, since the leader's hold began, and its blocker
 names that hold (`follows` is the leader); far behind or on another map it is
@@ -48,6 +55,7 @@ from __future__ import annotations
 import re
 
 import agenda
+import deathloop
 import nowstatus
 import raidteams
 import situation
@@ -125,7 +133,10 @@ ASKS_SQL = (
 )
 
 BASIS = (
-    "Stuck means one of two records the bridge keeps: a class quest it has "
+    "Stuck means one of three records the bridge keeps: five or more deaths "
+    "in one zone within an hour with no level gained, until it gains a level "
+    "or goes two hours without dying (first seen at the first of those "
+    "deaths), a class quest it has "
     "asked the guild for help with in the last two hours (first seen at the "
     "first ask of that run), or a reason to wait it has logged for 30 minutes "
     "or more (first seen when the reason was first logged). A family's leader "
@@ -156,6 +167,7 @@ def fetch(ctx) -> dict:
         "jobs": [],
         "moved": {},
         "credits": {},
+        "deaths": [],
         "now_at": 0,
     }
     if names:
@@ -208,6 +220,11 @@ def _read(ctx, names: list) -> dict:
         (*names, agenda.BOSS_KIND),
         what="overseer_dungeon_run_event",
     )
+    deaths = rd.rows(
+        deathloop.SQL.format(holes=h),
+        (*everyone, deathloop.READ_SECONDS),
+        what="overseer_death",
+    )
     clock = rd.must("SELECT UNIX_TIMESTAMP() AS now_at")
     now_at = int(clock[0]["now_at"]) if clock else 0
     return {
@@ -223,6 +240,7 @@ def _read(ctx, names: list) -> dict:
             for r in credits or ()
             if r.get("at")
         },
+        "deaths": deaths or [],
         "now_at": now_at,
     }
 
@@ -419,8 +437,9 @@ def follower_blocker(leader: str, yards: str, lead: dict | None) -> dict | None:
 
 
 def _asking(entry: dict | None) -> bool:
-    """A class quest ask is the member's own blocker, follower or not."""
-    return entry is not None and entry["kind"] == "class quest"
+    """A class quest ask or a death loop is the member's own blocker, follower
+    or not."""
+    return entry is not None and entry["kind"] in ("class quest", deathloop.KIND)
 
 
 def _resolve_followers(members: list, found: dict, follows: dict) -> None:
@@ -514,7 +533,22 @@ def _member(name, row, ctx_rows) -> dict:
     return out
 
 
-def _stuck_entry(member: dict, run: list, now_at: int) -> dict | None:
+def loop_blocker(loop, now_at: int) -> dict | None:
+    """The stuck entry for a deathloop.Loop, or None for no loop."""
+    if loop is None:
+        return None
+    return {
+        "step": "Dying in " + loop.place,
+        "blocker": loop.blocker(),
+        "since": (int(now_at) - int(loop.first_age)) if now_at else None,
+        "kind": deathloop.KIND,
+    }
+
+
+def _stuck_entry(member: dict, run: list, now_at: int, loop=None) -> dict | None:
+    found = loop_blocker(loop, now_at)
+    if found is not None:
+        return found
     if member["life"] in ("dead", "ghost"):
         return None
     return ask_blocker(run, now_at) or hold_blocker(member, now_at)
@@ -635,6 +669,14 @@ def _lookups(families, chars, snaps, facts, now_at, jobs, readings) -> dict:
     }
 
 
+def _levels(chars: dict, guild_of: dict) -> dict:
+    """name -> level now, off the character row, else the guild row."""
+    return {
+        name: _either(chars.get(name) or {}, guild_of.get(name) or {}, "level")
+        for name in set(chars) | set(guild_of)
+    }
+
+
 def build(
     families,
     guild,
@@ -647,23 +689,29 @@ def build(
     readings=None,
     moved=None,
     credits=None,
+    deaths=None,
 ) -> dict:
     """The roster: one row per member, family first, with its stuck reading.
 
     `readings` is presence.of's answer for every member; `snaps` is where the
     online ones stand; `moved` is name -> when it last made progress (Unix
     seconds), for a stalled family (stall_entry); `credits` is leader -> its
-    newest boss credit ({"at", "detail"}), which counts as movement too."""
+    newest boss credit ({"at", "detail"}), which counts as movement too;
+    `deaths` is deathloop.SQL's rows, judged against each member's level
+    (deathloop.loops)."""
     families = families or {}
     rows = _lookups(families, chars, snaps, facts, now_at, jobs, readings)
     guild_of = {r["name"]: r for r in guild or ()}
     streaks = ask_streaks(asks)
     members, found, follows = [], {}, {}
+    loops = deathloop.loops(deaths, _levels(rows["chars"], guild_of))
     for name in _order(families, guild_of):
         if name not in rows["chars"] and name not in guild_of:
             continue
         m = _member(name, guild_of.get(name, {}), rows)
-        found[name] = _stuck_entry(m, streaks.get(name, []), rows["now_at"])
+        found[name] = _stuck_entry(
+            m, streaks.get(name, []), rows["now_at"], loops.get(name)
+        )
         followed = nowstatus.followed(rows["facts"].get(name), m)
         if followed and not _asking(found[name]):
             follows[name] = followed
@@ -808,6 +856,7 @@ def _build_roster(ctx) -> dict:
         f["readings"],
         f.get("moved"),
         f.get("credits"),
+        f.get("deaths"),
     )
 
 

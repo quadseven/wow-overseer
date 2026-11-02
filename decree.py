@@ -49,6 +49,7 @@ import chat
 import core  # noqa: F401 - named by SUCCESS_STATUSES' comment, and by the suite
 import fanout
 import jobs
+import priorities
 import professions
 import travel
 
@@ -79,6 +80,7 @@ CHAT = "chat"  # POST /api/chat, one character at a time
 COMMAND = "command"  # POST /api/decree, one overseer_command row per character
 ROSTER = "roster"  # POST /api/decree, one overseer_roster column
 QUEUE_STORE = "queue"  # POST /api/decree, the bridge's campaign queue table
+PRIORITY_STORE = "priorities"  # POST /api/decree, the family priorities row
 NOWHERE = ""  # no write path from this page
 
 JOB = "job"
@@ -87,6 +89,7 @@ CAMPAIGN = "campaign"
 QUEUE = "queue"
 TRAVEL = "travel"
 WILL = "will"
+PRIORITIES = "priorities"
 
 
 @dataclass(frozen=True)
@@ -199,6 +202,22 @@ SECTIONS = (
             "Each answer can start at most one action, and the character "
             "decides which, so this card starts a conversation rather than "
             "giving an order."
+        ),
+    ),
+    Section(
+        key=PRIORITIES,
+        title="Family priorities",
+        writes=PRIORITY_STORE,
+        why_not="",
+        instead="",
+        does=(
+            # priorities.py (#1559): one row, the ids in order. The bridge
+            # reads it on its next pass.
+            "Ranks what the family cares about most, for every family on the "
+            "realm. The ranked sentences go word for word into every choice "
+            "the family asks Jev to make, and break the tie when more than "
+            "one goal wants the family's job. Only the fixed priorities can "
+            "be ranked; nothing is typed."
         ),
     ),
 )
@@ -1224,6 +1243,9 @@ class Order:
     # A campaignqueue.Plan for the queue card, None for every other card. The
     # adapter replaces the family's pending entries with its own.
     queue: object = None
+    # The validated priority order for the priorities card (#1559), None for
+    # every other card. One row, so one write.
+    priorities: tuple | None = None
 
     @property
     def asked(self) -> int:
@@ -1231,7 +1253,8 @@ class Order:
         queued = 0
         if self.queue is not None:
             queued = len(self.queue.entries) or 1
-        return len(self.rows) + len(self.updates) + queued
+        ranked = 0 if self.priorities is None else 1
+        return len(self.rows) + len(self.updates) + queued + ranked
 
 
 def _refuse(section: str, why: str) -> Order:
@@ -1439,11 +1462,48 @@ def _plan_queue(request: dict, standing: dict, family: str, roster_rows: list) -
     return Order(QUEUE, "", (), (), plan.says, plan)
 
 
+PRIORITIES_SAVED = (
+    "The family's priorities are saved, highest first: %s. Nothing in the "
+    "world has changed yet. %s"
+)
+
+
+def _plan_priorities(request: dict, standing: dict) -> Order:
+    """The family's priority order, or why not (#1559).
+
+    `order` is the whole ranking, highest first, and priorities.validate
+    holds it to a full permutation of the fixed list: anything else is
+    refused and nothing is written, never repaired. `reset` puts the default
+    order back through the same write. The roster is not read: the order is
+    one for the whole realm.
+    """
+    if request.get("reset") is True:
+        order = priorities.DEFAULT_ORDER
+    else:
+        order, refusal = priorities.validate(request.get("order"))
+        if order is None:
+            return _refuse(PRIORITIES, refusal)
+    labels = ", ".join(priorities.priority(i).label for i in order)
+    return Order(
+        section=PRIORITIES,
+        refusal="",
+        rows=(),
+        updates=(),
+        says=PRIORITIES_SAVED % (labels, priorities.TAKES_EFFECT),
+        priorities=tuple(order),
+    )
+
+
 # Which card plans which order. A table rather than a chain for the same
 # reason map_server's routes are one: an unknown section is a miss, not
 # another branch. The queue card is planned beside it, because it alone needs
 # the family's key and levels.
-PLANNERS = {JOB: _plan_job, CAMPAIGN: _plan_campaign, TRAVEL: _plan_travel}
+PLANNERS = {
+    JOB: _plan_job,
+    CAMPAIGN: _plan_campaign,
+    TRAVEL: _plan_travel,
+    PRIORITIES: _plan_priorities,
+}
 
 # The cards whose order fans out over a family and is read off its leader.
 # Travel is not one: it names one character, and the name picks the family.
@@ -1531,6 +1591,11 @@ ORDER_NOTHING = {
     QUEUE: (
         "Nothing changed. Either there was no queue to clear, or this realm "
         "has no dungeon queue yet; it appears once the overseer has started."
+    ),
+    PRIORITIES: (
+        "Nothing changed. Either the family already had this order, or this "
+        "realm has no place to keep it yet; it appears once the overseer has "
+        "started."
     ),
 }
 
@@ -1645,6 +1710,7 @@ def build_console(
     now: datetime | None = None,
     newest_job_rows: list | None = None,
     queue_rows: list | None = None,
+    priority_rows: list | None = None,
 ) -> dict:
     """Rows in, the console's JSON out.
 
@@ -1655,6 +1721,7 @@ def build_console(
                    character from any source, which is what tells "a later
                    order replaced it" apart from "it never took"
     queue_rows     overseer_dungeon_queue's pending rows, every family (#209)
+    priority_rows  priorities.SELECT_SQL's rows: the stored order, or [] (#1559)
 
     ALL MAY BE EMPTY. A realm whose worldserver predates a table hands in []
     and gets a thinner console, never an exception - the same contract every
@@ -1738,6 +1805,10 @@ def build_console(
             "clear_label": QUEUE_CLEAR_LABEL,
             "example": QUEUE_EXAMPLE,
         },
+        "priorities": dict(
+            priorities.view(priority_rows),
+            section=PRIORITIES,
+        ),
         "families": family_views(roster_rows, queue_rows),
         "outcomes": list(lines),
         "orders": list(batches(command_rows, lines, family_of)),

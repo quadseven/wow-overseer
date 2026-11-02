@@ -24,6 +24,7 @@ sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import decree  # noqa: E402
 import map_server  # noqa: E402
+import priorities  # noqa: E402
 import travel  # noqa: E402
 
 APP = HERE / "app"
@@ -65,7 +66,10 @@ DECREE = {
         },
     ],
     "orders": [],
+    "priorities": dict(priorities.view([]), section="priorities"),
 }
+
+AGENDA = {"headline": "The family is questing in Stranglethorn Vale."}
 
 DIRECTOR = {
     "watcher": "Watcher",
@@ -157,6 +161,7 @@ def on_reads(decree_read=None):
         "/api/v2/operator": {"data": {"enabled": True}, "at": 1, "error": None},
         "/api/decree": decree_read or {"data": DECREE, "at": 1, "error": None},
         "/api/director": {"data": DIRECTOR, "at": 1, "error": None},
+        "/api/agenda": {"data": AGENDA, "at": 1, "error": None},
     }
 
 
@@ -256,6 +261,7 @@ class FormsPostWhereTheHandlersRead(unittest.TestCase):
             decree.CAMPAIGN,
             decree.QUEUE,
             decree.TRAVEL,
+            decree.PRIORITIES,
         }
         for aid, action in self.actions.items():
             fixed = action.get("fixed", {})
@@ -265,6 +271,7 @@ class FormsPostWhereTheHandlersRead(unittest.TestCase):
                 self.assertIn('"%s"' % fixed["action"], handler_source("/api/watch"))
         self.assertIs(self.actions["restart"]["fixed"]["restart"], True)
         self.assertIs(self.actions["unqueue"]["fixed"]["clear"], True)
+        self.assertIs(self.actions["unrank"]["fixed"]["reset"], True)
         self.assertEqual(self.actions["standdown"]["fixed"]["role"], travel.NONE)
 
     def test_on_demand_stream_controls_are_not_in_the_operator_view(self):
@@ -376,6 +383,139 @@ class TheDecreeRead(unittest.TestCase):
         self.assertIn("Zug&#39;s family: 4 of 10 runs done.", html)
         self.assertIn('<option value="Zug"', html)
         self.assertIn('<option value="quest"', html)
+
+
+DEFAULT = list(priorities.DEFAULT_ORDER)
+
+
+def ranked_in(html):
+    """The priority ids in the order the list draws them."""
+    chunk = html[html.index('<ol class="op-rank"') : html.index("</ol>")]
+    return re.findall(
+        r'<li class="op-rank-item" data-op-rank="priorities" data-pid="([a-z]+)"', chunk
+    )
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class ThePrioritiesPanel(unittest.TestCase):
+    """#1559: the ranked list beside what the family is doing now."""
+
+    def reorder(self, steps):
+        """Render, run `steps` (JS) against the bound listeners, then return
+        the last redraw of the priorities form and every POST."""
+        return run(
+            "const c = ctx(%s);\nV.render(c); V.after(main, c);\n%s\n"
+            "await new Promise((r) => setTimeout(r, 50));\n"
+            "const last = swapped.filter((h) => h.includes('data-op=\"priorities\"')).pop() || '';\n"
+            "console.log(JSON.stringify({last, posted: posted.filter((p) => p.method === 'POST')}));"
+            % (json.dumps(on_reads()), steps)
+        )
+
+    def test_the_order_and_the_agenda_sentence_are_side_by_side(self):
+        got = render_with(on_reads())
+        self.assertIn("/api/agenda", got["reads"])
+        html = got["html"]
+        card = html[html.index('class="card op-card op-pri"') :]
+        card = card[: card.index('<div class="op-grid">')]
+        self.assertIn("The family is questing in Stranglethorn Vale.", card)
+        self.assertIn("op-pri-side", card)
+        self.assertIn("op-pri-main", card)
+        self.assertEqual(ranked_in(card), DEFAULT)
+        for p in priorities.PRIORITIES:
+            self.assertIn(p.sentence.replace("'", "&#39;"), card)
+        self.assertIn(priorities.TAKES_EFFECT, card)
+        self.assertIn('data-op="unrank"', card)
+
+    def test_an_unanswered_agenda_is_said_not_blank(self):
+        reads = on_reads()
+        reads["/api/agenda"] = {
+            "at": 0,
+            "error": {"message": "HTTP 503"},
+            "failures": 1,
+        }
+        html = render_with(reads)["html"]
+        self.assertIn("What the family is doing now did not answer (HTTP 503)", html)
+
+    def test_move_to_shifts_rather_than_swaps(self):
+        got = run(
+            "console.log(JSON.stringify([M.moveTo(%s, 'dungeons', 1), M.moveTo(%s, 'alive', 4)]));"
+            % (json.dumps(DEFAULT), json.dumps(DEFAULT))
+        )
+        self.assertEqual(got[0], list(priorities.move(DEFAULT, "dungeons", 1)))
+        self.assertEqual(got[1], list(priorities.move(DEFAULT, "alive", 4)))
+
+    def button(self, move, pid):
+        return (
+            "{closest: (sel) => sel.includes('data-op-move') ? {getAttribute: (a) => "
+            "({'data-op-move': '%s', 'data-op-rank': 'priorities', 'data-pid': '%s'})[a]} : null}"
+            % (move, pid)
+        )
+
+    def row(self, pid):
+        return (
+            "{closest: (sel) => sel.includes('li[data-op-rank]') ? {getAttribute: (a) => "
+            "({'data-op-rank': 'priorities', 'data-pid': '%s'})[a]} : null}" % pid
+        )
+
+    def test_the_arrow_buttons_reorder(self):
+        got = self.reorder(
+            "listeners.click({target: %s, preventDefault() {}});\n"
+            "listeners.click({target: %s, preventDefault() {}});"
+            % (self.button("up", "dungeons"), self.button("down", "alive"))
+        )
+        expected = priorities.move(DEFAULT, "dungeons", 3)
+        expected = priorities.move(expected, "alive", 2)
+        self.assertEqual(ranked_in(got["last"]), list(expected))
+        self.assertIn("Not saved yet", got["last"])
+        self.assertEqual(got["posted"], [])
+
+    def test_alt_arrow_on_a_focused_row_reorders(self):
+        got = self.reorder(
+            "listeners.keydown({altKey: true, key: 'ArrowUp', target: %s, preventDefault() {}});\n"
+            "listeners.keydown({altKey: false, key: 'ArrowUp', target: %s, preventDefault() {}});"
+            % (self.row("gold"), self.row("gold"))
+        )
+        self.assertEqual(
+            ranked_in(got["last"]), list(priorities.move(DEFAULT, "gold", 5))
+        )
+
+    def test_dragging_a_row_onto_another_takes_its_place(self):
+        got = self.reorder(
+            "listeners.dragstart({target: %s});\n"
+            "listeners.dragover({target: %s, preventDefault() {}});\n"
+            "listeners.drop({target: %s, preventDefault() {}});"
+            % (self.row("guild"), self.row("alive"), self.row("alive"))
+        )
+        self.assertEqual(
+            ranked_in(got["last"]), list(priorities.move(DEFAULT, "guild", 1))
+        )
+
+    def test_saving_sends_the_order_on_screen_after_a_confirm(self):
+        got = self.reorder(
+            "listeners.keydown({altKey: true, key: 'ArrowUp', target: %s, preventDefault() {}});\n"
+            "listeners.submit({target: target({'form[data-op]': 'priorities'}), preventDefault() {}});\n"
+            "listeners.click({target: target({'data-op-confirm': 'priorities'}), preventDefault() {}});"
+            % self.row("quest")
+        )
+        [sent] = got["posted"]
+        self.assertTrue(sent["url"].endswith("/api/decree"))
+        self.assertEqual(
+            json.loads(sent["body"]),
+            {
+                "section": "priorities",
+                "order": list(priorities.move(DEFAULT, "quest", 2)),
+            },
+        )
+
+    def test_reset_sends_reset_and_no_order(self):
+        got = self.reorder(
+            "listeners.submit({target: target({'form[data-op]': 'unrank'}), preventDefault() {}});\n"
+            "listeners.click({target: target({'data-op-confirm': 'unrank'}), preventDefault() {}});"
+        )
+        [sent] = got["posted"]
+        self.assertEqual(
+            json.loads(sent["body"]), {"section": "priorities", "reset": True}
+        )
 
 
 @unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")

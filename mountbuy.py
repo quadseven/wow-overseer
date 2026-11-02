@@ -68,6 +68,11 @@ CLASS_MOUNT_CLASSES = frozenset({2, 9})
 USE = "use"
 BUY = "buy"
 
+# The module's reason for a vendor buy the bags have no slot for
+# (EQUIP_ERR_INVENTORY_FULL). Read live 2026-10-27 (#1593): every mount buy
+# since the walk went live came back so, and the walk was aimed again.
+BAGS_FULL_REASON = "bags cannot take the item"
+
 
 @dataclass(frozen=True)
 class Offer:

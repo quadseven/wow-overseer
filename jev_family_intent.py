@@ -591,7 +591,18 @@ async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
         facts=facts_line(f),
     )
     state, questions = question(f, offered)
-    outcome = await client.ask(KIND, state, questions)
+    # The heuristic's answer and the outcome snapshot go to a comparison
+    # backend only (#820): its disagreement with the heuristic is recorded
+    # and scored as the heuristic arm, snapshotted the way the bridge
+    # snapshots a Jev answer (the pick that was not taken).
+    outcome = await client.ask(
+        KIND,
+        state,
+        questions,
+        heuristic={"intent": current},
+        subject=f.family,
+        before=lambda answer: snapshot(f, answer),
+    )
     if outcome.answers is None:
         return replace(base, status=outcome.status, latency_ms=outcome.latency_ms)
     answer = outcome.answers["intent"]

@@ -20,6 +20,7 @@ import pathlib
 import sys
 import types
 import unittest
+from datetime import datetime, timedelta
 from unittest import mock
 
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
@@ -648,16 +649,75 @@ class TheInterviewIntegration(unittest.TestCase):
             ),
         )
 
-    def test_invite_proceeds_when_interview_returns_none(self):
-        """When the candidate is offline (interview returns None), the invite
-        still proceeds - the LLM never gates the invite."""
+    def _exchange(self, name, reply):
+        return self.bridge.interview.InterviewExchange(
+            candidate=name,
+            question=f"What brings you to look for a guild, {name}?",
+            reply=reply,
+            reason="shortlisted and online",
+        )
+
+    def test_offline_candidate_is_skipped_without_an_invite(self):
+        """An offline candidate (interview returns None) gets no invite, and
+        with nobody else on the shortlist the pass waits."""
         self.mocks["_interview_candidate"].return_value = None
 
         client = self._make_client()
         asyncio.run(client._recruit_once())
 
         self.mocks["_interview_candidate"].assert_called_once_with("Candidate1")
-        self.mocks["_insert_guild"].assert_called_once()
+        self.mocks["_insert_guild"].assert_not_called()
+
+    def test_offline_candidate_tries_the_next_shortlisted_name(self):
+        """The first name is offline, so the second is interviewed and is the
+        one invited."""
+        self.mocks["_latest_guild_shortlist"].return_value = (
+            {
+                "shortlist": [
+                    {"name": "Candidate1", "class": 1},
+                    {"name": "Candidate2", "class": 1},
+                ]
+            },
+            5.0,
+        )
+        self.mocks["_interview_candidate"].side_effect = lambda name: (
+            None if name == "Candidate1" else self._exchange(name, "Glad to.")
+        )
+
+        client = self._make_client()
+        asyncio.run(client._recruit_once())
+
+        self.assertEqual(
+            [c.args[0] for c in self.mocks["_interview_candidate"].call_args_list],
+            ["Candidate1", "Candidate2"],
+        )
+        self.mocks["_insert_guild"].assert_called_once_with(
+            "ActingMember", "invite Candidate2", "recruit", "Candidate2"
+        )
+
+    def test_a_reply_that_says_no_does_not_stop_the_invite(self):
+        """The LLM reply never gates the invite: a refusal still invites."""
+        self.mocks["_interview_candidate"].return_value = self._exchange(
+            "Candidate1", "No. I will never join your guild."
+        )
+
+        client = self._make_client()
+        asyncio.run(client._recruit_once())
+
+        self.mocks["_insert_guild"].assert_called_once_with(
+            "ActingMember", "invite Candidate1", "recruit", "Candidate1"
+        )
+
+    def test_a_failed_interview_call_does_not_stop_the_invite(self):
+        """An LLM error is not a verdict either: the invite still goes out."""
+        self.mocks["_interview_candidate"].side_effect = RuntimeError("llm down")
+
+        client = self._make_client()
+        asyncio.run(client._recruit_once())
+
+        self.mocks["_insert_guild"].assert_called_once_with(
+            "ActingMember", "invite Candidate1", "recruit", "Candidate1"
+        )
 
     def test_shortlist_action_does_not_call_interview(self):
         """When the action is shortlist, _interview_candidate is not called."""
@@ -688,6 +748,48 @@ class TheModuleShipsInTheImage(unittest.TestCase):
         """test_ship_manifest checks this generically; named here too so a
         failure points at the module that moved rather than at a list."""
         self.assertIn("recruit.py", DOCKERFILE.read_text(encoding="utf-8"))
+
+
+class GuildRecruitingPolicy(unittest.TestCase):
+    def test_ad_names_missing_roles_and_raid_nights_and_is_hourly(self):
+        line = recruit.recruiting_ad(
+            "<Lost Armada>", ["healers", "tanks"], ["Tue", "Thu"]
+        )
+        self.assertIn("healers, tanks", line)
+        self.assertIn("Tue, Thu", line)
+        self.assertTrue(recruit.may_post_ad(None))
+        for minutes_since_first_post in (0.0, 0.5, 30.0, 59, 59.9):
+            with self.subTest(second_post_after=minutes_since_first_post):
+                self.assertFalse(recruit.may_post_ad(minutes_since_first_post))
+        self.assertTrue(recruit.may_post_ad(recruit.AD_INTERVAL_MINUTES))
+        self.assertTrue(recruit.may_post_ad(60))
+
+    def test_missing_role_outranks_gear_and_below_level_is_dropped(self):
+        picks = recruit.rank_raid_candidates(
+            [
+                {"name": "Filled", "role": "damage", "level": 60, "gear": 999},
+                {"name": "Needed", "role": "healer", "level": 55, "gear": 1},
+                {"name": "Low", "role": "healer", "level": 54, "gear": 9999},
+            ],
+            {"healer"},
+        )
+        self.assertEqual([row["name"] for row in picks], ["Needed", "Filled"])
+
+    def test_offline_six_days_is_kept_and_eight_days_surplus_is_pruned(self):
+        now = datetime(2026, 10, 26)
+        members = [
+            {"name": "Recent", "last_seen": now - timedelta(days=6)},
+            {"name": "Stale", "last_seen": now - timedelta(days=8)},
+        ]
+        self.assertEqual(
+            [
+                row["name"]
+                for row in recruit.prune_surplus_members(
+                    members, now, {"Recent", "Stale"}
+                )
+            ],
+            ["Stale"],
+        )
 
 
 if __name__ == "__main__":

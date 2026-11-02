@@ -807,7 +807,16 @@ def hubs_from(team, map_id, zone_id) -> tuple:
 
 
 def choose(
-    level, race, map_id, bands, masters, zone_id=None, orbs=None, opens=None, nodes=None
+    level,
+    race,
+    map_id,
+    bands,
+    masters,
+    zone_id=None,
+    orbs=None,
+    opens=None,
+    nodes=None,
+    avoid=None,
 ) -> Choice:
     """The hub a member of this level and race is walked to from `map_id`.
 
@@ -819,12 +828,16 @@ def choose(
     (`ground_of`); from map 530, on the map its side's boat or orb (`orbs`,
     orbs_from) lands on, and from a continent, on the ground its side's
     zeppelin or boat lands on (`Choice.cross_to`); see the module docstring.
+    A hub in zone `avoid` (a zone the member keeps dying in, deathloop.py) is
+    never chosen.
     """
     team = side_of(race)
     if not team:
         return Choice(refused="its side cannot be read off its race")
     level = int(level)
     fitting = _fitting(team, level, map_id, zone_id, bands, masters, opens, nodes)
+    if avoid:
+        fitting = [f for f in fitting if f.hub.zone_id != int(avoid)]
     if not fitting:
         return Choice(refused="no %s hub fits level %d" % (team, level))
     ground = ground_of(team, map_id, zone_id)

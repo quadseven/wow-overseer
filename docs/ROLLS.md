@@ -61,6 +61,15 @@ the realm and its proof line was seen (section 3).
 
 A roll is five steps that must land as ONE worldserver restart.
 
+Before opening a roll PR, check the deploy repository's ship lock:
+
+    python3 .github/scripts/wow_bridge_ship.py --check-lock
+
+The lock holds for a 30-minute watch window after a merged bridge ship,
+worldserver pin or numbered roll. If the command exits 1, it names the holder
+and when the window closes; wait for the window to close, then check again
+before opening the PR.
+
 1. **Merge the module PRs** (mod-overseer, mod-dungeon-clear) after checks pass and every bot thread is
    answered. Record the new main SHA of each. mod-dungeon-clear is pinned to the head of its deployed fork
    branch, not main.
@@ -70,8 +79,8 @@ A roll is five steps that must land as ONE worldserver restart.
    - the mod-overseer submodule gitlink under `production/docker/azerothcore-playerbots/` (set it with
      `git update-index --cacheinfo 160000,<sha>,<path>`);
    - the `"dev"` fields of the matching entries in `.github/scripts/wow_promotion_drift.py`.
-   Check `git status --short` shows exactly those three paths. The banner (`overseer-pin.yaml`),
-   `deployed_dev` and the banner test literal move with the IMAGE in step 4, not here, so this PR restarts
+   Check `git status --short` shows exactly those three paths. The banner (`overseer-pin.yaml`)
+   and `deployed_dev` move with the IMAGE in step 4, not here, so this PR restarts
    nothing. Run the wow-dev tests, the promotion tests and `python3 .github/scripts/wow_promotion_drift.py`
    ("All four views agree"). Merge it. This merge starts the image build workflow
    (`build.azerothcore-playerbots.yml`).
@@ -80,6 +89,43 @@ A roll is five steps that must land as ONE worldserver restart.
    mod-overseer carries a patch under its `patches/` that infra does not apply, and names the file. A fast
    failure at that step means a missing patch port to infra's `patches/` tree, not a flake: port the patch, do
    not rerun.
+   The source locations and workflow are declared for the Loom station here:
+
+   ```loom-roll-pins
+   {
+     "deployment_repo": "infra",
+     "build_workflow": "build.azerothcore-playerbots.yml",
+     "sources": [
+       {
+         "repository": "mod-overseer",
+         "location": "production/docker/azerothcore-playerbots/UPSTREAM-PINS.env",
+         "keys": ["AC_OVERSEER_SHA"]
+       },
+       {
+         "repository": "mod-dungeon-clear",
+         "location": "production/docker/azerothcore-playerbots/UPSTREAM-PINS.env",
+         "keys": ["AC_DUNGEON_CLEAR_SHA"],
+         "revision_repo": "mod-dungeon-clear",
+         "revision_ref": "deployed fork branch"
+       },
+       {
+         "repository": "azerothcore",
+         "location": "production/docker/azerothcore-playerbots/UPSTREAM-PINS.env",
+         "keys": ["AC_CORE_SHA", "AC_MODULE_SHA", "AC_OLLAMA_CHAT_SHA"]
+       },
+       {
+         "repository": "mod-overseer",
+         "location": "production/docker/azerothcore-playerbots/ gitlink"
+       },
+       {
+         "repository": "mod-overseer",
+         "location": ".github/scripts/wow_promotion_drift.py",
+         "entry": "dev",
+         "dict_dev": true
+       }
+     ]
+   }
+   ```
 3. **Read both digests from the build run's push lines**, each under its own `The push refers to repository
    [ghcr.io/quadseven/<image>]` line: `ac-playerbots-worldserver` and `ac-playerbots-db-import`. A digest read
    from the wrong repository line is the classic mistake.
@@ -89,8 +135,8 @@ A roll is five steps that must land as ONE worldserver restart.
    text from the diff). Every string must be found. A build that lacks the symbol is a stale layer: do not pin.
 5. **Pin the pair** in a second infra PR: in `wow-dev/kustomization.yaml` set the worldserver AND db-import
    digests together (the worldserver comment block stays 3 lines), and move the banner
-   (`production/oke/manifests/wow-dev/overseer-pin.yaml`), `deployed_dev` in the drift entries and the banner
-   test literal in `wow-dev/tests/test_dev_world_isolation.py` to the new SHAs. Pinning one image without the
+   (`production/oke/manifests/wow-dev/overseer-pin.yaml`) and `deployed_dev` in the drift entries to the new
+   SHAs. Pinning one image without the
    other is a binary asking for a table its schema step never created; the drift check fails on it. Run the
    drift check again, open the PR in Chief format, then merge it as soon as the merge bar holds (section 2).
 6. Watch `kubectl -n wow-dev rollout status deploy/worldserver` and confirm the running image equals the new
@@ -102,6 +148,19 @@ Its channel and release files live in infra under `production/realm-roller/wow-d
 channel is PAUSED and its seed releases are stale (it needs a GitHub App, infra#5027, an operator step), so run
 the steps above by hand. `tools/realm_roller.py validate` and `dry-run` are read-only and safe to run: dry-run
 prints the gates it sees and what it would do. Turning the roller on is an operator decision.
+
+### 1c. Addon ship (the stream clients' in-game panels)
+
+`wow-addons/` is not in any image, so neither ship above carries it. Merging changes nothing on a stream.
+
+1. Copy each changed file from the merged main to the client container, into `base`, and into each streamed
+   character's folder under `/opt/wow/<Name>/Interface/AddOns/`. Those folders are hard links into `base`, so
+   overwrite an existing file in place (`cat new > old`), which keeps the links, and link a new one with `ln`.
+2. Restart each client: `systemctl restart wow-session@<Name>`. A file added to the `.toc` needs a restart
+   because a client reads the addon list when it launches. The character stays in the world and its stream
+   comes back with the session, in about two minutes. Nothing here touches a campaign.
+3. Prove it with a frame from the stream: `ffmpeg -rtsp_transport tcp -i rtsp://127.0.0.1:8554/dev<name>
+   -frames:v 1 out.jpg` inside the container, while the character does what the panel reports.
 
 ## 2. Before any ship
 
@@ -221,7 +280,7 @@ blocked, ghosts, stuck, deaths in 24 hours, next dungeon) before and after a rol
 - Class quests come first for every class (the mandatory quests), ahead of leveling throughput and raid prep.
 - The coupled pins move together: the five source pins (`AC_CORE_SHA`, `AC_MODULE_SHA`, `AC_OVERSEER_SHA`,
   `AC_DUNGEON_CLEAR_SHA`, `AC_OLLAMA_CHAT_SHA`; core, playerbots and ollama-chat move as a set), the
-  mod-overseer gitlink, the drift entries, the banner and its test literal; and the worldserver and db-import
+  mod-overseer gitlink, the drift entries and the banner; and the worldserver and db-import
   digests always come from one build and change in one PR.
 - Public repos: no hosts, addresses, node names, personal names or credentials. Cite the private repo bare
   (infra#N). Never write the bot handle with an at-sign; the bot is the `grug-tribe` app and its commands are

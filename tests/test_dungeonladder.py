@@ -355,12 +355,15 @@ class TheOperatorFirstAndOneJevCampaignAtATime(unittest.TestCase):
         ]
         line = campaignqueue.progress_line(rows, 50)
         self.assertEqual(
-            line, "Ragefire Chasm 50 of 50, then Blackfathom Deeps 30 (Jev's choice)"
+            line,
+            "Ragefire Chasm 50 of 50 done, then Blackfathom Deeps 30 (Jev's choice)",
         )
         view = campaignqueue.view(rows, 50, "Zug")
         self.assertEqual([e["by"] for e in view["entries"]], ["", "Jev's choice"])
         planned = dict(rows[1], source=campaignplan.SOURCE)
-        self.assertIn("(planned)", campaignqueue.progress_line([planned], None))
+        self.assertIn(
+            "(the planner's choice)", campaignqueue.progress_line([planned], None)
+        )
 
 
 class JevsReasonsOnThePage(unittest.TestCase):

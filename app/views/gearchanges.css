@@ -5,3 +5,9 @@
 .gc-row { display:grid; grid-template-columns:auto 1fr; gap:.35rem .75rem; margin:.5rem 0; }
 .gc-row time { grid-column:2; color:var(--color-neutral-400); font-size:.8rem; }
 .gc-label { color:var(--color-accent-300); font-size:.8rem; }
+.gc-row > .gc-diff { grid-column:2; font-size:.9rem; line-height:1.45; }
+.gc-row > .gc-diff::before { content:"Stat changes: "; color:var(--color-neutral-400); }
+@media (max-width: 520px) {
+  .gc-row { grid-template-columns:1fr; gap:.4rem; }
+  .gc-row time, .gc-row > .gc-diff { grid-column:1; }
+}

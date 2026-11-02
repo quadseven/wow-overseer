@@ -54,6 +54,7 @@ import json
 import re
 
 import achievements
+import campaignplan
 import council
 import dungeonpace
 import dungeonstall
@@ -62,8 +63,8 @@ import guildrun
 from apiv2 import _scope, members, quests
 
 STUCK_HOURS = 2.0
-MIN_RUNS = 8
-CLEAR_FLOOR = 0.30
+MIN_RUNS = campaignplan.POOR_CLEAR_RUNS
+CLEAR_FLOOR = campaignplan.POOR_CLEAR_RATE
 RUN_DAYS = 1
 RUNS_READ = 500
 REFUSAL_HOURS = 48
@@ -84,7 +85,12 @@ NON_ASCII = {
     "\u2014": "-",
 }
 
-STUCK_AREAS = {"class quest": "quests", "hold": "gear", "ghost": "deaths"}
+STUCK_AREAS = {
+    "class quest": "quests",
+    "hold": "gear",
+    "ghost": "deaths",
+    "death-loop": "deaths",
+}
 
 NOW_SQL = "SELECT UNIX_TIMESTAMP() AS now_at"
 # The team sync's guild invites (bridge TEAM_SYNC_SOURCE), with the module's

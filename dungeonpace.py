@@ -219,12 +219,21 @@ LAST_BACK_SQL = (
     "WHERE family = %s AND decision IN ('step_up', 'release') GROUP BY door"
 )
 RUNS_SQL = (
-    "SELECT id, map_id, outcome, started_at FROM overseer_dungeon_run "
+    "SELECT id, map_id, outcome, started_at, last_progress_at, ended_at, ended_reason "
+    "FROM overseer_dungeon_run "
     "WHERE state = 'ended' AND leader_name IN ({holes}) "
     "AND started_at >= NOW() - INTERVAL %s HOUR ORDER BY id"
 )
 QUEUE_STARTED_SQL = (
     "SELECT id, started_at FROM overseer_dungeon_queue WHERE id IN ({holes})"
+)
+# The newest worldserver start. `uptime.starttime` is unix seconds, while the
+# run rows come back as datetimes on the database's own clock (RUNS_SQL windows
+# them with NOW()), so the database's NOW() rides along and `world_start` turns
+# the start into that same clock without guessing a time zone in Python.
+WORLD_START_SQL = (
+    "SELECT MAX(starttime) AS started, UNIX_TIMESTAMP() AS now_unix, "
+    "NOW() AS now_at FROM acore_auth.uptime"
 )
 MAIN_HAND_SQL = (
     "SELECT c.name FROM character_inventory ci JOIN characters c "
@@ -333,7 +342,37 @@ def returned(started, back) -> bool:
     return started is None or started - back <= timedelta(hours=RETURN_HOURS)
 
 
-def viability(runs, map_id: int, since=None) -> Viability:
+def world_start(rows):
+    """The newest worldserver start from WORLD_START_SQL's row, as a datetime
+    on the run rows' clock, or None when the realm has no start to give."""
+    row = (rows or [{}])[0]
+    started, now_unix, now_at = (
+        row.get("started"),
+        row.get("now_unix"),
+        row.get("now_at"),
+    )
+    if started is None or now_unix is None or now_at is None:
+        return None
+    return now_at - timedelta(seconds=int(now_unix) - int(started))
+
+
+def _ended_by_restart(run: dict, world_started_at) -> bool:
+    """Whether a run begun before this worldserver start crossed its settle window."""
+    if world_started_at is None or run.get("started_at") is None:
+        return False
+    started = run["started_at"]
+    if started >= world_started_at:
+        return False
+    ended = run.get("ended_at")
+    if ended is None or ended < world_started_at:
+        return False
+    last_progress = run.get("last_progress_at")
+    crossed_restart = last_progress is not None and last_progress < world_started_at
+    settled_close = ended <= world_started_at + timedelta(seconds=600)
+    return crossed_restart or settled_close
+
+
+def viability(runs, map_id: int, since=None, world_started_at=None) -> Viability:
     """The door's record from ledger rows, oldest first.
 
     `since` drops rows that started before the queue entry did, compared as
@@ -344,6 +383,7 @@ def viability(runs, map_id: int, since=None) -> Viability:
         for r in runs or ()
         if int(r.get("map_id") or 0) == int(map_id)
         and str(r.get("outcome") or "") in FOUGHT
+        and not _ended_by_restart(r, world_started_at)
         and (since is None or r.get("started_at") is None or r["started_at"] >= since)
     ]
     streak = 0
@@ -357,6 +397,7 @@ def viability(runs, map_id: int, since=None) -> Viability:
         for r in runs or ()
         if int(r.get("map_id") or 0) == int(map_id)
         and str(r.get("outcome") or "") in ATTEMPTED
+        and not _ended_by_restart(r, world_started_at)
         and (since is None or r.get("started_at") is None or r["started_at"] >= since)
     ]
     uncleared_streak = 0

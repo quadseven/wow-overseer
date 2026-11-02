@@ -53,7 +53,7 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
         realm_at = self.server.index("    def _realm(")
         for later in (
             "def _map",
-            "def _family",
+            "def _family(",
             "def _armory",
             "def _thoughts",
             "def _agenda",

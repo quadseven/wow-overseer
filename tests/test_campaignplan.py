@@ -23,6 +23,7 @@ import dungeonpath  # noqa: E402
 import jev  # noqa: E402
 import jev_choices  # noqa: E402
 import jobs  # noqa: E402
+import priorities  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
@@ -225,6 +226,76 @@ class WhichOne(unittest.TestCase):
             keywords(opts)[:3], ["razorfen-kraul", "razorfen-downs", "zulfarrak"]
         )
         self.assertEqual(campaignplan.heuristic(opts).keyword, "razorfen-kraul")
+
+    def test_a_door_the_family_is_outgrowing_gives_way(self):
+        """Measured 2026-11-01: a family at 45 to 49 made about 2,100 xp a
+        member-hour in Razorfen Downs and about 6,300 in Uldaman. Uldaman is
+        across the sea from Kalimdor, so Zul'Farrak is the next door here."""
+        family = (
+            ("Grug", 49, 1),
+            ("Grog", 47, 3),
+            ("Bork", 46, 7),
+            ("Ugga", 46, 1),
+            ("Og", 45, 1),
+        )
+        opts = campaignplan.options(facts(family, KALIMDOR))
+        self.assertIn("razorfen-downs", keywords(opts))
+        pick = campaignplan.heuristic(opts)
+        self.assertEqual(pick.keyword, "zulfarrak")
+        self.assertIn("not already outgrowing", campaignplan.heuristic_why(pick))
+
+    ZUG = (
+        ("Zug", 47, 2),
+        ("Uzza", 46, 8),
+        ("Zrog", 46, 2),
+        ("Oz", 45, 8),
+        ("Zork", 45, 6),
+    )
+
+    def test_a_door_that_rarely_clears_does_not_win(self):
+        """Measured 2026-11-01: Zul'Farrak cleared 2 of 11 guild runs in a day
+        and neither family has ever cleared it."""
+        opts = campaignplan.options(
+            facts(self.ZUG, KALIMDOR, door_record={"zulfarrak": (2, 11)})
+        )
+        self.assertNotIn("zulfarrak", keywords(opts))
+        self.assertTrue(opts)
+
+    def test_a_sound_record_keeps_the_door(self):
+        opts = campaignplan.options(
+            facts(self.ZUG, KALIMDOR, door_record={"zulfarrak": (4, 11)})
+        )
+        self.assertIn("zulfarrak", keywords(opts))
+
+    def test_too_few_runs_say_nothing_about_a_door(self):
+        opts = campaignplan.options(
+            facts(self.ZUG, KALIMDOR, door_record={"zulfarrak": (0, 7)})
+        )
+        self.assertIn("zulfarrak", keywords(opts))
+
+    def test_a_family_that_has_cleared_the_door_keeps_it(self):
+        opts = campaignplan.options(
+            facts(
+                self.ZUG,
+                KALIMDOR,
+                done={"zulfarrak": 1},
+                door_record={"zulfarrak": (2, 11)},
+            )
+        )
+        self.assertIn("zulfarrak", keywords(opts))
+
+    def test_a_poor_door_stays_when_nothing_sound_is_left(self):
+        """The family still runs something: no door is better than a poor one
+        only when a sound one is there to take."""
+        record = {run.keyword: (0, 20) for run in campaignplan.RUNS}
+        opts = campaignplan.options(facts(self.ZUG, KALIMDOR, door_record=record))
+        self.assertTrue(opts)
+        self.assertTrue(all(o.poor for o in opts))
+
+    def test_a_door_well_inside_its_band_keeps_the_old_order(self):
+        family = (("Zug", 41, 2), ("Oz", 40, 8), ("Uzza", 40, 8))
+        opts = campaignplan.options(facts(family, KALIMDOR))
+        self.assertEqual(campaignplan.heuristic(opts).keyword, "razorfen-downs")
 
     def test_at_the_cap_the_least_run_first(self):
         opts = campaignplan.options(
@@ -439,6 +510,7 @@ class TheBridgePass(unittest.TestCase):
                 "_planner_dry": lambda names: None,
                 "_finish_planned": lambda finish: 0,
                 "dataclasses": __import__("dataclasses"),
+                "priorities": priorities,
             },
         )
         fake = FakeJev(
@@ -448,6 +520,12 @@ class TheBridgePass(unittest.TestCase):
             _jev=jev.Client(key, transport=fake), _planner_said={}
         )
         me._plan_campaign = types.MethodType(ns["_plan_campaign"], me)
+
+        async def default_priorities():
+            return priorities.DEFAULT_ORDER
+
+        # The family's priorities (#1559): never set on this realm.
+        me._priority_order = default_priorities
 
         async def no_situation(*_args):
             return None

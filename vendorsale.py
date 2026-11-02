@@ -61,6 +61,10 @@ THE RULE (`verdict`), the first line that applies:
 NATURAL ONLY. The member sells its own loot to the world's vendor for the
 world's price.
 
+EVERY SALE IS SAID (#1592). A sell row the world delivered is logged on its own
+line, naming the member, the item and what the counter paid (`sale_line`), so a
+read of the bridge log answers what left a member's bags and for how much.
+
 PURE MODULE: items and facts in, a verdict out. No MySQL, no clock.
 """
 
@@ -203,3 +207,45 @@ def sells(item, judge: Judge) -> bool:
 def worth(items) -> int:
     """Copper the stacks bring at the counter."""
     return sum(_int(i.sell_price) * max(1, _int(i.count, 1)) for i in items or ())
+
+
+@dataclass(frozen=True)
+class Sale:
+    """One sell row as the log names it: the row's command, and the stack."""
+
+    command: str
+    name: str
+    count: int
+    copper: int
+
+
+def sale_of(command, item) -> Sale:
+    """The Sale a sell row `command` for carried stack `item` makes."""
+    count = max(1, _int(getattr(item, "count", 1), 1))
+    name = str(getattr(item, "name", "") or "") or "item %d" % _int(
+        getattr(item, "entry", 0)
+    )
+    return Sale(str(command), name, count, _int(item.sell_price) * count)
+
+
+def money(copper) -> str:
+    """`1g 2s 3c`, `13c`: copper as the log says it."""
+    copper = max(0, _int(copper))
+    gold, rest = divmod(copper, 10_000)
+    silver, cop = divmod(rest, 100)
+    parts = ["%dg" % gold] if gold else []
+    if silver:
+        parts.append("%ds" % silver)
+    if cop or not parts:
+        parts.append("%dc" % cop)
+    return " ".join(parts)
+
+
+def sale_line(holder, sale: Sale) -> str:
+    """`Bonk sold Wolf Belt x1 for 2s 30c`: one delivered sale."""
+    return "%s sold %s x%d for %s" % (holder, sale.name, sale.count, money(sale.copper))
+
+
+def sale_for(sales, command):
+    """The Sale in `sales` whose row command is `command`, None without one."""
+    return next((s for s in sales or () if s.command == str(command)), None)

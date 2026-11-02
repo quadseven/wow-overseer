@@ -77,7 +77,21 @@ def _outcome_source() -> str:
     """Everything from the outcome banner to the end of DeliverPendingCommands."""
     src = _source()
     start = src.index(BANNER)
-    end = src.index("    // Speak as the character would.")
+    # The span used to end at the next comment banner. The module has grown
+    # other command handlers (DoLockbox and the rest) between the verifier and
+    # that banner, so the span now ends where the docstring says it does: the
+    # end of DeliverPendingCommands, braces balanced.
+    deliver = src.index("void DeliverPendingCommands(", start)
+    depth = 0
+    end = 0
+    for i in range(src.index("{", deliver), len(src)):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
     assert end > start
     return src[start:end]
 
@@ -210,8 +224,27 @@ class TheThrottleIsNotWhatChanged(unittest.TestCase):
 
     def test_the_per_verb_hold_still_leaves_the_row_pending(self):
         code = _code(_outcome_source())
-        self.assertIn('spoken.insert(targetName + "\\n" + verb)', code)
-        self.assertIn("continue;", code)
+        # The per-verb bookkeeping moved into
+        # OverseerDecisions::HoldForSharedTrigger, which records the
+        # `targetName \n verb` key itself; the loop still leaves the held row
+        # pending (no claim, no failure) and moves on.
+        self.assertIn(
+            "OverseerDecisions::HoldForSharedTrigger(spoken, kind, targetName, command)",
+            code,
+        )
+        held = code[code.index("HoldForSharedTrigger(spoken") :]
+        held = held[: held.index("continue;") + len("continue;")]
+        self.assertIn("++held;", held)
+        # Held, not claimed and not failed: the only write is the touch that
+        # sends it behind runnable rows, and it only matches a pending row.
+        self.assertIn("AND status = 'pending'", held)
+        self.assertNotIn("claimed_by", held)
+        self.assertNotIn("SET status", held)
+        decisions = modsource.read(modsource.DECISIONS, encoding="utf-8")
+        self.assertIn(
+            "std::string const key = targetName + \"\\n\" + command.substr(0, command.find(' '));",
+            decisions,
+        )
 
     def test_the_poll_interval_is_untouched(self):
         self.assertIn("constexpr uint32 COMMAND_POLL_MS = 2000;", _source())

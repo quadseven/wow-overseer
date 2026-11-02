@@ -5,6 +5,7 @@ read statements and the shaped payload are both checked without a database.
 """
 
 import pathlib
+import sqlite3
 import sys
 import types
 import unittest
@@ -91,10 +92,39 @@ def _base_answers(guild="Cave"):
         roster.ASKS_SQL: [],
         goal.QUEST_ASKS_SQL: [],
         goal.DEATHS_SQL: [],
+        goal.DEATH_TOTAL_SQL: [{"total": 0}],
         presence._SNAP_SQL: [],
         presence._FLAGS_SQL: [],
         guildrun._RUN_SQL: [],
     }
+
+
+class _DeathReader(realmread.Memory):
+    """Execute the production death queries over synthetic in-memory rows."""
+
+    def __init__(self, guild, events):
+        super().__init__(_base_answers(guild))
+        self.db = sqlite3.connect(":memory:")
+        self.db.row_factory = sqlite3.Row
+        self.db.execute(
+            "CREATE TABLE overseer_death (character_name TEXT, map INTEGER, "
+            "zone INTEGER, killer_name TEXT, created_at INTEGER)"
+        )
+        self.db.executemany("INSERT INTO overseer_death VALUES (?, ?, ?, ?, ?)", events)
+        self.death_reads = []
+
+    def _run(self, sql, params):
+        if "FROM overseer_death" not in sql:
+            return super()._run(sql, params)
+        self.death_reads.append((sql, params))
+        # SQLite keeps the fixture clock as integer seconds. Leave all scope,
+        # grouping, ordering, aggregate and limit clauses untouched.
+        statement = sql.replace("NOW() - INTERVAL 1 DAY", str(NOW - DAY))
+        statement = statement.replace("%s", "?")
+        return [dict(row) for row in self.db.execute(statement, params)]
+
+    def close(self):
+        self.db.close()
 
 
 class TheRoute(unittest.TestCase):
@@ -287,6 +317,48 @@ class TheGoal(unittest.TestCase):
         self.assertEqual(body["runs"]["timed_out"], 1)
         self.assertEqual(body["runs"]["clears_per_attempt"], 0.25)
 
+    def test_death_total_covers_groups_beyond_the_five_displayed(self):
+        name = _seat_names("Cave")[0]
+        outsider = _seat_names("Bonkers")[0]
+        events = [
+            (name, 0, 40, "Killer %d" % group, NOW - 60)
+            for group, count in enumerate((9, 8, 7, 6, 5, 4))
+            for _ in range(count)
+        ]
+        events += [(name, 0, 40, "Old killer", NOW - DAY - 1)] * 80
+        events += [(outsider, 0, 40, "Other guild", NOW - 60)] * 80
+        for guild, expected in (("Cave", 39), ("Bonkers", 80)):
+            with self.subTest(guild=guild):
+                rd = _DeathReader(guild, events)
+                self.addCleanup(rd.close)
+                body = goal.build(rd, guild)["deaths_24h"]
+                self.assertTrue(rd.death_reads)
+                self.assertEqual(body["total"], expected)
+                counts = [row["n"] for row in body["repeated"]]
+                self.assertLessEqual(len(counts), 5)
+                self.assertEqual(counts, sorted(counts, reverse=True))
+                if guild == "Cave":
+                    self.assertEqual(counts, [9, 8, 7, 6, 5])
+
+    def test_death_window_includes_its_boundary_and_excludes_older_rows(self):
+        name = _seat_names("Cave")[0]
+        rd = _DeathReader(
+            "Cave",
+            [
+                (name, 0, 40, "Killer", NOW - DAY),
+                (name, 0, 40, "Killer", NOW - DAY - 1),
+            ],
+        )
+        self.addCleanup(rd.close)
+        self.assertEqual(goal.build(rd, "Cave")["deaths_24h"]["total"], 1)
+
+    def test_no_deaths_answers_zero_with_no_repeated_groups(self):
+        rd = _DeathReader("Cave", [])
+        self.addCleanup(rd.close)
+        self.assertEqual(
+            goal.build(rd, "Cave")["deaths_24h"], {"total": 0, "repeated": []}
+        )
+
     def test_repeated_deaths_are_grouped_by_member_spot_and_killer(self):
         answers = _base_answers("Cave")
         answers[goal.DEATHS_SQL] = [
@@ -294,6 +366,7 @@ class TheGoal(unittest.TestCase):
             {"name": "Bonk", "map": 0, "zone": 40, "killer": "Defias Pillager", "n": 2},
             {"name": "Grug", "map": 36, "zone": 1581, "killer": "Rhahk'Zor", "n": 1},
         ]
+        answers[goal.DEATH_TOTAL_SQL] = [{"total": 6}]
         body = goal.build(Ctx(answers).read, "Cave")
         self.assertEqual(body["deaths_24h"]["total"], 6)
         repeated = body["deaths_24h"]["repeated"]
@@ -308,6 +381,7 @@ class TheGoal(unittest.TestCase):
     def test_a_missing_table_answers_zeros_with_a_note(self):
         answers = _base_answers("Cave")
         answers[goal.DEATHS_SQL] = realmread.MISSING_TABLE
+        answers[goal.DEATH_TOTAL_SQL] = realmread.MISSING_TABLE
         body = goal.build(Ctx(answers).read, "Cave")
         self.assertEqual(body["deaths_24h"]["total"], 0)
         self.assertEqual(body["deaths_24h"]["repeated"], [])

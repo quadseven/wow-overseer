@@ -20,6 +20,7 @@ EVENTS = [
         "member_name": "Durga",
         "guild": "Bonkers",
         "kind": "item_equip",
+        "entry": 101,
         "item": "Worn Boots",
         "quality": 1,
         "item_level": 5,
@@ -30,6 +31,7 @@ EVENTS = [
         "member_name": "Velo",
         "guild": "Bonkers",
         "kind": "item_equip",
+        "entry": 102,
         "item": "Wool Gloves",
         "quality": 1,
         "item_level": 4,
@@ -40,10 +42,12 @@ EVENTS = [
         "member_name": "Mirra",
         "guild": "Cave",
         "kind": "item_equip",
+        "entry": 103,
         "item": "Brightwood Staff",
         "quality": 3,
         "item_level": 30,
         "prior_state": "item",
+        "prior_entry": 99,
         "prior_item": "Oak Staff",
         "prior_quality": 2,
         "prior_item_level": 20,
@@ -53,6 +57,7 @@ EVENTS = [
         "member_name": "Tharn",
         "guild": "Cave",
         "kind": "item_loot",
+        "entry": 104,
         "item": "Ashwood Bow",
         "quality": 2,
         "item_level": 8,
@@ -77,6 +82,8 @@ class TestGearChanges(unittest.TestCase):
         )
         self.assertEqual(body["changes"][2]["replaced"], "Oak Staff")
         self.assertEqual(body["changes"][2]["item_level_change"], 10)
+        self.assertEqual(body["changes"][2]["entry"], 103)
+        self.assertEqual(body["changes"][2]["prior_entry"], 99)
         self.assertEqual(body["changes"][1]["replaced"], "was empty")
         self.assertEqual(body["changes"][0]["replaced"], "not recorded")
 
