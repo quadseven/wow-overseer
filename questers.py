@@ -57,8 +57,10 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
     STALL_SECONDS of play while the quester was working it (`Clock`). Play is
     time online and alive between two looks, at most PLAY_GAP_SECONDS each, so
     a bridge restart or a night offline is not play. A quest is being worked
-    while it is in the quester's log and of the zone it stands in, or is the
-    quest its last move was for;
+    while it is the quest the quester's last move was for, or while it is in
+    its log, of the zone it stands in, and has no objective spawn the quester
+    could hunt (`_working`): nothing works that one, so its clock is the
+    world's, not the quester's;
   * GIVER_MISSING: a creature is named as its giver, none is spawned, and
     no gameobject or item starts it either;
   * ENDER_MISSING: nothing is named to hand it in to, or the creature named is
@@ -909,17 +911,44 @@ def in_reach(cat: Catalogue, member, zone, broken=frozenset()) -> list:
     ]
 
 
-def _working(cat: Catalogue, member, last_quest=0) -> set:
-    """The quests the quester is working now: those in its log of the zone it
-    stands in, and the quest its last move was for."""
+def _working(cat: Catalogue, member, last_quest=0, left=frozenset()) -> set:
+    """The quests whose stall clock runs now: the quest the quester's last move
+    was for, and each quest of its log of the zone it stands in that it has
+    no objective spawn to hunt (`_unhuntable`).
+
+    A QUEST WAITING ITS TURN WAS DROPPED AS STALLED (2026-11-02). A quester
+    takes every quest in reach first and then hunts them one at a time, the
+    nearest spawn first (`next_move`). The clock ran for every quest of the
+    zone, so while it hunted one, each of the others reached two hours of play
+    with nothing moved, was dropped and was filed as broken: Westfall Stew,
+    Bounty on Murlocs, Red Linen Goods, The Night Watch, Kobold Candles and
+    a dozen more in one day, each one a quest no quester had yet gone after.
+    A quest it could hunt waits its turn; one it cannot hunt has nothing to
+    wait for, so its clock still runs and a quest nobody can work still
+    stalls (STALLED_UNSOURCED)."""
     out = {
         qid
         for qid in member.quest_log
-        if (cat.facts.get(qid) is not None and cat.facts[qid].zone == member.zone)
+        if (
+            cat.facts.get(qid) is not None
+            and cat.facts[qid].zone == member.zone
+            and _unhuntable(cat, member, qid, left)
+        )
     }
     if last_quest and int(last_quest) in member.quest_log:
         out.add(int(last_quest))
     return out
+
+
+def _unhuntable(cat: Catalogue, member, qid, left=frozenset()) -> bool:
+    """True when the quester has no objective spawn of this quest to hunt
+    (`_hunt`'s own choice: a solo field within its level, on its map, not one
+    it leaves for now)."""
+    quest = cat.quest(qid)
+    if quest is None:
+        return True
+    fields = classquest.within_level(member, classquest.solo_fields(quest))
+    return _nearest(member, fields, left) is None
 
 
 def _fields_gone(quest, gone) -> bool:
@@ -958,7 +987,7 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
     object_gone = gone_spawns(member.name, tried, OBJECT_KIND)
     refused = refusals(member.name, tried)
     final = cannot_turn_in(member.name, tried)
-    working = _working(cat, member, last_quest)
+    working = _working(cat, member, last_quest, left_spawns(member.name, tried))
     playing = bool(member.online and member.alive)
     out = []
     for qid in sorted(member.quest_log):
