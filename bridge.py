@@ -19886,13 +19886,28 @@ class Bridge(discord.Client):
         one: pulling the leader out is how the party spreads.
         """
         smelters = await asyncio.to_thread(_forge_errands, _cohort_key(cohort))
+        focus = travel.FORGE_FOCUS_ID
+        town_stop = not smelters
+        if town_stop:
+            # A FAMILY ON A TOWN RUN (#1786): its crafts are written too, and
+            # nothing else stands it at their station. The town slot decides
+            # when; a station outside the town is deferred below.
+            smelters, focus = await self._town_stop_demand(cohort)
         if not smelters:
             return
         names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names or await self._mid_run(names):
             return
         where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
-        spawn = await asyncio.to_thread(_nearest_forge, leader)
+        spawn = await asyncio.to_thread(_nearest_forge, leader, focus)
+        if town_stop and spawn and not travel.station_in_town(spawn):
+            log.info(
+                "forge: %s wait for a town stop with a %s: the nearest is past "
+                "%d yards of leader=%s",
+                ", ".join(sorted(smelters)), craft.STATIONS[focus].name,
+                travel.TOWN_STATION_YARDS, leader,
+            )
+            return
         forge = travel.forge_aim(spawn, where.get("map_id") if where else None)
         if not forge.aim:
             # THE FAILURE IS LEGIBLE HERE BECAUSE IT CANNOT BE LEGIBLE THERE.
@@ -19947,6 +19962,29 @@ class Bridge(discord.Client):
             leader, forge.aim, forge.radius, ", ".join(sorted(smelters)),
             ", ".join("%s=%d" % pair for pair in sorted(smelters.items())),
         )
+
+    async def _town_stop_demand(self, cohort=None) -> tuple:
+        """(name -> craft_spell, focus) of the town stop's craft worth a walk.
+
+        One station a pass, forge first: the crafts of the other wait for the
+        next pass or the next stop, and the module defers them with a reason.
+        """
+        standing = await asyncio.to_thread(_town_stop_errands, _cohort_key(cohort))
+        wanted = sorted(
+            (name, reagent.entry)
+            for name, spell in standing.items()
+            for reagent in craft_rhythm.GATHERED.get(spell, ())
+        )
+        counts = await asyncio.to_thread(_fetch_item_counts, wanted) if wanted else {}
+        held_by: dict = {}
+        for (name, entry), count in counts.items():
+            held_by.setdefault(name, {})[entry] = count
+        ready = craft_rhythm.town_stop_crafts(standing, held_by)
+        for focus in craft.TOWN_STOP_FOCI:
+            crafters = {n: s for n, s in ready.items() if craft.focus_for(s) == focus}
+            if crafters:
+                return crafters, focus
+        return {}, 0
 
     async def _forge_loop(self) -> None:
         """Keep a smelter standing at a forge (infra#3748).
@@ -33483,8 +33521,10 @@ _FORGE_SQL = (
 )
 
 
-def _nearest_forge(name: str):
+def _nearest_forge(name: str, focus: int = travel.FORGE_FOCUS_ID):
     """The nearest usable Forge spawn row on `name`'s own map, or None.
+
+    `focus` asks for another world station by its `SpellFocusObject` id.
 
     A ROW OUT OF THE SPAWN TABLE, NOT A COORDINATE THIS PROCESS INVENTED - the
     identical guarantee `_nearest_vault` gives, against the identical tables.
@@ -33502,7 +33542,7 @@ def _nearest_forge(name: str):
             cur.execute(_FORGE_SQL, (
                 name,
                 travel.SPELL_FOCUS_GO_TYPE,
-                travel.FORGE_FOCUS_ID,
+                int(focus),
                 travel.ARRIVED_POSITION_YARDS,
             ))
         except pymysql.err.MySQLError as exc:
@@ -33579,6 +33619,29 @@ def _forge_errands(family: str | None = None) -> dict:
         return {row["name"]: int(row["craft_spell"] or 0)
                 for row in cur.fetchall()
                 if craft.focus_for(row["craft_spell"]) == travel.FORGE_FOCUS_ID}
+
+
+def _town_stop_errands(family: str | None = None) -> dict:
+    """name -> craft_spell, for every family member on 'town run' (#1786).
+
+    `_forge_errands`' own scope, on the job a family holds in town. Its filter
+    is the demand: nobody here is walked until `town_stop_crafts` says so.
+    """
+    cohort = family or _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT name, craft_spell FROM overseer_roster "  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+                "WHERE enabled = 1 AND job = %s AND craft_spell > 0" + scope,
+                ("town run", *scope_args),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return {}
+            raise
+        return {row["name"]: int(row["craft_spell"]) for row in cur.fetchall()}
 
 
 def _current_travel_npc(name: str) -> str:
