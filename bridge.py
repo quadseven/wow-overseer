@@ -16117,7 +16117,7 @@ class Bridge(discord.Client):
             return
         names = sorted(raidteams.quester_names())
         members, tried, ledger, hunts_open, crossings = await asyncio.to_thread(
-            _fetch_quester_facts, names)
+            _fetch_quester_facts, names, cat)
         if not members:
             log.info("questers: no quester is on the realm yet")
             return
@@ -16131,8 +16131,23 @@ class Bridge(discord.Client):
         hunts_left = max(0, QUESTER_HUNTS - min(int(hunts_open or 0), QUESTER_HUNTS))
         for m in members:
             held = self._quester_broken.setdefault(m.name, {})
-            known = frozenset(held) | frozenset(
-                q for (who, q), state in ledger.items() if who == m.name and state == "broken")
+            retryable = set()
+            for qid, reason in list(held.items()):
+                state = ledger.get((m.name, qid))
+                quest = cat.quest(qid)
+                if reason == questers.STALLED and quest is not None and quest.items:
+                    if state in (questledger.BROKEN, None):
+                        retryable.add(qid)
+                    else:
+                        held.pop(qid, None)
+            known = (
+                frozenset(held)
+                | frozenset(
+                    q
+                    for (who, q), state in ledger.items()
+                    if who == m.name and state == questledger.BROKEN
+                )
+            ) - retryable
             plan = questers.plan(cat, m, self._quester_clock, now, known, tried,
                                  self._quester_last.get(m.name, 0), crossings)
             await self._quester_ledger(m, plan, held, ledger, mono)
@@ -34099,7 +34114,7 @@ def _quester_catalogue():
     return _QUESTER_CATALOGUE
 
 
-def _fetch_quester_facts(names: list) -> tuple:
+def _fetch_quester_facts(names: list, cat=None) -> tuple:
     """(questers.Member rows, questers.Attempt rows, ledger state by (name,
     quest), the realm's open hunt rows or None, guildjobs.Recent crossing rows)
     for the questers on the realm. A ledger the realm does not have yet (#923)
@@ -34115,6 +34130,25 @@ def _fetch_quester_facts(names: list) -> tuple:
         log_rows = _job_read(cur, "quester quest logs", questers.LOG_SQL.format(guids=guids))
         done_rows = _job_read(cur, "quester rewarded quests",
                               questers.REWARDED_SQL.format(guids=guids))
+        item_ids = sorted(
+            {
+                item
+                for quest in (cat.book.quests.values() if cat else ())
+                for item, _count in quest.items
+            }
+        )
+        item_rows = (
+            _job_read(
+                cur,
+                "quester carried quest items",
+                questers.ITEMS_SQL.format(
+                    names=marks, items=",".join(map(str, item_ids))
+                ),
+                list(names),
+            )
+            if item_ids
+            else []
+        )
         recent = _job_read(cur, "quester rows", _JOB_RECENT_SQL, (QUESTER_SOURCE_LIKE,))
         crossings = _job_read(cur, "quester crossings", _JOB_RECENT_SQL,
                               (QUESTER_CROSSINGS_LIKE,))
@@ -34122,6 +34156,14 @@ def _fetch_quester_facts(names: list) -> tuple:
                            list(names))
         hunts = _hunts_open(cur)
     members = questers.members_from_rows(rows, log_rows, done_rows)
+    carried = {}
+    for row in item_rows:
+        carried.setdefault(str(row["name"]), {})[int(row["item"])] = int(
+            row["count"] or 0
+        )
+    members = [
+        dataclasses.replace(m, carried_items=carried.get(m.name, {})) for m in members
+    ]
     states = {(str(r["name"]), int(r["quest"])): str(r.get("state") or "") for r in ledger}
     return (members, questers.attempts(recent), states, hunts,
             guildjobs.recent_from_rows(crossings))

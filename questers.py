@@ -298,6 +298,16 @@ LOG_SQL = (
 REWARDED_SQL = (
     "SELECT guid, quest FROM character_queststatus_rewarded WHERE guid IN ({guids})"
 )
+ITEMS_SQL = (
+    "SELECT c.name, ii.itemEntry AS item, SUM(ii.count) AS count "
+    "FROM characters c JOIN character_inventory ci ON ci.guid = c.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE c.name IN ({names}) AND ii.itemEntry IN ({items}) "
+    "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "GROUP BY c.name, ii.itemEntry"
+)
 # The quest ledger (questledger.py, #923): what is recorded of each quester's
 # quests, and a broken quest written into it. A quest already in the ledger
 # keeps the time it was first taken.
@@ -561,6 +571,8 @@ class Member:
     quests_done: frozenset = frozenset()
     # quest id -> the sum of its objective counters
     quest_progress: dict = field(default_factory=dict)
+    # Carried quest items (item entry -> count), read from the bags.
+    carried_items: dict = field(default_factory=dict)
 
     @property
     def zone(self) -> int:
@@ -1339,9 +1351,8 @@ def _hunt(cat: Catalogue, member, skip, left):
     an incomplete quest it holds, or None."""
     hunts = []
     for qid, quest in _held(cat, member, STATUS_INCOMPLETE, skip):
-        spot = _nearest(
-            member, classquest.within_level(member, classquest.solo_fields(quest)), left
-        )
+        fields = _fields_still_needed(quest, member)
+        spot = _nearest(member, classquest.within_level(member, fields), left)
         if spot is not None:
             hunts.append((_yards(member, spot), qid, quest, spot))
     if not hunts:
@@ -1353,6 +1364,21 @@ def _hunt(cat: Catalogue, member, skip, left):
         spot.name or "its objective",
     )
     return _move(classquest.HUNT, member, quest, spot, said)
+
+
+def _fields_still_needed(quest, member):
+    """Skip item droppers whose quest items the member already carries."""
+    fields = classquest.solo_fields(quest)
+    if not quest.items:
+        return fields
+    needed = {
+        item
+        for item, count in quest.items
+        if int(member.carried_items.get(item, 0)) < count
+    }
+    entries = {entry for item, entry in quest.drops if item in needed}
+    entries.update(entry for entry, _count in quest.kills)
+    return tuple(spot for spot in fields if spot.entry in entries)
 
 
 # The module's verb for each move that is one quest row.
@@ -1379,7 +1405,12 @@ def step_for(member, move, cap, quest=None, hunt=True, item_form=True):
     walk = _walk_row(member, move, cap)
     if move.kind == classquest.HUNT:
         row = (
-            classhunt.command(quest, move.spot.entry, None, item_form)
+            classhunt.command(
+                quest,
+                move.spot.entry,
+                lambda item: member.carried_items.get(int(item), 0),
+                item_form,
+            )
             if (hunt and quest is not None)
             else ""
         )

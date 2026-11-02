@@ -87,6 +87,7 @@ def world(
     extra_starts=(),
     extra_ends=(),
     extra_spawns=(),
+    extra_loot=(),
     drop=(),
 ):
     """Northshire (sorted under its area, 9), Goldshire in Elwynn (12), two
@@ -138,7 +139,7 @@ def world(
     # The spawned givers and enders catalogue() reads: `drop` takes the spawn
     # out of these while `starts` and `ends` still name it.
     givers = [g for g in givers if g["guid"] not in drop]
-    return questers.catalogue(quests, givers, spawns, [], starts, ends)
+    return questers.catalogue(quests, givers, spawns, list(extra_loot), starts, ends)
 
 
 def mirra(**kw):
@@ -727,6 +728,36 @@ class AFailedCrossingPassesTheZoneOver(unittest.TestCase):
     def test_a_crossing_refused_for_good_passes_the_zone_over_too(self):
         p = self.plan(crossing_row(NO_TRANSPORT, False, age=60))
         self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 60))
+
+
+class ItemQuestHunts(unittest.TestCase):
+    def test_a_multi_item_quest_hunts_an_objective_still_needed(self):
+        stew = quest(38, WESTFALL, 13, title="Westfall Stew")
+        stew.update(item1=501, item_count1=3, item2=502, item_count2=3)
+        cat = world(
+            extra_quests=[stew],
+            extra_givers=[
+                giver(38, "start", 1038, 138, 3000, 0),
+                giver(38, "end", 1038, 138, 3000, 0),
+            ],
+            extra_starts=[started(38, 138)],
+            extra_ends=[ended(38, 138)],
+            extra_spawns=[spawn(2038, 238, 100, 0), spawn(2039, 239, 200, 0)],
+            extra_loot=[{"item": 501, "entry": 238}, {"item": 502, "entry": 239}],
+        )
+        member = mirra(
+            level=13,
+            zone_id=WESTFALL,
+            quest_log={38: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({20, 21}),
+            carried_items={501: 3},
+            x=100.0,
+        )
+        plan = questers.plan(cat, member, questers.Clock(), 0.0)
+        step = questers.step_for(member, plan.move, 0, cat.quest(38))
+        self.assertEqual(plan.move.quest, 38)
+        self.assertIn("creature:239", step.rows[0].command)
+        self.assertIn("item:502 count:3", step.rows[0].command)
 
 
 class Steps(unittest.TestCase):

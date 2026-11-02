@@ -67,7 +67,7 @@ class Pass:
         self.started.append(step)
         self.self._job_steps.pop(step.holder, None)
 
-    def _facts(self, names):
+    def _facts(self, names, cat=None):
         self.asked.append(list(names))
         return self.members, (), self.ledger, self.hunts_open, self.crossings
 
@@ -89,6 +89,31 @@ class Pass:
 
 
 class TheQuesterPass(unittest.TestCase):
+    def test_a_stalled_item_quest_is_retried_after_its_hunt_is_fixed(self):
+        stew = quest(38, 40, 13, title="Westfall Stew")
+        stew.update(item1=501, item_count1=3, item2=502, item_count2=3)
+        cat = world(
+            extra_quests=[stew],
+            extra_givers=[
+                giver(38, "start", 1038, 138, 3000, 0),
+                giver(38, "end", 1038, 138, 3000, 0),
+            ],
+            extra_starts=[started(38, 138)],
+            extra_ends=[ended(38, 138)],
+            extra_spawns=[spawn(2038, 238, 100, 0), spawn(2039, 239, 200, 0)],
+            extra_loot=[{"item": 501, "entry": 238}, {"item": 502, "entry": 239}],
+        )
+        member = quester(level=13, zone_id=40, quests_done=frozenset({20, 21}))
+        run = Pass([member], ledger={("Mirra", 38): "broken"}, cat=cat)
+        run.self._quester_clock = questers.Clock()
+        run.self._quester_broken = {"Mirra": {38: questers.STALLED}}
+        run.self._quester_last = {}
+        run.self._quester_unledgered = 0.0
+        run.run()
+        self.assertEqual(
+            [row.command for row in run.started[0].rows], ["take quest:38"]
+        )
+
     def test_it_reads_the_questers_and_nobody_else(self):
         run = Pass([quester()]).run()
         self.assertEqual(run.asked, [sorted(raidteams.quester_names())])
