@@ -36,10 +36,10 @@ class TheFamilyTab(unittest.TestCase):
         A request cannot name a character, which is what this has always been
         about.
         """
-        handler = self.server[self.server.index("def _family") :]
+        handler = self.server[self.server.index("def _family(") :]
         handler = handler[: handler.index("def _thoughts")]
         # the roster reaching the query comes from the lookup, not the request
-        self.assertIn("self._family_scope(query)", handler)
+        self.assertIn("= _family_scope(query)", handler)
         # Every reader here is handed `names`, the list that lookup produced.
         # Matched as a call ARGUMENT rather than as one exact line, because
         # pinning the whole spelling makes this fail on any rewording of the
@@ -59,7 +59,7 @@ class TheFamilyTab(unittest.TestCase):
         self.assertNotIn("build_family(query", handler)
 
         lookup = self.server[self.server.index("def _family_scope") :]
-        lookup = lookup[: lookup.index("def _chat_post")]
+        lookup = lookup[: lookup.index("class Handler(")]
         # the only thing taken from the request is the family key, and an
         # unrecognised key falls back rather than reaching SQL
         self.assertIn('which = query.get("family", [""])[0]', lookup)
@@ -106,14 +106,14 @@ class TheQuestBoard(unittest.TestCase):
         Horde tab was handed the Alliance board. The names reaching the reader
         are the ones _family_scope looked up, and the key is its only input."""
         handler = self.server[self.server.index("def _questlog") :]
-        handler = handler[: handler.index("def _family_scope")]
-        self.assertIn("self._family_scope(query)", handler)
+        handler = handler[: handler.index("def _chat_post")]
+        self.assertIn("= _family_scope(query)", handler)
         self.assertIn(
             "questlog.build_questlog(**_fetch_questlog(names), roster=names)", handler
         )
         self.assertNotIn("query.get", handler)
         scope = self.server[self.server.index("def _family_scope") :]
-        scope = scope[: scope.index("def _chat_post")]
+        scope = scope[: scope.index("class Handler(")]
         self.assertIn('which = query.get("family", [""])[0]', scope)
         self.assertIn("rosters = FAMILIES.families()", scope)
         self.assertNotIn('query.get("name', scope)
@@ -171,10 +171,10 @@ class TheNeedsTheHandoversAndTheBonds(unittest.TestCase):
         and nothing else. Without it the Horde tab drew the Alliance's bags."""
         handler = self.server[self.server.index("def _needs") :]
         handler = handler[: handler.index("def _agenda")]
-        self.assertIn("self._family_scope(query)", handler)
+        self.assertIn("= _family_scope(query)", handler)
         self.assertIn("needs.build_needs(**_fetch_needs(names), roster=names)", handler)
         self.assertNotIn("query.get", handler)
-        self.assertIn("self._send(503", handler)
+        self.assertIn('@_get_route("needs query failed")\n    def _needs(', self.server)
 
     def test_the_handler_sits_outside_every_other_suites_window(self):
         """The Armory suite reads `def _armory` to `def _thoughts` as its own

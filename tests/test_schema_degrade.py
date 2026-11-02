@@ -175,7 +175,25 @@ class EachLateColumnIsReadOnceAndGuardedOnItsOwn(unittest.TestCase):
     so no 1054 test is needed anywhere."""
 
     def test_the_travel_column_is_selected_in_exactly_one_place(self):
-        self.assertEqual(1, _selects("travel_npc"))
+        """Was one loader. It is four single-purpose reads now (the book's
+        Load, the one-row CurrentTravelNpc and LeaderTravelAim, and the
+        leftover-aim sweep), so the rule is held as what it was for: no read
+        may be the quest drive's main query (tested above), and every one of
+        them must give the "no errand" answer on a null result, which is what
+        an older schema without the column produces."""
+        code = _code(_source())
+        reads = [
+            m
+            for m in re.finditer(r'"SELECT[^;]*?"\s*[,)]', code, re.S)
+            if "travel_npc" in m.group(0)
+        ]
+        self.assertEqual(4, len(reads))
+        for read in reads:
+            after = code[read.end() : read.end() + 400]
+            self.assertTrue(
+                "if (!result)" in after or "result ?" in after,
+                "a travel_npc read with no null-result answer: %s" % read.group(0)[:80],
+            )
 
     def test_the_aim_column_is_selected_in_exactly_one_place(self):
         self.assertEqual(1, _selects("drive_quest"))

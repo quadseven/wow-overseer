@@ -25,6 +25,7 @@ import guildpug as gp  # noqa: E402
 import guildrun  # noqa: E402
 import guildsocial as gs  # noqa: E402
 import raidroles  # noqa: E402
+import classtrain  # noqa: E402
 import standin  # noqa: E402
 from test_classquest import (  # noqa: E402
     EASTERN,
@@ -584,6 +585,26 @@ class TheWiring(unittest.TestCase):
             "owed=frozenset(_class_owed_names(self))",
         ):
             self.assertIn(needle, text)
+
+
+class ArmorProficiencySpells(unittest.TestCase):
+    def test_proficiency_spell_with_skill_is_not_owed(self):
+        trainer = [
+            {"spell": 750, "level": 40, "cost": 10},
+            {"spell": 8737, "level": 40, "cost": 10},
+        ]
+        due = classtrain.due(trainer, set(), 40, skills={293, 413})
+        self.assertEqual(due.count, 0)
+
+    def test_spell_with_no_skill_grant_is_owed(self):
+        trainer = [{"spell": 100, "level": 40, "cost": 10}]
+        due = classtrain.due(trainer, set(), 40, skills={293, 413})
+        self.assertEqual(due.count, 1)
+
+    def test_proficiency_spell_without_skill_is_owed(self):
+        trainer = [{"spell": 750, "level": 40, "cost": 10}]
+        due = classtrain.due(trainer, set(), 40, skills=set())
+        self.assertEqual(due.count, 1)
 
 
 if __name__ == "__main__":

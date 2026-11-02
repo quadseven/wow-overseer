@@ -72,6 +72,7 @@ import jev
 import places
 import raidroles
 import raidsupply
+import raidlineup
 
 # --- the switch and the limits ---------------------------------------------
 
@@ -93,7 +94,9 @@ ROLLING = 20
 MIN_SAMPLES = 3
 MAX_OPTIONS = 3
 MAX_DUNGEONS = 4
-DEFAULT_GUILDS = ("Cave", "Bonkers")
+LEGACY_GUILDS = (("Cave", "Alliance"), ("Bonkers", "Horde"))
+DEFAULT_GUILDS = tuple(name for name, _ in LEGACY_GUILDS)
+MAX_EXTRA_GUILDS = 2
 # The continents a queue may start from: never from inside an instance.
 OPEN_WORLD_MAPS = (0, 1, 530)
 # A run no row has ended by now is lost (a worldserver restart, a sweep).
@@ -139,6 +142,12 @@ OUTCOMES = (
 WENT_IN = (CLEARED, "wiped", "abandoned", "timed out", "stalled")
 
 
+def every_boss_fell(done: int, total: int) -> bool:
+    """Does the count hold every boss the run expects? `cleared` alone does not
+    say: the finder finishes a dungeon on its last boss, side bosses standing."""
+    return total > 0 and done >= total
+
+
 def enabled(environ=None) -> bool:
     """On only when GUILD_RUNS says so: this sends bots into dungeons."""
     env = os.environ if environ is None else environ
@@ -178,8 +187,93 @@ def limits(environ=None) -> Limits:
         cooldown_minutes=_int_env(
             env, "GUILD_RUNS_COOLDOWN_MINUTES", COOLDOWN_MINUTES, 0, 1440
         ),
-        guilds=guilds or DEFAULT_GUILDS,
+        guilds=guilds or run_guild_names(),
     )
+
+
+def _legacy_rows() -> list:
+    """The two family guilds, always registered, with raidteams as lineup."""
+    return [
+        {
+            "name": name,
+            "faction": faction,
+            "raid_nights": (),
+            "size_target": 40,
+            "lineup_override": True,
+        }
+        for name, faction in LEGACY_GUILDS
+    ]
+
+
+def _natural_sixties(candidate: dict) -> list:
+    """The candidate's naturally levelled level-60 members, nobody else."""
+    naturalized = set(candidate.get("naturalized", ()))
+    return [
+        m
+        for m in candidate.get("members", ())
+        if m.get("level") == 60 and m.get("name") in naturalized
+    ]
+
+
+def _fills_template(members: list) -> bool:
+    """Do these members fill the Molten Core template: 8 tanks, 11 healers,
+    21 damage and a fire resistance source in every group."""
+    plan = raidlineup.plan_molten_core(members)
+    roles = [m.get("seat") for group in plan["groups"] for m in group["members"]]
+    return (
+        roles.count("tank") == 8
+        and roles.count("healer") == 11
+        and roles.count("dps") == 21
+        and all(group["fire_resistance"] for group in plan["groups"])
+    )
+
+
+def _enrol_row(candidate: dict, taken_names: set, taken_factions: set):
+    """The registry row for a candidate that qualifies, else None."""
+    name = str(candidate.get("name") or "").strip()
+    faction = candidate.get("faction")
+    if (
+        not name
+        or faction not in ("Alliance", "Horde")
+        or faction in taken_factions
+        or name in taken_names
+    ):
+        return None
+    if not _fills_template(_natural_sixties(candidate)):
+        return None
+    return {
+        "name": name,
+        "faction": faction,
+        "raid_nights": tuple(candidate.get("raid_nights", ())),
+        "size_target": int(candidate.get("size_target") or 40),
+        "lineup_override": False,
+    }
+
+
+def guild_registry(
+    candidates=(), max_extra: int = MAX_EXTRA_GUILDS
+) -> tuple[dict, ...]:
+    """Return legacy guilds and eligible, faction-balanced raid guilds.
+
+    Candidate rows carry name, faction, raid_nights, size_target, members and
+    naturalized names. Only naturally restarted level-60 characters count.
+    """
+    registry = _legacy_rows()
+    allowed = max(0, int(max_extra))
+    factions = set()
+    for candidate in candidates or ():
+        if len(registry) - len(LEGACY_GUILDS) >= allowed:
+            break
+        row = _enrol_row(candidate, {r["name"] for r in registry}, factions)
+        if row:
+            registry.append(row)
+            factions.add(row["faction"])
+    return tuple(registry)
+
+
+def run_guild_names(candidates=()) -> tuple:
+    """The names of the guilds the coordinator runs: the registry's rows."""
+    return tuple(row["name"] for row in guild_registry(candidates))
 
 
 # --- who can go -------------------------------------------------------------
@@ -389,6 +483,51 @@ def free_members(
             continue
         free.append(member)
     return free, held
+
+
+# ROOM TO LOOT BEFORE THE DOOR (#1568). Three Deadmines guild runs stalled at
+# the Iron Clad Door on 2026-10-27 because every member out of combat that
+# knew Opening had full bags, so nobody could loot the Defias Gunpowder. A
+# member with fewer than BAG_ROOM_FREE_SLOTS free general-bag slots is held
+# out of a run, its ask or yes taken back, so it is no longer spoken for and
+# the guild jobs pass sends it to sell (guildjobs.loot_room_short already asks
+# a sale of it there); with room again it is free to ask or answer. The wait
+# is bounded: once a member has been short for BAG_ROOM_WAIT_SECONDS it is
+# free to a run again, so one who cannot reach a vendor, or carries nothing a
+# vendor will buy, does not hold the run for ever. The family's own campaign has its hold at the resume
+# floor (bag_pressure.campaign_resume_short).
+SHORT_OF_BAG_ROOM = "short of bag room"
+BAG_ROOM_FREE_SLOTS = 4
+BAG_ROOM_WAIT_SECONDS = 20 * 60
+
+
+def bag_room_holds(
+    free_slots: dict,
+    since: dict,
+    now: float,
+    floor: int = BAG_ROOM_FREE_SLOTS,
+    wait: float = BAG_ROOM_WAIT_SECONDS,
+) -> tuple:
+    """(names held for bag room now, the clock to keep for the next pass).
+
+    `free_slots` is name -> free general-bag slots; `since` is the clock this
+    returned last time (name -> when it was first read short). A member short
+    of `floor` is held until it has been short for `wait` seconds; a member
+    with room, or one whose bags were not read, is forgotten, so a later
+    shortage starts a new wait. An unread or negative reading holds nobody: a
+    broken read must not keep a guild out of its dungeons."""
+    clock = {}
+    held = set()
+    for name, free in (free_slots or {}).items():
+        if not isinstance(free, int) or isinstance(free, bool):
+            continue
+        if free < 0 or free >= floor:
+            continue
+        start = (since or {}).get(name, now)
+        clock[name] = start
+        if now - start < wait:
+            held.add(name)
+    return frozenset(held), clock
 
 
 def settling(uptime_seconds, settle_seconds: int = SETTLE_SECONDS) -> bool:
@@ -1624,7 +1763,7 @@ def state_for(plan: Plan) -> dict:
         ],
         "how_runs_are_judged": (
             "cleared = the dungeon finder marks the dungeon finished; a wipe, an "
-            "abandoned run or a timeout is a failure"
+            "abandoned run, a stall or a timeout is a failure"
         ),
     }
 
@@ -1982,10 +2121,19 @@ def outcome_from_row(row: dict) -> dict | None:
     if status == "verifying":
         if str(result.get("phase") or "") != "inside":
             return None
-        return dict(_progress(result), state=INSIDE)
+        return _count_kept(row, dict(_progress(result), state=INSIDE))
     if status not in ("applied", "error", "delivered", "unchanged"):
         return None
-    return _ended(row, result)
+    return _count_kept(row, _ended(row, result))
+
+
+def _count_kept(row: dict, seen: dict) -> dict:
+    """A boss once down stays down. The module reads bosses_done off the tank's
+    instance bind on each poll, and that reads nothing while the tank stands
+    outside the dungeon, so a run's last word can be a lower count than it
+    reached. `row` carries what the run's row already holds."""
+    seen["bosses_done"] = max(_num(row, "bosses_done"), _num(seen, "bosses_done"))
+    return seen
 
 
 # --- the Guild tab ---------------------------------------------------------------
@@ -2110,6 +2258,13 @@ def _extra_words(extra: str) -> str:
     return "%s (%s)" % (extra, "a seat kind this page does not know")
 
 
+def _prior_cleared(view: dict) -> int:
+    """The clears behind the stored rate, which is Rate.smoothed and so never
+    0%: (cleared + 1) / (runs + 2)."""
+    runs = view["prior_runs"]
+    return max(0, round((view["prior"] or 0.0) * (runs + 2) - 1))
+
+
 def _run_lines(view: dict) -> list:
     if view["dungeon"]["by"] == ASKED:
         return _asked_lines(view) + _outcome_lines(view)
@@ -2130,8 +2285,8 @@ def _run_lines(view: dict) -> list:
     ]
     if view["prior_runs"]:
         lines.append(
-            "record before this run: %d%% over %s"
-            % (round(100 * (view["prior"] or 0.0)), _n(view["prior_runs"], "run"))
+            "record before this run: %d cleared of %s"
+            % (_prior_cleared(view), _n(view["prior_runs"], "run"))
         )
     return lines + _outcome_lines(view)
 
@@ -2375,6 +2530,30 @@ def came_back(reader, guilds: list, days: int, n: int) -> list:
         )
     )
     return _runs(reader, where, (*guilds, days, *WENT_IN), n)
+
+
+# Every guild's runs that went in over the last N days, by door and outcome,
+# for `door_record`. {holes} takes WENT_IN.
+DOOR_RECORD_SQL = (
+    "SELECT keyword, outcome, COUNT(*) AS n FROM overseer_guild_run "
+    "WHERE ended_at >= NOW() - INTERVAL %s DAY AND outcome IN ({holes}) "
+    "GROUP BY keyword, outcome"
+)
+
+
+def door_record(rows) -> dict:
+    """Run keyword -> (cleared, went in), from DOOR_RECORD_SQL rows. An
+    alternate door counts toward its wing (campaignplan.Facts.door_record)."""
+    out: dict = {}
+    for row in rows or ():
+        keyword = campaignplan.wing_of(str(row.get("keyword") or ""))
+        if not keyword:
+            continue
+        count = int(row.get("n") or 0)
+        cleared, went = out.get(keyword, (0, 0))
+        hit = str(row.get("outcome") or "") == CLEARED
+        out[keyword] = (cleared + (count if hit else 0), went + count)
+    return out
 
 
 def ended_since(reader, guilds: list, days: int, n: int) -> list:

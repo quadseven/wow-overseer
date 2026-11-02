@@ -51,7 +51,8 @@ CLASSIC_CONTINENTS = (0, 1)
 
 # THE BLOOD ELF AND DRAENEI STARTING LANDS, on map 530: the four zones those
 # races level in and their two capitals. The module's Classic::IsStartingLand
-# names the same six (tests/test_classic.py compares them). The Isle of
+# names the same six plus the Veiled Sea (tests/test_classic.py compares
+# them). The Isle of
 # Quel'Danas is not one: it is level-70 content.
 EVERSONG_WOODS = 3430
 GHOSTLANDS = 3433
@@ -59,6 +60,10 @@ SILVERMOON_CITY = 3487
 AZUREMYST_ISLE = 3524
 BLOODMYST_ISLE = 3525
 THE_EXODAR = 3557
+# The sea zone beside the starting isles on map 530. Members who cross to or
+# from Azuremyst by boat stand on that shore and berth, and the module counts
+# the zone as a starting land (IsStartingLand), so this side must too.
+VEILED_SEA = 3479
 STARTING_LAND_ZONES = frozenset(
     {
         EVERSONG_WOODS,
@@ -67,6 +72,7 @@ STARTING_LAND_ZONES = frozenset(
         AZUREMYST_ISLE,
         BLOODMYST_ISLE,
         THE_EXODAR,
+        VEILED_SEA,
     }
 )
 
@@ -246,7 +252,7 @@ def is_expansion_map(map_id) -> bool:
 
 
 def is_starting_land(map_id, zone_id) -> bool:
-    """One of the six starting-land zones, on map 530. An unread map or zone
+    """One of the starting-land zones (six, plus the Veiled Sea), on map 530. An unread map or zone
     is not one."""
     return (
         map_id is not None

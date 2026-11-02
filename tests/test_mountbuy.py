@@ -292,7 +292,7 @@ class ARefusalForFullBagsIsNotRepeated(unittest.TestCase):
             },
         )
         recent = guildjobs.recent_from_rows(rows)
-        self.assertTrue(guildjobs.mount_refused_for_bags("Grug", recent))
+        self.assertTrue(guildjobs.buy_refused_for_bags("Grug", mountbuy.ACTION, recent))
 
     def test_only_the_newest_buy_counts(self):
         bought_after = guildjobs.Recent(
@@ -304,7 +304,9 @@ class ARefusalForFullBagsIsNotRepeated(unittest.TestCase):
             result='{"outcome":"applied"}',
         )
         recent = (refused_buy(200), bought_after)
-        self.assertFalse(guildjobs.mount_refused_for_bags("Grug", recent))
+        self.assertFalse(
+            guildjobs.buy_refused_for_bags("Grug", mountbuy.ACTION, recent)
+        )
 
 
 class TheMakeRoomStepIsCapped(unittest.TestCase):

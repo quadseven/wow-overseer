@@ -483,6 +483,67 @@ def build_lineup(
     }
 
 
+def plan_molten_core(members: list) -> dict:
+    """Plan an unapproved guild roster into the 8/11/21 Molten Core template."""
+    pool = [raidroles.with_spec(m) for m in members if m.get("name")]
+    groups = [[] for _ in range(8)]
+    sources = _take(pool, 8, frozenset({PALADIN, SHAMAN}))
+    tanks = _take(pool, 8, TANKS)
+    healers = _take(pool, 11, HEALERS)
+    damage = sources + _take(pool, 21 - len(sources))
+    roles = [
+        [
+            _placed(member, raidroles.SEAT_TANK, OFF_TANK, frozenset())
+            for member in tanks
+        ],
+        [
+            _placed(member, raidroles.SEAT_HEALER, HEALER_WORD, frozenset())
+            for member in healers
+        ],
+        [
+            _placed(member, raidroles.SEAT_DAMAGE, DAMAGE_WORD, frozenset())
+            for member in damage
+        ],
+    ]
+    assigned = set()
+    for group in groups:
+        source = next(
+            (
+                m
+                for role in roles
+                for m in role
+                if m["name"] not in assigned and m.get("class_id") in (PALADIN, SHAMAN)
+            ),
+            None,
+        )
+        if source:
+            group.append(source)
+            assigned.add(source["name"])
+    for role in roles:
+        for member in role:
+            if member["name"] in assigned:
+                continue
+            group = min(
+                groups, key=lambda current: (len(current), groups.index(current))
+            )
+            group.append(member)
+            assigned.add(member["name"])
+    return {
+        "groups": [
+            {
+                "number": index + 1,
+                "members": group,
+                "fire_resistance": any(
+                    member.get("class_id") in (PALADIN, SHAMAN) for member in group
+                ),
+            }
+            for index, group in enumerate(groups)
+        ],
+        "wanted": {"tanks": 8, "healers": 11, "damage": 21},
+        "surplus": pool,
+    }
+
+
 def _approved_seat(member: dict, seat, number: int) -> dict:
     """A member in the seat the approved lineup gives it, playing the tree
     that seat names. Nobody respecs: the approved tree is the one it plays."""

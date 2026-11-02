@@ -68,6 +68,7 @@ def facts(
     done=0,
     level_rows=None,
     avoid=None,
+    world_started_at=None,
 ):
     level_rows = level_rows or ALLIANCE
     door = door or head_row["keyword"]
@@ -78,7 +79,9 @@ def facts(
         door=door,
         door_row=head_row,
         record=pace.viability(
-            runs, pace.campaignplan.BY_KEYWORD[head_row["keyword"]].map_id
+            runs,
+            pace.campaignplan.BY_KEYWORD[head_row["keyword"]].map_id,
+            world_started_at=world_started_at,
         ),
         members=rows,
         gates=gates,
@@ -246,6 +249,52 @@ class TheDecision(unittest.TestCase):
         self.assertEqual(pace.STEP_DOWN, back.kind)
         self.assertEqual("scarlet", back.target)
         self.assertIn("beat the family again", back.why)
+
+    def test_client_loss_closed_during_restart_settle_does_not_beat_returning_family(
+        self,
+    ):
+        restarted = T0 + timedelta(hours=1)
+        run_row = {
+            "map_id": 48,
+            "outcome": "client_lost",
+            "started_at": restarted - timedelta(minutes=20),
+            "last_progress_at": restarted - timedelta(minutes=2),
+            "ended_at": restarted + timedelta(minutes=2),
+            "ended_reason": "heartbeat cold - nobody from the roster seen on the map",
+        }
+        rows = [dict(r, level=26) for r in HORDE]
+        returned = pace.replace(
+            facts(
+                head("blackfathom"),
+                members(rows),
+                [run_row],
+                level_rows=rows,
+                world_started_at=restarted,
+            ),
+            returned=True,
+        )
+        self.assertEqual(0, returned.record.uncleared_streak)
+        self.assertEqual(pace.NOTHING, pace.decide(returned).kind)
+
+    def test_wipe_or_stall_outside_restart_still_steps_away_on_return(self):
+        restarted = T0 + timedelta(hours=1)
+        for outcome in ("wipe", "stalled"):
+            run_row = {
+                "map_id": 189,
+                "outcome": outcome,
+                "started_at": restarted + timedelta(minutes=20),
+                "last_progress_at": restarted + timedelta(minutes=25),
+                "ended_at": restarted + timedelta(minutes=30),
+                "ended_reason": "heartbeat cold - nobody from the roster seen on the map",
+            }
+            f = facts(
+                head("scarlet-library"),
+                members(ALLIANCE),
+                [run_row],
+                world_started_at=restarted,
+            )
+            d = pace.decide(pace.replace(f, returned=True))
+            self.assertEqual(pace.STEP_DOWN, d.kind, outcome)
 
     def test_an_entry_that_starts_after_the_step_back_is_the_return(self):
         """wow-dev 2026-09-28: stepped back up at 00:14:54, the Library entry
@@ -615,7 +664,15 @@ class NoEasierDoor(unittest.TestCase):
         run("client_lost", 80, BFD),
     ]
 
-    def _at_bfd(self, runs, levels=None, open_=None, changed="", returned=False):
+    def _at_bfd(
+        self,
+        runs,
+        levels=None,
+        open_=None,
+        changed="",
+        returned=False,
+        world_started_at=None,
+    ):
         levels = levels or self.LEVELS
         rows = members(levels, worn=14)
         f = facts(
@@ -625,6 +682,7 @@ class NoEasierDoor(unittest.TestCase):
             open_=open_,
             changed=changed,
             level_rows=levels,
+            world_started_at=world_started_at,
         )
         ahead = tuple(
             pace.ascend(

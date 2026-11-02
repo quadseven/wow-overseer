@@ -123,6 +123,124 @@ class OnlyDamageDealersFillDamageSeats(unittest.TestCase):
 
 
 class TheSwitchAndTheLimits(unittest.TestCase):
+    def test_registry_enrols_only_template_ready_guilds_within_faction_cap(self):
+        roster = (
+            [{"name": "tank%d" % i, "class_id": WARRIOR, "level": 60} for i in range(8)]
+            + [
+                {"name": "heal%d" % i, "class_id": PRIEST, "level": 60}
+                for i in range(11)
+            ]
+            + [
+                {"name": "damage%d" % i, "class_id": MAGE, "level": 60}
+                for i in range(19)
+            ]
+            + [
+                {"name": "source%d" % i, "class_id": PALADIN, "level": 60}
+                for i in range(8)
+            ]
+        )
+        natural = {m["name"] for m in roster}
+        candidates = [
+            {
+                "name": "NewA",
+                "faction": "Alliance",
+                "members": roster,
+                "naturalized": natural,
+                "raid_nights": ["Tuesday"],
+                "size_target": 40,
+            },
+            {
+                "name": "NewB",
+                "faction": "Horde",
+                "members": roster,
+                "naturalized": natural,
+                "raid_nights": ["Wednesday"],
+                "size_target": 40,
+            },
+            {
+                "name": "NewC",
+                "faction": "Alliance",
+                "members": roster,
+                "naturalized": natural,
+                "raid_nights": ["Thursday"],
+                "size_target": 40,
+            },
+        ]
+        registry = guildrun.guild_registry(candidates)
+        run_guilds = tuple(row["name"] for row in registry)
+        self.assertEqual(run_guilds, ("Cave", "Bonkers", "NewA", "NewB"))
+
+    def test_factory_made_or_short_guild_does_not_enrol(self):
+        roster = (
+            [{"name": "tank%d" % i, "class_id": WARRIOR, "level": 60} for i in range(8)]
+            + [
+                {"name": "heal%d" % i, "class_id": PRIEST, "level": 60}
+                for i in range(11)
+            ]
+            + [
+                {"name": "damage%d" % i, "class_id": MAGE, "level": 60}
+                for i in range(13)
+            ]
+            + [
+                {"name": "source%d" % i, "class_id": PALADIN, "level": 60}
+                for i in range(8)
+            ]
+        )
+        candidate = {
+            "name": "NewA",
+            "faction": "Alliance",
+            "members": roster,
+            "naturalized": set(),
+            "raid_nights": [],
+            "size_target": 40,
+        }
+        self.assertEqual(
+            guildrun.guild_registry([candidate]), guildrun.guild_registry([])
+        )
+        candidate["naturalized"] = {member["name"] for member in roster}
+        candidate["members"] = roster[:39]
+        self.assertEqual(
+            guildrun.guild_registry([candidate]), guildrun.guild_registry([])
+        )
+
+    def test_a_guild_without_fire_resistance_sources_does_not_enrol(self):
+        # 8 tanks, 11 healers and 21 damage dealers, but no paladin or shaman:
+        # no group has a fire resistance source, so the template is not filled.
+        roster = (
+            [{"name": "tank%d" % i, "class_id": WARRIOR, "level": 60} for i in range(8)]
+            + [
+                {"name": "heal%d" % i, "class_id": PRIEST, "level": 60}
+                for i in range(11)
+            ]
+            + [
+                {"name": "damage%d" % i, "class_id": MAGE, "level": 60}
+                for i in range(21)
+            ]
+        )
+        candidate = {
+            "name": "NewA",
+            "faction": "Alliance",
+            "members": roster,
+            "naturalized": {member["name"] for member in roster},
+            "raid_nights": [],
+            "size_target": 40,
+        }
+        self.assertEqual(
+            guildrun.guild_registry([candidate]), guildrun.guild_registry([])
+        )
+
+    def test_default_run_guilds_come_from_the_registry(self):
+        rows = (
+            {"name": "Cave"},
+            {"name": "Bonkers"},
+            {"name": "NewA"},
+        )
+        with mock.patch.object(guildrun, "guild_registry", lambda *a, **k: rows):
+            self.assertEqual(guildrun.limits({}).guilds, ("Cave", "Bonkers", "NewA"))
+            override = guildrun.limits({"GUILD_RUNS_GUILDS": "Cave"})
+            self.assertEqual(override.guilds, ("Cave",))
+        self.assertEqual(guildrun.run_guild_names(), guildrun.DEFAULT_GUILDS)
+
     def test_off_unless_it_is_turned_on(self):
         self.assertFalse(guildrun.enabled({}))
         self.assertFalse(guildrun.enabled({"GUILD_RUNS": "off"}))
@@ -1380,6 +1498,32 @@ class TheOutcomeIsReadOffTheRow(unittest.TestCase):
         self.assertEqual(
             (seen["deaths"], seen["bosses_done"], seen["loot_items"]), (2, 4, 17)
         )
+        # The module reads the count off the tank's instance bind, which reads
+        # nothing while the tank stands outside: a count never falls.
+        fell = guildrun.outcome_from_row(
+            {
+                "id": 1,
+                "bosses_done": 5,
+                "status": "applied",
+                "detail": "cleared",
+                "result": '{"phase":"done","outcome":"cleared",'
+                '"bosses_done":0,"bosses_total":7}',
+            }
+        )
+        self.assertEqual(fell["bosses_done"], 5)
+        inside = guildrun.outcome_from_row(
+            {
+                "id": 1,
+                "bosses_done": 5,
+                "status": "verifying",
+                "result": '{"phase":"inside","bosses_done":0,"bosses_total":7}',
+            }
+        )
+        self.assertEqual(inside["bosses_done"], 5)
+        bridge_src = (pathlib.Path(__file__).parent.parent / "bridge.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"r.bosses_done, r.bosses_total, "', bridge_src)
         self.assertEqual((seen["ilvl_gained"], seen["levels_gained"]), (12, 1))
         self.assertEqual(seen["loot_notable"], "1,2")
 
