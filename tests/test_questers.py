@@ -793,6 +793,38 @@ class Broken(unittest.TestCase):
         self.assertEqual((p.move.kind, p.move.quest), (classquest.ABANDON, 1))
         self.assertIn(questers.STALLED, p.move.said)
 
+    def test_objectives_with_no_spawns_stall_unsourced_after_two_hours(self):
+        """A quest with kill objectives but no spawned creatures for them
+        becomes STALLED_UNSOURCED, not STALLED. This is quest 34 "An
+        Unwelcome Guest" in Redridge: it asks to kill mobs that don't exist
+        in the world data."""
+        cat = world(
+            extra_quests=[
+                quest(34, REDRIDGE, 24, kill=999, count=5, title="An Unwelcome Guest")
+            ],
+            extra_givers=[
+                giver(34, "start", 1034, 999, 2000, 0),
+                giver(34, "end", 1034, 999, 2000, 0),
+            ],
+            extra_starts=[started(34, 999)],
+            extra_ends=[ended(34, 999)],
+        )
+        member = mirra(level=24, quest_log={34: 3}, zone_id=REDRIDGE, x=2000.0, y=0.0)
+        clock = questers.Clock()
+        p = None
+        for minute in range(0, 115 + 1, 5):
+            p = questers.plan(cat, member, clock, minute * 60.0)
+        self.assertEqual(p.broken, ())
+        clock = questers.Clock()
+        for minute in range(0, 120 + 1, 5):
+            p = questers.plan(cat, member, clock, minute * 60.0)
+        self.assertEqual(
+            [(b.quest, b.reason, b.held) for b in p.broken],
+            [(34, questers.STALLED_UNSOURCED, True)],
+        )
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.ABANDON, 34))
+        self.assertIn(questers.STALLED_UNSOURCED, p.move.said)
+
     def test_objectives_that_move_never_stall(self):
         p, _ = self._play(
             mirra(quest_log={1: 3}), 240, progress=lambda minute: {1: minute // 60}
