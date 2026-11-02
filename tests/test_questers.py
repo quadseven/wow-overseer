@@ -837,6 +837,7 @@ class Steps(unittest.TestCase):
             quests_done=frozenset({20, 21}),
         )
         p = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual(p.broken, ())
         self.assertEqual(p.move.kind, classquest.HUNT)
         self.assertEqual(p.move.spot.entry, 598)
         self.assertIn("at Defias Smuggler", p.move.said)
@@ -856,6 +857,7 @@ class Steps(unittest.TestCase):
             quests_done=frozenset({20, 21}),
         )
         p_done = questers.plan(cat, done_member, questers.Clock(), 0.0)
+        self.assertEqual(p_done.broken, ())
         self.assertEqual(p_done.move.kind, classquest.TURN_IN)
         self.assertEqual(p_done.move.spot.guid, 1010)
         self.assertIn("Gryan Stoutmantle", p_done.move.said)
