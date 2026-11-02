@@ -92,6 +92,7 @@ def world(extra_quests=(), extra_givers=(), extra_starts=(), extra_ends=(), drop
         quest(5, NORTHSHIRE, 2, classes=1 << (WARRIOR - 1), title="Simple Letter"),
         quest(6, NORTHSHIRE, 3, prev=1, title="After the Wolves"),
         quest(7, NORTHSHIRE, 12, min_level=10, title="Too High For Now"),
+        quest(18, WESTFALL, 4, title="Brotherhood of Thieves"),
         quest(20, WESTFALL, 4, title="The Westfall Stew"),
         quest(21, WESTFALL, 12, title="The Defias Brotherhood"),
         quest(30, REDRIDGE, 6, title="Redridge Goulash"),
@@ -112,6 +113,8 @@ def world(extra_quests=(), extra_givers=(), extra_starts=(), extra_ends=(), drop
         giver(6, "end", 1001, 100, 0, 0),
         giver(7, "start", 1001, 100, 0, 0),
         giver(7, "end", 1001, 100, 0, 0),
+        giver(18, "start", 1018, 118, 3500, 0),
+        giver(18, "end", 1018, 118, 3500, 0),
         giver(20, "start", 1020, 120, 3000, 0),
         giver(20, "end", 1020, 120, 3000, 0),
         giver(21, "start", 1020, 120, 3000, 0),
@@ -121,7 +124,11 @@ def world(extra_quests=(), extra_givers=(), extra_starts=(), extra_ends=(), drop
         giver(31, "start", 1030, 130, 2000, 0),
         giver(31, "end", 1030, 130, 2000, 0),
     ] + list(extra_givers)
-    spawns = [spawn(2001, 200, 150, 0), spawn(2002, 201, 250, 0, level=3)]
+    spawns = [
+        spawn(2001, 200, 150, 0),
+        spawn(2002, 201, 250, 0, level=3),
+        spawn(2018, 218, 1850, 0, level=4),
+    ]
     # What is named to give and take each quest, spawned or not.
     named = {g["quest"]: g["entry"] for g in givers if g["role"] == "start"}
     starts = [started(q, e) for q, e in sorted(named.items())] + list(extra_starts)
@@ -161,7 +168,7 @@ def walk(member, cat, rounds=20, clock=None):
         moves.append((p.move.kind, p.move.quest))
         log, done = dict(member.quest_log), set(member.quests_done)
         if p.move.kind == classquest.TAKE:
-            if p.move.quest in {20, 21, 30, 31}:
+            if p.move.quest in {18, 20, 21, 30, 31}:
                 break  # the walk to the next zone
             log[p.move.quest] = questers.STATUS_INCOMPLETE
             if not cat.quest(p.move.quest).kills:
