@@ -17,6 +17,9 @@ from test_questers import (
     crossing_row,
     giver,
     quest,
+    started,
+    ended,
+    spawn,
     world,
 )
 
@@ -98,6 +101,50 @@ class TheQuesterPass(unittest.TestCase):
             step.walk.command.split()[:2], ["walk-to-spawn", "creature:1001"]
         )
         self.assertEqual([r.command for r in step.rows], ["take quest:1"])
+
+    def test_kobold_camp_cleanup_walks_inside_the_quest_givers_reach(self):
+        cat = world(
+            extra_quests=[
+                quest(7, 9, 2, kill=40, count=8, title="Kobold Camp Cleanup")
+            ],
+            extra_givers=[
+                giver(7, "start", 1007, 197, 55, 0),
+                giver(7, "end", 1007, 197, 55, 0),
+            ],
+            extra_starts=[started(7, 197)],
+            extra_ends=[ended(7, 197)],
+            extra_spawns=[spawn(2007, 40, 250, 0)],
+            drop={1001},
+        )
+        run = Pass(
+            [quester(x=55.0, quests_done=frozenset({1, 2, 3, 6}))], cat=cat
+        ).run()
+        (step,) = run.started
+        self.assertEqual([r.command for r in step.rows], ["take quest:7"])
+        self.assertEqual(step.walk.command, "walk-to-spawn creature:1007 near:12")
+
+        hand_in = Pass(
+            [quester(quest_log={7: questers.STATUS_COMPLETE})], cat=cat
+        ).run()
+        (step,) = hand_in.started
+        self.assertEqual([r.command for r in step.rows], ["turnin quest:7"])
+        self.assertEqual(step.walk.command, "walk-to-spawn creature:1007 near:12")
+
+        hunt = Pass(
+            [
+                quester(
+                    quest_log={7: questers.STATUS_INCOMPLETE},
+                    quests_done=frozenset({1, 2, 3, 6}),
+                    x=225.0,
+                )
+            ],
+            cat=cat,
+        ).run()
+        (step,) = hunt.started
+        self.assertEqual(
+            [r.command for r in step.rows], ["hunt-spawn creature:40 count:8 max:480"]
+        )
+        self.assertEqual(step.walk.command, "walk-to-spawn creature:2007 near:12")
 
     def test_it_moves_zones_only_when_nothing_in_its_zone_is_left(self):
         left = Pass([quester(level=5, quests_done=frozenset({1, 3, 6}))]).run()
