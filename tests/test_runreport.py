@@ -19,6 +19,9 @@ import unittest
 from datetime import datetime, timezone
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+# realmread imports pymysql, and this module must not depend on a neighbour in
+# its unittest batch having stubbed it first: batches shift as files are added.
+sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import realmread  # noqa: E402
 import runreport  # noqa: E402

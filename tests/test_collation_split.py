@@ -139,6 +139,9 @@ COLLATIONS = {
     # named in its own CREATE TABLE the same way. The bridge reads it and
     # writes only its chosen_* columns.
     "overseer_family_intent": "utf8mb4_unicode_ci",
+    # Module-owned, explicitly declared by 2026_11_01_00_overseer_zone_danger.sql;
+    # its migration replay verifies this on isolated MySQL before deployment.
+    "overseer_zone_danger": "utf8mb4_unicode_ci",
     # Module-owned (2026_09_24_06_overseer_keep.sql), named in its own CREATE
     # TABLE the same way. The bridge reads it, joined to `characters` by name.
     "overseer_keep": "utf8mb4_unicode_ci",
@@ -169,6 +172,7 @@ BINARY = "utf8mb4_bin"
 # entry - it is utf8mb4_bin, which settles any comparison it is part of before
 # the column ever matters.
 STRING_COLUMNS = {
+    "overseer_zone_danger": frozenset({"name", "result"}),
     "overseer_bridge_memo": frozenset({"kind", "subject", "value"}),
     "overseer_chat": frozenset(
         {"channel", "channel_name", "heard_by", "sender_name", "text"}

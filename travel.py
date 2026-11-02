@@ -81,8 +81,9 @@ ROLES = {
     "petitioner": "UNIT_NPC_FLAG_PETITIONER",
     # A Guild Master, the only NPC that sells a guild charter: both flags,
     # matched all-or-nothing by the module, so an Arena Organizer (petitioner
-    # bit only) never fills it. Mirrors the module's entry; no alias is added
-    # here because "guild charter" already means any petitioner above.
+    # bit only) never fills it. Mirrors the module's entry. "guild charter"
+    # and "guild master" resolve here (#1173); the bare "charter" stays any
+    # petitioner.
     "guild petitioner": "UNIT_NPC_FLAG_PETITIONER | UNIT_NPC_FLAG_TABARDDESIGNER",
     "tabard designer": "UNIT_NPC_FLAG_TABARDDESIGNER",
     "innkeeper": "UNIT_NPC_FLAG_INNKEEPER",
@@ -109,7 +110,8 @@ ALIASES = {
     "auction house": "auctioneer",
     "ah": "auctioneer",
     "charter": "petitioner",
-    "guild charter": "petitioner",
+    "guild charter": "guild petitioner",
+    "guild master": "guild petitioner",
     "tabard": "tabard designer",
     "inn": "innkeeper",
     "hearth": "innkeeper",

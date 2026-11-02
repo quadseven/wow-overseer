@@ -150,8 +150,17 @@ class Decision:
     say: str
 
 
+def normalise_command(text: str) -> str:
+    """A command as the grammar compares it: whitespace collapsed, case
+    folded. Shared with core, whose report scope must recognise a command
+    exactly as this module's raw check does - two copies of the folding
+    would drift, and a command one side folded and the other did not is a
+    scope hole wearing a formatting difference."""
+    return " ".join(text.split()).lower()
+
+
 def is_raw_command(text: str) -> bool:
-    normalised = " ".join(text.split()).lower()
+    normalised = normalise_command(text)
     if not normalised:
         return False
     if _starts_with_multiword(normalised):

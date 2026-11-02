@@ -260,8 +260,16 @@ class TheVocabularyIsSharedBetweenPythonAndTheModule(unittest.TestCase):
         self.assertEqual(
             "the nearest guild petitioner", travel.describe("guild petitioner")
         )
-        self.assertEqual("petitioner", travel.resolve("guild charter"))
         self.assertLessEqual(len("guild petitioner"), travel.COLUMN_WIDTH)
+
+    def test_a_guild_charter_is_bought_from_a_guild_master_not_any_petitioner(self):
+        """Only a Guild Master sells a guild charter (#1173). An Arena
+        Organizer carries the petitioner bit alone, so "guild charter" and
+        "guild master" must resolve to the two-flag role; the bare "charter"
+        stays the any-petitioner role."""
+        self.assertEqual("guild petitioner", travel.resolve("guild charter"))
+        self.assertEqual("guild petitioner", travel.resolve("Guild Master"))
+        self.assertEqual("petitioner", travel.resolve("charter"))
 
     def test_every_alias_resolves_to_a_real_role(self):
         for alias, canonical in travel.ALIASES.items():
@@ -283,6 +291,7 @@ class TheVocabularyIsSharedBetweenPythonAndTheModule(unittest.TestCase):
             "banker",
             "guild banker",
             "petitioner",
+            "guild petitioner",
             "tabard designer",
         ):
             self.assertIn(keyword, travel.ROLES, keyword)
@@ -474,7 +483,7 @@ class TheTargetVocabulary(unittest.TestCase):
         self.assertEqual("tabard designer", travel.resolve("  Tabard   Designer "))
 
     def test_the_way_a_person_says_it_resolves(self):
-        self.assertEqual("petitioner", travel.resolve("guild charter"))
+        self.assertEqual("guild petitioner", travel.resolve("guild charter"))
         self.assertEqual("vendor", travel.resolve("merchant"))
         self.assertEqual("banker", travel.resolve("bank"))
         self.assertEqual("auctioneer", travel.resolve("AH"))

@@ -5,6 +5,7 @@ import unittest
 from unittest import mock
 
 import bag_pressure
+import bankbags
 import disposition
 from bag_pressure import (
     ItemForSale,
@@ -497,6 +498,8 @@ class TheSurplusBagReadCarriesTheCorpsFacts(unittest.TestCase):
         logger = logging.getLogger("test_1667_bridge")
         ns = {
             "bag_pressure": bag_pressure,
+            "bankbags": bankbags,
+            "_fetch_bank_bag_facts": lambda names: [],
             "_connect": lambda: conn,
             "_SURPLUS_BAGS_SQL": "%s",
             "log": logger,

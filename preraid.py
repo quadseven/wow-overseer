@@ -76,9 +76,9 @@ LOWER_MAPS = (SCARLET, RAZORFEN_DOWNS, ULDAMAN, ZULFARRAK, MARAUDON)
 
 MAPS = (SUNKEN_TEMPLE, SPIRE, DEPTHS, SCHOLOMANCE, STRATHOLME, DIRE_MAUL) + LOWER_MAPS
 
-# The Upper Spire shares map 229 with the Lower Spire and has no door of its
-# own in mod-overseer (the Dragonspine Door inside opens for the Seal of
-# Ascension), so it is a place the plan names and the planner cannot choose.
+# The Upper Spire shares map 229 with the Lower Spire and has no five-man door
+# of its own: it is a raid run (spirerun.py), a place the plan names and the
+# planner cannot choose.
 UPPER_SPIRE = "upper-blackrock-spire"
 
 # Inner Maraudon, past Celebras, is reached through either the orange or the
@@ -165,8 +165,8 @@ PLACES = tuple(
 # Why a place with no run cannot be chosen, in a reader's words.
 CLOSED = {
     UPPER_SPIRE: (
-        "it starts behind the Dragonspine Door, which opens for the Seal of "
-        "Ascension, and the overseer has no door row for it"
+        "it is a ten-seat raid and no five-man door: the raid run orders it "
+        "when a guild has ten seats at level 56"
     ),
 }
 

@@ -129,9 +129,9 @@ def dungeon_job(keyword: str) -> str | None:
 # overseer_decisions, quadseven/mod-overseer#634). A `raid:<keyword>` job is
 # refused by the module's DoJob for any keyword not in its table, so this set
 # is the whole vocabulary. DELIBERATELY APART FROM PORTAL_KEYWORDS: the council
-# and the campaign planner choose among portal keywords, and a raid is only
-# ever an operator's order.
-RAID_KEYWORDS = frozenset({"moltencore"})
+# and the campaign planner choose among portal keywords, and a raid is an
+# operator's order or spirerun.py's own, never a planner's choice.
+RAID_KEYWORDS = frozenset({"moltencore", "ubrs"})
 RAID_PREFIX = "raid:"
 
 

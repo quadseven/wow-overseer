@@ -153,7 +153,9 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=TIMEOUT_SECONDS)
     args = ap.parse_args()
 
-    wanted = [p for p in (args.probes or PROBES)]
+    # With --all, argparse puts the first probe in the optional name slot.
+    selected = ([args.name] if args.all and args.name else []) + (args.probes or [])
+    wanted = selected or list(PROBES)
     bad = [p for p in wanted if p not in PROBES]
     if bad:
         print(

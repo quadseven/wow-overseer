@@ -230,6 +230,7 @@ class TheBridgePass(unittest.TestCase):
 
     def run_pass(self, answers):
         written = []
+        answers.setdefault("SELECT COUNT(*) AS n", [{"n": 1}])
         cursor = _Cursor(answers, written)
         with mock.patch.object(self.bridge, "_connect", lambda: _Conn(cursor)):
             count = self.bridge._record_quests()
@@ -286,7 +287,9 @@ class TheBridgePass(unittest.TestCase):
                     self.bridge._ensure_quest_ledger_store()
                 self.assertFalse(self.bridge._quest_ledger_ready)
                 executed = []
-                cursor = _Cursor({"SELECT guid, name": []}, [])
+                cursor = _Cursor(
+                    {"SELECT guid, name": [], "SELECT COUNT(*) AS n": [{"n": 1}]}, []
+                )
                 cursor.execute = lambda sql, args=(), cursor=cursor, executed=executed: (
                     executed.append(sql),
                     setattr(cursor, "last", sql),
