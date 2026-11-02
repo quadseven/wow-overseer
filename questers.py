@@ -162,6 +162,22 @@ STATUS_INCOMPLETE = classquest.STATUS_INCOMPLETE
 # until it is dropped (questlog.FAILED).
 STATUS_FAILED = questlog.FAILED
 
+
+def _quest_complete(quest, status, progress=0) -> bool:
+    """True when the quest in the log is complete: the core's complete
+    status, or objectives (their sum, as LOG_SQL reads them) that reach what
+    the quest requires."""
+    try:
+        if int(status) == STATUS_COMPLETE:
+            return True
+        if quest is None:
+            return False
+        target = classhunt.wanted(quest)
+        return 0 < target <= int(progress or 0)
+    except (TypeError, ValueError):
+        return False
+
+
 # The reasons a quest is broken, as the ledger records them. FAILED is the
 # ledger's own words for it (questledger.FAILED_REASON, #923).
 FAILED = "the quest failed in the log"
@@ -958,13 +974,14 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
     out = []
     for qid in sorted(member.quest_log):
         status = int(member.quest_log[qid])
-        value = (status, int(member.quest_progress.get(qid, 0)))
+        prog = int(member.quest_progress.get(qid, 0))
+        value = (status, prog)
         played = clock.observe(member.name, qid, value, now, playing and qid in working)
         quest, facts = cat.quest(qid), cat.facts.get(qid)
         if quest is None or facts is None:
             continue
         reason = _broken_reason(
-            quest, facts, status, played, gone, refused, final, object_gone
+            quest, facts, status, played, gone, refused, final, object_gone, prog
         )
         if reason:
             out.append(Broken(member.name, qid, quest.title, reason, held=True))
@@ -981,6 +998,7 @@ def _broken_reason(
     refused,
     final=None,
     object_gone=frozenset(),
+    progress=0,
 ) -> str:
     """Why a quest the quester holds is broken, "" when it is not (yet). A
     complete quest's objectives cannot move, so stillness never stalls it:
@@ -991,16 +1009,17 @@ def _broken_reason(
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that
     # object, so the quest is worked, and only a stall breaks it (#1606).
-    if missing and not (status == STATUS_INCOMPLETE and facts.object_unspawned):
+    complete = _quest_complete(quest, status, progress)
+    if missing and not (not complete and facts.object_unspawned):
         return missing
-    if status == STATUS_INCOMPLETE and _fields_gone(quest, gone):
+    if not complete and _fields_gone(quest, gone):
         return SOURCE_MISSING
     if quest.id in (final or {}):
         return _refused_words(CANNOT_TURN_IN, final[quest.id])
     count, words = refused.get(("turnin", quest.id), (0, ""))
     if count >= FAILS_BEFORE_BROKEN:
         return _refused_words(REFUSED_TURN_IN, words)
-    if played < STALL_SECONDS or status == STATUS_COMPLETE:
+    if played < STALL_SECONDS or complete:
         return ""
     unsourced = (quest.kills or quest.items) and not quest.fields
     return STALLED_UNSOURCED if unsourced else STALLED
@@ -1197,7 +1216,7 @@ def next_move(
     logged_complete = {
         qid
         for qid, status in member.quest_log.items()
-        if int(status) == STATUS_COMPLETE
+        if _quest_complete(cat.quest(qid), status, member.quest_progress.get(qid, 0))
     }
     # 1. A broken quest it holds is dropped.
     move = _drop(cat, member, broken, found, complete | logged_complete)
@@ -1286,7 +1305,12 @@ def _hand_in(
     """The hand-in of the complete quest whose turn-in NPC or object is
     nearest, or None. A quest the module called complete is handed in even when its log
     row still says otherwise (#1085); `skip` leaves it as it leaves any other."""
-    due = {qid for qid, _quest in _held(cat, member, STATUS_COMPLETE, skip)}
+    due = {
+        qid
+        for qid, status in member.quest_log.items()
+        if qid not in skip
+        and _quest_complete(cat.quest(qid), status, member.quest_progress.get(qid, 0))
+    }
     due |= {qid for qid in complete if qid in member.quest_log and qid not in skip}
     ready = []
     for qid in due:
@@ -1334,6 +1358,8 @@ def _hunt(cat: Catalogue, member, skip, left):
     an incomplete quest it holds, or None."""
     hunts = []
     for qid, quest in _held(cat, member, STATUS_INCOMPLETE, skip):
+        if _quest_complete(quest, STATUS_INCOMPLETE, member.quest_progress.get(qid, 0)):
+            continue
         spot = _nearest(
             member, classquest.within_level(member, classquest.solo_fields(quest)), left
         )
