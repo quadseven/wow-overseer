@@ -16,11 +16,14 @@ per death with the level and zone recorded at the moment of death:
     other,
   * every one of them at the same level, and the member's level now still
     that level (no level was gained in the hour, or since),
-  * and the member's newest death, in any zone, under QUIET_SECONDS old.
+  * and the member's newest death in that zone under QUIET_SECONDS old.
 
 So the entry clears by itself once the member gains a level or goes
-QUIET_SECONDS without dying. Nothing is kept between passes: each read sees
-the last READ_SECONDS of deaths and judges them again.
+QUIET_SECONDS without dying in the loop zone. The quiet clock is the zone's
+own (#1569): a member that left the zone and died once or twice elsewhere is
+out of the loop, where a clock over every zone kept a loop three hours old
+listed. Nothing is kept between passes: each read sees the last READ_SECONDS
+of deaths and judges them again.
 
 WHAT IT IS FOR. The stuck reader (apiv2/members.py) lists the member with kind
 KIND and the blocker sentence (`Loop.blocker`), and the guild jobs pass
@@ -175,15 +178,15 @@ def loops(rows, levels=None) -> dict:
     levels = levels or {}
     out = {}
     for name, deaths in _deaths_of(rows).items():
-        if deaths[0].age > QUIET_SECONDS:
-            continue
         by_zone: dict = {}
         for d in deaths:
             by_zone.setdefault(d.zone, []).append(d)
+        # The quiet clock is each zone's own (#1569): deaths elsewhere do not
+        # keep a zone the member has left listed.
         found = [
             loop
             for zone, zone_deaths in by_zone.items()
-            if zone
+            if zone and zone_deaths[0].age <= QUIET_SECONDS
             for loop in (_zone_loop(name, zone_deaths, levels.get(name)),)
             if loop is not None
         ]

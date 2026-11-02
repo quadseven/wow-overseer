@@ -15,6 +15,7 @@ purchase, through the existing kind='buy' town-trip row.
 import pathlib
 import re
 import unittest
+from dataclasses import replace
 
 import bag_pressure
 import bag_upgrade
@@ -137,8 +138,15 @@ class TheCheapestBagIsBoughtWhenTheReserveSurvives(unittest.TestCase):
         got, notes = bag_pressure.bag_purchases([buyer(open_positions=0)], [POUCH])
         self.assertEqual((got, notes), ((), ()))
 
-    def test_no_free_slot_to_land_in_buys_nothing(self):
+    def test_a_full_backpack_can_buy_into_an_empty_worn_position(self):
         got, notes = bag_pressure.bag_purchases([buyer(free_slots=0)], [POUCH])
+        self.assertEqual([p.entry for p in got], [POUCH.entry])
+        self.assertEqual(notes, ())
+
+    def test_a_bank_bag_still_needs_a_free_cargo_slot(self):
+        got, notes = bag_pressure.bag_purchases(
+            [replace(buyer(free_slots=0), bank=True)], [POUCH]
+        )
         self.assertEqual(got, ())
         self.assertIn("no free slot", notes[0])
 

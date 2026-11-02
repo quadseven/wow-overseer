@@ -368,6 +368,22 @@ def combined_plan(
             False,
             "",
         )
+    factions = {
+        achievements.faction_of(r.get("race") for r in rows)
+        for rows in (level_rows_a, level_rows_b)
+    }
+    if len(factions - {""}) > 1:
+        # AllowTwoSide.Interaction.Group = 0: the core refuses this group, so a
+        # combined step would stand two families at a door neither can enter.
+        return Plan(
+            family_a,
+            "Not queued: %s and %s are opposite factions, and the realm refuses "
+            "a group holding both. Nothing was written."
+            % (_family(family_a), _family(family_b)),
+            (),
+            False,
+            "",
+        )
     for entry in entries:
         for level_rows in (level_rows_a, level_rows_b):
             why = (
@@ -610,13 +626,13 @@ def step(rows: list, leader: dict | None) -> Move:
 # said bare: it is the queue's ordinary entry, and everything else is marked.
 CHOOSERS = {
     campaignplan.SOURCE_JEV: "Jev's choice",
-    campaignplan.SOURCE: "planned",
+    campaignplan.SOURCE: "the planner's choice",
     campaignplan.SOURCE_STEPDOWN: "stepped down",
 }
 
 
 def chooser(row: dict) -> str:
-    """ "Jev's choice", "planned", or "" for an operator's entry."""
+    """ "Jev's choice", "the planner's choice", or "" for an operator's entry."""
     return CHOOSERS.get(str(row.get("source") or ""), "")
 
 
@@ -626,7 +642,7 @@ def _marked(row: dict, said: str) -> str:
 
 
 def progress_line(rows: list, done: int | None) -> str:
-    """ "Ragefire Chasm 12 of 50, then Wailing Caverns 50", or "" when empty.
+    """ "Ragefire Chasm 12 of 50 done, then Wailing Caverns 50", or "" when empty.
 
     `done` is the leader's dungeon_runs_done, which counts the ACTIVE head
     only. A head not yet started says so rather than borrowing a count that
@@ -639,7 +655,7 @@ def progress_line(rows: list, done: int | None) -> str:
         place = _place(str(row["keyword"]))
         runs = int(row["runs_wanted"])
         if i == 0 and str(row["status"]) == ACTIVE and done is not None:
-            said = "%s %d of %d" % (place, min(int(done), runs), runs)
+            said = "%s %d of %d done" % (place, min(int(done), runs), runs)
         elif i == 0:
             said = "%s %d (starting)" % (place, runs)
         else:

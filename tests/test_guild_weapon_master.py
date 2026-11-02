@@ -13,6 +13,7 @@ Pure unit tests against weaponskill and guildjobs.plan, and a read of bridge.py
 for the wiring.
 """
 
+import json
 import pathlib
 import unittest
 
@@ -21,9 +22,8 @@ import guildjobs
 import purse
 import weaponskill
 
-BRIDGE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
-    encoding="utf-8"
-)
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+BRIDGE = (ROOT / "bridge.py").read_text(encoding="utf-8")
 
 MAGE, PRIEST, HUNTER = 8, 5, 3
 SWORDS, BOWS = 43, 45
@@ -352,6 +352,139 @@ class TheCrossing(unittest.TestCase):
         result = guildjobs.plan([member(money=400)], weapons={"Eggo": far_offer()})
         self.assertEqual([], weapon_steps(result))
         self.assertTrue(any("saves for skill 43" in n for n in result.notes))
+
+
+# THE MASTER ACROSS THE WATER IS RANKED FROM THE LANDING (#1585). The rows'
+# yards are from the member on its own continent, so they ranked nothing on
+# the other one, and an Alliance member could be sent to Darnassus, which a
+# walk from Auberdine never reaches.
+ORGRIMMAR_MASTER = dict(
+    MASTER, entry=11868, spawn=501, name="Orgrimmar Master",
+    x=1700.0, y=-4300.0, yards=9000.0,
+)  # fmt: skip
+BLUFF_MASTER = dict(
+    MASTER, entry=11869, spawn=502, name="Bluff Master",
+    x=-1200.0, y=-50.0, yards=10.0,
+)  # fmt: skip
+# Darnassus, on Teldrassil, and an Alliance master on the Eastern Kingdoms.
+DARNASSUS_MASTER = dict(
+    MASTER, entry=11866, spawn=601, name="Darnassus Master", faction=80,
+    map_id=1, x=9950.0, y=2300.0, yards=10.0,
+)  # fmt: skip
+STORMWIND_MASTER = dict(
+    MASTER, entry=11867, spawn=602, name="Stormwind Master", faction=12,
+    map_id=0, x=-8800.0, y=600.0, yards=10.0,
+)  # fmt: skip
+
+
+class TheLanding(unittest.TestCase):
+    def test_the_far_master_nearest_the_landing_wins(self):
+        got = weaponskill.choose_far_master(
+            [BLUFF_MASTER, ORGRIMMAR_MASTER], {201}, "horde", 0
+        )
+        self.assertEqual(501, got["spawn"])
+        self.assertLess(got["yards"], 100.0)
+
+    def test_an_entry_keeps_its_spawn_nearest_the_landing(self):
+        near = dict(ORGRIMMAR_MASTER, spawn=503, yards=9500.0)
+        far = dict(ORGRIMMAR_MASTER, x=-1200.0, y=-50.0, yards=5.0)
+        got = weaponskill.choose_far_master([far, near], {201}, "horde", 0)
+        self.assertEqual(503, got["spawn"])
+
+    def test_every_landing_is_a_flight_point_of_the_world(self):
+        nodes = {
+            n["id"]: n
+            for n in json.loads((ROOT / "taxinodes.json").read_text(encoding="utf-8"))[
+                "nodes"
+            ]
+        }
+        for (_team, map_id), points in weaponskill.LANDINGS.items():
+            for node, x, y in points:
+                with self.subTest(node=node):
+                    self.assertEqual(map_id, nodes[node]["map"])
+                    self.assertAlmostEqual(x, nodes[node]["x"], places=3)
+                    self.assertAlmostEqual(y, nodes[node]["y"], places=3)
+                    self.assertEqual(
+                        weaponskill.MAINLAND, weaponskill.ground_of(map_id, x, y)
+                    )
+
+
+class TheIsland(unittest.TestCase):
+    def test_darnassus_is_never_the_master_across_the_water(self):
+        self.assertEqual(
+            {},
+            weaponskill.choose_far_master([DARNASSUS_MASTER], {201}, "alliance", 0),
+        )
+
+    def test_a_walk_from_auberdine_is_not_sent_to_darnassus(self):
+        auberdine = {"map_id": 1, "pos_x": 6341.0, "pos_y": 557.0}
+        self.assertEqual(
+            {},
+            weaponskill.choose_master(
+                [DARNASSUS_MASTER], {201}, "alliance", 1, auberdine
+            ),
+        )
+
+    def test_a_member_on_teldrassil_walks_to_darnassus(self):
+        rut_theran = {"map_id": 1, "pos_x": 8643.0, "pos_y": 841.0}
+        got = weaponskill.choose_master(
+            [DARNASSUS_MASTER], {201}, "alliance", 1, rut_theran
+        )
+        self.assertEqual(601, got["spawn"])
+
+    def test_the_island_is_the_zone_box_of_teldrassil(self):
+        zones = json.loads((ROOT / "zones.json").read_text(encoding="utf-8"))
+        (box,) = [
+            z for z in zones["continents"]["1"]["zones"] if z["name"] == "Teldrassil"
+        ]
+        self.assertEqual(
+            (("Teldrassil", box["bottom"], box["top"], box["right"], box["left"]),),
+            weaponskill.ISLANDS[1],
+        )
+
+    def test_the_bridge_reads_the_ground_of_every_walker(self):
+        self.assertEqual(
+            3,
+            BRIDGE.count('int(at["map_id"]), at)') + BRIDGE.count("int(m.map_id), at)"),
+        )
+
+
+def cross_row(action, dest, age, **over):
+    return guildjobs.Recent(
+        "Eggo", action, age, command="cross-to-map map:%d" % dest, dest=dest, **over
+    )
+
+
+class NoBackAndForth(unittest.TestCase):
+    """THE LEVEL CROSSING COMES FIRST (#1585): past the shared crossing clock, a
+    weapon crossing never undoes a level crossing, and is asked once a day."""
+
+    def plan(self, recent):
+        return guildjobs.plan([member()], weapons={"Eggo": far_offer()}, recent=recent)
+
+    def test_a_level_crossing_here_holds_the_weapon_crossing(self):
+        old = guildjobs.classquest.CROSS_COOLDOWN_MINUTES + 30
+        result = self.plan((cross_row(guildjobs.guildlevel.CROSS_ACTION, 1, old),))
+        self.assertEqual([], weapon_steps(result))
+        self.assertTrue(
+            any("its level crossing brought it here" in n for n in result.notes),
+            result.notes,
+        )
+
+    def test_a_weapon_crossing_there_and_back_is_not_asked_again(self):
+        old = guildjobs.classquest.CROSS_COOLDOWN_MINUTES + 90
+        result = self.plan((cross_row(guildjobs.WEAPON_CROSS_ACTION, 0, old),))
+        self.assertEqual([], weapon_steps(result))
+        self.assertTrue(any("and is back" in n for n in result.notes), result.notes)
+
+    def test_a_level_crossing_elsewhere_or_refused_does_not_hold(self):
+        old = guildjobs.classquest.CROSS_COOLDOWN_MINUTES + 30
+        for row in (
+            cross_row(guildjobs.guildlevel.CROSS_ACTION, 0, old),
+            cross_row(guildjobs.guildlevel.CROSS_ACTION, 1, old, refusal="no"),
+        ):
+            with self.subTest(row=row):
+                self.assertEqual(1, len(weapon_steps(self.plan((row,)))))
 
 
 class TheBridgeReadsTheFarMaster(unittest.TestCase):

@@ -64,10 +64,6 @@ KNOWN_UNREACHED = {
     "dungeonladder",
     "enroll",
     "lootcard",
-    "realmroller",
-    "realmroller_act",
-    "realmroller_plan",
-    "realmroller_world",
 }
 
 

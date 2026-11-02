@@ -67,7 +67,7 @@ def _load_jobs() -> str:
 def _do_job() -> str:
     return _function(
         "static char const* DoJob(Player* player, std::string const& command, "
-        "char const*& status)"
+        "char const*& status,"
     )
 
 
@@ -131,13 +131,19 @@ class TheCommandKindIsDispatchedNotForwarded(unittest.TestCase):
     and do nothing, exactly the voice.py 'sell junk' failure."""
 
     def test_job_is_excluded_from_the_bot_command_trigger_path(self):
+        # The command kinds are one else-if chain now, with the whisper to the
+        # bot as its last arm. A job row is excluded from that arm by being
+        # answered by its own, earlier, arm.
         src = _code(_source())
-        self.assertIn('kind != "job"', src)
+        job_arm = src.index('else if (kind == "job")\n')
+        whisper = src.index("botAI->HandleCommand(CHAT_MSG_WHISPER, command, player);")
+        self.assertLess(job_arm, whisper)
+        self.assertIn("detail = DoJob(", src[job_arm : job_arm + 200])
 
     def test_job_is_dispatched_to_do_job(self):
         src = _code(_source())
         self.assertIn('kind == "job"', src)
-        self.assertIn("DoJob(player, command, status)", src)
+        self.assertIn("DoJob(player, command, status, rowResult)", src)
 
     def test_do_job_validates_against_the_known_modes(self):
         body = _do_job()

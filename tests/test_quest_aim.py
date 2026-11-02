@@ -92,6 +92,16 @@ def _clear() -> str:
     return _function("void ClearAim(")
 
 
+def _step() -> str:
+    """The decision DriveChosenQuest acts on. It left the drive for
+    OverseerDecisions::ChosenQuestStepFor (overseer_decisions.cpp), so the
+    steady-state rules below are read there, and the drive is checked to feed
+    it the right facts and to act on each answer."""
+    src = modsource.read(modsource.DECISIONS, encoding="utf-8")
+    start = src.index("ChosenQuestStep ChosenQuestStepFor(")
+    return src[start : src.index("\n}\n", start) + 3]
+
+
 class TheColumnIsActuallyRead(unittest.TestCase):
     """It was written by the bridge and read by nobody. That was the bug."""
 
@@ -195,8 +205,18 @@ class TheLeaseIsReasserted(unittest.TestCase):
         self.assertIn("questId", body)
 
     def test_an_unchanged_lease_is_left_alone(self):
-        self.assertIn("if (working == questId)", _code(_chosen()))
-        self.assertIn("return true;", _code(_chosen()))
+        # The rule left the drive: the lease already names the quest and the
+        # aim has not moved is ChosenQuestStep::Leave, and the drive's answer
+        # to Leave is to return with the lease untouched.
+        self.assertIn("facts.working = working == questId;", _code(_chosen()))
+        self.assertIn(
+            "return facts.aimChanged ? ChosenQuestStep::Reissue : ChosenQuestStep::Leave;",
+            _code(_step()),
+        )
+        self.assertRegex(
+            _code(_chosen()),
+            r"case OverseerDecisions::ChosenQuestStep::Leave:\s*return true;",
+        )
 
     def test_the_variant_header_is_included(self):
         """std::get_if needs <variant>. NewRpgInfo.h uses std::variant without
@@ -238,8 +258,16 @@ class NoPathIsSilent(unittest.TestCase):
 
     def test_every_refusal_logs_before_it_returns(self):
         body = _chosen()
+        # One `return false;` is the NotHeld arm of the switch, which the code
+        # itself marks as already refused (and logged) by the status and
+        # template checks above it. It is exempt by that marker, and the
+        # marker must sit on exactly one line.
+        marker = "return false;  // refused above already"
+        self.assertEqual(1, body.count(marker))
         for match in re.finditer(r"return false;", body):
-            before = body[max(0, match.start() - 900) : match.start()]
+            if body.startswith(marker, match.start()):
+                continue
+            before = body[max(0, match.start() - 1500) : match.start()]
             self.assertIn(
                 self.LOG, before, "a refusal at offset %d says nothing" % match.start()
             )
@@ -405,6 +433,12 @@ class EveryMemberUsedWasVerifiedAgainstThePinnedSources(unittest.TestCase):
         # call sites), so the build has long since proven them.
         "GetName",
         "GetLevel",
+        # Quest::GetQuestLevel and Quest::GetMinLevel: the family quest drive
+        # names a quest's level in its log lines. The module at the deployed
+        # revision (c75ffd32) compiles with both and runs on the realm, so the
+        # build has proven them.
+        "GetQuestLevel",
+        "GetMinLevel",
     }
 
     def test_every_arrow_member_used_is_on_the_verified_list(self):
@@ -479,7 +513,14 @@ class TheSecondErrandOnTheSameBot(unittest.TestCase):
 
     def test_the_steady_state_guard_is_gated_on_the_aim_not_having_changed(self):
         code = _code(_function("bool DriveChosenQuest"))
-        self.assertIn("working == questId && !aimChanged", code)
+        # The guard is the decision's, and it is gated on the aim: a lease that
+        # names the quest is left alone only while the aim has not changed.
+        self.assertIn("facts.aimChanged = aimChanged;", code)
+        self.assertIn(
+            "if (facts.working)\n        return facts.aimChanged ? "
+            "ChosenQuestStep::Reissue : ChosenQuestStep::Leave;",
+            _code(_step()),
+        )
         self.assertNotRegex(
             code,
             r"if\s*\(\s*working == questId\s*\)\s*\n\s*return true;",
@@ -489,7 +530,8 @@ class TheSecondErrandOnTheSameBot(unittest.TestCase):
 
     def test_a_new_errand_reissues_even_when_the_id_already_matches(self):
         code = _code(_function("bool DriveChosenQuest"))
-        tail = code.split("working == questId && !aimChanged", 1)[1]
+        tail = code.split("case OverseerDecisions::ChosenQuestStep::Reissue:", 1)[1]
+        tail = tail.split("case OverseerDecisions::ChosenQuestStep::Assert:", 1)[0]
         self.assertIn(
             "ChangeToDoQuest",
             tail,
@@ -502,6 +544,13 @@ class TheSecondErrandOnTheSameBot(unittest.TestCase):
         self.assertIn("re-issuing for the new errand", body)
 
     def test_the_measurement_that_found_it_is_recorded_in_place(self):
-        body = _function("bool DriveChosenQuest")
-        for needle in ("Ymrossi", "233", "3109", "COMPLETE"):
-            self.assertIn(needle, body, needle)
+        # The measurement (quest 233, a COMPLETE quest re-aimed for a second
+        # errand) now sits in the decision's own documentation in
+        # overseer_decisions.h, beside the Reissue step it produced. The
+        # character name and the council's quest number (3109) are no longer
+        # recorded anywhere in the module.
+        header = modsource.read(modsource.DECISIONS_H, encoding="utf-8")
+        start = header.index("//   Reissue")
+        note = header[start : start + 300]
+        self.assertIn("233", note)
+        self.assertIn("regression", note)

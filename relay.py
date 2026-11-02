@@ -343,9 +343,42 @@ _MASS_MENTION = re.compile(r"@(everyone|here)\b", re.IGNORECASE)
 # role form is exactly what an @everyone-only filter misses.
 _ID_MENTION = re.compile(r"<(@[!&]?|#)(\d+)>")
 
+# The client's own markup: a hyperlink is |H<target>|h<shown text>|h, usually
+# wrapped in a colour span |c<8 hex digits> ... |r. The game client renders
+# all of that as one coloured, clickable phrase; Discord has no client, so a
+# relayed line arrived as raw escapes ("Need help with |cFFFFFF00|Hquest:
+# 605:35|h[Singing Blue Shards]|h|r?") and read as gibberish rather than as
+# the sentence a player in the client saw. Keep the shown text, drop the
+# machinery. A link that arrives already broken (the talent-spec line whose
+# |H head never made it, leaving each number in its own colour span) still
+# reads correctly once every escape is stripped: "(0/8/0)".
+# Only well-formed markup is touched; a pipe that starts anything else is
+# ordinary text ("|Hello", "a |hop", "help|hint"). One pass, so a literal
+# pipe written as || is never re-read as the start of an escape.
+_WOW_MARKUP = re.compile(
+    r"\|\|"  # an escaped, literal pipe
+    r"|\|H[A-Za-z]+:[^|\s]*\|h(?P<link>.*?)\|h"  # hyperlink, keep shown text
+    r"|\|T[^|\s]*[\\/:.][^|\s]*\|t"  # texture: a path-shaped body
+    r"|\|c[0-9a-fA-F]{8}"  # colour start
+    r"|\|r(?![A-Za-z0-9])"  # colour reset, not the start of a word
+    r"|\|h(?![A-Za-z0-9])"  # stray link end left by a broken link
+)
+
+
+def _plain_world_text(text: str) -> str:
+    """World markup -> the words a player in the client would have read."""
+
+    def swap(m: re.Match) -> str:
+        if m.group(0) == "||":
+            return "|"
+        return m.group("link") or ""
+
+    return _WOW_MARKUP.sub(swap, text)
+
 
 def sanitize(text: str) -> str:
     """Make world text safe to post, without changing what it says."""
+    text = _plain_world_text(text)
     text = _MASS_MENTION.sub(lambda m: "@" + ZERO_WIDTH + m.group(1), text)
     text = _ID_MENTION.sub(
         lambda m: "<" + ZERO_WIDTH + m.group(1) + m.group(2) + ">", text

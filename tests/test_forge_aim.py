@@ -237,12 +237,19 @@ class TheArrivalToleranceIsMirroredFromTheModule(unittest.TestCase):
         )
 
     def test_the_column_width_agrees_with_the_module(self):
+        # The module's constant is an alias of the decisions header's now.
         found = re.search(
-            r"constexpr\s+std::size_t\s+TRAVEL_AIM_COLUMN_CHARS\s*=\s*(\d+)\s*;",
+            r"constexpr\s+std::size_t\s+TRAVEL_AIM_COLUMN_CHARS\s*=\s*"
+            r"OverseerDecisions::TRAVEL_AIM_MAX_CHARS\s*;",
             self.module,
         )
         self.assertIsNotNone(found)
-        self.assertEqual(int(found.group(1)), travel.COLUMN_WIDTH)
+        header = modsource.read(modsource.DECISIONS_H, encoding="utf-8")
+        width = re.search(
+            r"constexpr\s+std::size_t\s+TRAVEL_AIM_MAX_CHARS\s*=\s*(\d+)\s*;", header
+        )
+        self.assertIsNotNone(width)
+        self.assertEqual(int(width.group(1)), travel.COLUMN_WIDTH)
 
     def test_the_module_hands_a_ground_aim_back_by_itself(self):
         """WHY THIS PASS NEEDS NO RELEASE OF ITS OWN. `TravelAimBook::Release`

@@ -187,10 +187,15 @@ class OnlyTheWorldThreadWritesTheTable(unittest.TestCase):
         )
 
     def test_flush_deaths_is_called_exactly_once_and_from_on_update(self):
+        # Two callers now, both on the world thread: the death timer in
+        # OnUpdate, and the one more flush OnShutdown does so queued deaths
+        # are written before the process ends. Nothing else may call it.
         code = _code(_source())
-        self.assertEqual(1, code.count("FlushDeaths();"))
+        self.assertEqual(2, code.count("FlushDeaths();"))
         on_update = _function("void OnUpdate(uint32 diff) override")
         self.assertIn("FlushDeaths();", _code(on_update))
+        on_shutdown = _function("void OnShutdown() override")
+        self.assertIn("FlushDeaths();", _code(on_shutdown))
 
     def test_flush_deaths_runs_on_its_own_timer_not_piggybacked(self):
         """A death must not be able to wait behind the event queue's own
@@ -289,6 +294,17 @@ class TheMigrationMatchesWhatTheCodeWrites(unittest.TestCase):
         "health_at_death",
         "max_health_at_death",
         "seconds_since_full_health",
+        # The three most recent damage samples before the death: the amount,
+        # how many seconds before death, and the source (NULL when unknown).
+        "damage_1",
+        "damage_1_seconds",
+        "damage_1_source",
+        "damage_2",
+        "damage_2_seconds",
+        "damage_2_source",
+        "damage_3",
+        "damage_3_seconds",
+        "damage_3_source",
         "job",
         "quest_aim",
         "travel_target",
@@ -307,6 +323,12 @@ class TheMigrationMatchesWhatTheCodeWrites(unittest.TestCase):
         "last_pos_y",
         "last_pos_z",
         "yards_fallen",
+        # Where the fall began, and what was moving the character then.
+        "fall_start_map",
+        "fall_start_x",
+        "fall_start_y",
+        "fall_start_z",
+        "fall_start_movement_generator",
         "leader_seen",
         "leader_map",
         "leader_pos_x",
@@ -327,6 +349,15 @@ class TheMigrationMatchesWhatTheCodeWrites(unittest.TestCase):
         "fall_guard_seconds",
     )
 
+    # Written only when DeathHitColumnsPresent() says the schema has them, so
+    # an older schema costs these four columns and not the whole death row.
+    OPTIONAL_COLUMNS = (
+        "mana_at_death",
+        "max_mana_at_death",
+        "enemies_engaged",
+        "targeted_by",
+    )
+
     def test_migration_file_exists(self):
         self.assertTrue(modsource.exists(MIGRATION), MIGRATION)
 
@@ -340,12 +371,24 @@ class TheMigrationMatchesWhatTheCodeWrites(unittest.TestCase):
         flush = _code(_flush_deaths()).replace("\n", " ").replace('"', "")
         match = re.search(r"INSERT INTO overseer_death \(([^)]*)\)", flush)
         self.assertIsNotNone(match)
-        columns = tuple(c.strip() for c in match.group(1).split(","))
+        # The statement is assembled with a stream: a fixed column list, then a
+        # ternary that appends the optional columns when the schema has them.
+        # Read the two parts apart.
+        fixed, optional = match.group(1).split("<<", 1)
+        columns = tuple(c.strip() for c in fixed.split(","))
         self.assertEqual(self.INSERT_COLUMNS, columns)
+        self.assertIn("hitColumns ?", optional)
+        self.assertEqual(
+            self.OPTIONAL_COLUMNS,
+            tuple(
+                c.strip()
+                for c in re.search(r"\?\s*,([^:]*):", optional).group(1).split(",")
+            ),
+        )
 
     def test_every_inserted_column_exists_in_the_create_table(self):
         migration = _migrations()
-        for column in self.INSERT_COLUMNS:
+        for column in self.INSERT_COLUMNS + self.OPTIONAL_COLUMNS:
             self.assertIn(
                 "`%s`" % column,
                 migration,

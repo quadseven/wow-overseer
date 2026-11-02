@@ -581,6 +581,13 @@ class NoNewUpstreamMemberWasIntroduced(unittest.TestCase):
         # call sites), so the build has long since proven them.
         "GetName",
         "GetLevel",
+        # Quest::GetQuestLevel and Quest::GetMinLevel: the drive now reads
+        # them to name a quest's level in its give-up log lines. The module
+        # at the deployed revision (c75ffd32) compiles with both and runs on
+        # the realm, so the build has proven both. GetQuestLevel is also called
+        # outside the drive (the stale-quest check).
+        "GetQuestLevel",
+        "GetMinLevel",
     }
 
     def test_the_new_member_is_cited_where_it_is_used(self):

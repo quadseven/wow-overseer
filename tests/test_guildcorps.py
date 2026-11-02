@@ -157,6 +157,24 @@ class ThePosts(unittest.TestCase):
 
 
 class ATailorsNextStep(unittest.TestCase):
+    def test_auto_learned_linen_bolt_need_not_be_in_saved_spells(self):
+        t = tailor("Tailor", 21, 75, known=frozenset({3908}), carried=(held(2589, 19),))
+        step, _ = step_of(t)
+        self.assertIsNotNone(step)
+        self.assertEqual((step.action, step.key, step.repeat), ("craft", 2963, 9))
+
+    def test_a_bought_bag_uses_its_auto_learned_bolt(self):
+        t = tailor(
+            "Tailor",
+            45,
+            75,
+            known=frozenset({3908, 3755}),
+            carried=(held(2589, 6), held(2320, 3)),
+        )
+        step, _ = step_of(t, fam=[family("Recipient", (0, 0, 0, 0))])
+        self.assertIsNotNone(step)
+        self.assertEqual((step.action, step.key, step.repeat), ("craft", 2963, 3))
+
     def test_at_its_ceiling_below_artisan_it_walks_to_a_trainer_for_the_next_rank(self):
         t = tailor("Xohjaz", 225, 225, guild="Bonkers")
         step, _ = step_of(t)
@@ -322,6 +340,33 @@ class ThePass(unittest.TestCase):
         plan = gc.plan(self.crew(), {}, TRAINABLE, VENDORS, recent, set())
         self.assertNotIn("buy", [s.action for s in plan.steps if s.holder == "Derred"])
         self.assertTrue(any("cooldown" in n for n in plan.notes))
+
+    def test_cooling_collection_leaves_carried_linen_available_to_craft(self):
+        t = tailor(
+            "Tailor",
+            21,
+            75,
+            known=frozenset({3908, 2963}),
+            carried=(held(2589, 19),),
+            mail=(gc.Letter(55, 5001, 2589, 20),),
+        )
+        for age, action, key, repeat in (
+            (1, "craft", 2963, 9),
+            (31, "collect", 2589, 1),
+        ):
+            with self.subTest(collection_age=age):
+                plan = gc.plan(
+                    [t],
+                    {},
+                    TRAINABLE,
+                    VENDORS,
+                    {("Tailor", "collect", 2589): age},
+                    set(),
+                )
+                self.assertEqual(
+                    [(s.action, s.key, s.repeat) for s in plan.steps],
+                    [(action, key, repeat)],
+                )
 
     def test_a_busy_tailor_is_left_alone(self):
         plan = gc.plan(self.crew(), {}, TRAINABLE, VENDORS, {}, {"Derred"})
@@ -709,6 +754,33 @@ class TheGuildGetsTheBags(unittest.TestCase):
         step, _ = step_of(t, members=[waiting, other])
         self.assertEqual(step.action, "post")
         self.assertEqual(step.rows[0].target_arg, "Grog")
+
+    def test_a_guildmate_passed_over_for_a_bag_in_the_mail_is_named(self):
+        # #1605: the #1591 skip left no trace, so whether it held could not be
+        # read from the log. The plan names the member and the waiting bag.
+        t = tailor(carried=self.BAG)
+        waiting = member(
+            "Bodo",
+            maintenance=False,
+            worn_bags=(6,),
+            mail=(gc.Letter(7, 77, 4238, 1),),
+        )
+        cloth = member(
+            "Grog",
+            maintenance=False,
+            worn_bags=(6,),
+            mail=(gc.Letter(8, 88, 2589, 20),),
+        )
+        plan = gc.plan([t, waiting, cloth], {}, TRAINABLE, VENDORS, {}, set())
+        self.assertEqual(
+            plan.mail_waits,
+            ("Bodo is passed over for a bag: a Linen Bag waits in its mail",),
+        )
+
+    def test_the_bridge_logs_the_passed_over_once_per_state(self):
+        self.assertIn(
+            '_log_changed("guild corps: bag in the mail", plan.mail_waits', BRIDGE
+        )
 
     def test_a_letter_of_cloth_does_not_hold_back_a_bag(self):
         t = tailor(carried=self.BAG)

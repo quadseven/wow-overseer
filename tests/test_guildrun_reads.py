@@ -161,6 +161,13 @@ class TheRunState(unittest.TestCase):
         self.assertEqual(self.state_of(state="ended", outcome=""), "lost")
         self.assertEqual(self.state_of(state="ended", outcome="sweep"), "lost")
 
+    def test_the_record_before_a_run_is_counted_not_smoothed(self):
+        # The row stores (cleared + 1) / (runs + 2), so 0 of 10 is 8%.
+        lines = guildrun.run_view(dict(ROW, prior_rate=1 / 12, prior_runs=10))["lines"]
+        self.assertIn("record before this run: 0 cleared of 10 runs", lines)
+        lines = guildrun.run_view(dict(ROW, prior_rate=7 / 12, prior_runs=10))["lines"]
+        self.assertIn("record before this run: 6 cleared of 10 runs", lines)
+
     def test_the_old_fields_stay_for_compatibility(self):
         view = guildrun.run_view(dict(ROW))
         self.assertEqual(
@@ -411,6 +418,24 @@ const runs = M.groups({runs: [run]}).find((g) => g.label === "Runs");
 console.log(JSON.stringify(runs.rows[0].sub));""",
         )
         self.assertEqual(got, "Cave | lost | 2026-10-09 19:00")
+
+
+class DoorRecord(unittest.TestCase):
+    def test_outcomes_fold_into_cleared_of_went_in(self):
+        rows = [
+            {"keyword": "zulfarrak", "outcome": "cleared", "n": 2},
+            {"keyword": "zulfarrak", "outcome": "timed out", "n": 9},
+            {"keyword": "uldaman-back", "outcome": "cleared", "n": 1},
+            {"keyword": "uldaman", "outcome": "stalled", "n": 2},
+            {"keyword": "not-a-door", "outcome": "cleared", "n": 5},
+        ]
+        self.assertEqual(
+            guildrun.door_record(rows),
+            {"zulfarrak": (2, 11), "uldaman": (1, 3)},
+        )
+
+    def test_nothing_read_is_no_record(self):
+        self.assertEqual(guildrun.door_record(None), {})
 
 
 if __name__ == "__main__":

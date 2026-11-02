@@ -585,22 +585,6 @@ class CharacterState:
 
 
 @dataclass(frozen=True)
-class Spare:
-    """One grey stack in a taker's bags that may be destroyed to make room.
-
-    `value` is the stack's whole vendor price in copper, so the cheapest goes
-    first. Only `deliverable` spends one, and only for a shield on its way to
-    a shield tank who has none (see `Grant.clears`).
-    """
-
-    holder: str
-    guid: int
-    count: int
-    name: str
-    value: int
-
-
-@dataclass(frozen=True)
 class Grant:
     """One item, moving from the family member who cannot use it to the one
     who can.
@@ -625,10 +609,10 @@ class Grant:
     slots. `deliverable` empties this on whatever it emits, so a Grant that
     reaches the insert path carries one taker and nothing else.
 
-    `makes_room` is set when the item is a shield and the taker a shield tank
-    with no shield on: a full bag is then cleared rather than taken as a
-    refusal (#550). `clears` is the Spare `deliverable` chose to destroy
-    first, or None; the writer queues that destroy ahead of the hand-over.
+    `frees` is the make-room step `deliverable` attached when the taker was
+    full: a carried junk stack the taker gives the giver first, so the hand-off
+    has the slot it needs. It travels with the grant rather than beside it, so
+    a grant Jev withholds takes its make-room step with it.
     """
 
     holder: str
@@ -640,8 +624,7 @@ class Grant:
     said: str
     verb: str = TRADE
     alternates: tuple = ()
-    makes_room: bool = False
-    clears: Spare | None = None
+    frees: tuple = ()
 
     @property
     def command(self) -> str:
@@ -657,6 +640,57 @@ class Grant:
         if self.verb == MAIL:
             return "send item:%d subject:%s" % (int(self.guid), self.name)
         return "guid:%d" % int(self.guid)
+
+
+@dataclass(frozen=True)
+class Freeable:
+    """One carried stack a full receiver may give away to make room.
+
+    The fact, not the decision: `deliverable` picks a Freeable when a full
+    receiver also stands beside the giver, and the giver has the one slot the
+    stack costs. `bag_pressure.freeable_greys` supplies the cheapest grey a
+    vendor would buy, so a plan never gives away a stack the family wants.
+    """
+
+    guid: int
+    entry: int
+    name: str
+
+
+@dataclass(frozen=True)
+class Free:
+    """The plan's own make-room step before a hand-off.
+
+    A one-for-one move, not a sale. The bag floor is the one place a gift
+    stops: the shield is an upgrade, but the receiver has nowhere to put it.
+    A vendor or bank would need a walk the gift pass cannot arrange, while the
+    giver is already beside the receiver and has room; so the cheapest junk
+    stack goes to the giver first and the hand-off follows. GIVE and not
+    TRADE: the giver and receiver satisfy DoGive's trade-range rule by
+    construction, and a database move cannot race the hand-off's trade
+    window. It also leaves the giver's own log line saying what it is.
+    """
+
+    holder: str
+    taker: str
+    guid: int
+    entry: int
+    name: str
+    verb: str = GIVE
+
+    @property
+    def command(self) -> str:
+        return "guid:%d" % int(self.guid)
+
+    @property
+    def said(self) -> str:
+        return "%s -> %s by %s, %s (item %d), frees a slot for a hand-off" % (
+            self.holder,
+            self.taker,
+            self.verb,
+            self.name,
+            int(self.guid),
+        )
 
 
 @dataclass(frozen=True)
@@ -1134,11 +1168,6 @@ def _grant_for(holding: Holding, taker: CharacterState, reason: str) -> Grant:
             f"can: {reason}."
         ),
         said=f"{holding.holder} trade {taker.name} {holding.name}.",
-        makes_room=(
-            is_shield(holding)
-            and shield_tank(taker)
-            and taker.off_hand_kind != OFF_HAND_SHIELD
-        ),
     )
 
 
@@ -1249,12 +1278,25 @@ def spots_from_rows(rows) -> dict:
 
 
 def deliverable(
-    grants, position_rows=None, free_slots=None, at_mailbox=None, spares=None
+    grants, position_rows=None, free_slots=None, at_mailbox=None, freeables=None
 ) -> Plan:
     """The hand-offs that can land right now, each carrying the verb to use.
 
     EXACTLY ONE NOTE PER WITHHELD GRANT, so a caller can report "decided N,
     queued M, held back K" without being handed a second count to trust.
+
+    A FULL TAKER WHO IS BESIDE THE GIVER CAN MAKE THE ROOM HIMSELF (#550).
+    `freeables` is name -> carried junk stacks a full receiver may give away
+    (bag_pressure.freeable_greys). When the ranked taker has no slot, the two
+    stand within trade range, and the GIVER has a slot to take the junk, the
+    plan attaches a `Free` to that taker's grant: give the junk first, then
+    the piece. This is the shield case that started it - Grog's spare shield
+    for Erg, whose bags stood at zero - and it is deliberately a swap rather
+    than a sale: a vendor or bank needs a walk this pass cannot arrange, and
+    the giver is already beside the receiver with room. `None` means nobody
+    asked; the plan withholds exactly as it did before this gate. When it was
+    asked and no slot could be freed, the refusal says which step failed, and
+    that no hand-over skips the bags: a trade and a letter both land there.
 
     `position_rows=None` and `free_slots=None` both mean NOBODY ASKED, and
     the result is what this pass did before either gate existed - the same
@@ -1288,23 +1330,13 @@ def deliverable(
     either posted to, when `at_mailbox` names the holder as standing at a
     mailbox now, or waits with a note: a family walks together and the trade
     happens on a later pass. `at_mailbox=None` means nobody offered the post.
-
-    A FULL SHIELD TANK IS CLEARED, NOT REFUSED (#550). A trade and a letter
-    both land in the bags, so nothing equips a shield straight from another
-    character; one free slot is the whole cost. When a `makes_room` taker has
-    none, the cheapest Spare in `spares[taker]` is destroyed first and the
-    shield follows it in the same pass. Each Spare clears room once. The
-    refusal says which step failed when no Spare is left.
     """
     asked_where = position_rows is not None
     asked_room = free_slots is not None
     spots = spots_from_rows(position_rows)
     room = {str(k): int(v or 0) for k, v in dict(free_slots or {}).items()}
     posting = {str(n) for n in (at_mailbox or ())}
-    pool = {
-        str(name): sorted(held, key=lambda s: (int(s.value), int(s.guid)))
-        for name, held in dict(spares or {}).items()
-    }
+    giveable = {str(k): tuple(v) for k, v in dict(freeables or {}).items()}
 
     out, notes = [], []
     for grant in grants:
@@ -1317,59 +1349,74 @@ def deliverable(
                 f"is not in the world right now"
             )
             continue
+        chosen, verb = None, TRADE
+        walls = {"absent": [], "crowded": [], "apart": []}
+        unfreed = []
         facts = (here, spots, room, posting, asked_where, asked_room)
-        chosen, walls = _first_taker(grant, facts, pool)
+        for option in (grant,) + tuple(grant.alternates):
+            verb, wall = _delivery_wall(option, *facts)
+            frees = ()
+            if wall == "crowded":
+                stack, why = _free_step(option, here, spots, room, giveable)
+                if stack is None and freeables is not None:
+                    unfreed.append((option.taker, why))
+                    continue
+                if stack is not None:
+                    frees = (stack,)
+                    room[option.taker] = room.get(option.taker, 0) + 1
+                    room[option.holder] -= 1
+                    verb, wall = _delivery_wall(option, *facts)
+            if wall:
+                walls[wall].append(option.taker)
+                continue
+            chosen = replace(option, frees=frees)
+            if frees:
+                giveable[option.taker] = giveable[option.taker][1:]
+            break
         if chosen is None:
-            notes.append(_withheld(grant, **walls))
+            notes.append(
+                _withheld(
+                    grant, walls["crowded"], walls["absent"], walls["apart"], unfreed
+                )
+            )
             continue
-        if asked_room and chosen.clears is None:
+        if asked_room:
             room[chosen.taker] -= 1
-        out.append(chosen)
+        out.append(replace(chosen, verb=verb, alternates=()))
     return Plan(grants=tuple(out), notes=tuple(notes))
 
 
-def _first_taker(grant: Grant, facts: tuple, pool: dict) -> tuple:
-    """(the first ranked taker who can have it now, walls hit before it).
+def _free_step(option, here, spots, room, giveable):
+    """(the Free this taker can make to fit the piece, ""), else (None, why).
 
-    A `makes_room` taker stopped only by a full bag takes the cheapest Spare
-    out of `pool`: the room it frees is the room the shield uses, so the
-    room budget is left alone for that grant.
+    Called only after `_delivery_wall` has refused for room, so presence is
+    already established. Only where the two stand together, because the junk
+    moves by the same trade range GIVE obeys; only when the giver has the
+    slot the junk costs; and only for the first Freeable, which is the
+    cheapest stack a vendor would buy (`bag_pressure.freeable_greys`).
     """
-    walls = {"absent": [], "crowded": [], "apart": [], "uncleared": []}
-    for option in (grant,) + tuple(grant.alternates):
-        verb, wall = _delivery_wall(option, *facts)
-        clears = None
-        if wall == "crowded" and option.makes_room:
-            clears, verb, wall = _cleared(option, facts, pool)
-        if wall:
-            walls[wall].append(option.taker)
-            continue
-        if clears is not None:
-            option = replace(
-                option,
-                reason="%s %s's bags are full, so %s (a grey) is destroyed first "
-                "to make room." % (option.reason, option.taker, clears.name),
-            )
-        return replace(option, verb=verb, alternates=(), clears=clears), walls
-    return None, walls
-
-
-def _cleared(option: Grant, facts: tuple, pool: dict) -> tuple:
-    """(Spare, verb, "") when destroying a grey lets this taker have it now,
-    else (None, "", wall): "uncleared" when no grey is left to destroy, or the
-    wall the taker would hit with room."""
-    held = pool.get(option.taker) or []
-    if not held:
-        return None, "", "uncleared"
-    here, spots, room, posting, asked_where, asked_room = facts
-    roomy = dict(room, **{option.taker: 1})
-    verb, wall = _delivery_wall(
-        option, here, spots, roomy, posting, asked_where, asked_room
+    there = spots.get(option.taker)
+    if here is None or there is None or not _within_trade_range(here, there):
+        return None, "%s is not beside %s to give a junk stack" % (
+            option.taker,
+            option.holder,
+        )
+    if room.get(option.holder, 0) <= 0:
+        return None, "%s has no free slot to take a junk stack" % option.holder
+    stacks = giveable.get(option.taker, ())
+    if not stacks:
+        return None, "%s carries no grey a vendor would buy" % option.taker
+    stack = stacks[0]
+    return (
+        Free(
+            holder=option.taker,
+            taker=option.holder,
+            guid=int(stack.guid),
+            entry=int(stack.entry),
+            name=str(stack.name),
+        ),
+        "",
     )
-    if wall:
-        return None, "", wall
-    spare = held.pop(0)
-    return spare, verb, ""
 
 
 def _joined(names: list) -> str:
@@ -1397,16 +1444,16 @@ def _delivery_wall(option, here, spots, room, posting, asked_where, asked_room):
     return "", "apart"
 
 
-def _withheld(grant: Grant, crowded: list, absent: list, apart=(), uncleared=()) -> str:
+def _withheld(grant: Grant, crowded: list, absent: list, apart=(), unfreed=()) -> str:
     """The one note for an item every ranked taker refused.
 
     Both walls are named when both were hit. A note that said only "no free
     bag slot" for a ranking where two takers were offline and one was full
     would send the next reader looking at bags for a presence problem.
 
-    `uncleared` are full shield tanks this pass tried to make room for: the
-    note names both steps that failed, so the reader knows no grey was left
-    to destroy and that no hand-over could have skipped the bags.
+    `unfreed` is (taker, why) for each full taker whose make-room step
+    failed: the note names that step, and that no hand-over equips the piece
+    directly, so a reader knows both roads were tried (#550).
     """
     walls = []
     if crowded:
@@ -1414,12 +1461,11 @@ def _withheld(grant: Grant, crowded: list, absent: list, apart=(), uncleared=())
             "%s %s no free bag slot to receive it"
             % (_joined(crowded), "have" if len(crowded) > 1 else "has")
         )
-    if uncleared:
+    for taker, why in unfreed:
         walls.append(
-            "%s %s no free bag slot, no slot could be freed (no grey left in "
-            "the bags to destroy) and no hand-over equips it directly (a "
-            "trade or a letter lands in the bags)"
-            % (_joined(list(uncleared)), "have" if len(uncleared) > 1 else "has")
+            "%s has no free bag slot to receive it, no slot could be freed "
+            "(%s), and no hand-over equips it directly (a trade or a letter "
+            "lands in the bags)" % (taker, why)
         )
     if absent:
         walls.append(

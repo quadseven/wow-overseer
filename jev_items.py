@@ -1170,6 +1170,55 @@ def recipient_judgment(ask: RecipientAsk, outcome: jev.Outcome, mode: str) -> Ju
     )
 
 
+# WHAT FOLLOWED A RECIPIENT CHOICE (#820, jev_outcomes). A guild item's
+# disagreement is scored once its route has had this long to deliver: where
+# the item is then, and whether it is worn.
+RECIPIENT_OUTCOME_MINUTES = 60
+# Open rows scored per pass, so a backlog never makes one pass long.
+RECIPIENT_OUTCOME_LIMIT = 50
+# Where one item instance is now: its owner and, if it sits in an inventory
+# slot, which. bag 0 and slot < 19 is the worn range.
+RECIPIENT_WHERE_SQL = (
+    "SELECT c.name, IF(ci.bag = 0 AND ci.slot < 19, 1, 0) AS worn "
+    "FROM item_instance ii JOIN characters c ON c.guid = ii.owner_guid "
+    "LEFT JOIN character_inventory ci ON ci.item = ii.guid "
+    "WHERE ii.guid = %s LIMIT 1"
+)
+
+
+def recipient_snapshot(ask: RecipientAsk, chose: str) -> dict:
+    """What a recipient choice is later judged against: the item, who held
+    it, the heuristic's pick and the other pick."""
+    h = ask.holding
+    return {
+        "guid": int(h.guid),
+        "holder": str(h.holder)[:12],
+        "heuristic": str(ask.heuristic)[:12],
+        "chose": str(chose)[:12],
+    }
+
+
+def recipient_outcome_words(before: dict, where: dict | None, minutes: int) -> str:
+    """One line: who has the item now and whether it is worn, said against
+    both picks. `where` is a RECIPIENT_WHERE_SQL row, None when the item is
+    on no character (sold, destroyed or in the mail)."""
+    head = "after %d min: " % int(minutes)
+    if not where:
+        return (head + "the item is on no character")[:255]
+    name = str(where.get("name") or "")
+    worn = bool(where.get("worn"))
+    state = "worn by %s" % name if worn else "held by %s, not worn" % name
+    if name == before.get("heuristic"):
+        side = "the heuristic pick"
+    elif name == before.get("chose"):
+        side = "the other pick"
+    elif name == before.get("holder"):
+        side = "still the holder"
+    else:
+        side = "neither pick"
+    return (head + "%s (%s)" % (state, side))[:255]
+
+
 async def recipient_pass(client, asks, describe, closet, mode, limit=16) -> list:
     """Ask Jev about each guild item; the judgments, `acted` unset.
 
@@ -1186,7 +1235,18 @@ async def recipient_pass(client, asks, describe, closet, mode, limit=16) -> list
         item = describe(int(h.entry)) or {"name": h.name, "item_level": h.item_level}
         state, questions = recipient_question(ask, item, closet)
         async with gate:
-            outcome = await client.ask(KIND_GUILD, state, questions, wait=wait)
+            # The heuristic's pick and the outcome snapshot go to a
+            # comparison backend only (#820): its disagreement with the
+            # heuristic is recorded and scored as the heuristic arm.
+            outcome = await client.ask(
+                KIND_GUILD,
+                state,
+                questions,
+                wait=wait,
+                heuristic={"to": ask.heuristic},
+                subject=h.holder,
+                before=lambda chose: recipient_snapshot(ask, chose),
+            )
         return recipient_judgment(ask, outcome, mode)
 
     return list(await asyncio.gather(*(one(a) for a in asks[: max(0, int(limit))])))

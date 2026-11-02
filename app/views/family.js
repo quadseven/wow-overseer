@@ -28,7 +28,7 @@ function paths(fam) {
   return {
     family: q("/api/family", fam), agenda: D.agendaPath(fam), levelroute: q("/api/levelroute", fam),
     needs: q("/api/needs", fam), questlog: q("/api/questlog", fam),
-    auras: "/api/auras", meter: "/api/meter", party: "/api/party-status",
+    auras: "/api/auras", meter: "/api/meter", party: "/api/party-status", danger: "/api/v2/zone-danger",
   };
 }
 
@@ -111,6 +111,24 @@ function meter(ctx, p, fam) {
     body = rows.map(({ m, v }) => html`<div class="mrow"><a href="${memberHref(m.name)}" class="member">${m.name}</a><span class="mbar"><span class="mfill m-${k}" style="width:${Math.round((100 * (v || 0)) / top)}%"></span></span><span class="num mval">${v === null ? notMeasured("none") : k === "threat" ? v + "%" : v.toLocaleString("en-US")}</span></div>`);
   }
   return html`<div class="card fam-card"><div class="spread"><span class="b">Damage, healing and threat</span><span class="dim small">${line}</span></div>${tabs}${body}</div>`;
+}
+
+function zoneDanger(ctx, p, fam) {
+  const read = ctx.get(p.danger);
+  let body;
+  if (!D.ok(read)) body = waiting(read, "Travel danger");
+  else {
+    const entry = (read.data.families || []).find((f) => f.family === fam);
+    const d = entry && entry.danger;
+    if (!entry || entry.status !== "online" || !d) {
+      body = state("unmeasured", "Travel danger not measured", (entry && entry.error) || "No routing sample is available.");
+    } else {
+      const why = html`<p class="muted small">For ${entry.sampled_for}'s current map (${d.map_id}) and party minimum level ${d.party_level}. The routing rule counts creature deaths in the last ${d.window_seconds / 3600} hours to enemies at least ${d.level_gap} levels above the party; friendly killers are excluded. Avoidance starts at score ${d.threshold}.</p>`;
+      const rows = d.zones.length ? html`<ul class="danger-zones">${d.zones.map((z) => html`<li><span class="b">${z.name || "Zone " + z.zone_id}</span><span class="num warn">Score ${z.score}</span><span class="muted small">${plural(z.deaths_counted, "death")} counted; strongest killer level ${z.strongest_killer}.</span></li>`)}</ul>` : html`<p>No zones meet the routing threshold in this sample.</p>`;
+      body = html`${why}${rows}<span class="dim small">Sampled ${since(d.sampled_at)}. This list explains route avoidance; it does not guarantee a safe path.</span>`;
+    }
+  }
+  return html`<section class="travel-danger" aria-labelledby="travel-danger-heading"><h2 id="travel-danger-heading">Travel danger</h2>${body}</section>`;
 }
 
 // ---- quest board --------------------------------------------------------------------
@@ -196,6 +214,7 @@ export default {
 ${lead ? html`<p class="lead">${lead}</p>` : D.ok(agenda) ? "" : html`<p class="lead">${notMeasured("The agenda is not measured.")}</p>`}
 ${memberStrip(ctx, p)}
 <div class="fam-grid">${buffs(ctx, p, fam)}${meter(ctx, p, fam)}</div>
+${zoneDanger(ctx, p, fam)}
 ${questBoard(ctx, p)}
 <div class="fam-grid">${needsBlocks(ctx, p)}</div>
 ${route(ctx, p)}`;

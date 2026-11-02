@@ -65,7 +65,9 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
     not spawned, or the world refused every spawn of it as gone;
   * OBJECT_ENDER_MISSING: only a gameobject is named to hand it in to, and it
     has no spawn in the world, or the world refused every spawn of it as gone
-    (#1594);
+    (#1594). An incomplete quest one of whose enders is an object with no
+    static spawn is not judged on its ender at all: a script or an event
+    summons that object, so it is worked and only a stall breaks it (#1606);
   * SOURCE_MISSING: the world refused every spawn of its objective as gone.
     A quest whose objective no spawned creature is or drops is not judged on
     that alone (a script may summon it, a chest or a vendor may hold the
@@ -196,6 +198,11 @@ FAILS_BEFORE_BROKEN = 3
 TURN_IN_RETRY_MINUTES = 6 * 60
 # The quest ledger's reason column.
 REASON_WIDTH = 255
+# Quest errands find their NPC within the walk's arrival radius (20 yards).
+# Keep questers well inside that radius even when the spawn is above or below
+# the character on uneven ground.
+QUESTER_NPC_NEAR = 12
+QUESTER_HUNT_NEAR = 12
 
 _FAILED = ("error", "failed", "refused", "expired")
 _WENT = ("applied", "delivered")
@@ -396,6 +403,9 @@ class Facts:
     ender_objects: bool = False
     # The spawns of the gameobjects named to take it (ObjectSpawn), #1594.
     object_enders: tuple = ()
+    # A gameobject named to take it has no static spawn: a script or an event
+    # summons it, so its absence says nothing of the quest (#1606).
+    object_unspawned: bool = False
 
 
 @dataclass(frozen=True)
@@ -439,6 +449,7 @@ def catalogue(quest_rows, giver_rows, spawn_rows, loot_rows, start_rows, ender_r
     )
     named, npc_enders, object_enders = _named(start_rows, ender_rows)
     object_spots = _object_ender_spots(ender_rows)
+    summoned = _unspawned_object_enders(ender_rows)
     zones = {_int(r.get("id")): zone_of(r.get("zone")) for r in rows}
     classic_zones = _classic_zones(book, zones)
     facts = {}
@@ -458,6 +469,7 @@ def catalogue(quest_rows, giver_rows, spawn_rows, loot_rows, start_rows, ender_r
             ender_npcs=qid in npc_enders,
             ender_objects=qid in object_enders,
             object_enders=object_spots.get(qid, ()),
+            object_unspawned=qid in summoned,
         )
         kept[qid] = quest
         band_rows.append(
@@ -508,6 +520,16 @@ def _object_ender_spots(ender_rows) -> dict:
         if spot not in spots:
             spots.append(spot)
     return {qid: tuple(spots) for qid, spots in out.items()}
+
+
+def _unspawned_object_enders(ender_rows) -> set:
+    """The quests a gameobject with no spawn in the world is named to take
+    (ENDERS_SQL's guid 0 rows): one a script or an event summons (#1606)."""
+    return {
+        _int(r.get("quest"))
+        for r in ender_rows or ()
+        if str(r.get("kind") or "") == "gameobject" and not _int(r.get("guid"))
+    }
 
 
 def _classic_zones(book, zones) -> set:
@@ -971,7 +993,10 @@ def _broken_reason(
     if status == STATUS_FAILED:
         return FAILED
     missing = _ender_missing(quest, facts, gone, object_gone)
-    if missing:
+    # An incomplete quest one of whose enders is an object with no static
+    # spawn is not judged on its ender: a script or an event summons that
+    # object, so the quest is worked, and only a stall breaks it (#1606).
+    if missing and not (status == STATUS_INCOMPLETE and facts.object_unspawned):
         return missing
     if status == STATUS_INCOMPLETE and _fields_gone(quest, gone):
         return SOURCE_MISSING
@@ -1362,7 +1387,7 @@ def step_for(member, move, cap, quest=None, hunt=True, item_form=True):
         if not row and yards <= classquest.HUNT_REACH:
             return None
         rows = (guildcorps.Row("job", row, "", source),) if row else ()
-        if row and yards <= classhunt.HUNT_NEAR:
+        if row and yards <= QUESTER_HUNT_NEAR:
             walk = None
     elif move.kind == classquest.CROSS:
         rows = _move_rows(move, guildjobs.source_for(CROSS_ACTION, member.name))
@@ -1391,6 +1416,9 @@ def _walk_row(member, move, cap):
         int(move.spot.map_id),
         float(move.spot.x),
         float(move.spot.y),
+        near=QUESTER_NPC_NEAR
+        if move.kind in (classquest.TAKE, classquest.TURN_IN)
+        else QUESTER_HUNT_NEAR,
     )
     return guildcorps.Row(
         "job",
