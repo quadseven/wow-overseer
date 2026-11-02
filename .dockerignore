@@ -1,11 +1,15 @@
-# The Dockerfile COPYs an explicit list of top-level .py/.json/.html files -
-# it never reaches into any of these - but keeping them out of the build
-# context anyway makes `docker build .` faster and stops a stray secret in
+# The Dockerfile copies an explicit list of runtime files. Keeping other
+# files out of the build context makes `docker build .` faster and stops a stray secret in
 # .git history or a local .env from ever being sendable to a daemon.
 .git/
 .github/
 tests/
-tools/
+# AI-REVIEW 2026-11-01 [codex/in-process/release-sequence] METRIC-IMAGE-891
+# (standard-ai-review-provenance, PR #1765): COPY cannot read excluded files;
+# admit only the scheduled collector and its dependency to the build context.
+tools/*
+!tools/metric_watcher.py
+!tools/realm_state_audit.py
 mod-overseer/
 patches/
 wow-addons/
