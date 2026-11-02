@@ -34222,7 +34222,7 @@ def _quester_catalogue():
         qids = ids(r["id"] for r in quests)
         givers = _job_read(cur, "quester quest givers", classquest.GIVERS_SQL.format(quests=qids))
         items = {int(r[f"item{i}"]) for r in quests for i in range(1, 7) if r.get(f"item{i}")}
-        loot = _class_rows(cur, "quester quest loot", classquest.LOOT_SQL, "items", items)
+        loot = _class_rows(cur, "quester quest loot", questers.LOOT_SQL, "items", items)
         entries = {int(r[f"npc{i}"]) for r in quests for i in range(1, 5)
                    if (r.get(f"npc{i}") or 0) > 0} | {int(r["entry"]) for r in loot}
         spawns = _class_rows(cur, "quester quest spawns", classquest.SPAWNS_SQL, "entries",

@@ -13,6 +13,56 @@ PRIEST, WARRIOR = 5, 1
 ALLIANCE_MASK, HORDE_MASK = 1101, 690
 
 
+class ReferencedQuestItemLoot(unittest.TestCase):
+    def test_reference_loot_makes_its_creature_an_objective_field(self):
+        cat = questers.catalogue(
+            [
+                {
+                    **quest(60, ELWYNN, 7, min_level=4, title="Kobold Candles"),
+                    "item1": 773,
+                    "item_count1": 8,
+                }
+            ],
+            [giver(60, "start", 6000, 251, 0, 0), giver(60, "end", 6000, 251, 0, 0)],
+            [spawn(6001, 6, 25, 0, level=4)],
+            [{"item": 773, "entry": 6}],
+            [started(60, 251)],
+            [ended(60, 251)],
+        )
+        candle_quest = cat.quest(60)
+        self.assertEqual([(773, 8)], list(candle_quest.items))
+        self.assertEqual([6], [field.entry for field in candle_quest.fields])
+        member = questers.Member(
+            name="Tester",
+            level=7,
+            race=HUMAN,
+            class_id=PRIEST,
+            map_id=0,
+            x=25.0,
+            y=0.0,
+            zone_id=ELWYNN,
+            online=True,
+            quest_log={60: questers.STATUS_INCOMPLETE},
+        )
+        hunt = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual((classquest.HUNT, 60), (hunt.move.kind, hunt.move.quest))
+        turn_in = questers.plan(
+            cat,
+            questers.Member(
+                **{**member.__dict__, "quest_log": {60: questers.STATUS_COMPLETE}}
+            ),
+            questers.Clock(),
+            60.0,
+        )
+        self.assertEqual(
+            (classquest.TURN_IN, 60), (turn_in.move.kind, turn_in.move.quest)
+        )
+
+    def test_quester_loot_query_resolves_reference_rows(self):
+        self.assertIn("reference_loot_template", questers.LOOT_SQL)
+        self.assertIn("creature_loot_template", questers.LOOT_SQL)
+
+
 def quest(
     qid,
     zone,
@@ -44,6 +94,8 @@ def quest(
         "grp": 0,
         "npc1": kill,
         "npc_count1": count,
+        "item1": 0,
+        "item_count1": 0,
     }
 
 

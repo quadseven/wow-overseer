@@ -250,6 +250,21 @@ QUESTS_SQL = (
     + ") AND q.LogTitle NOT LIKE '<%%' AND q.LogTitle NOT LIKE 'NOT A QUEST%%'"
 )
 
+# Required items can be listed directly in creature_loot_template or inside a
+# referenced loot table. Resolve both so item objectives point at their actual
+# creature fields, including Kobold Candles' Large Candle drops.
+LOOT_SQL = (
+    "SELECT l.Item AS item, ct.entry AS entry "
+    "FROM acore_world.creature_loot_template l "
+    "JOIN acore_world.creature_template ct ON ct.lootid = l.Entry "
+    "WHERE l.Item IN ({items}) UNION "
+    "SELECT r.Item AS item, ct.entry AS entry "
+    "FROM acore_world.creature_loot_template l "
+    "JOIN acore_world.creature_template ct ON ct.lootid = l.Entry "
+    "JOIN acore_world.reference_loot_template r ON r.Entry = l.Reference "
+    "WHERE r.Item IN ({items})"
+)
+
 # What starts each quest besides a spawned creature (classquest.STARTERS_SQL),
 # and every creature named as a giver whether it is spawned or not, so a giver
 # that is named and not in the world is told from a quest nothing gives. Two
