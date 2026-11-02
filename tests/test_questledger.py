@@ -127,6 +127,13 @@ class TheLedgerMoves(unittest.TestCase):
             e[(10, 7)].args(), (10, 7, "Tharn", "taken", EARLIER, None, "")
         )
 
+    def test_a_broken_quest_taken_again_clears_its_old_reason(self):
+        old = ledger(56, 7, "broken", finished=EARLIER, reason="stalled")
+        e = moved([old], [log(56, 7)])
+        self.assertEqual(
+            e[(56, 7)].args(), (56, 7, "Tharn", "taken", EARLIER, None, "")
+        )
+
     def test_a_completed_quest_back_in_the_log_stays_completed(self):
         self.assertEqual(moved([ledger(10, 7, "completed")], [log(10, 7)]), {})
 
