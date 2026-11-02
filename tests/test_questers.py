@@ -81,7 +81,14 @@ def ended(qid, entry, kind="creature"):
     return {"quest": qid, "kind": kind, "entry": entry}
 
 
-def world(extra_quests=(), extra_givers=(), extra_starts=(), extra_ends=(), drop=()):
+def world(
+    extra_quests=(),
+    extra_givers=(),
+    extra_starts=(),
+    extra_ends=(),
+    extra_spawns=(),
+    drop=(),
+):
     """Northshire (sorted under its area, 9), Goldshire in Elwynn (12), two
     zones further on, and quests a Human priest may not take."""
     quests = [
@@ -122,6 +129,7 @@ def world(extra_quests=(), extra_givers=(), extra_starts=(), extra_ends=(), drop
         giver(31, "end", 1030, 130, 2000, 0),
     ] + list(extra_givers)
     spawns = [spawn(2001, 200, 150, 0), spawn(2002, 201, 250, 0, level=3)]
+    spawns.extend(extra_spawns)
     # What is named to give and take each quest, spawned or not.
     named = {g["quest"]: g["entry"] for g in givers if g["role"] == "start"}
     starts = [started(q, e) for q, e in sorted(named.items())] + list(extra_starts)

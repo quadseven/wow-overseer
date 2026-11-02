@@ -214,6 +214,11 @@ FAILS_BEFORE_BROKEN = 3
 TURN_IN_RETRY_MINUTES = 6 * 60
 # The quest ledger's reason column.
 REASON_WIDTH = 255
+# Quest errands find their NPC within the walk's arrival radius (20 yards).
+# Keep questers well inside that radius even when the spawn is above or below
+# the character on uneven ground.
+QUESTER_NPC_NEAR = 12
+QUESTER_HUNT_NEAR = 12
 
 _FAILED = ("error", "failed", "refused", "expired")
 _WENT = ("applied", "delivered")
@@ -1408,7 +1413,7 @@ def step_for(member, move, cap, quest=None, hunt=True, item_form=True):
         if not row and yards <= classquest.HUNT_REACH:
             return None
         rows = (guildcorps.Row("job", row, "", source),) if row else ()
-        if row and yards <= classhunt.HUNT_NEAR:
+        if row and yards <= QUESTER_HUNT_NEAR:
             walk = None
     elif move.kind == classquest.CROSS:
         rows = _move_rows(move, guildjobs.source_for(CROSS_ACTION, member.name))
@@ -1437,6 +1442,9 @@ def _walk_row(member, move, cap):
         int(move.spot.map_id),
         float(move.spot.x),
         float(move.spot.y),
+        near=QUESTER_NPC_NEAR
+        if move.kind in (classquest.TAKE, classquest.TURN_IN)
+        else QUESTER_HUNT_NEAR,
     )
     return guildcorps.Row(
         "job",
