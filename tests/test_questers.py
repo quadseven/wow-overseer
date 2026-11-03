@@ -24,9 +24,11 @@ def quest(
     prev=0,
     kill=0,
     count=1,
+    item=0,
+    item_count=0,
     title="",
 ):
-    return {
+    row = {
         "id": qid,
         "title": title or "Quest %d" % qid,
         "sort": zone,
@@ -45,6 +47,10 @@ def quest(
         "npc1": kill,
         "npc_count1": count,
     }
+    for i in range(1, 7):
+        row["item%d" % i] = item if i == 1 else 0
+        row["item_count%d" % i] = item_count if i == 1 else 0
+    return row
 
 
 def giver(qid, role, guid, entry, x, y, map_id=0, name="Marshal"):
@@ -88,6 +94,7 @@ def world(
     extra_ends=(),
     extra_spawns=(),
     drop=(),
+    loot_rows=(),
 ):
     """Northshire (sorted under its area, 9), Goldshire in Elwynn (12), two
     zones further on, and quests a Human priest may not take."""
@@ -138,7 +145,7 @@ def world(
     # The spawned givers and enders catalogue() reads: `drop` takes the spawn
     # out of these while `starts` and `ends` still name it.
     givers = [g for g in givers if g["guid"] not in drop]
-    return questers.catalogue(quests, givers, spawns, [], starts, ends)
+    return questers.catalogue(quests, givers, spawns, loot_rows, starts, ends)
 
 
 def mirra(**kw):
@@ -758,6 +765,46 @@ class Steps(unittest.TestCase):
             [r.command for r in step.rows], ["hunt-spawn creature:200 count:8 max:480"]
         )
 
+    def test_gold_dust_exchange_hunts_its_item_dropper(self):
+        # These are the quest_template and loot rows projected by
+        # questers.QUESTS_SQL and classquest.LOOT_SQL. The spawn guid is synthetic.
+        cat = world(
+            extra_quests=[
+                quest(
+                    47,
+                    ELWYNN,
+                    7,
+                    min_level=4,
+                    item=773,
+                    item_count=10,
+                    title="Gold Dust Exchange",
+                )
+            ],
+            extra_givers=[
+                giver(47, "start", 1047, 197, 155.0, 0.0, name="Remy"),
+                giver(47, "end", 1047, 197, 155.0, 0.0, name="Remy"),
+            ],
+            extra_starts=[started(47, 197)],
+            extra_ends=[ended(47, 197)],
+            extra_spawns=[spawn(2047, 476, 300.0, 0.0, level=4, name="Kobold Miner")],
+            loot_rows=[{"item": 773, "entry": 476}],
+        )
+        member = mirra(
+            level=7,
+            x=300.0,
+            quest_log={47: questers.STATUS_INCOMPLETE},
+            quest_item_counts={47: {773: 4}},
+            quests_done=frozenset({1, 2, 3, 6, 20, 30}),
+        )
+
+        p = questers.plan(cat, member, questers.Clock(), 0.0, last_quest=47)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.HUNT, 47))
+        step = questers.step_for(member, p.move, 0, cat.quest(47))
+        self.assertEqual(
+            [r.command for r in step.rows],
+            ["hunt-spawn creature:476 item:773 count:6 max:480"],
+        )
+
     def test_with_no_hunt_verb_a_far_hunt_is_the_walk_to_the_spawn_alone(self):
         member = mirra(x=-400.0, quest_log={1: 3}, quests_done=frozenset({2, 3}))
         cat = world()
@@ -811,6 +858,11 @@ class Broken(unittest.TestCase):
         )
         self.assertEqual((p.move.kind, p.move.quest), (classquest.ABANDON, 1))
         self.assertIn(questers.STALLED, p.move.said)
+
+    def test_only_gold_dust_exchanges_old_stall_is_retried_by_this_fix(self):
+        self.assertTrue(questers.retry_stalled(47, questers.STALLED))
+        self.assertFalse(questers.retry_stalled(47, questers.STALLED_UNSOURCED))
+        self.assertFalse(questers.retry_stalled(48, questers.STALLED))
 
     def test_dusky_crab_cakes_ledger_explains_the_unsupported_cooking_step(self):
         # The world rows name six Dusky Crab Cakes as a required item. The
@@ -1537,7 +1589,7 @@ class ASummonedObjectEnder(unittest.TestCase):
     def test_log_rows_keep_each_creature_objective_counter(self):
         self.assertIn("q.RequiredNpcOrGo1 AS npc1", questers.LOG_SQL)
         self.assertIn("s.mobcount1", questers.LOG_SQL)
-        logs, progress, objectives, _done = questers._logs_by_guid(
+        logs, progress, objectives, item_counts, _done = questers._logs_by_guid(
             [
                 {
                     "guid": 1,
@@ -1552,6 +1604,8 @@ class ASummonedObjectEnder(unittest.TestCase):
                     "mobcount2": 0,
                     "mobcount3": 0,
                     "mobcount4": 0,
+                    "item1": 773,
+                    "itemcount1": 4,
                 }
             ],
             [],
@@ -1559,6 +1613,7 @@ class ASummonedObjectEnder(unittest.TestCase):
         self.assertEqual(logs[1][104], questers.STATUS_INCOMPLETE)
         self.assertEqual(progress[1][104], 10)
         self.assertEqual(objectives[1][104], {127: 10, 171: 0, 456: 0})
+        self.assertEqual(item_counts[1][104], {773: 4})
 
     def test_coastal_menace_hunts_only_objectives_with_remaining_kills(self):
         coastal = quest(

@@ -43,9 +43,10 @@ def quester(name="Mirra", **kw):
 class Pass:
     """A bridge with only what the quester pass reads, and what it wrote."""
 
-    def __init__(self, members, ledger=None, cat=None):
+    def __init__(self, members, ledger=None, ledger_reasons=None, cat=None):
         self.members = list(members)
         self.ledger = dict(ledger or {})
+        self.ledger_reasons = dict(ledger_reasons or {})
         self.cat = cat or world()
         self.hunts_open = 0
         self.crossings = ()
@@ -69,7 +70,14 @@ class Pass:
 
     def _facts(self, names):
         self.asked.append(list(names))
-        return self.members, (), self.ledger, self.hunts_open, self.crossings
+        return (
+            self.members,
+            (),
+            self.ledger,
+            self.ledger_reasons,
+            self.hunts_open,
+            self.crossings,
+        )
 
     def run(self, now=0.0):
         with (
@@ -145,6 +153,35 @@ class TheQuesterPass(unittest.TestCase):
             [r.command for r in step.rows], ["hunt-spawn creature:40 count:8 max:480"]
         )
         self.assertEqual(step.walk.command, "walk-to-spawn creature:2007 near:12")
+
+    def test_a_fixed_item_quest_is_retried_after_its_old_stall_ledger_row(self):
+        cat = world(
+            extra_quests=[
+                quest(
+                    47,
+                    ELWYNN,
+                    7,
+                    min_level=4,
+                    item=773,
+                    item_count=10,
+                    title="Gold Dust Exchange",
+                )
+            ],
+            extra_givers=[
+                giver(47, "start", 1047, 197, 155.0, 0.0, name="Remy"),
+                giver(47, "end", 1047, 197, 155.0, 0.0, name="Remy"),
+            ],
+            extra_starts=[started(47, 197)],
+            extra_ends=[ended(47, 197)],
+        )
+        run = Pass(
+            [quester(level=7, quests_done=frozenset({1, 2, 3, 6, 20, 30}))],
+            ledger={("Mirra", 47): "broken"},
+            ledger_reasons={("Mirra", 47): questers.STALLED},
+            cat=cat,
+        ).run()
+
+        self.assertEqual([r.command for r in run.started[0].rows], ["take quest:47"])
 
     def test_it_moves_zones_only_when_nothing_in_its_zone_is_left(self):
         left = Pass([quester(level=5, quests_done=frozenset({1, 3, 6}))]).run()

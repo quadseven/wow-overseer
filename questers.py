@@ -221,6 +221,10 @@ def _quest_complete(quest, status, progress=0) -> bool:
 # ledger's own words for it (questledger.FAILED_REASON, #923).
 FAILED = "the quest failed in the log"
 STALLED = "its objectives did not move for 2 hours of play"
+# Quest 47 was stalled because item-drop sources were absent from _hunt's
+# target selection. Once this code can hunt those sources, retry only that
+# historical stall instead of keeping it permanently skipped in the ledger.
+RETRYABLE_STALLS = frozenset({47})
 GIVER_MISSING = "the quest giver is not in the world"
 # Further Concerns and Report to Gryan Stoutmantle require speaking to an NPC
 # for objective credit. Questers can hunt and use quest verbs, but cannot speak
@@ -384,6 +388,10 @@ LOG_SQL = (
     "SELECT s.guid, s.quest, s.status, "
     "(mobcount1 + mobcount2 + mobcount3 + mobcount4 + itemcount1 + itemcount2 + "
     "itemcount3 + itemcount4 + itemcount5 + itemcount6) AS progress, "
+    + ", ".join(
+        "q.RequiredItemId%d AS item%d, s.itemcount%d" % (i, i, i) for i in range(1, 7)
+    )
+    + ", "
     "q.RequiredNpcOrGo1 AS npc1, q.RequiredNpcOrGo2 AS npc2, "
     "q.RequiredNpcOrGo3 AS npc3, q.RequiredNpcOrGo4 AS npc4, "
     "s.mobcount1, s.mobcount2, s.mobcount3, s.mobcount4 "
@@ -397,7 +405,7 @@ REWARDED_SQL = (
 # quests, and a broken quest written into it. A quest already in the ledger
 # keeps the time it was first taken.
 LEDGER_SQL = (
-    "SELECT l.quest, c.name, l.state FROM overseer_quest_ledger l "
+    "SELECT l.quest, c.name, l.state, l.reason FROM overseer_quest_ledger l "
     "JOIN characters c ON c.guid = l.guid WHERE c.name IN ({names})"
 )
 BROKEN_SQL = (
@@ -416,7 +424,9 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
 
     `reputation_rows` are REPUTATION_SQL's; None (not read) leaves each
     member's reputation unknown, and a reputation gate is then not judged."""
-    log_by, progress_by, objectives_by, done_by = _logs_by_guid(log_rows, rewarded_rows)
+    log_by, progress_by, objectives_by, item_counts_by, done_by = _logs_by_guid(
+        log_rows, rewarded_rows
+    )
     rep_by = None
     if reputation_rows is not None:
         rep_by = {}
@@ -433,6 +443,7 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
             frozenset(done_by.get(guid, ())),
             progress_by.get(guid, {}),
             objectives_by.get(guid, {}),
+            item_counts_by.get(guid, {}),
         )
         if rep_by is not None:
             member = replace(member, reputation=rep_by.get(guid, {}))
@@ -442,7 +453,7 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
 
 def _logs_by_guid(log_rows, rewarded_rows) -> tuple:
     """Status, total and per-creature objective progress, and rewards by guid."""
-    log_by, progress_by, objectives_by, done_by = {}, {}, {}, {}
+    log_by, progress_by, objectives_by, item_counts_by, done_by = {}, {}, {}, {}, {}
     for r in log_rows or ():
         guid, qid = _int(r.get("guid")), _int(r.get("quest"))
         log_by.setdefault(guid, {})[qid] = _int(r.get("status"))
@@ -453,9 +464,15 @@ def _logs_by_guid(log_rows, rewarded_rows) -> tuple:
             if _int(r.get("npc%d" % i)) > 0
         }
         objectives_by.setdefault(guid, {})[qid] = objectives
+        item_counts = {
+            _int(r.get("item%d" % i)): _int(r.get("itemcount%d" % i))
+            for i in range(1, 7)
+            if _int(r.get("item%d" % i)) > 0
+        }
+        item_counts_by.setdefault(guid, {})[qid] = item_counts
     for r in rewarded_rows or ():
         done_by.setdefault(_int(r.get("guid")), set()).add(_int(r.get("quest")))
-    return log_by, progress_by, objectives_by, done_by
+    return log_by, progress_by, objectives_by, item_counts_by, done_by
 
 
 def _alive(row) -> bool:
@@ -466,7 +483,9 @@ def _alive(row) -> bool:
     return _int(health) > 1 or (_int(health) == 1 and not row.get("has_corpse"))
 
 
-def _member_from_row(r, quest_log, quests_done, quest_progress, quest_objectives):
+def _member_from_row(
+    r, quest_log, quests_done, quest_progress, quest_objectives, quest_item_counts
+):
     fresh = r.get("pos_x") is not None and r.get("pos_y") is not None
     map_id = r.get("map_id")
     return Member(
@@ -484,6 +503,7 @@ def _member_from_row(r, quest_log, quests_done, quest_progress, quest_objectives
         quests_done=quests_done,
         quest_progress=quest_progress,
         quest_objectives=quest_objectives,
+        quest_item_counts=quest_item_counts,
     )
 
 
@@ -567,6 +587,11 @@ def _int(value, default=0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def retry_stalled(quest_id, reason) -> bool:
+    """Whether a fixed quest's old stalled ledger row should be tried again."""
+    return int(quest_id) in RETRYABLE_STALLS and str(reason or "") == STALLED
 
 
 def catalogue(
@@ -754,6 +779,8 @@ class Member:
     quests_done: frozenset = frozenset()
     # quest id -> the sum of its objective counters
     quest_progress: dict = field(default_factory=dict)
+    # quest id -> required item entry -> the counter in character_queststatus
+    quest_item_counts: dict = field(default_factory=dict)
     # quest id -> creature entry -> its objective counter
     quest_objectives: dict = field(default_factory=dict)
     # Free general bag slots (bag_pressure.general_bag_room); None when not
@@ -1640,11 +1667,18 @@ def _hunt(cat: Catalogue, member, skip, left):
                 for entry, count in kills.items()
                 if int(progress.get(entry, 0)) < count
             }
+        item_counts = member.quest_item_counts.get(qid, {})
+        needed_items = {
+            item for item, count in quest.items if int(item_counts.get(item, 0)) < count
+        }
+        targets = set(kills) | {
+            entry for item, entry in quest.drops if item in needed_items
+        }
         spot = _nearest(
             member,
             classquest.within_level(
                 member,
-                tuple(s for s in classquest.solo_fields(quest) if s.entry in kills),
+                tuple(s for s in classquest.solo_fields(quest) if s.entry in targets),
             ),
             left,
         )
@@ -1684,8 +1718,11 @@ def step_for(member, move, cap, quest=None, hunt=True, item_form=True):
     source = guildjobs.source_for(ACTION, member.name)
     walk = _walk_row(member, move, cap)
     if move.kind == classquest.HUNT:
+        held = member.quest_item_counts.get(move.quest, {})
         row = (
-            classhunt.command(quest, move.spot.entry, None, item_form)
+            classhunt.command(
+                quest, move.spot.entry, lambda item: held.get(item, 0), item_form
+            )
             if (hunt and quest is not None)
             else ""
         )

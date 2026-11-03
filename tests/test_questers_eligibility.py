@@ -295,6 +295,30 @@ class TheBridgeReadsWhatTheRulesNeed(unittest.TestCase):
         (unread,) = questers.members_from_rows(rows, [], [])
         self.assertIsNone(unread.reputation)
 
+    def test_quest_log_rows_keep_each_required_item_counter(self):
+        member_rows = [
+            {"guid": 7, "name": "Bromli", "level": 7, "race": HUMAN, "class_id": 1}
+        ]
+        log_rows = [
+            {
+                "guid": 7,
+                "quest": 47,
+                "status": questers.STATUS_INCOMPLETE,
+                "progress": 4,
+                "item1": 773,
+                "itemcount1": 4,
+            }
+        ]
+
+        (member,) = questers.members_from_rows(member_rows, log_rows, [])
+
+        self.assertEqual(member.quest_item_counts, {47: {773: 4}})
+        self.assertIn(
+            "q.RequiredItemId1 AS item1, s.itemcount1, "
+            "q.RequiredItemId2 AS item2, s.itemcount2",
+            questers.LOG_SQL,
+        )
+
 
 class TheBridgeHandsTheQuesterItsRoom(unittest.TestCase):
     """bridge._fetch_quester_facts gives each quester its free bag slots and
