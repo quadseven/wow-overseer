@@ -1464,3 +1464,146 @@ class ASummonedObjectEnder(unittest.TestCase):
         p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
         self.assertEqual([b.quest for b in p.broken], [40])
         self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+
+class Quest102PatrollingWestfall(unittest.TestCase):
+    """Quest 102 "Patrolling Westfall" (level 14, Westfall zone) is broken.
+
+    Questers affected: Durga, Mirra, Bromli, Kellan, Pindle (Cave guild).
+    Pindle: "no giver of that quest in reach" (cannot obtain).
+    Others: "objectives did not move for 2 hours of play" (stall).
+    """
+
+    def test_quest_102_giver_missing_for_pindle(self):
+        """Quest 102 has giver_named but no starter spawn - GIVER_MISSING for Pindle."""
+        # Simulate the real Quest 102: has named giver but no starter spawn in world
+        cat = world(
+            extra_quests=[
+                quest(
+                    102, WESTFALL, 14, title="Patrolling Westfall", races=ALLIANCE_MASK
+                ),
+            ],
+            extra_givers=[
+                giver(102, "start", 1102, 1102, 120, 3000, 0, "Gryan Stoutmantle"),
+                giver(102, "end", 1102, 1102, 120, 3000, 0, "Gryan Stoutmantle"),
+            ],
+            drop=(1102,),
+        )  # Drop the starter spawn - giver not in world
+        m = mirra(name="Pindle", race=7, level=29, zone_id=WESTFALL)
+        # in_reach should still include it (open_to passes)
+        reachable = questers.in_reach(cat, m, WESTFALL)
+        self.assertIn(102, reachable, "Quest 102 should be in reach (open_to passes)")
+        # But _giver_failure should return GIVER_MISSING
+        gone = frozenset()
+        refused = {}
+        why = questers._giver_failure(cat, m, 102, gone, refused)
+        self.assertEqual(why, questers.GIVER_MISSING, "Should report GIVER_MISSING")
+
+    def test_quest_102_stalled_for_others(self):
+        """Quest 102 objectives have no valid spawns - STALLED for other questers."""
+        # Quest has objectives (kill=500) but no spawn for entry 500 in Westfall
+        cat = world(
+            extra_quests=[
+                quest(
+                    102,
+                    WESTFALL,
+                    14,
+                    title="Patrolling Westfall",
+                    races=ALLIANCE_MASK,
+                    kill=500,
+                    count=10,
+                ),
+            ],
+            extra_givers=[
+                giver(102, "start", 1102, 1102, 120, 3000, 0, "Gryan Stoutmantle"),
+                giver(102, "end", 1102, 1102, 120, 3000, 0, "Gryan Stoutmantle"),
+            ],
+        )
+        m = mirra(
+            name="Durga", race=DWARF, level=29, zone_id=WESTFALL, quest_log={102: 3}
+        )
+        # No spawn for entry 500 means _unhuntable returns True
+        unhuntable = questers._unhuntable(cat, m, 102)
+        self.assertTrue(unhuntable, "Quest 102 should be unhuntable (no spawns)")
+        # This causes STALLED after 2 hours
+
+    def test_quest_102_obtainable_by_all_alliance_races(self):
+        """Quest 102 should be obtainable by all Alliance races including Gnome."""
+        # Simulate Quest 102 WITH giver spawn in Westfall (the correct database state)
+        cat = world(
+            extra_quests=[
+                quest(
+                    102, WESTFALL, 14, title="Patrolling Westfall", races=ALLIANCE_MASK
+                ),
+            ],
+            extra_givers=[
+                giver(102, "start", 1102, 1102, 120, 3000, 0, "Gryan Stoutmantle"),
+                giver(102, "end", 1102, 1102, 120, 3000, 0, "Gryan Stoutmantle"),
+            ],
+            extra_spawns=[
+                spawn(
+                    1102, 1102, 120, 3000, level=14, map_id=0, name="Gryan Stoutmantle"
+                ),
+            ],
+        )
+        # Test all Alliance races: Human(1), Dwarf(3), NightElf(4), Gnome(7), Draenei(11)
+        for race_id, race_name in [
+            (1, "Human"),
+            (3, "Dwarf"),
+            (4, "NightElf"),
+            (7, "Gnome"),
+            (11, "Draenei"),
+        ]:
+            m = mirra(
+                name=f"Pindle_{race_name}", race=race_id, level=15, zone_id=WESTFALL
+            )
+            reachable = questers.in_reach(cat, m, WESTFALL)
+            self.assertIn(
+                102, reachable, f"Quest 102 should be in reach for {race_name}"
+            )
+            # No giver failure
+            gone = frozenset()
+            refused = {}
+            why = questers._giver_failure(cat, m, 102, gone, refused)
+            self.assertEqual(
+                why, "", f"Quest 102 should have no giver failure for {race_name}"
+            )
+
+    def test_quest_102_objectives_completable_with_spawns(self):
+        """Quest 102 objectives should be completable when spawns exist in Westfall."""
+        # Simulate Quest 102 with objective spawns in Westfall
+        cat = world(
+            extra_quests=[
+                quest(
+                    102,
+                    WESTFALL,
+                    14,
+                    title="Patrolling Westfall",
+                    races=ALLIANCE_MASK,
+                    kill=500,
+                    count=10,
+                ),
+            ],
+            extra_givers=[
+                giver(102, "start", 1102, 1102, 120, 3000, 0, "Gryan Stoutmantle"),
+                giver(102, "end", 1102, 1102, 120, 3000, 0, "Gryan Stoutmantle"),
+            ],
+            extra_spawns=[
+                spawn(
+                    1102, 1102, 120, 3000, level=14, map_id=0, name="Gryan Stoutmantle"
+                ),
+                spawn(5001, 500, 200, 3100, level=14, map_id=0, name="Defias Thug"),
+                spawn(5002, 500, 250, 3200, level=15, map_id=0, name="Defias Thug"),
+            ],
+        )
+        m = mirra(
+            name="Durga", race=DWARF, level=15, zone_id=WESTFALL, quest_log={102: 3}
+        )
+        # With spawns for entry 500, _unhuntable should return False
+        unhuntable = questers._unhuntable(cat, m, 102)
+        self.assertFalse(unhuntable, "Quest 102 should be huntable (has spawns)")
+        # Should not be STALLED
+
+
+if __name__ == "__main__":
+    unittest.main()
