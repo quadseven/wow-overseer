@@ -932,6 +932,20 @@ class Broken(unittest.TestCase):
         p = questers.plan(world(), mirra(x=0.0), questers.Clock(), 0.0, tried=later)
         self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 1))
 
+    def test_already_in_the_quest_log_is_not_a_broken_take(self):
+        tried = [
+            questers.Attempt(
+                "Mirra",
+                "take quest:1",
+                "error",
+                reason="already in the quest log",
+            )
+            for _ in range(3)
+        ]
+        p = questers.plan(world(), mirra(x=0.0), questers.Clock(), 0.0, tried=tried)
+        self.assertEqual(p.broken, ())
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 1))
+
     def test_a_hand_in_refused_three_times_is_broken_with_the_worlds_words(self):
         tried = [
             questers.Attempt(
