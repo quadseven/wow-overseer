@@ -242,7 +242,10 @@ NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
 # The kind of spawn a gameobject ender's walk names (`walk-to-spawn gameobject:`).
 OBJECT_KIND = "gameobject"
 SOURCE_MISSING = "an objective's creature or item is never found in the world"
-STALLED_UNSOURCED = STALLED + ", and no spawned creature is or drops what it asks for"
+STALLED_UNSOURCED = (
+    STALLED
+    + ", no huntable source supplies what it asks for, and questers cannot buy items from vendors"
+)
 REFUSED_TAKE = "the quest giver would not give it"
 REFUSED_TURN_IN = "the turn-in NPC would not take it"
 # The module refused the hand-in and marked it never retryable (#19 in

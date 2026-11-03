@@ -922,6 +922,22 @@ class Broken(unittest.TestCase):
         self._play(member, 125, cat=cat)
         self.assertIn((8, questers.STALLED_UNSOURCED), self.found)
 
+    def test_item_objective_without_huntable_source_explains_vendor_limit(self):
+        item_quest = quest(8, NORTHSHIRE, 2, title="An Item Errand")
+        item_quest.update(item1=1262, item_count1=1)
+        cat = world(
+            extra_quests=[item_quest],
+            extra_givers=[
+                giver(8, "start", 1008, 108, 0, 0),
+                giver(8, "end", 1008, 108, 0, 0),
+            ],
+        )
+
+        self._play(mirra(quest_log={8: questers.STATUS_INCOMPLETE}), 125, cat=cat)
+
+        reason = next(reason for qid, reason in self.found if qid == 8)
+        self.assertIn("questers cannot buy items from vendors", reason)
+
     def test_quest_64_the_forgotten_heirloom_has_specific_stall_reason(self):
         # Quest 64 "The Forgotten Heirloom" in Westfall (level 12) requires an
         # item that no spawned creature drops. The quest has items but no
