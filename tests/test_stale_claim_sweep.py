@@ -12,15 +12,14 @@ writes nothing, so the bridge counts the run lost while its five members stay
 in the dungeon's group.
 """
 
-import sys
-import types
 import unittest
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-from unittest import mock  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    from unittest import mock
 
-from test_guildsocial_bridge import _Conn, bridge  # noqa: E402
+    from test_guildsocial_bridge import _Conn, bridge
 
 
 def _sweep():

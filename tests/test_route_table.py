@@ -8,14 +8,14 @@ POST route.
 
 import pathlib
 import sys
-import types
 import unittest
+
+from _stub_modules import PYMYSQL, stub_modules
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import map_server  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import map_server
 
 # Read by nothing in app/, index.html, the Python outside tests/, the addons
 # or the module once the classic page was deleted.

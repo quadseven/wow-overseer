@@ -20,7 +20,7 @@ import pathlib
 import types
 import unittest
 
-from test_family_economy_parity import (  # noqa: F401 - also sets up the pymysql stub
+from test_family_economy_parity import (  # noqa: F401
     ALLIANCE,
     FAKE_ASYNCIO,
     HELPERS,
