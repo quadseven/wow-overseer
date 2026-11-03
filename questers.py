@@ -225,6 +225,7 @@ GIVER_MISSING = "the quest giver is not in the world"
 # Further Concerns requires speaking to an NPC for objective credit. Questers
 # can hunt objectives and use the quest verbs, but have no speak-objective verb.
 UNSUPPORTED_OBJECTIVE = "it requires speaking to an NPC, which questers cannot do"
+CRAFTED_CRAB_CAKES = "requires crafted Crab Cakes (item 2683); questers cannot cook"
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
 # The kind of spawn a gameobject ender's walk names (`walk-to-spawn gameobject:`).
@@ -1255,6 +1256,8 @@ def _broken_reason(
         return FAILED
     if quest.id == 35:
         return UNSUPPORTED_OBJECTIVE
+    if quest.id == 93 and status == STATUS_INCOMPLETE and (2683, 6) in quest.items:
+        return CRAFTED_CRAB_CAKES
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that

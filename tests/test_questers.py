@@ -812,6 +812,37 @@ class Broken(unittest.TestCase):
         self.assertEqual((p.move.kind, p.move.quest), (classquest.ABANDON, 1))
         self.assertIn(questers.STALLED, p.move.said)
 
+    def test_dusky_crab_cakes_ledger_explains_the_unsupported_cooking_step(self):
+        # The world rows name six Dusky Crab Cakes as a required item. The
+        # quester can hunt drops, but has no cooking step to make this item.
+        quest = classquest.Quest(
+            93,
+            "Dusky Crab Cakes",
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((2683, 6),),
+        )
+        facts = questers.Facts(zone=10, level=20, ender_npcs=True)
+
+        reason = questers._broken_reason(
+            quest,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertEqual(
+            reason,
+            "requires crafted Crab Cakes (item 2683); questers cannot cook",
+        )
+
     def test_objectives_that_move_never_stall(self):
         p, _ = self._play(
             mirra(quest_log={1: 3}), 240, progress=lambda minute: {1: minute // 60}
