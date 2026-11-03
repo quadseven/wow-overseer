@@ -106,6 +106,19 @@ doubling with each refusal past those; then it is tried once more.
 A hand-in refused as never retryable (CANNOT_TURN_IN) is held from its
 first refusal while that row is in the rows the pass reads.
 
+A QUESTER WITH FULL BAGS SELLS FIRST (`sell_step`, #1813). A quest that hands
+over an item waits on a free bag slot (above), and the questers never sold,
+so every quester of #1732 and #1716 stood with none and took no such quest.
+A quester at SELL_FLOOR free general bag slots or fewer walks to any vendor
+that buys (`walk-to-vendor any`) and sells what it has no use for, the guild
+members' own sale (guildjobs.vendor_stacks, vendorsale.py): grey, junk,
+outgrown gear and gear that is no upgrade over what it wears, and trade goods
+no quest of the catalogue asks for (a quester has no guild bank to keep them
+for). Kept: every item a catalogue quest needs, hands over or uses, quest
+items, an upgrade, a piece judged while its worn gear is unread, and a stack
+reserved in overseer_keep (keep.py; unread reservations sell nothing). The
+sale is asked at most once in SELL_COOLDOWN_MINUTES, and before the move.
+
 PURE MODULE: rows in, moves and verdicts out. No MySQL; the clock is passed in.
 """
 
@@ -123,10 +136,23 @@ import guildjobs
 import guildroute
 import levelroute
 import questlog
+import vendorsale
 
 # The step's action word, in the command log's source (guildjobs.source_for).
 ACTION = "quester"
 WALK_ACTION = ACTION + "-walk"
+# The sale of a quester with full bags (`sell_step`, #1813): its own action
+# word, under ACTION's source prefix so the pass's recent read holds its rows,
+# and not one `attempts` reads as a quest's take, hand-in or walk.
+SELL_ACTION = ACTION + "-sell"
+SELL_WALK_ACTION = SELL_ACTION + "-walk"
+# Free general bag slots at or under which a quester sells: one for the item a
+# quest hands over and one for the loot of the next kill.
+SELL_FLOOR = 1
+# A sale is asked again only this long after the last, sold or refused: the
+# walk and the rows run inside it, and a vendor out of reach is not asked
+# every pass.
+SELL_COOLDOWN_MINUTES = 20
 # A quester's crossing row has its own source action (quest takes, hand-ins
 # and hunts are ACTION), so it shares the one crossing clock and the walls of
 # the class quest's and the level step's crossings (guildjobs.CROSS_ACTIONS).
@@ -1624,6 +1650,91 @@ def step_for(member, move, cap, quest=None, hunt=True, item_form=True):
         walk=walk,
         goal=goal,
         spot=move.spot if move.kind == classquest.HUNT else None,
+    )
+
+
+def _seller(member, carried, worn) -> guildjobs.Member:
+    """The quester as the guild members' sale reads it (guildjobs.vendor_judge):
+    its level, class, worn gear and bags, and no guild bank forecast, so a trade
+    good no quest needs is sold (an empty `reserved`, not an unread one)."""
+    return guildjobs.Member(
+        name=member.name,
+        guild="",
+        role=guildjobs.RAIDER,
+        level=int(member.level),
+        class_id=int(member.class_id),
+        race=int(member.race),
+        online=bool(member.online),
+        alive=bool(member.alive),
+        carried=tuple(carried or ()),
+        free_slots=member.free_slots,
+        worn=worn,
+        reserved=frozenset(),
+    )
+
+
+def _selling_lately(name, recent) -> bool:
+    """A sale row of this quester's younger than SELL_COOLDOWN_MINUTES."""
+    return any(
+        r.name == name
+        and r.action in (SELL_ACTION, SELL_WALK_ACTION)
+        and int(r.age_minutes) < SELL_COOLDOWN_MINUTES
+        for r in recent or ()
+    )
+
+
+def needs_sale(member) -> bool:
+    """Whether the quester's bags are read and at SELL_FLOOR or under."""
+    return member.free_slots is not None and int(member.free_slots) <= SELL_FLOOR
+
+
+def sell_step(member, carried, worn, kept, cat: Catalogue, recent, cap):
+    """The guildcorps.Step that sends a quester with full bags to a vendor, or
+    None: its bags have room or are unread, it is offline, dead or unplaced,
+    its last sale is younger than SELL_COOLDOWN_MINUTES, the reservations are
+    unread, or it carries nothing it may sell.
+
+    `carried` is its guildjobs.Carried stacks, `worn` its gear.CharacterState
+    (None unread: no weapon or armor short of outgrown is sold), `kept` the
+    keep.py reservations, `recent` guildjobs.Recent rows of the questers' own
+    sources. What it sells is guildjobs.vendor_stacks with every item a quest
+    of the catalogue needs, hands over or uses protected."""
+    if not needs_sale(member) or kept is None:
+        return None
+    if not member.online or not member.alive or not member.placed:
+        return None
+    if _selling_lately(member.name, recent):
+        return None
+    seller = _seller(member, carried, worn)
+    stacks = guildjobs.vendor_stacks(
+        seller, kept, guildjobs._protected_entries(cat.book)
+    )
+    if not stacks:
+        return None
+    source = guildjobs.source_for(SELL_ACTION, member.name)
+    return guildcorps.Step(
+        member.name,
+        SELL_ACTION,
+        len(stacks),
+        "%s has %d free bag slot%s and walks to a vendor to sell %d stack(s) it "
+        "has no use for, worth %dc"
+        % (
+            member.name,
+            int(member.free_slots),
+            "" if int(member.free_slots) == 1 else "s",
+            len(stacks),
+            vendorsale.worth(stacks),
+        ),
+        rows=tuple(
+            guildcorps.Row("sell", "guid:%d" % int(c.guid), "", source) for c in stacks
+        ),
+        walk=guildcorps.Row(
+            "buy",
+            "walk-to-vendor any%s" % guildroute.errand_cap_word(cap),
+            "",
+            guildjobs.source_for(SELL_WALK_ACTION, member.name),
+        ),
+        sales=guildjobs.sale_notes(stacks),
     )
 
 
