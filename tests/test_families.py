@@ -12,12 +12,13 @@ import sys
 import types
 import unittest
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-HERE = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
+with stub_modules(pymysql=PYMYSQL):
+    HERE = pathlib.Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(HERE))
 
-import families  # noqa: E402
+    import families
 
 GRUG = ["Grug", "Bork", "Ugga"]
 ZUG = ["Zug", "Oz"]
@@ -279,8 +280,11 @@ if __name__ == "__main__":
 
 # ---- through the map server: /api/realm and the closed set everywhere -------
 
-import map_server  # noqa: E402  (must follow the pymysql stub)
+from _stub_modules import PYMYSQL, stub_modules  # noqa: E402
 from tests.test_vclient import get  # noqa: E402
+
+with stub_modules(pymysql=PYMYSQL):
+    import map_server
 from unittest import mock  # noqa: E402
 
 # Every GET that takes a character's name. A stranger (a member of a guild no

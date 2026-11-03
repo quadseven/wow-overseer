@@ -9,34 +9,33 @@ a pug, and drive the bridge's half with its reads stubbed.
 import asyncio
 import datetime
 import os
-import sys
-import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import guildpug as gp  # noqa: E402
-import guildrun  # noqa: E402
-import guildsocial as gs  # noqa: E402
-from test_guildsocial import (  # noqa: E402
-    DEADMINES,
-    DOORS,
-    ENTRANCES,
-    HOLY,
-    MAGE,
-    NOW,
-    PRIEST,
-    PROTECTION,
-    ROGUE,
-    WARLOCK,
-    WARRIOR,
-    ask,
-    mate,
-    plan,
-    yes,
-)
-from test_guildsocial_bridge import _Conn, _Self, bridge, facts, row  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import guildpug as gp
+    import guildrun
+    import guildsocial as gs
+    from test_guildsocial import (
+        DEADMINES,
+        DOORS,
+        ENTRANCES,
+        HOLY,
+        MAGE,
+        NOW,
+        PRIEST,
+        PROTECTION,
+        ROGUE,
+        WARLOCK,
+        WARRIOR,
+        ask,
+        mate,
+        plan,
+        yes,
+    )
+    from test_guildsocial_bridge import _Conn, _Self, bridge, facts, row
 
 ORC = 2
 SHADOW = "15392"  # Shadow Weaving: a priest who plays damage

@@ -13,7 +13,7 @@ import ast
 import types
 import unittest
 
-from test_family_economy_parity import BRIDGE, _load  # noqa: F401 - sets up the pymysql stub
+from test_family_economy_parity import BRIDGE, _load  # noqa: F401
 
 import gear  # noqa: E402
 import tidy  # noqa: E402

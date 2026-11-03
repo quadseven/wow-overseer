@@ -16,7 +16,7 @@ import asyncio
 import types
 import unittest
 
-from test_family_economy_parity import (  # noqa: F401 - also sets up the pymysql stub
+from test_family_economy_parity import (  # noqa: F401
     HORDE,
     TheSelf,
     _Log,

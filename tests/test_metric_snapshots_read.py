@@ -3,15 +3,14 @@ file, the last week before the newest snapshot, and nothing on a bad path."""
 
 import json
 import os
-import sys
 import tempfile
-import types
 import unittest
 
-os.environ.setdefault("MYSQL_ROOT_PASSWORD", "test")
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import map_server  # noqa: E402
+os.environ.setdefault("MYSQL_ROOT_PASSWORD", "test")
+with stub_modules(pymysql=PYMYSQL):
+    import map_server
 
 DAY = 86400
 

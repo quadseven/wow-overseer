@@ -4,8 +4,11 @@ import json
 import types
 import unittest
 
-from apiv2 import zone_danger
+from _stub_modules import PYMYSQL, stub_modules
 from test_zone_danger import ANSWER
+
+with stub_modules(pymysql=PYMYSQL):
+    from apiv2 import zone_danger
 
 
 class Read:
