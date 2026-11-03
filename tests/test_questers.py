@@ -904,6 +904,45 @@ class Broken(unittest.TestCase):
         self._play(member, 125, cat=cat)
         self.assertIn((8, questers.STALLED_UNSOURCED), self.found)
 
+    def test_quest_64_the_forgotten_heirloom_has_specific_stall_reason(self):
+        # Quest 64 "The Forgotten Heirloom" in Westfall (level 12) requires an
+        # item that no spawned creature drops. The quest has items but no
+        # fields (no spawns of creatures that drop the required item), so it
+        # would be STALLED_UNSOURCED. We add a specific reason explaining why.
+        heirloom = quest(64, WESTFALL, 12, title="The Forgotten Heirloom")
+        heirloom.update(item1=1234, item_count1=1)  # requires item 1234
+        cat = world(
+            extra_quests=[heirloom],
+            extra_givers=[
+                giver(64, "start", 1064, 164, 0, 0),
+                giver(64, "end", 1064, 164, 0, 0),
+            ],
+            # No spawns that drop item 1234 -> no fields for this quest
+        )
+        member = mirra(
+            level=12,
+            zone_id=WESTFALL,
+            quest_log={64: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({20, 21}),
+            quest_progress={64: 0},
+            quest_objectives={64: {1234: 0}},
+        )
+        clock = questers.Clock()
+        # First pass - quest is not yet stalled
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        # Advance clock in PLAY_GAP_SECONDS increments until stall
+        # Each call advances at most PLAY_GAP_SECONDS (10 min = 600 sec)
+        # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        # After 2 hours of play - quest should be stalled with specific reason
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 64)
+        # Should have a specific reason, not just STALLED_UNSOURCED
+        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("Forgotten Heirloom", p.broken[0].reason)
+
     def test_a_quest_of_another_zone_it_is_not_working_does_not_stall(self):
         p, _ = self._play(mirra(quest_log={20: 3}), 240)
         self.assertEqual(p.broken, ())
