@@ -87,6 +87,7 @@ def world(
     extra_starts=(),
     extra_ends=(),
     extra_spawns=(),
+    extra_loot=(),
     drop=(),
 ):
     """Northshire (sorted under its area, 9), Goldshire in Elwynn (12), two
@@ -138,7 +139,7 @@ def world(
     # The spawned givers and enders catalogue() reads: `drop` takes the spawn
     # out of these while `starts` and `ends` still name it.
     givers = [g for g in givers if g["guid"] not in drop]
-    return questers.catalogue(quests, givers, spawns, [], starts, ends)
+    return questers.catalogue(quests, givers, spawns, list(extra_loot), starts, ends)
 
 
 def mirra(**kw):
@@ -1699,6 +1700,40 @@ class ASummonedObjectEnder(unittest.TestCase):
 
         self.assertEqual(hunted, [127, 171, 456])
         self.assertEqual((hand_in.kind, hand_in.quest), (classquest.TURN_IN, 104))
+
+    def test_pie_for_billy_hunts_the_boars_that_drop_its_meat(self):
+        # The world rows of Pie for Billy (quest 86), in the shapes the
+        # reads write them: QUESTS_SQL names no creature to kill, only
+        # four of item 769 to collect (craft.py names 769 as Chunk of Boar
+        # Meat), LOOT_SQL names the boar entry that drops it, and
+        # SPAWNS_SQL holds that boar's spawns. LOG_SQL's per-creature
+        # counters name no creature for an item quest, so the hunt must
+        # still be at the dropper's spawn, not nowhere.
+        pie = quest(86, ELWYNN, 6, title="Pie for Billy")
+        pie.update(item1=769, item_count1=4)
+        cat = world(
+            extra_quests=[pie],
+            extra_givers=[
+                giver(86, "start", 5086, 186, 0, 0),
+                giver(86, "end", 5087, 187, 400, 0),
+            ],
+            extra_spawns=[spawn(5113, 113, 30, 0, level=5, name="Stonetusk Boar")],
+            extra_loot=[{"item": 769, "entry": 113}],
+        )
+        member = mirra(
+            level=6,
+            quest_log={86: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({1, 2, 3, 6}),
+            quest_progress={86: 0},
+            quest_objectives={86: {}},
+        )
+
+        move = questers.plan(cat, member, questers.Clock(), 0.0).move
+
+        self.assertEqual(
+            (move.kind, move.quest, move.spot.entry),
+            (classquest.HUNT, 86, 113),
+        )
 
     def test_an_incomplete_quest_whose_object_spawns_are_gone_is_still_broken(self):
         member = mirra(quest_log={40: 3})
