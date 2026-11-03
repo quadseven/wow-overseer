@@ -222,8 +222,9 @@ def _quest_complete(quest, status, progress=0) -> bool:
 FAILED = "the quest failed in the log"
 STALLED = "its objectives did not move for 2 hours of play"
 GIVER_MISSING = "the quest giver is not in the world"
-# Further Concerns requires speaking to an NPC for objective credit. Questers
-# can hunt objectives and use the quest verbs, but have no speak-objective verb.
+# Further Concerns and Report to Gryan Stoutmantle require speaking to an NPC
+# for objective credit. Questers can hunt and use quest verbs, but cannot speak
+# to satisfy these objectives.
 UNSUPPORTED_OBJECTIVE = "it requires speaking to an NPC, which questers cannot do"
 CRAFTED_CRAB_CAKES = "requires crafted Crab Cakes (item 2683); questers cannot cook"
 ENDER_MISSING = "the turn-in NPC is not in the world"
@@ -1270,7 +1271,7 @@ def _broken_reason(
     it is due a turn-in, not a drop (#1085)."""
     if status == STATUS_FAILED:
         return FAILED
-    if quest.id == 35:
+    if quest.id in (35, 109):
         return UNSUPPORTED_OBJECTIVE
     if quest.id == 93 and status == STATUS_INCOMPLETE and (2683, 6) in quest.items:
         return CRAFTED_CRAB_CAKES
@@ -1303,7 +1304,7 @@ def _giver_failure(cat: Catalogue, member, qid, gone, refused):
     stands in the way is no fault of the quest (a giver on another map, or a
     quest a gameobject or an item starts, which no verb takes)."""
     quest, facts = cat.quest(qid), cat.facts[qid]
-    if int(qid) == 35:
+    if int(qid) in (35, 109):
         return UNSUPPORTED_OBJECTIVE
     count, words = refused.get(("take", qid), (0, ""))
     if count >= FAILS_BEFORE_BROKEN:
