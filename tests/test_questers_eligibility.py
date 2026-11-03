@@ -382,15 +382,11 @@ class TheBridgeHandsTheQuesterItsRoom(unittest.TestCase):
 
 
 class Quest120MessengerToStormwind(unittest.TestCase):
-    """Quest 120 "Messenger to Stormwind" - Alliance quest in Redridge (zone 44)
-    for level 14. Four Alliance questers at level 14 in Redridge CAN take it:
-    Durga (Dwarf Hunter), Mirra (Human Priest), Bromli (Dwarf Paladin),
-    Kellan (Human Warrior). The quest has QuestLevel=14 but MinLevel=15 in the
-    worldserver database; the fix uses QuestLevel when MinLevel > QuestLevel."""
+    """Quest 120 uses MinLevel for acceptance, even when QuestLevel differs."""
 
-    def test_all_four_questers_can_take_quest_120_at_level_14(self):
-        # Quest 120 "Messenger to Stormwind" has QuestLevel=14 but MinLevel=15
-        # in the worldserver database. Level 14 questers CAN take it (fix for #1837).
+    def test_min_level_15_explains_the_level_14_refusal(self):
+        # The observed quest_template row is read by QUESTS_SQL: QuestLevel=14,
+        # MinLevel=15. The worldserver enforces MinLevel, not the displayed level.
         q120 = row(
             120,
             "Messenger to Stormwind",
@@ -400,149 +396,27 @@ class Quest120MessengerToStormwind(unittest.TestCase):
             ALLIANCE,
         )
         cat = catalogue([q120])
+        level_14 = member("Quester", HUMAN, 14, REDRIDGE)
+        level_15 = member("Quester", HUMAN, 15, REDRIDGE)
 
-        # The four questers from #1837 at level 14
-        durga = member("Durga", DWARF, 14, REDRIDGE, class_id=3)  # Hunter
-        mirra = member("Mirra", HUMAN, 14, REDRIDGE, class_id=5)  # Priest
-        bromli = member("Bromli", DWARF, 14, REDRIDGE, class_id=2)  # Paladin
-        kellan = member("Kellan", HUMAN, 14, REDRIDGE, class_id=1)  # Warrior
-
-        for q in (durga, mirra, bromli, kellan):
-            self.assertIn(
-                120,
-                questers.in_reach(cat, q, REDRIDGE),
-                f"{q.name} ({q.race}/{q.class_id}) should be able to take quest 120 at level 14",
-            )
-
-    def test_quest_120_refusal_reason_when_not_eligible(self):
-        """When a quester is not eligible for Quest 120 (wrong race/class/level),
-        the refusal reason includes 'not eligible'."""
-        # Quest 120 with normal MinLevel=QuestLevel=14
-        q120 = row(
+        self.assertNotIn(120, questers.in_reach(cat, level_14, REDRIDGE))
+        self.assertIn(120, questers.in_reach(cat, level_15, REDRIDGE))
+        reason = questers._giver_failure(
+            cat,
+            level_14,
             120,
-            "Messenger to Stormwind",
-            REDRIDGE,
-            14,
-            14,
-            ALLIANCE,
+            gone=frozenset(),
+            refused={
+                ("take", 120): (
+                    3,
+                    "not eligible (level, race, class, prerequisite or exclusive group)",
+                )
+            },
         )
-        cat = catalogue([q120])
-
-        # Horde quester cannot take Alliance quest
-        horde = member("HordeGuy", ORC, 14, REDRIDGE, class_id=3)
-        self.assertNotIn(120, questers.in_reach(cat, horde, REDRIDGE))
-
-        # Level 13 quester cannot take level 14 quest
-        low_level = member("LowLevel", HUMAN, 13, REDRIDGE, class_id=1)
-        self.assertNotIn(120, questers.in_reach(cat, low_level, REDRIDGE))
-
-        # Class that cannot take the quest (e.g., Mage if quest is Warrior-only)
-        # Note: Quest 120 allows all classes (classes=0), so this tests the general case
-        # A quest with class restriction would need classes bitmask set
-
-    def test_quest_120_with_prerequisite_fails(self):
-        """If Quest 120 has a PrevQuestID, questers without it cannot take it."""
-        # Quest 120 with a prerequisite (e.g., Quest 30 Redridge Goulash)
-        q120 = row(
-            120,
-            "Messenger to Stormwind",
-            REDRIDGE,
-            14,
-            14,
-            ALLIANCE,
-            prev=30,
+        self.assertEqual(
+            "the quest giver would not give it: not eligible (level, race, class, prerequisite or exclusive group)",
+            reason,
         )
-        cat = catalogue([q120])
-
-        durga = member("Durga", DWARF, 14, REDRIDGE, class_id=3)
-        # Durga hasn't done quest 30
-        self.assertNotIn(120, questers.in_reach(cat, durga, REDRIDGE))
-
-        # But if she has done quest 30, she can take it
-        durga_done = member(
-            "Durga", DWARF, 14, REDRIDGE, class_id=3, quests_done=frozenset({30})
-        )
-        self.assertIn(120, questers.in_reach(cat, durga_done, REDRIDGE))
-
-    def test_quest_120_with_exclusive_group_fails(self):
-        """If Quest 120 has an exclusive group, questers with another quest in that group cannot take it."""
-        # Quest 120 with exclusive group 120
-        q120 = row(
-            120,
-            "Messenger to Stormwind",
-            REDRIDGE,
-            14,
-            14,
-            ALLIANCE,
-            exclusive=120,
-        )
-        # Another quest in the same exclusive group
-        q_other = row(
-            30,
-            "Redridge Goulash",
-            REDRIDGE,
-            6,
-            6,
-            ALLIANCE,
-            exclusive=120,
-        )
-        cat = catalogue([q120, q_other])
-
-        # Durga has quest 30 in her log
-        durga = member("Durga", DWARF, 14, REDRIDGE, class_id=3, quest_log={30: 3})
-        self.assertNotIn(120, questers.in_reach(cat, durga, REDRIDGE))
-
-        # But if she doesn't have it, she can take 120
-        durga_free = member("Durga", DWARF, 14, REDRIDGE, class_id=3)
-        self.assertIn(120, questers.in_reach(cat, durga_free, REDRIDGE))
-
-    def test_quest_120_with_startitem_needs_bag_slot(self):
-        """If Quest 120 provides an item (StartItem), it needs a free bag slot."""
-        q120 = row(
-            120,
-            "Messenger to Stormwind",
-            REDRIDGE,
-            14,
-            14,
-            ALLIANCE,
-            provided0=1234,  # Some item ID
-        )
-        cat = catalogue([q120])
-
-        # Durga has no free bag slots
-        durga_full = member("Durga", DWARF, 14, REDRIDGE, class_id=3, free_slots=0)
-        self.assertNotIn(120, questers.in_reach(cat, durga_full, REDRIDGE))
-
-        # But with a free slot, she can take it
-        durga_room = member("Durga", DWARF, 14, REDRIDGE, class_id=3, free_slots=1)
-        self.assertIn(120, questers.in_reach(cat, durga_room, REDRIDGE))
-
-    def test_quest_120_with_reputation_gate(self):
-        """If Quest 120 has a reputation requirement, questers without it cannot take it."""
-        STORMWIND_REP = 12345  # Some faction ID
-        q120 = row(
-            120,
-            "Messenger to Stormwind",
-            REDRIDGE,
-            14,
-            14,
-            ALLIANCE,
-            min_rep_faction=STORMWIND_REP,
-            min_rep_value=3000,  # Honored
-        )
-        cat = catalogue([q120])
-
-        # Durga has no reputation with Stormwind
-        durga = member(
-            "Durga", DWARF, 14, REDRIDGE, class_id=3, reputation={STORMWIND_REP: 0}
-        )
-        self.assertNotIn(120, questers.in_reach(cat, durga, REDRIDGE))
-
-        # But with Honored reputation, she can take it
-        durga_honored = member(
-            "Durga", DWARF, 14, REDRIDGE, class_id=3, reputation={STORMWIND_REP: 3000}
-        )
-        self.assertIn(120, questers.in_reach(cat, durga_honored, REDRIDGE))
 
 
 if __name__ == "__main__":

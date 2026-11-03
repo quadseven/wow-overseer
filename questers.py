@@ -514,7 +514,6 @@ class Facts:
 
     zone: int
     level: int
-    quest_level: int = 0
     classes: int = 0
     # quest_template_addon.PrevQuestID as stored: positive, rewarded first;
     # negative, held first.
@@ -610,7 +609,6 @@ def catalogue(
         facts[qid] = Facts(
             zone=zones[qid],
             level=max(_int(r.get("level")), quest.min_level, 1),
-            quest_level=_int(r.get("level")),
             classes=_int(r.get("classes")),
             prev=_int(r.get("prev_signed")),
             giver_named=qid in named,
@@ -1100,12 +1098,7 @@ def open_to(cat: Catalogue, member, quest_id, broken=frozenset()) -> bool:
         return False
     if not quest.admits(member.race) or not _class_ok(facts, member.class_id):
         return False
-    effective_min = (
-        min(facts.quest_level, quest.min_level)
-        if facts.quest_level
-        else quest.min_level
-    )
-    if int(member.level) < effective_min:
+    if int(member.level) < quest.min_level:
         return False
     if facts.level > int(member.level) + levelroute.ABOVE:
         return False
