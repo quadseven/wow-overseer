@@ -135,7 +135,9 @@ def is_hunt_row(command) -> bool:
     return str(command or "").split(" ", 1)[0] == VERB
 
 
-def command(quest: classquest.Quest, entry, held=None, item_form=True) -> str:
+def command(
+    quest: classquest.Quest, entry, held=None, item_form=True, prefer_item=False
+) -> str:
     """The `hunt-spawn` row for `entry`, a creature of the quest's objective,
     or "" when the quest has no creature to hunt there.
 
@@ -147,17 +149,32 @@ def command(quest: classquest.Quest, entry, held=None, item_form=True) -> str:
     `item_form` False (a worldserver that rejects `item:`) or no known item,
     the row asks for neither, and the bridge ends it when the member's counters
     say the quest is complete.
+
+    `prefer_item` chooses an incomplete item objective ahead of a kill objective
+    on the same creature, and skips items whose counters already meet the need.
     """
     entry = int(entry or 0)
     if entry <= 0:
         return ""
     kills = dict(quest.kills)
-    if entry in kills:
+    wants = dict(quest.items)
+    if prefer_item:
+        item = next(
+            (
+                i
+                for i, e in quest.drops
+                if e == entry
+                and i in wants
+                and (int(held(i)) if callable(held) else 0) < wants[i]
+            ),
+            0,
+        )
+    else:
+        item = next((i for i, e in quest.drops if e == entry and i in wants), 0)
+    if entry in kills and not (prefer_item and item):
         word = " count:%d" % min(MAX_COUNT, max(1, int(kills[entry])))
         return "%s creature:%d%s max:%d" % (VERB, entry, word, MAX_SECONDS)
     word = ""
-    wants = dict(quest.items)
-    item = next((i for i, e in quest.drops if e == entry and i in wants), 0)
     if item and item_form:
         have = int(held(item)) if callable(held) else 0
         need = min(MAX_COUNT, max(1, int(wants[item]) - have))

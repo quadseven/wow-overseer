@@ -87,6 +87,7 @@ def world(
     extra_starts=(),
     extra_ends=(),
     extra_spawns=(),
+    extra_loot=(),
     drop=(),
 ):
     """Northshire (sorted under its area, 9), Goldshire in Elwynn (12), two
@@ -138,7 +139,7 @@ def world(
     # The spawned givers and enders catalogue() reads: `drop` takes the spawn
     # out of these while `starts` and `ends` still name it.
     givers = [g for g in givers if g["guid"] not in drop]
-    return questers.catalogue(quests, givers, spawns, [], starts, ends)
+    return questers.catalogue(quests, givers, spawns, extra_loot, starts, ends)
 
 
 def mirra(**kw):
@@ -777,6 +778,115 @@ class Steps(unittest.TestCase):
         self.assertEqual(p.move.kind, classquest.HUNT)
         self.assertIsNone(
             questers.step_for(member, p.move, 0, cat.quest(1), hunt=False)
+        )
+
+
+class ItemObjectives(unittest.TestCase):
+    def test_goretusk_liver_pie_hunts_a_creature_that_drops_its_item(self):
+        """The old STALLED ledger reason came from selecting no item-drop target."""
+        pie = quest(22, WESTFALL, 12, title="Goretusk Liver Pie")
+        pie.update(item1=723, item_count1=8)
+        cat = world(
+            extra_quests=[pie],
+            extra_givers=[
+                giver(22, "start", 1022, 120, 3000, 0),
+                giver(22, "end", 1022, 120, 3000, 0),
+            ],
+            extra_spawns=[spawn(2022, 157, 3000, 0, level=12, name="Goretusk")],
+            extra_loot=[{"item": 723, "entry": 157}],
+        )
+        member = mirra(
+            name="Quester",
+            level=12,
+            zone_id=WESTFALL,
+            x=3000.0,
+            quest_log={22: questers.STATUS_INCOMPLETE},
+            quest_progress={22: 0},
+            quest_item_objectives={22: {723: 0}},
+            quests_done=frozenset({1, 2, 3, 6, 7, 20, 21}),
+        )
+
+        plan = questers.plan(cat, member, questers.Clock(), 0.0)
+
+        self.assertEqual((plan.move.kind, plan.move.quest), (classquest.HUNT, 22))
+        step = questers.step_for(member, plan.move, 0, cat.quest(22))
+        self.assertEqual(
+            [row.command for row in step.rows],
+            ["hunt-spawn creature:157 item:723 count:8 max:480"],
+        )
+        partial = questers.Member(
+            **{
+                **member.__dict__,
+                "quest_progress": {22: 3},
+                "quest_item_objectives": {22: {723: 3}},
+            }
+        )
+        partial_plan = questers.plan(cat, partial, questers.Clock(), 0.0)
+        partial_step = questers.step_for(partial, partial_plan.move, 0, cat.quest(22))
+        self.assertEqual(
+            [row.command for row in partial_step.rows],
+            ["hunt-spawn creature:157 item:723 count:5 max:480"],
+        )
+        completed = questers.Member(
+            **{
+                **member.__dict__,
+                "quest_progress": {22: 8},
+                "quest_item_objectives": {22: {723: 8}},
+            }
+        )
+        turn_in = questers.plan(cat, completed, questers.Clock(), 0.0)
+        self.assertEqual(
+            (turn_in.move.kind, turn_in.move.quest), (classquest.TURN_IN, 22)
+        )
+
+    def test_an_uncollected_item_on_a_shared_dropper_wins_over_its_kill(self):
+        pie = quest(22, WESTFALL, 12, title="Goretusk Liver Pie")
+        pie.update(
+            item1=723,
+            item_count1=8,
+            item2=724,
+            item_count2=1,
+            npc1=157,
+            npc_count1=2,
+        )
+        cat = world(
+            extra_quests=[pie],
+            extra_givers=[
+                giver(22, "start", 1022, 120, 3000, 0),
+                giver(22, "end", 1022, 120, 3000, 0),
+            ],
+            extra_spawns=[spawn(2022, 157, 3000, 0, level=12, name="Goretusk")],
+            extra_loot=[
+                {"item": 723, "entry": 157},
+                {"item": 724, "entry": 157},
+            ],
+        )
+        member = mirra(
+            name="Quester",
+            level=12,
+            zone_id=WESTFALL,
+            x=3000.0,
+            quest_log={22: questers.STATUS_INCOMPLETE},
+            quest_progress={22: 8},
+            quest_objectives={22: {157: 0}},
+            quest_item_objectives={22: {723: 8, 724: 0}},
+            quests_done=frozenset({1, 2, 3, 6, 7, 20, 21}),
+        )
+
+        plan = questers.plan(cat, member, questers.Clock(), 0.0)
+        step = questers.step_for(member, plan.move, 0, cat.quest(22))
+
+        self.assertEqual((plan.move.kind, plan.move.quest), (classquest.HUNT, 22))
+        self.assertEqual(
+            [row.command for row in step.rows],
+            ["hunt-spawn creature:157 item:724 count:1 max:480"],
+        )
+        legacy_step = questers.step_for(
+            member, plan.move, 0, cat.quest(22), item_form=False
+        )
+        self.assertEqual(
+            [row.command for row in legacy_step.rows],
+            ["hunt-spawn creature:157 max:480"],
         )
 
 
@@ -1537,13 +1647,15 @@ class ASummonedObjectEnder(unittest.TestCase):
     def test_log_rows_keep_each_creature_objective_counter(self):
         self.assertIn("q.RequiredNpcOrGo1 AS npc1", questers.LOG_SQL)
         self.assertIn("s.mobcount1", questers.LOG_SQL)
-        logs, progress, objectives, _done = questers._logs_by_guid(
+        self.assertIn("q.RequiredItemId1 AS item1", questers.LOG_SQL)
+        self.assertIn("s.itemcount1 AS item_count1", questers.LOG_SQL)
+        logs, progress, objectives, item_objectives, _done = questers._logs_by_guid(
             [
                 {
                     "guid": 1,
                     "quest": 104,
                     "status": questers.STATUS_INCOMPLETE,
-                    "progress": 10,
+                    "progress": 12,
                     "npc1": 127,
                     "npc2": 171,
                     "npc3": 456,
@@ -1552,13 +1664,16 @@ class ASummonedObjectEnder(unittest.TestCase):
                     "mobcount2": 0,
                     "mobcount3": 0,
                     "mobcount4": 0,
+                    "item1": 723,
+                    "item_count1": 2,
                 }
             ],
             [],
         )
         self.assertEqual(logs[1][104], questers.STATUS_INCOMPLETE)
-        self.assertEqual(progress[1][104], 10)
+        self.assertEqual(progress[1][104], 12)
         self.assertEqual(objectives[1][104], {127: 10, 171: 0, 456: 0})
+        self.assertEqual(item_objectives[1][104], {723: 2})
 
     def test_coastal_menace_hunts_only_objectives_with_remaining_kills(self):
         coastal = quest(

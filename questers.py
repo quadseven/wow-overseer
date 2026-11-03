@@ -386,8 +386,13 @@ LOG_SQL = (
     "itemcount3 + itemcount4 + itemcount5 + itemcount6) AS progress, "
     "q.RequiredNpcOrGo1 AS npc1, q.RequiredNpcOrGo2 AS npc2, "
     "q.RequiredNpcOrGo3 AS npc3, q.RequiredNpcOrGo4 AS npc4, "
-    "s.mobcount1, s.mobcount2, s.mobcount3, s.mobcount4 "
-    "FROM character_queststatus s JOIN acore_world.quest_template q ON q.ID = s.quest "
+    "s.mobcount1, s.mobcount2, s.mobcount3, s.mobcount4, "
+    + ", ".join(
+        "q.RequiredItemId%d AS item%d, s.itemcount%d AS item_count%d" % (i, i, i, i)
+        for i in range(1, 7)
+    )
+    + " FROM character_queststatus s "
+    "JOIN acore_world.quest_template q ON q.ID = s.quest "
     "WHERE s.guid IN ({guids}) AND s.status IN (1, 3, 5)"
 )
 REWARDED_SQL = (
@@ -416,7 +421,9 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
 
     `reputation_rows` are REPUTATION_SQL's; None (not read) leaves each
     member's reputation unknown, and a reputation gate is then not judged."""
-    log_by, progress_by, objectives_by, done_by = _logs_by_guid(log_rows, rewarded_rows)
+    log_by, progress_by, objectives_by, items_by_guid, done_by = _logs_by_guid(
+        log_rows, rewarded_rows
+    )
     rep_by = None
     if reputation_rows is not None:
         rep_by = {}
@@ -433,6 +440,7 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
             frozenset(done_by.get(guid, ())),
             progress_by.get(guid, {}),
             objectives_by.get(guid, {}),
+            items_by_guid.get(guid, {}),
         )
         if rep_by is not None:
             member = replace(member, reputation=rep_by.get(guid, {}))
@@ -441,8 +449,8 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
 
 
 def _logs_by_guid(log_rows, rewarded_rows) -> tuple:
-    """Status, total and per-creature objective progress, and rewards by guid."""
-    log_by, progress_by, objectives_by, done_by = {}, {}, {}, {}
+    """Status, total and per-objective progress, and rewards by guid."""
+    log_by, progress_by, objectives_by, items_by_guid, done_by = {}, {}, {}, {}, {}
     for r in log_rows or ():
         guid, qid = _int(r.get("guid")), _int(r.get("quest"))
         log_by.setdefault(guid, {})[qid] = _int(r.get("status"))
@@ -453,9 +461,17 @@ def _logs_by_guid(log_rows, rewarded_rows) -> tuple:
             if _int(r.get("npc%d" % i)) > 0
         }
         objectives_by.setdefault(guid, {})[qid] = objectives
+        item_counts = {}
+        for i in range(1, 7):
+            item = _int(r.get("item%d" % i))
+            if item > 0:
+                item_counts[item] = item_counts.get(item, 0) + _int(
+                    r.get("item_count%d" % i)
+                )
+        items_by_guid.setdefault(guid, {})[qid] = item_counts
     for r in rewarded_rows or ():
         done_by.setdefault(_int(r.get("guid")), set()).add(_int(r.get("quest")))
-    return log_by, progress_by, objectives_by, done_by
+    return log_by, progress_by, objectives_by, items_by_guid, done_by
 
 
 def _alive(row) -> bool:
@@ -466,7 +482,9 @@ def _alive(row) -> bool:
     return _int(health) > 1 or (_int(health) == 1 and not row.get("has_corpse"))
 
 
-def _member_from_row(r, quest_log, quests_done, quest_progress, quest_objectives):
+def _member_from_row(
+    r, quest_log, quests_done, quest_progress, quest_objectives, quest_item_objectives
+):
     fresh = r.get("pos_x") is not None and r.get("pos_y") is not None
     map_id = r.get("map_id")
     return Member(
@@ -484,6 +502,7 @@ def _member_from_row(r, quest_log, quests_done, quest_progress, quest_objectives
         quests_done=quests_done,
         quest_progress=quest_progress,
         quest_objectives=quest_objectives,
+        quest_item_objectives=quest_item_objectives,
     )
 
 
@@ -756,6 +775,8 @@ class Member:
     quest_progress: dict = field(default_factory=dict)
     # quest id -> creature entry -> its objective counter
     quest_objectives: dict = field(default_factory=dict)
+    # quest id -> required item entry -> its objective counter
+    quest_item_objectives: dict = field(default_factory=dict)
     # Free general bag slots (bag_pressure.general_bag_room); None when not
     # read, and a provided item's slot is then not judged (#1732).
     free_slots: int | None = None
@@ -1625,6 +1646,26 @@ def _takes(cat: Catalogue, member, skip, left, tried) -> tuple:
     return takes, never_held
 
 
+def _remaining_hunt_entries(
+    quest: classquest.Quest, member: Member, qid: int
+) -> set[int]:
+    """Creature entries with a kill or item objective still to satisfy."""
+    objectives = member.quest_objectives.get(qid, {})
+    entries = {
+        entry for entry, count in quest.kills if int(objectives.get(entry, 0)) < count
+    }
+    held_items = member.quest_item_objectives.get(qid, {})
+    required = {}
+    for item, count in quest.items:
+        required[item] = required.get(item, 0) + count
+    for item, count in required.items():
+        if int(held_items.get(item, 0)) < count:
+            entries.update(
+                entry for drop_item, entry in quest.drops if drop_item == item
+            )
+    return entries
+
+
 def _hunt(cat: Catalogue, member, skip, left):
     """The hunt at the nearest objective spawn within the quester's level of
     an incomplete quest it holds, or None."""
@@ -1632,19 +1673,12 @@ def _hunt(cat: Catalogue, member, skip, left):
     for qid, quest in _held(cat, member, STATUS_INCOMPLETE, skip):
         if _quest_complete(quest, STATUS_INCOMPLETE, member.quest_progress.get(qid, 0)):
             continue
-        progress = member.quest_objectives.get(qid)
-        kills = dict(quest.kills)
-        if progress:
-            kills = {
-                entry: count
-                for entry, count in kills.items()
-                if int(progress.get(entry, 0)) < count
-            }
+        entries = _remaining_hunt_entries(quest, member, qid)
         spot = _nearest(
             member,
             classquest.within_level(
                 member,
-                tuple(s for s in classquest.solo_fields(quest) if s.entry in kills),
+                tuple(s for s in classquest.solo_fields(quest) if s.entry in entries),
             ),
             left,
         )
@@ -1685,7 +1719,15 @@ def step_for(member, move, cap, quest=None, hunt=True, item_form=True):
     walk = _walk_row(member, move, cap)
     if move.kind == classquest.HUNT:
         row = (
-            classhunt.command(quest, move.spot.entry, None, item_form)
+            classhunt.command(
+                quest,
+                move.spot.entry,
+                lambda item: member.quest_item_objectives.get(move.quest, {}).get(
+                    item, 0
+                ),
+                item_form,
+                prefer_item=True,
+            )
             if (hunt and quest is not None)
             else ""
         )
