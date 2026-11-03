@@ -69,7 +69,12 @@ function drawShell() {
 // ---- views -----------------------------------------------------------------
 function loadView(name) {
   if (!views.has(name)) {
-    views.set(name, import("./views/" + name + ".js").then((m) => m.default));
+    views.set(name, import("./views/" + name + ".js").then((m) => m.default, (e) => {
+      // A load that failed is not kept: the next visit asks again instead
+      // of answering with the same rejection until a full reload.
+      views.delete(name);
+      throw e;
+    }));
   }
   return views.get(name);
 }
@@ -149,6 +154,10 @@ async function route() {
   if (r.redirect) { history.replaceState(null, "", r.redirect); return route(); }
   saveLastPage(hash);
   const module = await loadView(r.view);
+  // Navigated on again while the module loaded: the newer route() owns
+  // the page now, and drawing this one would put the wrong view under
+  // the hash and poll its reads.
+  if (location.hash !== hash) return;
   (module.css || []).forEach(useCss);
   const ctx = {
     view: r.view, section: r.section, params: r.params, query: parsed.query, hash,

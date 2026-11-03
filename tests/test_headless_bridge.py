@@ -148,6 +148,7 @@ def _start_harness():
 
     started: list = []
     ensured: list = []
+    watched: list = []
 
     async def to_thread(fn, *args):
         return fn(*args)
@@ -155,9 +156,15 @@ def _start_harness():
     async def gather(*tasks):
         return None
 
+    class Task:
+        """Hashable, so it sits in the set the start paths keep."""
+
+        def add_done_callback(self, callback):
+            watched.append(callback)
+
     def create_task(coro):
         started.append(coro)
-        return object()
+        return Task()
 
     ns = {
         "dataclasses": dataclasses,
@@ -184,6 +191,7 @@ def _start_harness():
 
     class Harness(ns["Harness"]):
         user = "the bridge"
+        done_callbacks = watched
         guilds = ("a guild",)
         _guild_run_formed_at = None
         _guild_run_recovered = types.SimpleNamespace(set=lambda: None)
@@ -249,6 +257,17 @@ class BothStartPathsRunTheRegistry(unittest.TestCase):
         bridge, started, _ = _start_harness()
         asyncio.run(bridge.setup_hook())
         self.assertEqual([name for name, _ in _registry()], started)
+
+    def test_the_gateway_path_watches_every_pass_it_starts(self):
+        """A held task is never collected, so asyncio never reports an
+        exception that escapes its loop either. Each gets a done-callback
+        that logs the death (test_bridge_loops_stay_alive has the log)."""
+        bridge, started, _ = _start_harness()
+        asyncio.run(bridge.setup_hook())
+        self.assertEqual(len(bridge.done_callbacks), len(started))
+        self.assertTrue(
+            all(cb.__name__ == "_pass_done" for cb in bridge.done_callbacks)
+        )
 
     def test_the_headless_path_starts_exactly_the_headless_passes(self):
         bridge, started, _ = _start_harness()

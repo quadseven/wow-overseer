@@ -56,7 +56,9 @@ class TheEndpoint(unittest.TestCase):
     def test_the_map_parameter_is_an_integer_or_it_is_dropped(self):
         handler = SERVER[SERVER.index("def _recap") :]
         handler = handler[: handler.index("def _council")]
-        self.assertIn("isdigit()", handler)
+        # _row_id: ASCII digits only, so a superscript that str.isdigit
+        # passes and int() refuses is dropped too, not a 503.
+        self.assertIn("_row_id(asked)", handler)
 
     def test_every_overseer_read_is_guarded_for_both_errors(self):
         """1146 is a missing TABLE and 1054 a missing COLUMN, and the realm
