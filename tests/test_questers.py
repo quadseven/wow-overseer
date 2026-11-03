@@ -7,7 +7,7 @@ import classquest
 import guildjobs
 import questers
 
-ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE = 12, 9, 40, 44
+ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE, DUSKWOOD = 12, 9, 40, 44, 10
 HUMAN, ORC = 1, 2
 PRIEST, WARRIOR = 5, 1
 ALLIANCE_MASK, HORDE_MASK = 1101, 690
@@ -972,6 +972,52 @@ class Broken(unittest.TestCase):
         # Advance clock in PLAY_GAP_SECONDS increments until stall
         # Each call advances at most PLAY_GAP_SECONDS (10 min = 600 sec)
         # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        # After 2 hours of play - quest should be stalled with specific reason
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 91)
+        # Should have a specific reason, not just STALLED_UNSOURCED
+        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("Solomon's Law", p.broken[0].reason)
+
+    def test_quest_91_solomons_law_stalls_even_with_spawns_in_other_zone_on_same_map(
+        self,
+    ):
+        # Production issue: Quest 91 "Solomon's Law" in Redridge Mountains (zone 44)
+        # requires killing creature 444. In production, creature 444 has spawns in
+        # Duskwood (zone 10) on the same map (0 = Eastern Kingdoms). The _here()
+        # function only filters by map_id, not zone_id, so it finds the Duskwood
+        # spawns and _unhuntable() returns False. The stall clock never runs, and
+        # the specific SOLOMONS_LAW reason is never detected.
+        # This test verifies the fix: quests with specific stall reasons (64, 91)
+        # are included in _working() so their stall clock runs.
+        solomons = quest(91, REDRIDGE, 23, kill=444, count=10, title="Solomon's Law")
+        cat = world(
+            extra_quests=[solomons],
+            extra_givers=[
+                giver(91, "start", 1091, 191, 0, 0),
+                giver(91, "end", 1091, 191, 0, 0),
+            ],
+            extra_spawns=[
+                # Creature 444 spawn in Duskwood (zone 10) on map 0 (Eastern Kingdoms)
+                # Same map as Redridge, different zone
+                spawn(4441, 444, 500.0, 500.0, level=23),
+            ],
+        )
+        member = mirra(
+            level=23,
+            zone_id=REDRIDGE,
+            quest_log={91: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({30, 31}),
+            quest_progress={91: 0},
+            quest_objectives={91: {444: 0}},
+        )
+        clock = questers.Clock()
+        # First pass - quest is not yet stalled
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        # Advance clock in PLAY_GAP_SECONDS increments until stall
         for i in range(1, 13):
             p = questers.plan(cat, member, clock, 600.0 * i)
         # After 2 hours of play - quest should be stalled with specific reason

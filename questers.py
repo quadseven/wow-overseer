@@ -240,6 +240,11 @@ NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
 OBJECT_KIND = "gameobject"
 SOURCE_MISSING = "an objective's creature or item is never found in the world"
 STALLED_UNSOURCED = STALLED + ", and no spawned creature is or drops what it asks for"
+
+# Quests with specific stall reasons that require the stall clock to run
+# to reach STALL_SECONDS before their specific reason is returned.
+_STALL_REASON_QUESTS = {64, 91}
+
 REFUSED_TAKE = "the quest giver would not give it"
 REFUSED_TURN_IN = "the turn-in NPC would not take it"
 # The module refused the hand-in and marked it never retryable (#19 in
@@ -1177,14 +1182,17 @@ def _working(cat: Catalogue, member, last_quest=0, left=frozenset()) -> set:
     a dozen more in one day, each one a quest no quester had yet gone after.
     A quest it could hunt waits its turn; one it cannot hunt has nothing to
     wait for, so its clock still runs and a quest nobody can work still
-    stalls (STALLED_UNSOURCED)."""
+    stalls (STALLED_UNSOURCED).
+
+    Also includes quests with specific stall reasons (64, 91) so their stall
+    clock runs and the specific reason is detected after STALL_SECONDS."""
     out = {
         qid
         for qid in member.quest_log
         if (
             cat.facts.get(qid) is not None
             and cat.facts[qid].zone == member.zone
-            and _unhuntable(cat, member, qid, left)
+            and (_unhuntable(cat, member, qid, left) or qid in _STALL_REASON_QUESTS)
         )
     }
     if last_quest and int(last_quest) in member.quest_log:
