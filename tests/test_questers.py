@@ -969,6 +969,31 @@ class Broken(unittest.TestCase):
             [(b.quest, b.reason, b.held) for b in available.broken],
         )
 
+    def test_report_to_gryans_stoutmantle_is_recorded_as_unsupported(self):
+        q = quest(109, ELWYNN, 10, title="Report to Gryan Stoutmantle")
+        q["npc1"] = 234
+        q["npc_count1"] = 1
+        cat = world(
+            extra_quests=[q],
+            extra_givers=[
+                giver(109, "start", 1109, 197, 100.0, 0.0),
+                giver(109, "end", 1109, 234, 200.0, 0.0),
+            ],
+            extra_spawns=[spawn(2109, 234, 200.0, 0.0, name="Gryan")],
+        )
+        held = questers.plan(
+            cat, mirra(level=10, quest_log={109: 3}), questers.Clock(), 0.0
+        )
+        self.assertEqual(
+            [(b.quest, b.reason) for b in held.broken],
+            [(109, questers.UNSUPPORTED_OBJECTIVE)],
+        )
+        available = questers.plan(cat, mirra(level=10, x=5000.0), questers.Clock(), 0.0)
+        self.assertIn(
+            (109, questers.UNSUPPORTED_OBJECTIVE, False),
+            [(b.quest, b.reason, b.held) for b in available.broken],
+        )
+
     def test_a_quest_an_item_also_starts_is_not_missing_its_giver(self):
         cat = world(
             drop={1002}, extra_starts=[{"quest": 2, "kind": "item", "entry": 9}]
