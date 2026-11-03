@@ -227,6 +227,9 @@ GIVER_MISSING = "the quest giver is not in the world"
 # to satisfy these objectives.
 UNSUPPORTED_OBJECTIVE = "it requires speaking to an NPC, which questers cannot do"
 CRAFTED_CRAB_CAKES = "requires crafted Crab Cakes (item 2683); questers cannot cook"
+FORGOTTEN_HEIRLOOM = (
+    "The Forgotten Heirloom (quest 64) requires an item no spawned creature drops"
+)
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
 NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
@@ -1275,6 +1278,8 @@ def _broken_reason(
         return UNSUPPORTED_OBJECTIVE
     if quest.id == 93 and status == STATUS_INCOMPLETE and (2683, 6) in quest.items:
         return CRAFTED_CRAB_CAKES
+    if quest.id == 64 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
+        return FORGOTTEN_HEIRLOOM
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that
