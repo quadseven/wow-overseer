@@ -843,6 +843,24 @@ class Broken(unittest.TestCase):
             "requires crafted Crab Cakes (item 2683); questers cannot cook",
         )
 
+    def test_fargodeep_mine_ledger_explains_unsupported_exploration_credit(self):
+        quest = classquest.Quest(62, "The Fargodeep Mine", 0, 1, 0, 0, 0, 0, 0)
+        facts = questers.Facts(zone=12, level=7, ender_npcs=True)
+
+        reason = questers._broken_reason(
+            quest,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertEqual(
+            reason,
+            "requires exploring Fargodeep Mine; questers cannot earn exploration credit",
+        )
+
     def test_objectives_that_move_never_stall(self):
         p, _ = self._play(
             mirra(quest_log={1: 3}), 240, progress=lambda minute: {1: minute // 60}

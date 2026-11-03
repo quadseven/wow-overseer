@@ -233,6 +233,9 @@ FORGOTTEN_HEIRLOOM = (
 SOLOMONS_LAW = (
     "Solomon's Law (quest 91) requires creatures with no spawns in Redridge Mountains"
 )
+FARGODEEP_EXPLORATION = (
+    "requires exploring Fargodeep Mine; questers cannot earn exploration credit"
+)
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
 NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
@@ -1285,6 +1288,8 @@ def _broken_reason(
         return FORGOTTEN_HEIRLOOM
     if quest.id == 91 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return SOLOMONS_LAW
+    if quest.id == 62 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
+        return FARGODEEP_EXPLORATION
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that
