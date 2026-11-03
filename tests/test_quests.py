@@ -94,6 +94,49 @@ class ReadTest(unittest.TestCase):
         self.assertIn("Wood", quests.say_remaining(p))
         self.assertIn("7 more", quests.say_remaining(p))
 
+    def test_quest_116_dry_times_objectives_do_not_progress(self):
+        """Quest 116 'Dry Times' in Redridge Mountains (level 15) is broken.
+
+        The quest is in the ledger as BROKEN (character_queststatus status=5).
+        Objectives don't progress: mobcount/itemcount never reach targets.
+        No spawned creature drops the required item (Thunder Ale or similar).
+
+        This test documents the failure pattern. The fix requires a SQL patch
+        in the worldserver database (quest_template/quest_template_addon) to
+        correct the objective data or add the missing creature drop.
+        """
+        # Simulate Quest 116 with character_queststatus showing FAILED (status=5)
+        # and objectives that don't progress - mobcount/itemcount stuck at 0
+        p = quests.read(
+            _row(
+                quest=116,
+                character_name="Durga",
+                mobcount1=0,   # Never progresses - no creature to kill
+                itemcount1=0,  # Never progresses - no drop
+            ),
+            _meta(
+                LogTitle="Dry Times",
+                QuestLevel=15,
+                # Kill objective: need 10 Thunder Ale barrels but no creature drops them
+                RequiredNpcOrGoCount1=10,
+                npc_name1="Thunder Ale",
+                # Item objective: need 1 Thunder Ale but no drop source
+                RequiredItemCount1=1,
+                item_name1="Thunder Ale",
+            ),
+        )
+        self.assertIsNotNone(p)
+        self.assertEqual(p.quest_id, 116)
+        self.assertEqual(p.title, "Dry Times")
+        # Objectives show 10 kills and 1 item needed, but have 0
+        self.assertEqual(p.left, 11)  # 10 kills + 1 item = 11 remaining
+        # The quest is marked FAILED in character_queststatus, which the ledger
+        # reads as BROKEN with reason "the quest failed in the log"
+        self.assertFalse(p.done)
+        # Not started because no progress was ever made (mobcount/itemcount = 0)
+        # This matches the real issue: questers accept it but cannot progress
+        self.assertFalse(p.started)
+
 
 class FocusTest(unittest.TestCase):
     def _p(self, qid, have, need, character="Grug"):

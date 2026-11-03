@@ -106,6 +106,38 @@ class TheLedgerMoves(unittest.TestCase):
             moved(log_rows=[log(11, 7, status=5)])[(11, 7)].first_taken, NOW
         )
 
+    def test_quest_116_dry_times_appears_as_broken_in_ledger(self):
+        """Quest 116 'Dry Times' appears as BROKEN in the quest ledger.
+
+        Multiple questers (Durga, Mirra, Bromli, Kellan) have this quest
+        with character_queststatus status=5 (FAILED). The ledger reads this
+        as BROKEN with reason "the quest failed in the log".
+
+        This test documents the current broken state. The fix requires a SQL
+        patch in the worldserver database to correct quest_template data so
+        objectives can progress and creatures drop the required items.
+        """
+        # Simulate multiple questers having Quest 116 with FAILED status
+        # Using existing CHARS guids (7=Tharn/Durga, 8=Mirra)
+        e = moved(
+            [
+                ledger(116, 7, "taken"),   # Tharn/Durga
+                ledger(116, 8, "taken"),   # Mirra
+            ],
+            [
+                log(116, 7, status=5),  # Durga - FAILED
+                log(116, 8, status=5),  # Mirra - FAILED
+            ],
+        )
+        # Both questers should show Quest 116 as BROKEN with FAILED_REASON
+        for guid in (7, 8):
+            self.assertEqual(
+                e[(116, guid)].args(),
+                (116, guid, CHARS[guid], "broken", EARLIER, NOW, ql.FAILED_REASON),
+            )
+        # The ledger now has 2 rows for Quest 116, all BROKEN
+        self.assertEqual(len([k for k in e if k[0] == 116]), 2)
+
     def test_a_broken_quest_dropped_from_the_log_stays_broken(self):
         old = ledger(10, 7, "broken", finished=EARLIER, reason=ql.FAILED_REASON)
         self.assertEqual(moved([old]), {})
