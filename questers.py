@@ -378,10 +378,14 @@ MEMBERS_SQL = (
     "WHERE c.name IN ({names})"
 )
 LOG_SQL = (
-    "SELECT guid, quest, status, "
+    "SELECT s.guid, s.quest, s.status, "
     "(mobcount1 + mobcount2 + mobcount3 + mobcount4 + itemcount1 + itemcount2 + "
-    "itemcount3 + itemcount4 + itemcount5 + itemcount6) AS progress "
-    "FROM character_queststatus WHERE guid IN ({guids}) AND status IN (1, 3, 5)"
+    "itemcount3 + itemcount4 + itemcount5 + itemcount6) AS progress, "
+    "q.RequiredNpcOrGo1 AS npc1, q.RequiredNpcOrGo2 AS npc2, "
+    "q.RequiredNpcOrGo3 AS npc3, q.RequiredNpcOrGo4 AS npc4, "
+    "s.mobcount1, s.mobcount2, s.mobcount3, s.mobcount4 "
+    "FROM character_queststatus s JOIN acore_world.quest_template q ON q.ID = s.quest "
+    "WHERE s.guid IN ({guids}) AND s.status IN (1, 3, 5)"
 )
 REWARDED_SQL = (
     "SELECT guid, quest FROM character_queststatus_rewarded WHERE guid IN ({guids})"
@@ -409,7 +413,7 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
 
     `reputation_rows` are REPUTATION_SQL's; None (not read) leaves each
     member's reputation unknown, and a reputation gate is then not judged."""
-    log_by, progress_by, done_by = _logs_by_guid(log_rows, rewarded_rows)
+    log_by, progress_by, objectives_by, done_by = _logs_by_guid(log_rows, rewarded_rows)
     rep_by = None
     if reputation_rows is not None:
         rep_by = {}
@@ -425,6 +429,7 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
             log_by.get(guid, {}),
             frozenset(done_by.get(guid, ())),
             progress_by.get(guid, {}),
+            objectives_by.get(guid, {}),
         )
         if rep_by is not None:
             member = replace(member, reputation=rep_by.get(guid, {}))
@@ -433,16 +438,21 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
 
 
 def _logs_by_guid(log_rows, rewarded_rows) -> tuple:
-    """(guid -> {quest: status}, guid -> {quest: progress}, guid -> {quests
-    rewarded}) from LOG_SQL's and REWARDED_SQL's rows."""
-    log_by, progress_by, done_by = {}, {}, {}
+    """Status, total and per-creature objective progress, and rewards by guid."""
+    log_by, progress_by, objectives_by, done_by = {}, {}, {}, {}
     for r in log_rows or ():
         guid, qid = _int(r.get("guid")), _int(r.get("quest"))
         log_by.setdefault(guid, {})[qid] = _int(r.get("status"))
         progress_by.setdefault(guid, {})[qid] = _int(r.get("progress"))
+        objectives = {
+            _int(r.get("npc%d" % i)): _int(r.get("mobcount%d" % i))
+            for i in range(1, 5)
+            if _int(r.get("npc%d" % i)) > 0
+        }
+        objectives_by.setdefault(guid, {})[qid] = objectives
     for r in rewarded_rows or ():
         done_by.setdefault(_int(r.get("guid")), set()).add(_int(r.get("quest")))
-    return log_by, progress_by, done_by
+    return log_by, progress_by, objectives_by, done_by
 
 
 def _alive(row) -> bool:
@@ -453,7 +463,7 @@ def _alive(row) -> bool:
     return _int(health) > 1 or (_int(health) == 1 and not row.get("has_corpse"))
 
 
-def _member_from_row(r, quest_log, quests_done, quest_progress):
+def _member_from_row(r, quest_log, quests_done, quest_progress, quest_objectives):
     fresh = r.get("pos_x") is not None and r.get("pos_y") is not None
     map_id = r.get("map_id")
     return Member(
@@ -470,6 +480,7 @@ def _member_from_row(r, quest_log, quests_done, quest_progress):
         quest_log=quest_log,
         quests_done=quests_done,
         quest_progress=quest_progress,
+        quest_objectives=quest_objectives,
     )
 
 
@@ -740,6 +751,8 @@ class Member:
     quests_done: frozenset = frozenset()
     # quest id -> the sum of its objective counters
     quest_progress: dict = field(default_factory=dict)
+    # quest id -> creature entry -> its objective counter
+    quest_objectives: dict = field(default_factory=dict)
     # Free general bag slots (bag_pressure.general_bag_room); None when not
     # read, and a provided item's slot is then not judged (#1732).
     free_slots: int | None = None
@@ -1612,8 +1625,21 @@ def _hunt(cat: Catalogue, member, skip, left):
     for qid, quest in _held(cat, member, STATUS_INCOMPLETE, skip):
         if _quest_complete(quest, STATUS_INCOMPLETE, member.quest_progress.get(qid, 0)):
             continue
+        progress = member.quest_objectives.get(qid)
+        kills = dict(quest.kills)
+        if progress:
+            kills = {
+                entry: count
+                for entry, count in kills.items()
+                if int(progress.get(entry, 0)) < count
+            }
         spot = _nearest(
-            member, classquest.within_level(member, classquest.solo_fields(quest)), left
+            member,
+            classquest.within_level(
+                member,
+                tuple(s for s in classquest.solo_fields(quest) if s.entry in kills),
+            ),
+            left,
         )
         if spot is not None:
             hunts.append((_yards(member, spot), qid, quest, spot))
