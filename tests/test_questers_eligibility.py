@@ -19,6 +19,7 @@ from test_questers import ended, giver, started
 
 WESTFALL, TIRISFAL, DEATHKNELL = 40, 85, 154
 ASHENVALE, STONETALON, DESOLACE, LOCH_MODAN, WETLANDS = 331, 406, 405, 38, 11
+REDRIDGE = 44
 ALLIANCE, HORDE = 1101, 690
 DWARF, NIGHT_ELF, GNOME, TAUREN, ORC, HUMAN = 3, 4, 7, 6, 2, 1
 WARSONG_OUTRIDERS = 889
@@ -62,12 +63,12 @@ def catalogue(rows, links=()):
     return questers.catalogue(rows, givers, [], [], starts, ends, links)
 
 
-def member(name, race, level, zone, **kw):
+def member(name, race, level, zone, class_id=1, **kw):
     return questers.Member(
         name=name,
         level=level,
         race=race,
-        class_id=1,
+        class_id=class_id,
         map_id=1,
         x=0.0,
         y=0.0,
@@ -378,6 +379,143 @@ class TheBridgeHandsTheQuesterItsRoom(unittest.TestCase):
             )
             cat = bridge._quester_catalogue()
         self.assertEqual(cat.facts[1082].before, ((1083, 1084),))
+
+
+class Quest120MessengerToStormwind(unittest.TestCase):
+    """Quest 120 "Messenger to Stormwind" - Alliance quest in Redridge (zone 44)
+    for level 14. Four Alliance questers at level 14 in Redridge cannot take it:
+    Durga (Dwarf Hunter), Mirra (Human Priest), Bromli (Dwarf Paladin),
+    Kellan (Human Warrior)."""
+
+    def test_all_four_questers_cannot_take_quest_120_at_level_14(self):
+        # Quest 120 "Messenger to Stormwind" has QuestLevel=14 but MinLevel=15
+        # in the worldserver database. Level 14 questers see it but cannot take it.
+        q120 = row(
+            120,
+            "Messenger to Stormwind",
+            REDRIDGE,
+            14,  # QuestLevel (shown in UI)
+            15,  # MinLevel (minimum to accept)
+            ALLIANCE,
+        )
+        cat = catalogue([q120])
+
+        # The four questers from #1837 at level 14
+        durga = member("Durga", DWARF, 14, REDRIDGE, class_id=3)  # Hunter
+        mirra = member("Mirra", HUMAN, 14, REDRIDGE, class_id=5)  # Priest
+        bromli = member("Bromli", DWARF, 14, REDRIDGE, class_id=2)  # Paladin
+        kellan = member("Kellan", HUMAN, 14, REDRIDGE, class_id=1)  # Warrior
+
+        for q in (durga, mirra, bromli, kellan):
+            self.assertNotIn(
+                120,
+                questers.in_reach(cat, q, REDRIDGE),
+                f"{q.name} ({q.race}/{q.class_id}) should not be able to take quest 120 at level 14",
+            )
+
+    def test_quest_120_with_prerequisite_fails(self):
+        """If Quest 120 has a PrevQuestID, questers without it cannot take it."""
+        # Quest 120 with a prerequisite (e.g., Quest 30 Redridge Goulash)
+        q120 = row(
+            120,
+            "Messenger to Stormwind",
+            REDRIDGE,
+            14,
+            14,
+            ALLIANCE,
+            prev=30,
+        )
+        cat = catalogue([q120])
+
+        durga = member("Durga", DWARF, 14, REDRIDGE, class_id=3)
+        # Durga hasn't done quest 30
+        self.assertNotIn(120, questers.in_reach(cat, durga, REDRIDGE))
+
+        # But if she has done quest 30, she can take it
+        durga_done = member(
+            "Durga", DWARF, 14, REDRIDGE, class_id=3, quests_done=frozenset({30})
+        )
+        self.assertIn(120, questers.in_reach(cat, durga_done, REDRIDGE))
+
+    def test_quest_120_with_exclusive_group_fails(self):
+        """If Quest 120 has an exclusive group, questers with another quest in that group cannot take it."""
+        # Quest 120 with exclusive group 120
+        q120 = row(
+            120,
+            "Messenger to Stormwind",
+            REDRIDGE,
+            14,
+            14,
+            ALLIANCE,
+            exclusive=120,
+        )
+        # Another quest in the same exclusive group
+        q_other = row(
+            30,
+            "Redridge Goulash",
+            REDRIDGE,
+            6,
+            6,
+            ALLIANCE,
+            exclusive=120,
+        )
+        cat = catalogue([q120, q_other])
+
+        # Durga has quest 30 in her log
+        durga = member("Durga", DWARF, 14, REDRIDGE, class_id=3, quest_log={30: 3})
+        self.assertNotIn(120, questers.in_reach(cat, durga, REDRIDGE))
+
+        # But if she doesn't have it, she can take 120
+        durga_free = member("Durga", DWARF, 14, REDRIDGE, class_id=3)
+        self.assertIn(120, questers.in_reach(cat, durga_free, REDRIDGE))
+
+    def test_quest_120_with_startitem_needs_bag_slot(self):
+        """If Quest 120 provides an item (StartItem), it needs a free bag slot."""
+        q120 = row(
+            120,
+            "Messenger to Stormwind",
+            REDRIDGE,
+            14,
+            14,
+            ALLIANCE,
+            provided0=1234,  # Some item ID
+        )
+        cat = catalogue([q120])
+
+        # Durga has no free bag slots
+        durga_full = member("Durga", DWARF, 14, REDRIDGE, class_id=3, free_slots=0)
+        self.assertNotIn(120, questers.in_reach(cat, durga_full, REDRIDGE))
+
+        # But with a free slot, she can take it
+        durga_room = member("Durga", DWARF, 14, REDRIDGE, class_id=3, free_slots=1)
+        self.assertIn(120, questers.in_reach(cat, durga_room, REDRIDGE))
+
+    def test_quest_120_with_reputation_gate(self):
+        """If Quest 120 has a reputation requirement, questers without it cannot take it."""
+        STORMWIND_REP = 12345  # Some faction ID
+        q120 = row(
+            120,
+            "Messenger to Stormwind",
+            REDRIDGE,
+            14,
+            14,
+            ALLIANCE,
+            min_rep_faction=STORMWIND_REP,
+            min_rep_value=3000,  # Honored
+        )
+        cat = catalogue([q120])
+
+        # Durga has no reputation with Stormwind
+        durga = member(
+            "Durga", DWARF, 14, REDRIDGE, class_id=3, reputation={STORMWIND_REP: 0}
+        )
+        self.assertNotIn(120, questers.in_reach(cat, durga, REDRIDGE))
+
+        # But with Honored reputation, she can take it
+        durga_honored = member(
+            "Durga", DWARF, 14, REDRIDGE, class_id=3, reputation={STORMWIND_REP: 3000}
+        )
+        self.assertIn(120, questers.in_reach(cat, durga_honored, REDRIDGE))
 
 
 if __name__ == "__main__":
