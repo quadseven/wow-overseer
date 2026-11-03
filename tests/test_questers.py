@@ -1170,6 +1170,26 @@ class Broken(unittest.TestCase):
     # hand-in with "retryable":false. That is "could not", not "did not yet".
     NO_HOLDER = "the world names no creature and no object that takes that quest in"
 
+    def test_quest_45_without_a_named_turn_in_is_explained_in_its_ledger_reason(self):
+        cat = world(
+            extra_quests=[
+                quest(45, ELWYNN, 10, title="Discover Rolf's Fate"),
+            ],
+            extra_givers=[giver(45, "start", 1045, 145, 10, 0)],
+            extra_starts=[started(45, 145)],
+        )
+        p = questers.plan(
+            cat,
+            mirra(quest_log={45: questers.STATUS_COMPLETE}),
+            questers.Clock(),
+            0.0,
+        )
+
+        self.assertEqual(
+            [(b.quest, b.reason) for b in p.broken],
+            [(45, questers.NO_TURN_IN_NAMED)],
+        )
+
     @staticmethod
     def _turn_in_row(reason, retryable, age=10, name="Mirra"):
         result = '{"outcome":"refused","reason":"%s","holder":"none"' % reason

@@ -227,6 +227,7 @@ GIVER_MISSING = "the quest giver is not in the world"
 UNSUPPORTED_OBJECTIVE = "it requires speaking to an NPC, which questers cannot do"
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
+NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
 # The kind of spawn a gameobject ender's walk names (`walk-to-spawn gameobject:`).
 OBJECT_KIND = "gameobject"
 SOURCE_MISSING = "an objective's creature or item is never found in the world"
@@ -1193,6 +1194,8 @@ def _ender_missing(quest, facts: Facts, gone, object_gone=frozenset()) -> str:
     missing its object, not its NPC (#1594)."""
     if _ender_spots(quest, facts, gone, object_gone):
         return ""
+    if not facts.ender_npcs and not facts.ender_objects:
+        return NO_TURN_IN_NAMED
     if facts.ender_objects and not facts.ender_npcs:
         return OBJECT_ENDER_MISSING
     return ENDER_MISSING
