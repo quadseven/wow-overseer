@@ -2,9 +2,8 @@
 
 Pure unit tests against synthetic Members and WorkOrders, the same seam as
 tests/test_guildshare.py: this suite proves the DECISION is right for the
-inputs given. It does not prove bridge.py's SQL produces those inputs, and it
-does not re-prove any worldserver verb. The module is pure, and the bridge
-only logs what it decides: nothing is written or sent.
+inputs given. Bridge wiring tests separately prove persistent store reads,
+assignment writes and error handling. No worldserver verb is involved.
 
 WHAT THE FIXTURES CARRY. The professions and skill ids come from goals.SKILL_IDS,
 the same table the module reads: alchemy 171, herbalism 182, tailoring 197,
@@ -405,7 +404,94 @@ class RosterTest(unittest.TestCase):
 
 
 class BridgeWiringTest(unittest.TestCase):
-    """The guild surplus pass logs the standing work orders, and writes nothing."""
+    """The bridge plans persistent orders alongside the standing orders."""
+
+    def test_raid_shortfall_is_requested_and_assignee_can_report(self):
+        from test_guildsocial_bridge import bridge
+
+        order = _order(workorders.CONSUMABLE, "Greater Fire Protection Potion", 12)
+        with (
+            mock.patch.object(bridge, "_connect", _store_connection()),
+            mock.patch.object(
+                bridge.raidsupply, "fire_potion_order", return_value=order
+            ),
+            mock.patch.object(bridge.workorderstore, "request") as request,
+        ):
+            bridge._request_fire_potion_order([object()])
+        request.assert_called_once()
+        self.assertEqual(request.call_args.args[1], order)
+
+        with (
+            mock.patch.object(bridge, "_connect", _store_connection()),
+            mock.patch.object(
+                bridge.workorderstore, "report", return_value=True
+            ) as report,
+        ):
+            self.assertTrue(bridge._report_work_order(17, "Ugga"))
+        report.assert_called_once_with(mock.ANY, 17, "Ugga")
+
+    def test_the_bridge_plans_stored_orders_and_saves_assignments(self):
+        from test_guildsocial_bridge import bridge
+
+        roster = [
+            guildshare.Member(name="Ugga", level=58, skills={ALCHEMY: 200}, online=True)
+        ]
+        stored = _order(
+            workorders.CONSUMABLE,
+            "Greater Fire Protection Potion",
+            12,
+            status=workorders.REQUESTED,
+        )
+        planned = workorders.WorkOrderPlan(
+            assignments=(workorders.WorkAssignment(stored, "Ugga"),), notes=()
+        )
+        cursor = mock.Mock()
+        cursor.__enter__ = mock.Mock(return_value=cursor)
+        cursor.__exit__ = mock.Mock(return_value=False)
+        conn = mock.Mock()
+        conn.__enter__ = mock.Mock(return_value=conn)
+        conn.__exit__ = mock.Mock(return_value=False)
+        conn.cursor.return_value = cursor
+        with (
+            mock.patch.object(bridge, "_connect", return_value=conn),
+            mock.patch.object(
+                bridge.workorderstore, "open_orders", return_value=[stored]
+            ) as read,
+            mock.patch.object(
+                bridge.workorderstore, "save_plan", return_value=1
+            ) as save,
+            mock.patch.object(bridge.workorders, "plan", return_value=planned) as plan,
+        ):
+            bridge._log_work_orders(roster)
+        read.assert_called_once_with(cursor)
+        plan.assert_called_once()
+        self.assertEqual(plan.call_args.args[0][0], stored)
+        save.assert_called_once_with(cursor, planned)
+
+    def test_store_read_failure_is_logged_and_does_not_escape(self):
+        from test_guildsocial_bridge import bridge
+
+        conn = mock.Mock()
+        conn.__enter__ = mock.Mock(return_value=conn)
+        conn.__exit__ = mock.Mock(return_value=False)
+        cursor = mock.Mock()
+        cursor.__enter__ = mock.Mock(return_value=cursor)
+        cursor.__exit__ = mock.Mock(return_value=False)
+        conn.cursor.return_value = cursor
+        with (
+            mock.patch.object(bridge, "_connect", return_value=conn),
+            mock.patch.object(
+                bridge.workorderstore,
+                "open_orders",
+                side_effect=RuntimeError("store unavailable"),
+            ),
+            self.assertLogs(bridge.log, "ERROR") as seen,
+        ):
+            bridge._log_work_orders([])
+        self.assertIn(
+            "workorders: planning or store read/write failed",
+            seen.records[0].getMessage(),
+        )
 
     def test_the_bridge_logs_who_takes_each_standing_order(self):
         from test_guildsocial_bridge import bridge
@@ -415,7 +501,12 @@ class BridgeWiringTest(unittest.TestCase):
                 name="Og", level=58, skills={TAILORING: 300}, online=True
             ),
         ]
-        with self.assertLogs(bridge.log, "INFO") as seen:
+        with (
+            mock.patch.object(bridge, "_connect", _store_connection()),
+            mock.patch.object(bridge.workorderstore, "open_orders", return_value=[]),
+            mock.patch.object(bridge.workorderstore, "save_plan", return_value=0),
+            self.assertLogs(bridge.log, "INFO") as seen,
+        ):
             bridge._log_work_orders(roster)
         said = [r.getMessage() for r in seen.records]
         self.assertEqual(
@@ -465,9 +556,11 @@ class BridgeWiringTest(unittest.TestCase):
         ):
             asyncio.run(bridge.Bridge._guild_share_once(_Self()))
         self.assertEqual(written, [[gift]])
-        self.assertIn(
-            "work order plan failed; retrying next cycle",
-            [r.getMessage() for r in seen.records],
+        self.assertTrue(
+            any(
+                "planning or store read/write failed" in r.getMessage()
+                for r in seen.records
+            )
         )
 
 
@@ -482,6 +575,13 @@ def _share_pass_stubs(bridge, roster, share):
         ("_give_attempts", lambda hours: []),
     ):
         stack.enter_context(mock.patch.object(bridge, name, value))
+    stack.enter_context(mock.patch.object(bridge, "_connect", _store_connection()))
+    stack.enter_context(
+        mock.patch.object(bridge.workorderstore, "open_orders", return_value=[])
+    )
+    stack.enter_context(
+        mock.patch.object(bridge.workorderstore, "save_plan", return_value=0)
+    )
     stack.enter_context(
         mock.patch.object(bridge.guildshare, "plan", lambda *a, **k: share)
     )
@@ -494,6 +594,13 @@ def _share_pass_stubs(bridge, roster, share):
         )
     )
     return stack
+
+
+def _store_connection():
+    cursor = mock.MagicMock()
+    conn = mock.MagicMock()
+    conn.cursor.return_value = cursor
+    return conn
 
 
 if __name__ == "__main__":
