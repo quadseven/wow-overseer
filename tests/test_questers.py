@@ -25,6 +25,8 @@ def quest(
     kill=0,
     count=1,
     title="",
+    item=0,
+    item_count=0,
 ):
     return {
         "id": qid,
@@ -44,6 +46,8 @@ def quest(
         "grp": 0,
         "npc1": kill,
         "npc_count1": count,
+        "item1": item,
+        "item_count1": item_count,
     }
 
 
@@ -88,6 +92,7 @@ def world(
     extra_ends=(),
     extra_spawns=(),
     drop=(),
+    extra_loot=(),
 ):
     """Northshire (sorted under its area, 9), Goldshire in Elwynn (12), two
     zones further on, and quests a Human priest may not take."""
@@ -138,7 +143,7 @@ def world(
     # The spawned givers and enders catalogue() reads: `drop` takes the spawn
     # out of these while `starts` and `ends` still name it.
     givers = [g for g in givers if g["guid"] not in drop]
-    return questers.catalogue(quests, givers, spawns, [], starts, ends)
+    return questers.catalogue(quests, givers, spawns, list(extra_loot), starts, ends)
 
 
 def mirra(**kw):
@@ -872,6 +877,31 @@ class Broken(unittest.TestCase):
         member = mirra(quest_log={1: 3, 8: 3}, quests_done=frozenset({2, 3}))
         self._play(member, 125, cat=cat)
         self.assertIn((8, questers.STALLED_UNSOURCED), self.found)
+
+    def test_quest_116_item_objectives_are_huntable_from_reference_loot_rows(self):
+        cat = world(
+            extra_quests=[
+                quest(116, REDRIDGE, 15, item=723, item_count=5, title="Dry Times")
+            ],
+            extra_givers=[
+                giver(116, "start", 1116, 116, 100.0, 0.0),
+                giver(116, "end", 1116, 116, 100.0, 0.0),
+            ],
+            extra_spawns=[spawn(2116, 1726, 150.0, 0.0, level=14)],
+            extra_loot=[{"item": 723, "entry": 1726}],
+        )
+        member = mirra(
+            level=15,
+            zone_id=REDRIDGE,
+            x=100.0,
+            quest_log={116: 3},
+            quests_done=frozenset(cat.book.quests) - {116},
+        )
+        p = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.HUNT, 116))
+        self.assertEqual(p.move.spot.guid, 2116)
+        p, _ = self._play(member, 125, cat=cat)
+        self.assertNotIn((116, questers.STALLED_UNSOURCED), self.found)
 
     def test_a_quest_of_another_zone_it_is_not_working_does_not_stall(self):
         p, _ = self._play(mirra(quest_log={20: 3}), 240)
