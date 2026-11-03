@@ -890,6 +890,32 @@ class Broken(unittest.TestCase):
         )
         self.assertNotEqual(p.move.quest, 2)
 
+    def test_further_concerns_is_recorded_as_an_unsupported_speak_objective(self):
+        q = quest(35, ELWYNN, 10, title="Further Concerns")
+        q["npc1"] = 261
+        q["npc_count1"] = 1
+        cat = world(
+            extra_quests=[q],
+            extra_givers=[
+                giver(35, "start", 1035, 240, 100.0, 0.0),
+                giver(35, "end", 1035, 240, 100.0, 0.0),
+            ],
+            extra_spawns=[spawn(2035, 261, 200.0, 0.0, level=20)],
+        )
+        held = questers.plan(
+            cat, mirra(level=10, quest_log={35: 3}), questers.Clock(), 0.0
+        )
+        self.assertEqual(
+            [(b.quest, b.reason) for b in held.broken],
+            [(35, questers.UNSUPPORTED_OBJECTIVE)],
+        )
+        available = questers.plan(cat, mirra(level=10), questers.Clock(), 0.0)
+        self.assertNotEqual(available.move.quest, 35)
+        self.assertIn(
+            (35, questers.UNSUPPORTED_OBJECTIVE, False),
+            [(b.quest, b.reason, b.held) for b in available.broken],
+        )
+
     def test_a_quest_an_item_also_starts_is_not_missing_its_giver(self):
         cat = world(
             drop={1002}, extra_starts=[{"quest": 2, "kind": "item", "entry": 9}]
