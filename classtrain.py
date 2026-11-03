@@ -40,6 +40,7 @@ import classic
 import dungeonplan
 import guildroute
 import racespells
+import taughtspells
 
 LOG_PREFIX = "guild training:"
 # The command log's source for a class trainer walk: `guildtrain:<member>`.
@@ -86,7 +87,7 @@ def spell_state(row, known, level, cap, skills=None) -> str:
     reached, and every spell it requires is known.
     """
     spell = _int(row["spell"])
-    if spell in known or PROFICIENCY_SPELLS.get(spell) in {
+    if taughtspells.held(spell, known) or PROFICIENCY_SPELLS.get(spell) in {
         _int(k) for k in skills or ()
     }:
         return "learned"
@@ -134,11 +135,16 @@ def due(
     the core refuses it, so counting it walked the member to a trainer that
     would not teach it.
 
+    A row that is a learn spell counts as known when the member holds the
+    spell it teaches, and the race check runs on every taught spell too;
+    with `own_class`, a rogue has Dual Wield and a druid without Bear Form
+    is refused the bear-only spells (taughtspells.py, #792).
+
     With `class_id`, only the spells a member of that class casts or holds
     passively (classcasts.py): what the member's purchase order saves for
     first (purse.py, #771).
     """
-    known = {_int(k) for k in known or ()}
+    known = taughtspells.with_held_rows(known, own_class)
     known.update(
         spell
         for spell, skill in PROFICIENCY_SPELLS.items()
@@ -151,7 +157,14 @@ def due(
         if _int(row["spell"]) not in known
         and _int(row.get("level")) <= level
         and (class_id is None or classcasts.casts(class_id, row["spell"]))
-        and (race_id is None or racespells.fits(row["spell"], race_id, own_class))
+        and (
+            race_id is None
+            or all(
+                racespells.fits(spell, race_id, own_class)
+                for spell in (_int(row["spell"]),) + taughtspells.taught(row["spell"])
+            )
+        )
+        and not taughtspells.refused(row["spell"], known, own_class)
     ]
     costs = []
     taught = set(known)

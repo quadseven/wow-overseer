@@ -68,6 +68,7 @@ import campaignqueue
 import classic
 import classask
 import classtrain
+import taughtspells
 import classparty
 import classhunt
 import classquest
@@ -30099,8 +30100,10 @@ _CLASS_TRAINER_SQL = (
 _CLASS_KNOWN_SQL = (
     "SELECT c.name, c.class AS class_id, c.race AS race_id, c.level, cs.spell "
     "FROM characters c LEFT JOIN character_spell cs ON cs.guid = c.guid "
-    "AND cs.spell IN (SELECT ts.SpellId FROM acore_world.trainer_spell ts "
+    "AND (cs.spell IN (SELECT ts.SpellId FROM acore_world.trainer_spell ts "
     "JOIN acore_world.trainer t ON t.Id = ts.TrainerId WHERE t.Type = 0) "
+    # The spells a learn row teaches and Bear Form (taughtspells.py, #792).
+    "OR cs.spell IN (" + ",".join(map(str, taughtspells.READ_SPELLS)) + ")) "
     "WHERE c.name IN (%s)"
 )
 _CLASS_TRAINER_ROWS: dict = {}
