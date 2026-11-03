@@ -381,5 +381,39 @@ class TheBridgeHandsTheQuesterItsRoom(unittest.TestCase):
         self.assertEqual(cat.facts[1082].before, ((1083, 1084),))
 
 
+class Quest120MessengerToStormwind(unittest.TestCase):
+    """Quest 120's world minimum is above its displayed quest level."""
+
+    def test_level_14_refusal_explains_the_world_minimum(self):
+        # The QUESTS_SQL row exposes QuestLevel as `level` and MinLevel as
+        # `min_level`; the worldserver enforces MinLevel when accepting.
+        cat = catalogue(
+            [row(120, "Messenger to Stormwind", REDRIDGE, 14, 15, ALLIANCE)]
+        )
+        level_14 = member("Quester", HUMAN, 14, REDRIDGE)
+        level_15 = member("Quester", HUMAN, 15, REDRIDGE)
+
+        self.assertNotIn(120, questers.in_reach(cat, level_14, REDRIDGE))
+        self.assertIn(120, questers.in_reach(cat, level_15, REDRIDGE))
+        reason = questers._giver_failure(
+            cat,
+            level_14,
+            120,
+            gone=frozenset(),
+            refused={
+                ("take", 120): (
+                    3,
+                    "not eligible (level, race, class, prerequisite or exclusive group)",
+                )
+            },
+        )
+        self.assertEqual(
+            "the quest giver would not give it: not eligible "
+            "(level, race, class, prerequisite or exclusive group) "
+            "(world MinLevel 15 exceeds displayed QuestLevel 14)",
+            reason,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

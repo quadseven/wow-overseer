@@ -514,6 +514,7 @@ class Facts:
 
     zone: int
     level: int
+    quest_level: int = 0
     classes: int = 0
     # quest_template_addon.PrevQuestID as stored: positive, rewarded first;
     # negative, held first.
@@ -609,6 +610,7 @@ def catalogue(
         facts[qid] = Facts(
             zone=zones[qid],
             level=max(_int(r.get("level")), quest.min_level, 1),
+            quest_level=_int(r.get("level")),
             classes=_int(r.get("classes")),
             prev=_int(r.get("prev_signed")),
             giver_named=qid in named,
@@ -1323,6 +1325,16 @@ def _giver_failure(cat: Catalogue, member, qid, gone, refused):
         return UNSUPPORTED_OBJECTIVE
     count, words = refused.get(("take", qid), (0, ""))
     if count >= FAILS_BEFORE_BROKEN:
+        if (
+            facts.quest_level
+            and facts.level > facts.quest_level
+            and "not eligible" in words
+        ):
+            words = "%s (world MinLevel %d exceeds displayed QuestLevel %d)" % (
+                words,
+                facts.level,
+                facts.quest_level,
+            )
         return _refused_words(REFUSED_TAKE, words)
     if any(kind != "creature" for kind, _entry in quest.other_starts):
         return ""
