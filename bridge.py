@@ -34291,7 +34291,8 @@ def _quester_catalogue():
                              entries)
         starts = _job_read(cur, "quester quest starters", questers.STARTERS_SQL.format(quests=qids))
         ends = _job_read(cur, "quester quest enders", questers.ENDERS_SQL.format(quests=qids))
-    _QUESTER_CATALOGUE = questers.catalogue(quests, givers, spawns, loot, starts, ends)
+        links = _job_read(cur, "quester quest links", questers.LINKS_SQL)
+    _QUESTER_CATALOGUE = questers.catalogue(quests, givers, spawns, loot, starts, ends, links)
     log.info("questers: read %d quest(s) a quester may take from the world database",
              len(_QUESTER_CATALOGUE.facts))
     return _QUESTER_CATALOGUE
@@ -34313,13 +34314,18 @@ def _fetch_quester_facts(names: list) -> tuple:
         log_rows = _job_read(cur, "quester quest logs", questers.LOG_SQL.format(guids=guids))
         done_rows = _job_read(cur, "quester rewarded quests",
                               questers.REWARDED_SQL.format(guids=guids))
+        rep_rows = _job_read(cur, "quester reputation",
+                             questers.REPUTATION_SQL.format(guids=guids))
         recent = _job_read(cur, "quester rows", _JOB_RECENT_SQL, (QUESTER_SOURCE_LIKE,))
         crossings = _job_read(cur, "quester crossings", _JOB_RECENT_SQL,
                               (QUESTER_CROSSINGS_LIKE,))
         ledger = _job_read(cur, "quest ledger", questers.LEDGER_SQL.format(names=marks),
                            list(names))
         hunts = _hunts_open(cur)
-    members = questers.members_from_rows(rows, log_rows, done_rows)
+    members = questers.members_from_rows(rows, log_rows, done_rows, rep_rows)
+    # A quest that hands over an item needs a free bag slot for it (#1732).
+    free = _fetch_free_slots([m.name for m in members])
+    members = [dataclasses.replace(m, free_slots=free.get(m.name)) for m in members]
     states = {(str(r["name"]), int(r["quest"])): str(r.get("state") or "") for r in ledger}
     return (members, questers.attempts(recent), states, hunts,
             guildjobs.recent_from_rows(crossings))
