@@ -11,26 +11,25 @@ import ast
 import pathlib
 import re
 import shutil
-import sys
-import types
 import unittest
+
+from _stub_modules import PYMYSQL, stub_modules
 
 # apiv2 imports realmread, which imports pymysql. Stub it when it is not
 # installed, so this module does not lean on another module's stub (#1434).
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import achievements  # noqa: E402
-import agenda  # noqa: E402
-import commandwords  # noqa: E402
-import events  # noqa: E402
-import guildrun  # noqa: E402
-import nowstatus  # noqa: E402
-import places  # noqa: E402
-import raidready  # noqa: E402
-import runtimeline  # noqa: E402
-from apiv2 import activity, guild  # noqa: E402
-from events import Event  # noqa: E402
-from transform import Geometry  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import achievements
+    import agenda
+    import commandwords
+    import events
+    import guildrun
+    import nowstatus
+    import places
+    import raidready
+    import runtimeline
+    from apiv2 import activity, guild
+    from events import Event
+    from transform import Geometry
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 GEO = Geometry.load(str(HERE))

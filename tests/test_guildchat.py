@@ -2,15 +2,15 @@
 
 import logging
 import pathlib
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import map_server  # noqa: E402  (must follow the pymysql stub)
-from tests.test_vclient import get  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import map_server
+    from tests.test_vclient import get
 
 map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())

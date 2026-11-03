@@ -9,17 +9,16 @@ import io
 import json
 import logging
 import pathlib
-import sys
-import types
 import unittest
 from datetime import datetime, timedelta
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import families  # noqa: E402
-import gearorigin  # noqa: E402
-import map_server  # noqa: E402  (must follow the pymysql stub)
+with stub_modules(pymysql=PYMYSQL):
+    import families
+    import gearorigin
+    import map_server
 
 map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())
