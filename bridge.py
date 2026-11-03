@@ -30642,7 +30642,9 @@ _JOB_ITEMS_SQL = (
     "it.class, it.subclass, it.Quality AS quality, it.SellPrice AS sell_price, "
     "it.name AS item_name, it.ItemLevel AS item_level, "
     "it.RequiredLevel AS required_level, it.InventoryType AS inventory_type, "
-    "it.AllowableClass AS allowable_class "
+    "it.AllowableClass AS allowable_class, "
+    # Soulbound (vendorsale.py: a bound rare piece is the member's own).
+    "(ii.flags & 1) AS bound "
     "FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
     "WHERE ci.guid IN ({guids}) "
