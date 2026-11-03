@@ -421,15 +421,6 @@ class BridgeWiringTest(unittest.TestCase):
         request.assert_called_once()
         self.assertEqual(request.call_args.args[1], order)
 
-        with (
-            mock.patch.object(bridge, "_connect", _store_connection()),
-            mock.patch.object(
-                bridge.workorderstore, "report", return_value=True
-            ) as report,
-        ):
-            self.assertTrue(bridge._report_work_order(17, "Ugga"))
-        report.assert_called_once_with(mock.ANY, 17, "Ugga")
-
     def test_the_bridge_plans_stored_orders_and_saves_assignments(self):
         from test_guildsocial_bridge import bridge
 
@@ -483,7 +474,7 @@ class BridgeWiringTest(unittest.TestCase):
             mock.patch.object(
                 bridge.workorderstore,
                 "open_orders",
-                side_effect=RuntimeError("store unavailable"),
+                side_effect=bridge.pymysql.err.MySQLError("store unavailable"),
             ),
             self.assertLogs(bridge.log, "ERROR") as seen,
         ):
@@ -492,6 +483,19 @@ class BridgeWiringTest(unittest.TestCase):
             "workorders: planning or store read/write failed",
             seen.records[0].getMessage(),
         )
+
+    def test_a_planner_defect_is_not_reported_as_a_store_failure(self):
+        from test_guildsocial_bridge import bridge
+
+        with (
+            mock.patch.object(bridge, "_connect", _store_connection()),
+            mock.patch.object(bridge.workorderstore, "open_orders", return_value=[]),
+            mock.patch.object(
+                bridge.workorders, "plan", side_effect=ValueError("bad skill")
+            ),
+            self.assertRaises(ValueError),
+        ):
+            bridge._log_work_orders([])
 
     def test_the_bridge_logs_who_takes_each_standing_order(self):
         from test_guildsocial_bridge import bridge
@@ -558,7 +562,7 @@ class BridgeWiringTest(unittest.TestCase):
         self.assertEqual(written, [[gift]])
         self.assertTrue(
             any(
-                "planning or store read/write failed" in r.getMessage()
+                "work order plan failed" in r.getMessage()
                 for r in seen.records
             )
         )

@@ -25292,7 +25292,9 @@ def _log_work_orders(roster: list) -> None:
                 workorders.members_from_roster(roster),
             )
             workorderstore.save_plan(cur, plan)
-    except Exception:
+    except (pymysql.err.MySQLError, OSError):
+        # Store errors only: a planner defect (a malformed roster skill, say)
+        # surfaces to the guild pass, which logs it as a plan failure.
         log.exception("workorders: planning or store read/write failed; retrying next pass")
         return
     log.info("workorders: %s", workorders.headline(plan))
@@ -25312,16 +25314,6 @@ def _request_fire_potion_order(lines) -> None:
             workorderstore.request(cur, order)
     except Exception:
         log.exception("workorders: fire potion shortfall could not be stored")
-
-
-def _report_work_order(order_id: int, reporter: str) -> bool:
-    """Complete a stored order only when its assignee reports it."""
-    try:
-        with _connect() as conn, conn.cursor() as cur:
-            return workorderstore.report(cur, order_id, reporter)
-    except Exception:
-        log.exception("workorders: report could not be recorded")
-        return False
 
 
 def _fetch_guild_roster(names: list) -> list:
