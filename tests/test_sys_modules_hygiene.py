@@ -176,8 +176,9 @@ _WRITES = {"setdefault", "update", "pop", "popitem", "clear", "__setitem__"}
 
 
 def _top_level_writes(tree):
-    """Line numbers of statements run at import time, outside any function
-    or class, that change sys.modules directly. A write inside a
+    """Line numbers of code run at import time that changes sys.modules
+    directly: module-level statements and class bodies, at any depth, but not
+    function or lambda bodies, which run only when called. A write inside a
     `with stub_modules(...)` block is restored by the helper and is not one."""
 
     def is_sys_modules(node):
@@ -188,40 +189,43 @@ def _top_level_writes(tree):
             and node.value.id == "sys"
         )
 
-    def writes(node):
-        for sub in ast.walk(node):
-            if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-                continue
-            if (
-                isinstance(sub, ast.Call)
-                and isinstance(sub.func, ast.Attribute)
-                and sub.func.attr in _WRITES
-                and is_sys_modules(sub.func.value)
-            ):
-                yield sub.lineno
-            targets = []
-            if isinstance(sub, (ast.Assign, ast.Delete)):
-                targets = sub.targets
-            elif isinstance(sub, (ast.AugAssign, ast.AnnAssign)):
-                targets = [sub.target]
-            for target in targets:
-                if isinstance(target, ast.Subscript) and is_sys_modules(target.value):
-                    yield sub.lineno
+    def is_helper_block(node):
+        return isinstance(node, ast.With) and any(
+            isinstance(item.context_expr, ast.Call)
+            and getattr(item.context_expr.func, "id", None) == "stub_modules"
+            for item in node.items
+        )
 
-    def statements(body):
-        for stmt in body:
-            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                continue
-            if isinstance(stmt, ast.With) and any(
-                isinstance(item.context_expr, ast.Call)
-                and getattr(item.context_expr.func, "id", None) == "stub_modules"
-                for item in stmt.items
-            ):
-                continue
-            yield stmt
+    def is_write(node):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in _WRITES
+            and is_sys_modules(node.func.value)
+        ):
+            return True
+        if isinstance(node, (ast.Assign, ast.Delete)):
+            targets = node.targets
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            targets = [node.target]
+        else:
+            return False
+        return any(
+            isinstance(t, ast.Subscript) and is_sys_modules(t.value) for t in targets
+        )
 
-    for stmt in statements(tree.body):
-        yield from writes(stmt)
+    def visit(node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            return
+        if is_helper_block(node):
+            return
+        if is_write(node):
+            yield node.lineno
+        for child in ast.iter_child_nodes(node):
+            yield from visit(child)
+
+    lines = sorted(set(visit(tree)))
+    yield from lines
 
 
 class NoModuleWritesSysModulesAtImport(unittest.TestCase):
@@ -248,9 +252,18 @@ class NoModuleWritesSysModulesAtImport(unittest.TestCase):
                 sys.modules["y"] = None
             def later():
                 sys.modules["z"] = None
+            if True:
+                def nested():
+                    sys.modules["n"] = None
+                hook = lambda: sys.modules.pop("n")
+                sys.modules.update(a=None)
+            class Case:
+                sys.modules["c"] = None
+                def method(self):
+                    sys.modules["m"] = None
             """
         )
-        self.assertEqual([3, 4], list(_top_level_writes(ast.parse(source))))
+        self.assertEqual([3, 4, 13, 15], list(_top_level_writes(ast.parse(source))))
 
 
 if __name__ == "__main__":
