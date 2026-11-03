@@ -9,10 +9,11 @@ loaded out of bridge.py and run on fakes; nothing touches a database.
 """
 
 import asyncio
-import sys
 import unittest
 
-from test_family_economy_parity import (  # noqa: F401 - also sets up the pymysql stub
+from _stub_modules import PYMYSQL
+
+from test_family_economy_parity import (  # noqa: F401
     ALLIANCE,
     FAKE_ASYNCIO,
     HELPERS,
@@ -262,7 +263,7 @@ def _run_pass(world, standing_together=True, roster=frozenset()):
             "TIDY_RETRY_HOURS": 24,
             "_fetch_surplus_gear": lambda names: [KILT, HYDRALICK, IDOL, MEADOW],
             "_fetch_enabled_roster_names": enabled_roster,
-            "pymysql": sys.modules["pymysql"],
+            "pymysql": PYMYSQL,
             "_fetch_family_equipped": lambda names: worn_rows,
             "_fetch_worn_entries": lambda names: {"Grug": {10: 1076, 11: 4998}},
             "_equip_history": lambda hours, minutes: [],

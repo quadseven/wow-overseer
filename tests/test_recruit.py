@@ -17,15 +17,15 @@ these tests is what should make it look out of place.
 import ast
 import asyncio
 import pathlib
-import sys
 import types
 import unittest
 from datetime import datetime, timedelta
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, fresh_import, stub_modules
 
-import recruit  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import recruit
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
@@ -559,9 +559,6 @@ class TheInterviewIntegration(unittest.TestCase):
     """
 
     def _import_bridge(self):
-        import sys
-        import types
-
         stub = types.ModuleType("discord")
 
         class Client:
@@ -569,10 +566,7 @@ class TheInterviewIntegration(unittest.TestCase):
                 pass
 
         stub.Client = Client
-        with mock.patch.dict(sys.modules, {"discord": stub}):
-            sys.modules.pop("bridge", None)
-            import bridge as bridge_module
-        return bridge_module
+        return fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
 
     def setUp(self):
         self.bridge = self._import_bridge()

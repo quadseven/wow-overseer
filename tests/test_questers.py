@@ -812,11 +812,64 @@ class Broken(unittest.TestCase):
         self.assertEqual((p.move.kind, p.move.quest), (classquest.ABANDON, 1))
         self.assertIn(questers.STALLED, p.move.said)
 
+    def test_dusky_crab_cakes_ledger_explains_the_unsupported_cooking_step(self):
+        # The world rows name six Dusky Crab Cakes as a required item. The
+        # quester can hunt drops, but has no cooking step to make this item.
+        quest = classquest.Quest(
+            93,
+            "Dusky Crab Cakes",
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((2683, 6),),
+        )
+        facts = questers.Facts(zone=10, level=20, ender_npcs=True)
+
+        reason = questers._broken_reason(
+            quest,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertEqual(
+            reason,
+            "requires crafted Crab Cakes (item 2683); questers cannot cook",
+        )
+
     def test_objectives_that_move_never_stall(self):
         p, _ = self._play(
             mirra(quest_log={1: 3}), 240, progress=lambda minute: {1: minute // 60}
         )
         self.assertEqual(p.broken, ())
+
+    def test_counters_at_the_required_total_are_handed_in_even_if_status_lags(self):
+        # LOG_SQL sums the objective counters. The core can leave status at
+        # incomplete after those counters reach the quest's required total.
+        cat = world(
+            extra_quests=[
+                quest(20, REDRIDGE, 18, kill=200, count=8, title="Blackrock Menace")
+            ]
+        )
+        member = mirra(
+            name="Quester",
+            level=21,
+            zone_id=REDRIDGE,
+            x=150.0,
+            quest_log={20: questers.STATUS_INCOMPLETE},
+            quest_progress={20: 8},
+        )
+        clock = questers.Clock()
+        questers.plan(cat, member, clock, 0.0)
+        p = questers.plan(cat, member, clock, 2 * 60 * 60)
+        self.assertEqual(p.broken, ())
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TURN_IN, 20))
 
     def test_time_offline_is_not_play(self):
         clock = questers.Clock()
@@ -1148,6 +1201,26 @@ class Broken(unittest.TestCase):
     # hand-in with "retryable":false. That is "could not", not "did not yet".
     NO_HOLDER = "the world names no creature and no object that takes that quest in"
 
+    def test_quest_45_without_a_named_turn_in_is_explained_in_its_ledger_reason(self):
+        cat = world(
+            extra_quests=[
+                quest(45, ELWYNN, 10, title="Discover Rolf's Fate"),
+            ],
+            extra_givers=[giver(45, "start", 1045, 145, 10, 0)],
+            extra_starts=[started(45, 145)],
+        )
+        p = questers.plan(
+            cat,
+            mirra(quest_log={45: questers.STATUS_COMPLETE}),
+            questers.Clock(),
+            0.0,
+        )
+
+        self.assertEqual(
+            [(b.quest, b.reason) for b in p.broken],
+            [(45, questers.NO_TURN_IN_NAMED)],
+        )
+
     @staticmethod
     def _turn_in_row(reason, retryable, age=10, name="Mirra"):
         result = '{"outcome":"refused","reason":"%s","holder":"none"' % reason
@@ -1435,6 +1508,77 @@ class ASummonedObjectEnder(unittest.TestCase):
             )
             reasons += [b.reason for b in p.broken if b.quest == 40]
         self.assertTrue(reasons and reasons[-1].startswith(questers.STALLED))
+
+    def test_log_rows_keep_each_creature_objective_counter(self):
+        self.assertIn("q.RequiredNpcOrGo1 AS npc1", questers.LOG_SQL)
+        self.assertIn("s.mobcount1", questers.LOG_SQL)
+        logs, progress, objectives, _done = questers._logs_by_guid(
+            [
+                {
+                    "guid": 1,
+                    "quest": 104,
+                    "status": questers.STATUS_INCOMPLETE,
+                    "progress": 10,
+                    "npc1": 127,
+                    "npc2": 171,
+                    "npc3": 456,
+                    "npc4": 0,
+                    "mobcount1": 10,
+                    "mobcount2": 0,
+                    "mobcount3": 0,
+                    "mobcount4": 0,
+                }
+            ],
+            [],
+        )
+        self.assertEqual(logs[1][104], questers.STATUS_INCOMPLETE)
+        self.assertEqual(progress[1][104], 10)
+        self.assertEqual(objectives[1][104], {127: 10, 171: 0, 456: 0})
+
+    def test_coastal_menace_hunts_only_objectives_with_remaining_kills(self):
+        coastal = quest(
+            104, WESTFALL, 17, kill=127, count=10, title="The Coastal Menace"
+        )
+        coastal.update(npc2=171, npc_count2=8, npc3=456, npc_count3=5)
+        cat = world(
+            extra_quests=[coastal],
+            extra_givers=[
+                giver(104, "start", 5104, 5593, 0, 0),
+                giver(104, "end", 5104, 5593, 0, 0),
+            ],
+            extra_spawns=[
+                spawn(5127, 127, 10, 0, level=16),
+                spawn(5171, 171, 20, 0, level=16),
+                spawn(5456, 456, 30, 0, level=16),
+            ],
+        )
+        member = mirra(
+            level=20,
+            zone_id=WESTFALL,
+            quest_log={104: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({20, 21}),
+            quest_progress={104: 0},
+            quest_objectives={104: {127: 0, 171: 0, 456: 0}},
+        )
+
+        hunted = []
+        for entry, count, total in ((127, 10, 10), (171, 8, 18), (456, 5, 23)):
+            move = questers.plan(cat, member, questers.Clock(), 0.0).move
+            hunted.append(move.spot.entry)
+            objectives = dict(member.quest_objectives[104])
+            objectives[entry] = count
+            member = questers.Member(
+                **{
+                    **member.__dict__,
+                    "quest_progress": {104: total},
+                    "quest_objectives": {104: objectives},
+                }
+            )
+
+        hand_in = questers.plan(cat, member, questers.Clock(), 0.0).move
+
+        self.assertEqual(hunted, [127, 171, 456])
+        self.assertEqual((hand_in.kind, hand_in.quest), (classquest.TURN_IN, 104))
 
     def test_an_incomplete_quest_whose_object_spawns_are_gone_is_still_broken(self):
         member = mirra(quest_log={40: 3})

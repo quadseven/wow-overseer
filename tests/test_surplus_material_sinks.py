@@ -27,18 +27,17 @@ an auction listing of a stack asks for the whole stack's price.
 
 import pathlib
 import re
-import sys
-import types
 import unittest
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import auction  # noqa: E402
-import bank  # noqa: E402
-import clearance  # noqa: E402
-import disposition  # noqa: E402
-import guildshare  # noqa: E402
-import materials  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import auction
+    import bank
+    import clearance
+    import disposition
+    import guildshare
+    import materials
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 CLOTH = 5

@@ -201,6 +201,22 @@ STATUS_INCOMPLETE = classquest.STATUS_INCOMPLETE
 # until it is dropped (questlog.FAILED).
 STATUS_FAILED = questlog.FAILED
 
+
+def _quest_complete(quest, status, progress=0) -> bool:
+    """True when the quest in the log is complete: the core's complete
+    status, or objectives (their sum, as LOG_SQL reads them) that reach what
+    the quest requires."""
+    try:
+        if int(status) == STATUS_COMPLETE:
+            return True
+        if quest is None:
+            return False
+        target = classhunt.wanted(quest)
+        return 0 < target <= int(progress or 0)
+    except (TypeError, ValueError):
+        return False
+
+
 # The reasons a quest is broken, as the ledger records them. FAILED is the
 # ledger's own words for it (questledger.FAILED_REASON, #923).
 FAILED = "the quest failed in the log"
@@ -209,8 +225,10 @@ GIVER_MISSING = "the quest giver is not in the world"
 # Further Concerns requires speaking to an NPC for objective credit. Questers
 # can hunt objectives and use the quest verbs, but have no speak-objective verb.
 UNSUPPORTED_OBJECTIVE = "it requires speaking to an NPC, which questers cannot do"
+CRAFTED_CRAB_CAKES = "requires crafted Crab Cakes (item 2683); questers cannot cook"
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
+NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
 # The kind of spawn a gameobject ender's walk names (`walk-to-spawn gameobject:`).
 OBJECT_KIND = "gameobject"
 SOURCE_MISSING = "an objective's creature or item is never found in the world"
@@ -362,10 +380,14 @@ MEMBERS_SQL = (
     "WHERE c.name IN ({names})"
 )
 LOG_SQL = (
-    "SELECT guid, quest, status, "
+    "SELECT s.guid, s.quest, s.status, "
     "(mobcount1 + mobcount2 + mobcount3 + mobcount4 + itemcount1 + itemcount2 + "
-    "itemcount3 + itemcount4 + itemcount5 + itemcount6) AS progress "
-    "FROM character_queststatus WHERE guid IN ({guids}) AND status IN (1, 3, 5)"
+    "itemcount3 + itemcount4 + itemcount5 + itemcount6) AS progress, "
+    "q.RequiredNpcOrGo1 AS npc1, q.RequiredNpcOrGo2 AS npc2, "
+    "q.RequiredNpcOrGo3 AS npc3, q.RequiredNpcOrGo4 AS npc4, "
+    "s.mobcount1, s.mobcount2, s.mobcount3, s.mobcount4 "
+    "FROM character_queststatus s JOIN acore_world.quest_template q ON q.ID = s.quest "
+    "WHERE s.guid IN ({guids}) AND s.status IN (1, 3, 5)"
 )
 REWARDED_SQL = (
     "SELECT guid, quest FROM character_queststatus_rewarded WHERE guid IN ({guids})"
@@ -393,7 +415,7 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
 
     `reputation_rows` are REPUTATION_SQL's; None (not read) leaves each
     member's reputation unknown, and a reputation gate is then not judged."""
-    log_by, progress_by, done_by = _logs_by_guid(log_rows, rewarded_rows)
+    log_by, progress_by, objectives_by, done_by = _logs_by_guid(log_rows, rewarded_rows)
     rep_by = None
     if reputation_rows is not None:
         rep_by = {}
@@ -409,6 +431,7 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
             log_by.get(guid, {}),
             frozenset(done_by.get(guid, ())),
             progress_by.get(guid, {}),
+            objectives_by.get(guid, {}),
         )
         if rep_by is not None:
             member = replace(member, reputation=rep_by.get(guid, {}))
@@ -417,16 +440,21 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
 
 
 def _logs_by_guid(log_rows, rewarded_rows) -> tuple:
-    """(guid -> {quest: status}, guid -> {quest: progress}, guid -> {quests
-    rewarded}) from LOG_SQL's and REWARDED_SQL's rows."""
-    log_by, progress_by, done_by = {}, {}, {}
+    """Status, total and per-creature objective progress, and rewards by guid."""
+    log_by, progress_by, objectives_by, done_by = {}, {}, {}, {}
     for r in log_rows or ():
         guid, qid = _int(r.get("guid")), _int(r.get("quest"))
         log_by.setdefault(guid, {})[qid] = _int(r.get("status"))
         progress_by.setdefault(guid, {})[qid] = _int(r.get("progress"))
+        objectives = {
+            _int(r.get("npc%d" % i)): _int(r.get("mobcount%d" % i))
+            for i in range(1, 5)
+            if _int(r.get("npc%d" % i)) > 0
+        }
+        objectives_by.setdefault(guid, {})[qid] = objectives
     for r in rewarded_rows or ():
         done_by.setdefault(_int(r.get("guid")), set()).add(_int(r.get("quest")))
-    return log_by, progress_by, done_by
+    return log_by, progress_by, objectives_by, done_by
 
 
 def _alive(row) -> bool:
@@ -437,7 +465,7 @@ def _alive(row) -> bool:
     return _int(health) > 1 or (_int(health) == 1 and not row.get("has_corpse"))
 
 
-def _member_from_row(r, quest_log, quests_done, quest_progress):
+def _member_from_row(r, quest_log, quests_done, quest_progress, quest_objectives):
     fresh = r.get("pos_x") is not None and r.get("pos_y") is not None
     map_id = r.get("map_id")
     return Member(
@@ -454,6 +482,7 @@ def _member_from_row(r, quest_log, quests_done, quest_progress):
         quest_log=quest_log,
         quests_done=quests_done,
         quest_progress=quest_progress,
+        quest_objectives=quest_objectives,
     )
 
 
@@ -724,6 +753,8 @@ class Member:
     quests_done: frozenset = frozenset()
     # quest id -> the sum of its objective counters
     quest_progress: dict = field(default_factory=dict)
+    # quest id -> creature entry -> its objective counter
+    quest_objectives: dict = field(default_factory=dict)
     # Free general bag slots (bag_pressure.general_bag_room); None when not
     # read, and a provided item's slot is then not judged (#1732).
     free_slots: int | None = None
@@ -1177,6 +1208,8 @@ def _ender_missing(quest, facts: Facts, gone, object_gone=frozenset()) -> str:
     missing its object, not its NPC (#1594)."""
     if _ender_spots(quest, facts, gone, object_gone):
         return ""
+    if not facts.ender_npcs and not facts.ender_objects:
+        return NO_TURN_IN_NAMED
     if facts.ender_objects and not facts.ender_npcs:
         return OBJECT_ENDER_MISSING
     return ENDER_MISSING
@@ -1206,13 +1239,14 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
     out = []
     for qid in sorted(member.quest_log):
         status = int(member.quest_log[qid])
-        value = (status, int(member.quest_progress.get(qid, 0)))
+        prog = int(member.quest_progress.get(qid, 0))
+        value = (status, prog)
         played = clock.observe(member.name, qid, value, now, playing and qid in working)
         quest, facts = cat.quest(qid), cat.facts.get(qid)
         if quest is None or facts is None:
             continue
         reason = _broken_reason(
-            quest, facts, status, played, gone, refused, final, object_gone
+            quest, facts, status, played, gone, refused, final, object_gone, prog
         )
         if reason:
             out.append(Broken(member.name, qid, quest.title, reason, held=True))
@@ -1229,6 +1263,7 @@ def _broken_reason(
     refused,
     final=None,
     object_gone=frozenset(),
+    progress=0,
 ) -> str:
     """Why a quest the quester holds is broken, "" when it is not (yet). A
     complete quest's objectives cannot move, so stillness never stalls it:
@@ -1237,20 +1272,23 @@ def _broken_reason(
         return FAILED
     if quest.id == 35:
         return UNSUPPORTED_OBJECTIVE
+    if quest.id == 93 and status == STATUS_INCOMPLETE and (2683, 6) in quest.items:
+        return CRAFTED_CRAB_CAKES
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that
     # object, so the quest is worked, and only a stall breaks it (#1606).
-    if missing and not (status == STATUS_INCOMPLETE and facts.object_unspawned):
+    complete = _quest_complete(quest, status, progress)
+    if missing and not (not complete and facts.object_unspawned):
         return missing
-    if status == STATUS_INCOMPLETE and _fields_gone(quest, gone):
+    if not complete and _fields_gone(quest, gone):
         return SOURCE_MISSING
     if quest.id in (final or {}):
         return _refused_words(CANNOT_TURN_IN, final[quest.id])
     count, words = refused.get(("turnin", quest.id), (0, ""))
     if count >= FAILS_BEFORE_BROKEN:
         return _refused_words(REFUSED_TURN_IN, words)
-    if played < STALL_SECONDS or status == STATUS_COMPLETE:
+    if played < STALL_SECONDS or complete:
         return ""
     unsourced = (quest.kills or quest.items) and not quest.fields
     return STALLED_UNSOURCED if unsourced else STALLED
@@ -1449,7 +1487,7 @@ def next_move(
     logged_complete = {
         qid
         for qid, status in member.quest_log.items()
-        if int(status) == STATUS_COMPLETE
+        if _quest_complete(cat.quest(qid), status, member.quest_progress.get(qid, 0))
     }
     # 1. A broken quest it holds is dropped.
     move = _drop(cat, member, broken, found, complete | logged_complete)
@@ -1538,7 +1576,12 @@ def _hand_in(
     """The hand-in of the complete quest whose turn-in NPC or object is
     nearest, or None. A quest the module called complete is handed in even when its log
     row still says otherwise (#1085); `skip` leaves it as it leaves any other."""
-    due = {qid for qid, _quest in _held(cat, member, STATUS_COMPLETE, skip)}
+    due = {
+        qid
+        for qid, status in member.quest_log.items()
+        if qid not in skip
+        and _quest_complete(cat.quest(qid), status, member.quest_progress.get(qid, 0))
+    }
     due |= {qid for qid in complete if qid in member.quest_log and qid not in skip}
     ready = []
     for qid in due:
@@ -1586,8 +1629,23 @@ def _hunt(cat: Catalogue, member, skip, left):
     an incomplete quest it holds, or None."""
     hunts = []
     for qid, quest in _held(cat, member, STATUS_INCOMPLETE, skip):
+        if _quest_complete(quest, STATUS_INCOMPLETE, member.quest_progress.get(qid, 0)):
+            continue
+        progress = member.quest_objectives.get(qid)
+        kills = dict(quest.kills)
+        if progress:
+            kills = {
+                entry: count
+                for entry, count in kills.items()
+                if int(progress.get(entry, 0)) < count
+            }
         spot = _nearest(
-            member, classquest.within_level(member, classquest.solo_fields(quest)), left
+            member,
+            classquest.within_level(
+                member,
+                tuple(s for s in classquest.solo_fields(quest) if s.entry in kills),
+            ),
+            left,
         )
         if spot is not None:
             hunts.append((_yards(member, spot), qid, quest, spot))
