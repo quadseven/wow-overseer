@@ -14,22 +14,22 @@ import asyncio
 import json
 import pathlib
 import sqlite3
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import jev  # noqa: E402
-import jev_activity as ja  # noqa: E402
-import jev_family_intent as jfi  # noqa: E402
-import jev_items  # noqa: E402
-import jev_outcomes as jo  # noqa: E402
-from test_jev import ROUTE, Transport, good_choice, reply  # noqa: E402
-from test_jev_act import DESTINY, FakePick, ranked, route  # noqa: E402
-from test_jev_items import FakeJev  # noqa: E402
-from test_jev_outcomes import _import_bridge, activity_facts, intent_facts  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import jev
+    import jev_activity as ja
+    import jev_family_intent as jfi
+    import jev_items
+    import jev_outcomes as jo
+    from test_jev import ROUTE, Transport, good_choice, reply
+    from test_jev_act import DESTINY, FakePick, ranked, route
+    from test_jev_items import FakeJev
+    from test_jev_outcomes import _import_bridge, activity_facts, intent_facts
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 

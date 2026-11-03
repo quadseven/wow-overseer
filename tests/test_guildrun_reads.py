@@ -15,16 +15,16 @@ import pathlib
 import re
 import shutil
 import sys
-import types
 import unittest
+
+from _stub_modules import PYMYSQL, stub_modules
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import guildrun  # noqa: E402
-import realmread  # noqa: E402
-from test_measured_views import render  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import guildrun
+    import realmread
+    from test_measured_views import render
 
 FORMED = datetime.datetime(2026, 10, 8, 10, 0, 0)
 

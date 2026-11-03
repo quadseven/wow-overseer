@@ -10,7 +10,7 @@ process with its own copy.
 import pathlib
 import unittest
 
-from test_decree_order import FakeConn  # noqa: F401  sets up the pymysql stub
+from test_decree_order import FakeConn  # noqa: F401
 
 import crossing  # noqa: E402
 import map_server  # noqa: E402
