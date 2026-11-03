@@ -177,8 +177,9 @@ _WRITES = {"setdefault", "update", "pop", "popitem", "clear", "__setitem__"}
 
 def _top_level_writes(tree):
     """Line numbers of code run at import time that changes sys.modules
-    directly: module-level statements and class bodies, at any depth, but not
-    function or lambda bodies, which run only when called. A write inside a
+    directly: module-level statements and class bodies, at any depth, and a
+    function's decorators, defaults and annotations, but not function or
+    lambda bodies, which run only when called. A write inside a
     `with stub_modules(...)` block is restored by the helper and is not one."""
 
     def is_sys_modules(node):
@@ -216,6 +217,14 @@ def _top_level_writes(tree):
 
     def visit(node):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            # Decorators, defaults and annotations run at definition time;
+            # only the body waits for a call.
+            run_now = [node.args]
+            if not isinstance(node, ast.Lambda):
+                run_now += [*node.decorator_list, node.returns]
+            for child in run_now:
+                if child is not None:
+                    yield from visit(child)
             return
         if is_helper_block(node):
             return
@@ -261,9 +270,15 @@ class NoModuleWritesSysModulesAtImport(unittest.TestCase):
                 sys.modules["c"] = None
                 def method(self):
                     sys.modules["m"] = None
+            @keep(sys.modules.pop("d"))
+            def decorated(stub=sys.modules.setdefault("e", None)) -> None:
+                sys.modules["f"] = None
+            later_hook = lambda stub=sys.modules.pop("g"): stub
             """
         )
-        self.assertEqual([3, 4, 13, 15], list(_top_level_writes(ast.parse(source))))
+        self.assertEqual(
+            [3, 4, 13, 15, 18, 19, 21], list(_top_level_writes(ast.parse(source)))
+        )
 
 
 if __name__ == "__main__":
