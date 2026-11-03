@@ -414,7 +414,7 @@ class Quest120MessengerToStormwind(unittest.TestCase):
             },
         )
         self.assertEqual(
-            "the quest giver would not give it: not eligible (level, race, class, prerequisite or exclusive group)",
+            "the quest giver would not give it: not eligible (level, race, class, prerequisite or exclusive group) (world MinLevel 15 exceeds displayed QuestLevel 14)",
             reason,
         )
 
