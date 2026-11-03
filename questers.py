@@ -1639,6 +1639,12 @@ def _hunt(cat: Catalogue, member, skip, left):
             continue
         progress = member.quest_objectives.get(qid)
         kills = dict(quest.kills)
+        for item, count in quest.items:
+            if int(member.quest_progress.get(qid, 0)) >= classhunt.wanted(quest):
+                continue
+            for required_item, entry in quest.drops:
+                if required_item == item:
+                    kills[entry] = max(kills.get(entry, 0), count)
         if progress:
             kills = {
                 entry: count

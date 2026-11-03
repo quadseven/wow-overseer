@@ -88,6 +88,7 @@ def world(
     extra_ends=(),
     extra_spawns=(),
     drop=(),
+    loot=(),
 ):
     """Northshire (sorted under its area, 9), Goldshire in Elwynn (12), two
     zones further on, and quests a Human priest may not take."""
@@ -138,7 +139,7 @@ def world(
     # The spawned givers and enders catalogue() reads: `drop` takes the spawn
     # out of these while `starts` and `ends` still name it.
     givers = [g for g in givers if g["guid"] not in drop]
-    return questers.catalogue(quests, givers, spawns, [], starts, ends)
+    return questers.catalogue(quests, givers, spawns, loot, starts, ends)
 
 
 def mirra(**kw):
@@ -781,6 +782,50 @@ class Steps(unittest.TestCase):
 
 
 class Broken(unittest.TestCase):
+    def test_item_objective_hunts_a_creature_that_drops_the_required_item(self):
+        pie = quest(22, WESTFALL, 12, min_level=10, title="Goretusk Liver Pie")
+        pie.update(item1=723, item_count1=4)
+        cat = world(
+            extra_quests=[pie],
+            extra_givers=[
+                giver(22, "start", 1022, 122, 3000, 0),
+                giver(22, "end", 1022, 122, 3000, 0),
+            ],
+            extra_spawns=[spawn(2022, 157, 100, 0, level=11, name="Goretusk")],
+            loot=[{"item": 723, "entry": 157}],
+        )
+        member = mirra(
+            level=12,
+            zone_id=WESTFALL,
+            x=100.0,
+            quests_done=frozenset({1, 2, 3, 6, 7, 20, 21}),
+            quest_log={22: questers.STATUS_INCOMPLETE},
+        )
+
+        plan = questers.plan(cat, member, questers.Clock(), 0.0)
+
+        self.assertEqual(
+            (plan.move.kind, plan.move.quest, plan.move.spot.entry),
+            (classquest.HUNT, 22, 157),
+        )
+        step = questers.step_for(member, plan.move, 0, cat.quest(22))
+        self.assertEqual(
+            [row.command for row in step.rows],
+            ["hunt-spawn creature:157 item:723 count:4 max:480"],
+        )
+
+        completed, _clock = self._play(
+            member,
+            240,
+            step=5,
+            progress=lambda minute: {22: min(minute // 10, 4)},
+            cat=cat,
+        )
+        self.assertEqual(completed.broken, ())
+        self.assertEqual(
+            (completed.move.kind, completed.move.quest), (classquest.TURN_IN, 22)
+        )
+
     def _play(self, member, minutes, clock=None, step=5, progress=None, cat=None):
         """Plan every `step` minutes, each pass told the quest its last move
         was for, as the bridge tells it (`_quester_last`)."""
