@@ -30,24 +30,23 @@ import concurrent.futures
 import datetime
 import pathlib
 import re
-import sys
 import threading
-import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import achievements  # noqa: E402
-import modsource  # noqa: E402
-import jev  # noqa: E402
-import jev_activity  # noqa: E402
-import llmpool  # noqa: E402
-import map_server  # noqa: E402
-import realmread  # noqa: E402
-import recap  # noqa: E402
-import vision  # noqa: E402
-from apiv2 import chronicle, guild  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import achievements
+    import modsource
+    import jev
+    import jev_activity
+    import llmpool
+    import map_server
+    import realmread
+    import recap
+    import vision
+    from apiv2 import chronicle, guild
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 TABLES = ("overseer_death", "overseer_guild_ask")

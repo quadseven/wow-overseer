@@ -12,7 +12,7 @@ import pathlib
 import types
 import unittest
 
-from test_decree_order import FakeConn, FakeCursor  # sets up the pymysql stub
+from test_decree_order import FakeConn, FakeCursor
 
 import campaignqueue  # noqa: E402
 import core  # noqa: E402

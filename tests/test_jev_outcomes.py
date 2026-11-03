@@ -9,18 +9,18 @@ family's next question, and the kind's recent outcomes in the question.
 
 import asyncio
 import pathlib
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, fresh_import, stub_modules
 
-import jev  # noqa: E402
-import jev_activity as ja  # noqa: E402
-import jev_family_intent as jfi  # noqa: E402
-import jev_outcomes as jo  # noqa: E402
-from test_jev_items import FakeJev  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import jev
+    import jev_activity as ja
+    import jev_family_intent as jfi
+    import jev_outcomes as jo
+    from test_jev_items import FakeJev
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
@@ -203,9 +203,7 @@ def _import_bridge():
             pass
 
     stub.Client = Client
-    with mock.patch.dict(sys.modules, {"discord": stub}):
-        sys.modules.pop("bridge", None)
-        import bridge
+    bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
     return bridge
 
 

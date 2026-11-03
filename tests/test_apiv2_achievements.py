@@ -12,16 +12,17 @@ import sys
 import types
 import unittest
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-HERE = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
+with stub_modules(pymysql=PYMYSQL):
+    HERE = pathlib.Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(HERE))
 
-import families as families_module  # noqa: E402
-import guildrun  # noqa: E402
-import realmread  # noqa: E402
-from apiv2 import achievements as A  # noqa: E402
-from apiv2._context import Context  # noqa: E402
+    import families as families_module
+    import guildrun
+    import realmread
+    from apiv2 import achievements as A
+    from apiv2._context import Context
 
 T0 = 1_790_000_000
 MAPS = {33: "Shadowfang Keep", 36: "The Deadmines"}

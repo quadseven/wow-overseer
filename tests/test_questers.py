@@ -739,9 +739,11 @@ class Steps(unittest.TestCase):
 
     def test_a_drop_is_the_abandon_row_alone(self):
         clock = questers.Clock()
-        member = mirra(quest_log={1: 3})
+        member = mirra(quest_log={1: 3}, quests_done=frozenset({2, 3}))
+        last = 0
         for minute in range(0, 125, 5):
-            p = questers.plan(world(), member, clock, minute * 60.0)
+            p = questers.plan(world(), member, clock, minute * 60.0, last_quest=last)
+            last = p.move.quest
         step = questers.step_for(member, p.move, 0)
         self.assertIsNone(step.walk)
         self.assertEqual([r.command for r in step.rows], ["abandon quest:1"])
@@ -779,21 +781,30 @@ class Steps(unittest.TestCase):
 
 
 class Broken(unittest.TestCase):
-    def _play(self, member, minutes, clock=None, step=5, progress=None):
+    def _play(self, member, minutes, clock=None, step=5, progress=None, cat=None):
+        """Plan every `step` minutes, each pass told the quest its last move
+        was for, as the bridge tells it (`_quester_last`)."""
         clock = clock or questers.Clock()
-        p = None
+        cat = cat or world()
+        p, last, found = None, 0, []
         for minute in range(0, minutes + 1, step):
             if progress:
                 member = questers.Member(
                     **{**member.__dict__, "quest_progress": progress(minute)}
                 )
-            p = questers.plan(world(), member, clock, minute * 60.0)
+            p = questers.plan(cat, member, clock, minute * 60.0, last_quest=last)
+            found += [(b.quest, b.reason) for b in p.broken]
+            if p.move is not None:
+                last = p.move.quest
+        self.found = found
         return p, clock
 
     def test_objectives_still_for_two_hours_of_play_break_the_quest(self):
-        p, _ = self._play(mirra(quest_log={1: 3}), 115)
+        # Nothing else in reach to take, so the quester hunts quest 1.
+        hunting = mirra(quest_log={1: 3}, quests_done=frozenset({2, 3}))
+        p, _ = self._play(hunting, 115)
         self.assertEqual(p.broken, ())
-        p, _ = self._play(mirra(quest_log={1: 3}), 120)
+        p, _ = self._play(hunting, 120)
         self.assertEqual(
             [(b.quest, b.reason, b.held) for b in p.broken],
             [(1, questers.STALLED, True)],
@@ -815,6 +826,30 @@ class Broken(unittest.TestCase):
         )
         self.assertEqual(p.broken, ())
         self.assertLess(clock.played("Mirra", 1), questers.STALL_SECONDS)
+
+    def test_a_quest_waiting_its_turn_does_not_stall(self):
+        # Mirra holds two quests of Northshire and hunts the nearer one
+        # (quest 1, wolves at 150 yards). Quest 2 waits its turn: two hours
+        # of hunting quest 1 are not two hours of quest 2 standing still, so
+        # quest 2 is never found broken and never filed (2026-11-02: a dozen
+        # quests a quester had not yet gone after were filed as stalled).
+        self._play(mirra(quest_log={1: 3, 2: 3}, quests_done=frozenset({3})), 130)
+        self.assertIn((1, questers.STALLED), self.found)
+        self.assertNotIn(2, [q for q, _reason in self.found])
+
+    def test_a_quest_it_cannot_hunt_still_stalls_while_it_hunts_another(self):
+        # Quest 8 asks for a creature no spawn is of: nothing works it, so its
+        # clock runs while the quester hunts quest 1, and it is still broken.
+        cat = world(
+            extra_quests=[quest(8, NORTHSHIRE, 2, kill=299, title="Nobody")],
+            extra_givers=[
+                giver(8, "start", 1001, 100, 0, 0),
+                giver(8, "end", 1001, 100, 0, 0),
+            ],
+        )
+        member = mirra(quest_log={1: 3, 8: 3}, quests_done=frozenset({2, 3}))
+        self._play(member, 125, cat=cat)
+        self.assertIn((8, questers.STALLED_UNSOURCED), self.found)
 
     def test_a_quest_of_another_zone_it_is_not_working_does_not_stall(self):
         p, _ = self._play(mirra(quest_log={20: 3}), 240)
@@ -854,6 +889,32 @@ class Broken(unittest.TestCase):
             [(b.quest, b.reason, b.held) for b in p.broken],
         )
         self.assertNotEqual(p.move.quest, 2)
+
+    def test_further_concerns_is_recorded_as_an_unsupported_speak_objective(self):
+        q = quest(35, ELWYNN, 10, title="Further Concerns")
+        q["npc1"] = 261
+        q["npc_count1"] = 1
+        cat = world(
+            extra_quests=[q],
+            extra_givers=[
+                giver(35, "start", 1035, 240, 100.0, 0.0),
+                giver(35, "end", 1035, 240, 100.0, 0.0),
+            ],
+            extra_spawns=[spawn(2035, 261, 200.0, 0.0, level=20)],
+        )
+        held = questers.plan(
+            cat, mirra(level=10, quest_log={35: 3}), questers.Clock(), 0.0
+        )
+        self.assertEqual(
+            [(b.quest, b.reason) for b in held.broken],
+            [(35, questers.UNSUPPORTED_OBJECTIVE)],
+        )
+        available = questers.plan(cat, mirra(level=10), questers.Clock(), 0.0)
+        self.assertNotEqual(available.move.quest, 35)
+        self.assertIn(
+            (35, questers.UNSUPPORTED_OBJECTIVE, False),
+            [(b.quest, b.reason, b.held) for b in available.broken],
+        )
 
     def test_a_quest_an_item_also_starts_is_not_missing_its_giver(self):
         cat = world(
@@ -895,6 +956,20 @@ class Broken(unittest.TestCase):
         self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 2))
         later = [questers.Attempt(**{**tried[0].__dict__, "age_minutes": 200})]
         p = questers.plan(world(), mirra(x=0.0), questers.Clock(), 0.0, tried=later)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 1))
+
+    def test_already_in_the_quest_log_is_not_a_broken_take(self):
+        tried = [
+            questers.Attempt(
+                "Mirra",
+                "take quest:1",
+                "error",
+                reason="already in the quest log",
+            )
+            for _ in range(3)
+        ]
+        p = questers.plan(world(), mirra(x=0.0), questers.Clock(), 0.0, tried=tried)
+        self.assertEqual(p.broken, ())
         self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 1))
 
     def test_a_hand_in_refused_three_times_is_broken_with_the_worlds_words(self):

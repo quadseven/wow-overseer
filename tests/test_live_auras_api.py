@@ -4,26 +4,18 @@ import pathlib
 import sys
 import threading
 import time
-import types
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
-try:
-    import pymysql  # noqa: F401
-except ModuleNotFoundError:
-    # map_server's pure payload helpers need no database driver. Keep this test
-    # usable in the stdlib-only local check, where the production image adds it.
-    pymysql_stub = types.ModuleType("pymysql")
-    pymysql_stub.connections = types.SimpleNamespace(Connection=object)
-    mysql_error = type("MySQLError", (Exception,), {})
-    pymysql_stub.MySQLError = mysql_error
-    pymysql_stub.err = types.SimpleNamespace(MySQLError=mysql_error)
-    sys.modules["pymysql"] = pymysql_stub
+from _stub_modules import PYMYSQL, stub_modules
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-import map_server  # noqa: E402
+# map_server's pure payload helpers need no database driver: the stand-in
+# serves for the import and leaves sys.modules again (#1648).
+with stub_modules(pymysql=PYMYSQL):
+    import map_server
 
 
 class FakeCursor:

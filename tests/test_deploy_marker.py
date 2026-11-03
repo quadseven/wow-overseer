@@ -15,6 +15,8 @@ import types
 import unittest
 from unittest import mock
 
+from _stub_modules import PYMYSQL, fresh_import
+
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "tests"))
@@ -27,7 +29,6 @@ NODE = shutil.which("node")
 
 
 def _import_bridge():
-    sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
     stub = types.ModuleType("discord")
 
     class Client:
@@ -35,9 +36,7 @@ def _import_bridge():
             pass
 
     stub.Client = Client
-    with mock.patch.dict(sys.modules, {"discord": stub}):
-        sys.modules.pop("bridge", None)
-        import bridge
+    bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
     return bridge
 
 
