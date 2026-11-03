@@ -180,6 +180,9 @@ STATUS_FAILED = questlog.FAILED
 FAILED = "the quest failed in the log"
 STALLED = "its objectives did not move for 2 hours of play"
 GIVER_MISSING = "the quest giver is not in the world"
+# Further Concerns requires speaking to an NPC for objective credit. Questers
+# can hunt objectives and use the quest verbs, but have no speak-objective verb.
+UNSUPPORTED_OBJECTIVE = "it requires speaking to an NPC, which questers cannot do"
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
 # The kind of spawn a gameobject ender's walk names (`walk-to-spawn gameobject:`).
@@ -1206,6 +1209,8 @@ def _broken_reason(
     it is due a turn-in, not a drop (#1085)."""
     if status == STATUS_FAILED:
         return FAILED
+    if quest.id == 35:
+        return UNSUPPORTED_OBJECTIVE
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that
@@ -1234,6 +1239,8 @@ def _giver_failure(cat: Catalogue, member, qid, gone, refused):
     stands in the way is no fault of the quest (a giver on another map, or a
     quest a gameobject or an item starts, which no verb takes)."""
     quest, facts = cat.quest(qid), cat.facts[qid]
+    if int(qid) == 35:
+        return UNSUPPORTED_OBJECTIVE
     count, words = refused.get(("take", qid), (0, ""))
     if count >= FAILS_BEFORE_BROKEN:
         return _refused_words(REFUSED_TAKE, words)
