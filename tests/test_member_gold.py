@@ -13,9 +13,9 @@ checks on the bridge passes that write the rows.
 
 import ast
 import pathlib
-import sys
-import types
 import unittest
+
+from _stub_modules import PYMYSQL, stub_modules
 
 import classtrain
 import guildfund
@@ -23,9 +23,6 @@ import guildpost
 import guildroute
 import guildwork
 
-# apiv2 imports realmread, which imports pymysql. Stub it when it is not
-# installed, so this module does not lean on another module's stub (#1434).
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
@@ -115,7 +112,8 @@ class ClassSpellsDue(unittest.TestCase):
         self.assertFalse(due.affords(1499))
 
     def test_the_profile_reads_the_same_rule(self):
-        import apiv2.training as training
+        with stub_modules(pymysql=PYMYSQL):
+            import apiv2.training as training
 
         self.assertIs(training.spell_state, classtrain.spell_state)
 

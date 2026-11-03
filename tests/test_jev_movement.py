@@ -12,7 +12,7 @@ import pathlib
 import types
 import unittest
 
-from test_campaign_queue import _load  # sets up the pymysql stub
+from test_campaign_queue import _load
 from test_jev_items import FakeJev
 
 import jev  # noqa: E402

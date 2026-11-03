@@ -15,17 +15,17 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import types
 import unittest
+
+from _stub_modules import PYMYSQL, stub_modules
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import decree  # noqa: E402
-import map_server  # noqa: E402
-import priorities  # noqa: E402
-import travel  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import decree
+    import map_server
+    import priorities
+    import travel
 
 APP = HERE / "app"
 

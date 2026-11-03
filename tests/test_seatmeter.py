@@ -6,27 +6,26 @@ counted apart, and the free members whose level fits a door still waiting.
 """
 
 import asyncio
-import sys
-import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import seatmeter as sm  # noqa: E402
-from test_guildsocial import (  # noqa: E402
-    DOORS,
-    HOLY,
-    MAGE,
-    PRIEST,
-    PROTECTION,
-    ROGUE,
-    WARRIOR,
-    mate,
-)
-import guildrun  # noqa: E402
-import json  # noqa: E402
-from test_guildsocial_bridge import _Self, bridge, facts  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import seatmeter as sm
+    from test_guildsocial import (
+        DOORS,
+        HOLY,
+        MAGE,
+        PRIEST,
+        PROTECTION,
+        ROGUE,
+        WARRIOR,
+        mate,
+    )
+    import guildrun
+    import json
+    from test_guildsocial_bridge import _Self, bridge, facts
 
 
 def run(guild, names, pugs="", outcome=""):

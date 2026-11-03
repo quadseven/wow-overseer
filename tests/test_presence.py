@@ -18,19 +18,20 @@ import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-HERE = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
+with stub_modules(pymysql=PYMYSQL):
+    HERE = pathlib.Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(HERE))
 
-import guildgear  # noqa: E402
-import guildrun  # noqa: E402
-import map_server  # noqa: E402  (must follow the pymysql stub)
-import realmread  # noqa: E402
-from apiv2 import guild, members, presence  # noqa: E402
-from tests.test_apiv2_guilds import Ctx as GuildCtx  # noqa: E402
-from tests.test_members_v2 import ctx_for, roster_rules, server  # noqa: E402
-from tests.test_vclient import get, realm_of  # noqa: E402
+    import guildgear
+    import guildrun
+    import map_server
+    import realmread
+    from apiv2 import guild, members, presence
+    from tests.test_apiv2_guilds import Ctx as GuildCtx
+    from tests.test_members_v2 import ctx_for, roster_rules, server
+    from tests.test_vclient import get, realm_of
 
 NOW = 1_800_000_000
 GHOST_FLAG = 0x10  # PLAYER_FLAGS_GHOST in the saved playerFlags

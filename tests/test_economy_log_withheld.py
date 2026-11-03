@@ -7,15 +7,15 @@ deadlock that did not exist.
 """
 
 import asyncio
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import bag_pressure  # noqa: E402
-from test_guildsocial_bridge import bridge  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import bag_pressure
+    from test_guildsocial_bridge import bridge
 
 
 def _run(withheld: bool):
