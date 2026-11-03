@@ -95,30 +95,10 @@ PYMYSQL = _pymysql_stub()
 FRESH_COPIES: list[types.ModuleType] = []
 
 
-def _share_pymysql() -> None:
-    """While some test modules still install their own bare `pymysql` stub,
-    every module must share one driver object, as the setdefault stubs did:
-    the stand-in is left in sys.modules, and a bare stub an earlier module
-    left is kept and given the stand-in's exception tree. A later change
-    (#1648) restores sys.modules once no module installs a stub of its own."""
-    current = sys.modules.setdefault("pymysql", PYMYSQL)
-    if current is PYMYSQL or hasattr(current, "connect"):
-        return
-    for name in vars(PYMYSQL.err):
-        if not name.startswith("_") and not hasattr(current, name):
-            setattr(current, name, getattr(PYMYSQL, name))
-    if not hasattr(current, "err"):
-        current.err = PYMYSQL.err
-
-
 @contextlib.contextmanager
 def stub_modules(**stubs: types.ModuleType):
     """Put `stubs` in sys.modules for the block, then restore each of those
-    entries, and only those, to what it was (or to absent). The driver
-    stand-in is shared instead (_share_pymysql) until every module uses it."""
-    if stubs.get("pymysql") is PYMYSQL:
-        stubs = {k: v for k, v in stubs.items() if k != "pymysql"}
-        _share_pymysql()
+    entries, and only those, to what it was (or to absent)."""
     saved = {name: sys.modules.get(name, _ABSENT) for name in stubs}
     sys.modules.update(stubs)
     try:
