@@ -336,7 +336,7 @@ def build_push(
     party, the operator is looking at five streams, and telling only one of
     them would make it look like one member's problem.
     """
-    now = now or datetime.utcnow()
+    now = now or datetime.now()
     orders = agenda.standing_orders(roster_rows)
     roster = orders["roster"]
     run = agenda.active_run(run_rows)

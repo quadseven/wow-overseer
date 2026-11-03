@@ -131,7 +131,7 @@ def dungeonups(query: dict, ctx) -> tuple[int, object]:
         return 400, {"error": "family= is a family head's name"}
     map_id = None
     if dungeon:
-        if not dungeon.isdigit() or len(dungeon) > 5:
+        if not (dungeon.isascii() and dungeon.isdigit()) or len(dungeon) > 5:
             return 400, {"error": "dungeon= is a map id"}
         map_id = int(dungeon)
     server = ctx.server
