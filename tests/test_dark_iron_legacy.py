@@ -24,14 +24,14 @@ character_queststatus_rewarded. A guild run's members are the
 """
 
 import asyncio
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, fresh_import, stub_modules
 
-import dungeonquests as dq  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import dungeonquests as dq
 
 FRANCLORN_ROW = {
     "kind": "creature",
@@ -232,9 +232,7 @@ def _import_bridge():
             pass
 
     stub.Client = Client
-    with mock.patch.dict(sys.modules, {"discord": stub}):
-        sys.modules.pop("bridge", None)
-        import bridge
+    bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
     return bridge
 
 

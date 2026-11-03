@@ -431,13 +431,18 @@ def aim_place(aim: str, creatures: dict | None = None) -> str:
     `creatures` names numeric (creature entry) aims: entry -> the creature's
     name, or {"name", "subname", "place"} for the full player-like form. A
     numeric aim no entry names is said as an unnamed creature with its number,
-    never a bare id. WHAT THE WALK IS FOR is not this function's: the caller
-    holds that row (a vendor's stock, an errand's kind) and says it beside
-    this.
+    never a bare id. The entry may arrive spelled `creature:<entry>` (the
+    intent book's form) or bare. WHAT THE WALK IS FOR is not this function's:
+    the caller holds that row (a vendor's stock, an errand's kind) and says
+    it beside this.
     """
     text = str(aim or "").strip()
     if not text:
         return "nowhere"
+    if text.startswith("creature:"):
+        entry = text.split(":", 1)[1]
+        if entry.isdigit():
+            return creature_words(int(entry), _creature_info(creatures, int(entry)))
     if text.startswith("trigger:"):
         how, place = trigger_place(text.split(":", 1)[1])
         if not place:

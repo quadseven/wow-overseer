@@ -17,7 +17,18 @@ reach of a quester when:
   * its race and class masks hold the quester's, its minimum level is met and
     its own level is at most levelroute.ABOVE over the quester's;
   * the quest before it is rewarded (or held, for a negative PrevQuestID), and
-    no quest of its exclusive group is rewarded or held;
+    no quest of its exclusive group is rewarded or held. "The quest before it"
+    is the world's list, not the row's: its own PrevQuestID or any quest whose
+    NextQuestID names it, a quest of a negative exclusive group standing for
+    its whole group (#1732);
+  * the quest its RewardNextQuest names is not held or rewarded, no quest
+    whose RewardNextQuest names it is held, a breadcrumb's target is not held
+    or rewarded and a target's breadcrumb is not held;
+  * the quester's stored reputation meets the quest's reputation gate;
+  * a quest that hands over an item (StartItem) has a free bag slot for it:
+    the world refuses the take as "not eligible" otherwise (CanAddQuest), and
+    a quester with full bags walked to Westfall Stew and A Rogue's Deal and
+    filed them broken (#1732, #1716);
   * the quester has not finished it, does not hold it, and has not found it
     broken.
 
@@ -57,8 +68,10 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
     STALL_SECONDS of play while the quester was working it (`Clock`). Play is
     time online and alive between two looks, at most PLAY_GAP_SECONDS each, so
     a bridge restart or a night offline is not play. A quest is being worked
-    while it is in the quester's log and of the zone it stands in, or is the
-    quest its last move was for;
+    while it is the quest the quester's last move was for, or while it is in
+    its log, of the zone it stands in, and has no objective spawn the quester
+    could hunt (`_working`): nothing works that one, so its clock is the
+    world's, not the quester's;
   * GIVER_MISSING: a creature is named as its giver, none is spawned, and
     no gameobject or item starts it either;
   * ENDER_MISSING: nothing is named to hand it in to, or the creature named is
@@ -93,6 +106,19 @@ doubling with each refusal past those; then it is tried once more.
 A hand-in refused as never retryable (CANNOT_TURN_IN) is held from its
 first refusal while that row is in the rows the pass reads.
 
+A QUESTER WITH FULL BAGS SELLS FIRST (`sell_step`, #1813). A quest that hands
+over an item waits on a free bag slot (above), and the questers never sold,
+so every quester of #1732 and #1716 stood with none and took no such quest.
+A quester at SELL_FLOOR free general bag slots or fewer walks to any vendor
+that buys (`walk-to-vendor any`) and sells what it has no use for, the guild
+members' own sale (guildjobs.vendor_stacks, vendorsale.py): grey, junk,
+outgrown gear and gear that is no upgrade over what it wears, and trade goods
+no quest of the catalogue asks for (a quester has no guild bank to keep them
+for). Kept: every item a catalogue quest needs, hands over or uses, quest
+items, an upgrade, a piece judged while its worn gear is unread, and a stack
+reserved in overseer_keep (keep.py; unread reservations sell nothing). The
+sale is asked at most once in SELL_COOLDOWN_MINUTES, and before the move.
+
 PURE MODULE: rows in, moves and verdicts out. No MySQL; the clock is passed in.
 """
 
@@ -110,10 +136,23 @@ import guildjobs
 import guildroute
 import levelroute
 import questlog
+import vendorsale
 
 # The step's action word, in the command log's source (guildjobs.source_for).
 ACTION = "quester"
 WALK_ACTION = ACTION + "-walk"
+# The sale of a quester with full bags (`sell_step`, #1813): its own action
+# word, under ACTION's source prefix so the pass's recent read holds its rows,
+# and not one `attempts` reads as a quest's take, hand-in or walk.
+SELL_ACTION = ACTION + "-sell"
+SELL_WALK_ACTION = SELL_ACTION + "-walk"
+# Free general bag slots at or under which a quester sells: one for the item a
+# quest hands over and one for the loot of the next kill.
+SELL_FLOOR = 1
+# A sale is asked again only this long after the last, sold or refused: the
+# walk and the rows run inside it, and a vendor out of reach is not asked
+# every pass.
+SELL_COOLDOWN_MINUTES = 20
 # A quester's crossing row has its own source action (quest takes, hand-ins
 # and hunts are ACTION), so it shares the one crossing clock and the walls of
 # the class quest's and the level step's crossings (guildjobs.CROSS_ACTIONS).
@@ -183,6 +222,9 @@ def _quest_complete(quest, status, progress=0) -> bool:
 FAILED = "the quest failed in the log"
 STALLED = "its objectives did not move for 2 hours of play"
 GIVER_MISSING = "the quest giver is not in the world"
+# Further Concerns requires speaking to an NPC for objective credit. Questers
+# can hunt objectives and use the quest verbs, but have no speak-objective verb.
+UNSUPPORTED_OBJECTIVE = "it requires speaking to an NPC, which questers cannot do"
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
 # The kind of spawn a gameobject ender's walk names (`walk-to-spawn gameobject:`).
@@ -199,7 +241,9 @@ CANNOT_TURN_IN = "the world says no hand-in of it can go through"
 # The module's non-retryable refusals that are about the quest log's state at
 # that moment, not about the quest: a later read of the log settles them, so
 # they never make a held quest a could-not.
-LOG_STATE_REFUSALS = frozenset({"already turned in", "not in the quest log"})
+LOG_STATE_REFUSALS = frozenset(
+    {"already turned in", "not in the quest log", "already in the quest log"}
+)
 
 # The world's own words for a spawn that is not there (classquest.SPAWN_REFUSALS).
 GONE = "no such spawn in the world"
@@ -252,6 +296,12 @@ QUESTS_SQL = (
     "COALESCE(a.PrevQuestID, 0) AS prev, "
     "COALESCE(a.ExclusiveGroup, 0) AS exclusive, q.RewardSpell AS reward, "
     "q.RewardDisplaySpell AS display, q.SuggestedGroupNum AS grp, "
+    "q.RewardNextQuest AS chain_next, "
+    "COALESCE(a.BreadcrumbForQuestId, 0) AS crumb_for, "
+    "COALESCE(a.RequiredMinRepFaction, 0) AS min_rep_faction, "
+    "COALESCE(a.RequiredMinRepValue, 0) AS min_rep_value, "
+    "COALESCE(a.RequiredMaxRepFaction, 0) AS max_rep_faction, "
+    "COALESCE(a.RequiredMaxRepValue, 0) AS max_rep_value, "
     + _NPCS
     + _ITEMS
     + _PROVIDED
@@ -264,6 +314,28 @@ QUESTS_SQL = (
     + " AND q.QuestInfoID NOT IN ("
     + ", ".join(str(i) for i in sorted(OUT_OF_REACH_INFO))
     + ") AND q.LogTitle NOT LIKE '<%%' AND q.LogTitle NOT LIKE 'NOT A QUEST%%'"
+)
+
+# The quest relations the world builds at load (ObjectMgr::LoadQuests) that a
+# quest's own row does not carry, over every quest and not only the ones a
+# quester may take: a quest whose NextQuestID names X is a quest before X, a
+# quest whose RewardNextQuest names X is X's previous quest in the chain, a
+# breadcrumb names its target, and a negative exclusive group is every-of-all
+# (#1732). One constant string, no outside value.
+LINKS_SQL = (
+    "SELECT a.ID AS id, a.NextQuestID AS next, a.BreadcrumbForQuestId AS crumb_for, "
+    "a.ExclusiveGroup AS exclusive, 0 AS chain_next "
+    "FROM acore_world.quest_template_addon a "
+    "WHERE a.NextQuestID <> 0 OR a.BreadcrumbForQuestId <> 0 OR a.ExclusiveGroup < 0 "
+    "UNION ALL "
+    "SELECT q.ID, 0, 0, 0, q.RewardNextQuest FROM acore_world.quest_template q "
+    "WHERE q.RewardNextQuest <> 0"
+)
+
+# Each quester's standing with each faction it has met, for a quest's
+# reputation gate (#1732).
+REPUTATION_SQL = (
+    "SELECT guid, faction, standing FROM character_reputation WHERE guid IN ({guids})"
 )
 
 # What starts each quest besides a spawned creature (classquest.STARTERS_SQL),
@@ -330,22 +402,33 @@ BROKEN_SQL = (
 )
 
 
-def members_from_rows(rows, log_rows, rewarded_rows) -> list:
+def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> list:
     """Member rows from MEMBERS_SQL's, LOG_SQL's and REWARDED_SQL's rows. The
     position and zone come from a fresh snapshot only, so a walk is never judged
-    from an old one; with none the quester is offline or unplaced."""
+    from an old one; with none the quester is offline or unplaced.
+
+    `reputation_rows` are REPUTATION_SQL's; None (not read) leaves each
+    member's reputation unknown, and a reputation gate is then not judged."""
     log_by, progress_by, done_by = _logs_by_guid(log_rows, rewarded_rows)
+    rep_by = None
+    if reputation_rows is not None:
+        rep_by = {}
+        for r in reputation_rows:
+            rep_by.setdefault(_int(r.get("guid")), {})[_int(r.get("faction"))] = _int(
+                r.get("standing")
+            )
     out = []
     for r in rows or ():
         guid = _int(r.get("guid"))
-        out.append(
-            _member_from_row(
-                r,
-                log_by.get(guid, {}),
-                frozenset(done_by.get(guid, ())),
-                progress_by.get(guid, {}),
-            )
+        member = _member_from_row(
+            r,
+            log_by.get(guid, {}),
+            frozenset(done_by.get(guid, ())),
+            progress_by.get(guid, {}),
         )
+        if rep_by is not None:
+            member = replace(member, reputation=rep_by.get(guid, {}))
+        out.append(member)
     return out
 
 
@@ -422,6 +505,27 @@ class Facts:
     # A gameobject named to take it has no static spawn: a script or an event
     # summons it, so its absence says nothing of the quest (#1606).
     object_unspawned: bool = False
+    # The ways the quests before it can be met (SatisfyQuestPreviousQuest):
+    # each a tuple of signed quest ids that must all hold, a positive id
+    # rewarded, a negative one held. Its own PrevQuestID and every quest whose
+    # NextQuestID names it; a quest before it of a negative exclusive group
+    # stands for its whole group. Empty: nothing before it (#1732).
+    before: tuple = ()
+    # The item the world hands over on the take (StartItem): the take needs a
+    # free bag slot for it (CanAddQuest).
+    provided_item: int = 0
+    # RewardNextQuest, and the quests whose RewardNextQuest names this one
+    # (SatisfyQuestNextChain, SatisfyQuestPrevChain).
+    chain_next: int = 0
+    chain_before: tuple = ()
+    # BreadcrumbForQuestId, and the breadcrumbs that name this one
+    # (SatisfyQuestBreadcrumb).
+    breadcrumb_for: int = 0
+    breadcrumbs: tuple = ()
+    # (faction, value) of RequiredMinRepFaction / RequiredMaxRepFaction, or
+    # None (SatisfyQuestReputation).
+    min_rep: tuple | None = None
+    max_rep: tuple | None = None
 
 
 @dataclass(frozen=True)
@@ -451,10 +555,12 @@ def _int(value, default=0) -> int:
         return default
 
 
-def catalogue(quest_rows, giver_rows, spawn_rows, loot_rows, start_rows, ender_rows):
+def catalogue(
+    quest_rows, giver_rows, spawn_rows, loot_rows, start_rows, ender_rows, link_rows=()
+):
     """The Catalogue from the world's rows: QUESTS_SQL's, classquest's
-    GIVERS_SQL, SPAWNS_SQL and LOOT_SQL rows for these quests, STARTERS_SQL's
-    and ENDERS_SQL's.
+    GIVERS_SQL, SPAWNS_SQL and LOOT_SQL rows for these quests, STARTERS_SQL's,
+    ENDERS_SQL's and LINKS_SQL's.
 
     Only the classic world: a quest is kept when its zone holds a quest whose
     giver is spawned on a classic continent, or is one of the starting lands.
@@ -468,6 +574,7 @@ def catalogue(quest_rows, giver_rows, spawn_rows, loot_rows, start_rows, ender_r
     summoned = _unspawned_object_enders(ender_rows)
     zones = {_int(r.get("id")): zone_of(r.get("zone")) for r in rows}
     classic_zones = _classic_zones(book, zones)
+    links = _links(rows, link_rows)
     facts = {}
     kept = {}
     band_rows = []
@@ -486,6 +593,14 @@ def catalogue(quest_rows, giver_rows, spawn_rows, loot_rows, start_rows, ender_r
             ender_objects=qid in object_enders,
             object_enders=object_spots.get(qid, ()),
             object_unspawned=qid in summoned,
+            before=links.before(qid, _int(r.get("prev_signed"))),
+            provided_item=_int(r.get("provided0")),
+            chain_next=_int(r.get("chain_next")),
+            chain_before=tuple(sorted(links.chain_before.get(qid, ()))),
+            breadcrumb_for=_int(r.get("crumb_for")),
+            breadcrumbs=tuple(sorted(links.breadcrumbs.get(qid, ()))),
+            min_rep=_rep(r, "min"),
+            max_rep=_rep(r, "max"),
         )
         kept[qid] = quest
         band_rows.append(
@@ -498,6 +613,54 @@ def catalogue(quest_rows, giver_rows, spawn_rows, loot_rows, start_rows, ender_r
         )
     bands = {side: levelroute.bands(band_rows, side) for side in levelroute.RACE_MASK}
     return Catalogue(classquest.Book(kept), facts, bands)
+
+
+def _rep(row, end):
+    faction = _int(row.get(end + "_rep_faction"))
+    return (faction, _int(row.get(end + "_rep_value"))) if faction else None
+
+
+@dataclass(frozen=True)
+class _Links:
+    """The relations ObjectMgr::LoadQuests builds across quests (LINKS_SQL)."""
+
+    # quest -> the quests whose NextQuestID names it
+    named_next: dict
+    # negative exclusive group -> its quests
+    groups: dict
+    # quest -> its exclusive group
+    group_of: dict
+    chain_before: dict
+    breadcrumbs: dict
+
+    def before(self, qid, prev) -> tuple:
+        """Facts.before of a quest: its PrevQuestID (`prev`, signed) and every
+        quest whose NextQuestID names it, each as the ids that must all hold."""
+        signed = ([prev] if prev else []) + sorted(self.named_next.get(qid, ()))
+        out = []
+        for p in signed:
+            group = self.group_of.get(abs(p), 0)
+            way = tuple(sorted(self.groups[group])) if p > 0 and group < 0 else (p,)
+            if way not in out:
+                out.append(way)
+        return tuple(out)
+
+
+def _links(quest_rows, link_rows) -> _Links:
+    named_next, groups, group_of, chain_before, breadcrumbs = {}, {}, {}, {}, {}
+    for r in list(quest_rows) + list(link_rows or ()):
+        qid = _int(r.get("id"))
+        group = _int(r.get("exclusive"))
+        if group < 0:
+            groups.setdefault(group, set()).add(qid)
+            group_of[qid] = group
+        if _int(r.get("next")):
+            named_next.setdefault(_int(r.get("next")), set()).add(qid)
+        if _int(r.get("crumb_for")):
+            breadcrumbs.setdefault(_int(r.get("crumb_for")), set()).add(qid)
+        if _int(r.get("chain_next")):
+            chain_before.setdefault(_int(r.get("chain_next")), set()).add(qid)
+    return _Links(named_next, groups, group_of, chain_before, breadcrumbs)
 
 
 def _named(start_rows, ender_rows) -> tuple:
@@ -577,6 +740,11 @@ class Member:
     quests_done: frozenset = frozenset()
     # quest id -> the sum of its objective counters
     quest_progress: dict = field(default_factory=dict)
+    # Free general bag slots (bag_pressure.general_bag_room); None when not
+    # read, and a provided item's slot is then not judged (#1732).
+    free_slots: int | None = None
+    # faction id -> stored standing (REPUTATION_SQL); None when not read.
+    reputation: dict | None = None
 
     @property
     def zone(self) -> int:
@@ -742,7 +910,7 @@ def refusals(name, tried) -> dict:
     takes and hand-ins the world refused."""
     out: dict = {}
     for a in sorted(tried or (), key=lambda a: -a.age_minutes):
-        if a.name != name or not a.failed:
+        if a.name != name or not a.failed or a.reason in LOG_STATE_REFUSALS:
             continue
         found = _CHAIN_ROW.match(a.command)
         if not found:
@@ -909,11 +1077,59 @@ def open_to(cat: Catalogue, member, quest_id, broken=frozenset()) -> bool:
         return False
     if facts.level > int(member.level) + levelroute.ABOVE:
         return False
-    if facts.prev > 0 and facts.prev not in member.quests_done:
+    if facts.before and not any(
+        all(_before_met(member, p) for p in way) for way in facts.before
+    ):
         return False
-    if facts.prev < 0 and -facts.prev not in member.quest_log:
+    if _chain_closed(member, facts) or _breadcrumb_closed(member, facts):
+        return False
+    if not _reputation_ok(member, facts):
+        return False
+    if facts.provided_item and member.free_slots is not None and member.free_slots < 1:
         return False
     return not _exclusive_closed(cat, member, quest)
+
+
+def _before_met(member, signed) -> bool:
+    """A quest before this one is met: rewarded (positive), or held or
+    rewarded (negative: GetQuestStatus is not NONE)."""
+    if signed > 0:
+        return signed in member.quests_done
+    return -signed in member.quest_log or -signed in member.quests_done
+
+
+def _chain_closed(member, facts: Facts) -> bool:
+    """The quest its RewardNextQuest names is held or rewarded, or a quest
+    whose RewardNextQuest names it is held."""
+    nxt = facts.chain_next
+    if nxt and (nxt in member.quest_log or nxt in member.quests_done):
+        return True
+    return any(q in member.quest_log for q in facts.chain_before)
+
+
+def _breadcrumb_closed(member, facts: Facts) -> bool:
+    """A breadcrumb whose target is held or rewarded, or a target while one of
+    its breadcrumbs is held."""
+    target = facts.breadcrumb_for
+    if target and (target in member.quest_log or target in member.quests_done):
+        return True
+    return any(q in member.quest_log for q in facts.breadcrumbs)
+
+
+def _reputation_ok(member, facts: Facts) -> bool:
+    """The stored standing meets RequiredMinRepValue and is under
+    RequiredMaxRepValue. Unread reputation is not judged. The stored standing
+    leaves out the faction's base reputation (ReputationMgr adds it): 0 for
+    most factions these gates name (Warsong Outriders, Silverwing Sentinels,
+    Argent Dawn), and below 0 for a few, where this check is looser than the
+    world's and the take is refused as before."""
+    if member.reputation is None:
+        return True
+    if facts.min_rep and member.reputation.get(facts.min_rep[0], 0) < facts.min_rep[1]:
+        return False
+    return not (
+        facts.max_rep and member.reputation.get(facts.max_rep[0], 0) >= facts.max_rep[1]
+    )
 
 
 def in_reach(cat: Catalogue, member, zone, broken=frozenset()) -> list:
@@ -925,17 +1141,44 @@ def in_reach(cat: Catalogue, member, zone, broken=frozenset()) -> list:
     ]
 
 
-def _working(cat: Catalogue, member, last_quest=0) -> set:
-    """The quests the quester is working now: those in its log of the zone it
-    stands in, and the quest its last move was for."""
+def _working(cat: Catalogue, member, last_quest=0, left=frozenset()) -> set:
+    """The quests whose stall clock runs now: the quest the quester's last move
+    was for, and each quest of its log of the zone it stands in that it has
+    no objective spawn to hunt (`_unhuntable`).
+
+    A QUEST WAITING ITS TURN WAS DROPPED AS STALLED (2026-11-02). A quester
+    takes every quest in reach first and then hunts them one at a time, the
+    nearest spawn first (`next_move`). The clock ran for every quest of the
+    zone, so while it hunted one, each of the others reached two hours of play
+    with nothing moved, was dropped and was filed as broken: Westfall Stew,
+    Bounty on Murlocs, Red Linen Goods, The Night Watch, Kobold Candles and
+    a dozen more in one day, each one a quest no quester had yet gone after.
+    A quest it could hunt waits its turn; one it cannot hunt has nothing to
+    wait for, so its clock still runs and a quest nobody can work still
+    stalls (STALLED_UNSOURCED)."""
     out = {
         qid
         for qid in member.quest_log
-        if (cat.facts.get(qid) is not None and cat.facts[qid].zone == member.zone)
+        if (
+            cat.facts.get(qid) is not None
+            and cat.facts[qid].zone == member.zone
+            and _unhuntable(cat, member, qid, left)
+        )
     }
     if last_quest and int(last_quest) in member.quest_log:
         out.add(int(last_quest))
     return out
+
+
+def _unhuntable(cat: Catalogue, member, qid, left=frozenset()) -> bool:
+    """True when the quester has no objective spawn of this quest to hunt
+    (`_hunt`'s own choice: a solo field within its level, on its map, not one
+    it leaves for now)."""
+    quest = cat.quest(qid)
+    if quest is None:
+        return True
+    fields = classquest.within_level(member, classquest.solo_fields(quest))
+    return _nearest(member, fields, left) is None
 
 
 def _fields_gone(quest, gone) -> bool:
@@ -974,7 +1217,7 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
     object_gone = gone_spawns(member.name, tried, OBJECT_KIND)
     refused = refusals(member.name, tried)
     final = cannot_turn_in(member.name, tried)
-    working = _working(cat, member, last_quest)
+    working = _working(cat, member, last_quest, left_spawns(member.name, tried))
     playing = bool(member.online and member.alive)
     out = []
     for qid in sorted(member.quest_log):
@@ -1010,6 +1253,8 @@ def _broken_reason(
     it is due a turn-in, not a drop (#1085)."""
     if status == STATUS_FAILED:
         return FAILED
+    if quest.id == 35:
+        return UNSUPPORTED_OBJECTIVE
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that
@@ -1039,6 +1284,8 @@ def _giver_failure(cat: Catalogue, member, qid, gone, refused):
     stands in the way is no fault of the quest (a giver on another map, or a
     quest a gameobject or an item starts, which no verb takes)."""
     quest, facts = cat.quest(qid), cat.facts[qid]
+    if int(qid) == 35:
+        return UNSUPPORTED_OBJECTIVE
     count, words = refused.get(("take", qid), (0, ""))
     if count >= FAILS_BEFORE_BROKEN:
         return _refused_words(REFUSED_TAKE, words)
@@ -1429,6 +1676,91 @@ def step_for(member, move, cap, quest=None, hunt=True, item_form=True):
         walk=walk,
         goal=goal,
         spot=move.spot if move.kind == classquest.HUNT else None,
+    )
+
+
+def _seller(member, carried, worn) -> guildjobs.Member:
+    """The quester as the guild members' sale reads it (guildjobs.vendor_judge):
+    its level, class, worn gear and bags, and no guild bank forecast, so a trade
+    good no quest needs is sold (an empty `reserved`, not an unread one)."""
+    return guildjobs.Member(
+        name=member.name,
+        guild="",
+        role=guildjobs.RAIDER,
+        level=int(member.level),
+        class_id=int(member.class_id),
+        race=int(member.race),
+        online=bool(member.online),
+        alive=bool(member.alive),
+        carried=tuple(carried or ()),
+        free_slots=member.free_slots,
+        worn=worn,
+        reserved=frozenset(),
+    )
+
+
+def _selling_lately(name, recent) -> bool:
+    """A sale row of this quester's younger than SELL_COOLDOWN_MINUTES."""
+    return any(
+        r.name == name
+        and r.action in (SELL_ACTION, SELL_WALK_ACTION)
+        and int(r.age_minutes) < SELL_COOLDOWN_MINUTES
+        for r in recent or ()
+    )
+
+
+def needs_sale(member) -> bool:
+    """Whether the quester's bags are read and at SELL_FLOOR or under."""
+    return member.free_slots is not None and int(member.free_slots) <= SELL_FLOOR
+
+
+def sell_step(member, carried, worn, kept, cat: Catalogue, recent, cap):
+    """The guildcorps.Step that sends a quester with full bags to a vendor, or
+    None: its bags have room or are unread, it is offline, dead or unplaced,
+    its last sale is younger than SELL_COOLDOWN_MINUTES, the reservations are
+    unread, or it carries nothing it may sell.
+
+    `carried` is its guildjobs.Carried stacks, `worn` its gear.CharacterState
+    (None unread: no weapon or armor short of outgrown is sold), `kept` the
+    keep.py reservations, `recent` guildjobs.Recent rows of the questers' own
+    sources. What it sells is guildjobs.vendor_stacks with every item a quest
+    of the catalogue needs, hands over or uses protected."""
+    if not needs_sale(member) or kept is None:
+        return None
+    if not member.online or not member.alive or not member.placed:
+        return None
+    if _selling_lately(member.name, recent):
+        return None
+    seller = _seller(member, carried, worn)
+    stacks = guildjobs.vendor_stacks(
+        seller, kept, guildjobs._protected_entries(cat.book)
+    )
+    if not stacks:
+        return None
+    source = guildjobs.source_for(SELL_ACTION, member.name)
+    return guildcorps.Step(
+        member.name,
+        SELL_ACTION,
+        len(stacks),
+        "%s has %d free bag slot%s and walks to a vendor to sell %d stack(s) it "
+        "has no use for, worth %dc"
+        % (
+            member.name,
+            int(member.free_slots),
+            "" if int(member.free_slots) == 1 else "s",
+            len(stacks),
+            vendorsale.worth(stacks),
+        ),
+        rows=tuple(
+            guildcorps.Row("sell", "guid:%d" % int(c.guid), "", source) for c in stacks
+        ),
+        walk=guildcorps.Row(
+            "buy",
+            "walk-to-vendor any%s" % guildroute.errand_cap_word(cap),
+            "",
+            guildjobs.source_for(SELL_WALK_ACTION, member.name),
+        ),
+        sales=guildjobs.sale_notes(stacks),
     )
 
 

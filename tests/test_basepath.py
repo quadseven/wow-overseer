@@ -22,15 +22,14 @@ Ticket: infra#3239.
 import json
 import pathlib
 import re
-import sys
-import types
 import unittest
 from urllib.parse import urljoin, urlsplit
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import basepath  # noqa: E402  (must follow the pymysql stub)
-import map_server  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import basepath
+    import map_server
 
 HERE = pathlib.Path(__file__).resolve().parent
 

@@ -12,35 +12,35 @@ and the cross-continent quest to a named blocker.
 
 import asyncio
 import dataclasses
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import classquest  # noqa: E402
-import guildjobs  # noqa: E402
-import guildpug as gp  # noqa: E402
-import guildrun  # noqa: E402
-import guildsocial as gs  # noqa: E402
-import raidroles  # noqa: E402
-import classtrain  # noqa: E402
-import standin  # noqa: E402
-from test_classquest import (  # noqa: E402
-    EASTERN,
-    KALIMDOR,
-    UNDEAD,
-    WARRIOR,
-    book,
-    class_plan,
-    class_steps,
-    qrow,
-    who,
-)
-from test_guildpug import HOLY, PRIEST, four_yeses, pug_facts, yes  # noqa: E402
-from test_guildsocial_bridge import _Self, bridge, facts, row  # noqa: E402
-from test_standin import facts as standin_facts  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import classquest
+    import guildjobs
+    import guildpug as gp
+    import guildrun
+    import guildsocial as gs
+    import raidroles
+    import classtrain
+    import standin
+    from test_classquest import (
+        EASTERN,
+        KALIMDOR,
+        UNDEAD,
+        WARRIOR,
+        book,
+        class_plan,
+        class_steps,
+        qrow,
+        who,
+    )
+    from test_guildpug import HOLY, PRIEST, four_yeses, pug_facts, yes
+    from test_guildsocial_bridge import _Self, bridge, facts, row
+    from test_standin import facts as standin_facts
 
 DAY = 24 * 3600.0
 PROTECTION = "12301"

@@ -68,6 +68,7 @@ import campaignqueue
 import classic
 import classask
 import classtrain
+import taughtspells
 import classparty
 import classhunt
 import classquest
@@ -1141,6 +1142,26 @@ def _fetch_grounding(name: str) -> dict | None:
         return cur.fetchone()
 
 
+def _interview_errors() -> tuple[type[BaseException], ...]:
+    """What one interview may fail with and still let the invite go out: the
+    snapshot read (MySQL), the LLM request (URLError and timeouts are OSError,
+    LLM_MODE=off is LLMOff) and a malformed reply (bad JSON is ValueError, a
+    missing field KeyError or IndexError). Anything else is a bug and must not
+    be logged away as a failed interview (Elder on wow-overseer#1532).
+
+    A function, not a module constant: pymysql.err is resolved at call time,
+    like every other MySQLError guard here, so a test that stubs pymysql can
+    still import this module."""
+    return (
+        pymysql.err.MySQLError,
+        OSError,
+        ValueError,
+        KeyError,
+        IndexError,
+        llmmode.LLMOff,
+    )
+
+
 def _interview_candidate(name: str) -> interview.InterviewExchange | None:
     """One interview exchange with a shortlisted candidate, as data.
 
@@ -1152,9 +1173,9 @@ def _interview_candidate(name: str) -> interview.InterviewExchange | None:
     caller to record. None when the candidate is offline: the caller tries
     the next shortlisted name rather than blocking.
 
-    NOT wired into any loop yet. The automatic loop that calls this is a
-    separate piece of work, and where the transcript is stored long-term is
-    another - so this writes nothing, it only returns the exchange.
+    Called by `_recruit_once` before every invite (wow-overseer#1157). Where
+    the transcript is stored long-term is separate work, so this writes
+    nothing, it only returns the exchange.
 
     Neither the LLM nor this function judges the candidate: the question is
     deterministic, the model only answers it in character, and
@@ -16075,7 +16096,7 @@ class Bridge(discord.Client):
         prefer = await asyncio.to_thread(_recruit_prefer, sorted(actors)[0]) if actors else ()
         result, age = await asyncio.to_thread(_latest_guild_shortlist)
         members, target = recruit.roster_from_shortlist(result or {})
-        action = recruit.plan_recruit(
+        plan_args = dict(
             actors=actors,
             prefer=prefer,
             shortlist=recruit.names_from_shortlist(result or {}, prefer),
@@ -16086,9 +16107,47 @@ class Bridge(discord.Client):
             member_count=members,
             target_size=target,
         )
+        action = recruit.plan_recruit(**plan_args)
+
+        # THE INTERVIEW COMES BEFORE EVERY INVITE (wow-overseer#1157). An
+        # offline candidate (no fresh snapshot, so _interview_candidate returns
+        # None) is skipped without an invite and the planner is asked again
+        # with that name set aside, so the next shortlisted name is tried. The
+        # loop ends because each round removes one name from a finite list.
+        # The REPLY never gates the invite: RecruitVerdictFor stays the only
+        # pass or fail decision, and a failed interview call does not hold the
+        # invite back either.
+        offline: set = set()
+        while action.verb == "invite":
+            try:
+                exchange = await asyncio.to_thread(_interview_candidate, action.target_arg)
+            except _interview_errors() as exc:
+                log.warning(
+                    "recruit interview: %s - no exchange (%s); the invite does not wait on it",
+                    action.target_arg, exc,
+                )
+                break
+            if exchange is not None:
+                log.info(
+                    "recruit interview: %s - Q: %s | A: %s",
+                    exchange.candidate, exchange.question, exchange.reply,
+                )
+                break
+            log.info(
+                "recruit: %s is offline (no fresh snapshot) - skipped, trying the next shortlisted name",
+                action.target_arg,
+            )
+            offline.add(action.target_arg)
+            action = recruit.plan_recruit(**{**plan_args, "asked": plan_args["asked"] | offline})
 
         if action.verb == "wait":
-            log.info("recruit: nothing this pass - %s", action.reason)
+            if offline:
+                log.info(
+                    "recruit: nothing this pass - %s (skipped offline: %s)",
+                    action.reason, ", ".join(sorted(offline)),
+                )
+            else:
+                log.info("recruit: nothing this pass - %s", action.reason)
             return
 
         row = await asyncio.to_thread(
@@ -16229,6 +16288,12 @@ class Bridge(discord.Client):
         # The hunt rows still open are the questers' own as much as anyone's: an
         # unread count holds them to QUESTER_HUNTS from this pass alone.
         hunts_left = max(0, QUESTER_HUNTS - min(int(hunts_open or 0), QUESTER_HUNTS))
+        # A quester with full bags sells before its move (questers.sell_step,
+        # #1813): its bags, worn gear and sale rows are read only for those.
+        full = [m.name for m in members if questers.needs_sale(m)]
+        carried, worn, sold = (await asyncio.to_thread(_fetch_quester_bags, full)
+                               if full else ({}, {}, ()))
+        kept = await asyncio.to_thread(_KEEP.now) if full else None
         for m in members:
             held = self._quester_broken.setdefault(m.name, {})
             known = frozenset(held) | frozenset(
@@ -16236,7 +16301,10 @@ class Bridge(discord.Client):
             plan = questers.plan(cat, m, self._quester_clock, now, known, tried,
                                  self._quester_last.get(m.name, 0), crossings)
             await self._quester_ledger(m, plan, held, ledger, mono)
-            if self._quester_start(m, plan, cat, cap, mono, hunt_verb and hunts_left > 0):
+            sale = (questers.sell_step(m, carried.get(m.name, ()), worn.get(m.name), kept,
+                                       cat, sold, cap) if m.name in full else None)
+            if self._quester_start(m, plan, cat, cap, mono, hunt_verb and hunts_left > 0,
+                                   sale):
                 hunts_left -= 1
         await asyncio.to_thread(_share_quester_quests, {m.name for m in members})
         await asyncio.to_thread(_quester_memos_write, self._quester_clock,
@@ -16260,9 +16328,21 @@ class Bridge(discord.Client):
                 # No ledger yet (#923): asked again in an hour, not every pass.
                 self._quester_unledgered = mono + 3600
 
-    def _quester_start(self, m, plan, cat, cap: float, mono: float, hunt: bool) -> bool:
+    def _quester_start(self, m, plan, cat, cap: float, mono: float, hunt: bool,
+                       sale=None) -> bool:
         """Start the quester's move as a step, unless it is on one already or
-        has none; True when the step holds a hunt row (one of QUESTER_HUNTS)."""
+        has none; True when the step holds a hunt row (one of QUESTER_HUNTS).
+        A `sale` (questers.sell_step: its bags are full) goes first, in the
+        move's place: the move is planned again on the next pass."""
+        if m.name not in self._job_steps and sale is not None:
+            log.info("questers: %s", sale.said)
+            self._job_steps[m.name] = mono
+            try:
+                self._start_quester_step(sale, cap)
+            except Exception:
+                self._job_steps.pop(m.name, None)
+                raise
+            return False
         if m.name in self._job_steps or plan.move is None:
             log.info("questers: %s", plan.line if m.name not in self._job_steps
                      else "%s is on a step" % m.name)
@@ -16363,8 +16443,9 @@ class Bridge(discord.Client):
             log.info("%s", line)
 
     async def _raid_spec_loop(self) -> None:
-        """Keep every family guild's seat targets current (the operator's
-        eight groups of one tank, one healer and three damage dealers).
+        """Keep every family guild's seat targets current (the lineup's
+        eight groups of five, its tank and healer totals from the encounter
+        table).
 
         Ten minutes by default: a target only matters at a level-up or a
         login, and the module reads the table once a minute.
@@ -30040,8 +30121,10 @@ _CLASS_TRAINER_SQL = (
 _CLASS_KNOWN_SQL = (
     "SELECT c.name, c.class AS class_id, c.race AS race_id, c.level, cs.spell "
     "FROM characters c LEFT JOIN character_spell cs ON cs.guid = c.guid "
-    "AND cs.spell IN (SELECT ts.SpellId FROM acore_world.trainer_spell ts "
+    "AND (cs.spell IN (SELECT ts.SpellId FROM acore_world.trainer_spell ts "
     "JOIN acore_world.trainer t ON t.Id = ts.TrainerId WHERE t.Type = 0) "
+    # The spells a learn row teaches and Bear Form (taughtspells.py, #792).
+    "OR cs.spell IN (" + ",".join(map(str, taughtspells.READ_SPELLS)) + ")) "
     "WHERE c.name IN (%s)"
 )
 _CLASS_TRAINER_ROWS: dict = {}
@@ -34229,7 +34312,8 @@ def _quester_catalogue():
                              entries)
         starts = _job_read(cur, "quester quest starters", questers.STARTERS_SQL.format(quests=qids))
         ends = _job_read(cur, "quester quest enders", questers.ENDERS_SQL.format(quests=qids))
-    _QUESTER_CATALOGUE = questers.catalogue(quests, givers, spawns, loot, starts, ends)
+        links = _job_read(cur, "quester quest links", questers.LINKS_SQL)
+    _QUESTER_CATALOGUE = questers.catalogue(quests, givers, spawns, loot, starts, ends, links)
     log.info("questers: read %d quest(s) a quester may take from the world database",
              len(_QUESTER_CATALOGUE.facts))
     return _QUESTER_CATALOGUE
@@ -34251,16 +34335,53 @@ def _fetch_quester_facts(names: list) -> tuple:
         log_rows = _job_read(cur, "quester quest logs", questers.LOG_SQL.format(guids=guids))
         done_rows = _job_read(cur, "quester rewarded quests",
                               questers.REWARDED_SQL.format(guids=guids))
+        rep_rows = _job_read(cur, "quester reputation",
+                             questers.REPUTATION_SQL.format(guids=guids))
         recent = _job_read(cur, "quester rows", _JOB_RECENT_SQL, (QUESTER_SOURCE_LIKE,))
         crossings = _job_read(cur, "quester crossings", _JOB_RECENT_SQL,
                               (QUESTER_CROSSINGS_LIKE,))
         ledger = _job_read(cur, "quest ledger", questers.LEDGER_SQL.format(names=marks),
                            list(names))
         hunts = _hunts_open(cur)
-    members = questers.members_from_rows(rows, log_rows, done_rows)
+    members = questers.members_from_rows(rows, log_rows, done_rows, rep_rows)
+    # A quest that hands over an item needs a free bag slot for it (#1732).
+    free = _fetch_free_slots([m.name for m in members])
+    members = [dataclasses.replace(m, free_slots=free.get(m.name)) for m in members]
     states = {(str(r["name"]), int(r["quest"])): str(r.get("state") or "") for r in ledger}
     return (members, questers.attempts(recent), states, hunts,
             guildjobs.recent_from_rows(crossings))
+
+
+# The sale rows of a quester with full bags (questers.sell_step, #1813).
+QUESTER_SALE_LIKE = guildjobs.SOURCE + ":" + questers.SELL_ACTION + "%"
+
+
+def _fetch_quester_bags(names: list) -> tuple:
+    """(name -> guildjobs.Carried stacks, name -> gear.CharacterState, the
+    guildjobs.Recent sale rows) for the questers whose bags are full: what
+    questers.sell_step judges, read as the guild members' sale reads it
+    (_JOB_ITEMS_SQL, _JOB_WORN_SQL)."""
+    if not names:
+        return {}, {}, ()
+    ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        rows = _job_read(cur, "questers", questers.MEMBERS_SQL.format(names=marks),
+                         list(names))
+        name_of = {int(r["guid"]): str(r["name"]) for r in rows}
+        if not name_of:
+            return {}, {}, ()
+        guids = ids(name_of)
+        item_rows = _job_read(cur, "quester carried items", _JOB_ITEMS_SQL.format(
+            guids=guids, goods=guildjobs.TRADE_GOODS,
+            subclasses=ids(sorted(guildjobs.MATERIAL_SUBCLASSES)),
+            entries=ids(_JOB_ENTRIES)))
+        worn_rows = _job_read(cur, "quester worn gear", _JOB_WORN_SQL.format(guids=guids))
+        sale_rows = _job_read(cur, "quester sales", _JOB_RECENT_SQL, (QUESTER_SALE_LIKE,))
+    carried = {name_of[guid]: stacks
+               for guid, stacks in guildjobs.carried_from_rows(item_rows).items()
+               if guid in name_of}
+    return carried, _job_worn(worn_rows), guildjobs.recent_from_rows(sale_rows)
 
 
 def _share_quester_quests(names: set) -> None:

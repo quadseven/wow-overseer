@@ -17,18 +17,18 @@ bag-room hold measured its ceiling the same way. Pinned here:
 import ast
 import asyncio
 import pathlib
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, fresh_import, stub_modules
 
-import bag_pressure  # noqa: E402
-import campaignqueue  # noqa: E402
-import dungeonquests  # noqa: E402
-import gearup  # noqa: E402
-import jobs  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import bag_pressure
+    import campaignqueue
+    import dungeonquests
+    import gearup
+    import jobs
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (ROOT / "bridge.py").read_text(encoding="utf-8")
@@ -44,9 +44,7 @@ def _import_bridge():
             pass
 
     stub.Client = Client
-    with mock.patch.dict(sys.modules, {"discord": stub}):
-        sys.modules.pop("bridge", None)
-        import bridge
+    bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
     return bridge
 
 
