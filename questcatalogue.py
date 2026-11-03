@@ -95,6 +95,15 @@ class Quest:
     classes: int  # AllowableClasses; 0 is every class
     follows: int  # PrevQuestID; 0 is none
 
+    # Required items for the quest
+    required_items: tuple  # (item_id, count, name) for each required item
+    # Required creatures/objects for the quest
+    required_creatures: tuple  # (entry, count) for each required creature/object
+    # Spawn counts for creatures/objects (entry -> (zone_spawns, total_spawns))
+    spawn_counts: dict  # entry -> (zone_spawns, total_spawns)
+    # Sources for required items
+    item_sources: tuple  # (item_id, source_type, source_id) for each source
+
     def view(self) -> dict:
         return {
             "id": self.id,
@@ -107,6 +116,10 @@ class Quest:
             "races": self.races,
             "classes": self.classes,
             "follows": self.follows,
+            "required_items": self.required_items,
+            "required_creatures": self.required_creatures,
+            "spawn_counts": self.spawn_counts,
+            "item_sources": self.item_sources,
         }
 
 

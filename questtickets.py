@@ -239,6 +239,35 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
         ]
     lines += [
         "",
+        "## World rows",
+        "",
+    ]
+    if info:
+        if hasattr(info, 'required_items') and info.required_items:
+            for item_id, count, name in info.required_items:
+                sources = []
+                if hasattr(info, 'item_sources') and info.item_sources:
+                    for source_item_id, source_type, source_id in info.item_sources:
+                        if source_item_id == item_id:
+                            if source_type == "dropper":
+                                sources.append("creature %d drops it" % source_id)
+                            elif source_type == "reward":
+                                sources.append("quest %d rewards it" % source_id)
+                            elif source_type == "vendor":
+                                sources.append("vendor %d sells it" % source_id)
+                if sources:
+                    lines.append("  - Item %d %d (%s) comes from: %s" % (item_id, count, name, ", ".join(sources)))
+                else:
+                    lines.append("  - Item %d %d (%s) comes from: no source in the world rows" % (item_id, count, name))
+        if hasattr(info, 'required_creatures') and info.required_creatures:
+            for entry, count in info.required_creatures:
+                if hasattr(info, 'spawn_counts') and entry in info.spawn_counts:
+                    zone_spawns, total_spawns = info.spawn_counts[entry]
+                    lines.append("  - Creature/object %d %d has %d spawn in the zone and %d in total" % (entry, count, zone_spawns, total_spawns))
+                else:
+                    lines.append("  - Creature/object %d %d has no spawn data" % (entry, count))
+    lines += [
+        "",
         "## Acceptance criteria",
         "",
         "- [ ] A quester can finish this quest, or the ticket says why no one can",
