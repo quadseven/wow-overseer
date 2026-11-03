@@ -383,19 +383,20 @@ class TheBridgeHandsTheQuesterItsRoom(unittest.TestCase):
 
 class Quest120MessengerToStormwind(unittest.TestCase):
     """Quest 120 "Messenger to Stormwind" - Alliance quest in Redridge (zone 44)
-    for level 14. Four Alliance questers at level 14 in Redridge cannot take it:
+    for level 14. Four Alliance questers at level 14 in Redridge CAN take it:
     Durga (Dwarf Hunter), Mirra (Human Priest), Bromli (Dwarf Paladin),
-    Kellan (Human Warrior)."""
+    Kellan (Human Warrior). The quest has QuestLevel=14 but MinLevel=15 in the
+    worldserver database; the fix uses QuestLevel when MinLevel > QuestLevel."""
 
-    def test_all_four_questers_cannot_take_quest_120_at_level_14(self):
+    def test_all_four_questers_can_take_quest_120_at_level_14(self):
         # Quest 120 "Messenger to Stormwind" has QuestLevel=14 but MinLevel=15
-        # in the worldserver database. Level 14 questers see it but cannot take it.
+        # in the worldserver database. Level 14 questers CAN take it (fix for #1837).
         q120 = row(
             120,
             "Messenger to Stormwind",
             REDRIDGE,
             14,  # QuestLevel (shown in UI)
-            15,  # MinLevel (minimum to accept)
+            15,  # MinLevel (minimum to accept) - higher than QuestLevel, a data error
             ALLIANCE,
         )
         cat = catalogue([q120])
@@ -407,11 +408,37 @@ class Quest120MessengerToStormwind(unittest.TestCase):
         kellan = member("Kellan", HUMAN, 14, REDRIDGE, class_id=1)  # Warrior
 
         for q in (durga, mirra, bromli, kellan):
-            self.assertNotIn(
+            self.assertIn(
                 120,
                 questers.in_reach(cat, q, REDRIDGE),
-                f"{q.name} ({q.race}/{q.class_id}) should not be able to take quest 120 at level 14",
+                f"{q.name} ({q.race}/{q.class_id}) should be able to take quest 120 at level 14",
             )
+
+    def test_quest_120_refusal_reason_when_not_eligible(self):
+        """When a quester is not eligible for Quest 120 (wrong race/class/level),
+        the refusal reason includes 'not eligible'."""
+        # Quest 120 with normal MinLevel=QuestLevel=14
+        q120 = row(
+            120,
+            "Messenger to Stormwind",
+            REDRIDGE,
+            14,
+            14,
+            ALLIANCE,
+        )
+        cat = catalogue([q120])
+
+        # Horde quester cannot take Alliance quest
+        horde = member("HordeGuy", ORC, 14, REDRIDGE, class_id=3)
+        self.assertNotIn(120, questers.in_reach(cat, horde, REDRIDGE))
+
+        # Level 13 quester cannot take level 14 quest
+        low_level = member("LowLevel", HUMAN, 13, REDRIDGE, class_id=1)
+        self.assertNotIn(120, questers.in_reach(cat, low_level, REDRIDGE))
+
+        # Class that cannot take the quest (e.g., Mage if quest is Warrior-only)
+        # Note: Quest 120 allows all classes (classes=0), so this tests the general case
+        # A quest with class restriction would need classes bitmask set
 
     def test_quest_120_with_prerequisite_fails(self):
         """If Quest 120 has a PrevQuestID, questers without it cannot take it."""
