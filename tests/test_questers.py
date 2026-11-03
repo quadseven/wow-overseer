@@ -88,6 +88,7 @@ def world(
     extra_ends=(),
     extra_spawns=(),
     drop=(),
+    loot_rows=(),
 ):
     """Northshire (sorted under its area, 9), Goldshire in Elwynn (12), two
     zones further on, and quests a Human priest may not take."""
@@ -138,7 +139,7 @@ def world(
     # The spawned givers and enders catalogue() reads: `drop` takes the spawn
     # out of these while `starts` and `ends` still name it.
     givers = [g for g in givers if g["guid"] not in drop]
-    return questers.catalogue(quests, givers, spawns, [], starts, ends)
+    return questers.catalogue(quests, givers, spawns, loot_rows, starts, ends)
 
 
 def mirra(**kw):
@@ -781,6 +782,32 @@ class Steps(unittest.TestCase):
 
 
 class Broken(unittest.TestCase):
+    def test_underbelly_scales_hunts_creatures_that_drop_the_required_item(self):
+        scales = quest(122, REDRIDGE, 18, title="Underbelly Scales")
+        scales.update(item1=6001, item_count1=4)
+        cat = world(
+            extra_quests=[scales],
+            extra_givers=[
+                giver(122, "start", 1122, 122, 2000, 0),
+                giver(122, "end", 1122, 122, 2000, 0),
+            ],
+            extra_spawns=[spawn(6122, 612, 2100, 0, level=18)],
+            loot_rows=[{"item": 6001, "entry": 612}],
+        )
+        member = mirra(
+            level=18,
+            zone_id=REDRIDGE,
+            x=2090.0,
+            quest_log={122: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({1, 2, 3, 4, 5, 6, 7, 20, 21, 30, 31}),
+            quest_objectives={122: {6001: 0}},
+        )
+
+        plan = questers.plan(cat, member, questers.Clock(), 0.0)
+
+        self.assertEqual((plan.move.kind, plan.move.quest), (classquest.HUNT, 122))
+        self.assertEqual(plan.move.spot.entry, 612)
+
     def _play(self, member, minutes, clock=None, step=5, progress=None, cat=None):
         """Plan every `step` minutes, each pass told the quest its last move
         was for, as the bridge tells it (`_quester_last`)."""

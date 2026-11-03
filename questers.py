@@ -1647,19 +1647,22 @@ def _hunt(cat: Catalogue, member, skip, left):
     for qid, quest in _held(cat, member, STATUS_INCOMPLETE, skip):
         if _quest_complete(quest, STATUS_INCOMPLETE, member.quest_progress.get(qid, 0)):
             continue
-        progress = member.quest_objectives.get(qid)
-        kills = dict(quest.kills)
-        if progress:
-            kills = {
-                entry: count
-                for entry, count in kills.items()
-                if int(progress.get(entry, 0)) < count
-            }
+        progress = member.quest_objectives.get(qid, {})
+        hunt_entries = {
+            entry for entry, count in quest.kills if int(progress.get(entry, 0)) < count
+        }
+        hunt_entries.update(
+            entry
+            for item, entry in quest.drops
+            if int(progress.get(item, 0)) < dict(quest.items).get(item, 0)
+        )
         spot = _nearest(
             member,
             classquest.within_level(
                 member,
-                tuple(s for s in classquest.solo_fields(quest) if s.entry in kills),
+                tuple(
+                    s for s in classquest.solo_fields(quest) if s.entry in hunt_entries
+                ),
             ),
             left,
         )
