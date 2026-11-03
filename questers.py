@@ -1289,8 +1289,6 @@ def _broken_reason(
         return FORGOTTEN_HEIRLOOM
     if quest.id == 91 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return SOLOMONS_LAW
-    if quest.id == 124 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
-        return A_BAYING_OF_GNOLLS
     if quest.id == 62 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return FARGODEEP_EXPLORATION
     missing = _ender_missing(quest, facts, gone, object_gone)
@@ -1310,7 +1308,13 @@ def _broken_reason(
     if played < STALL_SECONDS or complete:
         return ""
     unsourced = (quest.kills or quest.items) and not quest.fields
-    return STALLED_UNSOURCED if unsourced else STALLED
+    if unsourced:
+        return "%s (quest %d) requires creatures with no spawns in zone %d" % (
+            quest.title,
+            quest.id,
+            facts.zone,
+        )
+    return STALLED
 
 
 def _refused_words(reason, words) -> str:

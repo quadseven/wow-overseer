@@ -1,6 +1,7 @@
 """The questers' play (questers.py, #924): every quest in reach, zone by zone,
 and a quest that stops progressing is broken with its reason."""
 
+import sqlite3
 import unittest
 
 import classquest
@@ -79,6 +80,10 @@ def started(qid, entry):
 
 def ended(qid, entry, kind="creature"):
     return {"quest": qid, "kind": kind, "entry": entry}
+
+
+def ids(values):
+    return ",".join(str(int(v)) for v in values) or "0"
 
 
 def world(
@@ -920,7 +925,10 @@ class Broken(unittest.TestCase):
         )
         member = mirra(quest_log={1: 3, 8: 3}, quests_done=frozenset({2, 3}))
         self._play(member, 125, cat=cat)
-        self.assertIn((8, questers.STALLED_UNSOURCED), self.found)
+        self.assertIn(
+            (8, "Nobody (quest 8) requires creatures with no spawns in zone 12"),
+            self.found,
+        )
 
     def test_quest_64_the_forgotten_heirloom_has_specific_stall_reason(self):
         # Quest 64 "The Forgotten Heirloom" in Westfall (level 12) requires an
@@ -1039,6 +1047,320 @@ class Broken(unittest.TestCase):
         self.assertEqual(len(p.broken), 1)
         self.assertEqual(p.broken[0].quest, 124)
         # Should have a specific reason, not just STALLED_UNSOURCED
+        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("A Baying of Gnolls", p.broken[0].reason)
+
+    def test_quest_124_stall_reason_uses_real_spawn_data_from_database(self):
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("ATTACH DATABASE ':memory:' AS acore_world")
+        db.execute("ATTACH DATABASE ':memory:' AS characters")
+
+        db.execute("""
+            CREATE TABLE acore_world.quest_template (
+                ID INTEGER PRIMARY KEY,
+                LogTitle TEXT,
+                QuestSortID INTEGER,
+                QuestLevel INTEGER,
+                QuestInfoID INTEGER,
+                MinLevel INTEGER,
+                AllowableRaces INTEGER,
+                RewardSpell INTEGER,
+                RewardDisplaySpell INTEGER,
+                SuggestedGroupNum INTEGER,
+                RewardNextQuest INTEGER,
+                StartItem INTEGER,
+                ItemDrop1 INTEGER,
+                ItemDrop2 INTEGER,
+                ItemDrop3 INTEGER,
+                ItemDrop4 INTEGER,
+                RequiredNpcOrGo1 INTEGER,
+                RequiredNpcOrGoCount1 INTEGER,
+                RequiredNpcOrGo2 INTEGER,
+                RequiredNpcOrGoCount2 INTEGER,
+                RequiredNpcOrGo3 INTEGER,
+                RequiredNpcOrGoCount3 INTEGER,
+                RequiredNpcOrGo4 INTEGER,
+                RequiredNpcOrGoCount4 INTEGER,
+                RequiredItemId1 INTEGER,
+                RequiredItemCount1 INTEGER,
+                RequiredItemId2 INTEGER,
+                RequiredItemCount2 INTEGER,
+                RequiredItemId3 INTEGER,
+                RequiredItemCount3 INTEGER,
+                RequiredItemId4 INTEGER,
+                RequiredItemCount4 INTEGER,
+                RequiredItemId5 INTEGER,
+                RequiredItemCount5 INTEGER,
+                RequiredItemId6 INTEGER,
+                RequiredItemCount6 INTEGER
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE acore_world.quest_template_addon (
+                ID INTEGER PRIMARY KEY,
+                AllowableClasses INTEGER,
+                PrevQuestID INTEGER,
+                NextQuestID INTEGER,
+                ExclusiveGroup INTEGER,
+                BreadcrumbForQuestId INTEGER,
+                RequiredMinRepFaction INTEGER,
+                RequiredMinRepValue INTEGER,
+                RequiredMaxRepFaction INTEGER,
+                RequiredMaxRepValue INTEGER
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE acore_world.creature_template (
+                entry INTEGER PRIMARY KEY,
+                name TEXT,
+                rank INTEGER,
+                maxlevel INTEGER,
+                lootid INTEGER
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE acore_world.creature (
+                guid INTEGER PRIMARY KEY,
+                id INTEGER,
+                map INTEGER,
+                position_x REAL,
+                position_y REAL,
+                position_z REAL,
+                spawntimesecs INTEGER
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE acore_world.creature_queststarter (
+                id INTEGER,
+                quest INTEGER
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE acore_world.creature_questender (
+                id INTEGER,
+                quest INTEGER
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE acore_world.gameobject_queststarter (
+                id INTEGER,
+                quest INTEGER
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE acore_world.gameobject_questender (
+                id INTEGER,
+                quest INTEGER
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE acore_world.gameobject_template (
+                entry INTEGER PRIMARY KEY,
+                type INTEGER,
+                Data0 INTEGER,
+                Data1 INTEGER,
+                Data2 INTEGER,
+                name TEXT
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE acore_world.gameobject (
+                guid INTEGER PRIMARY KEY,
+                id INTEGER,
+                map INTEGER,
+                position_x REAL,
+                position_y REAL,
+                position_z REAL
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE acore_world.item_template (
+                entry INTEGER PRIMARY KEY,
+                name TEXT,
+                class INTEGER,
+                startquest INTEGER,
+                spellid_1 INTEGER,
+                spelltrigger_1 INTEGER
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE acore_world.creature_loot_template (
+                Entry INTEGER,
+                Item INTEGER,
+                Reference INTEGER
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE acore_world.reference_loot_template (
+                Entry INTEGER,
+                Item INTEGER
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE acore_world.trainer_spell (
+                SpellId INTEGER
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE acore_world.conditions (
+                SourceTypeOrReferenceId INTEGER,
+                SourceEntry INTEGER,
+                ConditionTypeOrReference INTEGER,
+                ConditionValue1 INTEGER,
+                ConditionValue2 INTEGER,
+                ConditionValue3 INTEGER,
+                ConditionTarget INTEGER,
+                NegativeCondition INTEGER
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE acore_world.smart_scripts (
+                entryorguid INTEGER,
+                source_type INTEGER,
+                event_type INTEGER,
+                event_param1 INTEGER,
+                action_type INTEGER,
+                action_param1 INTEGER
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE acore_world.event_scripts (
+                id INTEGER,
+                command INTEGER,
+                datalong INTEGER
+            )
+        """)
+
+        quest_124_title = "A Baying of Gnolls"
+        db.execute(
+            """
+            INSERT INTO acore_world.quest_template (
+                ID, LogTitle, QuestSortID, QuestLevel, QuestInfoID, MinLevel,
+                AllowableRaces, RewardSpell, RewardDisplaySpell, SuggestedGroupNum,
+                RewardNextQuest, StartItem, ItemDrop1, ItemDrop2, ItemDrop3, ItemDrop4,
+                RequiredNpcOrGo1, RequiredNpcOrGoCount1,
+                RequiredNpcOrGo2, RequiredNpcOrGoCount2,
+                RequiredNpcOrGo3, RequiredNpcOrGoCount3,
+                RequiredNpcOrGo4, RequiredNpcOrGoCount4,
+                RequiredItemId1, RequiredItemCount1,
+                RequiredItemId2, RequiredItemCount2,
+                RequiredItemId3, RequiredItemCount3,
+                RequiredItemId4, RequiredItemCount4,
+                RequiredItemId5, RequiredItemCount5,
+                RequiredItemId6, RequiredItemCount6
+            ) VALUES (124, ?, 44, 20, 0, 20, 1101, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 444, 15, 445, 15, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        """,
+            (quest_124_title,),
+        )
+
+        db.execute(
+            "INSERT INTO acore_world.quest_template_addon (ID, AllowableClasses, PrevQuestID, NextQuestID, ExclusiveGroup) VALUES (124, 1101, 0, 0, 0)"
+        )
+
+        db.execute(
+            "INSERT INTO acore_world.creature_template (entry, name, rank, maxlevel, lootid) VALUES (444, 'Redridge Gnoll', 0, 22, 0)"
+        )
+        db.execute(
+            "INSERT INTO acore_world.creature_template (entry, name, rank, maxlevel, lootid) VALUES (445, 'Redridge Mongrel', 0, 22, 0)"
+        )
+        db.execute(
+            "INSERT INTO acore_world.creature_template (entry, name, rank, maxlevel, lootid) VALUES (1124, 'Lieutenant Doren', 0, 25, 0)"
+        )
+
+        db.execute(
+            "INSERT INTO acore_world.creature (guid, id, map, position_x, position_y, position_z, spawntimesecs) VALUES (10005, 1124, 0, -9400.0, -2400.0, 60.0, 300)"
+        )
+
+        db.execute(
+            "INSERT INTO acore_world.creature_queststarter (id, quest) VALUES (1124, 124)"
+        )
+        db.execute(
+            "INSERT INTO acore_world.creature_questender (id, quest) VALUES (1124, 124)"
+        )
+
+        cur = db.cursor()
+        quests = [dict(r) for r in cur.execute(questers.QUESTS_SQL).fetchall()]
+        self.assertEqual(len(quests), 1)
+        q = quests[0]
+        self.assertEqual(q["id"], 124)
+        self.assertEqual(q["title"], quest_124_title)
+        self.assertEqual(q["npc1"], 444)
+        self.assertEqual(q["npc_count1"], 15)
+        self.assertEqual(q["npc2"], 445)
+        self.assertEqual(q["npc_count2"], 15)
+
+        qids = "124"
+        givers = [
+            dict(r)
+            for r in cur.execute(classquest.GIVERS_SQL.format(quests=qids)).fetchall()
+        ]
+        self.assertEqual(len(givers), 2)
+
+        entries = {444, 445}
+        spawns = [
+            dict(r)
+            for r in cur.execute(
+                classquest.SPAWNS_SQL.format(entries=ids(entries))
+            ).fetchall()
+        ]
+        self.assertEqual(len(spawns), 0)
+
+        starts = [
+            dict(r)
+            for r in cur.execute(questers.STARTERS_SQL.format(quests=qids)).fetchall()
+        ]
+        ends = [
+            dict(r)
+            for r in cur.execute(questers.ENDERS_SQL.format(quests=qids)).fetchall()
+        ]
+        links = [dict(r) for r in cur.execute(questers.LINKS_SQL).fetchall()]
+
+        cat = questers.catalogue(quests, givers, spawns, [], starts, ends, links)
+
+        member = questers.Member(
+            name="Tester",
+            level=20,
+            race=1,
+            class_id=5,
+            map_id=0,
+            x=-9000.0,
+            y=-2000.0,
+            zone_id=44,
+            online=True,
+            quest_log={124: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset(),
+            quest_progress={124: 0},
+            quest_objectives={124: {444: 0, 445: 0}},
+        )
+        clock = questers.Clock()
+
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 124)
         self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
         self.assertIn("A Baying of Gnolls", p.broken[0].reason)
 
