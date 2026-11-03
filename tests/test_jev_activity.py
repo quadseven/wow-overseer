@@ -14,7 +14,7 @@ import pathlib
 import types
 import unittest
 
-from test_campaign_queue import FakeWorld, _q, _queue_pass  # sets up the pymysql stub
+from test_campaign_queue import FakeWorld, _q, _queue_pass
 
 import campaignqueue  # noqa: E402
 import core  # noqa: E402

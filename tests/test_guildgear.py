@@ -11,16 +11,15 @@ still for nobody else.
 
 import logging
 import pathlib
-import sys
-import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import guildgear  # noqa: E402
-import map_server  # noqa: E402  (must follow the pymysql stub)
-from tests.test_vclient import get, realm_of  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import guildgear
+    import map_server
+    from tests.test_vclient import get, realm_of
 
 map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())

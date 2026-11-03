@@ -18,26 +18,17 @@ when it is an older copy than the server now serves.
 import json
 import logging
 import pathlib
-import sys
-import types
 import unittest
 from datetime import datetime
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-if not hasattr(sys.modules["pymysql"], "err"):
-    _err = types.ModuleType("pymysql.err")
+from _stub_modules import PYMYSQL, stub_modules
 
-    class _MySQLError(Exception):
-        pass
-
-    _err.MySQLError = _MySQLError
-    sys.modules["pymysql"].err = _err
-
-import eye  # noqa: E402
-import map_server  # noqa: E402  (must follow the pymysql stub)
-from tests.test_vclient import realm_of  # noqa: E402
-import wealth  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import eye
+    import map_server
+    from tests.test_vclient import realm_of
+    import wealth
 
 map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())

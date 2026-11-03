@@ -10,18 +10,18 @@ import os
 import pathlib
 import sys
 import threading
-import types
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
 
+from _stub_modules import PYMYSQL, stub_modules
+
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "tools"))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import gen_api_doc  # noqa: E402
-from tests import sandbox_caps  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import gen_api_doc
+    from tests import sandbox_caps
 
 _loader = importlib.machinery.SourceFileLoader(
     "overseer_cli", str(HERE / "tools" / "overseer")

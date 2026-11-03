@@ -2,26 +2,19 @@
 
 import os
 import sys
-import types
 import unittest
+
+from _stub_modules import PYMYSQL, stub_modules
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-# orders imports pymysql and catches its MySQLError. Stub both when pymysql is
-# not installed, so this module does not lean on another module's stub (#1434).
-try:
-    import pymysql
-except ModuleNotFoundError:
-    pymysql = sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-if not hasattr(pymysql, "err"):
-    _err = types.ModuleType("pymysql.err")
-    _err.MySQLError = type("MySQLError", (Exception,), {})
-    pymysql.err = _err
-
-import orders  # noqa: E402
+# orders imports pymysql and catches its MySQLError. A stand-in serves where
+# the driver is not installed, and is taken out of sys.modules again (#1648).
+with stub_modules(pymysql=PYMYSQL):
+    import orders
 
 
-class FakeMySqlError(pymysql.err.MySQLError):
+class FakeMySqlError(orders.pymysql.err.MySQLError):
     pass
 
 

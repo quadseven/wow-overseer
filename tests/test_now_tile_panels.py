@@ -15,17 +15,17 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import types
 import unittest
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-HERE = pathlib.Path(__file__).resolve().parent.parent
-APP = HERE / "app"
-sys.path.insert(0, str(HERE))
+with stub_modules(pymysql=PYMYSQL):
+    HERE = pathlib.Path(__file__).resolve().parent.parent
+    APP = HERE / "app"
+    sys.path.insert(0, str(HERE))
 
-import apiv2  # noqa: E402
-import map_server  # noqa: E402
+    import apiv2
+    import map_server
 
 BROWSER = r"""
 class El {

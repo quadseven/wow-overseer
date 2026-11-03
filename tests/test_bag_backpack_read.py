@@ -14,10 +14,10 @@ import asyncio
 import types
 import unittest
 
-from test_campaign_queue import _load, _Log  # sets up the pymysql stub
+from _stub_modules import PYMYSQL as pymysql
+from test_campaign_queue import _load, _Log
 
 import bag_upgrade  # noqa: E402
-import pymysql  # noqa: E402  (the stub test_decree_order installs)
 
 GIVE = "give"
 

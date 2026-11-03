@@ -9,16 +9,15 @@ walked by anyone else.
 """
 
 import contextlib
-import sys
-import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import guildpost  # noqa: E402
-import guildroute  # noqa: E402
-from test_guildsocial_bridge import bridge  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import guildpost
+    import guildroute
+    from test_guildsocial_bridge import bridge
 
 
 def letter(receiver, mail_id, guid, **over):

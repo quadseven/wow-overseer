@@ -17,18 +17,17 @@ import shutil
 import sys
 import tempfile
 import time
-import types
 import unittest
 from unittest import mock
 
-_stub = types.ModuleType("pymysql")
-_stub.MySQLError = type("MySQLError", (Exception,), {})
-sys.modules.setdefault("pymysql", _stub)
+from _stub_modules import PYMYSQL, stub_modules
+
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
-import realmread  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import realmread
 
 
 def load():
@@ -37,7 +36,8 @@ def load():
     module = importlib.util.module_from_spec(spec)
     # Registered first: a dataclass looks its module up while it is defined.
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    with stub_modules(pymysql=PYMYSQL):
+        spec.loader.exec_module(module)
     return module
 
 
