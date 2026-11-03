@@ -570,6 +570,9 @@ class Carried:
     required_level: int = 0
     inventory_type: int = 0
     allowable_class: int = -1
+    # item_instance.flags & 1: soulbound, so no guildmate, mail or bank can
+    # take it (vendorsale.py judges a bound rare piece as the member's own).
+    bound: bool = False
 
     @property
     def material(self) -> str:
@@ -6767,6 +6770,7 @@ def carried_from_rows(rows) -> dict:
                 required_level=_int(row.get("required_level")),
                 inventory_type=_int(row.get("inventory_type")),
                 allowable_class=_int(row.get("allowable_class"), -1),
+                bound=bool(_int(row.get("bound"))),
             )
         )
     return {k: tuple(v) for k, v in out.items()}

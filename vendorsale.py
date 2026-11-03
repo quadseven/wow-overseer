@@ -37,8 +37,8 @@ THE RULE (`verdict`), the first line that applies:
     the consumables                          them
   * a pet or a mount (miscellaneous)         keep
   * other miscellaneous junk                 sell
-  * rare or better weapon or armor           keep: guild loot, for the loot
-                                             council and the bank
+  * rare or better weapon or armor that is   keep: guild loot, for the loot
+    not soulbound                            council and the bank
   * weapon or armor OUTGROWN_LEVELS under    sell
     the member's level
   * a ring, neck, trinket or other piece     keep: gear.py cannot weigh the
@@ -57,6 +57,15 @@ THE RULE (`verdict`), the first line that applies:
   * other trade goods and gems               sell: the guild holds it past
                                              what it will use
   * anything else                            keep
+
+A SOULBOUND BLUE IS THE MEMBER'S OWN (#1592). Read on the dev realm on
+2026-11-03: 128 of 162 members had one free bag slot or none, and 579 of their
+3,710 bag slots held rare weapons and armor ten or more item levels under the
+holder (Rhahk'Zor's Hammer 54 times), nearly all soulbound. No guildmate, mail
+or guild bank can take a bound piece, and the loot council decides a drop when
+it drops, so "guild loot" kept it in the bags for ever. A rare piece that is
+soulbound (item_instance.flags & 1) skips that line and is judged by the rest
+of the gear rules: outgrown sells, an upgrade is kept, the rest sells.
 
 NATURAL ONLY. The member sells its own loot to the world's vendor for the
 world's price.
@@ -145,7 +154,7 @@ def _int(value, default=0) -> int:
 
 def _gear_verdict(item, judge: Judge) -> tuple:
     quality = _int(item.quality)
-    if quality >= RARE:
+    if quality >= RARE and not getattr(item, "bound", False):
         return KEEP, "guild loot, for the loot council and the bank"
     item_level = _int(getattr(item, "item_level", 0))
     if 0 < item_level <= _int(judge.level) - OUTGROWN_LEVELS:
