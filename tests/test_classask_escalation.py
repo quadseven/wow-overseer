@@ -11,28 +11,27 @@ holding a group quest that wants two helpers.
 
 import asyncio
 import datetime
-import sys
-import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import classask  # noqa: E402
-import classparty  # noqa: E402
-import guildjobs  # noqa: E402
-import guildpug  # noqa: E402
-import guildsocial as gs  # noqa: E402
-from test_classask import (  # noqa: E402
-    CAVE,
-    NEAR,
-    asker,
-    done_ask,
-    group_book,
-    qask,
-)
-from test_guildsocial import NOW, ask, mate, yes  # noqa: E402
-from test_guildsocial_bridge import bridge  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import classask
+    import classparty
+    import guildjobs
+    import guildpug
+    import guildsocial as gs
+    from test_classask import (
+        CAVE,
+        NEAR,
+        asker,
+        done_ask,
+        group_book,
+        qask,
+    )
+    from test_guildsocial import NOW, ask, mate, yes
+    from test_guildsocial_bridge import bridge
 
 HUMAN, ORC = 1, 2
 KALIMDOR = 1

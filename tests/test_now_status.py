@@ -13,15 +13,15 @@ ends and starts again every few seconds, and a leader held for bag room.
 import logging
 import os
 import re
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, fresh_import, stub_modules
 
-import nowstatus  # noqa: E402
-import watchwall  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import nowstatus
+    import watchwall
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NOW = 1_000_000
@@ -486,9 +486,7 @@ def _import_bridge():
             pass
 
     stub.Client = Client
-    with mock.patch.dict(sys.modules, {"discord": stub}):
-        sys.modules.pop("bridge", None)
-        import bridge
+    bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
     return bridge
 
 
@@ -565,3 +563,57 @@ class GhostRecovery(unittest.TestCase):
         got = nowstatus.compose(m, None)
         self.assertEqual("Dead", got["doing"])
         self.assertNotEqual("Idle", got["doing"])
+
+
+class TookOverCreatureAim(unittest.TestCase):
+    """A took-over step aimed at a creature entry reads as a sentence. #1784
+
+    The intent book holds the aim as `creature:<entry>`. Said through the
+    walk words, an entry nothing names is an unnamed creature with its
+    number and an entry the creatures dict names is that name; the raw
+    `creature:<entry>` form never reaches a card.
+    """
+
+    ROW: dict = {
+        "leader_name": "Grug",
+        "family": "Grug",
+        "current_kind": "errand",
+        "current_owner": "travel column",
+        "current_target": "creature:3369",
+        "current_for": 30,
+    }
+
+    def test_the_intent_step_says_the_unnamed_creature(self):
+        got = nowstatus.intent_steps(None, dict(self.ROW))
+        self.assertEqual(len(got), 1)
+        self.assertEqual(
+            got[0].doing,
+            "the errand walk took over: walking to an unnamed creature "
+            "(3369) on a town errand",
+        )
+
+    def test_the_intent_step_says_a_named_creature(self):
+        got = nowstatus.intent_steps(None, dict(self.ROW), {3369: "a murloc"})
+        self.assertEqual(
+            got[0].doing,
+            "the errand walk took over: walking to a murloc on a town errand",
+        )
+
+    def test_the_card_sentence_says_the_unnamed_creature(self):
+        # No fresh intent row and no restarts: the stored step is the only
+        # speaker, and compose's doing comes from it alone.
+        took = step(
+            "Grug",
+            "the errand walk took over: walking to an unnamed creature "
+            "(3369) on a town errand",
+            kind="intent",
+            times=1,
+        )
+        facts = nowstatus.build_facts(["Grug", "Bork"], ROSTER, [], [took], NOW)
+        got = nowstatus.compose(
+            {"name": "Grug", "present": True, "condition": "ok"}, facts["Grug"], NOW
+        )
+        self.assertEqual(
+            got["doing"], "Walking to an unnamed creature (3369) on a town errand"
+        )
+        self.assertNotIn("creature:", got["line"])

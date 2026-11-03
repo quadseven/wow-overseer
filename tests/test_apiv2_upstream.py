@@ -13,12 +13,13 @@ import sys
 import types
 import unittest
 
+from _stub_modules import PYMYSQL, stub_modules
+
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import apiv2  # noqa: E402
-from apiv2 import upstream  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import apiv2
+    from apiv2 import upstream
 
 PIN = "a" * 40
 HEAD = "b" * 40

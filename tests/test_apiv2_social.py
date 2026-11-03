@@ -11,17 +11,18 @@ import sys
 import types
 import unittest
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-HERE = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
+with stub_modules(pymysql=PYMYSQL):
+    HERE = pathlib.Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(HERE))
 
-import apiv2  # noqa: E402
-import families as families_module  # noqa: E402
-import realmread  # noqa: E402
-import vclient  # noqa: E402
-from apiv2 import social  # noqa: E402
-from apiv2._context import Context  # noqa: E402
+    import apiv2
+    import families as families_module
+    import realmread
+    import vclient
+    from apiv2 import social
+    from apiv2._context import Context
 
 
 def realm_of(fams, guildmates=()):

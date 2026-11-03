@@ -10,17 +10,17 @@ that puts a banker within reach is written BEFORE any row that needs one.
 import asyncio
 import pathlib
 import re
-import sys
 import types
 import unittest
 from unittest import mock
 import modsource
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, fresh_import, stub_modules
 
-import bank  # noqa: E402
-import bankbags  # noqa: E402
-import towntrip  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import bank
+    import bankbags
+    import towntrip
 
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = PACKAGE / "bridge.py"
@@ -590,9 +590,7 @@ def _import_bridge():
             pass
 
     stub.Client = Client
-    with mock.patch.dict(sys.modules, {"discord": stub}):
-        sys.modules.pop("bridge", None)
-        import bridge
+    bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
     return bridge
 
 

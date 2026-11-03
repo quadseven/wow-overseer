@@ -20,7 +20,7 @@ import pathlib
 import types
 import unittest
 
-from test_family_economy_parity import FAKE_ASYNCIO, _load  # noqa: F401 - pymysql stub
+from test_family_economy_parity import FAKE_ASYNCIO, _load  # noqa: F401
 
 import bankforecast  # noqa: E402
 

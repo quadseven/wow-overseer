@@ -16,16 +16,16 @@ stack is always kept. It reuses `disposition._stock_keeps`, which is the rule
 """
 
 import pathlib
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, fresh_import, stub_modules
 
-import bag_pressure  # noqa: E402
-import disposition  # noqa: E402
-import materials  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import bag_pressure
+    import disposition
+    import materials
 
 
 def row(guid, count, holder="Oz", entry=2589, name="Linen Cloth"):
@@ -95,9 +95,7 @@ class TheVendorReadOffersTheSurplus(unittest.TestCase):
                 pass
 
         stub.Client = Client
-        with mock.patch.dict(sys.modules, {"discord": stub}):
-            sys.modules.pop("bridge", None)
-            import bridge
+        bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
         self.bridge = bridge
 
     def _read(self, rows):

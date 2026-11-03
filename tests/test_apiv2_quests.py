@@ -4,18 +4,18 @@ against the in-memory realm reader."""
 import datetime
 import pathlib
 import sys
-import types
 import unittest
+
+from _stub_modules import PYMYSQL, stub_modules
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import apiv2  # noqa: E402
-import questcatalogue as qc  # noqa: E402
-import questledger as ql  # noqa: E402
-import realmread  # noqa: E402
-from apiv2 import quests as v2quests  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import apiv2
+    import questcatalogue as qc
+    import questledger as ql
+    import realmread
+    from apiv2 import quests as v2quests
 
 HORDE_ONLY = 2 | 16 | 32 | 128 | 512
 ALLIANCE_ONLY = 1 | 4 | 8 | 64 | 1024

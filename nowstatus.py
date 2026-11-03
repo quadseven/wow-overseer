@@ -727,8 +727,20 @@ def _from_intent(intent: dict, steps, now_at, creatures: dict | None = None):
     return doing, "to get there", since
 
 
+def _walk_words_of(text: str) -> str:
+    """The walk a stored step names, as a Doing line: a 'took over' step
+    names the walk it began, the sentence after the prefix, capitalized."""
+    if " took over: " in text:
+        return _cap("A", reword(text.split(" took over: ", 1)[1]))
+    return reword(text)
+
+
 def _from_step(step: dict):
-    return reword(step["doing"]), reword(step.get("waiting")), int(step["first_at"])
+    return (
+        _walk_words_of(step["doing"]),
+        reword(step.get("waiting")),
+        int(step["first_at"]),
+    )
 
 
 def _from_member_state(state):

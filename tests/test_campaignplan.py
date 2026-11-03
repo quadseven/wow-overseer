@@ -14,7 +14,7 @@ import types
 import unittest
 from unittest import mock
 
-from test_campaign_queue import _load  # sets up the pymysql stub
+from test_campaign_queue import _load
 from test_jev_items import FakeJev
 
 import campaignplan  # noqa: E402
