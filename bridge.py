@@ -16288,6 +16288,12 @@ class Bridge(discord.Client):
         # The hunt rows still open are the questers' own as much as anyone's: an
         # unread count holds them to QUESTER_HUNTS from this pass alone.
         hunts_left = max(0, QUESTER_HUNTS - min(int(hunts_open or 0), QUESTER_HUNTS))
+        # A quester with full bags sells before its move (questers.sell_step,
+        # #1813): its bags, worn gear and sale rows are read only for those.
+        full = [m.name for m in members if questers.needs_sale(m)]
+        carried, worn, sold = (await asyncio.to_thread(_fetch_quester_bags, full)
+                               if full else ({}, {}, ()))
+        kept = await asyncio.to_thread(_KEEP.now) if full else None
         for m in members:
             held = self._quester_broken.setdefault(m.name, {})
             known = frozenset(held) | frozenset(
@@ -16295,7 +16301,10 @@ class Bridge(discord.Client):
             plan = questers.plan(cat, m, self._quester_clock, now, known, tried,
                                  self._quester_last.get(m.name, 0), crossings)
             await self._quester_ledger(m, plan, held, ledger, mono)
-            if self._quester_start(m, plan, cat, cap, mono, hunt_verb and hunts_left > 0):
+            sale = (questers.sell_step(m, carried.get(m.name, ()), worn.get(m.name), kept,
+                                       cat, sold, cap) if m.name in full else None)
+            if self._quester_start(m, plan, cat, cap, mono, hunt_verb and hunts_left > 0,
+                                   sale):
                 hunts_left -= 1
         await asyncio.to_thread(_share_quester_quests, {m.name for m in members})
         await asyncio.to_thread(_quester_memos_write, self._quester_clock,
@@ -16319,9 +16328,21 @@ class Bridge(discord.Client):
                 # No ledger yet (#923): asked again in an hour, not every pass.
                 self._quester_unledgered = mono + 3600
 
-    def _quester_start(self, m, plan, cat, cap: float, mono: float, hunt: bool) -> bool:
+    def _quester_start(self, m, plan, cat, cap: float, mono: float, hunt: bool,
+                       sale=None) -> bool:
         """Start the quester's move as a step, unless it is on one already or
-        has none; True when the step holds a hunt row (one of QUESTER_HUNTS)."""
+        has none; True when the step holds a hunt row (one of QUESTER_HUNTS).
+        A `sale` (questers.sell_step: its bags are full) goes first, in the
+        move's place: the move is planned again on the next pass."""
+        if m.name not in self._job_steps and sale is not None:
+            log.info("questers: %s", sale.said)
+            self._job_steps[m.name] = mono
+            try:
+                self._start_quester_step(sale, cap)
+            except Exception:
+                self._job_steps.pop(m.name, None)
+                raise
+            return False
         if m.name in self._job_steps or plan.move is None:
             log.info("questers: %s", plan.line if m.name not in self._job_steps
                      else "%s is on a step" % m.name)
@@ -34329,6 +34350,38 @@ def _fetch_quester_facts(names: list) -> tuple:
     states = {(str(r["name"]), int(r["quest"])): str(r.get("state") or "") for r in ledger}
     return (members, questers.attempts(recent), states, hunts,
             guildjobs.recent_from_rows(crossings))
+
+
+# The sale rows of a quester with full bags (questers.sell_step, #1813).
+QUESTER_SALE_LIKE = guildjobs.SOURCE + ":" + questers.SELL_ACTION + "%"
+
+
+def _fetch_quester_bags(names: list) -> tuple:
+    """(name -> guildjobs.Carried stacks, name -> gear.CharacterState, the
+    guildjobs.Recent sale rows) for the questers whose bags are full: what
+    questers.sell_step judges, read as the guild members' sale reads it
+    (_JOB_ITEMS_SQL, _JOB_WORN_SQL)."""
+    if not names:
+        return {}, {}, ()
+    ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        rows = _job_read(cur, "questers", questers.MEMBERS_SQL.format(names=marks),
+                         list(names))
+        name_of = {int(r["guid"]): str(r["name"]) for r in rows}
+        if not name_of:
+            return {}, {}, ()
+        guids = ids(name_of)
+        item_rows = _job_read(cur, "quester carried items", _JOB_ITEMS_SQL.format(
+            guids=guids, goods=guildjobs.TRADE_GOODS,
+            subclasses=ids(sorted(guildjobs.MATERIAL_SUBCLASSES)),
+            entries=ids(_JOB_ENTRIES)))
+        worn_rows = _job_read(cur, "quester worn gear", _JOB_WORN_SQL.format(guids=guids))
+        sale_rows = _job_read(cur, "quester sales", _JOB_RECENT_SQL, (QUESTER_SALE_LIKE,))
+    carried = {name_of[guid]: stacks
+               for guid, stacks in guildjobs.carried_from_rows(item_rows).items()
+               if guid in name_of}
+    return carried, _job_worn(worn_rows), guildjobs.recent_from_rows(sale_rows)
 
 
 def _share_quester_quests(names: set) -> None:
