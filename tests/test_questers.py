@@ -1489,6 +1489,77 @@ class ASummonedObjectEnder(unittest.TestCase):
             reasons += [b.reason for b in p.broken if b.quest == 40]
         self.assertTrue(reasons and reasons[-1].startswith(questers.STALLED))
 
+    def test_log_rows_keep_each_creature_objective_counter(self):
+        self.assertIn("q.RequiredNpcOrGo1 AS npc1", questers.LOG_SQL)
+        self.assertIn("s.mobcount1", questers.LOG_SQL)
+        logs, progress, objectives, _done = questers._logs_by_guid(
+            [
+                {
+                    "guid": 1,
+                    "quest": 104,
+                    "status": questers.STATUS_INCOMPLETE,
+                    "progress": 10,
+                    "npc1": 127,
+                    "npc2": 171,
+                    "npc3": 456,
+                    "npc4": 0,
+                    "mobcount1": 10,
+                    "mobcount2": 0,
+                    "mobcount3": 0,
+                    "mobcount4": 0,
+                }
+            ],
+            [],
+        )
+        self.assertEqual(logs[1][104], questers.STATUS_INCOMPLETE)
+        self.assertEqual(progress[1][104], 10)
+        self.assertEqual(objectives[1][104], {127: 10, 171: 0, 456: 0})
+
+    def test_coastal_menace_hunts_only_objectives_with_remaining_kills(self):
+        coastal = quest(
+            104, WESTFALL, 17, kill=127, count=10, title="The Coastal Menace"
+        )
+        coastal.update(npc2=171, npc_count2=8, npc3=456, npc_count3=5)
+        cat = world(
+            extra_quests=[coastal],
+            extra_givers=[
+                giver(104, "start", 5104, 5593, 0, 0),
+                giver(104, "end", 5104, 5593, 0, 0),
+            ],
+            extra_spawns=[
+                spawn(5127, 127, 10, 0, level=16),
+                spawn(5171, 171, 20, 0, level=16),
+                spawn(5456, 456, 30, 0, level=16),
+            ],
+        )
+        member = mirra(
+            level=20,
+            zone_id=WESTFALL,
+            quest_log={104: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({20, 21}),
+            quest_progress={104: 0},
+            quest_objectives={104: {127: 0, 171: 0, 456: 0}},
+        )
+
+        hunted = []
+        for entry, count, total in ((127, 10, 10), (171, 8, 18), (456, 5, 23)):
+            move = questers.plan(cat, member, questers.Clock(), 0.0).move
+            hunted.append(move.spot.entry)
+            objectives = dict(member.quest_objectives[104])
+            objectives[entry] = count
+            member = questers.Member(
+                **{
+                    **member.__dict__,
+                    "quest_progress": {104: total},
+                    "quest_objectives": {104: objectives},
+                }
+            )
+
+        hand_in = questers.plan(cat, member, questers.Clock(), 0.0).move
+
+        self.assertEqual(hunted, [127, 171, 456])
+        self.assertEqual((hand_in.kind, hand_in.quest), (classquest.TURN_IN, 104))
+
     def test_an_incomplete_quest_whose_object_spawns_are_gone_is_still_broken(self):
         member = mirra(quest_log={40: 3})
         cat = object_world(object_ended(40, 270, guid=5001, x=300.0))
