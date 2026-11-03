@@ -17148,6 +17148,21 @@ class Bridge(discord.Client):
         plan = raidsupply.plan_guild(guild_facts, recent, busy, focus=focus, cap=cap)
         log.info("%s; focus %s", raidsupply.summary(plan), focus or "none")
         _log_capped("raid supply", plan.notes)
+
+        # Request the fire potion order into the store, once while it stays open
+        try:
+            fire_order = raidsupply.fire_potion_order(plan.lines)
+            if fire_order:
+                # Get the order id from the store
+                conn = _connect()
+                try:
+                    order_id = workorderstore.request(conn, fire_order)
+                    log.info("raid supply: fire potion order requested (id=%d)", order_id)
+                except Exception:
+                    log.exception("raid supply: failed to request fire potion order to store")
+        except Exception:
+            log.exception("raid supply: failed to check for fire potion shortfall")
+
         now = time.monotonic()
         for step in plan.steps:
             self._corps_steps[step.holder] = now
@@ -25259,19 +25274,40 @@ _GUILD_SKILLS_SQL = (
 
 
 def _log_work_orders(roster: list) -> None:
-    """Log who takes each standing guild work order this pass (#486).
+    """Log and execute the guild work order plan this pass (#486).
 
-    Log only: workorders.py decides, and nothing here writes a row or sends
-    an order, so the world is unchanged by it.
+    The plan reads both standing orders and open orders from the store,
+    assigns each requested order to one qualified member, and saves the
+    assignments. Failures to read or write the store are logged and do not
+    stop the guild share pass.
     """
-    plan = workorders.plan(
-        workorders.STANDING_ORDERS, workorders.members_from_roster(roster)
-    )
-    log.info("workorders: %s", workorders.headline(plan))
-    for line in workorders.lines(plan):
-        log.info("workorders: %s", line)
-    for note in plan.notes:
-        log.info("workorders: %s", note)
+    members = workorders.members_from_roster(roster)
+
+    # Combine standing orders with open orders from the store
+    orders_to_plan = list(workorders.STANDING_ORDERS)
+    try:
+        open_orders = workorderstore.open_orders(_connect())
+        orders_to_plan.extend(open_orders)
+    except Exception:
+        log.exception("work orders: cannot read open orders from store - planning only standing orders")
+
+    # Plan assignments for all orders (standing + open)
+    try:
+        plan = workorders.plan(orders_to_plan, members)
+        log.info("workorders: %s", workorders.headline(plan))
+        for line in workorders.lines(plan):
+            log.info("workorders: %s", line)
+        for note in plan.notes:
+            log.info("workorders: %s", note)
+
+        # Save the plan to the store
+        try:
+            moved = workorderstore.save_plan(_connect(), plan)
+            log.info("work orders: assigned %d open order(s) this pass", moved)
+        except Exception:
+            log.exception("work orders: failed to save plan to store")
+    except Exception:
+        log.exception("work orders: failed to plan assignments - planning only standing orders")
 
 
 def _fetch_guild_roster(names: list) -> list:
