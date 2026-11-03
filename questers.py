@@ -1094,7 +1094,9 @@ def in_reach(cat: Catalogue, member, zone, broken=frozenset()) -> list:
     ]
 
 
-def _working(cat: Catalogue, member, last_quest=0, left=frozenset()) -> set:
+def _working(
+    cat: Catalogue, member, last_quest=0, left=frozenset(), object_gone=frozenset()
+) -> set:
     """The quests whose stall clock runs now: the quest the quester's last move
     was for, and each quest of its log of the zone it stands in that it has
     no objective spawn to hunt (`_unhuntable`).
@@ -1115,7 +1117,7 @@ def _working(cat: Catalogue, member, last_quest=0, left=frozenset()) -> set:
         if (
             cat.facts.get(qid) is not None
             and cat.facts[qid].zone == member.zone
-            and _unhuntable(cat, member, qid, left)
+            and _unhuntable(cat, member, qid, left, object_gone)
         )
     }
     if last_quest and int(last_quest) in member.quest_log:
@@ -1123,7 +1125,19 @@ def _working(cat: Catalogue, member, last_quest=0, left=frozenset()) -> set:
     return out
 
 
-def _unhuntable(cat: Catalogue, member, qid, left=frozenset()) -> bool:
+def _has_gameobject_objectives(quest, object_gone=frozenset()) -> bool:
+    """True when the quest has gameobject objectives (USE_OBJECT with item=0)
+    that have at least one spawn not in object_gone."""
+    for use in quest.uses:
+        if use.verb == classquest.USE_OBJECT and use.item == 0:
+            if any(s.guid not in object_gone for s in use.spots):
+                return True
+    return False
+
+
+def _unhuntable(
+    cat: Catalogue, member, qid, left=frozenset(), object_gone=frozenset()
+) -> bool:
     """True when the quester has no objective spawn of this quest to hunt
     (`_hunt`'s own choice: a solo field within its level, on its map, not one
     it leaves for now)."""
@@ -1131,7 +1145,11 @@ def _unhuntable(cat: Catalogue, member, qid, left=frozenset()) -> bool:
     if quest is None:
         return True
     fields = classquest.within_level(member, classquest.solo_fields(quest))
-    return _nearest(member, fields, left) is None
+    if _nearest(member, fields, left) is not None:
+        return False
+    if _has_gameobject_objectives(quest, object_gone):
+        return False
+    return True
 
 
 def _fields_gone(quest, gone) -> bool:
@@ -1170,7 +1188,7 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
     object_gone = gone_spawns(member.name, tried, OBJECT_KIND)
     refused = refusals(member.name, tried)
     final = cannot_turn_in(member.name, tried)
-    working = _working(cat, member, last_quest, left_spawns(member.name, tried))
+    working = _working(cat, member, last_quest, left_spawns(member.name, tried), object_gone)
     playing = bool(member.online and member.alive)
     out = []
     for qid in sorted(member.quest_log):
@@ -1219,8 +1237,17 @@ def _broken_reason(
         return _refused_words(REFUSED_TURN_IN, words)
     if played < STALL_SECONDS or status == STATUS_COMPLETE:
         return ""
-    unsourced = (quest.kills or quest.items) and not quest.fields
-    return STALLED_UNSOURCED if unsourced else STALLED
+    has_creature_objectives = bool(quest.kills or quest.items)
+    has_gameobject_objectives = any(
+        use.verb == classquest.USE_OBJECT and use.item == 0 for use in quest.uses
+    )
+    has_creature_spawns = bool(quest.fields)
+    has_gameobject_spawns = _has_gameobject_objectives(quest, object_gone)
+    if has_creature_objectives and not has_creature_spawns:
+        return STALLED_UNSOURCED
+    if has_gameobject_objectives and not has_gameobject_spawns:
+        return STALLED_UNSOURCED
+    return STALLED
 
 
 def _refused_words(reason, words) -> str:
