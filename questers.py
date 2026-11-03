@@ -196,7 +196,9 @@ CANNOT_TURN_IN = "the world says no hand-in of it can go through"
 # The module's non-retryable refusals that are about the quest log's state at
 # that moment, not about the quest: a later read of the log settles them, so
 # they never make a held quest a could-not.
-LOG_STATE_REFUSALS = frozenset({"already turned in", "not in the quest log"})
+LOG_STATE_REFUSALS = frozenset(
+    {"already turned in", "not in the quest log", "already in the quest log"}
+)
 
 # The world's own words for a spawn that is not there (classquest.SPAWN_REFUSALS).
 GONE = "no such spawn in the world"
@@ -863,7 +865,7 @@ def refusals(name, tried) -> dict:
     takes and hand-ins the world refused."""
     out: dict = {}
     for a in sorted(tried or (), key=lambda a: -a.age_minutes):
-        if a.name != name or not a.failed:
+        if a.name != name or not a.failed or a.reason in LOG_STATE_REFUSALS:
             continue
         found = _CHAIN_ROW.match(a.command)
         if not found:
