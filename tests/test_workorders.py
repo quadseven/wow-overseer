@@ -561,10 +561,7 @@ class BridgeWiringTest(unittest.TestCase):
             asyncio.run(bridge.Bridge._guild_share_once(_Self()))
         self.assertEqual(written, [[gift]])
         self.assertTrue(
-            any(
-                "work order plan failed" in r.getMessage()
-                for r in seen.records
-            )
+            any("work order plan failed" in r.getMessage() for r in seen.records)
         )
 
 
