@@ -230,6 +230,9 @@ CRAFTED_CRAB_CAKES = "requires crafted Crab Cakes (item 2683); questers cannot c
 FORGOTTEN_HEIRLOOM = (
     "The Forgotten Heirloom (quest 64) requires an item no spawned creature drops"
 )
+SOLOMONS_LAW = (
+    "Solomon's Law (quest 91) requires creatures with no spawns in Redridge Mountains"
+)
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
 NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
@@ -1280,6 +1283,8 @@ def _broken_reason(
         return CRAFTED_CRAB_CAKES
     if quest.id == 64 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return FORGOTTEN_HEIRLOOM
+    if quest.id == 91 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
+        return SOLOMONS_LAW
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that
