@@ -843,6 +843,24 @@ class Broken(unittest.TestCase):
             "requires crafted Crab Cakes (item 2683); questers cannot cook",
         )
 
+    def test_fargodeep_mine_ledger_explains_unsupported_exploration_credit(self):
+        quest = classquest.Quest(62, "The Fargodeep Mine", 0, 1, 0, 0, 0, 0, 0)
+        facts = questers.Facts(zone=12, level=7, ender_npcs=True)
+
+        reason = questers._broken_reason(
+            quest,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertEqual(
+            reason,
+            "requires exploring Fargodeep Mine; questers cannot earn exploration credit",
+        )
+
     def test_objectives_that_move_never_stall(self):
         p, _ = self._play(
             mirra(quest_log={1: 3}), 240, progress=lambda minute: {1: minute // 60}
@@ -942,6 +960,44 @@ class Broken(unittest.TestCase):
         # Should have a specific reason, not just STALLED_UNSOURCED
         self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
         self.assertIn("Forgotten Heirloom", p.broken[0].reason)
+
+    def test_quest_91_solomons_law_has_specific_stall_reason(self):
+        # Quest 91 "Solomon's Law" in Redridge Mountains (level 23) requires
+        # killing creatures that have no spawns in the world database. The quest
+        # has kills but no fields (no spawns of the required creatures), so it
+        # would be STALLED_UNSOURCED. We add a specific reason explaining why.
+        solomons = quest(91, REDRIDGE, 23, kill=444, count=10, title="Solomon's Law")
+        cat = world(
+            extra_quests=[solomons],
+            extra_givers=[
+                giver(91, "start", 1091, 191, 0, 0),
+                giver(91, "end", 1091, 191, 0, 0),
+            ],
+            # No spawns of creature 444 -> no fields for this quest
+        )
+        member = mirra(
+            level=23,
+            zone_id=REDRIDGE,
+            quest_log={91: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({30, 31}),
+            quest_progress={91: 0},
+            quest_objectives={91: {444: 0}},
+        )
+        clock = questers.Clock()
+        # First pass - quest is not yet stalled
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        # Advance clock in PLAY_GAP_SECONDS increments until stall
+        # Each call advances at most PLAY_GAP_SECONDS (10 min = 600 sec)
+        # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        # After 2 hours of play - quest should be stalled with specific reason
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 91)
+        # Should have a specific reason, not just STALLED_UNSOURCED
+        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("Solomon's Law", p.broken[0].reason)
 
     def test_a_quest_of_another_zone_it_is_not_working_does_not_stall(self):
         p, _ = self._play(mirra(quest_log={20: 3}), 240)
