@@ -19,6 +19,7 @@ from test_questers import ended, giver, started
 
 WESTFALL, TIRISFAL, DEATHKNELL = 40, 85, 154
 ASHENVALE, STONETALON, DESOLACE, LOCH_MODAN, WETLANDS = 331, 406, 405, 38, 11
+REDRIDGE = 44
 ALLIANCE, HORDE = 1101, 690
 DWARF, NIGHT_ELF, GNOME, TAUREN, ORC, HUMAN = 3, 4, 7, 6, 2, 1
 WARSONG_OUTRIDERS = 889
@@ -62,12 +63,12 @@ def catalogue(rows, links=()):
     return questers.catalogue(rows, givers, [], [], starts, ends, links)
 
 
-def member(name, race, level, zone, **kw):
+def member(name, race, level, zone, class_id=1, **kw):
     return questers.Member(
         name=name,
         level=level,
         race=race,
-        class_id=1,
+        class_id=class_id,
         map_id=1,
         x=0.0,
         y=0.0,
@@ -378,6 +379,88 @@ class TheBridgeHandsTheQuesterItsRoom(unittest.TestCase):
             )
             cat = bridge._quester_catalogue()
         self.assertEqual(cat.facts[1082].before, ((1083, 1084),))
+
+
+class Quest120MessengerToStormwind(unittest.TestCase):
+    """Quest 120's world minimum is above its displayed quest level."""
+
+    def test_level_14_refusal_explains_the_world_minimum(self):
+        # The QUESTS_SQL row exposes QuestLevel as `level` and MinLevel as
+        # `min_level`; the worldserver enforces MinLevel when accepting.
+        cat = catalogue(
+            [row(120, "Messenger to Stormwind", REDRIDGE, 14, 15, ALLIANCE)]
+        )
+        level_14 = member("Quester", HUMAN, 14, REDRIDGE)
+        level_15 = member("Quester", HUMAN, 15, REDRIDGE)
+
+        self.assertNotIn(120, questers.in_reach(cat, level_14, REDRIDGE))
+        self.assertIn(120, questers.in_reach(cat, level_15, REDRIDGE))
+        reason = questers._giver_failure(
+            cat,
+            level_14,
+            120,
+            gone=frozenset(),
+            refused={
+                ("take", 120): (
+                    3,
+                    "not eligible (level, race, class, prerequisite or exclusive group)",
+                )
+            },
+        )
+        self.assertEqual(
+            "the quest giver would not give it: not eligible "
+            "(level, race, class, prerequisite or exclusive group) "
+            "(world MinLevel 15 exceeds displayed QuestLevel 14)",
+            reason,
+        )
+
+    def test_the_ledger_row_stores_the_explained_reason(self):
+        # The quester's take pass finds the refusals and the bridge writes the
+        # broken quest into the ledger (BROKEN_SQL): the explanation must reach
+        # the reason column, not only the pure seam above.
+        cat = catalogue(
+            [row(120, "Messenger to Stormwind", REDRIDGE, 14, 15, ALLIANCE)]
+        )
+        quester = member("Durga", HUMAN, 15, REDRIDGE)
+        words = "not eligible (level, race, class, prerequisite or exclusive group)"
+        tried = [
+            questers.Attempt(
+                "Durga", "take quest:120", "refused", reason=words, age_minutes=n
+            )
+            for n in range(questers.FAILS_BEFORE_BROKEN)
+        ]
+        _takes, never_held = questers._takes(cat, quester, set(), frozenset(), tried)
+        self.assertEqual([120], [b.quest for b in never_held])
+
+        executed = []
+
+        class Cursor:
+            def execute(self, sql, args=()):
+                executed.append((sql, args))
+
+        class Conn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def cursor(self):
+                return contextlib.nullcontext(Cursor())
+
+        with mock.patch.object(bridge, "_connect", return_value=Conn()):
+            self.assertTrue(bridge._record_quest_broken(never_held[0]))
+        self.assertEqual([questers.BROKEN_SQL], [sql for sql, _args in executed])
+        self.assertEqual(
+            (
+                120,
+                False,
+                "the quest giver would not give it: " + words + " "
+                "(world MinLevel 15 exceeds displayed QuestLevel 14)",
+                "Durga",
+            ),
+            executed[0][1],
+        )
 
 
 if __name__ == "__main__":
