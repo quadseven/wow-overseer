@@ -409,6 +409,7 @@ class StallWorld(FakeWorld):
         self.held_left = None
         self.hold_said = {}
         self.silent_seconds = None
+        self.dungeonquest_held = set()
         self.world = self
 
     def cancel(self, qid):
@@ -423,7 +424,7 @@ class StallWorld(FakeWorld):
         )
 
 
-def _pass(world, dungeonquest_held=()):
+def _pass(world):
     """One queue pass with the stall breaker in front of the step."""
     log = _Log()
     ns = _load(
@@ -481,7 +482,7 @@ def _pass(world, dungeonquest_held=()):
         return False
 
     async def dungeonquest_pass(pending, fams):
-        return dungeonquest_held
+        return world.dungeonquest_held
 
     me = types.SimpleNamespace(
         _activity_holds=lambda key=None: "",
@@ -562,8 +563,9 @@ class TheCampaignDoesNotStartAThirdRun(unittest.TestCase):
     def test_silent_head_is_checked_before_a_dungeon_quest_hold(self):
         w = self.silent_family()
         w.silent_seconds += 1
+        w.dungeonquest_held = {w.queue[0]["family"]}
 
-        lines = _pass(w, {w.queue[0]["family"]})
+        lines = _pass(w)
 
         self.assertEqual("cancelled", w.queue[0]["status"], lines)
         self.assertEqual({jobs.DEFAULT}, self.zug_jobs(w))
@@ -571,6 +573,17 @@ class TheCampaignDoesNotStartAThirdRun(unittest.TestCase):
         self.assertEqual(
             [("Zug", stall.DECISION, "gnomeregan")], [p[1:4] for p in held_reads]
         )
+
+    def test_silent_head_is_left_on_the_first_pass_at_the_bound(self):
+        w = self.silent_family()
+        w.silent_seconds = 2 * 60 * 60
+
+        lines = _pass(w)
+
+        self.assertEqual("cancelled", w.queue[0]["status"], lines)
+        self.assertEqual(w.queue[0]["family"], w.records[0][0])
+        self.assertEqual(w.queue[0]["id"], w.records[0][4])
+        self.assertEqual({jobs.DEFAULT}, self.zug_jobs(w))
 
     def test_silence_needs_no_run_row_only_the_active_head(self):
         # No ledger row and no run timeline at all: the family never reached a
