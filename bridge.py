@@ -21491,8 +21491,6 @@ class Bridge(discord.Client):
     async def _campaign_queue_family_once(self, key: str, rows: list,
                                           fams: dict, held: set) -> None:
         """Apply one family's queue step, leaving other families independent."""
-        if key in held:
-            return
         fam = fams.get(key)
         if fam is None:
             log.warning("queue: %s has queued dungeons and no enabled "
@@ -21530,6 +21528,8 @@ class Bridge(discord.Client):
             return
         holds = getattr(self, "_queue_holds", None)
         if holds is not None and await holds(key, rows, fam):
+            return
+        if key in held:
             return
         move = campaignqueue.step(rows, fam["leader"])
         if not move.writes:
