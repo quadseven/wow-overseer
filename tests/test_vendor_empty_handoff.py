@@ -41,6 +41,7 @@ def settle(sellable, outstanding=0, at_counter=True):
         "_fetch_family_intents": lambda: {},
         "_fetch_vendor_position": lambda name: (0, 0, 0, 0),
         "_fetch_positions": lambda names: {name: position for name in names},
+        "_fetch_vendor_wait_seconds": lambda names: 0,
         "_release_trade_errand": lambda *args: released.append(args) or 1,
         "_VENDOR_SELLABLE": sellable,
         "log": types.SimpleNamespace(info=quiet, warning=quiet, debug=quiet),

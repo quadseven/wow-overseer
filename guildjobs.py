@@ -4832,8 +4832,13 @@ def class_asking(m, book, hunts=None, now=0.0, recent=(), asks=()) -> tuple:
         left, count, yeses = class_ask_streak(m.name, h.quest, asks)
         if left:
             why = class_road_refusal(m.name, h.quest, asks)
+            helpers_why = (
+                "" if why else class_helpers_road_refusal(m.name, h.quest, asks)
+            )
             if why:
                 yields.append(_road_yield(m, h, left, why))
+            elif helpers_why:
+                yields.append(_helpers_road_yield(m, h, left, helpers_why))
             else:
                 yields.append(_streak_yield(m, h, left, count, yeses))
             continue
@@ -4940,6 +4945,17 @@ def _road_yield(m, move, left, why) -> tuple:
     return (m.name, move.quest, "road", why), line
 
 
+def _helpers_road_yield(m, move, left, why) -> tuple:
+    """(key, line) for a quest whose last parties stopped because no helper
+    could reach the objective either (class_helpers_road_refusal)."""
+    line = (
+        "class ask: %s stops asking for %s: the helpers who came could not "
+        "reach the objective either (%s), which no other helper in reach "
+        "can change; it levels for %d minute(s)" % (m.name, move.title, why, left)
+    )
+    return (m.name, move.quest, "helpers-road", why), line
+
+
 def _streak_yield(m, move, left, count, yeses) -> tuple:
     line = (
         "class ask: %s stops asking for %s after %d asks that did not get it done "
@@ -4976,6 +4992,13 @@ def _streak_yield(m, move, left, count, yeses) -> tuple:
 # another identical party is not a useful next step while the member can level.
 CLASS_ASK_STREAK_MAX = 4
 CLASS_PARTY_TIMEOUT_STREAK_MAX = 3
+# Asks in a row that stopped because no helper met the asker, the named
+# helper's walk refused on a lasting refusal (helpers_road_refusal), before
+# the member yields as it does for its own refused road (#1480). One such
+# ask may draw another helper; by the second the call has gone to the
+# server too (a stopped ask escalates at once), so both pools have been
+# refused by the same road.
+HELPERS_ROAD_STREAK = 2
 CLASS_ASK_STREAK_WINDOW_MINUTES = 12 * 60
 _ASK_RAN = "ran"
 _ASK_LIVE = frozenset({"open", "filled"})
@@ -4996,6 +5019,10 @@ class QuestAsk:
     # The module's lasting refusal of the asker's OWN meeting walk, when its
     # party stopped on one (asker_road_refusal), else "".
     road_why: str = ""
+    # The module's lasting refusal of a HELPER's meeting walk, when the ask
+    # stopped because no helper met the asker on one
+    # (helpers_road_refusal), else "".
+    helpers_road_why: str = ""
 
 
 # AN ASKER WHOSE OWN WAY TO THE OBJECTIVE IS REFUSED FOR GOOD IS NOT ASKED FOR
@@ -5028,6 +5055,60 @@ def asker_road_refusal(reason, asker) -> str:
     return ""
 
 
+# A MEETING NO HELPER COULD REACH IS THE SAME ROAD, ONE REDRAW LATER (#1480).
+# From 2026-10-26 to 2026-11-02 a rogue asked the guild 17 times for Klaven's
+# Tower and its stuck finding was seen again 6 times. Two of the runs stopped
+# with "no helper met": the helper who came (Flintt, then Lugg, four days
+# apart) did not reach the spawn because "the road to the spawn crosses
+# ground far above its level", the lasting refusal that holds until the
+# member has levelled. The asker's own road starts the stall hold at once
+# (#1345), but a helper's road never did: it counted only toward the
+# four-ask streak, so a run of two or three such asks never yielded at all,
+# and the member asked again into the same road. One such ask may still draw
+# another helper, whose road may be open. By the second ask in a row the
+# call has gone to the server too (a stopped ask escalates at once,
+# classask), and both pools have been refused by the same road to the same
+# objective: no helper in reach can change it, so the member levels, which
+# is what opens the road, exactly as for its own refused road.
+def helpers_road_refusal(reason, asker) -> str:
+    """The lasting refusal of a helper's meeting walk named in an ask's
+    reason column when no helper met the asker ("stopped: the meeting
+    failed: no helper met <asker> at <spot>: <helper> did not reach <spot>
+    (<why>)"), else "". The why is read through the column's truncation
+    (_lasting_why_named): with a real spot name the stored words stop
+    inside it. The asker's own refusal, a short one (a stall, a death) or
+    a passing one (a fight, a flight, a far walk wall) is not one."""
+    head = classask.STOPPED + "the meeting failed: no helper met %s at " % asker
+    text = str(reason or "")
+    if not asker or not text.startswith(head):
+        return ""
+    reach = text.find(" did not reach ", len(head))
+    if reach < 0:
+        return ""
+    return _lasting_why_named(text[reach:])
+
+
+def _lasting_why_named(text) -> str:
+    """The lasting walk refusal (classquest.SPAWN_REFUSALS that are not
+    SPAWN_SHORT_REFUSALS) named after the first " (" in `text`, else "".
+    The reason column holds classask.REASON_CHARS characters, so the
+    stored words may stop inside the refusal: what is left names it when
+    it is a long-enough head of exactly one refusal's words and of no
+    other refusal's, short or lasting."""
+    _head, sep, tail = text.partition(" (")
+    if not sep:
+        return ""
+    tail = tail.split(")", 1)[0]
+    if len(tail) < 12:
+        return ""
+    named = [why for why in classquest.SPAWN_REFUSALS if why.startswith(tail)]
+    if len(named) != 1:
+        return ""
+    why = named[0]
+    lasting = classquest.SPAWN_REFUSALS - classquest.SPAWN_SHORT_REFUSALS
+    return why if why in lasting else ""
+
+
 def quest_asks_from_rows(rows) -> tuple:
     """QuestAsk rows from the job's ask read; a row whose target is not a
     quest's is left out. `failed` is an ask whose party went and failed."""
@@ -5048,6 +5129,9 @@ def quest_asks_from_rows(rows) -> tuple:
                     classask.FAILED + "party timed out"
                 ),
                 road_why=asker_road_refusal(row.get("reason"), row.get("asker")),
+                helpers_road_why=helpers_road_refusal(
+                    row.get("reason"), row.get("asker")
+                ),
             )
         )
     return tuple(out)
@@ -5057,10 +5141,12 @@ def class_ask_streak(name, quest, asks) -> tuple:
     """(minutes left of the hold, asks in the run, yeses they drew) for one
     member's quest: the closed asks for it since the newest whose party got
     it done, newest first, inside CLASS_ASK_STREAK_WINDOW_MINUTES. The hold is 0 while the run
-    is short of CLASS_ASK_STREAK_MAX without three consecutive party timeouts
-    and its newest ask did not stop on the asker's own lasting walk refusal
-    (asker_road_refusal), or CLASS_STALL_HOLD_MINUTES have passed since its
-    newest ask."""
+    is short of CLASS_ASK_STREAK_MAX without three consecutive party timeouts,
+    its newest ask did not stop on the asker's own lasting walk refusal
+    (asker_road_refusal) and its newest HELPERS_ROAD_STREAK asks did not all
+    stop because no helper met the asker on a lasting walk refusal
+    (helpers_road_refusal), or CLASS_STALL_HOLD_MINUTES have passed since
+    its newest ask."""
     rows = sorted(
         (
             a
@@ -5085,7 +5171,15 @@ def class_ask_streak(name, quest, asks) -> tuple:
         a.timed_out for a in run[:CLASS_PARTY_TIMEOUT_STREAK_MAX]
     )
     road_refused = bool(run) and bool(run[0].road_why)
-    if len(run) < CLASS_ASK_STREAK_MAX and not repeated_timeouts and not road_refused:
+    helpers_road_refused = len(run) >= HELPERS_ROAD_STREAK and all(
+        a.helpers_road_why for a in run[:HELPERS_ROAD_STREAK]
+    )
+    if (
+        len(run) < CLASS_ASK_STREAK_MAX
+        and not repeated_timeouts
+        and not road_refused
+        and not helpers_road_refused
+    ):
         return 0, len(run), yeses
     left = max(0, CLASS_STALL_HOLD_MINUTES - int(run[0].age_minutes))
     return left, len(run), yeses
@@ -5109,6 +5203,32 @@ def class_road_refusal(name, quest, asks) -> str:
     if not closed or (closed[0].state == _ASK_RAN and not closed[0].failed):
         return ""
     return closed[0].road_why
+
+
+def class_helpers_road_refusal(name, quest, asks) -> str:
+    """The lasting refusal of a helper's meeting walk that stopped the
+    member's newest closed asks for `quest` when no helper met it on
+    HELPERS_ROAD_STREAK asks in a row inside
+    CLASS_ASK_STREAK_WINDOW_MINUTES (helpers_road_refusal), else ""."""
+    closed = sorted(
+        (
+            a
+            for a in asks or ()
+            if a.asker == name
+            and a.quest == int(quest)
+            and a.state not in _ASK_LIVE
+            and int(a.age_minutes) < CLASS_ASK_STREAK_WINDOW_MINUTES
+        ),
+        key=lambda a: int(a.age_minutes),
+    )
+    if len(closed) < HELPERS_ROAD_STREAK:
+        return ""
+    if closed[0].state == _ASK_RAN and not closed[0].failed:
+        return ""
+    newest = closed[:HELPERS_ROAD_STREAK]
+    if not all(a.helpers_road_why for a in newest):
+        return ""
+    return newest[0].helpers_road_why
 
 
 def class_ask_held(name, asks) -> frozenset:

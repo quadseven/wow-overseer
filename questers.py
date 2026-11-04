@@ -233,6 +233,8 @@ FORGOTTEN_HEIRLOOM = (
 SOLOMONS_LAW = (
     "Solomon's Law (quest 91) requires creatures with no spawns in Redridge Mountains"
 )
+A_BAYING_OF_GNOLLS = "A Baying of Gnolls (quest 124) requires creatures with no spawns in Redridge Mountains"
+THE_LOST_TOOLS = "The Lost Tools (quest 125) requires items from creatures with no spawns in Redridge Mountains"
 BLACKROCK_BOUNTY = "Blackrock Bounty (quest 128) requires creatures with no spawns in Redridge Mountains"
 FARGODEEP_EXPLORATION = (
     "requires exploring Fargodeep Mine; questers cannot earn exploration credit"
@@ -243,7 +245,10 @@ NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
 # The kind of spawn a gameobject ender's walk names (`walk-to-spawn gameobject:`).
 OBJECT_KIND = "gameobject"
 SOURCE_MISSING = "an objective's creature or item is never found in the world"
-STALLED_UNSOURCED = STALLED + ", and no spawned creature is or drops what it asks for"
+STALLED_UNSOURCED = (
+    STALLED
+    + ", no huntable source supplies what it asks for, and questers cannot buy items from vendors"
+)
 REFUSED_TAKE = "the quest giver would not give it"
 REFUSED_TURN_IN = "the turn-in NPC would not take it"
 # The module refused the hand-in and marked it never retryable (#19 in
@@ -515,6 +520,7 @@ class Facts:
 
     zone: int
     level: int
+    quest_level: int = 0
     classes: int = 0
     # quest_template_addon.PrevQuestID as stored: positive, rewarded first;
     # negative, held first.
@@ -610,6 +616,7 @@ def catalogue(
         facts[qid] = Facts(
             zone=zones[qid],
             level=max(_int(r.get("level")), quest.min_level, 1),
+            quest_level=_int(r.get("level")),
             classes=_int(r.get("classes")),
             prev=_int(r.get("prev_signed")),
             giver_named=qid in named,
@@ -1289,6 +1296,10 @@ def _broken_reason(
         return FORGOTTEN_HEIRLOOM
     if quest.id == 91 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return SOLOMONS_LAW
+    if quest.id == 124 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
+        return A_BAYING_OF_GNOLLS
+    if quest.id == 125 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
+        return THE_LOST_TOOLS
     if quest.id == 128 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return BLACKROCK_BOUNTY
     if quest.id == 62 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
@@ -1326,6 +1337,16 @@ def _giver_failure(cat: Catalogue, member, qid, gone, refused):
         return UNSUPPORTED_OBJECTIVE
     count, words = refused.get(("take", qid), (0, ""))
     if count >= FAILS_BEFORE_BROKEN:
+        if (
+            facts.quest_level
+            and facts.level > facts.quest_level
+            and "not eligible" in words
+        ):
+            words = "%s (world MinLevel %d exceeds displayed QuestLevel %d)" % (
+                words,
+                facts.level,
+                facts.quest_level,
+            )
         return _refused_words(REFUSED_TAKE, words)
     if any(kind != "creature" for kind, _entry in quest.other_starts):
         return ""

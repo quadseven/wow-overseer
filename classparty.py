@@ -42,7 +42,11 @@ THE FLOW, one task per party (the bridge's _run_class_party):
             a helper (HELPER) takes that helper's yes back, bars the helper from
             this ask and ends the attempt: the ask's next pass picks another.
             A refusal that names the leader (LEADER) waits LEADER_WAIT_SECONDS
-            and writes the row again. UNSUPPORTED (a worldserver before the
+            and writes the row again. One that says the leader is in combat
+            (leader_busy) is transient, like the meeting's held walks: it is
+            waited out inside the attempt without counting a failure, at most
+            LEADER_BUSY_RETRIES times, and only then does the attempt count
+            its one failure (#1222). UNSUPPORTED (a worldserver before the
             verbs, or one with Overseer.PartyWalk.Enable off) keeps today's
             behaviour: the ask runs out unformed and nothing is asked again for
             guildroute.WALK_UNSUPPORTED_SECONDS. After MAX_FAILURES failures of
@@ -121,6 +125,15 @@ MEET_READ_SECONDS = 10.0
 UP_FOLLOW_SECONDS = 90.0
 # Seconds to wait before writing party-up again after the leader was refused.
 LEADER_WAIT_SECONDS = 60.0
+# A party-up refusal that says the leader is in combat is waited out inside
+# the attempt, without counting a failure of the ask, this many times before
+# the attempt counts its one failure: the leader stands at a hostile
+# objective (the meeting walked it there), a fight there outlasts the old
+# three-refusal budget of about two minutes, and each refusal spending a
+# failure gave the ask up under a party that only had to wait for the fight
+# to end (#1222). A retry here is only a row write, unlike a meeting re-walk,
+# so the bound sits above MEET_HELD_RETRIES.
+LEADER_BUSY_RETRIES = 5
 # A meeting walk refused because another verb holds the walker is not a lost
 # member: the hold is transient (classquest backs the same refusal off
 # HELD_BACKOFF_MINUTES), so the meeting walks again after this wait instead of
@@ -255,6 +268,14 @@ def judge_up(leader, status, detail, result) -> UpAnswer:
     if reason.startswith(_LEADER_REFUSALS):
         return UpAnswer(LEADER, said, why=reason)
     return UpAnswer(BAD, said, why=reason)
+
+
+def leader_busy(verdict) -> bool:
+    """True when a party-up refusal says the leader is in combat: the state
+    clears on its own once the fight ends, so the refusal is transient,
+    unlike the other leader refusals (already in a party, the realm's party
+    cap, the core refusing), which waiting does not change."""
+    return verdict.state == LEADER and "in combat" in verdict.why
 
 
 def invite_stopped(verdict) -> str:

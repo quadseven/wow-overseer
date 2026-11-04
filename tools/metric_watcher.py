@@ -11,7 +11,10 @@ import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from tools import realm_state_audit
+if __package__:
+    from tools import realm_state_audit
+else:
+    import realm_state_audit
 
 TARGET_SEATS = 40
 MAX_LEVEL = 60
