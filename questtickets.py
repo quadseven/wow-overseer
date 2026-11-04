@@ -209,6 +209,59 @@ def title(quest: int, info) -> str:
     )
 
 
+def _world_rows(info) -> list[str]:
+    """Render the catalogue's objective and source rows for a ticket."""
+    lines = ["## World rows", ""]
+    if info is None:
+        return lines + ["World rows are not in the catalogue.", ""]
+    lines.extend(
+        [
+            "- QuestLevel: %s; MinLevel: %s"
+            % (
+                getattr(info, "level", "not measured"),
+                getattr(info, "min_level", "not measured"),
+            ),
+        ]
+    )
+    if getattr(info, "follows", 0):
+        lines.append("- Previous quest: %d" % info.follows)
+    for item in getattr(info, "items", ()):
+        label = item["name"] or "item"
+        source = []
+        if item["droppers"]:
+            source.append("creature entries " + ", ".join(map(str, item["droppers"])))
+        if item["rewards"]:
+            source.append("rewarded by quests " + ", ".join(map(str, item["rewards"])))
+        if item["vendors"]:
+            source.append(
+                "sold by vendor entries " + ", ".join(map(str, item["vendors"]))
+            )
+        lines.append(
+            "- Required item %d x%d (%s): %s"
+            % (
+                item["id"],
+                item["count"],
+                label,
+                "; ".join(source) or "no source in the world rows",
+            )
+        )
+    for objective in getattr(info, "objectives", ()):
+        label = objective["name"] or "objective"
+        lines.append(
+            "- Required creature/object %d x%d (%s): %d spawn(s) in zone, %d total"
+            % (
+                objective["entry"],
+                objective["count"],
+                label,
+                objective["zone_count"],
+                objective["total_count"],
+            )
+        )
+    if not getattr(info, "items", ()) and not getattr(info, "objectives", ()):
+        lines.append("- No required item or creature/object rows.")
+    return lines + [""]
+
+
 def body(quest: int, info, rows, objectives, site: str) -> str:
     """The issue body. `site` is the site's public base; without one the
     Quests page is named by its route, since no host may be guessed."""
@@ -230,6 +283,7 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
         % (site.rstrip("/") + "/" if site else "", quest),
         "",
     ]
+    lines.extend(_world_rows(info))
     for row in rows:
         name = str(row.get("character_name") or "")
         lines += [
