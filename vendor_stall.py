@@ -18,6 +18,11 @@ MAX_BAG_WAIT_SECONDS = 2 * 60 * 60.0
 # while its sellers are held far away (the range-refused stacks of #1261). The
 # same 30 minutes the sustained vendor wait takes a trip after
 # (bag_pressure.VENDOR_WAIT_TRIP_SECONDS), so the wait never outlasts the trip.
+# The yield reads two clocks against that bound: the leader's own wait, and
+# the sellers' vendor wait (the fresh no-vendor step age the bridge reads for
+# the trip). The leader's step age restarts whenever its intent changes,
+# which it does while the sellers stay held, so that clock alone can run
+# forever under a wait that passed the bound long before.
 MAX_IDLE_COUNTER_SECONDS = 30 * 60.0
 
 HOLD = "hold"
@@ -221,6 +226,7 @@ def decide(
     bag_wait_seconds: float = 0.0,
     max_bag_wait_seconds: float = MAX_BAG_WAIT_SECONDS,
     max_idle_counter_seconds: float = MAX_IDLE_COUNTER_SECONDS,
+    vendor_wait_seconds: float = 0.0,
 ) -> Decision:
     """Decide whether a stalled vendor aim may be handed back.
 
@@ -229,6 +235,11 @@ def decide(
     and no position progress has occurred for the bounded interval. Unknown
     queue or movement state always holds. The caller must still release with
     its exact ``travel_npc = 'vendor'`` compare-and-swap.
+
+    At the counter the question is different: the aim ends when the visit
+    has been idle for the bounded interval, read on the leader's own wait
+    or on the sellers' vendor wait, whichever reaches it. A sale still
+    outstanding holds the visit on either clock.
     """
     if not pressure:
         return Decision(HOLD, "no bag pressure")
@@ -237,8 +248,9 @@ def decide(
             YIELD, "bag room not freed within the bounded wait; yielding the walk"
         )
     if at_counter:
-        if sales_outstanding == 0 and bag_wait_seconds >= max(
-            0.0, float(max_idle_counter_seconds)
+        idle_limit = max(0.0, float(max_idle_counter_seconds))
+        if sales_outstanding == 0 and (
+            bag_wait_seconds >= idle_limit or vendor_wait_seconds >= idle_limit
         ):
             return Decision(
                 YIELD,

@@ -1,10 +1,9 @@
-"""The image ships the modules the bridge imports, and no dead module.
+"""The image ships its runtime entry points and their imports, and no dead module.
 
-The Dockerfile's own comment states the image ships only what bridge.py
-imports. `death_dismiss.py` used to violate that: it was copied into the
-image but imported by nothing, so it shipped no behavior. This test pins
-the invariant: every module bridge.py imports is present in the image, and
-a module nothing imports is not shipped.
+The Dockerfile copies runtime modules explicitly. The bridge's imports must
+be present, and the scheduled collector must start from those copied files.
+`death_dismiss.py` used to be copied without any runtime caller; that dead
+module stays outside the image.
 
 The bridge is headless - it owns no pixels, no client and no screen
 capture - so a death-dialog dismissal (which needs a detector measuring a
@@ -15,9 +14,14 @@ That decision lives with the screen-owning client, not here.
 from __future__ import annotations
 
 import ast
+import os
 import pathlib
 import re
+import shlex
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
 
 THIRD_PARTY = {"discord", "pymysql", "apiv2"}
@@ -54,8 +58,34 @@ def bridge_modules() -> set[str]:
     return {n for n in names if n not in stdlib and n not in THIRD_PARTY}
 
 
+def _copy_sources_for_destination(dockerfile: str, destination: str) -> list[str]:
+    """Return source paths from COPY instructions targeting one directory."""
+    sources: list[str] = []
+    instruction: list[str] = []
+    for line in dockerfile.splitlines():
+        stripped = line.strip()
+        if not instruction:
+            if not stripped.upper().startswith("COPY "):
+                continue
+            instruction.append(stripped)
+        else:
+            instruction.append(stripped)
+
+        continued = instruction[-1].endswith("\\")
+        if continued:
+            instruction[-1] = instruction[-1][:-1].rstrip()
+            continue
+
+        parts = shlex.split(" ".join(instruction))
+        instruction.clear()
+        if len(parts) < 3 or parts[-1] != destination:
+            continue
+        sources.extend(part for part in parts[1:-1] if not part.startswith("--"))
+    return sources
+
+
 # Shipped today but reached by no import from the image's entry points
-# (bridge.py, map_server.py, the apiv2 endpoints). Each is used only by
+# (bridge.py, map_server.py, the apiv2 endpoints and the metric collector). Each is used only by
 # tools/ or by tests, or is not wired yet. The list may only shrink: wire a
 # module in or stop copying it, then delete its name here.
 KNOWN_UNREACHED = {
@@ -94,9 +124,10 @@ def _source_for(name: str) -> pathlib.Path | None:
 def reached_modules() -> set[str]:
     """Module names reachable by imports from the image's entry points.
 
-    apiv2 endpoints are loaded by the package, so each is a root too.
+    apiv2 endpoints and the scheduled metric collector are roots too.
     """
     roots = [pathlib.Path("bridge.py"), pathlib.Path("map_server.py")]
+    roots.append(pathlib.Path("tools/metric_watcher.py"))
     roots += sorted(pathlib.Path("apiv2").glob("*.py"))
     seen: set[pathlib.Path] = set()
     todo = list(roots)
@@ -113,6 +144,70 @@ def reached_modules() -> set[str]:
 
 
 class ImageModuleWiring(unittest.TestCase):
+    def test_copy_sources_include_dockerfile_continuations(self):
+        dockerfile = (
+            "COPY tools/first.py \\\n    tools/sub/second.py \\\n    /app/tools/\n"
+        )
+        self.assertEqual(
+            _copy_sources_for_destination(dockerfile, "/app/tools/"),
+            ["tools/first.py", "tools/sub/second.py"],
+        )
+
+    def test_nested_copy_source_uses_build_context_path_and_destination_basename(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            context = root / "context"
+            source = context / "tools" / "sub" / "audit.py"
+            source.parent.mkdir(parents=True)
+            source.write_text("value = 1\n", encoding="utf-8")
+            target = root / "image" / "tools"
+            target.mkdir(parents=True)
+
+            sources = _copy_sources_for_destination(
+                "COPY tools/sub/audit.py /app/tools/\n", "/app/tools/"
+            )
+            self.assertEqual(sources, ["tools/sub/audit.py"])
+            # Docker copies each file into a directory destination by basename.
+            for name in sources:
+                shutil.copyfile(context / name, target / pathlib.Path(name).name)
+
+            self.assertEqual(
+                (target / "audit.py").read_text(encoding="utf-8"), "value = 1\n"
+            )
+
+            missing = _copy_sources_for_destination(
+                "COPY tools/sub/missing.py /app/tools/\n", "/app/tools/"
+            )
+            with self.assertRaises(FileNotFoundError):
+                shutil.copyfile(
+                    context / missing[0], target / pathlib.Path(missing[0]).name
+                )
+
+    def test_scheduled_metric_watcher_starts_from_image_files(self):
+        dockerfile = pathlib.Path("Dockerfile").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            target = root / "tools"
+            target.mkdir()
+            # Source paths are build-context-relative; the destination is a directory.
+            for source in _copy_sources_for_destination(dockerfile, "/app/tools/"):
+                shutil.copyfile(source, target / pathlib.Path(source).name)
+            env = dict(os.environ)
+            env.pop("PYTHONPATH", None)
+            for args in (["tools/metric_watcher.py"], ["-m", "tools.metric_watcher"]):
+                with self.subTest(args=args):
+                    result = subprocess.run(
+                        [sys.executable, "-u", *args, "--help"],
+                        cwd=root,
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("--api-root", result.stdout)
+
     def test_every_module_bridge_imports_is_in_the_image(self):
         image = dockerfile_modules()
         missing = sorted(bridge_modules() - image)

@@ -4110,6 +4110,10 @@ def level_step(m, world, recent, cap, loop=None):
     Never a roster family member (levelroute walks those), never at the level
     cap, never while offline, fighting or dead, never on a way that has killed
     it (deadly_hub_note), and at most once per COOLDOWN_MINUTES["level"]. The
+    one exception to the roster refusal is a death loop's escape (#1620): a
+    roster member standing in the zone it keeps dying in is walked out by
+    this pass, because levelroute only puts that zone last, never out, and
+    the loop's hearth rung may not be able to start. The
     walk is `walk-to-spawn creature:` naming the flight master's spawn, at the
     pass's cap. When the hub lies across the water, from map 530 or from a
     continent, the step is its side's boat or zeppelin (level_cross_step) or
@@ -4124,7 +4128,10 @@ def level_step(m, world, recent, cap, loop=None):
     # nobody, and Cave's level 14-15 priests stayed in their starting zones.
     if world is None or not m.online or m.in_combat:
         return None, "", ""
-    if m.name in world.roster or m.level >= guildlevel.LEVEL_CAP:
+    if m.level >= guildlevel.LEVEL_CAP:
+        return None, "", ""
+    # The roster refusal, with the death loop's escape ahead of it (#1620).
+    if m.name in world.roster and not _in_loop_zone(m, loop):
         return None, "", ""
     bands = world.bands.get(guildlevel.side_of(m.race), {})
     # A ZONE IS LEFT WHEN ITS QUESTS RUN OUT (2026-10-10): its open quests for

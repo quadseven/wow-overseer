@@ -47,7 +47,9 @@ class ShipManifestTest(unittest.TestCase):
 
     def test_every_copied_module_exists_on_disk(self):
         copied_py = {f for f in _copied_files() if f.endswith(".py")}
-        phantom = sorted(copied_py - set(os.listdir(HERE)))
+        phantom = sorted(
+            f for f in copied_py if not os.path.isfile(os.path.join(HERE, f))
+        )
         self.assertEqual(
             phantom, [], "Dockerfile COPYs files that do not exist: %s" % phantom
         )

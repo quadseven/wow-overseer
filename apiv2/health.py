@@ -41,6 +41,15 @@ THE KINDS:
               Its "most often because" is the run row's ended_reason, which
               for a stall is the cleanup; scripts/diagnose_finding.py prints
               why each run stopped, from the archived worldserver log.
+  unreleased  a member the roster reads as an online corpse (life "dead",
+              not a released spirit) whose newest death on record is older
+              than RELEASE_SECONDS: the module never released it, so no
+              ghost recovery can start. One finding per member, keyed by
+              its name, since the death itself. A ghost is a recovery
+              already running and an offline member's save is not a corpse
+              standing in the world, so neither is flagged; a member with
+              no death on record has no proven start and is not flagged
+              either.
 
 Read-only, like everything under /api/v2. An empty list means "looked and
 found nothing"; a read that fails is a 503 from the map server, never an empty
@@ -60,6 +69,7 @@ import dungeonpace
 import dungeonstall
 import guildfund
 import guildrun
+import levelroute
 from apiv2 import _scope, members, quests
 
 STUCK_HOURS = 2.0
@@ -73,6 +83,9 @@ TITLE_MAX = 90
 EVIDENCE_MAX = 400
 LOOP_RUNS = 3
 LOOP_HOURS = 24
+# The bound a death is released within: a member still read as a corpse
+# this long after its death was never released (#1093).
+RELEASE_SECONDS = 5 * 60
 
 
 # The marks the game's and the bridge's text use that ASCII has a plain twin for.
@@ -123,6 +136,25 @@ BANK_MOVED_SQL = (
     "JOIN guild g ON g.guildid = e.guildid WHERE e.TabId = 100 "
     "AND g.name IN ({holes}) GROUP BY g.name"
 )
+
+# _DEATH_SQL is one member's read; _DEATHS is the template of the
+# statement for any number of them (realmread.Memory matches it by its
+# fields). Each branch is one row by its key (character_name = %s, newest
+# first, LIMIT 1), the bounded shape for a newest-per-member read: a
+# MAX(id) subquery over the whole table is the read that grew (#795).
+_DEATH_SQL = (
+    "(SELECT character_name AS name, zone, killer_name AS killer, "
+    "UNIX_TIMESTAMP(created_at) AS at FROM overseer_death "
+    "WHERE character_name = %s ORDER BY created_at DESC, id DESC LIMIT 1)"
+)
+_DEATHS = _DEATH_SQL + "{more}"
+
+
+def deaths_sql(n: int) -> str:
+    """One _DEATH_SQL per roster member, as one statement."""
+    more = "".join(" UNION ALL " + _DEATH_SQL for _ in range(n - 1))
+    return _DEATHS.format(more=more)
+
 
 # The family campaigns' own runs (overseer_dungeon_run has no family column:
 # a run is the family's whose leader is one of its names), newest first.
@@ -393,6 +425,63 @@ def bank_findings(banks: list, moved: dict, now_at: int) -> list:
     return out
 
 
+def unreleased_findings(roster: dict, deaths: list, now_at: int) -> list:
+    """One finding per member the roster reads as an online corpse whose
+    newest death on record is older than RELEASE_SECONDS. _DEATH_SQL
+    reads each member's newest death; of `deaths` rows the newest per
+    member counts, since while a member stands dead its newest recorded
+    death is the one it has not come back from (a death it already
+    recovered from is never its newest while it stands dead again). If
+    the death it now stands in went unrecorded, the start and the facts
+    shown are the last death on record, and the title still holds: it is
+    dead, and no release has followed.
+
+    Nothing else on this list can see the member: the stuck reader leaves
+    dead members to the module, and the death loop needs five deaths in an
+    hour. So an unreleased corpse stood invisible until someone read the
+    roster by hand (#1093)."""
+    newest = {}
+    for r in deaths or ():
+        name = str(r.get("name") or "")
+        if name and (
+            name not in newest
+            or int(r.get("at") or 0) > int(newest[name].get("at") or 0)
+        ):
+            newest[name] = r
+    out = []
+    for m in roster.get("members") or ():
+        if m.get("life") != "dead" or not m.get("online"):
+            continue
+        name = str(m.get("name") or "")
+        row = newest.get(name)
+        at = int(row.get("at") or 0) if row else 0
+        if not at or now_at - at < RELEASE_SECONDS:
+            continue
+        said = "Its newest death on record is at %s" % iso(at)
+        zone = int(row.get("zone") or 0)
+        if zone:
+            said += " in %s" % levelroute.zone_name(zone)
+        killer = str(row.get("killer") or "").strip()
+        if killer:
+            said += ", to %s" % killer
+        said += (
+            ". It still reads as a corpse: the module has not released it, "
+            "and no ghost recovery can start until it does."
+        )
+        out.append(
+            finding(
+                "unreleased:%s" % name,
+                "%s is dead and has not released" % name,
+                "deaths",
+                1,
+                hours_since(at, now_at),
+                said,
+                at,
+            )
+        )
+    return out
+
+
 def streak(rows: list) -> list:
     """The ended runs of `rows` (one family's, oldest first) from the newest
     back to the first that cleared or ran another map, oldest first. A run
@@ -511,6 +600,8 @@ def build(
     place=lambda k: k,
     streaks=None,
     events=(),
+    roster=None,
+    deaths=(),
 ):
     """Everything read, the payload out. Pure. Highest impact first."""
     found = (
@@ -519,6 +610,7 @@ def build(
         + family_loop_findings(streaks or {}, events, now_at)
         + quester_findings(questers, invites, now_at)
         + bank_findings(banks, moved, now_at)
+        + unreleased_findings(roster or {}, deaths, now_at)
     )
     found.sort(key=lambda f: (-f["impact"], f["key"]))
     return {"checked_at": iso(now_at), "findings": found}
@@ -582,7 +674,16 @@ def health(_query: dict, ctx) -> tuple[int, dict]:
     invites = rd.rows(INVITES_SQL, (REFUSAL_HOURS,), what="overseer_command")
     streaks, events = family_reads(rd, ctx.families.families())
     _, stuck = members.stuck(_query, ctx)
+    _, roster = members.roster(_query, ctx)
     _, questers = quests.questers(_query, ctx)
+    names = sorted(
+        {str(m.get("name")) for m in roster.get("members") or () if m.get("name")}
+    )
+    deaths = (
+        rd.rows(deaths_sql(len(names)), tuple(names), what="overseer_death")
+        if names
+        else []
+    )
     payload = build(
         now_at,
         stuck,
@@ -594,6 +695,8 @@ def health(_query: dict, ctx) -> tuple[int, dict]:
         place,
         streaks,
         events,
+        roster=roster,
+        deaths=[dict(r) for r in deaths],
     )
     return 200, payload
 

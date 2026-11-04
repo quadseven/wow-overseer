@@ -12581,6 +12581,13 @@ class Bridge(discord.Client):
             )
             if family_stall.current is not None:
                 self._vendor_family_movement[leader] = family_stall.current
+            # THE SELLERS' WAIT, READ FOR THE COUNTER YIELD (#1261). The
+            # leader's own step age restarts whenever its intent changes,
+            # which it does while the sellers stay held, so the counter
+            # yield in vendor_stall also reads the wait the wait trip
+            # reads: the fresh no-vendor step age of the family's sellers.
+            vendor_wait_seconds = await asyncio.to_thread(
+                _fetch_vendor_wait_seconds, names)
             decision = vendor_stall.decide(
                 pressure=pressure,
                 at_counter=bool(leader_town.vendor),
@@ -12593,6 +12600,7 @@ class Bridge(discord.Client):
                 family_progressed=family_stall.progressed,
                 family_split_seconds=family_stall.split_seconds,
                 bag_wait_seconds=bag_wait_seconds,
+                vendor_wait_seconds=vendor_wait_seconds,
             )
             recovered = await self._apply_vendor_stall_decision(
                 leader, decision, stall, bag_wait_seconds, free_slots,
@@ -17820,7 +17828,9 @@ class Bridge(discord.Client):
 
     async def _job_bag_steps(self, members, recent, busy, cap) -> dict:
         wanted = [m for m in members
-                  if m.name not in busy and guildbags.eligible(m, recent)]
+                  if m.name not in busy
+                  and (guildbags.eligible(m, recent)
+                       or guildbags.equip_eligible(m, recent))]
         chosen, self._bag_read_offset = guildjobs.rotate_reads(
             [m.name for m in wanted], getattr(self, "_bag_read_offset", 0),
             GUILD_SUPPLY_READS_PER_PASS)
