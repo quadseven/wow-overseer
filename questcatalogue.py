@@ -41,7 +41,7 @@ PURE apart from `load`, which is handed the read and keeps its answer.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import classic
 import levelroute
@@ -57,11 +57,59 @@ FACTIONS = (HORDE, ALLIANCE, BOTH)
 QUESTS_SQL = (
     "SELECT t.ID AS quest, t.LogTitle AS title, t.QuestLevel AS level, "
     "t.MinLevel AS min_level, t.QuestSortID AS sort, t.AllowableRaces AS races, "
+    + "".join(
+        "t.RequiredItemId%d AS item%d, t.RequiredItemCount%d AS item_count%d, "
+        % (i, i, i, i)
+        for i in range(1, 7)
+    )
+    + "".join(
+        "t.RequiredNpcOrGo%d AS objective%d, t.RequiredNpcOrGoCount%d AS objective_count%d, "
+        % (i, i, i, i)
+        for i in range(1, 5)
+    )
+    + ""
     "COALESCE(a.AllowableClasses, 0) AS classes, "
     "COALESCE(a.PrevQuestID, 0) AS follows "
     "FROM acore_world.quest_template t "
     "LEFT JOIN acore_world.quest_template_addon a ON a.ID = t.ID "
     "WHERE t.LogTitle NOT LIKE '<%%' AND t.LogTitle NOT LIKE 'NOT A QUEST%%'"
+)
+
+ITEM_NAMES_SQL = (
+    "SELECT entry, name FROM acore_world.item_template WHERE entry IN ({ids})"
+)
+CREATURE_NAMES_SQL = (
+    "SELECT entry, name FROM acore_world.creature_template WHERE entry IN ({ids})"
+)
+OBJECT_NAMES_SQL = (
+    "SELECT entry, name FROM acore_world.gameobject_template WHERE entry IN ({ids})"
+)
+DROP_SQL = (
+    "SELECT l.Item AS item, c.entry AS entry FROM acore_world.creature_loot_template l "
+    "JOIN acore_world.creature_template c ON c.lootid = l.Entry WHERE l.Item IN ({ids}) "
+    "UNION SELECT r.Item, c.entry FROM acore_world.creature_loot_template l "
+    "JOIN acore_world.reference_loot_template r ON r.Entry = l.Reference "
+    "JOIN acore_world.creature_template c ON c.lootid = l.Entry "
+    "WHERE l.Reference <> 0 AND r.Item IN ({ids})"
+)
+REWARD_SQL = (
+    "SELECT ID AS quest, RewardItem AS item FROM acore_world.quest_template "
+    "WHERE RewardItem IN ({ids}) UNION ALL "
+    "SELECT ID, RewardItem2 FROM acore_world.quest_template WHERE RewardItem2 IN ({ids}) "
+    "UNION ALL SELECT ID, RewardItem3 FROM acore_world.quest_template "
+    "WHERE RewardItem3 IN ({ids}) UNION ALL "
+    "SELECT ID, RewardItem4 FROM acore_world.quest_template WHERE RewardItem4 IN ({ids})"
+)
+VENDOR_SQL = (
+    "SELECT DISTINCT item, entry FROM acore_world.npc_vendor WHERE item IN ({ids})"
+)
+SPAWN_COUNTS_SQL = (
+    "SELECT id AS entry, zoneId AS zone, COUNT(*) AS n FROM acore_world.creature "
+    "WHERE id IN ({ids}) GROUP BY id, zoneId"
+)
+OBJECT_COUNTS_SQL = (
+    "SELECT id AS entry, zoneId AS zone, COUNT(*) AS n FROM acore_world.gameobject "
+    "WHERE id IN ({ids}) GROUP BY id, zoneId"
 )
 
 # Every map a quest's starters and enders stand on. creature.id, not id1, as
@@ -94,6 +142,8 @@ class Quest:
     races: int  # AllowableRaces; 0 is every race
     classes: int  # AllowableClasses; 0 is every class
     follows: int  # PrevQuestID; 0 is none
+    items: tuple = ()
+    objectives: tuple = ()
 
     def view(self) -> dict:
         return {
@@ -248,6 +298,102 @@ def load(read) -> tuple:
     quest_rows = read(QUESTS_SQL) or []
     giver_rows = read(GIVERS_SQL) or []
     found = build(quest_rows, giver_rows)
+    if found:
+        item_ids = sorted(
+            {int(r.get("item%d" % i) or 0) for r in quest_rows for i in range(1, 7)}
+            - {0}
+        )
+        objective_ids = sorted(
+            {
+                abs(int(r.get("objective%d" % i) or 0))
+                for r in quest_rows
+                for i in range(1, 5)
+            }
+            - {0}
+        )
+
+        def rows_for(sql, ids):
+            return read(sql.format(ids=", ".join(map(str, ids)))) if ids else []
+
+        item_names = {
+            int(r["entry"]): str(r.get("name") or "")
+            for r in rows_for(ITEM_NAMES_SQL, item_ids)
+        }
+        creature_names = {
+            int(r["entry"]): str(r.get("name") or "")
+            for r in rows_for(CREATURE_NAMES_SQL, objective_ids)
+        }
+        object_names = {
+            int(r["entry"]): str(r.get("name") or "")
+            for r in rows_for(OBJECT_NAMES_SQL, objective_ids)
+        }
+        drops = rows_for(DROP_SQL, item_ids)
+        rewards = rows_for(REWARD_SQL, item_ids)
+        vendors = rows_for(VENDOR_SQL, item_ids)
+        spawns = rows_for(SPAWN_COUNTS_SQL, objective_ids)
+        object_spawns = rows_for(OBJECT_COUNTS_SQL, objective_ids)
+        by_id = {int(r["quest"]): r for r in quest_rows}
+
+        def evidence(rows, key):
+            grouped = {}
+            for row in rows:
+                grouped.setdefault(int(row[key]), set()).add(
+                    int(row["entry"] if key == "item" else row["quest"])
+                )
+            return grouped
+
+        drop_by_item = evidence(drops, "item")
+        reward_by_item = {}
+        for row in rewards:
+            reward_by_item.setdefault(int(row["item"]), set()).add(int(row["quest"]))
+        vendor_by_item = evidence(vendors, "item")
+        spawn_by_entry = {}
+        for kind, rows in (("creature", spawns), ("object", object_spawns)):
+            for row in rows:
+                spawn_by_entry.setdefault((int(row["entry"]), kind), []).append(row)
+        enriched = []
+        for quest in found:
+            source = by_id[quest.id]
+            items, objectives = [], []
+            for i in range(1, 7):
+                item = int(source.get("item%d" % i) or 0)
+                if item:
+                    items.append(
+                        {
+                            "id": item,
+                            "count": int(source.get("item_count%d" % i) or 0),
+                            "name": item_names.get(item, ""),
+                            "droppers": sorted(drop_by_item.get(item, ())),
+                            "rewards": sorted(reward_by_item.get(item, ())),
+                            "vendors": sorted(vendor_by_item.get(item, ())),
+                        }
+                    )
+            for i in range(1, 5):
+                signed_entry = int(source.get("objective%d" % i) or 0)
+                entry = abs(signed_entry)
+                if entry:
+                    kind = "object" if signed_entry < 0 else "creature"
+                    counts = spawn_by_entry.get((entry, kind), ())
+                    objectives.append(
+                        {
+                            "entry": entry,
+                            "count": int(source.get("objective_count%d" % i) or 0),
+                            "kind": kind,
+                            "name": object_names.get(entry, "")
+                            if kind == "object"
+                            else creature_names.get(entry, ""),
+                            "zone_count": sum(
+                                int(r["n"])
+                                for r in counts
+                                if int(r["zone"]) == quest.zone
+                            ),
+                            "total_count": sum(int(r["n"]) for r in counts),
+                        }
+                    )
+            enriched.append(
+                replace(quest, items=tuple(items), objectives=tuple(objectives))
+            )
+        found = tuple(enriched)
     if quest_rows and giver_rows:
         _CATALOGUE = found
     return found
