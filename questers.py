@@ -233,6 +233,7 @@ FORGOTTEN_HEIRLOOM = (
 SOLOMONS_LAW = (
     "Solomon's Law (quest 91) requires creatures with no spawns in Redridge Mountains"
 )
+BLACKROCK_BOUNTY = "Blackrock Bounty (quest 128) requires creatures with no spawns in Redridge Mountains"
 FARGODEEP_EXPLORATION = (
     "requires exploring Fargodeep Mine; questers cannot earn exploration credit"
 )
@@ -1288,6 +1289,8 @@ def _broken_reason(
         return FORGOTTEN_HEIRLOOM
     if quest.id == 91 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return SOLOMONS_LAW
+    if quest.id == 128 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
+        return BLACKROCK_BOUNTY
     if quest.id == 62 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return FARGODEEP_EXPLORATION
     missing = _ender_missing(quest, facts, gone, object_gone)
