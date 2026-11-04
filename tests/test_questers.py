@@ -7,7 +7,7 @@ import classquest
 import guildjobs
 import questers
 
-ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE = 12, 9, 40, 44
+ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE, DUSKWOOD = 12, 9, 40, 44, 10
 HUMAN, ORC = 1, 2
 PRIEST, WARRIOR = 5, 1
 ALLIANCE_MASK, HORDE_MASK = 1101, 690
@@ -998,6 +998,46 @@ class Broken(unittest.TestCase):
         # Should have a specific reason, not just STALLED_UNSOURCED
         self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
         self.assertIn("Solomon's Law", p.broken[0].reason)
+
+    def test_quest_101_totem_of_infliction_has_specific_stall_reason(self):
+        # Quest 101 "The Totem of Infliction" in Duskwood (level 25) requires
+        # killing creatures that have no spawns in the world database. The quest
+        # has kills but no fields (no spawns of the required creatures), so it
+        # would be STALLED_UNSOURCED. We add a specific reason explaining why.
+        totem = quest(
+            101, DUSKWOOD, 25, kill=1234, count=8, title="The Totem of Infliction"
+        )
+        cat = world(
+            extra_quests=[totem],
+            extra_givers=[
+                giver(101, "start", 1101, 101, 0, 0),
+                giver(101, "end", 1101, 101, 0, 0),
+            ],
+            # No spawns of creature 1234 -> no fields for this quest
+        )
+        member = mirra(
+            level=25,
+            zone_id=DUSKWOOD,
+            quest_log={101: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({30, 31}),
+            quest_progress={101: 0},
+            quest_objectives={101: {1234: 0}},
+        )
+        clock = questers.Clock()
+        # First pass - quest is not yet stalled
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        # Advance clock in PLAY_GAP_SECONDS increments until stall
+        # Each call advances at most PLAY_GAP_SECONDS (10 min = 600 sec)
+        # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        # After 2 hours of play - quest should be stalled with specific reason
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 101)
+        # Should have a specific reason, not just STALLED_UNSOURCED
+        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("Totem of Infliction", p.broken[0].reason)
 
     def test_a_quest_of_another_zone_it_is_not_working_does_not_stall(self):
         p, _ = self._play(mirra(quest_log={20: 3}), 240)
