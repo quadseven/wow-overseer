@@ -24,8 +24,10 @@ returns rows as dicts: the bridge's pymysql DictCursor, and the test suite's
 SQLite cursor. Nothing here crafts, gathers or writes a worldserver row.
 
 WHERE IT RUNS. bridge._ensure_order_store creates the table at start-up. The
-guild pass does not read or write it yet: reading the open orders into its
-plan, saving the assignments and taking reports is the next step.
+raid supply pass requests its fire-potion shortfall, and the guild pass reads
+open orders, plans them with standing cooldown orders and saves assignments.
+`report` records completion only for the stored assignee; no bridge path calls
+it yet.
 """
 
 from __future__ import annotations
