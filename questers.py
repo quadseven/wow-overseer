@@ -1676,11 +1676,19 @@ def _hunt(cat: Catalogue, member, skip, left):
                 for entry, count in kills.items()
                 if int(progress.get(entry, 0)) < count
             }
+        # The per-creature counters name only kill objectives, so a quest
+        # that asks for an item (Pie for Billy, 86: four of an item a boar
+        # drops, and no creature to kill) has no kill entry to hunt by, and
+        # filtering its fields to kill entries left it with nowhere to hunt
+        # at all: its objectives never moved and it stalled as broken. A
+        # required item's droppers are hunt targets too, met or not by any
+        # counter the log names.
+        targets = set(kills) | {entry for _item, entry in quest.drops}
         spot = _nearest(
             member,
             classquest.within_level(
                 member,
-                tuple(s for s in classquest.solo_fields(quest) if s.entry in kills),
+                tuple(s for s in classquest.solo_fields(quest) if s.entry in targets),
             ),
             left,
         )
