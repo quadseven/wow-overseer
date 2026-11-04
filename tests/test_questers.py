@@ -1181,6 +1181,36 @@ class Broken(unittest.TestCase):
         self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
         self.assertIn("Underbelly Scales", p.broken[0].reason)
 
+    def test_quest_94_a_watchful_eye_has_specific_stall_reason(self):
+        # Quest 94 "A Watchful Eye" in Redridge Mountains (level 21) requires
+        # killing creatures with no spawns in the world database.
+        watchful = quest(94, REDRIDGE, 21, kill=504, count=10, title="A Watchful Eye")
+        cat = world(
+            extra_quests=[watchful],
+            extra_givers=[
+                giver(94, "start", 1094, 194, 0, 0),
+                giver(94, "end", 1094, 194, 0, 0),
+            ],
+            # No spawns of creature 504 -> no fields for this quest
+        )
+        member = mirra(
+            level=21,
+            zone_id=REDRIDGE,
+            quest_log={94: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({30, 31}),
+            quest_progress={94: 0},
+            quest_objectives={94: {504: 0}},
+        )
+        clock = questers.Clock()
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 94)
+        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("A Watchful Eye", p.broken[0].reason)
+
     def test_a_quest_of_another_zone_it_is_not_working_does_not_stall(self):
         p, _ = self._play(mirra(quest_log={20: 3}), 240)
         self.assertEqual(p.broken, ())

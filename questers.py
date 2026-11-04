@@ -240,6 +240,7 @@ FARGODEEP_EXPLORATION = (
     "requires exploring Fargodeep Mine; questers cannot earn exploration credit"
 )
 UNDERBELLY_SCALES = "Underbelly Scales (quest 122) requires Black Dragonspawn with no spawns in Redridge Mountains"
+A_WATCHFUL_EYE = "A Watchful Eye (quest 94) requires creatures with no spawns in Redridge Mountains"
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
 NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
@@ -1307,6 +1308,8 @@ def _broken_reason(
         return FARGODEEP_EXPLORATION
     if quest.id == 122 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return UNDERBELLY_SCALES
+    if quest.id == 94 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
+        return A_WATCHFUL_EYE
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that
