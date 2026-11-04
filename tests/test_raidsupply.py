@@ -1082,6 +1082,7 @@ class TheBridgePassRuns(unittest.TestCase):
                 log.info("%s: %s", prefix, n) for n in notes
             ],
             "_fetch_raid_supply_facts": lambda m: extra,
+            "_request_fire_potion_order": lambda lines: None,
             "_insert_jev_judgment": lambda j: world["judgments"].append(j),
             "_fetch_teams": lambda names: {n: "alliance" for n in names},
             "_fetch_auction_listings": lambda entries, house: list(listings),

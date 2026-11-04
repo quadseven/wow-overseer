@@ -34,11 +34,10 @@ ones are needed elsewhere), then name, so a pass is deterministic.
 
 WHERE IT RUNS. bridge.py's guild surplus pass already reads the guild roster
 (name, level, online, character_skills) for guildshare; it hands the same
-roster to `members_from_roster` and plans STANDING_ORDERS, and logs the
-headline, each taker's line and each note. That is all it does with the plan:
-it writes no row and sends no order, so nothing in the world changes. The
-realm's cooldown times are not read yet, so every holder counts as ready
-until that read exists.
+roster to `members_from_roster` and plans stored orders beside
+STANDING_ORDERS. Assignments for stored orders are saved, then the headline,
+each taker's line and each note are logged. The realm's cooldown times are not
+read yet, so every holder counts as ready until that read exists.
 
 ASKING AND KEEPING (#1487). `consumable` and `farming` build a requested
 order and refuse one with no item, no quantity or no zone. workorderstore.py
