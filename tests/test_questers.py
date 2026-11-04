@@ -1099,6 +1099,46 @@ class Broken(unittest.TestCase):
         self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
         self.assertIn("The Lost Tools", p.broken[0].reason)
 
+    def test_quest_128_blackrock_bounty_has_specific_stall_reason(self):
+        # Quest 128 "Blackrock Bounty" in Redridge Mountains (level 25) requires
+        # killing creatures that have no spawns in the world database. The quest
+        # has kills but no fields (no spawns of the required creatures), so it
+        # would be STALLED_UNSOURCED. We add a specific reason explaining why.
+        blackrock = quest(
+            128, REDRIDGE, 25, kill=500, count=8, title="Blackrock Bounty"
+        )
+        cat = world(
+            extra_quests=[blackrock],
+            extra_givers=[
+                giver(128, "start", 1128, 128, 0, 0),
+                giver(128, "end", 1128, 128, 0, 0),
+            ],
+            # No spawns of creature 500 -> no fields for this quest
+        )
+        member = mirra(
+            level=25,
+            zone_id=REDRIDGE,
+            quest_log={128: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({30, 31}),
+            quest_progress={128: 0},
+            quest_objectives={128: {500: 0}},
+        )
+        clock = questers.Clock()
+        # First pass - quest is not yet stalled
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        # Advance clock in PLAY_GAP_SECONDS increments until stall
+        # Each call advances at most PLAY_GAP_SECONDS (10 min = 600 sec)
+        # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        # After 2 hours of play - quest should be stalled with specific reason
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 128)
+        # Should have a specific reason, not just STALLED_UNSOURCED
+        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("Blackrock Bounty", p.broken[0].reason)
+
     def test_quest_122_underbelly_scales_has_specific_stall_reason(self):
         # Quest 122 "Underbelly Scales" in Redridge Mountains (level 18) requires
         # collecting 5 Underbelly Scales (item 1283) from Black Dragonspawn (414).
