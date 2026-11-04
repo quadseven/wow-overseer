@@ -53,6 +53,12 @@ export function legacy(hash) {
   return fn ? fn(rest) : "#/now";
 }
 
+// A percent-escape that is not UTF-8 (a mangled link) is kept as typed
+// rather than thrown: a throw here lands in route() with nothing drawn.
+function decode(s) {
+  try { return decodeURIComponent(s); } catch (e) { return s; }
+}
+
 // "#/members?stuck=1&lvl=10-20" -> {parts: ["members"], query: {...}}
 export function parse(hash) {
   const raw = String(hash || "").replace(/^#\/?/, "");
@@ -63,14 +69,12 @@ export function parse(hash) {
     raw.slice(q + 1).split("&").forEach((kv) => {
       if (!kv) return;
       const i = kv.indexOf("=");
-      const k = decodeURIComponent(i < 0 ? kv : kv.slice(0, i));
-      const v = i < 0 ? "1" : decodeURIComponent(kv.slice(i + 1).replace(/\+/g, " "));
+      const k = decode(i < 0 ? kv : kv.slice(0, i));
+      const v = i < 0 ? "1" : decode(kv.slice(i + 1).replace(/\+/g, " "));
       query[k] = v;
     });
   }
-  const parts = pathPart.split("/").filter(Boolean).map((p) => {
-    try { return decodeURIComponent(p); } catch (e) { return p; }
-  });
+  const parts = pathPart.split("/").filter(Boolean).map(decode);
   return { parts, query };
 }
 

@@ -619,6 +619,19 @@ console.log(JSON.stringify([p, M.build(p.parts, p.query), M.build(["m", "Some On
         self.assertEqual(got[1], "#/members?stuck=1&lvl=10-20&q=Gr%C3%BCg")
         self.assertEqual(got[2], "#/m/Some%20One")
 
+    def test_a_mangled_escape_in_a_link_is_kept_not_thrown(self):
+        # decodeURIComponent throws on an escape that is not UTF-8; a throw
+        # from parse() lands in route() with nothing drawn, so the query
+        # keeps the raw text the way the path parts already did.
+        got = node_module(
+            "router.js",
+            """
+const p = M.parse("#/members/Gr%E0g?q=%E0&k%E0=1&ok=Gr%C3%BCg");
+console.log(JSON.stringify(p));""",
+        )
+        self.assertEqual(got["parts"], ["members", "Gr%E0g"])
+        self.assertEqual(got["query"], {"q": "%E0", "k%E0": "1", "ok": "Grüg"})
+
     def test_a_swipe_walks_the_tab_row(self):
         got = node_module(
             "router.js",

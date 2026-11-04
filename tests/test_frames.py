@@ -124,3 +124,6 @@ class TheEndpointIsWired(unittest.TestCase):
         a table becomes unqueryable."""
         self.assertIn("_FRAMES: dict = {}", self.server)
         self.assertIn("_FRAMES_LOCK", self.server)
+        # The name check admits any 2-12 letters, so the "one per
+        # character" bound needs a ceiling of its own (test_frame_store_bound).
+        self.assertIn("MAX_FRAMES = 4 * stream.MAX_CHANNELS", self.server)
