@@ -1240,7 +1240,7 @@ def _ask_llm(prompt: str, system: str = "") -> str:
             # the key), and budget enough tokens that a backend which thinks
             # anyway still reaches the answer. parse_decision takes the LAST
             # JSON object for the same reason.
-            {"role": "system", "content": "Answer with the JSON object only. No reasoning, no preamble."},
+            {"role": "system", "content": system or "Answer with the JSON object only. No reasoning, no preamble."},
             {"role": "user", "content": prompt},
         ],
         "max_tokens": 1500,
@@ -7789,6 +7789,22 @@ class Bridge(discord.Client):
             asyncio.create_task(coro())
             for coro in self._pass_coroutines(headless=False)
         }
+        # Held tasks are never collected, so asyncio never logs "Task
+        # exception was never retrieved" for them either: a pass whose
+        # exception escapes its own loop would end for the life of the
+        # process with nothing in the log. The callback says so.
+        for task in self._loops:
+            task.add_done_callback(self._pass_done)
+
+    def _pass_done(self, task) -> None:
+        """A pass that died says so; nothing restarts it before a redeploy."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            coro = getattr(task, "get_coro", lambda: None)()
+            log.error("pass %s died and will not run again until restart",
+                      getattr(coro, "__qualname__", "?"), exc_info=exc)
 
     def _log_waiting_for_pass(self, message: str) -> None:
         if message not in self._waiting_for_passes:
@@ -8315,7 +8331,12 @@ class Bridge(discord.Client):
                 # reply is None for a spoken line, which the chat relay is
                 # already carrying back; popping it is the whole point.
                 if channel is not None and reply is not None:
-                    await channel.send(reply.text)
+                    try:
+                        await channel.send(reply.text)
+                    except Exception:
+                        # A channel gone or a line Discord refuses must
+                        # not end outcome reporting for every later order.
+                        log.exception("outcome reply for row %s not sent", row_id)
 
     async def _obey_evan_in_game(self, rows: list) -> None:
         """Act on an order the operator typed in game rather than in Discord.
@@ -14413,7 +14434,7 @@ class Bridge(discord.Client):
         skills = await asyncio.to_thread(_fetch_recipe_skills, names)
         roster = await asyncio.to_thread(_fetch_guild_roster, names)
         people = _clearance_people(names, skills, roster)
-        kept = _clearance_kept(rows, names, skills)
+        kept = await asyncio.to_thread(_clearance_kept, rows, names, skills)
         market: dict = {}
         if auction_open and leader:
             teams = await asyncio.to_thread(_fetch_teams, [leader])
@@ -17169,6 +17190,7 @@ class Bridge(discord.Client):
         focus = await self._raid_supply_focus(
             guild_facts, recent, busy, cap, raidsupply.reserve(withdrawn, spent))
         plan = raidsupply.plan_guild(guild_facts, recent, busy, focus=focus, cap=cap)
+        _request_fire_potion_order(plan.lines)
         log.info("%s; focus %s", raidsupply.summary(plan), focus or "none")
         _log_capped("raid supply", plan.notes)
         now = time.monotonic()
@@ -19405,8 +19427,8 @@ class Bridge(discord.Client):
         if state.why == townerrand.BAG_PRESSURE_WHY:
             free_slots = await asyncio.to_thread(_fetch_free_slots, names)
             campaign_waiting = await asyncio.to_thread(_campaign_waiting, names)
-            bag_pressure_needed = _bag_errand_needed(names, free_slots,
-                                                     campaign_waiting)
+            bag_pressure_needed = await asyncio.to_thread(
+                _bag_errand_needed, names, free_slots, campaign_waiting)
             if bag_pressure_needed and not in_run:
                 await self._aim_stranded_bag_pressure_members(
                     names, leader, positions, free_slots, in_run,
@@ -19549,8 +19571,8 @@ class Bridge(discord.Client):
         stalled = _queue_stall_floor(names)
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
         campaign_waiting = await asyncio.to_thread(_campaign_waiting, names)
-        bag_pressure_needed = _bag_errand_needed(names, free_slots,
-                                                 campaign_waiting)
+        bag_pressure_needed = await asyncio.to_thread(
+            _bag_errand_needed, names, free_slots, campaign_waiting)
         # Looked up: the adapter tests load this method in isolation.
         released = globals().get("_released_floor_members", lambda names: ())
         floor_sale = bag_pressure_needed and bool(released(names))
@@ -25282,19 +25304,39 @@ _GUILD_SKILLS_SQL = (
 
 
 def _log_work_orders(roster: list) -> None:
-    """Log who takes each standing guild work order this pass (#486).
-
-    Log only: workorders.py decides, and nothing here writes a row or sends
-    an order, so the world is unchanged by it.
-    """
-    plan = workorders.plan(
-        workorders.STANDING_ORDERS, workorders.members_from_roster(roster)
-    )
+    """Plan standing and stored work orders and persist stored assignments."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            orders = workorderstore.open_orders(cur)
+            plan = workorders.plan(
+                [*orders, *workorders.STANDING_ORDERS],
+                workorders.members_from_roster(roster),
+            )
+            workorderstore.save_plan(cur, plan)
+    except (pymysql.err.MySQLError, OSError):
+        # Store errors only: a planner defect (a malformed roster skill, say)
+        # surfaces to the guild pass, which logs it as a plan failure.
+        log.exception("workorders: planning or store read/write failed; retrying next pass")
+        return
     log.info("workorders: %s", workorders.headline(plan))
     for line in workorders.lines(plan):
         log.info("workorders: %s", line)
     for note in plan.notes:
         log.info("workorders: %s", note)
+
+
+def _request_fire_potion_order(lines) -> None:
+    """Keep the raid's Greater Fire Protection Potion shortfall in the store."""
+    order = raidsupply.fire_potion_order(lines)
+    if order is None:
+        return
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            workorderstore.request(cur, order)
+    except (pymysql.err.MySQLError, OSError):
+        # Store errors only: a defect in building or requesting the order
+        # surfaces to the raid supply pass instead of reading as an outage.
+        log.exception("workorders: fire potion shortfall could not be stored")
 
 
 def _fetch_guild_roster(names: list) -> list:

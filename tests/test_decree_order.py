@@ -955,7 +955,11 @@ class FakeHandler(map_server.Handler):
     def __init__(self, body=b""):
         self.path = "/api/decree"
         self.rfile = io.BytesIO(body)
-        self.headers = {"Content-Length": str(len(body))} if body else {}
+        self.headers = (
+            {"Content-Length": str(len(body)), "Content-Type": "application/json"}
+            if body
+            else {}
+        )
         self.sent = []
 
     def _send(self, code, ctype, body):
