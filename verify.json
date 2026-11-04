@@ -1,0 +1,3 @@
+{
+  "missing": "towntrip.py:168 - The REAGENT_SPELLS dictionary needs to be populated with Engineering's Weak Flux (entry 2880, name 'Weak Flux', price 100) for Bronze Tube (spell 3938) so it can be bought. Currently REAGENT_SPELLS is empty. Moss Agate should remain out as it has zero npc_vendor rows."
+}
