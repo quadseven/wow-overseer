@@ -26,6 +26,16 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 NOW = datetime.datetime(2026, 9, 5, 12, 0, 0)
 
 
+class TheClockIsAgendas(unittest.TestCase):
+    def test_the_default_now_is_the_same_clock_agenda_stalls_on(self):
+        """agenda.stalled compares a naive DB timestamp with datetime.now();
+        a utcnow() default here disagreed with the agenda banner by the
+        container's UTC offset, and is deprecated since 3.12 besides."""
+        source = (HERE / "partystatus.py").read_text(encoding="utf-8")
+        self.assertNotIn("utcnow", source)
+        self.assertIn("now = now or datetime.now()", source)
+
+
 def _member(name, **kw):
     row = {
         "name": name,

@@ -35,6 +35,9 @@ const CQ_SHOWN = 8;
 const CHAT_SHOWN = 10;
 
 function key(ctx) { return ctx.params.guild; }
+// The slug as a query value: before the realm list arrives, resolve()
+// admits any slug, so one with "&" in it would split the query string.
+function slug(ctx) { return encodeURIComponent(key(ctx)); }
 function gname(ctx) { return guildName(key(ctx)); }
 // The family that plays in this guild, as the realm reports it. The guild
 // read says the family it found too; the view checks the two agree.
@@ -43,19 +46,19 @@ function base(ctx) { return "#/guilds/" + key(ctx); }
 function model(ctx) { return guildModel(peek(P.guild(ctx))); }
 
 const P = {
-  guild: (ctx) => "/api/v2/guild?guild=" + key(ctx),
+  guild: (ctx) => "/api/v2/guild?guild=" + slug(ctx),
   roster: () => "/api/v2/roster",
-  series: (ctx) => "/api/v2/series?guild=" + key(ctx),
+  series: (ctx) => "/api/v2/series?guild=" + slug(ctx),
   runs: () => "/api/guildruns",
   seats: () => "/api/guildseats",
-  ups: (ctx) => "/api/v2/dungeonups?family=" + family(ctx).toLowerCase(),
+  ups: (ctx) => "/api/v2/dungeonups?family=" + encodeURIComponent(family(ctx).toLowerCase()),
   timeline: () => "/api/runtimeline",
-  chronicle: (ctx) => "/api/v2/chronicle?guild=" + key(ctx),
+  chronicle: (ctx) => "/api/v2/chronicle?guild=" + slug(ctx),
   loot: () => "/api/loot",
   recap: () => "/api/recap",
   council: () => "/api/council",
-  chat: (ctx) => "/api/guildchat?guild=" + gname(ctx),
-  achievements: (ctx) => "/api/v2/achievements?guild=" + key(ctx),
+  chat: (ctx) => "/api/guildchat?guild=" + encodeURIComponent(gname(ctx)),
+  achievements: (ctx) => "/api/v2/achievements?guild=" + slug(ctx),
 };
 
 const TAB_READS = {

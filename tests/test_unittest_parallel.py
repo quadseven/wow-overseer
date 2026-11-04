@@ -66,6 +66,17 @@ EMPTY = """
     VALUE = "a test module with no TestCase in it"
 """
 
+# Ends the worker with status 0 before unittest prints its count: an
+# `os._exit` reached from a test, or a `sys.exit` a test patched away.
+QUIET_EXIT = """
+    import os
+    import unittest
+
+    class T(unittest.TestCase):
+        def test_a(self):
+            os._exit(0)
+"""
+
 
 def build_suite(root, modules):
     tests = pathlib.Path(root) / "tests"
@@ -112,6 +123,16 @@ class ParallelRunnerTest(unittest.TestCase):
         self.assertRegex(output, r"(?m)^FAILED in: .*\btest_two\b")
         self.assertIn("FAIL: test_broken (test_two.", output)
         self.assertEqual(parallel_total(output), (5, 3))
+
+    def test_a_worker_that_exits_zero_without_a_count_fails_the_run(self):
+        with tempfile.TemporaryDirectory() as root:
+            tests = build_suite(root, {"test_one": PASSING, "test_quiet": QUIET_EXIT})
+            result = run_parallel(tests)
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertRegex(output, r"(?m)^FAILED in: .*\btest_quiet\b")
+        self.assertIn("no test count in the output", output)
+        self.assertEqual(parallel_total(output), (2, 2))
 
     def test_a_module_with_no_tests_passes(self):
         with tempfile.TemporaryDirectory() as root:
