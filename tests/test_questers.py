@@ -1139,6 +1139,48 @@ class Broken(unittest.TestCase):
         self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
         self.assertIn("Blackrock Bounty", p.broken[0].reason)
 
+    def test_quest_122_underbelly_scales_has_specific_stall_reason(self):
+        # Quest 122 "Underbelly Scales" in Redridge Mountains (level 18) requires
+        # collecting 5 Underbelly Scales (item 1283) from Black Dragonspawn (414).
+        # If there are no spawns of creature 414 in Redridge, the quest has items
+        # but no fields -> STALLED_UNSOURCED. We add a specific reason explaining why.
+        underbelly = quest(
+            122, REDRIDGE, 18, kill=414, count=5, title="Underbelly Scales"
+        )
+        underbelly["item1"] = 1283
+        underbelly["item_count1"] = 5
+        cat = world(
+            extra_quests=[underbelly],
+            extra_givers=[
+                giver(122, "start", 1122, 415, 0, 0),  # Wiley the Black
+                giver(122, "end", 1122, 415, 0, 0),
+            ],
+            # No spawns of creature 414 -> no fields for this quest
+        )
+        member = mirra(
+            level=18,
+            zone_id=REDRIDGE,
+            quest_log={122: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({30, 31}),
+            quest_progress={122: 0},
+            quest_objectives={122: {414: 0}},
+        )
+        clock = questers.Clock()
+        # First pass - quest is not yet stalled
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        # Advance clock in PLAY_GAP_SECONDS increments until stall
+        # Each call advances at most PLAY_GAP_SECONDS (10 min = 600 sec)
+        # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        # After 2 hours of play - quest should be stalled with specific reason
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 122)
+        # Should have a specific reason, not just STALLED_UNSOURCED
+        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("Underbelly Scales", p.broken[0].reason)
+
     def test_a_quest_of_another_zone_it_is_not_working_does_not_stall(self):
         p, _ = self._play(mirra(quest_log={20: 3}), 240)
         self.assertEqual(p.broken, ())
