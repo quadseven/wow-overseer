@@ -562,7 +562,8 @@ class TheCampaignDoesNotStartAThirdRun(unittest.TestCase):
 
     def test_silent_head_is_checked_before_a_dungeon_quest_hold(self):
         w = self.silent_family()
-        w.dungeonquest_held = {"Zug"}
+        w.silent_seconds += 1
+        w.dungeonquest_held = {w.queue[0]["family"]}
 
         lines = _pass(w)
 
