@@ -999,6 +999,46 @@ class Broken(unittest.TestCase):
         self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
         self.assertIn("Solomon's Law", p.broken[0].reason)
 
+    def test_quest_125_the_lost_tools_has_specific_stall_reason(self):
+        # Quest 125 "The Lost Tools" in Redridge Mountains (level 16) requires
+        # items from creatures that have no spawns in Redridge. The quest
+        # has kills/items but no fields (no spawns of the required creatures),
+        # so it would be STALLED_UNSOURCED. We add a specific reason explaining why.
+        lost_tools = quest(
+            125, REDRIDGE, 16, kill=99999, count=6, title="The Lost Tools"
+        )
+        cat = world(
+            extra_quests=[lost_tools],
+            extra_givers=[
+                giver(125, "start", 1125, 1125, 0, 0),
+                giver(125, "end", 1125, 1125, 0, 0),
+            ],
+            # No spawns of creature 99999 -> no fields for this quest
+        )
+        member = mirra(
+            level=16,
+            zone_id=REDRIDGE,
+            quest_log={125: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset(),
+            quest_progress={125: 0},
+            quest_objectives={125: {99999: 0}},
+        )
+        clock = questers.Clock()
+        # First pass - quest is not yet stalled
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        # Advance clock in PLAY_GAP_SECONDS increments until stall
+        # Each call advances at most PLAY_GAP_SECONDS (10 min = 600 sec)
+        # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        # After 2 hours of play - quest should be stalled with specific reason
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 125)
+        # Should have a specific reason, not just STALLED_UNSOURCED
+        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("The Lost Tools", p.broken[0].reason)
+
     def test_a_quest_of_another_zone_it_is_not_working_does_not_stall(self):
         p, _ = self._play(mirra(quest_log={20: 3}), 240)
         self.assertEqual(p.broken, ())
