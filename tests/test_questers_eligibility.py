@@ -414,6 +414,54 @@ class Quest120MessengerToStormwind(unittest.TestCase):
             reason,
         )
 
+    def test_the_ledger_row_stores_the_explained_reason(self):
+        # The quester's take pass finds the refusals and the bridge writes the
+        # broken quest into the ledger (BROKEN_SQL): the explanation must reach
+        # the reason column, not only the pure seam above.
+        cat = catalogue(
+            [row(120, "Messenger to Stormwind", REDRIDGE, 14, 15, ALLIANCE)]
+        )
+        quester = member("Durga", HUMAN, 15, REDRIDGE)
+        words = "not eligible (level, race, class, prerequisite or exclusive group)"
+        tried = [
+            questers.Attempt(
+                "Durga", "take quest:120", "refused", reason=words, age_minutes=n
+            )
+            for n in range(questers.FAILS_BEFORE_BROKEN)
+        ]
+        _takes, never_held = questers._takes(cat, quester, set(), frozenset(), tried)
+        self.assertEqual([120], [b.quest for b in never_held])
+
+        executed = []
+
+        class Cursor:
+            def execute(self, sql, args=()):
+                executed.append((sql, args))
+
+        class Conn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def cursor(self):
+                return contextlib.nullcontext(Cursor())
+
+        with mock.patch.object(bridge, "_connect", return_value=Conn()):
+            self.assertTrue(bridge._record_quest_broken(never_held[0]))
+        self.assertEqual([questers.BROKEN_SQL], [sql for sql, _args in executed])
+        self.assertEqual(
+            (
+                120,
+                False,
+                "the quest giver would not give it: " + words + " "
+                "(world MinLevel 15 exceeds displayed QuestLevel 14)",
+                "Durga",
+            ),
+            executed[0][1],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
