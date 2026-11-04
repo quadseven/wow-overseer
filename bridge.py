@@ -18507,12 +18507,17 @@ class Bridge(discord.Client):
 
         A refusal naming a helper takes that helper's yes back and bars it from
         this ask, and the ask's next pass picks another; one naming the leader
-        waits and asks again; a worldserver before the verbs is not asked again
-        for guildroute.WALK_UNSUPPORTED_SECONDS (today's behaviour: the ask runs
-        out unformed). MAX_FAILURES failures give the ask up."""
+        waits and asks again; one saying the leader is in combat is waited out
+        inside the attempt without counting a failure
+        (classparty.leader_busy), at most classparty.LEADER_BUSY_RETRIES
+        times, before the attempt counts its one failure; a worldserver before
+        the verbs is not asked again for guildroute.WALK_UNSUPPORTED_SECONDS
+        (today's behaviour: the ask runs out unformed). MAX_FAILURES failures
+        give the ask up."""
         board = self._class_board
         row = guildcorps.Row("guild", classparty.up_command(run.helpers), "",
                              classparty.SOURCE)
+        busy_retries = 0
         while True:
             row_id = await asyncio.to_thread(_insert_corps_row, run.leader, row)
             if not row_id:
@@ -18535,6 +18540,24 @@ class Bridge(discord.Client):
                 log.warning("class party: this worldserver does not seat a quest party; "
                             "filled class quest asks run out unformed for %d minutes",
                             int(guildroute.WALK_UNSUPPORTED_SECONDS // 60))
+                return False
+            if classparty.leader_busy(verdict):
+                # THE LEADER IS ONLY FIGHTING (#1222): the meeting walked it
+                # to a hostile objective, and a fight there outlasts the old
+                # three-refusal budget, so counting each refusal as a failure
+                # gave the ask up under a party that only had to wait. Wait
+                # the fight out inside the attempt, like the meeting waits
+                # out a held walk; the attempt counts one failure only when
+                # the busy retries run out.
+                if busy_retries < classparty.LEADER_BUSY_RETRIES:
+                    busy_retries += 1
+                    log.info("class party: %s is fighting; the invite for %s "
+                             "waits and is written again (%d of %d)",
+                             run.leader, run.title, busy_retries,
+                             classparty.LEADER_BUSY_RETRIES)
+                    await asyncio.sleep(classparty.LEADER_WAIT_SECONDS)
+                    continue
+                board.fail(run.ask_id)
                 return False
             board.fail(run.ask_id)
             if verdict.state == classparty.WAITING:
@@ -21468,8 +21491,6 @@ class Bridge(discord.Client):
     async def _campaign_queue_family_once(self, key: str, rows: list,
                                           fams: dict, held: set) -> None:
         """Apply one family's queue step, leaving other families independent."""
-        if key in held:
-            return
         fam = fams.get(key)
         if fam is None:
             log.warning("queue: %s has queued dungeons and no enabled "
@@ -21507,6 +21528,8 @@ class Bridge(discord.Client):
             return
         holds = getattr(self, "_queue_holds", None)
         if holds is not None and await holds(key, rows, fam):
+            return
+        if key in held:
             return
         move = campaignqueue.step(rows, fam["leader"])
         if not move.writes:

@@ -922,6 +922,22 @@ class Broken(unittest.TestCase):
         self._play(member, 125, cat=cat)
         self.assertIn((8, questers.STALLED_UNSOURCED), self.found)
 
+    def test_item_objective_without_huntable_source_explains_vendor_limit(self):
+        item_quest = quest(8, NORTHSHIRE, 2, title="An Item Errand")
+        item_quest.update(item1=1262, item_count1=1)
+        cat = world(
+            extra_quests=[item_quest],
+            extra_givers=[
+                giver(8, "start", 1008, 108, 0, 0),
+                giver(8, "end", 1008, 108, 0, 0),
+            ],
+        )
+
+        self._play(mirra(quest_log={8: questers.STATUS_INCOMPLETE}), 125, cat=cat)
+
+        reason = next(reason for qid, reason in self.found if qid == 8)
+        self.assertIn("questers cannot buy items from vendors", reason)
+
     def test_quest_64_the_forgotten_heirloom_has_specific_stall_reason(self):
         # Quest 64 "The Forgotten Heirloom" in Westfall (level 12) requires an
         # item that no spawned creature drops. The quest has items but no
@@ -998,6 +1014,49 @@ class Broken(unittest.TestCase):
         # Should have a specific reason, not just STALLED_UNSOURCED
         self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
         self.assertIn("Solomon's Law", p.broken[0].reason)
+
+    def test_quest_124_a_baying_of_gnolls_has_specific_stall_reason(self):
+        # Quest 124 "A Baying of Gnolls" in Redridge Mountains (level 20) requires
+        # killing Redridge Gnolls (444) and Redridge Mongrels (445) that have
+        # no spawns in the world database. The quest has kills but no fields
+        # (no spawns of the required creatures), so it would be STALLED_UNSOURCED.
+        # We add a specific reason explaining why.
+        baying = quest(
+            124, REDRIDGE, 20, kill=444, count=15, title="A Baying of Gnolls"
+        )
+        baying["npc2"] = 445
+        baying["npc_count2"] = 15
+        cat = world(
+            extra_quests=[baying],
+            extra_givers=[
+                giver(124, "start", 1124, 191, 0, 0),
+                giver(124, "end", 1124, 191, 0, 0),
+            ],
+            # No spawns of creatures 444, 445 -> no fields for this quest
+        )
+        member = mirra(
+            level=20,
+            zone_id=REDRIDGE,
+            quest_log={124: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({30, 31}),
+            quest_progress={124: 0},
+            quest_objectives={124: {444: 0, 445: 0}},
+        )
+        clock = questers.Clock()
+        # First pass - quest is not yet stalled
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        # Advance clock in PLAY_GAP_SECONDS increments until stall
+        # Each call advances at most PLAY_GAP_SECONDS (10 min = 600 sec)
+        # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        # After 2 hours of play - quest should be stalled with specific reason
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 124)
+        # Should have a specific reason, not just STALLED_UNSOURCED
+        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("A Baying of Gnolls", p.broken[0].reason)
 
     def test_quest_122_underbelly_scales_has_specific_stall_reason(self):
         # Quest 122 "Underbelly Scales" in Redridge Mountains (level 18) requires
