@@ -137,14 +137,24 @@ BANK_MOVED_SQL = (
     "AND g.name IN ({holes}) GROUP BY g.name"
 )
 
-# Each roster member's newest death (overseer_death, the module's row per
-# death): when the corpse a member now is was made, and to what.
-DEATHS_SQL = (
-    "SELECT character_name AS name, zone, killer_name AS killer, "
-    "UNIX_TIMESTAMP(created_at) AS at FROM overseer_death WHERE id IN ("
-    "SELECT MAX(id) FROM overseer_death "
-    "WHERE character_name IN ({holes}) GROUP BY character_name)"
+# _DEATH_SQL is one member's read; DEATHS_SQL is the template of the
+# statement for any number of them (realmread.Memory matches it by its
+# fields). Each branch is one row by its key (character_name = %s, newest
+# first, LIMIT 1), the bounded shape for a newest-per-member read: a
+# MAX(id) subquery over the whole table is the read that grew (#795).
+_DEATH_SQL = (
+    "(SELECT character_name AS name, zone, killer_name AS killer, "
+    "UNIX_TIMESTAMP(created_at) AS at FROM overseer_death "
+    "WHERE character_name = %s ORDER BY created_at DESC, id DESC LIMIT 1)"
 )
+DEATHS_SQL = _DEATH_SQL + "{more}"
+
+
+def deaths_sql(n: int) -> str:
+    """One _DEATH_SQL per roster member, as one statement."""
+    more = "".join(" UNION ALL " + _DEATH_SQL for _ in range(n - 1))
+    return DEATHS_SQL.format(more=more)
+
 
 # The family campaigns' own runs (overseer_dungeon_run has no family column:
 # a run is the family's whose leader is one of its names), newest first.
@@ -670,11 +680,7 @@ def health(_query: dict, ctx) -> tuple[int, dict]:
         {str(m.get("name")) for m in roster.get("members") or () if m.get("name")}
     )
     deaths = (
-        rd.rows(
-            DEATHS_SQL.format(holes=_scope.holes(len(names))),
-            tuple(names),
-            what="overseer_death",
-        )
+        rd.rows(deaths_sql(len(names)), tuple(names), what="overseer_death")
         if names
         else []
     )
