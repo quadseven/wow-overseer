@@ -23,22 +23,13 @@ import ast
 import json
 import pathlib
 import re
-import sys
-import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-if not hasattr(sys.modules["pymysql"], "err"):
-    _err = types.ModuleType("pymysql.err")
+from _stub_modules import PYMYSQL, stub_modules
 
-    class _MySQLError(Exception):
-        pass
-
-    _err.MySQLError = _MySQLError
-    sys.modules["pymysql"].err = _err
-
-import map_server  # noqa: E402  (must follow the pymysql stub)
+with stub_modules(pymysql=PYMYSQL):
+    import map_server
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 

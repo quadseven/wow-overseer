@@ -16,16 +16,16 @@ import io
 import json
 import logging
 import pathlib
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import families  # noqa: E402
-import map_server  # noqa: E402  (must follow the pymysql stub)
-import vclient  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import families
+    import map_server
+    import vclient
 
 map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())

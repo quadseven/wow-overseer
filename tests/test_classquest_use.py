@@ -309,16 +309,29 @@ class TheUsesAreReadFromTheWorld(unittest.TestCase):
         self.assertEqual(b.quests[6062].provided, (ROD,))
         self.assertEqual(b.quests[6062].sources, (4242,))
 
-    def test_a_source_item_with_no_use_is_still_never_sold(self):
-        # Trial of the Lake (28): its Shrine Bauble (15877) is an ItemDrop with
-        # no use here; it stays a protected quest item.
+    def test_trial_of_the_lake_fetches_and_uses_its_bauble_at_the_ender(self):
+        shrine = spawn(1, 90001, 1, 1, "Shrine of Remulos")
+        urn = spawn(2, 90002, 2, 2, "Bauble Container")
         b = classquest.build(
             quest_rows=[qrow(28, "Trial of the Lake", sort=-263, source1=15877)],
-            giver_rows=[],
+            giver_rows=[giver(28, "end", shrine)],
             spawn_rows=[],
             loot_rows=[],
+            chest_rows=[{"item": 15877, "entry": 90002}],
+            object_rows=[urn],
         )
         self.assertIn(15877, guildjobs._protected_entries(b))
+        quest = b.quests[28]
+        use = quest.uses[0]
+        self.assertEqual((use.verb, use.item), (classquest.USE_HERE, 15877))
+        self.assertEqual([spot.guid for spot in use.spots], [1])
+        self.assertEqual(
+            classquest.use_command(use, use.spots[0]), "use-item-here item:15877"
+        )
+        self.assertEqual(
+            (use.fetch.verb, use.fetch.item, use.fetch.targets),
+            (classquest.USE_OBJECT, 15877, (90002,)),
+        )
 
     def test_the_new_reads_name_the_world_database_and_the_spell_condition(self):
         for sql in (

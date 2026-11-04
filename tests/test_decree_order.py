@@ -39,30 +39,21 @@ import io
 import json
 import logging
 import pathlib
-import sys
-import types
 import unittest
 from unittest import mock
+
+from _stub_modules import PYMYSQL, stub_modules
 
 # STUBBED FOR IMPORT, exactly as tests/test_chat_endpoints.py does it: the
 # module only touches pymysql inside _connect(), which nothing here reaches.
 # `err.MySQLError` is added because this suite DOES reach the except clauses
 # that name it - a bare stub would turn a degraded-schema test into an
 # AttributeError that looked like the guard working.
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-if not hasattr(sys.modules["pymysql"], "err"):
-    _err = types.ModuleType("pymysql.err")
-
-    class _MySQLError(Exception):
-        pass
-
-    _err.MySQLError = _MySQLError
-    sys.modules["pymysql"].err = _err
-
-import decree  # noqa: E402
-import jobs  # noqa: E402
-import map_server  # noqa: E402  (must follow the pymysql stub)
-import travel  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import decree
+    import jobs
+    import map_server
+    import travel
 
 # The degraded-write paths log on purpose; without a configured root handler
 # those reach stderr and make a passing run look like a wall of failures.
@@ -964,7 +955,11 @@ class FakeHandler(map_server.Handler):
     def __init__(self, body=b""):
         self.path = "/api/decree"
         self.rfile = io.BytesIO(body)
-        self.headers = {"Content-Length": str(len(body))} if body else {}
+        self.headers = (
+            {"Content-Length": str(len(body)), "Content-Type": "application/json"}
+            if body
+            else {}
+        )
         self.sent = []
 
     def _send(self, code, ctype, body):

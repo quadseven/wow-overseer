@@ -15,16 +15,16 @@ import pathlib
 import re
 import shutil
 import sys
-import types
 import unittest
+
+from _stub_modules import PYMYSQL, stub_modules
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import guildrun  # noqa: E402
-import realmread  # noqa: E402
-from test_measured_views import render  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import guildrun
+    import realmread
+    from test_measured_views import render
 
 FORMED = datetime.datetime(2026, 10, 8, 10, 0, 0)
 
@@ -418,6 +418,24 @@ const runs = M.groups({runs: [run]}).find((g) => g.label === "Runs");
 console.log(JSON.stringify(runs.rows[0].sub));""",
         )
         self.assertEqual(got, "Cave | lost | 2026-10-09 19:00")
+
+
+class DoorRecord(unittest.TestCase):
+    def test_outcomes_fold_into_cleared_of_went_in(self):
+        rows = [
+            {"keyword": "zulfarrak", "outcome": "cleared", "n": 2},
+            {"keyword": "zulfarrak", "outcome": "timed out", "n": 9},
+            {"keyword": "uldaman-back", "outcome": "cleared", "n": 1},
+            {"keyword": "uldaman", "outcome": "stalled", "n": 2},
+            {"keyword": "not-a-door", "outcome": "cleared", "n": 5},
+        ]
+        self.assertEqual(
+            guildrun.door_record(rows),
+            {"zulfarrak": (2, 11), "uldaman": (1, 3)},
+        )
+
+    def test_nothing_read_is_no_record(self):
+        self.assertEqual(guildrun.door_record(None), {})
 
 
 if __name__ == "__main__":

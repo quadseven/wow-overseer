@@ -18,7 +18,8 @@ import types
 import unittest
 from unittest.mock import patch
 
-from test_campaign_queue import FakeWorld, _load, _Log, _q  # sets up the pymysql stub
+from _stub_modules import PYMYSQL
+from test_campaign_queue import FakeWorld, _load, _Log, _q
 
 import campaignplan  # noqa: E402
 import campaignqueue  # noqa: E402
@@ -408,6 +409,7 @@ class StallWorld(FakeWorld):
         self.held_left = None
         self.hold_said = {}
         self.silent_seconds = None
+        self.dungeonquest_held = set()
         self.world = self
 
     def cancel(self, qid):
@@ -450,7 +452,7 @@ def _pass(world):
             "dungeonstall": stall,
             "jobs": jobs,
             "log": log,
-            "pymysql": __import__("pymysql"),
+            "pymysql": PYMYSQL,
             "_connect": lambda: StoreConn(world),
             "_silent_seconds": lambda head_id, names: world.silent_seconds,
             "_jobs_of": lambda names: {n: world.member_job(n) for n in names},
@@ -479,11 +481,15 @@ def _pass(world):
     async def no_plan(pending, fams):
         return False
 
+    async def dungeonquest_pass(pending, fams):
+        return world.dungeonquest_held
+
     me = types.SimpleNamespace(
         _activity_holds=lambda key=None: "",
         _campaign_owns_travel=nothing,
         _leave_town_when_done=nothing,
         _plan_campaigns=no_plan,
+        _dungeonquest_pass=dungeonquest_pass,
     )
     for name in (
         "_campaign_queue_family_once",
@@ -553,6 +559,31 @@ class TheCampaignDoesNotStartAThirdRun(unittest.TestCase):
         self.assertEqual({jobs.DEFAULT}, self.zug_jobs(w))
         self.assertIn("no stall reason recorded", w.records[0][7])
         self.assertTrue([line for line in lines if "no stall reason recorded" in line])
+
+    def test_silent_head_is_checked_before_a_dungeon_quest_hold(self):
+        w = self.silent_family()
+        w.silent_seconds += 1
+        w.dungeonquest_held = {w.queue[0]["family"]}
+
+        lines = _pass(w)
+
+        self.assertEqual("cancelled", w.queue[0]["status"], lines)
+        self.assertEqual({jobs.DEFAULT}, self.zug_jobs(w))
+        held_reads = [params for sql, params in w.calls if "decision = %s" in sql]
+        self.assertEqual(
+            [("Zug", stall.DECISION, "gnomeregan")], [p[1:4] for p in held_reads]
+        )
+
+    def test_silent_head_is_left_on_the_first_pass_at_the_bound(self):
+        w = self.silent_family()
+        w.silent_seconds = 2 * 60 * 60
+
+        lines = _pass(w)
+
+        self.assertEqual("cancelled", w.queue[0]["status"], lines)
+        self.assertEqual(w.queue[0]["family"], w.records[0][0])
+        self.assertEqual(w.queue[0]["id"], w.records[0][4])
+        self.assertEqual({jobs.DEFAULT}, self.zug_jobs(w))
 
     def test_silence_needs_no_run_row_only_the_active_head(self):
         # No ledger row and no run timeline at all: the family never reached a

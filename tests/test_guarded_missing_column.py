@@ -10,9 +10,9 @@ reader's (realmread.py, #731), and every read on the site goes through it.
 Tickets: #187.
 """
 
-import sys
-import types
 import unittest
+
+from _stub_modules import PYMYSQL, stub_modules
 
 # The same stub other suites install when pymysql is absent (CI installs
 # nothing). It must carry the real hierarchy, because the point of this file is
@@ -24,17 +24,8 @@ try:
     REAL_PYMYSQL = hasattr(pymysql, "connect")
 except ImportError:
     REAL_PYMYSQL = False
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-if not hasattr(sys.modules["pymysql"], "err"):
-    _err = types.ModuleType("pymysql.err")
-
-    class _MySQLError(Exception):
-        pass
-
-    _err.MySQLError = _MySQLError
-    sys.modules["pymysql"].err = _err
-
-import realmread  # noqa: E402  (must follow the pymysql stub)
+with stub_modules(pymysql=PYMYSQL):
+    import realmread
 
 ERR = realmread.pymysql.err
 for _name in ("OperationalError", "ProgrammingError"):

@@ -1068,7 +1068,7 @@ def _in_a_run(run, instance_rows, counter, names, jsplit, is_stalled):
     """Branch 2. The most specific thing the family can be doing."""
     instance = instance_for(instance_rows, int(run.get("map_id") or 0))
     progress = dungeon_progress(run, instance, counter)
-    detail = [_members_line(run, names)]
+    detail = [_members_line(run, names, counter.get("recorded_by") or "")]
     if progress["instance_cleared"]:
         detail.append(
             "The instance they are saved to is already cleared (%d of %d), so "
@@ -1235,18 +1235,27 @@ def _last_run_line(run: dict, where: str | None) -> str:
     return "%s%s ended because %s." % (which, " of " + where if where else "", said)
 
 
-def _members_line(run: dict, names: list) -> str:
-    """Who went in, from the run row, falling back to the leader alone.
+def _members_line(run: dict, names: list, head: str) -> str:
+    """Who went in, from the run row, led by the family's head.
+
+    The row's leader_name is whoever crossed the trigger first until the
+    module aligns it to the head as the run closes, so it is only the fallback.
 
     `members` is stamped at the StagedInside -> Clearing transition, so a run
     that has not got that far yet legitimately has none and says so by saying
     less, rather than by claiming the party is empty.
     """
-    leader = str(run.get("leader_name") or "") or "nobody"
+    leader = head or str(run.get("leader_name") or "") or "nobody"
     members = [m.strip() for m in str(run.get("members") or "").split(",") if m.strip()]
     if not members:
         return "Led by %s; the party is not stamped into the run yet." % leader
-    line = "Led by %s, with %s." % (leader, ", ".join(sorted(members)))
+    others = sorted(m for m in members if m != leader)
+    if leader not in members:
+        line = "Inside: %s." % ", ".join(others)
+    elif others:
+        line = "Led by %s, with %s." % (leader, ", ".join(others))
+    else:
+        line = "Led by %s." % leader
     missing = [n for n in names if n not in members]
     if missing:
         line += " Not inside: %s." % ", ".join(sorted(missing))

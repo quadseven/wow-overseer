@@ -14,13 +14,14 @@ import types
 import unittest
 from unittest import mock
 
+from _stub_modules import PYMYSQL, stub_modules
+
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import map_server  # noqa: E402
-import realmread  # noqa: E402
-import test_app_shell as shell  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import map_server
+    import realmread
+    import test_app_shell as shell
 
 UNREACHABLE = {"error": "world unreachable"}
 
@@ -551,13 +552,16 @@ class ThePartyChatAnswersThroughTheSharedAnswer(unittest.TestCase):
         self.assertEqual(h.body(), b'{"error": "world unreachable"}')
         self.assertIn("party chat query failed", logs.output[0])
 
-    def test_a_digit_int_refuses_is_the_shared_503_too(self):
-        """str.isdigit passes a superscript and int() refuses it, inside the
-        catch before and after."""
-        with self.assertLogs(map_server.log, "ERROR") as logs:
+    def test_a_unicode_digit_cursor_is_the_same_400_not_a_503(self):
+        """str.isdigit passes a superscript and int() refuses it. That used
+        to land in the catch as a 503 with a traceback in the log; the
+        cursor check reads ASCII digits only now, so it is a bad cursor
+        like any other and no read is attempted."""
+        with mock.patch.object(map_server, "_fetch_chat_party") as fetch:
             h = shell.get("/api/chat/party?after=%C2%B2")
-        self.assertEqual(h.status(), 503)
-        self.assertIn("party chat query failed", logs.output[0])
+        self.assertEqual(h.status(), 400)
+        self.assertEqual(h.body(), b'{"error": "bad cursor"}')
+        fetch.assert_not_called()
 
     def test_a_failed_roster_read_is_not_this_routes_503(self):
         """The scope was never inside this route's catch, so it still escapes

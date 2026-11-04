@@ -2532,6 +2532,30 @@ def came_back(reader, guilds: list, days: int, n: int) -> list:
     return _runs(reader, where, (*guilds, days, *WENT_IN), n)
 
 
+# Every guild's runs that went in over the last N days, by door and outcome,
+# for `door_record`. {holes} takes WENT_IN.
+DOOR_RECORD_SQL = (
+    "SELECT keyword, outcome, COUNT(*) AS n FROM overseer_guild_run "
+    "WHERE ended_at >= NOW() - INTERVAL %s DAY AND outcome IN ({holes}) "
+    "GROUP BY keyword, outcome"
+)
+
+
+def door_record(rows) -> dict:
+    """Run keyword -> (cleared, went in), from DOOR_RECORD_SQL rows. An
+    alternate door counts toward its wing (campaignplan.Facts.door_record)."""
+    out: dict = {}
+    for row in rows or ():
+        keyword = campaignplan.wing_of(str(row.get("keyword") or ""))
+        if not keyword:
+            continue
+        count = int(row.get("n") or 0)
+        cleared, went = out.get(keyword, (0, 0))
+        hit = str(row.get("outcome") or "") == CLEARED
+        out[keyword] = (cleared + (count if hit else 0), went + count)
+    return out
+
+
 def ended_since(reader, guilds: list, days: int, n: int) -> list:
     """The guilds' runs that ended, whatever their outcome (a refusal at the
     door included), formed in the last `days` days, as rows newest first.

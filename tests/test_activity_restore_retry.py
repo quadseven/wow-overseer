@@ -9,14 +9,14 @@ stubbed.
 """
 
 import asyncio
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, fresh_import, stub_modules
 
-import jev_activity  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import jev_activity
 
 
 def _import_bridge():
@@ -27,9 +27,7 @@ def _import_bridge():
             pass
 
     stub.Client = Client
-    with mock.patch.dict(sys.modules, {"discord": stub}):
-        sys.modules.pop("bridge", None)
-        import bridge
+    bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
     return bridge
 
 

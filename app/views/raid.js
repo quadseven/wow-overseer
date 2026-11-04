@@ -13,7 +13,7 @@
 import { html, raw, item, member, memberHref, notMeasured, pendingRead, state, plural, classVar } from "../ui.js";
 import { guildSlugs, guildName } from "../families.js";
 
-const TEAMS = (g) => "/api/v2/raidteams?guild=" + g;
+const TEAMS = (g) => "/api/v2/raidteams?guild=" + encodeURIComponent(g);
 const GOALS = "/api/raidgoals";
 const UPS = (name) => "/api/upgrades?name=" + encodeURIComponent(name);
 

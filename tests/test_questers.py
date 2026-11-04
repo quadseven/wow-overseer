@@ -81,7 +81,14 @@ def ended(qid, entry, kind="creature"):
     return {"quest": qid, "kind": kind, "entry": entry}
 
 
-def world(extra_quests=(), extra_givers=(), extra_starts=(), extra_ends=(), drop=()):
+def world(
+    extra_quests=(),
+    extra_givers=(),
+    extra_starts=(),
+    extra_ends=(),
+    extra_spawns=(),
+    drop=(),
+):
     """Northshire (sorted under its area, 9), Goldshire in Elwynn (12), two
     zones further on, and quests a Human priest may not take."""
     quests = [
@@ -122,6 +129,7 @@ def world(extra_quests=(), extra_givers=(), extra_starts=(), extra_ends=(), drop
         giver(31, "end", 1030, 130, 2000, 0),
     ] + list(extra_givers)
     spawns = [spawn(2001, 200, 150, 0), spawn(2002, 201, 250, 0, level=3)]
+    spawns.extend(extra_spawns)
     # What is named to give and take each quest, spawned or not.
     named = {g["quest"]: g["entry"] for g in givers if g["role"] == "start"}
     starts = [started(q, e) for q, e in sorted(named.items())] + list(extra_starts)
@@ -731,9 +739,11 @@ class Steps(unittest.TestCase):
 
     def test_a_drop_is_the_abandon_row_alone(self):
         clock = questers.Clock()
-        member = mirra(quest_log={1: 3})
+        member = mirra(quest_log={1: 3}, quests_done=frozenset({2, 3}))
+        last = 0
         for minute in range(0, 125, 5):
-            p = questers.plan(world(), member, clock, minute * 60.0)
+            p = questers.plan(world(), member, clock, minute * 60.0, last_quest=last)
+            last = p.move.quest
         step = questers.step_for(member, p.move, 0)
         self.assertIsNone(step.walk)
         self.assertEqual([r.command for r in step.rows], ["abandon quest:1"])
@@ -771,21 +781,30 @@ class Steps(unittest.TestCase):
 
 
 class Broken(unittest.TestCase):
-    def _play(self, member, minutes, clock=None, step=5, progress=None):
+    def _play(self, member, minutes, clock=None, step=5, progress=None, cat=None):
+        """Plan every `step` minutes, each pass told the quest its last move
+        was for, as the bridge tells it (`_quester_last`)."""
         clock = clock or questers.Clock()
-        p = None
+        cat = cat or world()
+        p, last, found = None, 0, []
         for minute in range(0, minutes + 1, step):
             if progress:
                 member = questers.Member(
                     **{**member.__dict__, "quest_progress": progress(minute)}
                 )
-            p = questers.plan(world(), member, clock, minute * 60.0)
+            p = questers.plan(cat, member, clock, minute * 60.0, last_quest=last)
+            found += [(b.quest, b.reason) for b in p.broken]
+            if p.move is not None:
+                last = p.move.quest
+        self.found = found
         return p, clock
 
     def test_objectives_still_for_two_hours_of_play_break_the_quest(self):
-        p, _ = self._play(mirra(quest_log={1: 3}), 115)
+        # Nothing else in reach to take, so the quester hunts quest 1.
+        hunting = mirra(quest_log={1: 3}, quests_done=frozenset({2, 3}))
+        p, _ = self._play(hunting, 115)
         self.assertEqual(p.broken, ())
-        p, _ = self._play(mirra(quest_log={1: 3}), 120)
+        p, _ = self._play(hunting, 120)
         self.assertEqual(
             [(b.quest, b.reason, b.held) for b in p.broken],
             [(1, questers.STALLED, True)],
@@ -793,11 +812,82 @@ class Broken(unittest.TestCase):
         self.assertEqual((p.move.kind, p.move.quest), (classquest.ABANDON, 1))
         self.assertIn(questers.STALLED, p.move.said)
 
+    def test_dusky_crab_cakes_ledger_explains_the_unsupported_cooking_step(self):
+        # The world rows name six Dusky Crab Cakes as a required item. The
+        # quester can hunt drops, but has no cooking step to make this item.
+        quest = classquest.Quest(
+            93,
+            "Dusky Crab Cakes",
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((2683, 6),),
+        )
+        facts = questers.Facts(zone=10, level=20, ender_npcs=True)
+
+        reason = questers._broken_reason(
+            quest,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertEqual(
+            reason,
+            "requires crafted Crab Cakes (item 2683); questers cannot cook",
+        )
+
+    def test_fargodeep_mine_ledger_explains_unsupported_exploration_credit(self):
+        quest = classquest.Quest(62, "The Fargodeep Mine", 0, 1, 0, 0, 0, 0, 0)
+        facts = questers.Facts(zone=12, level=7, ender_npcs=True)
+
+        reason = questers._broken_reason(
+            quest,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertEqual(
+            reason,
+            "requires exploring Fargodeep Mine; questers cannot earn exploration credit",
+        )
+
     def test_objectives_that_move_never_stall(self):
         p, _ = self._play(
             mirra(quest_log={1: 3}), 240, progress=lambda minute: {1: minute // 60}
         )
         self.assertEqual(p.broken, ())
+
+    def test_counters_at_the_required_total_are_handed_in_even_if_status_lags(self):
+        # LOG_SQL sums the objective counters. The core can leave status at
+        # incomplete after those counters reach the quest's required total.
+        cat = world(
+            extra_quests=[
+                quest(20, REDRIDGE, 18, kill=200, count=8, title="Blackrock Menace")
+            ]
+        )
+        member = mirra(
+            name="Quester",
+            level=21,
+            zone_id=REDRIDGE,
+            x=150.0,
+            quest_log={20: questers.STATUS_INCOMPLETE},
+            quest_progress={20: 8},
+        )
+        clock = questers.Clock()
+        questers.plan(cat, member, clock, 0.0)
+        p = questers.plan(cat, member, clock, 2 * 60 * 60)
+        self.assertEqual(p.broken, ())
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TURN_IN, 20))
 
     def test_time_offline_is_not_play(self):
         clock = questers.Clock()
@@ -807,6 +897,107 @@ class Broken(unittest.TestCase):
         )
         self.assertEqual(p.broken, ())
         self.assertLess(clock.played("Mirra", 1), questers.STALL_SECONDS)
+
+    def test_a_quest_waiting_its_turn_does_not_stall(self):
+        # Mirra holds two quests of Northshire and hunts the nearer one
+        # (quest 1, wolves at 150 yards). Quest 2 waits its turn: two hours
+        # of hunting quest 1 are not two hours of quest 2 standing still, so
+        # quest 2 is never found broken and never filed (2026-11-02: a dozen
+        # quests a quester had not yet gone after were filed as stalled).
+        self._play(mirra(quest_log={1: 3, 2: 3}, quests_done=frozenset({3})), 130)
+        self.assertIn((1, questers.STALLED), self.found)
+        self.assertNotIn(2, [q for q, _reason in self.found])
+
+    def test_a_quest_it_cannot_hunt_still_stalls_while_it_hunts_another(self):
+        # Quest 8 asks for a creature no spawn is of: nothing works it, so its
+        # clock runs while the quester hunts quest 1, and it is still broken.
+        cat = world(
+            extra_quests=[quest(8, NORTHSHIRE, 2, kill=299, title="Nobody")],
+            extra_givers=[
+                giver(8, "start", 1001, 100, 0, 0),
+                giver(8, "end", 1001, 100, 0, 0),
+            ],
+        )
+        member = mirra(quest_log={1: 3, 8: 3}, quests_done=frozenset({2, 3}))
+        self._play(member, 125, cat=cat)
+        self.assertIn((8, questers.STALLED_UNSOURCED), self.found)
+
+    def test_quest_64_the_forgotten_heirloom_has_specific_stall_reason(self):
+        # Quest 64 "The Forgotten Heirloom" in Westfall (level 12) requires an
+        # item that no spawned creature drops. The quest has items but no
+        # fields (no spawns of creatures that drop the required item), so it
+        # would be STALLED_UNSOURCED. We add a specific reason explaining why.
+        heirloom = quest(64, WESTFALL, 12, title="The Forgotten Heirloom")
+        heirloom.update(item1=1234, item_count1=1)  # requires item 1234
+        cat = world(
+            extra_quests=[heirloom],
+            extra_givers=[
+                giver(64, "start", 1064, 164, 0, 0),
+                giver(64, "end", 1064, 164, 0, 0),
+            ],
+            # No spawns that drop item 1234 -> no fields for this quest
+        )
+        member = mirra(
+            level=12,
+            zone_id=WESTFALL,
+            quest_log={64: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({20, 21}),
+            quest_progress={64: 0},
+            quest_objectives={64: {1234: 0}},
+        )
+        clock = questers.Clock()
+        # First pass - quest is not yet stalled
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        # Advance clock in PLAY_GAP_SECONDS increments until stall
+        # Each call advances at most PLAY_GAP_SECONDS (10 min = 600 sec)
+        # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        # After 2 hours of play - quest should be stalled with specific reason
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 64)
+        # Should have a specific reason, not just STALLED_UNSOURCED
+        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("Forgotten Heirloom", p.broken[0].reason)
+
+    def test_quest_91_solomons_law_has_specific_stall_reason(self):
+        # Quest 91 "Solomon's Law" in Redridge Mountains (level 23) requires
+        # killing creatures that have no spawns in the world database. The quest
+        # has kills but no fields (no spawns of the required creatures), so it
+        # would be STALLED_UNSOURCED. We add a specific reason explaining why.
+        solomons = quest(91, REDRIDGE, 23, kill=444, count=10, title="Solomon's Law")
+        cat = world(
+            extra_quests=[solomons],
+            extra_givers=[
+                giver(91, "start", 1091, 191, 0, 0),
+                giver(91, "end", 1091, 191, 0, 0),
+            ],
+            # No spawns of creature 444 -> no fields for this quest
+        )
+        member = mirra(
+            level=23,
+            zone_id=REDRIDGE,
+            quest_log={91: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({30, 31}),
+            quest_progress={91: 0},
+            quest_objectives={91: {444: 0}},
+        )
+        clock = questers.Clock()
+        # First pass - quest is not yet stalled
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        # Advance clock in PLAY_GAP_SECONDS increments until stall
+        # Each call advances at most PLAY_GAP_SECONDS (10 min = 600 sec)
+        # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        # After 2 hours of play - quest should be stalled with specific reason
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 91)
+        # Should have a specific reason, not just STALLED_UNSOURCED
+        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("Solomon's Law", p.broken[0].reason)
 
     def test_a_quest_of_another_zone_it_is_not_working_does_not_stall(self):
         p, _ = self._play(mirra(quest_log={20: 3}), 240)
@@ -846,6 +1037,57 @@ class Broken(unittest.TestCase):
             [(b.quest, b.reason, b.held) for b in p.broken],
         )
         self.assertNotEqual(p.move.quest, 2)
+
+    def test_further_concerns_is_recorded_as_an_unsupported_speak_objective(self):
+        q = quest(35, ELWYNN, 10, title="Further Concerns")
+        q["npc1"] = 261
+        q["npc_count1"] = 1
+        cat = world(
+            extra_quests=[q],
+            extra_givers=[
+                giver(35, "start", 1035, 240, 100.0, 0.0),
+                giver(35, "end", 1035, 240, 100.0, 0.0),
+            ],
+            extra_spawns=[spawn(2035, 261, 200.0, 0.0, level=20)],
+        )
+        held = questers.plan(
+            cat, mirra(level=10, quest_log={35: 3}), questers.Clock(), 0.0
+        )
+        self.assertEqual(
+            [(b.quest, b.reason) for b in held.broken],
+            [(35, questers.UNSUPPORTED_OBJECTIVE)],
+        )
+        available = questers.plan(cat, mirra(level=10), questers.Clock(), 0.0)
+        self.assertNotEqual(available.move.quest, 35)
+        self.assertIn(
+            (35, questers.UNSUPPORTED_OBJECTIVE, False),
+            [(b.quest, b.reason, b.held) for b in available.broken],
+        )
+
+    def test_report_to_gryans_stoutmantle_is_recorded_as_unsupported(self):
+        q = quest(109, ELWYNN, 10, title="Report to Gryan Stoutmantle")
+        q["npc1"] = 234
+        q["npc_count1"] = 1
+        cat = world(
+            extra_quests=[q],
+            extra_givers=[
+                giver(109, "start", 1109, 197, 100.0, 0.0),
+                giver(109, "end", 1109, 234, 200.0, 0.0),
+            ],
+            extra_spawns=[spawn(2109, 234, 200.0, 0.0, name="Gryan")],
+        )
+        held = questers.plan(
+            cat, mirra(level=10, quest_log={109: 3}), questers.Clock(), 0.0
+        )
+        self.assertEqual(
+            [(b.quest, b.reason) for b in held.broken],
+            [(109, questers.UNSUPPORTED_OBJECTIVE)],
+        )
+        available = questers.plan(cat, mirra(level=10, x=5000.0), questers.Clock(), 0.0)
+        self.assertIn(
+            (109, questers.UNSUPPORTED_OBJECTIVE, False),
+            [(b.quest, b.reason, b.held) for b in available.broken],
+        )
 
     def test_a_quest_an_item_also_starts_is_not_missing_its_giver(self):
         cat = world(
@@ -887,6 +1129,20 @@ class Broken(unittest.TestCase):
         self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 2))
         later = [questers.Attempt(**{**tried[0].__dict__, "age_minutes": 200})]
         p = questers.plan(world(), mirra(x=0.0), questers.Clock(), 0.0, tried=later)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 1))
+
+    def test_already_in_the_quest_log_is_not_a_broken_take(self):
+        tried = [
+            questers.Attempt(
+                "Mirra",
+                "take quest:1",
+                "error",
+                reason="already in the quest log",
+            )
+            for _ in range(3)
+        ]
+        p = questers.plan(world(), mirra(x=0.0), questers.Clock(), 0.0, tried=tried)
+        self.assertEqual(p.broken, ())
         self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 1))
 
     def test_a_hand_in_refused_three_times_is_broken_with_the_worlds_words(self):
@@ -1064,6 +1320,26 @@ class Broken(unittest.TestCase):
     # creature ender; a world that names nothing to hand it in to refuses the
     # hand-in with "retryable":false. That is "could not", not "did not yet".
     NO_HOLDER = "the world names no creature and no object that takes that quest in"
+
+    def test_quest_45_without_a_named_turn_in_is_explained_in_its_ledger_reason(self):
+        cat = world(
+            extra_quests=[
+                quest(45, ELWYNN, 10, title="Discover Rolf's Fate"),
+            ],
+            extra_givers=[giver(45, "start", 1045, 145, 10, 0)],
+            extra_starts=[started(45, 145)],
+        )
+        p = questers.plan(
+            cat,
+            mirra(quest_log={45: questers.STATUS_COMPLETE}),
+            questers.Clock(),
+            0.0,
+        )
+
+        self.assertEqual(
+            [(b.quest, b.reason) for b in p.broken],
+            [(45, questers.NO_TURN_IN_NAMED)],
+        )
 
     @staticmethod
     def _turn_in_row(reason, retryable, age=10, name="Mirra"):
@@ -1352,6 +1628,77 @@ class ASummonedObjectEnder(unittest.TestCase):
             )
             reasons += [b.reason for b in p.broken if b.quest == 40]
         self.assertTrue(reasons and reasons[-1].startswith(questers.STALLED))
+
+    def test_log_rows_keep_each_creature_objective_counter(self):
+        self.assertIn("q.RequiredNpcOrGo1 AS npc1", questers.LOG_SQL)
+        self.assertIn("s.mobcount1", questers.LOG_SQL)
+        logs, progress, objectives, _done = questers._logs_by_guid(
+            [
+                {
+                    "guid": 1,
+                    "quest": 104,
+                    "status": questers.STATUS_INCOMPLETE,
+                    "progress": 10,
+                    "npc1": 127,
+                    "npc2": 171,
+                    "npc3": 456,
+                    "npc4": 0,
+                    "mobcount1": 10,
+                    "mobcount2": 0,
+                    "mobcount3": 0,
+                    "mobcount4": 0,
+                }
+            ],
+            [],
+        )
+        self.assertEqual(logs[1][104], questers.STATUS_INCOMPLETE)
+        self.assertEqual(progress[1][104], 10)
+        self.assertEqual(objectives[1][104], {127: 10, 171: 0, 456: 0})
+
+    def test_coastal_menace_hunts_only_objectives_with_remaining_kills(self):
+        coastal = quest(
+            104, WESTFALL, 17, kill=127, count=10, title="The Coastal Menace"
+        )
+        coastal.update(npc2=171, npc_count2=8, npc3=456, npc_count3=5)
+        cat = world(
+            extra_quests=[coastal],
+            extra_givers=[
+                giver(104, "start", 5104, 5593, 0, 0),
+                giver(104, "end", 5104, 5593, 0, 0),
+            ],
+            extra_spawns=[
+                spawn(5127, 127, 10, 0, level=16),
+                spawn(5171, 171, 20, 0, level=16),
+                spawn(5456, 456, 30, 0, level=16),
+            ],
+        )
+        member = mirra(
+            level=20,
+            zone_id=WESTFALL,
+            quest_log={104: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({20, 21}),
+            quest_progress={104: 0},
+            quest_objectives={104: {127: 0, 171: 0, 456: 0}},
+        )
+
+        hunted = []
+        for entry, count, total in ((127, 10, 10), (171, 8, 18), (456, 5, 23)):
+            move = questers.plan(cat, member, questers.Clock(), 0.0).move
+            hunted.append(move.spot.entry)
+            objectives = dict(member.quest_objectives[104])
+            objectives[entry] = count
+            member = questers.Member(
+                **{
+                    **member.__dict__,
+                    "quest_progress": {104: total},
+                    "quest_objectives": {104: objectives},
+                }
+            )
+
+        hand_in = questers.plan(cat, member, questers.Clock(), 0.0).move
+
+        self.assertEqual(hunted, [127, 171, 456])
+        self.assertEqual((hand_in.kind, hand_in.quest), (classquest.TURN_IN, 104))
 
     def test_an_incomplete_quest_whose_object_spawns_are_gone_is_still_broken(self):
         member = mirra(quest_log={40: 3})

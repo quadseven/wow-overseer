@@ -18,7 +18,7 @@ import types
 import unittest
 import unittest.mock
 
-from test_decree_order import FakeConn, FakeCursor  # noqa: F401  (pymysql stub)
+from test_decree_order import FakeConn, FakeCursor  # noqa: F401
 
 import campaignqueue  # noqa: E402
 import jobs  # noqa: E402
@@ -197,11 +197,11 @@ class TheSeatsAreTheLineup(unittest.TestCase):
                     "class_id": raidlineup.PRIEST,
                     "race": 1,
                 }
-                for i in range(8)
+                for i in range(10)
             ]
             + [
                 {"name": "D%d" % i, "level": 60, "class_id": raidlineup.MAGE, "race": 1}
-                for i in range(24)
+                for i in range(22)
             ]
         )
         lineup = raidlineup.build_lineup(members, guaranteed=["T0"])
@@ -292,7 +292,7 @@ GUILD = [
     for n, c in (
         [("Grug", raidlineup.WARRIOR)]
         + [("W%d" % i, raidlineup.WARRIOR) for i in range(8)]
-        + [("P%d" % i, raidlineup.PRIEST) for i in range(9)]
+        + [("P%d" % i, raidlineup.PRIEST) for i in range(10)]
         + [("M%d" % i, raidlineup.MAGE) for i in range(30)]
     )
 ]

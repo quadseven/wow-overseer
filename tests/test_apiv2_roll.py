@@ -14,14 +14,15 @@ import unittest
 from datetime import datetime, timedelta
 from unittest import mock
 
+from _stub_modules import PYMYSQL, stub_modules
+
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import apiv2  # noqa: E402
-import realmread  # noqa: E402
-from apiv2 import roll as v2roll  # noqa: E402
-from apiv2._context import Context  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import apiv2
+    import realmread
+    from apiv2 import roll as v2roll
+    from apiv2._context import Context
 
 NOW = datetime(2026, 10, 9, 12, 0, 0)
 CORE = (
@@ -300,7 +301,8 @@ class TheHandler(unittest.TestCase):
             self.assertTrue(sql.lstrip().upper().startswith("SELECT"), sql)
 
     def test_the_map_server_serves_it(self):
-        import map_server
+        with stub_modules(pymysql=PYMYSQL):
+            import map_server
 
         sys.path.insert(0, str(HERE / "tests"))
         from test_app_shell import get

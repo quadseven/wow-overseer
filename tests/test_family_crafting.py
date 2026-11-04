@@ -13,7 +13,7 @@ import pathlib
 import types
 import unittest
 
-from test_decree_order import FakeConn, FakeCursor  # noqa: F401 - sets up the pymysql stub
+from test_decree_order import FakeConn, FakeCursor  # noqa: F401
 
 import bag_pressure  # noqa: E402
 import craft  # noqa: E402
@@ -261,7 +261,11 @@ def _rhythm_self(world, log):
     async def idle(claimant, cohort=None):
         world.idled.append((claimant, cohort))
 
+    async def no_material_requests(names):
+        return []
+
     me._craft_once = craft_once
+    me._material_routes = no_material_requests
     me._set_job = set_job
     me._mid_run = mid_run
     me._idle_town_slot = idle

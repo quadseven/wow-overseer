@@ -1,15 +1,15 @@
 """GET /api/guildseats answers the bench rows the bridge left in the memo store (#784)."""
 
 import json
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import map_server  # noqa: E402
-import realmread  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import map_server
+    import realmread
 
 
 class TheEndpoint(unittest.TestCase):

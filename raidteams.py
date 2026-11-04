@@ -2,8 +2,8 @@
 the guild running, and who leaves (operator, 2026-10-05).
 
 WHY THIS EXISTS. raidlineup.build_lineup fills forty seats from whatever a
-guild holds, as eight groups of one tank, one healer and three damage. That is
-a five-man dungeon's shape, not Molten Core's. The operator approved a lineup
+guild holds, as eight groups of five with the encounter table's tank and
+healer totals (mcencounters.py, #1483). The operator approved a lineup
 built for Ragnaros instead: per guild, 8 tanks (Garr's 8 adds), 11 healers and
 21 damage, a fire resistance source (a paladin aura or a shaman totem, both
 party-only in 3.3.5) in every group, group 1 the family, groups 2 to 8 named

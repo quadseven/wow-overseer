@@ -8,22 +8,21 @@ number when it does not - never a bare "<kind> <digits>".
 """
 
 import re
-import sys
-import types
 import unittest
+
+from _stub_modules import PYMYSQL, stub_modules
 
 # apiv2 imports realmread, which imports pymysql. Stub it when it is not
 # installed, so this module does not lean on another module's stub (#1434).
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-
-import agenda  # noqa: E402
-import bag_pressure  # noqa: E402
-import commandwords  # noqa: E402
-import craft_supply  # noqa: E402
-import nowstatus  # noqa: E402
-import places  # noqa: E402
-import travel  # noqa: E402
-from apiv2 import guild  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import agenda
+    import bag_pressure
+    import commandwords
+    import craft_supply
+    import nowstatus
+    import places
+    import travel
+    from apiv2 import guild
 
 KORGELD = {"name": "Kor'geld", "subname": "Alchemy Supplies", "place": "Orgrimmar"}
 CREATURES = {8122: KORGELD, 5594: "Alchemist Pestlezugg"}
@@ -199,7 +198,8 @@ class TheErrandBannerNamesItsWalk(unittest.TestCase):
 
 class TheLiveReadNamesNumericAims(unittest.TestCase):
     def test_names_and_spawns_are_read_once_per_process(self):
-        import map_server
+        with stub_modules(pymysql=PYMYSQL):
+            import map_server
 
         saved = dict(map_server._CREATURE_NAMES)
         map_server._CREATURE_NAMES.clear()

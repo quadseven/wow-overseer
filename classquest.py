@@ -290,6 +290,11 @@ FOCUS_ITEMS = {
     # had no use and 9504 read SOURCE for every draenei shaman.
     23749: 223,
 }
+# Trial of the Lake (28) gives its Shrine Bauble as an ItemDrop, which is
+# recovered from a lake container and used at the shrine beside its ender.
+# The item's spell completes the quest objective; unlike spell-focus items,
+# its target is positional and is not named by a world database condition.
+ENDPOINT_USE_ITEMS = {15877}
 
 # GROUND A SCRIPT WATCHES (2026-10-10). Two class quest objectives appear only
 # when a member stands at one place, so no spawn row holds them and the book
@@ -670,7 +675,12 @@ TRAINED_SQL = (
 LOOT_SQL = (
     "SELECT l.Item AS item, ct.entry AS entry FROM acore_world.creature_loot_template l "
     "JOIN acore_world.creature_template ct ON ct.lootid = l.Entry "
-    "WHERE l.Item IN ({items})"
+    "WHERE l.Item IN ({items}) UNION ALL "
+    "SELECT r.Item AS item, ct.entry AS entry "
+    "FROM acore_world.creature_loot_template l "
+    "JOIN acore_world.reference_loot_template r ON r.Entry = l.Reference "
+    "JOIN acore_world.creature_template ct ON ct.lootid = l.Entry "
+    "WHERE l.Reference <> 0 AND r.Item IN ({items})"
 )
 
 # The items whose on-use spell is bound to named creatures, in either of the
@@ -1185,6 +1195,10 @@ def _uses(r, items, provided, droppers, aims) -> tuple:
     out = []
     required = [i for i, _n in items]
     for item in dict.fromkeys([*provided, *_sources(r), *required]):
+        if item in ENDPOINT_USE_ITEMS:
+            fetch = None if item in provided else _chest_fetch(item, aims)
+            out.append(Use(USE_HERE, item, 1, (), (), item in provided, fetch))
+            continue
         use = _item_use(item, provided, aims)
         if use is not None:
             out.append(use)
@@ -1224,6 +1238,13 @@ def _quest(
     qid = _int(r.get("id"))
     provided = _provided(r)
     inside = tuple(i for p in provided for i in (held or {}).get(p, ()))
+    enders = tuple(ends.get(qid, ()))
+    uses = tuple(
+        replace(use, spots=enders)
+        if use.verb == USE_HERE and use.item in ENDPOINT_USE_ITEMS
+        else use
+        for use in _uses(r, items, provided + inside, droppers, aims)
+    )
     return Quest(
         qid,
         str(r.get("title") or ""),
@@ -1238,9 +1259,9 @@ def _quest(
         items,
         _pairs(r, "npc", "npc_count", 4, False),
         tuple(starts.get(qid, ())),
-        tuple(ends.get(qid, ())),
+        enders,
         tuple(s for e in sorted(entries) for s in by_entry.get(e, ())),
-        _uses(r, items, provided + inside, droppers, aims),
+        uses,
         provided,
         frozenset(
             i for i, _n in items if any(by_entry.get(e) for e in droppers.get(i, ()))

@@ -13,18 +13,17 @@ import io
 import json
 import logging
 import pathlib
-import sys
-import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-import achievements  # noqa: E402
-import dungeonpath  # noqa: E402
-import guildcraft  # noqa: E402
-import map_server  # noqa: E402
-import test_guildcraft as gc  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import achievements
+    import dungeonpath
+    import guildcraft
+    import map_server
+    import test_guildcraft as gc
 
 map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())

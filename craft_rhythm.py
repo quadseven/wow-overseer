@@ -47,7 +47,8 @@ existing economy passes. This module's whole output is a job mode.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import asdict, dataclass, replace
 
 import craft
 import craft_supply
@@ -1157,10 +1158,9 @@ def stand(name: str, craft_spell: int, held: dict) -> Stand:
     if casts < SHORT_CASTS:
         verdict = SHORT
         why = (
-            "%s holds %d %s against %d per cast of spell %d, which is %d "
-            "more cast(s) - short of the %d it takes to be worth staying "
-            "put"
-            % (name, carried, thin.label, thin.per_cast, spell, casts, SHORT_CASTS)
+            "%s holds %d %s against %d per cast, enough for %d more - short "
+            "of the %d it takes to be worth staying put"
+            % (name, carried, thin.label, thin.per_cast, casts, SHORT_CASTS)
         )
     elif casts >= STOCK_CASTS:
         verdict = STOCKED
@@ -1340,4 +1340,357 @@ def short_of_nodes(stands, primaries: dict) -> bool:
     return any(
         stand.verdict == SHORT and NODE_TRADES & set(primaries.get(stand.name, ()))
         for stand in stands
+    )
+
+
+# ---------------------------------------------------------------------------
+# MATERIAL REQUESTS (#476). mod-overseer's DriveCraft writes one
+# `material-request` overseer_event row when it skips a craft for a reagent the
+# crafter is short of: the character, the recipe (`subject_id`), the reagent
+# item (`item_guid`) and a detail "short 4x Copper Bar (needs 6, has 2)". It
+# writes one row per open request and nothing while that request stays open.
+#
+# Each request is ROUTED once: to a GATHER errand when the family can produce
+# the reagent (a member holds the trade, or it drops off kills, so roaming is
+# the gathering), else to a BUY on the auction house. A gather route is a SHORT
+# stand for its gatherer, which sends the family out (`rhythm`); a buy route is
+# an `auction.Need` the auction pass buys for (`auction.requested_needs`).
+#
+# PENDING IS KEYED BY CHARACTER AND REAGENT, not by recipe: two recipes short
+# of one reagent are one errand. A route stays pending until the bags hold what
+# the request needs, then it is closed and kept until its event ages out of the
+# read window, so re-reading the same row acts on nothing. The window runs on
+# the EVENT's clock (`Route.seen`, its last_seen), not the route's: a request
+# the module still reports keeps its route, so it is never routed twice. The row's identity
+# is its id AND its occurrence count: the module reuses one row per hour, so a
+# request that closes and opens again within the hour bumps the count.
+MATERIAL_REQUEST = "material-request"
+ROUTE_GATHER, ROUTE_BUY = "gather", "buy"
+# item_template class 7 (Trade Goods), by subclass: the gathering trade that
+# produces it, and the subclasses that drop off kills (5 cloth, 8 meat).
+TRADE_GOODS = 7
+GATHER_TRADES = {6: "skinning", 7: "mining", 9: "herbalism"}
+KILL_DROPS = frozenset({5, 8})
+# A gather route that has not closed in this long goes to the house instead, so
+# a reagent no node gives (a smelted bar files under metal and stone) never
+# holds the family out gathering for ever.
+GATHER_SECONDS = 2 * 3600
+# How far back the bridge reads request rows, and so how long a route is kept.
+READ_SECONDS = 24 * 3600
+# A refreshed last_seen moves a route's `seen` only when it moves this much.
+SEEN_SLACK_SECONDS = 60
+
+_REQUEST_DETAIL = re.compile(r"^short (\d+)x (.+) \(needs (\d+), has (\d+)\)$")
+
+
+@dataclass(frozen=True)
+class MaterialRequest:
+    """One `material-request` event row, as the module wrote it."""
+
+    character: str
+    recipe: int
+    entry: int
+    label: str = ""
+    short: int = 0
+    need: int = 0
+    event_id: int = 0
+    occurrence: int = 0
+    # Seconds since the row's last_seen when it was read; `take_requests`
+    # turns it into the caller's clock as `Route.seen`.
+    age: float = 0.0
+
+
+@dataclass(frozen=True)
+class Route:
+    """Where one request went: `how` is ROUTE_GATHER or ROUTE_BUY, `who` the
+    member gathering (or the requester buying), `since` the caller's clock
+    when it was routed, `closed` once the bags held what it needed. `seen` is
+    the caller's clock at the event's latest last_seen (None: `since`), and
+    `base` what a gatherer other than the requester already carried of the
+    reagent when it was routed, so only what it gathers since counts."""
+
+    request: MaterialRequest
+    how: str
+    who: str
+    why: str = ""
+    since: float = 0.0
+    closed: bool = False
+    seen: float | None = None
+    base: int = 0
+
+
+def material_request(row) -> MaterialRequest | None:
+    """The request in one overseer_event row, or None for a row that is not."""
+    match = _REQUEST_DETAIL.match(str(row.get("detail") or "").strip())
+    name = str(row.get("character_name") or "")
+    entry = int(row.get("item_guid") or 0)
+    if not match or not name or entry <= 0:
+        return None
+    return MaterialRequest(
+        character=name,
+        recipe=int(row.get("subject_id") or 0),
+        entry=entry,
+        label=match.group(2),
+        short=int(match.group(1)),
+        need=int(match.group(3)),
+        event_id=int(row.get("id") or 0),
+        occurrence=int(row.get("occurrences") or 0),
+        age=max(0.0, float(row.get("age") or 0)),
+    )
+
+
+def _request_key(request: MaterialRequest) -> str:
+    return "%s:%d" % (request.character, request.entry)
+
+
+def route_request(request: MaterialRequest, kind, skills: dict) -> tuple:
+    """(how, who, why) for one request.
+
+    `kind` is the reagent's (item class, subclass), None when unread; `skills`
+    is {name: {trade: value}} for the family. The requester is asked first.
+    """
+    label = request.label or "item %d" % request.entry
+    if kind is None:
+        return (
+            ROUTE_BUY,
+            request.character,
+            "%s is not in item_template here, so it is bought" % label,
+        )
+    item_class, subclass = int(kind[0]), int(kind[1])
+    if item_class == TRADE_GOODS and subclass in KILL_DROPS:
+        return (
+            ROUTE_GATHER,
+            request.character,
+            "%s drops off kills, so %s roams for it" % (label, request.character),
+        )
+    trade = GATHER_TRADES.get(subclass, "") if item_class == TRADE_GOODS else ""
+    if not trade:
+        return (
+            ROUTE_BUY,
+            request.character,
+            "%s comes from no gathering trade, so it is bought" % label,
+        )
+    holders = sorted(
+        (name for name, held in skills.items() if int(held.get(trade, 0)) > 0),
+        key=lambda name: (name != request.character, name.casefold()),
+    )
+    if holders:
+        return (
+            ROUTE_GATHER,
+            holders[0],
+            "%s holds %s, which gathers %s" % (holders[0], trade, label),
+        )
+    return (
+        ROUTE_BUY,
+        request.character,
+        "nobody in the family holds %s for %s, so it is bought" % (trade, label),
+    )
+
+
+def _same_event(route: Route, request: MaterialRequest) -> bool:
+    return (route.request.event_id, route.request.occurrence) == (
+        request.event_id,
+        request.occurrence,
+    )
+
+
+def _largest_per_key(requests) -> dict:
+    """One request per character and reagent: the one needing the most."""
+    out: dict = {}
+    for request in requests or ():
+        key = _request_key(request)
+        if key not in out or request.need > out[key].need:
+            out[key] = request
+    return out
+
+
+def route_clock(route: Route) -> float:
+    """The clock a route ages by: its event's latest read, else its routing."""
+    return route.since if route.seen is None else route.seen
+
+
+_seen = route_clock
+
+
+def _refresh(pending, requests, now: float) -> None:
+    """Move each route's `seen` up to the latest read of the request it answers.
+
+    An open route answers every request for its character and reagent (the
+    module may write a fresh row while the shortage lasts); a closed one only
+    the row it acted on, since a new row after it closed is a new request.
+    """
+    for request in requests or ():
+        key = _request_key(request)
+        route = pending.get(key)
+        if route is None or (route.closed and not _same_event(route, request)):
+            continue
+        seen = float(now) - request.age
+        # The age is whole seconds against a fractional clock, so an unchanged
+        # last_seen reads a little later each pass; only a real move counts,
+        # or every pass would rewrite the memo.
+        if seen > _seen(route) + SEEN_SLACK_SECONDS:
+            pending[key] = replace(route, seen=seen)
+
+
+def take_requests(
+    pending, requests, kinds: dict, skills: dict, held: dict, now: float
+) -> list:
+    """Route every request not already acted on; return the new routes.
+
+    `pending` is {key: Route} and is written in place. A request is skipped
+    while a route for its character and reagent is open, when its own row was
+    already acted on, or when `held` ({(name, entry): count}, the bags) already
+    answers it. Every route a request still answers has its `seen` refreshed.
+    `held` should carry each possible gatherer's count too: a gatherer's count
+    at routing is its route's `base`.
+    """
+    _refresh(pending, requests, now)
+    routed = []
+    for key, request in sorted(_largest_per_key(requests).items()):
+        known = pending.get(key)
+        if known is not None and (not known.closed or _same_event(known, request)):
+            continue
+        if int(held.get((request.character, request.entry), 0)) >= request.need:
+            continue
+        how, who, why = route_request(request, kinds.get(request.entry), skills)
+        base = (
+            int(held.get((who, request.entry), 0))
+            if how == ROUTE_GATHER and who != request.character
+            else 0
+        )
+        pending[key] = Route(
+            request,
+            how,
+            who,
+            why,
+            float(now),
+            seen=float(now) - request.age,
+            base=base,
+        )
+        routed.append(pending[key])
+    return routed
+
+
+def _answered(route: Route, held: dict) -> int:
+    """What counts toward a route: the requester's bags, plus what a gatherer
+    other than the requester has gathered since it was routed."""
+    request = route.request
+    count = int(held.get((request.character, request.entry), 0))
+    if route.how == ROUTE_GATHER and route.who != request.character:
+        count += max(0, int(held.get((route.who, request.entry), 0)) - route.base)
+    return count
+
+
+def settle_requests(pending, held: dict) -> list:
+    """Close every open route the family's bags now answer.
+
+    A gather route assigned to another member closes on what that gatherer
+    has gathered for it as well as on the requester's own bags, so stock
+    already gathered is never escalated into a purchase.
+    """
+    closed = []
+    for key, route in sorted(pending.items()):
+        if route.closed or _answered(route, held) < route.request.need:
+            continue
+        pending[key] = replace(route, closed=True)
+        closed.append(pending[key])
+    return closed
+
+
+def escalate_requests(pending, now: float) -> list:
+    """Send every gather route open past GATHER_SECONDS to the house, once."""
+    moved = []
+    for key, route in sorted(pending.items()):
+        if (
+            route.closed
+            or route.how != ROUTE_GATHER
+            or now - route.since < GATHER_SECONDS
+        ):
+            continue
+        pending[key] = replace(
+            route,
+            how=ROUTE_BUY,
+            who=route.request.character,
+            why="gathering had not answered it in %d hours, so it is bought"
+            % (GATHER_SECONDS // 3600),
+        )
+        moved.append(pending[key])
+    return moved
+
+
+def expire_requests(pending, now: float) -> list:
+    """Forget every route whose event has left the read window; return them.
+
+    The age is the event's (`Route.seen`), not the route's: a request still
+    being read keeps its route however long ago it was routed.
+    """
+    old = [
+        key
+        for key, route in sorted(pending.items())
+        if now - _seen(route) >= READ_SECONDS
+    ]
+    return [pending.pop(key) for key in old]
+
+
+def open_routes(pending, how: str = "") -> list:
+    """The open routes, of one kind when `how` is given, oldest first."""
+    return sorted(
+        (r for r in pending.values() if not r.closed and (not how or r.how == how)),
+        key=lambda r: (r.since, r.request.character, r.request.entry),
+    )
+
+
+def requested_stands(stands, routes) -> tuple:
+    """`stands` with each open gather route's gatherer SHORT on its request."""
+    asks = {r.who: r for r in routes or () if r.how == ROUTE_GATHER and not r.closed}
+    out = []
+    for item in stands or ():
+        route = asks.get(item.name)
+        if route is None or item.verdict == SHORT:
+            out.append(item)
+            continue
+        request = route.request
+        out.append(
+            replace(
+                item,
+                verdict=SHORT,
+                thinnest=request.label,
+                why="%s answers %s's material-request: %s short %dx %s"
+                % (
+                    item.name,
+                    request.character,
+                    request.character,
+                    request.short,
+                    request.label,
+                ),
+            )
+        )
+    return tuple(out)
+
+
+def route_memo(route: Route, offset: float) -> dict:
+    """A Route as JSON for the memo store, its clock in wall time."""
+    return {
+        "request": asdict(route.request),
+        "how": route.how,
+        "who": route.who,
+        "why": route.why,
+        "since": float(route.since) + offset,
+        "closed": bool(route.closed),
+        "seen": None if route.seen is None else float(route.seen) + offset,
+        "base": int(route.base),
+    }
+
+
+def route_from_memo(value, offset: float) -> Route:
+    """The Route `route_memo` stored, its clock back in monotonic time."""
+    return Route(
+        request=MaterialRequest(**value["request"]),
+        how=str(value["how"]),
+        who=str(value["who"]),
+        why=str(value["why"]),
+        since=float(value["since"]) - offset,
+        closed=bool(value["closed"]),
+        seen=None if value.get("seen") is None else float(value["seen"]) - offset,
+        base=int(value.get("base") or 0),
     )

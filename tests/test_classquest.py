@@ -188,6 +188,9 @@ class TheBook(unittest.TestCase):
             self.assertIn("acore_world.", sql)
         self.assertIn("AllowableClasses", classquest.QUESTS_SQL)
 
+    def test_loot_read_resolves_creature_reference_tables(self):
+        self.assertIn("reference_loot_template", classquest.LOOT_SQL)
+
 
 class TheNextMove(unittest.TestCase):
     def move(self, m, b=None):

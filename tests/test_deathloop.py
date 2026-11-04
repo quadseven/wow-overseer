@@ -11,20 +11,20 @@ sends the member to town and plans no quest in that zone while it lasts.
 
 import pathlib
 import sys
-import types
 import unittest
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, stub_modules
 
-HERE = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(HERE))
+with stub_modules(pymysql=PYMYSQL):
+    HERE = pathlib.Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(HERE))
 
-import deathloop  # noqa: E402
-import guildjobs  # noqa: E402
-import guildlevel  # noqa: E402
-import guildroute  # noqa: E402
-import levelroute  # noqa: E402
-from apiv2 import health, members  # noqa: E402
+    import deathloop
+    import guildjobs
+    import guildlevel
+    import guildroute
+    import levelroute
+    from apiv2 import health, members
 
 NOW = 1_800_000_000
 MINUTE = 60
@@ -320,6 +320,75 @@ class ThePassLeavesTheZone(unittest.TestCase):
         command = steps[0].rows[0].command
         self.assertNotIn("creature:%d " % spawn_of("redridge"), command)
         self.assertIn("died 6 times in Redridge Mountains", steps[0].said)
+
+    def test_a_passing_level_refusal_retries_the_escape_after_five_minutes(self):
+        for age, expected in (
+            (4, []),
+            (5, [guildlevel.ACTION]),
+            (101, [guildlevel.ACTION]),
+        ):
+            with self.subTest(age=age):
+                recent = (
+                    guildjobs.Recent("Clunk", "hearth", 21, "applied"),
+                    guildjobs.Recent(
+                        "Clunk",
+                        guildlevel.ACTION,
+                        age,
+                        "error",
+                        retryable=True,
+                        refusal="character is held by another verb",
+                    ),
+                )
+                steps = steps_of(
+                    plan([member()], loops={"Clunk": loop()}, recent=recent)
+                )
+                self.assertEqual([step.action for step in steps], expected)
+                for step in steps:
+                    self.assertNotIn(
+                        "creature:%d " % spawn_of("redridge"), step.rows[0].command
+                    )
+
+    def test_other_level_results_keep_the_normal_cooldown(self):
+        for status, retryable, refusal in (
+            ("pending", True, "character is held by another verb"),
+            ("applied", True, "character is held by another verb"),
+            ("error", False, "character is held by another verb"),
+            ("error", True, "ground that does not hold"),
+            ("error", True, "unrecognized refusal"),
+        ):
+            with self.subTest(status=status, retryable=retryable, refusal=refusal):
+                recent = (
+                    guildjobs.Recent("Clunk", "hearth", 21, "applied"),
+                    guildjobs.Recent(
+                        "Clunk",
+                        guildlevel.ACTION,
+                        101,
+                        status,
+                        retryable=retryable,
+                        refusal=refusal,
+                    ),
+                )
+                self.assertEqual(
+                    steps_of(plan([member()], loops={"Clunk": loop()}, recent=recent)),
+                    [],
+                )
+
+    def test_a_temporary_hold_also_retries_an_ordinary_level_walk(self):
+        here = member(level=21, zone_id=ELWYNN, x=-9000.0, y=100.0)
+        recent = (
+            guildjobs.Recent(
+                "Clunk",
+                guildlevel.ACTION,
+                5,
+                "error",
+                retryable=True,
+                reason="character is in combat",
+            ),
+        )
+        self.assertEqual(
+            [step.action for step in steps_of(plan([here], recent=recent))],
+            [guildlevel.ACTION],
+        )
 
     def test_with_no_way_out_no_quest_of_the_zone_is_planned(self):
         recent = (

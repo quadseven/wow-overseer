@@ -419,6 +419,11 @@ WORN_ARMOR_SUBCLASSES = frozenset({1, 2, 3, 4, 5, 6})
 POST_MIN = {MAINTENANCE: 1, SUMMONER: 10, RAIDER: 20}
 MAX_LETTERS = 6
 POSTAGE_COPPER = 30
+# THE WORTH OF A LETTER (#1471): a maintenance member's low bar let it pay
+# thirty copper to post a single herb. Each letter it sends carries a full
+# stack, or stacks worth POST_VALUE_MULT times the postage at the vendor.
+POST_FULL_STACK = 20
+POST_VALUE_MULT = 4
 
 # THE BAR FOR A SALE: this many stacks to sell, or this much worth, or bags
 # short of room for loot (loot_room_short).
@@ -432,6 +437,7 @@ LOOT_ROOM_SHARE = (1, 4)
 # HOW OFTEN EACH KIND OF STEP MAY BE ASKED OF ONE MEMBER, in minutes, counted
 # from the command log so a restart forgets nothing.
 BAG_ACTION = "bag"
+LEVEL_TRANSIENT_RETRY_MINUTES = 5
 COOLDOWN_MINUTES = {
     BAG_ACTION: 20,
     "gear": 60,
@@ -564,6 +570,9 @@ class Carried:
     required_level: int = 0
     inventory_type: int = 0
     allowable_class: int = -1
+    # item_instance.flags & 1: soulbound, so no guildmate, mail or bank can
+    # take it (vendorsale.py judges a bound rare piece as the member's own).
+    bound: bool = False
 
     @property
     def material(self) -> str:
@@ -815,7 +824,7 @@ def _cooling(member: Member, action: str, recent) -> bool:
     return any(
         r.name == member.name
         and r.action == action
-        and int(r.age_minutes) < _train_row_wait(r, minutes)
+        and int(r.age_minutes) < _step_row_wait(r, minutes)
         for r in recent or ()
     )
 
@@ -851,7 +860,7 @@ def passing_train_row(r) -> bool:
     (#1116): one of PASSING_TRAIN_REASONS, read exactly from the module's
     `reason`. Such a row learned nothing about the trainer or the road, so it
     does not double the wait (train_cooldown); it still waits the base
-    COOLDOWN_MINUTES["train"] (_train_row_wait), so the same walk is not asked
+    COOLDOWN_MINUTES["train"] (_step_row_wait), so the same walk is not asked
     every pass. Counting a fight as a failed walk once sat a member at a tier
     cap out up to twelve hours behind a fight it had already won."""
     if r.status not in TRAIN_FAILED:
@@ -859,9 +868,19 @@ def passing_train_row(r) -> bool:
     return (r.refusal or r.reason) in PASSING_TRAIN_REASONS
 
 
-def _train_row_wait(r, minutes: int) -> int:
-    """The minutes `r` holds its step back: the base trainer wait for a passing
-    trainer row, `minutes` for every other row."""
+def _step_row_wait(r, minutes: int) -> int:
+    """Keep long waits for completed walks and persistent failures.
+
+    A temporary level-walk refusal learned nothing about the destination;
+    retry after a short wait once the member becomes available again.
+    """
+    if (
+        r.action == guildlevel.ACTION
+        and r.status == "error"
+        and r.retryable
+        and (r.refusal or r.reason) in PASSING_TRAIN_REASONS
+    ):
+        return min(minutes, LEVEL_TRANSIENT_RETRY_MINUTES)
     if r.action == "train" and passing_train_row(r):
         return min(minutes, COOLDOWN_MINUTES["train"])
     return minutes
@@ -904,7 +923,7 @@ def _training_cooling(name: str, skill_id: int, recent) -> bool:
         and (r.skill_id is None or r.skill_id == skill_id)
     )
     minutes = train_cooldown(name, rows, skill_id)
-    return any(int(r.age_minutes) < _train_row_wait(r, minutes) for r in rows)
+    return any(int(r.age_minutes) < _step_row_wait(r, minutes) for r in rows)
 
 
 # ---------------------------------------------------------------------------
@@ -2897,8 +2916,27 @@ def _kept(name, item, kept) -> bool:
     )
 
 
+def worth_its_postage(item) -> bool:
+    """A letter worth the walk: a full stack, or worth POST_VALUE_MULT times
+    the postage at the vendor."""
+    if int(item.count) >= POST_FULL_STACK:
+        return True
+    return vendorsale.worth((item,)) >= POST_VALUE_MULT * POSTAGE_COPPER
+
+
 def _post_step(member, crafters, master, kept, cap, crafting=False, bar=None):
-    stacks = postable(member, kept, crafting, bar)[:MAX_LETTERS]
+    stacks = postable(member, kept, crafting, bar)
+    # Only the role's own bar asks a letter to be worth its postage; a
+    # make-room post (bar given) clears the bags whatever the stack is worth.
+    if bar is None and member.role == MAINTENANCE and stacks:
+        worth = [c for c in stacks if worth_its_postage(c)]
+        if not worth:
+            return None, (
+                "%s holds materials worth less than its postage; they wait "
+                "for a full stack" % member.name
+            )
+        stacks = worth
+    stacks = stacks[:MAX_LETTERS]
     if not stacks:
         return None, ""
     if member.money < POSTAGE_COPPER:
@@ -3384,18 +3422,18 @@ def _gathering_step(m, spot, recent, cap):
 
 
 def _shared_step(m, crafters, master, kept, recent, cap, crafting=False):
-    """Post, then sell: what every role does with what it carries."""
+    """Post, then sell: what every role does with what it carries. A post
+    that waits names why, and the sale still goes."""
+    why = ""
     if not _cooling(m, "post", recent):
         step, why = _post_step(m, crafters, master, kept, cap, crafting)
         if step:
             return step, step.said, ""
-        if why:
-            return None, "", why
     if not _cooling(m, "sell", recent):
         step = _sell_step(m, kept, cap)
         if step:
             return step, step.said, ""
-    return None, "", ""
+    return None, "", why
 
 
 def _summoner_step(m, doors, pending, crafters, master, kept, recent, cap):
@@ -6732,6 +6770,7 @@ def carried_from_rows(rows) -> dict:
                 required_level=_int(row.get("required_level")),
                 inventory_type=_int(row.get("inventory_type")),
                 allowable_class=_int(row.get("allowable_class"), -1),
+                bound=bool(_int(row.get("bound"))),
             )
         )
     return {k: tuple(v) for k, v in out.items()}

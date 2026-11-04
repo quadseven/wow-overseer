@@ -34,17 +34,22 @@ ones are needed elsewhere), then name, so a pass is deterministic.
 
 WHERE IT RUNS. bridge.py's guild surplus pass already reads the guild roster
 (name, level, online, character_skills) for guildshare; it hands the same
-roster to `members_from_roster` and plans STANDING_ORDERS, and logs the
-headline, each taker's line and each note. That is all it does with the plan:
-it writes no row and sends no order, so nothing in the world changes. The
-realm's cooldown times are not read yet, so every holder counts as ready
-until that read exists.
+roster to `members_from_roster` and plans stored orders beside
+STANDING_ORDERS. Assignments for stored orders are saved, then the headline,
+each taker's line and each note are logged. The realm's cooldown times are not
+read yet, so every holder counts as ready until that read exists.
+
+ASKING AND KEEPING (#1487). `consumable` and `farming` build a requested
+order and refuse one with no item, no quantity or no zone. workorderstore.py
+keeps each order in a bridge-owned table with its status and assignee, so an
+assigned order is read back assigned on the next pass and `plan` leaves it
+with its taker. raidsupply.fire_potion_order is the first intake: the raid
+night's Greater Fire Protection Potion shortfall as a consumable order.
 
 WHAT IT DOES NOT DO. It does not check recipe knowledge or skill rank for a
-specific recipe, it does not read cooldown times from the realm, and it does
-not persist orders between passes: those are the caller's facts. The item
-table below names the ticket's own examples; an item it does not name is
-reported, never guessed.
+specific recipe, and it does not read cooldown times from the realm: those
+are the caller's facts. The item table below names the ticket's own
+examples; an item it does not name is reported, never guessed.
 """
 
 from __future__ import annotations
@@ -77,6 +82,27 @@ class WorkOrder:
     requested_by: str = "the guild"
     status: str = REQUESTED
     assigned_to: str = ""
+    # The store's row id; 0 for an order the store does not hold (a standing
+    # order, or one not yet requested).
+    order_id: int = 0
+
+
+def consumable(item: str, quantity: int, requested_by: str = "the guild") -> WorkOrder:
+    """A requested order for `quantity` of `item`; refuses no item or no count."""
+    item = str(item or "").strip()
+    if not item or int(quantity) <= 0:
+        raise ValueError("a consumable order needs an item and a quantity above 0")
+    return WorkOrder(
+        CONSUMABLE, item, quantity=int(quantity), requested_by=requested_by
+    )
+
+
+def farming(item: str, zone: str, requested_by: str = "the guild") -> WorkOrder:
+    """A requested order to gather `item` in `zone`; refuses no item or no zone."""
+    item, zone = str(item or "").strip(), str(zone or "").strip()
+    if not item or not zone:
+        raise ValueError("a farming order needs an item and a zone")
+    return WorkOrder(FARMING, item, zone=zone, requested_by=requested_by)
 
 
 @dataclass(frozen=True)
@@ -109,8 +135,8 @@ class WorkOrderPlan:
 
 # The orders that stand every pass, with nobody having to ask: a profession
 # cooldown is spent whenever someone is ready to spend it. Consumable and
-# farming orders need someone to ask for them, and the intake for those is
-# not built yet (see WHERE IT RUNS).
+# farming orders need someone to ask for them: they are requested into
+# workorderstore.py (see ASKING AND KEEPING).
 STANDING_ORDERS = (
     WorkOrder(COOLDOWN, "Mooncloth"),
     WorkOrder(COOLDOWN, "Arcanite"),
