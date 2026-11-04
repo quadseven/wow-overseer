@@ -16,7 +16,11 @@ more than a tenth of its cores. Each batch's output prints under a
 `===== <modules> =====` header as it finishes, then one total line:
 `Parallel unittest total: Ran N tests across M modules`. A module with no
 tests in it (unittest's exit code 5, "NO TESTS RAN") passes, as it does
-under discover. Local `python3 -m unittest discover -s tests` still works.
+under discover. A batch that exits 0 without unittest's own `Ran N tests`
+line fails: something ended the worker before the runner spoke (an
+`os._exit`, a patched `sys.exit`), and counting it as passed would shrink
+the total silently. Local `python3 -m unittest discover -s tests` still
+works.
 """
 
 from __future__ import annotations
@@ -110,7 +114,10 @@ def main() -> int:
             print(output, end="" if output.endswith("\n") else "\n", flush=True)
             ran = tests_ran(output)
             total += ran
-            if result.returncode and not (
+            if result.returncode == 0 and not RAN.search(output):
+                print("no test count in the output; the worker ended early", flush=True)
+                failed.append(" ".join(batch))
+            elif result.returncode and not (
                 result.returncode == NO_TESTS_RAN and ran == 0
             ):
                 failed.append(" ".join(batch))

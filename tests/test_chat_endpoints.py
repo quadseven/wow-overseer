@@ -58,7 +58,11 @@ class FakeHandler(map_server.Handler):
     def __init__(self, path, body=b""):
         self.path = path
         self.rfile = io.BytesIO(body)
-        self.headers = {"Content-Length": str(len(body))} if body else {}
+        self.headers = (
+            {"Content-Length": str(len(body)), "Content-Type": "application/json"}
+            if body
+            else {}
+        )
         self.sent = []
 
     def _send(self, code, ctype, body):
@@ -97,6 +101,14 @@ class ThoughtsEndpointTest(unittest.TestCase):
         # reads as "history ends here" - a silent lie about the past.
         with mock.patch.object(map_server, "_fetch_thoughts") as fetch:
             handler = self.get("/api/thoughts?name=Odo&before=yesterday")
+        self.assertEqual(handler.code, 400)
+        fetch.assert_not_called()
+
+    def test_a_cursor_of_unicode_digits_is_a_400_not_a_503(self):
+        # "²".isdigit() is True and int("²") raises: the raise used to land
+        # in the 503 path with a traceback in the log, for a bad link.
+        with mock.patch.object(map_server, "_fetch_thoughts") as fetch:
+            handler = self.get("/api/thoughts?name=Odo&before=%C2%B2")
         self.assertEqual(handler.code, 400)
         fetch.assert_not_called()
 
@@ -275,6 +287,40 @@ class ChatEndpointTest(unittest.TestCase):
 
     def test_an_empty_body_is_refused(self):
         self.assertEqual(post(raw=b"").code, 400)
+
+    def test_a_body_not_declared_json_is_refused_unread(self):
+        # A page on another origin can send a POST through the operator's
+        # browser without a preflight only as text/plain or a form; a JSON
+        # body under either name is the cross-site shape and never parses.
+        for ctype in ("text/plain", "application/x-www-form-urlencoded", None):
+            with self.subTest(ctype=ctype):
+                handler = FakeHandler(
+                    "/api/chat", json.dumps({"name": "Odo", "text": "hi"}).encode()
+                )
+                handler.headers.pop("Content-Type")
+                if ctype:
+                    handler.headers["Content-Type"] = ctype
+                with mock.patch.object(map_server, "_insert_thought") as wrote:
+                    handler.do_POST()
+                self.assertEqual(handler.code, 415)
+                self.assertEqual(handler.rfile.tell(), 0)
+                wrote.assert_not_called()
+
+    def test_a_json_body_with_a_charset_is_still_json(self):
+        handler = FakeHandler(
+            "/api/chat", json.dumps({"name": "Odo", "text": ""}).encode()
+        )
+        handler.headers["Content-Type"] = "application/json; charset=utf-8"
+        handler.do_POST()
+        # Past the type check: the empty text is what is refused now.
+        self.assertEqual(handler.code, 400)
+        self.assertNotEqual(handler.payload["error"], "send application/json")
+
+    def test_the_handler_gives_up_on_a_silent_socket(self):
+        # One idle connection per thread, with no cap on threads, is a
+        # socket-level hole no body limit closes.
+        self.assertGreater(map_server.Handler.timeout, 0)
+        self.assertLessEqual(map_server.Handler.timeout, 120)
 
     def test_a_dead_database_is_a_503(self):
         self.mocks["_fetch_chat_grounding"].side_effect = OSError("gone")

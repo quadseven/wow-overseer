@@ -10,7 +10,8 @@ operator names, so its stream shows them. It queues moves as
 (`director.observer_allows`) holds only observer commands.
 
 Orders come from Discord (in the overseer channel, from an allowed user) or
-`POST /api/director {"watch": "<order>"}` with the `X-Director-Token` header:
+`POST /api/director {"watch": "<order>"}` with the `X-Director-Token` header
+and `Content-Type: application/json` (every JSON POST on the site requires it):
 
 ```text
 watch <character> | family [key] | guild <name> | run <id>

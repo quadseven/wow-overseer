@@ -182,6 +182,14 @@ MODELS = modelviewer.Store(MODEL_CACHE, _fetch_upstream)
 # WoW's own name rule (same as the bridge); anything else never reaches SQL.
 _NAME_RE = re.compile(r"^[A-Za-z]{2,12}$")
 
+
+# A row id or map id as the query string spells it: ASCII digits only.
+# str.isdigit alone admits superscripts and other Unicode digits that
+# int() then refuses, which turned a bad cursor into a 503 and a logged
+# traceback instead of the 400 it is.
+def _row_id(raw: str) -> bool:
+    return raw.isascii() and raw.isdigit() and len(raw) <= 18
+
 # The inner voice, reached exactly as the bridge reaches it. Duplicated
 # rather than imported because bridge.py is the Discord process (importing
 # it would pull in discord.py and its env contract); the defaults, the
@@ -4311,6 +4319,11 @@ def _ask_llm(prompt: str) -> str:
 # before the process died is not evidence of anything now.
 _FRAMES: dict = {}
 _FRAMES_LOCK = threading.Lock()
+# The name check above the store admits any 2-12 letters, not just the
+# roster, so the "one per character" bound needs a ceiling of its own: past
+# it the record that was last touched longest ago goes. Four times the
+# streams that can run at once is more than any watch wall shows.
+MAX_FRAMES = 4 * stream.MAX_CHANNELS
 
 
 # Where the page reaches the model-viewer cache. Also the value of the
@@ -4874,6 +4887,12 @@ def _family_scope(query: dict):
 
 
 class Handler(BaseHTTPRequestHandler):
+    # Socket reads and writes give up after this long. Without it a client
+    # that opens a connection and sends nothing, or declares a body it never
+    # sends, holds one thread of the threading server for as long as it
+    # likes, and there is no cap on threads.
+    timeout = 30
+
     def do_GET(self):  # noqa: N802 (stdlib naming)
         # A lookup and nothing else. Every GET endpoint takes the parsed
         # query and owns its own method, so adding one is a row in the table
@@ -5258,7 +5277,7 @@ class Handler(BaseHTTPRequestHandler):
         if not _NAME_RE.fullmatch(name):
             return 400, {"error": "not a character name"}
         raw_before = query.get("before", [""])[0]
-        if raw_before and not raw_before.isdigit():
+        if raw_before and not _row_id(raw_before):
             # Silently ignoring a malformed cursor would restart the page at
             # the newest thought and read as "history ends here".
             return 400, {"error": "bad cursor"}
@@ -5284,7 +5303,7 @@ class Handler(BaseHTTPRequestHandler):
 
         def read(query: dict, _ctx) -> tuple[int, dict]:
             raw_after = query.get("after", [""])[0]
-            if raw_after and not raw_after.isdigit():
+            if raw_after and not _row_id(raw_after):
                 return 400, {"error": "bad cursor"}
             if not raw_after:
                 return 200, {"rows": [], "after": _fetch_chat_newest()}
@@ -5440,7 +5459,7 @@ class Handler(BaseHTTPRequestHandler):
         # answer to a request with a bad query string and a 400 would blank
         # the tab over a typo in a pasted URL.
         asked = query.get("map", [None])[0]
-        map_id = int(asked) if asked and asked.isdigit() else None
+        map_id = int(asked) if asked and _row_id(asked) else None
         if map_id not in achievements.MAP_NAMES:
             map_id = None
         # A failed read answers 503 (_answer).
@@ -6005,6 +6024,8 @@ class Handler(BaseHTTPRequestHandler):
         with _FRAMES_LOCK:
             _FRAMES[name] = frames.accept(_FRAMES.get(name), status, body,
                                           detail, time.time())
+            while len(_FRAMES) > MAX_FRAMES:
+                del _FRAMES[min(_FRAMES, key=lambda n: _FRAMES[n]["at"])]
         if status != frames.OK:
             log.info("frame: %s reported %s%s", name, status,
                      " - " + frames.clean_detail(detail) if detail else "")
@@ -6338,6 +6359,14 @@ class Handler(BaseHTTPRequestHandler):
             # Bounded read: this endpoint takes a name and a sentence, and
             # an unbounded rfile.read is a memory hole on a public port.
             self._send(413, "application/json", b'{"error": "too much to say"}')
+            return None
+        ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0]
+        if ctype.strip().lower() != "application/json":
+            # A page on another origin can POST through the operator's own
+            # browser without a preflight only as a simple type (text/plain,
+            # a form). Refusing everything but JSON closes that door; the
+            # app (app/api.js) and the seer (vision.py) already send it.
+            self._send(415, "application/json", b'{"error": "send application/json"}')
             return None
         try:
             body = json.loads(self.rfile.read(length))
