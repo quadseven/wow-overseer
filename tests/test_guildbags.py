@@ -251,3 +251,124 @@ class LiveCaller(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(steps, {})
         read.assert_not_called()
+
+
+def bags_for(name, carried=(), worn=None):
+    return bu.Member(
+        name,
+        4,
+        worn=(bu.Bag("Pouch", 6, used=6, entry=4496),) if worn is None else worn,
+        carried=carried,
+    )
+
+
+class WearingABagItAlreadyCarries(unittest.TestCase):
+    """#1591: the corps posts ladder bags to the whole guild, but the bag
+    step only ever reached a maintenance member short of space, so a raider
+    or summoner who collected its posted bag carried it as cargo for good.
+    Wearing a bag you already carry is not a purchase and needs no role."""
+
+    def test_a_raider_wears_the_bigger_bag_it_carries(self):
+        m = member(
+            "Raider",
+            role=guildjobs.RAIDER,
+            level=43,
+            money=20000,
+            free_slots=0,
+            bag_slots=22,
+        )
+        spare = bu.Bag("Satchel", 8, entry=4498, guid=10)
+        steps, _ = guildbags.plan([m], [bags_for("Raider", (spare,))], {})
+        step = steps["Raider"].step
+        self.assertIsNone(step.walk)
+        self.assertEqual(
+            [(r.kind, r.command) for r in step.rows], [("bot", "e Hitem:4498:0")]
+        )
+
+    def test_a_summoner_with_an_empty_position_wears_its_carried_bag(self):
+        m = member(
+            "Summoner",
+            role=guildjobs.SUMMONER,
+            level=43,
+            money=20000,
+            free_slots=5,
+            bag_slots=22,
+        )
+        spare = bu.Bag("Satchel", 8, entry=4498, guid=10)
+        steps, _ = guildbags.plan([m], [bags_for("Summoner", (spare,), worn=())], {})
+        step = steps["Summoner"].step
+        self.assertIsNone(step.walk)
+        self.assertEqual(
+            [(r.kind, r.command) for r in step.rows], [("bot", "e Hitem:4498:0")]
+        )
+
+    def test_a_member_with_room_to_spare_still_wears_a_better_carried_bag(self):
+        m = replace(worker(), free_slots=10)
+        spare = bu.Bag("Satchel", 8, entry=4498, guid=10)
+        steps, _ = guildbags.plan([m], [containers((spare,))], {})
+        step = steps["Tailor"].step
+        self.assertEqual(
+            [(r.kind, r.command) for r in step.rows], [("bot", "e Hitem:4498:0")]
+        )
+
+    def test_a_raider_is_never_sent_to_buy_a_bag(self):
+        m = member(
+            "Raider",
+            role=guildjobs.RAIDER,
+            level=43,
+            money=20000,
+            free_slots=0,
+            bag_slots=22,
+        )
+        offers = {"Raider": vendors()["Tailor"]}
+        steps, _ = guildbags.plan([m], [bags_for("Raider")], offers)
+        self.assertEqual(steps, {})
+
+
+class TheBridgeReadsBagsForEveryRole(unittest.IsolatedAsyncioTestCase):
+    async def test_a_raiders_carried_bag_reaches_the_plan(self):
+        from test_guildsocial_bridge import bridge
+
+        m = member(
+            "Raider",
+            role=guildjobs.RAIDER,
+            level=43,
+            money=20000,
+            free_slots=0,
+            bag_slots=22,
+        )
+        rows = [
+            dict(
+                holder="Raider",
+                guid=10,
+                name="Pouch",
+                slots=6,
+                used=6,
+                bag=0,
+                slot=19,
+                entry=4496,
+                subclass=0,
+            ),
+            dict(
+                holder="Raider",
+                guid=11,
+                name="Satchel",
+                slots=8,
+                used=0,
+                bag=0,
+                slot=23,
+                entry=4498,
+                subclass=0,
+            ),
+        ]
+        with (
+            mock.patch.object(bridge, "_fetch_bag_state", return_value=rows) as read,
+            mock.patch.object(bridge, "_fetch_bag_vendors", return_value=[]),
+        ):
+            steps = await bridge.Bridge._job_bag_steps(
+                SimpleNamespace(), [m], (), set(), guildroute.MAIL_RUN_YARDS
+            )
+        read.assert_called_once_with(["Raider"])
+        plan = guildjobs.plan([m], bags=steps)
+        self.assertEqual([s.action for s in plan.steps], [guildjobs.BAG_ACTION])
+        self.assertEqual(plan.steps[0].rows[0].command, "e Hitem:4498:0")

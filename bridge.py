@@ -17828,7 +17828,9 @@ class Bridge(discord.Client):
 
     async def _job_bag_steps(self, members, recent, busy, cap) -> dict:
         wanted = [m for m in members
-                  if m.name not in busy and guildbags.eligible(m, recent)]
+                  if m.name not in busy
+                  and (guildbags.eligible(m, recent)
+                       or guildbags.equip_eligible(m, recent))]
         chosen, self._bag_read_offset = guildjobs.rotate_reads(
             [m.name for m in wanted], getattr(self, "_bag_read_offset", 0),
             GUILD_SUPPLY_READS_PER_PASS)
