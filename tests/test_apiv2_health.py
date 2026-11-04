@@ -564,7 +564,7 @@ class Handler(unittest.TestCase):
             health.FUND_SQL: [],
             health.INVITES_SQL: [],
             health.FAMILY_RUNS_SQL: [],
-            health.DEATHS_SQL: [
+            health._DEATHS: [
                 {
                     "name": "Tanglehoof",
                     "zone": 141,

@@ -137,7 +137,7 @@ BANK_MOVED_SQL = (
     "AND g.name IN ({holes}) GROUP BY g.name"
 )
 
-# _DEATH_SQL is one member's read; DEATHS_SQL is the template of the
+# _DEATH_SQL is one member's read; _DEATHS is the template of the
 # statement for any number of them (realmread.Memory matches it by its
 # fields). Each branch is one row by its key (character_name = %s, newest
 # first, LIMIT 1), the bounded shape for a newest-per-member read: a
@@ -147,13 +147,13 @@ _DEATH_SQL = (
     "UNIX_TIMESTAMP(created_at) AS at FROM overseer_death "
     "WHERE character_name = %s ORDER BY created_at DESC, id DESC LIMIT 1)"
 )
-DEATHS_SQL = _DEATH_SQL + "{more}"
+_DEATHS = _DEATH_SQL + "{more}"
 
 
 def deaths_sql(n: int) -> str:
     """One _DEATH_SQL per roster member, as one statement."""
     more = "".join(" UNION ALL " + _DEATH_SQL for _ in range(n - 1))
-    return DEATHS_SQL.format(more=more)
+    return _DEATHS.format(more=more)
 
 
 # The family campaigns' own runs (overseer_dungeon_run has no family column:
@@ -427,7 +427,7 @@ def bank_findings(banks: list, moved: dict, now_at: int) -> list:
 
 def unreleased_findings(roster: dict, deaths: list, now_at: int) -> list:
     """One finding per member the roster reads as an online corpse whose
-    newest death on record is older than RELEASE_SECONDS. DEATHS_SQL
+    newest death on record is older than RELEASE_SECONDS. _DEATH_SQL
     reads each member's newest death; of `deaths` rows the newest per
     member counts, since while a member stands dead its newest recorded
     death is the one it has not come back from (a death it already
