@@ -999,6 +999,82 @@ class Broken(unittest.TestCase):
         self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
         self.assertIn("Solomon's Law", p.broken[0].reason)
 
+    def test_quest_9_the_killing_fields_stalls_without_defias_spawns(self):
+        # Quest 9 "The Killing Fields" in Westfall (zone 40, level 15) requires
+        # killing Defias mobs (entry 9) with count 10. Without spawns of entry 9
+        # in Westfall, the quest has kills but no fields, so it stalls as
+        # STALLED_UNSOURCED. We add a specific stall reason explaining why.
+        killing_fields = quest(
+            9, WESTFALL, 15, kill=9, count=10, title="The Killing Fields"
+        )
+        cat = world(
+            extra_quests=[killing_fields],
+            extra_givers=[
+                giver(9, "start", 1009, 235, 0, 0),  # Farmer Saldean gives
+                giver(9, "end", 1009, 235, 0, 0),  # Farmer Saldean takes
+            ],
+            # No spawns of creature 9 (Defias) -> no fields for this quest
+        )
+        member = mirra(
+            level=15,
+            zone_id=WESTFALL,
+            quest_log={9: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({20, 21}),
+            quest_progress={9: 0},
+            quest_objectives={9: {9: 0}},
+        )
+        clock = questers.Clock()
+        # First pass - quest is not yet stalled
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        # Advance clock in PLAY_GAP_SECONDS increments until stall
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        # After 2 hours of play - quest should be stalled with specific reason
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 9)
+        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("The Killing Fields", p.broken[0].reason)
+
+    def test_quest_9_the_killing_fields_turn_in_fails_without_farmer_saldean_spawn(
+        self,
+    ):
+        # Quest 9 "The Killing Fields" turn-in NPC is Farmer Saldean (entry 235).
+        # If Farmer Saldean has no spawn, the turn-in fails immediately with
+        # ENDER_MISSING, even if the quest objectives are complete.
+        killing_fields = quest(
+            9, WESTFALL, 15, kill=9, count=10, title="The Killing Fields"
+        )
+        cat = world(
+            extra_quests=[killing_fields],
+            extra_givers=[
+                giver(9, "start", 1009, 235, 0, 0),
+                giver(9, "end", 1009, 235, 0, 0),
+            ],
+            extra_spawns=[
+                # Defias spawns exist so the quest can be completed
+                spawn(2009, 9, 100.0, 0.0, level=10, name="Defias Thug"),
+                spawn(2010, 9, 200.0, 0.0, level=12, name="Defias Looter"),
+            ],
+            # drop Farmer Saldean (guid 1009) -> no turn-in NPC spawn
+            drop={1009},
+        )
+        # Quest is complete (mobcount1=20, progress=100)
+        member = mirra(
+            level=15,
+            zone_id=WESTFALL,
+            quest_log={9: questers.STATUS_COMPLETE},
+            quests_done=frozenset({20, 21}),
+            quest_progress={9: 100},
+            quest_objectives={9: {9: 20}},
+        )
+        p = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual(
+            [(b.quest, b.reason) for b in p.broken], [(9, questers.ENDER_MISSING)]
+        )
+        # Complete quest is not abandoned, just recorded broken
+        self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
     def test_a_quest_of_another_zone_it_is_not_working_does_not_stall(self):
         p, _ = self._play(mirra(quest_log={20: 3}), 240)
         self.assertEqual(p.broken, ())
