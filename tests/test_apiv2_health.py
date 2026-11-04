@@ -364,6 +364,73 @@ class Bank(unittest.TestCase):
         self.assertEqual("guild-bank-empty:B", f["key"])
 
 
+class Unreleased(unittest.TestCase):
+    def roster(self, *members):
+        return {"members": list(members)}
+
+    def member(self, name, life="dead", online=True):
+        return {"name": name, "life": life, "online": online}
+
+    def death(self, name, at, zone=141, killer="Darnassus Sentinel"):
+        return {"name": name, "zone": zone, "killer": killer, "at": at}
+
+    def test_a_member_dead_past_the_release_bound_is_a_finding_by_name(self):
+        roster = self.roster(self.member("Tanglehoof"))
+        deaths = [self.death("Tanglehoof", NOW - 6 * 24 * HOUR)]
+        (f,) = health.unreleased_findings(roster, deaths, NOW)
+        self.assertEqual("unreleased:Tanglehoof", f["key"])
+        self.assertEqual("Tanglehoof is dead and has not released", f["title"])
+        self.assertEqual(
+            ("deaths", 1, 144.0, 144.0),
+            (f["area"], f["affected"], f["hours"], f["impact"]),
+        )
+        self.assertIn("Teldrassil", f["evidence"])
+        self.assertIn("Darnassus Sentinel", f["evidence"])
+        self.assertTrue(f["since"].endswith("Z"))
+
+    def test_a_member_dead_inside_the_bound_is_no_finding(self):
+        roster = self.roster(self.member("Tanglehoof"))
+        deaths = [self.death("Tanglehoof", NOW - 4 * 60)]
+        self.assertEqual([], health.unreleased_findings(roster, deaths, NOW))
+
+    def test_a_member_dead_exactly_the_bound_is_a_finding(self):
+        roster = self.roster(self.member("Tanglehoof"))
+        deaths = [self.death("Tanglehoof", NOW - health.RELEASE_SECONDS)]
+        (f,) = health.unreleased_findings(roster, deaths, NOW)
+        self.assertEqual("unreleased:Tanglehoof", f["key"])
+
+    def test_a_ghost_is_a_recovery_running_not_an_unreleased_corpse(self):
+        roster = self.roster(self.member("Tanglehoof", life="ghost"))
+        deaths = [self.death("Tanglehoof", NOW - 24 * HOUR)]
+        self.assertEqual([], health.unreleased_findings(roster, deaths, NOW))
+
+    def test_an_offline_member_read_as_dead_is_no_finding(self):
+        roster = self.roster(self.member("Tanglehoof", online=False))
+        deaths = [self.death("Tanglehoof", NOW - 24 * HOUR)]
+        self.assertEqual([], health.unreleased_findings(roster, deaths, NOW))
+
+    def test_a_dead_member_with_no_death_on_record_is_no_finding(self):
+        roster = self.roster(self.member("Tanglehoof"))
+        self.assertEqual([], health.unreleased_findings(roster, [], NOW))
+
+    def test_the_newest_death_is_the_one_that_counts(self):
+        roster = self.roster(self.member("Tanglehoof"))
+        deaths = [
+            self.death("Tanglehoof", NOW - 24 * HOUR),
+            self.death("Tanglehoof", NOW - 60),
+        ]
+        self.assertEqual([], health.unreleased_findings(roster, deaths, NOW))
+
+    def test_each_unreleased_member_is_its_own_finding(self):
+        roster = self.roster(self.member("Tanglehoof"), self.member("Mosshoof"))
+        deaths = [
+            self.death("Tanglehoof", NOW - 24 * HOUR),
+            self.death("Mosshoof", NOW - 2 * HOUR),
+        ]
+        keys = [f["key"] for f in health.unreleased_findings(roster, deaths, NOW)]
+        self.assertEqual(["unreleased:Mosshoof", "unreleased:Tanglehoof"], sorted(keys))
+
+
 class Text(unittest.TestCase):
     def test_strings_are_one_line_of_ascii_within_their_limits(self):
         f = health.finding(
@@ -424,6 +491,9 @@ class Handler(unittest.TestCase):
         with (
             mock.patch.object(health.members, "stuck", return_value=(200, stuck)),
             mock.patch.object(
+                health.members, "roster", return_value=(200, {"members": []})
+            ),
+            mock.patch.object(
                 health.quests, "questers", return_value=(200, {"questers": []})
             ),
         ):
@@ -474,6 +544,9 @@ class Handler(unittest.TestCase):
                 health.members, "stuck", return_value=(200, {"members": []})
             ),
             mock.patch.object(
+                health.members, "roster", return_value=(200, {"members": []})
+            ),
+            mock.patch.object(
                 health.quests, "questers", return_value=(200, {"questers": []})
             ),
         ):
@@ -481,6 +554,49 @@ class Handler(unittest.TestCase):
                 (200, []),
                 (health.health({}, ctx)[0], health.health({}, ctx)[1]["findings"]),
             )
+
+    def test_the_handler_flags_a_member_dead_past_the_release_bound(self):
+        answers = {
+            health.NOW_SQL: [{"now_at": NOW}],
+            guildrun._RUN_SQL: [],
+            health.BANK_SQL: [],
+            health.BANK_MOVED_SQL: [],
+            health.FUND_SQL: [],
+            health.INVITES_SQL: [],
+            health.FAMILY_RUNS_SQL: [],
+            health.DEATHS_SQL: [
+                {
+                    "name": "Tanglehoof",
+                    "zone": 141,
+                    "killer": "Darnassus Sentinel",
+                    "at": NOW - 26 * HOUR,
+                }
+            ],
+        }
+        ctx, asked = ctx_for(answers)
+        roster = {
+            "members": [
+                {"name": "Tanglehoof", "life": "dead", "online": True},
+                {"name": "Grug", "life": "alive", "online": True},
+            ]
+        }
+        with (
+            mock.patch.object(
+                health.members, "stuck", return_value=(200, {"members": []})
+            ),
+            mock.patch.object(health.members, "roster", return_value=(200, roster)),
+            mock.patch.object(
+                health.quests, "questers", return_value=(200, {"questers": []})
+            ),
+        ):
+            status, payload = health.health({}, ctx)
+        self.assertEqual(200, status)
+        (f,) = payload["findings"]
+        self.assertEqual("unreleased:Tanglehoof", f["key"])
+        self.assertEqual("Tanglehoof is dead and has not released", f["title"])
+        # The roster names are bound, never formatted into the statement.
+        death_params = [p for sql, p in asked if "overseer_death" in sql][0]
+        self.assertEqual(("Grug", "Tanglehoof"), death_params)
 
 
 if __name__ == "__main__":
