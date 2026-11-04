@@ -19,6 +19,7 @@ from test_questers import ended, giver, started
 
 WESTFALL, TIRISFAL, DEATHKNELL = 40, 85, 154
 ASHENVALE, STONETALON, DESOLACE, LOCH_MODAN, WETLANDS = 331, 406, 405, 38, 11
+REDRIDGE = 44
 ALLIANCE, HORDE = 1101, 690
 DWARF, NIGHT_ELF, GNOME, TAUREN, ORC, HUMAN = 3, 4, 7, 6, 2, 1
 WARSONG_OUTRIDERS = 889
@@ -378,6 +379,27 @@ class TheBridgeHandsTheQuesterItsRoom(unittest.TestCase):
             )
             cat = bridge._quester_catalogue()
         self.assertEqual(cat.facts[1082].before, ((1083, 1084),))
+
+
+class Quest131DeliveringDaffodilsRequiresPrerequisite(unittest.TestCase):
+    """Quest 131 'Delivering Daffodils' in Redridge Mountains (level 15) requires
+    quest 128 'A Swift Message' as a prerequisite (PrevQuestID). The world
+    refuses the take as 'not eligible (prerequisite)' when the prerequisite is
+    not met. Bromli (Dwarf, level 29) encounters this in Redridge."""
+
+    def test_delivering_daffodils_requires_a_swift_message(self):
+        cat = catalogue(
+            [
+                row(131, "Delivering Daffodils", REDRIDGE, 15, 10, ALLIANCE, prev=128),
+                row(128, "A Swift Message", REDRIDGE, 15, 10, ALLIANCE),
+            ],
+        )
+        # Bromli in Redridge, has not done quest 128
+        bromli = member("Bromli", DWARF, 29, REDRIDGE)
+        self.assertNotIn(131, questers.in_reach(cat, bromli, REDRIDGE))
+        # After completing quest 128, quest 131 becomes available
+        done = member("Bromli", DWARF, 29, REDRIDGE, quests_done=frozenset({128}))
+        self.assertIn(131, questers.in_reach(cat, done, REDRIDGE))
 
 
 if __name__ == "__main__":
