@@ -86,6 +86,20 @@ class TheUpAnswer(unittest.TestCase):
                 self.judge("error", why, "refused").state, classparty.LEADER, why
             )
 
+    def test_only_a_leader_in_combat_is_a_busy_refusal(self):
+        busy = self.judge("error", "the leader is in combat", "refused")
+        self.assertTrue(classparty.leader_busy(busy))
+        for why in (
+            "the leader is already in a party",
+            "the leader leads a family campaign",
+            "the realm already has 4 quest parties (Overseer.PartyWalk.MaxParties)",
+            "the core would not form a party under the leader",
+            "'Chill': a helper is in combat",
+        ):
+            self.assertFalse(
+                classparty.leader_busy(self.judge("error", why, "refused")), why
+            )
+
     def test_a_malformed_row_is_neither_a_helper_nor_the_leader(self):
         why = "a name in the row is not a character name"
         self.assertEqual(self.judge("error", why, "refused").state, classparty.BAD)
@@ -744,9 +758,43 @@ class TheBridgeFollowsTheParty(unittest.TestCase):
         self.assertIn(classparty.LEADER_WAIT_SECONDS, this.slept)
         self.assertEqual(this.settled, [(1, True, False)])
 
-    def test_failures_give_the_ask_up_and_cool_its_asker(self):
+    def test_a_leader_fighting_past_the_failure_limit_still_forms_its_party(self):
+        # The leader stands at a hostile objective and its fight outlasts the
+        # ask's whole failure budget (MAX_FAILURES refusals, about two minutes
+        # of waits): a busy refusal is waited out inside the attempt, so the
+        # party still forms once the fight ends and no failure is counted
+        # (#1222).
         busy = answer(
             "error", "the leader is in combat", "refused", "refused: see result"
+        )
+        this = _Bridge(
+            [busy] * classparty.MAX_FAILURES
+            + [FORMED, answer("applied", phase="ended")]
+        )
+        drive(this, a_run())
+        ups = [r for r in this.rows if r[2].startswith("party-up")]
+        self.assertEqual(len(ups), classparty.MAX_FAILURES + 1)
+        self.assertEqual(this._class_board.failures(1), 0)
+        self.assertEqual(this.settled, [(1, True, False)])
+
+    def test_a_leader_who_never_stops_fighting_costs_one_failure_not_the_ask(self):
+        busy = answer(
+            "error", "the leader is in combat", "refused", "refused: see result"
+        )
+        this = _Bridge([busy] * (classparty.LEADER_BUSY_RETRIES + 2))
+        drive(this, a_run())
+        ups = [r for r in this.rows if r[2].startswith("party-up")]
+        self.assertEqual(len(ups), 1 + classparty.LEADER_BUSY_RETRIES)
+        self.assertEqual(this._class_board.failures(1), 1)
+        self.assertEqual(this.settled, [(1, False, False)])
+        self.assertEqual(this._class_board.cooling(0.0), set())
+
+    def test_failures_give_the_ask_up_and_cool_its_asker(self):
+        busy = answer(
+            "error",
+            "the realm already has 4 quest parties (Overseer.PartyWalk.MaxParties)",
+            "refused",
+            "refused: see result",
         )
         this = _Bridge([busy] * 5)
         drive(this, a_run())
