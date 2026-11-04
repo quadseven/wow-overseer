@@ -261,6 +261,17 @@ class TheLevelGuardIsTheOnlyOneThereIs(unittest.TestCase):
         )
         self.assertTrue(over.refused)
 
+    def test_a_zone_within_the_familys_level_yields_an_aim(self):
+        got = gatheraim.choose(
+            skills={"G": {"mining": 1}},
+            standing_on=1,
+            spawns=[spawn(1337, COPPER)],
+            family_level=48,
+            zone_levels={1337: 42},
+        )
+        self.assertFalse(got.refused)
+        self.assertEqual(got.chosen.zone_id, 1337)
+
     def test_a_dangerous_dense_zone_loses_to_a_safe_thin_one(self):
         rows = [spawn(490, COPPER)] * 10 + [spawn(148, COPPER)]
         got = gatheraim.choose(
