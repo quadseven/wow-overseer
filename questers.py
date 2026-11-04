@@ -234,6 +234,7 @@ SOLOMONS_LAW = (
     "Solomon's Law (quest 91) requires creatures with no spawns in Redridge Mountains"
 )
 A_BAYING_OF_GNOLLS = "A Baying of Gnolls (quest 124) requires creatures with no spawns in Redridge Mountains"
+THE_LOST_TOOLS = "The Lost Tools (quest 125) requires items from creatures with no spawns in Redridge Mountains"
 FARGODEEP_EXPLORATION = (
     "requires exploring Fargodeep Mine; questers cannot earn exploration credit"
 )
@@ -1296,6 +1297,8 @@ def _broken_reason(
         return SOLOMONS_LAW
     if quest.id == 124 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return A_BAYING_OF_GNOLLS
+    if quest.id == 125 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
+        return THE_LOST_TOOLS
     if quest.id == 62 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return FARGODEEP_EXPLORATION
     missing = _ender_missing(quest, facts, gone, object_gone)
