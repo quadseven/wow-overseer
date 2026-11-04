@@ -17190,6 +17190,7 @@ class Bridge(discord.Client):
         focus = await self._raid_supply_focus(
             guild_facts, recent, busy, cap, raidsupply.reserve(withdrawn, spent))
         plan = raidsupply.plan_guild(guild_facts, recent, busy, focus=focus, cap=cap)
+        _request_fire_potion_order(plan.lines)
         log.info("%s; focus %s", raidsupply.summary(plan), focus or "none")
         _log_capped("raid supply", plan.notes)
         now = time.monotonic()
@@ -25303,19 +25304,39 @@ _GUILD_SKILLS_SQL = (
 
 
 def _log_work_orders(roster: list) -> None:
-    """Log who takes each standing guild work order this pass (#486).
-
-    Log only: workorders.py decides, and nothing here writes a row or sends
-    an order, so the world is unchanged by it.
-    """
-    plan = workorders.plan(
-        workorders.STANDING_ORDERS, workorders.members_from_roster(roster)
-    )
+    """Plan standing and stored work orders and persist stored assignments."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            orders = workorderstore.open_orders(cur)
+            plan = workorders.plan(
+                [*orders, *workorders.STANDING_ORDERS],
+                workorders.members_from_roster(roster),
+            )
+            workorderstore.save_plan(cur, plan)
+    except (pymysql.err.MySQLError, OSError):
+        # Store errors only: a planner defect (a malformed roster skill, say)
+        # surfaces to the guild pass, which logs it as a plan failure.
+        log.exception("workorders: planning or store read/write failed; retrying next pass")
+        return
     log.info("workorders: %s", workorders.headline(plan))
     for line in workorders.lines(plan):
         log.info("workorders: %s", line)
     for note in plan.notes:
         log.info("workorders: %s", note)
+
+
+def _request_fire_potion_order(lines) -> None:
+    """Keep the raid's Greater Fire Protection Potion shortfall in the store."""
+    order = raidsupply.fire_potion_order(lines)
+    if order is None:
+        return
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            workorderstore.request(cur, order)
+    except (pymysql.err.MySQLError, OSError):
+        # Store errors only: a defect in building or requesting the order
+        # surfaces to the raid supply pass instead of reading as an outage.
+        log.exception("workorders: fire potion shortfall could not be stored")
 
 
 def _fetch_guild_roster(names: list) -> list:
