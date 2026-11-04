@@ -25312,7 +25312,9 @@ def _request_fire_potion_order(lines) -> None:
     try:
         with _connect() as conn, conn.cursor() as cur:
             workorderstore.request(cur, order)
-    except Exception:
+    except (pymysql.err.MySQLError, OSError):
+        # Store errors only: a defect in building or requesting the order
+        # surfaces to the raid supply pass instead of reading as an outage.
         log.exception("workorders: fire potion shortfall could not be stored")
 
 

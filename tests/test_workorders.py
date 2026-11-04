@@ -421,6 +421,44 @@ class BridgeWiringTest(unittest.TestCase):
         request.assert_called_once()
         self.assertEqual(request.call_args.args[1], order)
 
+    def test_a_fire_potion_store_outage_is_logged_and_the_pass_goes_on(self):
+        from test_guildsocial_bridge import bridge
+
+        order = _order(workorders.CONSUMABLE, "Greater Fire Protection Potion", 12)
+        with (
+            mock.patch.object(bridge, "_connect", _store_connection()),
+            mock.patch.object(
+                bridge.raidsupply, "fire_potion_order", return_value=order
+            ),
+            mock.patch.object(
+                bridge.workorderstore,
+                "request",
+                side_effect=bridge.pymysql.err.MySQLError("store unavailable"),
+            ),
+            self.assertLogs(bridge.log, "ERROR") as seen,
+        ):
+            bridge._request_fire_potion_order([object()])
+        self.assertIn(
+            "workorders: fire potion shortfall could not be stored",
+            seen.records[0].getMessage(),
+        )
+
+    def test_a_fire_potion_request_defect_is_not_reported_as_a_store_failure(self):
+        from test_guildsocial_bridge import bridge
+
+        order = _order(workorders.CONSUMABLE, "Greater Fire Protection Potion", 12)
+        with (
+            mock.patch.object(bridge, "_connect", _store_connection()),
+            mock.patch.object(
+                bridge.raidsupply, "fire_potion_order", return_value=order
+            ),
+            mock.patch.object(
+                bridge.workorderstore, "request", side_effect=ValueError("bad order")
+            ),
+            self.assertRaises(ValueError),
+        ):
+            bridge._request_fire_potion_order([object()])
+
     def test_the_bridge_plans_stored_orders_and_saves_assignments(self):
         from test_guildsocial_bridge import bridge
 
