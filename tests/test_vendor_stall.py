@@ -77,6 +77,36 @@ class VendorStallDecisionTests(unittest.TestCase):
         self.assertEqual(yielded.action, vendor_stall.YIELD)
         self.assertLessEqual(vendor_stall.MAX_IDLE_COUNTER_SECONDS, 30 * 60)
 
+    def test_sellers_wait_past_the_trip_yields_the_counter(self):
+        # #1261, the counter-mode case the brief names: the leader stands
+        # at the vendor with no sale queued and its own step is young (its
+        # intent keeps changing while the sellers stay held), while the
+        # sellers' vendor wait - the fresh no-vendor step age the wait
+        # trip itself reads - has run to the trip bound. The yield must
+        # fire on that clock too, so the held sellers rejoin or another
+        # route takes the column, well inside the two-hour bound.
+        held = self.decide(
+            at_counter=True,
+            bag_wait_seconds=60,
+            vendor_wait_seconds=vendor_stall.MAX_IDLE_COUNTER_SECONDS - 1,
+        )
+        self.assertEqual(held.action, vendor_stall.HOLD)
+        yielded = self.decide(
+            at_counter=True,
+            bag_wait_seconds=60,
+            vendor_wait_seconds=vendor_stall.MAX_IDLE_COUNTER_SECONDS,
+        )
+        self.assertEqual(yielded.action, vendor_stall.YIELD)
+        self.assertIn("held sellers rejoin", yielded.reason)
+
+    def test_sellers_wait_does_not_yield_the_counter_with_a_sale_outstanding(self):
+        decision = self.decide(
+            at_counter=True,
+            sales_outstanding=1,
+            vendor_wait_seconds=vendor_stall.MAX_IDLE_COUNTER_SECONDS,
+        )
+        self.assertEqual(decision.action, vendor_stall.HOLD)
+
     def test_far_held_sellers_do_not_keep_the_leader_at_the_counter(self):
         # #1261, driven as the bridge drives it: the sellers stand 3,500 and
         # 5,500 yards from the leader and the module holds them as too far to

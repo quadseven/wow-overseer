@@ -74,6 +74,7 @@ def _settle(members_state: str):
         },
         "_fetch_vendor_position": lambda name: (0, 100.0, 0.0, 0.0),
         "_fetch_positions": lambda names: {n: POSITIONS[n] for n in names},
+        "_fetch_vendor_wait_seconds": lambda names: 0,
     }
     exec(
         compile(
