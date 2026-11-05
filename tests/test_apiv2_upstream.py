@@ -349,9 +349,9 @@ class Handler(unittest.TestCase):
     def ctx(self, payload):
         server = types.SimpleNamespace(
             realm=types.SimpleNamespace(build_realm=lambda **rows: payload),
-            _BUILD_SQL="b",
-            _WORLD_VERSION_SQL="w",
-            _REALMLIST_SQL="r",
+            BUILD_SQL="b",
+            WORLD_VERSION_SQL="w",
+            REALMLIST_SQL="r",
         )
         read = types.SimpleNamespace(rows=lambda *a, **k: [])
         return types.SimpleNamespace(server=server, read=read)

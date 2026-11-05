@@ -173,7 +173,7 @@ def fetch(ctx) -> dict:
     if names:
         rows = _read(ctx, names)
     everyone = sorted(set(names) | {r["name"] for r in rows["guild"]})
-    facts = server._fetch_now_facts(everyone) if everyone else {}
+    facts = server.fetch_now_facts(everyone) if everyone else {}
     return dict(rows, families=families, facts=facts or {})
 
 
@@ -183,7 +183,7 @@ def _read(ctx, names: list) -> dict:
     # S608 below: `holes` is a run of placeholders sized by the roster;
     # every value is bound by the driver.
     guild = rd.rows(
-        server._LINEUP_GUILD.format(holes=holes(len(names))),
+        server.LINEUP_GUILD.format(holes=holes(len(names))),
         tuple(names),
         what="guild_member",
     )

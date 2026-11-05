@@ -47,7 +47,7 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
     def test_the_handler_sits_below_every_other_endpoints_window(self):
         """The Family, Armory and Wealth windows end at `def _thoughts` or
         `def do_POST`; the watch window starts at `def _watch_state`."""
-        at = SERVER.index("    def _decree(self")
+        at = SERVER.index("    def _decree(")
         self.assertGreater(at, SERVER.index("    def do_POST(self"))
         self.assertGreater(at, SERVER.index("    def _chat(self"))
         self.assertLess(at, SERVER.index("    def _watch_state(self"))
@@ -98,16 +98,16 @@ class TheEndpointIsAnAdapter(unittest.TestCase):
         self.assertIn('"/api/decree": _decree_post,', post[: post.index("}")])
 
     def test_the_handler_only_fetches_and_serves(self):
-        handler = SERVER[SERVER.index("    def _decree(self") :]
+        handler = SERVER[SERVER.index("    def _decree(") :]
         handler = handler[: handler.index("    def _watch_state(self")]
         self.assertIn("decree.build_console(**_fetch_decree())", handler)
         self.assertNotIn("query.get", handler)
 
     def test_a_failed_query_is_a_503_and_never_a_blank_console(self):
-        handler = SERVER[SERVER.index("    def _decree(self") :]
-        handler = handler[: handler.index("    def _watch_state(self")]
-        self.assertIn("self._send(503", handler)
-        self.assertIn("log.exception", handler)
+        # _answer logs the failure and sends the 503 (#1701).
+        self.assertIn(
+            '    @_get_route("decree query failed")\n    def _decree(', SERVER
+        )
 
     def test_a_degraded_schema_thins_the_console_rather_than_breaking_it(self):
         """A realm whose worldserver predates a table must get an empty list,

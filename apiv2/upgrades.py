@@ -1,7 +1,7 @@
 """GET /api/v2/upgrades?name=X: /api/upgrades, plus what to wear at this level, now.
 
 THE SAME PAYLOAD AS /api/upgrades, extended and never changed: the map
-server's _upgrades_payload builds it, with the same gate (a family guild
+server's upgrades_payload builds it, with the same gate (a family guild
 member, by the world's name rule), and this adds fields beside its own.
 
 `now` PER SLOT is the best boss drop the member can wear today from a dungeon
@@ -52,9 +52,9 @@ def _world(ctx) -> dict:
             return _WORLD
         server, rd = ctx.server, ctx.read
         catalogue = rd.rows(
-            server._PLAN_CATALOGUE,
+            server.PLAN_CATALOGUE,
             (),
-            fallback=server._PLAN_CATALOGUE_OLD,
+            fallback=server.PLAN_CATALOGUE_OLD,
             what="dungeon_access_template",
         )
         maps = dungeonplan.map_ids(catalogue, achievements.MAP_NAMES)
@@ -62,12 +62,12 @@ def _world(ctx) -> dict:
         if maps:
             h = holes(len(maps))
             encounters = rd.rows(
-                server._PLAN_ENCOUNTERS.format(holes=h),
+                server.PLAN_ENCOUNTERS.format(holes=h),
                 tuple(maps),
                 what="instance_encounters",
             )
             loot = rd.rows(
-                server._PLAN_LOOT.format(holes=h),
+                server.PLAN_LOOT.format(holes=h),
                 tuple(maps),
                 what="creature_loot_template",
             )
@@ -83,18 +83,18 @@ def fetch(ctx, name: str) -> dict:
     world = _world(ctx)
     one = holes(1)
     chars = rd.rows(
-        server._PLAN_CHARS.format(holes=one),
+        server.PLAN_CHARS.format(holes=one),
         (name,),
-        fallback=server._PLAN_CHARS_OLD.format(holes=one),
+        fallback=server.PLAN_CHARS_OLD.format(holes=one),
         what="characters",
     )
     worn = rd.rows(
-        server._RECAP_WORN.format(holes=one),
+        server.RECAP_WORN.format(holes=one),
         (len(server.armory.EQUIPPED_SLOTS), name),
         what="character_inventory",
     )
     skills = rd.rows(
-        server._RECAP_SKILLS.format(holes=one),
+        server.RECAP_SKILLS.format(holes=one),
         (name,),
         what="character_skills",
     )
@@ -200,7 +200,7 @@ def upgrades(query: dict, ctx) -> tuple[int, dict]:
     name = wanted_name(query)
     if not may_answer(ctx, name):
         return 404, dict(NOT_A_MEMBER)
-    code, payload = ctx.server._upgrades_payload(name)
+    code, payload = ctx.server.upgrades_payload(name)
     if code != 200:
         return code, payload
     server = ctx.server

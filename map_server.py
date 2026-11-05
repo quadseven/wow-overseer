@@ -214,7 +214,7 @@ _DIRECTOR_TOKEN = os.environ.get("OVERSEER_DIRECTOR_TOKEN", "").strip()
 # wording to the panel's rendering choices.
 _MAP_RACE_NAMES = {1: "Human", 2: "Orc", 3: "Dwarf", 4: "Night Elf", 5: "Undead",
                    6: "Tauren", 7: "Gnome", 8: "Troll", 10: "Blood Elf", 11: "Draenei"}
-_MAP_CLASS_NAMES = {1: "Warrior", 2: "Paladin", 3: "Hunter", 4: "Rogue", 5: "Priest",
+MAP_CLASS_NAMES = {1: "Warrior", 2: "Paladin", 3: "Hunter", 4: "Rogue", 5: "Priest",
                     6: "Death Knight", 7: "Shaman", 8: "Mage", 9: "Warlock", 11: "Druid"}
 
 # One short-lived connection per poll, same posture as the bridge; the map
@@ -308,9 +308,9 @@ def _bridge_started() -> float | None:
 # one banner on the site whose whole job is to be trustworthy when something is
 # wrong. A page that renders "REALM NOT VERIFIED" is doing its job; a page that
 # 500s has told the reader nothing at all about what they are looking at.
-_BUILD_SQL = "SELECT name, value, source, reported_at FROM overseer_build"
-_WORLD_VERSION_SQL = "SELECT core_version FROM acore_world.version LIMIT 1"
-_REALMLIST_SQL = "SELECT name FROM acore_auth.realmlist ORDER BY id LIMIT 1"
+BUILD_SQL = "SELECT name, value, source, reported_at FROM overseer_build"
+WORLD_VERSION_SQL = "SELECT core_version FROM acore_world.version LIMIT 1"
+REALMLIST_SQL = "SELECT name FROM acore_auth.realmlist ORDER BY id LIMIT 1"
 
 
 _CROSSING_SQL = "SELECT value FROM overseer_build WHERE name = 'crossing'"
@@ -347,10 +347,10 @@ def _fetch_realm() -> dict:
     question about the deployment, not about anybody the caller can name.
     """
     with realmread.Session(_connect) as rd:
-        build_rows = rd.rows(_BUILD_SQL, what="overseer_build")
-        version_rows = rd.rows(_WORLD_VERSION_SQL,
+        build_rows = rd.rows(BUILD_SQL, what="overseer_build")
+        version_rows = rd.rows(WORLD_VERSION_SQL,
                                what="acore_world.version")
-        realmlist_rows = rd.rows(_REALMLIST_SQL,
+        realmlist_rows = rd.rows(REALMLIST_SQL,
                                  what="acore_auth.realmlist")
         db_now = rd.db_now()
     return {"build_rows": build_rows, "version_rows": version_rows,
@@ -724,7 +724,7 @@ def _creature_names(fetch, entries) -> dict:
     return {e: dict(_CREATURE_NAMES[e]) for e in wanted if e in _CREATURE_NAMES}
 
 
-def _fetch_now_facts(names):
+def fetch_now_facts(names):
     """name -> the facts nowstatus composes a tile's sentence from.
 
     Three small reads: the roster rows (job, aim), the module's intent book
@@ -1096,7 +1096,7 @@ def _fetch_upgrade_items(ids: list[int]) -> dict[int, dict]:
 _NOT_A_GUILD_MEMBER = {"error": "not a guild member"}
 
 
-def _upgrades_payload(wanted: str) -> tuple[int, dict]:
+def upgrades_payload(wanted: str) -> tuple[int, dict]:
     """(status, payload) for /api/upgrades?name=`wanted`.
 
     The gate and the build of the upgrade tracker (#541), apart from the
@@ -1311,7 +1311,7 @@ def _fetch_guild_sizes(names: list[str]) -> dict[str, int]:
 
 # EVERY MEMBER OF EVERY FAMILY GUILD, ONE ROW PER WORN ITEM (the Lineup tab's
 # gear table). The guilds are the ones the roster's names are in, as the
-# database reports them, exactly as _LINEUP_GUILD binds them; nothing from the
+# database reports them, exactly as LINEUP_GUILD binds them; nothing from the
 # request reaches it. A member wearing nothing still comes back once, with a
 # NULL slot. Online and life are not read here: _fetch_guild_gear adds
 # apiv2.presence's reading, the one the roster and the Guild page serve.
@@ -2365,7 +2365,7 @@ def _fetch_eye() -> dict:
 # BY GUILD ID AND NOT BY GUILD NAME. Two families mean two guilds, and naming
 # them here would put a deployment's own words in the server. The subquery is
 # the same one the raid-goal read uses: whichever guilds the roster is in.
-_LINEUP_GUILD = (
+LINEUP_GUILD = (
     "SELECT g.guildid, g.name AS guild_name, c.name, c.class AS class_id, "
     "       c.level, c.race, " + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
@@ -2845,7 +2845,7 @@ def _fetch_raidgoals() -> dict:
             tuple(spells), what="trainer_spell")
         chars = rd.rows(_RAID_CHARS.format(holes=rholes),  # noqa: S608
                         tuple(roster), what="characters")
-        skills = rd.rows(_RECAP_SKILLS.format(holes=rholes),  # noqa: S608
+        skills = rd.rows(RECAP_SKILLS.format(holes=rholes),  # noqa: S608
                          tuple(roster), what="character_skills")
         known = rd.rows(
             _RAID_SPELLS.format(holes=rholes, spells=spell_holes),  # noqa: S608
@@ -2925,7 +2925,7 @@ def _fetch_raidgoals() -> dict:
 # without `guild_member` gets an empty guild and a page covering the family,
 # rather than a 503 on a tab that has nothing to do with the missing table
 # (infra#3172). This section sits above the recap's reads for the same reason
-# `_fetch_dungeonplan` below does: it must stay OUTSIDE the recap suite's fetch
+# `fetch_dungeonplan` below does: it must stay OUTSIDE the recap suite's fetch
 # window.
 
 # The trade skill ids, inlined as text rather than bound, exactly as
@@ -3172,7 +3172,7 @@ def _fetch_guildcraft(groups: list[tuple[str, list[str]]] | None = None) -> dict
 # without dungeon_access_template gets an empty catalogue and a page that says
 # so, rather than a 503 on a tab that has nothing to do with the missing
 # table (infra#3172).
-_PLAN_CATALOGUE = (
+PLAN_CATALOGUE = (
     "SELECT map_id, difficulty, min_level, max_level, comment "
     "FROM acore_world.dungeon_access_template ORDER BY map_id, difficulty"
 )
@@ -3180,7 +3180,7 @@ _PLAN_CATALOGUE = (
 # whose table predates that column still gets its dungeons, and _catalogue
 # treats the missing value as difficulty 0, which is the row it would have
 # picked anyway.
-_PLAN_CATALOGUE_OLD = (
+PLAN_CATALOGUE_OLD = (
     "SELECT map_id, min_level, max_level, comment "
     "FROM acore_world.dungeon_access_template ORDER BY map_id"
 )
@@ -3192,7 +3192,7 @@ _PLAN_CATALOGUE_OLD = (
 #
 # DISTINCT IS LOAD BEARING. A boss with two spawn rows on the same map is two
 # rows out of this join and would be counted as two bosses.
-_PLAN_ENCOUNTERS = (
+PLAN_ENCOUNTERS = (
     "SELECT DISTINCT cr.map AS map_id, ie.creditEntry AS creature, ct.name "
     "FROM acore_world.instance_encounters ie "
     "JOIN acore_world.creature_template ct ON ct.entry = ie.creditEntry "
@@ -3213,7 +3213,7 @@ _PLAN_ENCOUNTERS = (
 # board asks that one dungeon at a time, and the basis says so. Selecting them
 # here would be two unread columns on the widest read this service makes, and
 # the next person to see them would reasonably add the sentence they support.
-_PLAN_LOOT = (
+PLAN_LOOT = (
     "SELECT clt.Item, ct.entry AS creature, " + _ITEM_TEMPLATE_COLUMNS + " "
     "FROM acore_world.creature_loot_template clt "
     "JOIN acore_world.creature_template ct ON ct.lootid = clt.Entry "
@@ -3228,10 +3228,10 @@ _PLAN_LOOT = (
 # continent" that is about them rather than about the dungeon. `map` is on
 # the characters row already, so this is _RECAP_CHARS with one more column
 # rather than a second read.
-_PLAN_CHARS = (
+PLAN_CHARS = (
     "SELECT name, level, class, map, race FROM characters WHERE name IN ({holes})"
 )
-_PLAN_CHARS_OLD = (
+PLAN_CHARS_OLD = (
     "SELECT name, level, class, map FROM characters WHERE name IN ({holes})"
 )
 # BOTH FAMILIES, BY THE ROSTER'S OWN `family` COLUMN (#81). bonds knows one
@@ -3251,7 +3251,7 @@ _PLAN_RUNS_OLD = ("SELECT leader_name, map_id FROM overseer_dungeon_run "
                   "WHERE leader_name IN ({holes})")
 
 
-def _fetch_dungeonplan() -> dict:
+def fetch_dungeonplan() -> dict:
     """Every dungeon, every boss drop, and what both families and their guilds
     are wearing.
 
@@ -3267,8 +3267,8 @@ def _fetch_dungeonplan() -> dict:
     nothing of it.
     """
     with realmread.Session(_connect) as rd:
-        catalogue = rd.rows(_PLAN_CATALOGUE, (),
-                            fallback=_PLAN_CATALOGUE_OLD,
+        catalogue = rd.rows(PLAN_CATALOGUE, (),
+                            fallback=PLAN_CATALOGUE_OLD,
                             what="dungeon_access_template")
         # THE UNION, AND THE MODULE DECIDES IT. dungeonplan.map_ids is the
         # one answer to which maps get a row, and it is asked here so the
@@ -3280,10 +3280,10 @@ def _fetch_dungeonplan() -> dict:
         if maps:
             mholes = ", ".join(["%s"] * len(maps))
             encounters = rd.rows(
-                _PLAN_ENCOUNTERS.format(holes=mholes),  # noqa: S608
+                PLAN_ENCOUNTERS.format(holes=mholes),  # noqa: S608
                 tuple(maps), what="instance_encounters")
             loot = rd.rows(
-                _PLAN_LOOT.format(holes=mholes),  # noqa: S608
+                PLAN_LOOT.format(holes=mholes),  # noqa: S608
                 tuple(maps), what="creature_loot_template")
         queue_views = _queue_views(rd)
         families: dict = {}
@@ -3313,7 +3313,7 @@ def _fetch_dungeonplan() -> dict:
             # S608 on the roster reads: `holes` is a run of placeholders
             # sized by the roster, and every VALUE is bound by the driver.
             guild_rows = rd.rows(
-                _LINEUP_GUILD.format(holes=holes),  # noqa: S608
+                LINEUP_GUILD.format(holes=holes),  # noqa: S608
                 tuple(names), what="guild_member")
             # THE GUILD'S MEMBERS TOO, because the page counts who in the
             # guild would gain. Measured on the dev realm with a guild of
@@ -3321,17 +3321,17 @@ def _fetch_dungeonplan() -> dict:
             everyone = sorted(set(names) | {r["name"] for r in guild_rows})
             eholes = ", ".join(["%s"] * len(everyone))
             chars = rd.rows(
-                _PLAN_CHARS.format(holes=eholes),  # noqa: S608
-                tuple(everyone), fallback=_PLAN_CHARS_OLD.format(holes=eholes),  # noqa: S608
+                PLAN_CHARS.format(holes=eholes),  # noqa: S608
+                tuple(everyone), fallback=PLAN_CHARS_OLD.format(holes=eholes),  # noqa: S608
                 what="characters")
             worn = rd.rows(
-                _RECAP_WORN.format(holes=eholes),  # noqa: S608
+                RECAP_WORN.format(holes=eholes),  # noqa: S608
                 (len(armory.EQUIPPED_SLOTS), *everyone), what="character_inventory")
             # Guarded like everything else, and the empty list this hands
             # back on a degraded schema is a real answer: an unknown
             # proficiency, which the basis says out loud.
             skills = rd.rows(
-                _RECAP_SKILLS.format(holes=eholes),  # noqa: S608
+                RECAP_SKILLS.format(holes=eholes),  # noqa: S608
                 tuple(everyone), what="character_skills")
             # Bound to the roster: only runs the families led are drawn.
             runs = rd.rows(
@@ -3699,7 +3699,7 @@ _RECAP_LOOT = (
     "WHERE creditType = 0)"
 )
 _RECAP_CHARS = "SELECT name, level, class FROM characters WHERE name IN ({holes})"
-_RECAP_WORN = (
+RECAP_WORN = (
     "SELECT c.name, ci.slot, ii.itemEntry AS entry, it.name AS item_name, "
     "it.Quality AS quality, it.ItemLevel AS item_level, it.class, it.subclass, "
     "it.InventoryType AS inventory_type, it.displayid FROM characters c "
@@ -3720,7 +3720,7 @@ _RECAP_ITEMS = (
 # character may hold a weapon is not on the item at all; it is one of these
 # rows. `value` comes with it because the core's own test is
 # `GetSkillValue(skill) == 0`, not "is there a row".
-_RECAP_SKILLS = (
+RECAP_SKILLS = (
     "SELECT c.name, cs.skill, cs.value FROM characters c "
     "JOIN character_skills cs ON cs.guid = c.guid WHERE c.name IN ({holes})"
 )
@@ -3763,7 +3763,7 @@ def _fetch_recap(map_id: int | None, names: list[str] | None = None) -> dict:
                             tuple(names), what="instance")
         chars = rd.rows(_RECAP_CHARS.format(holes=holes),  # noqa: S608
                         tuple(names), what="characters")
-        worn = rd.rows(_RECAP_WORN.format(holes=holes),  # noqa: S608
+        worn = rd.rows(RECAP_WORN.format(holes=holes),  # noqa: S608
                        (len(armory.EQUIPPED_SLOTS), *names), what="character_inventory")
         # GUARDED LIKE EVERYTHING ELSE HERE, and the empty list this hands
         # back on a degraded schema is a real answer rather than a silent
@@ -3771,7 +3771,7 @@ def _fetch_recap(map_id: int | None, names: list[str] | None = None) -> dict:
         # unknown, and an unknown proficiency ranks the board exactly the
         # way it was ranked before and keeps printing the caveat that says
         # so. A failed read must not be able to empty the board.
-        skills = rd.rows(_RECAP_SKILLS.format(holes=holes),  # noqa: S608
+        skills = rd.rows(RECAP_SKILLS.format(holes=holes),  # noqa: S608
                          tuple(names), what="character_skills")
         # TWO MAPS, AND THEY ARE ONLY USUALLY THE SAME ONE. The board is
         # whichever dungeon is being browsed; the progress bar is the map
@@ -3900,7 +3900,7 @@ def _leader_now(name: str | None):
     if not name:
         return None
     try:
-        facts = _fetch_now_facts([name])
+        facts = fetch_now_facts([name])
         if facts is False:
             return None
         with realmread.Session(_connect) as rd:
@@ -5112,7 +5112,8 @@ class Handler(BaseHTTPRequestHandler):
             _fetch_family([director.WATCHER_NAME]), GEO, (director.WATCHER_NAME,))
         return 200, payload
 
-    def _wall(self, query: dict) -> None:
+    @_get_route("wall query failed")
+    def _wall(_query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/wall - the Watch wall: every family's streamed characters.
 
         TAKES NO PARAMETERS. The families come from the roster table and the
@@ -5122,31 +5123,28 @@ class Handler(BaseHTTPRequestHandler):
         build_family finds a family's leader by guid among the rows it is
         handed and a merged set would hand one family the other's leader.
         """
+        # A failed read answers 503 (_answer). The same contract as
+        # /api/family: the wall keeps the tiles it already has and says it
+        # may be stale.
+        rosters = FAMILIES.families()
+        everyone = FAMILIES.names()
+        rows = _fetch_family(everyone)
+        profiles = _fetch_profiles(everyone)
+        built = []
+        for key, names in rosters.items():
+            mine = [r for r in rows if r["name"] in names]
+            built.append((key, family.build_family(
+                mine, GEO, names, {n: profiles[n] for n in names if n in profiles})))
         try:
-            rosters = FAMILIES.families()
-            everyone = FAMILIES.names()
-            rows = _fetch_family(everyone)
-            profiles = _fetch_profiles(everyone)
-            built = []
-            for key, names in rosters.items():
-                mine = [r for r in rows if r["name"] in names]
-                built.append((key, family.build_family(
-                    mine, GEO, names, {n: profiles[n] for n in names if n in profiles})))
-            try:
-                facts = _fetch_now_facts(everyone + [director.WATCHER_NAME])
-            except (pymysql.err.MySQLError, OSError):
-                # The tiles still draw; each says its sentence is unavailable.
-                log.exception("wall status feed failed")
-                facts = False
-            payload = watchwall.build_heads(built, family.build_observers(
-                _fetch_family([director.WATCHER_NAME]), GEO, (director.WATCHER_NAME,)),
-                facts=facts)
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # The same contract as /api/family: the wall keeps the tiles it
-            # already has and says it may be stale.
-            log.exception("wall query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+            facts = fetch_now_facts(everyone + [director.WATCHER_NAME])
+        except (pymysql.err.MySQLError, OSError):
+            # The tiles still draw; each says its sentence is unavailable.
+            log.exception("wall status feed failed")
+            facts = False
+        payload = watchwall.build_heads(built, family.build_observers(
+            _fetch_family([director.WATCHER_NAME]), GEO, (director.WATCHER_NAME,)),
+            facts=facts)
+        return 200, payload
 
     def _auras(self, query: dict) -> None:
         """GET /api/auras - current aura samples for the fixed family rosters.
@@ -5747,7 +5745,7 @@ class Handler(BaseHTTPRequestHandler):
             name=snapshot["name"],
             level=snapshot["level"],
             race_name=_MAP_RACE_NAMES.get(snapshot["race"], "creature"),
-            class_name=_MAP_CLASS_NAMES.get(snapshot["class"], "adventurer"),
+            class_name=MAP_CLASS_NAMES.get(snapshot["class"], "adventurer"),
             zone=GEO.zone_name(snapshot["map_id"], snapshot["pos_x"], snapshot["pos_y"]),
             personality=snapshot["personality"],
             health=snapshot["health"],
@@ -5787,7 +5785,8 @@ class Handler(BaseHTTPRequestHandler):
             "command_id": row_id,
         }).encode())
 
-    def _decree(self, query: dict) -> None:
+    @_get_route("decree query failed")
+    def _decree(_query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/decree - the console's own state, fully decided.
 
         BELOW the chat handler and above the watch one, which is the one
@@ -5801,18 +5800,15 @@ class Handler(BaseHTTPRequestHandler):
         family-wide by construction and a campaign belongs to one party, so a
         per-character console would answer a question this view does not ask.
         """
-        try:
-            payload = decree.build_console(**_fetch_decree())
-            payload["jev"] = _fetch_jev_view()
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll, and it matters here for a
-            # particular reason: this console exists to say what is real. A
-            # blanked card would read as "no job is set" and a cheerful
-            # default would be the page inventing an order nobody gave, so
-            # the last good answer stays up and the page marks it stale.
-            log.exception("decree query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer). Same contract as every other
+        # poll, and it matters here for a particular reason: this console
+        # exists to say what is real. A blanked card would read as "no job is
+        # set" and a cheerful default would be the page inventing an order
+        # nobody gave, so the last good answer stays up and the page marks it
+        # stale.
+        payload = decree.build_console(**_fetch_decree())
+        payload["jev"] = _fetch_jev_view()
+        return 200, payload
 
     def _decree_post(self) -> None:
         """POST /api/decree - the console gives an order.
@@ -6040,7 +6036,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, "application/json",
                    json.dumps(frames.describe(_FRAMES[name], time.time())).encode())
 
-    def _party_status(self, _query: dict) -> None:
+    @_get_route("party status query failed")
+    def _party_status(_query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/party-status - one line the in-game addon can render.
 
         infra#3334. The party frames in five game clients say who the family
@@ -6066,22 +6063,18 @@ class Handler(BaseHTTPRequestHandler):
         own handler's name, and a handler dropped inside one of those windows
         is read as part of a contract it has nothing to do with.
         """
-        try:
-            rows = _fetch_agenda()
-            payload = partystatus.build_push(
-                roster_rows=rows["roster_rows"],
-                run_rows=rows["run_rows"],
-                event_rows=rows["event_rows"],
-                now=rows["now"],
-            )
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll. It matters particularly here:
-            # a blank line rendered as success would blank five labels in the
-            # game and read as "nobody is doing anything", which is a specific
-            # and alarming claim rather than the absence of one.
-            log.exception("party status query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer). Same contract as every other
+        # poll. It matters particularly here: a blank line rendered as success
+        # would blank five labels in the game and read as "nobody is doing
+        # anything", which is a specific and alarming claim rather than the
+        # absence of one.
+        rows = _fetch_agenda()
+        return 200, partystatus.build_push(
+            roster_rows=rows["roster_rows"],
+            run_rows=rows["run_rows"],
+            event_rows=rows["event_rows"],
+            now=rows["now"],
+        )
 
     @_get_route("levelroute query failed")
     def _levelroute(query: dict, _ctx) -> tuple[int, dict]:
@@ -6152,10 +6145,10 @@ class Handler(BaseHTTPRequestHandler):
         reads saved gear, not overseer_snapshot, so it is not subject to the
         60s freshness rule and answers for someone offline. Every score is
         gearscore's; gearupgrades only lays the slots out. The payload is
-        _upgrades_payload's, which /api/v2/upgrades extends. A failed read is
+        upgrades_payload's, which /api/v2/upgrades extends. A failed read is
         _answer's 503.
         """
-        return _upgrades_payload(query.get("name", [""])[0])
+        return upgrades_payload(query.get("name", [""])[0])
 
     # --- the virtual game client (vclient.py) ---------------------------
     # Below _armory_member for the same reason it sits here: several suites
@@ -6289,7 +6282,8 @@ class Handler(BaseHTTPRequestHandler):
                        "ready": False, "asks": []}
         return 200, payload
 
-    def _director_state(self, _query: dict) -> None:
+    @_get_route("director state query failed")
+    def _director_state(_query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/director - what the Watcher has been told, and what it is doing.
 
         Read-only and open like every other GET here. Only the order (POST) is
@@ -6297,23 +6291,19 @@ class Handler(BaseHTTPRequestHandler):
         (bridge._ensure_watch_store, #740): one the bridge has not created
         yet holds no order, and the site does not create it.
         """
-        try:
-            row = _read_watch_order()
-            active = director.mandate_active(row)
-            payload = {
-                "watcher": director.WATCHER_NAME,
-                "enabled": bool(_DIRECTOR_TOKEN),
-                "active": active,
-                "spec": row["spec"] if active else "",
-                "target": row["target"] if active else "",
-                "note": row["note"] if row else "",
-                "expires_in": int(row["ttl"]) if active else 0,
-                "usage": director.USAGE,
-            }
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            log.exception("director state query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        # A failed read answers 503 (_answer).
+        row = _read_watch_order()
+        active = director.mandate_active(row)
+        return 200, {
+            "watcher": director.WATCHER_NAME,
+            "enabled": bool(_DIRECTOR_TOKEN),
+            "active": active,
+            "spec": row["spec"] if active else "",
+            "target": row["target"] if active else "",
+            "note": row["note"] if row else "",
+            "expires_in": int(row["ttl"]) if active else 0,
+            "usage": director.USAGE,
+        }
 
     def _director_post(self) -> None:
         """POST /api/director {"watch": "<order>"} - point the Watcher.

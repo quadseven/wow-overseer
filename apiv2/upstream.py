@@ -462,13 +462,11 @@ def realm_payload(ctx) -> dict:
     """The /api/realm banner's JSON, read through this request's reader."""
     server = ctx.server
     return server.realm.build_realm(
-        build_rows=ctx.read.rows(server._BUILD_SQL, what="overseer_build"),
+        build_rows=ctx.read.rows(server.BUILD_SQL, what="overseer_build"),
         version_rows=ctx.read.rows(
-            server._WORLD_VERSION_SQL, what="acore_world.version"
+            server.WORLD_VERSION_SQL, what="acore_world.version"
         ),
-        realmlist_rows=ctx.read.rows(
-            server._REALMLIST_SQL, what="acore_auth.realmlist"
-        ),
+        realmlist_rows=ctx.read.rows(server.REALMLIST_SQL, what="acore_auth.realmlist"),
     )
 
 
