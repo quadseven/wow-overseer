@@ -128,7 +128,7 @@ def run(rules=RULES, roster=ROSTER, guildmates=("Bork", "Stale")):
     everyone = [n for names in roster.values() for n in names]
     store = families_module.MemoryStore(roster, {"Cave": everyone + list(guildmates)})
     fams = families_module.Families(store, fallback=lambda: [])
-    srv = types.SimpleNamespace(_LINEUP_GUILD="SELECT lineup guild ({holes})")
+    srv = types.SimpleNamespace(LINEUP_GUILD="SELECT lineup guild ({holes})")
     rd = realmread.Session(lambda: FakeConn(rules, log))
     ctx = Context(
         read=rd,

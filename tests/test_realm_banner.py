@@ -171,7 +171,7 @@ class EveryReadIsGuardedWithTheClassThatActuallyFires(unittest.TestCase):
         precisely so a newer module adds rows and never columns. That is what
         leaves 1146 as the only way this read can fail on an old realm, and it
         only holds while the SELECT stays this narrow."""
-        select = re.search(r'_BUILD_SQL = "([^"]+)"', self.server).group(1)
+        select = re.search(r'BUILD_SQL = "([^"]+)"', self.server).group(1)
         self.assertEqual(
             select, "SELECT name, value, source, reported_at FROM overseer_build"
         )
