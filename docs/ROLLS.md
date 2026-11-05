@@ -91,41 +91,35 @@ before opening the PR.
    not rerun.
    The source locations and workflow are declared for the Loom station here:
 
-   ```loom-roll-pins
-   {
-     "deployment_repo": "infra",
-     "build_workflow": "build.azerothcore-playerbots.yml",
-     "sources": [
-       {
-         "repository": "mod-overseer",
-         "location": "production/docker/azerothcore-playerbots/UPSTREAM-PINS.env",
-         "keys": ["AC_OVERSEER_SHA"]
-       },
-       {
-         "repository": "mod-dungeon-clear",
-         "location": "production/docker/azerothcore-playerbots/UPSTREAM-PINS.env",
-         "keys": ["AC_DUNGEON_CLEAR_SHA"],
-         "revision_repo": "mod-dungeon-clear",
-         "revision_ref": "deployed fork branch"
-       },
-       {
-         "repository": "azerothcore",
-         "location": "production/docker/azerothcore-playerbots/UPSTREAM-PINS.env",
-         "keys": ["AC_CORE_SHA", "AC_MODULE_SHA", "AC_OLLAMA_CHAT_SHA"]
-       },
-       {
-         "repository": "mod-overseer",
-         "location": "production/docker/azerothcore-playerbots/ gitlink"
-       },
-       {
-         "repository": "mod-overseer",
-         "location": ".github/scripts/wow_promotion_drift.py",
-         "entry": "dev",
-         "dict_dev": true
-       }
-     ]
-   }
-   ```
+```loom-roll-pins
+{
+  "deployment_repo": "quadseven/infra",
+  "build_workflow": "build.azerothcore-playerbots.yml",
+  "sources": [
+    {"repo": "quadseven/mod-overseer", "pins": [
+      {"path": "production/docker/azerothcore-playerbots/UPSTREAM-PINS.env", "key": "AC_OVERSEER_SHA"}
+    ]},
+    {"repo": "quadseven/mod-dungeon-clear", "revision_repo": "quadseven/mod-dungeon-clear", "revision_ref": "quadseven/prod", "pins": [
+      {"path": "production/docker/azerothcore-playerbots/UPSTREAM-PINS.env", "key": "AC_DUNGEON_CLEAR_SHA"}
+    ]},
+    {"repo": "quadseven/azerothcore", "pins": [
+      {"path": "production/docker/azerothcore-playerbots/UPSTREAM-PINS.env", "key": "AC_CORE_SHA"}
+    ]},
+    {"repo": "quadseven/azerothcore", "pins": [
+      {"path": "production/docker/azerothcore-playerbots/UPSTREAM-PINS.env", "key": "AC_MODULE_SHA"}
+    ]},
+    {"repo": "quadseven/azerothcore", "pins": [
+      {"path": "production/docker/azerothcore-playerbots/UPSTREAM-PINS.env", "key": "AC_OLLAMA_CHAT_SHA"}
+    ]},
+    {"repo": "quadseven/mod-overseer", "pins": [
+      {"path": "production/docker/azerothcore-playerbots", "kind": "gitlink"}
+    ]},
+    {"repo": "quadseven/mod-overseer", "pins": [
+      {"path": ".github/scripts/wow_promotion_drift.py", "kind": "dict_dev", "entry": "dev"}
+    ]}
+  ]
+}
+```
 3. **Read both digests from the build run's push lines**, each under its own `The push refers to repository
    [ghcr.io/quadseven/<image>]` line: `ac-playerbots-worldserver` and `ac-playerbots-db-import`. A digest read
    from the wrong repository line is the classic mistake.

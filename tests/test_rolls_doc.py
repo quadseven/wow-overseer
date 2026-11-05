@@ -90,7 +90,7 @@ class RollsDocTest(unittest.TestCase):
                 self.assertTrue(kept in bridge_ship, f"ROLLS.md 1a lost: {kept!r}")
 
     def test_roll_source_pins_cover_every_location_in_step_two(self):
-        blocks = re.findall(r"```loom-roll-pins\s*\n(.*?)\n\s*```", self.text, re.S)
+        blocks = re.findall(r"(?ms)^```loom-roll-pins\s*\n(.*?)\n```\s*$", self.text)
         self.assertEqual(len(blocks), 1, "ROLLS.md must contain exactly one pin block")
         pins = json.loads(blocks[0])
         self.assertIn("deployment_repo", pins)
@@ -98,6 +98,35 @@ class RollsDocTest(unittest.TestCase):
         sources = pins["sources"]
         declared = json.dumps(sources)
         self.assertEqual(_pin_gaps(self.text, declared), [])
+
+    def test_roll_source_pins_follow_the_station_manifest_schema(self):
+        blocks = re.findall(r"(?ms)^```loom-roll-pins\s*\n(.*?)\n```\s*$", self.text)
+        self.assertEqual(len(blocks), 1, "ROLLS.md must contain exactly one pin block")
+        manifest = json.loads(blocks[0])
+        self.assertRegex(manifest["deployment_repo"], r"^[^/]+/[^/]+$")
+        self.assertTrue(manifest["build_workflow"].strip())
+        self.assertTrue(manifest["sources"])
+
+        for source in manifest["sources"]:
+            with self.subTest(source=source):
+                self.assertRegex(source["repo"], r"^[^/]+/[^/]+$")
+                self.assertTrue(source["pins"])
+                if "revision_repo" in source or "revision_ref" in source:
+                    self.assertRegex(source["revision_repo"], r"^[^/]+/[^/]+$")
+                    self.assertTrue(source["revision_ref"].strip())
+                paths = []
+                for pin in source["pins"]:
+                    with self.subTest(pin=pin):
+                        self.assertTrue(pin["path"])
+                        paths.append(pin["path"])
+                        kind = pin.get("kind", "env")
+                        if kind == "env":
+                            self.assertRegex(pin["key"], r"^[A-Z][A-Z0-9_]*$")
+                        elif kind == "dict_dev":
+                            self.assertEqual(pin["entry"], "dev")
+                        else:
+                            self.assertEqual(kind, "gitlink")
+                self.assertEqual(len(paths), len(set(paths)))
 
     def test_a_location_dropped_from_the_block_is_a_gap(self):
         named = _named_locations(self.text)
