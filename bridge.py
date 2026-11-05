@@ -17860,6 +17860,8 @@ class Bridge(discord.Client):
             asks=facts.get("quest_asks", ()),
             # Members too full to put an upgrade on make room (#1088).
             equip_room=self._equip_room,
+            # A family campaign keeps its roster off the loop escape (#1873).
+            campaign=campaign_door,
             # Members dying over and over in one zone leave it (#1464).
             loops=facts.get("death_loops"))
         log.info("guild jobs: the plan took %.2f s on the event loop for %d "
