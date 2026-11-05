@@ -31,6 +31,26 @@ the order and what the Watcher is doing.
 The character, its game account and the client that logs it in are the
 deployment's to provide.
 
+## Item-goal dungeon campaigns
+
+An allowed Discord user can order `queue <family>: deadmines until
+Cookie's Stirring Rod drops`. Add a run ceiling before `until`, such as
+`deadmines 10 until ... drops`; without one the ceiling is 65535 runs.
+
+The bridge resolves one case-insensitive exact item name, or one partial
+match if no exact match exists. Unknown or ambiguous names ask for a more
+specific name and leave the existing queue untouched. The reply identifies
+the family, dungeon keyword and item id. Item-goal orders name one family
+and one dungeon.
+
+The queue pass finishes the entry when an enabled family member owns the
+item in saved equipment, bags or personal bank, or when the run ceiling is
+reached. Mail and other characters' items do not count. Saved inventory can
+lag the live client. Existing campaign holds still apply. The bridge reports
+an observed item completion in the overseer channel and advances the queue.
+Pending notices survive restarts and retry failed sends. Delivery is at least
+once: a crash after sending but before acknowledgement may repeat a notice.
+
 ## Realm roller
 
 `realmroller.py` and `realmroller_world.py` hold the release and channel file
