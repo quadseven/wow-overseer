@@ -41,12 +41,26 @@ on whether the caller passed `()`.
 
 Read-only by contract: nothing here commits, and a write does not belong in a
 reader.
+
+THE CLOCK (#1843). A naive DATETIME from MySQL is on the database session's
+clock, and nothing in the row says which zone that is. So:
+
+- a read whose rows are compared with "now" also reads the database's own
+  NOW() in the same session (`db_now()`), and passes that as the builder's
+  `now`. The pod's clock and the database's need not agree on a zone;
+- a pure function that takes `now=` and is called without one defaults to
+  naive UTC (`utc_now()`), because the deployed database runs UTC. It never
+  defaults to the container-local datetime.now(), which moves with the
+  image's TZ while the rows do not;
+- gear.py, which works in aware UTC, reads a naive row value, and a naive
+  `now` handed to it, as UTC: the same assumption, spelled with a zone.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 import pymysql
@@ -56,6 +70,15 @@ log = logging.getLogger("wow-map.realmread")
 MISSING_TABLE = 1146
 MISSING_COLUMN = 1054
 _SCHEMA_GAPS = (MISSING_TABLE, MISSING_COLUMN)
+
+# The database's clock, read beside rows that are compared with "now".
+DB_NOW_SQL = "SELECT NOW() AS db_now"
+
+
+def utc_now() -> datetime:
+    """Naive UTC: the clock a naive database timestamp is read in when the
+    database's own NOW() was not read (THE CLOCK above)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class Gap(Exception):
@@ -117,6 +140,18 @@ class Reader:
         """The statement's rows. Every error raises: a missing table or column
         as Gap, so a caller that has its own answer for one can catch it."""
         return self._run(sql, params)
+
+    def db_now(self) -> datetime:
+        """The database's NOW(), on the clock its naive timestamps are in.
+
+        An answer with no datetime in it (a stub cursor) reads as utc_now().
+        A failed read raises, like must()."""
+        found = self.must(DB_NOW_SQL)
+        if found and isinstance(found[0], dict):
+            value = found[0].get("db_now")
+            if isinstance(value, datetime):
+                return value
+        return utc_now()
 
     def __enter__(self) -> Reader:
         return self

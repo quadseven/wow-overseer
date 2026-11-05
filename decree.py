@@ -40,7 +40,7 @@ this epic is named after.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 import agenda
 import bonds
@@ -1727,7 +1727,8 @@ def build_console(
     and gets a thinner console, never an exception - the same contract every
     other endpoint on this page keeps.
     """
-    now = now or datetime.now()
+    # No db_now passed: naive UTC (THE CLOCK, realmread.py), not local time.
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
     standing = agenda.standing_orders(roster_rows)
     mode = standing["job"]
     split = standing["job_split"]

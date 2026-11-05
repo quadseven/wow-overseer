@@ -352,8 +352,9 @@ def _fetch_realm() -> dict:
                                what="acore_world.version")
         realmlist_rows = rd.rows(_REALMLIST_SQL,
                                  what="acore_auth.realmlist")
+        db_now = rd.db_now()
     return {"build_rows": build_rows, "version_rows": version_rows,
-            "realmlist_rows": realmlist_rows}
+            "realmlist_rows": realmlist_rows, "now": db_now}
 
 
 def _fetch_rows() -> list[dict]:
@@ -1820,10 +1821,11 @@ def _fetch_achievements(names=None) -> dict:
                 tuple(entries),
             )
             items = {int(r["entry"]): r for r in item_rows}
+        db_now = rd.db_now()
     return {"run_rows": run_rows, "event_rows": event_rows, "death_rows": death_rows,
             "items": items, "icons": ITEMS.icons, "book": ITEMS,
             "boss_drops": boss_drops,
-            "quest_rewards": quest_rewards, "roster": names}
+            "quest_rewards": quest_rewards, "roster": names, "now": db_now}
 
 
 def _fetch_loot() -> dict:
@@ -2283,9 +2285,10 @@ def _fetch_council() -> dict:
             )
             quest_titles = {int(r["ID"]): r["LogTitle"]
                             for r in title_rows}
+        db_now = rd.db_now()
     return {"thought_rows": thought_rows, "goal_rows": goal_rows,
             "level_rows": level_rows, "quest_titles": quest_titles,
-            "roster_rows": roster_rows}
+            "roster_rows": roster_rows, "now": db_now}
 
 
 def _fetch_eye() -> dict:
@@ -2318,10 +2321,11 @@ def _fetch_eye() -> dict:
         guild_rows = rd.rows(
             "SELECT COUNT(*) AS guilds FROM guild",
             (), what="guild")
+        db_now = rd.db_now()
     for row in family_rows:
         row["family"] = family_of.get(row["name"], "")
     return {"snapshot_rows": snapshot_rows, "family_rows": family_rows,
-            "realm_rows": realm_rows, "guild_rows": guild_rows}
+            "realm_rows": realm_rows, "guild_rows": guild_rows, "now": db_now}
 
 
 # --- what the guild still needs before it can raid (infra#3508) --------------
@@ -3789,13 +3793,16 @@ def _fetch_recap(map_id: int | None, names: list[str] | None = None) -> dict:
             iholes = ", ".join(["%s"] * len(wanted))
             items = rd.rows(_RECAP_ITEMS.format(holes=iholes),  # noqa: S608
                             tuple(wanted), what="item_template")
+        # THE CLOCK (realmread): stale and stalled are judged against
+        # the database's NOW(), the clock updated_at was stamped on.
+        db_now = rd.db_now()
     return {"run_rows": runs, "event_rows": equips, "death_rows": deaths,
             "snapshot_rows": snaps, "instance_rows": instances,
             "encounter_rows": encounters,
             "board_encounter_rows": board_encounters, "loot_rows": loot,
             "char_rows": chars, "equipped_rows": worn,
             "skill_rows": skills,
-            "item_rows": items, "board_map": board}
+            "item_rows": items, "board_map": board, "now": db_now}
 
 
 # --- the current-goal banner (infra#3205) -----------------------------------
@@ -3987,11 +3994,12 @@ def _fetch_agenda(names=None) -> dict:
             lambda sql, params: rd.rows(sql, params, what="creature names"),
             [r.get("travel_npc") for r in roster_rows],
         )
+        db_now = rd.db_now()
     return {"roster_rows": roster_rows, "run_rows": run_rows,
             "instance_rows": instance_rows, "goal_rows": goal_rows,
             "trade_rows": trade_rows, "event_rows": event_rows,
             "quest_titles": quest_titles, "creatures": creatures,
-            "standin_rows": standin_rows}
+            "standin_rows": standin_rows, "now": db_now}
 
 
 def _fetch_streams() -> list:
@@ -4486,9 +4494,10 @@ def _fetch_decree() -> dict:
         # realm whose bridge predates it reads as the default order.
         priority_rows = rd.rows(priorities.SELECT_SQL, (),
                                 what=priorities.TABLE)
+        db_now = rd.db_now()
     return {"roster_rows": roster_rows, "command_rows": command_rows,
             "newest_job_rows": newest_job_rows, "queue_rows": queue_rows,
-            "priority_rows": priority_rows}
+            "priority_rows": priority_rows, "now": db_now}
 
 
 def _with_family(rd, roster_rows: list) -> list:
@@ -5500,8 +5509,7 @@ class Handler(BaseHTTPRequestHandler):
             items={int(row["entry"]): row for row in item_rows},
             icons=ITEMS.icons, book=ITEMS,
             dungeons=achievements.MAP_NAMES,
-            zones=recap.zone_names(GEO.continents),
-            now=datetime.now(), **fetched)
+            zones=recap.zone_names(GEO.continents), **fetched)
         payload["board"] = recap.build_lootboard(
             board_map, achievements.MAP_NAMES.get(board_map,
                                                   places.map_name(board_map)),
@@ -6064,6 +6072,7 @@ class Handler(BaseHTTPRequestHandler):
                 roster_rows=rows["roster_rows"],
                 run_rows=rows["run_rows"],
                 event_rows=rows["event_rows"],
+                now=rows["now"],
             )
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:

@@ -36,7 +36,7 @@ import functools
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import achievements
@@ -2034,7 +2034,8 @@ def build_council(
     `families` is the tab: one entry per family, both factions. The top-level
     keys repeat the first family's for any older reader of this payload.
     """
-    now = now or datetime.now()
+    # No db_now passed: naive UTC (THE CLOCK, realmread.py), not local time.
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
     families = [
         _family_view(
             fam,

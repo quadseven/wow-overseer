@@ -28,12 +28,15 @@ NOW = datetime.datetime(2026, 9, 5, 12, 0, 0)
 
 class TheClockIsAgendas(unittest.TestCase):
     def test_the_default_now_is_the_same_clock_agenda_stalls_on(self):
-        """agenda.stalled compares a naive DB timestamp with datetime.now();
+        """agenda.stalled compares a naive DB timestamp with the default now;
         a utcnow() default here disagreed with the agenda banner by the
-        container's UTC offset, and is deprecated since 3.12 besides."""
+        container's UTC offset, and is deprecated since 3.12 besides. Both
+        now default to naive UTC (#1843, THE CLOCK in realmread.py)."""
+        default = "now = now or datetime.now(timezone.utc).replace(tzinfo=None)"
         source = (HERE / "partystatus.py").read_text(encoding="utf-8")
         self.assertNotIn("utcnow", source)
-        self.assertIn("now = now or datetime.now()", source)
+        self.assertIn(default, source)
+        self.assertIn(default, (HERE / "agenda.py").read_text(encoding="utf-8"))
 
 
 def _member(name, **kw):
