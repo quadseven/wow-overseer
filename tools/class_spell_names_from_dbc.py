@@ -26,7 +26,8 @@ CHECKSUMS = {
 
 def read_dbc(path: Path):
     blob = path.read_bytes()
-    if hashlib.md5(blob).hexdigest() != CHECKSUMS[path.name]:
+    # Match published legacy version fingerprints, not an authenticity proof.
+    if hashlib.md5(blob, usedforsecurity=False).hexdigest() != CHECKSUMS[path.name]:
         raise ValueError(f"{path.name}: does not match the documented client data")
     magic, count, fields, size, string_size = struct.unpack_from("<4s4I", blob)
     end = 20 + count * size
