@@ -47,7 +47,7 @@ rows that produces a quiet banner over an unidentified realm.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 # The three answers, named rather than spelled inline so the page can style them
 # and the suite can assert on them without matching English. These strings are
@@ -396,7 +396,8 @@ def build_realm(
     this file has to be is obviously correct to somebody checking whether a live
     realm can possibly render as a safe one.
     """
-    now = now or datetime.now()
+    # No db_now passed: naive UTC (THE CLOCK, realmread.py), not local time.
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
     facts = _facts(build_rows)
     reported = bool(facts)
 

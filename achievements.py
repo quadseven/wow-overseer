@@ -54,7 +54,7 @@ Tickets: mod-overseer#88 (the epic), mod-overseer#152, mod-overseer#159.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import places
 from armory import QUALITY_NAMES, UNKNOWN_QUALITY, ItemBook, template_tooltip
@@ -1443,7 +1443,8 @@ def build_achievements(
     quest_rewards quest id -> {"items": [(entry, count)], "choices": [entry]}
     roster        the family, from family.roster()
     """
-    now = now or datetime.now()
+    # No db_now passed: naive UTC (THE CLOCK, realmread.py), not local time.
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
     events = [e for e in event_rows if e["kind"] != "death"]
     # Computed once over the whole history rather than per run: the earliest
     # equip of a pair is a fact about the record, not about any one visit, and
