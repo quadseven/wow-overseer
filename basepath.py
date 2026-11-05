@@ -51,10 +51,8 @@ quietly addresses the wrong world says nothing at all.
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 
-import realmnav
 
 # The Deployment-level knob. Named for the page rather than for the realm on
 # purpose: it says WHERE this copy is mounted, and nothing about which world it
@@ -78,16 +76,6 @@ ENV_VAR = "OVERSEER_BASE_PATH"
 # line. ../../oke/manifests/wow-dev/tests/_render.py hit both halves of this
 # and made the same choice.
 PLACEHOLDER = "__OVERSEER_BASE__"
-# THE SWITCHER RIDES WITH THE MOUNT POINT, because it is a function of it: the
-# page is served from one image on all three realms and the ONLY thing that
-# differs is where it is mounted, so the mount is both what tells the page
-# where it is and what tells it which pill to light. Substituting them in the
-# same pass means the two can never disagree.
-#
-# Not an endpoint. A switcher that arrives on a later poll is a switcher that
-# is missing for the first second on every load, which is exactly when someone
-# who opened the wrong realm is looking for it.
-NAV_PLACEHOLDER = "__OVERSEER_NAV__"
 # WHICH COPY OF THE PAGE THIS IS. The page is served no-store and nothing in
 # front of it caches, so a reload always fetches the current one; but a tab
 # left open keeps running the script it loaded, for days, and nothing on it
@@ -157,14 +145,6 @@ def apply(html: bytes, prefix: str) -> bytes:
             "realm at the root from every realm."
         )
     html = html.replace(marker, prefix.encode())
-    # Substituted only where the page asks for it. A page with no switcher is
-    # a page with no switcher, which is a visible absence somebody notices;
-    # refusing to serve it, the way a missing mount point is refused, would
-    # turn a cosmetic loss into an outage. test_realm_nav asserts index.html
-    # carries the token, so the loud failure happens in the suite instead.
-    nav = NAV_PLACEHOLDER.encode()
-    if nav in html:
-        html = html.replace(nav, json.dumps(realmnav.build_nav(prefix)).encode())
     page = PAGE_PLACEHOLDER.encode()
     if page in html:
         html = html.replace(page, page_version(original).encode())

@@ -36,7 +36,7 @@
 // written with replaceState so typing never loses the caret, and a row's link
 // carries them, so the way back from a quest lands on the same list.
 
-import { html, raw, notMeasured, pendingRead, pageHead, sectionHead, state, memberHref, plural, ready } from "../ui.js";
+import { html, raw, isHttps, notMeasured, pendingRead, pageHead, sectionHead, state, memberHref, plural, ready } from "../ui.js";
 import { liveQuery, setQuery } from "./_members.js";
 import { build } from "../router.js";
 import { since } from "../models/time.js";
@@ -260,7 +260,7 @@ ${when ? html`<span class="dim qs-s">${when}</span>` : ""}${a.reason ? html`<p c
 // A ticket renders only as an object with an https url: the link comes from a
 // read, and anything else is not a link to follow.
 function ticketLink(ticket) {
-  if (!ticket || typeof ticket !== "object" || !/^https:\/\//.test(String(ticket.url || ""))) return "";
+  if (!ticket || typeof ticket !== "object" || !isHttps(ticket.url)) return "";
   return html` <a class="qs-s" href="${ticket.url}" target="_blank" rel="noopener">Ticket #${ticket.number}</a>`;
 }
 

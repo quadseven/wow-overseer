@@ -4,7 +4,7 @@
 // /api/client/guildbank for the vaults. Which family, character, trade and
 // guild is shown lives in the URL query, so every state can be linked.
 
-import { html, raw, pageHead, sectionHead, tabs, item, notMeasured, gold, plural, duration, pendingRead, state, classVar, memberHref, member } from "../ui.js";
+import { html, raw, isHttps, pageHead, sectionHead, tabs, item, notMeasured, gold, plural, duration, pendingRead, state, classVar, memberHref, member } from "../ui.js";
 import { build } from "../router.js";
 import { familyKeys } from "../families.js";
 
@@ -140,7 +140,9 @@ function buyoutOf(r) { return r.buyout_label ? gold(r.buyout.total) : html`<span
 
 function ticketSentence(s) {
   if (!s) return "";
-  return html`${s.before}<a href="${s.ticket.url}" target="_blank" rel="noopener">${s.ticket.label}</a>${s.after}`;
+  const t = s.ticket || {};
+  if (!isHttps(t.url)) return html`${s.before}${t.label}${s.after}`;
+  return html`${s.before}<a href="${t.url}" target="_blank" rel="noopener">${t.label}</a>${s.after}`;
 }
 
 function auctionTab(a) {

@@ -84,25 +84,24 @@ class TheSwitcherKnowsWhichWorldsExist(unittest.TestCase):
                 self.assertTrue(r["href"].endswith("/"), r["href"])
 
     def test_it_is_json_serialisable(self):
-        """It is substituted into the page as JSON, so anything that is not
-        serialisable here is a page that will not parse its own header."""
+        """A switcher handed to the page travels as JSON, so anything that is
+        not serialisable here could never reach it."""
         json.dumps(realmnav.build_nav("/dev"))
 
 
-class TheSwitcherReachesThePageWithTheMountPoint(unittest.TestCase):
-    """Substituted in the same pass as the mount, because it is a function of
-    it: the pill that is lit and the realm the page reads cannot then differ."""
+class ThePageCarriesNoNavBlock(unittest.TestCase):
+    """The page once shipped a JSON nav block that nothing under app/ read
+    (#1849). The mount point is still substituted; nothing else is needed."""
 
-    def test_apply_substitutes_real_json(self):
-        out = basepath.apply(b"<x>__OVERSEER_BASE__</x><y>__OVERSEER_NAV__</y>", "/dev")
-        blob = out.decode().split("<y>")[1].split("</y>")[0]
-        nav = json.loads(blob)
-        self.assertTrue(next(r for r in nav if r["mount"] == "/dev")["current"])
+    def test_index_html_has_no_nav_token(self):
+        with open(os.path.join(HERE, "index.html"), encoding="utf-8") as fh:
+            page = fh.read()
+        self.assertNotIn("__OVERSEER_NAV__", page)
+        self.assertNotIn('id="overseer-nav"', page)
 
-    def test_a_page_without_the_token_is_still_served(self):
+    def test_a_page_with_only_the_mount_token_is_served(self):
         """A missing mount point is refused, because it makes every realm read
-        production. A missing switcher is a visible absence somebody reports,
-        so refusing to serve would turn a cosmetic loss into an outage."""
+        production. A page with no other token is still served."""
         self.assertEqual(basepath.apply(b"__OVERSEER_BASE__", "/dev"), b"/dev")
 
 
