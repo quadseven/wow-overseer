@@ -178,9 +178,8 @@ The Discord bridge and live website for a World of Warcraft realm run by bots. `
 - `mod-overseer/`: pinned submodule, read as text by tests only. `services/strands-decider/`: a separate image.
 - `patches/`: test copies of realm patches and the Majordomo series; the realm applies patches only from the infrastructure repo's tree (`docs/HISTORY.md`). `UPSTREAM-PINS.env`: a test fixture, not a build input.
 - `docs/ROLLS.md`: the ship procedure. `docs/agents/area-taxonomy.md`: the label taxonomy.
-- Tracked output with no reader in this repo. Nothing here reads these files, and `.gitignore` keeps new files in `logs/` and `reports/` local; the tracked ones stay as records.
-  - `logs/review-ledger.jsonl`: one line per AI review finding and its verdict, appended by hand by an agent that settles a finding on a PR. A reviewer greps it; no code consumes it.
-  - `reports/T001-realm-state-audit.json` and `reports/realm-state-2026-10-11.json`: realm state snapshots from 2026-10-11, written by `tools/realm_state_audit.py` from the site API. No code consumes them.
+- `logs/review-ledger.jsonl`: tracked output. Producer: an agent that settles an AI review finding on a PR appends one line with the finding and its verdict. Consumer: a reviewer greps it for past verdicts; no code reads it.
+- `reports/`: local output of `tools/realm_state_audit.py`, which snapshots realm state from the site API. Nothing in the repo reads a report, so none is tracked. `.gitignore` keeps new files in `logs/` and `reports/` local.
 
 ## Build, test, lint
 

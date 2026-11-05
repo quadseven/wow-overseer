@@ -9,14 +9,15 @@ of those from coming back without naming the old values themselves: every
 `kubectl` namespace, exec target, copy source and token subject must be a
 shell placeholder, and the docs must say what each placeholder means.
 
-They also pin the tracked output with no reader in this repo
-(`logs/review-ledger.jsonl`, `reports/*.json`): AGENTS.md says what writes
-each one, and `.gitignore` keeps new output in those directories local.
+They also pin the output directories: AGENTS.md names the producer and
+consumer of `logs/review-ledger.jsonl`, no report under `reports/` is
+tracked, and `.gitignore` keeps new output in both directories local.
 """
 
 import ast
 import pathlib
 import re
+import subprocess
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -133,18 +134,24 @@ class NoPrivatePathsOrQuotes(unittest.TestCase):
 
 
 class TrackedOutputIsDocumented(unittest.TestCase):
-    OUTPUTS = (
-        "logs/review-ledger.jsonl",
-        "reports/T001-realm-state-audit.json",
-        "reports/realm-state-2026-10-11.json",
-    )
-
-    def test_agents_md_names_each_output_below_the_sync_marker(self):
+    def test_agents_md_names_the_ledger_producer_and_consumer(self):
         own = _read("AGENTS.md").split("<!-- repo-specific below -->", 1)[1]
-        for rel in self.OUTPUTS:
-            with self.subTest(output=rel):
-                self.assertIn(f"`{rel}`", own)
+        line = next(
+            (ln for ln in own.splitlines() if "`logs/review-ledger.jsonl`" in ln), ""
+        )
+        self.assertIn("Producer:", line)
+        self.assertIn("Consumer:", line)
         self.assertIn("tools/realm_state_audit.py", own)
+
+    def test_no_report_is_tracked(self):
+        tracked = subprocess.run(
+            ["git", "ls-files", "reports"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        self.assertEqual(tracked, [], "reports have no reader; keep them local")
 
     def test_gitignore_keeps_new_output_local(self):
         lines = _read(".gitignore").splitlines()
