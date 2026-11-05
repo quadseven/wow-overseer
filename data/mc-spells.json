@@ -1,0 +1,143 @@
+{
+  "boss_spells": {
+    "19659": {
+      "dispel": 1,
+      "name": "Ignite Mana"
+    },
+    "19702": {
+      "dispel": 1,
+      "name": "Impending Doom"
+    },
+    "19703": {
+      "dispel": 2,
+      "name": "Lucifron's Curse"
+    },
+    "19713": {
+      "dispel": 2,
+      "name": "Shazzrah's Curse"
+    },
+    "19714": {
+      "dispel": 1,
+      "name": "Magic Grounding"
+    },
+    "19716": {
+      "dispel": 2,
+      "name": "Gehennas' Curse"
+    },
+    "19776": {
+      "dispel": 1,
+      "name": "Shadow Word: Pain"
+    }
+  },
+  "learned": {
+    "Death Knight": {
+      "47528": {
+        "level": 57,
+        "name": "Mind Freeze"
+      }
+    },
+    "Druid": {
+      "2782": {
+        "level": 24,
+        "name": "Remove Curse"
+      }
+    },
+    "Hunter": {
+      "1499": {
+        "level": 20,
+        "name": "Freezing Trap"
+      },
+      "19801": {
+        "level": 60,
+        "name": "Tranquilizing Shot"
+      }
+    },
+    "Mage": {
+      "118": {
+        "level": 8,
+        "name": "Polymorph"
+      },
+      "2139": {
+        "level": 24,
+        "name": "Counterspell"
+      },
+      "475": {
+        "level": 18,
+        "name": "Remove Curse"
+      }
+    },
+    "Paladin": {
+      "19891": {
+        "level": 36,
+        "name": "Fire Resistance Aura"
+      },
+      "4987": {
+        "level": 42,
+        "name": "Cleanse"
+      }
+    },
+    "Priest": {
+      "527": {
+        "level": 18,
+        "name": "Dispel Magic"
+      },
+      "6346": {
+        "level": 20,
+        "name": "Fear Ward"
+      }
+    },
+    "Rogue": {
+      "1766": {
+        "level": 12,
+        "name": "Kick"
+      },
+      "6770": {
+        "level": 10,
+        "name": "Sap"
+      }
+    },
+    "Shaman": {
+      "370": {
+        "level": 12,
+        "name": "Purge"
+      },
+      "57994": {
+        "level": 16,
+        "name": "Wind Shear"
+      },
+      "8143": {
+        "level": 18,
+        "name": "Tremor Totem"
+      },
+      "8184": {
+        "level": 28,
+        "name": "Fire Resistance Totem"
+      }
+    },
+    "Warlock": {
+      "710": {
+        "level": 28,
+        "name": "Banish"
+      }
+    },
+    "Warrior": {
+      "18499": {
+        "level": 32,
+        "name": "Berserker Rage"
+      },
+      "6552": {
+        "level": 38,
+        "name": "Pummel"
+      },
+      "72": {
+        "level": 12,
+        "name": "Shield Bash"
+      }
+    }
+  },
+  "source": {
+    "query": "trainer_spell.SpellId and MIN(ReqLevel), class trainer Type = 0",
+    "spell_dbc_md5": "543b9fe61355b6a77a01714d52fea2e5",
+    "training": "Archived Standing training export; capture time not recorded"
+  }
+}
