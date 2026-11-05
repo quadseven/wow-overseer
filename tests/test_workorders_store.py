@@ -284,6 +284,71 @@ class RaidSupplyIntakeTest(unittest.TestCase):
         self.assertEqual(workorderstore.get(cur, first).quantity, 96)
 
 
+class ReconcileTest(unittest.TestCase):
+    """The held order follows the measured shortfall and closes at none (#1873)."""
+
+    ITEM = "Greater Fire Protection Potion"
+
+    def _held(self, cur, quantity=96):
+        return workorderstore.request(
+            cur, workorders.consumable(self.ITEM, quantity, requested_by="raidsupply")
+        )
+
+    def test_a_smaller_shortfall_updates_the_held_order(self):
+        cur = _store()
+        held = self._held(cur)
+        self.assertEqual(
+            workorderstore.reconcile(cur, workorders.CONSUMABLE, self.ITEM, 40), 1
+        )
+        order = workorderstore.get(cur, held)
+        self.assertEqual(order.quantity, 40)
+        self.assertEqual(order.status, workorders.REQUESTED)
+
+    def test_an_assigned_order_keeps_its_assignee_while_its_quantity_moves(self):
+        cur = _store()
+        held = self._held(cur)
+        _pass(cur, [_member("Ugga", skills={ALCHEMY: 300})])
+        workorderstore.reconcile(cur, workorders.CONSUMABLE, self.ITEM.lower(), 12)
+        order = workorderstore.get(cur, held)
+        self.assertEqual(
+            (order.quantity, order.status, order.assigned_to),
+            (12, workorders.ASSIGNED, "Ugga"),
+        )
+
+    def test_no_shortfall_completes_the_held_order(self):
+        cur = _store()
+        held = self._held(cur)
+        _pass(cur, [_member("Ugga", skills={ALCHEMY: 300})])
+        self.assertEqual(
+            workorderstore.reconcile(cur, workorders.CONSUMABLE, self.ITEM, 0), 1
+        )
+        self.assertEqual(workorderstore.get(cur, held).status, workorders.COMPLETE)
+        self.assertEqual(workorderstore.open_orders(cur), [])
+        self.assertNotEqual(self._held(cur, 30), held)
+
+    def test_nothing_held_moves_nothing_and_adds_nothing(self):
+        cur = _store()
+        self.assertEqual(
+            workorderstore.reconcile(cur, workorders.CONSUMABLE, self.ITEM, 0), 0
+        )
+        self.assertEqual(
+            workorderstore.reconcile(cur, workorders.CONSUMABLE, self.ITEM, 9), 0
+        )
+        self.assertEqual(workorderstore.open_orders(cur), [])
+
+    def test_a_completed_order_is_not_reopened_or_resized(self):
+        cur = _store()
+        held = self._held(cur)
+        workorderstore.reconcile(cur, workorders.CONSUMABLE, self.ITEM, 0)
+        workorderstore.reconcile(cur, workorders.CONSUMABLE, self.ITEM, 50)
+        order = workorderstore.get(cur, held)
+        self.assertEqual((order.status, order.quantity), (workorders.COMPLETE, 96))
+
+    def test_the_settle_statements_carry_their_status_guard(self):
+        for sql in (workorderstore.RESIZE_SQL, workorderstore.SETTLE_SQL):
+            self.assertIn("status IN ('requested', 'assigned')", sql)
+
+
 class ColumnsTest(unittest.TestCase):
     """CREATE_SQL, the SQLite copy above and the read all name one column set."""
 
