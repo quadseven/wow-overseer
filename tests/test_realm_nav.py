@@ -24,6 +24,7 @@ import os
 import re
 import unittest
 
+import basepath
 import realmnav
 
 LF = chr(10)
@@ -86,6 +87,22 @@ class TheSwitcherKnowsWhichWorldsExist(unittest.TestCase):
         """A switcher handed to the page travels as JSON, so anything that is
         not serialisable here could never reach it."""
         json.dumps(realmnav.build_nav("/dev"))
+
+
+class ThePageCarriesNoNavBlock(unittest.TestCase):
+    """The page once shipped a JSON nav block that nothing under app/ read
+    (#1849). The mount point is still substituted; nothing else is needed."""
+
+    def test_index_html_has_no_nav_token(self):
+        with open(os.path.join(HERE, "index.html"), encoding="utf-8") as fh:
+            page = fh.read()
+        self.assertNotIn("__OVERSEER_NAV__", page)
+        self.assertNotIn('id="overseer-nav"', page)
+
+    def test_a_page_with_only_the_mount_token_is_served(self):
+        """A missing mount point is refused, because it makes every realm read
+        production. A page with no other token is still served."""
+        self.assertEqual(basepath.apply(b"__OVERSEER_BASE__", "/dev"), b"/dev")
 
 
 class TheHouseRules(unittest.TestCase):
