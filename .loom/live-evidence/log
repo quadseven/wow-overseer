@@ -97,6 +97,10 @@ def parse_report(text: str, needle: str, since: datetime):
         raise ReadError("the report has no coverage block")
     head = lines[: lines.index("coverage") + 8]
     first, last = _field(head, "first archived line"), _field(head, "last archived line")
+    if first == "none" or last == "none":
+        # An empty archive is a failed read, not an absence: the report says
+        # "no line at all" when the archive server cannot be reached, too.
+        raise ReadError("the archive holds no line at all, so it cannot show an absence")
     try:
         start = lines.index("needle: %s" % needle)
     except ValueError:

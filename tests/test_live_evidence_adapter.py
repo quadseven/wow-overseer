@@ -90,6 +90,28 @@ EMPTY_REPORT = textwrap.dedent(
     """
 )
 
+NO_LINE_REPORT = textwrap.dedent(
+    """\
+    coverage
+      lines: 0
+      kubelet records read: 0, unparsed: 0
+      first archived line: none
+      last archived line: none
+      window: 2026-10-20T00:00:00Z to the end of the archive
+    COVERAGE GAP: the archive holds no line at all
+
+    needle: boat leg taken
+      regex: boat\\ leg\\ taken
+      before window: 0
+      inside window: 0
+      first match: none
+      last match: none
+      per hour inside window: none (no archived line inside the window)
+      distinct inside window: 0
+      samples: 0 of 0 matching lines inside the window (first, last and evenly spaced)
+    """
+)
+
 FAKE_REALM_LOGS = """\
 import os, sys
 with open(os.environ["FAKE_CALLS"], "a") as calls:
@@ -311,6 +333,15 @@ class LogAdapterTest(unittest.TestCase):
         self.assertEqual(done.returncode, 2)
         self.assertEqual(done.stdout, "")
         self.assertIn("exited 3", done.stderr)
+
+    def test_an_archive_with_no_line_is_no_answer(self):
+        # realm-logs exits 0 with an empty archive when its server is
+        # unreachable; that must not read as the needle being absent.
+        _, env = self.fakes(NO_LINE_REPORT)
+        done = run(LOG, ["wow-overseer", SINCE, "boat leg taken"], env)
+        self.assertEqual(done.returncode, 2)
+        self.assertEqual(done.stdout, "")
+        self.assertIn("no line at all", done.stderr)
 
     def test_a_report_without_the_needle_block_is_no_answer(self):
         _, env = self.fakes()
