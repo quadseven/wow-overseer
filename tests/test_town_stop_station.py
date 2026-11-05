@@ -139,7 +139,9 @@ class TheRaidCook(unittest.TestCase):
         self.assertEqual([r.command for r in step.rows][0], "818")
         self.assertEqual([r.command for r in step.rows][1], str(cook.spell))
         self.assertEqual(step.repeat, 1)
-        self.assertIn(" 1 ", step.said)
+        # One fire, then a cast per dish while it burns (#1897).
+        self.assertEqual([r.command for r in step.rows][2:], [str(cook.spell)] * 4)
+        self.assertIn(" 5 ", step.said)
 
 
 if __name__ == "__main__":
