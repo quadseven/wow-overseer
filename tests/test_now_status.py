@@ -617,3 +617,36 @@ class TookOverCreatureAim(unittest.TestCase):
             got["doing"], "Walking to an unnamed creature (3369) on a town errand"
         )
         self.assertNotIn("creature:", got["line"])
+
+
+class FollowerOwnIntent(unittest.TestCase):
+    """A follower with an intent step of its own names its leader's job first.
+    #1784
+
+    Bork follows Grug, whose roster job is a town run. A fresh took-over step
+    for Bork alone read as the whole card, so the card said only the walk and
+    never what the family was out doing.
+    """
+
+    TOOK = "the errand walk took over: walking to town on a town errand"
+
+    def got(self, roster=ROSTER):
+        took = step("Bork", self.TOOK, "to get there", kind="intent", first=30)
+        intents = [dict(row, module_age=0) for row in INTENTS]
+        fs = nowstatus.build_facts(["Bork"], roster, intents, [took], NOW)
+        return nowstatus.compose(
+            {"name": "Bork", "present": True, "condition": "ok"}, fs["Bork"], NOW
+        )
+
+    def test_a_follower_names_its_leaders_job_before_its_own_intent_step(self):
+        line = self.got()["line"]
+        self.assertTrue(line.startswith("Doing: On a town run with Grug"), line)
+        self.assertIn("walking to town on a town errand", line)
+        self.assertLess(
+            line.index("On a town run"), line.index("walking to town"), line
+        )
+
+    def test_a_leader_with_no_job_leaves_the_follower_step_alone(self):
+        roster = [dict(r, job="quest") if r["name"] == "Grug" else r for r in ROSTER]
+        got = self.got(roster)
+        self.assertEqual(got["doing"], "Walking to town on a town errand")
