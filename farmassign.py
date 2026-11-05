@@ -395,24 +395,42 @@ def standing_from_rows(rows, members) -> list:
     by_name = {m.name: m for m in members or ()}
     newest = {}
     for row in rows or ():
-        parts = str(row.get("source") or "").split(":")
-        if len(parts) != 3 or parts[0] != SOURCE or parts[1] != "assign":
+        found = _live_assignment(row, by_name)
+        if found is None:
             continue
-        try:
-            entry, age = int(parts[2]), int(row.get("age") or 0)
-        except (TypeError, ValueError):
-            continue
-        material = MATERIALS.get(entry)
-        gatherer = by_name.get(str(row.get("target_name") or ""))
-        if material is None or gatherer is None:
-            continue
-        if str(row.get("status") or "") not in LIVE_STATUSES:
-            continue
-        if age >= material.duration:
-            continue
-        if entry not in newest or age < newest[entry][1]:
-            newest[entry] = (_new_task(gatherer, material), age)
+        gatherer, material, age = found
+        if material.entry not in newest or age < newest[material.entry][1]:
+            newest[material.entry] = (_new_task(gatherer, material), age)
     return [newest[e] for e in sorted(newest)]
+
+
+def _assignment_of(row):
+    """(material entry, age in minutes) of an assignment row, or None for
+    any other row of the command log."""
+    parts = str(row.get("source") or "").split(":")
+    if len(parts) != 3 or parts[0] != SOURCE or parts[1] != "assign":
+        return None
+    try:
+        return int(parts[2]), int(row.get("age") or 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _live_assignment(row, by_name):
+    """(gatherer, material, age) for an assignment row that still stands:
+    a known material, a member of the guild, a live status, inside its
+    stint. None otherwise."""
+    parsed = _assignment_of(row)
+    if parsed is None:
+        return None
+    entry, age = parsed
+    material = MATERIALS.get(entry)
+    gatherer = by_name.get(str(row.get("target_name") or ""))
+    if material is None or gatherer is None or age >= material.duration:
+        return None
+    if str(row.get("status") or "") not in LIVE_STATUSES:
+        return None
+    return gatherer, material, age
 
 
 def _new_task(gatherer, material) -> Task:
