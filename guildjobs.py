@@ -3538,6 +3538,7 @@ def plan(
     mounts=None,
     loops=None,
     bags=None,
+    campaign="",
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -3575,7 +3576,9 @@ def plan(
     `equip_room` name -> (free slots needed, what for) for members too full to
     put an upgrade on (gear.equip_room, equip_room_step);
     `loops` name -> deathloop.Loop for a member dying over and over in one zone
-    (death_loop_first), None or {} for none.
+    (death_loop_first), None or {} for none; `campaign` the family's
+    campaign door (the bridge's _guild_campaign_door), "" for none, which
+    keeps a roster member's death loop escape off the level walk (level_step).
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -3645,6 +3648,7 @@ def plan(
             _offer_for(mounts, m.name),
             _offer_for(loops, m.name),
             _offer_for(bags, m.name),
+            campaign,
         )
         asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
         helps += asked
@@ -3956,6 +3960,7 @@ def _member_step(
     mount=None,
     loop=None,
     bag=None,
+    campaign="",
 ):
     """A death loop's way out of its zone first (death_loop_first, #1464),
     then a class quest, then a hunter's first pet, then a hearth out of a
@@ -3989,7 +3994,7 @@ def _member_step(
     A member that has stood on one spot for standstill.STILL_MINUTES
     (`still_for`) with nothing asked of it hearths home before anything else
     is asked (stood_still_step)."""
-    found = death_loop_first(m, loop, leveling, recent, cap)
+    found = death_loop_first(m, loop, leveling, recent, cap, campaign)
     if found is not None:
         return found
     found, quest_note = _quest_first(
@@ -4067,7 +4072,7 @@ def _member_step(
     step = _collect_first(m, mail, recent, cap)
     if step is not None:
         return step, step.said, supply_note, gear_note
-    step, doing, level_note = level_step(m, leveling, recent, cap, loop)
+    step, doing, level_note = level_step(m, leveling, recent, cap, loop, campaign)
     if step is not None or doing:
         return step, doing, supply_note, gear_note
     step, doing, note = _plan_member(
@@ -4102,7 +4107,7 @@ def _join_once(*parts) -> str:
     return "; ".join(said)
 
 
-def level_step(m, world, recent, cap, loop=None):
+def level_step(m, world, recent, cap, loop=None, campaign=""):
     """(step or None, what it does, a note): a member that has outgrown
     where it stands (its quests there have run out, or its band) walks to the
     flight master of a quest hub where it has open quests (guildlevel.py).
@@ -4121,6 +4126,13 @@ def level_step(m, world, recent, cap, loop=None):
 
     With `loop` (a deathloop.Loop) the loop's zone is never the hub chosen,
     and a member standing in it has outgrown it on the deaths alone.
+
+    NOT WHILE ITS FAMILY HOLDS A CAMPAIGN (#1873). With `campaign` (the
+    family's campaign door, "" for none) the escape is off and the roster
+    refusal stands: the queue coordinator stages the family at that dungeon's
+    door, and a walk to a quest hub of another zone pulls the member away
+    from it. levelroute keeps the member, as it keeps every roster member
+    outside a death loop.
     """
     # EVERY MEMBER, NATURAL OR NOT (2026-10-05). The natural reset gates what
     # a member contributes, not where it walks: on the dev realm 1 of Cave's
@@ -4130,8 +4142,9 @@ def level_step(m, world, recent, cap, loop=None):
         return None, "", ""
     if m.level >= guildlevel.LEVEL_CAP:
         return None, "", ""
-    # The roster refusal, with the death loop's escape ahead of it (#1620).
-    if m.name in world.roster and not _in_loop_zone(m, loop):
+    # The roster refusal, with the death loop's escape ahead of it (#1620)
+    # unless the family holds a campaign (#1873).
+    if m.name in world.roster and (campaign or not _in_loop_zone(m, loop)):
         return None, "", ""
     bands = world.bands.get(guildlevel.side_of(m.race), {})
     # A ZONE IS LEFT WHEN ITS QUESTS RUN OUT (2026-10-10): its open quests for
@@ -4231,7 +4244,7 @@ def death_loop_hearth(m, loop, recent):
     )
 
 
-def death_loop_first(m, loop, leveling, recent, cap):
+def death_loop_first(m, loop, leveling, recent, cap, campaign=""):
     """(the member's step as _member_step returns it), or None: the way out of
     the zone a member keeps dying in (deathloop.Loop), ahead of every quest.
 
@@ -4246,7 +4259,7 @@ def death_loop_first(m, loop, leveling, recent, cap):
     step = death_loop_hearth(m, loop, recent)
     if step is not None:
         return step, step.said, "", ""
-    step, doing, note = level_step(m, leveling, recent, cap, loop)
+    step, doing, note = level_step(m, leveling, recent, cap, loop, campaign)
     if step is not None:
         return step, doing, note, ""
     held = "%s plans no quest in %s: %s" % (m.name, loop.place, loop.reason())
