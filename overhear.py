@@ -3,12 +3,12 @@
 Pure module. Chat rows in, a decision about whether the overseer was being
 addressed out. bridge.py does the reading and the acting.
 
-WHY. The operator kept asking the same question in different words - "how do i talk as
-grug suggesting to go to a town and sell and upgrade gear", "i just asked for
-the sword that dropped with +4 stamina and they arent listening". He was
-typing into party chat and nothing was listening, because the only ear the
-overseer had was a Discord channel. He is sitting at the keyboard playing one
-of these characters; that is the natural place to talk to them.
+WHY. The operator kept asking the same question in different words: how to
+tell the family, from inside the game, to go to town, sell and upgrade gear,
+and why a request for a dropped weapon went unheard. The operator was typing
+into party chat and nothing was listening, because the only ear the overseer
+had was a Discord channel. The operator sits at the keyboard playing one of
+these characters; that is the natural place to talk to them.
 
 WHAT COUNTS AS BEING ADDRESSED. A line in a channel the family shares, from a
 family member, that the bridge did not author, with no AI behind it
@@ -81,19 +81,19 @@ def is_addressed(row: dict, *, family, authored) -> bool:
     either, and that speaks in the same channel (#347). Authorship alone read
     it as the operator typing. Matching upstream's text templates caught only
     its formulaic lines. Nothing in the row tells a bot's line from the
-    operator's under selfbot: with SelfBotLevel 3 the AI attaches to his
-    character the instant he logs in, so the live row read
+    operator's under selfbot: with SelfBotLevel 3 the AI attaches to the
+    operator's character at login, so the live row read
 
-        Grug  sender_is_bot=1  party  "everyone go sell your junk and repair"
+        Grug  sender_is_bot=1  party  "<an order the operator typed>"
 
-    while he was sitting there typing it. So a bot-flagged line is refused,
+    while the operator was typing it. So a bot-flagged line is refused,
     whatever it says.
 
     WHAT THAT COSTS. While selfbot is on, the operator's own typed line is
-    flagged too and is not heard here; he can say it again in Discord. That is
-    the trade on purpose: a missed order can be repeated, a `reset ai` or a
-    `stay` nobody gave cannot be taken back. Giving him his in-game voice back
-    needs the row to say where a line came from (a module-side flag set only
+    flagged too and is not heard here; the operator can say it again in
+    Discord. That is the trade on purpose: a missed order can be repeated, a
+    `reset ai` or a `stay` nobody gave cannot be taken back. Restoring the
+    operator's in-game voice needs the row to say where a line came from (a module-side flag set only
     for a line a client typed), and then that flag, not this one, decides.
     """
     if (row.get("channel") or "") not in HEARD_ON:
@@ -123,8 +123,8 @@ def hear(
     """The one order to act on from this batch, or None.
 
     The LAST qualifying line, not the first: if the operator typed twice while the
-    relay was between ticks, the later line is the one he meant. Taking the
-    first would act on a sentence he had already replaced.
+    relay was between ticks, the later line is the one the operator meant.
+    Taking the first would act on a sentence already replaced.
     """
     if last_at is not None and (now - last_at) < COOLDOWN_SECONDS:
         return None
@@ -138,7 +138,7 @@ def hear(
 def audience(directive: Directive, *, family) -> list:
     """Who carries out the order: the family, minus whoever gave it.
 
-    The operator is playing one of them. Ordering his own character to follow itself is
+    The operator is playing one of them. Ordering the operator's own character to follow itself is
     the sort of thing that looks fine in a test and reads as a bug in game.
     """
     return sorted(n for n in family if n.casefold() != directive.speaker.casefold())

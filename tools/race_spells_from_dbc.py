@@ -7,9 +7,12 @@ into the repo like the other DBC books.
 
 USAGE
 
-    kubectl -n wow-dev exec <worldserver-pod> -c worldserver -- \\
+    kubectl -n "$NAMESPACE" exec "$POD" -c worldserver -- \\
       cat /azerothcore/env/dist/data/dbc/SkillLineAbility.dbc > SkillLineAbility.dbc
     python3 tools/race_spells_from_dbc.py SkillLineAbility.dbc > racespells_table.txt
+
+`$NAMESPACE` is the Kubernetes namespace the realm runs in. `$POD` is a
+worldserver pod in it.
 
 As of 2026-10-29 the file's md5 is d8c11abfcfe70596cb9068c0e97a1d9a. Paste
 the output over the ROWS block in racespells.py.

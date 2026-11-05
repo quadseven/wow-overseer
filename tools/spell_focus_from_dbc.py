@@ -21,11 +21,14 @@ to make two places agree, and only one of them can be typed from memory.
 
 USAGE
 
-    kubectl -n wow-dev cp \\
-      worldserver-<pod>:/azerothcore/env/dist/data/dbc/Spell.dbc ./Spell.dbc
-    kubectl -n wow-dev cp \\
-      worldserver-<pod>:/azerothcore/env/dist/data/dbc/SpellFocusObject.dbc .
+    kubectl -n "$NAMESPACE" cp \\
+      "$POD":/azerothcore/env/dist/data/dbc/Spell.dbc ./Spell.dbc
+    kubectl -n "$NAMESPACE" cp \\
+      "$POD":/azerothcore/env/dist/data/dbc/SpellFocusObject.dbc .
     python3 tools/spell_focus_from_dbc.py <dir holding the two .dbc files>
+
+`$NAMESPACE` is the Kubernetes namespace the realm runs in. `$POD` is a
+worldserver pod in it.
 
 VERIFY THE COPY BEFORE TRUSTING IT. `md5sum` the local files against the pod's
 own `md5sum` of the same paths; a partial `kubectl cp` is a truncated file that

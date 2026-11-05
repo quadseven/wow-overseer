@@ -25,13 +25,16 @@ of those, and it has no regenerator because it needs a live cluster.
 
 USAGE - identical to its two siblings, and the same warning applies
 
-    kubectl -n wow-dev exec <worldserver-pod> -c worldserver -- \\
+    kubectl -n "$NAMESPACE" exec "$POD" -c worldserver -- \\
       cat /azerothcore/env/dist/data/dbc/Spell.dbc > Spell.dbc
-    kubectl -n wow-dev exec <worldserver-pod> -c worldserver -- \\
+    kubectl -n "$NAMESPACE" exec "$POD" -c worldserver -- \\
       cat /azerothcore/env/dist/data/dbc/SkillLineAbility.dbc > SkillLineAbility.dbc
-    kubectl -n wow-dev exec <worldserver-pod> -c worldserver -- \\
+    kubectl -n "$NAMESPACE" exec "$POD" -c worldserver -- \\
       cat /azerothcore/env/dist/data/dbc/SpellFocusObject.dbc > SpellFocusObject.dbc
     python3 tools/raid_consumables_from_dbc.py <dir holding the three .dbc files>
+
+`$NAMESPACE` is the Kubernetes namespace the realm runs in. `$POD` is a
+worldserver pod in it.
 
 `kubectl cp` is NOT used above on purpose: it refuses a Windows destination
 path (the drive-letter colon reads as a pod separator) and a partial copy is a
