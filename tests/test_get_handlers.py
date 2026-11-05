@@ -581,7 +581,7 @@ class TheArmoryReadsAreHandlers(unittest.TestCase):
         for name, query, fetch in (
             ("_armory", {}, "_fetch_armory"),
             ("_armory_member", {"name": ["Grug"]}, "_fetch_armory"),
-            ("_upgrades", {"name": ["Grug"]}, "_upgrades_payload"),
+            ("_upgrades", {"name": ["Grug"]}, "upgrades_payload"),
             ("_item", {"entry": ["5"]}, "_item_payload"),
         ):
             with (
@@ -596,7 +596,7 @@ class TheArmoryReadsAreHandlers(unittest.TestCase):
 
     def test_the_upgrades_are_the_shared_payload(self):
         with mock.patch.object(
-            map_server, "_upgrades_payload", return_value=(404, {"error": "e"})
+            map_server, "upgrades_payload", return_value=(404, {"error": "e"})
         ) as built:
             got = map_server.Handler._upgrades.__wrapped__({"name": ["Grug"]}, None)
         self.assertEqual(got, (404, {"error": "e"}))
@@ -638,6 +638,121 @@ class TheArmoryReadsAreHandlers(unittest.TestCase):
                 families.may_answer.return_value = False
                 h = shell.get(path)
             self.assertEqual(h.body(), body, path)
+
+
+# The state reads and the wall (#1701): path, Handler method, the first fetch
+# it makes, and its failure's log line.
+STATE_READS = (
+    ("/api/wall", "_wall", "_fetch_family", "wall query failed"),
+    ("/api/decree", "_decree", "_fetch_decree", "decree query failed"),
+    (
+        "/api/party-status",
+        "_party_status",
+        "_fetch_agenda",
+        "party status query failed",
+    ),
+    (
+        "/api/director",
+        "_director_state",
+        "_read_watch_order",
+        "director state query failed",
+    ),
+)
+
+
+class TheStateReadsAreHandlers(unittest.TestCase):
+    """The wall, the decree console, the party status line and the director
+    state return (status, payload) and leave a failed read to _answer."""
+
+    def setUp(self):
+        families = mock.patch.object(map_server, "FAMILIES")
+        self.families = families.start()
+        self.families.families.return_value = {"a": ["Grug"]}
+        self.families.names.return_value = ["Grug"]
+        self.addCleanup(families.stop)
+
+    def test_a_failed_read_leaves_the_handler(self):
+        for path, name, fetch, _what in STATE_READS:
+            with (
+                self.subTest(path),
+                mock.patch.object(map_server, fetch, side_effect=OSError("down")),
+            ):
+                with self.assertRaises(OSError):
+                    getattr(map_server.Handler, name).__wrapped__({}, None)
+
+    def test_a_failed_read_is_the_same_503_and_log_line(self):
+        for path, _name, fetch, what in STATE_READS:
+            with (
+                self.subTest(path),
+                mock.patch.object(map_server, fetch, side_effect=OSError("down")),
+                self.assertLogs(map_server.log, "ERROR") as logs,
+            ):
+                h = shell.get(path)
+            self.assertEqual(h.status(), 503, path)
+            self.assertEqual(h.body(), b'{"error": "world unreachable"}', path)
+            self.assertIn(what, logs.output[0], path)
+
+    def test_the_decree_goes_out_with_its_exact_bytes(self):
+        with (
+            mock.patch.object(map_server, "_fetch_decree", return_value={}),
+            mock.patch.object(
+                map_server.decree, "build_console", return_value={"jobs": []}
+            ),
+            mock.patch.object(map_server, "_fetch_jev_view", return_value={"k": 1}),
+        ):
+            h = shell.get("/api/decree")
+        self.assertEqual(h.status(), 200)
+        self.assertEqual(h.body(), b'{"jobs": [], "jev": {"k": 1}}')
+
+    def test_the_party_status_is_the_push_line(self):
+        rows = {"roster_rows": [], "run_rows": [], "event_rows": [], "now": 0}
+        with (
+            mock.patch.object(map_server, "_fetch_agenda", return_value=rows),
+            mock.patch.object(
+                map_server.partystatus, "build_push", return_value={"line": "x"}
+            ) as push,
+        ):
+            got = map_server.Handler._party_status.__wrapped__({}, None)
+        push.assert_called_once_with(**rows)
+        self.assertEqual(got, (200, {"line": "x"}))
+
+    def test_no_order_is_an_inactive_director(self):
+        with (
+            mock.patch.object(map_server, "_read_watch_order", return_value=None),
+            mock.patch.object(
+                map_server.director, "mandate_active", return_value=False
+            ),
+        ):
+            code, payload = map_server.Handler._director_state.__wrapped__({}, None)
+        self.assertEqual(code, 200)
+        self.assertFalse(payload["active"])
+        self.assertEqual(
+            (
+                payload["spec"],
+                payload["target"],
+                payload["note"],
+                payload["expires_in"],
+            ),
+            ("", "", "", 0),
+        )
+
+    def test_a_dead_status_feed_still_draws_the_wall(self):
+        """The wall's own narrower catch stays inside the handler."""
+        with (
+            mock.patch.object(map_server, "_fetch_family", return_value=[]),
+            mock.patch.object(map_server, "_fetch_profiles", return_value={}),
+            mock.patch.object(
+                map_server, "fetch_now_facts", side_effect=OSError("feed down")
+            ),
+            mock.patch.object(
+                map_server.watchwall, "build_heads", return_value={"heads": []}
+            ) as heads,
+            self.assertLogs(map_server.log, "ERROR") as logs,
+        ):
+            got = map_server.Handler._wall.__wrapped__({}, None)
+        self.assertEqual(got, (200, {"heads": []}))
+        self.assertIs(heads.call_args.kwargs["facts"], False)
+        self.assertIn("wall status feed failed", logs.output[0])
 
 
 if __name__ == "__main__":

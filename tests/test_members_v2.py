@@ -89,8 +89,8 @@ def server(families=None, guildmates=(), **extra):
     ns = types.SimpleNamespace(
         _NAME_RE=__import__("re").compile(r"^[A-Za-z]{2,12}$"),
         FAMILIES=realm_of(fams, guildmates),
-        _LINEUP_GUILD="SELECT lineup guild ({holes})",
-        _fetch_now_facts=lambda names: {},
+        LINEUP_GUILD="SELECT lineup guild ({holes})",
+        fetch_now_facts=lambda names: {},
         family=types.SimpleNamespace(roster=lambda: []),
     )
     for k, v in extra.items():
@@ -862,15 +862,15 @@ class NowIsTheBestDropOpenAtThisLevel(unittest.TestCase):
         }
         upgrades._WORLD.clear()
         srv = server(
-            _upgrades_payload=lambda name: (200, v1),
-            _PLAN_CATALOGUE="SELECT catalogue",
-            _PLAN_CATALOGUE_OLD="",
-            _PLAN_ENCOUNTERS="SELECT encounters {holes}",
-            _PLAN_LOOT="SELECT loot {holes}",
-            _PLAN_CHARS="SELECT plan chars {holes}",
-            _PLAN_CHARS_OLD="",
-            _RECAP_WORN="SELECT worn {holes}",
-            _RECAP_SKILLS="SELECT skills {holes}",
+            upgrades_payload=lambda name: (200, v1),
+            PLAN_CATALOGUE="SELECT catalogue",
+            PLAN_CATALOGUE_OLD="",
+            PLAN_ENCOUNTERS="SELECT encounters {holes}",
+            PLAN_LOOT="SELECT loot {holes}",
+            PLAN_CHARS="SELECT plan chars {holes}",
+            PLAN_CHARS_OLD="",
+            RECAP_WORN="SELECT worn {holes}",
+            RECAP_SKILLS="SELECT skills {holes}",
             armory=types.SimpleNamespace(EQUIPPED_SLOTS=list(range(19))),
             ITEMS=types.SimpleNamespace(icons={}),
             GEO=types.SimpleNamespace(entrances={}, continents={}),

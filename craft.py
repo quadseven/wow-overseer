@@ -249,6 +249,20 @@ BLACKSMITH_HAMMER = 5956
 TOOL_WALKS: frozenset = frozenset({BLACKSMITH_HAMMER})
 
 
+# Every `SpellFocusObject.dbc` id a recipe here needs, id -> its name.
+# tests/test_recipe_stations.py fails on a recipe whose measured focus is not a
+# key. A Forge is the bridge's walk, an Anvil is DriveCraft's and a Cooking Fire
+# is lit where the cook stands.
+STATIONS: dict = {1: "Anvil", 3: "Forge", 4: "Cooking Fire"}
+
+# `TotemCategory.dbc` id -> the item that answers it, the same test's table.
+TOOL_ITEMS: dict = {
+    10: 16207,  # Runed Arcanite Rod
+    14: 6219,  # Arclight Spanner
+    162: BLACKSMITH_HAMMER,
+}
+
+
 # One profession, one verified entry, per the module docstring's own
 # discipline. Grow this table by adding entries with the SAME care, not by
 # filling every profession at once from memory.

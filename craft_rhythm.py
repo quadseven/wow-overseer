@@ -561,6 +561,22 @@ def casts_in_hand(craft_spell: int, held: dict) -> int | None:
     )
 
 
+def town_stop_crafts(standing: dict, held_by: dict) -> dict:
+    """name -> craft_spell of the smelts worth a forge walk on a town stop.
+
+    The family is not walked to a forge to stand there empty-handed. An Anvil
+    is DriveCraft's own walk, which counts the reagents itself. `held_by` is
+    name -> `casts_in_hand`'s `held`.
+    """
+    out = {}
+    for name, spell in standing.items():
+        if craft.focus_for(spell) not in craft.FOCUS_AIMS:
+            continue
+        if casts_in_hand(spell, held_by.get(name, {})):
+            out[name] = spell
+    return out
+
+
 @dataclass(frozen=True)
 class Errand:
     """Which of a character's two possible recipes it should be casting.

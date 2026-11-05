@@ -139,7 +139,7 @@ def fetch(ctx) -> dict:
     # by the member count, and the slot bounds are module constants; every
     # value is bound by the driver.
     guild = rd.rows(
-        ctx.server._LINEUP_GUILD.format(holes=holes(len(names))),
+        ctx.server.LINEUP_GUILD.format(holes=holes(len(names))),
         tuple(names),
         what="guild_member",
     )

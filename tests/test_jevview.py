@@ -93,7 +93,7 @@ class ViewTest(unittest.TestCase):
 
 class ThePageComposesNothing(unittest.TestCase):
     def test_the_decree_carries_the_card_and_the_read_never_raises(self):
-        handler = SERVER[SERVER.index("    def _decree(self") :]
+        handler = SERVER[SERVER.index("    def _decree(") :]
         handler = handler[: handler.index("    def _decree_post(self")]
         self.assertIn('payload["jev"] = _fetch_jev_view()', handler)
         fetch = SERVER[SERVER.index("def _fetch_jev_view()") :]

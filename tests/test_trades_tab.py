@@ -68,13 +68,13 @@ HANDLER = SERVER[SERVER.index("def _trades") : SERVER.index("def _run_timeline")
 
 class WhereTheCodeIsAllowedToSit(unittest.TestCase):
     def test_the_fetch_sits_above_both_fetch_windows_that_forbid_a_bare_read(self):
-        """test_dungeon_tab slices `def _fetch_dungeonplan` onward and
+        """test_dungeon_tab slices `def fetch_dungeonplan` onward and
         test_recap_tab slices `def _fetch_recap` onward, and both forbid a bare
         cur.execute anywhere inside. A section dropped in either would be
         asserted about by a suite that knows nothing of it."""
         self.assertLess(
             SERVER.index("def _fetch_guildcraft"),
-            SERVER.index("def _fetch_dungeonplan"),
+            SERVER.index("def fetch_dungeonplan"),
         )
         self.assertLess(
             SERVER.index("def _fetch_guildcraft"), SERVER.index("def _fetch_recap")

@@ -198,7 +198,7 @@ def build(q: str, rd, families, server) -> dict:
     guilds = list(server.guildrun.limits().guilds)
     maps = _dungeon_maps(q, server.achievements.MAP_NAMES)
     _limit_statements(rd)
-    members = _members(rd, q, roster, server._MAP_CLASS_NAMES)
+    members = _members(rd, q, roster, server.MAP_CLASS_NAMES)
     items = _items(rd, q, server.ITEMS.icons)
     quests = _quests(rd, q, roster)
     run_rows = _runs(rd, q, _keywords_for(q, maps, keywords, place))

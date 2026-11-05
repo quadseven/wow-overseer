@@ -66,7 +66,7 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
         """test_dungeon_tab slices its fetch from its own function to the
         recap's banner and forbids an unguarded read inside it."""
         self.assertLess(
-            SERVER.index("def _fetch_raidgoals"), SERVER.index("def _fetch_dungeonplan")
+            SERVER.index("def _fetch_raidgoals"), SERVER.index("def fetch_dungeonplan")
         )
 
 

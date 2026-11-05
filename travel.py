@@ -724,6 +724,16 @@ class ForgeAim:
     radius: int = 0
 
 
+# A capital's far quarters are about this far apart. A station beyond it is in
+# another place, and a town stop does not leave town for one.
+TOWN_STATION_YARDS = 800
+
+
+def station_in_town(spawn) -> bool:
+    """Is this `_FORGE_SQL` row (with its squared `d2`) inside the town stop?"""
+    return bool(spawn) and float(spawn.get("d2") or 0) <= TOWN_STATION_YARDS**2
+
+
 def forge_aim(spawn, standing_on):
     """Aim a character standing on map `standing_on` at the Forge `spawn`.
 
