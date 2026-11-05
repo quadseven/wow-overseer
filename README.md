@@ -118,4 +118,5 @@ A worldserver roll is separate and logs every bot out. [docs/ROLLS.md](docs/ROLL
 - [docs/ROLLS.md](docs/ROLLS.md): how to ship.
 - [docs/OPERATIONS.md](docs/OPERATIONS.md): the Watcher camera, realm roller and metric snapshots.
 - [docs/HISTORY.md](docs/HISTORY.md): where this repository came from.
+- [docs/CLASS-SPELL-NAMES.md](docs/CLASS-SPELL-NAMES.md): regenerate the Standing card spell catalog.
 - [AGENTS.md](AGENTS.md): rules for agents.
