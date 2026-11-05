@@ -92,6 +92,76 @@ class TheComparison(unittest.TestCase):
         self.assertTrue(path.endswith("UPSTREAM-PINS.env"), path)
 
 
+class TheUnreadableDeployFile(unittest.TestCase):
+    """CI cannot read the private deploy repo, so the comparison skips there
+    (#1844). The skip must show as a workflow warning, a box without `gh`
+    must skip with a reason rather than a traceback, and --require must
+    still fail."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = pathlib.Path(tmp.name)
+        self.bin = self.dir / "bin"
+        self.bin.mkdir()
+
+    def _fake_gh(self):
+        gh = self.bin / "gh"
+        gh.write_text("#!/bin/sh\necho 'HTTP 404' >&2\nexit 1\n", encoding="utf-8")
+        gh.chmod(0o755)
+
+    def _run(self, *extra, actions=False):
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_ACTIONS"}
+        env["PATH"] = str(self.bin)
+        if actions:
+            env["GITHUB_ACTIONS"] = "true"
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), "--vendored", str(VENDORED), *extra],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    def test_a_missing_gh_binary_is_a_skip_with_a_reason(self):
+        result = self._run()
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertIn("SKIPPED", result.stderr)
+        self.assertIn("gh", result.stderr)
+
+    def test_a_missing_gh_binary_fails_under_require(self):
+        result = self._run("--require")
+        self.assertEqual(1, result.returncode)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertNotIn("SKIPPED", result.stderr)
+
+    def test_the_skip_is_a_workflow_warning_under_actions(self):
+        self._fake_gh()
+        result = self._run(actions=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        line = result.stderr.strip()
+        self.assertTrue(line.startswith("::warning::"), line)
+        self.assertIn("SKIPPED", line)
+
+    def test_a_missing_gh_binary_is_a_warning_under_actions(self):
+        result = self._run(actions=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(result.stderr.startswith("::warning::"), result.stderr)
+
+    def test_the_skip_is_plain_outside_actions(self):
+        self._fake_gh()
+        result = self._run()
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertFalse(result.stderr.startswith("::"), result.stderr)
+        self.assertIn("SKIPPED", result.stderr)
+
+    def test_require_still_fails_under_actions(self):
+        self._fake_gh()
+        result = self._run("--require", actions=True)
+        self.assertEqual(1, result.returncode)
+        self.assertNotIn("SKIPPED", result.stderr)
+
+
 class TheVendoredFile(unittest.TestCase):
     def test_it_carries_a_well_formed_fork_pin(self):
         mod = load()

@@ -2,7 +2,7 @@
 
 The Discord bridge and live web site for a World of Warcraft server run by bots.
 
-Last checked against the code: 2026-11-01.
+Last checked against the code: 2026-11-05.
 
 An operator steers playerbots on an AzerothCore server in plain language from Discord, and a live map and operations site show the world. [mod-overseer](https://github.com/quadseven/mod-overseer) runs inside the worldserver. This service writes its commands and renders what it records.
 
@@ -58,7 +58,7 @@ uvx ruff@0.15.10 check .
 uvx ruff@0.15.10 format --check .
 ```
 
-The pin check fetches the module's main branch, so it needs network access. The parity check skips with a message when it cannot read the private deploy repo. A bare `unittest` run without the submodule and pinned requirements reports failures that CI never sees.
+The pin check fetches the module's main branch, so it needs network access. The parity check skips with a message when it cannot read the private deploy repo, which is always the case in CI. Before a fork pin bump, run it locally with `--require`. A bare `unittest` run without the submodule and pinned requirements reports failures that CI never sees.
 
 ## Configuration
 

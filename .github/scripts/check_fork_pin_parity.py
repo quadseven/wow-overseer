@@ -5,15 +5,18 @@ header names that file (owner/repo's path). This compares AC_MODULE_SHA, the
 fork revision the realm builds, between the two and exits 1 with both values
 when they differ.
 
-The deploy repo is read-only and may be private. With --deploy-file the
-comparison is purely local (the unit tests use this). Otherwise it is read
-with `gh api`; when it cannot be read (no token on a runner) the check says
-so and is skipped, unless --require is given, which turns that into a
-failure.
+The deploy repo is private. With --deploy-file the comparison is purely
+local (the unit tests use this). Otherwise it is read with `gh api`; when it
+cannot be read (CI's token cannot read another private repo, or `gh` is not
+installed) the check says why and is skipped, unless --require is given,
+which turns that into a failure. So CI always skips: a fork pin bump needs a
+local run with --require from a box whose `gh` can read the deploy repo.
+Under GitHub Actions the skip is printed as a workflow warning.
 """
 
 import argparse
 import base64
+import os
 import pathlib
 import re
 import subprocess
@@ -39,15 +42,30 @@ def deploy_source(vendored_text):
 
 
 def fetch_deploy(vendored_text):
+    """Return (text, None), or (None, reason) when the file cannot be read."""
     slug, path = deploy_source(vendored_text)
-    out = subprocess.run(
-        ["gh", "api", f"repos/{slug}/contents/{path}", "--jq", ".content"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        out = subprocess.run(
+            ["gh", "api", f"repos/{slug}/contents/{path}", "--jq", ".content"],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return None, "the gh CLI is not installed"
     if out.returncode != 0:
-        return None
-    return base64.b64decode(out.stdout).decode("utf-8")
+        detail = out.stderr.strip().splitlines()
+        reason = f"gh api exited {out.returncode}"
+        if detail:
+            reason += f" ({detail[-1]})"
+        return None, reason
+    return base64.b64decode(out.stdout).decode("utf-8"), None
+
+
+def skip_line(msg):
+    """A workflow warning under GitHub Actions, plain text elsewhere."""
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        return "::warning::" + msg
+    return msg
 
 
 def main(argv=None):
@@ -63,13 +81,22 @@ def main(argv=None):
         if args.deploy_file:
             deploy_text = pathlib.Path(args.deploy_file).read_text(encoding="utf-8")
         else:
-            deploy_text = fetch_deploy(vendored_text)
+            deploy_text, reason = fetch_deploy(vendored_text)
             if deploy_text is None:
-                msg = "fork pin parity: the deploy repo file is not readable here"
+                msg = (
+                    "fork pin parity: the deploy repo file is not readable "
+                    f"here: {reason}"
+                )
                 if args.require:
                     print(msg, file=sys.stderr)
                     return 1
-                print(msg + "; SKIPPED", file=sys.stderr)
+                print(
+                    skip_line(
+                        msg + "; SKIPPED. Run with --require where gh can read "
+                        "the deploy repo before a fork pin bump"
+                    ),
+                    file=sys.stderr,
+                )
                 return 0
         theirs = module_sha(deploy_text)
     except ValueError as err:
