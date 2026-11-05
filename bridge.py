@@ -17332,11 +17332,23 @@ class Bridge(discord.Client):
         for its stint; meanwhile only the stacks its gatherer picked up are
         mailed to the crafter, inside farmassign's own cooldown.
 
+        Each new task's gather errand (a job row walking the gatherer to a node
+        of its material) is started as its own task, `_run_farm_errand`, which
+        logs the assignment only once that row is written (#1833). A bridge
+        with no tasks in memory for the guild (a restart) rebuilds the
+        standing ones from the assignment rows the pass read.
+
         Synchronous on purpose: `_farm_tasks[guild]` is read and written back
         with no `await` between, so two supply passes on the event loop can
         never interleave inside it and drop each other's tasks. Keep any I/O
         out of this method; tests pin that it stays a plain function."""
         guild = guild_facts.guild
+        if guild not in self._farm_tasks:
+            self._farm_tasks[guild] = {
+                task.material: (task, now - age * 60)
+                for task, age in farmassign.standing_from_rows(
+                    extra["farm_recent"], guild_facts.members)
+            }
         standing = {
             entry: (task, at)
             for entry, (task, at) in self._farm_tasks.get(guild, {}).items()
@@ -17349,15 +17361,75 @@ class Bridge(discord.Client):
             guild_facts.members, guild_facts.posts, busy, recent, cap,
             standing=[task for task, _ in standing.values()])
         for task in farm.tasks:
-            log.info("farmassign: assigned %s to %s", task.bot, task.name)
             standing[task.material] = (task, now)
         self._farm_tasks[guild] = standing
         _log_capped("farmassign", farm.notes)
+        for task in farm.tasks:
+            self._corps_steps[task.bot] = now
+            run = asyncio.create_task(self._run_farm_errand(guild, task, now, cap))
+            self._mail_walk_tasks.add(run)
+            run.add_done_callback(self._mail_walk_task_done)
         for step in farm.steps:
             self._corps_steps[step.holder] = now
             run = asyncio.create_task(self._run_corps_step(step, cap))
             self._mail_walk_tasks.add(run)
             run.add_done_callback(self._mail_walk_task_done)
+
+    async def _run_farm_errand(self, guild, task, at, cap) -> None:
+        """Write one farming task's gather errand, then follow its row (#1833).
+
+        `farmassign: assigned <bot> to <material>` is logged only once the
+        job row is written; with no node or no row the task is dropped and
+        named as not assigned, so the next pass may give it again. A walk that
+        does not come back applied or delivered drops the task too.
+        """
+        written = 0
+        try:
+            spawns = await asyncio.to_thread(_fetch_farm_nodes, task)
+            step = farmassign.errand_step(task, spawns, cap)
+            if step is None:
+                self._drop_farm_task(guild, task, at, "no %s node is known in %s"
+                                     % (task.name, task.zone))
+                return
+            (row,) = step.rows
+            written = await asyncio.to_thread(_insert_corps_row, task.bot, row)
+            if not written:
+                self._drop_farm_task(guild, task, at, "its job row was not written")
+                return
+            log.info("farmassign: assigned %s to %s", task.bot, task.name)
+            log.info("%s (job row %d)", step.said, written)
+            answer = await self._await_corps_answer(
+                written, max(CORPS_ROW_FOLLOW_SECONDS, guildroute.follow_seconds(cap)))
+            status = str((answer or {}).get("status") or "")
+            if status in ("applied", "delivered"):
+                log.info("farmassign: job row %d for %s came back %s",
+                         written, task.bot, status)
+                return
+            self._drop_farm_task(guild, task, at, "")
+            log.info("farmassign: %s stopped farming %s: job row %d came back %s: %s",
+                     task.bot, task.name, written, status or "unanswered",
+                     str((answer or {}).get("detail") or ""))
+        except pymysql.err.MySQLError:
+            # A row already written stands: the gatherer is walking, and a
+            # restart would rebuild the task from it, so only an unwritten
+            # errand is dropped.
+            log.exception("farmassign: the errand for %s failed", task.bot)
+            if not written:
+                self._drop_farm_task(guild, task, at, "the database refused the errand")
+        finally:
+            self._corps_steps.pop(task.bot, None)
+
+    def _drop_farm_task(self, guild, task, at, why) -> None:
+        """Forget one farming task whose errand is not running, and say why.
+        Only the same task given at the same moment is dropped, so a newer
+        assignment for the material is never lost. `why`, when given, is
+        logged as the reason the task was not assigned."""
+        tasks = self._farm_tasks.get(guild, {})
+        if tasks.get(task.material) == (task, at):
+            tasks.pop(task.material)
+        if why:
+            log.info("farmassign: %s was not assigned to %s: %s",
+                     task.bot, task.name, why)
 
     async def _raid_supply_focus(self, guild_facts, recent, busy, cap, budget) -> str:
         """What the guild works first: Jev's `raid_supply` choice where it acts,
@@ -31480,6 +31552,36 @@ _JOB_NODE_SQL = (
     "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
     "WHERE g.map = %s AND gt.type = %s AND gt.Data0 IN ({placeholders}) AND g.zoneId <> 0"
 )
+
+
+# The gather nodes of one farming task's material in its zone (#1833): node
+# spawns by name, on the task's map, in the zone farmassign names by area id.
+_FARM_NODE_SQL = (
+    "SELECT g.guid, g.map AS map_id, g.zoneId AS zone_id, g.position_x AS x, "
+    "g.position_y AS y, gt.name AS name "
+    "FROM acore_world.gameobject g "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "WHERE g.map = %s AND g.zoneId = %s AND gt.type = %s AND gt.name IN ({placeholders})"
+)
+
+
+def _fetch_farm_nodes(task) -> list:
+    """The node spawn rows a farming task's errand may walk to, for
+    farmassign.errand_step; [] for a material with no node or an unknown zone,
+    and on a world without the columns."""
+    names = farmassign.NODES.get(int(task.material), ())
+    zone = farmassign.ZONE_IDS.get(task.zone)
+    if not names or zone is None:
+        return []
+    sql = _FARM_NODE_SQL.format(placeholders=",".join(["%s"] * len(names)))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, (int(task.map_id), int(zone), travel.CHEST_GO_TYPE, *names))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        return list(cur.fetchall())
 
 
 # Skinnable beasts near one point: a normal-rank creature with skinning loot

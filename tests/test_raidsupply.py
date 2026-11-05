@@ -1115,6 +1115,9 @@ class TheBridgePassRuns(unittest.TestCase):
             async def _run_corps_step(self, step, cap):
                 return None
 
+            async def _run_farm_errand(self, guild, task, at, cap):
+                return None
+
         me = Self()
         for name in self.PASS:
             setattr(me, name, types.MethodType(ns[name], me))
@@ -1166,10 +1169,11 @@ class TheBridgePassRuns(unittest.TestCase):
         herbalist = gc.Post("Hebus", "herbalist", gc.HERBALISM, 250, 300)
         farm = {"members": [hebus], "posts": [herbalist]}
         world, log, me = self.run_pass(farm={**farm, "members": [hebus, anneve]})
-        assigned = [
-            line for line in log.lines if line.startswith("farmassign: assigned Hebus")
-        ]
-        self.assertEqual(len(assigned), 1)
+        # The task stands and its gather errand is started (#1833); the
+        # assignment line waits for that errand's row (tests/test_farmassign.py).
+        self.assertEqual(
+            [task.bot for task, _ in me._farm_tasks["Cave"].values()], ["Hebus"]
+        )
         self.assertEqual(self.farm_steps(world), [])
         ((task, _),) = me._farm_tasks["Cave"].values()
         # Next pass Hebus carries a stack it gathered for its task.
