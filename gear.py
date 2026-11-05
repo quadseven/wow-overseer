@@ -2339,7 +2339,7 @@ def equip_room(wanted, worn, free_slots, holds=None, now=None) -> dict:
     asked again the pass the room is there. A holder short for two pieces is
     named for the one that needs the most.
     """
-    now = now or datetime.now(timezone.utc)
+    now = _utc(now) if now else datetime.now(timezone.utc)
     out: dict = {}
     for equip in sorted(wanted, key=lambda e: (e.holder, e.slot, e.guid)):
         free = (free_slots or {}).get(equip.holder)
@@ -2577,7 +2577,10 @@ def _settles_now(equip, kind, p) -> bool:
 
 
 def _utc(at):
-    """`at` with a UTC zone when it is a naive datetime, else as given."""
+    """`at` with a UTC zone when it is a naive datetime, else as given.
+
+    A naive value is a database timestamp, or the database's NOW() a caller
+    passed as `now`; both are read as UTC (THE CLOCK, realmread.py)."""
     if isinstance(at, datetime) and at.tzinfo is None:
         return at.replace(tzinfo=timezone.utc)
     return at
@@ -2888,7 +2891,7 @@ def equips_to_queue(
         holds=holds,
         tries=tries or {},
         retries=retries,
-        now=now or datetime.now(timezone.utc),
+        now=_utc(now) if now else datetime.now(timezone.utc),
         free_slots=free_slots,
         wearers=wearers,
         items=items,

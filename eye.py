@@ -23,7 +23,7 @@ with no change here.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 # The three things a tier can be. Status words, so the page sets them in the
 # mono face and never has to decide what to call a tier itself.
@@ -341,7 +341,8 @@ def build_eye(
     whose schema predates a table hands in [] for it, and every tier above
     reads an empty list as "nothing found" rather than raising.
     """
-    now = now or datetime.now()
+    # No db_now passed: naive UTC (THE CLOCK, realmread.py), not local time.
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
     realm_characters = _count(realm_rows, "characters")
     guilds = _count(guild_rows, "guilds")
     souls = len(snapshot_rows)

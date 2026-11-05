@@ -60,7 +60,7 @@ already shipped once in another shape:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import achievements
 import campaignqueue
@@ -891,7 +891,8 @@ def build_agenda(
     runs - so the SQL stays a plain read. None keeps every row, which is what
     every caller did before there were two families.
     """
-    now = now or datetime.now()
+    # No db_now passed: naive UTC (THE CLOCK, realmread.py), not local time.
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
     if members is not None:
         ours = set(members)
         roster_rows = [r for r in roster_rows if str(r.get("name")) in ours]

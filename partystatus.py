@@ -77,7 +77,7 @@ unless one is not handed to it.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import agenda
 import jobs
@@ -336,7 +336,8 @@ def build_push(
     party, the operator is looking at five streams, and telling only one of
     them would make it look like one member's problem.
     """
-    now = now or datetime.now()
+    # No db_now passed: naive UTC (THE CLOCK, realmread.py), not local time.
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
     orders = agenda.standing_orders(roster_rows)
     roster = orders["roster"]
     run = agenda.active_run(run_rows)
