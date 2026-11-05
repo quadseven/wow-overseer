@@ -39,7 +39,7 @@ MOLTEN_CORE = (
 
 
 def _raider(class_id, seat="dps"):
-    return {"class_id": class_id, "seat": seat}
+    return {"class_id": class_id, "seat": seat, "level": 60}
 
 
 def _row(report, boss):
@@ -142,6 +142,18 @@ class TheLineupCarriesTheReport(unittest.TestCase):
                 lineup["encounter_line"],
                 mcencounters.encounter_line(lineup["encounters"]),
             )
+
+    def test_the_real_approved_lineup_carries_member_levels_into_the_report(self):
+        team = next(iter(raidteams.GROUPS))
+        roster = self._approved_roster(team)
+        for member in roster:
+            if member["class_id"] in (MAGE, DRUID):
+                member["level"] = 17
+        lineup = raidlineup.build_lineup(roster)
+        row = _row(lineup["encounters"], "Lucifron")
+        self.assertEqual(row["have"][CURSE_DISPEL], 0)
+        self.assertIn("level 18", lineup["encounter_line"])
+        self.assertEqual(lineup["approved"], team)
 
     def test_an_automatic_lineup_reports_too(self):
         roster = [

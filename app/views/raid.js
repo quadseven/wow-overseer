@@ -402,6 +402,7 @@ export default {
     const seats = teams ? plural((teams.seats || []).flat().length, "seat") : "";
     return html`${header(ctx, summaryLine(card, teams, gates, raiders), seats)}
 ${headCard(card)}
+${card.encounter_line ? html`<section class="card raid-block"><h2 class="raid-h2">Encounter capabilities</h2><p class="muted">${card.encounter_line}</p></section>` : ""}
 ${lineupSection(ctx, card, teamsRead, raiders, gates)}
 <div class="raid-two">${blockersCard(card)}${attuneCard(card)}</div>
 ${raidersFold(card, teams)}

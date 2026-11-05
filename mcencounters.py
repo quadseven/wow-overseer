@@ -44,13 +44,16 @@ The counts are planning numbers. The scripts say which mechanic exists; how
 many hands it takes (two curse dispellers so one death does not stop the
 fight) is a judgement, kept here in one table so a change is one line.
 
-WHAT IT DOES NOT CHECK YET. A capability is read from the class alone: a mage
-counts as a curse dispeller whatever its level. The level each class learns a
-spell at, read from this server's spell and trainer data, is a follow-up.
+Learn levels and boss dispel types are the realm-data projection in
+data/mc-spells.json; tools/mc_spell_facts.py regenerates it. Capability means
+the class can train the spell at this level, not proof the member bought it.
+Missing member levels never count as a trained-level capability.
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import NamedTuple
 
 # WotLK class ids, as the realm's `characters.class` column stores them. The
@@ -68,6 +71,7 @@ class Capability(NamedTuple):
     classes: frozenset
     one: str
     many: str
+    levels: dict | None = None
 
 
 TANKS = "tanks"
@@ -119,6 +123,51 @@ CAPABILITIES = {
         "fire resistance sources",
     ),
 }
+
+
+# Trainer spell IDs, including both non-talent warrior interrupts. The earliest
+# teachable alternative determines the class's level for a capability.
+_CAPABILITY_SPELLS = {
+    CURSE_DISPEL: {MAGE: (475,), DRUID: (2782,)},
+    MAGIC_DISPEL: {PRIEST: (527,), PALADIN: (4987,)},
+    OFFENSIVE_DISPEL: {PRIEST: (527,), SHAMAN: (370,)},
+    BANISH: {WARLOCK: (710,)},
+    CROWD_CONTROL: {MAGE: (118,), HUNTER: (1499,), ROGUE: (6770,)},
+    INTERRUPT: {
+        WARRIOR: (72, 6552),
+        ROGUE: (1766,),
+        SHAMAN: (57994,),
+        MAGE: (2139,),
+        DEATH_KNIGHT: (47528,),
+    },
+    FEAR_PROTECTION: {PRIEST: (6346,), SHAMAN: (8143,), WARRIOR: (18499,)},
+    TRANQUILIZING_SHOT: {HUNTER: (19801,)},
+    FIRE_RESISTANCE: {PALADIN: (19891,), SHAMAN: (8184,)},
+}
+_CLASS_NAMES = {
+    WARRIOR: "Warrior",
+    PALADIN: "Paladin",
+    HUNTER: "Hunter",
+    ROGUE: "Rogue",
+    PRIEST: "Priest",
+    DEATH_KNIGHT: "Death Knight",
+    SHAMAN: "Shaman",
+    MAGE: "Mage",
+    WARLOCK: "Warlock",
+    DRUID: "Druid",
+}
+_FACTS = json.loads((Path(__file__).parent / "data" / "mc-spells.json").read_text())
+BOSS_SPELLS = {int(key): row for key, row in _FACTS["boss_spells"].items()}
+for _name, _classes in _CAPABILITY_SPELLS.items():
+    CAPABILITIES[_name] = CAPABILITIES[_name]._replace(
+        levels={
+            klass: min(
+                _FACTS["learned"][_CLASS_NAMES[klass]][str(spell)]["level"]
+                for spell in spells
+            )
+            for klass, spells in _classes.items()
+        }
+    )
 
 
 class Encounter(NamedTuple):
@@ -205,7 +254,10 @@ def _have(placed: list) -> dict:
             have[TANKS] += 1
         class_id = member.get("class_id")
         for name, capability in CAPABILITIES.items():
-            if class_id in capability.classes:
+            if (
+                class_id in capability.classes
+                and (member.get("level") or 0) >= capability.levels[class_id]
+            ):
                 have[name] += 1
     return have
 
@@ -213,11 +265,21 @@ def _have(placed: list) -> dict:
 def compose(placed: list) -> list:
     """Each boss with what it needs, what the lineup has, and what it lacks.
 
-    `placed` is the lineup's seated raiders, each with `class_id` and `seat`.
+    `placed` is the lineup's seated raiders, with `class_id`, `seat` and `level`.
     A row is {"boss", "needs", "have", "lacks", "why"}; `lacks` maps a
     capability to how many more it takes, and is empty when the boss is met.
     """
     have = _have(placed)
+    below = {}
+    for name, capability in CAPABILITIES.items():
+        floors = {
+            capability.levels[m["class_id"]]
+            for m in placed
+            if m.get("class_id") in capability.classes
+            and (m.get("level") or 0) < capability.levels[m["class_id"]]
+        }
+        if floors:
+            below[name] = sorted(floors)
     out = []
     for encounter in ENCOUNTERS:
         needs = dict(encounter.needs)
@@ -232,6 +294,7 @@ def compose(placed: list) -> list:
                 "have": mine,
                 "lacks": lacks,
                 "why": encounter.why,
+                "below_level": {name: below[name] for name in lacks if name in below},
             }
         )
     return out
@@ -252,10 +315,23 @@ def encounter_line(report: list) -> str:
     short = [row for row in report if row["lacks"]]
     if not short:
         return "The lineup brings what every Molten Core boss asks for."
+    below = {}
+    for row in short:
+        for name, levels in row.get("below_level", {}).items():
+            below.setdefault(name, set()).update(levels)
+    explanation = "; ".join(
+        "%s needs level %s"
+        % (CAPABILITIES[name].one, "/".join(map(str, sorted(levels))))
+        for name, levels in below.items()
+    )
+    suffix = (
+        " Class present but level not met: %s." % explanation if explanation else ""
+    )
     return (
         "Molten Core: "
         + "; ".join(
             "%s lacks %s" % (row["boss"], _lack_words(row["lacks"])) for row in short
         )
         + "."
+        + suffix
     )
