@@ -11,6 +11,7 @@ import types
 import unittest
 from unittest import mock
 
+import modsource
 from _stub_modules import PYMYSQL, fresh_import, stub_modules
 
 with stub_modules(pymysql=PYMYSQL):
@@ -56,6 +57,18 @@ class TheDemand(unittest.TestCase):
         cook = next(r.spell_id for r in craft.known_recipes() if r.focus == 4)
         self.assertEqual(craft_rhythm.town_stop_crafts({"A": linen, "B": cook}, {}), {})
 
+    def test_an_anvil_craft_is_drivecrafts_walk_not_the_forge_pass(self):
+        # The module walks a crafter refused for an Anvil itself (its ANVILS
+        # AND THE BLACKSMITH HAMMER block in mod_overseer.cpp), so
+        # the bridge's forge pass must not send the family as well, even with
+        # every reagent in the bags.
+        anvil = next(r.spell_id for r in craft.known_recipes() if r.focus == 1)
+        self.assertEqual(craft.STATIONS[1], "Anvil")
+        held = {"Smith": dict.fromkeys(range(1, 30000), 99)}
+        self.assertEqual(craft_rhythm.town_stop_crafts({"Smith": anvil}, held), {})
+        source = modsource.read(modsource.MODULE, encoding="utf-8")
+        self.assertIn("AnvilSpawns", source)
+
 
 class TheTown(unittest.TestCase):
     def test_a_forge_across_a_capital_is_in_town(self):
@@ -89,9 +102,7 @@ class ThePass(unittest.TestCase):
         reads = {
             "_forge_errands": lambda *_: {},
             "_town_stop_errands": lambda *_: standing,
-            "_fetch_item_counts": lambda pairs: {
-                ("Lead", COPPER_ORE): 19 for _ in pairs
-            },
+            "_fetch_item_counts": lambda pairs: dict.fromkeys(pairs, 19),
             "_family_of": lambda *_: (["Lead", "Kin"], "Lead"),
             "_fetch_positions": lambda names: {"Lead": {"map_id": 0}},
             "_nearest_forge": lambda name: spawn,
