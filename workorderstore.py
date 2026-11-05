@@ -19,6 +19,13 @@ the same kind and item (case folded) instead of adding a second, so an intake
 that asks every pass (raidsupply.fire_potion_order) asks once. A completed
 order is not open, so the next shortfall is a new order.
 
+THE HELD ORDER FOLLOWS ITS SHORTFALL (#1873). `request` keeps a held order as
+it is, so `reconcile` is how an intake that measures its need every pass keeps
+the order true: RESIZE_SQL sets the held order's quantity to the shortfall,
+and SETTLE_SQL completes it once nothing is short, whoever closed the gap.
+Both move a row only while it is still open, so a completed order is never
+reopened or resized.
+
 The statements run on any DB-API cursor that takes `%s` placeholders and
 returns rows as dicts: the bridge's pymysql DictCursor, and the test suite's
 SQLite cursor. Nothing here crafts, gathers or writes a worldserver row.
@@ -26,6 +33,7 @@ SQLite cursor. Nothing here crafts, gathers or writes a worldserver row.
 WHERE IT RUNS. bridge._ensure_order_store creates the table at start-up. The
 raid supply pass requests its fire-potion shortfall, and the guild pass reads
 open orders, plans them with standing cooldown orders and saves assignments.
+The raid supply pass also reconciles the order with the night's shortfall.
 `report` records completion only for the stored assignee; no bridge path calls
 it yet.
 """
@@ -86,6 +94,17 @@ COMPLETE_SQL = (
     " SET status = 'complete', completed_at = CURRENT_TIMESTAMP"
     " WHERE id = %s AND status = 'assigned' AND assigned_to = %s"
     " AND assigned_to <> ''"
+)
+
+RESIZE_SQL = (
+    "UPDATE overseer_work_order SET quantity = %s"
+    " WHERE id = %s AND status IN ('requested', 'assigned')"
+)
+
+SETTLE_SQL = (
+    "UPDATE overseer_work_order"
+    " SET status = 'complete', completed_at = CURRENT_TIMESTAMP"
+    " WHERE id = %s AND status IN ('requested', 'assigned')"
 )
 
 
@@ -165,3 +184,24 @@ def report(cur, order_id: int, reporter: str) -> bool:
     """Complete an assigned order on its assignee's report; False if refused."""
     cur.execute(COMPLETE_SQL, (int(order_id), str(reporter or "")))
     return int(cur.rowcount) == 1
+
+
+def reconcile(cur, kind: str, item: str, shortfall: int) -> int:
+    """Hold the open order of `kind` and `item` at `shortfall`; rows moved.
+
+    A shortfall above 0 sets the held order's quantity and keeps its status
+    and assignee; none completes it. With no open order, nothing moves and
+    nothing is added: asking is `request`'s work.
+    """
+    key = workorders.WorkOrder(kind=kind, item=item)
+    shortfall = max(0, int(shortfall))
+    moved = 0
+    for held in open_orders(cur):
+        if not _same(held, key):
+            continue
+        if shortfall:
+            cur.execute(RESIZE_SQL, (shortfall, int(held.order_id)))
+        else:
+            cur.execute(SETTLE_SQL, (int(held.order_id),))
+        moved += max(0, int(cur.rowcount))
+    return moved

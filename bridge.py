@@ -12099,7 +12099,9 @@ class Bridge(discord.Client):
             # stop the surplus below from going out.
             log.exception("guild route pass failed; retrying next cycle")
         try:
-            _log_work_orders(roster)
+            # Off the loop (#1873): the plan reads and writes the store, and a
+            # slow store must not stall every other pass.
+            await asyncio.to_thread(_log_work_orders, roster)
         except Exception:
             # Log-only planner (#486): a broken plan must not stop the
             # surplus below from going out.
@@ -17295,22 +17297,30 @@ class Bridge(discord.Client):
         members = raidsupply.with_letters(members, extra["letters"])
         recent = guildcorps.recent_from_rows(extra["recent"], prefix=raidsupply.SOURCE)
         started = 0
+        night = []
         for guild, posts in sorted((corps or {}).items()):
             guild_facts = raidsupply.guild_facts(
                 guild, members, extra["worn"], posts, facts.get("vendors") or {})
             started += await self._raid_supply_guild(
-                guild_facts, extra, recent, busy, cap)
+                guild_facts, extra, recent, busy, cap, night)
+        # Every guild's lines in one call, off the loop (#1873): the store
+        # holds one open fire potion order, so it carries the whole night's
+        # shortfall, and a slow store must not stall every other pass.
+        await asyncio.to_thread(_request_fire_potion_order, night)
         log.info("raid supply: started %d step(s)", started)
 
-    async def _raid_supply_guild(self, guild_facts, extra, recent, busy, cap) -> int:
-        """One guild's supply steps, started; returns how many."""
+    async def _raid_supply_guild(self, guild_facts, extra, recent, busy, cap,
+                                 night=None) -> int:
+        """One guild's supply steps, started; returns how many. Its plan's
+        lines are added to `night` for the fire potion order."""
         guild = guild_facts.guild
         master = extra["masters"].get(guild, "")
         withdrawn, spent = raidsupply.ledger(extra["ledger"], master)
         focus = await self._raid_supply_focus(
             guild_facts, recent, busy, cap, raidsupply.reserve(withdrawn, spent))
         plan = raidsupply.plan_guild(guild_facts, recent, busy, focus=focus, cap=cap)
-        _request_fire_potion_order(plan.lines)
+        if night is not None:
+            night.extend(plan.lines)
         log.info("%s; focus %s", raidsupply.summary(plan), focus or "none")
         _log_capped("raid supply", plan.notes)
         now = time.monotonic()
@@ -25618,14 +25628,29 @@ def _log_work_orders(roster: list) -> None:
         log.info("workorders: %s", note)
 
 
+_FIRE_POTION = raidsupply.SUPPLY_BY_ENTRY[raidsupply.GREATER_FIRE_PROTECTION].name
+
+
 def _request_fire_potion_order(lines) -> None:
-    """Keep the raid's Greater Fire Protection Potion shortfall in the store."""
+    """Keep the raid's Greater Fire Protection Potion shortfall in the store.
+
+    `lines` are every guild's supply lines this pass. The store holds one open
+    order per item, so the order is asked for once and then held at the sum
+    of the guilds' shortfalls, and completed when none is short (#1873).
+    Blocking: the raid supply pass runs it in a thread.
+    """
     order = raidsupply.fire_potion_order(lines)
-    if order is None:
-        return
+    short = sum(
+        line.short
+        for line in lines or ()
+        if line.entry == raidsupply.GREATER_FIRE_PROTECTION
+    )
     try:
         with _connect() as conn, conn.cursor() as cur:
-            workorderstore.request(cur, order)
+            if order is not None:
+                workorderstore.request(cur, order)
+            workorderstore.reconcile(
+                cur, workorders.CONSUMABLE, _FIRE_POTION, short)
     except (pymysql.err.MySQLError, OSError):
         # Store errors only: a defect in building or requesting the order
         # surfaces to the raid supply pass instead of reading as an outage.

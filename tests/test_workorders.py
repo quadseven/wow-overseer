@@ -21,6 +21,7 @@ from unittest import mock
 
 import goals
 import guildshare
+import raidsupply
 import workorders
 
 ALCHEMY = goals.SKILL_IDS["alchemy"]
@@ -36,6 +37,17 @@ def _member(name, level=40, skills=None, online=True, cooldowns=None):
         skills=skills or {},
         cooldowns=cooldowns or {},
     )
+
+
+# The night's fire potion line, 12 short: what the raid supply pass hands over.
+_FIRE_LINE = raidsupply.Line(
+    raidsupply.GREATER_FIRE_PROTECTION,
+    "Greater Fire Protection Potion",
+    12,
+    0,
+    raidsupply.BUY,
+    "",
+)
 
 
 def _order(
@@ -417,7 +429,7 @@ class BridgeWiringTest(unittest.TestCase):
             ),
             mock.patch.object(bridge.workorderstore, "request") as request,
         ):
-            bridge._request_fire_potion_order([object()])
+            bridge._request_fire_potion_order([_FIRE_LINE])
         request.assert_called_once()
         self.assertEqual(request.call_args.args[1], order)
 
@@ -437,7 +449,7 @@ class BridgeWiringTest(unittest.TestCase):
             ),
             self.assertLogs(bridge.log, "ERROR") as seen,
         ):
-            bridge._request_fire_potion_order([object()])
+            bridge._request_fire_potion_order([_FIRE_LINE])
         self.assertIn(
             "workorders: fire potion shortfall could not be stored",
             seen.records[0].getMessage(),
@@ -457,7 +469,7 @@ class BridgeWiringTest(unittest.TestCase):
             ),
             self.assertRaises(ValueError),
         ):
-            bridge._request_fire_potion_order([object()])
+            bridge._request_fire_potion_order([_FIRE_LINE])
 
     def test_the_bridge_plans_stored_orders_and_saves_assignments(self):
         from test_guildsocial_bridge import bridge
@@ -566,7 +578,7 @@ class BridgeWiringTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
         start = source.index("    async def _guild_share_once(")
         end = source.index("    async def _write_guild_gifts(")
-        self.assertIn("_log_work_orders(roster)", source[start:end])
+        self.assertIn("asyncio.to_thread(_log_work_orders, roster)", source[start:end])
 
     def test_a_raising_work_order_plan_still_lets_the_gifts_go_out(self):
         from test_guildsocial_bridge import bridge
