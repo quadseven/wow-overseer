@@ -7841,6 +7841,15 @@ class Bridge(discord.Client):
         self._level_skip: dict = {}
         self._level_said: dict = {}
 
+    # A PASS THAT DIES STAYS DOWN (#1850). Its death is the error line
+    # `_pass_done` writes, and nothing restarts it before the next redeploy.
+    # A restart, with backoff or a bounded count, would turn a pass that
+    # dies on every cycle into one that spins, and would hide the death
+    # behind a loop that looks alive. Instead each pass keeps its per-cycle
+    # work inside its own try, so a bad row or a bad snapshot is a logged
+    # cycle and only a bug in the loop itself escapes. run_headless follows
+    # the same policy: the dead pass is logged and the others keep running.
+    # A restart policy stays open as a later change of its own.
     async def setup_hook(self) -> None:
         # Held, not fired and forgotten. asyncio keeps only a weak reference to
         # a running task, so one with no other referent can be garbage
@@ -14158,15 +14167,21 @@ class Bridge(discord.Client):
                     missing_said = True
                 await asyncio.sleep(60)
                 continue
+            # One row the module wrote that cannot be read is that row's
+            # problem: it is logged and skipped, and the rows after it and
+            # the next cycle still run (#1850).
             for row in rows:
-                council_row = lootcouncil.council_from_row(row)
-                if council_row is None or council_row.key in asking:
-                    continue
-                asking.add(council_row.key)
-                task = asyncio.create_task(
-                    self._answer_loot_council(council_row, asking))
-                self._jev_tasks["loot_council:" + council_row.key] = task
-                task.add_done_callback(_jev_task_done)
+                try:
+                    council_row = lootcouncil.council_from_row(row)
+                    if council_row is None or council_row.key in asking:
+                        continue
+                    asking.add(council_row.key)
+                    task = asyncio.create_task(
+                        self._answer_loot_council(council_row, asking))
+                    self._jev_tasks["loot_council:" + council_row.key] = task
+                    task.add_done_callback(_jev_task_done)
+                except Exception:
+                    log.exception("loot council: an open row could not be read; skipped")
 
     async def _answer_loot_council(self, council_row, asking: set) -> None:
         """Decide one council row and write it back."""
@@ -20870,54 +20885,60 @@ class Bridge(discord.Client):
                 # prev is kept so the next good poll still diffs sensibly.
                 log.exception("event snapshot poll failed; retrying next cycle")
                 continue
-            curr = {r["name"]: r for r in rows}
-            detected = events.detect_events(prev, curr, GEO)
+            # Everything after the read is this cycle's work, under one try:
+            # a snapshot the diff, the filter or the split cannot handle is
+            # a logged cycle, not the end of narration (#1850).
             try:
-                notable = await asyncio.to_thread(_fetch_notable_names)
+                curr = {r["name"]: r for r in rows}
+                detected = events.detect_events(prev, curr, GEO)
+                try:
+                    notable = await asyncio.to_thread(_fetch_notable_names)
+                except Exception:
+                    # Losing the notable set must not lose the cycle: fall
+                    # back to arc-only, which is the quiet direction.
+                    log.exception("notable lookup failed; arc-only this cycle")
+                    notable = set()
+                detected = events.filter_for_story(detected, frozenset(notable))
+                prev = curr
+                # With the model switched off, every event takes the templated
+                # path rather than raising through the voiced one each cycle.
+                voiced, overflow = events.split_for_voicing(
+                    detected, cap if llmmode.enabled() else 0
+                )
+                texts: list[str] = []
+                if voiced:
+                    try:
+                        reply = await llmpool.call(
+                            _ask_llm, events.build_batch_prompt(voiced)
+                        )
+                        texts = events.voice_events(voiced, reply)
+                    except Exception:
+                        log.exception("event voice unreachable; templated lines only")
+                        texts = [events.template_line(e) for e in voiced]
+                written = 0
+                # strict=True enforces what events.voice_events promises: one
+                # line per event, always (skipped or garbled model output
+                # degrades to a template line rather than a short list). A
+                # lenient zip would silently DROP thoughts if that contract
+                # ever broke - the exact silent-failure class this repo hunts.
+                for event, text in list(zip(voiced, texts, strict=True)) + [
+                    (e, events.template_line(e)) for e in overflow
+                ]:
+                    try:
+                        await asyncio.to_thread(_insert_thought, event.name, "event", text)
+                        written += 1
+                    except Exception:
+                        # One failed insert must not cost the rest of the batch.
+                        log.exception("event thought insert failed for %s", event.name)
+                # Emitted every cycle, quiet ones included: this line is the
+                # Datadog-observable cap the ticket demands - alerting and
+                # dashboards key off "event cycle" counts.
+                log.info(
+                    "event cycle: detected=%d voiced=%d templated=%d written=%d cap=%d",
+                    len(detected), len(voiced), len(overflow), written, cap,
+                )
             except Exception:
-                # Losing the notable set must not lose the cycle: fall
-                # back to arc-only, which is the quiet direction.
-                log.exception("notable lookup failed; arc-only this cycle")
-                notable = set()
-            detected = events.filter_for_story(detected, frozenset(notable))
-            prev = curr
-            # With the model switched off, every event takes the templated
-            # path rather than raising through the voiced one each cycle.
-            voiced, overflow = events.split_for_voicing(
-                detected, cap if llmmode.enabled() else 0
-            )
-            texts: list[str] = []
-            if voiced:
-                try:
-                    reply = await llmpool.call(
-                        _ask_llm, events.build_batch_prompt(voiced)
-                    )
-                    texts = events.voice_events(voiced, reply)
-                except Exception:
-                    log.exception("event voice unreachable; templated lines only")
-                    texts = [events.template_line(e) for e in voiced]
-            written = 0
-            # strict=True enforces what events.voice_events promises: one
-            # line per event, always (skipped or garbled model output
-            # degrades to a template line rather than a short list). A
-            # lenient zip would silently DROP thoughts if that contract
-            # ever broke - the exact silent-failure class this repo hunts.
-            for event, text in list(zip(voiced, texts, strict=True)) + [
-                (e, events.template_line(e)) for e in overflow
-            ]:
-                try:
-                    await asyncio.to_thread(_insert_thought, event.name, "event", text)
-                    written += 1
-                except Exception:
-                    # One failed insert must not cost the rest of the batch.
-                    log.exception("event thought insert failed for %s", event.name)
-            # Emitted every cycle, quiet ones included: this line is the
-            # Datadog-observable cap the ticket demands - alerting and
-            # dashboards key off "event cycle" counts.
-            log.info(
-                "event cycle: detected=%d voiced=%d templated=%d written=%d cap=%d",
-                len(detected), len(voiced), len(overflow), written, cap,
-            )
+                log.exception("event cycle failed; retrying next cycle")
     # --- goal supervision (infra#2601): thin adapters over goals.py -------
 
     async def _maybe_handle_goal(self, d: core.NLDirective, channel) -> bool:
@@ -37779,7 +37800,14 @@ class HeadlessBridge(Bridge):
         # only a weak reference to a running task, and a collected one stops
         # its forever-loop silently.
         self._loops = {asyncio.create_task(coro()) for coro in loops}
-        await asyncio.gather(*self._loops)
+        # Watched and gathered the way the policy above setup_hook says: a
+        # plain gather raised the first pass's exception, which ended
+        # run_headless and every other pass with it, and no line said
+        # which pass it was (#1850).
+        for task in self._loops:
+            task.add_done_callback(self._pass_done)
+        await asyncio.gather(*self._loops, return_exceptions=True)
+        log.error("headless: every pass has stopped")
 
 
 def main() -> None:
