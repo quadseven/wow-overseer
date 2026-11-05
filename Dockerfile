@@ -7,9 +7,15 @@
 # limit that does not exist here) - hence the old Dockerfile COPYing from a
 # synthetic `_shared/` directory. This build is a plain `docker build .`
 # against this repo's own tree (build.yml, GitHub-hosted runner), so that
-# indirection is gone; the explicit file list below is unchanged in spirit -
-# still hand-maintained. Tests, module sources and patches stay outside the
-# image; the scheduled watcher and its dependency are copied separately below.
+# indirection is gone.
+#
+# Every top-level *.py module is copied into the image. The list below is
+# hand-maintained and names each one; tests/test_ship_manifest.py fails when a
+# top-level module is missing from it, and states this rule in the same words.
+# A module the image never imports therefore leaves the top level rather than
+# the list (tests/test_bridge_image_modules.py tracks the ones still waiting).
+# Tests, module sources and patches stay outside the image; the scheduled
+# watcher and its dependency are copied separately below.
 FROM python:3.12-slim
 
 RUN pip install --no-cache-dir discord.py==2.4.0 PyMySQL==1.1.1

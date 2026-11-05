@@ -1,6 +1,8 @@
-"""Every module that ships must be in the image.
+"""Every top-level *.py module is copied into the image.
 
-The Dockerfile names top-level modules explicitly (no wildcard COPY), so a
+The Dockerfile header states the same rule in the same words, and
+test_dockerfile_header_and_this_test_state_the_same_rule keeps the two in
+step. The Dockerfile names top-level modules explicitly (no wildcard COPY), so a
 new module is one forgotten line away from an image that imports something
 it does not contain - a crash at pod start, long after CI went green.
 
@@ -16,6 +18,25 @@ import unittest
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOCKERFILE = os.path.join(HERE, "Dockerfile")
+
+# The one rule, in the words the Dockerfile header and this module's
+# docstring both use (#1846).
+RULE = "Every top-level *.py module is copied into the image."
+
+
+def _words(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _dockerfile_header() -> str:
+    """The comment block above FROM, with the `#` markers removed."""
+    lines = []
+    with open(DOCKERFILE, encoding="utf-8") as f:
+        for line in f:
+            if not line.startswith("#"):
+                break
+            lines.append(line[1:])
+    return _words(" ".join(lines))
 
 
 def _copied_files() -> set:
@@ -38,6 +59,10 @@ def _copied_files() -> set:
 
 
 class ShipManifestTest(unittest.TestCase):
+    def test_dockerfile_header_and_this_test_state_the_same_rule(self):
+        self.assertIn(RULE, _dockerfile_header())
+        self.assertIn(RULE, _words(__doc__ or ""))
+
     def test_every_top_level_module_is_copied_into_the_image(self):
         on_disk = {f for f in os.listdir(HERE) if f.endswith(".py")}
         missing = sorted(on_disk - _copied_files())
