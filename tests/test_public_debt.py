@@ -33,7 +33,11 @@ KUBECTL_FILES = (
 )
 
 # A value a reader supplies: `$NAME`, `"$NAME"`, `"${NAME#pod/}"` or `<name>`.
-PLACEHOLDER = r"""(?:"?\$\{?[A-Z_]+|<[^>]+>)"""
+PLACEHOLDER = r"""(?:"?\$\{?[A-Z_]+(?![A-Za-z0-9_])|<[^>]+>)"""
+# The whole value is one placeholder: `$NAME`, `"$NAME"`, `"${NAME}"` or `<name>`.
+WHOLE_PLACEHOLDER = r"""(?:"?\$\{?(?P<name>[A-Z_]+)\}?"?|<[^>]+>)"""
+# The names docs/ROLLS.md explains before its steps.
+ROLLS_PLACEHOLDERS = ("NAMESPACE", "DB_POD", "READER_SA", "MANIFESTS_DIR")
 
 
 def _read(rel):
@@ -62,7 +66,9 @@ class KubectlLinesUsePlaceholders(unittest.TestCase):
             for command in _kubectl_commands(_read(rel)):
                 for value in re.findall(r"\s-n\s+(\S+)", command):
                     with self.subTest(file=rel, command=command):
-                        self.assertRegex(value, "^" + PLACEHOLDER)
+                        found = re.fullmatch(WHOLE_PLACEHOLDER, value)
+                        self.assertIsNotNone(found, value)
+                        self.assertIn(found.group("name"), (None, "NAMESPACE"))
 
     def test_every_exec_target_and_copy_source_is_a_placeholder(self):
         for rel in KUBECTL_FILES:
@@ -90,13 +96,21 @@ class KubectlLinesUsePlaceholders(unittest.TestCase):
                 found = re.search(r"(?:create token|kustomize)\s+(\S+)", command)
                 if found:
                     with self.subTest(file=rel, command=command):
-                        self.assertRegex(found.group(1), "^" + PLACEHOLDER)
+                        whole = re.fullmatch(WHOLE_PLACEHOLDER, found.group(1))
+                        self.assertIsNotNone(whole, found.group(1))
+                        self.assertIn(whole.group("name"), (None,) + ROLLS_PLACEHOLDERS)
 
     def test_the_rolls_doc_explains_each_placeholder(self):
         text = _read("docs/ROLLS.md")
-        for name in ("$NAMESPACE", "$DB_POD", "$READER_SA", "$MANIFESTS_DIR"):
+        for name in ROLLS_PLACEHOLDERS:
             with self.subTest(placeholder=name):
-                self.assertIn(f"`{name}`", text.split("## 1. Steps", 1)[0])
+                self.assertIn(f"`${name}`", text.split("## 1. Steps", 1)[0])
+
+    def test_the_rolls_doc_uses_only_explained_placeholders(self):
+        used = set()
+        for command in _kubectl_commands(_read("docs/ROLLS.md")):
+            used |= set(re.findall(r"\$\{?([A-Z_]+)", command))
+        self.assertEqual(sorted(used - set(ROLLS_PLACEHOLDERS)), [])
 
     def test_each_tool_explains_its_placeholders(self):
         # A name the recipe assigns itself (`POD=$(...)`) or reads inside the
