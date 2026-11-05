@@ -34,12 +34,14 @@ that a pull request can be gated on.
 
 USAGE
 
-    POD=$(kubectl -n wow-dev get pods -l app=worldserver -o name | head -1)
+    POD=$(kubectl -n "$NAMESPACE" get pods -l app=worldserver -o name | head -1)
     for f in Spell.dbc SkillLineAbility.dbc; do
-      kubectl -n wow-dev exec "${POD#pod/}" -c worldserver -- \\
+      kubectl -n "$NAMESPACE" exec "${POD#pod/}" -c worldserver -- \\
         sh -c "cat /azerothcore/env/dist/data/dbc/$f" > "$f"
     done
     python3 tools/craftbook_from_dbc.py <dir holding the two .dbc files>
+
+`$NAMESPACE` is the Kubernetes namespace the realm runs in.
 
 VERIFY THE COPY BEFORE TRUSTING IT, exactly as spell_focus_from_dbc.py says:
 `md5sum` the local files against the pod's own `md5sum` of the same paths, and

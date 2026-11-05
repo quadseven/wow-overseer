@@ -30,8 +30,8 @@ that can make these two disagree, because there is only one set of facts.
 HOW IT IS SELECTED. `OVERSEER_FAMILY` in the environment, read once at import.
 Unset means live, and that is the load-bearing default: every process that
 exists today - the Discord bridge, the map, the metrics emitter - sets nothing,
-and must keep behaving exactly as it does. Only ../../oke/manifests/wow-dev
-sets it, and its isolation suite asserts that.
+and must keep behaving exactly as it does. Only the dev world's manifests in
+the deploy repository set it, and their isolation suite asserts that.
 
 THE ONE THING THE DEV NAMES MUST BE. Disjoint from the live names. Chained
 substitution over an overlapping map corrupts (rename Grug->Grog and Grog->Bork
@@ -128,8 +128,8 @@ def selected(environ=None) -> str:
     templated somewhere shared. Falling back to live is the behaviour every
     caller already has.
 
-    The dev side is protected differently and better: the wow-dev isolation
-    suite asserts the rendered value is exactly `dev`, so a typo there is
+    The dev side is protected differently and better: the dev world's
+    isolation suite in the deploy repository asserts the rendered value is exactly `dev`, so a typo there is
     caught before it is applied rather than after.
     """
     environ = os.environ if environ is None else environ

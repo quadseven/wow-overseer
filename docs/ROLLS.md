@@ -8,7 +8,7 @@ Two things ship, and they have different costs:
 
 | Ship | What changes | What restarts | Where the digest is pinned |
 |---|---|---|---|
-| Bridge and site | `wow-overseer` main (bridge.py, map_server.py, apiv2/, app/) | the `wow-overseer` and `wow-map` deployments | the `ghcr.io/quadseven/wow-overseer` image in the wow-dev kustomization (infra) |
+| Bridge and site | `wow-overseer` main (bridge.py, map_server.py, apiv2/, app/) | the `wow-overseer` and `wow-map` deployments | the `ghcr.io/quadseven/wow-overseer` image in the dev realm kustomization (infra) |
 | Worldserver | mod-overseer, mod-dungeon-clear, core, playerbots, ollama-chat | the `worldserver` deployment (every online bot logs out) | the `ac-playerbots-worldserver` and `ac-playerbots-db-import` images in the same kustomization, plus the source pins |
 
 A bridge ship is cheap and can be batched often. A worldserver roll logs every bot out and ends the family and
@@ -18,6 +18,14 @@ and families and guild runs restart their runs. What still blocks a roll is in s
 
 Merging a PR here deploys nothing. Label a merged-but-not-deployed ticket "merged"; "shipped" means it is on
 the realm and its proof line was seen (section 3).
+
+The `kubectl` commands below take the deployment's own names from the shell, so set these first:
+
+- `$NAMESPACE` is the Kubernetes namespace the dev realm runs in.
+- `$DB_POD` is the realm database pod.
+- `$READER_SA` is the read-only ServiceAccount for agents in that namespace.
+- `$MANIFESTS_DIR` is the deploy repository's directory for the dev realm, the one holding its
+  `kustomization.yaml`.
 
 ## 1. Steps
 
@@ -35,7 +43,7 @@ the realm and its proof line was seen (section 3).
        python3 .github/scripts/wow_bridge_ship.py --sha <merge sha> --write --body-out body.md
 
    It finds that merge's successful `build.yml` run on main, reads the one digest its log published, rewrites
-   the one stanza in `production/oke/manifests/wow-dev/kustomization.yaml`, writes the Chief-format PR body
+   the one stanza in `$MANIFESTS_DIR/kustomization.yaml`, writes the Chief-format PR body
    (the carried commits and their Refs lines) to `body.md`, and prints the PR title. The stanza it writes:
 
        # Published from wow-overseer <what shipped, e.g. #857 and #858>, merge <10 chars>, build run <run id>.
@@ -50,11 +58,11 @@ the realm and its proof line was seen (section 3).
    hand-edit a digest around a refusal; fix its cause.
 4. The body carries a `Pre-ship review verdict: PENDING` line. Run the Pre-roll adversarial review (section 2)
    on the batch and replace that line with its verdict before the PR merges.
-5. Render it (`kubectl kustomize production/oke/manifests/wow-dev`), commit, open the infra PR with the printed
+5. Render it (`kubectl kustomize "$MANIFESTS_DIR"`), commit, open the infra PR with the printed
    title and `body.md` (Chief format, see the appendix), wait for checks, answer every bot thread, then squash
    merge.
-6. Merging triggers `sync.k8s-manifests`, which applies the wow-dev directory. Wait for
-   `kubectl -n wow-dev rollout status deploy/wow-overseer` and confirm the deployment image equals the new digest.
+6. Merging triggers `sync.k8s-manifests`, which applies `$MANIFESTS_DIR`. Wait for
+   `kubectl -n "$NAMESPACE" rollout status deploy/wow-overseer` and confirm the deployment image equals the new digest.
    `wow-map` runs the same image and rolls with it.
 
 ### 1b. Worldserver roll (one restart for a batch of module changes)
@@ -81,7 +89,7 @@ before opening the PR.
    - the `"dev"` fields of the matching entries in `.github/scripts/wow_promotion_drift.py`.
    Check `git status --short` shows exactly those three paths. The banner (`overseer-pin.yaml`)
    and `deployed_dev` move with the IMAGE in step 4, not here, so this PR restarts
-   nothing. Run the wow-dev tests, the promotion tests and `python3 .github/scripts/wow_promotion_drift.py`
+   nothing. Run the dev realm tests, the promotion tests and `python3 .github/scripts/wow_promotion_drift.py`
    ("All four views agree"). Merge it. This merge starts the image build workflow
    (`build.azerothcore-playerbots.yml`).
    This PR's `check.wow-patches` and that build both run the module patch coverage guard
@@ -123,17 +131,17 @@ before opening the PR.
 3. **Read both digests from the build run's push lines**, each under its own `The push refers to repository
    [ghcr.io/quadseven/<image>]` line: `ac-playerbots-worldserver` and `ac-playerbots-db-import`. A digest read
    from the wrong repository line is the classic mistake.
-4. **Prove the binary** before pinning: run a throwaway pod on the worldserver digest in wow-dev (same pull
+4. **Prove the binary** before pinning: run a throwaway pod on the worldserver digest in `$NAMESPACE` (same pull
    secret as the worldserver deployment, amd64 node selector) that greps
    `/azerothcore/env/dist/bin/worldserver` for a string or symbol unique to each change (a function name or log
    text from the diff). Every string must be found. A build that lacks the symbol is a stale layer: do not pin.
-5. **Pin the pair** in a second infra PR: in `wow-dev/kustomization.yaml` set the worldserver AND db-import
+5. **Pin the pair** in a second infra PR: in `$MANIFESTS_DIR/kustomization.yaml` set the worldserver AND db-import
    digests together (the worldserver comment block stays 3 lines), and move the banner
-   (`production/oke/manifests/wow-dev/overseer-pin.yaml`) and `deployed_dev` in the drift entries to the new
+   (`$MANIFESTS_DIR/overseer-pin.yaml`) and `deployed_dev` in the drift entries to the new
    SHAs. Pinning one image without the
    other is a binary asking for a table its schema step never created; the drift check fails on it. Run the
    drift check again, open the PR in Chief format, then merge it as soon as the merge bar holds (section 2).
-6. Watch `kubectl -n wow-dev rollout status deploy/worldserver` and confirm the running image equals the new
+6. Watch `kubectl -n "$NAMESPACE" rollout status deploy/worldserver` and confirm the running image equals the new
    worldserver digest. The db-import job runs the module SQL first.
 
 The same sequence is encoded for automation as the realm roller (`realmroller.py`, `realmroller_plan.py`,
@@ -166,13 +174,13 @@ restart them. Do not title a pin PR "HOLD for window".
 
 Optionally, take a before-roll metrics snapshot for the section 3 comparison. It blocks nothing. Read the site
 API from inside the cluster (read-only). From a pod that has `python3` (for example
-`kubectl -n wow-dev exec deploy/wow-map -- python3 -c ...`):
+`kubectl -n "$NAMESPACE" exec deploy/wow-map -- python3 -c ...`):
 
 - Families: `GET /api/family?family=Grug` and `...=Zug` on the map server (port 8080); members whose `instance`
   is set are the runs the restart will end.
 - Guild runs: `GET /api/guildruns`, field `active`.
 - Cross-check in the database with a SELECT on `acore_characters.overseer_guild_run` (state `inside`) and
-  `overseer_dungeon_run` (open runs), as `mysql-0` read-only. Never write.
+  `overseer_dungeon_run` (open runs), on `$DB_POD`, read-only. Never write.
 
 ### Rules for a worldserver roll
 
@@ -217,8 +225,8 @@ metric moved. Name both in the ticket before the roll. Typical proof sources:
 
 | Change type | Where to look | Proof |
 |---|---|---|
-| Bridge pass logic | `kubectl -n wow-dev logs deploy/wow-overseer` | the new log line text from the PR; no traceback after the restart; no heartbeat warning |
-| Worldserver module behavior | `kubectl -n wow-dev logs deploy/worldserver -c worldserver` | the module's log text from the diff (for example the line a reroute prints); no `ASSERTION FAILED` |
+| Bridge pass logic | `kubectl -n "$NAMESPACE" logs deploy/wow-overseer` | the new log line text from the PR; no traceback after the restart; no heartbeat warning |
+| Worldserver module behavior | `kubectl -n "$NAMESPACE" logs deploy/worldserver -c worldserver` | the module's log text from the diff (for example the line a reroute prints); no `ASSERTION FAILED` |
 | Database or schema | read-only SELECT on the table the change writes | rows appear or counts move |
 | Site and API | the site API from inside the cluster | the field or view returns the new shape |
 | Progression | `overseer_death`, `overseer_dungeon_run`, `overseer_guild_run`, level counts per guild | deaths down, runs and clears up over the window |
@@ -227,7 +235,7 @@ Two read-only helpers in infra, under `production/oke/manifests/realm-log-archiv
 hand:
 
 - `live_since.py <repo> <PR>` (repo is `mod-overseer` or `wow-overseer`; a commit SHA works in place of the PR)
-  answers whether a merge is live on wow-dev and since when. It reads the deploy history from infra's git log
+  answers whether a merge is live on the dev realm and since when. It reads the deploy history from infra's git log
   (`origin/main`, so fetch first) and prints every window in which the deployed pin contained the merge. Exit 0
   is live now, 1 is not live (or not merged), 2 is unknown; never read an unknown as "not live". `--time`
   prints only the start of the current window, for use as SINCE.
@@ -238,8 +246,8 @@ hand:
   line>'`. It reads the node log archive, so it needs an operator kubeconfig; the agent identity below cannot
   run it, so ask the operator for the report or fall back to `kubectl logs`.
 
-The read-only identity for agents is the `wow-agent-reader` ServiceAccount in wow-dev; mint an expiring token
-(`kubectl -n wow-dev create token wow-agent-reader --duration=24h`) instead of keeping a standing one. A
+The read-only identity for agents is the `$READER_SA` ServiceAccount in `$NAMESPACE`; mint an expiring token
+(`kubectl -n "$NAMESPACE" create token "$READER_SA" --duration=24h`) instead of keeping a standing one. A
 metrics snapshot per guild (online, median level, count at 20/40/60, runs, clears, class-quest done and
 blocked, ghosts, stuck, deaths in 24 hours, next dungeon) before and after a roll is the standard comparison.
 

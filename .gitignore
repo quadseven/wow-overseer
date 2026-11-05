@@ -3,3 +3,6 @@ __pycache__/
 *.tmp
 .hermes-scratch/
 .ruff_cache/
+# Hand-run output (AGENTS.md, Layout): new files stay local.
+logs/
+reports/
