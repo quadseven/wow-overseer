@@ -4196,6 +4196,16 @@ def _ensure_queue_store() -> None:
     try:
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(campaignqueue.CREATE_SQL)
+            for column, definition in (
+                    ("goal_item", "INT UNSIGNED NOT NULL DEFAULT 0"),
+                    ("goal_notice_pending", "TINYINT UNSIGNED NOT NULL DEFAULT 0")):
+                cur.execute(
+                    "SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'overseer_dungeon_queue' "
+                    "AND COLUMN_NAME = %s", (column,))
+                if not (cur.fetchone() or {}).get("n"):
+                    cur.execute("ALTER TABLE overseer_dungeon_queue ADD COLUMN "
+                                + column + " " + definition)
     except pymysql.err.MySQLError:
         log.exception("queue: the campaign queue store is unavailable, so no "
                       "family's queue can be set or advanced")
@@ -4230,6 +4240,49 @@ def _fetch_priority_order() -> tuple:
             return priorities.DEFAULT_ORDER, priorities.UNSET
         raise
     return priorities.read_stored(rows)
+
+
+def _queue_item_candidates(entries: tuple) -> dict:
+    """Read exact names first; ambiguous names are never resolved by ordering."""
+    out = {}
+    with _connect() as conn, conn.cursor() as cur:
+        for entry in entries:
+            if not entry.item_name:
+                continue
+            cur.execute("SELECT entry, name FROM acore_world.item_template "
+                        "WHERE LOWER(name) = LOWER(%s) ORDER BY entry LIMIT 21",
+                        (entry.item_name,))
+            rows = list(cur.fetchall())
+            if not rows:
+                cur.execute("SELECT entry, name FROM acore_world.item_template "
+                            "WHERE LOCATE(LOWER(%s), LOWER(name)) > 0 "
+                            "ORDER BY entry LIMIT 21", (entry.item_name,))
+                rows = list(cur.fetchall())
+            out[entry.item_name] = rows
+    return out
+
+
+def _queue_item_notices() -> list:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(campaignqueue.ITEM_NOTICES_SQL)
+        return list(cur.fetchall())
+
+
+def _queue_owned_items(family: str, target: int) -> set:
+    """Saved inventory includes equipped items, carried bags and personal bank.
+
+    Read the full enabled family, including a member sitting out of this run.
+    Mail and another character's holdings cannot satisfy the family goal.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT ii.itemEntry AS entry FROM overseer_roster r "
+            "JOIN characters c ON c.name = r.name "
+            "JOIN character_inventory ci ON ci.guid = c.guid "
+            "JOIN item_instance ii ON ii.guid = ci.item AND ii.owner_guid = c.guid "
+            "WHERE r.family = %s AND r.enabled = 1 AND ii.itemEntry = %s "
+            "AND ii.count > 0", (family, target))
+        return {int(row["entry"]) for row in cur.fetchall()}
 
 
 def _fetch_queue_rows() -> list:
@@ -4545,9 +4598,11 @@ def _write_queue(plan, source: str, new_ids: list | None = None) -> int:
         cur.execute(campaignqueue.CANCEL_SQL, (plan.family,))
         changed = cur.rowcount or 0
         for position, entry in enumerate(plan.entries):
-            cur.execute(campaignqueue.INSERT_SQL,
-                        (plan.family, position, entry.keyword, entry.runs,
-                         source[:64]))
+            params = (plan.family, position, entry.keyword, entry.runs, source[:64])
+            if entry.goal_item:
+                cur.execute(campaignqueue.ITEM_INSERT_SQL, params + (entry.goal_item,))
+            else:
+                cur.execute(campaignqueue.INSERT_SQL, params)
             if new_ids is not None:
                 new_ids.append(cur.lastrowid)
             changed += 1
@@ -4636,7 +4691,9 @@ def _apply_queue_move(move, names: list, family: str = "") -> str:
     check was holding back (#217).
     """
     if move.finish:
-        _mark_queue(campaignqueue.FINISH_SQL, move.finish)
+        finish_sql = campaignqueue.FINISH_ITEM_SQL if move.acquired_item else campaignqueue.FINISH_SQL
+        if not _mark_queue(finish_sql, move.finish):
+            return "withheld: the queue entry changed before completion"
     if move.quest:
         for name in names:
             try:
@@ -21541,7 +21598,16 @@ class Bridge(discord.Client):
             return
         if key in held:
             return
-        move = campaignqueue.step(rows, fam["leader"])
+        target = int(rows[0].get("goal_item") or 0) if rows else 0
+        if target:
+            try:
+                owned = await asyncio.to_thread(_queue_owned_items, key, target)
+            except pymysql.err.MySQLError:
+                log.exception("queue: item ownership for %s could not be read; retrying next pass", key)
+                return
+            move = campaignqueue.step(rows, fam["leader"], owned_items=owned)
+        else:
+            move = campaignqueue.step(rows, fam["leader"])
         if not move.writes:
             log.info("queue: %s: %s", campaignqueue._family(key), move.why)
             return
@@ -21699,6 +21765,27 @@ class Bridge(discord.Client):
             owed=frozenset(_class_owed_names(self)),
             every_family=frozenset(gfacts["family"]), mid_run=mid_run, current=current)
 
+    async def _send_queue_item_notices(self) -> None:
+        """Retry saved completion notices, acknowledging only a Discord send."""
+        if not OVERSEER_CHANNEL_ID:
+            return
+        channel = self.get_channel(int(OVERSEER_CHANNEL_ID))
+        if channel is None:
+            return
+        try:
+            notices = await asyncio.to_thread(_queue_item_notices)
+        except pymysql.err.MySQLError:
+            log.exception("queue: item completion notices could not be read")
+            return
+        for row in notices:
+            try:
+                await channel.send(("%s owns item %d; the %s item goal is complete."
+                                    % (campaignqueue._family(row["family"]),
+                                       row["goal_item"], row["keyword"]))[:1990])
+                await asyncio.to_thread(_mark_queue, campaignqueue.ACK_ITEM_NOTICE_SQL, row["id"])
+            except Exception:
+                log.exception("queue: completion notice %s remains pending", row["id"])
+
     async def _campaign_queue_once(self) -> None:
         """One pass: every family with a pending entry, off its own leader."""
         # WHAT THE MODULE CAN CROSS, read before any door is judged, so a
@@ -21710,6 +21797,9 @@ class Bridge(discord.Client):
                      "on the other continent is %s", crosses or "",
                      "reachable by its boats" if crossing.module_boards()
                      else "refused until it can cross")
+        notices = getattr(self, "_send_queue_item_notices", None)
+        if notices is not None:
+            await notices()
         pending = campaignqueue.pending_by_family(
             await asyncio.to_thread(_fetch_queue_rows))
         fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
@@ -22460,6 +22550,17 @@ class Bridge(discord.Client):
             if refusal:
                 await channel.send(refusal[:1990])
                 return
+            if any(entry.item_name for entry in entries):
+                try:
+                    candidates = await asyncio.to_thread(_queue_item_candidates, entries)
+                except pymysql.err.MySQLError:
+                    log.exception("queue: goal item lookup failed")
+                    await channel.send("The item catalog could not be read. Nothing was written.")
+                    return
+                entries, refusal = campaignqueue.resolve_items(entries, candidates)
+                if refusal:
+                    await channel.send(refusal[:1990])
+                    return
             level_rows = await asyncio.to_thread(_queue_level_rows, fams[key])
             plan = campaignqueue.plan(key, entries, level_rows)
             if plan.refusal:
@@ -22507,6 +22608,9 @@ class Bridge(discord.Client):
             entries, refusal = campaignqueue.parse_entries(order.text)
         if refusal:
             await channel.send(refusal[:1990])
+            return
+        if any(entry.item_name for entry in entries):
+            await channel.send("Item-goal orders name one family. Nothing was written.")
             return
         try:
             rows_a = await asyncio.to_thread(_queue_level_rows, fams[key])

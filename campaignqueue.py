@@ -67,6 +67,8 @@ CREATE_SQL = (
     " position SMALLINT UNSIGNED NOT NULL,"
     " keyword VARCHAR(32) NOT NULL,"
     " runs_wanted SMALLINT UNSIGNED NOT NULL,"
+    " goal_item INT UNSIGNED NOT NULL DEFAULT 0,"
+    " goal_notice_pending TINYINT UNSIGNED NOT NULL DEFAULT 0,"
     " status ENUM('queued','active','done','cancelled') NOT NULL"
     " DEFAULT 'queued',"
     " source VARCHAR(64) NOT NULL DEFAULT '',"
@@ -80,7 +82,7 @@ CREATE_SQL = (
 # `source` rides along so the planner (campaignplan.py) can tell its own
 # entries from an operator's order.
 SELECT_PENDING_SQL = (
-    "SELECT id, family, position, keyword, runs_wanted, status, source "
+    "SELECT id, family, position, keyword, runs_wanted, status, source, goal_item "
     "FROM overseer_dungeon_queue WHERE status IN ('queued', 'active') "
     "ORDER BY family, position, id"
 )
@@ -99,6 +101,12 @@ INSERT_SQL = (
     "VALUES (%s, %s, %s, %s, %s)"
 )
 
+ITEM_INSERT_SQL = (
+    "INSERT INTO overseer_dungeon_queue "
+    "(family, position, keyword, runs_wanted, source, goal_item) "
+    "VALUES (%s, %s, %s, %s, %s, %s)"
+)
+
 # Guarded on the status it moves FROM, so a queue replaced between the read
 # and the write is not revived by a pass that read the old one.
 START_SQL = (
@@ -108,6 +116,19 @@ START_SQL = (
 FINISH_SQL = (
     "UPDATE overseer_dungeon_queue SET status = 'done', finished_at = NOW() "
     "WHERE id = %s AND status = 'active'"
+)
+
+FINISH_ITEM_SQL = (
+    "UPDATE overseer_dungeon_queue SET status = 'done', finished_at = NOW(), "
+    "goal_notice_pending = 1 WHERE id = %s AND status IN ('queued', 'active')"
+)
+ITEM_NOTICES_SQL = (
+    "SELECT id, family, keyword, goal_item FROM overseer_dungeon_queue "
+    "WHERE status = 'done' AND goal_notice_pending = 1 ORDER BY id LIMIT 20"
+)
+ACK_ITEM_NOTICE_SQL = (
+    "UPDATE overseer_dungeon_queue SET goal_notice_pending = 0 "
+    "WHERE id = %s AND status = 'done'"
 )
 
 # What the validation reads: each member's saved level, race and map. The
@@ -133,6 +154,8 @@ class Entry:
     # plan is written for; two keys are a combined run, one dungeon step two
     # families enter together (a 10-man raid such as UBRS: two 5-man parties
     # on the same keyword).
+    goal_item: int = 0
+    item_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -151,6 +174,7 @@ class Move:
     """One queue pass for one family.
 
     finish    queue id to mark done, or 0
+    acquired_item item id whose ownership ended the queue entry, or 0
     start     queue id to mark active once its job is written, or 0
     keyword   the dungeon job to write to every enabled member, or ""
     wanted    the cap written with it
@@ -161,6 +185,7 @@ class Move:
     """
 
     finish: int = 0
+    acquired_item: int = 0
     start: int = 0
     keyword: str = ""
     wanted: int = 0
@@ -267,6 +292,23 @@ def parse_entries(text: str) -> tuple:
             len(text),
             MAX_ORDER_CHARS,
         )
+    normalized = " ".join(text.split())
+    split_at = normalized.lower().find(" until ")
+    if split_at > 0 and normalized.lower().endswith(" drops"):
+        dungeon = normalized[:split_at]
+        item_name = normalized[split_at + len(" until ") : -len(" drops")].strip()
+        if not item_name:
+            return (), "Name the item to wait for. Nothing was written."
+        # Item names can contain commas, numbers and "and". Parse only the
+        # dungeon/count portion with the ordinary queue grammar.
+        if not any(_COUNT.fullmatch(w) for w in _fold(dungeon).split()):
+            dungeon += " %d" % RUNS_CEILING
+        entries, refusal = parse_entries(dungeon)
+        if refusal:
+            return (), refusal
+        if len(entries) != 1:
+            return (), "An item-goal order names one dungeon."
+        return (replace(entries[0], item_name=item_name.strip()),), ""
     parts = [p.strip() for p in _SPLIT.split(text) if p and p.strip()]
     if not parts:
         return (), (
@@ -307,6 +349,33 @@ def parse_entries(text: str) -> tuple:
     return tuple(entries), ""
 
 
+def resolve_items(entries: tuple, candidates: dict) -> tuple:
+    """Resolve every named goal before allowing any queue row to be written."""
+    resolved = []
+    for entry in entries:
+        if not entry.item_name:
+            resolved.append(entry)
+            continue
+        rows = candidates.get(entry.item_name, [])
+        exact = [
+            r for r in rows if str(r["name"]).casefold() == entry.item_name.casefold()
+        ]
+        matches = exact or rows
+        if len(matches) != 1:
+            choices = ", ".join(
+                "%s (item %s)" % (r["name"], r["entry"]) for r in matches
+            )
+            return (), (
+                "Which item did you mean by %s? %s Nothing was written."
+                % (entry.item_name, choices or "No item matches.")
+            )
+        row = matches[0]
+        resolved.append(
+            replace(entry, goal_item=int(row["entry"]), item_name=str(row["name"]))
+        )
+    return tuple(resolved), ""
+
+
 def plan(family: str, entries: tuple, level_rows: list) -> Plan:
     """Validate a whole queue for one family against its members' rows.
 
@@ -319,6 +388,14 @@ def plan(family: str, entries: tuple, level_rows: list) -> Plan:
     if not entries:
         return Plan(family, "The queue names no dungeon.", (), False, "")
     for entry in entries:
+        if entry.item_name and not entry.goal_item:
+            return Plan(
+                family,
+                "The goal item has not been resolved. Nothing was written.",
+                (),
+                False,
+                "",
+            )
         why = (
             raidrun.refusal(entry.keyword, entry.runs, level_rows)
             if raidrun.is_raid(entry.keyword)
@@ -435,7 +512,15 @@ def _family(family: str) -> str:
 
 
 def _plain(entries) -> str:
-    return ", then ".join("%s %d" % (_place(e.keyword), e.runs) for e in entries)
+    return ", then ".join(
+        (
+            "%s [%s] until %s (item %d) drops, at most %d runs"
+            % (_place(e.keyword), e.keyword, e.item_name, e.goal_item, e.runs)
+        )
+        if e.goal_item
+        else "%s %d" % (_place(e.keyword), e.runs)
+        for e in entries
+    )
 
 
 # --- the Discord order form ----------------------------------------------------
@@ -554,7 +639,7 @@ def _leader_of(key: str, rows: list) -> dict:
     )
 
 
-def step(rows: list, leader: dict | None) -> Move:
+def step(rows: list, leader: dict | None, owned_items: set | None = None) -> Move:
     """What one pass does for one family's pending rows.
 
     `leader` is the family's leader's roster row (job, dungeon_runs_done):
@@ -574,7 +659,9 @@ def step(rows: list, leader: dict | None) -> Move:
     keyword = str(head["keyword"])
     runs = int(head["runs_wanted"])
     place = _place(keyword)
-    if str(head["status"]) == QUEUED:
+    target = int(head.get("goal_item") or 0)
+    acquired = bool(target and owned_items is not None and target in owned_items)
+    if str(head["status"]) == QUEUED and not acquired:
         return Move(
             start=int(head["id"]),
             keyword=keyword,
@@ -582,19 +669,25 @@ def step(rows: list, leader: dict | None) -> Move:
             reset=True,
             why="starting %s, %d runs" % (place, runs),
         )
-    if leader is None or leader.get("dungeon_runs_done") is None:
+    if not acquired and (leader is None or leader.get("dungeon_runs_done") is None):
         return Move(why="the leader's run count cannot be read, so %s holds" % place)
-    done = int(leader["dungeon_runs_done"])
-    if done >= runs:
+    done = (
+        int((leader or {}).get("dungeon_runs_done") or 0)
+        if str(head["status"]) == ACTIVE
+        else 0
+    )
+    if done >= runs or acquired:
         if len(rows) > 1:
             nxt = rows[1]
             return Move(
                 finish=int(head["id"]),
+                acquired_item=target if acquired else 0,
                 start=int(nxt["id"]),
                 keyword=str(nxt["keyword"]),
                 wanted=int(nxt["runs_wanted"]),
                 reset=True,
-                why="%s is done at %d of %d; moving on to %s, %d runs"
+                why=("item %d is owned; " % target if acquired else "")
+                + "%s is done at %d of %d; moving on to %s, %d runs"
                 % (
                     place,
                     done,
@@ -605,8 +698,10 @@ def step(rows: list, leader: dict | None) -> Move:
             )
         return Move(
             finish=int(head["id"]),
+            acquired_item=target if acquired else 0,
             quest=True,
-            why="%s is done at %d of %d and the queue is empty; back to %s"
+            why=("item %d is owned; " % target if acquired else "")
+            + "%s is done at %d of %d and the queue is empty; back to %s"
             % (place, done, runs, jobs.DEFAULT),
         )
     want = jobs.job_for(keyword)
@@ -660,6 +755,8 @@ def progress_line(rows: list, done: int | None) -> str:
             said = "%s %d (starting)" % (place, runs)
         else:
             said = "%s %d" % (place, runs)
+        if row.get("goal_item"):
+            said += " until item %d is owned" % int(row["goal_item"])
         parts.append(_marked(row, said))
     return ", then ".join(parts)
 
@@ -677,6 +774,7 @@ def view(rows: list, done: int | None, family: str = "") -> dict:
                 "runs": int(r["runs_wanted"]),
                 "status": str(r["status"]),
                 "by": chooser(r),
+                "goal_item": int(r.get("goal_item") or 0),
             }
             for r in rows or []
         ],
