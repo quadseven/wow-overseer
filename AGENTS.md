@@ -203,7 +203,7 @@ Not required, but the merge gate below binds them: `unittest / check`, `lint / c
 - The file above `<!-- repo-specific below -->` is synced from `quadseven/infra-public` and replaced on every sync. Edit below the marker only.
 - `bridge.py` and `map_server.py` are read as text by about 110 source-shape tests. The formatter skips both (`ruff.toml`). Do not reflow them.
 - The `Dockerfile` lists each module by hand. A new module imported by the bridge or site goes in that list or the image breaks.
-- `AC_OVERSEER_SHA` in `UPSTREAM-PINS.env` must equal the `mod-overseer` submodule pin. `AC_MODULE_SHA` must equal the deploy repo's value; `check_fork_pin_parity.py` compares them. After a bump, re-run `git apply --check` for every file under `patches/` against the fork at the new revision.
+- `AC_OVERSEER_SHA` in `UPSTREAM-PINS.env` must equal the `mod-overseer` submodule pin. `AC_MODULE_SHA` must equal the deploy repo's value; `check_fork_pin_parity.py` compares them only where `gh` can read the private deploy repo, so CI skips it with a warning. A fork pin bump needs a local `python3 .github/scripts/check_fork_pin_parity.py --require` run. After a bump, re-run `git apply --check` for every file under `patches/` against the fork at the new revision.
 - `check_mod_overseer_pin.py` fetches the module's main branch, so the unittest job needs network access.
 - Inside a lane sandbox, the tests that serve a fake site on localhost skip; CI runs them.
 
