@@ -7681,6 +7681,12 @@ class Bridge(discord.Client):
             "material_request", "material request route", craft_rhythm.route_memo,
             craft_rhythm.route_from_memo, craft_rhythm.route_clock,
             MATERIAL_REQUEST_MEMO_SECONDS)
+        # Tool request diagnostics share the durable route memo format, but
+        # never enter reagent gathering. The command writer owns purchase dedup.
+        self._tool_requests: dict = _ClockMemo(
+            "tool_request", "tool request outcome", craft_rhythm.route_memo,
+            craft_rhythm.route_from_memo, craft_rhythm.route_clock,
+            MATERIAL_REQUEST_MEMO_SECONDS)
         # Equip rows whose outcome has already been logged, by row id, so each
         # answer is said once (#146).
         self._equip_reported: set = set()
@@ -7916,7 +7922,7 @@ class Bridge(discord.Client):
         # The stall and borrow clocks a deploy must not restart (#817).
         for name in ("_vendor_movement", "_vendor_family_movement",
                      "_bank_family_movement", "_family_lead_since",
-                     "_material_requests"):
+                     "_material_requests", "_tool_requests"):
             # A _ClockMemo; anything else (a test's plain dict) has nothing
             # to restore.
             restore = getattr(self.__dict__.get(name), "restore", None)
@@ -9443,7 +9449,7 @@ class Bridge(discord.Client):
         # THE BLACKSMITH HAMMER FIRST, because the early return below ends the
         # pass for a smith whose recipe names no vendor reagent
         # (the module ticket): its buy rows and its walk join the same single trip.
-        queued, needs = await self._buy_blacksmith_hammers(spells)
+        queued, needs = await self._buy_blacksmith_hammers(spells, names)
         if not candidates and not multi_candidates:
             await self._walk_for_hammers(needs, cohort)
             log.info(
@@ -9879,7 +9885,34 @@ class Bridge(discord.Client):
         if needs:
             await self._walk_for_reagents(needs, cohort)
 
-    async def _buy_blacksmith_hammers(self, spells: dict) -> tuple:
+    def _tool_request_note(self, request, note: str, *, handled=False) -> None:
+        """Say one refusal per event occurrence, then its eventual disposition."""
+        key = f"{request.event_id}:{request.occurrence}"
+        previous = self._tool_requests.get(key)
+        if previous and (previous.closed or not handled):
+            return
+        now = time.monotonic()
+        self._tool_requests[key] = craft_rhythm.Route(
+            request, "tool", request.character, note, now,
+            closed=handled, seen=now - request.age)
+        log.info("material request: %s item %d event %d/%d %s: %s",
+                 request.character, request.entry, request.event_id,
+                 request.occurrence, "handled" if handled else "waiting", note)
+
+    async def _current_tool_requests(self, spells: dict, names: list) -> dict:
+        """Associate event occurrences only with their current standing recipe."""
+        requests = await asyncio.to_thread(_fetch_tool_requests, names)
+        current = {}
+        craft_rhythm.expire_requests(self._tool_requests, time.monotonic())
+        for request in requests:
+            recipe = spells.get(request.character, (0, 0))[0]
+            if request.recipe != recipe or request.entry != craft.tool_for(recipe):
+                self._tool_request_note(request, "request no longer matches the standing recipe")
+            elif request.entry == craft.BLACKSMITH_HAMMER:
+                current.setdefault(request.character, []).append(request)
+        return current
+
+    async def _buy_blacksmith_hammers(self, spells: dict, names=None) -> tuple:
         """Queue a Blacksmith Hammer for every smith who has none (the module ticket).
 
         `spells` is `_fetch_standing_crafts`' name -> (craft_spell, money).
@@ -9893,6 +9926,7 @@ class Bridge(discord.Client):
             for name, (spell, money) in spells.items()
             if craft.tool_for(spell) == craft.BLACKSMITH_HAMMER
         }
+        current = await self._current_tool_requests(spells, list(spells) if names is None else names)
         if not smiths:
             return 0, []
         holders = await asyncio.to_thread(_fetch_hammer_holders, list(smiths))
@@ -9907,11 +9941,17 @@ class Bridge(discord.Client):
             errand, note = craft_supply.hammer_errand(
                 name, spell, name in holders, money, free_slots.get(name, 0), town,
             )
-            if note:
-                log.info("craft_supply: %s", note)
-            elif errand and await asyncio.to_thread(_insert_town_errand, errand):
-                queued += 1
-                log.info("craft_supply: %s %s - %s", name, errand.command, errand.why)
+            handled = name in holders
+            if errand:
+                row_id, note = await asyncio.to_thread(_insert_hammer_errand, errand, spell)
+                queued += bool(row_id)
+                handled = bool(row_id) or note in ("hammer already owned", "purchase already pending")
+            note = note or "hammer already owned"
+            if current.get(name):
+                for request in current[name]:
+                    self._tool_request_note(request, note, handled=handled)
+            elif errand or not handled:
+                log.info("craft_supply: %s - %s", name, note)
         return queued, needs
 
     async def _buy_fishing_poles(self, names: list, cohort=None) -> tuple:
@@ -35317,7 +35357,7 @@ _MATERIAL_REQUEST_SQL = (
 )
 
 
-def _fetch_material_requests(names: list) -> list:
+def _fetch_material_requests(names: list, *, tools=False) -> list:
     """craft_rhythm.MaterialRequest for each request row of `names`."""
     if not names:
         return []
@@ -35334,13 +35374,22 @@ def _fetch_material_requests(names: list) -> list:
             raise
     requests = []
     for row in rows:
-        request = craft_rhythm.material_request(row)
+        parser = craft_rhythm.tool_request if tools else craft_rhythm.material_request
+        other = craft_rhythm.material_request if tools else craft_rhythm.tool_request
+        request = parser(row)
+        if request is None and other(row) is not None:
+            continue
         if request is None:
             log.warning("material request: event %s is not a request this "
                         "bridge can read: %r", row.get("id"), row.get("detail"))
             continue
         requests.append(request)
     return requests
+
+
+def _fetch_tool_requests(names: list) -> list:
+    """Tool events use the same bounded event reader, never reagent routing."""
+    return _fetch_material_requests(names, tools=True)
 
 
 def _fetch_item_kinds(entries: list) -> dict:
@@ -36795,6 +36844,49 @@ def _insert_iron_errand(errand) -> int:
                 return 0
             raise
         return cur.lastrowid or 0
+
+
+def _hammer_purchase(cur, errand, recipe: int) -> tuple:
+    """Recheck standing and inventory while serializing this member's buyers."""
+    cur.execute("SELECT craft_spell, job FROM overseer_roster WHERE name = %s FOR UPDATE",
+                (errand.member,))
+    standing = cur.fetchone()
+    if (not standing or int(standing["craft_spell"] or 0) != recipe
+            or standing["job"] not in (craft_rhythm.MODE_CRAFT, craft_rhythm.MODE_GATHER)
+            or craft.tool_for(recipe) != craft.BLACKSMITH_HAMMER):
+        return 0, "standing recipe or job changed"
+    cur.execute(
+        "SELECT ii.guid FROM characters c "
+        "JOIN character_inventory ci ON ci.guid = c.guid "
+        "JOIN item_instance ii ON ii.guid = ci.item "
+        "WHERE c.name = %s AND ii.itemEntry = %s LIMIT 1",
+        (errand.member, craft.BLACKSMITH_HAMMER))
+    if cur.fetchone():
+        return 0, "hammer already owned"
+    cur.execute(
+        "SELECT id FROM overseer_command WHERE target_name = %s "
+        "AND kind = 'buy' AND command = %s AND source = 'towntrip' "
+        "AND status IN ('pending', 'claimed', 'verifying') LIMIT 1",
+        (errand.member, errand.command))
+    if cur.fetchone():
+        return 0, "purchase already pending"
+    cur.execute(
+        "INSERT INTO overseer_command (target_name, command, kind, target_arg, source) "
+        "VALUES (%s, %s, 'buy', '', 'towntrip')", (errand.member, errand.command))
+    return int(cur.lastrowid or 0), "hammer purchase queued"
+
+
+def _insert_hammer_errand(errand, recipe: int) -> tuple:
+    """A dedicated hammer transaction; unrelated town errands keep their policy."""
+    with _connect() as conn, conn.cursor() as cur:
+        conn.begin()
+        try:
+            result = _hammer_purchase(cur, errand, recipe)
+            conn.commit()
+            return result
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def _insert_town_errand(errand) -> int:
