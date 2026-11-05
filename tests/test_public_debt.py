@@ -35,7 +35,11 @@ KUBECTL_FILES = (
 # A value a reader supplies: `$NAME`, `"$NAME"`, `"${NAME#pod/}"` or `<name>`.
 PLACEHOLDER = r"""(?:"?\$\{?[A-Z_]+(?![A-Za-z0-9_])|<[^>]+>)"""
 # The whole value is one placeholder: `$NAME`, `"$NAME"`, `"${NAME}"` or `<name>`.
-WHOLE_PLACEHOLDER = r"""(?:"?\$\{?(?P<name>[A-Z_]+)\}?"?|<[^>]+>)"""
+# A brace or a quote opens only with its pair.
+WHOLE_PLACEHOLDER = (
+    r"""(?:(?P<quote>")?\$(?P<brace>\{)?(?P<name>[A-Z_]+)(?(brace)\})(?(quote)")"""
+    r"""|<[^>]+>)"""
+)
 # The names docs/ROLLS.md explains before its steps.
 ROLLS_PLACEHOLDERS = ("NAMESPACE", "DB_POD", "READER_SA", "MANIFESTS_DIR")
 
@@ -58,6 +62,18 @@ def _docstrings(source):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
     ]
     return [doc for doc in (ast.get_docstring(n) for n in nodes) if doc]
+
+
+class WholePlaceholderShape(unittest.TestCase):
+    def test_accepts_each_complete_form(self):
+        for value in ("$NAME", '"$NAME"', "${NAME}", '"${NAME}"', "<name>"):
+            with self.subTest(value=value):
+                self.assertIsNotNone(re.fullmatch(WHOLE_PLACEHOLDER, value))
+
+    def test_refuses_an_unpaired_brace_or_quote(self):
+        for value in ("${NAME", "$NAME}", '"$NAME', '$NAME"', "name"):
+            with self.subTest(value=value):
+                self.assertIsNone(re.fullmatch(WHOLE_PLACEHOLDER, value))
 
 
 class KubectlLinesUsePlaceholders(unittest.TestCase):
