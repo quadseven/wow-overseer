@@ -3,8 +3,11 @@ gather the missing materials and mail them to the crafters who need them.
 
 Pure module: deficits in, assignments and mail steps out. Nothing here talks
 to MySQL, touches a clock or writes the command log. The bridge reads the
-facts, runs the assignment, logs `farmassign: assigned <bot> to <material>`
-for each task, and runs the mail steps with the corps' own runner.
+facts, runs the assignment, writes each new task's gather errand
+(`errand_step`), logs `farmassign: assigned <bot> to <material>` only once
+that row is written, and runs the mail steps with the corps' own runner. A
+restarted bridge rebuilds its standing tasks from those rows
+(`standing_from_rows`).
 
 WHY THIS EXISTS. `raidcraft` plans what consumables a raid night eats and
 `raidsupply` tracks how many of each the guild holds. Neither says who goes to
@@ -99,6 +102,49 @@ MATERIALS: dict[int, Material] = {
     )
 }
 
+# The zones above by their area id, as the world's gameobject rows carry it
+# (`gameobject.zoneId`), so a task's zone names the nodes it walks to.
+ZONE_IDS: dict[str, int] = {
+    "Eastern Plaguelands": 139,
+    "Western Plaguelands": 28,
+    "Silithus": 1377,
+    "Winterspring": 618,
+    "Blasted Lands": 4,
+    "Arathi Highlands": 45,
+    "The Hinterlands": 47,
+}
+
+# The gather node names that yield each material, for the errand's walk. An
+# herb grows on a node of its own name; a stone comes out of the ore veins.
+# Elemental Earth drops from elementals, not a node, so it has no errand and
+# its task is named as not assigned instead of standing with no row.
+NODES: dict[int, tuple] = {
+    13463: ("Dreamfoil",),
+    13464: ("Golden Sansam",),
+    13465: ("Mountain Silversage",),
+    13466: ("Plaguebloom",),
+    13467: ("Icecap",),
+    13468: ("Black Lotus",),
+    8846: ("Gromsblood",),
+    3818: ("Fadeleaf",),
+    7912: ("Mithril Deposit", "Ooze Covered Mithril Deposit"),
+    12365: (
+        "Small Thorium Vein",
+        "Ooze Covered Thorium Vein",
+        "Rich Thorium Vein",
+        "Ooze Covered Rich Thorium Vein",
+    ),
+}
+
+# The row kind a gather errand is written as: the guild jobs' own field walk.
+ROW_KIND = "job"
+
+# A persisted assignment row in one of these states still stands after a
+# restart; any other state (an error, a refusal) ended it.
+LIVE_STATUSES = frozenset(
+    ("", "pending", "claimed", "verifying", "applied", "delivered")
+)
+
 # The trade whose crafter consumes each gathered material, for designating the
 # crafter a farmed stack is mailed to. Herbs feed alchemy (potions, elixirs,
 # flasks). Ores have no corps crafter on this realm, so they are farmed but not
@@ -150,8 +196,9 @@ class Task:
 class FarmPlan:
     """The assignments and mail steps for one pass.
 
-    `tasks` are this pass's new assignments, logged live as
-    `farmassign: assigned <bot> to <material>`. `steps` mail what standing
+    `tasks` are this pass's new assignments, each logged live as
+    `farmassign: assigned <bot> to <material>` once its gather errand's row is
+    written (`errand_step`). `steps` mail what standing
     assignments gathered to the designated crafters.
     """
 
@@ -295,6 +342,77 @@ def _route_collected(standing, members, posts, busy, recent, cap) -> list:
             steps.append(step)
             busy.add(task.bot)
     return steps
+
+
+def errand_step(task, spawns, cap=guildroute.MAIL_RUN_YARDS):
+    """The gather errand that carries out `task`: one job row walking its
+    gatherer to a node of its material in its zone, or None when no such node
+    is among `spawns` (gameobject rows with guid, map_id, zone_id and name).
+    The lowest spawn id is taken, so the same task always names the same node.
+    """
+    names = set(NODES.get(int(task.material), ()))
+    zone = ZONE_IDS.get(task.zone)
+    if not names or zone is None:
+        return None
+    found = []
+    for s in spawns or ():
+        try:
+            if (
+                int(s["map_id"]) == int(task.map_id)
+                and int(s["zone_id"]) == zone
+                and str(s.get("name") or "") in names
+            ):
+                found.append(int(s["guid"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not found:
+        return None
+    entry = int(task.material)
+    return gc.Step(
+        task.bot,
+        "assign",
+        entry,
+        "farmassign: %s walks to a %s node in %s to gather for the raid"
+        % (task.bot, task.name, task.zone),
+        rows=(
+            gc.Row(
+                ROW_KIND,
+                "walk-to-spawn gameobject:%d%s"
+                % (min(found), guildroute.errand_cap_word(cap)),
+                "",
+                source_for("assign", entry),
+            ),
+        ),
+    )
+
+
+def standing_from_rows(rows, members) -> list:
+    """[(Task, age in minutes)] for the assignments the command log shows
+    still inside their stint, for a bridge that has none in memory (a
+    restart). One per material, the newest row's; only for `members`, and
+    only a row still live (LIVE_STATUSES). The gatherer's stacks today are
+    its baseline: what it carried before the restart is not posted."""
+    by_name = {m.name: m for m in members or ()}
+    newest = {}
+    for row in rows or ():
+        parts = str(row.get("source") or "").split(":")
+        if len(parts) != 3 or parts[0] != SOURCE or parts[1] != "assign":
+            continue
+        try:
+            entry, age = int(parts[2]), int(row.get("age") or 0)
+        except (TypeError, ValueError):
+            continue
+        material = MATERIALS.get(entry)
+        gatherer = by_name.get(str(row.get("target_name") or ""))
+        if material is None or gatherer is None:
+            continue
+        if str(row.get("status") or "") not in LIVE_STATUSES:
+            continue
+        if age >= material.duration:
+            continue
+        if entry not in newest or age < newest[entry][1]:
+            newest[entry] = (_new_task(gatherer, material), age)
+    return [newest[e] for e in sorted(newest)]
 
 
 def _new_task(gatherer, material) -> Task:
