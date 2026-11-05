@@ -56,7 +56,7 @@ def fetch_deploy(vendored_text):
         detail = out.stderr.strip().splitlines()
         reason = f"gh api exited {out.returncode}"
         if detail:
-            reason += f" ({detail[-1]})"
+            reason += f" ({detail[0].strip()})"
         return None, reason
     return base64.b64decode(out.stdout).decode("utf-8"), None
 

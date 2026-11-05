@@ -107,7 +107,10 @@ class TheUnreadableDeployFile(unittest.TestCase):
 
     def _fake_gh(self):
         gh = self.bin / "gh"
-        gh.write_text("#!/bin/sh\necho 'HTTP 404' >&2\nexit 1\n", encoding="utf-8")
+        gh.write_text(
+            "#!/bin/sh\necho 'HTTP 404' >&2\necho '  hint line' >&2\nexit 4\n",
+            encoding="utf-8",
+        )
         gh.chmod(0o755)
 
     def _run(self, *extra, actions=False):
@@ -142,6 +145,11 @@ class TheUnreadableDeployFile(unittest.TestCase):
         line = result.stderr.strip()
         self.assertTrue(line.startswith("::warning::"), line)
         self.assertIn("SKIPPED", line)
+
+    def test_the_reason_names_the_exit_code_and_first_error_line(self):
+        self._fake_gh()
+        result = self._run()
+        self.assertIn("gh api exited 4 (HTTP 404)", result.stderr)
 
     def test_a_missing_gh_binary_is_a_warning_under_actions(self):
         result = self._run(actions=True)
