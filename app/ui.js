@@ -26,6 +26,11 @@ export function html(strings, ...vals) {
 
 export function raw(s) { return new Safe(String(s)); }
 
+// The one test a server-supplied URL passes before it becomes a link to
+// another site: a string that starts with https://. Anything else (a
+// javascript: URL, a relative path, a missing field) is not a link to follow.
+export function isHttps(url) { return typeof url === "string" && /^https:\/\//.test(url); }
+
 // ---- words and numbers -------------------------------------------------
 
 export function ago(seconds) {
@@ -107,10 +112,6 @@ export function member(m, opts) {
   const dot = m.state ? html`<span class="mdot" style="background:${statusColor(m.state)}" aria-hidden="true"></span>` : "";
   const title = m.state ? (STATUS[m.state] || STATUS.offline)[0] : "";
   return html`<a class="member" href="${memberHref(m.name, o.tab)}" style="color:${classVar(m.cls || m.class)}"${title ? raw(' title="' + esc(title) + '"') : ""}>${dot}${m.name}</a>`;
-}
-
-export function memberChip(m) {
-  return html`<a class="chip" href="${memberHref(m.name)}"><span class="mdot" style="width:7px;height:7px;border-radius:50%;background:${statusColor(m.state || "offline")}" aria-hidden="true"></span><span style="color:${classVar(m.cls || m.class)}">${m.name}</span></a>`;
 }
 
 // ---- items ---------------------------------------------------------------

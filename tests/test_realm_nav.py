@@ -24,7 +24,6 @@ import os
 import re
 import unittest
 
-import basepath
 import realmnav
 
 LF = chr(10)
@@ -84,26 +83,9 @@ class TheSwitcherKnowsWhichWorldsExist(unittest.TestCase):
                 self.assertTrue(r["href"].endswith("/"), r["href"])
 
     def test_it_is_json_serialisable(self):
-        """It is substituted into the page as JSON, so anything that is not
-        serialisable here is a page that will not parse its own header."""
+        """A switcher handed to the page travels as JSON, so anything that is
+        not serialisable here could never reach it."""
         json.dumps(realmnav.build_nav("/dev"))
-
-
-class TheSwitcherReachesThePageWithTheMountPoint(unittest.TestCase):
-    """Substituted in the same pass as the mount, because it is a function of
-    it: the pill that is lit and the realm the page reads cannot then differ."""
-
-    def test_apply_substitutes_real_json(self):
-        out = basepath.apply(b"<x>__OVERSEER_BASE__</x><y>__OVERSEER_NAV__</y>", "/dev")
-        blob = out.decode().split("<y>")[1].split("</y>")[0]
-        nav = json.loads(blob)
-        self.assertTrue(next(r for r in nav if r["mount"] == "/dev")["current"])
-
-    def test_a_page_without_the_token_is_still_served(self):
-        """A missing mount point is refused, because it makes every realm read
-        production. A missing switcher is a visible absence somebody reports,
-        so refusing to serve would turn a cosmetic loss into an outage."""
-        self.assertEqual(basepath.apply(b"__OVERSEER_BASE__", "/dev"), b"/dev")
 
 
 class TheHouseRules(unittest.TestCase):

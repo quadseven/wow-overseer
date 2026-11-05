@@ -144,8 +144,6 @@ export function health(paths) {
   return { at, failures, state };
 }
 
-export function currentReads() { return pollPaths.slice(); }
-
 // The one write, used only by the operator view after a person has confirmed
 // it. A JSON body to a path under the mount; a header (the Watcher's token)
 // when given. Never rejects: resolves to {ok, status, body, failed}, where

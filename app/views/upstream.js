@@ -3,10 +3,12 @@
 // measures; this only draws, and a number the server did not report reads
 // "not measured", never 0.
 
-import { html, raw, ago, notMeasured, plural, sectionHead, state, kpi } from "../ui.js";
+import { html, raw, isHttps, ago, notMeasured, plural, sectionHead, state, kpi } from "../ui.js";
 import { ageOf, since } from "../models/time.js";
 
 export const READ = "/api/v2/upstream";
+
+const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
 const KIND = {
   security: ["Security", "tag-bad"],
@@ -41,15 +43,17 @@ function changes(r) {
   if (!r.notable || !r.notable.length) return "";
   const shown = r.notable.length;
   const label = r.behind > shown ? "Notable changes (" + shown + " of " + r.behind + ")" : "Notable changes (" + shown + ")";
-  const base = "https://github.com/" + r.repo + "/commit/";
-  const items = r.notable.map((c) => html`<li><span class="ud-kinds">${kinds(c.tags)}</span><a href="${base + c.sha}" target="_blank" rel="noopener">${c.title}</a></li>`);
+  // A commit links only when the repo reads as owner/name, so the built URL
+  // stays on github.com.
+  const base = REPO.test(String(r.repo || "")) ? "https://github.com/" + r.repo + "/commit/" : "";
+  const items = r.notable.map((c) => html`<li><span class="ud-kinds">${kinds(c.tags)}</span>${base ? html`<a href="${base + encodeURIComponent(c.sha)}" target="_blank" rel="noopener">${c.title}</a>` : c.title}</li>`);
   return html`<details class="fold ud-fold"${r.counts && r.counts.security ? raw(" open") : ""}><summary>${label}</summary><ul class="ud-list">${items}</ul></details>`;
 }
 
 function project(r, now) {
   const stale = r.stale ? html` <span class="warn">Last good reading; GitHub did not answer just now.</span>` : "";
   const checked = r.checked_at ? html`Checked ${since(r.checked_at, now)}.` : "";
-  const open = r.url ? html` <a href="${r.url}" target="_blank" rel="noopener">Compare on GitHub</a>` : "";
+  const open = isHttps(r.url) ? html` <a href="${r.url}" target="_blank" rel="noopener">Compare on GitHub</a>` : "";
   return html`<article class="card ud-row"><div class="ud-top"><h3 class="b">${r.label}</h3>${verdict(r)}</div><div class="ud-pin">${pinLine(r, now)}</div>${changes(r)}<div class="ud-foot dim">${checked}${stale}${open}</div></article>`;
 }
 
