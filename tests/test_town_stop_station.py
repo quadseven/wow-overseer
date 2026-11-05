@@ -136,11 +136,11 @@ class TheRaidCook(unittest.TestCase):
         crafter = mock.Mock(known={cook.spell}, count=lambda _e: 50)
         crafter.name = "Cook"
         step = raidsupply.craft_step(crafter, cook, "Soup", 5, {}, 0)
-        self.assertEqual([r.command for r in step.rows][0], "818")
-        self.assertEqual([r.command for r in step.rows][1], str(cook.spell))
+        # One fire, then a cast per dish while it burns (#1897): want 5 and
+        # 50 of every reagent make five cast rows after the fire row.
+        commands = [r.command for r in step.rows]
+        self.assertEqual(commands, ["818"] + [str(cook.spell)] * 5)
         self.assertEqual(step.repeat, 1)
-        # One fire, then a cast per dish while it burns (#1897).
-        self.assertEqual([r.command for r in step.rows][2:], [str(cook.spell)] * 4)
         self.assertIn(" 5 ", step.said)
 
 
