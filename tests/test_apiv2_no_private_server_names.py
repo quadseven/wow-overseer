@@ -43,7 +43,7 @@ def server_reads(source: str) -> list[tuple[int, str]]:
             if isinstance(target, ast.Name):
                 pairs.append((target, node.value))
             elif isinstance(target, ast.Tuple) and isinstance(node.value, ast.Tuple):
-                pairs.extend(zip(target.elts, node.value.elts))
+                pairs.extend(zip(target.elts, node.value.elts, strict=True))
             for name, value in pairs:
                 if isinstance(name, ast.Name) and _is_ctx_server(value):
                     aliases.add(name.id)
