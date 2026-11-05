@@ -1439,6 +1439,31 @@ def material_request(row) -> MaterialRequest | None:
     )
 
 
+_TOOL_DETAIL = re.compile(r"^need 1x (.+) \(a tool, kept in the bank\)$")
+
+
+def tool_request(row) -> MaterialRequest | None:
+    """Read the module's tool shortage separately from gathered reagents."""
+    match = _TOOL_DETAIL.fullmatch(str(row.get("detail") or "").strip())
+    name = str(row.get("character_name") or "").strip()
+    entry = int(row.get("item_guid") or 0)
+    recipe = int(row.get("subject_id") or 0)
+    event_id = int(row.get("id") or 0)
+    if not match or not name or min(entry, recipe, event_id) <= 0:
+        return None
+    return MaterialRequest(
+        character=name,
+        recipe=recipe,
+        entry=entry,
+        label=match.group(1),
+        short=1,
+        need=1,
+        event_id=event_id,
+        occurrence=int(row.get("occurrences") or 0),
+        age=max(0.0, float(row.get("age") or 0)),
+    )
+
+
 def _request_key(request: MaterialRequest) -> str:
     return "%s:%d" % (request.character, request.entry)
 

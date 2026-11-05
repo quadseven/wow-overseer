@@ -17,6 +17,7 @@ import types
 import unittest
 
 import bank
+import craft_rhythm
 import guildroute
 import tradechoice
 import vendor_stall
@@ -101,6 +102,7 @@ def _memo_module(clock, store):
         "_MEMO_WRITER": types.SimpleNamespace(submit=lambda fn, *a: fn(*a)),
         "vendor_stall": vendor_stall,
         "tradechoice": tradechoice,
+        "craft_rhythm": craft_rhythm,
     }
     nodes = _bridge_nodes(
         "_memo_job",
@@ -108,6 +110,7 @@ def _memo_module(clock, store):
         "_trip_clock",
         "TRIP_CLOCK_MEMO_SECONDS",
         "LEAD_CLOCK_MEMO_SECONDS",
+        "MATERIAL_REQUEST_MEMO_SECONDS",
     )
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
     ns["log_lines"] = log.lines
@@ -391,13 +394,23 @@ class Wiring(unittest.TestCase):
             "_bank_family_movement",
             "_family_lead_since",
             "_material_requests",
+            "_tool_requests",
         ):
             self.assertIn(f'"{attribute}"', text)
 
     def test_the_memo_kinds_fit_the_store(self):
         kinds = re.findall(r'_ClockMemo\(\s*"([^"]+)"', SOURCE)
-        self.assertIn("material_request", kinds)
-        self.assertEqual(4, len(set(kinds) - {"material_request"}), kinds)
+        self.assertEqual(
+            {
+                "vendor_move",
+                "vendor_family",
+                "bank_family",
+                "lead_borrow",
+                "material_request",
+                "tool_request",
+            },
+            set(kinds),
+        )
         self.assertTrue(all(len(kind) <= 32 for kind in kinds))
 
 
@@ -421,3 +434,28 @@ class TheMailRunCapReadsTheSameDay(unittest.TestCase):
 if __name__ == "__main__":
     logging.basicConfig()
     unittest.main()
+
+
+class ToolRequestRestart(unittest.TestCase):
+    def test_real_tool_memo_restores_occurrence_and_clock_after_restart(self):
+        clock, store = Clock(), Store()
+        original = _clocks(_memo_module(clock, store), "_tool_requests")
+        request = craft_rhythm.MaterialRequest(
+            "Smith", 2666, 5956, "Blacksmith Hammer", 1, 1, 11, 2
+        )
+        original["11:2"] = craft_rhythm.Route(
+            request,
+            "tool",
+            "Smith",
+            "no reachable vendor",
+            clock.monotonic(),
+            seen=clock.monotonic(),
+        )
+        clock.restart(60)
+        restored = _clocks(_memo_module(clock, store), "_tool_requests")
+        restored.restore()
+        self.assertEqual(restored["11:2"].request, request)
+        self.assertEqual(restored["11:2"].why, "no reachable vendor")
+        self.assertFalse(restored["11:2"].closed)
+        self.assertEqual(clock.monotonic() - restored["11:2"].seen, 60)
+        self.assertEqual(len(store.writes), 1)
