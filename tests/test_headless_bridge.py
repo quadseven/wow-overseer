@@ -153,7 +153,7 @@ def _start_harness():
     async def to_thread(fn, *args):
         return fn(*args)
 
-    async def gather(*tasks):
+    async def gather(*tasks, return_exceptions=False):
         return None
 
     class Task:
@@ -275,6 +275,18 @@ class BothStartPathsRunTheRegistry(unittest.TestCase):
         self.assertEqual([name for name, headless in _registry() if headless], started)
         self.assertIn("_loot_council_loop", started)
         self.assertNotIn("_relay_chat", started)
+
+    def test_the_headless_path_watches_every_pass_it_starts(self):
+        """Without the callback a headless pass that died said nothing, and
+        its exception ended the gather and every other pass (#1850).
+        test_pass_survives_bad_cycle runs that death for real."""
+        bridge, started, _ = _start_harness()
+        asyncio.run(bridge.run_headless())
+        self.assertEqual(len(bridge.done_callbacks), len(started))
+        self.assertTrue(
+            all(cb.__name__ == "_pass_done" for cb in bridge.done_callbacks)
+        )
+        self.assertIn("return_exceptions=True", _block("async def run_headless(self)"))
 
 
 class TheStoreSetupIsListedOnce(unittest.TestCase):
