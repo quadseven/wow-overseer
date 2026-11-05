@@ -104,20 +104,21 @@ a.seat:hover .seat-name { text-decoration: underline; text-underline-offset: 3px
 .raid-stack { display: flex; flex-direction: column; gap: 8px; }
 .raid-more { font-size: var(--fs-2); padding-top: 6px; min-height: 44px; display: inline-flex; align-items: center; }
 
-.up-rows { display: flex; flex-direction: column; }
-.up-row {
+.raid-up-rows { display: flex; flex-direction: column; }
+.raid-up-row {
   display: grid; grid-template-columns: 80px minmax(0, 1.4fr) minmax(0, 1fr) 60px; gap: 10px;
   align-items: center; min-height: 44px; padding: 4px 0; font-size: var(--fs-2);
   box-shadow: 0 -1px 0 var(--color-neutral-900);
 }
-.up-row > :last-child { text-align: right; }
+.raid-up-row > :last-child { text-align: right; }
 @media (max-width: 559.98px) {
-  .up-row { grid-template-columns: minmax(0, 1fr) auto; }
-  .up-row > :first-child { grid-column: 1 / -1; }
-  .up-row > :nth-child(3) { grid-column: 1 / -1; order: 4; }
+  .raid-up-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .raid-up-row > :first-child { grid-column: 1 / -1; }
+  .raid-up-row > :nth-child(3) { grid-column: 1 / -1; order: 4; }
 }
 
 /* Tables: a table on desktop, one card per row on phone. */
+.raid-table th { white-space: normal; }
 .raid-table td { font-size: var(--fs-2); }
 @media (max-width: 759.98px) {
   .raid-table thead { display: none; }

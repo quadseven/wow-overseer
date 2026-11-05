@@ -275,9 +275,9 @@ function upgradesFromRead(name, read, teams) {
   const d = read.data;
   const rows = (d.slots || []).filter((s) => s.next).sort((a, b) => (b.next.gain || 0) - (a.next.gain || 0)).slice(0, 5);
   const list = rows.length
-    ? rows.map((s) => html`<div class="up-row"><span class="dim">${s.label}</span><span>${item({ entry: s.next.entry, name: s.next.name })}</span><span class="muted">${whereText(s.next.where) || notMeasured()}</span><span class="num ok">+${Math.round(s.next.gain)}</span></div>`)
+    ? rows.map((s) => html`<div class="raid-up-row"><span class="dim">${s.label}</span><span>${item({ entry: s.next.entry, name: s.next.name })}</span><span class="muted">${whereText(s.next.where) || notMeasured()}</span><span class="num ok">+${Math.round(s.next.gain)}</span></div>`)
     : html`<span class="muted">No listed piece beats what is worn.</span>`;
-  return html`<details class="card raid-fold">${head((d.ready && d.ready.line) || "")}<div class="up-rows">${list}</div><a class="raid-more" href="${memberHref(name, "upgrades")}">All ${(d.slots || []).length} slots for ${name}</a></details>`;
+  return html`<details class="card raid-fold">${head((d.ready && d.ready.line) || "")}<div class="raid-up-rows">${list}</div><a class="raid-more" href="${memberHref(name, "upgrades")}">All ${(d.slots || []).length} slots for ${name}</a></details>`;
 }
 
 function preraidMember(m, columns, teams) {
