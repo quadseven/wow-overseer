@@ -292,9 +292,13 @@ def parse_entries(text: str) -> tuple:
             len(text),
             MAX_ORDER_CHARS,
         )
-    goal = re.fullmatch(r"(.+?)\s+until\s+(.+?)\s+drops\s*", text, re.IGNORECASE)
-    if goal:
-        dungeon, item_name = goal.groups()
+    normalized = " ".join(text.split())
+    split_at = normalized.lower().find(" until ")
+    if split_at > 0 and normalized.lower().endswith(" drops"):
+        dungeon = normalized[:split_at]
+        item_name = normalized[split_at + len(" until ") : -len(" drops")].strip()
+        if not item_name:
+            return (), "Name the item to wait for. Nothing was written."
         # Item names can contain commas, numbers and "and". Parse only the
         # dungeon/count portion with the ordinary queue grammar.
         if not any(_COUNT.fullmatch(w) for w in _fold(dungeon).split()):
