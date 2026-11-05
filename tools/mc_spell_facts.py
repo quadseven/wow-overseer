@@ -51,23 +51,26 @@ def dbc_rows(blob: bytes) -> dict:
     return rows
 
 
+def _member_levels(member: dict, required: tuple, levels: dict) -> None:
+    for state in ("learned", "trainable", "needs", "above"):
+        for row in member.get("spells", {}).get(state, ()):
+            spell, level = row["spell"], row["level"]
+            if spell not in required:
+                continue
+            if type(level) is not int or level <= 0:
+                raise ValueError("invalid trainer level for spell %s" % spell)
+            old = levels.get(spell)
+            if old is not None and old != level:
+                raise ValueError("conflicting trainer levels for spell %s" % spell)
+            levels[spell] = level
+
+
 def project(training: dict, spells: dict) -> dict:
     levels = {name: {} for name in SPELLS}
     for member in training.values():
         klass = member.get("class")
-        if klass not in SPELLS:
-            continue
-        for state in ("learned", "trainable", "needs", "above"):
-            for row in member.get("spells", {}).get(state, ()):
-                spell, level = row["spell"], row["level"]
-                if spell not in SPELLS[klass]:
-                    continue
-                if type(level) is not int or level <= 0:
-                    raise ValueError("invalid trainer level for spell %s" % spell)
-                old = levels[klass].get(spell)
-                if old is not None and old != level:
-                    raise ValueError("conflicting trainer levels for spell %s" % spell)
-                levels[klass][spell] = level
+        if klass in SPELLS:
+            _member_levels(member, SPELLS[klass], levels[klass])
     learned = {}
     for klass, required in SPELLS.items():
         learned[klass] = {}
