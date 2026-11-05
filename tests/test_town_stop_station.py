@@ -7,17 +7,17 @@ with materials in hand and a station inside the town.
 """
 
 import asyncio
-import sys
 import types
 import unittest
 from unittest import mock
 
-sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+from _stub_modules import PYMYSQL, fresh_import, stub_modules
 
-import craft  # noqa: E402
-import craft_rhythm  # noqa: E402
-import raidsupply  # noqa: E402
-import travel  # noqa: E402
+with stub_modules(pymysql=PYMYSQL):
+    import craft
+    import craft_rhythm
+    import raidsupply
+    import travel
 
 SMELT_COPPER = 2657
 COPPER_ORE = craft_rhythm.GATHERED[SMELT_COPPER][0].entry
@@ -34,10 +34,7 @@ def load_bridge():
     stub.Client = Client
     stub.Intents = mock.Mock()
     stub.Message = object
-    with mock.patch.dict(sys.modules, {"discord": stub}):
-        sys.modules.pop("bridge", None)
-        import bridge
-    return bridge
+    return fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
 
 
 class TheDemand(unittest.TestCase):
@@ -57,9 +54,7 @@ class TheDemand(unittest.TestCase):
     def test_a_recipe_with_no_world_station_walks_nobody(self):
         linen = next(r.spell_id for r in craft.known_recipes() if not r.focus)
         cook = next(r.spell_id for r in craft.known_recipes() if r.focus == 4)
-        self.assertEqual(
-            craft_rhythm.town_stop_crafts({"A": linen, "B": cook}, {}), {}
-        )
+        self.assertEqual(craft_rhythm.town_stop_crafts({"A": linen, "B": cook}, {}), {})
 
 
 class TheTown(unittest.TestCase):
@@ -122,8 +117,11 @@ class ThePass(unittest.TestCase):
 
 class TheRaidCook(unittest.TestCase):
     def test_a_raid_cook_lights_its_fire_first(self):
-        cook = next(s.make for s in raidsupply.SUPPLIES
-                    if s.make and s.make.skill == raidsupply.COOKING)
+        cook = next(
+            s.make
+            for s in raidsupply.SUPPLIES
+            if s.make and s.make.skill == raidsupply.COOKING
+        )
         crafter = mock.Mock(known={cook.spell}, count=lambda _e: 50)
         crafter.name = "Cook"
         step = raidsupply.craft_step(crafter, cook, "Soup", 5, {}, 0)

@@ -1147,7 +1147,11 @@ def craft_step(crafter, make, name, want, vendors, cap):
             "raid supply: %s crafts %d %s for Molten Core" % (crafter.name, n, name),
             rows=(
                 *(
-                    (guildcorps.Row("cast", "818", "", source_for("craft", make.spell)),)
+                    (
+                        guildcorps.Row(
+                            "cast", "818", "", source_for("craft", make.spell)
+                        ),
+                    )
                     if cooking
                     else ()
                 ),

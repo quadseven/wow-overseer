@@ -44,7 +44,8 @@ class EveryRecipeHasAKnownStation(unittest.TestCase):
             for spell in sorted(spells):
                 with self.subTest(table=table, spell=spell):
                     self.assertIn(
-                        spell, MEASURED,
+                        spell,
+                        MEASURED,
                         "run tools/recipe_stations_from_dbc.py: a recipe whose "
                         "focus nobody read is a recipe refused on every poll",
                     )
