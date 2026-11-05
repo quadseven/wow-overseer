@@ -93,8 +93,8 @@ DROP_SQL = (
     "WHERE l.Reference <> 0 AND r.Item IN ({ids})"
 )
 REWARD_SQL = (
-    "SELECT ID AS quest, RewardItem AS item FROM acore_world.quest_template "
-    "WHERE RewardItem IN ({ids}) UNION ALL "
+    "SELECT ID AS quest, RewardItem1 AS item FROM acore_world.quest_template "
+    "WHERE RewardItem1 IN ({ids}) UNION ALL "
     "SELECT ID, RewardItem2 FROM acore_world.quest_template WHERE RewardItem2 IN ({ids}) "
     "UNION ALL SELECT ID, RewardItem3 FROM acore_world.quest_template "
     "WHERE RewardItem3 IN ({ids}) UNION ALL "
