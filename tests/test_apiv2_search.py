@@ -108,7 +108,7 @@ def server():
         FAMILIES=families.Families(
             families.MemoryStore({ROSTER[0]: list(ROSTER)}), fallback=lambda: []
         ),
-        _MAP_CLASS_NAMES={1: "Warrior"},
+        MAP_CLASS_NAMES={1: "Warrior"},
         ITEMS=types.SimpleNamespace(icons={2589: "inv_fabric_linen_01"}),
         council=types.SimpleNamespace(
             DUNGEON_KEYWORDS={"deadmines": (36, ""), "wailing": (43, "")},

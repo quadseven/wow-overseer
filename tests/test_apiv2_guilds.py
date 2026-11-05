@@ -355,7 +355,7 @@ class TheDungeonUps(unittest.TestCase):
             achievements = types.SimpleNamespace(MAP_NAMES={36: "The Deadmines"})
 
             @staticmethod
-            def _fetch_dungeonplan():
+            def fetch_dungeonplan():
                 return fetched([drop(1, 18, 15)])
 
         ctx = Ctx(server=Server)
@@ -788,7 +788,7 @@ class TheAllowlist(unittest.TestCase):
 
         class Server:
             @staticmethod
-            def _fetch_dungeonplan():
+            def fetch_dungeonplan():
                 raise AssertionError("the world was read")
 
         for q in ({"family": ["gr'ug"]}, {"family": ["grug"], "dungeon": ["123456"]}):

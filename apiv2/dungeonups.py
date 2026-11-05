@@ -10,7 +10,7 @@ upgrades on every row without one read per row.
 
 ONE DEFINITION OF AN UPGRADE, AND IT IS NOT THIS MODULE'S. The verdict is
 `recap.verdict`, the same one the loot board uses, over the dungeon plan's
-reads (`_fetch_dungeonplan`), so "beats what is worn" cannot mean two things
+reads (`fetch_dungeonplan`), so "beats what is worn" cannot mean two things
 on two pages. This module adds one thing: a drop the member is not yet
 high enough for (the verdict says `locked`) is asked again at the level it
 needs, and when it would beat what is worn then, it is listed with `now`
@@ -135,7 +135,7 @@ def dungeonups(query: dict, ctx) -> tuple[int, object]:
             return 400, {"error": "dungeon= is a map id"}
         map_id = int(dungeon)
     server = ctx.server
-    fetched = server._fetch_dungeonplan()
+    fetched = server.fetch_dungeonplan()
     heads = {h.lower(): h for h in fetched["families"]}
     head = heads.get(family.lower())
     if head is None:
