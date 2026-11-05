@@ -603,10 +603,12 @@ def build_facts(names, roster, intents, steps, now_at=None, creatures=None) -> d
     members = member_states(current_intents)
     facts = {}
     for n in names:
+        member = members.get(n)
         facts[n] = {
             "roster": by_name.get(n),
             "intent": leaders.get(n),
-            "member": members.get(n),
+            "member": member,
+            "leader_roster": by_name.get(member[0]) if member else None,
             "steps": [],
             "now_at": now_at,
             "creatures": creatures,
@@ -778,6 +780,12 @@ def _from_job(roster: dict, creatures: dict | None = None):
     aim = str(roster.get("travel_npc") or "")
     if aim and not job.startswith("dungeon:"):
         return _cap("A", "walking " + places.walk_words(aim, creatures)), "", None
+    return _job_phrase(roster), "", None
+
+
+def _job_phrase(roster: dict) -> str:
+    """The roster job as words, or '' for no job or the plain quest job."""
+    job = str((roster or {}).get("job") or "")
     if job.startswith("dungeon:"):
         done = roster.get("dungeon_runs_done")
         wanted = roster.get("dungeon_runs_wanted")
@@ -785,12 +793,12 @@ def _from_job(roster: dict, creatures: dict | None = None):
         import council  # armory, which council pulls in, imports this module
 
         place = council.keyword_place(job.split(":", 1)[1])
-        return "On the " + place + " campaign" + run, "", None
+        return "On the " + place + " campaign" + run
     if job in _JOB_WORDS:
-        return _JOB_WORDS[job], "", None
+        return _JOB_WORDS[job]
     if job and job != "quest":
-        return "On the '" + job + "' job", "", None
-    return "", "", None
+        return "On the '" + job + "' job"
+    return ""
 
 
 def _intent_is_active(intent) -> bool:
@@ -820,8 +828,24 @@ def _from_scopes(f, fresh):
             continue
         mine = [s for s in fresh if s.get("scope") == scope]
         if mine:
-            return _from_step(mine[0])
+            return _with_leader_job(f, mine[0], _from_step(mine[0]))
     return _from_job(f.get("roster") or {}, f.get("creatures"))
+
+
+def _with_leader_job(f, step, said):
+    """A follower's own intent step, led by its leader's job when it has one:
+    the walk alone hides what the family is out doing. #1784"""
+    member = f.get("member")
+    if step.get("kind") != "intent" or not member or not member[0]:
+        return said
+    job = _job_phrase(f.get("leader_roster") or {})
+    if not job:
+        return said
+    doing, waiting, since = said
+    # A took-over walk was capitalized to stand alone; it now follows a clause.
+    took = " took over: " in str(step.get("doing"))
+    walk = doing[:1].lower() + doing[1:] if took else doing
+    return "%s with %s; %s" % (job, member[0], walk), waiting, since
 
 
 def _from_restarts(intent, steps, now_at, creatures: dict | None = None):
