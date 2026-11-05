@@ -21602,7 +21602,7 @@ class Bridge(discord.Client):
         if target:
             try:
                 owned = await asyncio.to_thread(_queue_owned_items, key, target)
-            except Exception:
+            except pymysql.err.MySQLError:
                 log.exception("queue: item ownership for %s could not be read; retrying next pass", key)
                 return
             move = campaignqueue.step(rows, fam["leader"], owned_items=owned)

@@ -302,10 +302,14 @@ class BridgeItemGoal(unittest.TestCase):
             ]
         )
 
-        def broken_read(*args):
-            raise RuntimeError("database unavailable")
+        import pymysql
 
-        _queue_pass(world, extra={"_queue_owned_items": broken_read})
+        def broken_read(*args):
+            raise pymysql.err.OperationalError(2003, "database unavailable")
+
+        _queue_pass(
+            world, extra={"_queue_owned_items": broken_read, "pymysql": pymysql}
+        )
         self.assertEqual("active", world.queue[0]["status"])
         self.assertEqual("active", world.queue[1]["status"])
 
@@ -396,3 +400,29 @@ class BridgeItemGoal(unittest.TestCase):
         self.assertEqual(0, move.start)
         self.assertTrue(move.quest)
         self.assertEqual(123, move.acquired_item)
+
+    def test_programming_fault_in_ownership_reader_is_not_a_transient_hold(self):
+        from test_campaign_queue import FakeWorld, _queue_pass
+        import pymysql
+
+        world = FakeWorld(
+            [
+                {
+                    "id": 7,
+                    "family": "Grug",
+                    "position": 0,
+                    "keyword": "deadmines",
+                    "runs_wanted": 50,
+                    "status": "active",
+                    "goal_item": 123,
+                }
+            ]
+        )
+
+        def broken_read(*args):
+            raise NameError("reader defect")
+
+        with self.assertRaisesRegex(NameError, "reader defect"):
+            _queue_pass(
+                world, extra={"_queue_owned_items": broken_read, "pymysql": pymysql}
+            )
