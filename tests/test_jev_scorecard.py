@@ -426,6 +426,65 @@ class TheStoredScorecard(unittest.TestCase):
             },
         )
 
+    def control(self, kind, outcome, chose="a"):
+        self.db.execute(
+            "INSERT INTO overseer_jev_outcome VALUES "
+            "(?, 'Zug', ?, ?, NULL, 'heuristic', ?, '{}', ?, "
+            "'2026-11-01 00:00:00', ?)",
+            (
+                kind,
+                chose,
+                chose,
+                jo.NO_MODEL,
+                outcome,
+                None if outcome is None else "x",
+            ),
+        )
+
+    def test_control_rows_stay_out_of_the_disagreement_query(self):
+        self.control("activity_choice", "after 9 min: queue now RFC 13 of 50")
+        rows = list(self.db.execute(_sqlite(jo.OUTCOME_SQL), ("2026-10-28",)))
+        self.assertEqual(rows, [])
+
+    def test_each_arm_per_kind_with_the_same_readings(self):
+        """#820 step 2: the rules alone (control), a model carried out, and a
+        model overruled, side by side per kind, read the same way."""
+        self.control("activity_choice", "after 9 min: queue now RFC 13 of 50")
+        self.control("activity_choice", "after 9 min: the queue did not move")
+        self.control("activity_choice", None)
+        self.control("family_intent", "after 20 min: no longer requested, x")
+        self.outcome(
+            "activity_choice",
+            "after 9 min: the queue did not move",
+            acted="jev",
+            backend="jev",
+        )
+        self.outcome(
+            "activity_choice",
+            "after 9 min: queue now RFC 14 of 50",
+            acted="heuristic",
+            backend="jev",
+        )
+        got = {
+            (r["kind"], r["arm"]): (
+                r["decisions"],
+                r["scored"],
+                r["went_acted_way"],
+                r["went_other_way"],
+                r["unclear"],
+            )
+            for r in self.db.execute(_sqlite(jo.ARM_SQL), ("2026-10-28",))
+        }
+        self.assertEqual(
+            got,
+            {
+                ("activity_choice", jo.ARM_CONTROL): (3, 2, 1, 1, 0),
+                ("activity_choice", jo.ARM_MODEL): (1, 1, 0, 1, 0),
+                ("activity_choice", jo.ARM_OVERRULED): (1, 1, 1, 0, 0),
+                ("family_intent", jo.ARM_CONTROL): (1, 1, 1, 0, 0),
+            },
+        )
+
     def test_the_readings_match_the_lines_the_kinds_write(self):
         before = ja.snapshot(activity_facts())
         moved = ja.outcome_words(before, activity_facts(queue="RFC 13 of 50"), 9)

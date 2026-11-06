@@ -22,6 +22,15 @@ heuristic's (jev.compare_rows), and each disagreement is recorded here with
 (SCORECARD below) reads what followed when the heuristic acted against that
 backend's advice.
 
+THE RULES ALONE (#820, step 2 of the plan on #1907). While no model answers
+at all (Jev paused after a 402, no key, a timeout), there is no disagreement
+to record, so for the kinds in CONTROL_KINDS each decision the heuristic made
+alone is still one row: `chose` and `instead_of` both the heuristic's answer,
+`acted = 'heuristic'`, `backend = 'none'` (NO_MODEL). It is scored at the
+family's next question by the same outcome line as every other row, so
+ARM_SQL can set what followed the rules alone against what followed a model
+carried out, per kind. These rows are never fed back into a question.
+
 HOW IT WORKS.
 
   record   When a kind's answer is carried out over the heuristic's
@@ -55,6 +64,12 @@ import random
 DEFAULT_SAMPLE = 0.1
 
 HISTORY_LIMIT = 8
+
+# The kinds whose heuristic-alone decisions are recorded as the control arm:
+# the two with an outcome line scored at the family's next question.
+CONTROL_KINDS = ("activity_choice", "family_intent")
+# `backend` of a control row: no model answered.
+NO_MODEL = "none"
 
 TABLE_SQL = (
     "CREATE TABLE IF NOT EXISTS overseer_jev_outcome ("
@@ -150,10 +165,11 @@ def record_args(
     """INSERT_SQL's arguments for a judgment Jev answered, or None.
 
     Every disagreement is recorded, whoever acted; an agreement is recorded
-    at the sample rate. No answer from Jev has no outcome to score.
+    at the sample rate. No answer from any model is recorded only for a
+    CONTROL_KINDS kind, as the heuristic acting alone (`control_args`).
     """
     if not getattr(judgment, "jev", ""):
-        return None
+        return control_args(judgment, before)
     if judgment.jev == judgment.heuristic:
         rate = sample_rate() if sample is None else sample
         if rate <= 0.0 or rand() >= rate:
@@ -168,6 +184,24 @@ def record_args(
         snapshot_text(before),
         acted[:10],
         str(getattr(judgment, "backend", "") or backend)[:12],
+    )
+
+
+def control_args(judgment, before: dict) -> tuple | None:
+    """INSERT_SQL's arguments for a decision the heuristic made with no model
+    answer, or None outside CONTROL_KINDS or with no heuristic answer."""
+    heuristic = str(getattr(judgment, "heuristic", "") or "")
+    if judgment.kind not in CONTROL_KINDS or not heuristic:
+        return None
+    return (
+        judgment.kind[:32],
+        judgment.subject[:24],
+        heuristic[:40],
+        heuristic[:40],
+        None,
+        snapshot_text(before),
+        "heuristic",
+        NO_MODEL,
     )
 
 
@@ -342,3 +376,46 @@ OUTCOME_SQL = (  # noqa: S608 - constants only, see above
     "WHERE chose <> instead_of AND created_at >= %s "
     "GROUP BY kind, backend, acted ORDER BY kind, backend, acted"
 ).format(scored=_SCORED, acted=_ACTED_SIDE, other=_OTHER_SIDE)
+
+
+# THE ARMS SIDE BY SIDE (#820 step 2). Per kind and arm, every recorded row
+# (agreements and control rows included), how many were scored, and whether
+# what followed went the acted side's way, the other way, or neither, by the
+# same READINGS. The arms:
+#
+#   heuristic_alone   no model answered; the rules acted (backend 'none')
+#   model             a model's answer was carried out (acted 'jev')
+#   model_overruled   a model answered differently; the heuristic acted
+#   agreed            a model agreed with the heuristic (a sample)
+#
+# `went_acted_way` for heuristic_alone against the same for model is the
+# comparison the plan asks for. Read only; `since` is bound by the driver.
+ARM_CONTROL = "heuristic_alone"
+ARM_MODEL = "model"
+ARM_OVERRULED = "model_overruled"
+ARM_AGREED = "agreed"
+
+ARM_SQL = (  # noqa: S608 - constants only, see above
+    "SELECT kind, arm, COUNT(*) AS decisions, "
+    "SUM(CASE WHEN {scored} THEN 1 ELSE 0 END) AS scored, "
+    "SUM(CASE WHEN {scored} AND {acted} THEN 1 ELSE 0 END) AS went_acted_way, "
+    "SUM(CASE WHEN {scored} AND {other} THEN 1 ELSE 0 END) AS went_other_way, "
+    "SUM(CASE WHEN {scored} AND NOT {acted} AND NOT {other} THEN 1 ELSE 0 END) "
+    "AS unclear "
+    "FROM (SELECT kind, outcome, scored_at, CASE "
+    "WHEN acted = 'jev' THEN '{model}' "
+    "WHEN acted = 'both' THEN '{agreed}' "
+    "WHEN backend = '{none}' THEN '{control}' "
+    "ELSE '{overruled}' END AS arm "
+    "FROM overseer_jev_outcome WHERE created_at >= %s) AS arms "
+    "GROUP BY kind, arm ORDER BY kind, arm"
+).format(
+    scored=_SCORED,
+    acted=_ACTED_SIDE,
+    other=_OTHER_SIDE,
+    model=ARM_MODEL,
+    agreed=ARM_AGREED,
+    none=NO_MODEL,
+    control=ARM_CONTROL,
+    overruled=ARM_OVERRULED,
+)

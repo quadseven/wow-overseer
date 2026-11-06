@@ -86,7 +86,7 @@ class TheRecord(unittest.TestCase):
             self.assertEqual(jo.before_of({"before_state": args[5]}), before)
             self.assertEqual(args[6], acted)
 
-    def test_agreements_are_sampled_and_no_answer_is_never_recorded(self):
+    def test_agreements_are_sampled_and_no_answer_is_recorded_only_as_control(self):
         agree = ja.Judgment(
             subject="Zug",
             heuristic=ja.SELL,
@@ -108,7 +108,12 @@ class TheRecord(unittest.TestCase):
             mode=jev.ACT,
             status="timeout",
         )
-        self.assertIsNone(jo.record_args(silent, {}, sample=1.0))
+        # A kind outside the control arm still records nothing on no answer.
+        other = types.SimpleNamespace(
+            kind="item_keep", subject="Zug", heuristic="keep", jev="", acted=""
+        )
+        self.assertIsNone(jo.record_args(other, {}, sample=1.0))
+        self.assertEqual(jo.record_args(silent, {}, sample=0.0)[6], jev.HEURISTIC)
 
     def test_sample_rate_reads_env_and_fails_safe(self):
         self.assertEqual(jo.sample_rate({}), jo.DEFAULT_SAMPLE)
@@ -134,6 +139,55 @@ class TheRecord(unittest.TestCase):
     def test_an_unreadable_snapshot_is_empty(self):
         self.assertEqual(jo.before_of({"before_state": "not json"}), {})
         self.assertEqual(jo.before_of({}), {})
+
+
+class TheControlArm(unittest.TestCase):
+    """#820 step 2: when no model answered and the heuristic acted alone, an
+    activity_choice or family_intent decision is still an outcome row, so the
+    rules' own results can be set against a model's."""
+
+    def silent(self, cls=ja.Judgment, status="paused", **kw):
+        return cls(
+            subject="Zug",
+            heuristic=kw.pop("heuristic", ja.CAMPAIGN),
+            heuristic_why="",
+            mode=jev.ACT,
+            status=status,
+            **kw,
+        )
+
+    def test_a_heuristic_alone_activity_choice_is_a_control_row(self):
+        before = ja.snapshot(activity_facts())
+        for status in ("paused", "error", "timeout", "no_key", "busy"):
+            with self.subTest(status=status):
+                args = jo.record_args(self.silent(status=status), before, sample=0.0)
+                self.assertEqual(
+                    args[:5], (ja.KIND, "Zug", ja.CAMPAIGN, ja.CAMPAIGN, None)
+                )
+                self.assertEqual(jo.before_of({"before_state": args[5]}), before)
+                self.assertEqual(args[6:], (jev.HEURISTIC, jo.NO_MODEL))
+
+    def test_a_heuristic_alone_family_intent_is_a_control_row(self):
+        judgment = self.silent(jfi.Judgment, holder="Zug", heuristic="quest")
+        before = jfi.snapshot(intent_facts(), judgment.heuristic)
+        args = jo.record_args(judgment, before, backend="jev")
+        self.assertEqual(args[:4], (jfi.KIND, "Zug", "quest", "quest"))
+        self.assertEqual(args[6:], (jev.HEURISTIC, jo.NO_MODEL))
+
+    def test_no_heuristic_answer_is_no_row(self):
+        self.assertIsNone(jo.record_args(self.silent(heuristic=""), {}))
+
+    def test_control_rows_stay_out_of_the_fed_back_history(self):
+        self.assertIn("acted = 'jev'", jo.HISTORY_SQL)
+        self.assertEqual(jo.CONTROL_KINDS, (ja.KIND, jfi.KIND))
+
+    def test_the_bridge_snapshots_the_pick_that_acted(self):
+        body = BRIDGE[BRIDGE.index("async def _family_intent_for") :]
+        body = body[: body.index("async def _situation_loop")]
+        self.assertIn(
+            "jev_family_intent.snapshot(facts, judgment.jev or judgment.heuristic)",
+            body,
+        )
 
 
 class TheActivityChoiceLearns(unittest.TestCase):
@@ -308,7 +362,10 @@ class TheBridgeScoresAndRecords(unittest.TestCase):
             self.bridge._record_jev_override(
                 ja.Judgment(**{**judgment.__dict__, "jev": "", "status": "error"}), {}
             )
-        self.assertEqual([s for s, _a in sql], [jo.INSERT_SQL, jo.INSERT_SQL])
+        # The third had no model answer: the heuristic acted alone, the
+        # control arm (#820 step 2).
+        self.assertEqual([s for s, _a in sql], [jo.INSERT_SQL] * 3)
+        self.assertEqual(sql[2][1][6:], (jev.HEURISTIC, jo.NO_MODEL))
 
     def test_history_goes_into_the_facts_and_a_failure_leaves_them(self):
         f = activity_facts()
