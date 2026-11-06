@@ -14571,11 +14571,12 @@ class Bridge(discord.Client):
             _fetch_clearance_materials, names)
         # PAST THE GUILD'S TARGET (bankforecast): never the vault, a guildmate
         # only when its rung is short, and the house's own history for a price.
-        # The keep cap gives way too (#747): a holder keeps only its rung's need.
+        # The keep cap gives way too (#747), only by what the forecast allots
+        # each holder, so the guild never drops below its target in one sweep.
         forecast = await asyncio.to_thread(_bank_forecast, names)
         over = clearance.material_surplus(
             materials_over, materials.REAGENTS,
-            over_target=forecast.over_target, eats=forecast.eats)
+            over_target=forecast.over_target, release=forecast.release)
         surplus_rows = [dict(row, material_surplus=True)
                         for row in materials_over if row["item_guid"] in over]
         # WHAT A MEMBER TOOK OUT OF THE VAULT FOR THE HOUSE (bankforecast) is

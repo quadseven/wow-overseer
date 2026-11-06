@@ -184,22 +184,27 @@ def stacks_from_rows(rows) -> list:
 
 
 def material_surplus(
-    rows, names, *, over_target=None, eats=None, keep=disposition.MATERIAL_KEEP
+    rows, names, *, over_target=None, release=None, keep=disposition.MATERIAL_KEEP
 ) -> frozenset:
     """guids of the named materials each holder carries past what it keeps.
 
-    A material the guild still wants keeps `disposition.MATERIAL_KEEP` per
-    holder, as before. A material the guild holds PAST ITS TARGET
-    (bankforecast's `over_target`) keeps only what the holder's own current
-    rung eats (`eats`: entry -> {member: units}), and never less than the one
-    stack `disposition` always keeps.
+    Every holder gives up what it carries past `disposition.MATERIAL_KEEP`, as
+    before. A material the guild holds PAST ITS TARGET (bankforecast's
+    `over_target`) also frees whole stacks inside the cap, up to the units the
+    forecast allots that holder (`release`: entry -> {member: units}), and
+    never the holder's largest stack.
 
     WHY THE CAP GIVES WAY PAST THE TARGET (#747). Measured on the dev realm
     2026-10-26: the guild held 3371 Linen Cloth against a target of 598,
     spread about 47 to a member, so no holder ever passed the cap of 120 and
     not one stack reached the auction house however far past the target the
-    guild was. The cap guards a crafter's stock for a guild that needs it; a
-    guild past its target does not.
+    guild was.
+
+    WHY ONLY THE ALLOTMENT. The vault keeps only what the target asks for
+    beyond the members' own stock (bankforecast._vault_decisions), so the
+    members' stock is what holds the guild at its target. The forecast allots
+    at most the units the members hold past the target, so the vault's sales
+    and these together never take the guild below it in one sweep.
     """
     over = over_target or {}
     groups: dict = {}
@@ -211,12 +216,36 @@ def material_surplus(
         groups.setdefault(key, []).append(row)
     out: set = set()
     for (holder, entry), held in groups.items():
-        cap = keep
-        if entry in over:
-            rung = ((eats or {}).get(entry) or {}).get(holder, 0)
-            cap = min(keep, max(0, int(rung or 0)))
-        out |= disposition.material_surplus(held, names, cap)
+        freed = disposition.material_surplus(held, names, keep)
+        out |= freed
+        if entry not in over:
+            continue
+        budget = _units(((release or {}).get(entry) or {}).get(holder))
+        inside = sorted(
+            (
+                (_units(row.get("count")), _units(row.get("item_guid")))
+                for row in held
+                if row.get("name") in names
+            ),
+            reverse=True,
+        )
+        # The largest stack always stays; the rest go smallest first, so the
+        # allotment frees as many whole stacks as it covers and never more.
+        for count, guid in reversed(inside[1:]):
+            if guid in freed or count <= 0:
+                continue
+            if count > budget:
+                break
+            out.add(guid)
+            budget -= count
     return frozenset(out)
+
+
+def _units(value) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def can_learn_now(stack: Stack, person: Person) -> bool:

@@ -297,9 +297,10 @@ class Forecast:
     fair: dict = field(default_factory=dict)
     # entry -> the members whose current rung eats more of it than they carry.
     short: dict = field(default_factory=dict)
-    # entry -> {member: units its current rung eats}: what a holder keeps of
-    # a material past the target (clearance.material_surplus).
-    eats: dict = field(default_factory=dict)
+    # entry -> {member: units it may give up past its own rung}, for a
+    # material past the target (clearance.material_surplus). Together no more
+    # than the members hold past the target: see _release.
+    release: dict = field(default_factory=dict)
     # The guild's name, for the headline.
     guild: str = ""
     # Every entry the forecast judged: the vault's, the ladders' and what the
@@ -798,6 +799,37 @@ class _Plan:
     over: dict = field(default_factory=dict)
     fair: dict = field(default_factory=dict)
     given: dict = field(default_factory=dict)
+    release: dict = field(default_factory=dict)
+
+
+def _release(entry, outside, target, need, carried) -> dict:
+    """member -> units of `entry` it may give up past what its own rung eats.
+
+    THE MEMBERS' STOCK HOLDS THE GUILD AT ITS TARGET. The vault keeps only
+    `target - outside` (_vault_decisions), so it sells everything once the
+    members alone hold the target. What the members may give up is therefore
+    capped at what they hold past the target, `outside - target`, allotted to
+    the largest piles past their own rung first. Without the cap one sweep
+    sold the vault and cut every holder to its rung at once (#747 pre-ship
+    review: target 598, members 650 and a vault of 200 would end near 150).
+    """
+    budget = max(0, int(outside) - int(target))
+    eats = dict(need.by_member) if need is not None else {}
+    piles = sorted(
+        (
+            max(0, _int((carried.get(name) or {}).get(entry)) - _int(eats.get(name))),
+            str(name),
+        )
+        for name in carried
+    )
+    out = {}
+    for units, name in sorted(piles, key=lambda p: (-p[0], p[1])):
+        if budget <= 0 or units <= 0:
+            break
+        take = min(units, budget)
+        out[name] = take
+        budget -= take
+    return out
 
 
 def _plan_item(acc, item, mine, outside, members, need, history, house, carried):
@@ -815,6 +847,9 @@ def _plan_item(acc, item, mine, outside, members, need, history, house, carried)
         )
         if price:
             acc.fair[item.entry] = price
+        release = _release(item.entry, outside, target, need, carried)
+        if release:
+            acc.release[item.entry] = release
     if not mine:
         if surplus and kind != RAID:
             acc.lines.append(
@@ -889,11 +924,7 @@ def plan(
         acc.over,
         acc.fair,
         _short(need_of, carried),
-        eats={
-            entry: dict(need.by_member)
-            for entry, need in need_of.items()
-            if need.by_member
-        },
+        release=acc.release,
         judged=frozenset(e for e in judged if e in items),
     )
 
