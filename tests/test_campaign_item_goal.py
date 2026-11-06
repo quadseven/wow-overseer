@@ -302,7 +302,7 @@ class BridgeItemGoal(unittest.TestCase):
             ]
         )
 
-        import pymysql
+        from _stub_modules import PYMYSQL as pymysql
 
         def broken_read(*args):
             raise pymysql.err.OperationalError(2003, "database unavailable")
@@ -403,7 +403,7 @@ class BridgeItemGoal(unittest.TestCase):
 
     def test_programming_fault_in_ownership_reader_is_not_a_transient_hold(self):
         from test_campaign_queue import FakeWorld, _queue_pass
-        import pymysql
+        from _stub_modules import PYMYSQL as pymysql
 
         world = FakeWorld(
             [
