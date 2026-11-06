@@ -99,6 +99,15 @@ writes one line per backend and kind per hour. In compare mode the comparison
 backend gets its own lines, and `disagreed` counts its answers that differ
 from the active backend's. A repeating failure (a 402 on every call) is
 logged once an hour, not once per call (#797).
+
+PAUSED AFTER A PAYMENT OR AUTH REFUSAL (#1907). A backend that answers 402
+(payment required) or 401 (unauthorized) will refuse the next question too, so
+after the first such answer the client asks it nothing for
+`JEV_PAUSE_SECONDS` (3600 by default) and answers `paused` at once, with the
+refusal in `detail`. The first call after the window is a retry: an answer ends
+the pause, another 402 or 401 starts a new window. The refusal is logged once
+per window. A comparison backend pauses the same way, on its own, and a paused
+active backend still lets the comparison run against the heuristic.
 """
 
 from __future__ import annotations
@@ -142,6 +151,9 @@ _LABEL = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 # Per backend and kind, the most recent latencies a tally period keeps.
 TALLY_SAMPLES = 2000
 TALLY_SECONDS = 3600.0
+# How long a backend that answered 402 or 401 is left unasked (#1907).
+PAUSE_SECONDS = 3600.0
+PAUSE_HTTP = (401, 402)
 # How often a pass queued for a free slot looks again (see Client.ask's wait).
 SLOT_POLL_SECONDS = 0.05
 
@@ -157,6 +169,8 @@ BUSY = "busy"
 TIMEOUT = "timeout"
 ERROR = "error"
 INVALID = "invalid"
+# Asked nothing: the backend refused payment or auth and its window is open.
+PAUSED = "paused"
 
 
 def mode(kind: str, environ=None, default: str = DEFAULT_MODE) -> str:
@@ -714,7 +728,14 @@ class Tally:
     def _slot(self, backend: str, kind: str) -> dict:
         return self._counts.setdefault(
             (backend, kind),
-            {"answered": 0, "disagreed": 0, "errors": 0, "ms": [], "service": []},
+            {
+                "answered": 0,
+                "disagreed": 0,
+                "errors": 0,
+                "paused": 0,
+                "ms": [],
+                "service": [],
+            },
         )
 
     def status(
@@ -740,6 +761,8 @@ class Tally:
                         del c["service"][:-TALLY_SAMPLES]
             elif status in (ERROR, TIMEOUT, INVALID):
                 c["errors"] += 1
+            elif status == PAUSED:
+                c["paused"] += 1
 
     def agreement(self, kind: str, agree, backend: str | None = None) -> None:
         """One answer's agreement. `backend` is the one whose answer is being
@@ -769,6 +792,8 @@ class Tally:
             c["disagreed"],
             c["errors"],
         )
+        if c["paused"]:
+            line += " paused=%d" % c["paused"]
         if c["ms"]:
             line += " p50_ms=%d p95_ms=%d" % (
                 _percentile(c["ms"], 50),
@@ -952,6 +977,7 @@ class Client:
         shadow=None,
         compare_sink=None,
         allow_http_hosts=(),
+        pause_seconds: float = PAUSE_SECONDS,
     ):
         self.backend = backend or JEV_BACKEND
         # A local backend with an empty URL is a switched-off one (no_key);
@@ -975,6 +1001,11 @@ class Client:
         self._transport = transport or _urllib_post
         self._clock = clock
         self._said_no_key = False
+        self.pause_seconds = max(0.0, float(pause_seconds))
+        # While the clock is before this, the backend is not asked (#1907).
+        self._paused_until = None
+        self._paused_detail = ""
+        self._skipped = 0
         # Set on a comparison client: its tally lines are its own, and its
         # answers are not the active backend's.
         self.compared = False
@@ -993,6 +1024,7 @@ class Client:
         common = dict(
             timeout=float(env.get("JEV_TIMEOUT_SECONDS", TIMEOUT_SECONDS)),
             concurrency=int(env.get("JEV_CONCURRENCY", CONCURRENCY)),
+            pause_seconds=float(env.get("JEV_PAUSE_SECONDS", PAUSE_SECONDS)),
         )
         settings = _settings(name, env)
         other = backend_name(env, "JEV_COMPARE_BACKEND")
@@ -1119,7 +1151,7 @@ class Client:
             other = await self.shadow._ask_one(kind, state, questions)
             # A repeat (cached) was recorded when it was first asked; busy
             # and no_key asked nothing.
-            if other.status in (CACHED, BUSY, NO_KEY):
+            if other.status in (CACHED, BUSY, NO_KEY, PAUSED):
                 return
             rows = compare_rows(
                 kind,
@@ -1168,6 +1200,11 @@ class Client:
 
         if not self.ready(kind):
             return Outcome(NO_KEY, 0)
+        if self._paused_until is not None:
+            if self._clock() < self._paused_until:
+                self._skipped += 1
+                return self._said(kind, Outcome(PAUSED, 0, detail=self._paused_detail))
+            self._paused_until = None
         key = _cache_key(self.backend.name + ":" + self.model, state, questions)
         hit = self._cache.get(key)
         if hit is not None:
@@ -1200,6 +1237,10 @@ class Client:
             return self._said(
                 kind, Outcome(ERROR, elapsed(), detail=type(exc).__name__)
             )
+        if status in PAUSE_HTTP:
+            return self._pause(
+                kind, Outcome(ERROR, elapsed(), detail="http %s" % status)
+            )
         if status != 200:
             return self._said(
                 kind, Outcome(ERROR, elapsed(), detail="http %s" % status)
@@ -1225,7 +1266,31 @@ class Client:
             ),
         )
 
-    def _said(self, kind: str, outcome: Outcome) -> Outcome:
+    def _pause(self, kind: str, outcome: Outcome) -> Outcome:
+        """A 402 or 401: ask this backend nothing until the window ends, and
+        say so once for the window (#1907)."""
+        if self.pause_seconds <= 0:
+            return self._said(kind, outcome)
+        outcome = self._tallied(kind, outcome)
+        now = self._clock()
+        if self._paused_until is not None and now < self._paused_until:
+            # Another request in flight already opened this window.
+            return outcome
+        self._paused_until = now + self.pause_seconds
+        self._paused_detail = outcome.detail
+        log.warning(
+            "jev: backend=%s kind=%s answered %s; asking it nothing for %ds, "
+            "every judgment keeps the heuristic (%d skipped in the last window)",
+            self.backend.name,
+            kind,
+            outcome.detail,
+            int(self.pause_seconds),
+            self._skipped,
+        )
+        self._skipped = 0
+        return outcome
+
+    def _tallied(self, kind: str, outcome: Outcome) -> Outcome:
         outcome = dataclasses.replace(outcome, backend=self.backend.name)
         TALLY.status(
             self.backend.name,
@@ -1236,6 +1301,13 @@ class Client:
             active=not self.compared,
         )
         TALLY.maybe_log()
+        return outcome
+
+    def _said(self, kind: str, outcome: Outcome) -> Outcome:
+        outcome = self._tallied(kind, outcome)
+        if outcome.status == PAUSED:
+            # The refusal was said once, when the window opened (_pause).
+            return outcome
         if outcome.answers is None:
             # A failure that repeats is said once an hour with the count it
             # swallowed, not once per call (#797).

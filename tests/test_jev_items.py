@@ -477,6 +477,45 @@ class ShadowSummaryTest(unittest.TestCase):
         self.assertIn("unanswered: %s x%d" % (jev.NO_KEY, len(judgments)), line)
 
 
+class SummaryDueTest(unittest.TestCase):
+    """#1907: a pass that asked no backend (paused after a 402, or no key)
+    says its summary once an hour, not on every pass."""
+
+    def judgments(self, status, detail=""):
+        base = run([chest()], key="")
+        return [replace(j, status=status, detail=detail, jev="") for j in base]
+
+    def test_a_paused_pass_is_said_once_an_hour(self):
+        clock = [0.0]
+        tally = jev.Tally(clock=lambda: clock[0])
+        paused = self.judgments(jev.PAUSED, "http 402")
+        said = []
+        for _ in range(12):
+            said.append(jev_items.summary_due(paused, tally))
+            clock[0] += 300
+        self.assertEqual(said.count(True), 1)
+        self.assertTrue(said[0])
+        clock[0] += 3600
+        self.assertTrue(jev_items.summary_due(paused, tally))
+
+    def test_no_key_is_held_the_same_way(self):
+        tally = jev.Tally(clock=lambda: 0.0)
+        idle = self.judgments(jev.NO_KEY)
+        self.assertTrue(jev_items.summary_due(idle, tally))
+        self.assertFalse(jev_items.summary_due(idle, tally))
+
+    def test_a_pass_that_asked_is_always_said(self):
+        tally = jev.Tally(clock=lambda: 0.0)
+        failed = self.judgments(jev.ERROR, "http 503")
+        answered = run([chest()])
+        for _ in range(3):
+            self.assertTrue(jev_items.summary_due(failed, tally))
+            self.assertTrue(jev_items.summary_due(answered, tally))
+
+    def test_the_bridge_gates_its_summary_line(self):
+        self.assertTrue("jev_items.summary_due(judgments)" in BRIDGE)
+
+
 class DescriptionTest(unittest.TestCase):
     def test_the_card_drops_what_the_judgment_does_not_need(self):
         card = jev_items.item_card(

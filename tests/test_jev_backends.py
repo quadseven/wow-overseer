@@ -356,7 +356,11 @@ class Tally(unittest.TestCase):
             run(go())
         failures = [x for x in logs.output if "http 402" in x]
         self.assertEqual(len(failures), 1)
-        self.assertEqual(jev.TALLY._counts[("jev", "k")]["errors"], 5)
+        # The first 402 pauses the backend (#1907): one request, four
+        # questions answered `paused` without one.
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(jev.TALLY._counts[("jev", "k")]["errors"], 1)
+        self.assertEqual(jev.TALLY._counts[("jev", "k")]["paused"], 4)
 
 
 class BridgeWiring(unittest.TestCase):

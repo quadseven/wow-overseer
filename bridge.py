@@ -14403,7 +14403,8 @@ class Bridge(discord.Client):
             log.info("%s", judgment.line())
             await asyncio.to_thread(_insert_jev_judgment, judgment)
             self._jev_recorded[judgment.key] = judgment.signature
-        log.info("%s", jev_items.shadow_summary(judgments, who, len(fresh)))
+        if jev_items.summary_due(judgments):
+            log.info("%s", jev_items.shadow_summary(judgments, who, len(fresh)))
 
     async def _hand_recipes(self, names: list, free_slots: dict) -> None:
         """Move every carried recipe into the bag of whoever works its trade.
