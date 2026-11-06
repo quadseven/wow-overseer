@@ -3664,7 +3664,9 @@ def plan(
             _count_focus(tally, m, None, fields)
             continue
         started, allowance = _allowance(step, counters, per_guild)
-        why = _step_refusal(m, busy, started, allowance, step)
+        why = _step_refusal(m, busy, started, allowance, step) or job_walk_held(
+            m, step, recent
+        )
         if why:
             notes.append(why)
             _release_slots(m.name, far, hunts)
@@ -4635,6 +4637,136 @@ def class_walk_backoff(name, recent) -> int:
     newest = rows[0]
     wait = classquest.BACKOFF_MINUTES.get(newest.refusal or newest.reason, 0)
     return max(0, wait - int(newest.age_minutes))
+
+
+# EVERY GUILD JOBS WALK WAITS OUT THE REALM'S FAR WALK WALLS (#1295). The class
+# quest walk waits them out (class_walk_backoff), but the other walks (the
+# `walk-to-spawn` job rows of the farm, door and level steps, and the step walks
+# to a vendor, a trainer, a mailbox or an inn) read only their own cooldown: a
+# held level walk was asked again after five minutes and a walk of another kind
+# at once. In the 24 hours to 2026-11-04 05Z, 866 of 888 walk refusals came
+# from these walks, 723 of them "character is held by another verb". The hold
+# is on the character, so any walk waits it out; the realm's ceiling and the
+# bot's hourly budget count far walks only, so only a far walk waits them out.
+JOB_WALK_WALLS = (
+    classquest.REALM_FULL_REASON,
+    classquest.BOT_BUDGET_REASON,
+    classquest.HELD_REASON,
+)
+_WALK_PREFIX = "walk-to-"
+_WALK_CAP = re.compile(r"\bmax:(\d+)\b")
+_WALK_SPAWN = re.compile(r"walk-to-spawn (creature|gameobject):(\d+)\b")
+
+
+def _is_walk_row(r) -> bool:
+    """Whether a Recent row was a walk: the step's walk (its source ends
+    "-walk") or a `walk-to-*` command of any action."""
+    return bool(r.walk) or str(r.command or "").startswith(_WALK_PREFIX)
+
+
+def job_walk_backoff(name, recent) -> tuple:
+    """(the wall's words, minutes still to wait) when this member's newest
+    guild jobs walk row, of any action, was refused for a far walk wall
+    (JOB_WALK_WALLS) younger than its classquest.BACKOFF_MINUTES; ("", 0)
+    otherwise. A walk row of the same minute that was not refused for a wall
+    lifts it."""
+    walks = [r for r in recent or () if r.name == name and _is_walk_row(r)]
+    if not walks:
+        return "", 0
+    age = min(int(r.age_minutes) for r in walks)
+    newest = [r for r in walks if int(r.age_minutes) == age]
+    words = {(r.refusal or r.reason) for r in newest}
+    if len(words) != 1 or not words <= set(JOB_WALK_WALLS):
+        return "", 0
+    (wall,) = words
+    wait = classquest.BACKOFF_MINUTES[wall] - age
+    return (wall, wait) if wait > 0 else ("", 0)
+
+
+def _step_walks(step) -> tuple:
+    """The walk commands a step writes: its walk and any `walk-to-*` row."""
+    walk = getattr(step, "walk", None)
+    out = [walk.command] if walk is not None else []
+    out += [
+        r.command
+        for r in getattr(step, "rows", ()) or ()
+        if str(r.command or "").startswith(_WALK_PREFIX)
+    ]
+    return tuple(out)
+
+
+def _far_walk_command(command) -> bool:
+    """Whether a walk command asks past the near cap (guildroute's
+    TRAINER_WALK_YARDS), the walks the realm counts as far."""
+    found = _WALK_CAP.search(str(command or ""))
+    return bool(found) and int(found.group(1)) > guildroute.TRAINER_WALK_YARDS
+
+
+def _walk_spawn_key(command, spawn=0):
+    """(kind, spawn id) a `walk-to-spawn` command names, else None; a row read
+    with only its creature spawn id gives ("creature", spawn)."""
+    found = _WALK_SPAWN.match(str(command or ""))
+    if found:
+        return found.group(1), int(found.group(2))
+    return ("creature", int(spawn)) if spawn else None
+
+
+def job_refused_spawns(name, recent) -> dict:
+    """(kind, spawn id) -> minutes still left for each spawn a guild jobs walk
+    of this member, of any action but the class quest's (class_avoid leaves
+    those packs itself), was refused with a lasting spawn refusal
+    (classquest.SPAWN_REFUSALS that are not SPAWN_SHORT_REFUSALS, among them
+    the road far above the walker's level) inside SPAWN_REFUSED_MINUTES."""
+    lasting = classquest.SPAWN_REFUSALS - classquest.SPAWN_SHORT_REFUSALS
+    out: dict = {}
+    for r in recent or ():
+        if (
+            r.name != name
+            or r.action == classquest.ACTION
+            or not _is_walk_row(r)
+            or (r.refusal or r.reason) not in lasting
+            or _before_epoch(r)
+        ):
+            continue
+        key = _walk_spawn_key(r.command, r.spawn)
+        left = classquest.SPAWN_REFUSED_MINUTES - int(r.age_minutes)
+        if key is not None and left > 0:
+            out[key] = (max(left, out.get(key, (0, ""))[0]), r.refusal or r.reason)
+    return out
+
+
+def job_walk_held(m, step, recent) -> str:
+    """The plan note for a member whose step walks and must wait, "" when it
+    may start: its newest walk was refused for a far walk wall
+    (job_walk_backoff; the ceiling and the budget hold only a far walk), or,
+    for a step other than a class quest's, the walk goes to a spawn a walk
+    was lately refused for good (job_refused_spawns)."""
+    walks = _step_walks(step)
+    if not walks:
+        return ""
+    wall, wait = job_walk_backoff(m.name, recent)
+    if wall and (wall == classquest.HELD_REASON or any(map(_far_walk_command, walks))):
+        return "%s waits %d more minute%s to walk: %s" % (
+            m.name,
+            wait,
+            "" if wait == 1 else "s",
+            wall,
+        )
+    if getattr(step, "action", "") == classquest.ACTION:
+        return ""
+    refused = job_refused_spawns(m.name, recent)
+    for command in walks:
+        key = _walk_spawn_key(command)
+        if key in refused:
+            left, why = refused[key]
+            return "%s leaves %s for %d more minute%s: %s" % (
+                m.name,
+                getattr(step, "goal", "") or "the spawn %s:%d" % key,
+                left,
+                "" if left == 1 else "s",
+                why,
+            )
+    return ""
 
 
 def class_priority(m) -> int:
