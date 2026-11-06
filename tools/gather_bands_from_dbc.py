@@ -12,11 +12,13 @@ form of the server's answer a pull request can be gated on.
 
 USAGE
 
-    POD=$(kubectl get pods -n wow-dev -l app=worldserver \\
+    POD=$(kubectl get pods -n "$NAMESPACE" -l app=worldserver \\
           -o jsonpath='{.items[0].metadata.name}')
-    kubectl cp -n wow-dev -c worldserver \\
+    kubectl cp -n "$NAMESPACE" -c worldserver \\
       "$POD:/azerothcore/env/dist/data/dbc/Lock.dbc" ./Lock.dbc
     python3 tools/gather_bands_from_dbc.py ./Lock.dbc
+
+`$NAMESPACE` is the Kubernetes namespace the realm runs in.
 
 VERIFY THE COPY BEFORE TRUSTING IT. `md5sum` the local file against the pod's
 own `md5sum` of the same path; a partial `kubectl cp` is a truncated file that

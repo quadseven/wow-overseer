@@ -9,11 +9,13 @@ projection is the form a pull request can be gated on (same reasoning as
 
 USAGE
 
-    POD=$(kubectl get pods -n wow-dev -l app=worldserver \\
+    POD=$(kubectl get pods -n "$NAMESPACE" -l app=worldserver \\
           -o jsonpath='{.items[0].metadata.name}')
-    kubectl cp -n wow-dev -c worldserver \\
+    kubectl cp -n "$NAMESPACE" -c worldserver \\
       "$POD:/azerothcore/env/dist/data/dbc/ItemExtendedCost.dbc" ./ItemExtendedCost.dbc
     python3 tools/item_extended_cost_from_dbc.py ./ItemExtendedCost.dbc
+
+`$NAMESPACE` is the Kubernetes namespace the realm runs in.
 
 Compare `md5sum` of the copy with the pod's own before trusting it. Read on
 2026-10-04: 998c568fb2df87208a231e130970f278 (972 records).
