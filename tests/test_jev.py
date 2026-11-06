@@ -219,6 +219,159 @@ class FallbackTest(unittest.TestCase):
         self.assertEqual(ask(client, questions).status, jev.INVALID)
 
 
+class Clock:
+    """A monotonic clock the test moves by hand."""
+
+    def __init__(self, now=1000.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+class PaymentPauseTest(unittest.TestCase):
+    """#1907: a backend that answers 402 or 401 is not asked again for an
+    hour. The heuristic keeps acting; the pass costs no request and no log
+    line."""
+
+    def paused_client(self, status=402, **kw):
+        clock = Clock()
+        transport = Transport(result=(status, b'{"error":"payment required"}'))
+        client = jev.Client("k", transport=transport, clock=clock, **kw)
+        return client, transport, clock
+
+    def test_a_402_stops_the_asking_until_the_window_ends(self):
+        client, transport, clock = self.paused_client()
+        first = ask(client)
+        clock.now += 60
+        second = ask(client, state="another sword")
+        third = ask(client, state="a third sword")
+        self.assertEqual((first.status, first.answers), (jev.ERROR, None))
+        self.assertIn("402", first.detail)
+        self.assertEqual((second.status, second.answers), (jev.PAUSED, None))
+        self.assertEqual(third.status, jev.PAUSED)
+        self.assertIn("402", second.detail)
+        self.assertEqual(len(transport.calls), 1)
+
+    def test_a_401_stops_the_asking_too(self):
+        client, transport, _ = self.paused_client(status=401)
+        ask(client)
+        self.assertEqual(ask(client, state="another sword").status, jev.PAUSED)
+        self.assertEqual(len(transport.calls), 1)
+
+    def test_one_retry_after_the_window_and_a_new_window_on_another_402(self):
+        client, transport, clock = self.paused_client()
+        ask(client)
+        clock.now += jev.PAUSE_SECONDS + 1
+        retried = ask(client, state="another sword")
+        after = ask(client, state="a third sword")
+        self.assertEqual(retried.status, jev.ERROR)
+        self.assertEqual(after.status, jev.PAUSED)
+        self.assertEqual(len(transport.calls), 2)
+
+    def test_an_answer_on_the_retry_ends_the_pause(self):
+        client, transport, clock = self.paused_client()
+        ask(client)
+        transport.result = reply(good_choice())
+        clock.now += jev.PAUSE_SECONDS + 1
+        self.assertEqual(ask(client, state="another sword").status, jev.ANSWERED)
+        self.assertEqual(ask(client, state="a third sword").status, jev.ANSWERED)
+        self.assertEqual(len(transport.calls), 3)
+
+    def test_a_passing_failure_does_not_pause(self):
+        for status in (429, 500, 503, 529):
+            with self.subTest(status=status):
+                client, transport, _ = self.paused_client(status=status)
+                ask(client)
+                self.assertEqual(ask(client, state="another sword").status, jev.ERROR)
+                self.assertEqual(len(transport.calls), 2)
+
+    def test_the_pause_is_said_once_per_window(self):
+        client, _, clock = self.paused_client()
+        with self.assertLogs("wow-overseer.jev", "INFO") as logs:
+            for n in range(20):
+                clock.now += 30
+                ask(client, state="sword %d" % n)
+        said = [line for line in logs.output if "402" in line]
+        self.assertEqual(len(said), 1, logs.output)
+        self.assertIn("heuristic", said[0])
+
+    def test_refusals_already_in_flight_open_one_window(self):
+        transport = Transport(result=(402, b"{}"), delay=0.05)
+        client = jev.Client("k", transport=transport, concurrency=4)
+
+        async def burst():
+            return await asyncio.gather(
+                *(client.ask("x", "s%d" % n, {"route": ROUTE}) for n in range(4))
+            )
+
+        with self.assertLogs("wow-overseer.jev", "INFO") as logs:
+            outcomes = asyncio.run(burst())
+        self.assertEqual([o.status for o in outcomes], [jev.ERROR] * 4)
+        self.assertEqual(len([x for x in logs.output if "402" in x]), 1)
+
+    def test_the_window_comes_from_the_environment(self):
+        client = jev.Client.from_env(
+            {"TYPESAFE_API_KEY": "k", "JEV_PAUSE_SECONDS": "120"}
+        )
+        self.assertEqual(client.pause_seconds, 120.0)
+        self.assertEqual(
+            jev.Client.from_env({"TYPESAFE_API_KEY": "k"}).pause_seconds,
+            jev.PAUSE_SECONDS,
+        )
+
+    def test_a_paused_active_backend_still_lets_the_comparison_run(self):
+        """The compare backend (strands on the dev realm) keeps measuring
+        against the heuristic while the active backend is paused."""
+        clock = Clock()
+        shadow = jev.Client("k2", transport=Transport(), clock=clock)
+        rows = []
+
+        async def sink(batch):
+            rows.extend(batch)
+
+        client = jev.Client(
+            "k",
+            transport=Transport(result=(402, b"{}")),
+            clock=clock,
+            shadow=shadow,
+            compare_sink=sink,
+        )
+
+        async def run():
+            await client.ask("x", "s1", {"route": ROUTE}, heuristic={"route": "keep"})
+            paused = await client.ask(
+                "x", "s2", {"route": ROUTE}, heuristic={"route": "keep"}
+            )
+            await client.drain_compare()
+            return paused
+
+        self.assertEqual(asyncio.run(run()).status, jev.PAUSED)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[-1]["against"], jev.AGAINST_HEURISTIC)
+
+    def test_a_paused_comparison_backend_writes_no_rows(self):
+        clock = Clock()
+        shadow = jev.Client("k2", transport=Transport(result=(402, b"{}")), clock=clock)
+        rows = []
+
+        async def sink(batch):
+            rows.extend(batch)
+
+        client = jev.Client(
+            "k", transport=Transport(), clock=clock, shadow=shadow, compare_sink=sink
+        )
+
+        async def run():
+            await client.ask("x", "s1", {"route": ROUTE})
+            await client.drain_compare()
+            await client.ask("x", "s2", {"route": ROUTE})
+            await client.drain_compare()
+
+        asyncio.run(run())
+        self.assertEqual([r["status"] for r in rows], [jev.ERROR])
+
+
 class AnswerTest(unittest.TestCase):
     def test_a_good_choice_is_typed_and_logged_with_its_latency(self):
         client = jev.Client("k", transport=Transport())

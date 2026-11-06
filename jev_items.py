@@ -663,6 +663,20 @@ def unanswered_reason(judgments) -> str:
     )
 
 
+# Statuses under which no backend was asked (#1907).
+_UNASKED = (jev.PAUSED, jev.NO_KEY)
+
+
+def summary_due(judgments, tally=None) -> bool:
+    """Whether a pass's summary line is worth saying. A pass that asked a
+    backend always is. One that asked nothing (the backend paused after a
+    402, or no key) says it once an hour per cause, not every pass (#1907)."""
+    if not judgments or any(j.status not in _UNASKED for j in judgments):
+        return True
+    causes = tuple(sorted({(j.status, j.detail) for j in judgments}))
+    return (tally or jev.TALLY).first_failure(("jev-shadow",) + causes) is not None
+
+
 def shadow_summary(judgments, who: str, fresh: int) -> str:
     """The one line a pass says: the totals, and the reason when any
     question got no answer."""
