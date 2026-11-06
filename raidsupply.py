@@ -292,6 +292,11 @@ CRYSTAL_VIAL = (8925, 1, 2500)
 LEADED_VIAL = (3372, 1, 200)
 SMALL_FLAME_SAC, FADELEAF = 4402, 3818
 SPRING_WATER = (159, 1, 25)
+# Basic Campfire (spell 818) burns one Simple Wood and needs Flint and Tinder
+# carried. A trade goods vendor sells the wood for 38 copper in the 3.3.5
+# item_template; a cook short of it buys a few fires' worth (#1897).
+BASIC_CAMPFIRE, SIMPLE_WOOD, FLINT_AND_TINDER = 818, 4470, 4471
+SIMPLE_WOOD_PRICE, CAMPFIRE_WOOD_BUY = 38, 5
 RAW_NIGHTFIN_SNAPPER = 13759
 ELEMENTAL_FIRE, DREAMFOIL, GOLDEN_SANSAM = 7068, 13463, 13464
 MOUNTAIN_SILVERSAGE, PLAGUEBLOOM, ICECAP = 13465, 13466, 13467
@@ -1092,6 +1097,53 @@ def own_recipe_vendor(make, member):
     return next((v for v in make.recipe_vendors if team and v.team == team), None)
 
 
+def _campfire_lacks(crafter) -> list:
+    """The campfire's reagent and tool the crafter does not carry, by name."""
+    return [
+        what
+        for entry, what in (
+            (FLINT_AND_TINDER, "Flint and Tinder"),
+            (SIMPLE_WOOD, "Simple Wood"),
+        )
+        if crafter.count(entry) < 1
+    ]
+
+
+def _cook_step(crafter, make, name, n, vendors, cap):
+    """One campfire, then `n` casts while it burns (#1897), or the wood's buy.
+
+    The bridge writes every row `repeat` times, so a cook batch keeps repeat 1
+    and lists its casts: one fire row, then one row per dish. Without the
+    campfire's tool, or without wood no vendor here sells, there is no step,
+    so a fire the server refuses is never written pass after pass."""
+    lacks = _campfire_lacks(crafter)
+    if lacks == ["Simple Wood"] and SIMPLE_WOOD in vendors:
+        return _buy_step(
+            crafter,
+            SIMPLE_WOOD,
+            CAMPFIRE_WOOD_BUY,
+            SIMPLE_WOOD_PRICE,
+            "Simple Wood",
+            cap,
+        )
+    if lacks:
+        return None
+    cast = guildcorps.Row("cast", str(make.spell), "", source_for("craft", make.spell))
+    return guildcorps.Step(
+        crafter.name,
+        "craft",
+        make.spell,
+        "raid supply: %s crafts %d %s for Molten Core" % (crafter.name, n, name),
+        rows=(
+            guildcorps.Row(
+                "cast", str(BASIC_CAMPFIRE), "", source_for("craft", make.spell)
+            ),
+            *(cast,) * n,
+        ),
+        repeat=1,
+    )
+
+
 def craft_step(crafter, make, name, want, vendors, cap):
     """The crafter's own step toward `want` more of this make, or None."""
     if make.spell not in crafter.known:
@@ -1136,9 +1188,8 @@ def craft_step(crafter, make, name, want, vendors, cap):
                 )
         return None
     n = min(_can_make(crafter, make), CRAFT_BATCH, max(1, int(want)))
-    cooking = make.skill == COOKING
-    if cooking:
-        n = min(n, 1)  # one fire row, then one cast, the crew cook's shape
+    if n > 0 and make.skill == COOKING:
+        return _cook_step(crafter, make, name, n, vendors, cap)
     if n > 0:
         return guildcorps.Step(
             crafter.name,
@@ -1146,15 +1197,6 @@ def craft_step(crafter, make, name, want, vendors, cap):
             make.spell,
             "raid supply: %s crafts %d %s for Molten Core" % (crafter.name, n, name),
             rows=(
-                *(
-                    (
-                        guildcorps.Row(
-                            "cast", "818", "", source_for("craft", make.spell)
-                        ),
-                    )
-                    if cooking
-                    else ()
-                ),
                 guildcorps.Row(
                     "cast", str(make.spell), "", source_for("craft", make.spell)
                 ),
@@ -1529,6 +1571,13 @@ def _why_not(crafter, make, name, members) -> str:
             )
     if make.spell not in crafter.known:
         return "%s does not know %s and carries no recipe for it" % (crafter.name, name)
+    lacks = _campfire_lacks(crafter) if make.skill == COOKING else []
+    if lacks and _can_make(crafter, make) > 0:
+        return "%s holds what %s takes but no %s for the campfire" % (
+            crafter.name,
+            name,
+            " or ".join(lacks),
+        )
     missing = [
         REAGENT_NAMES.get(e, "item %d" % e)
         for e, n in make.reagents
@@ -1606,6 +1655,9 @@ SUPPLY_ENTRIES = frozenset(
         for e, _, _ in m.vendor
     }
     | {s.make.recipe_item for s in SUPPLIES if s.make and s.make.recipe_item}
+    # The campfire's wood and tool, so a cook's own count and the wood's
+    # vendors are read (#1897).
+    | {SIMPLE_WOOD, FLINT_AND_TINDER}
 )
 SUPPLY_SPELLS = frozenset(
     m.spell for m in [s.make for s in SUPPLIES if s.make] + [g.make for g in FIRE_GEAR]
