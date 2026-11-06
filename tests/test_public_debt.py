@@ -30,6 +30,9 @@ KUBECTL_FILES = (
     "tools/spell_bands_from_dbc.py",
     "tools/spell_focus_from_dbc.py",
     "tools/seed_roster.py",
+    "tools/gather_bands_from_dbc.py",
+    "tools/item_extended_cost_from_dbc.py",
+    "tools/taxi_nodes_from_dbc.py",
 )
 
 # A value a reader supplies: `$NAME`, `"$NAME"`, `"${NAME#pod/}"` or `<name>`.
@@ -146,7 +149,8 @@ class KubectlLinesUsePlaceholders(unittest.TestCase):
 
 class NoPrivatePathsOrQuotes(unittest.TestCase):
     def test_no_relative_path_into_a_manifests_tree(self):
-        for rel in ("cast.py", "tools/seed_roster.py"):
+        # Docstrings and comments alike: basepath.py held one in a comment.
+        for rel in ("cast.py", "tools/seed_roster.py", "basepath.py"):
             with self.subTest(file=rel):
                 self.assertIsNone(re.search(r"(\.\./)+\S*manifests", _read(rel)))
 

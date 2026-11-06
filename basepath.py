@@ -73,8 +73,8 @@ ENV_VAR = "OVERSEER_BASE_PATH"
 # suppression directive here: the suppression would be arguing with a correct
 # rule over a name that was arbitrary, and ruff parses such a directive out of
 # ANY comment, so even writing one in prose to explain it silences the whole
-# line. ../../oke/manifests/wow-dev/tests/_render.py hit both halves of this
-# and made the same choice.
+# line. A render helper in the deployment's own test suite hit both halves of
+# this and made the same choice.
 PLACEHOLDER = "__OVERSEER_BASE__"
 # WHICH COPY OF THE PAGE THIS IS. The page is served no-store and nothing in
 # front of it caches, so a reload always fetches the current one; but a tab
