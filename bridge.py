@@ -827,6 +827,39 @@ LEVEL_CLAIMANT = "level"
 # Blackrock Mountain (attunestep.py), across the Eastern Kingdoms, so it is
 # held to the flight pass's lease too. attunestep.CLAIMANT is the same word.
 ATTUNE_CLAIMANT = "attunement"
+
+# THE CLASS PARTY'S RETRY LINES (#1332). Each is written after its retry has
+# run and names what the retry did, so a live check reading the log sees a
+# result, not an attempt. One format per line, so a grep matches each.
+# The held meeting walked again: leader, title, held names, why, round, rounds,
+# and the round's result.
+CLASS_PARTY_MEET_RETRY_LINE = (
+    "class party: the meeting for %s's %s walked again after waiting out %s "
+    "(%s): walk %d of %d: %s"
+)
+# A held meeting that met on a retry: leader, title, round, rounds.
+CLASS_PARTY_MEET_RETRY_MET_LINE = "class party: the meeting for %s's %s met on retry %d of %d"
+# The invite written again after the leader fought: leader, title, leader, round,
+# rounds, and the rewritten invite's answer.
+CLASS_PARTY_BUSY_RETRY_LINE = (
+    "class party: the invite for %s's %s was written again after %s fought "
+    "(%d of %d): %s"
+)
+# An invite that formed the party on a retry: leader, title, round, rounds.
+CLASS_PARTY_BUSY_RETRY_FORMED_LINE = (
+    "class party: the invite for %s's %s formed on retry %d of %d"
+)
+
+
+def _log_class_party_busy_retry(run, verdict, retry: int) -> None:
+    """The leader-busy invite retry's line, written after the rewritten invite
+    answered and naming that answer, and its own line when the party formed
+    (#1332)."""
+    log.info(CLASS_PARTY_BUSY_RETRY_LINE, run.leader, run.title, run.leader,
+             retry, classparty.LEADER_BUSY_RETRIES, verdict.said)
+    if verdict.state == classparty.FORMED:
+        log.info(CLASS_PARTY_BUSY_RETRY_FORMED_LINE, run.leader, run.title,
+                 retry, classparty.LEADER_BUSY_RETRIES)
 DUNGEON_QUEST_CLAIMANT = "dungeon quests"
 
 # How often the leveling pass looks, and how long a leveling choice stands
@@ -18616,23 +18649,32 @@ class Bridge(discord.Client):
         after classparty.MEET_HELD_WAIT_SECONDS instead: the hold is transient
         (classquest backs the same refusal off), so failing the ask for it only
         makes the asker ask again (#1275). The members stay held on the board
-        all the while."""
+        all the while. A retried round's line is written once that round has
+        walked and been seen, with its result, and a retry that meets writes
+        its own line (#1332)."""
         board = self._class_board
         log.info(classparty.meet_line(run))
         held_rounds = 0
+        waited = None
         while True:
             run.walks.clear()
             arrived = await self._class_party_meet_walks(run)
             meeting = await self._class_party_meet_seen(run, arrived)
             held = classparty.meeting_held(run)
+            if waited is not None:
+                result = ("met" if meeting.met else
+                          "held again" if held else
+                          "not met: " + meeting.why)
+                log.info(CLASS_PARTY_MEET_RETRY_LINE, run.leader, run.title,
+                         ", ".join(waited[0]), waited[1], held_rounds,
+                         classparty.MEET_HELD_RETRIES, result)
+                if meeting.met:
+                    log.info(CLASS_PARTY_MEET_RETRY_MET_LINE, run.leader,
+                             run.title, held_rounds, classparty.MEET_HELD_RETRIES)
             if (not meeting.met and held
                     and held_rounds < classparty.MEET_HELD_RETRIES):
                 held_rounds += 1
-                log.info("class party: the meeting for %s's %s waits out %s "
-                         "(%s): walk %d of %d", run.leader, run.title,
-                         ", ".join(held),
-                         "; ".join(run.walks.get(n, "") for n in held),
-                         held_rounds, classparty.MEET_HELD_RETRIES)
+                waited = (held, "; ".join(run.walks.get(n, "") for n in held))
                 await asyncio.sleep(classparty.MEET_HELD_WAIT_SECONDS)
                 continue
             for name in meeting.lost:
@@ -18731,6 +18773,7 @@ class Bridge(discord.Client):
         row = guildcorps.Row("guild", classparty.up_command(run.helpers), "",
                              classparty.SOURCE)
         busy_retries = 0
+        busy_retry = False
         while True:
             row_id = await asyncio.to_thread(_insert_corps_row, run.leader, row)
             if not row_id:
@@ -18744,6 +18787,9 @@ class Bridge(discord.Client):
                 answer.get("result"))
             log.info("class party: party-up row %d for %s (%s): %s", row_id,
                      run.leader, row.command, verdict.said)
+            if busy_retry:
+                busy_retry = False
+                _log_class_party_busy_retry(run, verdict, busy_retries)
             if verdict.state == classparty.FORMED:
                 run.form(time.monotonic())
                 return True
@@ -18764,10 +18810,7 @@ class Bridge(discord.Client):
                 # the busy retries run out.
                 if busy_retries < classparty.LEADER_BUSY_RETRIES:
                     busy_retries += 1
-                    log.info("class party: %s is fighting; the invite for %s "
-                             "waits and is written again (%d of %d)",
-                             run.leader, run.title, busy_retries,
-                             classparty.LEADER_BUSY_RETRIES)
+                    busy_retry = True
                     await asyncio.sleep(classparty.LEADER_WAIT_SECONDS)
                     continue
                 board.fail(run.ask_id)

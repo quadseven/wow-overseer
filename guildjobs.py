@@ -4313,17 +4313,23 @@ def death_loop_first(
     FOOD FIRST, IN THE ZONE OR OUT OF IT (test_death_loop_food_first). While
     the loop is listed, a member short of food or drink with a vendor in
     reach (`supply`, the bridge's read) buys some before the hearth, and in
-    town after it before every other rung: a member with none never rests."""
+    town after it before every other rung: a member with none never rests.
+
+    A HELD FOOD WALK GIVES WAY (#1911). When the guild jobs walk wall
+    (job_walk_held) would refuse the supply step, the rungs go on without it:
+    in the loop's zone the hearth comes next in the same pass, and out of it
+    the pass plans as usual."""
     if loop is None:
         return None
     step, doing, _why = _supply_first(m, supply, recent, cap, kept, book)
-    if step is not None:
+    held = job_walk_held(m, step, recent) if step is not None else ""
+    if step is not None and not held:
         return step, doing, "", ""
     if not _in_loop_zone(m, loop):
         return None
     step = death_loop_hearth(m, loop, recent)
     if step is not None:
-        return step, step.said, "", ""
+        return step, step.said, held, ""
     step, doing, note = level_step(m, leveling, recent, cap, loop, campaign)
     if step is not None:
         return step, doing, note, ""
