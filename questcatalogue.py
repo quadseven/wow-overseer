@@ -57,6 +57,7 @@ FACTIONS = (HORDE, ALLIANCE, BOTH)
 QUESTS_SQL = (
     "SELECT t.ID AS quest, t.LogTitle AS title, t.QuestLevel AS level, "
     "t.MinLevel AS min_level, t.QuestSortID AS sort, t.AllowableRaces AS races, "
+    "t.StartItem AS provided_item, "
     + "".join(
         "t.RequiredItemId%d AS item%d, t.RequiredItemCount%d AS item_count%d, "
         % (i, i, i, i)
@@ -363,6 +364,7 @@ def load(read) -> tuple:
                             "id": item,
                             "count": int(source.get("item_count%d" % i) or 0),
                             "name": item_names.get(item, ""),
+                            "provided": int(source.get("provided_item") or 0) == item,
                             "droppers": sorted(drop_by_item.get(item, ())),
                             "rewards": sorted(reward_by_item.get(item, ())),
                             "vendors": sorted(vendor_by_item.get(item, ())),
