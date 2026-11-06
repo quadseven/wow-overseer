@@ -285,7 +285,7 @@ class SharedAndPersonalTest(unittest.TestCase):
 
 
 class BehindTest(unittest.TestCase):
-    def test_the_two_who_are_behind_are_the_two_evan_named(self):
+    def test_the_two_who_are_behind_are_the_two_the_operator_named(self):
         counts = {m.name: len(questbook.behind(m, FAMILY, CATALOG)) for m in FAMILY}
         self.assertEqual(counts["Grug"], 0)
         self.assertEqual(counts["Bork"], 0)

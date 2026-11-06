@@ -10,16 +10,19 @@ private copy to prove a shipped ticket's `sql:<SELECT ...>` Live line. It:
    same rule Loom applies before it calls this;
 2. opens `kubectl port-forward` to the realm database pod on a free local
    port kubectl picks, as the identity of the kubeconfig the station passes
-   (the read-only agent reader);
+   (the read-only agent reader); the namespace and pod come from
+   LIVE_EVIDENCE_NAMESPACE and LIVE_EVIDENCE_POD;
 3. runs the statement once with the mysql client from PATH as the
-   SELECT-only database user, with no password and no option files read,
+   SELECT-only database user named in LIVE_EVIDENCE_DB_USER, with no
+   password and no option files read,
    database acore_characters unless the statement names another;
 4. prints one line per row, `col=value` pairs separated by spaces (the
    client's batch escaping, so a row is always one line; NULL as NULL);
 5. always ends the port-forward, on success, error, timeout or SIGTERM.
 
 Exit 0 with at least one row, 1 with none, 2 on any error (a refused
-statement, a missing kubectl or mysql, a port-forward that never opened, a
+statement, an unset or malformed LIVE_EVIDENCE_* variable, a missing
+kubectl or mysql, a port-forward that never opened, a
 client error, a deadline passed). Diagnostics go to stderr only.
 """
 
@@ -34,10 +37,20 @@ import sys
 import threading
 import time
 
-NAMESPACE = "wow-dev"
-POD = "mysql-0"
+# The deployment's own names, from the environment the station passes (it
+# hands an adapter only the variables LOOM_LIVE_EVIDENCE_PASS_ENV names).
+# Nothing is guessed: an unset or malformed one is an error naming it.
+TARGET_ENV = (
+    ("namespace", "LIVE_EVIDENCE_NAMESPACE"),
+    ("pod", "LIVE_EVIDENCE_POD"),
+    ("user", "LIVE_EVIDENCE_DB_USER"),
+)
+_TARGET_RE = {
+    "namespace": re.compile(r"^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$"),
+    "pod": re.compile(r"^[a-z0-9](?:[-.a-z0-9]{0,251}[a-z0-9])?$"),
+    "user": re.compile(r"^[A-Za-z0-9_]{1,32}$"),
+}
 DB_PORT = 3306
-DB_USER = "agent_reader"
 DATABASE = "acore_characters"
 LOCAL = "127.0.0.1"
 # Under the manifest's 60 second timeout, so this script reports its own
@@ -92,6 +105,24 @@ def refusal(statement: str) -> str:
     return "only one read-only SELECT or SHOW runs"
 
 
+def target(env) -> dict:
+    """{"namespace", "pod", "user"} from `env`, each checked against the
+    shape a Kubernetes name or a MySQL user takes."""
+    missing = [name for _, name in TARGET_ENV if not env.get(name)]
+    if missing:
+        raise ReadError(
+            "%s not set; give the station each one and name it in "
+            "LOOM_LIVE_EVIDENCE_PASS_ENV" % ", ".join(missing)
+        )
+    found = {}
+    for key, name in TARGET_ENV:
+        value = env[name]
+        if not _TARGET_RE[key].match(value):
+            raise ReadError("%s is not a valid %s name" % (name, key))
+        found[key] = value
+    return found
+
+
 def tool(name: str) -> str:
     found = shutil.which(name)
     if found is None:
@@ -104,7 +135,7 @@ def _drain(stream, sink) -> None:
         sink.append(raw.decode("utf-8", "replace").rstrip("\n"))
 
 
-def open_forward(kubectl: str):
+def open_forward(kubectl: str, namespace: str, pod: str):
     """(the port-forward process, the local port it listens on). The child
     stays in this script's process group, so the station's timeout, which
     ends the group, ends it too."""
@@ -112,9 +143,9 @@ def open_forward(kubectl: str):
         [
             kubectl,
             "-n",
-            NAMESPACE,
+            namespace,
             "port-forward",
-            "pod/" + POD,
+            "pod/" + pod,
             ":%d" % DB_PORT,
             "--address",
             LOCAL,
@@ -137,7 +168,7 @@ def open_forward(kubectl: str):
         time.sleep(0.05)
     close_forward(process)
     why = (err[-1:] or ["no message"])[0]
-    raise ReadError("the port-forward to %s/%s did not open (%s)" % (NAMESPACE, POD, why))
+    raise ReadError("the port-forward to %s/%s did not open (%s)" % (namespace, pod, why))
 
 
 def close_forward(process) -> None:
@@ -165,7 +196,7 @@ def rows_of(batch: str):
     return out
 
 
-def run_query(mysql: str, port: int, statement: str):
+def run_query(mysql: str, port: int, user: str, statement: str):
     env = {k: v for k, v in os.environ.items() if not k.startswith("MYSQL")}
     argv = [
         mysql,
@@ -173,7 +204,7 @@ def run_query(mysql: str, port: int, statement: str):
         "--protocol=TCP",
         "--host=" + LOCAL,
         "--port=%d" % port,
-        "--user=" + DB_USER,
+        "--user=" + user,
         "--database=" + DATABASE,
         "--connect-timeout=10",
         "--batch",
@@ -209,9 +240,10 @@ def main(argv) -> int:
     signal.signal(signal.SIGTERM, _terminated)
     forward = None
     try:
+        names = target(os.environ)
         kubectl, mysql = tool("kubectl"), tool("mysql")
-        forward, port = open_forward(kubectl)
-        rows = run_query(mysql, port, statement)
+        forward, port = open_forward(kubectl, names["namespace"], names["pod"])
+        rows = run_query(mysql, port, names["user"], statement)
     except (ReadError, OSError) as err:
         return fail(str(err))
     finally:

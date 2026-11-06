@@ -381,9 +381,17 @@ class SqlAdapterTest(unittest.TestCase):
     STATEMENT = "SELECT name, level FROM characters WHERE level >= 60 LIMIT 2"
     ROWS = "name\tlevel\nZug\t60\nUzza\t61\n"
 
+    # Placeholder names: the deployment's real ones live in the station's
+    # environment, never in this public repo.
+    TARGET = {
+        "LIVE_EVIDENCE_NAMESPACE": "example-realm",
+        "LIVE_EVIDENCE_POD": "example-db-0",
+        "LIVE_EVIDENCE_DB_USER": "example_reader",
+    }
+
     def fakes(self, **extra):
         fakes = Fakes(self, {"kubectl": FAKE_KUBECTL, "mysql": FAKE_MYSQL})
-        return fakes, fakes.env(**extra)
+        return fakes, fakes.env(**{**self.TARGET, **extra})
 
     def test_prints_one_line_per_row_and_closes_the_forward(self):
         fakes, env = self.fakes(FAKE_ROWS=self.ROWS)
@@ -401,9 +409,9 @@ class SqlAdapterTest(unittest.TestCase):
             [
                 "kubectl",
                 "-n",
-                "wow-dev",
+                "example-realm",
                 "port-forward",
-                "pod/mysql-0",
+                "pod/example-db-0",
                 ":3306",
                 "--address",
                 "127.0.0.1",
@@ -412,7 +420,7 @@ class SqlAdapterTest(unittest.TestCase):
         self.assertEqual(mysql[0:2], ["mysql", "--no-defaults"])
         self.assertIn("--port=43123", mysql)
         self.assertIn("--host=127.0.0.1", mysql)
-        self.assertIn("--user=agent_reader", mysql)
+        self.assertIn("--user=example_reader", mysql)
         self.assertIn("--database=acore_characters", mysql)
         self.assertIn("--execute=" + self.STATEMENT, mysql)
         self.assertFalse([arg for arg in mysql if arg.startswith(("-p", "--password"))])
@@ -459,9 +467,27 @@ class SqlAdapterTest(unittest.TestCase):
         process.stderr.close()
         self.assertTrue(fakes.wait_dead(pid), "the port-forward outlived a SIGTERM")
 
+    def test_an_unset_target_is_named_and_runs_nothing(self):
+        for name in self.TARGET:
+            fakes, env = self.fakes(FAKE_ROWS=self.ROWS)
+            del env[name]
+            done = run(SQL, [self.STATEMENT], env)
+            self.assertEqual(done.returncode, 2, name)
+            self.assertIn(name + " not set", done.stderr)
+            self.assertIn("LOOM_LIVE_EVIDENCE_PASS_ENV", done.stderr)
+            self.assertEqual(fakes.recorded(), [], name)
+
+    def test_a_malformed_target_is_named_and_runs_nothing(self):
+        for name in self.TARGET:
+            fakes, env = self.fakes(FAKE_ROWS=self.ROWS, **{name: "-x; y"})
+            done = run(SQL, [self.STATEMENT], env)
+            self.assertEqual(done.returncode, 2, name)
+            self.assertIn(name + " is not a valid", done.stderr)
+            self.assertEqual(fakes.recorded(), [], name)
+
     def test_missing_mysql_client_says_so_and_runs_nothing(self):
         fakes = Fakes(self, {"kubectl": FAKE_KUBECTL})
-        done = run(SQL, [self.STATEMENT], fakes.env())
+        done = run(SQL, [self.STATEMENT], fakes.env(**self.TARGET))
         self.assertEqual(done.returncode, 2)
         self.assertIn("`mysql` is not on PATH", done.stderr)
         self.assertEqual(fakes.recorded(), [])
@@ -520,21 +546,19 @@ class ReadOnlyTextTest(unittest.TestCase):
             self.assertNotIn("os.system", text, path)
             self.assertNotIn("shell=True", text, path)
             # Every kubectl argv the script builds names one read-only verb.
-            for verbs in re.findall(r'"-n",\s*NAMESPACE,\s*"([a-z-]+)"', text):
+            for verbs in re.findall(r'"-n",\s*namespace,\s*"([a-z-]+)"', text):
                 self.assertNotRegex(verbs, writes, path)
         self.assertNotIn(
             '"kubectl"', self.read(LOG), "the log adapter reads only through realm-logs"
         )
         self.assertEqual(
-            re.findall(r'"-n",\s*NAMESPACE,\s*"([a-z-]+)"', self.read(SQL)),
+            re.findall(r'"-n",\s*namespace,\s*"([a-z-]+)"', self.read(SQL)),
             ["port-forward"],
         )
 
     def test_only_the_select_only_reader_without_a_password(self):
         text = self.read(SQL)
-        self.assertEqual(
-            re.findall(r'^DB_USER = "([^"]*)"', text, re.M), ["agent_reader"]
-        )
+        self.assertIn('"LIVE_EVIDENCE_DB_USER"', text)
         self.assertEqual(text.count("--user="), 1)
         self.assertNotIn("--password", text)
         self.assertNotRegex(text, r'"-p|"-u')

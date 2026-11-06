@@ -152,7 +152,7 @@ class DedicatedChannelTest(unittest.TestCase):
         out = parse_directive("job farm", ME, ALLOWED, dedicated=True)
         self.assertEqual(out, [JobDirective(mode="farm", source="discord:1000")])
 
-    def test_evans_own_sentence_is_recognised(self):
+    def test_the_operators_own_sentence_is_recognised(self):
         from core import JobDirective
 
         out = parse_directive("its farming time", ME, ALLOWED, dedicated=True)
