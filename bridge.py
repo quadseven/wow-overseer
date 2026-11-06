@@ -17820,7 +17820,9 @@ class Bridge(discord.Client):
         facts = dict(facts, class_book=self._class_book_for_plan(facts))
         gear = await self._job_gear_offers(members, facts["recent"])
         # Food and drink for a member with none (restsupply.py).
-        supply = await self._job_supply_offers(members, facts["recent"])
+        # A member in a death loop is read first (guildjobs.supply_reads).
+        supply = await self._job_supply_offers(
+            members, facts["recent"], facts.get("death_loops"))
         bags = (await self._job_bag_steps(members, facts["recent"], busy, cap)
                 if spawn_walks else {})
         # A hunter's first pet (hunterpet.py): the beasts around each hunter
@@ -18043,17 +18045,18 @@ class Bridge(discord.Client):
         _log_capped("guild bags", notes)
         return steps
 
-    async def _job_supply_offers(self, members, recent) -> dict:
+    async def _job_supply_offers(self, members, recent, loops=None) -> dict:
         """name -> the food and drink sold in reach, for members short of them
         (restsupply.wanted): online, alive, out of combat, placed and off the
-        supply cooldown, at most GUILD_SUPPLY_READS_PER_PASS of them in turn."""
+        supply cooldown, at most GUILD_SUPPLY_READS_PER_PASS of them in turn,
+        the members in a death loop (`loops`) first (guildjobs.supply_reads)."""
         wanted = [m.name for m in members
                   if m.online and m.alive and not m.in_combat
                   and m.map_id is not None and m.x is not None and m.y is not None
                   and restsupply.wanted(m)
                   and not guildjobs._cooling(m, restsupply.ACTION, recent)]
-        chosen, self._supply_read_offset = guildjobs.rotate_reads(
-            wanted, getattr(self, "_supply_read_offset", 0),
+        chosen, self._supply_read_offset = guildjobs.supply_reads(
+            wanted, set(loops or ()), getattr(self, "_supply_read_offset", 0),
             GUILD_SUPPLY_READS_PER_PASS)
         by_name = {m.name: m for m in members}
         offers = {}

@@ -1860,6 +1860,25 @@ def rotate_reads(names, offset, limit):
     return chosen, (start + limit) % len(names)
 
 
+def supply_reads(names, looped, offset, limit):
+    """(the food vendor reads this pass, the offset for the next pass): the
+    members in a death loop (`looped`) first, then rotate_reads over the rest
+    for the reads left. More loopers than reads rotate among themselves.
+
+    A member in a death loop with no food dies again before the rotation (12
+    reads a pass over about 120 hungry members) comes back to it, and a read
+    only buys food while a vendor stands in reach, as it does in town just
+    after the loop's hearth (test_death_loop_food_first)."""
+    names = list(names)
+    first = [n for n in names if n in looped]
+    if len(first) >= limit:
+        return rotate_reads(first, offset, limit)
+    rest, offset = rotate_reads(
+        [n for n in names if n not in looped], offset, limit - len(first)
+    )
+    return first + rest, offset
+
+
 def friendly_vendor_rows(member, vendor_rows) -> list:
     """The rows of vendors whose faction will deal with this member.
 
@@ -3993,8 +4012,13 @@ def _member_step(
 
     A member that has stood on one spot for standstill.STILL_MINUTES
     (`still_for`) with nothing asked of it hearths home before anything else
-    is asked (stood_still_step)."""
-    found = death_loop_first(m, loop, leveling, recent, cap, campaign)
+    is asked (stood_still_step).
+
+    The death loop's rung buys food first while the loop is listed, in its
+    zone or in town after the hearth (death_loop_first)."""
+    found = death_loop_first(
+        m, loop, leveling, recent, cap, campaign, supply, kept, classes
+    )
     if found is not None:
         return found
     found, quest_note = _quest_first(
@@ -4244,7 +4268,9 @@ def death_loop_hearth(m, loop, recent):
     )
 
 
-def death_loop_first(m, loop, leveling, recent, cap, campaign=""):
+def death_loop_first(
+    m, loop, leveling, recent, cap, campaign="", supply=None, kept=None, book=None
+):
     """(the member's step as _member_step returns it), or None: the way out of
     the zone a member keeps dying in (deathloop.Loop), ahead of every quest.
 
@@ -4253,7 +4279,17 @@ def death_loop_first(m, loop, leveling, recent, cap, campaign=""):
     start, no step at all, so no quest or grind of that zone is planned for it.
     Out of the zone, None: the pass plans as usual, and its level walk never
     chooses the loop's zone (level_step). The loop clears by itself
-    (deathloop.loops), and the planning with it."""
+    (deathloop.loops), and the planning with it.
+
+    FOOD FIRST, IN THE ZONE OR OUT OF IT (test_death_loop_food_first). While
+    the loop is listed, a member short of food or drink with a vendor in
+    reach (`supply`, the bridge's read) buys some before the hearth, and in
+    town after it before every other rung: a member with none never rests."""
+    if loop is None:
+        return None
+    step, doing, _why = _supply_first(m, supply, recent, cap, kept, book)
+    if step is not None:
+        return step, doing, "", ""
     if not _in_loop_zone(m, loop):
         return None
     step = death_loop_hearth(m, loop, recent)
