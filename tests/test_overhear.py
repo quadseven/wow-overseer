@@ -1,10 +1,9 @@
 """The operator talking to the family in game rather than through Discord.
 
-He asked the same thing several ways - "how do i talk as grug suggesting to go
-to a town and sell and upgrade gear", and then, having typed exactly that into
-party chat: "i just asked for the sword that dropped with +4 stamina and they
-arent listening". Nothing was listening. The only ear the overseer had was a
-Discord channel.
+The operator asked how to speak as one character and suggest a trip to town to
+sell and upgrade gear, then typed an order for a dropped item into party chat
+and saw no response. Nothing was listening. The only ear the overseer had was
+a Discord channel.
 """
 
 import unittest
@@ -65,7 +64,7 @@ class AddressedTest(unittest.TestCase):
         row = _row(sender_is_bot=1, text="everyone go sell your junk and repair")
         self.assertFalse(overhear.is_addressed(row, family=FAMILY, authored=AUTHORED))
 
-    def test_a_stranger_is_not_giving_evans_orders(self):
+    def test_a_stranger_is_not_giving_the_operators_orders(self):
         self.assertFalse(
             overhear.is_addressed(
                 _row(sender_name="Thrall"), family=FAMILY, authored=AUTHORED
@@ -255,7 +254,7 @@ class WiringTest(unittest.TestCase):
         self.assertNotIn("ai_playerbot_texts", self.src)
 
     def test_the_relay_listens(self):
-        self.assertIn("_obey_evan_in_game", self._names("_relay_chat"))
+        self.assertIn("_obey_operator_in_game", self._names("_relay_chat"))
 
     def test_the_bridge_supplies_what_it_authored(self):
         """authored=set() means the bridge claims to have said nothing, and its
@@ -411,7 +410,7 @@ class WiringTest(unittest.TestCase):
             n
             for n in self.ast.walk(self.tree)
             if isinstance(n, self.ast.AsyncFunctionDef)
-            and n.name == "_obey_evan_in_game"
+            and n.name == "_obey_operator_in_game"
         )
         handlers = [
             n for n in self.ast.walk(fn) if isinstance(n, self.ast.ExceptHandler)

@@ -4,8 +4,11 @@ This repo is public and reusable (AGENTS.md). The regeneration recipes in
 `tools/` and the ship procedure in `docs/ROLLS.md` used to spell out one
 deployment's namespace, database pod and agent ServiceAccount in every
 `kubectl` line, two docstrings pointed into a private manifests tree by
-relative path, and `overhear.py` quoted the operator. These tests keep each
-of those from coming back without naming the old values themselves: every
+relative path, `overhear.py` quoted the operator, a bridge method and six
+test names carried the operator's first name, and the live-evidence SQL
+adapter held its namespace, pod and database user as literals. These tests
+keep each of those from coming back without naming the old values
+themselves: every
 `kubectl` namespace, exec target, copy source and token subject must be a
 shell placeholder, and the docs must say what each placeholder means.
 
@@ -21,6 +24,10 @@ import subprocess
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+# The operator's first name, spelled backwards so this file does not carry it.
+OPERATOR_NAME = "nave"[::-1]
+LIVE_EVIDENCE_SQL = ".loom/live-evidence/sql"
 
 KUBECTL_FILES = (
     "docs/ROLLS.md",
@@ -165,6 +172,96 @@ class NoPrivatePathsOrQuotes(unittest.TestCase):
                 re.search(r"\b(?:he|his|him)\b", doc, re.I),
                 "say the operator, not a pronoun that guesses at a person",
             )
+
+
+def _word_parts(text):
+    """Each word part, lowercased: snake_case, camelCase and plain words
+    split, so `obey_x_in_game`, `obeyX` and `X's` all yield `x`."""
+    return {p.lower() for p in re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])", text)}
+
+
+def _tracked_files():
+    out = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return [rel for rel in out.split("\0") if rel]
+
+
+class NoOperatorName(unittest.TestCase):
+    def test_word_parts_split_every_identifier_shape(self):
+        self.assertIn("ab", _word_parts("x_ab_y"))
+        self.assertIn("ab", _word_parts("xAbY"))
+        self.assertIn("abs", _word_parts("test_abs_own"))
+        self.assertNotIn("ab", _word_parts("Xaby"))
+
+    def test_no_tracked_file_names_the_operator(self):
+        # The submodule is another repo's tree and keeps its own rules.
+        named = []
+        for rel in _tracked_files():
+            if rel == "mod-overseer" or rel.startswith("mod-overseer/"):
+                continue
+            path = ROOT / rel
+            if not path.is_file():
+                continue
+            parts = _word_parts(path.read_bytes().decode("utf-8", "replace"))
+            if OPERATOR_NAME in parts or OPERATOR_NAME + "s" in parts:
+                named.append(rel)
+        self.assertEqual(named, [], "say the operator, not their name")
+
+
+class LiveEvidenceSqlHasNoTarget(unittest.TestCase):
+    """The SQL adapter reads its namespace, pod and database user from the
+    environment the station passes, never from a literal in the script."""
+
+    def setUp(self):
+        self.tree = ast.parse(_read(LIVE_EVIDENCE_SQL))
+
+    def test_no_constant_holds_a_target(self):
+        for node in ast.walk(self.tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in (
+                    "NAMESPACE",
+                    "POD",
+                    "DB_USER",
+                ):
+                    with self.subTest(name=target.id):
+                        self.assertNotIsInstance(node.value, ast.Constant)
+
+    def test_the_kubectl_and_mysql_arguments_are_not_literals(self):
+        argv = [
+            node
+            for node in ast.walk(self.tree)
+            if isinstance(node, ast.List)
+            and any(
+                isinstance(e, ast.Constant) and e.value == "port-forward"
+                for e in node.elts
+            )
+        ]
+        self.assertEqual(len(argv), 1, "one port-forward argv")
+        elts = argv[0].elts
+        index = next(
+            i
+            for i, e in enumerate(elts)
+            if isinstance(e, ast.Constant) and e.value == "-n"
+        )
+        self.assertNotIsInstance(elts[index + 1], ast.Constant, "the namespace")
+        joined = [
+            node
+            for node in ast.walk(self.tree)
+            if isinstance(node, ast.BinOp)
+            and isinstance(node.left, ast.Constant)
+            and node.left.value in ("pod/", "--user=")
+        ]
+        self.assertEqual(sorted(n.left.value for n in joined), ["--user=", "pod/"])
+        for node in joined:
+            with self.subTest(prefix=node.left.value):
+                self.assertNotIsInstance(node.right, ast.Constant)
 
 
 class TrackedOutputIsDocumented(unittest.TestCase):

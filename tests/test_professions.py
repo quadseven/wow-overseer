@@ -195,7 +195,7 @@ class RosterTest(unittest.TestCase):
                 len(professions.assigned(name)), professions.MAX_PRIMARY, name
             )
 
-    def test_the_assignment_is_exactly_what_evan_wrote(self):
+    def test_the_assignment_is_exactly_what_the_operator_wrote(self):
         self.assertEqual(professions.assigned("Grug"), ("mining", "blacksmithing"))
         self.assertEqual(professions.assigned("Bork"), ("skinning", "leatherworking"))
         self.assertEqual(professions.assigned("Og"), ("tailoring", "enchanting"))

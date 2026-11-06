@@ -8443,13 +8443,12 @@ class Bridge(discord.Client):
                         # not end outcome reporting for every later order.
                         log.exception("outcome reply for row %s not sent", row_id)
 
-    async def _obey_evan_in_game(self, rows: list) -> None:
+    async def _obey_operator_in_game(self, rows: list) -> None:
         """Act on an order the operator typed in game rather than in Discord.
 
-        He is sitting at the keyboard playing one of these characters, so that
-        is the natural place to talk to them - and until now nothing was
-        listening: "i just asked for the sword that dropped with +4 stamina and
-        they arent listening".
+        The operator plays one of these characters at the keyboard, so party
+        chat is the natural place to talk to them, and before this nothing
+        listened there: an order typed in game went unanswered.
 
         Runs over the SAME rows the relay is about to post, so an order cannot
         be obeyed that the channel never saw, nor obeyed twice.
@@ -8486,9 +8485,8 @@ class Bridge(discord.Client):
         # the voice once, about who[0], and then apply that one answer to all
         # four - so Bork answered every order the operator ever gave (he is first
         # alphabetically), and the other three carried out a decision taken
-        # from Bork's level, Bork's zone and Bork's bags. The operator: "i want them
-        # all to answer to be honest, and it should all synthesize based on
-        # their own brain and needs based on what they are doing."
+        # from Bork's level, Bork's zone and Bork's bags. The operator asked for
+        # every member to answer, each deciding from its own state and needs.
         #
         # They may well pick DIFFERENT commands. That is the point of asking
         # them separately; a family that always agrees is one character.
@@ -8660,7 +8658,7 @@ class Bridge(discord.Client):
                 # arrive in Discord in the order they happened. Guarded inside
                 # the callee: _relay_chat was already at Elder's complexity cap
                 # and one more except here tips it over.
-                await self._obey_evan_in_game(rows)
+                await self._obey_operator_in_game(rows)
 
                 for post, ids in relay.format_batch(rows):
                     head = ids[0] if ids else 0

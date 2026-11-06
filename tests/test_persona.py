@@ -50,7 +50,7 @@ class PersonaTest(unittest.TestCase):
                 self.assertTrue(bond.char_class, name)
                 self.assertTrue(bond.gender, name)
 
-    def test_the_family_is_who_evan_says_it_is(self):
+    def test_the_family_is_who_the_operator_says_it_is(self):
         """Pinned against the live characters as of 2026-08-23."""
         self.assertEqual(
             {n: (b.gender, b.race, b.char_class) for n, b in bonds.FAMILY.items()},
