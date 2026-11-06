@@ -18006,15 +18006,7 @@ class Bridge(discord.Client):
         aims, moves, cohorts = pvpgear.gate(
             aims, moves, facts["seekers"], facts["minimums"], recent, facts["maps"])
         self._pvp_cohorts = cohorts
-        for cohort in cohorts:
-            log.info("pvp: cohort %s %s: %s", cohort.faction or "?", cohort.bracket,
-                     cohort.line)
-        for name, move in moves.items():
-            if move.holds:
-                held[name] = True
-            # A buyer crossing to its vendor is asked to no dungeon mid-crossing.
-            if move.kind == pvpgear.CROSS:
-                held[name] = True
+        _hold_pvp_members(held, moves, cohorts)
         self._pvp_pass = (aims, moves)
         if aims:
             log.info("pvp: %d member(s) playing for an upgrade: %s", len(aims),
@@ -32776,6 +32768,21 @@ def _pvp_list_rows(cur, ids) -> dict:
         for row in cur.fetchall():
             _PVP_LIST_ROWS[int(row["Item"])] = dict(row)
     return {i: _PVP_LIST_ROWS[i] for i in ids if i in _PVP_LIST_ROWS}
+
+
+def _hold_pvp_members(held: dict, moves: dict, cohorts) -> None:
+    """Log each cohort's count and remember the members the PvP pass holds
+    (`held`, in place): inside a battleground or its queue, or crossing to
+    its vendor (#603), who the guild social pass asks to no dungeon."""
+    for cohort in cohorts:
+        log.info("pvp: cohort %s %s: %s", cohort.faction or "?", cohort.bracket,
+                 cohort.line)
+    for name, move in moves.items():
+        if move.holds:
+            held[name] = True
+        # A buyer crossing to its vendor is asked to no dungeon mid-crossing.
+        if move.kind == pvpgear.CROSS:
+            held[name] = True
 
 
 def _pvp_crossings(rows, family_rows, busy, recent) -> dict:
