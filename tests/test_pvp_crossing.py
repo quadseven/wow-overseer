@@ -184,7 +184,7 @@ class TheGate(unittest.TestCase):
     def test_a_family_idle_in_town(self):
         rows = [
             {"name": "Lead", "job": "town run", "snapshot_map": EASTERN_KINGDOMS},
-            {"name": "Mend", "job": "craft", "snapshot_map": None},
+            {"name": "Mend", "job": "craft", "snapshot_map": KALIMDOR},
         ]
         self.assertTrue(pvpgear.family_idle_in_town(rows))
 
@@ -196,10 +196,41 @@ class TheGate(unittest.TestCase):
                 {"name": "Lead", "job": "town run", "snapshot_map": 36}
             ],
             "no family read": [],
+            # #1921: a member whose snapshot is unread may be anywhere.
+            "an unread snapshot": [
+                {"name": "Lead", "job": "town run", "snapshot_map": EASTERN_KINGDOMS},
+                {"name": "Mend", "job": "craft", "snapshot_map": None},
+            ],
         }
         for situation, rows in cases.items():
             with self.subTest(situation=situation):
                 self.assertFalse(pvpgear.family_idle_in_town(rows))
+
+    def test_the_gate_reads_the_buyers_family_not_its_whole_guild(self):
+        # #1921: two families share the guild Cave. The buyer's own family is
+        # idle in town; the other one is in a run, and does not shut its gate.
+        rows = [
+            {"name": "Auren", "family": "Lead", "guild_name": "Cave",
+             "job": "town run", "snapshot_map": EASTERN_KINGDOMS},
+            {"name": "Lead", "family": "Lead", "guild_name": "Cave",
+             "job": "craft", "snapshot_map": EASTERN_KINGDOMS},
+            {"name": "Mend", "family": "Lead", "guild_name": "Elsewhere",
+             "job": "town run", "snapshot_map": KALIMDOR},
+            {"name": "Zug", "family": "Zug", "guild_name": "Cave",
+             "job": "dungeon:deadmines", "snapshot_map": 36},
+            {"name": "Lone", "family": "", "guild_name": "Cave",
+             "job": "dungeon:deadmines", "snapshot_map": 36},
+        ]  # fmt: skip
+        mine = pvpgear.family_rows_for("Auren", "Cave", rows)
+        self.assertEqual(["Auren", "Lead", "Mend"], [r["name"] for r in mine])
+        self.assertTrue(pvpgear.family_idle_in_town(mine))
+        theirs = pvpgear.family_rows_for("Zug", "Cave", rows)
+        self.assertEqual(["Zug"], [r["name"] for r in theirs])
+        # A buyer off the roster reads the family with the most members in
+        # its guild (families.guilds), and none where no family plays.
+        stray = pvpgear.family_rows_for("Stray", "Cave", rows)
+        self.assertEqual(["Auren", "Lead", "Mend"], [r["name"] for r in stray])
+        self.assertEqual([], pvpgear.family_rows_for("Stray", "Nowhere", rows))
 
     def test_the_dock_is_shut_by_a_wall_or_a_cooling_refusal(self):
         wall = "no transport the module knows sails from this map to that map for this faction"
@@ -259,6 +290,24 @@ class ThePlan(unittest.TestCase):
         self.assertIn("Auren", aims)
         self.assertEqual([], cross_steps(plan))
         self.assertEqual((), plan.steps)
+
+    def test_a_dock_another_crossing_holds_waits_and_holds_nothing(self):
+        # #1921: a class quest's crossing 5 minutes old keeps the clock
+        # (guildjobs.crossing_cooling), so no crossing row is written this
+        # pass and the buyer is not held from mail, levelling or crafting.
+        cooling = pvpgear.Crossing(True, True, True, cooling=True)
+        move = pvpgear.next_move(buyer_aim(), EASTERN_KINGDOMS, False, (), cooling)
+        self.assertEqual(pvpgear.ACROSS, move.kind)
+        self.assertFalse(move.keeps)
+        other = cross_row(5, action="classquest-cross")
+        aims, plan = plan_for(cooling, recent=(other,))
+        self.assertIn("Auren", aims)
+        self.assertEqual([], cross_steps(plan))
+        step, _doing, held = guildjobs._pvp_first(
+            job_member(), (aims["Auren"], move), (other,), 0.0
+        )
+        self.assertIsNone(step)
+        self.assertFalse(held)
 
     def test_the_crossing_shares_every_crossings_clock(self):
         self.assertIn(pvpgear.CROSS_ACTION, guildjobs.CROSS_ACTIONS)
@@ -332,9 +381,16 @@ class TheWiring(unittest.TestCase):
             "guildjobs.class_walls(name, recent)",
             "guildjobs.CROSS_ACTIONS",
             "guildjobs.pvp_walk_cooldown(name, recent) == 0",
+            "pvpgear.family_rows_for(",
+            "cooling=guildjobs.crossing_cooling(name, recent) and not under_way",
         ):
             with self.subTest(fact=fact):
                 self.assertIn(fact, body)
+
+    def test_the_family_read_carries_the_rosters_family(self):
+        start = BRIDGE.index("_PVP_FAMILY_SQL = (")
+        sql = BRIDGE[start : BRIDGE.index(")\n", start)]
+        self.assertIn("r.family", sql)
 
 
 if __name__ == "__main__":
