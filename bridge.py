@@ -17996,22 +17996,20 @@ class Bridge(discord.Client):
         if not wanted:
             return {}
         facts = await asyncio.to_thread(
-            _fetch_pvp_facts, [m.name for m in wanted], set(busy or ()))
+            _fetch_pvp_facts, [m.name for m in wanted], set(busy or ()), recent)
         aims = pvpgear.plan_aims(facts["seekers"])
+        # A buyer with the honor crosses to its vendor's continent only through
+        # its gate (#603, pvpgear.Crossing): idle in town, dock and vendor open.
         moves = {
             name: pvpgear.next_move(aim, facts["maps"].get(name),
-                                    aim.entry in facts["carried"].get(name, ()), recent)
+                                    aim.entry in facts["carried"].get(name, ()), recent,
+                                    facts["crossings"].get(name))
             for name, aim in aims.items()
         }
         aims, moves, cohorts = pvpgear.gate(
             aims, moves, facts["seekers"], facts["minimums"], recent, facts["maps"])
         self._pvp_cohorts = cohorts
-        for cohort in cohorts:
-            log.info("pvp: cohort %s %s: %s", cohort.faction or "?", cohort.bracket,
-                     cohort.line)
-        for name, move in moves.items():
-            if move.holds:
-                held[name] = True
+        _hold_pvp_members(held, moves, cohorts)
         self._pvp_pass = (aims, moves)
         if aims:
             log.info("pvp: %d member(s) playing for an upgrade: %s", len(aims),
@@ -32712,6 +32710,18 @@ _PVP_MEMBERS_SQL = (
     "AND s.updated_at > NOW() - INTERVAL 120 SECOND "
     "WHERE c.name IN ({holes})"
 )
+# The roster's families by guild, each row's job and where it stands (#603): a
+# buyer crosses to its vendor only while its guild's family is idle in town
+# (pvpgear.family_idle_in_town).
+_PVP_FAMILY_SQL = (
+    "SELECT r.name, r.job, g.name AS guild_name, s.map_id AS snapshot_map "
+    "FROM overseer_roster r JOIN characters c ON c.name = r.name "
+    "JOIN guild_member gm ON gm.guid = c.guid "
+    "JOIN guild g ON g.guildid = gm.guildid "
+    "LEFT JOIN overseer_snapshot s ON s.name COLLATE utf8mb4_unicode_ci = r.name "
+    "AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "WHERE r.enabled = 1"
+)
 # A PvP item a member holds anywhere but on its body: bought, not yet worn.
 _PVP_CARRIED_SQL = (
     "SELECT c.name, ii.itemEntry AS entry FROM characters c "
@@ -32763,14 +32773,57 @@ def _pvp_list_rows(cur, ids) -> dict:
     return {i: _PVP_LIST_ROWS[i] for i in ids if i in _PVP_LIST_ROWS}
 
 
-def _fetch_pvp_facts(names: list, busy=()) -> dict:
+def _hold_pvp_members(held: dict, moves: dict, cohorts) -> None:
+    """Log each cohort's count and remember the members the PvP pass holds
+    (`held`, in place): inside a battleground or its queue, or crossing to
+    its vendor (#603), who the guild social pass asks to no dungeon."""
+    for cohort in cohorts:
+        log.info("pvp: cohort %s %s: %s", cohort.faction or "?", cohort.bracket,
+                 cohort.line)
+    for name, move in moves.items():
+        if move.holds:
+            held[name] = True
+        # A buyer crossing to its vendor is asked to no dungeon mid-crossing.
+        if move.kind == pvpgear.CROSS:
+            held[name] = True
+
+
+def _pvp_crossings(rows, family_rows, busy, recent) -> dict:
+    """name -> pvpgear.Crossing, each member's gate for the crossing to its
+    vendor (#603). Idle in town: in no run, step or walk (`busy`) and its
+    guild's family idle in town, or its own crossing already under way. The
+    dock: no wall the module named for the far continent and no refusal still
+    cooling (guildjobs.class_walls, the CROSS_ACTIONS rows). The vendor: its
+    last walk to a PvP vendor did not fail (guildjobs.pvp_walk_cooldown)."""
+    families: dict = {}
+    for r in family_rows or ():
+        families.setdefault(str(r.get("guild_name") or ""), []).append(r)
+    out = {}
+    for row in rows or ():
+        name = str(row["name"])
+        crossings = [r for r in recent or ()
+                     if r.name == name and r.action in guildjobs.CROSS_ACTIONS]
+        idle = name not in busy and pvpgear.family_idle_in_town(
+            families.get(str(row.get("guild_name") or ""), ()))
+        out[name] = pvpgear.Crossing(
+            idle or pvpgear.crossing_under_way(crossings),
+            pvpgear.dock_reachable(pvpgear.other_continent(row.get("snapshot_map")),
+                                   guildjobs.class_walls(name, recent), crossings),
+            guildjobs.pvp_walk_cooldown(name, recent) == 0)
+    return out
+
+
+def _fetch_pvp_facts(names: list, busy=(), recent=()) -> dict:
     """pvpgear's facts for these members: a Seeker each (pvpgear.
-    seekers_from_rows), where each stands (the snapshot's map) and the PvP
-    items each holds off its body."""
+    seekers_from_rows), where each stands (the snapshot's map), the PvP
+    items each holds off its body, and each one's gate for the crossing to
+    its vendor (_pvp_crossings, #603)."""
     holes = ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(_PVP_MEMBERS_SQL.format(holes=holes), names)  # noqa: S608 - placeholders only
         rows = list(cur.fetchall())
+        cur.execute(_PVP_FAMILY_SQL)
+        family_rows = list(cur.fetchall())
         cur.execute(guildsocial.WORN_SQL.format(holes=holes), names)  # noqa: S608 - placeholders only
         worn = list(cur.fetchall())
         cur.execute(guildsocial.SKILLS_SQL.format(holes=holes), names)  # noqa: S608 - placeholders only
@@ -32787,11 +32840,14 @@ def _fetch_pvp_facts(names: list, busy=()) -> dict:
             for row in cur.fetchall():
                 carried.setdefault(str(row["name"]), set()).add(int(row["entry"]))
     gear = guildsocial.gear_by_name(rows, worn, skills)
+    crossings = _pvp_crossings(rows, family_rows, set(busy or ()), recent)
     return {
-        "seekers": pvpgear.seekers_from_rows(rows, gear, list_rows, offers, busy),
+        "seekers": pvpgear.seekers_from_rows(rows, gear, list_rows, offers, busy,
+                                             crossings),
         "minimums": minimums,
         "maps": {str(r["name"]): r.get("snapshot_map") for r in rows},
         "carried": carried,
+        "crossings": crossings,
     }
 
 
