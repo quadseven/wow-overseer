@@ -183,6 +183,42 @@ def stacks_from_rows(rows) -> list:
     return out
 
 
+def material_surplus(
+    rows, names, *, over_target=None, eats=None, keep=disposition.MATERIAL_KEEP
+) -> frozenset:
+    """guids of the named materials each holder carries past what it keeps.
+
+    A material the guild still wants keeps `disposition.MATERIAL_KEEP` per
+    holder, as before. A material the guild holds PAST ITS TARGET
+    (bankforecast's `over_target`) keeps only what the holder's own current
+    rung eats (`eats`: entry -> {member: units}), and never less than the one
+    stack `disposition` always keeps.
+
+    WHY THE CAP GIVES WAY PAST THE TARGET (#747). Measured on the dev realm
+    2026-10-26: the guild held 3371 Linen Cloth against a target of 598,
+    spread about 47 to a member, so no holder ever passed the cap of 120 and
+    not one stack reached the auction house however far past the target the
+    guild was. The cap guards a crafter's stock for a guild that needs it; a
+    guild past its target does not.
+    """
+    over = over_target or {}
+    groups: dict = {}
+    for row in rows or ():
+        try:
+            key = (str(row.get("holder", "")), int(row["entry"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        groups.setdefault(key, []).append(row)
+    out: set = set()
+    for (holder, entry), held in groups.items():
+        cap = keep
+        if entry in over:
+            rung = ((eats or {}).get(entry) or {}).get(holder, 0)
+            cap = min(keep, max(0, int(rung or 0)))
+        out |= disposition.material_surplus(held, names, cap)
+    return frozenset(out)
+
+
 def can_learn_now(stack: Stack, person: Person) -> bool:
     """Has this person the recipe's trade at its rank today (#145)?"""
     return disposition.learnable_now(

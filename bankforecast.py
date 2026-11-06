@@ -297,6 +297,9 @@ class Forecast:
     fair: dict = field(default_factory=dict)
     # entry -> the members whose current rung eats more of it than they carry.
     short: dict = field(default_factory=dict)
+    # entry -> {member: units its current rung eats}: what a holder keeps of
+    # a material past the target (clearance.material_surplus).
+    eats: dict = field(default_factory=dict)
     # The guild's name, for the headline.
     guild: str = ""
     # Every entry the forecast judged: the vault's, the ladders' and what the
@@ -886,6 +889,11 @@ def plan(
         acc.over,
         acc.fair,
         _short(need_of, carried),
+        eats={
+            entry: dict(need.by_member)
+            for entry, need in need_of.items()
+            if need.by_member
+        },
         judged=frozenset(e for e in judged if e in items),
     )
 
