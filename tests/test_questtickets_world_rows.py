@@ -72,7 +72,7 @@ class WorldRows(unittest.TestCase):
         self.assertNotIn("no source in the world rows", text)
 
     def test_required_item_without_any_world_source_says_so(self):
-        row = quest_row(item1=1262, item_count1=1)
+        row = quest_row(item1=1262, item_count1=1, provided_item=1353)
         catalogue = self.catalogue(
             row,
             {
@@ -87,6 +87,23 @@ class WorldRows(unittest.TestCase):
         self.assertIn(
             "no source in the world rows", qt.body(116, catalogue[0], [], [], "")
         )
+
+    def test_quest_start_item_is_a_source_for_its_required_item(self):
+        row = quest_row(item1=1353, item_count1=1, provided_item=1353)
+        catalogue = self.catalogue(
+            row,
+            {
+                qc.ITEM_NAMES_SQL.format(ids="1353"): [
+                    {"entry": 1353, "name": "Shaw's Report"}
+                ],
+                qc.DROP_SQL.format(ids="1353"): [],
+                qc.REWARD_SQL.format(ids="1353"): [],
+                qc.VENDOR_SQL.format(ids="1353"): [],
+            },
+        )
+        text = qt.body(116, catalogue[0], [], [], "")
+        self.assertIn("provided when this quest is accepted", text)
+        self.assertNotIn("no source in the world rows", text)
 
     def test_kill_objective_lists_spawn_counts_in_quest_zone_and_total(self):
         row = quest_row(objective1=124, objective_count1=8)

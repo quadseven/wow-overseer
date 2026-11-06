@@ -228,6 +228,8 @@ def _world_rows(info) -> list[str]:
     for item in getattr(info, "items", ()):
         label = item["name"] or "item"
         source = []
+        if item.get("provided"):
+            source.append("provided when this quest is accepted")
         if item["droppers"]:
             source.append("creature entries " + ", ".join(map(str, item["droppers"])))
         if item["rewards"]:
