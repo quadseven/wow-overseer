@@ -23127,7 +23127,7 @@ class Bridge(discord.Client):
             log.exception("family intent: the choice for %s was not recorded",
                           campaignqueue._family(key))
         await _jev_override_recorded(
-            judgment, jev_family_intent.snapshot(facts, judgment.jev))
+            judgment, jev_family_intent.snapshot(facts, judgment.jev or judgment.heuristic))
         if judgment.pick:
             kind, target = jev_family_intent.pick_of(judgment.pick)
             written = await asyncio.to_thread(
@@ -26621,7 +26621,8 @@ def _score_recipient_outcomes() -> int:
 
 def _record_jev_override(judgment, before: dict) -> None:
     """One overseer_jev_outcome row for every disagreement, whichever side
-    acted, and a sample of agreements (jev_outcomes.record_args, #820)."""
+    acted, a sample of agreements, and, for the control kinds, every decision
+    the heuristic made with no model answer (jev_outcomes.record_args, #820)."""
     args = jev_outcomes.record_args(judgment, before, backend=JEV_ACTIVE_BACKEND)
     if args is None:
         return
