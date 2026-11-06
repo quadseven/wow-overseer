@@ -23,6 +23,7 @@ rotation (guildjobs.supply_reads).
 
 import unittest
 
+import classquest
 import deathloop
 import guildjobs
 import guildroute
@@ -47,7 +48,7 @@ def loop_of(zone=LOOP_ZONE):
     )
 
 
-def plan(m, loops=None, still=None, supply=None):
+def plan(m, loops=None, still=None, supply=None, recent=()):
     return guildjobs.plan(
         [m],
         masters={"Bonkers": "Zug"},
@@ -55,6 +56,28 @@ def plan(m, loops=None, still=None, supply=None):
         supply={NAME: BATES} if supply is None else supply,
         still=still or {},
         loops=loops or {},
+        recent=recent,
+    )
+
+
+def held_walk(age=3):
+    """The member's newest walk, a level walk the module refused because the
+    character is held by another verb, as the bridge reads it
+    (guildjobs.recent_from_rows)."""
+    return guildjobs.recent_from_rows(
+        (
+            {
+                "id": 800000 + age,
+                "source": guildjobs.source_for(guildjobs.guildlevel.ACTION, NAME),
+                "target_name": NAME,
+                "command": "walk-to-spawn creature:90001 max:%d"
+                % guildroute.FAR_WALK_YARDS,
+                "status": "error",
+                "result": '{"outcome":"refused","reason":"%s","retryable":true}'
+                % classquest.HELD_REASON,
+                "age": age,
+            },
+        )
     )
 
 
@@ -92,6 +115,46 @@ class FoodBeforeTheWayOut(unittest.TestCase):
         fed = member(food=restsupply.STACK, drink=restsupply.STACK)
         result = plan(fed, loops={NAME: loop_of()})
         self.assertEqual(actions(result), ["hearth"])
+
+
+class AHeldFoodWalkFallsBackToTheHearth(unittest.TestCase):
+    """#1911: the guild jobs walk wall (job_walk_held) refuses the supply step
+    of a member whose newest walk came back held. In the loop's zone the
+    hearth takes its place in the same pass; out of it the pass plans as
+    usual."""
+
+    def test_in_the_loop_zone_a_held_food_walk_gives_way_to_the_hearth(self):
+        result = plan(member(), loops={NAME: loop_of()}, recent=held_walk())
+        self.assertEqual(actions(result), ["hearth"])
+
+    def test_with_no_held_walk_the_food_still_comes_first(self):
+        found = guildjobs.death_loop_first(
+            member(), loop_of(), None, (), guildroute.FAR_WALK_YARDS, supply=BATES
+        )
+        self.assertEqual(found[0].action, restsupply.ACTION)
+
+    def test_in_the_loop_zone_the_held_way_out_is_the_hearth_step(self):
+        found = guildjobs.death_loop_first(
+            member(),
+            loop_of(),
+            None,
+            held_walk(),
+            guildroute.FAR_WALK_YARDS,
+            supply=BATES,
+        )
+        self.assertIsNotNone(found)
+        self.assertEqual(found[0].action, "hearth")
+
+    def test_out_of_the_loop_zone_a_held_food_walk_leaves_normal_planning(self):
+        found = guildjobs.death_loop_first(
+            member(zone_id=85),
+            loop_of(),
+            None,
+            held_walk(),
+            guildroute.FAR_WALK_YARDS,
+            supply=BATES,
+        )
+        self.assertIsNone(found)
 
 
 class LoopersAreReadFirst(unittest.TestCase):
