@@ -821,6 +821,8 @@ def _cooling(member: Member, action: str, recent) -> bool:
         minutes = train_cooldown(member.name, recent)
     elif action == "gear" and not last_gear_failed(member.name, recent):
         minutes = GEAR_SUCCESS_COOLDOWN_MINUTES
+    elif action == restsupply.ACTION and supply_walk_passed(member.name, recent):
+        minutes = min(minutes, LEVEL_TRANSIENT_RETRY_MINUTES)
     return any(
         r.name == member.name
         and r.action == action
@@ -866,6 +868,31 @@ def passing_train_row(r) -> bool:
     if r.status not in TRAIN_FAILED:
         return False
     return (r.refusal or r.reason) in PASSING_TRAIN_REASONS
+
+
+def supply_walk_passed(name, recent) -> bool:
+    """Whether this member's newest food trip (restsupply.ACTION) ended at
+    its walk for a passing reason (PASSING_TRAIN_REASONS: held, fighting,
+    flying) and nothing of it was served (test_supply_passing_refusal).
+
+    Its sell and buy rows then fail "vendor not in range" because the walk
+    never arrived, so the whole trip waits LEVEL_TRANSIENT_RETRY_MINUTES, not
+    the hour: a member that just revived is held still for its Resurrection
+    Sickness, and an hour's wait left it hungry, dying again."""
+    rows = [r for r in recent or () if r.name == name and r.action == restsupply.ACTION]
+    walks = [r for r in rows if _is_walk_row(r)]
+    if not walks:
+        return False
+    newest = min(walks, key=lambda r: int(r.age_minutes))
+    if (
+        newest.status != "error"
+        or (newest.refusal or newest.reason) not in PASSING_TRAIN_REASONS
+    ):
+        return False
+    return not any(
+        r.status != "error" and int(r.age_minutes) <= int(newest.age_minutes) + 1
+        for r in rows
+    )
 
 
 def _step_row_wait(r, minutes: int) -> int:
