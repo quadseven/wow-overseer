@@ -466,35 +466,43 @@ class ACarriedStackPastTheTargetReachesTheHouse(unittest.TestCase):
     def test_past_the_target_the_cap_gives_way_and_one_stack_stays(self):
         over = {LINEN: "the guild holds 3371 Linen Cloth against a target of 598"}
         surplus = clearance.material_surplus(
-            self.rows(), {"Linen Cloth"}, over_target=over
-        )
-        self.assertEqual(4, len(surplus))
-
-    def test_past_the_target_a_holder_keeps_what_its_own_rung_eats(self):
-        over = {LINEN: "past"}
-        surplus = clearance.material_surplus(
             self.rows(),
             {"Linen Cloth"},
             over_target=over,
-            eats={LINEN: {"Og": 60, "Totta": 100}},
+            release={LINEN: {"Og": 1000}},
+        )
+        self.assertEqual(4, len(surplus))
+
+    def test_past_the_target_a_holder_frees_only_its_allotment(self):
+        surplus = clearance.material_surplus(
+            self.rows(),
+            {"Linen Cloth"},
+            over_target={LINEN: "past"},
+            release={LINEN: {"Og": 40, "Totta": 100}},
         )
         self.assertEqual(2, len(surplus))
 
-    def test_the_forecast_names_what_each_rung_eats(self):
-        forecast = bf.plan(
-            linen_stacks(1),
-            {LINEN: LINEN_ITEM},
-            FAMILY + CREW,
-            {LINEN: 1114},
-            history=asks(LINEN, 729, 8),
-            house=2,
+    def test_an_allotment_short_of_a_whole_stack_frees_nothing(self):
+        surplus = clearance.material_surplus(
+            self.rows(),
+            {"Linen Cloth"},
+            over_target={LINEN: "past"},
+            release={LINEN: {"Og": 19}},
         )
-        self.assertEqual(74, forecast.eats[LINEN]["Og"])
+        self.assertEqual(frozenset(), surplus)
+
+    def test_past_the_target_with_no_allotment_only_the_cap_frees(self):
+        surplus = clearance.material_surplus(
+            self.rows(), {"Linen Cloth"}, over_target={LINEN: "past"}
+        )
+        self.assertEqual(frozenset(), surplus)
 
     def test_the_stack_is_routed_to_the_house_and_planned_as_a_sale(self):
         rows = self.rows()
         over = {LINEN: "the guild holds 3371 Linen Cloth against a target of 598"}
-        surplus = clearance.material_surplus(rows, {"Linen Cloth"}, over_target=over)
+        surplus = clearance.material_surplus(
+            rows, {"Linen Cloth"}, over_target=over, release={LINEN: {"Og": 80}}
+        )
         # The old keep cap alone would have listed nothing of these 100.
         self.assertEqual(
             frozenset(), disposition.material_surplus(rows, {"Linen Cloth"})
@@ -533,6 +541,57 @@ class ACarriedStackPastTheTargetReachesTheHouse(unittest.TestCase):
         self.assertEqual({"Linen Cloth"}, {s.candidate.label for s in sales})
 
 
+class OneSweepNeverTakesTheGuildBelowItsTarget(unittest.TestCase):
+    """#747 pre-ship review: the vault keeps only what the target asks beyond
+    the members' stock, so cutting every holder to its rung as well sold the
+    guild far below its target in one sweep."""
+
+    def forecast(self, carried, held, vault=10):
+        return bf.plan(
+            linen_stacks(vault),
+            {LINEN: LINEN_ITEM},
+            FAMILY + CREW,
+            {LINEN: held},
+            history=asks(LINEN, 729, 8),
+            house=2,
+            carried=carried,
+        )
+
+    def line(self, forecast):
+        return next(line for line in forecast.lines if line.entry == LINEN)
+
+    def test_members_give_up_at_most_what_they_hold_past_the_target(self):
+        carried = {"Grug": {LINEN: 400}, "Bork": {LINEN: 300}, "Totta": {LINEN: 300}}
+        forecast = self.forecast(carried, held=1000)
+        line = self.line(forecast)
+        self.assertIn(LINEN, forecast.over_target)
+        released = sum(forecast.release[LINEN].values())
+        self.assertEqual(1000 - line.target, released)
+        self.assertGreaterEqual(1000 - released, line.target)
+
+    def test_the_largest_pile_past_its_rung_gives_first(self):
+        carried = {"Grug": {LINEN: 900}, "Bork": {LINEN: 60}}
+        forecast = self.forecast(carried, held=960)
+        budget = 960 - self.line(forecast).target
+        self.assertGreater(budget, 0)
+        self.assertLessEqual(budget, 900)
+        self.assertEqual({"Grug": budget}, forecast.release[LINEN])
+
+    def test_members_inside_the_target_give_up_nothing(self):
+        carried = {"Grug": {LINEN: 40}, "Bork": {LINEN: 40}}
+        forecast = self.forecast(carried, held=80, vault=60)
+        self.assertGreater(self.line(forecast).target, 80)
+        self.assertIn(LINEN, forecast.over_target)
+        self.assertNotIn(LINEN, forecast.release)
+
+    def test_a_holder_never_gives_up_what_its_own_rung_eats(self):
+        need = bf.needs(FAMILY + CREW, ()).get(LINEN)
+        eats = need.by_member.get("Og", 0)
+        self.assertGreater(eats, 0)
+        release = bf._release(LINEN, 10_000, 0, need, {"Og": {LINEN: eats + 30}})
+        self.assertEqual({"Og": 30}, release)
+
+
 class TheBridgeAsksTheForecast(unittest.TestCase):
     SOURCE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
         encoding="utf-8"
@@ -561,7 +620,7 @@ class TheBridgeAsksTheForecast(unittest.TestCase):
     def test_clearance_lets_the_keep_cap_give_way_past_the_target(self):
         body = self.block("    async def _clearance_plan(")
         self.assertIn("clearance.material_surplus(", body)
-        self.assertIn("eats=forecast.eats", body)
+        self.assertIn("release=forecast.release", body)
         self.assertNotIn("disposition.material_surplus(", body)
 
     def test_the_module_ships(self):
