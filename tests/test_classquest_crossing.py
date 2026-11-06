@@ -17,6 +17,7 @@ import unittest
 
 import classquest
 import guildjobs
+import pvpgear
 from test_classquest import EASTERN, KALIMDOR, UNDEAD, book, class_plan, who
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
@@ -55,6 +56,20 @@ def crossing_row(name, age, status="applied", dest=KALIMDOR, reason=None, retry=
         "status": status,
         "age": age,
         "result": result,
+    }
+    return guildjobs.recent_from_rows([row])[0]
+
+
+def pvp_crossing_row(name, age):
+    """A young crossing row an honor buyer's PvP step wrote (pvpgear.CROSS_ACTION)."""
+    row = {
+        "id": 901,
+        "target_name": name,
+        "command": "cross-to-map map:%d" % KALIMDOR,
+        "source": guildjobs.source_for(pvpgear.CROSS_ACTION, name),
+        "status": "applied",
+        "age": age,
+        "result": "",
     }
     return guildjobs.recent_from_rows([row])[0]
 
@@ -154,6 +169,43 @@ class TheStep(unittest.TestCase):
 
     def test_a_member_with_an_unread_position_is_not_sent(self):
         self.assertEqual(cross_steps(class_plan([eastern(map_id=None)])), [])
+
+
+class ThePvpCrossing(unittest.TestCase):
+    """#1921: an honor buyer's crossing (pvpgear.CROSS_ACTION) does not hold a
+    class quest's crossing back, and the class quest comes first."""
+
+    def test_a_young_pvp_crossing_does_not_delay_the_class_quests(self):
+        recent = (pvp_crossing_row("Bigzug", 5),)
+        steps = cross_steps(class_plan([eastern()], recent=recent))
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0].action, classquest.ACTION)
+
+    def test_the_class_quests_clock_skips_only_the_pvp_rows(self):
+        own = (crossing_row("Bigzug", 5),)
+        pvp = (pvp_crossing_row("Bigzug", 5),)
+        self.assertTrue(guildjobs.class_crossing_cooling("Bigzug", own))
+        self.assertFalse(guildjobs.class_crossing_cooling("Bigzug", pvp))
+
+    def test_the_pvp_buyer_still_cools_on_every_crossing(self):
+        for row in (crossing_row("Bigzug", 5), pvp_crossing_row("Bigzug", 5)):
+            with self.subTest(source=row.action):
+                self.assertTrue(guildjobs.crossing_cooling("Bigzug", (row,)))
+
+    def test_a_class_crossing_due_goes_before_the_pvp_crossing(self):
+        aim = pvpgear.Aim(
+            "Bigzug", "Bonkers", 20, 19325, "Sentinel's Band", 300, 300,
+            pvpgear.BATTLEGROUNDS["wsg"], "Illiyana Moonblaze",
+            maps=frozenset({KALIMDOR}),
+        )  # fmt: skip
+        move = pvpgear.Move(pvpgear.CROSS, "crosses for the vendor", to_map=KALIMDOR)
+        result = class_plan([eastern()], pvp={"Bigzug": (aim, move)})
+        steps = cross_steps(result)
+        self.assertEqual([classquest.ACTION], [s.action for s in steps])
+        self.assertEqual(
+            steps[0].rows[0].source,
+            guildjobs.source_for(classquest.CROSS_ACTION, "Bigzug"),
+        )
 
 
 class TheWalls(unittest.TestCase):

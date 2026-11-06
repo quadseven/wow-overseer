@@ -32710,11 +32710,11 @@ _PVP_MEMBERS_SQL = (
     "AND s.updated_at > NOW() - INTERVAL 120 SECOND "
     "WHERE c.name IN ({holes})"
 )
-# The roster's families by guild, each row's job and where it stands (#603): a
-# buyer crosses to its vendor only while its guild's family is idle in town
-# (pvpgear.family_idle_in_town).
+# The roster's families, each row's family, guild, job and where it stands
+# (#603): a buyer crosses to its vendor only while its family is idle in town
+# (pvpgear.family_rows_for, pvpgear.family_idle_in_town; #1921).
 _PVP_FAMILY_SQL = (
-    "SELECT r.name, r.job, g.name AS guild_name, s.map_id AS snapshot_map "
+    "SELECT r.name, r.family, r.job, g.name AS guild_name, s.map_id AS snapshot_map "
     "FROM overseer_roster r JOIN characters c ON c.name = r.name "
     "JOIN guild_member gm ON gm.guid = c.guid "
     "JOIN guild g ON g.guildid = gm.guildid "
@@ -32784,6 +32784,8 @@ def _hold_pvp_members(held: dict, moves: dict, cohorts) -> None:
         if move.holds:
             held[name] = True
         # A buyer crossing to its vendor is asked to no dungeon mid-crossing.
+        # A CROSS move is made only when its row is written this pass or its
+        # own crossing is under way (pvpgear.Crossing.cooling, #1921).
         if move.kind == pvpgear.CROSS:
             held[name] = True
 
@@ -32791,25 +32793,27 @@ def _hold_pvp_members(held: dict, moves: dict, cohorts) -> None:
 def _pvp_crossings(rows, family_rows, busy, recent) -> dict:
     """name -> pvpgear.Crossing, each member's gate for the crossing to its
     vendor (#603). Idle in town: in no run, step or walk (`busy`) and its
-    guild's family idle in town, or its own crossing already under way. The
-    dock: no wall the module named for the far continent and no refusal still
-    cooling (guildjobs.class_walls, the CROSS_ACTIONS rows). The vendor: its
-    last walk to a PvP vendor did not fail (guildjobs.pvp_walk_cooldown)."""
-    families: dict = {}
-    for r in family_rows or ():
-        families.setdefault(str(r.get("guild_name") or ""), []).append(r)
+    family idle in town (pvpgear.family_rows_for, #1921), or its own crossing
+    already under way. The dock: no wall the module named for the far
+    continent and no refusal still cooling (guildjobs.class_walls, the
+    CROSS_ACTIONS rows). The vendor: its last walk to a PvP vendor did not
+    fail (guildjobs.pvp_walk_cooldown). Cooling: another crossing is young
+    and this is not its own under way, so no row would be written (#1921)."""
+    family_rows = list(family_rows or ())
     out = {}
     for row in rows or ():
         name = str(row["name"])
         crossings = [r for r in recent or ()
                      if r.name == name and r.action in guildjobs.CROSS_ACTIONS]
+        under_way = pvpgear.crossing_under_way(crossings)
         idle = name not in busy and pvpgear.family_idle_in_town(
-            families.get(str(row.get("guild_name") or ""), ()))
+            pvpgear.family_rows_for(name, str(row.get("guild_name") or ""), family_rows))
         out[name] = pvpgear.Crossing(
-            idle or pvpgear.crossing_under_way(crossings),
+            idle or under_way,
             pvpgear.dock_reachable(pvpgear.other_continent(row.get("snapshot_map")),
                                    guildjobs.class_walls(name, recent), crossings),
-            guildjobs.pvp_walk_cooldown(name, recent) == 0)
+            guildjobs.pvp_walk_cooldown(name, recent) == 0,
+            cooling=guildjobs.crossing_cooling(name, recent) and not under_way)
     return out
 
 
