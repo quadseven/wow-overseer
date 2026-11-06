@@ -5460,6 +5460,8 @@ def class_ask_held(name, asks) -> frozenset:
 #
 # The questers' crossing (questers.CROSS_ACTION) is the third. It is spelled
 # here because questers imports this module; questers takes it from here.
+# An honor buyer's crossing to its vendor (pvpgear.CROSS_ACTION, #603) is one
+# more.
 QUESTER_CROSS_ACTION = "quester-cross"
 CROSS_ACTIONS = frozenset(
     {
@@ -5467,6 +5469,7 @@ CROSS_ACTIONS = frozenset(
         guildlevel.CROSS_ACTION,
         QUESTER_CROSS_ACTION,
         WEAPON_CROSS_ACTION,
+        pvpgear.CROSS_ACTION,
     }
 )
 
@@ -6328,9 +6331,35 @@ def _pvp_walk_cooling(name, recent) -> bool:
     )  # fmt: skip
 
 
-def pvp_step(m, aim, move, cap, kept=None):
-    """The step for a PvP move: the queue row, or the walk to the vendor that
-    stocks the item and the honor buy, after selling junk for room."""
+def _pvp_cross_step(m, aim, move, recent):
+    """The step for a CROSS move (#603): one `cross-to-map map:<id>` row, no
+    walk (the module walks to the berth and rides), or None while the
+    member's last crossing is young (crossing_cooling) or it is dead."""
+    if not m.alive or crossing_cooling(m.name, recent):
+        return None
+    return guildcorps.Step(
+        m.name,
+        pvpgear.ACTION,
+        aim.entry,
+        move.said,
+        rows=(
+            guildcorps.Row(
+                "job",
+                classquest.cross_command(move.to_map),
+                "",
+                source_for(pvpgear.CROSS_ACTION, m.name),
+            ),
+        ),
+        goal=classquest.CONTINENTS.get(int(move.to_map), ""),
+    )
+
+
+def pvp_step(m, aim, move, cap, kept=None, recent=()):
+    """The step for a PvP move: the queue row, the crossing to the vendor's
+    continent, or the walk to the vendor that stocks the item and the honor
+    buy, after selling junk for room."""
+    if move.kind == pvpgear.CROSS:
+        return _pvp_cross_step(m, aim, move, recent)
     if move.kind == pvpgear.QUEUE:
         return guildcorps.Step(
             m.name,
@@ -6414,7 +6443,7 @@ def _pvp_first(
     aim, move = pvp
     if move.kind in (pvpgear.INSIDE, pvpgear.WAITING):
         return None, aim.line + ": " + move.said, True
-    if move.kind not in (pvpgear.QUEUE, pvpgear.BUY) or m.in_combat:
+    if move.kind not in (pvpgear.QUEUE, pvpgear.BUY, pvpgear.CROSS) or m.in_combat:
         return None, "", False
     if pet_wanted:
         return None, "", False
@@ -6424,8 +6453,8 @@ def _pvp_first(
         return None, "", False
     if move.kind == pvpgear.BUY and buy_room_short(m, pvpgear.ACTION, recent):
         return _pvp_room(m, aim, recent, cap, kept, book, crafters, master)
-    step = pvp_step(m, aim, move, cap, kept)
-    return step, (aim.line + ": " + move.said) if step else "", move.holds
+    step = pvp_step(m, aim, move, cap, kept, recent)
+    return step, (aim.line + ": " + move.said) if step else "", move.keeps
 
 
 def last_gear_failed(name, recent) -> bool:

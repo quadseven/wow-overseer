@@ -39,6 +39,23 @@ character", because a vendor walk stays on its map and no guild walk boards
 a boat. So a member counts only the stock whose vendor has a spawn on the
 map it stands on; on another continent it levels and travels as before,
 and PvP takes over when its travels bring it to the vendor's continent.
+
+THE CROSSING TO THE VENDOR (#603, slice 1, outbound only). Decided on
+2026-10-26: a buyer that already holds the honor takes the boat or zeppelin
+to the vendor's continent, as a player would, but only while its family is
+idle in town, so the trip never pulls a member out of a run, a quest walk or
+a group. The bridge reads the gate per member (`Crossing`): the member is in
+no step, run or walk and its family is idle in town (`family_idle_in_town`),
+the dock serves it (`dock_reachable`: no wall the module named for that map,
+no refusal still cooling, no walk to the berth that gave up on the ground),
+and its last walk to a PvP vendor did not fail. With the gate open an offer
+on the other classic continent counts when the member already holds its
+price (`across`), and `next_move` makes it CROSS (`crossing_move`): one
+`cross-to-map map:<id>` row (classquest.CROSSING_VERB), the module's own
+crossing, written by the guild job step as the class quest's is. On the far
+side the vendor stands on the member's map and the buy goes as before. With
+the gate shut nothing changes: the member counts only the stock where it
+stands. The trip back is its own slice (#1649).
 Inside a battleground the rule is not read: the member plays out its game.
 An unread map is not a continent, so a member without a fresh snapshot
 counts nothing.
@@ -78,6 +95,9 @@ WHAT IT DOES NEXT (`next_move`):
             item, named in the line, and buy it with an `honor:` ceiling at
             the price. A walk to it that failed is not asked again at once
             (guildjobs.pvp_walk_cooldown).
+  cross     its honor covers the price and the vendor stands on the other
+            classic continent: the module's boat or zeppelin crossing there
+            (crossing_move), held while the crossing is under way.
   waiting   its newest `bg-queue` row was accepted (queued/already), did
             not fail, and is under WAITING_MINUTES old. Older, it is asked
             again (queue) and the member stays held meanwhile (Move.holds).
@@ -100,6 +120,7 @@ import os
 import zlib
 from dataclasses import dataclass, replace
 
+import classquest
 import gearscore
 import guildrun
 import guildsocial
@@ -336,6 +357,117 @@ def offers_on(map_id, offers) -> list:
     return [o for o in offers if o.sold_on(map_id)]
 
 
+# --- the crossing to the vendor (#603) ----------------------------------------
+
+# The action of a buyer's crossing row: guildjobs.CROSS_ACTIONS holds it, so it
+# shares every crossing's clock and walls (guildjobs.crossing_cooling).
+CROSS_ACTION = ACTION + "-cross"
+# The roster jobs a family idles in town on: the town run a campaign waits on
+# (jobs.TOWN_RUN), and the craft job, whose casts run where the family stands.
+IN_TOWN_JOBS = frozenset({"town run", "craft"})
+
+
+def other_continent(map_id) -> int | None:
+    """The classic continent across the sea from `map_id`, None off the two
+    (Outland, an instance, unread)."""
+    if map_id is None or int(map_id) not in classquest.CONTINENTS:
+        return None
+    return next(m for m in classquest.CONTINENTS if m != int(map_id))
+
+
+def far_continent(map_id, maps) -> int | None:
+    """The classic continent a vendor on `maps` stands on when the member
+    stands on the other one and the vendor has no spawn there, else None."""
+    there = other_continent(map_id)
+    stands = {int(m) for m in maps or ()}
+    if there is None or int(map_id) in stands or there not in stands:
+        return None
+    return there
+
+
+def across(map_id, offers, honor) -> list:
+    """The offers on the other classic continent whose price `honor` covers."""
+    return [
+        o
+        for o in offers or ()
+        if far_continent(map_id, o.maps) is not None and o.honor <= int(honor or 0)
+    ]
+
+
+@dataclass(frozen=True)
+class Crossing:
+    """One buyer's gate for the crossing, as the bridge read it."""
+
+    # In no run, step or walk, and its family idle in town.
+    idle_in_town: bool = False
+    # The module serves the crossing: no wall, no refusal still cooling.
+    dock_reachable: bool = False
+    # Its last walk to a PvP vendor did not fail.
+    vendor_reachable: bool = False
+
+    @property
+    def open(self) -> bool:
+        return self.idle_in_town and self.dock_reachable and self.vendor_reachable
+
+
+def family_idle_in_town(family_rows) -> bool:
+    """Whether a family is idle in town: every roster row on an IN_TOWN_JOBS
+    job and none read inside an instance. Rows carry `job` and `snapshot_map`
+    (None unread); a family with no rows is not idle."""
+    rows = list(family_rows or ())
+    if not rows:
+        return False
+    for row in rows:
+        if str(row.get("job") or "").strip().lower() not in IN_TOWN_JOBS:
+            return False
+        where = row.get("snapshot_map")
+        if where is not None and int(where) not in guildrun.OPEN_WORLD_MAPS:
+            return False
+    return True
+
+
+def _refusal_wait(newest) -> int:
+    """Minutes a refused crossing row keeps the dock shut (classquest's clock)."""
+    if newest.refusal == classquest.CROSS_GROUND_GAVE_UP:
+        return classquest.CROSS_GROUND_HOLD_MINUTES
+    if newest.retryable:
+        return classquest.CROSS_RETRY_MINUTES
+    return classquest.CROSS_COOLDOWN_MINUTES
+
+
+def crossing_under_way(cross_rows) -> bool:
+    """Whether the member's newest crossing row is its own crossing to a
+    vendor (CROSS_ACTION), not refused and younger than the module's
+    crossing backstop: the member is on its way and stays on it."""
+    rows = list(cross_rows or ())
+    if not rows:
+        return False
+    newest = min(rows, key=lambda r: int(r.age_minutes))
+    return (
+        newest.action == CROSS_ACTION
+        and not newest.refusal
+        and int(newest.age_minutes) < classquest.CROSS_COOLDOWN_MINUTES
+    )
+
+
+def dock_reachable(to_map, walls, cross_rows) -> bool:
+    """Whether the crossing to `to_map` may be asked: the module named no wall
+    for that map (`walls`, guildjobs.class_walls), and the member's newest
+    crossing row (`cross_rows`, its guildjobs.CROSS_ACTIONS rows) is no
+    refusal still inside its wait. A walk to the berth that gave up on the
+    ground holds the dock shut for classquest.CROSS_GROUND_HOLD_MINUTES, so a
+    berth that cannot be walked to spends no far walk every pass."""
+    if to_map is None or int(to_map) in (walls or {}):
+        return False
+    rows = list(cross_rows or ())
+    if not rows:
+        return True
+    newest = min(rows, key=lambda r: int(r.age_minutes))
+    if not newest.refusal:
+        return True
+    return int(newest.age_minutes) >= _refusal_wait(newest)
+
+
 def list_ids(spec: str, phase: str) -> frozenset:
     """Every item id one of the spec's lists names (gearscore.PREFER_PHASES)."""
     lists = gearscore.load_spec(spec)["lists"].get(phase, {}).get("slots", {})
@@ -448,6 +580,8 @@ class Aim:
     filler: bool = False
     # The cohort's count line, said with the queue (#959).
     cohort: str = ""
+    # The maps the vendor's spawns stand on; empty when unread.
+    maps: frozenset = frozenset()
 
     @property
     def vendor(self) -> str:
@@ -503,12 +637,15 @@ def plan_aims(seekers) -> dict:
         chosen.setdefault(s.guild, bg.key)
         out[s.name] = Aim(
             s.name, s.guild, s.level, offer.entry, offer.name, offer.honor,
-            int(s.honor), bg, offer.vendor_name, s.faction,
+            int(s.honor), bg, offer.vendor_name, s.faction, maps=offer.maps,
         )  # fmt: skip
     return out
 
 
 INSIDE, CARRIED, BUY, WAITING, QUEUE = "inside", "carried", "buy", "waiting", "queue"
+# CROSS: the boat or zeppelin to the vendor's continent (#603). ACROSS: the
+# vendor is across the sea and the crossing's gate is shut, so it waits.
+CROSS, ACROSS = "cross", "across"
 # GATHERING: the cohort is short, nobody queues (#959). COOLING: the module
 # accepted a leave from it lately.
 GATHERING, COOLING = "gathering", "cooling"
@@ -522,11 +659,20 @@ class Move:
     # A queue accepted past WAITING_MINUTES: asked again (kind QUEUE), but the
     # member is still in the game's queue and stays held until the answer.
     queued: bool = False
+    # For a CROSS move, the continent map id it crosses to.
+    to_map: int | None = None
 
     @property
     def holds(self) -> bool:
         """Whether the member is held from other jobs: inside, or queued."""
         return self.kind in (INSIDE, WAITING) or self.queued
+
+    @property
+    def keeps(self) -> bool:
+        """Whether the guild job pass keeps the member from other jobs: held,
+        or crossing (a row written mid-crossing would turn it around). Not
+        counted in a battleground's cohort, which counts `holds`."""
+        return self.holds or self.kind == CROSS
 
 
 def _pvp_rows(name: str, recent):
@@ -565,9 +711,52 @@ def _leave_accepted(row) -> bool:
     return _accepted(row, "bg-leave", ("left", "already"))
 
 
-def next_move(aim: Aim, map_id, carried: bool, recent) -> Move:
+def crossing_move(
+    aim: Aim, map_id, idle_in_town: bool, dock: bool, vendor: bool
+) -> Move | None:
+    """The CROSS move to the vendor's continent, or None: only for a buyer
+    that holds the honor for its item, whose vendor stands on the other
+    classic continent, whose family is idle in town, and whose dock and
+    vendor are reachable (see the module notes)."""
+    if aim.filler or aim.held < aim.honor:
+        return None
+    to_map = far_continent(map_id, aim.maps)
+    if to_map is None or not (idle_in_town and dock and vendor):
+        return None
+    return Move(
+        CROSS,
+        "%s has the %d honor for %s and crosses to %s by boat or zeppelin for %s"
+        % (aim.name, aim.honor, aim.item, classquest.CONTINENTS[to_map], aim.vendor),
+        to_map=to_map,
+    )
+
+
+def _buy_move(aim: Aim, map_id, crossing: Crossing | None) -> Move:
+    """BUY where the vendor stands on the member's map, else the crossing to
+    it, else ACROSS: the gate is shut and the member waits."""
+    if far_continent(map_id, aim.maps) is None:
+        return Move(
+            BUY,
+            "%s has the %d honor for %s and walks to %s"
+            % (aim.name, aim.honor, aim.item, aim.vendor),
+        )
+    gate = crossing or Crossing()
+    move = crossing_move(
+        aim, map_id, gate.idle_in_town, gate.dock_reachable, gate.vendor_reachable
+    )
+    return move or Move(
+        ACROSS,
+        "%s has the %d honor for %s, sold across the sea, and waits"
+        % (aim.name, aim.honor, aim.item),
+    )
+
+
+def next_move(
+    aim: Aim, map_id, carried: bool, recent, crossing: Crossing | None = None
+) -> Move:
     """What the member does about its aim this pass (see the module notes).
-    `recent` is guildjobs.Recent rows."""
+    `recent` is guildjobs.Recent rows; `crossing` the member's gate for the
+    crossing to its vendor (#603), shut when None."""
     bg = aim.battleground
     if map_id is not None and int(map_id) in BATTLEGROUND_MAPS:
         return Move(
@@ -576,11 +765,7 @@ def next_move(aim: Aim, map_id, carried: bool, recent) -> Move:
     if carried:
         return Move(CARRIED, "%s carries %s and puts it on" % (aim.name, aim.item))
     if not aim.filler and aim.held >= aim.honor:
-        return Move(
-            BUY,
-            "%s has the %d honor for %s and walks to %s"
-            % (aim.name, aim.honor, aim.item, aim.vendor),
-        )
+        return _buy_move(aim, map_id, crossing)
     rows = _pvp_rows(aim.name, recent)
     if rows:
         newest = min(rows, key=lambda r: int(r.age_minutes))
@@ -887,7 +1072,7 @@ def spec_of_row(row: dict) -> str | None:
 
 
 def seekers_from_rows(
-    member_rows, gear_by_name: dict, list_rows: dict, offers, busy=()
+    member_rows, gear_by_name: dict, list_rows: dict, offers, busy=(), crossings=None
 ) -> list:
     """A Seeker per member row whose level could use any offer.
 
@@ -897,8 +1082,11 @@ def seekers_from_rows(
     -> item_template row for every list id their specs name; `offers` every
     Offer, both sides (each member sees its own side's, on its own map:
     offers_on); `busy` the names in a dungeon, raid run, campaign or other
-    queue, who are not idle for a cohort.
+    queue, who are not idle for a cohort; `crossings` name -> Crossing: with
+    its gate open a member also counts the offers across the sea whose price
+    it holds (across, #603).
     """
+    crossings = crossings or {}
     floor = min((o.required_level for o in offers or ()), default=LEVEL_CAP + 1)
     out = []
     for row in member_rows or ():
@@ -910,9 +1098,12 @@ def seekers_from_rows(
         if not gear or not spec:
             continue
         faction = guildrun.faction_of([member])
-        mine = offers_on(row.get("snapshot_map"), offers_for(faction, offers))
-        upgrade = next_upgrade(gear, spec, member.level, list_rows, mine)
+        side = offers_for(faction, offers)
+        mine = offers_on(row.get("snapshot_map"), side)
         honor = int(row.get("honor") or 0)
+        if crossings.get(member.name, Crossing()).open:
+            mine += across(row.get("snapshot_map"), side, honor)
+        upgrade = next_upgrade(gear, spec, member.level, list_rows, mine)
         out.append(
             Seeker(
                 member.name, member.guild, member.level, honor, upgrade, faction,
