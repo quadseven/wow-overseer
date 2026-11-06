@@ -849,6 +849,17 @@ CLASS_PARTY_BUSY_RETRY_LINE = (
 CLASS_PARTY_BUSY_RETRY_FORMED_LINE = (
     "class party: the invite for %s's %s formed on retry %d of %d"
 )
+
+
+def _log_class_party_busy_retry(run, verdict, retry: int) -> None:
+    """The leader-busy invite retry's line, written after the rewritten invite
+    answered and naming that answer, and its own line when the party formed
+    (#1332)."""
+    log.info(CLASS_PARTY_BUSY_RETRY_LINE, run.leader, run.title, run.leader,
+             retry, classparty.LEADER_BUSY_RETRIES, verdict.said)
+    if verdict.state == classparty.FORMED:
+        log.info(CLASS_PARTY_BUSY_RETRY_FORMED_LINE, run.leader, run.title,
+                 retry, classparty.LEADER_BUSY_RETRIES)
 DUNGEON_QUEST_CLAIMANT = "dungeon quests"
 
 # How often the leveling pass looks, and how long a leveling choice stands
@@ -18775,15 +18786,7 @@ class Bridge(discord.Client):
                      run.leader, row.command, verdict.said)
             if busy_retry:
                 busy_retry = False
-                # The retry's line comes after the rewritten invite answers,
-                # with that answer (#1332).
-                log.info(CLASS_PARTY_BUSY_RETRY_LINE, run.leader, run.title,
-                         run.leader, busy_retries,
-                         classparty.LEADER_BUSY_RETRIES, verdict.said)
-                if verdict.state == classparty.FORMED:
-                    log.info(CLASS_PARTY_BUSY_RETRY_FORMED_LINE, run.leader,
-                             run.title, busy_retries,
-                             classparty.LEADER_BUSY_RETRIES)
+                _log_class_party_busy_retry(run, verdict, busy_retries)
             if verdict.state == classparty.FORMED:
                 run.form(time.monotonic())
                 return True
