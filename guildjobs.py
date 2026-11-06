@@ -5467,7 +5467,8 @@ def class_ask_held(name, asks) -> frozenset:
 # The questers' crossing (questers.CROSS_ACTION) is the third. It is spelled
 # here because questers imports this module; questers takes it from here.
 # An honor buyer's crossing to its vendor (pvpgear.CROSS_ACTION, #603) is one
-# more.
+# more; a class quest's crossing does not wait on its clock
+# (class_crossing_cooling, #1921).
 QUESTER_CROSS_ACTION = "quester-cross"
 CROSS_ACTIONS = frozenset(
     {
@@ -5509,16 +5510,21 @@ def with_walls(m, recent):
     return replace(m, no_crossing=walls) if walls else m
 
 
-def crossing_cooling(name, recent) -> bool:
+def crossing_cooling(name, recent, skip=frozenset()) -> bool:
     """Whether the member's newest crossing row is too young to cross again: one
-    crossing is in flight per member. A refusal the module calls retryable is
+    crossing is in flight per member. Rows whose action is in `skip` are not
+    read (class_crossing_cooling). A refusal the module calls retryable is
     asked again after classquest.CROSS_RETRY_MINUTES, any other row after
     classquest.CROSS_COOLDOWN_MINUTES (over the module's own 30 minute backstop,
     so a row still crossing is always inside it). A walk to the berth that
     gave up on the ground classquest.CROSS_GROUND_ATTEMPTS times to the same map,
     inside classquest.CROSS_GROUND_HOLD_MINUTES of the last, holds it that long
     after the last."""
-    rows = [r for r in recent or () if r.name == name and r.action in CROSS_ACTIONS]
+    rows = [
+        r
+        for r in recent or ()
+        if r.name == name and r.action in CROSS_ACTIONS and r.action not in skip
+    ]
     if not rows:
         return False
     newest = min(rows, key=lambda r: int(r.age_minutes))
@@ -5541,6 +5547,20 @@ def crossing_cooling(name, recent) -> bool:
     return int(newest.age_minutes) < minutes
 
 
+# CLASS QUESTS COME FIRST (#1921): an honor buyer's crossing to its vendor
+# (pvpgear.CROSS_ACTION) does not hold a class quest's crossing back. The PvP
+# buyer still cools on every crossing row, the class quest's included, and the
+# class step runs ahead of the PvP step (_quest_first before _pvp_first), so a
+# class crossing that is due is the one written.
+CLASS_CROSS_SKIPS = frozenset({pvpgear.CROSS_ACTION})
+
+
+def class_crossing_cooling(name, recent) -> bool:
+    """crossing_cooling for a class quest's crossing: a PvP crossing row
+    (CLASS_CROSS_SKIPS) does not count."""
+    return crossing_cooling(name, recent, CLASS_CROSS_SKIPS)
+
+
 def _cross_step(m, move, recent):
     """(step or None, what it does, note) for a CROSS move: one
     `cross-to-map map:<id>` row, no walk (the module walks to the berth). The
@@ -5548,7 +5568,7 @@ def _cross_step(m, move, recent):
     or while it is dead."""
     if not m.alive:
         return None, move.said, _held_note(m, 0)
-    if crossing_cooling(m.name, recent):
+    if class_crossing_cooling(m.name, recent):
         return None, move.said, ""
     step = guildcorps.Step(
         m.name,

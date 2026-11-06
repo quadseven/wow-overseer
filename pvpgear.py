@@ -404,16 +404,40 @@ class Crossing:
     dock_reachable: bool = False
     # Its last walk to a PvP vendor did not fail.
     vendor_reachable: bool = False
+    # Another crossing row is still young (guildjobs.crossing_cooling) and it
+    # is not this buyer's own crossing under way: no crossing row would be
+    # written this pass, so the buyer waits (ACROSS) and is not held (#1921).
+    cooling: bool = False
 
     @property
     def open(self) -> bool:
         return self.idle_in_town and self.dock_reachable and self.vendor_reachable
 
 
+def family_rows_for(name: str, guild: str, roster_rows) -> list:
+    """The enabled roster rows of a buyer's family (#1921): the family its own
+    roster row names, else the family with the most members in its guild
+    (families.guilds, ties by key), none when no family plays there. Rows
+    carry `name`, `family` and `guild_name`; a row with no family is in none."""
+    rows = [r for r in roster_rows or () if str(r.get("family") or "")]
+    family = next((str(r["family"]) for r in rows if r.get("name") == name), "")
+    if not family:
+        counts: dict = {}
+        for r in rows:
+            if str(r.get("guild_name") or "") == guild:
+                key = str(r["family"])
+                counts[key] = counts.get(key, 0) + 1
+        if not counts:
+            return []
+        family = min(counts, key=lambda k: (-counts[k], k))
+    return [r for r in rows if str(r["family"]) == family]
+
+
 def family_idle_in_town(family_rows) -> bool:
     """Whether a family is idle in town: every roster row on an IN_TOWN_JOBS
-    job and none read inside an instance. Rows carry `job` and `snapshot_map`
-    (None unread); a family with no rows is not idle."""
+    job and read on an open world map. Rows carry `job` and `snapshot_map`;
+    an unread snapshot (None) may be anywhere, so it is not idle (#1921). A
+    family with no rows is not idle."""
     rows = list(family_rows or ())
     if not rows:
         return False
@@ -421,7 +445,7 @@ def family_idle_in_town(family_rows) -> bool:
         if str(row.get("job") or "").strip().lower() not in IN_TOWN_JOBS:
             return False
         where = row.get("snapshot_map")
-        if where is not None and int(where) not in guildrun.OPEN_WORLD_MAPS:
+        if where is None or int(where) not in guildrun.OPEN_WORLD_MAPS:
             return False
     return True
 
@@ -744,6 +768,9 @@ def _buy_move(aim: Aim, map_id, crossing: Crossing | None) -> Move:
     move = crossing_move(
         aim, map_id, gate.idle_in_town, gate.dock_reachable, gate.vendor_reachable
     )
+    if move is not None and gate.cooling:
+        # A CROSS that writes no row would still hold the member (#1921).
+        move = None
     return move or Move(
         ACROSS,
         "%s has the %d honor for %s, sold across the sea, and waits"
