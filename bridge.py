@@ -14538,7 +14538,13 @@ class Bridge(discord.Client):
         # same route, a guildmate who can use them first and a vendor last.
         materials_over = await asyncio.to_thread(
             _fetch_clearance_materials, names)
-        over = disposition.material_surplus(materials_over, materials.REAGENTS)
+        # PAST THE GUILD'S TARGET (bankforecast): never the vault, a guildmate
+        # only when its rung is short, and the house's own history for a price.
+        # The keep cap gives way too (#747): a holder keeps only its rung's need.
+        forecast = await asyncio.to_thread(_bank_forecast, names)
+        over = clearance.material_surplus(
+            materials_over, materials.REAGENTS,
+            over_target=forecast.over_target, eats=forecast.eats)
         surplus_rows = [dict(row, material_surplus=True)
                         for row in materials_over if row["item_guid"] in over]
         # WHAT A MEMBER TOOK OUT OF THE VAULT FOR THE HOUSE (bankforecast) is
@@ -14575,9 +14581,6 @@ class Bridge(discord.Client):
         if surplus_rows:
             vault, vault_room = bank.guild_room(
                 await asyncio.to_thread(_fetch_guild_bank_setup, names))
-        # PAST THE GUILD'S TARGET (bankforecast): never the vault, a guildmate
-        # only when its rung is short, and the house's own history for a price.
-        forecast = await asyncio.to_thread(_bank_forecast, names)
         routes = clearance.plan(stacks, people, kept=kept, market=market,
                                 auction_open=auction_open, picks=crafting.picks,
                                 vault=vault, vault_room=vault_room,
