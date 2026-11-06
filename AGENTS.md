@@ -198,7 +198,7 @@ A new worktree has no submodule. The script initializes `mod-overseer` and warns
 
 Required by ruleset on `main`: a PR, `Grug - Chief` and `Grug - Elder`. Force pushes and branch deletion are refused. Approvals are not required.
 
-Not required, but the merge gate below binds them: `unittest / check`, `lint / check`, `overseer image (build + publish)`, `leak-scan`, and CodeQL. `check.yml` and `build.yml` carry path filters, so a Markdown-only PR runs neither; run the tests that read a changed doc yourself. `tests/test_check_locally.py` requires this file to name `scripts/check-locally.sh`.
+Not required, but the merge gate below binds them: `unittest / check`, `lint / check`, `overseer image (build + publish)`, `leak-scan`, and CodeQL. `check.yml` and `build.yml` carry path filters. `check.yml` runs for Python and JSON anywhere, `app/`, `docs/`, `data/`, `scripts/`, `tests/`, `.loom/`, top-level HTML, CSS and JS, `README.md`, `AGENTS.md`, the `Dockerfile` and both workflows, so a change to a file a test reads as text still runs the tests. `build.yml` runs for every source the `Dockerfile` copies. A change outside both lists, such as a Markdown file elsewhere, runs neither; run the tests that read it yourself. `tests/test_workflow_paths.py` fails if a filter drops a file a test reads or a `Dockerfile` copies. `tests/test_check_locally.py` requires this file to name `scripts/check-locally.sh`.
 
 ## Traps
 

@@ -27,8 +27,22 @@ on:
       - 'patches/**'
       - 'wow-addons/**'
       - 'mod-overseer'
+      - 'app/**'
+      - 'docs/**'
+      - '*.html'
+      - '*.css'
+      - '*.js'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'manifest.webmanifest'
+      - 'Dockerfile'
+      - 'data/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - '.loom/**'
       - '.dockerignore'
       - '.github/workflows/check.yml'
+      - '.github/workflows/build.yml'
       - '.github/scripts/compile_check.py'
       - '.github/scripts/check_mod_overseer_pin.py'
       - '.github/scripts/check_fork_pin_parity.py'
@@ -43,8 +57,22 @@ on:
       - 'patches/**'
       - 'wow-addons/**'
       - 'mod-overseer'
+      - 'app/**'
+      - 'docs/**'
+      - '*.html'
+      - '*.css'
+      - '*.js'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'manifest.webmanifest'
+      - 'Dockerfile'
+      - 'data/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - '.loom/**'
       - '.dockerignore'
       - '.github/workflows/check.yml'
+      - '.github/workflows/build.yml'
       - '.github/scripts/compile_check.py'
       - '.github/scripts/check_mod_overseer_pin.py'
       - '.github/scripts/check_fork_pin_parity.py'
@@ -62,7 +90,7 @@ concurrency:
 
 jobs:
   unittest:
-    uses: quadseven/infra-public/.github/workflows/check.python.yml@f7adaca4271f8c14c15ac1f5f2a709f78d003b70
+    uses: quadseven/infra-public/.github/workflows/check.python.yml@3d7eb0b00e8bfe949783d772ab777100182ab05d
     with:
       runner: ubuntu-latest
       working-directory: .
@@ -72,6 +100,8 @@ jobs:
       # test (#1038), whose pinned sqlglot uv pulls ephemerally in test-cmd,
       # and the quest ledger's start-up test (#957), which raises PyMySQL's
       # own exceptions (pinned to the Dockerfile's version) instead of a stub.
+      # tests/requirements.txt pins all three: sqlglot, PyMySQL and lupa (the
+      # Lua runtime the meter addon test loads).
       install-cmd: "true"
       ruff: false
       # The declared interpreter floor, same convention as infra

@@ -33,6 +33,10 @@ on:
       - '**.json'
       - '*.html'
       - 'jquery.min.js'
+      - 'app/**'
+      - 'data/**'
+      - 'manifest.webmanifest'
+      - '*.png'
       - 'Dockerfile'
       - '.dockerignore'
       - '.github/workflows/build.yml'
@@ -43,6 +47,10 @@ on:
       - '**.json'
       - '*.html'
       - 'jquery.min.js'
+      - 'app/**'
+      - 'data/**'
+      - 'manifest.webmanifest'
+      - '*.png'
       - 'Dockerfile'
       - '.dockerignore'
       - '.github/workflows/build.yml'
@@ -66,9 +74,11 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-          # The Dockerfile COPYs an explicit list of top-level .py/.json/
-          # .html files only - it never reaches into mod-overseer/, tests/,
-          # tools/ or patches/. No submodule content is needed to build it.
+          # The Dockerfile COPYs named top-level files plus app/, apiv2/,
+          # data/ and two tools/ scripts - it never reaches into
+          # mod-overseer/, tests/ or patches/. No submodule content is
+          # needed to build it. The paths filters above cover every COPY
+          # source (tests/test_workflow_paths.py).
           submodules: false
 
       - name: Resolve image ref and whether to publish
@@ -114,7 +124,7 @@ jobs:
 
       - name: The image must actually run python and hold the interpreter this needs
         # No live Discord/MySQL to smoke-test against in CI, and starting
-        # bridge.py for real needs both plus DISCORD_TOKEN. What is proven
+        # bridge.py for real needs both plus DISCORD_BOT_TOKEN. What is proven
         # here instead: the image the pip install actually produced has a
         # working interpreter and can import the two third-party deps
         # bridge.py needs at module scope, before anything is deployed.
