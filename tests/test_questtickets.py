@@ -1,5 +1,6 @@
 """One GitHub issue per broken quest (#926), through the real filing path."""
 
+import importlib
 import pathlib
 import sys
 import types
@@ -174,6 +175,18 @@ class Filing(unittest.TestCase):
             "Part of #%d" % qt.EPIC,
         ):
             self.assertIn(want, text)
+
+    def test_the_body_forbids_a_reason_keyed_on_the_quest_id(self):
+        text = qt.body(62, None, [row(62)], [], "")
+        out_of_scope = text.split("## Out of scope", 1)[1]
+        self.assertIn("A reason string keyed on this quest's id", out_of_scope)
+
+    def test_tickets_default_to_the_open_quest_epic(self):
+        with mock.patch.dict("os.environ", {}, clear=False) as env:
+            env.pop("QUEST_TICKET_EPIC", None)
+            with stub_modules(pymysql=PYMYSQL):
+                fresh = importlib.reload(qt)
+        self.assertEqual(1575, fresh.EPIC)
 
     def test_with_no_site_the_body_names_the_route_and_no_host(self):
         self.assertIn("Quests page: #/quests/62", qt.body(62, None, [row(62)], [], ""))
