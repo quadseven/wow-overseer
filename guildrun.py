@@ -11,22 +11,31 @@ queues it, arms mod-dungeon-clear inside and reads the run back to its end.
 WHAT IT DECIDES, and what Jev decides.
 
   groups       Online members of one guild, not in a family, a group or an
-               instance, alive (no corpse: a ghost still reports health),
-               out of combat and rested (COOLDOWN_MINUTES since their last
-               run that went in), sorted by level. Nobody is picked until the
-               worldserver has been up SETTLE_SECONDS, so a restart's
-               logouts and logins are over first. A group is five within
-               BAND_SPREAD levels of each other with a tank and a healer by the
-               talent tree each plays (raidroles), or by the seat the raid plan
-               gave them (overseer_raid_spec) when no talent is spent yet.
+                instance, alive (no corpse: a ghost still reports health),
+                out of combat and rested (COOLDOWN_MINUTES since their last
+                run that went in), sorted by level. Nobody is picked until the
+                worldserver has been up SETTLE_SECONDS, so a restart's
+                logouts and logins are over first. A group is five within
+                BAND_SPREAD levels of each other with a tank and a healer by the
+                talent tree each plays (raidroles), or by the seat the raid plan
+                gave them (overseer_raid_spec) when no talent is spent yet.
   composition  When the pool can seat the group more than one way (another
-               tank, another healer), up to three compositions are offered.
-               Jev chooses (a Choice with a confidence); the prior below is
-               the heuristic.
+                tank, another healer), up to three compositions are offered.
+                Jev chooses (a Choice with a confidence); the prior below is
+                the heuristic.
   dungeon      Every door mod-overseer has a portal for whose band fits the
-               group (campaignplan.RUNS, council's floors) and whose finder
-               minimum every member meets. Jev chooses; the prior is the
-               heuristic.
+                group (campaignplan.RUNS, council's floors) and whose finder
+                minimum every member meets. Jev chooses; the prior is the
+                heuristic.
+
+THE RUN AND THE CARRY. A carry is a member who said "I can carry this run"
+(guildsocial.CARRIES) in a group ask. `carry_start` is a JSON object on
+`overseer_guild_run` named `{ "carrier": "Name", "carried": [("Name", (level, xp))] }`
+when a run starts. `carry_xp_lines` returns one string per carried member
+(every member except the carrier): `carry run <keyword>: <member> gained <N> xp (gap <G>)`
+where N counts XP across level-ups and G is the carrier's start level minus
+the member's start level. No carrier returns an empty list.
+"""
 
 THE LEARNING LOOP. Every run is a row in overseer_guild_run, beside the
 decision that made it: the options, Jev's answer and confidence, who acted,
@@ -364,10 +373,43 @@ def alive_or_unread(row: dict) -> bool:
     return row.get("health") is None or _alive(row)
 
 
-def _optional(row: dict, key: str, cast):
-    """`cast(row[key])`, or None when the read had no value for it."""
-    value = row.get(key)
-    return None if value is None else cast(value)
+def carry_xp_lines(keyword: str, carrier: str | None, start: dict, end: dict, xp_for_level: dict) -> list[str]:
+    """Return one line per carried member in a guild run.
+
+    `start` and `end` map member name to `(level, xp)` at run start and end.
+    `xp_for_level` maps level to XP needed for the next level.
+    Returns `carry run <keyword>: <member> gained <N> xp (gap <G>)` for each
+    carried member (every member except the carrier). No carrier returns an
+    empty list.
+    """
+    if carrier is None:
+        return []
+    lines = []
+    for member_name, (end_level, end_xp) in end.items():
+        if member_name == carrier:
+            continue
+        if member_name not in start:
+            continue
+        carrier_level = start[carrier][0]
+        gap = carrier_level - start[member_name][0]
+        if end_level == start[member_name][0]:
+            gained = end_xp - start[member_name][1]
+        else:
+            current_xp = end_xp
+            current_level = end_level
+            total_gained = 0
+            while current_level > start[member_name][0]:
+                next_level_xp = xp_for_level.get(current_level - 1, 0)
+                next_level_start = current_xp + next_level_xp
+                if current_level - 1 == start[member_name][0]:
+                    total_gained += next_level_start - start[member_name][1]
+                    break
+                total_gained += next_level_xp
+                current_level -= 1
+            gained = total_gained
+        lines.append(f"carry run {keyword}: {member_name} gained {gained} xp (gap {gap})")
+    return lines
+
 
 
 def member_from_row(row: dict) -> Member | None:
@@ -2149,18 +2191,24 @@ def _count_kept(row: dict, seen: dict) -> dict:
 # --- the Guild tab ---------------------------------------------------------------
 
 
-def _member_list(text: str) -> list:
-    out = []
-    for part in str(text or "").split(","):
-        bits = part.split(":")
-        if len(bits) != 4:
-            continue
-        name, seat, cls, level = bits
-        try:
-            out.append({"name": name, "seat": seat, "class": cls, "level": int(level)})
-        except ValueError:
-            continue
-    return out
+def carrier_info(asks, answers):
+    if not asks or not answers:
+        return None
+    answers_by_ask = {}
+    for a in answers:
+        answers_by_ask.setdefault(a.ask_id, []).append(a)
+    
+    for ask in asks:
+        for ans in answers_by_ask.get(ask.id, []):
+            if ans.stance == "carry":
+                carrier_name = ans.member
+                members = _member_list(ask.members) if hasattr(ask, 'members') else []
+                carried = {}
+                for m in members:
+                    carried[m["name"]] = (m["level"], 0)
+                return {"carrier": carrier_name, "carried": carried}
+    return None
+
 
 
 def _n(count: int, word: str) -> str:
