@@ -10,6 +10,8 @@ from unittest import mock
 
 from test_guildcorps import TRAINABLE, VENDORS, held, tailor
 
+import claims
+
 
 class GuildJobReservations(unittest.TestCase):
     def test_every_affected_pass_keeps_the_active_job_holder_busy(self):
@@ -45,7 +47,7 @@ class GuildJobReservations(unittest.TestCase):
                 )
                 expression = compile(ast.Expression(assignment.value), name, "eval")
                 # The expression comes only from checked-in bridge code.
-                busy = eval(expression, {"self": member})  # noqa: S307
+                busy = eval(expression, {"self": member, "claims": claims})  # noqa: S307 -- the expression comes only from checked-in bridge.py
                 self.assertIn("Tailor", busy)
 
 

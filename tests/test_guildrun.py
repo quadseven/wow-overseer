@@ -1614,7 +1614,11 @@ class TheWiring(unittest.TestCase):
 
     def test_a_member_in_a_run_is_left_alone_by_the_guild_passes(self):
         self.assertEqual(
-            BRIDGE.count('busy = set(getattr(self, "_guild_run_names", ())) | '), 4
+            BRIDGE.count('busy = set(getattr(self, "_guild_run_names", ())) | '), 0
+        )
+        self.assertGreaterEqual(
+            BRIDGE.count('claims.busy_members(getattr(self, "_guild_run_names", ())'),
+            6,
         )
 
     def test_nothing_new_is_formed_while_the_switch_is_off(self):

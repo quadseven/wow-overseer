@@ -13,16 +13,21 @@ import unittest
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
+CLAIMS = (HERE / "claims.py").read_text(encoding="utf-8")
 
 
 class TheFreedKnight(unittest.TestCase):
     def test_the_pass_subtracts_the_freed_knights_from_busy(self):
         self.assertIn("busy -= self._stranded_knights_freed(members)", BRIDGE)
 
+    def test_the_knight_rule_lives_in_claims(self):
+        self.assertIn("DEATH_KNIGHT_START_MAP", CLAIMS)
+        self.assertIn("def is_stranded_knight", CLAIMS)
+        self.assertIn("def stranded_knights", CLAIMS)
+        self.assertIn("claims.stranded_knights(", BRIDGE)
+
     def test_only_a_knight_in_its_start_zone_not_on_its_own_step_is_freed(self):
-        body = BRIDGE.split("def _stranded_knights_freed", 1)[1].split(
-            "async def _plan_guild_jobs", 1
-        )[0]
+        body = CLAIMS.split("def stranded_knights", 1)[1]
         self.assertIn("classquest.DEATH_KNIGHT", body)
         self.assertIn("classquest.DEATH_KNIGHT_START_MAP", body)
         self.assertIn("m.name not in self._job_steps", body)
