@@ -15,6 +15,7 @@ import { guildSlugs, guildName } from "../families.js";
 
 const TEAMS = (g) => "/api/v2/raidteams?guild=" + encodeURIComponent(g);
 const GOALS = "/api/raidgoals";
+const ROAD = (g) => "/api/v2/ragnaros?guild=" + encodeURIComponent(g);
 const UPS = (name) => "/api/upgrades?name=" + encodeURIComponent(name);
 
 // The reads the router polls for this route (see after()).
@@ -343,6 +344,57 @@ function basis(goals, card) {
   return html`<details class="fold raid-basis"><summary>How this is counted</summary><div class="raid-lines">${lines.map((l) => html`<span class="small dim">${l}</span>`)}<span class="small dim">Seats come from /api/v2/raidteams. Open seats are shown as open, never filled in.</span></div></details>`;
 }
 
+// ---- the road to Ragnaros ------------------------------------------------------
+//
+// One card above everything else: the server total (/api/v2/ragnaros), the
+// eight goal checkpoints as seats passing, every blocker with the seats it
+// holds back, and the Molten Core attempts. A milestone the server could not
+// measure says so with its reason; it is never drawn as zero.
+
+function roadTone(m) {
+  if (m.percent == null) return "";
+  return m.percent >= 100 ? "ok" : m.percent === 0 ? "bad" : "warn";
+}
+
+function roadRow(m) {
+  if (m.unit === "kill") {
+    const text = !m.measured ? notMeasured() : m.have ? "fallen" : "not yet";
+    return html`<div class="road-row"><span class="road-label"><b>${m.key}</b> ${m.label}</span><span class="road-count ${m.have ? "ok" : ""}">${text}</span></div>`;
+  }
+  if (!m.measured) {
+    return html`<div class="road-row"><span class="road-label"><b>${m.key}</b> ${m.label}<span class="gate-rule">${m.reason || ""}</span></span><span class="road-count">${notMeasured()}</span></div>`;
+  }
+  const t = roadTone(m);
+  const unread = m.unread ? html`<span class="dim"> | ${m.unread} not measured</span>` : "";
+  return html`<div class="road-row"><span class="road-label"><b>${m.key}</b> ${m.label}<span class="gate-rule">${m.rule}${m.note ? ". " + m.note : ""}</span></span><span class="road-count ${t}">${m.have} / ${m.want}${unread}</span><span class="gate-bar" aria-hidden="true"><span style="width:${m.percent}%" data-tone="${t}"></span></span></div>`;
+}
+
+function roadBlocker(b, milestones) {
+  const m = milestones.find((x) => x.key === b.milestone);
+  const names = (b.names || []).length ? html`<span class="dim"> ${b.names.join(", ")}${b.seats_short > b.names.length ? " and " + (b.seats_short - b.names.length) + " more" : ""}</span>` : "";
+  return html`<div class="road-blocker"><span><b>${b.milestone}</b> ${b.text}${names}</span><span class="${roadTone(m || {}) || "warn"}">${plural(b.seats_short, "seat")} short</span></div>`;
+}
+
+function roadCard(read) {
+  const wait = pendingRead(read, 2);
+  if (wait) return html`<section class="card raid-road"><span class="card-title">Road to Ragnaros</span>${wait}</section>`;
+  const d = read.data;
+  if (!d || !d.milestones) return "";
+  const pct = d.total.percent;
+  const a = d.attempts || {};
+  const best = a.best ? a.best.bosses_done + (a.best.bosses_total ? " of " + a.best.bosses_total : "") + " bosses" : "no boss yet";
+  const attempts = !a.measured
+    ? html`Ragnaros attempts: ${notMeasured()}.`
+    : html`Ragnaros attempts: ${plural(a.entered, "run")} went in, ${plural(a.wiped, "wipe")}, best ${best}.`;
+  const sixty = d.projected_60 ? "Level 60 for the 30th seat is projected for " + d.projected_60 + "." : "";
+  const total = pct == null ? notMeasured() : html`<span class="road-total-n">${pct}%</span>`;
+  const bar = pct == null ? "" : html`<span class="gate-bar" aria-hidden="true"><span style="width:${pct}%" data-tone="${pct >= 100 ? "ok" : ""}"></span></span>`;
+  const blockers = d.blockers.length
+    ? html`<div class="road-blockers">${d.blockers.map((b) => roadBlocker(b, d.milestones))}</div>`
+    : html`<span class="muted">No measured blocker.</span>`;
+  return html`<section class="card raid-road"><span class="card-title">Road to Ragnaros</span><div class="road-total"><span>${total}<span class="muted"> of the way to an attempt</span></span>${bar}</div><span class="small dim">${d.total.how}</span><div class="road-rows">${d.milestones.map(roadRow)}</div><span class="card-title">Blockers, most seats first</span>${blockers}<span class="muted">${attempts} ${sixty}</span></section>`;
+}
+
 // ---- the page --------------------------------------------------------------------
 
 function summaryLine(card, teams, gates, raiders) {
@@ -385,7 +437,7 @@ export default {
   css: ["views/raid.css"],
   every: 60000,
   reads(ctx) {
-    routed = [GOALS, TEAMS(ctx.params.guild), ...upgradeReads(ctx)];
+    routed = [GOALS, TEAMS(ctx.params.guild), ROAD(ctx.params.guild), ...upgradeReads(ctx)];
     return routed;
   },
   title: (ctx) => "Molten Core, " + cap(ctx.params.guild),
@@ -401,6 +453,7 @@ export default {
     const gates = gateList(card);
     const seats = teams ? plural((teams.seats || []).flat().length, "seat") : "";
     return html`${header(ctx, summaryLine(card, teams, gates, raiders), seats)}
+${roadCard(ctx.get(ROAD(ctx.params.guild)))}
 ${headCard(card)}
 ${card.encounter_line ? html`<section class="card raid-block"><h2 class="raid-h2">Encounter capabilities</h2><p class="muted">${card.encounter_line}</p></section>` : ""}
 ${lineupSection(ctx, card, teamsRead, raiders, gates)}
