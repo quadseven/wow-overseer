@@ -54,7 +54,8 @@ def _vendor_seller_fetch_blocks_trip(namespace_extra=None):
         "_HELD_FETCH_SINCE": {},
         "_vendor_sellers_held_for_leader": lambda *args: {
             "HeldSeller": jev_family_intent.Member(
-                "HeldSeller", "held too far to walk", "3500")
+                "HeldSeller", "held too far to walk", "3500"
+            )
         },
     }
     namespace.update(namespace_extra or {})
@@ -328,13 +329,17 @@ class TheHeldFollowerGuardHasABound(unittest.TestCase):
     BOUND = vendor_stall.HELD_FETCH_BOUND_SECONDS
 
     def _guard(self, lines):
-        held = {"Zork": jev_family_intent.Member(
-            "Zork", "held too far to walk", "3100")}
-        return _vendor_seller_fetch_blocks_trip({
-            "_vendor_sellers_held_for_leader": lambda *args: held,
-            "log": types.SimpleNamespace(
-                info=lambda fmt, *args: lines.append(fmt % args)),
-        })
+        held = {
+            "Zork": jev_family_intent.Member("Zork", "held too far to walk", "3100")
+        }
+        return _vendor_seller_fetch_blocks_trip(
+            {
+                "_vendor_sellers_held_for_leader": lambda *args: held,
+                "log": types.SimpleNamespace(
+                    info=lambda fmt, *args: lines.append(fmt % args)
+                ),
+            }
+        )
 
     def test_the_guard_holds_inside_the_bound_and_lets_the_trip_go_after(self):
         lines, since = [], {}
@@ -376,23 +381,27 @@ class TheHeldFollowerGuardHasABound(unittest.TestCase):
     def test_one_follower_still_inside_its_bound_keeps_the_guard(self):
         since = {}
         vendor_stall.held_fetch_bound("Zug", ["Zork"], since, 0.0)
-        both = vendor_stall.held_fetch_bound(
-            "Zug", ["Zork", "Uzza"], since, self.BOUND)
+        both = vendor_stall.held_fetch_bound("Zug", ["Zork", "Uzza"], since, self.BOUND)
         self.assertTrue(both)
         self.assertEqual(("Zork",), both.left_behind)
 
     def test_the_trip_goes_for_the_members_who_stand_with_the_leader(self):
         names, free, sellable = vendor_stall.without_left_behind(
-            self.NAMES, self.FREE, self.SELLABLE, ("Zork",))
+            self.NAMES, self.FREE, self.SELLABLE, ("Zork",)
+        )
         self.assertNotIn("Zork", names)
         self.assertNotIn("Zork", free)
         self.assertNotIn("Zork", sellable)
         # Oz and Uzza logged "no vendor within reach" on every pass for
         # hours: the sustained wait that takes a trip once the guard lets go.
         namespace = _vendor_pass_mode(
-            {"_fetch_vendor_wait_seconds": lambda n: 3 * 60 * 60})
-        mode = asyncio.run(namespace["_vendor_pass_mode"](
-            None, names, free, sellable, False, held_seller_for_leader=False))
+            {"_fetch_vendor_wait_seconds": lambda n: 3 * 60 * 60}
+        )
+        mode = asyncio.run(
+            namespace["_vendor_pass_mode"](
+                None, names, free, sellable, False, held_seller_for_leader=False
+            )
+        )
         self.assertEqual(bag_pressure.VENDOR_MODE_TRIP, mode)
 
     def test_no_trip_rearms_on_stacks_only_the_absent_member_carries(self):
@@ -401,17 +410,22 @@ class TheHeldFollowerGuardHasABound(unittest.TestCase):
         sold = dict(self.SELLABLE, Oz=0, Uzza=0)
         free = dict(self.FREE, Oz=26, Uzza=14)
         names, free, sold = vendor_stall.without_left_behind(
-            self.NAMES, free, sold, ("Zork",))
+            self.NAMES, free, sold, ("Zork",)
+        )
         namespace = _vendor_pass_mode(
-            {"_fetch_vendor_wait_seconds": lambda n: 8 * 60 * 60})
-        mode = asyncio.run(namespace["_vendor_pass_mode"](
-            None, names, free, sold, False, held_seller_for_leader=False))
+            {"_fetch_vendor_wait_seconds": lambda n: 8 * 60 * 60}
+        )
+        mode = asyncio.run(
+            namespace["_vendor_pass_mode"](
+                None, names, free, sold, False, held_seller_for_leader=False
+            )
+        )
         self.assertEqual(bag_pressure.VENDOR_MODE_COUNTER, mode)
 
     def test_the_economy_pass_judges_the_trip_without_the_left_behind(self):
         # The wiring in _vendor_once: the pass mode is asked about the family
         # without the members the guard left behind.
-        body = BRIDGE[BRIDGE.index("async def _vendor_once("):]
-        body = body[:body.index("\n    async def ", 10)]
+        body = BRIDGE[BRIDGE.index("async def _vendor_once(") :]
+        body = body[: body.index("\n    async def ", 10)]
         self.assertIn("vendor_stall.without_left_behind(", body)
         self.assertIn("trip_names, trip_free, trip_sellable, in_run", body)

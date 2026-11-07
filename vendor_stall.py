@@ -154,8 +154,9 @@ def held_fetch_bound(
     return HeldFetch(bool(waiting), tuple(left), tuple(newly))
 
 
-def without_left_behind(names, free_slots: Mapping, sellable_counts: Mapping,
-                        left_behind) -> tuple:
+def without_left_behind(
+    names, free_slots: Mapping, sellable_counts: Mapping, left_behind
+) -> tuple:
     """The family the vendor trip is judged for, without the left-behind members.
 
     A member left behind does not walk with the leader, so its goods and its
