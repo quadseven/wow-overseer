@@ -1134,11 +1134,12 @@ class Broken(unittest.TestCase):
         # The reason is the one the catalogue proves, never a per-quest claim.
         self.assertEqual(questers.STALLED_UNSOURCED, p.broken[0].reason)
 
-    def test_quest_128_blackrock_bounty_has_specific_stall_reason(self):
-        # Quest 128 "Blackrock Bounty" in Redridge Mountains (level 25) requires
-        # killing creatures that have no spawns in the world database. The quest
-        # has kills but no fields (no spawns of the required creatures), so it
-        # would be STALLED_UNSOURCED. We add a specific reason explaining why.
+    def test_quest_128_blackrock_bounty_stall_names_no_invented_cause(self):
+        # Quest 128 (Blackrock Bounty) once carried a hard-coded reason that
+        # the world database contradicts: it needs 15 kills of creature 435
+        # (Blackrock Champion), which has 24 spawns in Redridge Mountains. With
+        # no field for its objective in this fixture, the generic unsourced
+        # stall is the only reason the catalogue supports.
         blackrock = quest(
             128, REDRIDGE, 25, kill=500, count=8, title="Blackrock Bounty"
         )
@@ -1167,12 +1168,11 @@ class Broken(unittest.TestCase):
         # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
         for i in range(1, 13):
             p = questers.plan(cat, member, clock, 600.0 * i)
-        # After 2 hours of play - quest should be stalled with specific reason
+        # After 2 hours of play the quest stalls
         self.assertEqual(len(p.broken), 1)
         self.assertEqual(p.broken[0].quest, 128)
-        # Should have a specific reason, not just STALLED_UNSOURCED
-        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
-        self.assertIn("Blackrock Bounty", p.broken[0].reason)
+        # The reason is the one the catalogue proves, never a per-quest claim.
+        self.assertEqual(questers.STALLED_UNSOURCED, p.broken[0].reason)
 
     def test_quest_122_underbelly_scales_has_specific_stall_reason(self):
         # Quest 122 "Underbelly Scales" in Redridge Mountains (level 18) requires
