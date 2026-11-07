@@ -120,6 +120,13 @@ MEET_SECONDS = guildroute.follow_seconds(guildroute.FAR_WALK_YARDS) + 10.0
 # module refreshes the snapshot every few seconds.
 MEET_READS = 3
 MEET_READ_SECONDS = 10.0
+# Seconds a member that reaches the objective first is held there for the rest
+# (#888): the meeting walk's `stay:` word. On 2026-11-07 a helper arrived, was
+# let go, and walked 2,478 yards to a weapon vendor 5 s later; the leader
+# landed four minutes after and the meeting failed "stood too far". The hold
+# covers the slowest walk, the snapshot reads and a margin, and stays inside the
+# module's ceiling for the word (SPAWN_WALK_STAY_MAX_SECONDS, 2400).
+MEET_STAY_SECONDS = int(MEET_SECONDS + MEET_READS * MEET_READ_SECONDS + 30)
 
 # Seconds the bridge reads a party-up row's answer before it counts as lost.
 UP_FOLLOW_SECONDS = 90.0
@@ -440,8 +447,14 @@ def walk_command(spot, cap) -> str:
 
 
 def meet_command(spot, cap) -> str:
-    """The walk one member makes alone to the objective spawn to meet the rest."""
-    return "%s creature:%d%s" % (MEET, int(spot.guid), guildroute.errand_cap_word(cap))
+    """The walk one member makes alone to the objective spawn to meet the rest,
+    held there on arrival until the others come (MEET_STAY_SECONDS)."""
+    return "%s creature:%d%s stay:%d" % (
+        MEET,
+        int(spot.guid),
+        guildroute.errand_cap_word(cap),
+        MEET_STAY_SECONDS,
+    )
 
 
 def hunt_command(quest, spot, item_form=True) -> str:

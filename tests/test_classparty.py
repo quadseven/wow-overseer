@@ -1123,12 +1123,26 @@ class TheMeeting(unittest.TestCase):
 
     def test_the_walk_and_the_line(self):
         self.assertEqual(
-            classparty.meet_command(SPOT, 20000.0), "walk-to-spawn creature:9 max:20000"
+            classparty.meet_command(SPOT, 20000.0),
+            "walk-to-spawn creature:9 max:20000 stay:2170",
         )
         self.assertEqual(
             classparty.meet_command(SPOT, guildroute.TRAINER_WALK_YARDS),
-            "walk-to-spawn creature:9",
+            "walk-to-spawn creature:9 stay:2170",
         )
+
+    def test_the_first_to_arrive_is_held_for_the_rest(self):
+        # #888: the helper that arrived first was let go and walked off to a
+        # vendor before the leader came. The meeting walk asks the module to
+        # hold it there for the whole meeting, inside the module's ceiling.
+        meet = classparty.meet_command(SPOT, 20000.0)
+        stay = int(meet.rsplit("stay:", 1)[1])
+        self.assertGreaterEqual(
+            stay,
+            classparty.MEET_SECONDS
+            + classparty.MEET_READS * classparty.MEET_READ_SECONDS,
+        )
+        self.assertLessEqual(stay, 2400)
         self.assertEqual(
             classparty.meet_line(a_run()),
             "class party: Chill, Dread meet Bigzug at Lizard for Group Job",
