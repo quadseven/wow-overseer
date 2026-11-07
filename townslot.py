@@ -1632,8 +1632,9 @@ class Slot:
             `vendor` and `repair` roles too, and the coordinator holds its run
             for that trip: handing it back every minute on wow-dev 2026-09-23
             restarted the Horde head's trip each time and the run waited on
-            every restart. A bridge errand orphaned by a restart is bounded by
-            the module's own wait for it and by the errand's backstop;
+            every restart. Left alone for ever, it deadlocked instead (#1452),
+            so one that has stood unchanged for the orphan lease is handed
+            back once for that stand (`_stale_keyword_orphan`);
           * an ORPHAN ground aim (one this process does not remember writing,
             which is every aim after a restart) is handed back only after it
             has stood unchanged for `LEASE_SECONDS`, and only once per aim.
@@ -1655,10 +1656,41 @@ class Slot:
         if holder.claimant:
             return holder
         if not ground(holder.aim):
-            return None
+            return self._stale_keyword_orphan(holder, now)
         if holder.aim in self._yielded or now - holder.since < self.lease:
             return None
         self._yielded.add(holder.aim)
+        return holder
+
+    def _stale_keyword_orphan(self, holder: Holder, now: float) -> Holder | None:
+        """A keyword orphan that has outlived the orphan lease, once per stand.
+
+        THE LEFT-TO-ITS-WRITER RULE (#265) HAD NO END, AND BOTH SIDES WAITED
+        (#1452). A bridge restart forgets which pass wrote a `vendor` aim, so
+        it becomes an orphan, and the rule leaves an orphan keyword to its
+        writer. mod-overseer gives up on a walk it cannot finish but leaves
+        the column alone, because its book did not claim that aim ("the pass
+        that wrote it has not cleared it"). Measured on the dev realm
+        2026-11-07: the Horde leader carried `vendor` from 11:50Z to past
+        18:00Z, the module failed the walk every 15 minutes (no route to a
+        vendor 134 yards off), and every town pass, the guild bank included,
+        waited behind the campaign and that dead aim, 360 lines of "not a
+        bridge errand this pass may hand back yet" in one day.
+
+        So the rule keeps its reason and gains a bound. A keyword aim that
+        stood unchanged for the orphan lease (20 minutes, far past the
+        module's own 60-second stuck window and a town-service walk of at
+        most 1500 yards) is dead whoever wrote it, and it is handed back once
+        for that stand. A writer that re-arms it starts a new stand with a new
+        clock, so the hand-back #265 measured every minute is at most once per
+        orphan lease here.
+        """
+        if now - holder.since < self.orphan_lease:
+            return None
+        stand = (holder.aim, holder.since)
+        if stand in self._yielded:
+            return None
+        self._yielded.add(stand)
         return holder
 
     def released_for_campaign(self, holder: Holder, released: bool) -> None:

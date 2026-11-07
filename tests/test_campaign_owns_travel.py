@@ -227,13 +227,56 @@ class WhatTheBridgeHandsBack(unittest.TestCase):
     def test_a_keyword_orphan_is_left_to_its_writer(self):
         """mod-overseer's town trip writes `vendor` too (wow-overseer#265):
         handed back every minute on wow-dev, the Horde head's trip restarted
-        and the coordinator held the run behind each restart."""
+        and the coordinator held the run behind each restart. So it is left
+        alone for the whole orphan lease."""
         slot = townslot.Slot(releasable=economy)
-        for now in (0.0, townslot.LEASE_SECONDS, 5000.0):
+        for now in (
+            0.0,
+            60.0,
+            townslot.LEASE_SECONDS,
+            townslot.ORPHAN_LEASE_SECONDS - 1.0,
+        ):
             got = slot.campaign_release(
                 leader="Zug", column="vendor", now=now, ground=travel.is_ground_aim
             )
             self.assertIsNone(got, now)
+
+    def test_a_dead_keyword_orphan_is_handed_back_after_the_orphan_lease(self):
+        """#1452: after a bridge restart the Horde leader carried `vendor`
+        for six hours. The module gave up on the walk and left the column,
+        and the bridge left the orphan to its writer, so every town pass
+        waited behind it. Past the orphan lease it is handed back."""
+        slot = townslot.Slot(releasable=economy)
+        ask = dict(leader="Zug", column="vendor", ground=travel.is_ground_aim)
+        self.assertIsNone(slot.campaign_release(now=0.0, **ask))
+        got = slot.campaign_release(now=townslot.ORPHAN_LEASE_SECONDS, **ask)
+        self.assertIsNotNone(got)
+        self.assertEqual("vendor", got.aim)
+        self.assertEqual("", got.claimant)
+
+    def test_a_dead_keyword_orphan_is_handed_back_once_per_stand(self):
+        """A release that did not take is not retried every minute; a writer
+        that re-arms the aim starts a new stand with its own lease."""
+        slot = townslot.Slot(releasable=economy)
+        ask = dict(leader="Zug", ground=travel.is_ground_aim)
+        slot.campaign_release(now=0.0, column="vendor", **ask)
+        lease = townslot.ORPHAN_LEASE_SECONDS
+        first = slot.campaign_release(now=lease, column="vendor", **ask)
+        self.assertIsNotNone(first)
+        slot.released_for_campaign(first, False)
+        self.assertIsNone(
+            slot.campaign_release(now=lease + 60.0, column="vendor", **ask)
+        )
+        # Released after all, then re-armed: a new stand, a new lease.
+        slot.campaign_release(now=lease + 120.0, column="", **ask)
+        self.assertIsNone(
+            slot.campaign_release(now=lease + 180.0, column="vendor", **ask)
+        )
+        self.assertIsNone(
+            slot.campaign_release(now=2 * lease + 100.0, column="vendor", **ask)
+        )
+        again = slot.campaign_release(now=2 * lease + 180.0, column="vendor", **ask)
+        self.assertIsNotNone(again)
 
     def test_a_keyword_aim_a_bridge_pass_wrote_is_still_handed_back(self):
         slot = townslot.Slot(releasable=economy)
