@@ -407,9 +407,51 @@ REWARDED_SQL = (
 # quests, and a broken quest written into it. A quest already in the ledger
 # keeps the time it was first taken.
 LEDGER_SQL = (
-    "SELECT l.quest, c.name, l.state FROM overseer_quest_ledger l "
+    "SELECT l.quest, c.name, l.state, l.reason FROM overseer_quest_ledger l "
     "JOIN characters c ON c.guid = l.guid WHERE c.name IN ({names})"
 )
+# A LEDGER STALL IS NOT A FACT ABOUT THE QUEST (#1867). "Its objectives did not
+# move for 2 hours of play" says how one quester's play went, judged by the
+# stall clock; the bridge's broken memo holds the stalls that clock judged and
+# drops those the clock before #1809 judged (QUESTER_STALL_CLOCK_KEY, #1957).
+# The ledger row stays broken after that, so reading every broken ledger row
+# as broken put the old stalls straight back: on the dev realm Blackrock Bounty
+# (quest 128) was shared to the Cave questers 69 times between 2026-10-20 and
+# 2026-11-07 and dropped 104 times, each drop within minutes of its share or
+# of the quest coming back, and no quester ever wrote one walk or hunt row for
+# its Blackrock Champions (creature 435, 24 spawns in Redridge). A broken
+# ledger row whose reason is a stall reads LEDGER_STALLED: still broken for the
+# ledger's own writes, but the quest is held broken only while the memo holds
+# that stall.
+LEDGER_BROKEN = "broken"
+LEDGER_STALLED = "stalled"
+
+
+def ledger_state(state, reason) -> str:
+    """The quester pass's reading of one ledger row: LEDGER_STALLED for a
+    broken row whose reason is a stall, else the row's own state."""
+    state = str(state or "")
+    if state == LEDGER_BROKEN and str(reason or "").startswith(STALLED):
+        return LEDGER_STALLED
+    return state
+
+
+def ledger_says_broken(state) -> bool:
+    """True when the ledger row already records the quest as broken."""
+    return state in (LEDGER_BROKEN, LEDGER_STALLED)
+
+
+def known_broken(name, held, ledger) -> frozenset:
+    """The quests the quester holds broken: every quest of its memo (`held`)
+    and each quest the ledger records broken for a fact about the world, never
+    one the ledger records broken only for a stall the memo no longer holds."""
+    return frozenset(int(q) for q in held) | frozenset(
+        q
+        for (who, q), state in ledger.items()
+        if who == name and state == LEDGER_BROKEN
+    )
+
+
 BROKEN_SQL = (
     "INSERT INTO overseer_quest_ledger "
     "(quest, guid, character_name, state, first_taken, finished, reason) "
