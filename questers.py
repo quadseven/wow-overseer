@@ -230,7 +230,6 @@ CRAFTED_CRAB_CAKES = "requires crafted Crab Cakes (item 2683); questers cannot c
 FORGOTTEN_HEIRLOOM = (
     "The Forgotten Heirloom (quest 64) requires an item no spawned creature drops"
 )
-BLACKROCK_BOUNTY = "Blackrock Bounty (quest 128) requires creatures with no spawns in Redridge Mountains"
 FARGODEEP_EXPLORATION = (
     "requires exploring Fargodeep Mine; questers cannot earn exploration credit"
 )
@@ -1288,8 +1287,6 @@ def _broken_reason(
         return CRAFTED_CRAB_CAKES
     if quest.id == 64 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return FORGOTTEN_HEIRLOOM
-    if quest.id == 128 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
-        return BLACKROCK_BOUNTY
     if quest.id == 62 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return FARGODEEP_EXPLORATION
     if quest.id == 122 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
