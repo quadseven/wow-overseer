@@ -305,6 +305,39 @@ CREATE TABLE overseer_dungeon_run(
 """
 
 
+class _Cursor:
+    """A cursor that answers each statement through `answer(sql, params)`."""
+
+    def __init__(self, answer):
+        self.answer, self.rows = answer, []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, sql, params=()):
+        self.rows = self.answer(sql, params)
+
+    def fetchall(self):
+        return self.rows
+
+
+class _Connection:
+    def __init__(self, answer):
+        self.answer = answer
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def cursor(self):
+        return _Cursor(self.answer)
+
+
 class FamilyRun(unittest.TestCase):
     """A family's own Blackrock Depths run hands Ironfel in at the Shrine just
     as a guild run does (#1965). The family rows come from executing the
@@ -325,53 +358,32 @@ class FamilyRun(unittest.TestCase):
         self.log = [{"name": "Zork", "quest": 3802, "status": 1}]
         self.guild_runs = []
 
+    def _ledger(self, sql, params):
+        """The family statements, run on sqlite; a missing table or column
+        comes back as the MySQL error the bridge tolerates."""
+        try:
+            rows = self.db.execute(sql.replace("%s", "?"), params)
+        except sqlite3.OperationalError as error:
+            code = 1146 if "no such table" in str(error) else 1054
+            raise PYMYSQL.err.MySQLError(code, str(error)) from error
+        return [dict(r) for r in rows]
+
+    def _answer(self, sql, params):
+        """Rows for one statement of the pass: the family ledger off sqlite,
+        everything else from the fixture rows (first matching table wins)."""
+        if "overseer_dungeon_queue" in sql or "overseer_dungeon_run" in sql:
+            return self._ledger(sql, params)
+        fixtures = (
+            ("overseer_snapshot", [self.carrier]),
+            ("character_queststatus_rewarded", []),
+            ("character_queststatus", list(self.log)),
+            ("acore_world.creature", [FRANCLORN_ROW, SHRINE_ROW]),
+            ("overseer_guild_run", list(self.guild_runs)),
+        )
+        return next((rows for table, rows in fixtures if table in sql), [])
+
     def _connect(self):
-        """A connection whose family statement runs on sqlite; the other
-        statements of the pass answer from the fixture rows."""
-        subject = self
-
-        class Cursor:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-            def execute(self, sql, params=()):
-                if "overseer_dungeon_queue" in sql or "overseer_dungeon_run" in sql:
-                    try:
-                        rows = subject.db.execute(sql.replace("%s", "?"), params)
-                    except sqlite3.OperationalError as error:
-                        code = 1146 if "no such table" in str(error) else 1054
-                        raise PYMYSQL.err.MySQLError(code, str(error)) from error
-                    self.rows = [dict(r) for r in rows]
-                elif "overseer_snapshot" in sql:
-                    self.rows = [subject.carrier]
-                elif "character_queststatus_rewarded" in sql:
-                    self.rows = []
-                elif "character_queststatus" in sql:
-                    self.rows = list(subject.log)
-                elif "acore_world.creature" in sql:
-                    self.rows = [FRANCLORN_ROW, SHRINE_ROW]
-                elif "overseer_guild_run" in sql:
-                    self.rows = list(subject.guild_runs)
-                else:
-                    self.rows = []
-
-            def fetchall(self):
-                return self.rows
-
-        class Connection:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-            def cursor(self):
-                return Cursor()
-
-        return Connection()
+        return _Connection(self._answer)
 
     def _rows(self):
         with mock.patch.object(self.bridge, "_connect", self._connect):
