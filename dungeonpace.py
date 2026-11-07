@@ -625,7 +625,7 @@ def _open_to(run, level: int, level_rows, keys) -> bool:
         return False
     if level < run.floor or run.ceiling + OUTGROWN_GRACE < level:
         return False
-    need = campaignplan.DOOR_KEYS.get(run.keyword)
+    need = campaignplan.door_lock(run.keyword)
     return need is None or (keys is not None and need[0] in keys)
 
 

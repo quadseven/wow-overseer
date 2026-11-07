@@ -131,15 +131,36 @@ class WhatAFamilyIsOffered(unittest.TestCase):
             ],
         )
 
-    def test_blackrock_depths_waits_for_the_shadowforge_key(self):
-        """The Shadowforge gates and the Lyceum open only for a member who
-        carries the key (#785); it comes from the quest Dark Iron Legacy."""
-        opts = campaignplan.options(facts(ALLIANCE, EASTERN_KINGDOMS))
-        self.assertNotIn("blackrock-depths", keywords(opts))
-        refused = campaignplan.refusals(
-            facts(ALLIANCE, EASTERN_KINGDOMS, keys=frozenset())
-        )
-        self.assertIn("the Shadowforge Key", refused["blackrock-depths"])
+    def test_blackrock_depths_is_offered_without_the_shadowforge_key(self):
+        """The Shadowforge Key's one source is the quest Dark Iron Legacy,
+        inside Blackrock Depths, so locking the run on it kept every family out
+        of the place it is earned (#1964). The keyless run clears up to the
+        Shadowforge gates."""
+        for keys in (None, frozenset()):
+            opts = campaignplan.options(facts(ALLIANCE, EASTERN_KINGDOMS, keys=keys))
+            self.assertIn("blackrock-depths", keywords(opts), keys)
+            kinds = campaignplan.refusal_kinds(
+                facts(ALLIANCE, EASTERN_KINGDOMS, keys=keys)
+            )
+            self.assertNotIn("blackrock-depths", kinds, keys)
+
+    def test_a_key_from_another_wing_still_locks(self):
+        """The Scarlet Key, the Crescent Key and the Key to the City come from
+        another wing, so their doors stay locked without them."""
+        with mock.patch.dict(dungeonpath.WITHHELD_DOORS, {}, clear=True):
+            kinds = campaignplan.refusal_kinds(
+                facts(ALLIANCE, EASTERN_KINGDOMS, keys=frozenset())
+            )
+        self.assertEqual(kinds["stratholme-undead"][0], campaignplan.REFUSED_LOCKED)
+        for keyword in (
+            "scarlet-armory",
+            "scarlet-cathedral",
+            "dire-maul-west-north",
+            "dire-maul-north",
+            "stratholme-undead",
+        ):
+            self.assertIsNotNone(campaignplan.door_lock(keyword), keyword)
+        self.assertIsNone(campaignplan.door_lock("blackrock-depths"))
 
     def test_stratholme_joins_once_it_is_no_longer_withheld(self):
         with mock.patch.dict(dungeonpath.WITHHELD_DOORS, {}, clear=True):
