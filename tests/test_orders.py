@@ -125,6 +125,91 @@ class SendTests(unittest.TestCase):
             )
 
 
+class StrictStoreTests(unittest.TestCase):
+    """A strict store raises the schema errors a lenient one answers as 0.
+
+    The bridge's own writers never treated a missing table or column as "the
+    realm does not know this verb"; they let it raise. strict=True keeps that.
+    """
+
+    def test_strict_insert_raises_the_machinery_errors(self):
+        for code in orders.MISSING_MACHINERY:
+            with self.assertRaises(FakeMySqlError):
+                orders.send(
+                    orders.MySqlStore(FakeDb(raises=code), strict=True),
+                    orders.Order("B", "c", "s", kind="chat"),
+                )
+
+    def test_strict_store_still_writes_a_row_when_nothing_fails(self):
+        db = FakeDb(next_id=9)
+        self.assertEqual(
+            9,
+            orders.send(
+                orders.MySqlStore(db, strict=True), orders.Order("B", "c", "s")
+            ),
+        )
+
+
+class CommandOrderTests(unittest.TestCase):
+    """The plain-command row, as core.InsertCommand carries it."""
+
+    def test_the_row_is_the_three_column_insert_the_bridge_always_wrote(self):
+        db = FakeDb(next_id=4)
+        cmd = type(
+            "Cmd",
+            (),
+            {"target_name": "Brug", "command": "co +x", "source": "overseer:life"},
+        )()
+        row_id = orders.send(
+            orders.MySqlStore(db, strict=True), orders.command_order(cmd)
+        )
+        self.assertEqual(4, row_id)
+        self.assertEqual(
+            (
+                "INSERT INTO overseer_command (target_name, command, source) "
+                "VALUES (%s, %s, %s)",
+                ("Brug", "co +x", "overseer:life"),
+            ),
+            db.calls[0],
+        )
+
+
+class SpeakOrderTests(unittest.TestCase):
+    """#217: the council pass failed every cycle on DataError 1406."""
+
+    LONG = " ".join(["a long council sentence"] * 30)
+
+    def test_a_line_over_the_column_is_fitted_before_it_is_written(self):
+        import relay
+
+        db = FakeDb()
+        cmd = relay.SpeakCommand("Grug", "party", self.LONG, "", "overseer:council")
+        orders.send(orders.MySqlStore(db, strict=True), orders.speak_order(cmd))
+        sql, args = db.calls[0]
+        self.assertIn("kind", sql)
+        self.assertEqual(
+            (
+                "Grug",
+                relay.fit_spoken(self.LONG),
+                "chat",
+                "",
+                "party",
+                "overseer:council",
+            ),
+            args,
+        )
+        self.assertLessEqual(len(args[1]), 255)
+
+    def test_a_whisper_carries_its_target(self):
+        import relay
+
+        cmd = relay.SpeakCommand("Grug", "whisper", "hi", "Ugga", "src")
+        order = orders.speak_order(cmd)
+        self.assertEqual(
+            ("chat", "whisper", "Ugga"), (order.kind, order.channel, order.target_arg)
+        )
+
+
 class OnlyMySqlErrorsAreAnswersTests(unittest.TestCase):
     """A fault that is not a MySQL error is a bug, and is never read as 'no row'."""
 

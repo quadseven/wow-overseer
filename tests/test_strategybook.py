@@ -196,8 +196,9 @@ class TheBridgeWiresIt(unittest.TestCase):
     def test_an_order_is_recorded_after_its_row_is_written(self):
         body = self._function("_insert_command")
         self.assertIn("_record_strategy(cmd)", body)
+        self.assertIn("orders.send(", body)
         self.assertLess(
-            body.index("INSERT INTO overseer_command"),
+            body.index("orders.send("),
             body.index("_record_strategy(cmd)"),
         )
 
