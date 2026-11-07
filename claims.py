@@ -34,6 +34,7 @@ from __future__ import annotations
 import dataclasses
 
 import bag_pressure
+import classquest
 import townslot
 
 # The column vocabulary, re-exported so a caller names one module.
@@ -382,12 +383,10 @@ def is_stranded_knight(member, death_knight=None, start_map=None) -> bool:
     names it walks nowhere and holds it for good.
     """
     if death_knight is None or start_map is None:
-        from classquest import DEATH_KNIGHT, DEATH_KNIGHT_START_MAP
-
         if death_knight is None:
-            death_knight = DEATH_KNIGHT
+            death_knight = classquest.DEATH_KNIGHT
         if start_map is None:
-            start_map = DEATH_KNIGHT_START_MAP
+            start_map = classquest.DEATH_KNIGHT_START_MAP
     if not getattr(member, "online", False):
         return False
     try:
@@ -404,27 +403,26 @@ def stranded_knights(
     """The stranded knights to free: held by another pass, not by their own step.
 
     `members` are read for online, class, map and name, as the guild
-    jobs pass reads them. `own_steps` maps members on the step this
-    pass is running; only that step holds a knight. `held` maps a
-    label to the names that label holds, as busy_members unions them.
+    jobs pass reads them. `own_steps` maps the members on the step
+    this pass is running; the guild jobs pass passes `self._job_steps`.
+    A knight with `m.name not in self._job_steps` is freed when another
+    pass holds it. `held` maps a label to the names that label holds,
+    as busy_members unions them.
     """
-    from classquest import DEATH_KNIGHT, DEATH_KNIGHT_START_MAP
-
-    death = DEATH_KNIGHT if death_knight is None else death_knight
-    start = DEATH_KNIGHT_START_MAP if start_map is None else start_map
+    death = classquest.DEATH_KNIGHT if death_knight is None else death_knight
+    start = classquest.DEATH_KNIGHT_START_MAP if start_map is None else start_map
     held_map = _held_map(held)
     held_names = set()
     for names in held_map.values():
         held_names.update(names)
-    own = set(own_steps.keys()) if hasattr(own_steps, "keys") else set(own_steps)
     freed = set()
-    for member in members or ():
-        if member.name not in held_names:
+    for m in members or ():
+        if m.name not in held_names:
             continue
-        if member.name in own:
+        if m.name in own_steps:
             continue
-        if is_stranded_knight(member, death, start):
-            freed.add(member.name)
+        if is_stranded_knight(m, death, start):
+            freed.add(m.name)
     return freed
 
 

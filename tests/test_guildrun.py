@@ -1613,7 +1613,9 @@ class TheWiring(unittest.TestCase):
         self.assertIn("item_guid=run_id", start)
 
     def test_a_member_in_a_run_is_left_alone_by_the_guild_passes(self):
-        self.assertNotIn('busy = set(getattr(self, "_guild_run_names", ())) | ', BRIDGE)
+        self.assertEqual(
+            BRIDGE.count('busy = set(getattr(self, "_guild_run_names", ())) | '), 0
+        )
         self.assertGreaterEqual(
             BRIDGE.count('claims.busy_members(getattr(self, "_guild_run_names", ())'),
             6,
