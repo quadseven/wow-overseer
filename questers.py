@@ -48,8 +48,10 @@ WHAT A QUESTER DOES NEXT (`next_move`), one move a pass, in this order:
   5. with nothing left in reach, go to the next zone (`next_zone`): the zone
      whose band (levelroute.bands, the catalogue's own levels) is lowest of the
      zones holding a quest in reach for it whose giver it can go to (a quest
-     only an item or a gameobject starts takes no one anywhere), the most
-     quests first on a tie.
+     only an item or a gameobject starts takes no one anywhere, and a giver
+     of the other side or hostile to its own gives it nothing,
+     `hostile_givers`), a zone with a quest near its level before a zone of
+     grey leftovers, the most quests first on a tie.
      The move is the take of that zone's nearest quest; a zone on the other
      continent is a `cross-to-map` row (classquest.CROSSING_VERB) first. While
      its last crossing to a continent failed and the crossing clock holds it
@@ -609,6 +611,8 @@ class Catalogue:
     facts: dict = field(default_factory=dict)
     # side -> zone -> (floor, ceiling, count), levelroute.bands of these quests
     bands: dict = field(default_factory=dict)
+    # side -> the guids of quest givers hostile to that side (`hostile_givers`)
+    hostile: dict = field(default_factory=dict)
 
     def quest(self, quest_id):
         return self.book.quests.get(int(quest_id))
@@ -678,7 +682,39 @@ def catalogue(
             }
         )
     bands = {side: levelroute.bands(band_rows, side) for side in levelroute.RACE_MASK}
-    return Catalogue(classquest.Book(kept), facts, bands)
+    return Catalogue(classquest.Book(kept), facts, bands, hostile_givers(giver_rows))
+
+
+def hostile_givers(giver_rows) -> dict:
+    """side -> frozenset of the guids of quest givers that side cannot take a
+    quest from: a member of the other side (FactionGroup) or a creature
+    hostile to this side (EnemyGroup), off GIVERS_SQL's start rows.
+
+    A HORDE QUEST SENT AN ALLIANCE QUESTER TO DUROTAR (#1998, 2026-11-07).
+    The New Horde (787) carries AllowableRaces 0, so the race mask let every
+    quester take it, and its band in Durotar was 1, the lowest of any zone.
+    Velo, a level 31 Draenei, and Tharn, a level 19 Night Elf, were sent to
+    Eitrigg in Orgrimmar (FactionGroup Horde, EnemyGroup Alliance) on every
+    pass for hours, and a Tauren was sent to Denalan in Teldrassil the same
+    way. A quest is taken only from a giver its side can speak to."""
+    out = {side: set() for side in levelroute.RACE_MASK}
+    for r in giver_rows or ():
+        if r.get("role") != "start":
+            continue
+        group, enemy = _int(r.get("faction_group")), _int(r.get("enemy_group"))
+        for side in out:
+            mine = levelroute.GROUP_BIT[side]
+            theirs = levelroute.GROUP_BIT[levelroute.OTHER[side]]
+            if enemy & mine or group & theirs:
+                out[side].add(_int(r.get("guid")))
+    return {side: frozenset(guids) for side, guids in out.items()}
+
+
+def friendly_starters(cat: Catalogue, member, quest) -> tuple:
+    """The creature spawns that give the quest which the quester's side can
+    take it from (`hostile_givers`)."""
+    hostile = cat.hostile.get(side_of(member.race), frozenset())
+    return tuple(s for s in quest.starters if s.guid not in hostile)
 
 
 def _rep(row, end):
@@ -1141,6 +1177,8 @@ def open_to(cat: Catalogue, member, quest_id, broken=frozenset()) -> bool:
         return False
     if not quest.admits(member.race) or not _class_ok(facts, member.class_id):
         return False
+    if quest.starters and not friendly_starters(cat, member, quest):
+        return False
     if int(member.level) < quest.min_level:
         return False
     if facts.level > int(member.level) + levelroute.ABOVE:
@@ -1416,7 +1454,7 @@ def _giver_to_go_to(
                 int(s.map_id) in classquest.CONTINENTS and int(s.map_id) not in unsailed
             )
         )
-        for s in cat.quest(quest_id).starters
+        for s in friendly_starters(cat, member, cat.quest(quest_id))
     )
 
 
@@ -1460,8 +1498,15 @@ def next_zone(
     are all gone or left, is passed over, not chosen and then found to have no
     way there, pass after pass. A giver on a continent in `unsailed` (the maps
     its last crossings failed to reach for now, `failed_crossings`) counts only
-    when it stands on the quester's own map."""
+    when it stands on the quester's own map.
+
+    A zone holding a quest near the quester's level (no more than
+    levelroute.GREEN_BELOW under it) comes before a zone of grey leftovers,
+    whatever their bands (#1998: Velo at 31 was sent to a level 1 quest in
+    Durotar, and Morwick at 29 to a level 18 one in Redridge, because the
+    lowest band always came first)."""
     bands = cat.bands.get(side_of(member.race), {})
+    floor = int(member.level) - levelroute.GREEN_BELOW
     best = None
     for zone in sorted({f.zone for f in cat.facts.values()} - {member.zone}):
         opens = [
@@ -1472,7 +1517,8 @@ def next_zone(
         if not opens:
             continue
         band = bands.get(zone, (0, 0, 0))
-        key = (int(band[0]), -len(opens), zone)
+        grey = all(cat.facts[qid].level < floor for qid in opens)
+        key = (grey, int(band[0]), -len(opens), zone)
         if best is None or key < best[0]:
             best = (key, zone, opens)
     return (best[1], best[2]) if best else (0, [])
@@ -1494,7 +1540,7 @@ def _travel(cat: Catalogue, member, broken, gone, unsailed=frozenset()):
     options = []
     for qid in opens:
         quest = cat.quest(qid)
-        spot = _nearest(member, quest.starters, gone)
+        spot = _nearest(member, friendly_starters(cat, member, quest), gone)
         if spot is not None:
             options.append((_yards(member, spot), qid, quest, spot))
     if options:
@@ -1508,7 +1554,7 @@ def _travel(cat: Catalogue, member, broken, gone, unsailed=frozenset()):
         {
             int(s.map_id)
             for qid in opens
-            for s in cat.quest(qid).starters
+            for s in friendly_starters(cat, member, cat.quest(qid))
             if int(s.map_id) in classquest.CONTINENTS and s.guid not in gone
         }
     )
@@ -1677,7 +1723,7 @@ def _takes(cat: Catalogue, member, skip, left, tried) -> tuple:
             never_held.append(Broken(member.name, qid, cat.quest(qid).title, why))
             skip.add(qid)
             continue
-        spot = _nearest(member, cat.quest(qid).starters, left)
+        spot = _nearest(member, friendly_starters(cat, member, cat.quest(qid)), left)
         if spot is not None:
             takes.append((_yards(member, spot), qid, cat.quest(qid), spot))
     return takes, never_held

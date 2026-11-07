@@ -637,21 +637,27 @@ QUESTS_SQL = (  # noqa: S608
     "AND q.LogTitle NOT LIKE 'NOT A QUEST%%'"
 )
 
-# The creatures that start and end each quest, with every spawn of them.
+# The creatures that start and end each quest, with every spawn of them, and
+# the creature's FactionGroup and EnemyGroup bits (factiontemplate_dbc, 0 when
+# the template is not there): a giver of the other side, or one hostile to the
+# member's side, offers it nothing (questers.hostile_givers, #1998).
 GIVERS_SQL = (
     "SELECT s.quest AS quest, 'start' AS role, c.guid AS guid, c.id AS entry, "
     "c.map AS map_id, c.position_x AS x, c.position_y AS y, ct.name AS name, "
-    "c.position_z AS z "
+    "c.position_z AS z, COALESCE(ft.FactionGroup, 0) AS faction_group, "
+    "COALESCE(ft.EnemyGroup, 0) AS enemy_group "
     "FROM acore_world.creature_queststarter s "
     "JOIN acore_world.creature c ON c.id = s.id "
     "JOIN acore_world.creature_template ct ON ct.entry = c.id "
+    "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
     "WHERE s.quest IN ({quests}) "
     "UNION ALL "
     "SELECT e.quest, 'end', c.guid, c.id, c.map, c.position_x, c.position_y, ct.name, "
-    "c.position_z "
+    "c.position_z, COALESCE(ft.FactionGroup, 0), COALESCE(ft.EnemyGroup, 0) "
     "FROM acore_world.creature_questender e "
     "JOIN acore_world.creature c ON c.id = e.id "
     "JOIN acore_world.creature_template ct ON ct.entry = c.id "
+    "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
     "WHERE e.quest IN ({quests})"
 )
 
