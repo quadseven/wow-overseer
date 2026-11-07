@@ -652,8 +652,13 @@ class Member:
     food: int | None = None
     drink: int | None = None
     # Where its hearthstone is bound (character_homebind), None when unread.
+    # `home_zone` is the row's zoneId, which the core writes as the inn's AREA
+    # id (Brackenwall Village is 496, not Dustwallow Marsh's 15) once a member
+    # binds at an inn; guildlevel.home_zone_of reads the zone from the position.
     home_map: int | None = None
     home_zone: int | None = None
+    home_x: float | None = None
+    home_y: float | None = None
     # Every quest id it was rewarded (character_queststatus_rewarded), None when
     # unread: the level step then judges a zone by its band alone
     # (guildlevel.open_quests).
@@ -4339,8 +4344,11 @@ def death_loop_hearth(m, loop, recent):
     """The hearth home of a member in its death loop's zone, or None.
 
     Only a member online, alive and out of combat, in the open world, that is
-    in the loop's zone, with no hearth inside the hearth cooldown."""
+    in the loop's zone, with no hearth inside the hearth cooldown, and whose
+    hearthstone is not bound inside that same zone (`home_in_loop_zone`)."""
     if not _in_loop_zone(m, loop):
+        return None
+    if home_in_loop_zone(m, loop):
         return None
     if not (m.online and m.alive and not m.in_combat) or not _in_the_open(m):
         return None
@@ -4356,13 +4364,36 @@ def death_loop_hearth(m, loop, recent):
     )
 
 
+# A HEARTH BOUND IN THE LOOP'S ZONE IS NO WAY OUT (#1882). inn_step binds a
+# member's hearthstone at the inn of the zone it levels in, so the zone a member
+# keeps dying in is often the zone its hearth is bound in. Measured on the dev
+# realm on 2026-11-07: of 138 death-loop hearths, 52 were followed by three or
+# more deaths in the same zone within three hours, and 10 of the 11 members
+# bound at Brackenwall Village who hearthed out of a Dustwallow Marsh loop died
+# there again; a member bound in another zone came back about one time in
+# eight. Such a member skips the hearth and takes the level walk to a hub of
+# another zone, the loop's second rung.
+def home_in_loop_zone(m, loop) -> bool:
+    """The member's hearthstone is bound in the zone of its death loop."""
+    if loop is None:
+        return False
+    home = guildlevel.home_zone_of(
+        getattr(m, "home_map", None),
+        getattr(m, "home_x", None),
+        getattr(m, "home_y", None),
+        getattr(m, "home_zone", None),
+    )
+    return home is not None and int(home) == int(loop.zone)
+
+
 def death_loop_first(
     m, loop, leveling, recent, cap, campaign="", supply=None, kept=None, book=None
 ):
     """(the member's step as _member_step returns it), or None: the way out of
     the zone a member keeps dying in (deathloop.Loop), ahead of every quest.
 
-    In the loop's zone: the hearth to its town first (death_loop_hearth), then
+    In the loop's zone: the hearth to its town first (death_loop_hearth), unless
+    the hearthstone is bound in that zone (home_in_loop_zone, #1882), then
     the level walk to a hub of another zone (level_step), and while neither can
     start, no step at all, so no quest or grind of that zone is planned for it.
     Out of the zone, None: the pass plans as usual, and its level walk never
@@ -4390,6 +4421,12 @@ def death_loop_first(
     if step is not None:
         return step, step.said, held, ""
     step, doing, note = level_step(m, leveling, recent, cap, loop, campaign)
+    if home_in_loop_zone(m, loop):
+        note = _join(
+            note,
+            "%s does not hearth: its hearthstone is bound in %s, the zone it "
+            "keeps dying in" % (m.name, loop.place),
+        )
     if step is not None:
         return step, doing, note, ""
     held = "%s plans no quest in %s: %s" % (m.name, loop.place, loop.reason())
