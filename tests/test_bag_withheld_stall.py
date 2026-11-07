@@ -31,6 +31,7 @@ import types
 import unittest
 
 import bag_pressure
+import claims
 import item_plan
 import jev_activity
 import lockbox
@@ -395,6 +396,7 @@ def _bridge_self(world, clock, log):
             "time": clock,
             "log": log,
             "townslot": townslot,
+            "claims": claims,
             "bag_pressure": bag_pressure,
             "jev_activity": jev_activity,
             "professions": types.SimpleNamespace(
@@ -602,6 +604,7 @@ def _run_vendor_once(queued, at_vendor=True):
             "time": Clock(),
             "log": log,
             "townslot": townslot,
+            "claims": claims,
             "bag_pressure": bag_pressure,
             "vendor_stall": vendor_stall,
             "jev_activity": jev_activity,

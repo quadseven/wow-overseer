@@ -52,7 +52,7 @@ COPY core.py bridge.py voice.py transform.py \
      mailrun.py mountbuy.py holdings.py hunterpet.py \
      realm.py realmread.py basepath.py appbuild.py deployinfo.py watchwall.py nowstatus.py realmnav.py classic.py \
      needs.py partystatus.py partyvoice.py lootcard.py lootstory.py towntrip.py \
-     townerrand.py townslot.py tradechoice.py \
+     townerrand.py townslot.py claims.py tradechoice.py \
      enroll.py \
      tabard.py crossing.py \
      vendor_stall.py \
