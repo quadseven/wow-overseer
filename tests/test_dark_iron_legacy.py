@@ -318,6 +318,8 @@ class FamilyRun(unittest.TestCase):
         self.db = sqlite3.connect(":memory:")
         self.addCleanup(self.db.close)
         self.db.row_factory = sqlite3.Row
+        # The bridge's collation name, for the comparison it settles in MySQL.
+        self.db.create_collation("utf8mb4_unicode_ci", lambda a, b: (a > b) - (a < b))
         self.db.executescript(FAMILY_SCHEMA)
         self.carrier = _snap("Zork", health=3200, at=SHRINE_ROW)
         self.log = [{"name": "Zork", "quest": 3802, "status": 1}]
@@ -336,7 +338,7 @@ class FamilyRun(unittest.TestCase):
                 return False
 
             def execute(self, sql, params=()):
-                if "overseer_dungeon_queue" in sql:
+                if "overseer_dungeon_queue" in sql or "overseer_dungeon_run" in sql:
                     try:
                         rows = subject.db.execute(sql.replace("%s", "?"), params)
                     except sqlite3.OperationalError as error:

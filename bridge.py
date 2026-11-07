@@ -4489,16 +4489,19 @@ def _insert_dungeonquest_row(name: str, command: str,
 
 def _legacy_family_runs(cur) -> list:
     """The members of a family's own Blackrock Depths run (#1965). A realm
-    whose queue or run ledger predates the columns read has no family run to
-    count; any other database error is raised, never read as none."""
-    try:
-        cur.execute(dungeonquests.LEGACY_FAMILY_RUNS_SQL,
-                    dungeonquests.LEGACY_FAMILY_RUNS_ARGS)
-    except pymysql.err.MySQLError as exc:
-        if exc.args and exc.args[0] in (1054, 1146):
-            return []
-        raise
-    return list(cur.fetchall())
+    whose queue or run ledger predates the columns read has no family run of
+    that kind to count; any other database error is raised, never read as
+    none."""
+    rows = []
+    for sql, args in dungeonquests.LEGACY_FAMILY_STATEMENTS:
+        try:
+            cur.execute(sql, args)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                continue
+            raise
+        rows += list(cur.fetchall())
+    return rows
 
 
 def _legacy_facts(guilds: list) -> dungeonquests.LegacyFacts:

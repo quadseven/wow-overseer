@@ -424,14 +424,23 @@ LEGACY_MAP = 230
 # roster member of that family) and the members of an active run on the map.
 # Each row has the guild run's (keyword, members) shape, so `_run_names`
 # reads both alike.
-LEGACY_FAMILY_RUNS_SQL = (
+# Two statements, not a UNION: the queue and roster columns sit on opposite
+# sides of the collation split (bridge.py), and a UNION of their names would
+# have to reconcile them a second time.
+LEGACY_FAMILY_QUEUE_SQL = (
     "SELECT q.keyword AS keyword, r.name AS members "
-    "FROM overseer_dungeon_queue q JOIN overseer_roster r ON r.family = q.family "
-    "WHERE q.status = 'active' AND q.keyword = %s AND r.enabled = 1 "
-    "UNION ALL SELECT %s AS keyword, d.members AS members "
-    "FROM overseer_dungeon_run d WHERE d.state = 'active' AND d.map_id = %s"
+    "FROM overseer_dungeon_queue q JOIN overseer_roster r "
+    "ON r.family = q.family COLLATE utf8mb4_unicode_ci "
+    "WHERE q.status = 'active' AND q.keyword = %s AND r.enabled = 1"
 )
-LEGACY_FAMILY_RUNS_ARGS = (LEGACY_RUN, LEGACY_RUN, LEGACY_MAP)
+LEGACY_FAMILY_RUN_SQL = (
+    "SELECT %s AS keyword, members FROM overseer_dungeon_run "
+    "WHERE state = 'active' AND map_id = %s"
+)
+LEGACY_FAMILY_STATEMENTS = (
+    (LEGACY_FAMILY_QUEUE_SQL, (LEGACY_RUN,)),
+    (LEGACY_FAMILY_RUN_SQL, (LEGACY_RUN, LEGACY_MAP)),
+)
 
 
 @dataclass(frozen=True)
@@ -527,7 +536,7 @@ def key_holders(facts: LegacyFacts, handed) -> tuple:
 def _run_names(rows) -> frozenset:
     """Members of the in-flight Blackrock Depths runs. members is
     overseer_guild_run's `name:seat:class:level` list (guildrun._member_list),
-    or a family run's plain names (LEGACY_FAMILY_RUNS_SQL)."""
+    or a family run's plain names (LEGACY_FAMILY_STATEMENTS)."""
     return frozenset(
         part.split(":")[0]
         for row in rows or ()
