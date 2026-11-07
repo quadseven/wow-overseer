@@ -34842,6 +34842,17 @@ QUESTER_CROSSINGS_LIKE = guildjobs.SOURCE + ":%-cross:%"
 QUESTER_CLOCK_MEMO = "quester_clock"
 QUESTER_BROKEN_MEMO = "quester_broken"
 QUESTER_MEMO_SECONDS = 30 * 24 * 3600
+# WHICH STALL CLOCK JUDGED A HELD STALL (#1731, #1779). Until #1809 (live on
+# the dev realm 2026-11-03T13:56Z) the stall clock ran for every quest of the
+# zone while the quester hunted another, so a quest waiting its turn was held
+# as stalled. The memo is rewritten every pass, so it never expired, and each
+# time a party member shared the quest back the holder dropped it again: Durga
+# dropped An Unwelcome Guest eight times between 2026-11-06 and 2026-11-07,
+# while no quester found quest 34 or quest 101 stalled once after #1809 went
+# live. A broken memo written by this clock carries this key; a stall held in
+# one without it was judged by the old clock and is not held.
+QUESTER_STALL_CLOCK_KEY = "_stall_clock"
+QUESTER_STALL_CLOCK = 1809
 # The realm's hunt rows the questers may hold at once, of its ceiling
 # (classhunt.HUNTS_AT_ONCE): the guild's class quests come first (classquest
 # OWED_*), so the questers leave them the rest. Past it a quester's hunt is the
@@ -34972,17 +34983,41 @@ def _quester_memos() -> tuple:
     """(the stall clock's data, name -> {quest id: reason}) from the memo store."""
     clock = _memo_read(QUESTER_CLOCK_MEMO).get("all", ({}, 0.0))[0]
     broken = {
-        name: {int(q): str(reason) for q, reason in (value or {}).items()}
+        name: _quester_held(name, value)
         for name, (value, _since) in _memo_read(QUESTER_BROKEN_MEMO).items()
     }
     return clock, broken
+
+
+def _quester_held(name: str, value) -> dict:
+    """One quester's held quests (quest id -> reason) from its broken memo.
+
+    A stall held in a memo the #1809 clock did not write is dropped, and said
+    once, so the quest is judged again by the clock that only runs while the
+    quester works it (QUESTER_STALL_CLOCK_KEY). Every other reason is a fact
+    about the world and stays held."""
+    value = dict(value or {})
+    trusted = value.pop(QUESTER_STALL_CLOCK_KEY, None) == QUESTER_STALL_CLOCK
+    held, dropped = {}, []
+    for q, reason in value.items():
+        if not trusted and str(reason).startswith(questers.STALLED):
+            dropped.append(int(q))
+            continue
+        held[int(q)] = str(reason)
+    if dropped:
+        log.info("questers: %s no longer holds %d stall(s) judged before the "
+                 "#1809 clock: quests %s", name, len(dropped),
+                 ", ".join(str(q) for q in sorted(dropped)))
+    return held
 
 
 def _quester_memos_write(clock, broken: dict, now: float) -> None:
     _memo_upsert(QUESTER_CLOCK_MEMO, "all", clock.dump(), now, now + QUESTER_MEMO_SECONDS)
     for name, found in broken.items():
         if found:
-            _memo_upsert(QUESTER_BROKEN_MEMO, name, {str(q): r for q, r in found.items()},
+            value = {str(q): r for q, r in found.items()}
+            value[QUESTER_STALL_CLOCK_KEY] = QUESTER_STALL_CLOCK
+            _memo_upsert(QUESTER_BROKEN_MEMO, name, value,
                          now, now + QUESTER_MEMO_SECONDS)
 
 
