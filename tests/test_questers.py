@@ -844,6 +844,38 @@ class Broken(unittest.TestCase):
             "requires crafted Crab Cakes (item 2683); questers cannot cook",
         )
 
+    def test_totem_of_infliction_ledger_explains_unsupported_item_use(self):
+        # classquest.build supplies `uses` from its quest use-item rows. The
+        # quester hunts and turns in quests, but does not execute those verbs.
+        quest = classquest.Quest(
+            101,
+            "The Totem of Infliction",
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            uses=(classquest.Use("use-item-on", item=1),),
+        )
+        facts = questers.Facts(zone=10, level=25, ender_npcs=True)
+
+        reason = questers._broken_reason(
+            quest,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            0,
+            frozenset(),
+            {},
+        )
+
+        self.assertEqual(
+            reason,
+            "requires using a quest item on its objective; questers cannot "
+            "perform quest objective item use",
+        )
+
     def test_fargodeep_mine_ledger_explains_unsupported_exploration_credit(self):
         quest = classquest.Quest(62, "The Fargodeep Mine", 0, 1, 0, 0, 0, 0, 0)
         facts = questers.Facts(zone=12, level=7, ender_npcs=True)
