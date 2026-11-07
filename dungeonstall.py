@@ -259,6 +259,39 @@ def barred(stuck: dict) -> dict:
     return {door: "stalled: " + s.why for door, s in stuck.items()}
 
 
+# EVERY DOOR THE BREAKER LEFT, not only the two-stall kind (#1078). A leave
+# for a silent head (`silent_run`) has no two stalled runs behind it, so
+# `stuck_doors` cannot see it, and on 2026-11-07 the planner chose the same
+# Sunken Temple 61 seconds after the breaker left it, and the family ran it
+# 26 more times. The pace row is the leave's own record, so the planner reads
+# that. Newest leave per door first; the seconds left are the database's.
+HELD_SQL = (
+    "SELECT door, TIMESTAMPDIFF(SECOND, NOW(), created_at + INTERVAL %s HOUR) "
+    "AS left_s FROM overseer_dungeon_pace WHERE family = %s AND decision = %s "
+    "AND created_at >= NOW() - INTERVAL %s HOUR ORDER BY created_at DESC, id DESC"
+)
+
+
+def held_args(key: str) -> tuple:
+    """HELD_SQL's arguments for the family `key`."""
+    return (WINDOW_HOURS, key, DECISION, WINDOW_HOURS)
+
+
+def held_barred(rows: list) -> dict:
+    """Run keyword -> why the planner refuses a door the breaker left inside
+    the window (campaignplan.Facts.stalled), from HELD_SQL's rows."""
+    out = {}
+    for row in rows or []:
+        door = campaignplan.wing_of(str(row.get("door") or ""))
+        if not door or door in out:
+            continue
+        hours = max(0, int(row.get("left_s") or 0)) / 3600.0
+        out[door] = (
+            "stalled: the stall breaker left it; held for %.1f more hour(s)" % hours
+        )
+    return out
+
+
 @dataclass(frozen=True)
 class Leave:
     """The queue entries to cancel for a stuck door, and the sentence for it."""

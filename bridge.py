@@ -4839,8 +4839,9 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
             if rows is not None:
                 _PLANNER_BOSSES = campaignplan.bosses(rows)
         # A DOOR THE FAMILY STALLED AT TWICE RUNNING is not chosen again
-        # (dungeonstall.py, #1041): the stall breaker just left it.
-        stalled = dungeonstall.barred(_stuck_doors(cur, names))
+        # (dungeonstall.py, #1041), nor any door the stall breaker left in
+        # its window, a silent head's included (#1078).
+        stalled = _stall_barred(cur, key, names)
         # A DOOR THE GUILDS RARELY CLEAR gives way to a sound one
         # (campaignplan.Option.poor).
         record = _planner_rows(
@@ -5254,6 +5255,16 @@ def _stuck_doors(cur, names: list) -> dict:
         cur, dungeonstall.EVENTS_SQL.format(holes=dungeonstall.holes(len(ids))),
         tuple(ids), "the run timeline")
     return dungeonstall.stuck_doors(runs, events or [])
+
+
+def _stall_barred(cur, key: str, names: list) -> dict:
+    """campaignplan.Facts.stalled for one family, on `cur`: the doors stuck by
+    two stalls, and every door the stall breaker left inside its window
+    (#1078). An unreadable pace table bars only the stuck doors."""
+    barred = dungeonstall.barred(_stuck_doors(cur, names))
+    held = _planner_rows(cur, dungeonstall.HELD_SQL, dungeonstall.held_args(key),
+                         "the doors the stall breaker left")
+    return {**dungeonstall.held_barred(held or []), **barred}
 
 
 def _stall_reads(names: list) -> dict:
