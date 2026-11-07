@@ -8,9 +8,54 @@ import unittest
 
 import bag_pressure
 import jev_activity
+import jev_family_intent
+import vendor_stall
 
 
 BRIDGE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
+
+
+def _vendor_sellers_held_for_leader(namespace_extra=None):
+    tree = ast.parse(BRIDGE)
+    method = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_vendor_sellers_held_for_leader"
+    )
+    namespace = {
+        "jev_family_intent": jev_family_intent,
+        "vendor_stall": vendor_stall,
+        "_fetch_family_intents": lambda: {
+            "Leader": {"members_state": "HeldSeller|held too far to walk|3500"}
+        },
+    }
+    namespace.update(namespace_extra or {})
+    exec(
+        compile(ast.Module(body=[method], type_ignores=[]), "bridge.py", "exec"),
+        namespace,
+    )
+    return namespace["_vendor_sellers_held_for_leader"]
+
+
+def _vendor_seller_fetch_blocks_trip(namespace_extra=None):
+    tree = ast.parse(BRIDGE)
+    method = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_vendor_seller_fetch_blocks_trip"
+    )
+    namespace = {
+        "bag_pressure": bag_pressure,
+        "_vendor_sellers_held_for_leader": lambda *args: True,
+    }
+    namespace.update(namespace_extra or {})
+    exec(
+        compile(ast.Module(body=[method], type_ignores=[]), "bridge.py", "exec"),
+        namespace,
+    )
+    return namespace["_vendor_seller_fetch_blocks_trip"]
 
 
 def _vendor_pass_mode(namespace_extra=None):
@@ -39,6 +84,18 @@ def _vendor_pass_mode(namespace_extra=None):
 
 
 class VendorWaitTrip(unittest.TestCase):
+    def test_only_a_sellable_member_held_for_the_leader_blocks_a_vendor_trip(self):
+        held = _vendor_sellers_held_for_leader()
+        self.assertTrue(held(["Leader", "HeldSeller"], "Leader", {"HeldSeller": 2}))
+        self.assertFalse(held(["Leader", "HeldSeller"], "Leader", {"HeldSeller": 0}))
+
+    def test_fetch_priority_blocks_only_a_trip_that_could_otherwise_run(self):
+        blocks = _vendor_seller_fetch_blocks_trip()
+        args = (["Leader", "HeldSeller"], "Leader", {}, {"HeldSeller": 2})
+        self.assertTrue(blocks(*args, False))
+        self.assertFalse(blocks(*args, True))
+        self.assertFalse(blocks(*args[:3], {}, False))
+
     def test_carried_goods_get_a_trip_before_the_two_hour_stuck_finding(self):
         self.assertTrue(
             bag_pressure.vendor_wait_trip(
@@ -74,6 +131,25 @@ class VendorWaitTrip(unittest.TestCase):
             )
         )
         self.assertEqual(bag_pressure.VENDOR_MODE_TRIP, mode)
+
+    def test_a_held_seller_does_not_retake_the_trip_after_the_counter_yields(self):
+        # After the leader yields its counter aim, the old no-vendor row is
+        # still fresh. Retaking that trip while a seller remains held for the
+        # leader recreates the same unreachable counter visit every pass.
+        namespace = _vendor_pass_mode(
+            {"_fetch_vendor_wait_seconds": lambda names: 8 * 60 * 60}
+        )
+        mode = asyncio.run(
+            namespace["_vendor_pass_mode"](
+                None,
+                ["Leader", "HeldSeller"],
+                {"Leader": 0, "HeldSeller": 0},
+                {"Leader": 2, "HeldSeller": 3},
+                False,
+                held_seller_for_leader=True,
+            )
+        )
+        self.assertEqual(bag_pressure.VENDOR_MODE_COUNTER, mode)
 
 
 class TheTripMakesTheFamilyRoom(unittest.TestCase):
