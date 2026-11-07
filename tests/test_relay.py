@@ -117,6 +117,44 @@ class FitSpoken(unittest.TestCase):
         self.assertEqual(255, len(got))
 
 
+def _insert_speak(written: list):
+    """The spoken row through the orders interface: the same writer
+    bridge._insert_speak now calls, on a memory store. bridge.py itself
+    cannot be imported here."""
+    from _stub_modules import PYMYSQL, stub_modules
+
+    with stub_modules(pymysql=PYMYSQL):
+        import orders
+
+    store = orders.MemoryStore()
+
+    def insert(cmd):
+        order = orders.speak_order(cmd)
+        written.append(
+            (order.target, order.command, order.channel, order.target_arg, order.source)
+        )
+        return orders.send(store, order)
+
+    return insert
+
+
+class TheCouncilLineFitsTheColumn(unittest.TestCase):
+    """#217: the council pass failed every cycle on DataError 1406."""
+
+    def test_a_council_line_over_255_characters_is_written_to_fit(self):
+        written = []
+        cmd = relay.SpeakCommand("Grug", "party", LONG_LINE, "", "overseer:council")
+        _insert_speak(written)(cmd)
+        self.assertEqual(1, len(written))
+        name, command, channel, whisper_to, source = written[0]
+        self.assertLessEqual(len(command), 255)
+        self.assertEqual(relay.fit_spoken(LONG_LINE), command)
+        self.assertEqual(
+            ("Grug", "party", "", "overseer:council"),
+            (name, channel, whisper_to, source),
+        )
+
+
 class GmAllowlist(unittest.TestCase):
     def test_the_commands_this_feature_exists_for_are_allowed(self):
         for cmd in (
