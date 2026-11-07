@@ -48,7 +48,14 @@ def _vendor_seller_fetch_blocks_trip(namespace_extra=None):
     )
     namespace = {
         "bag_pressure": bag_pressure,
-        "_vendor_sellers_held_for_leader": lambda *args: True,
+        "vendor_stall": vendor_stall,
+        "time": types.SimpleNamespace(monotonic=lambda: 0.0),
+        "log": types.SimpleNamespace(info=lambda *args: None),
+        "_HELD_FETCH_SINCE": {},
+        "_vendor_sellers_held_for_leader": lambda *args: {
+            "HeldSeller": jev_family_intent.Member(
+                "HeldSeller", "held too far to walk", "3500")
+        },
     }
     namespace.update(namespace_extra or {})
     exec(
@@ -301,3 +308,110 @@ class NoTripForAFloorItCannotLift(unittest.TestCase):
             )
         )
         self.assertEqual({"Bork": 0, "Og": 2}, recorded)
+
+
+class TheHeldFollowerGuardHasABound(unittest.TestCase):
+    """#1983: a follower that can never be fetched no longer blocks the trip.
+
+    The dev realm on 2026-11-07: Zork stood in Tanaris about 3100 yards from
+    the four other members of his family in Un'Goro Crater, held for the
+    leader to fetch, and every fetch was refused because his combat flag never
+    cleared. The guard of #1948 kept the family in counter mode for hours
+    ("no vendor trip while a sellable family member is held for the leader to
+    fetch", 41 lines from 17:00 to 20:21 UTC) and Oz, standing with the
+    leader with 21 sale candidates, sold nothing.
+    """
+
+    NAMES = ["Zug", "Oz", "Uzza", "Zrog", "Zork"]
+    FREE = {"Zug": 12, "Oz": 5, "Uzza": 10, "Zrog": 11, "Zork": 4}
+    SELLABLE = {"Zug": 0, "Oz": 21, "Uzza": 4, "Zrog": 0, "Zork": 10}
+    BOUND = vendor_stall.HELD_FETCH_BOUND_SECONDS
+
+    def _guard(self, lines):
+        held = {"Zork": jev_family_intent.Member(
+            "Zork", "held too far to walk", "3100")}
+        return _vendor_seller_fetch_blocks_trip({
+            "_vendor_sellers_held_for_leader": lambda *args: held,
+            "log": types.SimpleNamespace(
+                info=lambda fmt, *args: lines.append(fmt % args)),
+        })
+
+    def test_the_guard_holds_inside_the_bound_and_lets_the_trip_go_after(self):
+        lines, since = [], {}
+        guard = self._guard(lines)
+        args = (self.NAMES, "Zug", self.FREE, self.SELLABLE, False)
+        self.assertTrue(guard(*args, since=since, now=100.0))
+        self.assertTrue(guard(*args, since=since, now=100.0 + self.BOUND - 1))
+        released = guard(*args, since=since, now=100.0 + self.BOUND)
+        self.assertFalse(released)
+        self.assertEqual(("Zork",), released.left_behind)
+
+    def test_the_follower_left_behind_is_named_once_per_hold(self):
+        lines, since = [], {}
+        guard = self._guard(lines)
+        args = (self.NAMES, "Zug", self.FREE, self.SELLABLE, False)
+        guard(*args, since=since, now=0.0)
+        guard(*args, since=since, now=self.BOUND)
+        guard(*args, since=since, now=self.BOUND + 300)
+        guard(*args, since=since, now=self.BOUND + 600)
+        self.assertEqual(1, len(lines))
+        self.assertIn("Zork", lines[0])
+        self.assertIn("held too far to walk", lines[0])
+        self.assertIn("3100", lines[0])
+        self.assertIn("leaves Zork behind", lines[0])
+
+    def test_a_new_hold_starts_a_fresh_clock(self):
+        since = {}
+        first = vendor_stall.held_fetch_bound("Zug", ["Zork"], since, 0.0)
+        self.assertTrue(first)
+        late = vendor_stall.held_fetch_bound("Zug", ["Zork"], since, self.BOUND)
+        self.assertEqual(("Zork",), late.newly_left)
+        # Zork is fetched: nobody is held, and the clock is dropped.
+        vendor_stall.held_fetch_bound("Zug", [], since, self.BOUND + 60)
+        self.assertEqual({}, since)
+        again = vendor_stall.held_fetch_bound("Zug", ["Zork"], since, self.BOUND + 120)
+        self.assertTrue(again)
+        self.assertEqual((), again.left_behind)
+
+    def test_one_follower_still_inside_its_bound_keeps_the_guard(self):
+        since = {}
+        vendor_stall.held_fetch_bound("Zug", ["Zork"], since, 0.0)
+        both = vendor_stall.held_fetch_bound(
+            "Zug", ["Zork", "Uzza"], since, self.BOUND)
+        self.assertTrue(both)
+        self.assertEqual(("Zork",), both.left_behind)
+
+    def test_the_trip_goes_for_the_members_who_stand_with_the_leader(self):
+        names, free, sellable = vendor_stall.without_left_behind(
+            self.NAMES, self.FREE, self.SELLABLE, ("Zork",))
+        self.assertNotIn("Zork", names)
+        self.assertNotIn("Zork", free)
+        self.assertNotIn("Zork", sellable)
+        # Oz and Uzza logged "no vendor within reach" on every pass for
+        # hours: the sustained wait that takes a trip once the guard lets go.
+        namespace = _vendor_pass_mode(
+            {"_fetch_vendor_wait_seconds": lambda n: 3 * 60 * 60})
+        mode = asyncio.run(namespace["_vendor_pass_mode"](
+            None, names, free, sellable, False, held_seller_for_leader=False))
+        self.assertEqual(bag_pressure.VENDOR_MODE_TRIP, mode)
+
+    def test_no_trip_rearms_on_stacks_only_the_absent_member_carries(self):
+        # After the leader's walk Oz and Uzza have sold out; Zork's ten
+        # stacks alone are no reason for the leader to walk again.
+        sold = dict(self.SELLABLE, Oz=0, Uzza=0)
+        free = dict(self.FREE, Oz=26, Uzza=14)
+        names, free, sold = vendor_stall.without_left_behind(
+            self.NAMES, free, sold, ("Zork",))
+        namespace = _vendor_pass_mode(
+            {"_fetch_vendor_wait_seconds": lambda n: 8 * 60 * 60})
+        mode = asyncio.run(namespace["_vendor_pass_mode"](
+            None, names, free, sold, False, held_seller_for_leader=False))
+        self.assertEqual(bag_pressure.VENDOR_MODE_COUNTER, mode)
+
+    def test_the_economy_pass_judges_the_trip_without_the_left_behind(self):
+        # The wiring in _vendor_once: the pass mode is asked about the family
+        # without the members the guard left behind.
+        body = BRIDGE[BRIDGE.index("async def _vendor_once("):]
+        body = body[:body.index("\n    async def ", 10)]
+        self.assertIn("vendor_stall.without_left_behind(", body)
+        self.assertIn("trip_names, trip_free, trip_sellable, in_run", body)

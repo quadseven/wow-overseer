@@ -5734,33 +5734,64 @@ def _fetch_vendor_wait_seconds(names: list) -> int:
 
 def _vendor_sellers_held_for_leader(
     names: list, leader: str, sellable_counts: dict,
-) -> bool:
-    """Whether a sellable follower is waiting for the leader to fetch it."""
+) -> dict:
+    """The sellable followers waiting for the leader to fetch them, by name.
+
+    name -> its intent book Member (state and yards); {} when none is held.
+    """
     if not leader:
-        return False
+        return {}
     row = _fetch_family_intents().get(leader, {})
     sellable = {
         name for name, count in (sellable_counts or {}).items()
         if name in names and name != leader and isinstance(count, int) and count > 0
     }
-    return any(
-        member.name in sellable
-        and member.state in vendor_stall.HELD_FOR_THE_LEADER
+    return {
+        member.name: member
         for member in jev_family_intent.parse_members(row.get("members_state"))
-    )
+        if member.name in sellable
+        and member.state in vendor_stall.HELD_FOR_THE_LEADER
+    }
+
+
+# (leader, follower) -> [monotonic time first seen held, announced]; see
+# vendor_stall.held_fetch_bound. In memory: a bridge restart starts the clock
+# again, which delays the trip by at most one more bound.
+_HELD_FETCH_SINCE: dict = {}
 
 
 def _vendor_seller_fetch_blocks_trip(
     names: list, leader: str, free_slots: dict, sellable_counts: dict,
-    in_run: bool,
-) -> bool:
-    """Leave travel to the module while a sellable follower needs fetching."""
+    in_run: bool, since=None, now=None,
+):
+    """Leave travel to the module while a sellable follower needs fetching.
+
+    For at most vendor_stall.HELD_FETCH_BOUND_SECONDS per hold (#1983): a
+    follower held past it is left behind, named once, and the trip is judged
+    for the members standing with the leader. Returns a vendor_stall.HeldFetch
+    (truthy while the trip is blocked), or False when nothing is held.
+    """
     if in_run or not (
             bag_pressure.family_town_run_needed(
                 free_slots, sellable=sellable_counts)
             or any((sellable_counts or {}).values())):
         return False
-    return _vendor_sellers_held_for_leader(names, leader, sellable_counts)
+    held = _vendor_sellers_held_for_leader(names, leader, sellable_counts)
+    if not held:
+        return False
+    since = _HELD_FETCH_SINCE if since is None else since
+    now = time.monotonic() if now is None else now
+    result = vendor_stall.held_fetch_bound(leader, held, since, now)
+    for name in result.newly_left:
+        member = held[name]
+        log.info(
+            "economy: %s has been held for %s to fetch for over %d minutes "
+            "(%s, %s yards) - the vendor trip goes ahead for the members who "
+            "stand with %s and leaves %s behind",
+            name, leader, int(vendor_stall.HELD_FETCH_BOUND_SECONDS // 60),
+            member.state, member.yards or "?", leader, name,
+        )
+    return result
 
 
 # --- what each character is doing, and waiting for (nowstatus.py) ------------
@@ -13435,9 +13466,16 @@ class Bridge(discord.Client):
             _vendor_seller_fetch_blocks_trip, names, leader, free_slots,
             sellable_counts, in_run,
         )
+        # A FOLLOWER HELD PAST THE BOUND IS LEFT BEHIND (#1983): the trip is
+        # judged on the goods of the members who walk with the leader, so it
+        # goes once for them and does not re-arm on the absent member's stacks.
+        trip_names, trip_free, trip_sellable = vendor_stall.without_left_behind(
+            names, free_slots, sellable_counts,
+            getattr(held_seller_for_leader, "left_behind", ()),
+        )
         mode = await self._vendor_pass_mode(
-            names, free_slots, sellable_counts, in_run,
-            held_seller_for_leader=held_seller_for_leader,
+            trip_names, trip_free, trip_sellable, in_run,
+            held_seller_for_leader=bool(held_seller_for_leader),
         )
         step = bag_pressure.aim_step_in_mode(step, mode)
         if mode == bag_pressure.VENDOR_MODE_NONE:
