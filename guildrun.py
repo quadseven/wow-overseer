@@ -1641,10 +1641,14 @@ MAX_UPGRADE_NAMES = 3
 def _seat_gains(plan: Plan, door: Door, composition: Composition) -> list:
     """The Gain of each member of `composition` for one run of `door`, or []
     below UPGRADE_FLOOR or when the gains are unread."""
-    if not plan.gains or min(composition.levels) < UPGRADE_FLOOR:
+    return _gains_for(plan.gains, door, composition)
+
+
+def _gains_for(gains: dict, door: Door, composition: Composition) -> list:
+    if not gains or min(composition.levels) < UPGRADE_FLOOR:
         return []
     seated = set(composition.names)
-    return [g for g in plan.gains.get(door.keyword, ()) if g.name in seated]
+    return [g for g in gains.get(door.keyword, ()) if g.name in seated]
 
 
 def upgrade_levels(plan: Plan, door: Door, composition: Composition) -> float:
@@ -1655,8 +1659,14 @@ def upgrade_levels(plan: Plan, door: Door, composition: Composition) -> float:
 def upgrade_words(plan: Plan, door: Door, composition: Composition) -> str:
     """ "upgrades for Name (best piece), ...", the members a run of `door`
     helps most; "" when none or unread."""
+    return gain_words(plan.gains, door, composition)
+
+
+def gain_words(gains: dict, door: Door, composition: Composition) -> str:
+    """upgrade_words from gains read without a Plan: the guild social pass,
+    where live guild runs form, names its seats' upgrades with it (#760)."""
     helped = sorted(
-        (g for g in _seat_gains(plan, door, composition) if g.upgrades and g.best),
+        (g for g in _gains_for(gains, door, composition) if g.upgrades and g.best),
         key=lambda g: (-g.levels, g.name),
     )
     if not helped:
