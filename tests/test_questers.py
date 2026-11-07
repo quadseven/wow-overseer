@@ -630,9 +630,11 @@ class AFailedCrossingPassesTheZoneOver(unittest.TestCase):
     zone across the sea and standing still until the clock lapses."""
 
     def setUp(self):
+        # Durotar's quest is level 10, within GREEN_BELOW of the quester's 15:
+        # a grey one would be passed over for Loch Modan (#1998).
         self.cat = world(
             extra_quests=[
-                quest(834, DUROTAR, 9, min_level=7, title="Winds in the Desert"),
+                quest(834, DUROTAR, 10, min_level=7, title="Winds in the Desert"),
                 quest(60, LOCH_MODAN, 14, min_level=10, title="Stormpike's Order"),
             ],
             extra_givers=[
