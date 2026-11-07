@@ -93,6 +93,9 @@ KNOWN_UNREACHED = {
     "bonkers",
     "dungeonladder",
     "enroll",
+    # The whole-bag item plan (#1967): shadow wiring is its own ticket (#1972).
+    # Not item_plan, the sale-retry memo; the names are close, the jobs are not.
+    "itemplan",
     "lootcard",
     # The realm switcher's data, unread since the page dropped its nav block
     # (#1849); wired to a switcher or dropped with the copy list (#1846).
