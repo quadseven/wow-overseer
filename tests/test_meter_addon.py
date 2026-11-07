@@ -296,6 +296,31 @@ class Source(unittest.TestCase):
         self.assertGreaterEqual(top, 392)
         self.assertLessEqual(top + (rows + 1) * row, 495)
 
+    def test_combat_log_event_unpacking_matches_335a_layout(self):
+        toc = (ADDON / "PartyStatus.toc").read_text()
+        self.assertIn("## Interface: 30300", toc)
+        # 3.3.5a COMBAT_LOG_EVENT_UNFILTERED layout: exactly 8 base prefix fields
+        # (_, sub, source, _, _, target, _, _) before event-specific payload arguments.
+        # Cataclysm (4.0+) added hideCaster (9th base field), which shifts offsets.
+        match = re.search(
+            r"local\s+([^=\n]+)\s*=\s*\.\.\.",
+            self.code,
+        )
+        self.assertIsNotNone(match)
+        variables = [v.strip() for v in match.group(1).split(",")]
+        # Exactly 8 base parameters prefixing payload:
+        # timestamp, subEvent, sourceGUID, sourceName, sourceFlags, destGUID, destName, destFlags
+        self.assertEqual(
+            variables[:8], ["_", "sub", "source", "_", "_", "target", "_", "_"]
+        )
+        # SWING_DAMAGE maps args a, b -> amount, overkill
+        self.assertIn(
+            'if sub == "SWING_DAMAGE" then\n        amount, overkill = a, b',
+            self.code,
+        )
+        # SPELL_SHAPED maps args d, e -> amount, overkill (after spellId, spellName, school)
+        self.assertIn("amount, overkill = d, e", self.code)
+
 
 if __name__ == "__main__":
     unittest.main()
