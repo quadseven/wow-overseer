@@ -21696,6 +21696,18 @@ class Bridge(discord.Client):
         if recipe:
             log.info("guild run %s: %s %s", social.form.ask.guild, social.form.door.place,
                      guildrun.recipe_words(recipe))
+        # THE SEATED RAIDERS' UPGRADES the run was formed for (#760). Live guild
+        # runs form here (GUILD_SOCIAL is on), never in _guild_run_once, so the
+        # seats' pre-raid gains are read and named here as well: the dev realm
+        # logged no "drops upgrades for" line from 2026-11-03 to 2026-11-07.
+        if run_id:
+            seats = social.form.composition
+            gains = await asyncio.to_thread(
+                _guild_seat_gains, list(seats.names), list(seats.levels))
+            upgrades = guildrun.gain_words(gains, social.form.door, seats)
+            if upgrades:
+                log.info("guild run %s: %s drops %s", social.form.ask.guild,
+                         social.form.door.place, upgrades)
         # THE SEATS AN HOUR (seatmeter, #784). Looked up so a test driving
         # this pass on a bare object needs no reads for it.
         meter = getattr(self, "_log_seat_meter", None)
