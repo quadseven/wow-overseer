@@ -1572,6 +1572,113 @@ class TheFirstTabIsFundedByTheFamily(unittest.TestCase):
             (),
         )
 
+    def test_a_full_bank_asks_the_family_for_the_next_tab(self):
+        """#1967: Bonkers' one tab held 98 of 98, its master 14 gold of the
+        250 the second tab costs, while the family's siblings carried about
+        900 gold and their own banks were full too. Only the first tab was
+        ever funded, so the full tab stood for days."""
+        gifts = guildbank.plan_tab_gifts(
+            self.chars(Zug=14, Zrog=374),
+            master="Zug",
+            purchased_tabs=1,
+            master_purse=14 * self.G,
+            tabs_full=True,
+        )
+        self.assertEqual([(g.donor, g.copper) for g in gifts], [("Zrog", 25 * self.G)])
+        self.assertIn("full", gifts[0].why)
+
+    def test_the_next_tab_gifts_stop_at_its_price(self):
+        gifts = guildbank.plan_tab_gifts(
+            self.chars(Zug=240, Zrog=374),
+            master="Zug",
+            purchased_tabs=1,
+            master_purse=240 * self.G,
+            tabs_full=True,
+        )
+        self.assertEqual([g.copper for g in gifts], [10 * self.G])
+
+    def test_a_tab_with_room_asks_nobody_for_the_next(self):
+        self.assertEqual(
+            guildbank.plan_tab_gifts(
+                self.chars(Zug=0, Oz=900),
+                master="Zug",
+                purchased_tabs=1,
+                tabs_full=False,
+            ),
+            (),
+        )
+
+    def test_every_kept_tab_bought_asks_nobody(self):
+        self.assertEqual(
+            guildbank.plan_tab_gifts(
+                self.chars(Zug=0, Oz=900),
+                master="Zug",
+                purchased_tabs=len(guildbank.TABS),
+                tabs_full=True,
+            ),
+            (),
+        )
+
+    def test_the_tabs_are_full_only_when_every_purchased_tab_is(self):
+        self.assertTrue(guildbank.tabs_full({0: 98}, 1))
+        self.assertTrue(guildbank.tabs_full({0: 98, 1: 98}, 2))
+        self.assertFalse(guildbank.tabs_full({0: 98, 1: 40}, 2))
+        self.assertFalse(guildbank.tabs_full({0: 98}, 2), "an unread tab is not full")
+        self.assertFalse(guildbank.tabs_full({}, 0))
+        self.assertFalse(guildbank.tabs_full(None, 1))
+
+    def test_the_master_saves_for_the_next_tab_while_the_tabs_are_full(self):
+        """#1967: the gifts must not be banked into the vault, which the core
+        never buys a tab from. Without `saving` a purse short of the price
+        banks everything above its float."""
+        purse = 60 * self.G
+        self.assertEqual(guildbank.master_reserve(purse, 1), guildbank.FLOAT_COPPER)
+        self.assertEqual(
+            guildbank.master_reserve(purse, 1, saving=True),
+            guildbank.FLOAT_COPPER + guildbank.tab_cost(1),
+        )
+        members = [{"name": "Zug", "in_guild": True, "money": purse}]
+        self.assertEqual(
+            guildbank.gold_deposits(
+                members, master="Zug", purchased_tabs=1, saving=True
+            ),
+            [],
+        )
+        self.assertEqual(
+            [
+                d.copper
+                for d in guildbank.gold_deposits(
+                    members, master="Zug", purchased_tabs=1
+                )
+            ],
+            [purse - guildbank.FLOAT_COPPER],
+        )
+
+    def test_both_gold_passes_save_while_the_tabs_are_full(self):
+        text = BRIDGE.read_text(encoding="utf-8")
+        calls = text.count("guildbank.gold_deposits(")
+        self.assertEqual(calls, 2)
+        self.assertEqual(
+            text.count("saving=saving)")
+            + text.count('saving=guildbank.tabs_full((setup or {}).get("tab_items"),'),
+            2,
+        )
+
+    def test_the_tab_size_matches_the_bank_module(self):
+        import bank
+
+        self.assertEqual(guildbank.TAB_SLOTS, bank.GUILD_TAB_SLOTS)
+
+    def test_the_bridge_tells_the_gifts_whether_the_tabs_are_full(self):
+        tree = ast.parse(BRIDGE.read_text(encoding="utf-8"))
+        fn = next(
+            n
+            for n in tree.body
+            if isinstance(n, ast.FunctionDef) and n.name == "_tab_gifts"
+        )
+        src = ast.get_source_segment(BRIDGE.read_text(encoding="utf-8"), fn)
+        self.assertIn('guildbank.tabs_full(setup.get("tab_items"), purchased)', src)
+
     def test_nothing_is_asked_when_the_master_is_not_there_to_receive(self):
         self.assertEqual(
             guildbank.plan_tab_gifts(self.chars(Oz=90), master="Zug", purchased_tabs=0),
