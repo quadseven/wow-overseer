@@ -680,7 +680,11 @@ LOOT_SQL = (
     "FROM acore_world.creature_loot_template l "
     "JOIN acore_world.reference_loot_template r ON r.Entry = l.Reference "
     "JOIN acore_world.creature_template ct ON ct.lootid = l.Entry "
-    "WHERE l.Reference <> 0 AND r.Item IN ({items})"
+    "WHERE l.Reference <> 0 AND r.Item IN ({items}) UNION ALL "
+    "SELECT qi.ItemId AS item, ct.entry AS entry "
+    "FROM acore_world.creature_questitem qi "
+    "JOIN acore_world.creature_template ct ON ct.entry = qi.CreatureEntry "
+    "WHERE qi.ItemId IN ({items})"
 )
 
 # The items whose on-use spell is bound to named creatures, in either of the

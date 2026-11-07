@@ -1916,6 +1916,38 @@ class ASummonedObjectEnder(unittest.TestCase):
             (classquest.HUNT, 86, 113),
         )
 
+    def test_oh_brother_hunts_the_rare_that_drops_its_badge(self):
+        # Oh Brother (167) has no kill counter: its required item 1875 comes
+        # from Foreman Thistlenettle (626), a rare spawn. The world read must
+        # pass the creature_questitem row through LOOT_SQL for this hunt.
+        oh_brother = quest(167, NORTHSHIRE, 20, title="Oh Brother. . .")
+        oh_brother.update(item1=1875, item_count1=1)
+        cat = world(
+            extra_quests=[oh_brother],
+            extra_givers=[
+                giver(167, "start", 5167, 186, 0, 0),
+                giver(167, "end", 5168, 187, 400, 0),
+            ],
+            extra_spawns=[
+                {**spawn(5169, 626, 30, 0, level=20), "rank": 4},
+            ],
+            extra_loot=[{"item": 1875, "entry": 626}],
+        )
+        member = mirra(
+            level=20,
+            zone_id=999,
+            quest_log={167: questers.STATUS_INCOMPLETE},
+            quest_progress={167: 0},
+            quest_objectives={167: {}},
+        )
+
+        move = questers.plan(cat, member, questers.Clock(), 0.0).move
+
+        self.assertEqual(
+            (move.kind, move.quest, move.spot.entry),
+            (classquest.HUNT, 167, 626),
+        )
+
     def test_an_incomplete_quest_whose_object_spawns_are_gone_is_still_broken(self):
         member = mirra(quest_log={40: 3})
         cat = object_world(object_ended(40, 270, guid=5001, x=300.0))
