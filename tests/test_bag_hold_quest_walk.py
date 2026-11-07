@@ -168,6 +168,7 @@ def _run_vendor_once(stuck):
         [
             "_vendor_once",
             "_vendor_pass_mode",
+            "_vendor_seller_fetch_blocks_trip",
             "_sellable_per_holder",
             "_without_bank_keeps",
             "_take_vendor_aim",
@@ -201,6 +202,8 @@ def _run_vendor_once(stuck):
             "_fetch_free_slots": lambda names: dict(FREE),
             "_present_members": lambda names, leader="": list(names),
             "_fetch_vendor_wait_seconds": lambda names: 0,
+            "_vendor_sellers_held_for_leader": lambda *args: False,
+            "_vendor_seller_fetch_blocks_trip": lambda *args: False,
             "_fetch_vendor_items": lambda names: _vendor_rows(),
             "_fetch_surplus_bags": lambda names: [],
             "_fetch_equipped_bag_slots": lambda names: {},
@@ -221,7 +224,7 @@ def _run_vendor_once(stuck):
         },
     )
     me = _FakeEconomySelf()
-    me._vendor_pass_mode = lambda *a: ns["_vendor_pass_mode"](me, *a)
+    me._vendor_pass_mode = lambda *a, **kw: ns["_vendor_pass_mode"](me, *a, **kw)
     me._take_vendor_aim = lambda *a: ns["_take_vendor_aim"](me, *a)
     cohort = townslot.Cohort(key="Grug", leader="Grug", names=FAMILY)
     asyncio.run(ns["_vendor_once"](me, cohort))
