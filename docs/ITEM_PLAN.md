@@ -120,4 +120,4 @@ Each executor route has its own ticket, and each ticket refers to #1967.
 
 ## Scope notes
 
-`itemplan.py` imports this repository's tables and nothing else. No module imports it yet, so `tests/test_bridge_image_modules.py` lists it in `KNOWN_UNREACHED`; the shadow ticket (#1972) removes it from that list when it wires the module in. The `Dockerfile` copies it because every top-level module is copied. It is not `item_plan.py`, the sale-retry memo: the names are close and the jobs are not.
+`itemplan.py` imports this repository's tables and nothing else. `itemplan_shadow.py` (#1972) runs it beside the economy pass when `ITEMPLAN_SHADOW` is on, and logs `itemplan:` lines (one plan line per member, one line per disagreement with the sale, bank and clearance passes); it acts on nothing. The `Dockerfile` copies both. It is not `item_plan.py`, the sale-retry memo: the names are close and the jobs are not.

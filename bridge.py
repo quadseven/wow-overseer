@@ -100,6 +100,7 @@ import guildsocial
 import holdings
 import hunterpet
 import interview
+import itemplan_shadow  # noqa: F401  (looked up through globals() in the economy pass)
 import itemsource
 import purse
 import pvpgear
@@ -13470,6 +13471,15 @@ class Bridge(discord.Client):
         bank_keeps = await asyncio.to_thread(_bank_policy, names, True)
         gear_sales = _without_bank_keeps(gear_sales, bank_keeps, "economy")
         _count_sales(sellable_counts, gear_sales)
+        # THE ITEM PLAN RUNS BESIDE THE PASSES, LOGS, AND CHANGES NOTHING (#1972).
+        # Off unless ITEMPLAN_SHADOW is on; a failure inside it is logged there.
+        # Looked up: the economy tests load this pass in isolation.
+        shadow_plan = globals().get("itemplan_shadow")
+        if shadow_plan is not None:
+            shadow_plan.run(
+                names, leader, rows, free_slots, gear_rows=gear_rows,
+                worn_rows=worn, sales=tuple(gear_sales) + lock_sales + clear_sales,
+                keep_names=OWNER_KEEPS, bank_keeps=bank_keeps, clear=clear)
 
         # A CAMPAIGN WITHHELD FOR BAG SPACE STILL SELLS (#225); see
         # `_vendor_pass_mode`.
