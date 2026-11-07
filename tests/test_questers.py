@@ -1010,11 +1010,12 @@ class Broken(unittest.TestCase):
         self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
         self.assertIn("Forgotten Heirloom", p.broken[0].reason)
 
-    def test_quest_91_solomons_law_has_specific_stall_reason(self):
-        # Quest 91 "Solomon's Law" in Redridge Mountains (level 23) requires
-        # killing creatures that have no spawns in the world database. The quest
-        # has kills but no fields (no spawns of the required creatures), so it
-        # would be STALLED_UNSOURCED. We add a specific reason explaining why.
+    def test_quest_91_solomons_law_stall_names_no_invented_cause(self):
+        # Quest 91 (Solomon's Law) once carried a hard-coded reason that the
+        # world database contradicts: it needs item 1075, which creatures 433,
+        # 434, 568 and 947 drop, all spawned in the world. With no field for its
+        # objective in this fixture, the generic unsourced stall is the only
+        # reason the catalogue supports.
         solomons = quest(91, REDRIDGE, 23, kill=444, count=10, title="Solomon's Law")
         cat = world(
             extra_quests=[solomons],
@@ -1041,19 +1042,18 @@ class Broken(unittest.TestCase):
         # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
         for i in range(1, 13):
             p = questers.plan(cat, member, clock, 600.0 * i)
-        # After 2 hours of play - quest should be stalled with specific reason
+        # After 2 hours of play the quest stalls
         self.assertEqual(len(p.broken), 1)
         self.assertEqual(p.broken[0].quest, 91)
-        # Should have a specific reason, not just STALLED_UNSOURCED
-        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
-        self.assertIn("Solomon's Law", p.broken[0].reason)
+        # The reason is the one the catalogue proves, never a per-quest claim.
+        self.assertEqual(questers.STALLED_UNSOURCED, p.broken[0].reason)
 
-    def test_quest_124_a_baying_of_gnolls_has_specific_stall_reason(self):
-        # Quest 124 "A Baying of Gnolls" in Redridge Mountains (level 20) requires
-        # killing Redridge Gnolls (444) and Redridge Mongrels (445) that have
-        # no spawns in the world database. The quest has kills but no fields
-        # (no spawns of the required creatures), so it would be STALLED_UNSOURCED.
-        # We add a specific reason explaining why.
+    def test_quest_124_a_baying_of_gnolls_stall_names_no_invented_cause(self):
+        # Quest 124 (A Baying of Gnolls) once carried a hard-coded reason that
+        # the world database contradicts: it needs creatures 426 and 430, which
+        # have 16 and 28 spawns. With no field for its objective in this
+        # fixture, the generic unsourced stall is the only reason the catalogue
+        # supports.
         baying = quest(
             124, REDRIDGE, 20, kill=444, count=15, title="A Baying of Gnolls"
         )
@@ -1084,18 +1084,18 @@ class Broken(unittest.TestCase):
         # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
         for i in range(1, 13):
             p = questers.plan(cat, member, clock, 600.0 * i)
-        # After 2 hours of play - quest should be stalled with specific reason
+        # After 2 hours of play the quest stalls
         self.assertEqual(len(p.broken), 1)
         self.assertEqual(p.broken[0].quest, 124)
-        # Should have a specific reason, not just STALLED_UNSOURCED
-        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
-        self.assertIn("A Baying of Gnolls", p.broken[0].reason)
+        # The reason is the one the catalogue proves, never a per-quest claim.
+        self.assertEqual(questers.STALLED_UNSOURCED, p.broken[0].reason)
 
-    def test_quest_125_the_lost_tools_has_specific_stall_reason(self):
-        # Quest 125 "The Lost Tools" in Redridge Mountains (level 16) requires
-        # items from creatures that have no spawns in Redridge. The quest
-        # has kills/items but no fields (no spawns of the required creatures),
-        # so it would be STALLED_UNSOURCED. We add a specific reason explaining why.
+    def test_quest_125_the_lost_tools_stall_names_no_invented_cause(self):
+        # Quest 125 (The Lost Tools) once carried a hard-coded reason that the
+        # world database contradicts: it needs item 1309, which only gameobject
+        # loot 1683 holds, not a creature. With no field for its objective in
+        # this fixture, the generic unsourced stall is the only reason the
+        # catalogue supports.
         lost_tools = quest(
             125, REDRIDGE, 16, kill=99999, count=6, title="The Lost Tools"
         )
@@ -1124,12 +1124,11 @@ class Broken(unittest.TestCase):
         # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
         for i in range(1, 13):
             p = questers.plan(cat, member, clock, 600.0 * i)
-        # After 2 hours of play - quest should be stalled with specific reason
+        # After 2 hours of play the quest stalls
         self.assertEqual(len(p.broken), 1)
         self.assertEqual(p.broken[0].quest, 125)
-        # Should have a specific reason, not just STALLED_UNSOURCED
-        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
-        self.assertIn("The Lost Tools", p.broken[0].reason)
+        # The reason is the one the catalogue proves, never a per-quest claim.
+        self.assertEqual(questers.STALLED_UNSOURCED, p.broken[0].reason)
 
     def test_quest_128_blackrock_bounty_has_specific_stall_reason(self):
         # Quest 128 "Blackrock Bounty" in Redridge Mountains (level 25) requires
