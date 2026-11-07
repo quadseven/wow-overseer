@@ -93,8 +93,6 @@ KNOWN_UNREACHED = {
     "bonkers",
     "dungeonladder",
     "enroll",
-    # Its input readers (#1973): quest log, worn gear, auction prices.
-    "itemplan_data",
     "lootcard",
     # The realm switcher's data, unread since the page dropped its nav block
     # (#1849); wired to a switcher or dropped with the copy list (#1846).

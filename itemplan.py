@@ -22,7 +22,7 @@ both families (10 members, 1,299 rows). `docs/ITEM_PLAN.md` holds the table.
 PURE. Rows in, a Plan out. No MySQL, no HTTP, no clock, no randomness. The
 only imports are this repo's own tables (craft ladders, supplies, guild bank
 tabs) so a recipe or tab change reaches this plan without a second copy.
-UNWIRED: nothing imports this module yet, so it is not in the Dockerfile list.
+`itemplan_shadow` runs it beside the economy pass (#1972).
 
 THE ORDERED RULES. The first rule that claims a stack decides its options; the
 allocation step then picks the first option that has room. Goals are ranked by
@@ -113,6 +113,9 @@ ROUTES = (
     DESTROY,
 )
 IRREVERSIBLE = frozenset({SELL_VENDOR, DISENCHANT, DESTROY})
+# The reason prefix of a stack that no destination had room for (#1973). The
+# stack stays where it is; a reader of the log searches for this word.
+NO_ROOM = "NO_ROOM"
 
 # Goal -> tier. Higher is more protected. A stack's priority is (tier, vendor
 # copper per slot); the lowest priority leaves a full bag first.
@@ -1474,9 +1477,16 @@ def _allocate(w: _World, todo: list, opts: dict, pinned: set):
         options = opts[s.key]
         if s.key in pinned:
             place = KEEP_CARRY if s.carried else BANK_PERSONAL
-            fixed = [o for o in options if o.route == place] or [
-                _opt(place, ROOM, "no destination had room: stays", "R0")
-            ]
+            fixed = [
+                replace(
+                    o,
+                    reason="%s: no destination had room, stays (%s)"
+                    % (NO_ROOM, o.reason),
+                    rule="R0",
+                )
+                for o in options
+                if o.route == place
+            ] or [_opt(place, ROOM, NO_ROOM + ": no destination had room: stays", "R0")]
             options = fixed
         for o in options:
             ok, why = _feasible(
@@ -1503,7 +1513,8 @@ def _allocate(w: _World, todo: list, opts: dict, pinned: set):
             chosen = _opt(
                 place,
                 ROOM,
-                "no destination had room (%s): stays put" % "; ".join(skipped),
+                "%s: no destination had room (%s): stays put"
+                % (NO_ROOM, "; ".join(skipped)),
                 "R0",
             )
             stuck.add(s.key)

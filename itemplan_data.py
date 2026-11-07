@@ -4,7 +4,7 @@ PURE. No MySQL, no HTTP, no clock. Each reader takes rows shaped like the
 real tables (a list of dicts) and returns what `itemplan.Context` takes. A
 malformed row is skipped and never raises: a row this module cannot read adds
 nothing, and the plan then fails closed on whatever that row would have
-described. UNWIRED: the shadow input reader (#1972) plugs these in.
+described. `itemplan_reads` runs the SQL and `itemplan_shadow` feeds the results to the plan.
 
 WHAT EACH READER REUSES, and what it adds.
 
@@ -39,6 +39,25 @@ import armory
 import auction
 import bankforecast
 
+# --- item template: binding and gear facts -----------------------------------
+
+ITEM_TEMPLATE_SQL = (
+    "SELECT it.entry AS entry, it.class AS item_class, it.subclass AS subclass, "
+    "it.bonding AS bonding, it.InventoryType AS inventory_type, "
+    "it.ItemLevel AS item_level, it.RequiredLevel AS req_level "
+    "FROM acore_world.item_template it WHERE it.entry IN (%s)"
+)
+
+_TEMPLATE_FIELDS = (
+    "item_class",
+    "subclass",
+    "bonding",
+    "inventory_type",
+    "item_level",
+    "req_level",
+)
+
+
 # --- quest log -------------------------------------------------------------
 
 QUEST_LOG_SQL = (
@@ -68,6 +87,52 @@ def _int(value, default=None):
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def item_templates(rows) -> dict:
+    """{entry: {field: int}} from `ITEM_TEMPLATE_SQL` rows.
+
+    Gives the binding of every carried row (the carried query holds none), and
+    the inventory type, item level and required level the worn-gear verdict
+    needs. A row with a missing or non-numeric field is skipped whole, so an
+    entry is either fully known or absent.
+    """
+    out: dict = {}
+    for row in rows or ():
+        try:
+            entry = _int(row["entry"])
+            item = {k: _int(row[k]) for k in _TEMPLATE_FIELDS}
+        except (KeyError, TypeError, AttributeError):
+            continue
+        if entry is None or entry <= 0 or any(v is None for v in item.values()):
+            continue
+        out[entry] = item
+    return out
+
+
+def verdict_rows(stacks, templates, characters) -> list:
+    """The `bag_rows` `upgrade_verdicts` takes, for every carried gear stack.
+
+    `stacks` are `itemplan.Stack`s, `templates` is `item_templates`' answer and
+    `characters` is name -> (class id, level). A stack with no template or no
+    known holder level is left out: no verdict, so the plan's other rules decide.
+    """
+    out = []
+    for s in stacks:
+        t = templates.get(s.entry)
+        if not s.carried or not s.gear or t is None or s.holder not in characters:
+            continue
+        out.append(
+            {
+                "member": s.holder,
+                "entry": s.entry,
+                "inventory_type": t["inventory_type"],
+                "item_level": t["item_level"],
+                "req_level": t["req_level"],
+                "level": characters[s.holder][1],
+            }
+        )
+    return out
 
 
 def _template_items(row) -> dict:
@@ -335,6 +400,7 @@ def absent_reason(listing_rows, history_rows=()) -> str:
 
 __all__ = [
     "EQUIPPED_SQL",
+    "ITEM_TEMPLATE_SQL",
     "LISTINGS_SQL",
     "NO_PRICE_SOURCE",
     "QUEST_LOG_SQL",
@@ -342,8 +408,10 @@ __all__ = [
     "absent_reason",
     "auction_prices",
     "equipped",
+    "item_templates",
     "open_quest_items",
     "quest_needs",
     "upgrade_verdicts",
+    "verdict_rows",
     "worn_entries",
 ]
