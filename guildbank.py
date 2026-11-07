@@ -283,8 +283,17 @@ def plan_tab_gifts(
     master_purse: int = 0,
     master_mailed: int = 0,
     eligible=None,
+    tabs_full: bool = False,
 ) -> tuple:
     """The family's gold letters to the guild master while the guild has no tab.
+
+    AND WHILE EVERY TAB IT BOUGHT IS FULL (#1967). The dues alone fill the
+    master's purse too slowly for a later tab: on the dev realm (2026-11-07)
+    Bonkers' one tab held 98 of 98 items, its master carried 14 gold of the
+    250 the second tab costs, and the family's siblings carried about 900
+    gold with their own banks full, so every deposit had nowhere to land.
+    `tabs_full` (see `tabs_full`) asks the family for the next tab the guild
+    keeps (`next_tab`), on the same terms as the first.
 
     `characters` maps a name to {"level", "purse"} for the members standing at
     the mailbox. Only a guild with no tab at all is helped (the first tab is
@@ -294,11 +303,18 @@ def plan_tab_gifts(
     `eligible` names the members whose gold was earned (natural.py); None asks
     nobody, a set restricts. Pure: returns the gifts, richest donor first.
     """
-    if purchased_tabs != 0 or not master or master not in (characters or {}):
+    if not master or master not in (characters or {}):
+        return ()
+    if purchased_tabs == 0:
+        tab, why = 0, "the guild has no bank tab and %s pays for it" % master
+    elif tabs_full and next_tab(purchased_tabs) is not None:
+        tab = next_tab(purchased_tabs)
+        why = "the guild's bank tabs are full and %s pays for the next" % master
+    else:
         return ()
     try:
         need = (
-            tab_cost(0)
+            tab_cost(tab)
             - max(0, int(master_purse or 0))
             - max(0, int(master_mailed or 0))
         )
@@ -325,11 +341,32 @@ def plan_tab_gifts(
                 name,
                 master,
                 share,
-                "the guild has no bank tab and %s pays for it" % master,
+                why,
             )
         )
         need -= share
     return tuple(gifts)
+
+
+# Slots in one 3.3.5 guild bank tab (bank.GUILD_TAB_SLOTS; not imported, this
+# module stays dependency-free).
+TAB_SLOTS = 98
+
+
+def tabs_full(tab_items, purchased_tabs) -> bool:
+    """Whether every purchased tab holds TAB_SLOTS items (#1967).
+
+    `tab_items` maps tab id to its item count, as the bridge reads it. A tab
+    with no count, no tab at all, or an unreadable count is not full: a bad
+    read never asks the family for gold.
+    """
+    try:
+        have = int(purchased_tabs)
+        if have <= 0 or not tab_items:
+            return False
+        return all(int(tab_items.get(tab, 0)) >= TAB_SLOTS for tab in range(have))
+    except (TypeError, ValueError, AttributeError):
+        return False
 
 
 def _purse(character) -> int:
@@ -575,7 +612,7 @@ def plan_deposits(
     return deposits
 
 
-def master_reserve(purse, purchased_tabs) -> int:
+def master_reserve(purse, purchased_tabs, saving: bool = False) -> int:
     """Copper the guild master keeps when it banks the guild's gold (#775).
 
     Its float, and the next tab's price when the purse already pays for it
@@ -584,16 +621,21 @@ def master_reserve(purse, purchased_tabs) -> int:
     realm Grug's purse read 41g to 48g from 2026-10-05 to 2026-10-10 against
     tab 1's 250g, and Zug's purse read 96.3g against tab 0's 100g, and holding
     it back left the guild's gold where no member's training could reach it.
+
+    SAVING FOR A TAB THE GUILD NEEDS HOLDS IT BACK ANYWAY (#1967). While every
+    purchased tab is full (`tabs_full`, passed as `saving`), the family posts
+    the master gold for the next tab (`plan_tab_gifts`); banking it away
+    would move the family's gold into a vault the core never buys a tab from.
     """
     tab = next_tab(purchased_tabs)
     keep = FLOAT_COPPER
-    if tab is not None and can_buy_tab(purse, tab):
+    if tab is not None and (saving or can_buy_tab(purse, tab)):
         keep += tab_cost(tab)
     return keep
 
 
 def plan_master_deposit(
-    members: list[dict], *, master: str, purchased_tabs: int
+    members: list[dict], *, master: str, purchased_tabs: int, saving: bool = False
 ) -> list[Deposit]:
     """The guild master's deposit of the guild's gold, or none (#775).
 
@@ -613,7 +655,7 @@ def plan_master_deposit(
         tabs = int(purchased_tabs)
     except (TypeError, ValueError):
         return []
-    copper = money - master_reserve(money, tabs)
+    copper = money - master_reserve(money, tabs, saving)
     if copper < MASTER_DEPOSIT_MIN_COPPER:
         return []
     return [Deposit(name=master, copper=copper)]
@@ -625,6 +667,7 @@ def gold_deposits(
     master: str,
     purchased_tabs: int,
     buyer: str = "",
+    saving: bool = False,
 ) -> list[Deposit]:
     """The gold deposits both guild bank passes plan: every member's while
     MEMBER_GOLD_DEPOSITS is on, the guild master's alone otherwise."""
@@ -635,7 +678,9 @@ def gold_deposits(
             buyer=buyer,
             reserve_for_buyer=buyer_reserve(purchased_tabs),
         )
-    return plan_master_deposit(members, master=master, purchased_tabs=purchased_tabs)
+    return plan_master_deposit(
+        members, master=master, purchased_tabs=purchased_tabs, saving=saving
+    )
 
 
 def worth_a_walk(deposits) -> bool:
@@ -651,9 +696,11 @@ def gold(copper) -> str:
     return "%ds" % s if s else "%dc" % rest
 
 
-def master_deposit_line(deposit: Deposit, purse, purchased_tabs) -> str:
+def master_deposit_line(
+    deposit: Deposit, purse, purchased_tabs, saving: bool = False
+) -> str:
     """The pass's sentence for the guild master's deposit."""
-    keep = master_reserve(purse, purchased_tabs)
+    keep = master_reserve(purse, purchased_tabs, saving)
     tab = next_tab(purchased_tabs)
     why = ""
     if keep > FLOAT_COPPER and tab is not None:

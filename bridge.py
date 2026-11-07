@@ -15981,9 +15981,12 @@ class Bridge(discord.Client):
         # off, the dues stopped in the master's purse and Cave's vault sat at
         # 155.0g for twelve days. guildbank.gold_deposits has the rule.
         master = _guild_master(setup)
+        # SAVING FOR THE NEXT TAB WHILE EVERY TAB IS FULL (#1967): the
+        # master keeps its price rather than bank the family's gifts away.
+        saving = guildbank.tabs_full((setup or {}).get("tab_items"), purchased_tabs)
         deposits = guildbank.gold_deposits(
             members, master=master, purchased_tabs=purchased_tabs,
-            buyer=_setup_buyer(setup, names, leader))
+            buyer=_setup_buyer(setup, names, leader), saving=saving)
         items = (await asyncio.to_thread(_plan_bank, names)).guild
         # AND WHAT JEV CHOSE TO BANK (#267), under the same gates.
         items = tuple(items) + tuple(self._jev_keep_deposits(names, setup, items))
@@ -16136,7 +16139,8 @@ class Bridge(discord.Client):
                 continue
             await asyncio.to_thread(_insert_guild, deposit.name, command, "guildbank")
             fresh.append(deposit)
-            _say_master_deposit(deposit, master, members, purchased_tabs, cohort)
+            _say_master_deposit(deposit, master, members, purchased_tabs, cohort,
+                                saving)
         if walking:
             # LOGGED: a pass that writes nothing and a broken one look
             # identical otherwise (infra#3660, restated for the rows).
@@ -16201,7 +16205,9 @@ class Bridge(discord.Client):
                 await asyncio.to_thread(_fetch_guild_money, names), eligible),
             master=_guild_master(setup),
             purchased_tabs=purchased_tabs,
-            buyer=_setup_buyer(setup, names, leader))
+            buyer=_setup_buyer(setup, names, leader),
+            saving=guildbank.tabs_full((setup or {}).get("tab_items"),
+                                       purchased_tabs))
         if not deposits:
             return
         positions = await asyncio.to_thread(
@@ -20084,9 +20090,10 @@ class Bridge(discord.Client):
         wanted = gearup.plan_funding(facts)
         if not wanted:
             # NO GEAR TO FUND: THE GUILD'S FIRST TAB (the operator,
-            # 2026-09-29). Gear comes first; with none short, the siblings at
-            # the mailbox post what they earned above their float to the guild
-            # master, whose purse the tab is bought from.
+            # 2026-09-29), OR ITS NEXT ONE WHILE EVERY TAB IS FULL (#1967).
+            # Gear comes first; with none short, the siblings at the mailbox
+            # post what they earned above their float to the guild master,
+            # whose purse the tab is bought from.
             wanted = await asyncio.to_thread(
                 _tab_gifts, names, facts, hub, positions)
         if not wanted:
@@ -33595,12 +33602,14 @@ def _gold_waits_for_a_vault(actions, items, deposits, cohort=None) -> bool:
     return True
 
 
-def _say_master_deposit(deposit, master, members, purchased_tabs, cohort=None) -> None:
+def _say_master_deposit(deposit, master, members, purchased_tabs, cohort=None,
+                        saving=False) -> None:
     """Log the guild master's deposit of the guild's gold (#775)."""
     if deposit.name != master or guildbank.MEMBER_GOLD_DEPOSITS:
         return
     purse = {str(m.get("name")): m.get("money") for m in members}.get(master)
-    log.info("%s%s", guildbank.master_deposit_line(deposit, purse, purchased_tabs),
+    log.info("%s%s", guildbank.master_deposit_line(deposit, purse, purchased_tabs,
+                                                   saving),
              _family_label(cohort))
 
 
@@ -35568,8 +35577,8 @@ def _insert_weapon_equip(row: dict) -> int:
 
 def _tab_gifts(names: list, facts: dict, hub, positions: dict) -> tuple:
     """guildbank.plan_tab_gifts over the members standing at the hub mailbox;
-    nothing when the guild has a tab, no master in the family, or nobody's
-    gold was earned (natural.py). No judgement here."""
+    nothing when the guild has a tab with room, no master in the family, or
+    nobody's gold was earned (natural.py). No judgement here."""
     setup = _fetch_guild_bank_setup(names)
     master = str((setup or {}).get("master") or "")
     if not setup or not master or master not in names:
@@ -35578,11 +35587,14 @@ def _tab_gifts(names: list, facts: dict, hub, positions: dict) -> tuple:
         hub, positions.get(n), TOWN_COUNTER_YARDS)}
     if master not in here:
         return ()
+    purchased = int(setup.get("purchased_tabs", 0))
     return guildbank.plan_tab_gifts(
-        here, master=master, purchased_tabs=int(setup.get("purchased_tabs", 0)),
+        here, master=master, purchased_tabs=purchased,
         master_purse=int(here[master].get("purse") or 0),
         master_mailed=int(setup.get("master_mailed_copper", 0)),
-        eligible=_natural_contributors(names, names))
+        eligible=_natural_contributors(names, names),
+        # A full bank asks the family for the next tab too (#1967).
+        tabs_full=guildbank.tabs_full(setup.get("tab_items"), purchased))
 
 
 def _insert_fund_letter(gift, command: str) -> int:
