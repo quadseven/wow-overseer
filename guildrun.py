@@ -55,6 +55,8 @@ picking above is the fallback; the bridge never runs both.
 
 PURE: facts in, groups, questions and judgments out. The bridge reads and
 writes; the only I/O here is the Jev client the caller hands in.
+
+Carry XP is logged as: `carry run <keyword>: <member> gained <N> xp (gap <G>)`.
 """
 
 from __future__ import annotations
@@ -116,6 +118,27 @@ SHORT_ABANDON_SECONDS = 10 * 60
 MAX_SWAPS = 3
 
 SOURCE = "overseer:guildrun"
+
+
+def carry_xp_lines(keyword, carrier, start, end, xp_for_level):
+    """Format XP gained by each carried member, counting level-ups."""
+    if not carrier or carrier not in start:
+        return []
+    carrier_level = int(start[carrier][0])
+    lines = []
+    for name, (start_level, start_xp) in start.items():
+        if name == carrier or name not in end:
+            continue
+        end_level, end_xp = end[name]
+        total = -int(start_xp) + int(end_xp)
+        for level in range(int(start_level), int(end_level)):
+            total += int(xp_for_level[level])
+        lines.append(
+            "carry run %s: %s gained %d xp (gap %d)"
+            % (keyword, name, total, carrier_level - int(start_level))
+        )
+    return lines
+
 
 KIND_DUNGEON = "guild_dungeon"
 KIND_COMPOSITION = "guild_composition"

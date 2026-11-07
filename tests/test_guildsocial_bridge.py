@@ -291,6 +291,9 @@ class _Cursor:
         self.lastrowid += 100
         self.log.append((sql, tuple(args)))
 
+    def fetchall(self):
+        return []
+
     def __enter__(self):
         return self
 

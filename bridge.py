@@ -27140,6 +27140,7 @@ def _ensure_guild_run_store() -> None:
                 " loot_notable VARCHAR(200) NOT NULL DEFAULT '',"
                 " ilvl_gained INT NOT NULL DEFAULT 0,"
                 " levels_gained INT NOT NULL DEFAULT 0,"
+                " carry_start TEXT NULL DEFAULT NULL,"
                 " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
                 " ended_at TIMESTAMP NULL DEFAULT NULL,"
                 " PRIMARY KEY (id), KEY idx_state (state),"
@@ -27161,6 +27162,16 @@ def _ensure_guild_run_store() -> None:
                 "ADD COLUMN last_boss_at TIMESTAMP NULL DEFAULT NULL"
             )
             log.info("overseer_guild_run: added last_boss_at")
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() "
+            "AND TABLE_NAME = 'overseer_guild_run' AND COLUMN_NAME = 'carry_start'"
+        )
+        if not (cur.fetchone() or {}).get("n"):
+            cur.execute(
+                "ALTER TABLE overseer_guild_run ADD COLUMN carry_start TEXT NULL DEFAULT NULL"
+            )
+            log.info("overseer_guild_run: added carry_start")
     # The social layer's asks and answers (guildsocial), and who proposed a
     # run, added to overseer_guild_run the way the Jev store adds a column.
     try:
@@ -27701,7 +27712,7 @@ def _follow_guild_runs() -> int:
                 "r.bosses_done, r.bosses_total, "
                 "TIMESTAMPDIFF(SECOND, r.last_boss_at, NOW()) AS seconds_since_boss, "
                 "r.created_at < NOW() - INTERVAL %s MINUTE AS stale, "
-                "c.status, c.detail, c.result FROM overseer_guild_run r "
+                "r.carry_start, c.status, c.detail, c.result FROM overseer_guild_run r "
                 "LEFT JOIN overseer_command c ON c.id = r.command_id "
                 "WHERE r.state IN ('queued', 'inside')",
                 (guildrun.LOST_AFTER_MINUTES,),
@@ -27749,6 +27760,7 @@ def _follow_guild_runs() -> int:
                  seen.get("levels_gained", 0), row["id"]),
             )
             changed += 1
+            _log_guild_carry_xp(cur, row)
             log.info("guild runs: run %d ended - %s (%s); %d death(s), %d of %d bosses, "
                      "%ds inside", row["id"], seen["outcome"], seen.get("why", ""),
                      seen.get("deaths", 0), seen.get("bosses_done", 0),
@@ -28342,6 +28354,61 @@ def _wait_out_of_combat(names, wait=None, poll=None) -> list:
         time.sleep(poll)
 
 
+def _guild_carry_start(cur, form):
+    """Snapshot member XP only when a seated answer explicitly carried."""
+    ids = list(form.seated)
+    if not ids:
+        return None
+    marks = ",".join(["%s"] * len(ids))
+    cur.execute(
+        "SELECT member FROM overseer_guild_answer WHERE stance = %s AND id IN ("
+        + marks + ")",
+        (guildsocial.CARRIES, *ids),
+    )
+    carriers = [str(row["member"]) for row in cur.fetchall()]
+    if not carriers:
+        return None
+    carrier = carriers[0]
+    names = list(form.composition.names)
+    holes = ",".join(["%s"] * len(names))
+    cur.execute(
+        "SELECT name, level, xp FROM characters WHERE name IN (" + holes + ")",
+        tuple(names),
+    )
+    members = {
+        str(row["name"]): [int(row["level"]), int(row["xp"])]
+        for row in cur.fetchall()
+    }
+    if carrier not in members or len(members) != len(names):
+        return None
+    return json.dumps({"carrier": carrier, "members": members}, separators=(",", ":"))
+
+
+def _log_guild_carry_xp(cur, row) -> None:
+    """Log XP gained by carried members in an ended guild run."""
+    carry_start = row.get("carry_start")
+    if not carry_start:
+        return
+    snapshot = json.loads(carry_start)
+    names = list(snapshot["members"])
+    holes = ",".join(["%s"] * len(names))
+    cur.execute(
+        "SELECT name, level, xp FROM characters WHERE name IN (" + holes + ")",
+        tuple(names),
+    )
+    end = {
+        str(item["name"]): (int(item["level"]), int(item["xp"]))
+        for item in cur.fetchall()
+    }
+    cur.execute("SELECT Level AS level, Experience AS xp FROM acore_world.player_xp_for_level")
+    xp_for_level = {int(item["level"]): int(item["xp"]) for item in cur.fetchall()}
+    start = {name: tuple(values) for name, values in snapshot["members"].items()}
+    for line in guildrun.carry_xp_lines(
+        row["keyword"], snapshot["carrier"], start, end, xp_for_level
+    ):
+        log.info("%s", line)
+
+
 def _start_social_run(form) -> int:
     """The run an ask formed: its overseer_guild_run row (crediting the
     proposer), the module's finder row exactly as _start_guild_run writes it,
@@ -28349,13 +28416,14 @@ def _start_social_run(form) -> int:
     comp = form.composition
     door = form.door
     with _connect() as conn, conn.cursor() as cur:
+        carry_start = _guild_carry_start(cur, form)
         cur.execute(
             "INSERT INTO overseer_guild_run (guild, band, composition, keyword, tank, "
-            "proposer, members, dungeon_by, composition_by) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, 'ask', 'answers')",
+            "proposer, members, dungeon_by, composition_by, carry_start) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, 'ask', 'answers', %s)",
             (form.ask.guild[:24], form.band[:8], form.key[:40], door.keyword[:32],
              comp.tank.name[:12], form.ask.asker[:12],
-             guildrun.members_text(comp)[:255]),
+             guildrun.members_text(comp)[:255], carry_start),
         )
         run_id = int(cur.lastrowid)
         if form.pugs:
