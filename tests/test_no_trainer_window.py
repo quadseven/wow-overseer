@@ -8,12 +8,15 @@ planned again while the map had not changed.
 """
 
 import json
+import pathlib
 import unittest
 from unittest import mock
 
 import guildjobs
 from test_guildjobs import member
 from test_guildsocial_bridge import bridge
+
+BRIDGE = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
 
 DAY = 24 * 60
 
@@ -75,6 +78,9 @@ class TheBridgeReadsThem(unittest.TestCase):
         self.assertIn("created_at <= NOW() - INTERVAL 1 DAY", sql)
         self.assertIn("command LIKE 'walk-to-trainer%%'", sql)
         self.assertGreater(guildjobs.NO_TRAINER_READ_DAYS, 1)
+        # One prefix per step keeps the read on the source index.
+        self.assertIn("(source LIKE %s OR source LIKE %s)", sql)
+        self.assertIn('guildjobs.SOURCE + ":train:%"', BRIDGE)
 
     def test_the_facts_carry_a_kept_refusal_beside_the_recent_rows(self):
         stranded = brug()

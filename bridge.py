@@ -31123,13 +31123,16 @@ _JOB_RECENT_SQL = (
 )
 # THE NO-TRAINER REFUSALS OLDER THAN THE RECENT READ (#1453), for as long as
 # guildjobs.still_stranded keeps them: the refusal holds while the member
-# stays on the map it was refused on, however long ago that was.
+# stays on the map it was refused on, however long ago that was. The two
+# source prefixes (the train and riding steps) are what let the read use the
+# source index: with one `guildjobs:%` prefix and a month of rows it scanned
+# the table, about 9 s on the dev realm, against about 0.25 s this way.
 _JOB_NO_TRAINER_SQL = (
     "SELECT id, target_name, command, source, status, target_arg, "
     "LEFT(result, 400) AS result, "
     "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
-    "WHERE source LIKE %s AND command LIKE 'walk-to-trainer%%' "
-    "AND result LIKE %s "
+    "WHERE (source LIKE %s OR source LIKE %s) AND status = 'error' "
+    "AND command LIKE 'walk-to-trainer%%' AND result LIKE %s "
     "AND created_at <= NOW() - INTERVAL 1 DAY "
     "AND created_at > NOW() - INTERVAL %s DAY"
 )
@@ -31420,7 +31423,8 @@ def _fetch_job_facts(family_names: list) -> dict:
         recent_rows = _job_read(cur, "recent rows", _JOB_RECENT_SQL,
                                 (guildjobs.SOURCE + ":%",))
         stranded_rows = _job_read(cur, "no-trainer refusals", _JOB_NO_TRAINER_SQL,
-                                  (guildjobs.SOURCE + ":%",
+                                  (guildjobs.SOURCE + ":train:%",
+                                   guildjobs.SOURCE + ":" + guildjobs.RIDING_ACTION + ":%",
                                    "%" + guildjobs.NO_TRAINER_ON_MAP_REFUSAL + "%",
                                    guildjobs.NO_TRAINER_READ_DAYS))
         pending_rows = _job_read(cur, "summons", _JOB_PENDING_SUMMONS_SQL)
