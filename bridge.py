@@ -181,6 +181,7 @@ import teamsync
 import towntrip
 import townerrand
 import townslot
+import claims
 import tradechoice
 import vendor_stall
 import vendorsale
@@ -7596,7 +7597,7 @@ class Bridge(discord.Client):
         # townslot.Slot is written to survive that: a restart finds the column
         # still set, adopts it as an errand with no owner, and gives it the
         # longer of the two leases.
-        self._town_slot = townslot.Slot(
+        self._town_slot = claims.Slot(
             lease=TOWN_SLOT_LEASE_SECONDS,
             releasable=_is_economy_aim,
             long_leases={
@@ -7699,7 +7700,7 @@ class Bridge(discord.Client):
             vendor_stall.family_from_memo, _trip_clock, TRIP_CLOCK_MEMO_SECONDS)
         # One town slot per OTHER family (#150), keyed by the roster's
         # `family` value. This bridge's own family keeps `self._town_slot`.
-        self._cohort_town_slots: dict[str, townslot.Slot] = {}
+        self._cohort_town_slots: dict[str, claims.Slot] = {}
         # When each other family's trainee first borrowed its lead for the
         # learn errand it still has (#211), keyed by the roster's `family`.
         # Kept in the memo store (#817), so a deploy does not restart the
@@ -13263,7 +13264,7 @@ class Bridge(discord.Client):
         # economy tests load this pass in isolation.
         hold_released = globals().get("_bag_hold_released")
         current_aim = await asyncio.to_thread(_current_travel_npc, leader)
-        if townslot.urgent_ground_release(
+        if claims.urgent_ground_release(
                 aim=current_aim,
                 pressure=bag_pressure.family_town_run_needed(
                     free_slots, sellable=sellable_counts),
@@ -17746,10 +17747,24 @@ class Bridge(discord.Client):
         now = time.monotonic()
         self._job_steps = guildroute.live_runs(
             self._job_steps, now, guildroute.GUILD_STEP_SECONDS)
-        busy = set(getattr(self, "_guild_run_names", ())) | (set(self._job_steps) | set(self._corps_steps) | set(self._dues_walks)
-                | set(self._guild_mail_runs) | set(self._crafter_walks)
-                | set(getattr(self, "_train_walks", ())))
-        busy -= self._stranded_knights_freed(members)
+        holds = claims.member_holds(
+            guild_runs=getattr(self, "_guild_run_names", ()),
+            corps_steps=self._corps_steps, dues_walks=self._dues_walks,
+            handover_runs=self._guild_mail_runs,
+            crafter_walks=self._crafter_walks, job_steps=self._job_steps,
+            train_walks=getattr(self, "_train_walks", ()),
+        )
+        busy = set(holds)
+        freed = claims.stranded_knights(
+            members, holds, job_steps=self._job_steps
+        )
+        for name in sorted(freed):
+            reasons = next((reasons for member, reasons in holds.items()
+                            if member == name), ())
+            log.info("guild jobs: %s stands in the death knight start zone and "
+                     "was held by %s; freed for its class quest", name,
+                     ", ".join(reasons))
+        busy -= freed
         cap = self._guild_walk_cap()
         self._guild_still = standstill.track(self._guild_still, members, now)
         spawn_walks = now >= self._job_walks_unsupported.get("spawn", 0.0)
@@ -17792,38 +17807,6 @@ class Bridge(discord.Client):
                 said[m.name] = now[m.name]
             else:
                 said.pop(m.name, None)
-
-    def _stranded_knights_freed(self, members) -> set:
-        """The death knights standing in their starting zone that every other
-        pass holds busy, so the class quest that frees them can run (2026-10-08).
-
-        A death knight there can reach nobody: a gear hand-over run, a crafter
-        walk, a guild ask or a dungeon run that names it walks nowhere and holds
-        it for good. Only the step it is itself running (`_job_steps`) holds it.
-        The sets that held it are logged, so the next pass shows which."""
-        sets = (
-            ("guild run", getattr(self, "_guild_run_names", ())),
-            ("corps step", self._corps_steps),
-            ("dues walk", self._dues_walks),
-            ("hand-over run", self._guild_mail_runs),
-            ("crafter walk", self._crafter_walks),
-        )
-        freed = set()
-        for m in members:
-            if not (
-                m.online
-                and int(m.class_id) == classquest.DEATH_KNIGHT
-                and m.map_id == classquest.DEATH_KNIGHT_START_MAP
-                and m.name not in self._job_steps
-            ):
-                continue
-            held = [label for label, names in sets if m.name in names]
-            if held:
-                log.info("guild jobs: %s stands in the death knight start zone and "
-                         "was held by %s; freed for its class quest", m.name,
-                         ", ".join(held))
-                freed.add(m.name)
-        return freed
 
     async def _plan_guild_jobs(self, members, facts, busy, cap, spawn_walks,
                                cohort=None):
