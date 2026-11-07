@@ -137,7 +137,7 @@ def release_legal(holder: Holder | None, releasable) -> bool:
         return False
     try:
         return bool(releasable(holder.aim))
-    except Exception:
+    except (AttributeError, KeyError, TypeError, ValueError):
         return False
 
 

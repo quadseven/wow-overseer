@@ -156,6 +156,15 @@ class ColumnLeaseRules(unittest.TestCase):
         self.assertTrue(claims.release_legal(holder, economy))
         self.assertFalse(claims.release_legal(trainer, economy))
 
+    def test_a_predicate_programming_error_is_not_swallowed(self):
+        holder = townslot.Holder("economy", "Grug", "vendor", since=0.0)
+
+        def broken_predicate(_aim):
+            return unknown_name  # noqa: F821
+
+        with self.assertRaises(NameError):
+            claims.release_legal(holder, broken_predicate)
+
     def test_expiry_is_since_plus_the_lease(self):
         holder = townslot.Holder("economy", "Grug", "vendor", since=10.0)
         self.assertEqual(
