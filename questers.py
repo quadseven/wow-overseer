@@ -86,7 +86,10 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
     that alone (a script may summon it, a chest or a vendor may hold the
     item): it stalls, and its stall says so (STALLED_UNSOURCED);
   * REFUSED_TAKE / REFUSED_TURN_IN: the world refused the take or the hand-in
-    FAILS_BEFORE_BROKEN times in a day, with its own words appended;
+    FAILS_BEFORE_BROKEN times in a day, with its own words appended. A take
+    refused in a retryable way (RETRYABLE_TAKE_REFUSALS) never counts toward
+    the take: the module says asking again can succeed, so it is the quester's
+    standing at that moment, not the quest's fault;
   * CANNOT_TURN_IN: the world refused the hand-in once and said no retry
     can help (`"retryable":false`, mod-overseer#19), with its own
     words appended. That is "could not", not "did not yet": the quest is
@@ -256,6 +259,17 @@ CANNOT_TURN_IN = "the world says no hand-in of it can go through"
 # they never make a held quest a could-not.
 LOG_STATE_REFUSALS = frozenset(
     {"already turned in", "not in the quest log", "already in the quest log"}
+)
+# The module's retryable take refusals (QuestErrandRefusalRetryable): the
+# quester was not at the giver when the row fired, or its log was full.
+# Asking again can succeed, so they are "did not yet" and never file a working
+# quest as broken (#1836).
+RETRYABLE_TAKE_REFUSALS = frozenset(
+    {
+        "no giver of that quest in reach",
+        "no object that gives that quest in reach",
+        "the quest log is full",
+    }
 )
 
 # The world's own words for a spawn that is not there (classquest.SPAWN_REFUSALS).
@@ -933,13 +947,18 @@ def walk_wall(name, tried) -> tuple:
 
 def refusals(name, tried) -> dict:
     """(verb, quest id) -> (times refused, the last words) for this quester's
-    takes and hand-ins the world refused."""
+    takes and hand-ins the world refused. A take refused in a retryable way
+    (RETRYABLE_TAKE_REFUSALS) is not counted: the module says asking again
+    can succeed, so it never files a working quest as broken the way a
+    refused take for a real eligibility failure does."""
     out: dict = {}
     for a in sorted(tried or (), key=lambda a: -a.age_minutes):
         if a.name != name or not a.failed or a.reason in LOG_STATE_REFUSALS:
             continue
         found = _CHAIN_ROW.match(a.command)
         if not found:
+            continue
+        if found.group(1) == "take" and a.reason in RETRYABLE_TAKE_REFUSALS:
             continue
         key = (found.group(1), int(found.group(2)))
         count, _words = out.get(key, (0, ""))

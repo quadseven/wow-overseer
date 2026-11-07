@@ -1386,6 +1386,67 @@ class Broken(unittest.TestCase):
         self.assertEqual(p.broken, ())
         self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 1))
 
+    def test_a_take_refused_for_no_giver_in_reach_is_not_broken(self):
+        # The module calls "no giver of that quest in reach" retryable:
+        # asking again can succeed, so it is "did not yet", not "could
+        # not", and must not file a working quest as broken. Mirra's
+        # three attempts of an in-reach quest read as proof the quest is
+        # broken until this exclusion exists (quest 118 ticketed so).
+        tried = [
+            questers.Attempt(
+                "Mirra",
+                "take quest:1",
+                "refused",
+                reason="no giver of that quest in reach",
+                age_minutes=10 * i,
+            )
+            for i in range(3)
+        ]
+        p = questers.plan(world(), mirra(x=0.0), questers.Clock(), 0.0, tried=tried)
+        self.assertEqual(p.broken, ())
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 1))
+
+    def test_a_take_refused_for_a_full_log_is_not_broken(self):
+        tried = [
+            questers.Attempt(
+                "Mirra",
+                "take quest:1",
+                "refused",
+                reason="the quest log is full",
+                age_minutes=10 * i,
+            )
+            for i in range(3)
+        ]
+        p = questers.plan(world(), mirra(x=0.0), questers.Clock(), 0.0, tried=tried)
+        self.assertEqual(p.broken, ())
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 1))
+
+    def test_a_take_refused_for_not_eligible_is_broken(self):
+        # The module marks "not eligible" non-retryable (its result
+        # carries "retryable":false): asking again cannot change the
+        # answer in the character's own state, so after enough refusals
+        # the quest is broken, with the module's words kept.
+        tried = [
+            questers.Attempt(
+                "Mirra",
+                "take quest:1",
+                "refused",
+                reason="not eligible "
+                "(level, race, class, prerequisite or exclusive group)",
+                retryable=False,
+                age_minutes=10 * i,
+            )
+            for i in range(3)
+        ]
+        p = questers.plan(world(), mirra(x=0.0), questers.Clock(), 0.0, tried=tried)
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 1)
+        self.assertEqual(
+            p.broken[0].reason,
+            questers.REFUSED_TAKE
+            + ": not eligible (level, race, class, prerequisite or exclusive group)",
+        )
+
     def test_a_hand_in_refused_three_times_is_broken_with_the_worlds_words(self):
         tried = [
             questers.Attempt(
