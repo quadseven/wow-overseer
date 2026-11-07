@@ -177,6 +177,7 @@ def _run_vendor_once(stuck):
             "_queue_vendor_sales",
             "_report_vendor_claim",
             "_bag_hold_released",
+            "_may_release_stale_ground",
         ],
         {
             "_BAG_HOLD_STUCK": dict(stuck),

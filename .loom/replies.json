@@ -1,0 +1,42 @@
+[
+  {
+    "thread": "PRRT_kwDOUg1iIc601pQH",
+    "reply": "Fixed: column_expiry (claims.py:159) is now called from shipped bridge code in _hand_back_for_campaign (bridge.py), which logs the holder lease expiry via claims.column_expiry before handing the aim back for a campaign, and the module now lists it in __all__ as exported interface. Tests: tests/test_claims.py ColumnLeaseRules still pins expiry, full suite passes.",
+    "resolve": true
+  },
+  {
+    "thread": "PRRT_kwDOUg1iIc601pQI",
+    "reply": "Fixed: release_legal (claims.py:172) is now called from _hand_back_for_campaign in bridge.py, which checks claims.release_legal(holder, slot.releasable) before releasing a campaign aim and returns without releasing when illegal. The narrow except (AttributeError, KeyError, TypeError, ValueError) with the NameError regression test in tests/test_claims.py remains.",
+    "resolve": true
+  },
+  {
+    "thread": "PRRT_kwDOUg1iIc601pQJ",
+    "reply": "Fixed: Claims.slot_for (claims.py:533) and want_column (claims.py:540) are now called from shipped bridge code. Bridge.__init__ creates self._claims sharing _cohort_town_slots, _cohort_town_slot delegates to slot_for, and _claim_town_slot delegates to want_column when _claims is present (fallback to slot.want otherwise, preserving isolated-load tests). New PerCohortSlots tests in tests/test_claims.py cover slot_for sharing and want_column.",
+    "resolve": true
+  },
+  {
+    "thread": "PRRT_kwDOUg1iIc601pQL",
+    "reply": "Fixed: Claims.member_observe (claims.py:544) is now called from _bag_hold_stuck in bridge.py via the global _CLAIMS store in log-only comparison mode: the persisted _BAG_HOLD decision still acts, and a disagreement with member_observe is logged with why and expires_at. _restore_bag_holds also restores _CLAIMS via MemberClaims.restore so a restart agrees.",
+    "resolve": true
+  },
+  {
+    "thread": "PRRT_kwDOUg1iIc601pQN",
+    "reply": "Fixed: Claims.member_released (claims.py:549) is now called from _bag_hold_stuck in bridge.py in the same log-only comparison as member_observe, checking the facade released flag against the persisted result and logging any disagreement. Bridge acts on the persisted _BAG_HOLD result as before.",
+    "resolve": true
+  },
+  {
+    "thread": "PRRT_kwDOUg1iIc601pQP",
+    "reply": "Fixed: Claims.member_stuck (claims.py:552) is now called from _bag_hold_stuck in bridge.py in the log-only comparison, comparing facade stuck members with the persisted result. MemberClaims.restore (claims.py) keeps the facade store in sync across a restart, and tests/test_claims.py pins the facade member interface.",
+    "resolve": true
+  },
+  {
+    "thread": "PRRT_kwDOUg1iIc601pQQ",
+    "reply": "Fixed: Claims.release_ground (claims.py:555) is now called from shipped code via _may_release_stale_ground in bridge.py, which forwards to _CLAIMS.release_ground().legal when the facade is present and to claims.may_release_ground otherwise. _vendor_once keeps its pressure question inline and calls the helper, so cyclomatic complexity stays under the cap; tests/test_bag_hold_quest_walk.py and test_bag_withheld_stall.py load the helper.",
+    "resolve": true
+  },
+  {
+    "thread": "PRRT_kwDOUg1iIc601pQR",
+    "reply": "Fixed: Claims.freed_knights (claims.py:561) is now called from _stranded_knights_freed in bridge.py via self._claims.freed_knights when present, falling back to claims.stranded_knights otherwise. The facade test in tests/test_claims.py asserts freed_knights agrees with the module function.",
+    "resolve": true
+  }
+]

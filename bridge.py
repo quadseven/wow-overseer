@@ -2917,6 +2917,10 @@ _BAG_HOLD: dict = {}
 # family key is its leader's name, so queue ownership reads its entry without
 # doing roster or inventory queries. The queue pass removes departed members.
 _BAG_HOLD_STUCK: dict[str, tuple] = {}
+# The claims facade's in-process member store, judged beside _BAG_HOLD so
+# the new interface and the persisted hold are compared on every reading.
+# `_bag_hold_stuck` keeps acting on _BAG_HOLD; a disagreement is logged.
+_CLAIMS = claims.Claims()
 
 
 # WHY NO TOWN PASS IS MAKING ROOM (#986). "No town pass has made room" held
@@ -3302,9 +3306,10 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
     # Looked up, not called by name: the campaign tests load this function in
     # isolation. A town errand under way is a pass not yet failed (#986).
     errand = globals().get("_town_errand_active")
+    running = bool(errand and errand(names))
     progress = bag_pressure.bag_hold_progress(
         _BAG_HOLD.get(key), free_slots, now,
-        running=bool(errand and errand(names)))
+        running=running)
     if progress is None:
         _BAG_HOLD.pop(key, None)
         # The hold ended: clear the memo this function writes below.
@@ -3347,6 +3352,30 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
             _BAG_HOLD_STUCK[name] = result
         else:
             _BAG_HOLD_STUCK.pop(name, None)
+    claims_store = globals().get("_CLAIMS")
+    if claims_store is not None:
+        hold = claims_store.member_observe(names, free_slots, now, running=running)
+        if hold is None:
+            claims_store.members.reset(names)
+            claims_stuck = ()
+            claims_released = False
+        else:
+            claims_stuck = claims_store.member_stuck(names)
+            claims_released = claims_store.member_released(names)
+        if progress is not None and progress.released and hold is not None:
+            if now - progress.since >= bag_pressure.BAG_HOLD_FORGET_SECONDS:
+                claims_store.members.reset(names)
+                claims_stuck = ()
+                claims_released = False
+        if claims_stuck != result or claims_released != bool(result):
+            log.warning(
+                "bag hold: claims facade disagrees for %s: persisted %s "
+                "released=%s, claims %s released=%s (%s, expires %s)",
+                ", ".join(names), result, bool(result),
+                claims_stuck, claims_released,
+                hold.why if hold is not None else "no hold",
+                hold.expires_at if hold is not None else None,
+            )
     return result
 
 
@@ -3356,6 +3385,45 @@ def _bag_hold_released(names) -> bool:
     so the family quests until there is room (#872). Read from what the
     campaign gate last recorded, with no query of its own."""
     return any(_BAG_HOLD_STUCK.get(str(name)) for name in names or ())
+
+
+def _may_release_stale_ground(aim, pressure, in_run, names) -> bool:
+    """Whether bag pressure may hand back a stale leader ground aim.
+
+    The released-bag-hold rule lives in claims: once released, the
+    quest walk is kept. Looked up, not called by name where a caller
+    loads a pass in isolation without the claims facade.
+    """
+    hold_released = globals().get("_bag_hold_released")
+    released = bool(hold_released and hold_released(names))
+    claims_store = globals().get("_CLAIMS")
+    if claims_store is not None:
+        return claims_store.release_ground(
+            aim=aim,
+            pressure=pressure,
+            in_run=in_run,
+            errand_active=_town_errand_active(names),
+            hold_released=released,
+            ground=travel.is_ground_aim,
+        ).legal
+    claims_mod = globals().get("claims")
+    if claims_mod is not None:
+        return claims_mod.may_release_ground(
+            aim=aim,
+            pressure=pressure,
+            in_run=in_run,
+            errand_active=_town_errand_active(names),
+            hold_released=released,
+            ground=travel.is_ground_aim,
+        )
+    return townslot.urgent_ground_release(
+        aim=aim,
+        pressure=pressure,
+        in_run=in_run,
+        errand_active=_town_errand_active(names),
+        hold_released=released,
+        ground=travel.is_ground_aim,
+    )
 
 
 def _released_floor_members(names) -> frozenset:
@@ -3427,16 +3495,22 @@ def _bag_hold_read(names) -> tuple:
 
 def _restore_bag_holds() -> None:
     now_wall, now_mono = time.time(), time.monotonic()
+    claims_store = globals().get("_CLAIMS")
     for subject, (value, _) in _memo_read("bag_hold").items():
         try:
             key = tuple(subject.split(","))
+            best = tuple((str(name), int(slots)) for name, slots in value["best"])
+            since = now_mono - (now_wall - float(value["since"]))
             _BAG_HOLD[key] = bag_pressure.BagHoldProgress(
-                best=tuple((str(name), int(slots)) for name, slots in value["best"]),
-                since=now_mono - (now_wall - float(value["since"])),
+                best=best,
+                since=since,
                 # A bridge restart is not evidence that the hold ended. Make
                 # startup the last observation so BAG_HOLD_GAP does not reset it.
                 seen=now_mono,
                 released=bool(value["released"]))
+            if claims_store is not None:
+                claims_store.members.restore(
+                    key, best, since, now_mono, bool(value["released"]))
         except (KeyError, TypeError, ValueError):
             log.exception("bridge memo: invalid bag hold memo for %s", subject)
 
@@ -7725,6 +7799,17 @@ class Bridge(discord.Client):
         # One town slot per OTHER family (#150), keyed by the roster's
         # `family` value. This bridge's own family keeps `self._town_slot`.
         self._cohort_town_slots: dict[str, townslot.Slot] = {}
+        # The one claims facade over those slots and the member holds.
+        # It shares the cohort dict, so a slot it creates is the slot
+        # `_cohort_town_slot` returns, and its None key is this family's.
+        self._cohort_town_slots[""] = self._town_slot
+        self._claims = claims.Claims(
+            lease=self._town_slot.lease,
+            releasable=self._town_slot.releasable,
+            long_leases=self._town_slot.long_leases,
+            firm_leases=self._town_slot.firm_leases,
+            slots=self._cohort_town_slots,
+        )
         # When each other family's trainee first borrowed its lead for the
         # learn errand it still has (#211), keyed by the roster's `family`.
         # Kept in the memo store (#817), so a deploy does not restart the
@@ -9708,13 +9793,24 @@ class Bridge(discord.Client):
             claimant == WEAPON_SKILL_CLAIMANT
             and await asyncio.to_thread(_is_weapon_training_route, column)
         )
-        decision = slot.want(
-            claimant=claimant, character=character, aim=aim, leader=leader,
-            column=column, retaskable=_retaskable_from(aim), now=now,
-            urgent=urgent, distance=distance,
-            priority_after=priority_after,
-            trainer_route=trainer_route,
-        )
+        claims_facade = getattr(self, "_claims", None)
+        if claims_facade is not None:
+            decision = claims_facade.want_column(
+                cohort,
+                claimant=claimant, character=character, aim=aim, leader=leader,
+                column=column, retaskable=_retaskable_from(aim), now=now,
+                urgent=urgent, distance=distance,
+                priority_after=priority_after,
+                trainer_route=trainer_route,
+            )
+        else:
+            decision = slot.want(
+                claimant=claimant, character=character, aim=aim, leader=leader,
+                column=column, retaskable=_retaskable_from(aim), now=now,
+                urgent=urgent, distance=distance,
+                priority_after=priority_after,
+                trainer_route=trainer_route,
+            )
         lapsed = getattr(slot, "take_lapse", lambda _now: "")(now)
         if lapsed:
             log.warning("town slot: %s", lapsed)
@@ -9787,6 +9883,9 @@ class Bridge(discord.Client):
         `cohort` is None, a `townslot.Cohort`, or its key. Each other family
         gets its own ledger with the same leases, created on first use.
         """
+        claims_facade = getattr(self, "_claims", None)
+        if claims_facade is not None:
+            return claims_facade.slot_for(cohort)
         key = getattr(cohort, "key", cohort)
         if not key:
             return self._town_slot
@@ -13292,18 +13391,11 @@ class Bridge(discord.Client):
         # no dungeon run owns the party, hand that economy aim back so the next
         # arbitration cycle can claim a real vendor target.
         # Not once the bag hold is released (#872): the family was sent
-        # questing, and its quest walk is a ground aim too. Looked up: the
-        # economy tests load this pass in isolation.
-        hold_released = globals().get("_bag_hold_released")
+        # questing, and its quest walk is a ground aim too.
         current_aim = await asyncio.to_thread(_current_travel_npc, leader)
-        if claims.may_release_ground(
-                aim=current_aim,
-                pressure=bag_pressure.family_town_run_needed(
-                    free_slots, sellable=sellable_counts),
-                in_run=in_run,
-                errand_active=_town_errand_active(names),
-                hold_released=bool(hold_released and hold_released(names)),
-                ground=travel.is_ground_aim):
+        pressure = bag_pressure.family_town_run_needed(
+            free_slots, sellable=sellable_counts)
+        if _may_release_stale_ground(current_aim, pressure, in_run, names):
             if await asyncio.to_thread(_release_trade_errand, leader, current_aim):
                 log.warning(
                     "economy: released stale leader ground aim %s under bag "
@@ -17848,7 +17940,11 @@ class Bridge(discord.Client):
             "hand-over run": self._guild_mail_runs,
             "crafter walk": self._crafter_walks,
         }
-        freed = claims.stranded_knights(members, self._job_steps, held)
+        claims_facade = getattr(self, "_claims", None)
+        if claims_facade is not None:
+            freed = claims_facade.freed_knights(members, self._job_steps, held)
+        else:
+            freed = claims.stranded_knights(members, self._job_steps, held)
         for name, labels in claims.stranded_held_labels(
             members, self._job_steps, held
         ).items():
@@ -22651,7 +22747,10 @@ class Bridge(discord.Client):
                          campaignqueue._family(key), name, active)
             slot.yield_to_campaign(owns)
             await self._hand_back_for_campaign(slot, name)
+        seen_slots = {}
         for slot in (self._town_slot, *self._cohort_town_slots.values()):
+            seen_slots.setdefault(id(slot), slot)
+        for slot in seen_slots.values():
             if id(slot) not in owning and slot.campaign:
                 log.info("town slot: the campaign no longer owns %s - town "
                          "errands resume", slot.campaign)
@@ -22757,6 +22856,20 @@ class Bridge(discord.Client):
             log.info("town slot: %s carries %r, which is not a bridge errand "
                      "this pass may hand back yet", leader, column)
             return
+        claims_mod = globals().get("claims")
+        now = time.monotonic()
+        if claims_mod is not None:
+            if not claims_mod.release_legal(holder, slot.releasable):
+                log.info("town slot: %s carries %r, which this pass may not "
+                         "hand back yet", leader, holder.aim)
+                return
+            expires = claims_mod.column_expiry(
+                holder, now, lease=slot.lease,
+                orphan_lease=slot.orphan_lease,
+                long_leases=slot.long_leases)
+            log.debug("town slot: %s lease for %r expires in %ds",
+                      holder.claimant or "an unknown writer",
+                      holder.aim, int(max(expires - now, 0.0)))
         released = await asyncio.to_thread(_release_trade_errand, leader,
                                            holder.aim)
         slot.released_for_campaign(holder, released)

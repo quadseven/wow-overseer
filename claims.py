@@ -37,6 +37,49 @@ import bag_pressure
 import classquest
 import townslot
 
+__all__ = [
+    "Claims",
+    "Cohort",
+    "Decision",
+    "GRANTED",
+    "Holder",
+    "MemberClaims",
+    "MemberHold",
+    "Release",
+    "Reservation",
+    "SLOT_CLEAR",
+    "SLOT_GIVE_UP",
+    "SLOT_HOLD",
+    "SLOT_NOT_THE_LEADER",
+    "SLOT_PREEMPT",
+    "SLOT_TAKE",
+    "SLOT_WAIT",
+    "Slot",
+    "Want",
+    "busy_members",
+    "column_expiry",
+    "decide",
+    "decide_idle",
+    "fresh_wants",
+    "ground_release",
+    "is_stranded_knight",
+    "lease_for",
+    "leases_for_ask",
+    "may_release_ground",
+    "member_hold_observe",
+    "new_column_slot",
+    "release_legal",
+    "report",
+    "reserved_wait",
+    "reserve_rank",
+    "stranded_aims_far_from_doors",
+    "stranded_held_labels",
+    "stranded_knights",
+    "stranded_nonleader_aims",
+    "urgent_ground_release",
+    "walk_rank",
+]
+
 # The column vocabulary, re-exported so a caller names one module.
 SLOT_TAKE = townslot.SLOT_TAKE
 SLOT_HOLD = townslot.SLOT_HOLD
@@ -350,6 +393,22 @@ class MemberClaims:
     def reset(self, names) -> None:
         self._holds.pop(self.key(names), None)
 
+    def restore(self, names, best, since, seen, released) -> None:
+        """Put back a hold the bridge persisted, so a restart agrees.
+
+        The bridge memoizes bag holds across a restart; restoring the
+        same reading here keeps the in-process store and the memo on
+        the same clock instead of starting a second hold at startup.
+        """
+        key = self.key(names)
+        self._holds[key] = MemberHold(
+            names=key,
+            best=tuple(best or ()),
+            since=float(since),
+            seen=float(seen),
+            released=bool(released),
+        )
+
 
 def busy_members(*sets) -> set:
     """Every member another pass has put on a walk.
@@ -458,6 +517,7 @@ class Claims:
         releasable=None,
         long_leases=None,
         firm_leases=None,
+        slots=None,
     ) -> None:
         self.kwargs = dict(
             lease=lease,
@@ -467,7 +527,7 @@ class Claims:
             firm_leases=firm_leases,
         )
         self.releasable = releasable
-        self._slots: dict = {}
+        self._slots: dict = {} if slots is None else slots
         self.members = MemberClaims()
 
     def slot_for(self, cohort=None):

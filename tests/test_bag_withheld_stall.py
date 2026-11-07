@@ -594,6 +594,7 @@ def _run_vendor_once(queued, at_vendor=True):
             "_count_sales",
             "_queue_vendor_sales",
             "_report_vendor_claim",
+            "_may_release_stale_ground",
         ],
         {
             "_bank_policy": lambda names, fresh=False: {},

@@ -366,6 +366,59 @@ class PerCohortSlots(unittest.TestCase):
         self.assertIsNot(first, second)
         self.assertIsNone(first.holder)
 
+    def test_a_shared_slots_dict_is_the_cohort_ledger(self):
+        shared = {}
+        store = claims.Claims(releasable=economy, slots=shared)
+        own = store.slot_for(None)
+        other = store.slot_for("Zug")
+        self.assertIs(shared[""], own)
+        self.assertIs(shared["Zug"], other)
+
+    def test_want_column_asks_the_cohort_slot(self):
+        store = claims.Claims(releasable=economy)
+        decision = store.want_column(
+            None,
+            claimant="guild bank",
+            character="Grug",
+            aim="at:1:1,2,3",
+            leader="Grug",
+            column="",
+            retaskable=("", "at:1:1,2,3"),
+            now=0.0,
+        )
+        self.assertEqual(townslot.SLOT_TAKE, decision.verdict)
+
+    def test_the_facade_member_interface_agrees_with_the_store(self):
+        store = claims.Claims(releasable=economy)
+        hold = store.member_observe(FAMILY, MEASURED, 0.0)
+        self.assertIsNotNone(hold)
+        self.assertFalse(store.member_released(FAMILY))
+        self.assertEqual((), store.member_stuck(FAMILY))
+        store.members.restore(FAMILY, hold.best, hold.since, hold.seen, True)
+        self.assertTrue(store.member_released(FAMILY))
+        self.assertEqual(("Grog",), store.member_stuck(FAMILY))
+
+    def test_the_facade_release_ground_agrees_with_the_pure_rule(self):
+        store = claims.Claims(releasable=economy)
+        rel = store.release_ground(
+            aim=QUEST_WALK,
+            pressure=True,
+            in_run=False,
+            hold_released=True,
+            ground=ground,
+        )
+        self.assertFalse(rel.legal)
+        self.assertIn("quest", rel.why.lower())
+
+    def test_the_facade_freed_knights_agrees_with_the_module(self):
+        store = claims.Claims(releasable=economy)
+        member = knight()
+        held = {"guild run": {"Brug"}}
+        self.assertEqual(
+            claims.stranded_knights([member], {}, held),
+            store.freed_knights([member], {}, held),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
