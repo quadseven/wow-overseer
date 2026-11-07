@@ -443,6 +443,50 @@ class RedundantCarriedBags(unittest.TestCase):
         made = bag(name="Woolen Bag", entry=4240, self_made=True, sell_price=300)
         self.assertEqual(bag_candidates([made], GRUG_EQUIPPED_BAGS), ())
 
+    def test_crafted_bags_past_the_corps_stock_are_sold(self):
+        """#1967: Oz carried 23 crafted Woolen Bags at 5 free slots, every one
+        kept for a corps that posts one bag per mailbox stand, and the family's
+        dungeon was held for bag room. The stock is kept, the surplus sold."""
+        import guildcorps
+
+        stock = guildcorps.CORPS_BAG_STOCK
+        made = [
+            bag(
+                name="Woolen Bag",
+                entry=4240,
+                self_made=True,
+                sell_price=300,
+                item_guid=9100 + i,
+            )
+            for i in range(stock + 3)
+        ]
+        sold = bag_candidates(made, GRUG_EQUIPPED_BAGS)
+        self.assertEqual(len(sold), 3)
+        self.assertEqual(
+            sorted(c.item_guid for c in sold), [9100 + stock + i for i in range(3)]
+        )
+        self.assertEqual(
+            bag_pressure.corps_bags_kept(made),
+            frozenset(9100 + i for i in range(stock)),
+        )
+
+    def test_the_corps_stock_is_counted_per_holder(self):
+        import guildcorps
+
+        stock = guildcorps.CORPS_BAG_STOCK
+        rows = [
+            bag(
+                name="Woolen Bag",
+                entry=4240,
+                self_made=True,
+                holder=who,
+                item_guid=base + i,
+            )
+            for who, base in (("Grug", 9100), ("Ugga", 9200))
+            for i in range(stock)
+        ]
+        self.assertEqual(len(bag_pressure.corps_bags_kept(rows)), 2 * stock)
+
     def test_a_plain_spare_bag_is_still_sold(self):
         """A Woolen Bag the holder did not craft, and a crafted bag that is
         not a ladder bag, are ordinary spares."""
@@ -509,10 +553,54 @@ class TheSurplusBagReadCarriesTheCorpsFacts(unittest.TestCase):
         with self.assertLogs(logger, level="INFO") as seen:
             got = ns["_fetch_surplus_bags"](["Og"])
         self.assertEqual(len(got), 2)
-        kept = [m for m in seen.output if "keeps its crafted" in m]
+        kept = [m for m in seen.output if "keeps" in m and "crafted" in m]
         self.assertEqual(len(kept), 1)
         self.assertIn("Woolen Bag", kept[0])
         self.assertIn("#1667", kept[0])
+
+    def test_the_kept_corps_bags_are_one_line_per_holder_and_bag(self):
+        """#1967: 23 kept bags logged 23 lines a pass; one line names the
+        stock kept and the surplus offered for sale."""
+        import guildcorps
+
+        fn = next(
+            n
+            for n in self._tree().body
+            if isinstance(n, ast.FunctionDef) and n.name == "_fetch_surplus_bags"
+        )
+        n = guildcorps.CORPS_BAG_STOCK + 5
+        rows = [
+            bag(
+                name="Woolen Bag",
+                entry=4240,
+                self_made=1,
+                holder="Oz",
+                item_guid=9300 + i,
+            )
+            for i in range(n)
+        ]
+        cursor = mock.MagicMock()
+        cursor.fetchall.return_value = rows
+        conn = mock.MagicMock()
+        conn.__enter__.return_value = conn
+        conn.cursor.return_value.__enter__.return_value = cursor
+        logger = logging.getLogger("test_1967_bridge")
+        ns = {
+            "bag_pressure": bag_pressure,
+            "bankbags": bankbags,
+            "_fetch_bank_bag_facts": lambda names: [],
+            "_connect": lambda: conn,
+            "_SURPLUS_BAGS_SQL": "%s",
+            "log": logger,
+            "pymysql": mock.MagicMock(),
+        }
+        exec(compile(ast.Module([fn], type_ignores=[]), str(BRIDGE), "exec"), ns)
+        with self.assertLogs(logger, level="INFO") as seen:
+            ns["_fetch_surplus_bags"](["Oz"])
+        kept = [m for m in seen.output if "crafted" in m]
+        self.assertEqual(len(kept), 1)
+        self.assertIn("keeps %d" % guildcorps.CORPS_BAG_STOCK, kept[0])
+        self.assertIn("5 more are offered for sale", kept[0])
 
 
 if __name__ == "__main__":
