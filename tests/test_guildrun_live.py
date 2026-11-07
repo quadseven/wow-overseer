@@ -224,6 +224,31 @@ class TheStartWritesTheRunAndTheCommand(unittest.TestCase):
             self.assertTrue(j["facts"])
 
 
+class CarryXpLines(unittest.TestCase):
+    def test_counts_xp_across_a_level_up_and_skips_the_carrier(self):
+        lines = guildrun.carry_xp_lines(
+            "ragefire",
+            "Carrier",
+            {"Carrier": (40, 0), "Member": (30, 1000)},
+            {"Carrier": (40, 0), "Member": (31, 500)},
+            {30: 5000},
+        )
+
+        self.assertEqual(lines, ["carry run ragefire: Member gained 4500 xp (gap 10)"])
+
+    def test_no_carrier_has_no_lines(self):
+        self.assertEqual(
+            guildrun.carry_xp_lines(
+                "ragefire",
+                None,
+                {"Member": (30, 1000)},
+                {"Member": (31, 500)},
+                {30: 5000},
+            ),
+            [],
+        )
+
+
 class TheFollowRecordsTheOutcome(unittest.TestCase):
     """_follow_guild_runs reads the command's answer and records the outcome."""
 
@@ -300,6 +325,58 @@ class TheFollowRecordsTheOutcome(unittest.TestCase):
         self.assertEqual(end_args[4], 4)
         self.assertEqual(end_args[5], 4)
         self.assertEqual(end_args[6], 17)
+
+    def test_follow_logs_carry_xp_only_when_the_run_has_a_snapshot(self):
+        result = {
+            "outcome": "cleared",
+            "why": "finished",
+            "deaths": 0,
+            "seconds_inside": 1500,
+            "bosses_done": 4,
+            "bosses_total": 4,
+        }
+        for carry_start, extra_reads, expected in (
+            (None, [], None),
+            (
+                json.dumps(
+                    {
+                        "carrier": "Carrier",
+                        "members": {"Carrier": [40, 0], "Member": [30, 1000]},
+                    }
+                ),
+                [
+                    [
+                        {"name": "Carrier", "level": 40, "xp": 0},
+                        {"name": "Member", "level": 31, "xp": 500},
+                    ],
+                    [{"level": 30, "xp": 5000}],
+                ],
+                "carry run ragefire: Member gained 4500 xp (gap 10)",
+            ),
+        ):
+            joined = {
+                "id": 99,
+                "state": "inside",
+                "keyword": "ragefire",
+                "tank": "Carrier",
+                "members": "Carrier:tank:warrior:40,Member:damage:mage:30",
+                "last_room": "",
+                "status": "applied",
+                "detail": "",
+                "result": json.dumps(result),
+                "stale": 0,
+                "carry_start": carry_start,
+            }
+            cursor = _Cursor(reads=[[joined], *extra_reads])
+            with self.subTest(carry_start=bool(carry_start)):
+                with self.assertLogs(level="INFO") as captured:
+                    with mock.patch.object(bridge, "_connect", _fake_connect(cursor)):
+                        self.assertEqual(bridge._follow_guild_runs(), 1)
+                output = "\n".join(captured.output)
+                if expected:
+                    self.assertIn(expected, output)
+                else:
+                    self.assertNotIn("carry run", output)
 
 
 class ThePageRendersTheRun(unittest.TestCase):
