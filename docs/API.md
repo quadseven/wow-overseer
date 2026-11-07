@@ -308,6 +308,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Answers: one classic quest, its ticket and every quester attempt.
 - Example: `overseer get /api/v2/quests/{id}`
 
+## `GET /api/v2/ragnaros`
+
+- Query: `guild`
+- Answers: the road to a Ragnaros attempt.
+- Example: `overseer get /api/v2/ragnaros guild=cave`
+
 ## `GET /api/v2/raidteams`
 
 - Query: `guild`

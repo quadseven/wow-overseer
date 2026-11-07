@@ -2580,6 +2580,12 @@ def formed_since(reader, guilds: list, days: int, n: int) -> list:
     return _runs(reader, where, (*guilds, days), n)
 
 
+def keyword_runs(reader, guild: str, keyword: str, n: int) -> list:
+    """One guild's runs at one door, in any state, as rows newest first. The
+    Ragnaros road reads the Molten Core ones (apiv2/ragnaros.py)."""
+    return _runs(reader, "guild = %s AND keyword = %s", (guild, keyword), n)
+
+
 def matching(reader, keywords: list, members_like: str, n: int) -> list:
     """Runs at one of `keywords`, or with a member whose lowered seat list
     matches the LIKE pattern `members_like`, as rows newest first."""
