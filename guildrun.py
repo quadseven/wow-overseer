@@ -626,7 +626,7 @@ class Door:
     finder_floor: int
     # The level the tank and healer seats must stand at (carries); 0 unread.
     carry_floor: int = 0
-    # THE KEY THE WING NEEDS, item entry and name (campaignplan.DOOR_KEYS), or
+    # THE KEY THE WING NEEDS, item entry and name (campaignplan.door_lock), or
     # 0 and "": a run there seats a member who carries it (opens_for).
     key: int = 0
     key_name: str = ""
@@ -677,7 +677,7 @@ def doors(finder_floors: dict | None = None, boss_levels: dict | None = None) ->
         if run.keyword in dungeonpath.WITHHELD_DOORS:
             continue
         floor = council.door_floor(run.keyword)
-        key, key_name, _where = campaignplan.DOOR_KEYS.get(run.keyword, (0, "", ""))
+        key, key_name, _where = campaignplan.door_lock(run.keyword) or (0, "", "")
         out.append(
             Door(
                 keyword=run.keyword,

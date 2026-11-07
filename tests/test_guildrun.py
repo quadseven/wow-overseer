@@ -809,11 +809,12 @@ class EachSideHasADoorAtEveryLevelItCanPlay(unittest.TestCase):
         "scarlet-armory", "scarlet-cathedral", "dire-maul-east-east",
         "dire-maul-west-north", "dire-maul-north",
     }  # fmt: skip
-    # Keyed wings (campaignplan.DOOR_KEYS): offered to a group that carries the
-    # key, never to one that does not (guildrun.opens_for, #785).
+    # Keyed wings (campaignplan.door_lock): offered to a group that carries the
+    # key, never to one that does not (guildrun.opens_for, #785). Blackrock
+    # Depths is not one: its key is earned inside it (#1964).
     KEYED = {
         "scarlet-armory", "scarlet-cathedral", "dire-maul-west-north",
-        "dire-maul-north", "blackrock-depths",
+        "dire-maul-north",
     }  # fmt: skip
     FIRST_LEVEL = {"Alliance": 17, "Horde": 15}
 
@@ -860,9 +861,8 @@ class EachSideHasADoorAtEveryLevelItCanPlay(unittest.TestCase):
 
     def test_a_keyed_wing_is_offered_only_to_a_group_with_its_key(self):
         """The Armory (Herod's Door), the Cathedral (the Chapel Door), Dire
-        Maul West and North (the Crescent doors) and Blackrock Depths (the
-        Shadowforge gates) need their key: a group that carries none is never
-        offered them, and one that carries it is."""
+        Maul West and North (the Crescent doors) need their key: a group that
+        carries none is never offered them, and one that carries it is."""
         for faction in ("Alliance", "Horde"):
             for level in range(36, 61):
                 offered = set(self.offered(level, faction))
@@ -877,6 +877,17 @@ class EachSideHasADoorAtEveryLevelItCanPlay(unittest.TestCase):
                 "dire-maul-west-north", self.offered(58, faction, frozenset({18249}))
             )
             self.assertIn("dire-maul-east-east", self.offered(58, faction))
+
+    def test_blackrock_depths_needs_no_key_to_be_offered(self):
+        """The Shadowforge Key comes from inside Blackrock Depths (Dark Iron
+        Legacy), so a lock there kept every guild run out of the one place it
+        is earned (#1964). A keyless group at the door's level is offered it,
+        and its door seats no key holder."""
+        for faction in ("Alliance", "Horde"):
+            self.assertIn("blackrock-depths", self.offered(56, faction), faction)
+        door = next(d for d in guildrun.doors() if d.keyword == "blackrock-depths")
+        self.assertEqual(door.key, 0)
+        self.assertTrue(guildrun.opens_for([], door))
 
     def test_the_ladder_climbs_through_the_high_dungeons(self):
         self.assertIn("razorfen-kraul", self.offered(32, "Horde"))
