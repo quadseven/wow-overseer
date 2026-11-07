@@ -41,11 +41,12 @@ WALK = dungeonquests.Step(
 
 
 class _Pass:
-    def __init__(self, granted):
+    def __init__(self, granted, mid_run=False):
         self.granted = granted
+        self.mid_run = mid_run
 
     async def _mid_run(self, names):
-        return False
+        return self.mid_run
 
     async def _claim_town_slot(self, claimant, leader, aim, cohort=None):
         return self.granted
@@ -56,7 +57,7 @@ FREE = {"Zug": 30, "Oz": 30}
 OUT = set()
 
 
-def run_pass(granted, sellable=None, names=("Zug", "Oz"), column=""):
+def run_pass(granted, sellable=None, names=("Zug", "Oz"), column="", mid_run=False):
     fam = {"leader": {"name": "Zug"}, "names": list(names)}
     rows = [{"status": campaignqueue.QUEUED, "keyword": "ragefire"}]
     with (
@@ -72,7 +73,7 @@ def run_pass(granted, sellable=None, names=("Zug", "Oz"), column=""):
     ):
         held = asyncio.run(
             bridge.Bridge._dungeonquest_for_family(
-                _Pass(granted), "Zug", fam, rows, "Zug"
+                _Pass(granted, mid_run), "Zug", fam, rows, "Zug"
             )
         )
     said = [c.args[0] % c.args[1:] for c in info.call_args_list]
@@ -285,6 +286,34 @@ class TownErrandsHoldTheColumnTest(unittest.TestCase):
             names=("Zug", "Oz"),
             column="vendor",
         )
+        self.assertFalse(held)
+        self.assertTrue([s for s in said if "waits for bag room" in s], said)
+
+
+class AFamilyMidRunTest(unittest.TestCase):
+    """#1243: no bag-room hold while the family is mid-run.
+
+    The vendor pass takes no trip while the family is in a dungeon run ("bag
+    pressure is urgent during a dungeon; the job stays on the dungeon and the
+    run makes bag room inside"), so a hold waiting for that trip waits for
+    ever: on the dev realm Grug's family read "waits for bag room; the vendor
+    trip keeps the travel column" from 2026-11-04 09:34Z to 12:23Z beside that
+    line, two hours and 48 minutes past nothing.
+    """
+
+    def setUp(self):
+        global FREE
+        self._saved = dict(FREE)
+        FREE["Oz"] = 0
+        self.addCleanup(lambda: (FREE.clear(), FREE.update(self._saved)))
+
+    def test_the_hold_does_not_wait_for_a_trip_that_cannot_come(self):
+        held, said = run_pass(True, {"Zug": 0, "Oz": 4}, mid_run=True)
+        self.assertFalse([s for s in said if "waits for bag room" in s], said)
+        self.assertTrue(held)
+
+    def test_out_of_a_run_the_hold_still_waits(self):
+        held, said = run_pass(True, {"Zug": 0, "Oz": 4}, mid_run=False)
         self.assertFalse(held)
         self.assertTrue([s for s in said if "waits for bag room" in s], said)
 

@@ -22537,7 +22537,14 @@ class Bridge(discord.Client):
         # stood at a vendor that could sell nothing of Uzza's.
         here, free, column = await asyncio.to_thread(
             _bag_hold_reads, list(fam["names"]), leader)
-        if jev_activity.withheld(True, free) and _vendor_trip_makes_room(
+        # NOT WHILE THE FAMILY IS MID-RUN EITHER (#1243). The vendor pass takes
+        # no trip then ("bag pressure is urgent during a dungeon; the job stays
+        # on the dungeon and the run makes bag room inside"), so the trip this
+        # hold waits for never comes: on the dev realm Grug's family read
+        # "waits for bag room" from 2026-11-04 09:34Z to 12:23Z, and Zug's from
+        # 2026-11-06 03:37Z to 04:20Z, each beside that vendor-pass line.
+        mid = await self._mid_run(list(fam["names"]))
+        if not mid and jev_activity.withheld(True, free) and _vendor_trip_makes_room(
                 here, free):
             # THE VENDOR TRIP CANNOT GO WHILE ANOTHER ERRAND HOLDS THE COLUMN.
             # Zug's town errand to Camp Taurajo held the traveller while it
@@ -22554,7 +22561,6 @@ class Bridge(discord.Client):
                 log.info("dungeon quests: %s waits for bag room; the vendor trip "
                          "keeps the travel column", campaignqueue._family(key))
                 return False
-        mid = await self._mid_run(list(fam["names"]))
         facts = await asyncio.to_thread(
             _dungeonquest_facts, fam, str(head["keyword"]), leader, True, mid)
         step = dungeonquests.step(facts)
