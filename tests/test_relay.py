@@ -118,36 +118,24 @@ class FitSpoken(unittest.TestCase):
 
 
 def _insert_speak(written: list):
-    """bridge._insert_speak, compiled out of its source and run on a fake
-    connection: bridge.py itself cannot be imported here."""
-    import ast
-    import contextlib
-    import pathlib
+    """The spoken row through the orders interface: the same writer
+    bridge._insert_speak now calls, on a memory store. bridge.py itself
+    cannot be imported here."""
+    from _stub_modules import PYMYSQL, stub_modules
 
-    src = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
-    node = next(
-        n
-        for n in ast.walk(ast.parse(src))
-        if isinstance(n, ast.FunctionDef) and n.name == "_insert_speak"
-    )
+    with stub_modules(pymysql=PYMYSQL):
+        import orders
 
-    class Cursor:
-        lastrowid = 7
+    store = orders.MemoryStore()
 
-        def execute(self, sql, params):
-            written.append(params)
+    def insert(cmd):
+        order = orders.speak_order(cmd)
+        written.append(
+            (order.target, order.command, order.channel, order.target_arg, order.source)
+        )
+        return orders.send(store, order)
 
-    namespace = {
-        "relay": relay,
-        "_connect": lambda: contextlib.nullcontext(
-            type(
-                "Conn", (), {"cursor": lambda self: contextlib.nullcontext(Cursor())}
-            )()
-        ),
-    }
-    code = compile(ast.Module(body=[node], type_ignores=[]), "bridge.py", "exec")
-    exec(code, namespace)  # noqa: S102 - bridge.py's own source
-    return namespace["_insert_speak"]
+    return insert
 
 
 class TheCouncilLineFitsTheColumn(unittest.TestCase):
