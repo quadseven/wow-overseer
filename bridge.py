@@ -100,6 +100,7 @@ import guildsocial
 import holdings
 import hunterpet
 import interview
+import itemplan_reads
 import itemplan_shadow
 import itemsource
 import purse
@@ -13474,7 +13475,8 @@ class Bridge(discord.Client):
         # THE ITEM PLAN RUNS BESIDE THE PASSES, LOGS, AND CHANGES NOTHING (#1972).
         # Off unless ITEMPLAN_SHADOW is on; a failure inside it is logged there.
         # Looked up: the economy tests load this pass in isolation.
-        globals().get("_shadow_itemplan", lambda *a, **k: None)(
+        await asyncio.to_thread(
+            globals().get("_shadow_itemplan", lambda *a, **k: None),
             names, leader, rows, free_slots, gear_rows=gear_rows, worn_rows=worn,
             sales=tuple(gear_sales) + lock_sales + clear_sales,
             keep_names=OWNER_KEEPS, bank_keeps=bank_keeps, clear=clear)
@@ -28810,8 +28812,20 @@ _SURPLUS_BAGS_SQL = (
 
 
 def _shadow_itemplan(*args, **facts) -> None:
-    """The economy pass's one call into the item plan shadow (#1972)."""
-    itemplan_shadow.run(*args, **facts)
+    """The economy pass's one call into the item plan shadow (#1972).
+
+    Blocking: the pass runs it in a thread. The reader reads the shadow's
+    inputs (#1973); a read that fails is named in the tick line, not raised.
+    """
+    itemplan_shadow.run(*args, reader=_itemplan_reads, **facts)
+
+
+def _itemplan_reads(names, family, rows, gear_rows, worn_rows):
+    """The item plan shadow's inputs, read with the passes' own reads (#1973)."""
+    return itemplan_reads.read(
+        names, family, rows, gear_rows, worn_rows, connect=_connect,
+        bank_rows=_fetch_bank_items, guild_setup=_fetch_guild_bank_setup,
+        roster=_fetch_guild_roster)
 
 
 def _count_sales(counts: dict, sales) -> None:

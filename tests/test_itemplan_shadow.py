@@ -102,6 +102,9 @@ class AdapterTest(unittest.TestCase):
 
 
 class RunTest(unittest.TestCase):
+    def setUp(self):
+        shadow.reset()
+
     def test_off_skips_and_touches_nothing(self):
         rows, gear, worn, free = fixture()
         before = copy.deepcopy((rows, gear, worn, free))
