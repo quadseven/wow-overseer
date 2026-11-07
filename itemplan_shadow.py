@@ -182,6 +182,93 @@ def _opinions(rows, sales, keep_names, bank_keeps, clear) -> dict:
     return out
 
 
+def _missing(extras: Extras) -> tuple:
+    """What the plan ran without, in words."""
+    gaps = (
+        (
+            extras.open_quest_items is None,
+            "quest log (using the sale query's quest flag)",
+        ),
+        (not extras.gear_verdict, "equipped gear verdicts"),
+        (not extras.market, "auction prices"),
+        (not extras.guild_crafters, "guild roster"),
+        (not extras.guild_free, "guild bank room"),
+        (True, "bank contents"),
+        (True, "binding of non-gear rows"),
+    )
+    return tuple(text for absent, text in gaps if absent)
+
+
+def _plan_lines(plan_, members, stacks) -> list:
+    """One line per member: free slots now and after the plan."""
+    lines = []
+    for m in members:
+        mine = [s for s in stacks if s.holder == m.name]
+        by_route: dict = {}
+        for d in plan_.by_holder(m.name):
+            by_route[d.route] = by_route.get(d.route, 0) + 1
+        routes = ", ".join("%s %d" % kv for kv in sorted(by_route.items()))
+        lines.append(
+            "%s plan %s: carried stacks %d, carried slots %d, free now %d, "
+            "free after %d (%d with no vendor), routes %s"
+            % (
+                PREFIX,
+                m.name,
+                len(mine),
+                m.carried_slots,
+                itemplan.free_now(m, mine),
+                itemplan.free_after(plan_, m, mine),
+                itemplan.free_after(plan_, m, mine, sales=False),
+                routes or "none",
+            )
+        )
+    return lines
+
+
+def _said(pass_name, theirs, decision, row, keep_names):
+    """What a pass says about a stack when it differs from the plan, else None."""
+    if pass_name == SALE:
+        sells = theirs == itemplan.SELL_VENDOR
+        if sells == (decision.route == itemplan.SELL_VENDOR):
+            return None
+        if sells:
+            return "sells"
+        why = bag_pressure.vendor_refusal(row, keep_names) or "not offered"
+        return "keeps (%s)" % why
+    if theirs is None or theirs == decision.route:
+        return None
+    return "routes it to %s" % theirs
+
+
+def _disagreements(plan_, rows_by_key, opinions, keep_names) -> list:
+    """One line per stack and pass where the pass and the plan differ."""
+    out = []
+    for d in plan_.decisions:
+        row = rows_by_key.get(d.key)
+        if row is None:
+            continue
+        guid = _int(row.get("item_guid"))
+        for pass_name, opinion in opinions.items():
+            said = _said(pass_name, opinion.get((d.holder, guid)), d, row, keep_names)
+            if said:
+                out.append(
+                    "%s disagree %s: %s x%d (guid %s) %s %s, plan %s (%s, %s)"
+                    % (
+                        PREFIX,
+                        d.holder,
+                        d.name,
+                        d.count,
+                        guid,
+                        pass_name,
+                        said,
+                        d.route,
+                        d.reason,
+                        d.rule,
+                    )
+                )
+    return out
+
+
 def shadow(
     names,
     family,
@@ -203,96 +290,23 @@ def shadow(
     members = build_members(
         names, family, stacks, free_slots, characters_from_worn(worn_rows)
     )
-    quest = (
-        extras.open_quest_items
-        if extras.open_quest_items is not None
-        else _quest_items(rows)
-    )
+    quest = extras.open_quest_items
     ctx = itemplan.Context(
-        open_quest_items=quest,
+        open_quest_items=_quest_items(rows) if quest is None else quest,
         gear_verdict=extras.gear_verdict,
         market=extras.market,
         guild_free=extras.guild_free,
         guild_crafters=extras.guild_crafters,
     )
     plan_ = itemplan.plan(stacks, members, ctx)
-    by_stack = {}
-    for stack, row in zip(stacks, rows):
-        by_stack[stack.key] = (stack, row)
-    missing = []
-    if extras.open_quest_items is None:
-        missing.append("quest log (using the sale query's quest flag)")
-    if not extras.gear_verdict:
-        missing.append("equipped gear verdicts")
-    if not extras.market:
-        missing.append("auction prices")
-    if not extras.guild_crafters:
-        missing.append("guild roster")
-    if not extras.guild_free:
-        missing.append("guild bank room")
-    missing.append("bank contents")
-    missing.append("binding of non-gear rows")
+    rows_by_key = {s.key: r for s, r in zip(stacks, rows, strict=True)}
     opinions = _opinions(rows, sales, keep_names, bank_keeps, clear)
-
-    lines = []
-    for m in members:
-        mine = [s for s in stacks if s.holder == m.name]
-        decisions = plan_.by_holder(m.name)
-        by_route: dict = {}
-        for d in decisions:
-            by_route[d.route] = by_route.get(d.route, 0) + 1
-        lines.append(
-            "%s plan %s: carried stacks %d, carried slots %d, free now %d, "
-            "free after %d (%d with no vendor), routes %s"
-            % (
-                PREFIX,
-                m.name,
-                len(mine),
-                m.carried_slots,
-                itemplan.free_now(m, mine),
-                itemplan.free_after(plan_, m, mine),
-                itemplan.free_after(plan_, m, mine, sales=False),
-                ", ".join("%s %d" % kv for kv in sorted(by_route.items())) or "none",
-            )
-        )
-    disagreements = []
-    for d in plan_.decisions:
-        stack, row = by_stack.get(d.key, (None, None))
-        if stack is None:
-            continue
-        guid = (stack.holder, _int(row.get("item_guid")))
-        for pass_name, opinion in opinions.items():
-            theirs = opinion.get(guid)
-            if pass_name == SALE:
-                sells = theirs == itemplan.SELL_VENDOR
-                if sells == (d.route == itemplan.SELL_VENDOR):
-                    continue
-                said = (
-                    "sells"
-                    if sells
-                    else "keeps (%s)"
-                    % (bag_pressure.vendor_refusal(row, keep_names) or "not offered")
-                )
-            else:
-                if theirs is None or theirs == d.route:
-                    continue
-                said = "routes it to %s" % theirs
-            disagreements.append(
-                "%s disagree %s: %s x%d (guid %s) %s %s, plan %s (%s, %s)"
-                % (
-                    PREFIX,
-                    d.holder,
-                    d.name,
-                    d.count,
-                    guid[1],
-                    pass_name,
-                    said,
-                    d.route,
-                    d.reason,
-                    d.rule,
-                )
-            )
-    return Report(plan_, tuple(lines), tuple(disagreements), tuple(missing))
+    return Report(
+        plan_,
+        tuple(_plan_lines(plan_, members, stacks)),
+        tuple(_disagreements(plan_, rows_by_key, opinions, keep_names)),
+        _missing(extras),
+    )
 
 
 def run(names, family, rows, free_slots, *, environ=None, logger=None, **facts):

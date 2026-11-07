@@ -100,7 +100,7 @@ import guildsocial
 import holdings
 import hunterpet
 import interview
-import itemplan_shadow  # noqa: F401  (looked up through globals() in the economy pass)
+import itemplan_shadow
 import itemsource
 import purse
 import pvpgear
@@ -13474,12 +13474,10 @@ class Bridge(discord.Client):
         # THE ITEM PLAN RUNS BESIDE THE PASSES, LOGS, AND CHANGES NOTHING (#1972).
         # Off unless ITEMPLAN_SHADOW is on; a failure inside it is logged there.
         # Looked up: the economy tests load this pass in isolation.
-        shadow_plan = globals().get("itemplan_shadow")
-        if shadow_plan is not None:
-            shadow_plan.run(
-                names, leader, rows, free_slots, gear_rows=gear_rows,
-                worn_rows=worn, sales=tuple(gear_sales) + lock_sales + clear_sales,
-                keep_names=OWNER_KEEPS, bank_keeps=bank_keeps, clear=clear)
+        globals().get("_shadow_itemplan", lambda *a, **k: None)(
+            names, leader, rows, free_slots, gear_rows=gear_rows, worn_rows=worn,
+            sales=tuple(gear_sales) + lock_sales + clear_sales,
+            keep_names=OWNER_KEEPS, bank_keeps=bank_keeps, clear=clear)
 
         # A CAMPAIGN WITHHELD FOR BAG SPACE STILL SELLS (#225); see
         # `_vendor_pass_mode`.
@@ -28809,6 +28807,11 @@ _SURPLUS_BAGS_SQL = (
     "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
     "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"
 )
+
+
+def _shadow_itemplan(*args, **facts) -> None:
+    """The economy pass's one call into the item plan shadow (#1972)."""
+    itemplan_shadow.run(*args, **facts)
 
 
 def _count_sales(counts: dict, sales) -> None:
