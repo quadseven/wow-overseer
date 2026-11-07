@@ -235,10 +235,6 @@ FARGODEEP_EXPLORATION = (
     "requires exploring Fargodeep Mine; questers cannot earn exploration credit"
 )
 UNDERBELLY_SCALES = "Underbelly Scales (quest 122) requires Black Dragonspawn with no spawns in Redridge Mountains"
-TOTEM_OF_INFLICTION = (
-    "requires using a quest item on its objective; questers cannot perform "
-    "quest objective item use"
-)
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
 NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
@@ -1290,8 +1286,6 @@ def _broken_reason(
         return UNSUPPORTED_OBJECTIVE
     if quest.id == 93 and status == STATUS_INCOMPLETE and (2683, 6) in quest.items:
         return CRAFTED_CRAB_CAKES
-    if quest.id == 101 and status == STATUS_INCOMPLETE and quest.uses:
-        return TOTEM_OF_INFLICTION
     if quest.id == 64 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return FORGOTTEN_HEIRLOOM
     if quest.id == 128 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
@@ -1316,12 +1310,6 @@ def _broken_reason(
         return _refused_words(REFUSED_TURN_IN, words)
     if played < STALL_SECONDS or complete:
         return ""
-    if quest.id == 34 and quest.kills and not quest.fields:
-        return (
-            "its objectives did not move for 2 hours of play, and "
-            + quest.title
-            + " has no objective spawn to hunt"
-        )
     unsourced = (quest.kills or quest.items) and not quest.fields
     return STALLED_UNSOURCED if unsourced else STALLED
 
