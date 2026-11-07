@@ -181,6 +181,7 @@ import teamsync
 import towntrip
 import townerrand
 import townslot
+import claims
 import tradechoice
 import vendor_stall
 import vendorsale
@@ -9756,7 +9757,7 @@ class Bridge(discord.Client):
         log.info("%s", townslot.report(decision))
         return True
 
-    def _cohort_town_slot(self, cohort=None) -> "townslot.Slot":
+    def _cohort_town_slot(self, cohort=None) -> "claims.Slot":
         """The town slot for a family: this bridge's own, or another's (#150).
 
         `cohort` is None, a `townslot.Cohort`, or its key. Each other family
@@ -9767,7 +9768,7 @@ class Bridge(discord.Client):
             return self._town_slot
         slot = self._cohort_town_slots.get(key)
         if slot is None:
-            slot = townslot.Slot(
+            slot = claims.new_column_slot(
                 lease=TOWN_SLOT_LEASE_SECONDS,
                 releasable=_is_economy_aim,
                 long_leases={
@@ -12995,12 +12996,12 @@ class Bridge(discord.Client):
                 # No door read means no way to tell a run's aim from a stale
                 # one, and the safe answer is the one that changes nothing.
                 return 0
-            stranded = townslot.stranded_aims_far_from_doors(
+            stranded = claims.stranded_aims_far_from_doors(
                 aims, leader, ground=travel.is_ground_aim,
                 releasable=_is_economy_aim, doors=doors,
             )
         else:
-            stranded = townslot.stranded_nonleader_aims(
+            stranded = claims.stranded_nonleader_aims(
                 aims, leader, ground=travel.is_ground_aim,
                 releasable=_is_economy_aim,
             )
@@ -13263,7 +13264,7 @@ class Bridge(discord.Client):
         # economy tests load this pass in isolation.
         hold_released = globals().get("_bag_hold_released")
         current_aim = await asyncio.to_thread(_current_travel_npc, leader)
-        if townslot.urgent_ground_release(
+        if claims.may_release_ground(
                 aim=current_aim,
                 pressure=bag_pressure.family_town_run_needed(
                     free_slots, sellable=sellable_counts),
@@ -16697,9 +16698,9 @@ class Bridge(discord.Client):
         self._dues_walks = guildroute.live_runs(
             self._dues_walks, now, guildroute.GUILD_STEP_SECONDS)
         posted = await asyncio.to_thread(_dues_recent_holders)
-        busy = set(getattr(self, "_guild_run_names", ())) | (set(self._dues_walks)
-                | set(self._guild_mail_runs) | set(getattr(self, "_job_steps", ()))
-                | set(getattr(self, "_train_walks", ())))
+        busy = claims.busy_members(getattr(self, "_guild_run_names", ()), self._dues_walks,
+                self._guild_mail_runs, getattr(self, "_job_steps", ()),
+                getattr(self, "_train_walks", ()))
         # NATURALLY EARNED ONLY (the operator, 2026-09-24): a member posts dues
         # only once it has been reset to level 1; natural.py has the rule.
         eligible = await asyncio.to_thread(
@@ -16837,9 +16838,9 @@ class Bridge(discord.Client):
         )
         receivers = sorted({x.receiver for x in letters})
         free_slots = await asyncio.to_thread(_fetch_free_slots, receivers)
-        busy = set(getattr(self, "_guild_run_names", ())) | (set(self._crafter_walks) | set(self._guild_mail_runs)
-                | set(self._dues_walks) | set(getattr(self, "_job_steps", ()))
-                | set(getattr(self, "_train_walks", ())))
+        busy = claims.busy_members(getattr(self, "_guild_run_names", ()), self._crafter_walks, self._guild_mail_runs,
+                self._dues_walks, getattr(self, "_job_steps", ()),
+                getattr(self, "_train_walks", ()))
         plan, notes = crafters.visits(letters, designated, known,
                                       frozenset(busy), free_slots)
         notes += await self._start_crafter_walks(plan, names, now)
@@ -16991,11 +16992,11 @@ class Bridge(discord.Client):
         online = {str(r["receiver"]) for r in rows if int(r.get("online") or 0)}
         receivers = sorted({x.receiver for x in letters} & online)
         free_slots = await asyncio.to_thread(_fetch_free_slots, receivers)
-        busy = (set(getattr(self, "_guild_run_names", ())) | set(self._post_walks)
-                | set(self._crafter_walks) | set(self._guild_mail_runs)
-                | set(self._dues_walks) | set(self._corps_steps)
-                | set(getattr(self, "_job_steps", ()))
-                | set(getattr(self, "_train_walks", ())))
+        busy = claims.busy_members(getattr(self, "_guild_run_names", ()), self._post_walks,
+                self._crafter_walks, self._guild_mail_runs,
+                self._dues_walks, self._corps_steps,
+                getattr(self, "_job_steps", ()),
+                getattr(self, "_train_walks", ()))
         sitting = await asyncio.to_thread(_sitting_out_to_walk, names)
         plan, notes = guildpost.visits(letters, online, busy, free_slots, roster,
                                        sitting)
@@ -17156,10 +17157,10 @@ class Bridge(discord.Client):
         walk, and the refusal spends the step's cooldown."""
         self._train_walks = guildroute.live_runs(
             self._train_walks, now, guildroute.GUILD_STEP_SECONDS)
-        return (set(getattr(self, "_guild_run_names", ())) | set(self._train_walks)
-                | set(self._dues_walks) | set(self._guild_mail_runs)
-                | set(self._corps_steps) | set(getattr(self, "_post_walks", ()))
-                | set(getattr(self, "_job_steps", ())))
+        return claims.busy_members(getattr(self, "_guild_run_names", ()), self._train_walks,
+                self._dues_walks, self._guild_mail_runs,
+                self._corps_steps, getattr(self, "_post_walks", ()),
+                getattr(self, "_job_steps", ()))
 
     async def _start_train_walk(self, walk, now: float) -> int:
         """Write one class trainer walk row; 1 when written."""
@@ -17275,10 +17276,10 @@ class Bridge(discord.Client):
         # Any bot another guild pass has on a walk is left alone: the module
         # would refuse a second walk anyway, and the refusal would spend the
         # step's cooldown.
-        busy = set(getattr(self, "_guild_run_names", ())) | (set(self._corps_steps) | set(self._dues_walks)
-                | set(self._guild_mail_runs) | set(self._crafter_walks)
-                | set(getattr(self, "_job_steps", ()))
-                | set(getattr(self, "_train_walks", ())))
+        busy = claims.busy_members(getattr(self, "_guild_run_names", ()), self._corps_steps, self._dues_walks,
+                self._guild_mail_runs, self._crafter_walks,
+                getattr(self, "_job_steps", ()),
+                getattr(self, "_train_walks", ()))
         cap = self._guild_walk_cap()
         near = await self._corps_mailbox_yards(members, names, busy, now)
         masters = await asyncio.to_thread(_corps_masters_at_mailbox, members)
@@ -17746,9 +17747,9 @@ class Bridge(discord.Client):
         now = time.monotonic()
         self._job_steps = guildroute.live_runs(
             self._job_steps, now, guildroute.GUILD_STEP_SECONDS)
-        busy = set(getattr(self, "_guild_run_names", ())) | (set(self._job_steps) | set(self._corps_steps) | set(self._dues_walks)
-                | set(self._guild_mail_runs) | set(self._crafter_walks)
-                | set(getattr(self, "_train_walks", ())))
+        busy = claims.busy_members(getattr(self, "_guild_run_names", ()), self._job_steps, self._corps_steps, self._dues_walks,
+                self._guild_mail_runs, self._crafter_walks,
+                getattr(self, "_train_walks", ()))
         busy -= self._stranded_knights_freed(members)
         cap = self._guild_walk_cap()
         self._guild_still = standstill.track(self._guild_still, members, now)
@@ -17800,29 +17801,23 @@ class Bridge(discord.Client):
         A death knight there can reach nobody: a gear hand-over run, a crafter
         walk, a guild ask or a dungeon run that names it walks nowhere and holds
         it for good. Only the step it is itself running (`_job_steps`) holds it.
-        The sets that held it are logged, so the next pass shows which."""
-        sets = (
-            ("guild run", getattr(self, "_guild_run_names", ())),
-            ("corps step", self._corps_steps),
-            ("dues walk", self._dues_walks),
-            ("hand-over run", self._guild_mail_runs),
-            ("crafter walk", self._crafter_walks),
-        )
-        freed = set()
-        for m in members:
-            if not (
-                m.online
-                and int(m.class_id) == classquest.DEATH_KNIGHT
-                and m.map_id == classquest.DEATH_KNIGHT_START_MAP
-                and m.name not in self._job_steps
-            ):
-                continue
-            held = [label for label, names in sets if m.name in names]
-            if held:
+        The sets that held it are logged, so the next pass shows which.
+        Decided in claims.py; this names the holder sets it decides over."""
+        held = {
+            "guild run": getattr(self, "_guild_run_names", ()),
+            "corps step": self._corps_steps,
+            "dues walk": self._dues_walks,
+            "hand-over run": self._guild_mail_runs,
+            "crafter walk": self._crafter_walks,
+        }
+        freed = claims.stranded_knights(members, self._job_steps, held)
+        for name, labels in claims.stranded_held_labels(
+            members, self._job_steps, held
+        ).items():
+            if name in freed:
                 log.info("guild jobs: %s stands in the death knight start zone and "
-                         "was held by %s; freed for its class quest", m.name,
-                         ", ".join(held))
-                freed.add(m.name)
+                         "was held by %s; freed for its class quest", name,
+                         ", ".join(labels))
         return freed
 
     async def _plan_guild_jobs(self, members, facts, busy, cap, spawn_walks,
@@ -21575,12 +21570,12 @@ class Bridge(discord.Client):
         # escalated ask may reach are read first.
         class_helps = getattr(self, "_class_helps", ())
         class_pugs = await _class_pug_rows(facts, class_helps, bounds)
-        mid_job = (set(getattr(self, "_job_steps", ())) | set(getattr(self, "_corps_steps", ()))
-                   | set(getattr(self, "_dues_walks", ())) | set(getattr(self, "_guild_mail_runs", ()))
-                   | set(getattr(self, "_crafter_walks", ()))
-                   | set(getattr(self, "_train_walks", ()))
-                   | {n for n, held in getattr(self, "_pvp_held", {}).items() if held}
-                   | set(getattr(self, "_classquest_held", ())))
+        mid_job = claims.busy_members(getattr(self, "_job_steps", ()), getattr(self, "_corps_steps", ()),
+                   getattr(self, "_dues_walks", ()), getattr(self, "_guild_mail_runs", ()),
+                   getattr(self, "_crafter_walks", ()),
+                   getattr(self, "_train_walks", ()),
+                   {n for n, held in getattr(self, "_pvp_held", {}).items() if held},
+                   getattr(self, "_classquest_held", ()))
         mates, held, needs = _guild_social_mates(facts, mid_job, doors)
         quest_pass, held, needs, parties, escalation = _class_ask_pass(
             facts, mates, held, needs, class_helps,

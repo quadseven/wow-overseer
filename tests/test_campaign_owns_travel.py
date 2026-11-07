@@ -36,6 +36,7 @@ import unittest
 
 import bag_pressure
 import campaignqueue
+import claims
 import jev_activity
 import jobs
 import learnaim
@@ -410,6 +411,7 @@ def _bridge_self(world, clock, log):
             "time": clock,
             "log": log,
             "townslot": townslot,
+            "claims": claims,
             "travel": travel,
             "jobs": jobs,
             "learnaim": learnaim,

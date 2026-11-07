@@ -24,6 +24,7 @@ import unittest
 
 from test_decree_order import FakeConn, FakeCursor  # noqa: F401
 
+import claims  # noqa: E402
 import guildbank  # noqa: E402
 import guildroute  # noqa: E402
 import guildwork  # noqa: E402
@@ -94,6 +95,7 @@ def _base(world):
     """The namespace every loaded pass shares: who each family is."""
     return {
         "asyncio": FAKE_ASYNCIO,
+        "claims": claims,
         "_pass_completed": lambda name: True,
         "_protected_guids": lambda: {i: n for i, n in enumerate(ALLIANCE)},
         "_head_now": lambda: world.setdefault("head_now_asked", "Grug") or "Grug",
