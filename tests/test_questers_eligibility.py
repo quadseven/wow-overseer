@@ -382,9 +382,10 @@ class TheBridgeHandsTheQuesterItsRoom(unittest.TestCase):
 
 
 class Quest120MessengerToStormwind(unittest.TestCase):
-    """Quest 120's world minimum is above its displayed quest level."""
+    """A take refused as not eligible keeps the core's words: a member in
+    reach already meets the quest's MinLevel, so MinLevel is never the cause."""
 
-    def test_level_14_refusal_explains_the_world_minimum(self):
+    def test_a_refusal_in_reach_names_no_minlevel_cause(self):
         # The QUESTS_SQL row exposes QuestLevel as `level` and MinLevel as
         # `min_level`; the worldserver enforces MinLevel when accepting.
         cat = catalogue(
@@ -397,7 +398,7 @@ class Quest120MessengerToStormwind(unittest.TestCase):
         self.assertIn(120, questers.in_reach(cat, level_15, REDRIDGE))
         reason = questers._giver_failure(
             cat,
-            level_14,
+            level_15,
             120,
             gone=frozenset(),
             refused={
@@ -409,12 +410,11 @@ class Quest120MessengerToStormwind(unittest.TestCase):
         )
         self.assertEqual(
             "the quest giver would not give it: not eligible "
-            "(level, race, class, prerequisite or exclusive group) "
-            "(world MinLevel 15 exceeds displayed QuestLevel 14)",
+            "(level, race, class, prerequisite or exclusive group)",
             reason,
         )
 
-    def test_the_ledger_row_stores_the_explained_reason(self):
+    def test_the_ledger_row_stores_the_core_words(self):
         # The quester's take pass finds the refusals and the bridge writes the
         # broken quest into the ledger (BROKEN_SQL): the explanation must reach
         # the reason column, not only the pure seam above.
@@ -455,8 +455,7 @@ class Quest120MessengerToStormwind(unittest.TestCase):
             (
                 120,
                 False,
-                "the quest giver would not give it: " + words + " "
-                "(world MinLevel 15 exceeds displayed QuestLevel 14)",
+                "the quest giver would not give it: " + words,
                 "Durga",
             ),
             executed[0][1],
