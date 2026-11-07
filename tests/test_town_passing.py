@@ -222,6 +222,7 @@ class TheVaultLookDepositsOnlyForWhoeverIsAtAVault(unittest.TestCase):
                         types.SimpleNamespace(name=m["name"], copper=1000)
                         for m in members
                     ],
+                    tabs_full=lambda tab_items, purchased: False,
                 ),
                 "_fetch_positions": lambda names: {
                     n: {"map_id": 1, "at": n == "Zug"} for n in names

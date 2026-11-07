@@ -77,6 +77,21 @@ class TheTailorSewsForTheGuild(unittest.TestCase):
         )
         self.assertNotEqual(chosen.spell, 3757)
 
+    def test_a_tailor_holding_a_stock_of_the_bag_sews_no_more(self):
+        """#1967: Oz sewed 47 Woolen Bags and carried 23 of them, because the
+        guild floor reads 0 while any guildmate has an empty position, and
+        the corps posts one bag per mailbox stand. A full stock stops it."""
+        import guildcorps
+
+        held = {WOOL_BOLT: 3, FINE_THREAD: 1, 4240: guildcorps.CORPS_BAG_STOCK}
+        self.assertNotIn(errand(90, 0, held).spell, craft_rhythm.BAG_FEED)
+        held[4240] = guildcorps.CORPS_BAG_STOCK - 1
+        self.assertEqual(errand(90, 0, held).spell, 3757)
+
+    def test_the_bags_in_stock_are_counted_before_the_choice(self):
+        wanted = craft_rhythm.reagents_to_count("Og", {"tailoring": 90}, TAILOR, 0, 6)
+        self.assertIn(4240, wanted)
+
     def test_the_bolts_and_cloth_are_counted_before_the_choice(self):
         wanted = craft_rhythm.reagents_to_count("Og", {"tailoring": 90}, TAILOR, 0, 6)
         self.assertTrue({WOOL_BOLT, WOOL, HEAVY_LEATHER} <= wanted)
