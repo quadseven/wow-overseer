@@ -823,6 +823,8 @@ def _cooling(member: Member, action: str, recent) -> bool:
         minutes = GEAR_SUCCESS_COOLDOWN_MINUTES
     elif action == restsupply.ACTION and supply_walk_passed(member.name, recent):
         minutes = min(minutes, LEVEL_TRANSIENT_RETRY_MINUTES)
+    elif action == "sell" and sale_walk_passed(member.name, recent):
+        minutes = min(minutes, LEVEL_TRANSIENT_RETRY_MINUTES)
     return any(
         r.name == member.name
         and r.action == action
@@ -879,15 +881,46 @@ def supply_walk_passed(name, recent) -> bool:
     never arrived, so the whole trip waits LEVEL_TRANSIENT_RETRY_MINUTES, not
     the hour: a member that just revived is held still for its Resurrection
     Sickness, and an hour's wait left it hungry, dying again."""
-    rows = [r for r in recent or () if r.name == name and r.action == restsupply.ACTION]
+    return _walk_passed(name, recent, restsupply.ACTION, PASSING_TRAIN_REASONS)
+
+
+# THE SALE WALK'S PASSING WALLS (#1592): the trainer's, plus the mid-walk
+# endings of a fight, a flight and leaving the world as a vendor walk words
+# them. A death on the road, a stall or the other side's ground say the same
+# walk would end the same way, and keep the full sale cooldown.
+PASSING_SALE_REASONS = PASSING_TRAIN_REASONS | frozenset(
+    {
+        "entered combat on the way to the vendor",
+        "took a flight on the way to the vendor",
+        "left the world on the way to the vendor",
+    }
+)
+
+
+def sale_walk_passed(name, recent) -> bool:
+    """Whether this member's newest sale walk (the `sell-walk` source, read as
+    a `sell` walk row) ended for a passing reason (PASSING_SALE_REASONS) and
+    no sale of it was served (test_sell_passing_refusal, #1592).
+
+    The sale then waits LEVEL_TRANSIENT_RETRY_MINUTES, not COOLDOWN_MINUTES
+    ["sell"]: about a third of the member sale walks in the 30 hours to
+    2026-11-07 17:42Z were refused this way, most of them held by the
+    Resurrection Sickness hold of a member that had just revived, and each
+    left a member with full bags waiting two hours while its loot stayed on
+    the corpse. The guild jobs walk wall (job_walk_backoff) still keeps a
+    held member waiting until the hold has lapsed."""
+    return _walk_passed(name, recent, "sell", PASSING_SALE_REASONS)
+
+
+def _walk_passed(name, recent, action, reasons) -> bool:
+    """Whether the newest walk row of `action` for `name` failed for one of
+    `reasons` and none of that step's rows was served."""
+    rows = [r for r in recent or () if r.name == name and r.action == action]
     walks = [r for r in rows if _is_walk_row(r)]
     if not walks:
         return False
     newest = min(walks, key=lambda r: int(r.age_minutes))
-    if (
-        newest.status != "error"
-        or (newest.refusal or newest.reason) not in PASSING_TRAIN_REASONS
-    ):
+    if newest.status != "error" or (newest.refusal or newest.reason) not in reasons:
         return False
     return not any(
         r.status != "error" and int(r.age_minutes) <= int(newest.age_minutes) + 1
