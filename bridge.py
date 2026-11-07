@@ -21696,6 +21696,18 @@ class Bridge(discord.Client):
         if recipe:
             log.info("guild run %s: %s %s", social.form.ask.guild, social.form.door.place,
                      guildrun.recipe_words(recipe))
+        # THE SEATED RAIDERS' UPGRADES the run was formed for (#760). Live guild
+        # runs form here (GUILD_SOCIAL is on), never in _guild_run_once, so the
+        # seats' pre-raid gains are read and named here as well: the dev realm
+        # logged no "drops upgrades for" line from 2026-11-03 to 2026-11-07.
+        if run_id:
+            seats = social.form.composition
+            gains = await asyncio.to_thread(
+                _guild_seat_gains, list(seats.names), list(seats.levels))
+            upgrades = guildrun.gain_words(gains, social.form.door, seats)
+            if upgrades:
+                log.info("guild run %s: %s drops %s", social.form.ask.guild,
+                         social.form.door.place, upgrades)
         # THE SEATS AN HOUR (seatmeter, #784). Looked up so a test driving
         # this pass on a bare object needs no reads for it.
         meter = getattr(self, "_log_seat_meter", None)
@@ -22537,7 +22549,14 @@ class Bridge(discord.Client):
         # stood at a vendor that could sell nothing of Uzza's.
         here, free, column = await asyncio.to_thread(
             _bag_hold_reads, list(fam["names"]), leader)
-        if jev_activity.withheld(True, free) and _vendor_trip_makes_room(
+        # NOT WHILE THE FAMILY IS MID-RUN EITHER (#1243). The vendor pass takes
+        # no trip then ("bag pressure is urgent during a dungeon; the job stays
+        # on the dungeon and the run makes bag room inside"), so the trip this
+        # hold waits for never comes: on the dev realm Grug's family read
+        # "waits for bag room" from 2026-11-04 09:34Z to 12:23Z, and Zug's from
+        # 2026-11-06 03:37Z to 04:20Z, each beside that vendor-pass line.
+        mid = await self._mid_run(list(fam["names"]))
+        if not mid and jev_activity.withheld(True, free) and _vendor_trip_makes_room(
                 here, free):
             # THE VENDOR TRIP CANNOT GO WHILE ANOTHER ERRAND HOLDS THE COLUMN.
             # Zug's town errand to Camp Taurajo held the traveller while it
@@ -22554,7 +22573,6 @@ class Bridge(discord.Client):
                 log.info("dungeon quests: %s waits for bag room; the vendor trip "
                          "keeps the travel column", campaignqueue._family(key))
                 return False
-        mid = await self._mid_run(list(fam["names"]))
         facts = await asyncio.to_thread(
             _dungeonquest_facts, fam, str(head["keyword"]), leader, True, mid)
         step = dungeonquests.step(facts)
@@ -31121,6 +31139,21 @@ _JOB_RECENT_SQL = (
     "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
     "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY"
 )
+# THE NO-TRAINER REFUSALS OLDER THAN THE RECENT READ (#1453), for as long as
+# guildjobs.still_stranded keeps them: the refusal holds while the member
+# stays on the map it was refused on, however long ago that was. The two
+# source prefixes (the train and riding steps) are what let the read use the
+# source index: with one `guildjobs:%` prefix and a month of rows it scanned
+# the table, about 9 s on the dev realm, against about 0.25 s this way.
+_JOB_NO_TRAINER_SQL = (
+    "SELECT id, target_name, command, source, status, target_arg, "
+    "LEFT(result, 400) AS result, "
+    "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
+    "WHERE (source LIKE %s OR source LIKE %s) AND status = 'error' "
+    "AND command LIKE 'walk-to-trainer%%' AND result LIKE %s "
+    "AND created_at <= NOW() - INTERVAL 1 DAY "
+    "AND created_at > NOW() - INTERVAL %s DAY"
+)
 # THE FAR WALKS THE REALM HAS UNDER WAY: every walk row that asked for a far
 # cap and is not finished, of every kind (the module's ceiling is realm-wide,
 # not per kind). A row left open past the walk's own ceiling is no longer under
@@ -31407,6 +31440,11 @@ def _fetch_job_facts(family_names: list) -> dict:
         supplies = _job_supplies(cur, everyone)
         recent_rows = _job_read(cur, "recent rows", _JOB_RECENT_SQL,
                                 (guildjobs.SOURCE + ":%",))
+        stranded_rows = _job_read(cur, "no-trainer refusals", _JOB_NO_TRAINER_SQL,
+                                  (guildjobs.SOURCE + ":train:%",
+                                   guildjobs.SOURCE + ":" + guildjobs.RIDING_ACTION + ":%",
+                                   "%" + guildjobs.NO_TRAINER_ON_MAP_REFUSAL + "%",
+                                   guildjobs.NO_TRAINER_READ_DAYS))
         pending_rows = _job_read(cur, "summons", _JOB_PENDING_SUMMONS_SQL)
         unclaimed_rows = _job_read(cur, "unopened material posts", _JOB_UNCLAIMED_SQL,
                                    (guildjobs.POST_SUBJECT, guildjobs.MAILBOX_FULL_LETTERS))
@@ -31428,7 +31466,8 @@ def _fetch_job_facts(family_names: list) -> dict:
                                  free_slots=_job_free_slots(room),
                                  supplies=supplies, rewarded_rows=rewarded_rows,
                                  bag_slots=_job_bag_slots(room),
-                                 worn=_job_worn(worn_rows))
+                                 worn=_job_worn(worn_rows),
+                                 stranded_rows=stranded_rows)
     facts["class_book"] = book
     facts["quest_asks"] = guildjobs.quest_asks_from_rows(quest_ask_rows)
     facts["death_loops"] = deathloop.loops(
@@ -31533,8 +31572,9 @@ def _job_worn(rows) -> dict:
 def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, item_rows,
                          recent_rows, pending_rows, log_rows=(), done_rows=(),
                          free_slots=None, supplies=None, rewarded_rows=None,
-                         bag_slots=None, worn=None) -> dict:
-    """The rows the job reads, turned into guildjobs' facts."""
+                         bag_slots=None, worn=None, stranded_rows=()) -> dict:
+    """The rows the job reads, turned into guildjobs' facts. `stranded_rows`
+    are the no-trainer refusals older than the recent read (#1453)."""
     family = set(family_names)
     guild_members, masters = guildwork.members_from_rows(rows, family_names)
     role_of = {m.name: m.role for m in guild_members}
@@ -31549,7 +31589,9 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
     map_id_by_name = {m.name: m.map_id for m in members if m.map_id is not None}
     return {
         "members": members, "masters": masters, "crafters": crafters,
-        "recent": guildjobs.recent_from_rows(recent_rows, map_id_by_name), "pending": pending,
+        "recent": (guildjobs.recent_from_rows(recent_rows, map_id_by_name)
+                   + guildjobs.still_stranded(stranded_rows, map_id_by_name)),
+        "pending": pending,
         "stones": guildjobs.spots_from_rows(_JOB_STONES),
     }
 
