@@ -5713,6 +5713,37 @@ def _fetch_vendor_wait_seconds(names: list) -> int:
     return int(rows[0].get("seconds") or 0) if rows else 0
 
 
+def _vendor_sellers_held_for_leader(
+    names: list, leader: str, sellable_counts: dict,
+) -> bool:
+    """Whether a sellable follower is waiting for the leader to fetch it."""
+    if not leader:
+        return False
+    row = _fetch_family_intents().get(leader, {})
+    sellable = {
+        name for name, count in (sellable_counts or {}).items()
+        if name in names and name != leader and isinstance(count, int) and count > 0
+    }
+    return any(
+        member.name in sellable
+        and member.state in vendor_stall.HELD_FOR_THE_LEADER
+        for member in jev_family_intent.parse_members(row.get("members_state"))
+    )
+
+
+def _vendor_seller_fetch_blocks_trip(
+    names: list, leader: str, free_slots: dict, sellable_counts: dict,
+    in_run: bool,
+) -> bool:
+    """Leave travel to the module while a sellable follower needs fetching."""
+    if in_run or not (
+            bag_pressure.family_town_run_needed(
+                free_slots, sellable=sellable_counts)
+            or any((sellable_counts or {}).values())):
+        return False
+    return _vendor_sellers_held_for_leader(names, leader, sellable_counts)
+
+
 # --- what each character is doing, and waiting for (nowstatus.py) ------------
 # The bridge's own INFO lines carry the reasons nothing else records ("waits
 # for bag room", "withheld: bags are near full"). NOW_TAP collects them from
@@ -13010,7 +13041,8 @@ class Bridge(discord.Client):
         return released
 
     async def _vendor_pass_mode(self, names: list, free_slots: dict,
-                                sellable_counts: dict, in_run: bool) -> str:
+                                sellable_counts: dict, in_run: bool,
+                                held_seller_for_leader: bool = False) -> str:
         """Whether `_vendor_once` travels, sells where it stands, or stops (#225).
 
         Selling alone may not clear the withhold line when a bag would. The
@@ -13023,6 +13055,13 @@ class Bridge(discord.Client):
         note_sellable = globals().get("_note_vendor_sellable")
         if note_sellable is not None:
             note_sellable(names, sellable_counts)
+        if held_seller_for_leader:
+            log.info(
+                "economy: no vendor trip while a sellable family member is "
+                "held for the leader to fetch; only members already at a "
+                "counter may sell"
+            )
+            return bag_pressure.VENDOR_MODE_COUNTER
         trip_worth = bag_pressure.family_town_run_needed(
             free_slots, sellable=sellable_counts)
         # THE ROOM THE TRIP MAKES IS THE FAMILY'S (#1204). One walk to a
@@ -13373,8 +13412,14 @@ class Bridge(discord.Client):
 
         # A CAMPAIGN WITHHELD FOR BAG SPACE STILL SELLS (#225); see
         # `_vendor_pass_mode`.
+        held_seller_for_leader = await asyncio.to_thread(
+            _vendor_seller_fetch_blocks_trip, names, leader, free_slots,
+            sellable_counts, in_run,
+        )
         mode = await self._vendor_pass_mode(
-            names, free_slots, sellable_counts, in_run)
+            names, free_slots, sellable_counts, in_run,
+            held_seller_for_leader=held_seller_for_leader,
+        )
         step = bag_pressure.aim_step_in_mode(step, mode)
         if mode == bag_pressure.VENDOR_MODE_NONE:
             # Said with the counts, because "below the trigger" and "nobody a
