@@ -1,0 +1,348 @@
+"""The data the item plan lacked (#1973): rows in, itemplan-ready values out.
+
+PURE. No MySQL, no HTTP, no clock. Each reader takes rows shaped like the
+real tables (a list of dicts) and returns what `itemplan.Context` takes. A
+malformed row is skipped and never raises: a row this module cannot read adds
+nothing, and the plan then fails closed on whatever that row would have
+described. UNWIRED: the shadow input reader (#1972) plugs these in.
+
+WHAT EACH READER REUSES, and what it adds.
+
+  quest_needs / open_quest_items. The filter is `bag_pressure.QUEST_NEEDED_SQL`
+  and `bankpolicy`'s copy of it: a `character_queststatus` row whose status is
+  not 0, joined to `quest_template`, names an item through RequiredItemId1-6,
+  ItemDrop1-4 or StartItem. Those two queries answer "is this one stack
+  needed" row by row inside a bag query. The plan needs the whole set, so
+  QUEST_LOG_SQL and QUEST_TEMPLATE_SQL read the same two tables without the
+  bag join, and add RequiredItemCount1-6 (as `classquest._ITEMS` does) so the
+  need has a count. ItemDrop and StartItem carry no count in the template and
+  count as 1.
+
+  equipped. The paper doll is `armory.EQUIPPED_SLOTS` (slot index to name) and
+  the worn bound is `ci.bag = 0 AND ci.slot < 19`, the same bound
+  `bankpolicy.WORN_SQL` and `panel._build_inventory` use. EQUIPPED_SQL adds
+  the item columns the plan needs and nothing else.
+
+  auction_prices. Two sources, live first. The live source is
+  `auctionhouse` joined to `item_instance` for the entry and count (the join
+  `bridge._AUCTION_LISTINGS_SQL` documents; LISTINGS_SQL is that query for
+  every entry), priced by `auction.Listing.per_unit`. The history source is
+  `bankforecast.HISTORY_SQL` priced by `bankforecast.fair_price`. When
+  neither has a row for an entry the entry is absent, and `absent_reason`
+  says which source was empty. No price is ever made up: `auction.price_candidates`
+  falls back to a stack's own vendor-derived fair price, and this module does not.
+"""
+
+from __future__ import annotations
+
+import armory
+import auction
+import bankforecast
+
+# --- quest log -------------------------------------------------------------
+
+QUEST_LOG_SQL = (
+    "SELECT c.name AS member, qs.quest AS quest, qs.status AS status "
+    "FROM character_queststatus qs "
+    "JOIN characters c ON c.guid = qs.guid "
+    "WHERE qs.status <> 0 AND c.name IN (%s)"
+)
+
+QUEST_TEMPLATE_SQL = (
+    "SELECT qt.ID AS quest, "
+    + "".join(
+        "qt.RequiredItemId%d AS item%d, qt.RequiredItemCount%d AS item_count%d, "
+        % (i, i, i, i)
+        for i in range(1, 7)
+    )
+    + "".join("qt.ItemDrop%d AS drop%d, " % (i, i) for i in range(1, 5))
+    + "qt.StartItem AS start_item "
+    "FROM acore_world.quest_template qt WHERE qt.ID IN (%s)"
+)
+
+QUEST_STATUS_NONE = 0
+
+
+def _int(value, default=None):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _template_items(row) -> dict:
+    """{item entry: count} one quest template names, or {} when unreadable."""
+    out: dict = {}
+    for i in range(1, 7):
+        entry = _int(row.get("item%d" % i), 0)
+        if entry > 0:
+            out[entry] = out.get(entry, 0) + max(
+                1, _int(row.get("item_count%d" % i), 1)
+            )
+    extra = [row.get("drop%d" % i) for i in range(1, 5)] + [row.get("start_item")]
+    for raw in extra:
+        entry = _int(raw, 0)
+        if entry > 0:
+            out[entry] = max(out.get(entry, 0), 1)
+    return out
+
+
+def quest_needs(quest_rows, template_rows) -> dict:
+    """{item entry: count needed} for ONE member's open quests.
+
+    `quest_rows` are that member's `character_queststatus` rows (quest,
+    status); `template_rows` are `QUEST_TEMPLATE_SQL` rows. A status of 0 is
+    not open. Two open quests that name one item add. A quest with no
+    template row, a row with a non-numeric id, or a row that is not a mapping
+    is skipped.
+    """
+    templates: dict = {}
+    for row in template_rows or ():
+        try:
+            quest = _int(row.get("quest"))
+            if quest is None:
+                continue
+            templates[quest] = _template_items(row)
+        except AttributeError:
+            continue
+    needs: dict = {}
+    seen: set = set()
+    for row in quest_rows or ():
+        try:
+            quest = _int(row.get("quest"))
+            status = _int(row.get("status"))
+        except AttributeError:
+            continue
+        if quest is None or status is None or status == QUEST_STATUS_NONE:
+            continue
+        if quest in seen:
+            continue
+        seen.add(quest)
+        for entry, count in templates.get(quest, {}).items():
+            needs[entry] = needs.get(entry, 0) + count
+    return needs
+
+
+def open_quest_items(quest_rows, template_rows) -> dict:
+    """`itemplan.Context.open_quest_items`: {member: frozenset of entries}.
+
+    `quest_rows` are `QUEST_LOG_SQL` rows for every member. A member with
+    rows but no named item maps to an empty set (the log was read and nothing
+    in it needs an item), which is what frees the leftovers. A member with
+    no row at all is absent, so the plan treats that member's log as unread
+    only when the whole mapping is None; the caller passes the mapping only
+    when the query ran.
+    """
+    by_member: dict = {}
+    for row in quest_rows or ():
+        try:
+            name = str(row["member"])
+        except (KeyError, TypeError):
+            continue
+        by_member.setdefault(name, []).append(row)
+    return {
+        name: frozenset(quest_needs(rows, template_rows))
+        for name, rows in by_member.items()
+    }
+
+
+# --- equipped gear ---------------------------------------------------------
+
+EQUIPPED_SQL = (
+    "SELECT c.name AS member, ci.slot AS slot, ii.itemEntry AS entry, "
+    "it.name AS name, it.class AS item_class, it.subclass AS subclass, "
+    "it.Quality AS quality, it.ItemLevel AS item_level, "
+    "it.InventoryType AS inventory_type, it.RequiredLevel AS req_level "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND ci.bag = 0 AND ci.slot < %d"
+) % ("%s", len(armory.EQUIPPED_SLOTS))
+
+_WORN_FIELDS = (
+    "entry",
+    "item_class",
+    "subclass",
+    "quality",
+    "item_level",
+    "inventory_type",
+    "req_level",
+)
+
+
+def equipped(rows) -> dict:
+    """{member: {slot name: worn item dict}} from `EQUIPPED_SQL` rows.
+
+    A slot outside the paper doll, a missing member or a non-numeric field is
+    skipped. A second row for one slot keeps the first (a slot holds one item).
+    """
+    out: dict = {}
+    for row in rows or ():
+        try:
+            member = str(row["member"])
+            slot = _int(row["slot"])
+            if not member or slot is None or not 0 <= slot < len(armory.EQUIPPED_SLOTS):
+                continue
+            item = {k: _int(row[k]) for k in _WORN_FIELDS}
+            if any(v is None for v in item.values()) or item["entry"] <= 0:
+                continue
+            item["name"] = str(row.get("name") or "")
+        except (KeyError, TypeError, AttributeError):
+            continue
+        out.setdefault(member, {}).setdefault(armory.EQUIPPED_SLOTS[slot], item)
+    return out
+
+
+def worn_entries(worn: dict) -> dict:
+    """{member: frozenset of worn entries}: what must never be sold, given or destroyed."""
+    return {
+        m: frozenset(i["entry"] for i in slots.values()) for m, slots in worn.items()
+    }
+
+
+# InventoryType -> the worn slots it can fill (3.3.5: 13 one-hand, 17 two-hand).
+_SLOTS_FOR = {
+    1: ("head",),
+    2: ("neck",),
+    3: ("shoulders",),
+    5: ("chest",),
+    20: ("chest",),
+    6: ("waist",),
+    7: ("legs",),
+    8: ("feet",),
+    9: ("wrists",),
+    10: ("hands",),
+    11: ("finger 1", "finger 2"),
+    12: ("trinket 1", "trinket 2"),
+    16: ("back",),
+    13: ("main hand", "off hand"),
+    21: ("main hand",),
+    17: ("main hand",),
+    14: ("off hand",),
+    22: ("off hand",),
+    23: ("off hand",),
+    15: ("ranged",),
+    25: ("ranged",),
+    26: ("ranged",),
+}
+
+
+def upgrade_verdicts(worn: dict, bag_rows) -> dict:
+    """`itemplan.Context.gear_verdict`: {(member, entry): "wear"}.
+
+    A bag piece is "wear" when its item level beats the worn item in every
+    slot it can fill, or fills an empty slot, and its required level is within
+    the holder's reach (`req_level` <= `level`, both from the row). This is a
+    deliberately blunt signal: it keeps a probable upgrade carried and never
+    judges a piece as not better, so a doubtful piece gets no verdict and the
+    plan's other rules decide. `bag_rows` carry member, entry, inventory_type,
+    item_level, req_level and level; a row missing any is skipped.
+    """
+    out: dict = {}
+    for row in bag_rows or ():
+        try:
+            member = str(row["member"])
+            entry = int(row["entry"])
+            itype = int(row["inventory_type"])
+            ilvl = int(row["item_level"])
+            req = int(row["req_level"])
+            level = int(row["level"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        slots = _SLOTS_FOR.get(itype)
+        if not slots or req > level:
+            continue
+        mine = worn.get(member)
+        if mine is None:
+            continue  # worn gear was not read for this member: no verdict
+        if any(slot in mine and mine[slot]["entry"] == entry for slot in slots):
+            continue
+        if all(ilvl > mine.get(slot, {}).get("item_level", 0) for slot in slots):
+            out[(member, entry)] = "wear"
+    return out
+
+
+# --- auction prices --------------------------------------------------------
+
+LISTINGS_SQL = (
+    "SELECT a.id AS auction_id, a.houseid AS house, a.buyoutprice AS buyout, "
+    "ii.itemEntry AS entry, ii.count AS count, it.name AS label "
+    "FROM auctionhouse a "
+    "JOIN item_instance ii ON ii.guid = a.itemguid "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE a.houseid = %s AND a.buyoutprice > 0"
+)
+
+NO_PRICE_SOURCE = (
+    "no auction price source: no live buyout listing and no auction history "
+    "row was read, so no entry has a price and the plan keeps the vendor price "
+    "as its floor"
+)
+
+
+def _listing(row):
+    try:
+        buyout = int(row["buyout"])
+        if buyout <= 0:
+            return None
+        return auction.Listing(
+            auction_id=int(row.get("auction_id") or 0),
+            entry=int(row["entry"]),
+            count=max(1, int(row.get("count") or 1)),
+            buyout=buyout,
+            house=int(row.get("house") or 0),
+        )
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def auction_prices(listing_rows, history_rows=(), house: int = 0) -> dict:
+    """`itemplan.Context.market`: {entry: (copper per unit, sample count)}.
+
+    The lowest live buyout per unit when the entry has a live listing (the
+    sample count is the number of listings); else the history's fair price
+    (`bankforecast.fair_price`; the count is its rows for the entry); else the
+    entry is absent. Never invents a price: an entry with no listing and no
+    history is not in the result, and an item no one lists does not reach the
+    auction route.
+    """
+    live: dict = {}
+    for row in listing_rows or ():
+        listing = _listing(row)
+        if listing is None:
+            continue
+        low, n = live.get(listing.entry, (None, 0))
+        price = listing.per_unit
+        live[listing.entry] = (price if low is None else min(low, price), n + 1)
+    out = dict(live)
+    history = [r for r in history_rows or () if isinstance(r, dict)]
+    for entry in {_int(r.get("item_entry")) for r in history} - set(out) - {None}:
+        price, _why = bankforecast.fair_price(history, entry, house)
+        if price > 0:
+            n = sum(1 for r in history if _int(r.get("item_entry")) == entry)
+            out[entry] = (price, n)
+    return out
+
+
+def absent_reason(listing_rows, history_rows=()) -> str:
+    """ "" when any price source had rows, else why no entry has a price."""
+    if listing_rows or history_rows:
+        return ""
+    return NO_PRICE_SOURCE
+
+
+__all__ = [
+    "EQUIPPED_SQL",
+    "LISTINGS_SQL",
+    "NO_PRICE_SOURCE",
+    "QUEST_LOG_SQL",
+    "QUEST_TEMPLATE_SQL",
+    "absent_reason",
+    "auction_prices",
+    "equipped",
+    "open_quest_items",
+    "quest_needs",
+    "upgrade_verdicts",
+    "worn_entries",
+]
