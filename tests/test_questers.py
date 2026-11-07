@@ -2007,6 +2007,48 @@ class ASummonedObjectEnder(unittest.TestCase):
             (classquest.HUNT, 167, 626),
         )
 
+    def test_keeper_of_the_flame_hunts_the_harvest_golem_for_oil(self):
+        # Keeper of the Flame (103) has no kill counter: its required
+        # item 814 (Flask of Oil, five of them) drops from Harvest
+        # Golem (36) and the other Harvest golems in Westfall, and
+        # Captain Grayson (392) starts and ends it. A quester holding
+        # it in Westfall hunts the golem, and no per-quest broken
+        # reason is needed for it.
+        keeper = quest(103, WESTFALL, 16, min_level=10, title="Keeper of the Flame")
+        keeper.update(item1=814, item_count1=5)
+        cat = world(
+            extra_quests=[keeper],
+            extra_givers=[
+                giver(103, "start", 6103, 392, 0, 0),
+                giver(103, "end", 6104, 392, 0, 0),
+            ],
+            extra_spawns=[spawn(6105, 36, 30, 0, level=12, name="Harvest Golem")],
+            extra_loot=[{"item": 814, "entry": 36}],
+        )
+        member = mirra(
+            level=13,
+            zone_id=999,
+            quest_log={103: questers.STATUS_INCOMPLETE},
+            quest_progress={103: 0},
+            quest_objectives={103: {}},
+        )
+
+        move = questers.plan(cat, member, questers.Clock(), 0.0).move
+
+        self.assertEqual(
+            (move.kind, move.quest, move.spot.entry),
+            (classquest.HUNT, 103, 36),
+        )
+        reason = questers._broken_reason(
+            cat.quest(103),
+            cat.facts[103],
+            questers.STATUS_INCOMPLETE,
+            0,
+            frozenset(),
+            {},
+        )
+        self.assertEqual(reason, "")
+
     def test_an_incomplete_quest_whose_object_spawns_are_gone_is_still_broken(self):
         member = mirra(quest_log={40: 3})
         cat = object_world(object_ended(40, 270, guid=5001, x=300.0))

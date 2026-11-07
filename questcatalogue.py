@@ -91,7 +91,10 @@ DROP_SQL = (
     "UNION SELECT r.Item, c.entry FROM acore_world.creature_loot_template l "
     "JOIN acore_world.reference_loot_template r ON r.Entry = l.Reference "
     "JOIN acore_world.creature_template c ON c.lootid = l.Entry "
-    "WHERE l.Reference <> 0 AND r.Item IN ({ids})"
+    "WHERE l.Reference <> 0 AND r.Item IN ({ids}) "
+    "UNION SELECT qi.ItemId, ct.entry FROM acore_world.creature_questitem qi "
+    "JOIN acore_world.creature_template ct ON ct.entry = qi.CreatureEntry "
+    "WHERE qi.ItemId IN ({ids})"
 )
 REWARD_SQL = (
     "SELECT ID AS quest, RewardItem1 AS item FROM acore_world.quest_template "

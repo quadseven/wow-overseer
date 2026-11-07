@@ -162,6 +162,17 @@ class TheFilters(unittest.TestCase):
         self.assertEqual(self.ids(faction="horde", zone=17, level_min=20), [3])
 
 
+class DropSources(unittest.TestCase):
+    def test_drop_read_resolves_quest_only_creature_items(self):
+        # The quester book (classquest.LOOT_SQL) already reads
+        # creature_questitem, e.g. item 1875 from creature 626 for
+        # Oh Brother (167). The catalogue that renders the quests
+        # page and the ticket world rows must read the same source,
+        # or it shows a huntable item as having no source.
+        self.assertIn("acore_world.creature_questitem qi", qc.DROP_SQL)
+        self.assertIn("ct.entry = qi.CreatureEntry", qc.DROP_SQL)
+
+
 class ReadOncePerProcess(unittest.TestCase):
     def tearDown(self):
         qc.forget()
