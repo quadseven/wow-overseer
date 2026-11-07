@@ -396,6 +396,8 @@ class Quest120MessengerToStormwind(unittest.TestCase):
 
         self.assertNotIn(120, questers.in_reach(cat, level_14, REDRIDGE))
         self.assertIn(120, questers.in_reach(cat, level_15, REDRIDGE))
+        self.assertFalse(questers.open_to(cat, level_14, 120))
+        self.assertTrue(questers.open_to(cat, level_15, 120))
         reason = questers._giver_failure(
             cat,
             level_15,
