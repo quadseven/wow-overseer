@@ -96,6 +96,82 @@ HELD_FOR_THE_LEADER = frozenset(
 )
 
 
+# A FOLLOWER HELD FOR THE LEADER IS WAITED FOR, BUT NOT FOREVER (#1983). The
+# vendor pass stays in counter mode while a sellable follower is held for the
+# leader to fetch (#1948), so the leader is not walked off to a counter the
+# held member cannot reach. A follower that can never be fetched (on the dev
+# realm, one member stood about 3100 yards from the rest with a combat flag
+# that never cleared, so every fetch was refused) then held the whole family's
+# vendor trip for hours, and the members standing with the leader sold
+# nothing. Past this bound the trip goes ahead without the held member: the
+# same 30 minutes the sustained vendor wait takes a trip after.
+HELD_FETCH_BOUND_SECONDS = 30 * 60.0
+
+
+@dataclasses.dataclass(frozen=True)
+class HeldFetch:
+    """Whether a held follower still blocks the family's vendor trip.
+
+    `left_behind` are the held followers past the bound, whose goods the trip
+    no longer waits on; `newly_left` the ones that passed it on this call, so
+    the caller says so once per hold. Truthy while the trip is still blocked.
+    """
+
+    blocks: bool
+    left_behind: tuple[str, ...] = ()
+    newly_left: tuple[str, ...] = ()
+
+    def __bool__(self) -> bool:
+        return self.blocks
+
+
+def held_fetch_bound(
+    leader: str,
+    held,
+    since: dict,
+    now: float,
+    bound: float = HELD_FETCH_BOUND_SECONDS,
+) -> HeldFetch:
+    """Apply the bound to the sellable followers held for `leader` right now.
+
+    `since` maps (leader, name) -> [first seen held, already announced] and is
+    kept by the caller between passes. A follower no longer held drops out of
+    it, so its next hold starts a fresh clock.
+    """
+    held = tuple(dict.fromkeys(n for n in held if n))
+    for key in [k for k in since if k[0] == leader and k[1] not in held]:
+        del since[key]
+    waiting, left, newly = [], [], []
+    for name in held:
+        entry = since.setdefault((leader, name), [now, False])
+        if now - entry[0] < bound:
+            waiting.append(name)
+            continue
+        left.append(name)
+        if not entry[1]:
+            entry[1] = True
+            newly.append(name)
+    return HeldFetch(bool(waiting), tuple(left), tuple(newly))
+
+
+def without_left_behind(
+    names, free_slots: Mapping, sellable_counts: Mapping, left_behind
+) -> tuple:
+    """The family the vendor trip is judged for, without the left-behind members.
+
+    A member left behind does not walk with the leader, so its goods and its
+    full bag are no reason for the walk; the members standing with the leader
+    decide it on their own goods. Then the trip goes once for them and does
+    not re-arm every pass on stacks only the absent member carries.
+    """
+    gone = set(left_behind or ())
+    return (
+        [n for n in names if n not in gone],
+        {n: v for n, v in (free_slots or {}).items() if n not in gone},
+        {n: v for n, v in (sellable_counts or {}).items() if n not in gone},
+    )
+
+
 def following(names, states: Mapping[str, str]) -> tuple[str, ...]:
     """The members whose distance says whether the family follows the trip.
 
