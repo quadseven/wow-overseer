@@ -128,10 +128,10 @@ def open_quest_items(quest_rows, template_rows) -> dict:
 
     `quest_rows` are `QUEST_LOG_SQL` rows for every member. A member with
     rows but no named item maps to an empty set (the log was read and nothing
-    in it needs an item), which is what frees the leftovers. A member with
-    no row at all is absent, so the plan treats that member's log as unread
-    only when the whole mapping is None; the caller passes the mapping only
-    when the query ran.
+    in it needs an item), which is what frees the leftovers. A member with no
+    row at all is absent, and the plan reads an absent member of a non-None
+    mapping as an empty log. The caller passes the mapping only when the
+    query ran; None keeps every quest-class stack.
     """
     by_member: dict = {}
     for row in quest_rows or ():
@@ -148,7 +148,7 @@ def open_quest_items(quest_rows, template_rows) -> dict:
 
 # --- equipped gear ---------------------------------------------------------
 
-EQUIPPED_SQL = (
+EQUIPPED_SQL = (  # noqa: S608 - the bound is an int from armory, names stay placeholders
     "SELECT c.name AS member, ci.slot AS slot, ii.itemEntry AS entry, "
     "it.name AS name, it.class AS item_class, it.subclass AS subclass, "
     "it.Quality AS quality, it.ItemLevel AS item_level, "
@@ -157,8 +157,9 @@ EQUIPPED_SQL = (
     "JOIN characters c ON c.guid = ci.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
-    "WHERE c.name IN (%s) AND ci.bag = 0 AND ci.slot < %d"
-) % ("%s", len(armory.EQUIPPED_SLOTS))
+    "WHERE c.name IN (%s) AND ci.bag = 0 AND ci.slot < "
+    + str(len(armory.EQUIPPED_SLOTS))
+)
 
 _WORN_FIELDS = (
     "entry",
