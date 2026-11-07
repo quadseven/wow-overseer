@@ -28845,11 +28845,19 @@ def _fetch_surplus_bags(names: list) -> list:
     # Both the sale and the sellable-stack count use these same rows.
     for row in rows:
         row["bank_reserved"] = int(row["item_guid"]) in bank_keeps
-    # One line per crafted corps bag the vendor pass leaves with its master (#1667).
-    for kept in rows:
-        if bag_pressure.corps_bag_kept(kept):
-            log.info("economy: %s keeps its crafted %s for the guild corps "
-                     "(not sold, #1667)", kept.get("holder"), kept.get("name"))
+    # One line per holder and crafted corps bag (#1667): the stock the vendor
+    # pass leaves with its master, and the surplus past it offered for sale
+    # (#1967). One line per bag logged 23 a pass for Oz.
+    stock = bag_pressure.corps_bags_kept(rows)
+    tally: dict = {}
+    for row in rows:
+        if bag_pressure.corps_bag_kept(row):
+            seen = tally.setdefault((row.get("holder"), row.get("name")), [0, 0])
+            seen[0 if row.get("item_guid") in stock else 1] += 1
+    for (holder, name), (kept, spare) in sorted(tally.items(), key=str):
+        log.info("economy: %s keeps %d crafted %s for the guild corps (not "
+                 "sold, #1667); %d more are offered for sale (#1967)",
+                 holder, kept, name, spare)
     return rows
 
 

@@ -236,6 +236,15 @@ BUY_CEILING_NUM, BUY_CEILING_DEN = 5, 4
 
 BOLT_OF = {r.makes: r for r in BOLTS}
 BAG_ITEMS = {r.makes: r for r in BAGS}
+# HOW MANY OF ONE CRAFTED LADDER BAG A TAILOR HOLDS FOR THE CORPS (#1967). The
+# corps posts one bag per mailbox stand, and a master posts only from a mailbox
+# it already stands at, so a stock past this is never posted in any time that
+# matters: on the dev realm (2026-11-07) Oz had sewn 47 Woolen Bags, 23 of them
+# in his own bags at 5 free slots, and his family's dungeon was held for bag
+# room. Up to this many are kept (bag_pressure.corps_bags_kept) and the tailor
+# sews no more while it holds them (craft_rhythm.guild_bag); the rest are
+# ordinary spares. Four fills every bag position of a guildmate with none.
+CORPS_BAG_STOCK = 4
 PATH_SPELLS = (
     frozenset(r.spell for r in BOLTS + BAGS)
     | frozenset(RANKS)

@@ -1808,6 +1808,34 @@ def corps_bag_kept(row: dict) -> bool:
         return False
 
 
+def corps_bags_kept(rows: Iterable[dict]) -> frozenset:
+    """The item guids of the crafted corps bags each holder keeps (#1667, #1967).
+
+    `corps_bag_kept` says which rows are corps stock; this keeps at most
+    guildcorps.CORPS_BAG_STOCK of each bag per holder, the lowest guids first
+    so the same bags are kept every pass. The rest are spares: a stock the
+    corps cannot post in any time that matters only fills the bags, and Oz's
+    23 Woolen Bags held his family's dungeon for bag room.
+    """
+    import guildcorps
+
+    stock: dict = {}
+    for row in rows:
+        if not corps_bag_kept(row):
+            continue
+        try:
+            key = (str(row["holder"]), int(row["entry"]))
+            guid = int(row["item_guid"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        stock.setdefault(key, []).append(guid)
+    return frozenset(
+        guid
+        for guids in stock.values()
+        for guid in sorted(guids)[: guildcorps.CORPS_BAG_STOCK]
+    )
+
+
 def bag_candidates(
     rows: Iterable[dict], equipped_slots: dict, keep_names=()
 ) -> tuple[SellCandidate, ...]:
@@ -1832,13 +1860,15 @@ def bag_candidates(
     be an upgrade is still withheld - it is one accidental `/equip` away from
     being useful, and that judgement is out of scope for this pass.
     """
+    rows = list(rows)
+    corps_stock = corps_bags_kept(rows)
     out = []
     for row in rows:
         if row.get("bank_reserved"):
             continue
         if owner_keeps(row.get("name", ""), keep_names):
             continue
-        if corps_bag_kept(row):
+        if row.get("item_guid") in corps_stock:
             continue
         try:
             if int(row["item_class"]) != 1:
