@@ -98,7 +98,7 @@ def _prices(cur, names, entries) -> tuple:
     """(prices, why empty): live buyouts first, then history, no price invented."""
     races = _fetch(
         cur,
-        "SELECT race FROM characters WHERE name IN (%s) ORDER BY name LIMIT 1"
+        "SELECT race FROM characters WHERE name IN (%s) ORDER BY name LIMIT 1"  # noqa: S608 - placeholders from a COUNT, values still bound
         % _marks(names),
         list(names),
     )
