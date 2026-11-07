@@ -434,13 +434,14 @@ def _keep_reservations(cur, names) -> tuple:
     return bankpolicy.reservations_from_rows(rows, names)
 
 
+def _orders_store():
+    # Strict: a schema gap raises here, as it always has for these writers,
+    # rather than reading as "the realm does not know this verb" (orders.py).
+    return orders.MySqlStore(_connect, strict=True)
+
+
 def _insert_command(cmd: core.InsertCommand) -> int:
-    with _connect() as conn, conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO overseer_command (target_name, command, source) VALUES (%s, %s, %s)",
-            (cmd.target_name, cmd.command, cmd.source),
-        )
-        row_id = cur.lastrowid
+    row_id = orders.send(_orders_store(), orders.command_order(cmd))
     # Written AFTER the row: a strategy order the table refused is not one the
     # operator has, so the book must not replay it after a roll (#1553).
     _record_strategy(cmd)
@@ -470,18 +471,10 @@ def _record_strategy(cmd: core.InsertCommand) -> None:
 
 
 def _insert_speak(cmd: relay.SpeakCommand) -> int:
-    # Fitted here, the one writer every spoken row passes through, so no
-    # caller can hand the column a line it refuses (#217). The council keeps
-    # the whole line in overseer_thought, whose text column holds it.
-    with _connect() as conn, conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO overseer_command "
-            "(target_name, command, kind, channel, target_arg, source) "
-            "VALUES (%s, %s, 'chat', %s, %s, %s)",
-            (cmd.target_name, relay.fit_spoken(cmd.text), cmd.channel,
-             cmd.whisper_to, cmd.source),
-        )
-        return cur.lastrowid
+    # The line is fitted to the column in orders.speak_order (#217). The
+    # council keeps the whole line in overseer_thought, whose text column
+    # holds it.
+    return orders.send(_orders_store(), orders.speak_order(cmd))
 
 
 def _insert_gm(cmd: relay.GmCommand) -> int:

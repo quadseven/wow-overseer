@@ -27,6 +27,8 @@ from typing import Callable, Optional
 
 import pymysql
 
+import relay
+
 # A missing column, a missing table, a truncated ENUM value: the three errors
 # a realm that has not run a migration yet raises. They mean "this realm does
 # not know the verb", not "the database is broken".
@@ -99,10 +101,16 @@ class MemoryStore:
 
 class MySqlStore:
     """overseer_command through a connect function that returns a pymysql-style
-    connection (context manager, cursor() context manager, DictCursor rows)."""
+    connection (context manager, cursor() context manager, DictCursor rows).
 
-    def __init__(self, connect: Callable):
+    A lenient store (the default) answers a missing machinery error with 0, the
+    "realm does not know this verb" answer. A strict store raises every error,
+    for writers whose callers have always let a schema gap raise.
+    """
+
+    def __init__(self, connect: Callable, *, strict: bool = False):
         self._connect = connect
+        self._strict = strict
         self._kinds_cache: Optional[frozenset] = None
 
     def insert(self, order: Order) -> int:
@@ -127,7 +135,7 @@ class MySqlStore:
             try:
                 cur.execute(sql, tuple(vals))
             except pymysql.err.MySQLError as exc:
-                if exc.args and exc.args[0] in MISSING_MACHINERY:
+                if not self._strict and exc.args and exc.args[0] in MISSING_MACHINERY:
                     return 0
                 raise
             return int(cur.lastrowid or 0)
@@ -164,6 +172,29 @@ class MySqlStore:
         if found is not None:
             self._kinds_cache = found
         return found
+
+
+def command_order(cmd) -> Order:
+    """The row for a plain command: any object with target_name, command and
+    source (core.InsertCommand). No verb, so the row is the bridge's own three
+    columns."""
+    return Order(target=cmd.target_name, command=cmd.command, source=cmd.source)
+
+
+def speak_order(cmd) -> Order:
+    """The chat row for a line the character says in the world (relay.SpeakCommand).
+
+    The text is fitted to the column here, the one writer every spoken row
+    passes through, so no caller can hand the column a line it refuses (#217).
+    """
+    return Order(
+        target=cmd.target_name,
+        command=relay.fit_spoken(cmd.text),
+        source=cmd.source,
+        kind="chat",
+        target_arg=cmd.whisper_to,
+        channel=cmd.channel,
+    )
 
 
 def parse_enum(column_type: str) -> Optional[frozenset]:
