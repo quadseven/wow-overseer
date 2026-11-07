@@ -1972,6 +1972,39 @@ class ASummonedObjectEnder(unittest.TestCase):
             (classquest.HUNT, 86, 113),
         )
 
+    def test_goretusk_liver_pie_hunts_its_goretusk_dropper(self):
+        # Quest 22 asks for four Goretusk Livers (item 723). The world rows
+        # name Goretusks (creature 157) as the dropper and provide their
+        # Westfall spawns; the quest has no creature kill objective.
+        pie = quest(22, WESTFALL, 12, title="Goretusk Liver Pie")
+        pie.update(item1=723, item_count1=4)
+        cat = world(
+            extra_quests=[pie],
+            extra_givers=[
+                giver(22, "start", 5022, 235, 0, 0),
+                giver(22, "end", 5022, 235, 0, 0),
+            ],
+            extra_spawns=[
+                spawn(5157, 157, 30, 0, level=10, name="Goretusk"),
+            ],
+            extra_loot=[{"item": 723, "entry": 157}],
+        )
+        member = mirra(
+            level=12,
+            zone_id=WESTFALL,
+            quests_done=frozenset({1, 2, 3, 6, 20, 21}),
+            quest_log={22: questers.STATUS_INCOMPLETE},
+            quest_progress={22: 0},
+            quest_objectives={22: {}},
+        )
+
+        move = questers.plan(cat, member, questers.Clock(), 0.0).move
+
+        self.assertEqual(
+            (move.kind, move.quest, move.spot.entry),
+            (classquest.HUNT, 22, 157),
+        )
+
     def test_oh_brother_hunts_the_rare_that_drops_its_badge(self):
         # Oh Brother (167) has no kill counter: its required item 1875 comes
         # from Foreman Thistlenettle (626), a rare spawn. The world read must
