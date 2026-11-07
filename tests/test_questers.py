@@ -1327,6 +1327,31 @@ class Broken(unittest.TestCase):
             [(b.quest, b.reason) for b in p.broken], [(1, questers.SOURCE_MISSING)]
         )
 
+    def test_unwelcome_guest_ledger_explains_missing_objective_spawn(self):
+        q = quest(34, REDRIDGE, 24, kill=345, title="An Unwelcome Guest")
+        cat = world(
+            extra_quests=[q],
+            extra_givers=[
+                giver(34, "start", 1034, 345, 0.0, 0.0),
+                giver(34, "end", 1034, 999, 0.0, 0.0),
+            ],
+            extra_spawns=[spawn(2034, 999, 0.0, 0.0)],
+        )
+        broken = questers._broken_reason(
+            cat.quest(34),
+            cat.facts[34],
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertEqual(
+            broken,
+            "its objectives did not move for 2 hours of play, and "
+            "An Unwelcome Guest has no objective spawn to hunt",
+        )
+
     def test_a_way_the_world_refused_is_left_for_now_and_breaks_nothing(self):
         tried = [
             questers.Attempt(
