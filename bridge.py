@@ -16595,8 +16595,7 @@ class Bridge(discord.Client):
         kept = await asyncio.to_thread(_KEEP.now) if full else None
         for m in members:
             held = self._quester_broken.setdefault(m.name, {})
-            known = frozenset(held) | frozenset(
-                q for (who, q), state in ledger.items() if who == m.name and state == "broken")
+            known = questers.known_broken(m.name, held, ledger)
             plan = questers.plan(cat, m, self._quester_clock, now, known, tried,
                                  self._quester_last.get(m.name, 0), crossings)
             await self._quester_ledger(m, plan, held, ledger, mono)
@@ -16619,7 +16618,8 @@ class Bridge(discord.Client):
                          m.name, b.title or b.quest, b.quest, b.reason)
             held.setdefault(b.quest, b.ledger_reason)
         for qid, reason in sorted(held.items()):
-            if ledger.get((m.name, qid)) == "broken" or mono < self._quester_unledgered:
+            if (questers.ledger_says_broken(ledger.get((m.name, qid)))
+                    or mono < self._quester_unledgered):
                 continue
             found = next((b for b in plan.broken if b.quest == qid), None)
             if not await asyncio.to_thread(_record_quest_broken, found or questers.Broken(
@@ -35123,7 +35123,9 @@ def _fetch_quester_facts(names: list) -> tuple:
     # A quest that hands over an item needs a free bag slot for it (#1732).
     free = _fetch_free_slots([m.name for m in members])
     members = [dataclasses.replace(m, free_slots=free.get(m.name)) for m in members]
-    states = {(str(r["name"]), int(r["quest"])): str(r.get("state") or "") for r in ledger}
+    states = {(str(r["name"]), int(r["quest"])): questers.ledger_state(r.get("state"),
+                                                                      r.get("reason"))
+              for r in ledger}
     return (members, questers.attempts(recent), states, hunts,
             guildjobs.recent_from_rows(crossings))
 
