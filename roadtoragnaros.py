@@ -332,84 +332,54 @@ def _total(rows: list) -> dict:
     }
 
 
+SEAT_RULES = {
+    "A": (_level_test(LEVEL_A), lambda f: _open_and_below(f, LEVEL_A)),
+    "B": (_level_test(LEVEL_B), _below(LEVEL_B)),
+    "C": (_level_test(LEVEL_C), _below(LEVEL_C)),
+    "E": (_attuned, _unattuned),
+    "F": (_fire_and_supplies, _fire_blockers),
+}
+
+
+def _seat_milestone(key, label, rule, rows, stuck) -> dict:
+    """One milestone: measured from the seats, or not measured with a reason."""
+    if key in KEY_NOT_MEASURED:
+        return _missing(key, label, rule, KEY_NOT_MEASURED[key])
+    if not rows:
+        return _missing(key, label, rule, "the seat read could not be answered")
+    test, blockers = SEAT_RULES[key]
+    out = _milestone(key, label, rule, rows, test, blockers)
+    if key == "B" and stuck:
+        held = _blocker(
+            "class-quest-ask", "held by a live class quest ask (24h read)", []
+        )
+        out["blockers"].append(held | {"seats_short": int(stuck)})
+    return out
+
+
+def _ragnaros(tries: dict) -> dict:
+    return {
+        "key": "H",
+        "label": MILESTONES[-1][1],
+        "rule": MILESTONES[-1][2],
+        "unit": "kill",
+        "have": (1 if tries.get("killed") else 0) if tries["measured"] else None,
+        "want": 1,
+        "unread": None,
+        "seats_short": None,
+        "percent": None,
+        "measured": tries["measured"],
+        "blockers": [],
+    }
+
+
 def build(guild: str, teams: dict | None, goal: dict | None, runs: list | None) -> dict:
     """The /api/v2/ragnaros payload from the reads. Pure."""
     rows = _seat_rows(teams)
     stuck = (goal or {}).get("stuck")
-    out = []
-    if not rows:
-        reason = "the seat read could not be answered"
-        for key, label, rule in MILESTONES[:-1]:
-            out.append(_missing(key, label, rule, KEY_NOT_MEASURED.get(key, reason)))
-    else:
-        for key, label, rule in MILESTONES[:-1]:
-            if key in KEY_NOT_MEASURED:
-                out.append(_missing(key, label, rule, KEY_NOT_MEASURED[key]))
-        by = {m["key"]: m for m in out}
-        out = []
-        for key, label, rule in MILESTONES[:-1]:
-            if key in by:
-                out.append(by[key])
-            elif key == "A":
-                out.append(
-                    _milestone(
-                        key,
-                        label,
-                        rule,
-                        rows,
-                        _level_test(LEVEL_A),
-                        lambda f: _open_and_below(f, LEVEL_A),
-                    )
-                )
-            elif key == "B":
-                m = _milestone(
-                    key,
-                    label,
-                    rule,
-                    rows,
-                    _level_test(LEVEL_B),
-                    _below(LEVEL_B),
-                )
-                if stuck:
-                    m["blockers"].append(
-                        _blocker(
-                            "class-quest-ask",
-                            "held by a live class quest ask (24h read)",
-                            [],
-                        )
-                        | {"seats_short": int(stuck)}
-                    )
-                out.append(m)
-            elif key == "C":
-                out.append(
-                    _milestone(
-                        key, label, rule, rows, _level_test(LEVEL_C), _below(LEVEL_C)
-                    )
-                )
-            elif key == "E":
-                out.append(_milestone(key, label, rule, rows, _attuned, _unattuned))
-            else:
-                out.append(
-                    _milestone(
-                        key, label, rule, rows, _fire_and_supplies, _fire_blockers
-                    )
-                )
+    out = [_seat_milestone(k, lb, r, rows, stuck) for k, lb, r in MILESTONES[:-1]]
     tries = attempts(runs)
-    out.append(
-        {
-            "key": "H",
-            "label": MILESTONES[-1][1],
-            "rule": MILESTONES[-1][2],
-            "unit": "kill",
-            "have": (1 if tries.get("killed") else 0) if tries["measured"] else None,
-            "want": 1,
-            "unread": None,
-            "seats_short": None,
-            "percent": None,
-            "measured": tries["measured"],
-            "blockers": [],
-        }
-    )
+    out.append(_ragnaros(tries))
     total = _total(out)
     if tries.get("killed"):
         total["percent"] = 100
@@ -417,6 +387,7 @@ def build(guild: str, teams: dict | None, goal: dict | None, runs: list | None) 
         (dict(b, milestone=m["key"]) for m in out for b in m["blockers"]),
         key=lambda b: (-b["seats_short"], b["milestone"], b["key"]),
     )
+    projected = (goal or {}).get("projected_60")
     return {
         "guild": guild,
         "seats": SEATS,
@@ -425,8 +396,7 @@ def build(guild: str, teams: dict | None, goal: dict | None, runs: list | None) 
         "blockers": flat,
         "attempts": tries,
         "map": raidrun.MOLTEN_CORE_MAP,
-        "projected_60": (goal or {}).get("projected_60"),
-        "projected_60_measured": goal is not None
-        and goal.get("projected_60") is not None,
+        "projected_60": projected,
+        "projected_60_measured": projected is not None,
         "checked_at": (goal or {}).get("checked_at"),
     }
