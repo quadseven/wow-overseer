@@ -135,7 +135,7 @@ def _insert_speak(written: list):
         )
         return orders.send(store, order)
 
-    return insert
+    return insert, store
 
 
 class TheCouncilLineFitsTheColumn(unittest.TestCase):
@@ -144,7 +144,8 @@ class TheCouncilLineFitsTheColumn(unittest.TestCase):
     def test_a_council_line_over_255_characters_is_written_to_fit(self):
         written = []
         cmd = relay.SpeakCommand("Grug", "party", LONG_LINE, "", "overseer:council")
-        _insert_speak(written)(cmd)
+        insert, store = _insert_speak(written)
+        row_id = insert(cmd)
         self.assertEqual(1, len(written))
         name, command, channel, whisper_to, source = written[0]
         self.assertLessEqual(len(command), 255)
@@ -153,6 +154,15 @@ class TheCouncilLineFitsTheColumn(unittest.TestCase):
             ("Grug", "party", "", "overseer:council"),
             (name, channel, whisper_to, source),
         )
+        self.assertEqual(1, len(store.rows))
+        row = store.rows[row_id]
+        self.assertEqual("Grug", row["target_name"])
+        self.assertEqual(relay.fit_spoken(LONG_LINE), row["command"])
+        self.assertLessEqual(len(row["command"]), 255)
+        self.assertEqual("chat", row["kind"])
+        self.assertEqual("party", row["channel"])
+        self.assertEqual("", row["target_arg"])
+        self.assertEqual("overseer:council", row["source"])
 
 
 class GmAllowlist(unittest.TestCase):
