@@ -31206,6 +31206,7 @@ _JOB_MEMBERS_SQL = (
     "s.zone_id, s.health, "
     "EXISTS (SELECT 1 FROM corpse k WHERE k.guid = c.guid) AS has_corpse, "
     "lc.name AS master, hb.mapId AS home_map, hb.zoneId AS home_zone, "
+    "hb.posX AS home_x, hb.posY AS home_y, "
     # The taxi nodes it knows, for the level step's flight (guildlevel.choose).
     "c.taximask, "
     + raidroles.TALENTS_COLUMN + " "
@@ -31851,6 +31852,8 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             drink=_member_supplies(supplies, guid)[1],
             home_map=_row_int(r, "home_map"),
             home_zone=_row_int(r, "home_zone"),
+            home_x=_row_float(r, "home_x"),
+            home_y=_row_float(r, "home_y"),
             rewarded=None if rewarded is None else rewarded.get(guid, frozenset()),
             taxi_nodes=flightlearn.known_nodes(r.get("taximask")),
             bag_slots=(bag_slots or {}).get(name),

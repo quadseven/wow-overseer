@@ -980,6 +980,31 @@ def there(map_id, x, y, master: HubMaster) -> bool:
     return math.hypot(float(x) - master.x, float(y) - master.y) <= ARRIVED_YARDS
 
 
+def home_zone_of(home_map, home_x, home_y, home_zone) -> int | None:
+    """The zone a member's hearthstone is bound in, or None when unread.
+
+    character_homebind.zoneId is the core's AREA id once a member binds at an
+    inn (Brackenwall Village 496, Gadgetzan 976), and this realm has no area
+    table to climb from an area to its zone (areatable_dbc holds no rows). A
+    member binds at a hub's inn, and every hub's inn stands within INN_YARDS of
+    the hub's flight point, so a home that close to a hub's flight point on its
+    map is in the hub's zone. Any other home keeps the row's own id, which is a
+    zone id for a hearth never moved off its starting inn (Durotar 14).
+    """
+    if home_map is not None and home_x is not None and home_y is not None:
+        best = None
+        for hub in levelroute.HUBS + levelroute.STARTING_LAND_HUBS:
+            point = hub.point
+            if point is None or int(point[0]) != int(home_map):
+                continue
+            yards = math.hypot(float(home_x) - point[1], float(home_y) - point[2])
+            if yards <= INN_YARDS and (best is None or yards < best[0]):
+                best = (yards, hub.zone_id)
+        if best is not None:
+            return int(best[1])
+    return int(home_zone) if home_zone else None
+
+
 def bind_inn(level, race, map_id, zone_id, x, y, home_map, home_zone, bands, inns):
     """(inn, hub) a member sets its hearth at, or (None, None).
 
