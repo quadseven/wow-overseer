@@ -31,7 +31,9 @@ from dataclasses import dataclass
 import questledger
 import raidteams
 
-EPIC = int(os.environ.get("QUEST_TICKET_EPIC", "922"))
+# The open quest epic. #922 closed on 2026-11-01 and its part 2 is #1575;
+# a ticket filed under a closed epic fails the plan check's epic row.
+EPIC = int(os.environ.get("QUEST_TICKET_EPIC", "1575"))
 REPO = os.environ.get("QUEST_TICKET_REPO", "quadseven/wow-overseer")
 LABELS = ("loom:ticket", "loom:queued")
 MAX_PER_PASS = 5
@@ -307,7 +309,10 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
         "",
         "## Out of scope",
         "",
-        "Any other broken quest.",
+        "Any other broken quest. A reason string keyed on this quest's id: "
+        "lanes cannot read the live world, and such strings have claimed causes "
+        "the world database contradicts (#1953). Name a cause only from the "
+        "world rows above or a fixture of them.",
         "",
         "Part of #%d" % EPIC,
     ]
