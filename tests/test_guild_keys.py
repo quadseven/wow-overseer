@@ -154,7 +154,10 @@ class OneKeyTableForFamiliesAndGuilds(unittest.TestCase):
     def test_the_door_carries_its_key(self):
         self.assertEqual(ARMORY.key, SCARLET_KEY)
         self.assertEqual(ARMORY.key_name, "the Scarlet Key")
-        self.assertEqual(BY_KEYWORD["blackrock-depths"].key, SHADOWFORGE_KEY)
+        # Blackrock Depths is its own key's source (Dark Iron Legacy), so its
+        # door carries no lock (#1964); the key still rides on KEY_ITEMS.
+        self.assertEqual(BY_KEYWORD["blackrock-depths"].key, 0)
+        self.assertIn(SHADOWFORGE_KEY, campaignplan.KEY_ITEMS)
         self.assertEqual(BY_KEYWORD["deadmines"].key, 0)
 
 

@@ -631,6 +631,12 @@ def guild_bag(value: int, floor, held: dict):
             for entry, need in bag.reagents[1:]
             if not guildcorps._vendor_reagent(entry)
         ):
+            # A FULL STOCK SEWS NO MORE (#1967): the floor reads 0 while any
+            # guildmate has an empty position, so without this the tailor
+            # sewed for ever (Oz, 47 Woolen Bags) and the vendor pass kept
+            # them all. Past the stock they are sold as spares.
+            if int(held.get(bag.makes, 0) or 0) >= guildcorps.CORPS_BAG_STOCK:
+                return None
             return bag
     return None
 
@@ -913,6 +919,7 @@ def _guild_bag_entries() -> set:
     chosen depends on what is held, so all of them are counted first."""
     out = set()
     for bag in guildcorps.BAGS:
+        out.add(int(bag.makes))  # the stock already sewn (#1967)
         out.update(int(entry) for entry, _ in bag.reagents)
         bolt = guildcorps.BOLT_OF.get(int(bag.reagents[0][0]))
         if bolt is not None:

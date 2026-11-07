@@ -24,6 +24,7 @@ character_queststatus_rewarded. A guild run's members are the
 """
 
 import asyncio
+import sqlite3
 import types
 import unittest
 from unittest import mock
@@ -289,6 +290,140 @@ class BridgePass(unittest.TestCase):
         written, said = self._run(host, rewarded)
         self.assertEqual(written, [])
         self.assertIn("dark iron legacy: Brakk now carries the Shadowforge Key", said)
+
+
+FAMILY_SCHEMA = """
+CREATE TABLE overseer_roster(name TEXT PRIMARY KEY, family TEXT, enabled INTEGER);
+INSERT INTO overseer_roster VALUES
+ ('Zug','Zug',1),('Zork','Zug',1),('Oz','Zug',1),('Benched','Zug',0),
+ ('Grug','Grug',1),('Og','Grug',1);
+CREATE TABLE overseer_dungeon_queue(
+ id INTEGER PRIMARY KEY, family TEXT, keyword TEXT, status TEXT);
+CREATE TABLE overseer_dungeon_run(
+ id INTEGER PRIMARY KEY, leader_name TEXT, map_id INTEGER, state TEXT,
+ members TEXT);
+"""
+
+
+class _Cursor:
+    """A cursor that answers each statement through `answer(sql, params)`."""
+
+    def __init__(self, answer):
+        self.answer, self.rows = answer, []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, sql, params=()):
+        self.rows = self.answer(sql, params)
+
+    def fetchall(self):
+        return self.rows
+
+
+class _Connection:
+    def __init__(self, answer):
+        self.answer = answer
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def cursor(self):
+        return _Cursor(self.answer)
+
+
+class FamilyRun(unittest.TestCase):
+    """A family's own Blackrock Depths run hands Ironfel in at the Shrine just
+    as a guild run does (#1965). The family rows come from executing the
+    bridge's real statement against the queue, roster and run tables."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.bridge = _import_bridge()
+
+    def setUp(self):
+        self.db = sqlite3.connect(":memory:")
+        self.addCleanup(self.db.close)
+        self.db.row_factory = sqlite3.Row
+        # The bridge's collation name, for the comparison it settles in MySQL.
+        self.db.create_collation("utf8mb4_unicode_ci", lambda a, b: (a > b) - (a < b))
+        self.db.executescript(FAMILY_SCHEMA)
+        self.carrier = _snap("Zork", health=3200, at=SHRINE_ROW)
+        self.log = [{"name": "Zork", "quest": 3802, "status": 1}]
+        self.guild_runs = []
+
+    def _ledger(self, sql, params):
+        """The family statements, run on sqlite; a missing table or column
+        comes back as the MySQL error the bridge tolerates."""
+        try:
+            rows = self.db.execute(sql.replace("%s", "?"), params)
+        except sqlite3.OperationalError as error:
+            code = 1146 if "no such table" in str(error) else 1054
+            raise PYMYSQL.err.MySQLError(code, str(error)) from error
+        return [dict(r) for r in rows]
+
+    def _answer(self, sql, params):
+        """Rows for one statement of the pass: the family ledger off sqlite,
+        everything else from the fixture rows (first matching table wins)."""
+        if "overseer_dungeon_queue" in sql or "overseer_dungeon_run" in sql:
+            return self._ledger(sql, params)
+        fixtures = (
+            ("overseer_snapshot", [self.carrier]),
+            ("character_queststatus_rewarded", []),
+            ("character_queststatus", list(self.log)),
+            ("acore_world.creature", [FRANCLORN_ROW, SHRINE_ROW]),
+            ("overseer_guild_run", list(self.guild_runs)),
+        )
+        return next((rows for table, rows in fixtures if table in sql), [])
+
+    def _connect(self):
+        return _Connection(self._answer)
+
+    def _rows(self):
+        with mock.patch.object(self.bridge, "_connect", self._connect):
+            facts = self.bridge._legacy_facts(["Bonkers"])
+        return dq.legacy_rows(facts)
+
+    def test_a_family_member_in_an_active_brd_queue_run_hands_3802_in(self):
+        self.db.execute(
+            "INSERT INTO overseer_dungeon_queue VALUES "
+            "(129, 'Zug', 'blackrock-depths', 'active')"
+        )
+        self.assertEqual(self._rows(), (("Zork", "turnin quest:3802"),))
+
+    def test_a_family_member_in_an_active_run_on_the_map_hands_3802_in(self):
+        self.db.execute(
+            "INSERT INTO overseer_dungeon_run VALUES "
+            "(7, 'Zug', 230, 'active', 'Zug,Zork,Oz')"
+        )
+        self.assertEqual(self._rows(), (("Zork", "turnin quest:3802"),))
+
+    def test_no_active_brd_run_of_any_kind_hands_nothing_in(self):
+        self.db.executescript(
+            "INSERT INTO overseer_dungeon_queue VALUES "
+            "(129, 'Zug', 'blackrock-depths', 'queued'),"
+            "(131, 'Zug', 'sunken-temple', 'active'),"
+            "(130, 'Grug', 'blackrock-depths', 'active');"
+            "INSERT INTO overseer_dungeon_run VALUES "
+            "(7, 'Zug', 109, 'active', 'Zug,Zork,Oz'),"
+            "(8, 'Zug', 230, 'ended', 'Zug,Zork,Oz');"
+        )
+        self.assertEqual(self._rows(), ())
+
+    def test_the_guild_run_path_still_hands_in(self):
+        self.guild_runs = [_brd_run("Zork", "Funky")]
+        self.assertEqual(self._rows(), (("Zork", "turnin quest:3802"),))
+
+    def test_an_older_ledger_without_the_columns_reads_no_family_run(self):
+        self.db.execute("ALTER TABLE overseer_dungeon_run DROP COLUMN members")
+        self.guild_runs = [_brd_run("Zork")]
+        self.assertEqual(self._rows(), (("Zork", "turnin quest:3802"),))
 
 
 if __name__ == "__main__":

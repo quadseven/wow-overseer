@@ -4487,6 +4487,23 @@ def _insert_dungeonquest_row(name: str, command: str,
         return cur.lastrowid or 0
 
 
+def _legacy_family_runs(cur) -> list:
+    """The members of a family's own Blackrock Depths run (#1965). A realm
+    whose queue or run ledger predates the columns read has no family run of
+    that kind to count; any other database error is raised, never read as
+    none."""
+    rows = []
+    for sql, args in dungeonquests.LEGACY_FAMILY_STATEMENTS:
+        try:
+            cur.execute(sql, args)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                continue
+            raise
+        rows += list(cur.fetchall())
+    return rows
+
+
 def _legacy_facts(guilds: list) -> dungeonquests.LegacyFacts:
     """Everything the Dark Iron Legacy pass reads (#811), on one connection;
     no judgement here."""
@@ -4507,6 +4524,7 @@ def _legacy_facts(guilds: list) -> dungeonquests.LegacyFacts:
         spawns = list(cur.fetchall())
         cur.execute(dungeonquests.LEGACY_RUNS_SQL)
         runs = list(cur.fetchall())
+        runs += _legacy_family_runs(cur)
         cur.execute(dungeonquests.RECENT_SQL, (dungeonquests.LEGACY_SOURCE,
                                                dungeonquests.LEGACY_RETRY_SECONDS))
         recent = list(cur.fetchall())
@@ -15963,9 +15981,12 @@ class Bridge(discord.Client):
         # off, the dues stopped in the master's purse and Cave's vault sat at
         # 155.0g for twelve days. guildbank.gold_deposits has the rule.
         master = _guild_master(setup)
+        # SAVING FOR THE NEXT TAB WHILE EVERY TAB IS FULL (#1967): the
+        # master keeps its price rather than bank the family's gifts away.
+        saving = guildbank.tabs_full((setup or {}).get("tab_items"), purchased_tabs)
         deposits = guildbank.gold_deposits(
             members, master=master, purchased_tabs=purchased_tabs,
-            buyer=_setup_buyer(setup, names, leader))
+            buyer=_setup_buyer(setup, names, leader), saving=saving)
         items = (await asyncio.to_thread(_plan_bank, names)).guild
         # AND WHAT JEV CHOSE TO BANK (#267), under the same gates.
         items = tuple(items) + tuple(self._jev_keep_deposits(names, setup, items))
@@ -16118,7 +16139,8 @@ class Bridge(discord.Client):
                 continue
             await asyncio.to_thread(_insert_guild, deposit.name, command, "guildbank")
             fresh.append(deposit)
-            _say_master_deposit(deposit, master, members, purchased_tabs, cohort)
+            _say_master_deposit(deposit, master, members, purchased_tabs, cohort,
+                                saving)
         if walking:
             # LOGGED: a pass that writes nothing and a broken one look
             # identical otherwise (infra#3660, restated for the rows).
@@ -16183,7 +16205,9 @@ class Bridge(discord.Client):
                 await asyncio.to_thread(_fetch_guild_money, names), eligible),
             master=_guild_master(setup),
             purchased_tabs=purchased_tabs,
-            buyer=_setup_buyer(setup, names, leader))
+            buyer=_setup_buyer(setup, names, leader),
+            saving=guildbank.tabs_full((setup or {}).get("tab_items"),
+                                       purchased_tabs))
         if not deposits:
             return
         positions = await asyncio.to_thread(
@@ -20066,9 +20090,10 @@ class Bridge(discord.Client):
         wanted = gearup.plan_funding(facts)
         if not wanted:
             # NO GEAR TO FUND: THE GUILD'S FIRST TAB (the operator,
-            # 2026-09-29). Gear comes first; with none short, the siblings at
-            # the mailbox post what they earned above their float to the guild
-            # master, whose purse the tab is bought from.
+            # 2026-09-29), OR ITS NEXT ONE WHILE EVERY TAB IS FULL (#1967).
+            # Gear comes first; with none short, the siblings at the mailbox
+            # post what they earned above their float to the guild master,
+            # whose purse the tab is bought from.
             wanted = await asyncio.to_thread(
                 _tab_gifts, names, facts, hub, positions)
         if not wanted:
@@ -21696,6 +21721,18 @@ class Bridge(discord.Client):
         if recipe:
             log.info("guild run %s: %s %s", social.form.ask.guild, social.form.door.place,
                      guildrun.recipe_words(recipe))
+        # THE SEATED RAIDERS' UPGRADES the run was formed for (#760). Live guild
+        # runs form here (GUILD_SOCIAL is on), never in _guild_run_once, so the
+        # seats' pre-raid gains are read and named here as well: the dev realm
+        # logged no "drops upgrades for" line from 2026-11-03 to 2026-11-07.
+        if run_id:
+            seats = social.form.composition
+            gains = await asyncio.to_thread(
+                _guild_seat_gains, list(seats.names), list(seats.levels))
+            upgrades = guildrun.gain_words(gains, social.form.door, seats)
+            if upgrades:
+                log.info("guild run %s: %s drops %s", social.form.ask.guild,
+                         social.form.door.place, upgrades)
         # THE SEATS AN HOUR (seatmeter, #784). Looked up so a test driving
         # this pass on a bare object needs no reads for it.
         meter = getattr(self, "_log_seat_meter", None)
@@ -22537,7 +22574,14 @@ class Bridge(discord.Client):
         # stood at a vendor that could sell nothing of Uzza's.
         here, free, column = await asyncio.to_thread(
             _bag_hold_reads, list(fam["names"]), leader)
-        if jev_activity.withheld(True, free) and _vendor_trip_makes_room(
+        # NOT WHILE THE FAMILY IS MID-RUN EITHER (#1243). The vendor pass takes
+        # no trip then ("bag pressure is urgent during a dungeon; the job stays
+        # on the dungeon and the run makes bag room inside"), so the trip this
+        # hold waits for never comes: on the dev realm Grug's family read
+        # "waits for bag room" from 2026-11-04 09:34Z to 12:23Z, and Zug's from
+        # 2026-11-06 03:37Z to 04:20Z, each beside that vendor-pass line.
+        mid = await self._mid_run(list(fam["names"]))
+        if not mid and jev_activity.withheld(True, free) and _vendor_trip_makes_room(
                 here, free):
             # THE VENDOR TRIP CANNOT GO WHILE ANOTHER ERRAND HOLDS THE COLUMN.
             # Zug's town errand to Camp Taurajo held the traveller while it
@@ -22554,7 +22598,6 @@ class Bridge(discord.Client):
                 log.info("dungeon quests: %s waits for bag room; the vendor trip "
                          "keeps the travel column", campaignqueue._family(key))
                 return False
-        mid = await self._mid_run(list(fam["names"]))
         facts = await asyncio.to_thread(
             _dungeonquest_facts, fam, str(head["keyword"]), leader, True, mid)
         step = dungeonquests.step(facts)
@@ -28827,11 +28870,19 @@ def _fetch_surplus_bags(names: list) -> list:
     # Both the sale and the sellable-stack count use these same rows.
     for row in rows:
         row["bank_reserved"] = int(row["item_guid"]) in bank_keeps
-    # One line per crafted corps bag the vendor pass leaves with its master (#1667).
-    for kept in rows:
-        if bag_pressure.corps_bag_kept(kept):
-            log.info("economy: %s keeps its crafted %s for the guild corps "
-                     "(not sold, #1667)", kept.get("holder"), kept.get("name"))
+    # One line per holder and crafted corps bag (#1667): the stock the vendor
+    # pass leaves with its master, and the surplus past it offered for sale
+    # (#1967). One line per bag logged 23 a pass for Oz.
+    stock = bag_pressure.corps_bags_kept(rows)
+    tally: dict = {}
+    for row in rows:
+        if bag_pressure.corps_bag_kept(row):
+            seen = tally.setdefault((row.get("holder"), row.get("name")), [0, 0])
+            seen[0 if row.get("item_guid") in stock else 1] += 1
+    for (holder, name), (kept, spare) in sorted(tally.items(), key=str):
+        log.info("economy: %s keeps %d crafted %s for the guild corps (not "
+                 "sold, #1667); %d more are offered for sale (#1967)",
+                 holder, kept, name, spare)
     return rows
 
 
@@ -31121,6 +31172,21 @@ _JOB_RECENT_SQL = (
     "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
     "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY"
 )
+# THE NO-TRAINER REFUSALS OLDER THAN THE RECENT READ (#1453), for as long as
+# guildjobs.still_stranded keeps them: the refusal holds while the member
+# stays on the map it was refused on, however long ago that was. The two
+# source prefixes (the train and riding steps) are what let the read use the
+# source index: with one `guildjobs:%` prefix and a month of rows it scanned
+# the table, about 9 s on the dev realm, against about 0.25 s this way.
+_JOB_NO_TRAINER_SQL = (
+    "SELECT id, target_name, command, source, status, target_arg, "
+    "LEFT(result, 400) AS result, "
+    "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
+    "WHERE (source LIKE %s OR source LIKE %s) AND status = 'error' "
+    "AND command LIKE 'walk-to-trainer%%' AND result LIKE %s "
+    "AND created_at <= NOW() - INTERVAL 1 DAY "
+    "AND created_at > NOW() - INTERVAL %s DAY"
+)
 # THE FAR WALKS THE REALM HAS UNDER WAY: every walk row that asked for a far
 # cap and is not finished, of every kind (the module's ceiling is realm-wide,
 # not per kind). A row left open past the walk's own ceiling is no longer under
@@ -31407,6 +31473,11 @@ def _fetch_job_facts(family_names: list) -> dict:
         supplies = _job_supplies(cur, everyone)
         recent_rows = _job_read(cur, "recent rows", _JOB_RECENT_SQL,
                                 (guildjobs.SOURCE + ":%",))
+        stranded_rows = _job_read(cur, "no-trainer refusals", _JOB_NO_TRAINER_SQL,
+                                  (guildjobs.SOURCE + ":train:%",
+                                   guildjobs.SOURCE + ":" + guildjobs.RIDING_ACTION + ":%",
+                                   "%" + guildjobs.NO_TRAINER_ON_MAP_REFUSAL + "%",
+                                   guildjobs.NO_TRAINER_READ_DAYS))
         pending_rows = _job_read(cur, "summons", _JOB_PENDING_SUMMONS_SQL)
         unclaimed_rows = _job_read(cur, "unopened material posts", _JOB_UNCLAIMED_SQL,
                                    (guildjobs.POST_SUBJECT, guildjobs.MAILBOX_FULL_LETTERS))
@@ -31428,7 +31499,8 @@ def _fetch_job_facts(family_names: list) -> dict:
                                  free_slots=_job_free_slots(room),
                                  supplies=supplies, rewarded_rows=rewarded_rows,
                                  bag_slots=_job_bag_slots(room),
-                                 worn=_job_worn(worn_rows))
+                                 worn=_job_worn(worn_rows),
+                                 stranded_rows=stranded_rows)
     facts["class_book"] = book
     facts["quest_asks"] = guildjobs.quest_asks_from_rows(quest_ask_rows)
     facts["death_loops"] = deathloop.loops(
@@ -31533,8 +31605,9 @@ def _job_worn(rows) -> dict:
 def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, item_rows,
                          recent_rows, pending_rows, log_rows=(), done_rows=(),
                          free_slots=None, supplies=None, rewarded_rows=None,
-                         bag_slots=None, worn=None) -> dict:
-    """The rows the job reads, turned into guildjobs' facts."""
+                         bag_slots=None, worn=None, stranded_rows=()) -> dict:
+    """The rows the job reads, turned into guildjobs' facts. `stranded_rows`
+    are the no-trainer refusals older than the recent read (#1453)."""
     family = set(family_names)
     guild_members, masters = guildwork.members_from_rows(rows, family_names)
     role_of = {m.name: m.role for m in guild_members}
@@ -31549,7 +31622,9 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
     map_id_by_name = {m.name: m.map_id for m in members if m.map_id is not None}
     return {
         "members": members, "masters": masters, "crafters": crafters,
-        "recent": guildjobs.recent_from_rows(recent_rows, map_id_by_name), "pending": pending,
+        "recent": (guildjobs.recent_from_rows(recent_rows, map_id_by_name)
+                   + guildjobs.still_stranded(stranded_rows, map_id_by_name)),
+        "pending": pending,
         "stones": guildjobs.spots_from_rows(_JOB_STONES),
     }
 
@@ -33527,12 +33602,14 @@ def _gold_waits_for_a_vault(actions, items, deposits, cohort=None) -> bool:
     return True
 
 
-def _say_master_deposit(deposit, master, members, purchased_tabs, cohort=None) -> None:
+def _say_master_deposit(deposit, master, members, purchased_tabs, cohort=None,
+                        saving=False) -> None:
     """Log the guild master's deposit of the guild's gold (#775)."""
     if deposit.name != master or guildbank.MEMBER_GOLD_DEPOSITS:
         return
     purse = {str(m.get("name")): m.get("money") for m in members}.get(master)
-    log.info("%s%s", guildbank.master_deposit_line(deposit, purse, purchased_tabs),
+    log.info("%s%s", guildbank.master_deposit_line(deposit, purse, purchased_tabs,
+                                                   saving),
              _family_label(cohort))
 
 
@@ -34842,6 +34919,17 @@ QUESTER_CROSSINGS_LIKE = guildjobs.SOURCE + ":%-cross:%"
 QUESTER_CLOCK_MEMO = "quester_clock"
 QUESTER_BROKEN_MEMO = "quester_broken"
 QUESTER_MEMO_SECONDS = 30 * 24 * 3600
+# WHICH STALL CLOCK JUDGED A HELD STALL (#1731, #1779). Until #1809 (live on
+# the dev realm 2026-11-03T13:56Z) the stall clock ran for every quest of the
+# zone while the quester hunted another, so a quest waiting its turn was held
+# as stalled. The memo is rewritten every pass, so it never expired, and each
+# time a party member shared the quest back the holder dropped it again: Durga
+# dropped An Unwelcome Guest eight times between 2026-11-06 and 2026-11-07,
+# while no quester found quest 34 or quest 101 stalled once after #1809 went
+# live. A broken memo written by this clock carries this key; a stall held in
+# one without it was judged by the old clock and is not held.
+QUESTER_STALL_CLOCK_KEY = "_stall_clock"
+QUESTER_STALL_CLOCK = 1809
 # The realm's hunt rows the questers may hold at once, of its ceiling
 # (classhunt.HUNTS_AT_ONCE): the guild's class quests come first (classquest
 # OWED_*), so the questers leave them the rest. Past it a quester's hunt is the
@@ -34972,17 +35060,41 @@ def _quester_memos() -> tuple:
     """(the stall clock's data, name -> {quest id: reason}) from the memo store."""
     clock = _memo_read(QUESTER_CLOCK_MEMO).get("all", ({}, 0.0))[0]
     broken = {
-        name: {int(q): str(reason) for q, reason in (value or {}).items()}
+        name: _quester_held(name, value)
         for name, (value, _since) in _memo_read(QUESTER_BROKEN_MEMO).items()
     }
     return clock, broken
+
+
+def _quester_held(name: str, value) -> dict:
+    """One quester's held quests (quest id -> reason) from its broken memo.
+
+    A stall held in a memo the #1809 clock did not write is dropped, and said
+    once, so the quest is judged again by the clock that only runs while the
+    quester works it (QUESTER_STALL_CLOCK_KEY). Every other reason is a fact
+    about the world and stays held."""
+    value = dict(value or {})
+    trusted = value.pop(QUESTER_STALL_CLOCK_KEY, None) == QUESTER_STALL_CLOCK
+    held, dropped = {}, []
+    for q, reason in value.items():
+        if not trusted and str(reason).startswith(questers.STALLED):
+            dropped.append(int(q))
+            continue
+        held[int(q)] = str(reason)
+    if dropped:
+        log.info("questers: %s no longer holds %d stall(s) judged before the "
+                 "#1809 clock: quests %s", name, len(dropped),
+                 ", ".join(str(q) for q in sorted(dropped)))
+    return held
 
 
 def _quester_memos_write(clock, broken: dict, now: float) -> None:
     _memo_upsert(QUESTER_CLOCK_MEMO, "all", clock.dump(), now, now + QUESTER_MEMO_SECONDS)
     for name, found in broken.items():
         if found:
-            _memo_upsert(QUESTER_BROKEN_MEMO, name, {str(q): r for q, r in found.items()},
+            value = {str(q): r for q, r in found.items()}
+            value[QUESTER_STALL_CLOCK_KEY] = QUESTER_STALL_CLOCK
+            _memo_upsert(QUESTER_BROKEN_MEMO, name, value,
                          now, now + QUESTER_MEMO_SECONDS)
 
 
@@ -35465,8 +35577,8 @@ def _insert_weapon_equip(row: dict) -> int:
 
 def _tab_gifts(names: list, facts: dict, hub, positions: dict) -> tuple:
     """guildbank.plan_tab_gifts over the members standing at the hub mailbox;
-    nothing when the guild has a tab, no master in the family, or nobody's
-    gold was earned (natural.py). No judgement here."""
+    nothing when the guild has a tab with room, no master in the family, or
+    nobody's gold was earned (natural.py). No judgement here."""
     setup = _fetch_guild_bank_setup(names)
     master = str((setup or {}).get("master") or "")
     if not setup or not master or master not in names:
@@ -35475,11 +35587,14 @@ def _tab_gifts(names: list, facts: dict, hub, positions: dict) -> tuple:
         hub, positions.get(n), TOWN_COUNTER_YARDS)}
     if master not in here:
         return ()
+    purchased = int(setup.get("purchased_tabs", 0))
     return guildbank.plan_tab_gifts(
-        here, master=master, purchased_tabs=int(setup.get("purchased_tabs", 0)),
+        here, master=master, purchased_tabs=purchased,
         master_purse=int(here[master].get("purse") or 0),
         master_mailed=int(setup.get("master_mailed_copper", 0)),
-        eligible=_natural_contributors(names, names))
+        eligible=_natural_contributors(names, names),
+        # A full bank asks the family for the next tab too (#1967).
+        tabs_full=guildbank.tabs_full(setup.get("tab_items"), purchased))
 
 
 def _insert_fund_letter(gift, command: str) -> int:
