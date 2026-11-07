@@ -844,37 +844,41 @@ class Broken(unittest.TestCase):
             "requires crafted Crab Cakes (item 2683); questers cannot cook",
         )
 
-    def test_totem_of_infliction_ledger_explains_unsupported_item_use(self):
-        # classquest.build supplies `uses` from its quest use-item rows. The
-        # quester hunts and turns in quests, but does not execute those verbs.
-        quest = classquest.Quest(
-            101,
-            "The Totem of Infliction",
-            0,
-            1,
-            0,
-            0,
-            0,
-            0,
-            0,
-            uses=(classquest.Use("use-item-on", item=1),),
-        )
+    def test_quest_101_carries_no_hard_coded_reason(self):
+        """The Totem of Infliction is a plain three-item collect quest in the
+        world rows (items 1129, 1130, 2378, no item use), so it is judged like
+        any other quest (#1779): a reason claiming an item use it does not
+        have told readers a false cause."""
+
+        def totem(quest_id):
+            return classquest.Quest(
+                quest_id,
+                "The Totem of Infliction",
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                uses=(classquest.Use("use-item-on", item=1),),
+            )
+
         facts = questers.Facts(zone=10, level=25, ender_npcs=True)
-
-        reason = questers._broken_reason(
-            quest,
-            facts,
-            questers.STATUS_INCOMPLETE,
-            0,
-            frozenset(),
-            {},
-        )
-
-        self.assertEqual(
-            reason,
-            "requires using a quest item on its objective; questers cannot "
-            "perform quest objective item use",
-        )
+        for played in (0, questers.STALL_SECONDS):
+            reasons = [
+                questers._broken_reason(
+                    totem(quest_id),
+                    facts,
+                    questers.STATUS_INCOMPLETE,
+                    played,
+                    frozenset(),
+                    {},
+                )
+                for quest_id in (101, 90101)
+            ]
+            self.assertEqual(reasons[0], reasons[1], played)
+            self.assertNotIn("item use", reasons[0])
 
     def test_fargodeep_mine_ledger_explains_unsupported_exploration_credit(self):
         quest = classquest.Quest(62, "The Fargodeep Mine", 0, 1, 0, 0, 0, 0, 0)
@@ -1326,7 +1330,10 @@ class Broken(unittest.TestCase):
             [(b.quest, b.reason) for b in p.broken], [(1, questers.SOURCE_MISSING)]
         )
 
-    def test_unwelcome_guest_ledger_explains_missing_objective_spawn(self):
+    def test_unwelcome_guest_carries_no_hard_coded_reason(self):
+        """Quest 34 asks for item 3631, which Bellygrub (one spawn) drops, so
+        a hard-coded "no objective spawn to hunt" was false (#1731); a stall
+        is judged like any other quest's."""
         q = quest(34, REDRIDGE, 24, kill=345, title="An Unwelcome Guest")
         cat = world(
             extra_quests=[q],
@@ -1345,11 +1352,7 @@ class Broken(unittest.TestCase):
             {},
         )
 
-        self.assertEqual(
-            broken,
-            "its objectives did not move for 2 hours of play, and "
-            "An Unwelcome Guest has no objective spawn to hunt",
-        )
+        self.assertEqual(broken, questers.STALLED_UNSOURCED)
 
     def test_a_way_the_world_refused_is_left_for_now_and_breaks_nothing(self):
         tried = [
