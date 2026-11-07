@@ -4444,6 +4444,17 @@ def inn_step(m, world, recent, cap):
         return None
     if _cooling(m, guildlevel.INN_ACTION, recent):
         return None
+    # THE HOME'S ZONE, NOT ITS AREA (#2006). Once a member binds at an inn the
+    # row holds the inn's area id (Brackenwall Village 496), which no zone band
+    # has, so every member bound at an inn read as bound where it had outgrown
+    # and was walked back to rebind: 50 of 53 bind walks on 2026-11-07 named
+    # the home "somewhere this page cannot place".
+    home = guildlevel.home_zone_of(
+        m.home_map,
+        getattr(m, "home_x", None),
+        getattr(m, "home_y", None),
+        m.home_zone,
+    )
     inn, hub = guildlevel.bind_inn(
         m.level,
         m.race,
@@ -4452,7 +4463,7 @@ def inn_step(m, world, recent, cap):
         m.x,
         m.y,
         m.home_map,
-        m.home_zone,
+        home,
         world.bands,
         getattr(world, "inns", {}),
     )
@@ -4463,7 +4474,7 @@ def inn_step(m, world, recent, cap):
         m.name,
         guildlevel.INN_ACTION,
         int(inn.spawn),
-        guildlevel.bind_said(m.name, m.level, inn, hub, m.home_zone),
+        guildlevel.bind_said(m.name, m.level, inn, hub, home),
         rows=(guildcorps.Row("bind", "here", "", source),),
         walk=guildcorps.Row(
             "job",
