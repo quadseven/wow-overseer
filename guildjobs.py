@@ -2073,6 +2073,32 @@ def _stranded_by_no_trainer(
     )
 
 
+# HOW FAR BACK A NO-TRAINER REFUSAL IS READ (#1453). The job's recent rows
+# are one day deep, so a member stranded on a map with no trainer for its
+# skill was walked again and refused again every 24 hours: Brug, on the death
+# knight start map, was refused once a day for each of four skills from
+# 2026-11-03 to 2026-11-07. The refusal is not retryable on that map, so it is
+# read this far back and kept for as long as the member is still on it.
+NO_TRAINER_READ_DAYS = 30
+
+
+def still_stranded(rows, map_id_by_name: dict[str, int]) -> tuple:
+    """The no-trainer refusals among `rows` (older than the recent read) whose
+    member still stands on the map the walk was refused on, as Recent rows.
+
+    A member that has left the map is not held by them, and neither is any
+    other refusal, so the cooldowns and backoffs read from the recent rows
+    are what they were."""
+    return tuple(
+        r
+        for r in recent_from_rows(rows, map_id_by_name)
+        if r.action in ("train", RIDING_ACTION)
+        and r.refusal == NO_TRAINER_ON_MAP_REFUSAL
+        and r.map_id
+        and map_id_by_name.get(r.name) == r.map_id
+    )
+
+
 def riding_step(m, recent):
     """(step or None, a note): a member whose purchase order reaches riding
     and whose purse covers it after its class spells walks to a riding

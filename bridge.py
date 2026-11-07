@@ -31139,6 +31139,21 @@ _JOB_RECENT_SQL = (
     "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
     "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY"
 )
+# THE NO-TRAINER REFUSALS OLDER THAN THE RECENT READ (#1453), for as long as
+# guildjobs.still_stranded keeps them: the refusal holds while the member
+# stays on the map it was refused on, however long ago that was. The two
+# source prefixes (the train and riding steps) are what let the read use the
+# source index: with one `guildjobs:%` prefix and a month of rows it scanned
+# the table, about 9 s on the dev realm, against about 0.25 s this way.
+_JOB_NO_TRAINER_SQL = (
+    "SELECT id, target_name, command, source, status, target_arg, "
+    "LEFT(result, 400) AS result, "
+    "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
+    "WHERE (source LIKE %s OR source LIKE %s) AND status = 'error' "
+    "AND command LIKE 'walk-to-trainer%%' AND result LIKE %s "
+    "AND created_at <= NOW() - INTERVAL 1 DAY "
+    "AND created_at > NOW() - INTERVAL %s DAY"
+)
 # THE FAR WALKS THE REALM HAS UNDER WAY: every walk row that asked for a far
 # cap and is not finished, of every kind (the module's ceiling is realm-wide,
 # not per kind). A row left open past the walk's own ceiling is no longer under
@@ -31425,6 +31440,11 @@ def _fetch_job_facts(family_names: list) -> dict:
         supplies = _job_supplies(cur, everyone)
         recent_rows = _job_read(cur, "recent rows", _JOB_RECENT_SQL,
                                 (guildjobs.SOURCE + ":%",))
+        stranded_rows = _job_read(cur, "no-trainer refusals", _JOB_NO_TRAINER_SQL,
+                                  (guildjobs.SOURCE + ":train:%",
+                                   guildjobs.SOURCE + ":" + guildjobs.RIDING_ACTION + ":%",
+                                   "%" + guildjobs.NO_TRAINER_ON_MAP_REFUSAL + "%",
+                                   guildjobs.NO_TRAINER_READ_DAYS))
         pending_rows = _job_read(cur, "summons", _JOB_PENDING_SUMMONS_SQL)
         unclaimed_rows = _job_read(cur, "unopened material posts", _JOB_UNCLAIMED_SQL,
                                    (guildjobs.POST_SUBJECT, guildjobs.MAILBOX_FULL_LETTERS))
@@ -31446,7 +31466,8 @@ def _fetch_job_facts(family_names: list) -> dict:
                                  free_slots=_job_free_slots(room),
                                  supplies=supplies, rewarded_rows=rewarded_rows,
                                  bag_slots=_job_bag_slots(room),
-                                 worn=_job_worn(worn_rows))
+                                 worn=_job_worn(worn_rows),
+                                 stranded_rows=stranded_rows)
     facts["class_book"] = book
     facts["quest_asks"] = guildjobs.quest_asks_from_rows(quest_ask_rows)
     facts["death_loops"] = deathloop.loops(
@@ -31551,8 +31572,9 @@ def _job_worn(rows) -> dict:
 def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, item_rows,
                          recent_rows, pending_rows, log_rows=(), done_rows=(),
                          free_slots=None, supplies=None, rewarded_rows=None,
-                         bag_slots=None, worn=None) -> dict:
-    """The rows the job reads, turned into guildjobs' facts."""
+                         bag_slots=None, worn=None, stranded_rows=()) -> dict:
+    """The rows the job reads, turned into guildjobs' facts. `stranded_rows`
+    are the no-trainer refusals older than the recent read (#1453)."""
     family = set(family_names)
     guild_members, masters = guildwork.members_from_rows(rows, family_names)
     role_of = {m.name: m.role for m in guild_members}
@@ -31567,7 +31589,9 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
     map_id_by_name = {m.name: m.map_id for m in members if m.map_id is not None}
     return {
         "members": members, "masters": masters, "crafters": crafters,
-        "recent": guildjobs.recent_from_rows(recent_rows, map_id_by_name), "pending": pending,
+        "recent": (guildjobs.recent_from_rows(recent_rows, map_id_by_name)
+                   + guildjobs.still_stranded(stranded_rows, map_id_by_name)),
+        "pending": pending,
         "stones": guildjobs.spots_from_rows(_JOB_STONES),
     }
 
