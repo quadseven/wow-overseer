@@ -418,6 +418,20 @@ LEGACY_RUNS_SQL = (
     "SELECT keyword, members FROM overseer_guild_run "
     "WHERE state IN ('queued', 'inside')"
 )
+LEGACY_MAP = 230
+# A family's own Blackrock Depths run counts as much as a guild run (#1965):
+# the members of its active queue entry on the keyword (one row per enabled
+# roster member of that family) and the members of an active run on the map.
+# Each row has the guild run's (keyword, members) shape, so `_run_names`
+# reads both alike.
+LEGACY_FAMILY_RUNS_SQL = (
+    "SELECT q.keyword AS keyword, r.name AS members "
+    "FROM overseer_dungeon_queue q JOIN overseer_roster r ON r.family = q.family "
+    "WHERE q.status = 'active' AND q.keyword = %s AND r.enabled = 1 "
+    "UNION ALL SELECT %s AS keyword, d.members AS members "
+    "FROM overseer_dungeon_run d WHERE d.state = 'active' AND d.map_id = %s"
+)
+LEGACY_FAMILY_RUNS_ARGS = (LEGACY_RUN, LEGACY_RUN, LEGACY_MAP)
 
 
 @dataclass(frozen=True)
@@ -467,8 +481,8 @@ def _franclorn_steps(seeker: Seeker) -> tuple:
 
 
 def _shrine_steps(seeker: Seeker, facts: LegacyFacts) -> tuple:
-    """3802 handed in at the Shrine by a member of a Blackrock Depths guild
-    run who carries Ironfel (the quest's one requirement, so its status is
+    """3802 handed in at the Shrine by a member of a Blackrock Depths run, a
+    guild run or the family's own (#1965), who carries Ironfel (the quest's one requirement, so its status is
     complete) and stands at the Shrine."""
     if seeker.member.name not in facts.runners:
         return ()
@@ -511,8 +525,9 @@ def key_holders(facts: LegacyFacts, handed) -> tuple:
 
 
 def _run_names(rows) -> frozenset:
-    """Members of the in-flight Blackrock Depths guild runs. members is
-    overseer_guild_run's `name:seat:class:level` list (guildrun._member_list)."""
+    """Members of the in-flight Blackrock Depths runs. members is
+    overseer_guild_run's `name:seat:class:level` list (guildrun._member_list),
+    or a family run's plain names (LEGACY_FAMILY_RUNS_SQL)."""
     return frozenset(
         part.split(":")[0]
         for row in rows or ()

@@ -4487,6 +4487,20 @@ def _insert_dungeonquest_row(name: str, command: str,
         return cur.lastrowid or 0
 
 
+def _legacy_family_runs(cur) -> list:
+    """The members of a family's own Blackrock Depths run (#1965). A realm
+    whose queue or run ledger predates the columns read has no family run to
+    count; any other database error is raised, never read as none."""
+    try:
+        cur.execute(dungeonquests.LEGACY_FAMILY_RUNS_SQL,
+                    dungeonquests.LEGACY_FAMILY_RUNS_ARGS)
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return []
+        raise
+    return list(cur.fetchall())
+
+
 def _legacy_facts(guilds: list) -> dungeonquests.LegacyFacts:
     """Everything the Dark Iron Legacy pass reads (#811), on one connection;
     no judgement here."""
@@ -4507,6 +4521,7 @@ def _legacy_facts(guilds: list) -> dungeonquests.LegacyFacts:
         spawns = list(cur.fetchall())
         cur.execute(dungeonquests.LEGACY_RUNS_SQL)
         runs = list(cur.fetchall())
+        runs += _legacy_family_runs(cur)
         cur.execute(dungeonquests.RECENT_SQL, (dungeonquests.LEGACY_SOURCE,
                                                dungeonquests.LEGACY_RETRY_SECONDS))
         recent = list(cur.fetchall())
