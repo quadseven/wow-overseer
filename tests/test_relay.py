@@ -118,36 +118,24 @@ class FitSpoken(unittest.TestCase):
 
 
 def _insert_speak(written: list):
-    """bridge._insert_speak, compiled out of its source and run on a fake
-    connection: bridge.py itself cannot be imported here."""
-    import ast
-    import contextlib
-    import pathlib
+    """The spoken row through the orders interface: the same writer
+    bridge._insert_speak now calls, on a memory store. bridge.py itself
+    cannot be imported here."""
+    from _stub_modules import PYMYSQL, stub_modules
 
-    src = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
-    node = next(
-        n
-        for n in ast.walk(ast.parse(src))
-        if isinstance(n, ast.FunctionDef) and n.name == "_insert_speak"
-    )
+    with stub_modules(pymysql=PYMYSQL):
+        import orders
 
-    class Cursor:
-        lastrowid = 7
+    store = orders.MemoryStore()
 
-        def execute(self, sql, params):
-            written.append(params)
+    def insert(cmd):
+        order = orders.speak_order(cmd)
+        written.append(
+            (order.target, order.command, order.channel, order.target_arg, order.source)
+        )
+        return orders.send(store, order)
 
-    namespace = {
-        "relay": relay,
-        "_connect": lambda: contextlib.nullcontext(
-            type(
-                "Conn", (), {"cursor": lambda self: contextlib.nullcontext(Cursor())}
-            )()
-        ),
-    }
-    code = compile(ast.Module(body=[node], type_ignores=[]), "bridge.py", "exec")
-    exec(code, namespace)  # noqa: S102 - bridge.py's own source
-    return namespace["_insert_speak"]
+    return insert, store
 
 
 class TheCouncilLineFitsTheColumn(unittest.TestCase):
@@ -156,7 +144,8 @@ class TheCouncilLineFitsTheColumn(unittest.TestCase):
     def test_a_council_line_over_255_characters_is_written_to_fit(self):
         written = []
         cmd = relay.SpeakCommand("Grug", "party", LONG_LINE, "", "overseer:council")
-        _insert_speak(written)(cmd)
+        insert, store = _insert_speak(written)
+        row_id = insert(cmd)
         self.assertEqual(1, len(written))
         name, command, channel, whisper_to, source = written[0]
         self.assertLessEqual(len(command), 255)
@@ -165,6 +154,15 @@ class TheCouncilLineFitsTheColumn(unittest.TestCase):
             ("Grug", "party", "", "overseer:council"),
             (name, channel, whisper_to, source),
         )
+        self.assertEqual(1, len(store.rows))
+        row = store.rows[row_id]
+        self.assertEqual("Grug", row["target_name"])
+        self.assertEqual(relay.fit_spoken(LONG_LINE), row["command"])
+        self.assertLessEqual(len(row["command"]), 255)
+        self.assertEqual("chat", row["kind"])
+        self.assertEqual("party", row["channel"])
+        self.assertEqual("", row["target_arg"])
+        self.assertEqual("overseer:council", row["source"])
 
 
 class GmAllowlist(unittest.TestCase):

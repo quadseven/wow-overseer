@@ -1329,6 +1329,12 @@ def _broken_reason(
         return _refused_words(REFUSED_TURN_IN, words)
     if played < STALL_SECONDS or complete:
         return ""
+    if quest.id == 34 and quest.kills and not quest.fields:
+        return (
+            "its objectives did not move for 2 hours of play, and "
+            + quest.title
+            + " has no objective spawn to hunt"
+        )
     unsourced = (quest.kills or quest.items) and not quest.fields
     return STALLED_UNSOURCED if unsourced else STALLED
 
