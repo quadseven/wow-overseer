@@ -191,6 +191,13 @@ class TheBook(unittest.TestCase):
     def test_loot_read_resolves_creature_reference_tables(self):
         self.assertIn("reference_loot_template", classquest.LOOT_SQL)
 
+    def test_loot_read_resolves_quest_only_creature_items(self):
+        self.assertIn(
+            "SELECT qi.ItemId AS item, ct.entry AS entry", classquest.LOOT_SQL
+        )
+        self.assertIn("acore_world.creature_questitem qi", classquest.LOOT_SQL)
+        self.assertIn("ct.entry = qi.CreatureEntry", classquest.LOOT_SQL)
+
 
 class TheNextMove(unittest.TestCase):
     def move(self, m, b=None):
