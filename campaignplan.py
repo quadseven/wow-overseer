@@ -166,6 +166,24 @@ DOOR_KEYS = {
 }
 KEY_ITEMS = tuple(sorted({key for key, _name, _where in DOOR_KEYS.values()}))
 
+
+def door_lock(keyword: str):
+    """(item entry, the key, the run it comes from) that locks `keyword`'s run,
+    or None when nothing does.
+
+    A DOOR THAT IS ITS OWN KEY'S SOURCE IS NOT LOCKED (#1964). The Shadowforge
+    Key comes from inside Blackrock Depths (Dark Iron Legacy), so a lock on
+    that run would keep every family and guild run out of the one place the
+    key is earned, and nobody would ever carry it. The keyless run is the run
+    that earns it: it clears up to the Shadowforge gates. A key from another
+    wing (the Scarlet Key, the Crescent Key, the Key to the City) still locks.
+    """
+    need = DOOR_KEYS.get(keyword)
+    if need is None or need[2] == keyword:
+        return None
+    return need
+
+
 # Why a run is not offered, beyond council's door refusals.
 REFUSED_OUTGROWN = "outgrown"
 # A door the family keeps clearing and learns nothing from (#1400).
@@ -858,7 +876,7 @@ def _dry(dry: dict | None, keyword: str, level: int) -> str:
 
 def _locked(facts: Facts, run: Run) -> str:
     """Why the family cannot get through `run`'s door without a key, or ""."""
-    need = DOOR_KEYS.get(run.keyword)
+    need = door_lock(run.keyword)
     if need is None:
         return ""
     entry, name, where = need
