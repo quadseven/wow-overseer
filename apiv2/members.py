@@ -124,11 +124,16 @@ BOSS_SQL = (
     "SELECT MAX(id) FROM overseer_dungeon_run_event "
     "WHERE leader_name IN ({holes}) AND kind = %s GROUP BY leader_name)"
 )
+# The asker key is named because MySQL drops both keys for a long asker list
+# (every guild member) and reads the whole, never-pruned table: EXPLAIN type
+# ALL over 40k rows with a filesort. idx_asker (asker, created_at) is a range
+# that also serves the ORDER BY (#795).
 ASKS_SQL = (
     "SELECT asker, target, target_label, reason, state, UNIX_TIMESTAMP(created_at) AS at, "
     "(SELECT COUNT(*) FROM overseer_guild_answer an "
     "WHERE an.ask_id = overseer_guild_ask.id) AS yeses "
-    "FROM overseer_guild_ask WHERE kind = 'quest' AND asker IN ({holes}) "
+    "FROM overseer_guild_ask FORCE INDEX (idx_asker) "
+    "WHERE kind = 'quest' AND asker IN ({holes}) "
     "AND created_at > NOW() - INTERVAL %s DAY ORDER BY asker, created_at, id"
 )
 

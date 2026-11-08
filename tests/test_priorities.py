@@ -30,6 +30,20 @@ with stub_modules(pymysql=PYMYSQL):
 map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())
 
+
+# THE REORDER IS POSTED AS THE OPERATOR, WITH THE DEPLOYMENT'S SWITCH ON
+# (#1842); tests/test_operator_gate.py pins the off side.
+_OPERATOR_ON = mock.patch.dict("os.environ", {"OVERSEER_OPERATOR_ACTIONS": "1"})
+
+
+def setUpModule():
+    _OPERATOR_ON.start()
+
+
+def tearDownModule():
+    _OPERATOR_ON.stop()
+
+
 HERE = pathlib.Path(__file__).resolve().parent.parent
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")

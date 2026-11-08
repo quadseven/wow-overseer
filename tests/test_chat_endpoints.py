@@ -35,6 +35,21 @@ with stub_modules(pymysql=PYMYSQL):
 map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())
 
+
+# THESE SUITES POST AS THE OPERATOR, WITH THE DEPLOYMENT'S SWITCH ON (#1842).
+# map_server refuses the operator routes while OVERSEER_OPERATOR_ACTIONS is
+# off; tests/test_operator_gate.py pins that side.
+_OPERATOR_ON = mock.patch.dict("os.environ", {"OVERSEER_OPERATOR_ACTIONS": "1"})
+
+
+def setUpModule():
+    _OPERATOR_ON.start()
+
+
+def tearDownModule():
+    _OPERATOR_ON.stop()
+
+
 NOW = datetime(2026, 8, 21, 12, 0, 0)
 
 SNAPSHOT = {
