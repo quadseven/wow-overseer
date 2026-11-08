@@ -2264,6 +2264,11 @@ def has_slot_bucket(item) -> bool:
     return bool(gear.bucket_of(own_piece(item)))
 
 
+def slot_bucket(item) -> str:
+    """The gear.py slot bucket a carried piece fills ('' for one it cannot weigh)."""
+    return gear.bucket_of(own_piece(item)) or ""
+
+
 def holder_would_wear(item, character, level) -> tuple:
     """gear.would_wear for the holder's own piece, judged at `level`."""
     return gear.would_wear(own_piece(item), replace(character, level=int(level)))

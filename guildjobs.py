@@ -1991,11 +1991,13 @@ def vendor_stacks(member, kept, protected=frozenset()) -> list:
     """The stacks this member sells at the counter, priciest first, at most
     MAX_SALES: every one vendorsale lets go that overseer_keep does not hold."""
     judge = vendor_judge(member, protected)
+    second_best = vendorsale.redundant_upgrades(member.carried, judge)
     return sorted(
         (
             c
             for c in (member.carried or ())
-            if vendorsale.sells(c, judge) and not _kept(member.name, c, kept)
+            if (vendorsale.sells(c, judge) or int(c.guid) in second_best)
+            and not _kept(member.name, c, kept)
         ),
         key=lambda c: (-int(c.sell_price) * int(c.count), int(c.guid)),
     )[:MAX_SALES]
