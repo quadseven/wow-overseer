@@ -33,7 +33,8 @@ def _source(name):
 def _hold(jobs_now, keywords=("blackrock-depths",)):
     ns = {
         "_campaign_jobs": lambda names: frozenset(
-            jobs.dungeon_job(k) for k in keywords),
+            jobs.dungeon_job(k) for k in keywords
+        ),
         "_jobs_of": lambda names: {n: jobs_now for n in names},
         "_PACE_QUESTERS": set(),
     }
@@ -88,8 +89,10 @@ class TheBareDungeonJobIsNotTheCampaign(unittest.TestCase):
         self.assertFalse(_hold("dungeon:blackrock-depths")(NAMES))
 
     def test_the_second_queued_campaigns_job_is_armed_too(self):
-        hold = _hold("dungeon:lower-blackrock-spire",
-                     keywords=("blackrock-depths", "lower-blackrock-spire"))
+        hold = _hold(
+            "dungeon:lower-blackrock-spire",
+            keywords=("blackrock-depths", "lower-blackrock-spire"),
+        )
         self.assertFalse(hold(NAMES))
 
     def test_no_campaign_waiting_is_no_hold(self):
@@ -98,24 +101,25 @@ class TheBareDungeonJobIsNotTheCampaign(unittest.TestCase):
     def test_the_measured_family_takes_the_trip_under_the_hold(self):
         free = {"Bork": 12, "Grog": 12, "Grug": 6, "Og": 13, "Ugga": 7}
         sellable = {"Bork": 8, "Grog": 12, "Grug": 4, "Og": 6, "Ugga": 2}
-        self.assertFalse(
-            bag_pressure.family_town_run_needed(free, sellable=sellable))
+        self.assertFalse(bag_pressure.family_town_run_needed(free, sellable=sellable))
         self.assertTrue(bag_pressure.town_first_trip_worth(free, sellable))
 
 
 class TheCampaignJobsRead(unittest.TestCase):
     def test_each_keyword_becomes_its_dungeon_job(self):
-        got = _campaign_jobs([{"keyword": "blackrock-depths"},
-                              {"keyword": "lower-blackrock-spire"}])
-        self.assertEqual(got, frozenset({"dungeon:blackrock-depths",
-                                         "dungeon:lower-blackrock-spire"}))
+        got = _campaign_jobs(
+            [{"keyword": "blackrock-depths"}, {"keyword": "lower-blackrock-spire"}]
+        )
+        self.assertEqual(
+            got,
+            frozenset({"dungeon:blackrock-depths", "dungeon:lower-blackrock-spire"}),
+        )
 
     def test_an_unknown_keyword_writes_no_job(self):
         self.assertEqual(_campaign_jobs([{"keyword": "atlantis"}]), frozenset())
 
     def test_an_empty_keyword_is_the_bare_job(self):
-        self.assertEqual(_campaign_jobs([{"keyword": ""}]),
-                         frozenset({"dungeon"}))
+        self.assertEqual(_campaign_jobs([{"keyword": ""}]), frozenset({"dungeon"}))
 
 
 if __name__ == "__main__":
