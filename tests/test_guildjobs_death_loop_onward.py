@@ -151,7 +151,10 @@ class TheHearthAlone(unittest.TestCase):
     def test_a_member_at_the_cap_keeps_the_hearth_alone(self):
         m = bound_in_elwynn(level=guildlevel.LEVEL_CAP)
         step = guildjobs.death_loop_hearth(
-            m, loop_of(level=guildlevel.LEVEL_CAP), (), leveling(),
+            m,
+            loop_of(level=guildlevel.LEVEL_CAP),
+            (),
+            leveling(),
             guildroute.FAR_WALK_YARDS,
         )
         self.assertEqual([r.kind for r in step.rows], ["hearth"])
