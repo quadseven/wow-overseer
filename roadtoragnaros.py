@@ -6,8 +6,9 @@ is from a Molten Core attempt or which blocker keeps the most of the 40 seats
 back. This module folds reads that already exist into that answer.
 
 PURE: rows in, a dict out. It never touches the database. apiv2/ragnaros.py
-makes the reads (the goal read, the raidteams read, the Molten Core runs) and
-hands them here.
+makes the reads (the goal read, the raidteams read, the Molten Core runs, the
+guild's dungeon runs, the summoner and maintenance coverage and the per-seat
+class quest read) and hands them here.
 
 THE SEATS ARE THE 40 APPROVED SEATS. A seat with no member is open and fails
 every milestone; it is never filled with a guess. A seat whose value the realm
@@ -15,18 +16,20 @@ could not read is `unread` for that milestone: it counts as neither passing nor
 short.
 
 THE PERCENT OF A MILESTONE is seats passing over the seats that could be read
-(the 40, less the unread ones). A milestone nobody could read, or one this
-module has no small, correct read for, is `measured: false` with its reason.
+(the 40, less the unread ones). D counts dungeons out of the faction's ladder
+and G counts people out of the summoners and maintenance members; neither is a
+seat count. A milestone nobody could read is `measured: false` with its reason.
 
 THE TOTAL is the mean of those percents over the measured seat milestones
-(A, B, C, E, F). An unmeasured milestone is left out: it is not counted as
-passed and not as zero, and the total names the ones it left out. H, the
-attempt itself, is not a seat count and is not in the mean; the total is 100
-only when Ragnaros has fallen.
+(A, B, C, E, F), and nothing else. An unmeasured seat milestone is left out:
+it is not counted as passed and not as zero, and the total names the ones it
+left out. D and G are measured in their own units and stay out of the mean,
+as does H, the attempt itself; the total is 100 only when Ragnaros has fallen.
 """
 
 from __future__ import annotations
 
+import campaignplan
 import guildrun
 import raidrun
 import raidsupply
@@ -36,25 +39,19 @@ NAMES_SHOWN = 5
 
 LEVEL_A, LEVEL_B, LEVEL_C = 20, 40, 60
 
-KEY_NOT_MEASURED = {
-    "D": (
-        "the faction's classic dungeons cleared in level order: the ladder's "
-        "rungs depend on faction, level, keys and crossings, and no small read "
-        "of 'every one cleared' exists yet"
-    ),
-    "G": (
-        "repair and summoning coverage: the summoners and maintenance members "
-        "are not seats, and no read of their levels, skills or summon spell "
-        "exists yet"
-    ),
-}
+FACTION = dict(guildrun.LEGACY_GUILDS)
+
+# The summoner's threshold (guildjobs.RITUAL_LEVEL): Ritual of Summoning is
+# taught at 20, so a summoner under it cannot summon yet whatever else it
+# knows.
+SUMMON_LEVEL = 20
 
 MILESTONES = (
     ("A", "40 seats at level 20", "every seat filled, level 20 or higher"),
     (
         "B",
         "40 seats at level 40",
-        "level 40 or higher; class quests are not checked per seat",
+        "level 40 or higher with mandatory class quests rewarded",
     ),
     ("C", "40 seats at level 60", "level 60"),
     ("D", "Classic dungeons cleared in level order", "the faction's dungeons"),
@@ -112,6 +109,23 @@ def _level_test(floor: int):
         return None if level is None else int(level) >= floor
 
     return test
+
+
+def _level_and_quests(row):
+    """Level 40 with the seat's mandatory class quests rewarded.
+
+    `class_quests` is True when every reward group of the member's class is
+    rewarded (apiv2/ragnaros.py, from character_queststatus_rewarded and the
+    spells it knows), False when at least one is not, and None when the realm
+    could not answer the quest read.
+    """
+    if row["open"]:
+        return False
+    level = row["member"].get("level")
+    quests = row["member"].get("class_quests")
+    if level is None or quests is None:
+        return None
+    return int(level) >= LEVEL_B and bool(quests)
 
 
 def _attuned(row):
@@ -239,6 +253,22 @@ def _below(floor: int):
     return blockers
 
 
+def _b_blockers(failing):
+    """B's blockers: open seats, seats below 40 and seats that owe quests."""
+    out = _open_and_below(failing, LEVEL_B)
+    owe = [
+        r["label"]
+        for r in failing
+        if not r["open"]
+        and r["member"].get("level") is not None
+        and int(r["member"]["level"]) >= LEVEL_B
+        and r["member"].get("class_quests") is False
+    ]
+    if owe:
+        out.append(_blocker("class-quest", "mandatory class quests not rewarded", owe))
+    return out
+
+
 def _unattuned(failing):
     short = [r["label"] for r in failing if not r["open"]]
     if not short:
@@ -287,20 +317,149 @@ def attempts(runs: list | None) -> dict:
     }
 
 
-def _missing(key, label, rule, reason) -> dict:
+def _missing(key, label, rule, reason, unit="seats", want=None) -> dict:
     return {
         "key": key,
         "label": label,
         "rule": rule,
-        "unit": "seats",
+        "unit": unit,
         "have": None,
-        "want": SEATS,
+        "want": SEATS if want is None else want,
         "unread": None,
         "seats_short": None,
         "percent": None,
         "measured": False,
         "reason": reason,
         "blockers": [],
+    }
+
+
+def _ladder(guild: str) -> list:
+    """The faction's ladder: every door the faction runs, lowest band first."""
+    faction = FACTION.get(guild or "", "")
+    if not faction:
+        return []
+    doors = guildrun.GUILD_DOORS.get(faction) or frozenset()
+    return [r for r in campaignplan.RUNS if r.keyword in doors]
+
+
+def _cleared_wings(runs: list) -> set:
+    """Wings a guild run cleared with every boss down.
+
+    `cleared` alone does not say: the finder finishes a dungeon on its last
+    boss with side bosses standing (guildrun.every_boss_fell).
+    """
+    out = set()
+    for r in runs or ():
+        if str(r.get("outcome") or "") != guildrun.CLEARED:
+            continue
+        if not guildrun.every_boss_fell(
+            int(r.get("bosses_done") or 0), int(r.get("bosses_total") or 0)
+        ):
+            continue
+        wing = campaignplan.wing_of(str(r.get("keyword") or ""))
+        if wing:
+            out.add(wing)
+    return out
+
+
+def _dungeon_milestone(guild, label, rule, runs) -> dict:
+    """D: the faction's dungeons cleared, from the run table and the ladder."""
+    if runs is None:
+        return _missing(
+            "D",
+            label,
+            rule,
+            "the dungeon run table could not be read",
+            unit="dungeons",
+            want=0,
+        )
+    if not FACTION.get(guild or ""):
+        return _missing(
+            "D",
+            label,
+            rule,
+            "the guild's faction could not be read",
+            unit="dungeons",
+            want=0,
+        )
+    ladder = _ladder(guild)
+    cleared = _cleared_wings(runs)
+    missing = [
+        r.place for r in ladder if campaignplan.wing_of(r.keyword) not in cleared
+    ]
+    have = len(ladder) - len(missing)
+    out = {
+        "key": "D",
+        "label": label,
+        "rule": rule,
+        "unit": "dungeons",
+        "have": have,
+        "want": len(ladder),
+        "unread": 0,
+        "seats_short": len(missing),
+        "percent": round(100 * have / len(ladder)) if ladder else None,
+        "measured": bool(ladder),
+        "blockers": (
+            [_blocker("not-cleared", "not cleared in level order", missing)]
+            if missing
+            else []
+        ),
+    }
+    if not ladder:
+        out["measured"] = False
+        out["reason"] = "the guild's faction could not be read"
+    return out
+
+
+def _summoner_ready(row: dict) -> bool:
+    """Level 20 with Ritual of Summoning, as the summoner job reads it."""
+    level = row.get("level")
+    return bool(
+        level is not None and int(level) >= SUMMON_LEVEL and row.get("summon") is True
+    )
+
+
+def _maintenance_ready(row: dict) -> bool:
+    """Holds the engineering skill (skill 202): the repair hand."""
+    skill = row.get("engineering")
+    return skill is not None and int(skill) > 0
+
+
+def _coverage_milestone(label, rule, coverage) -> dict:
+    """G: summoner and maintenance coverage, with who is missing named."""
+    if coverage is None:
+        return _missing(
+            "G",
+            label,
+            rule,
+            "the coverage read could not be answered",
+            unit="people",
+            want=0,
+        )
+    summoners = [r for r in coverage if r.get("role") == "summoner"]
+    upkeep = [r for r in coverage if r.get("role") == "maintenance"]
+    no_summon = [str(r.get("name") or "") for r in summoners if not _summoner_ready(r)]
+    no_repair = [str(r.get("name") or "") for r in upkeep if not _maintenance_ready(r)]
+    want = len(summoners) + len(upkeep)
+    have = want - len(no_summon) - len(no_repair)
+    blockers = []
+    if no_summon:
+        blockers.append(_blocker("no-summon", "no summoner in place", no_summon))
+    if no_repair:
+        blockers.append(_blocker("no-repair", "no repair hand in place", no_repair))
+    return {
+        "key": "G",
+        "label": label,
+        "rule": rule,
+        "unit": "people",
+        "have": have,
+        "want": want,
+        "unread": 0,
+        "seats_short": len(no_summon) + len(no_repair),
+        "percent": round(100 * have / want) if want else None,
+        "measured": want > 0,
+        "blockers": blockers,
     }
 
 
@@ -334,7 +493,7 @@ def _total(rows: list) -> dict:
 
 SEAT_RULES = {
     "A": (_level_test(LEVEL_A), lambda f: _open_and_below(f, LEVEL_A)),
-    "B": (_level_test(LEVEL_B), _below(LEVEL_B)),
+    "B": (_level_and_quests, _b_blockers),
     "C": (_level_test(LEVEL_C), _below(LEVEL_C)),
     "E": (_attuned, _unattuned),
     "F": (_fire_and_supplies, _fire_blockers),
@@ -343,8 +502,6 @@ SEAT_RULES = {
 
 def _seat_milestone(key, label, rule, rows, stuck) -> dict:
     """One milestone: measured from the seats, or not measured with a reason."""
-    if key in KEY_NOT_MEASURED:
-        return _missing(key, label, rule, KEY_NOT_MEASURED[key])
     if not rows:
         return _missing(key, label, rule, "the seat read could not be answered")
     test, blockers = SEAT_RULES[key]
@@ -373,11 +530,30 @@ def _ragnaros(tries: dict) -> dict:
     }
 
 
-def build(guild: str, teams: dict | None, goal: dict | None, runs: list | None) -> dict:
-    """The /api/v2/ragnaros payload from the reads. Pure."""
+def build(
+    guild: str,
+    teams: dict | None,
+    goal: dict | None,
+    runs: list | None,
+    dungeons: list | None = None,
+    coverage: list | None = None,
+) -> dict:
+    """The /api/v2/ragnaros payload from the reads. Pure.
+
+    `dungeons` is the guild's run rows (overseer_guild_run) for D, and
+    `coverage` the summoner and maintenance rows for G; each is None when
+    its read could not be answered, leaving that milestone unmeasured.
+    """
     rows = _seat_rows(teams)
     stuck = (goal or {}).get("stuck")
-    out = [_seat_milestone(k, lb, r, rows, stuck) for k, lb, r in MILESTONES[:-1]]
+    out = []
+    for key, label, rule in MILESTONES[:-1]:
+        if key == "D":
+            out.append(_dungeon_milestone(guild, label, rule, dungeons))
+        elif key == "G":
+            out.append(_coverage_milestone(label, rule, coverage))
+        else:
+            out.append(_seat_milestone(key, label, rule, rows, stuck))
     tries = attempts(runs)
     out.append(_ragnaros(tries))
     total = _total(out)
