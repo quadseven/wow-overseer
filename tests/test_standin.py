@@ -42,6 +42,64 @@ FAMILY = {
 ROSTER = tuple(sorted(FAMILY))
 
 
+# Zug's family as the realm read it on 2026-11-07 (#2018): Zug tanks, Uzza
+# heals, and Zork is a feral druid whose talents play tank and damage.
+DRUID, SHAMAN, ORC, TROLL, TAUREN = 11, 7, 2, 8, 6
+FERAL = (
+    "16862,16930,16941,16943,16949,16968,16975,17004,17007,24866,33852,"
+    "33866,33873,33917,34300,48495,48532,49377,57877,57881,61336"
+)
+ZUG_ROWS = {
+    "Zug": row(
+        "Zug",
+        55,
+        WARRIOR,
+        race=ORC,
+        guild_name="Bonkers",
+        talent_spells=PROTECTION,
+        has_shield=1,
+    ),
+    "Uzza": row(
+        "Uzza", 55, PRIEST, race=TROLL, guild_name="Bonkers", talent_spells=HOLY
+    ),
+    "Oz": row("Oz", 54, MAGE, race=TROLL, guild_name="Bonkers"),
+    "Zrog": row("Zrog", 55, SHAMAN, race=ORC, guild_name="Bonkers"),
+    "Zork": row(
+        "Zork", 54, DRUID, race=TAUREN, guild_name="Bonkers", talent_spells=FERAL
+    ),
+}
+ZUG = {n: guildrun.member_from_row(r) for n, r in ZUG_ROWS.items()}
+ZUG_ROSTER = tuple(sorted(ZUG))
+BRD = next(d for d in guildrun.doors() if d.keyword == "blackrock-depths")
+FROSTY = row("Frosty", 55, MAGE, race=ORC, guild_name="Bonkers")
+WHY = (
+    "Zork has been in combat without moving for 45 minute(s), 10602 yards from the head"
+)
+
+
+def zug_facts(**over):
+    """Zug's family at Blackrock Depths on a stranded pass, Zork stranded."""
+    others = [m for n, m in sorted(ZUG.items()) if n != "Zork"]
+    base = dict(
+        family="Zug",
+        leader="Zug",
+        ordered="Zork",
+        roster=ZUG_ROSTER,
+        out_member=ZUG["Zork"],
+        family_levels=tuple(m.level for m in others),
+        guild="Bonkers",
+        faction="Horde",
+        door=BRD,
+        candidates=(guildrun.member_from_row(FROSTY),),
+        every_family=frozenset(ZUG_ROSTER),
+        stranded=WHY,
+        stranded_pass=True,
+        seats_held=frozenset(standin.seat_of(m) for m in others),
+    )
+    base.update(over)
+    return standin.Facts(**base)
+
+
 def facts(**over):
     """Grug's family at the Deadmines, Og ordered out, three guildmates free."""
     base = dict(
@@ -829,6 +887,119 @@ class TheGuestIsBusyForTheGuild(unittest.TestCase):
         )
 
 
+# --- a member frozen in a far fight (#2018) -------------------------------------------
+
+
+class AStrandedMemberSitsOut(unittest.TestCase):
+    """wow-dev, 2026-11-07: Zork stood in Tanaris about 10,600 yards from Zug,
+    at full health and in combat with two Rabid Blisterpaws, unmoved for
+    hours; the dungeon finder waited on him ("a member is dead, in combat or
+    away") and Zug's family never started Blackrock Depths."""
+
+    HEAD = standin.Spot(1, 1600.0, -4400.0)
+    ZORK = standin.Spot(1, -8800.0, -2430.0, in_combat=True)
+
+    def test_a_far_unmoving_fight_past_the_bound_is_stranded(self):
+        anchor = standin.anchor_after(None, self.ZORK, self.HEAD, 1000.0)
+        self.assertEqual(1000.0, anchor.since)
+        later = standin.anchor_after(
+            anchor, standin.Spot(1, -8810.0, -2425.0, True), self.HEAD, 3000.0
+        )
+        self.assertEqual(anchor, later, "a few yards of jitter keeps the clock")
+        why = standin.stranded_why("Zork", later, self.ZORK, self.HEAD, 3000.0)
+        self.assertIn("Zork has been in combat without moving for 33 minute(s)", why)
+        self.assertIn("yards from the head", why)
+
+    def test_under_the_bound_is_not_yet_stranded(self):
+        anchor = standin.anchor_after(None, self.ZORK, self.HEAD, 1000.0)
+        self.assertEqual(
+            "", standin.stranded_why("Zork", anchor, self.ZORK, self.HEAD, 2000.0)
+        )
+
+    def test_a_fight_beside_the_family_is_not_far(self):
+        near = standin.Spot(1, 1650.0, -4400.0, in_combat=True)
+        self.assertIsNone(standin.anchor_after(None, near, self.HEAD, 0.0))
+
+    def test_out_of_combat_or_unread_is_never_stranded(self):
+        walking = standin.Spot(1, -8800.0, -2430.0, in_combat=False)
+        self.assertIsNone(standin.anchor_after(None, walking, self.HEAD, 0.0))
+        self.assertIsNone(standin.anchor_after(None, self.ZORK, None, 0.0))
+
+    def test_a_member_that_moved_starts_a_new_clock(self):
+        anchor = standin.Anchor(1, -8800.0, -2430.0, 0.0)
+        moved = standin.Spot(1, -8700.0, -2430.0, in_combat=True)
+        self.assertEqual(
+            5000.0, standin.anchor_after(anchor, moved, self.HEAD, 5000.0).since
+        )
+
+    def test_another_map_is_far(self):
+        self.assertTrue(
+            standin.far_from(standin.Spot(0, 1600.0, -4400.0, True), self.HEAD)
+        )
+
+    def test_zork_sits_out_and_a_guildmate_takes_a_damage_seat(self):
+        step = standin.step(zug_facts())
+        self.assertEqual(standin.SEAT, step.action)
+        self.assertEqual(
+            ("Zug", "Zork", "Frosty", "dps"),
+            (step.seat.family, step.seat.out_name, step.seat.in_name, step.seat.seat),
+        )
+        self.assertTrue(standin.is_stranded(step.seat), step.seat.reason)
+        self.assertIn("blackrock-depths", step.seat.reason)
+
+    def test_the_open_seat_is_the_one_the_family_lacks(self):
+        self.assertEqual(
+            standin.DPS, standin.open_seat(ZUG["Zork"], {"tank", "healer", "dps"})
+        )
+        self.assertEqual(
+            standin.TANK, standin.open_seat(ZUG["Zork"], {"healer", "dps"})
+        )
+
+    def test_not_stranded_writes_nothing(self):
+        step = standin.step(zug_facts(stranded="", ordered=""))
+        self.assertEqual(standin.NONE, step.action)
+
+    def test_no_door_seats_nobody(self):
+        self.assertEqual(standin.NONE, standin.step(zug_facts(door=None)).action)
+
+    def test_the_head_is_never_sat_out(self):
+        self.assertEqual(standin.NONE, standin.step(zug_facts(ordered="Zug")).action)
+
+    def test_no_guest_still_lets_the_others_go(self):
+        step = standin.step(zug_facts(candidates=()))
+        self.assertEqual((standin.SEAT, ""), (step.action, step.seat.in_name))
+        self.assertTrue(standin.is_stranded(step.seat))
+
+    def _row(self, in_name="Frosty"):
+        return standin.Seat("Zug", "Zork", in_name, "dps", standin.STRANDED_MARK + WHY)
+
+    def test_the_row_is_kept_while_he_stays_in_the_fight(self):
+        step = standin.step(zug_facts(current=self._row()))
+        self.assertEqual(standin.KEEP, step.action)
+
+    def test_out_of_the_fight_he_rejoins_between_runs(self):
+        step = standin.step(zug_facts(current=self._row(), stranded=""))
+        self.assertEqual(standin.CLEAR, step.action)
+
+    def test_out_of_the_fight_mid_run_the_guest_keeps_the_seat(self):
+        step = standin.step(zug_facts(current=self._row(), stranded="", mid_run=True))
+        self.assertEqual(standin.KEEP, step.action)
+
+    def test_a_lost_guest_keeps_the_row_stranded(self):
+        step = standin.step(zug_facts(current=self._row(), candidates=()))
+        self.assertEqual(standin.SEAT, step.action)
+        self.assertTrue(standin.is_stranded(step.seat), step.seat.reason)
+
+    def test_a_crafters_row_with_no_order_is_cleared(self):
+        crafter = standin.Seat("Zug", "Oz", "", "dps", "Oz crafts")
+        step = standin.step(zug_facts(current=crafter, stranded="", ordered=""))
+        self.assertEqual(standin.CLEAR, step.action)
+
+    def test_no_crafting_turn_is_recorded(self):
+        f = zug_facts(now=5000.0)
+        self.assertIsNone(standin.next_turn(f, standin.step(f)))
+
+
 # --- the bridge pass -------------------------------------------------------------------
 
 
@@ -882,9 +1053,14 @@ class TheBridgePass(unittest.TestCase):
         fetch_turns=None,
         note_turn=None,
         said=None,
+        spots=None,
+        anchors=None,
+        pending=None,
+        fams=None,
     ):
         written, jobs_told, lines = [], [], []
         self.noted = []
+        self.memo = []
         gfacts = _guild_facts()
         if guild_rows is not None:
             gfacts["rows"] = list(guild_rows)
@@ -894,11 +1070,12 @@ class TheBridgePass(unittest.TestCase):
             return mid_run
 
         this._mid_run = fake_mid_run
-        pending = {
+        pending = pending or {
             "Grug": [{"id": 1, "keyword": "deadmines", "status": "active"}],
             "Zug": [{"id": 2, "keyword": "ragefire", "status": "active"}],
         }
         members = {n: row(n, m.level, m.class_id) for n, m in FAMILY.items()}
+        members.update(ZUG_ROWS)
         log = types.SimpleNamespace(
             info=lambda msg, *a: lines.append(msg % a),
             exception=lambda msg, *a: lines.append("EXC " + (msg % a)),
@@ -927,6 +1104,10 @@ class TheBridgePass(unittest.TestCase):
                 ),
                 _STANDIN_SAID=said if said is not None else {},
                 _fetch_standin_turns=fetch_turns or (lambda: dict(turns or {})),
+                _fetch_strand_spots=lambda names: dict(spots or {}),
+                _fetch_strand_anchors=lambda: dict(anchors or {}),
+                _memo_upsert=lambda *a: self.memo.append(("put",) + a[:2]),
+                _memo_delete=lambda *a: self.memo.append(("del",) + a[:2]),
                 _note_standin_turn=note_turn
                 or (
                     lambda family, turn: self.noted.append(
@@ -935,7 +1116,7 @@ class TheBridgePass(unittest.TestCase):
                 ),
             ),
         ):
-            fams = asyncio.run(this._standin_pass(pending, _fams(leader_job)))
+            fams = asyncio.run(this._standin_pass(pending, fams or _fams(leader_job)))
         return fams, written, jobs_told, lines
 
     def test_og_sits_out_a_guest_is_written_and_og_goes_to_craft(self):
@@ -1152,6 +1333,91 @@ class TheBridgePass(unittest.TestCase):
         with mock.patch.object(bridge, "_memo_read", lambda kind: memo):
             got = bridge._fetch_standin_turns()
         self.assertEqual({"Grug": standin.Turn("Og", standin.FAMILY, 1000.0)}, got)
+
+    def _zug_pass(self, **kw):
+        now = time.time()
+        spots = {
+            "Zug": standin.Spot(1, 1600.0, -4400.0),
+            "Zork": standin.Spot(1, -8800.0, -2430.0, in_combat=True),
+            "Uzza": standin.Spot(1, -3236.0, 2491.0),
+        }
+        anchors = {"Zork": standin.Anchor(1, -8800.0, -2430.0, now - 3600)}
+        pending = {
+            "Zug": [{"id": 136, "keyword": "blackrock-depths", "status": "active"}],
+        }
+        fams = {
+            "Zug": {
+                "leader": {"name": "Zug", "job": "dungeon:blackrock-depths"},
+                "names": ["Oz", "Uzza", "Zork", "Zrog", "Zug"],
+            }
+        }
+        args = dict(
+            order="",
+            spots=spots,
+            anchors=anchors,
+            pending=pending,
+            fams=fams,
+            guild_rows=(FROSTY,),
+        )
+        args.update(kw)
+        return self.run_pass(**args)
+
+    def test_zork_frozen_far_away_sits_out_and_a_guildmate_stands_in(self):
+        fams, written, jobs_told, lines = self._zug_pass()
+        self.assertEqual(
+            [("Zug", standin.SEAT, ("Zug", "Zork", "Frosty", "dps"))],
+            [
+                (family, action, (s.family, s.out_name, s.in_name, s.seat))
+                for family, action, s in written
+            ],
+        )
+        self.assertTrue(written[0][2].reason.startswith(standin.STRANDED_MARK))
+        self.assertNotIn("Zork", fams["Zug"]["names"])
+        self.assertEqual(4, len(fams["Zug"]["names"]))
+        self.assertEqual(frozenset({"Zork"}), bridge._STANDIN_OUT)
+        self.assertEqual(frozenset({"Frosty"}), bridge._STANDIN_GUESTS)
+        self.assertEqual([("Zork", "quest", standin.SOURCE)], jobs_told)
+        self.assertEqual([], self.noted, "no crafting turn for a stranded member")
+        self.assertTrue(
+            any("Zork sits out, Frosty stands in" in line for line in lines), lines
+        )
+
+    def test_a_fresh_far_fight_only_starts_the_clock(self):
+        fams, written, jobs_told, _ = self._zug_pass(anchors={})
+        self.assertEqual([], written)
+        self.assertIn("Zork", fams["Zug"]["names"])
+        self.assertEqual([("put", bridge.STANDIN_STRAND_MEMO, "Zork")], self.memo)
+
+    def test_out_of_the_fight_his_row_ends_and_he_rejoins(self):
+        row_ = standin.Seat("Zug", "Zork", "Frosty", "dps", standin.STRANDED_MARK + WHY)
+        spots = {
+            "Zug": standin.Spot(1, 1600.0, -4400.0),
+            "Zork": standin.Spot(1, -8800.0, -2430.0, in_combat=False),
+        }
+        fams, written, jobs_told, lines = self._zug_pass(
+            rows={"Zug": row_}, spots=spots
+        )
+        self.assertEqual([("Zug", standin.CLEAR, None)], written)
+        self.assertIn("Zork", fams["Zug"]["names"])
+        self.assertEqual(
+            [("Zork", "dungeon:blackrock-depths", standin.SOURCE)], jobs_told
+        )
+        self.assertEqual([("del", bridge.STANDIN_STRAND_MEMO, "Zork")], self.memo)
+
+    def test_a_failed_stranded_read_leaves_his_row(self):
+        row_ = standin.Seat("Zug", "Zork", "Frosty", "dps", standin.STRANDED_MARK + WHY)
+
+        def boom(*a, **kw):
+            raise RuntimeError("snapshot gone")
+
+        with mock.patch.object(bridge, "_standin_stranded", boom):
+            fams, written, _, _ = self._zug_pass(rows={"Zug": row_})
+        self.assertEqual([], written)
+        self.assertNotIn("Zork", fams["Zug"]["names"])
+
+    def test_a_craft_order_wins_over_a_stranded_member(self):
+        _, written, _, _ = self._zug_pass(order="Zug:Oz")
+        self.assertNotIn("Zork", [s.out_name for _, _, s in written if s])
 
     def test_the_queue_pass_runs_it_before_anything_drives_a_family(self):
         import ast

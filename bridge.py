@@ -21994,8 +21994,18 @@ class Bridge(discord.Client):
         asked = standin.orders()
         try:
             rows = await asyncio.to_thread(_fetch_standin_rows)
-            if asked or rows:
-                seated = await self._standin_families(asked, rows, pending, fams)
+            # A MEMBER FROZEN IN A FAR FIGHT (#2018), for every family with no
+            # craft order: who is stranded now. A failed read judges nobody.
+            try:
+                stranded = await asyncio.to_thread(
+                    _standin_stranded, pending, fams, asked, rows)
+            except Exception:
+                log.exception("standin: the stranded read failed; nobody is "
+                              "judged stranded this pass")
+                stranded = None
+            if asked or rows or stranded:
+                seated = await self._standin_families(asked, rows, pending, fams,
+                                                      stranded)
             else:
                 seated = {}
             _STANDIN_OUT = frozenset(s.out_name for s in seated.values())
@@ -22007,8 +22017,11 @@ class Bridge(discord.Client):
                 for key, fam in fams.items()}
 
     async def _standin_families(self, asked: dict, rows: dict, pending: dict,
-                                fams: dict) -> dict:
-        """Step every family with an order or a row; family -> the seat it holds."""
+                                fams: dict, stranded=None) -> dict:
+        """Step every family with an order, a row or a stranded member
+        (#2018); family -> the seat it holds. `stranded` is family ->
+        (member, why) from _standin_stranded, or None when it was not read,
+        which leaves every stranded row exactly as it stands."""
         gfacts = await asyncio.to_thread(_fetch_guild_run_facts, guildrun.limits())
         doors = {d.keyword: d for d in guildrun.doors(gfacts["finder_floors"])}
         candidates = tuple(m for m in map(guildrun.member_from_row, gfacts["rows"]) if m)
@@ -22023,16 +22036,28 @@ class Bridge(discord.Client):
             log.exception("standin: the turns could not be read; none is judged this pass")
             turns = {}
         now = time.time()
-        for key in sorted(set(asked) | set(rows)):
+        strand_keys = set(stranded or {}) | (
+            {k for k, r in rows.items() if standin.is_stranded(r)} if stranded is not None
+            else set())
+        for key in sorted(set(asked) | set(rows) | (strand_keys - set(asked))):
             # In a guild run, or the guest of another family (this pass's
             # seats included); never busy by its own family's row.
             busy = set(gfacts["in_runs"]) | {s.in_name for f, s in seated.items()
                                              if f != key and s.in_name}
+            if stranded is None and key not in asked and standin.is_stranded(rows.get(key)):
+                # The stranded read failed: the stranded row stands as it is.
+                continue
             try:
-                facts = await self._standin_facts(
-                    key, asked.get(key, ""), rows.get(key), pending.get(key) or [],
-                    fams.get(key), dict(gfacts, busy=busy), doors, candidates)
-                facts = dataclasses.replace(facts, turn=turns.get(key), now=now)
+                if key in asked or key not in strand_keys:
+                    facts = await self._standin_facts(
+                        key, asked.get(key, ""), rows.get(key), pending.get(key) or [],
+                        fams.get(key), dict(gfacts, busy=busy), doors, candidates)
+                    facts = dataclasses.replace(facts, turn=turns.get(key), now=now)
+                else:
+                    name, why = (stranded or {}).get(key, ("", ""))
+                    facts = await self._standin_stranded_facts(
+                        key, name, why, rows.get(key), pending.get(key) or [],
+                        fams.get(key), dict(gfacts, busy=busy), doors, candidates)
                 step = standin.step(facts)
                 await asyncio.to_thread(_write_standin, key, step)
                 turn = standin.next_turn(facts, step)
@@ -22058,8 +22083,42 @@ class Bridge(discord.Client):
                 log.info("standin: %s: %s", campaignqueue._family(key), step.why)
             _STANDIN_SAID[key] = step.why
             if key in seated and not facts.mid_run:
-                await asyncio.to_thread(_standin_crafts, seated[key].out_name, key)
+                if standin.is_stranded(seated[key]):
+                    await asyncio.to_thread(_standin_quests, seated[key].out_name, key)
+                else:
+                    await asyncio.to_thread(_standin_crafts, seated[key].out_name, key)
         return seated
+
+    async def _standin_stranded_facts(self, key: str, name: str, why: str, current,
+                                      rows: list, fam, gfacts: dict, doors: dict,
+                                      candidates: tuple):
+        """standin.Facts for a stranded pass (#2018): `name` is the stranded
+        member (or the member of the stranded row standing), `why` says why it
+        is stranded now, "" once it is not. Reads only."""
+        roster = tuple(fam["names"]) if fam else ()
+        leader = str(fam["leader"].get("name") or "") if fam else ""
+        name = name or (current.out_name if current is not None else "")
+        out_member, levels, guild, faction, held = None, (), "", "", frozenset()
+        if name and name in roster:
+            read = await asyncio.to_thread(_fetch_standin_members, list(roster))
+            members = {n: guildrun.member_from_row(r) for n, r in read.items()}
+            others = [m for n, m in sorted(members.items()) if m is not None and n != name]
+            levels = tuple(m.level for m in others)
+            held = frozenset(standin.seat_of(m) for m in others)
+            head = members.get(key) or members.get(leader)
+            guild = head.guild if head is not None else ""
+            faction = guildrun.faction_of([m for m in members.values() if m is not None])
+            out_member = members.get(name)
+        door = _standin_door(rows, doors)
+        mid_run = bool(roster and await self._mid_run(list(roster)))
+        return standin.Facts(
+            family=key, leader=leader, ordered=name, roster=roster,
+            out_member=out_member, family_levels=levels, guild=guild, faction=faction,
+            door=door, candidates=candidates, busy=frozenset(gfacts["busy"]),
+            resting=frozenset(gfacts["resting"]), benched=frozenset(gfacts["benched"]),
+            owed=frozenset(_class_owed_names(self)),
+            every_family=frozenset(gfacts["family"]), mid_run=mid_run, current=current,
+            stranded=why, stranded_pass=True, seats_held=held)
 
     async def _note_turn(self, key: str, turn) -> None:
         """Record a family's new turn. A failed write is logged and the pass
@@ -27099,6 +27158,109 @@ def _standin_crafts(name: str, family: str) -> None:
     if _standin_tell(name, craft.MODE, time.monotonic()):
         log.info("standin: %s goes to job=%s while its family runs (was %s)",
                  name, craft.MODE, job or "none")
+
+
+def _standin_quests(name: str, family: str) -> None:
+    """Put a stranded member sitting out on job='quest', its own job, between
+    runs (#2018): it leaves its family's campaign and plays on where it is."""
+    job = str(_standing_jobs(family).get(name) or "").strip()
+    if job == "quest":
+        return
+    if _standin_tell(name, "quest", time.monotonic()):
+        log.info("standin: %s goes to job=quest while its family runs without it "
+                 "(was %s)", name, job or "none")
+
+
+# THE STRANDED CLOCK (#2018), one memo per member: where its far, unmoving
+# fight began and when, in wall time, so a bridge restart (every ship) does
+# not start the thirty minutes over. A day outlives any such fight worth
+# judging; the next reading rewrites or deletes it.
+STANDIN_STRAND_MEMO = "standin_strand"
+STANDIN_STRAND_MEMO_SECONDS = 24 * 3600
+_STRAND_SPOT_SQL = (
+    "SELECT name, map_id, pos_x, pos_y, in_combat FROM overseer_snapshot "
+    "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 60 SECOND"
+)
+
+
+def _fetch_strand_spots(names: list) -> dict:
+    """name -> standin.Spot for each name the snapshot holds fresh."""
+    if not names:
+        return {}
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_STRAND_SPOT_SQL % ",".join(["%s"] * len(names)), list(names))
+        rows = cur.fetchall()
+    return {str(r["name"]): standin.Spot(int(r["map_id"]), float(r["pos_x"]),
+                                        float(r["pos_y"]), bool(r["in_combat"]))
+            for r in rows}
+
+
+def _fetch_strand_anchors() -> dict:
+    """name -> standin.Anchor, from the memo store."""
+    anchors = {}
+    for name, (value, since) in _memo_read(STANDIN_STRAND_MEMO).items():
+        try:
+            anchors[name] = standin.Anchor(int(value["map"]), float(value["x"]),
+                                           float(value["y"]), float(since))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return anchors
+
+
+def _standin_stranded(pending: dict, fams: dict, asked: dict, rows: dict) -> dict:
+    """family -> (member, why) for every family with no craft order that has a
+    door queued or a stranded row standing (standin.py, #2018).
+
+    A member whose stranded row stands stays stranded while it is in combat
+    far from the head, or unread (offline: no less in the way); a new one
+    must have been in a far fight without moving for standin.STRANDED_SECONDS.
+    `why` is "" for a row whose member is no longer stranded. Writes the
+    members' anchors to the memo store as it reads them."""
+    now = time.time()
+    out = {}
+    anchors = None
+    for key, fam in sorted(fams.items()):
+        if key in asked:
+            continue
+        current = rows.get(key)
+        door = any(str(r.get("keyword") or "") and not raidrun.is_raid(str(r.get("keyword")))
+                   for r in pending.get(key) or [])
+        if not door and not standin.is_stranded(current):
+            continue
+        names = list(fam.get("names") or [])
+        leader = str((fam.get("leader") or {}).get("name") or key)
+        spots = _fetch_strand_spots(names)
+        head = spots.get(leader)
+        if anchors is None:
+            anchors = _fetch_strand_anchors()
+        best = None
+        for name in names:
+            if name in (key, leader):
+                continue
+            prev = anchors.get(name)
+            anchor = standin.anchor_after(prev, spots.get(name), head, now)
+            if anchor is None and prev is not None:
+                _memo_delete(STANDIN_STRAND_MEMO, name)
+            elif anchor is not None and anchor != prev:
+                _memo_upsert(STANDIN_STRAND_MEMO, name,
+                             {"map": anchor.map_id, "x": anchor.x, "y": anchor.y},
+                             anchor.since, anchor.since + STANDIN_STRAND_MEMO_SECONDS)
+            why = standin.stranded_why(name, anchor, spots.get(name), head, now)
+            if why and (best is None or anchor.since < best[2]):
+                best = (name, why, anchor.since)
+        if standin.is_stranded(current):
+            name = current.out_name
+            spot = spots.get(name)
+            if spot is None or head is None:
+                why = "%s is not read in the world" % name
+            elif spot.in_combat and standin.far_from(spot, head):
+                why = "%s is still in combat, %s" % (name, standin.far_from(spot, head))
+            else:
+                why = ""
+            out[key] = (name, why)
+        elif best is not None:
+            out[key] = (best[0], best[1])
+    return out
 
 
 def _standin_rejoin(family: str, name: str, fam) -> None:
