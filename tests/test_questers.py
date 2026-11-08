@@ -977,20 +977,21 @@ class Broken(unittest.TestCase):
         reason = next(reason for qid, reason in self.found if qid == 8)
         self.assertIn("questers cannot buy items from vendors", reason)
 
-    def test_quest_64_the_forgotten_heirloom_has_specific_stall_reason(self):
-        # Quest 64 "The Forgotten Heirloom" in Westfall (level 12) requires an
-        # item that no spawned creature drops. The quest has items but no
-        # fields (no spawns of creatures that drop the required item), so it
-        # would be STALLED_UNSOURCED. We add a specific reason explaining why.
+    def test_quest_64_the_forgotten_heirloom_stall_names_no_invented_cause(self):
+        # Quest 64 (The Forgotten Heirloom) once carried a hard-coded reason:
+        # it needs item 1449 (Furlbrow's Deed), which only gameobject loot
+        # 270 (Furlbrow's Wardrobe) holds, not a creature. With no field for
+        # its objective in this fixture, the generic unsourced stall is the
+        # only reason the catalogue supports.
         heirloom = quest(64, WESTFALL, 12, title="The Forgotten Heirloom")
-        heirloom.update(item1=1234, item_count1=1)  # requires item 1234
+        heirloom.update(item1=1449, item_count1=1)  # requires item 1449
         cat = world(
             extra_quests=[heirloom],
             extra_givers=[
                 giver(64, "start", 1064, 164, 0, 0),
                 giver(64, "end", 1064, 164, 0, 0),
             ],
-            # No spawns that drop item 1234 -> no fields for this quest
+            # No spawns that drop item 1449 -> no fields for this quest
         )
         member = mirra(
             level=12,
@@ -998,7 +999,7 @@ class Broken(unittest.TestCase):
             quest_log={64: questers.STATUS_INCOMPLETE},
             quests_done=frozenset({20, 21}),
             quest_progress={64: 0},
-            quest_objectives={64: {1234: 0}},
+            quest_objectives={64: {1449: 0}},
         )
         clock = questers.Clock()
         # First pass - quest is not yet stalled
@@ -1009,12 +1010,11 @@ class Broken(unittest.TestCase):
         # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
         for i in range(1, 13):
             p = questers.plan(cat, member, clock, 600.0 * i)
-        # After 2 hours of play - quest should be stalled with specific reason
+        # After 2 hours of play the quest stalls
         self.assertEqual(len(p.broken), 1)
         self.assertEqual(p.broken[0].quest, 64)
-        # Should have a specific reason, not just STALLED_UNSOURCED
-        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
-        self.assertIn("Forgotten Heirloom", p.broken[0].reason)
+        # The reason is the one the catalogue proves, never a per-quest claim.
+        self.assertEqual(questers.STALLED_UNSOURCED, p.broken[0].reason)
 
     def test_quest_91_solomons_law_stall_names_no_invented_cause(self):
         # Quest 91 (Solomon's Law) once carried a hard-coded reason that the
