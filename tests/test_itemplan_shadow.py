@@ -11,9 +11,12 @@ import sys
 import unittest
 from types import SimpleNamespace
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+import itemplan  # noqa: E402
 import itemplan_shadow as shadow  # noqa: E402
+from test_guildsocial_bridge import bridge  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
@@ -85,15 +88,130 @@ class AdapterTest(unittest.TestCase):
         self.assertFalse(shadow.give_enabled({"ITEMPLAN_GIVE": "off"}))
         self.assertTrue(shadow.give_enabled({"ITEMPLAN_GIVE": "on"}))
 
+    def test_disenchant_route_has_an_independent_switch(self):
+        self.assertFalse(shadow.disenchant_enabled({}))
+        self.assertFalse(shadow.disenchant_enabled({"ITEMPLAN_DISENCHANT": "off"}))
+        self.assertTrue(shadow.disenchant_enabled({"ITEMPLAN_DISENCHANT": "on"}))
+
     def test_give_executor_uses_the_plan_and_existing_gift_writer(self):
         start = BRIDGE.index("    async def _itemplan_give(")
-        end = BRIDGE.index("    async def _clearance_plan(", start)
+        end = BRIDGE.index("    async def _itemplan_disenchant(", start)
         executor = BRIDGE[start:end]
         self.assertIn("itemplan_shadow.give_enabled()", executor)
         self.assertIn("decision.route != itemplan.GIVE", executor)
         self.assertIn("not stack.tradable", executor)
         self.assertIn("await self._write_guild_gifts(gifts)", executor)
         self.assertIn("_run_itemplan_give(", BRIDGE)
+
+    def test_disenchant_executor_uses_the_plan_and_acts_where_protection_keeps_stack(
+        self,
+    ):
+        start = BRIDGE.index("    async def _itemplan_disenchant(")
+        end = BRIDGE.index("    async def _clearance_plan(", start)
+        executor = BRIDGE[start:end]
+        self.assertIn("itemplan_shadow.disenchant_enabled()", executor)
+        self.assertIn("decision.route != itemplan.DISENCHANT", executor)
+        self.assertIn("decision.confirm", executor)
+        self.assertIn("stack.name in OWNER_KEEPS", executor)
+        self.assertIn("guid in sold_guids", executor)
+        self.assertIn("_KEEP.blocks(", executor)
+        self.assertIn("_insert_disenchant", executor)
+        self.assertIn("_run_itemplan_disenchant(", BRIDGE)
+        self.assertIn('"disenchant"', BRIDGE)
+
+    def test_disenchant_route_execution_logic(self):
+        """Proof: A DISENCHANT row writes a command to the queue when enabled.
+
+        Fixture citation:
+        Stored rows from overseer_command:
+          SELECT id, target_name, command, kind, target_arg, source, status, created_at
+          FROM overseer_command WHERE kind = 'disenchant' AND source = 'economy'
+          AND status = 'delivered';
+        """
+        import asyncio
+        from unittest.mock import patch
+
+        # When disabled, does not execute reads or writes
+        with patch.object(shadow, "disenchant_enabled", return_value=False):
+            with patch.object(bridge, "_itemplan_reads") as mock_reads:
+                bridge_obj = bridge.Bridge.__new__(bridge.Bridge)
+                asyncio.run(bridge_obj._itemplan_disenchant(["Ana"], "Fam", [], {}))
+                mock_reads.assert_not_called()
+
+        # When enabled, processes DISENCHANT decisions
+        disenchant_decision = SimpleNamespace(
+            route=itemplan.DISENCHANT,
+            confirm=False,
+            key=("Ana", 1, 7777, 0),
+            holder="Ana",
+            count=1,
+        )
+        fake_plan = SimpleNamespace(decisions=[disenchant_decision])
+        fake_report = SimpleNamespace(plan=fake_plan)
+        fake_stack = SimpleNamespace(key=("Ana", 1, 7777, 0), name="Plain Green Cloak")
+
+        rows = [row("Ana", 4, 7777, "Plain Green Cloak", quality=2, item_class=4)]
+
+        with (
+            patch.object(shadow, "disenchant_enabled", return_value=True),
+            patch.object(
+                bridge,
+                "_itemplan_reads",
+                return_value=SimpleNamespace(templates={}, instance_soulbound={}),
+            ),
+            patch.object(shadow, "shadow", return_value=fake_report),
+            patch.object(shadow, "build_stacks", return_value=[fake_stack]),
+            patch.object(bridge, "_recent_disenchant_keys", return_value=set()),
+            patch.object(bridge, "_insert_disenchant", return_value=1) as mock_insert,
+            patch.object(bridge._KEEP, "blocks", return_value=False),
+        ):
+            bridge_obj = bridge.Bridge.__new__(bridge.Bridge)
+
+            # 1. Normal execution writes command
+            asyncio.run(
+                bridge_obj._itemplan_disenchant(["Ana"], "Fam", rows, {"Ana": 5})
+            )
+            mock_insert.assert_called_once_with("Ana", "disenchant guid:4 count:1")
+
+            # 2. Protection: item in OWNER_KEEPS is not disenchanted
+            mock_insert.reset_mock()
+            with patch.object(bridge, "OWNER_KEEPS", {"Plain Green Cloak"}):
+                asyncio.run(
+                    bridge_obj._itemplan_disenchant(["Ana"], "Fam", rows, {"Ana": 5})
+                )
+                mock_insert.assert_not_called()
+
+            # 3. Protection: item already sold is not disenchanted
+            mock_insert.reset_mock()
+            sold = [{"item_guid": 4}]
+            asyncio.run(
+                bridge_obj._itemplan_disenchant(
+                    ["Ana"], "Fam", rows, {"Ana": 5}, sales=sold
+                )
+            )
+            mock_insert.assert_not_called()
+
+            # 4. Protection: item blocked by _KEEP is not disenchanted
+            mock_insert.reset_mock()
+            with patch.object(bridge._KEEP, "blocks", return_value=True):
+                asyncio.run(
+                    bridge_obj._itemplan_disenchant(["Ana"], "Fam", rows, {"Ana": 5})
+                )
+                mock_insert.assert_not_called()
+
+    def test_build_stacks_reads_required_disenchant_skill(self):
+        r = [row("Oz", 101, 5001, "Boots", quality=2, item_class=4)]
+        templates = {
+            5001: {
+                "subclass": 1,
+                "bonding": 1,
+                "req_level": 10,
+                "item_level": 15,
+                "required_disenchant_skill": 1,
+            }
+        }
+        stacks = shadow.build_stacks(r, templates=templates)
+        self.assertEqual(stacks[0].disenchant_skill, 1)
 
     def test_rows_become_stacks_and_members(self):
         rows, gear, worn, free = fixture()

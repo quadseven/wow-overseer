@@ -31,6 +31,7 @@ class ItemTemplates(unittest.TestCase):
             "required_skill_rank": 225,
             "container_slots": 14,
             "fire_res": 12,
+            "required_disenchant_skill": 25,
             "stat_type1": 4,
             "stat_value1": 5,
             "armor": 80,
@@ -50,6 +51,7 @@ class ItemTemplates(unittest.TestCase):
                     "required_skill_rank": 225,
                     "container_slots": 14,
                     "fire_res": 12,
+                    "required_disenchant_skill": 25,
                     "stats": {
                         "strength": 5,
                         "armor": 80,

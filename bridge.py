@@ -345,7 +345,7 @@ def _connect():
 # disposal writers below do not ask it to (keep.py says why). The kinds whose
 # rows move an item off its holder, for the writers that also carry other
 # kinds.
-_DISPOSAL_KINDS = frozenset({"sell", "give", "trade", "mail", "auction", "guild"})
+_DISPOSAL_KINDS = frozenset({"sell", "give", "trade", "mail", "auction", "guild", "disenchant"})
 
 
 def _fetch_keep():
@@ -13554,6 +13554,14 @@ class Bridge(discord.Client):
         await globals().get(
             "_run_itemplan_give", skip_itemplan_give
         )(itemplan_give, names, leader, rows, free_slots, gear_rows, worn)
+        itemplan_disenchant = getattr(self, "_itemplan_disenchant", None)
+        async def skip_itemplan_disenchant(*args):
+            return None
+
+        await globals().get(
+            "_run_itemplan_disenchant", skip_itemplan_disenchant
+        )(itemplan_disenchant, names, leader, rows, free_slots, gear_rows, worn,
+          tuple(gear_sales) + lock_sales + clear_sales)
 
         # A CAMPAIGN WITHHELD FOR BAG SPACE STILL SELLS (#225); see
         # `_vendor_pass_mode`.
@@ -14784,6 +14792,58 @@ class Bridge(discord.Client):
             ))
         if gifts:
             await self._write_guild_gifts(gifts)
+
+    async def _itemplan_disenchant(self, names: list, family: str, rows: list,
+                                   free_slots: dict, gear_rows=(), worn_rows=(),
+                                   sales=()) -> None:
+        """Carry out DISENCHANT rows when ITEMPLAN_DISENCHANT is enabled."""
+        if not itemplan_shadow.disenchant_enabled():
+            return
+        extras = await asyncio.to_thread(
+            _itemplan_reads, names, family, rows, gear_rows, worn_rows)
+        report = await asyncio.to_thread(
+            itemplan_shadow.shadow, names, family, rows, free_slots,
+            gear_rows=gear_rows, worn_rows=worn_rows, extras=extras)
+        if report is None:
+            return
+        stacks = itemplan_shadow.build_stacks(
+            rows, gear_rows, extras.templates, extras.instance_soulbound)
+        by_key = {stack.key: stack for stack in stacks}
+        row_by_key = {}
+        indexes = {}
+        for row in rows:
+            holder = str(row["holder"])
+            index = indexes.get(holder, 0)
+            indexes[holder] = index + 1
+            row_by_key[(holder, 1, int(row["entry"]), index)] = row
+        seen = await asyncio.to_thread(_recent_disenchant_keys, GIVE_RETRY_MINUTES)
+        sold_guids = {
+            int(r["item_guid"]) for r in sales
+            if isinstance(r, dict) and "item_guid" in r
+        } | {
+            getattr(s, "item_guid", 0) for s in sales
+            if hasattr(s, "item_guid")
+        }
+        for decision in report.plan.decisions:
+            if decision.route != itemplan.DISENCHANT or decision.confirm:
+                continue
+            stack = by_key.get(decision.key)
+            row = row_by_key.get(decision.key)
+            if stack is None or row is None or stack.name in OWNER_KEEPS:
+                continue
+            guid = int(row.get("item_guid", 0))
+            if guid <= 0 or guid in sold_guids:
+                continue
+            command = "disenchant guid:%d count:%d" % (guid, max(1, decision.count))
+            if (decision.holder, command) in seen:
+                continue
+            if _KEEP.blocks(decision.holder, command):
+                continue
+            inserted = await asyncio.to_thread(
+                _insert_disenchant, decision.holder, command
+            )
+            if inserted:
+                seen.add((decision.holder, command))
 
     async def _clearance_plan(self, names: list, leader: str,
                               auction_open: bool = False) -> tuple:
@@ -29219,6 +29279,17 @@ async def _run_itemplan_give(itemplan_give, names, family, rows, free_slots,
         await itemplan_give(names, family, rows, free_slots, gear_rows, worn_rows)
 
 
+async def _run_itemplan_disenchant(itemplan_disenchant, names, family, rows,
+                                   free_slots, gear_rows, worn_rows,
+                                   sales=()) -> None:
+    """Call the disenchant executor when this economy pass exposes it."""
+    if itemplan_disenchant is not None:
+        await itemplan_disenchant(
+            names, family, rows, free_slots, gear_rows=gear_rows,
+            worn_rows=worn_rows, sales=sales,
+        )
+
+
 def _shadow_itemplan(*args, **facts) -> None:
     """The economy pass's one call into the item plan shadow (#1972).
 
@@ -30699,6 +30770,43 @@ def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
                     "%s from %s to %s needs a newer worldserver image",
                     verb, gift.count, gift.item, gift.holder, gift.taker,
                 )
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
+def _recent_disenchant_keys(minutes: int) -> set:
+    """(holder, command) pairs already proposed inside the window."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, command FROM overseer_command "
+                "WHERE kind = 'disenchant' AND created_at > NOW() - INTERVAL %s MINUTE",
+                (int(minutes),),
+            )
+            return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return set()
+            raise
+
+
+def _insert_disenchant(holder: str, command: str, source: str = "economy") -> int:
+    """Queue one carried gear stack for the enchanter's disenchant verb."""
+    if _KEEP.blocks(holder, command):
+        log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, holder)
+        return 0
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, 'disenchant', '', %s)",
+                (holder, command, source),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1146, 1265):
+                log.warning("disenchant command unavailable on this world image")
                 return 0
             raise
         return cur.lastrowid or 0

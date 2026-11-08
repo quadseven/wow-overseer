@@ -48,6 +48,7 @@ log = logging.getLogger("wow-overseer.itemplan")
 
 ENV_SWITCH = "ITEMPLAN_SHADOW"
 GIVE_ENV_SWITCH = "ITEMPLAN_GIVE"
+DISENCHANT_ENV_SWITCH = "ITEMPLAN_DISENCHANT"
 PREFIX = "itemplan:"
 # Seconds between full detail for a member whose plan has not changed.
 REFRESH_SECONDS = 30 * 60
@@ -104,6 +105,13 @@ def give_enabled(environ=None) -> bool:
     """On only when ITEMPLAN_GIVE says so; independent of shadow logging."""
     env = os.environ if environ is None else environ
     raw = str(env.get(GIVE_ENV_SWITCH, "") or "").strip().lower()
+    return raw in ("on", "1", "true", "yes")
+
+
+def disenchant_enabled(environ=None) -> bool:
+    """On only when ITEMPLAN_DISENCHANT says so; independent of shadow logging."""
+    env = os.environ if environ is None else environ
+    raw = str(env.get(DISENCHANT_ENV_SWITCH, "") or "").strip().lower()
     return raw in ("on", "1", "true", "yes")
 
 
@@ -197,6 +205,11 @@ def build_stacks(rows, gear_rows=(), templates=None, instance_soulbound=None) ->
         raw_item_level = g.get("item_level")
         if raw_item_level is None:
             raw_item_level = t.get("item_level")
+        raw_de = (
+            g.get("required_disenchant_skill")
+            if g.get("required_disenchant_skill") is not None
+            else t.get("required_disenchant_skill")
+        )
         index = seen.get(holder, 0)
         seen[holder] = index + 1
         out.append(
@@ -220,6 +233,7 @@ def build_stacks(rows, gear_rows=(), templates=None, instance_soulbound=None) ->
                 container_slots=t.get("container_slots"),
                 fire_res=t.get("fire_res"),
                 soulbound=soulbound,
+                disenchant_skill=raw_de,
             )
         )
     return out
