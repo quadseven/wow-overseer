@@ -119,27 +119,38 @@ FOUGHT = frozenset({"wipe", "complete", "left", "emptied", "stalled"})
 CLIENT_LOST = "client_lost"
 ATTEMPTED = FOUGHT | {"evacuated", CLIENT_LOST}
 EMPTIED = "emptied"
-# AN EMPTIED RUN THAT NEVER HAD TIME TO FIGHT (#2035). On wow-dev 2026-11-08
-# the finder took Zug's family into Blackrock Depths and the module had them
-# all back outside three seconds later; run 1644239 ended `emptied` one second
-# after it opened, with no encounter, and the pace read it as "1 fought, 1
-# without a clear" and stepped the family down on its way back. An `emptied`
-# run shorter than this met nothing, like a staging or reset failure, and
-# counts for nothing; a longer one keeps counting as fought.
-EMPTIED_UNFOUGHT_SECONDS = 120
+STALLED = "stalled"
+SPLIT_FAILED = "split_failed"
+# A RUN THAT NEVER HAD TIME TO FIGHT IS A NON-ENTRY (#2035, #2092). On wow-dev
+# 2026-11-08 the finder took Zug's family into Blackrock Depths and the module
+# had them all back outside three seconds later; run 1644239 ended `emptied`
+# one second after it opened, with no encounter, and the pace read it as "1
+# fought, 1 without a clear" and stepped the family down on its way back. The
+# same evening Grug's operator order for the same dungeon was cancelled
+# because run 1676285 reopened five seconds after a split failure and ended
+# `stalled` 65 seconds later: it never got in, yet it was the second stall
+# running. A run that ended `emptied`, `stalled` or `split_failed` within this
+# long of its start met nothing, like a staging or reset failure, and counts
+# for nothing, neither as a fight nor as a stall; a longer one keeps counting.
+NON_ENTRY_SECONDS = 180
+NON_ENTRY_OUTCOMES = frozenset({EMPTIED, STALLED, SPLIT_FAILED})
 
 
-def _never_fought(run: dict) -> bool:
-    """An `emptied` run that ended within EMPTIED_UNFOUGHT_SECONDS of its start."""
-    if str(run.get("outcome") or "") != EMPTIED:
+def never_fought(run: dict) -> bool:
+    """A run that ended `emptied`, `stalled` or `split_failed` inside
+    NON_ENTRY_SECONDS of its start."""
+    if str(run.get("outcome") or "") not in NON_ENTRY_OUTCOMES:
         return False
     started, ended = run.get("started_at"), run.get("ended_at")
     if started is None or ended is None:
         return False
     try:
-        return (ended - started).total_seconds() < EMPTIED_UNFOUGHT_SECONDS
+        return (ended - started).total_seconds() < NON_ENTRY_SECONDS
     except (TypeError, AttributeError):
         return False
+
+
+_never_fought = never_fought
 
 
 WIPE = "wipe"
