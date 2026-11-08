@@ -111,6 +111,30 @@ FOUGHT = frozenset({"wipe", "complete", "left", "emptied", "stalled"})
 # A spelling with a space matched no row, so a lost client never counted.
 CLIENT_LOST = "client_lost"
 ATTEMPTED = FOUGHT | {"evacuated", CLIENT_LOST}
+EMPTIED = "emptied"
+# AN EMPTIED RUN THAT NEVER HAD TIME TO FIGHT (#2035). On wow-dev 2026-11-08
+# the finder took Zug's family into Blackrock Depths and the module had them
+# all back outside three seconds later; run 1644239 ended `emptied` one second
+# after it opened, with no encounter, and the pace read it as "1 fought, 1
+# without a clear" and stepped the family down on its way back. An `emptied`
+# run shorter than this met nothing, like a staging or reset failure, and
+# counts for nothing; a longer one keeps counting as fought.
+EMPTIED_UNFOUGHT_SECONDS = 120
+
+
+def _never_fought(run: dict) -> bool:
+    """An `emptied` run that ended within EMPTIED_UNFOUGHT_SECONDS of its start."""
+    if str(run.get("outcome") or "") != EMPTIED:
+        return False
+    started, ended = run.get("started_at"), run.get("ended_at")
+    if started is None or ended is None:
+        return False
+    try:
+        return (ended - started).total_seconds() < EMPTIED_UNFOUGHT_SECONDS
+    except (TypeError, AttributeError):
+        return False
+
+
 WIPE = "wipe"
 COMPLETE = "complete"
 
@@ -383,6 +407,7 @@ def viability(runs, map_id: int, since=None, world_started_at=None) -> Viability
         for r in runs or ()
         if int(r.get("map_id") or 0) == int(map_id)
         and str(r.get("outcome") or "") in FOUGHT
+        and not _never_fought(r)
         and not _ended_by_restart(r, world_started_at)
         and (since is None or r.get("started_at") is None or r["started_at"] >= since)
     ]
@@ -397,6 +422,7 @@ def viability(runs, map_id: int, since=None, world_started_at=None) -> Viability
         for r in runs or ()
         if int(r.get("map_id") or 0) == int(map_id)
         and str(r.get("outcome") or "") in ATTEMPTED
+        and not _never_fought(r)
         and not _ended_by_restart(r, world_started_at)
         and (since is None or r.get("started_at") is None or r["started_at"] >= since)
     ]
@@ -1201,6 +1227,7 @@ def first_fight_after(runs, map_id: int, since) -> str:
         if (
             int(r.get("map_id") or 0) == int(map_id)
             and str(r.get("outcome") or "") in FOUGHT
+            and not _never_fought(r)
             and r.get("started_at") is not None
             and r["started_at"] >= since
         ):

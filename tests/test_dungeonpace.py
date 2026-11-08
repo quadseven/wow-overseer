@@ -986,3 +986,54 @@ def replace_gates(f, gates, notes):
     from dataclasses import replace
 
     return replace(f, gates=gates, notes=notes)
+
+
+# #2035: an `emptied` run over in a second never met the dungeon. On wow-dev
+# 2026-11-08 run 1644239 (Blackrock Depths, map 230) opened 04:10:57 and ended
+# `emptied` 04:10:58, and the pace stepped Zug's family down for it.
+class AnEmptiedRunThatNeverFoughtCountsForNothing(unittest.TestCase):
+    BRD_MAP = pace.campaignplan.BY_KEYWORD["blackrock-depths"].map_id
+
+    def emptied(self, seconds, outcome="emptied"):
+        start = T0 + timedelta(minutes=5)
+        return {
+            "map_id": self.BRD_MAP,
+            "outcome": outcome,
+            "started_at": start,
+            "ended_at": start + timedelta(seconds=seconds),
+        }
+
+    def test_a_one_second_emptied_run_is_not_fought(self):
+        v = pace.viability([self.emptied(1)], self.BRD_MAP)
+        self.assertEqual(0, v.fought)
+        self.assertEqual(0, v.uncleared_streak)
+        self.assertEqual(
+            "", pace.first_fight_after([self.emptied(1)], self.BRD_MAP, T0)
+        )
+
+    def test_so_a_return_is_not_stepped_down_for_it(self):
+        rows = [dict(r, level=52) if r["name"] == "Og" else r for r in BRD_FAMILY]
+        row = head("blackrock-depths")
+        f = facts(row, members(rows), runs=[self.emptied(1)], level_rows=rows)
+        f = replace_returned(f)
+        self.assertEqual((), f.gates)
+        d = pace.decide(f)
+        self.assertEqual(pace.NOTHING, d.kind, d)
+        self.assertNotIn("beat the family again", d.why)
+
+    def test_a_long_emptied_run_and_a_stall_still_count(self):
+        bound = pace.EMPTIED_UNFOUGHT_SECONDS
+        for run in (self.emptied(bound), self.emptied(1, "stalled")):
+            v = pace.viability([run], self.BRD_MAP)
+            self.assertEqual(1, v.fought, run)
+            self.assertEqual(1, v.uncleared_streak, run)
+
+    def test_a_run_with_no_end_time_counts_as_before(self):
+        run = dict(self.emptied(1), ended_at=None)
+        self.assertEqual(1, pace.viability([run], self.BRD_MAP).fought)
+
+
+def replace_returned(f):
+    from dataclasses import replace
+
+    return replace(f, returned=True)
