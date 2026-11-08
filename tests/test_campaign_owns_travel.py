@@ -304,9 +304,19 @@ class WhatTheBridgeHandsBack(unittest.TestCase):
         got = slot.campaign_release(now=townslot.LEASE_SECONDS, **ask)
         self.assertEqual(MAILBOX, got.aim)
         slot.released_for_campaign(got, True)
-        # Re-armed by whoever owned it: never handed back a second time.
+        # Re-armed by whoever owned it: not handed back a second time at the
+        # lease. A new stand waits a full orphan lease (#2087); an aim the
+        # module re-arms and then never reaches is not held for ever.
         self.assertIsNone(slot.campaign_release(now=5000.0, **ask))
-        self.assertIsNone(slot.campaign_release(now=9000.0, **ask))
+        self.assertIsNone(
+            slot.campaign_release(
+                now=5000.0 + townslot.ORPHAN_LEASE_SECONDS - 1.0, **ask
+            )
+        )
+        again = slot.campaign_release(
+            now=5000.0 + townslot.ORPHAN_LEASE_SECONDS, **ask
+        )
+        self.assertEqual(MAILBOX, again.aim)
 
     def test_never_an_aim_the_economy_cannot_release(self):
         slot = townslot.Slot(releasable=economy)
@@ -382,6 +392,8 @@ class FakeWorld:
         self.phase_reads = []
         self.releases = []
         self.learn_releases = []
+        self.stop_releases = []
+        self.learn_pending = False
         # `bridge._TOWN_FIRST_SINCE`: when the queue first held this family.
         self.town_first_since = {}
         self.writes = []
@@ -426,6 +438,14 @@ class FakeWorld:
     def town_first_hold(self, names):
         """`_town_first_hold`: a campaign waits and nobody carries its job."""
         return bool(self.pending()) and not self.job.startswith("dungeon")
+
+    def release_stop(self, name, aim):
+        """`_release_weapon_training_aim`: a stop goes, unless a learn waits."""
+        self.stop_releases.append((name, aim))
+        if self.learn_pending or self.column.get(name) != aim:
+            return False
+        self.column[name] = ""
+        return True
 
     def release_learn(self, name):
         self.learn_releases.append(name)
@@ -473,7 +493,7 @@ def _bridge_self(world, clock, log):
             "ATTUNE_CLAIMANT": "attunement",
             "WEAPON_SKILL_CLAIMANT": "weapon master",
             "_is_weapon_training_route": lambda _aim: False,
-            "_release_weapon_training_aim": lambda *_args: False,
+            "_release_weapon_training_aim": world.release_stop,
             "TOWN_SLOT_GATHER_LEASE_SECONDS": townslot.GATHER_LEASE_SECONDS,
             "TOWN_SLOT_FLIGHT_LEASE_SECONDS": townslot.GATHER_LEASE_SECONDS,
             "GEAR_HOUSE_CLAIMANT": "gear house",
@@ -511,6 +531,55 @@ def _bridge_self(world, clock, log):
 
 def _queue_pass(me, world):
     asyncio.run(me._campaign_owns_travel(world.pending(), world.fams()))
+
+
+class AStaleTrainingStopOnTheLeader(unittest.TestCase):
+    """#2087: the module's `trainer:1228` stood 17 hours behind the campaign."""
+
+    STOP = "trainer:1228"
+
+    def setUp(self):
+        self.world = FakeWorld(column=self.STOP)
+        self.clock, self.log = Clock(), _Log()
+        self.me = _bridge_self(self.world, self.clock, self.log)
+
+    def test_it_is_left_alone_inside_the_orphan_lease(self):
+        for now in (0.0, 600.0, townslot.ORPHAN_LEASE_SECONDS - 1.0):
+            self.clock.now = now
+            _queue_pass(self.me, self.world)
+        self.assertEqual(self.STOP, self.world.column["Zug"])
+        self.assertEqual([], self.world.stop_releases)
+
+    def test_it_is_handed_back_after_the_lease_and_the_line_says_how_long(self):
+        self.clock.now = 0.0
+        _queue_pass(self.me, self.world)
+        self.clock.now = townslot.ORPHAN_LEASE_SECONDS
+        _queue_pass(self.me, self.world)
+        self.assertEqual("", self.world.column["Zug"], self.log.lines)
+        self.assertEqual([("Zug", self.STOP)], self.world.stop_releases)
+        self.assertEqual([], self.world.releases)
+        line = [l for l in self.log.lines if "handed Zug" in l][0]
+        self.assertIn("after it stood 1200s", line)
+        self.assertIn("released=True", line)
+
+    def test_a_pending_learn_keeps_it(self):
+        self.world.learn_pending = True
+        self.clock.now = 0.0
+        _queue_pass(self.me, self.world)
+        self.clock.now = townslot.ORPHAN_LEASE_SECONDS
+        _queue_pass(self.me, self.world)
+        self.assertEqual(self.STOP, self.world.column["Zug"])
+        self.assertIn("released=False", " ".join(self.log.lines))
+
+    def test_the_campaigns_own_ground_aim_is_not_taken_early(self):
+        world = FakeWorld(column="at:209:1190.3,840.6,8.9")
+        me = _bridge_self(world, self.clock, self.log)
+        self.clock.now = 0.0
+        _queue_pass(me, world)
+        self.clock.now = townslot.LEASE_SECONDS - 1.0
+        _queue_pass(me, world)
+        self.assertEqual("at:209:1190.3,840.6,8.9", world.column["Zug"])
+        self.assertEqual([], world.stop_releases)
 
 
 class TheLiveSequence(unittest.TestCase):

@@ -492,6 +492,27 @@ class Decision:
         return self.verdict in (SLOT_TAKE, SLOT_PREEMPT)
 
 
+TRAINING_STOP_PREFIX = "trainer:"
+# How long an orphan training stop may stand unchanged before it is handed back
+# (#2087): the orphan lease, the module's own 20 minute travel backstop.
+STALE_STOP_SECONDS = ORPHAN_LEASE_SECONDS
+
+
+def is_training_stop_aim(aim) -> bool:
+    """Whether `aim` is a module training stop, `trainer:<creature entry>` (#2087).
+
+    The module's leader intent writes it when a family's learns need a
+    trainer. A bare decimal is a different aim (a vendor entry the craft
+    supply pass writes), and the `profession trainer` keyword is a standing
+    learn plan that carries `learn_skill`: neither is matched here.
+    """
+    text = str(aim or "")
+    if not text.startswith(TRAINING_STOP_PREFIX):
+        return False
+    entry = text[len(TRAINING_STOP_PREFIX):]
+    return entry.isascii() and entry.isdecimal() and int(entry) > 0
+
+
 def lease_for(
     holder: Holder | None,
     lease: float = LEASE_SECONDS,
@@ -1161,7 +1182,24 @@ def _held_column(
     allowed = lease_for(holder, lease, orphan_lease, long_leases)
     owner = holder.claimant or "an unknown writer"
 
-    if not releasable(holder.aim):
+    # A STALE TRAINING STOP IS THE ONE UNTOUCHABLE AIM WITH AN END (#2087). The
+    # module writes `trainer:<entry>` itself, and a stop it cannot walk (a
+    # trainer 829 yards off behind ground it cannot prove) stood 17 hours with
+    # nobody handing it back, so every pass waited "no lease applies to it".
+    # Only an ORPHAN is eligible, and only on the orphan lease: legitimate
+    # stops end by themselves in at most about 11 minutes (the dev realm's
+    # 89 stops over two days: longest 674s), far inside 1200s. The bridge
+    # hands it back through a compare-and-swap that still refuses a live
+    # `learn_skill`, so the lease can only ever clear a stop, never a learn.
+    # The bound is its own constant and is not the `orphan_lease` argument:
+    # an urgent ask zeroes that one, and urgency must never take a stop.
+    stale_stop = (
+        not holder.claimant
+        and is_training_stop_aim(holder.aim)
+        and held_for >= STALE_STOP_SECONDS
+    )
+
+    if not releasable(holder.aim) and not stale_stop:
         # NOT OURS TO HAND BACK, SO NOT OURS TO TAKE. A profession trainer
         # errand is a standing plan that outlives a town run and carries
         # `learn_skill` with it; blanking one is mod-overseer#438's bug, and
@@ -1634,7 +1672,7 @@ class Slot:
             restarted the Horde head's trip each time and the run waited on
             every restart. Left alone for ever, it deadlocked instead (#1452),
             so one that has stood unchanged for the orphan lease is handed
-            back once for that stand (`_stale_keyword_orphan`);
+            back once for that stand (`_stale_orphan`);
           * an ORPHAN ground aim (one this process does not remember writing,
             which is every aim after a restart) is handed back only after it
             has stood unchanged for `LEASE_SECONDS`, and only once per aim.
@@ -1642,12 +1680,21 @@ class Slot:
             on its next poll and says so at WARN; once per aim string bounds
             that to one re-arm per point per process.
 
-        A trainer aim is not `releasable` and is not answered here: the bridge
-        hands that one back through its own compare-and-swap.
+        A `profession trainer` keyword aim is not `releasable` and is not
+        answered here: the bridge hands that one back through its own
+        compare-and-swap. A module training stop (`trainer:<entry>`) that
+        stood unchanged for the orphan lease is answered here (#2087).
         """
         self.holder = _reconcile(self.holder, leader=leader, column=column, now=now)
         holder = self.holder
-        if holder is None or not self.releasable or not self.releasable(holder.aim):
+        if holder is None or not self.releasable:
+            return None
+        if not holder.claimant and is_training_stop_aim(holder.aim):
+            # A CAMPAIGN NEVER WRITES A TRAINING STOP (its own aims are
+            # `at:`, `repair` and `trigger:` ones), so a stop that has stood
+            # unchanged for the orphan lease is the module's, dead (#2087).
+            return self._stale_orphan(holder, now)
+        if not self.releasable(holder.aim):
             return None
         if self.stop_live(now) is not None:
             # A SHORT TOWN STOP THE CAMPAIGN ITSELF ALLOWED is not handed back
@@ -1656,14 +1703,33 @@ class Slot:
         if holder.claimant:
             return holder
         if not ground(holder.aim):
-            return self._stale_keyword_orphan(holder, now)
-        if holder.aim in self._yielded or now - holder.since < self.lease:
+            return self._stale_orphan(holder, now)
+        stand = (holder.aim, holder.since)
+        if stand in self._yielded:
+            return None
+        # THE FIRST HAND-BACK OF AN AIM STRING WAITS `LEASE_SECONDS`; A LATER
+        # STAND OF THE SAME STRING WAITS THE ORPHAN LEASE (#2087). Once per
+        # aim string for ever meant a point the module re-armed after the
+        # hand-back (an `at:` aim on the dev realm, 03:53Z to past 05:48Z) was
+        # never handed back again. A new stand needs a fresh clock that has
+        # run the full orphan lease, which is the module's own travel
+        # backstop, so a coordinator's staging walk that re-arms is not
+        # restarted every few minutes; an aim that changes starts a new clock.
+        if holder.aim in self._yielded:
+            if now - holder.since < self.orphan_lease:
+                return None
+        elif now - holder.since < self.lease:
             return None
         self._yielded.add(holder.aim)
+        self._yielded.add(stand)
         return holder
 
-    def _stale_keyword_orphan(self, holder: Holder, now: float) -> Holder | None:
-        """A keyword orphan that has outlived the orphan lease, once per stand.
+    def _stale_orphan(self, holder: Holder, now: float) -> Holder | None:
+        """A keyword or training-stop orphan past the orphan lease, once per stand.
+
+        The training stop (`trainer:<entry>`, #2087) rides the same bound as
+        the keyword: both are aims the module writes and gives up on without
+        clearing the column.
 
         THE LEFT-TO-ITS-WRITER RULE (#265) HAD NO END, AND BOTH SIDES WAITED
         (#1452). A bridge restart forgets which pass wrote a `vendor` aim, so

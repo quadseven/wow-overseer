@@ -9877,9 +9877,13 @@ class Bridge(discord.Client):
                     decision.release.character, decision.release.aim,
                 )
             else:
+                # A STALE ORPHAN TRAINING STOP (#2087) is handed back through
+                # the learn-safe swap; every other aim keeps the economy fence.
                 released = await asyncio.to_thread(
-                    _release_trade_errand, decision.release.character,
-                    decision.release.aim,
+                    _release_weapon_training_aim
+                    if townslot.is_training_stop_aim(decision.release.aim)
+                    else _release_trade_errand,
+                    decision.release.character, decision.release.aim,
                 )
             if not released:
                 # Not a failure, and not a reason to stop. The column changed
@@ -9968,8 +9972,10 @@ class Bridge(discord.Client):
             log.debug("%s", townslot.report(decision))
             return True
         released = await asyncio.to_thread(
-            _release_trade_errand, decision.release.character,
-            decision.release.aim,
+            _release_weapon_training_aim
+            if townslot.is_training_stop_aim(decision.release.aim)
+            else _release_trade_errand,
+            decision.release.character, decision.release.aim,
         )
         slot.settle(decision, released, now)
         if released:
@@ -23185,12 +23191,17 @@ class Bridge(discord.Client):
             log.info("town slot: %s carries %r, which is not a bridge errand "
                      "this pass may hand back yet", leader, column)
             return
-        released = await asyncio.to_thread(_release_trade_errand, leader,
-                                           holder.aim)
+        # A STALE ORPHAN TRAINING STOP (#2087) goes through the learn-safe
+        # swap, which refuses a pending learn; the rest keep the economy fence.
+        released = await asyncio.to_thread(
+            _release_weapon_training_aim
+            if townslot.is_training_stop_aim(holder.aim)
+            else _release_trade_errand, leader, holder.aim)
         slot.released_for_campaign(holder, released)
         log.warning("town slot: handed %s's %r (%s) back so the campaign can "
-                    "stage (released=%s)", leader, holder.aim,
-                    holder.claimant or "an unknown writer", released)
+                    "stage, after it stood %ds (released=%s)", leader,
+                    holder.aim, holder.claimant or "an unknown writer",
+                    int(time.monotonic() - holder.since), released)
 
     async def _set_queue(self, d: core.QueueDirective, channel) -> None:
         """Set, clear or read a family's queue from the overseer's channel.
