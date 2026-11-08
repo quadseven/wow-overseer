@@ -573,6 +573,10 @@ class Carried:
     # item_instance.flags & 1: soulbound, so no guildmate, mail or bank can
     # take it (vendorsale.py judges a bound rare piece as the member's own).
     bound: bool = False
+    # A class-12 stack that an open quest still names, or that starts a quest
+    # the holder has not been rewarded (bag_pressure.QUEST_NEEDED_SQL). A row
+    # that does not say is kept: only an explicit False lets the stack go.
+    quest_needed: bool = True
 
     @property
     def material(self) -> str:
@@ -7538,6 +7542,7 @@ def carried_from_rows(rows) -> dict:
                 inventory_type=_int(row.get("inventory_type")),
                 allowable_class=_int(row.get("allowable_class"), -1),
                 bound=bool(_int(row.get("bound"))),
+                quest_needed=bool(_int(row.get("quest_needed"), 1)),
             )
         )
     return {k: tuple(v) for k, v in out.items()}

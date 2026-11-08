@@ -31,6 +31,10 @@ THE RULE (`verdict`), the first line that applies:
     tool, a Soul Shard, what the member's
     own trade casts eat)
   * grey                                     sell
+  * a white or grey quest item no quest in   sell (#1592)
+    the holder's log asks for and that
+    starts no open quest (`quest_needed`
+    False)
   * a bag, reagent, ammunition, quiver,      keep
     quest item or key
   * food, drink, potions and the rest of     keep: its own AI eats and drinks
@@ -100,6 +104,7 @@ MISC = 15
 
 # item_template.Quality
 POOR = 0
+COMMON = 1
 RARE = 3
 
 # The classes a member never sells, and why (the verdict's words).
@@ -193,6 +198,12 @@ def verdict(item, judge: Judge) -> tuple:
     if _int(item.quality) == POOR:
         return SELL, "grey"
     item_class = _int(item.item_class)
+    if (
+        item_class == QUEST
+        and _int(item.quality) <= COMMON
+        and not getattr(item, "quest_needed", True)
+    ):
+        return SELL, "a quest leftover no open quest asks for"
     if item_class in KEPT_CLASSES:
         return KEEP, KEPT_CLASSES[item_class]
     if item_class == CONSUMABLE:
