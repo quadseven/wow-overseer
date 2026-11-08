@@ -1621,6 +1621,22 @@ def _recent_askers(asks: list, now) -> set:
     }
 
 
+def _as_closed(asks: list, expire: list, cancel: list) -> list:
+    """`asks` with the ones this pass ends set to how they end (#1636).
+
+    THE ASK THAT LAPSES THIS PASS BARS ITS DOOR THIS PASS. The rows are read
+    before the pass closes anything, so an ask whose time ran out a moment
+    ago still reads `open`. Reading the bars from those rows let the same
+    member post the same door in the very pass its last ask lapsed: on
+    wow-dev, 2026-11-08, Bluk's Maraudon ask lapsed at 00:54:40 and Bluk
+    asked for Maraudon again at 00:54:56, and the same for Workwork and
+    others, so the guild feed read ask, ask, ask. The long per-door bar and
+    the short per-member bar both read the closed states from here."""
+    ended = {ask_id: EXPIRED for ask_id, _asker, _line in expire}
+    ended.update({ask_id: CANCELLED for ask_id in cancel})
+    return [replace(a, state=ended[a.id]) if a.id in ended else a for a in asks]
+
+
 def _recent_doors(asks: list, now) -> set:
     """(asker, door) pairs whose ask EXPIRED within the long repeat bar
     (#1636). Only an expiry counts: an ask that ran, or one cancelled
@@ -1775,9 +1791,11 @@ def plan_pass(
         lent,
         recipes,
     )
-    board.recent_doors = _recent_doors(asks, now)
     live = [a for a in asks if a.state in LIVE_ASKS and a.kind == KIND_DUNGEON]
     expire, cancel, withdraw, still = _close(board, live)
+    # The bars read the asks as this pass leaves them, not as they were read.
+    asks = _as_closed(asks, expire, cancel)
+    board.recent_doors = _recent_doors(asks, now)
     board.gone = set(withdraw)
     form, filled = _form(board, still, can_form)
     complete = set(filled) | ({form.ask.id} if form else set())

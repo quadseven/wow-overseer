@@ -92,6 +92,53 @@ class TheSameDoorStaysQuietForHours(unittest.TestCase):
         )
         self.assertEqual([p.target for p in out.posts], ["deadmines"])
 
+    def test_an_ask_that_lapses_this_pass_bars_its_door_this_pass(self):
+        # wow-dev 2026-11-08: Bluk's Maraudon ask lapsed at 00:54:40 and Bluk
+        # asked for Maraudon again at 00:54:56, in the same pass, because the
+        # bar was read from the rows before the pass closed the lapsed ask.
+        lapsing = ask(
+            7,
+            "Auren",
+            created_at=NOW - datetime.timedelta(minutes=gs.ASK_MINUTES, seconds=16),
+            expires_at=NOW - datetime.timedelta(seconds=16),
+        )
+        out = plan(
+            [mate("Auren", 20, ROGUE)],
+            asks=[lapsing],
+            needs={"Auren": [cape_need("Auren")]},
+        )
+        self.assertEqual([e[0] for e in out.expire], [7])
+        self.assertEqual(out.posts, ())
+
+    def test_another_door_may_still_be_asked_as_the_last_ask_lapses(self):
+        lapsing = ask(
+            7,
+            "Auren",
+            created_at=NOW - datetime.timedelta(minutes=gs.ASK_COOLDOWN_MINUTES + 1),
+            expires_at=NOW - datetime.timedelta(seconds=16),
+        )
+        out = plan(
+            [mate("Auren", 20, ROGUE)],
+            asks=[lapsing],
+            needs={"Auren": [robe_need("Auren")]},
+        )
+        self.assertEqual([p.target for p in out.posts], ["wailing"])
+
+    def test_the_short_bar_also_reads_an_ask_that_lapses_this_pass(self):
+        # The 15-minute bar on the member (any door) counts the ask that
+        # lapsed a moment ago, as it counts one that lapsed last pass.
+        lapsing = ask(
+            7,
+            "Auren",
+            expires_at=NOW - datetime.timedelta(seconds=16),
+        )
+        out = plan(
+            [mate("Auren", 20, ROGUE)],
+            asks=[lapsing],
+            needs={"Auren": [robe_need("Auren")]},
+        )
+        self.assertEqual(out.posts, ())
+
     def test_the_bridge_reads_asks_back_over_the_long_cooldown(self):
         # The per-door bar can only bite if the bridge hands plan_pass the
         # asks that carry it: the read window must cover the repeat cooldown.
