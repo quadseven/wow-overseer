@@ -2310,6 +2310,26 @@ def _fetch_council() -> dict:
             "roster_rows": roster_rows, "now": db_now}
 
 
+# THE CHRONICLE RUN CARDS FOR THE COUNCIL (#2051). The council reads one
+# thing off the Chronicle: what the family has watched drop on each map
+# (council._drop_items_seen). Building the whole Chronicle for that read up to
+# 20,000 event and 20,000 death rows and cost about 4.7 s of Python in the pod
+# on every poll. The cards are history: a run that ended, a drop that was
+# looted. They only ever gain a row, and the council shows them as what the
+# family knows drops here, so a card up to this old changes no order the
+# console gives. A build in flight is shared by every caller (readcache).
+COUNCIL_CARDS_SECONDS = 30.0
+COUNCIL_CARDS = readcache.ReadCache(COUNCIL_CARDS_SECONDS)
+
+
+def _cards_for_council() -> list:
+    """The Chronicle cards, built at most once per COUNCIL_CARDS_SECONDS."""
+    return COUNCIL_CARDS.get(
+        "council-cards",
+        lambda: achievements.build_achievements(**_fetch_achievements())["cards"],
+    )
+
+
 def _fetch_eye() -> dict:
     """The four counts the rollup is built from.
 
@@ -5587,7 +5607,7 @@ class Handler(BaseHTTPRequestHandler):
         # it has drawn and says it may be stale. A blanked council reads as
         # "the family has stopped talking", which is a far stronger claim
         # than "this one read failed".
-        cards = achievements.build_achievements(**_fetch_achievements())["cards"]
+        cards = _cards_for_council()
         payload = council.build_council(**_fetch_council(), cards=cards)
         return 200, payload
 
