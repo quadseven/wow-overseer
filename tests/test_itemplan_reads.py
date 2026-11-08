@@ -633,6 +633,35 @@ class ReadTest(unittest.TestCase):
         self.assertIsNone(extras.instance_soulbound)
         self.assertIn(shadow.INSTANCE_SOULBOUND, extras.unread)
 
+    def test_missing_instance_flags_fail_closed(self):
+        rows, gear, worn, _free = fixture()
+        rows = [rows[-1]]
+        cur = FakeCursor(
+            tables={
+                "SELECT ii.guid AS item_guid": [{"item_guid": rows[0]["item_guid"]}]
+            }
+        )
+
+        extras = reads.read(
+            ["Ana"],
+            "Fam",
+            rows,
+            gear,
+            worn,
+            connect=lambda: FakeConn(cur),
+            bank_rows=lambda _names: [],
+            guild_setup=lambda _names: None,
+            roster=lambda _names: [],
+        )
+
+        self.assertIsNone(extras.instance_soulbound)
+        self.assertIn(shadow.INSTANCE_SOULBOUND, extras.unread)
+        stack = shadow.build_stacks(
+            rows, gear, extras.templates, extras.instance_soulbound
+        )[0]
+        self.assertIsNone(stack.soulbound)
+        self.assertFalse(stack.tradable)
+
     def test_missing_template_does_not_claim_fire_resistance_is_known(self):
         rows, gear, worn, _free = fixture()
         cur = FakeCursor()

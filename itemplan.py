@@ -864,9 +864,17 @@ def raid_entries() -> dict:
     return _RAID_ENTRIES
 
 
+def _raid_fire(w: _World, s: Stack) -> tuple[bool, bool]:
+    if s.fire_res is not None:
+        return s.fire_res > 0, True
+    if w.ctx.fire_gear is not None:
+        return s.entry in w.ctx.fire_gear, True
+    return False, False
+
+
 def _rule_raid(w: _World, s: Stack, me: Member):
     kind = raid_entries().get(s.entry)
-    fire_known = s.fire_res is not None or w.ctx.fire_gear is not None
+    fire, fire_known = _raid_fire(w, s)
     if not fire_known and s.gear:
         return [
             _opt(
@@ -877,11 +885,6 @@ def _rule_raid(w: _World, s: Stack, me: Member):
                 carry_forced=True,
             )
         ]
-    fire = (
-        s.fire_res > 0
-        if s.fire_res is not None
-        else s.entry in (w.ctx.fire_gear or frozenset())
-    )
     if not kind and not fire:
         return None
     if not s.tradable:
@@ -1222,6 +1225,65 @@ def _rule_gear(w: _World, s: Stack, me: Member):
     return out
 
 
+def _recipe_member_option(s: Stack, me: Member, trade: str | None, rank: int):
+    if not trade or me.skill(trade) <= 0:
+        return None
+    skill = me.skill(trade)
+    if rank > range_top(skill) + RANGE:
+        return None
+    goal = TRADE_NOW if rank <= skill else TRADE_NEXT
+    return _opt(
+        KEEP_CARRY if goal == TRADE_NOW else BANK_PERSONAL,
+        goal,
+        "%s recipe within reach of skill %d" % (trade, skill),
+        "R9",
+    )
+
+
+def _recipe_sibling_option(w: _World, s: Stack, trade: str | None, rank: int):
+    if not trade or not s.tradable:
+        return None
+    for sib in w.siblings(s.holder):
+        if sib.skill(trade) > 0 and rank <= range_top(sib.skill(trade)) + RANGE:
+            return _opt(
+                GIVE,
+                RECIPE,
+                "%s works %s and reaches it" % (sib.name, trade),
+                "R9",
+                target=sib.name,
+            )
+    return None
+
+
+def _recipe_guild_option(w: _World, s: Stack, trade: str | None, rank: int):
+    if not trade or not s.tradable:
+        return None
+    for name, gtrade, skill in sorted(w.ctx.guild_crafters):
+        if gtrade == trade and rank <= range_top(skill) + RANGE:
+            return _opt(
+                GIVE,
+                RECIPE,
+                "guildmate %s works %s" % (name, trade),
+                "R9",
+                target=name,
+            )
+    return None
+
+
+def _recipe_raid_options():
+    return [
+        _opt(
+            GUILD_BANK,
+            RAID_NIGHT,
+            "raid recipe: never sold",
+            "R9",
+            target="Raid Supplies",
+            tab=GUILD_TAB_RAID,
+        ),
+        _opt(BANK_PERSONAL, RAID_NIGHT, "raid recipe: never sold", "R9"),
+    ]
+
+
 def _rule_recipe(w: _World, s: Stack, me: Member):
     if s.item_class != C_RECIPE:
         return None
@@ -1239,57 +1301,17 @@ def _rule_recipe(w: _World, s: Stack, me: Member):
     rank = s.required_skill_rank
     drop = s.entry in raidsupply.DROP_RECIPES
     out = []
-    if trade and me.skill(trade) > 0 and rank <= range_top(me.skill(trade)) + RANGE:
-        goal = TRADE_NOW if rank <= me.skill(trade) else TRADE_NEXT
-        out.append(
-            _opt(
-                KEEP_CARRY if goal == TRADE_NOW else BANK_PERSONAL,
-                goal,
-                "%s recipe within reach of skill %d" % (trade, me.skill(trade)),
-                "R9",
-            )
-        )
-    if trade and s.tradable:
-        for sib in w.siblings(s.holder):
-            if sib.skill(trade) > 0 and rank <= range_top(sib.skill(trade)) + RANGE:
-                out.append(
-                    _opt(
-                        GIVE,
-                        RECIPE,
-                        "%s works %s and reaches it" % (sib.name, trade),
-                        "R9",
-                        target=sib.name,
-                    )
-                )
-                break
+    member_option = _recipe_member_option(s, me, trade, rank)
+    if member_option:
+        out.append(member_option)
+    sibling_option = _recipe_sibling_option(w, s, trade, rank)
+    if sibling_option:
+        out.append(sibling_option)
     if drop:
-        out.append(
-            _opt(
-                GUILD_BANK,
-                RAID_NIGHT,
-                "raid recipe: never sold",
-                "R9",
-                target="Raid Supplies",
-                tab=GUILD_TAB_RAID,
-            )
-        )
-        out.append(_opt(BANK_PERSONAL, RAID_NIGHT, "raid recipe: never sold", "R9"))
-        return out
-    guild_who = None
-    for name, gtrade, skill in sorted(w.ctx.guild_crafters):
-        if gtrade == trade and rank <= range_top(skill) + RANGE:
-            guild_who = name
-            break
-    if guild_who and s.tradable:
-        out.append(
-            _opt(
-                GIVE,
-                RECIPE,
-                "guildmate %s works %s" % (guild_who, trade),
-                "R9",
-                target=guild_who,
-            )
-        )
+        return out + _recipe_raid_options()
+    guild_option = _recipe_guild_option(w, s, trade, rank)
+    if guild_option:
+        out.append(guild_option)
     if s.tradable:
         out.append(
             _opt(
