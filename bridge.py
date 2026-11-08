@@ -31693,7 +31693,7 @@ _JOB_MEMBERS_SQL = (
     "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.race, "
     "c.level, c.money, (s.name IS NOT NULL) AS online, c.map AS map_id, s.pos_x, s.pos_y, s.pos_z, "
     "s.in_combat, "
-    "s.zone_id, s.health, "
+    "s.zone_id, s.health, s.group_leader, "
     "EXISTS (SELECT 1 FROM corpse k WHERE k.guid = c.guid) AS has_corpse, "
     "lc.name AS master, hb.mapId AS home_map, hb.zoneId AS home_zone, "
     "hb.posX AS home_x, hb.posY AS home_y, "
@@ -32347,7 +32347,9 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             rewarded=None if rewarded is None else rewarded.get(guid, frozenset()),
             taxi_nodes=flightlearn.known_nodes(r.get("taximask")),
             bag_slots=(bag_slots or {}).get(name),
-            worn=(worn or {}).get(name)))
+            worn=(worn or {}).get(name),
+            follows=bool(int(r.get("group_leader") or 0))
+            and int(r.get("group_leader") or 0) != guid))
     return members, crafters
 
 
