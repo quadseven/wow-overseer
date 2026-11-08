@@ -11,6 +11,7 @@ Pure tests against dungeonstall.py, then the bridge's queue pass driven
 against a fake queue, roster and store.
 """
 
+from datetime import datetime, timedelta
 import asyncio
 import pathlib
 import time
@@ -958,8 +959,52 @@ class AnOperatorsOrderIsJudgedOnRunsAfterIt(unittest.TestCase):
 
     def test_the_sql_reads_when_each_run_began(self):
         self.assertIn("started_at", stall.RUNS_SQL)
-        self.assertIn("r.outcome, r.started_at FROM", stall.RUNS_SQL_TIMELINE)
+        self.assertIn(
+            "r.outcome, r.started_at, r.ended_at FROM", stall.RUNS_SQL_TIMELINE
+        )
+        self.assertIn("ended_at", stall.RUNS_SQL)
 
     def test_the_breaker_reads_with_the_head_it_judges(self):
         body = BRIDGE[BRIDGE.index("    async def _stall_breaker(") :]
         self.assertIn("_stall_reads, names, rows[0]", body.split("leave =")[0])
+
+
+# 2026-11-08, wow-dev: Grug's x40 Blackrock Depths order (row 155) was
+# cancelled at 19:51Z because run 1676285 stalled 65 seconds after it opened,
+# five seconds after the run before it ended split_failed. (#2092)
+class ARunThatNeverGotInIsNotAStall(unittest.TestCase):
+    BRD = campaignplan.BY_KEYWORD["blackrock-depths"].map_id
+    LORE = "dungeon clear stopped: RepeatedTimeout at Lord Incendius after 180s"
+
+    def row(self, rid, outcome, seconds, started=1000):
+        begun = datetime(2026, 11, 8, 19, 0) + timedelta(seconds=started + rid)
+        return {
+            "id": rid,
+            "map_id": self.BRD,
+            "portal_keyword": "blackrock-depths",
+            "outcome": outcome,
+            "started_at": begun,
+            "ended_at": None if seconds is None else begun + timedelta(seconds=seconds),
+        }
+
+    def judged(self, later_seconds):
+        runs = [
+            self.row(1665107, "stalled", 5000),
+            self.row(1671027, "split_failed", 5760),
+            self.row(1676285, "stalled", later_seconds),
+        ]
+        events = [stalled(1665107, self.LORE), stalled(1676285, self.LORE)]
+        return stall.stuck_doors(runs, events)
+
+    def test_a_65_second_stall_does_not_make_two_running(self):
+        self.assertEqual({}, self.judged(65))
+
+    def test_a_stall_after_three_minutes_still_does(self):
+        self.assertEqual(["blackrock-depths"], sorted(self.judged(180)))
+
+    def test_a_stall_with_no_end_time_still_counts(self):
+        self.assertEqual(["blackrock-depths"], sorted(self.judged(None)))
+
+    def test_the_events_read_skips_the_non_entry(self):
+        runs = [self.row(1, "stalled", 5000), self.row(2, "stalled", 65)]
+        self.assertEqual([1], stall.event_ids(runs))
