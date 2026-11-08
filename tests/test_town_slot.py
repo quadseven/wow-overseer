@@ -370,7 +370,7 @@ class TheDoorDoesThreeThingsInOneOrder(unittest.TestCase):
         self.assertIn("and trainer_route", release_block)
         self.assertIn("decision.release.aim == column", release_block)
         self.assertIn(
-            "else:\n                released = await asyncio.to_thread(\n                    _release_trade_errand",
+            "else _release_trade_errand,\n                    decision.release.character",
             release_block,
         )
 
