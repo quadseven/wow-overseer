@@ -6,6 +6,7 @@ out, bytes over HTTP. No logic here that tests would want to reach.
 from __future__ import annotations
 
 import functools
+import gzip
 import hashlib
 import hmac
 import json
@@ -4464,6 +4465,33 @@ def _get_route(what: str, **dumps):
     return wrap
 
 
+# Below this a gzip header and a trip through zlib cost more than they save.
+# Only JSON is compressed: /api/frame answers a JPEG, which gzip cannot shrink.
+GZIP_MIN_BYTES = 4096
+
+
+def _gzipped(handler, ctype: str, body: bytes) -> bytes | None:
+    """The body gzipped, or None when it should go out as it is."""
+    if ctype.split(";")[0].strip() != "application/json" or len(body) < GZIP_MIN_BYTES:
+        return None
+    headers = getattr(handler, "headers", None)
+    asked = headers.get("Accept-Encoding", "") if headers else ""
+    for part in asked.split(","):
+        name, _, params = part.strip().partition(";")
+        if name.strip().lower() in ("gzip", "x-gzip"):
+            weight = params.replace(" ", "").lower()
+            if weight.startswith("q="):
+                try:
+                    refused = float(weight[2:] or 1) == 0
+                except ValueError:
+                    # A malformed weight is the caller's mistake, not a 500.
+                    refused = False
+                if refused:
+                    return None
+            return gzip.compress(body, 5, mtime=0)
+    return None
+
+
 def _etag(body: bytes) -> str:
     """A strong validator for a response body: same bytes, same tag."""
     return '"' + hashlib.sha256(body).hexdigest()[:24] + '"'
@@ -6436,19 +6464,35 @@ class Handler(BaseHTTPRequestHandler):
         # unchanged answer costs a 304 and no body. The model-viewer files
         # are the one immutable thing here and say so themselves; POSTs and
         # errors keep no-store.
+        #
+        # A JSON body over GZIP_MIN_BYTES goes out gzipped when the caller
+        # accepts it (#2051). Compression lives here because the proxy in
+        # front of the pod is configured outside this repo, and a cold load
+        # was measured at several MB of plain JSON. The gzipped form gets a
+        # "-gz" tag, so the two representations never share a validator.
         tag = ""
         if code == 200 and cache_control == "no-store" and getattr(self, "command", "") == "GET":
             cache_control = "no-cache"
             tag = _etag(body)
+        packed = _gzipped(self, ctype, body)
+        if tag:
+            if packed is not None:
+                tag = tag[:-1] + '-gz"'
             asked = self.headers.get("If-None-Match", "") if getattr(self, "headers", None) else ""
             if tag in [t.strip() for t in asked.split(",")]:
                 self.send_response(304)
                 self.send_header("ETag", tag)
                 self.send_header("Cache-Control", cache_control)
+                self.send_header("Vary", "Accept-Encoding")
                 self.end_headers()
                 return
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        if packed is not None:
+            body = packed
+            self.send_header("Content-Encoding", "gzip")
+        if ctype.split(";")[0].strip() == "application/json":
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", cache_control)
         if tag:
