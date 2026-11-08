@@ -64,8 +64,11 @@ _INSTANCE_SOULBOUND = 0x1
 # used to be `it.startquest > 0` alone, so a starter stayed protected for
 # ever after its quest was turned in. It now asks the holder's own
 # character_queststatus_rewarded for the quest it starts.
-QUEST_NEEDED_SQL = (
-    "(it.class = 12 AND ((it.startquest > 0 AND NOT EXISTS ("
+# The same test for a stack of any class: does an open quest name it, or does
+# it start a quest not yet rewarded? QUEST_NEEDED_SQL gates it to class 12;
+# the guild sale also asks it of a consumable (#1592), which a quest may name.
+STACK_QUEST_NEEDED_SQL = (
+    "((it.startquest > 0 AND NOT EXISTS ("
     "SELECT 1 FROM character_queststatus_rewarded qr "
     "WHERE qr.guid = ci.guid AND qr.quest = it.startquest)) OR EXISTS ("
     "SELECT 1 FROM character_queststatus qs "
@@ -73,8 +76,9 @@ QUEST_NEEDED_SQL = (
     "WHERE qs.guid = ci.guid AND qs.status <> 0 AND ii.itemEntry IN ("
     "qt.RequiredItemId1, qt.RequiredItemId2, qt.RequiredItemId3, "
     "qt.RequiredItemId4, qt.RequiredItemId5, qt.RequiredItemId6, "
-    "qt.ItemDrop1, qt.ItemDrop2, qt.ItemDrop3, qt.ItemDrop4, qt.StartItem))))"
+    "qt.ItemDrop1, qt.ItemDrop2, qt.ItemDrop3, qt.ItemDrop4, qt.StartItem)))"
 )
+QUEST_NEEDED_SQL = "(it.class = 12 AND " + STACK_QUEST_NEEDED_SQL + ")"
 
 
 def owner_keeps(name: str, keep_names) -> bool:
