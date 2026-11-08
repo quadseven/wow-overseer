@@ -5332,9 +5332,10 @@ def _silent_stall(head: dict, names: list):
     return dungeonstall.silent_run(str(head.get("keyword") or ""), seconds)
 
 
-def _stall_held(key: str, door: str) -> dict | None:
+def _stall_held(key: str, door: str, head_id: int = 0) -> dict | None:
     """This door's leave in its recent stall window, or None: the pace row's
-    id and the seconds its hold has left (`left_s`).
+    id, the seconds its hold has left (`left_s`), and whether queue row
+    `head_id` was ordered after that leave (`ordered_after`, #2033).
 
     The seconds are counted by the database against its own NOW(), so the
     hold end the log says is right however far the bridge pod's clock or
@@ -5342,7 +5343,9 @@ def _stall_held(key: str, door: str) -> dict | None:
     """
     sql = (
         "SELECT id, TIMESTAMPDIFF(SECOND, NOW(), created_at + INTERVAL %s HOUR) "
-        "AS left_s FROM overseer_dungeon_pace WHERE family = %s "
+        "AS left_s, COALESCE((SELECT q.created_at FROM overseer_dungeon_queue q "
+        "WHERE q.id = %s) > created_at, 0) AS ordered_after "
+        "FROM overseer_dungeon_pace WHERE family = %s "
         "AND decision = %s AND door = %s "
         "AND created_at >= NOW() - INTERVAL %s HOUR "
         # Newest leave first; id breaks a timestamp tie, so the same row (and
@@ -5350,8 +5353,8 @@ def _stall_held(key: str, door: str) -> dict | None:
         "ORDER BY created_at DESC, id DESC LIMIT 1"
     )
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(sql, (dungeonpace.WINDOW_HOURS, key, dungeonstall.DECISION,
-                          door, dungeonpace.WINDOW_HOURS))
+        cur.execute(sql, (dungeonpace.WINDOW_HOURS, int(head_id or 0), key,
+                          dungeonstall.DECISION, door, dungeonpace.WINDOW_HOURS))
         rows = cur.fetchall()
         return dict(rows[0]) if rows else None
 
@@ -22329,8 +22332,8 @@ class Bridge(discord.Client):
         leave = dungeonstall.leave(rows, stuck)
         if leave is None:
             return False
-        held = await asyncio.to_thread(_stall_held, key, leave.door)
-        if held is not None:
+        held = await asyncio.to_thread(_stall_held, key, leave.door, int(rows[0]["id"]))
+        if held is not None and not dungeonstall.order_outlives(rows[0], held):
             return self._stall_step_past(key, rows, leave, held)
         await asyncio.to_thread(_stall_write, key, leave)
         # The cancellation and its pace record are durable before the job
