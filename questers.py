@@ -1152,6 +1152,10 @@ class Clock:
         for key in [k for k in self._by if k[0] == name and k[1] not in keep]:
             del self._by[key]
 
+    def reset(self, name, quest) -> None:
+        """Start a fresh no-progress interval for one quest."""
+        self._by.pop((str(name), int(quest)), None)
+
     def dump(self) -> dict:
         return {"%s:%d" % k: v for k, v in self._by.items()}
 
@@ -1657,6 +1661,11 @@ def next_move(
         return _move(classquest.TAKE, member, quest, spot, said), "", never_held
     # 4. A quest it holds: the nearest objective spawn within its level.
     move = _hunt(cat, member, skip, left)
+    crossing_wait = ""
+    if move is not None and move.kind == classquest.CROSS:
+        crossing_wait = crossing_held(member.name, move, crossings)
+        if crossing_wait:
+            move = None
     if move is not None:
         return move, "", never_held
     if takes:
@@ -1669,6 +1678,8 @@ def next_move(
     # 5. Nothing left in reach here: the next zone.
     unsailed = failed_crossings(member.name, crossings)
     move, why = _travel(cat, member, skip, left, unsailed)
+    if move is None and crossing_wait:
+        why = crossing_wait
     return move, why, never_held
 
 
@@ -1765,39 +1776,39 @@ def _takes(cat: Catalogue, member, skip, left, tried) -> tuple:
 
 def _hunt(cat: Catalogue, member, skip, left):
     """The hunt at the nearest objective spawn within the quester's level of
-    an incomplete quest it holds, or None."""
+    an incomplete quest it holds, or a crossing to one on the other classic
+    continent. A nearby hunt always takes priority over a crossing."""
     hunts = []
+    crossings = []
     for qid, quest in _held(cat, member, STATUS_INCOMPLETE, skip):
         if _quest_complete(quest, STATUS_INCOMPLETE, member.quest_progress.get(qid, 0)):
             continue
-        progress = member.quest_objectives.get(qid)
-        kills = dict(quest.kills)
-        if progress:
-            kills = {
-                entry: count
-                for entry, count in kills.items()
-                if int(progress.get(entry, 0)) < count
-            }
-        # The per-creature counters name only kill objectives, so a quest
-        # that asks for an item (Pie for Billy, 86: four of an item a boar
-        # drops, and no creature to kill) has no kill entry to hunt by, and
-        # filtering its fields to kill entries left it with nowhere to hunt
-        # at all: its objectives never moved and it stalled as broken. A
-        # required item's droppers are hunt targets too, met or not by any
-        # counter the log names.
-        targets = set(kills) | {entry for _item, entry in quest.drops}
-        spot = _nearest(
-            member,
-            classquest.within_level(
-                member,
-                tuple(s for s in classquest.solo_fields(quest) if s.entry in targets),
-            ),
-            left,
+        fields = tuple(
+            spot
+            for spot in _held_objective_fields(member, qid, quest)
+            if spot.guid not in left
         )
+        spot = _nearest(member, fields, left)
         if spot is not None:
             hunts.append((_yards(member, spot), qid, quest, spot))
+            continue
+        # A held quest can outlive the trip that took it. If its eligible
+        # objectives are only on the other continent, cross to them before
+        # choosing a new zone. Otherwise an incomplete Redridge quest held in
+        # Darnassus is invisible to both the local hunt and next-zone search.
+        to_map = classquest.far_map(member, fields)
+        if to_map >= 0:
+            crossings.append((qid, quest, to_map))
     if not hunts:
-        return None
+        if not crossings:
+            return None
+        _qid, quest, to_map = min(crossings, key=lambda option: option[0])
+        said = "%s crosses to %s for %s" % (
+            member.name,
+            classquest.CONTINENTS[to_map],
+            quest.title,
+        )
+        return _move(classquest.CROSS, member, quest, None, said, to_map=to_map)
     _d, _q, quest, spot = min(hunts, key=_by_yards)
     said = "%s works %s at %s" % (
         member.name,
@@ -1805,6 +1816,64 @@ def _hunt(cat: Catalogue, member, skip, left):
         spot.name or "its objective",
     )
     return _move(classquest.HUNT, member, quest, spot, said)
+
+
+def stalled_holds_with_actionable_objectives(
+    cat, member, held, tried=(), crossings=()
+) -> frozenset:
+    """Stalled memo entries whose incomplete objectives can now be pursued.
+
+    World-fact holds remain durable. A stall is only retried when this pass can
+    route to an eligible local objective or across a known classic continent.
+    """
+    if not member.placed:
+        return frozenset()
+    left = left_spawns(member.name, tried)
+    retry = set()
+    for qid, reason in held.items():
+        if not str(reason).startswith(STALLED):
+            continue
+        if member.quest_log.get(qid) != STATUS_INCOMPLETE:
+            continue
+        quest = cat.quest(qid)
+        if quest is None or _quest_complete(
+            quest, STATUS_INCOMPLETE, member.quest_progress.get(qid, 0)
+        ):
+            continue
+        fields = tuple(
+            spot
+            for spot in _held_objective_fields(member, qid, quest)
+            if spot.guid not in left
+        )
+        if _nearest(member, fields, left) is not None:
+            retry.add(qid)
+            continue
+        to_map = classquest.far_map(member, fields)
+        if to_map < 0:
+            continue
+        crossing = _move(classquest.CROSS, member, quest, None, "", to_map=to_map)
+        if not crossing_held(member.name, crossing, crossings):
+            retry.add(qid)
+    return frozenset(retry)
+
+
+def _held_objective_fields(member, qid: int, quest: classquest.Quest) -> tuple:
+    """Eligible kill and item-drop fields for one incomplete held quest."""
+    progress = member.quest_objectives.get(qid)
+    kills = dict(quest.kills)
+    if progress:
+        kills = {
+            entry: count
+            for entry, count in kills.items()
+            if int(progress.get(entry, 0)) < count
+        }
+    # Item-only objectives have no creature counter, so their dropper fields
+    # remain eligible even when the quest log has no kill objective.
+    targets = set(kills) | {entry for _item, entry in quest.drops}
+    return classquest.within_level(
+        member,
+        tuple(s for s in classquest.solo_fields(quest) if s.entry in targets),
+    )
 
 
 # The module's verb for each move that is one quest row.

@@ -110,6 +110,17 @@ class TheLedgerMoves(unittest.TestCase):
         old = ledger(10, 7, "broken", finished=EARLIER, reason=ql.FAILED_REASON)
         self.assertEqual(moved([old]), {})
 
+    def test_a_stalled_quest_back_in_the_log_clears_its_ledger_reason(self):
+        old = ledger(
+            180,
+            8,
+            "broken",
+            finished=EARLIER,
+            reason="its objectives did not move for 2 hours of play",
+        )
+        entry = moved([old], [log(180, 8)])[(180, 8)]
+        self.assertEqual((entry.state, entry.reason), ("taken", ""))
+
     def test_a_taken_quest_gone_from_the_log_unrewarded_is_abandoned(self):
         e = moved([ledger(10, 7, "taken")])
         self.assertEqual(
