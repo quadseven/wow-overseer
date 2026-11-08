@@ -183,8 +183,10 @@ class TheReadIsIndexBacked(unittest.TestCase):
 
         src = inspect.getsource(bridge.Bridge._ensure_stores)
         self.assertIn("_ensure_event_store,", src)
-        self.assertIn(
-            "if ensure in (_ensure_dungeon_run_event_store, _ensure_event_store):", src
+        self.assertRegex(
+            src,
+            r"if ensure in \(\s+_ensure_dungeon_run_event_store,\s+"
+            r"_ensure_event_store,\s+_ensure_command_store,\s+\):",
         )
 
 
