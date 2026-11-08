@@ -51,7 +51,8 @@ class WhatIsAllowed(unittest.TestCase):
             "modelviewer/m2/1.m2",
             "viewer/viewer.min.js",
             "mo3/1.mo3",
-            "deployment/viewer/c3f890f/viewer.min.js",
+            "deployment/viewer/0000000/viewer.min.js",
+            "deployment/viewer/c3f890f/other.js",
             "../meta/item/1.json",
         ):
             self.assertIsNone(classify(path), path)
@@ -157,6 +158,79 @@ class TheReadThrough(unittest.TestCase):
         now[0] += modelviewer.MISS_TTL_SECONDS + 1
         s.serve("meta/armor/5/9.json")
         self.assertEqual(len(f.calls), 2)
+
+
+class TheViewerScript(unittest.TestCase):
+    """The viewer build comes through this cache, pinned by hash (#1849).
+
+    Its host refuses CORS requests, so the page could not pin it with an
+    integrity hash, and an unpinned third-party script runs with the page's
+    full rights. One exact path is admitted, and a body that is not the
+    pinned build is neither kept nor served.
+    """
+
+    BODY = b"window.ZamModelViewer = function () {};"
+
+    def setUp(self):
+        import base64
+
+        pin = base64.b64encode(hashlib.sha384(self.BODY).digest()).decode()
+        self._saved = modelviewer.VIEWER_SHA384
+        modelviewer.VIEWER_SHA384 = pin
+        self.url = modelviewer.UPSTREAM + modelviewer.VIEWER_SCRIPT
+
+    def tearDown(self):
+        modelviewer.VIEWER_SHA384 = self._saved
+
+    def test_the_pinned_build_is_admitted_as_javascript(self):
+        self.assertEqual(
+            classify("deployment/viewer/c3f890f/viewer.min.js"),
+            ("deployment/viewer/c3f890f/viewer.min.js", "text/javascript"),
+        )
+
+    def test_the_pinned_build_is_fetched_once_kept_and_served(self):
+        f = Fetcher({self.url: self.BODY})
+        s = store(f)
+        first = s.serve(modelviewer.VIEWER_SCRIPT)
+        second = s.serve(modelviewer.VIEWER_SCRIPT)
+        self.assertEqual((first.status, first.body), (200, self.BODY))
+        self.assertEqual(first.content_type, "text/javascript")
+        self.assertEqual((second.status, second.body), (200, self.BODY))
+        self.assertEqual(f.calls, [self.url])
+
+    def test_a_changed_build_upstream_is_a_502_and_is_not_kept(self):
+        f = Fetcher({self.url: self.BODY + b" /* changed */"})
+        s = store(f)
+        r = s.serve(modelviewer.VIEWER_SCRIPT)
+        self.assertEqual((r.status, r.cache_control), (502, "no-store"))
+        self.assertIsNone(s.cache.get(modelviewer.VIEWER_SCRIPT))
+        self.assertEqual(s.serve(modelviewer.VIEWER_SCRIPT).status, 502)
+        self.assertEqual(len(f.calls), 2)
+
+    def test_a_kept_copy_that_is_not_the_pin_is_not_served(self):
+        f = Fetcher({self.url: self.BODY})
+        s = store(f)
+        s.cache.put(modelviewer.VIEWER_SCRIPT, b"tampered")
+        r = s.serve(modelviewer.VIEWER_SCRIPT)
+        self.assertEqual((r.status, r.body), (200, self.BODY))
+        self.assertEqual(f.calls, [self.url])
+
+    def test_the_shipped_pin_is_a_sha384(self):
+        import base64
+
+        self.assertEqual(len(base64.b64decode(self._saved)), 48)
+
+    def test_the_page_loads_the_script_from_this_server(self):
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(
+            os.path.join(here, "app", "views", "_model.js"), encoding="utf-8"
+        ) as f:
+            src = f.read()
+        self.assertIn(
+            'const MODEL_SCRIPT = "/modelviewer/%s";' % modelviewer.VIEWER_SCRIPT, src
+        )
+        self.assertIn("loadScript(u(MODEL_SCRIPT))", src)
+        self.assertNotIn("zamimg", src)
 
 
 class TheDisk(unittest.TestCase):
