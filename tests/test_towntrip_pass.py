@@ -61,6 +61,15 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         """
         self.assertIn('    _Pass("_towntrip_loop"),\n', _source())
 
+    def test_the_plan_leaves_out_the_members_sitting_the_campaign_out(self):
+        """A member sitting out to craft is elsewhere on purpose; a hand-over
+        naming it waits forever while the party goes in dry (#2037)."""
+        code = _code("    async def _towntrip_once(self")
+        self.assertRegex(
+            code,
+            r"towntrip\.plan\(members, town,\s*sitting=frozenset\(names\) & _standin_out\(\)\)",
+        )
+
     def test_the_bridge_imports_the_planner(self):
         self.assertIn("\nimport towntrip\n", _source())
 
