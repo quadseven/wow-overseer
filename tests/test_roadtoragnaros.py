@@ -208,6 +208,19 @@ class TheTotal(unittest.TestCase):
         self.assertEqual(out["total"]["percent"], 40)
         self.assertNotIn("D, G", out["total"]["how"])
 
+    def test_an_unread_seat_milestone_is_left_out_not_counted_as_zero(self):
+        all_names = tuple(s.name for s in raidteams.seats("Cave"))
+        out = road.build(
+            "Cave",
+            _teams(unread=all_names),
+            None,
+            [],
+            dungeons=_dungeon_runs(),
+            coverage=_coverage(),
+        )
+        self.assertIn("A", out["total"]["left_out"])
+        self.assertIn("not counted as passed or as zero", out["total"]["how"])
+
     def test_a_guild_with_no_runs_has_a_measured_zero_attempt_count(self):
         out = road.build("Cave", _teams(), None, [])
         self.assertEqual(out["attempts"]["entered"], 0)
