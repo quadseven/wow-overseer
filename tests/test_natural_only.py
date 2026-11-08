@@ -15,6 +15,7 @@ NATURAL player actions
   - cross-to-map     class-quest zone crossing
   - deposit          bank a single item
   - destroy          destroy a surplus item
+  - disenchant       disenchant a soulbound or surplus item
   - dungeon:*        dungeon-finder campaign keyword
   - e                equip an item (mod-playerbots command)
   - entry            vendor purchase by item entry

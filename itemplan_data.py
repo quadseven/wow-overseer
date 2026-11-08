@@ -53,6 +53,7 @@ ITEM_TEMPLATE_SQL = (
     "it.holy_res AS holy_res, it.fire_res AS fire_res, "
     "it.nature_res AS nature_res, it.frost_res AS frost_res, "
     "it.shadow_res AS shadow_res, it.arcane_res AS arcane_res, "
+    "it.RequiredDisenchantSkill AS required_disenchant_skill, "
     + ", ".join(
         "it.stat_type%d AS stat_type%d, it.stat_value%d AS stat_value%d" % (n, n, n, n)
         for n in range(1, 11)
@@ -71,6 +72,7 @@ _TEMPLATE_FIELDS = (
     "required_skill_rank",
     "container_slots",
     "fire_res",
+    "required_disenchant_skill",
 )
 
 ITEM_INSTANCE_SQL = (
