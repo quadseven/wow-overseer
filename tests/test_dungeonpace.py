@@ -913,3 +913,76 @@ class AStallSendsTheFamilyToADoorThatFits(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# #2022: the console accepts a door within council.NEAR_ENOUGH of its floor,
+# and the pace must not step that order down on the next pass. Grug's family
+# on wow-dev 2026-11-08: Blackrock Depths (floor 52) ordered with Og at 50.
+BRD_FAMILY = [
+    {"name": "Grug", "level": 53, "race": 1, "map_id": 0},
+    {"name": "Grog", "level": 52, "race": 3, "map_id": 0},
+    {"name": "Bork", "level": 52, "race": 7, "map_id": 0},
+    {"name": "Og", "level": 50, "race": 1, "map_id": 0},
+    {"name": "Ugga", "level": 52, "race": 1, "map_id": 0},
+]
+
+
+class AnOperatorsOrderReadsTheConsolesBand(unittest.TestCase):
+    def brd_facts(self, rows, source="web:overseer"):
+        row = head("blackrock-depths", source=source)
+        gates, notes = pace.door_gates(row, members(rows))
+        f = facts(row, members(rows), level_rows=rows)
+        return replace_gates(f, gates, notes)
+
+    def test_an_operator_order_two_short_is_not_gated(self):
+        row = head("blackrock-depths", source="web:overseer")
+        gates, _notes = pace.door_gates(row, members(BRD_FAMILY))
+        self.assertEqual((), gates)
+
+    def test_and_the_door_holds_instead_of_stepping_down(self):
+        d = pace.decide(self.brd_facts(BRD_FAMILY))
+        self.assertEqual(pace.NOTHING, d.kind, d)
+
+    def test_three_short_is_still_gated(self):
+        rows = [dict(r, level=49) if r["name"] == "Og" else r for r in BRD_FAMILY]
+        row = head("blackrock-depths", source="web:overseer")
+        gates, _notes = pace.door_gates(row, members(rows))
+        self.assertEqual(1, len(gates))
+        self.assertIn("Og is level 49", gates[0])
+        d = pace.decide(self.brd_facts(rows))
+        self.assertNotEqual(pace.NOTHING, d.kind)
+
+    def test_the_overseers_own_entry_keeps_the_floor(self):
+        for source in ("overseer:planner", "overseer:stepdown", "overseer:jev", ""):
+            row = head("blackrock-depths", source=source)
+            gates, _notes = pace.door_gates(row, members(BRD_FAMILY))
+            self.assertEqual(1, len(gates), source)
+            self.assertIn("Og is level 50", gates[0])
+
+    def test_the_band_is_the_consoles(self):
+        import council
+
+        kind, _why = council.door_refusal_kind("blackrock-depths", BRD_FAMILY)
+        self.assertNotEqual(council.REFUSED_LEVEL, kind)
+        floor = pace.campaignplan.BY_KEYWORD["blackrock-depths"].floor
+        for short in range(5):
+            rows = [
+                dict(r, level=floor - short) if r["name"] == "Og" else r
+                for r in BRD_FAMILY
+            ]
+            console_refuses = (
+                council.door_refusal_kind("blackrock-depths", rows)[0]
+                == council.REFUSED_LEVEL
+            )
+            gated = bool(pace.door_gates(head("blackrock-depths"), members(rows))[0])
+            self.assertEqual(console_refuses, gated, f"Og {short} short")
+
+    def test_the_bridge_asks_the_door_row(self):
+        self.assertIn("dungeonpace.door_gates(door_row, members)", BRIDGE)
+        self.assertNotIn("dungeonpace.readiness(door, members)", BRIDGE)
+
+
+def replace_gates(f, gates, notes):
+    from dataclasses import replace
+
+    return replace(f, gates=gates, notes=notes)

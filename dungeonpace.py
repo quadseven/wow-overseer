@@ -467,12 +467,13 @@ def weakest(members) -> tuple:
     return name, level
 
 
-def readiness(keyword: str, members) -> tuple:
+def readiness(keyword: str, members, slack: int = 0) -> tuple:
     """(gates, notes) for sending the family through `keyword`'s door.
 
-    Gates hold the door: the weakest member below the level it wants. Notes
-    are reported with them and never hold it: slots empty, no main-hand
-    weapon (the gear hold, #146, owns those).
+    Gates hold the door: the weakest member more than `slack` levels below the
+    level it wants (0: below it at all). Notes are reported with them and
+    never hold it: slots empty, no main-hand weapon (the gear hold, #146, owns
+    those).
     """
     gates, notes = [], []
     who, level = weakest(members)
@@ -481,7 +482,7 @@ def readiness(keyword: str, members) -> tuple:
         if keyword in campaignplan.BY_KEYWORD
         else 0
     )
-    if who and floor and level < floor:
+    if who and floor and level + max(0, int(slack)) < floor:
         gates.append(
             "%s is level %d and %s wants %d"
             % (who, level, council.keyword_place(keyword), floor)
@@ -497,6 +498,32 @@ def readiness(keyword: str, members) -> tuple:
     if empty:
         notes.append("six or more empty slots: %s" % ", ".join(sorted(empty)))
     return tuple(gates), tuple(notes)
+
+
+def operator_ordered(row) -> bool:
+    """Whether a queue row is the operator's order rather than the overseer's
+    own (a planner, step-down or Jev entry: every source the bridge writes
+    starts "overseer:"). Unread or empty sources are the overseer's."""
+    source = str((row or {}).get("source") or "")
+    return bool(source) and not source.startswith("overseer:")
+
+
+def door_gates(door_row, members) -> tuple:
+    """(gates, notes) for the door a queue row names (#2022).
+
+    ONE LEVEL RULE FOR AN OPERATOR'S ORDER. The console, the queue and the
+    council accept a door when the weakest member is within council.NEAR_ENOUGH
+    of its floor (council.door_refusal_kind). This pace gated on the floor
+    with no slack, so an order the console said was queued was stepped down on
+    the next pass: on wow-dev 2026-11-08 Grug's family's Blackrock Depths order
+    (floor 52, weakest 50) was queued at 02:16Z and stepped down to Uldaman at
+    02:27Z, the second order of that family to go that way. An operator's
+    order now reads the same band the console accepted it on. The overseer's
+    own entries keep the floor: a step up still owes it (`ascend`).
+    """
+    keyword = str((door_row or {}).get("keyword") or "")
+    slack = council.NEAR_ENOUGH if operator_ordered(door_row) else 0
+    return readiness(keyword, members, slack=slack)
 
 
 def step_up_blockers(members) -> tuple:
