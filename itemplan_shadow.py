@@ -47,6 +47,7 @@ import itemplan_data
 log = logging.getLogger("wow-overseer.itemplan")
 
 ENV_SWITCH = "ITEMPLAN_SHADOW"
+GUILD_DEPOSIT_SWITCH = "ITEMPLAN_GUILD_BANK_DEPOSITS"
 PREFIX = "itemplan:"
 # Seconds between full detail for a member whose plan has not changed.
 REFRESH_SECONDS = 30 * 60
@@ -96,6 +97,13 @@ def enabled(environ=None) -> bool:
     """On only when ITEMPLAN_SHADOW says so."""
     env = os.environ if environ is None else environ
     raw = str(env.get(ENV_SWITCH, "") or "").strip().lower()
+    return raw in ("on", "1", "true", "yes")
+
+
+def guild_deposits_enabled(environ=None) -> bool:
+    """On only when the guild-bank item-plan route has its own switch."""
+    env = os.environ if environ is None else environ
+    raw = str(env.get(GUILD_DEPOSIT_SWITCH, "") or "").strip().lower()
     return raw in ("on", "1", "true", "yes")
 
 
