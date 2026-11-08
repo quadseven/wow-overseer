@@ -1036,6 +1036,9 @@ _JOIN = (
 _FILL = (
     "Short of a team in {bg}, I'll fill a spot for honor.",
     "I'll make up the numbers in {bg}, honor is honor.",
+    "{bg} is a man short, I'll jump in for the honor.",
+    "I've got the time, I'll queue {bg} and fill the gap.",
+    "Need bodies for {bg}? I'll go, I can use the honor.",
 )
 _BOUGHT = (
     "Finally have the honor for {item}, off to the quartermaster.",

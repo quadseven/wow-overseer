@@ -700,6 +700,19 @@ def worth(mate: Mate, door, value: float, entrances: dict) -> float:
 # --- the words ------------------------------------------------------------------------
 
 
+def _pick_new(options: tuple, avoid, render, *keys, vary: int = 0) -> str:
+    """`_pick`, but the first template from the same start whose rendered line
+    is not in `avoid` (what this member said lately, #1636); the stable pick
+    when every template was used."""
+    seed = zlib.crc32("|".join(str(k) for k in keys).encode("utf-8"))
+    start = seed + vary
+    for step in range(len(options)):
+        template = options[(start + step) % len(options)]
+        if render(template) not in avoid:
+            return template
+    return options[start % len(options)]
+
+
 def _pick(options: tuple, *keys, vary: int = 0) -> str:
     """A stable choice among templates, varied by who and what.
 
@@ -763,15 +776,37 @@ _ANSWER = {
         "Count me in for {place}.",
         "Sure, I'll come. Need the xp.",
     ),
-    (TANK, HELPS): ("I can tank it for you, I've outleveled it.",),
-    (HEALER, HELPS): ("I'll come heal, nothing in there for me but happy to help.",),
+    (TANK, HELPS): (
+        "I can tank it for you, I've outleveled it.",
+        "Nothing left for me in there, but I'll tank it for you.",
+        "I'll take the tank spot, it's an easy one for me now.",
+    ),
+    (HEALER, HELPS): (
+        "I'll come heal, nothing in there for me but happy to help.",
+        "I can heal it, I've got no reason to go but sure.",
+        "Happy to heal this one for you, it's easy now.",
+    ),
     (DPS, HELPS): (
         "I'll come help, I know the way.",
         "Nothing there for me but sure, I'll help out.",
+        "I've done it plenty, I'll tag along and help.",
+        "Sure, I'll come, I can show you where it goes wrong.",
     ),
-    (TANK, CARRIES): ("I can tank this run and carry the group.",),
-    (HEALER, CARRIES): ("I'll heal this run and carry the group.",),
-    (DPS, CARRIES): ("I'll come carry the group through.",),
+    (TANK, CARRIES): (
+        "I can tank this run and carry the group.",
+        "I'll tank it, you'll get through easy with me up front.",
+        "Tank here, I'll lead you through it.",
+    ),
+    (HEALER, CARRIES): (
+        "I'll heal this run and carry the group.",
+        "I'll keep everyone up, it's easy for me now.",
+        "Healer here, I'll get you through it.",
+    ),
+    (DPS, CARRIES): (
+        "I'll come carry the group through.",
+        "I'll come along and do the heavy lifting.",
+        "I can carry the damage, count me in.",
+    ),
 }
 _ANSWER_ITEM = (
     "I'm in, I want {item} too.",
@@ -825,7 +860,13 @@ def ask_reason(need: Need | None) -> str:
 
 
 def answer_line(
-    member: str, role: str, stance: str, door, need: Need | None, vary: int = 0
+    member: str,
+    role: str,
+    stance: str,
+    door,
+    need: Need | None,
+    vary: int = 0,
+    avoid=(),
 ) -> str:
     # An answer names a drop only when the answerer would actually gain
     # THAT drop at THIS door (#1636): a need at another door, or one with
@@ -839,11 +880,23 @@ def answer_line(
         and need.keyword == door.keyword
         and need.gain > 0
     )
+
+    def render(template: str) -> str:
+        return _fit(
+            template.format(place=door.place, item=need.item if need else ""), 255
+        )
+
+    # A member does not say a sentence again that it said lately: the first
+    # wording it has not used, from where the stable pick starts.
     if stance == NEED and gains_here:
-        template = _pick(_ANSWER_ITEM, member, door.keyword, vary=vary)
+        template = _pick_new(
+            _ANSWER_ITEM, avoid, render, member, door.keyword, vary=vary
+        )
     else:
-        template = _pick(_ANSWER[(role, stance)], member, door.keyword, vary=vary)
-    return _fit(template.format(place=door.place, item=need.item if need else ""), 255)
+        template = _pick_new(
+            _ANSWER[(role, stance)], avoid, render, member, door.keyword, vary=vary
+        )
+    return render(template)
 
 
 def short_place(place: str) -> str:
@@ -1119,6 +1172,9 @@ class _Board:
     # for one of these doors came to nothing within
     # ASK_REPEAT_COOLDOWN_MINUTES, so the member is not offered it again yet.
     recent_doors: set = field(default_factory=set)
+    # member -> the answers it said in the asks read (ASKS_READ_MINUTES back):
+    # an answer is worded to differ from them (#1636).
+    said: dict = field(default_factory=dict)
 
     @property
     def free(self) -> dict:
@@ -1324,7 +1380,15 @@ def _answers_to(board: _Board, ask: Ask, spoken: set) -> list:
                 stance,
                 # vary by the ask's id (#1636): the same member answering
                 # two asks does not say the identical sentence twice.
-                answer_line(name, role, stance, door, need, vary=ask.id),
+                answer_line(
+                    name,
+                    role,
+                    stance,
+                    door,
+                    need,
+                    vary=ask.id,
+                    avoid=board.said.get(name, ()),
+                ),
             )
         )
         spoken.add(name)
@@ -1796,6 +1860,7 @@ def plan_pass(
     # The bars read the asks as this pass leaves them, not as they were read.
     asks = _as_closed(asks, expire, cancel)
     board.recent_doors = _recent_doors(asks, now)
+    board.said = _said_by_member(answers)
     board.gone = set(withdraw)
     form, filled = _form(board, still, can_form)
     complete = set(filled) | ({form.ask.id} if form else set())
@@ -1819,6 +1884,15 @@ def plan_pass(
         form=form,
         notes=notes,
     )
+
+
+def _said_by_member(answers) -> dict:
+    """member -> the set of lines it answered with, over the answers read."""
+    out: dict = {}
+    for a in answers or ():
+        if a.said:
+            out.setdefault(a.member, set()).add(a.said)
+    return out
 
 
 def _seat_for(member: guildrun.Member, open_seats: list, door=None) -> str:
