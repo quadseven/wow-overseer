@@ -2,8 +2,8 @@
 
 GET /api/v2/quests?faction=&zone=&level_min=&level_max=&status=
 
-    {quests: [{id, title, level, min_level, zone, zone_name, faction, races,
-               classes, follows, status, attempts}],
+    {quests: [{id, title, level, min_level, zone, zone_name, faction,
+               status, attempts}],
      totals: {quests, completed, broken, taken, abandoned, not_reached},
      by_faction: {horde: totals, alliance: totals}, shown}
 
@@ -109,6 +109,17 @@ def _totals(quests, statuses: dict) -> dict:
     return out
 
 
+# What the page never reads. The catalogue view keeps the race, class and
+# prerequisite columns (other modules and tests use them); the wire does not,
+# since app/views/quests.js reads none of them and they are a large share of
+# each row (#2051).
+_NOT_ON_THE_WIRE = ("races", "classes", "follows")
+
+
+def _wire(q) -> dict:
+    return {k: v for k, v in q.view().items() if k not in _NOT_ON_THE_WIRE}
+
+
 def build_quests(
     catalogue,
     ledger_rows,
@@ -126,7 +137,7 @@ def build_quests(
     return {
         "quests": [
             {
-                **q.view(),
+                **_wire(q),
                 "status": statuses[q.id],
                 "attempts": sum(states.get(q.id, {}).values()),
             }
@@ -190,7 +201,7 @@ def build_quest(quest, ledger_rows) -> dict:
     states = [str(r.get("state") or "") for r in ledger_rows or ()]
     return {
         "quest": {
-            **quest.view(),
+            **_wire(quest),
             "status": questledger.quest_status(states),
             "attempts": len(states),
             "ticket": questtickets.ticket_of(ledger_rows),
