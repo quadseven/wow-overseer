@@ -3920,25 +3920,22 @@ def _room_for(room, step) -> bool:
     return room.crossings if _level_crossing(step) else room.walks
 
 
-# AN OUTGROWN MEMBER ON THE ISLE TAKES THE BOAT BEFORE ITS ERRANDS (#2047,
-# 2026-11-08). After #2039 gave the level crossing an allowance of its own,
-# three of Cave's outgrown Draenei were still held on Azuremyst Isle and in the
-# Exodar by steps ahead of the level step. Brakk (28) and Eggrok (29) stood at
-# 0 free bag slots, so their sale walk came first every pass and waited on
-# the guild job allowance ("waits: 4 guild job steps per guild per pass");
-# Eggrok was also grouped behind a bot of no guild, and the bridge holds a
-# follower's vendor walk (followhold.py) but not its crossing. Dakk's (27)
-# class step, Call of Fire, was refused on the class quest allowance ("waits:
-# 6 guild job steps") every pass, and with no other step taken the member
-# stood. Once the isle is outgrown its quests are spent and only the boat
-# moves the member on; a sale or a food buy is as easily made on the far
-# side. So, off the classic continents, a due level crossing comes ahead of the
-# make-room, bag and upkeep rungs (isle_crossing_first), and a member whose
-# chosen step waits on a used-up allowance takes its crossing instead when
-# the crossing allowance has room (isle_crossing_instead). A class step still
-# comes first while it can be started; one that keeps failing yields to the
-# crossing through stalled_level_first, which now reads the crossing
-# allowance for a crossing rather than the level walks'.
+# AN OUTGROWN MEMBER ON THE ISLE TAKES THE BOAT BEFORE ITS ERRANDS (#2047).
+# After #2039 gave the level crossing an allowance of its own, outgrown Draenei
+# were still held on the isle by steps planned ahead of the level step. A
+# member at 0 free bag slots had its sale walk first every pass, refused on
+# the guild job allowance, and a grouped follower's vendor walk is held by the
+# bridge (followhold.py) while its crossing row is not. A member whose class
+# step was refused on the class quest allowance took no step at all. Once the
+# isle is outgrown its quests are spent and only the boat moves the member on;
+# a sale or a food buy is as easily made on the far side. So, off the classic
+# continents, a due level crossing comes ahead of the make-room, bag and
+# upkeep rungs (isle_crossing_first), and a member whose chosen step waits on a
+# used-up allowance takes its crossing instead when the crossing allowance has
+# room (isle_crossing_instead). A class step still comes first while it can be
+# started; one that keeps failing yields to the crossing through
+# stalled_level_first, which now reads the crossing allowance for a crossing
+# rather than the level walks'.
 def isle_crossing_first(m, leveling, recent, cap, room=True, loop=None, campaign=""):
     """(step or None, what it does) of the level crossing of a member standing
     off the classic continents (classquest.CONTINENTS), or None when it has no

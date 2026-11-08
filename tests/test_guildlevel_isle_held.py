@@ -1,22 +1,17 @@
-"""An outgrown Draenei on the isle takes the boat before the errands that held
-it there (#2047).
+"""An outgrown Draenei bot on the isle takes the boat before the errands that
+held it there (#2047).
 
-Measured on the dev realm on 2026-11-08, after #2039 gave the level crossing an
-allowance of its own: three of Cave's outgrown Draenei were still held on
-Azuremyst Isle and in the Exodar by steps planned ahead of the level step.
+Three steps planned ahead of the level step kept an outgrown islander from
+its crossing, even once the crossing had an allowance of its own (#2039):
 
-  * Brakk (28) and Eggrok (29) stood at 0 free bag slots, so a sale walk came
-    first every pass and was refused on the guild job allowance ("waits: 4
-    guild job steps per guild per pass"). Eggrok was also grouped behind a bot
-    of no guild, and the bridge holds a follower's vendor walk, never its
-    crossing.
-  * Dakk (27): its class step, Call of Fire, was refused on the class quest
-    allowance ("waits: 6 guild job steps per guild per pass") every pass, and
-    no other step was taken in its place.
+  * A full-bagged member's sale walk came first every pass and was refused on
+    the guild job allowance. A grouped follower's vendor walk is also held by
+    the bridge (followhold.py), while its crossing row is not.
+  * A class step refused on the class quest allowance left the member with no
+    step at all.
   * A class step that keeps failing yields to the level step
-    (stalled_level_first), but only while the guild had a level WALK left; its
-    higher members' walks used both every pass, so the crossing was never
-    reached that way either.
+    (stalled_level_first), but only while the guild had a level WALK left, and
+    the guild's higher members' walks used both every pass.
 """
 
 import dataclasses
@@ -51,12 +46,12 @@ def full_bags(member):
 
 
 def class_step_for(name):
-    """The Call of Fire step the live plan put first for Dakk and Brakk."""
+    """A class step (a gameobject use) planned first for `name`."""
 
     def step(m, *_args, **_kw):
         if m.name != name:
             return None, "", ""
-        said = "%s uses Wickerman Effigy for Call of Fire" % m.name
+        said = "%s uses an effigy for its class quest" % m.name
         return (
             guildcorps.Step(
                 m.name,
@@ -109,12 +104,11 @@ class TheBoatComesBeforeTheSale(unittest.TestCase):
         )
 
     def test_a_follower_s_crossing_is_not_held_as_a_follower_walk(self):
-        """Eggrok follows a bot of no guild: its crossing row is no walk the
-        follower gate stands in front of, so the boat goes where the sale walk
-        was held."""
+        """A grouped follower's crossing row is no walk the follower gate
+        stands in front of, so the boat goes where the sale walk was held."""
         command = classquest.cross_command(1)
         self.assertFalse(followhold.is_walk(command))
-        group = followhold.Group(guid=1184, leader_guid=2844, leader="Lunliass")
+        group = followhold.Group(guid=1184, leader_guid=2844, leader="Leader")
         self.assertEqual(followhold.Holds().held("Eggrok", command, group, 0.0), "")
 
 
