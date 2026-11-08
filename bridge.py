@@ -103,6 +103,7 @@ import interview
 import itemplan_reads
 import itemplan_shadow
 import itemplan
+import itemplan_vendor
 import itemsource
 import purse
 import pvpgear
@@ -13751,8 +13752,17 @@ class Bridge(discord.Client):
         # a new one, releasing and re-taking the counter hold. The argument and
         # the measurements are on `bag_pressure.vendor_errand_step`.
         aimed = await self._take_vendor_aim(step, leader, cohort)
+        # THE ITEM PLAN'S VENDOR ROUTE (#1977) rides this town run: its
+        # own switch, off by default, and only the sales its helper
+        # returns reach the queue. Looked up: the economy tests load
+        # this pass in isolation.
+        route_sales = await asyncio.to_thread(
+            globals().get("_itemplan_vendor_sales", lambda *a, **k: ()),
+            names, leader, rows, free_slots, gear_rows=gear_rows,
+            worn_rows=worn, keep_names=OWNER_KEEPS)
         inserted = await _queue_vendor_sales(
             candidates, leader, aimed, mode, attempts,
+            route_sales=route_sales,
         )
         _report_vendor_claim(slot, aimed, inserted)
 
@@ -29211,6 +29221,36 @@ def _shadow_itemplan(*args, **facts) -> None:
     itemplan_shadow.run(*args, reader=_itemplan_reads, **facts)
 
 
+def _itemplan_vendor_sales(names, family, rows, free_slots, gear_rows=(),
+                           worn_rows=(), keep_names=()):
+    """The item plan vendor route's sales for this pass (#1977).
+
+    Blocking: the pass runs it in a thread. Off unless
+    ITEMPLAN_SELL_VENDOR is on, in which case the plan is built the way
+    the shadow builds it (#1973's reads, the shadow's stacks) and the
+    route picks its released SELL_VENDOR rows from it. No released set
+    exists yet, so a `confirm` row waits, exactly as the design says.
+    A failure here is logged and the economy pass carries on without
+    the route, as it does for the shadow.
+    """
+    if not itemplan_vendor.enabled():
+        return ()
+    try:
+        extras = _itemplan_reads(names, family, rows, gear_rows, worn_rows)
+        report = itemplan_shadow.shadow(
+            names, family, rows, free_slots, gear_rows=gear_rows,
+            worn_rows=worn_rows, keep_names=keep_names, extras=extras)
+        stacks = itemplan_shadow.build_stacks(
+            rows, gear_rows, extras.templates, extras.instance_soulbound)
+        pairs = list(zip(stacks, rows, strict=True))
+        return itemplan_vendor.sales_for(
+            report.plan, pairs, keep_names=keep_names)
+    except Exception:
+        log.exception(
+            "itemplan vendor: the route failed; the economy pass carries on")
+        return ()
+
+
 def _itemplan_reads(names, family, rows, gear_rows, worn_rows):
     """The item plan shadow's inputs, read with the passes' own reads (#1973)."""
     return itemplan_reads.read(
@@ -29232,6 +29272,7 @@ def _count_sales(counts: dict, sales) -> None:
 
 async def _queue_vendor_sales(
     candidates, leader: str, aimed: bool, mode: str, attempts,
+    route_sales=(),
 ) -> int:
     """Write the sell rows each holder can execute from where it stands.
 
@@ -29249,17 +29290,21 @@ async def _queue_vendor_sales(
     by_holder: dict[str, list] = {}
     for candidate in candidates:
         by_holder.setdefault(candidate.holder, []).append(candidate)
+    # The item plan route's holders (#1977): a route stack is one the
+    # ordinary selectors kept, so its holder may hold no candidate here
+    # at all, and still has a sale to queue when it reaches a counter.
+    holders = sorted(set(by_holder) | {sale.holder for sale in route_sales})
     inserted = 0
     considered = 0
     holder_town = {}
     leader_town = await asyncio.to_thread(_fetch_town, leader)
     holder_town[leader] = leader_town
     leader_at_counter = bool(leader_town.vendor)
-    for holder in sorted(by_holder):
+    for holder in holders:
         town = await asyncio.to_thread(_fetch_town, holder)
         holder_town[holder] = town
     queue_holders = set(bag_pressure.vendor_holders_to_queue(
-        candidates,
+        tuple(candidates) + tuple(sale.candidate for sale in route_sales),
         leader=leader,
         leader_at_counter=leader_at_counter,
         holder_at_counter=lambda holder: bool(holder_town[holder].vendor),
@@ -29272,8 +29317,8 @@ async def _queue_vendor_sales(
         queue_holders, mode, leader_at_counter,
         lambda holder: bool(holder_town[holder].vendor),
     )
-    for holder in sorted(by_holder):
-        holder_candidates = tuple(by_holder[holder])
+    for holder in holders:
+        holder_candidates = tuple(by_holder.get(holder, ()))
         town = holder_town[holder]
         if holder not in queue_holders:
             # A STACK THE WORLD ALREADY ANSWERED IS NOT A VENDOR WAIT (#1261).
@@ -29316,6 +29361,19 @@ async def _queue_vendor_sales(
             holder, len(plan.write), len(holder_candidates),
             item_plan.reasons(plan.skipped),
         )
+        # THE ROUTE'S SALES FOR THIS HOLDER (#1977), through the same
+        # insert and the same counter gate: a row the insert refuses is
+        # skipped and asked again next pass, and the gold each member
+        # realized is the route's own report line. Looked up: the
+        # economy tests load this pass in isolation.
+        route_mine = tuple(sale for sale in route_sales if sale.holder == holder)
+        vendor_mod = globals().get("itemplan_vendor")
+        if route_mine and vendor_mod is not None:
+            report = await asyncio.to_thread(
+                vendor_mod.carry_out, route_mine, _insert_sell)
+            inserted += len(report.carried)
+            for line in report.lines:
+                log.info("%s", line)
     log.info("economy: queued %d/%d vendor sale(s) across %d holder(s), "
              "one errand on leader=%s (taken=%s)",
              inserted, considered, len(by_holder), leader, aimed)
