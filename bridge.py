@@ -21057,7 +21057,10 @@ class Bridge(discord.Client):
             await asyncio.to_thread(_fetch_free_slots, names),
             names,
         )
-        trip = towntrip.plan(members, town)
+        # A member sitting the campaign out is not in the party that goes in,
+        # so it neither gives nor is given food or drink (towntrip._supply).
+        trip = towntrip.plan(members, town,
+                             sitting=frozenset(names) & _standin_out())
         for note in trip.notes:
             log.info("towntrip: %s", note)
         for stopped in trip.blocked:

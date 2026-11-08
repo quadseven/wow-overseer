@@ -456,6 +456,170 @@ class TheFreeRoutesComeBeforeTheCounter(unittest.TestCase):
         )
 
 
+class TheWholePartyHandsOn(unittest.TestCase):
+    """Any member going in hands a spare stack on, not only a conjurer (#2037).
+
+    MEASURED LIVE, 2026-11-08: Grug's family went into Blackrock Depths with
+    its paladin healer Grog carrying no drink while the priest Ugga carried 34
+    conjured waters. The town trip had planned only "from Og to Grog", and Og
+    the mage was sitting the run out to craft, 3056 yards away, so the
+    hand-over waited until they stood together and the run stalled at High
+    Interrogator Gerstahn on "Waiting on Grog (low mana)".
+    """
+
+    def _water(self, guid, count):
+        return towntrip.Stack(
+            guid=guid,
+            entry=8079,
+            name="Conjured Crystal Water",
+            count=count,
+            what="drink",
+            conjured=True,
+        )
+
+    def _family(self):
+        og = Member(
+            "Og",
+            "mage",
+            50,
+            10**6,
+            9,
+            (),
+            food_carried=20,
+            spells=frozenset({990, 5506}),
+        )
+        ugga = Member(
+            "Ugga",
+            "priest",
+            50,
+            10**6,
+            8,
+            (),
+            food_carried=20,
+            drink_carried=34,
+            stacks=(self._water(41, 20), self._water(42, 14)),
+        )
+        grog = Member("Grog", "paladin", 50, 10**6, 8, (), food_carried=20)
+        grug = Member("Grug", "warrior", 50, 10**6, 8, (), food_carried=20)
+        bork = Member("Bork", "rogue", 50, 10**6, 8, (), food_carried=20)
+        return og, ugga, grog, grug, bork
+
+    def test_with_the_conjurer_sitting_out_the_priest_hands_the_healer_a_stack(self):
+        got = towntrip.plan(self._family(), RATCHET, sitting=frozenset({"Og"}))
+        gives = [e for e in got.errands if e.kind == "give"]
+        self.assertEqual(
+            [(e.member, e.taker, e.command) for e in gives],
+            [("Ugga", "Grog", "guid:42")],
+        )
+
+    def test_the_member_sitting_out_is_never_named_as_a_giver_or_a_conjurer(self):
+        got = towntrip.plan(self._family(), RATCHET, sitting=frozenset({"Og"}))
+        self.assertEqual([e for e in got.errands if e.member == "Og"], [])
+
+    def test_the_giver_keeps_its_own_stack(self):
+        """The 14 goes and the 20 stays: each give is counted by the stack it
+        names, so handing on the 20-stack instead would fail here."""
+        _, ugga, _, _, _ = self._family()
+        counts = {"guid:%d" % s.guid: s.count for s in ugga.stacks}
+        got = towntrip.plan(self._family(), RATCHET, sitting=frozenset({"Og"}))
+        gives = [e.command for e in got.errands if e.kind == "give"]
+        self.assertEqual(gives, ["guid:42"])
+        self.assertGreaterEqual(
+            ugga.drink_carried - sum(counts[g] for g in gives), towntrip.STACK
+        )
+
+    def test_two_takers_never_share_one_stack(self):
+        """One non-conjurer giver with two spare stacks feeds two drinkers,
+        a different stack each, and keeps its own."""
+        ugga = Member(
+            "Ugga",
+            "priest",
+            50,
+            10**6,
+            8,
+            (),
+            food_carried=20,
+            drink_carried=60,
+            stacks=(self._water(61, 20), self._water(62, 20), self._water(63, 20)),
+        )
+        grog = Member("Grog", "paladin", 50, 10**6, 8, (), food_carried=20)
+        pala = Member("Holy", "paladin", 50, 10**6, 8, (), food_carried=20)
+        got = towntrip.plan((ugga, grog, pala), RATCHET)
+        gives = [
+            (e.member, e.taker, e.command) for e in got.errands if e.kind == "give"
+        ]
+        self.assertEqual(
+            gives, [("Ugga", "Grog", "guid:61"), ("Ugga", "Holy", "guid:62")]
+        )
+
+    def test_a_conjurer_and_a_carrier_both_give_when_two_are_short(self):
+        """The conjurer's one spare goes first; the carrier covers the next."""
+        og = Member(
+            "Og",
+            "mage",
+            50,
+            10**6,
+            9,
+            (),
+            food_carried=20,
+            drink_carried=40,
+            spells=frozenset({990, 5506}),
+            stacks=(self._water(31, 20), self._water(32, 20)),
+        )
+        _, ugga, grog, _, _ = self._family()
+        pala = Member("Holy", "paladin", 50, 10**6, 8, (), food_carried=20)
+        got = towntrip.plan((og, ugga, grog, pala), RATCHET)
+        gives = [
+            (e.member, e.taker, e.command) for e in got.errands if e.kind == "give"
+        ]
+        self.assertEqual(
+            gives, [("Og", "Grog", "guid:31"), ("Ugga", "Holy", "guid:42")]
+        )
+
+    def test_nobody_who_does_not_drink_is_handed_drink(self):
+        got = towntrip.plan(self._family(), RATCHET, sitting=frozenset({"Og"}))
+        takers = {e.taker for e in got.errands if e.kind == "give"}
+        self.assertNotIn("Grug", takers)
+        self.assertNotIn("Bork", takers)
+
+    def test_a_warrior_carrying_conjured_water_keeps_none_of_it(self):
+        """A drink is a bag slot to a class that runs on rage, so all of it
+        is spare, where a priest keeps a stack for itself."""
+        grug = Member(
+            "Grug",
+            "warrior",
+            50,
+            10**6,
+            8,
+            (),
+            food_carried=20,
+            drink_carried=20,
+            stacks=(self._water(51, 20),),
+        )
+        grog = Member("Grog", "paladin", 50, 10**6, 8, (), food_carried=20)
+        got = towntrip.plan((grug, grog), RATCHET)
+        gives = [e for e in got.errands if e.kind == "give"]
+        self.assertEqual([(e.member, e.taker) for e in gives], [("Grug", "Grog")])
+
+    def test_a_conjurer_in_the_party_is_still_asked_first(self):
+        og = Member(
+            "Og",
+            "mage",
+            50,
+            10**6,
+            9,
+            (),
+            food_carried=20,
+            drink_carried=40,
+            spells=frozenset({990, 5506}),
+            stacks=(self._water(31, 20), self._water(32, 20)),
+        )
+        _, ugga, grog, _, _ = self._family()
+        got = towntrip.plan((og, ugga, grog), RATCHET)
+        gives = [e for e in got.errands if e.kind == "give"]
+        self.assertEqual([(e.member, e.taker) for e in gives], [("Og", "Grog")])
+
+
 class TheEmptyCases(unittest.TestCase):
     def test_no_members_is_an_empty_plan_and_not_a_crash(self):
         self.assertEqual(towntrip.plan((), RATCHET), towntrip.Plan())
