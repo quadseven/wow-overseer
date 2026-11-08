@@ -880,6 +880,7 @@ def answer_line(
         and need.keyword == door.keyword
         and need.gain > 0
     )
+
     def render(template: str) -> str:
         return _fit(
             template.format(place=door.place, item=need.item if need else ""), 255
