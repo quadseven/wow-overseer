@@ -3725,7 +3725,10 @@ def plan(
         if m.role not in (MAINTENANCE, SUMMONER, RAIDER):
             continue
         master = str(masters.get(m.guild) or "")
-        level_room = counters["level"].get(m.guild, 0) < guildlevel.STEPS_PER_GUILD
+        level_room = LevelRoom(
+            walks=counters["level"].get(m.guild, 0) < guildlevel.STEPS_PER_GUILD,
+            crossings=counters["cross"].get(m.guild, 0) < CROSS_STEPS_PER_GUILD,
+        )
         step, doing, note, gear_why = _member_step(
             m,
             (gear or {}).get(m.name),
@@ -3781,7 +3784,20 @@ def plan(
         if why:
             notes.append(why)
             _release_slots(m.name, far, hunts)
-            continue
+            crossing = isle_crossing_instead(
+                m,
+                busy,
+                started,
+                allowance,
+                counters,
+                (leveling, recent, cap, _offer_for(loops, m.name), campaign),
+            )
+            if crossing is None:
+                continue
+            step = crossing
+            lines[m.name] = step.said
+            notes.append("%s takes its boat off the isle instead of waiting" % m.name)
+            started, allowance = _allowance(step, counters, per_guild)
         started[m.guild] = started.get(m.guild, 0) + 1
         busy.add(m.name)
         steps.append(step)
@@ -3880,6 +3896,85 @@ def _allowance(step, counters, per_guild):
     if step.action == "train":
         return counters["train"], TRAIN_STEPS_PER_GUILD
     return counters["jobs"], per_guild
+
+
+@dataclass(frozen=True)
+class LevelRoom:
+    """What a guild still has this pass of the two level allowances: a level
+    walk (guildlevel.STEPS_PER_GUILD) and a level crossing
+    (CROSS_STEPS_PER_GUILD). True when either is left; _room_for says which
+    one a step needs."""
+
+    walks: bool = True
+    crossings: bool = True
+
+    def __bool__(self) -> bool:
+        return self.walks or self.crossings
+
+
+def _room_for(room, step) -> bool:
+    """Whether `room` (a LevelRoom, or a plain bool for both) has the allowance
+    `step` is started against."""
+    if not isinstance(room, LevelRoom):
+        return bool(room)
+    return room.crossings if _level_crossing(step) else room.walks
+
+
+# AN OUTGROWN MEMBER ON THE ISLE TAKES THE BOAT BEFORE ITS ERRANDS (#2047,
+# 2026-11-08). After #2039 gave the level crossing an allowance of its own,
+# three of Cave's outgrown Draenei were still held on Azuremyst Isle and in the
+# Exodar by steps ahead of the level step. Brakk (28) and Eggrok (29) stood at
+# 0 free bag slots, so their sale walk came first every pass and waited on
+# the guild job allowance ("waits: 4 guild job steps per guild per pass");
+# Eggrok was also grouped behind a bot of no guild, and the bridge holds a
+# follower's vendor walk (followhold.py) but not its crossing. Dakk's (27)
+# class step, Call of Fire, was refused on the class quest allowance ("waits:
+# 6 guild job steps") every pass, and with no other step taken the member
+# stood. Once the isle is outgrown its quests are spent and only the boat
+# moves the member on; a sale or a food buy is as easily made on the far
+# side. So, off the classic continents, a due level crossing comes ahead of the
+# make-room, bag and upkeep rungs (isle_crossing_first), and a member whose
+# chosen step waits on a used-up allowance takes its crossing instead when
+# the crossing allowance has room (isle_crossing_instead). A class step still
+# comes first while it can be started; one that keeps failing yields to the
+# crossing through stalled_level_first, which now reads the crossing
+# allowance for a crossing rather than the level walks'.
+def isle_crossing_first(m, leveling, recent, cap, room=True, loop=None, campaign=""):
+    """(step or None, what it does) of the level crossing of a member standing
+    off the classic continents (classquest.CONTINENTS), or None when it has no
+    crossing due, the guild has no crossing left this pass (`room`), or the
+    member stands on a continent. A crossing that is still in flight
+    (crossing_cooling) holds the member with no step, so no errand is written
+    over it."""
+    if leveling is None or m.map_id is None:
+        return None
+    if int(m.map_id) in classquest.CONTINENTS or not m.online:
+        return None
+    step, doing, _note = level_step(m, leveling, recent, cap, loop, campaign)
+    if step is None:
+        held = bool(doing) and crossing_cooling(m.name, recent)
+        return (None, doing) if held else None
+    if not _level_crossing(step) or not _room_for(room, step):
+        return None
+    return step, doing
+
+
+def isle_crossing_instead(m, busy, started, allowance, counters, level):
+    """The level crossing a member off the classic continents starts in place
+    of a step refused on its used-up allowance (`started` against
+    `allowance`), or None: refused for another reason (offline, fighting,
+    already walking), no crossing due, or no crossing allowance left.
+    `level` is (leveling world, recent rows, cap, death loop, campaign)."""
+    if m.name in busy or not m.online or m.in_combat:
+        return None
+    if started.get(m.guild, 0) < int(allowance):
+        return None
+    leveling, recent, cap, loop, campaign = level
+    room = counters["cross"].get(m.guild, 0) < CROSS_STEPS_PER_GUILD
+    found = isle_crossing_first(m, leveling, recent, cap, room, loop, campaign)
+    if found is None or found[0] is None:
+        return None
+    return found[0]
 
 
 def collect_step(m, commands, cap):
@@ -4102,7 +4197,8 @@ def _member_step(
 ):
     """A death loop's way out of its zone first (death_loop_first, #1464),
     then a class quest, then a hunter's first pet, then a hearth out of a
-    spot it cannot leave, then room in the bags for an upgrade the world
+    spot it cannot leave, then the boat off the isle for a member that has
+    outgrown it (isle_crossing_first, #2047), then room in the bags for an upgrade the world
     cannot put on without it (_room_first, #1088), then an owned or paid bag
     for maintenance members short of space (guildbags), then food for a member
     with nothing to eat or drink,
@@ -4158,6 +4254,9 @@ def _member_step(
     )
     if found is not None:
         return found
+    found = isle_crossing_first(m, leveling, recent, cap, level_room, loop, campaign)
+    if found is not None:
+        return (*found[:2], quest_note, "")
     found, room_note = _room_first(
         m,
         equip_room,
@@ -6902,8 +7001,9 @@ def class_yield(m, recent) -> str:
 def stalled_level_first(m, leveling, recent, cap, room=True):
     """(step, what it does, note) of the level walk for a member whose class
     step is held for failing (class_stall_hold), or None: no hold, no level
-    walk left to the guild this pass (`room`), or no walk to make
-    (level_step). A member held on its level crossing (level_cross_step) stays
+    walk left to the guild this pass (`room`, a LevelRoom: a crossing is
+    started against the crossing allowance, a walk against the walks'), or
+    no walk to make (level_step). A member held on its level crossing (level_cross_step) stays
     held, with no class row written over the crossing."""
     if not room or leveling is None:
         return None
@@ -6912,6 +7012,8 @@ def stalled_level_first(m, leveling, recent, cap, room=True):
         return None
     step, doing, _note = level_step(m, leveling, recent, cap)
     if step is None and not doing:
+        return None
+    if step is not None and not _room_for(room, step):
         return None
     note = (
         "%s's class quest step failed %d times in a row without progress; its "
