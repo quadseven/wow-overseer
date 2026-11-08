@@ -53,9 +53,9 @@ THE RULE (`verdict`), the first line that applies:
     with no slot bucket                      slot
   * weapon or armor while the worn gear is   keep
     unread
-  * weapon or armor the member would wear    keep: an upgrade
-    within LOOKAHEAD_LEVELS (gear.would_wear,
-    the family's own test)
+  * weapon or armor the member would wear    keep: an upgrade, the best of its
+    within LOOKAHEAD_LEVELS (gear.would_wear, slot (`redundant_upgrades`: the
+    the family's own test)                   second-bests sell, #1592)
   * other weapon or armor                    sell: not an upgrade
   * a trade good, gem or recipe while the    keep
     bank forecast is unread
@@ -300,6 +300,46 @@ def verdict(item, judge: Judge) -> tuple:
     if item_class in FORECAST_CLASSES:
         return _forecast_verdict(item, judge)
     return KEEP, "not a kind a member sells"
+
+
+# The pieces of one slot bucket a member keeps as upgrades, best first: one
+# of each armor slot, the off hand and the ranged slot, and three weapons (a
+# main hand, an off hand and a spare, whatever the member's class wields).
+UPGRADES_KEPT = 1
+WEAPON_UPGRADES_KEPT = 3
+UPGRADE_WORDS = "an upgrade"
+
+
+def redundant_upgrades(items, judge: Judge) -> frozenset:
+    """Guids of the carried pieces kept as "an upgrade" that a better piece of
+    the same slot already covers (#1592).
+
+    The verdict judges each piece against the worn one alone, so a member that
+    looted four belts above its own kept all four. Read on the dev realm on
+    2026-11-08: 193 slots (77 gold) of the full members' bags were such
+    second-bests. The best UPGRADES_KEPT of a bucket by item level (guid breaks
+    a tie) stay; only an uncommon-or-lower piece beyond them sells. A pair of
+    identical pieces count twice, as they fill two slots.
+    """
+    buckets: dict = {}
+    for item in items or ():
+        if (
+            _int(item.item_class) not in (WEAPON, ARMOR)
+            or _int(item.quality) > UNCOMMON
+        ):
+            continue
+        kept, why = verdict(item, judge)
+        if kept is SELL or not why.startswith(UPGRADE_WORDS):
+            continue
+        bucket = bag_pressure.slot_bucket(item)
+        if bucket:
+            buckets.setdefault(bucket, []).append(item)
+    out = set()
+    for bucket, pieces in buckets.items():
+        pieces.sort(key=lambda i: (-_int(getattr(i, "item_level", 0)), _int(i.guid)))
+        keep = WEAPON_UPGRADES_KEPT if bucket == "weapon" else UPGRADES_KEPT
+        out.update(_int(i.guid) for i in pieces[keep:])
+    return frozenset(out)
 
 
 def sells(item, judge: Judge) -> bool:
