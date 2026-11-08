@@ -44,6 +44,26 @@ export function darkReason() {
   return "The picture is black: the game window may be asleep or on a loading screen.";
 }
 
+// A live tile whose frames stop painting is stalled, however healthy the
+// connection claims to be: the stream can sit open while the picture freezes
+// on its last frame (or on black). streams.js records when a frame was last
+// actually painted; past this gap the badge must stop saying LIVE until a
+// frame paints again. A tile that has never painted is still connecting,
+// not stalled.
+export const STALL_MS = 3000;
+
+export function frameStalled(state, lastFrame, nowMs) {
+  return state === "live" && lastFrame > 0 && nowMs - lastFrame > STALL_MS;
+}
+
+// The word on a live tile's badge: STALLED while its frames are stalled,
+// LIVE once they paint again. Only a live tile's badge is decided here;
+// every other state's word belongs to the tile's own state changes.
+export function badgeWord(state, stalled) {
+  if (state !== "live") return null;
+  return stalled ? "STALLED" : "LIVE";
+}
+
 // Sample a <video> and call onChange(dark) when the picture becomes or stops
 // being dark. Returns {start, stop}. Safe to call start() repeatedly.
 export function darkSampler(video, onChange, options = {}) {

@@ -16,7 +16,7 @@
 
 import { html, memberHref, duration, classVar } from "../../ui.js";
 import { makePlayer, hasSound } from "./whep.js";
-import { darkSampler, darkReason } from "./dark.js";
+import { darkSampler, darkReason, frameStalled, badgeWord } from "./dark.js";
 import { makeReader } from "./chatvoice.js";
 import { u } from "../../api.js";
 import { familyKeys } from "../../families.js";
@@ -299,7 +299,21 @@ function ageText(t) {
   return "frame " + s + "s old";
 }
 
+// A live tile whose frames have stalled says so on its badge until a frame
+// paints again; the state itself stays "live" (the connection is not the
+// problem), only the claim on the badge changes.
+function applyStall(t) {
+  const stalled = frameStalled(t.state, t.lastFrame, Date.now());
+  const marked = t.pic.dataset.stalled === "1";
+  if (stalled === marked) return;
+  if (stalled) t.pic.dataset.stalled = "1";
+  else delete t.pic.dataset.stalled;
+  const word = badgeWord(t.state, stalled);
+  if (word !== null) t.badge.lastChild.textContent = word;
+}
+
 function ageTick() {
+  tiles.forEach(applyStall);
   document.querySelectorAll("[data-frame-age]").forEach((n) => {
     const text = ageText(tiles.get(n.getAttribute("data-frame-age")));
     if (n.textContent !== text) n.textContent = text;
