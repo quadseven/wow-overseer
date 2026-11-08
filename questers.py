@@ -121,6 +121,14 @@ items, an upgrade, a piece judged while its worn gear is unread, and a stack
 reserved in overseer_keep (keep.py; unread reservations sell nothing). The
 sale is asked at most once in SELL_COOLDOWN_MINUTES, and before the move.
 
+A TAKE REFUSED FOR BAG ROOM IS A WAIT, NOT A BROKEN QUEST (#1992). The module
+refuses a take whose start item will not fit in the bags with its own words
+(BAG_ROOM_REFUSAL, retryable, mod-overseer#1393). Bags can read as having room
+and still be full to the core (a free slot only in a profession bag), so that
+refusal is never counted toward FAILS_BEFORE_BROKEN: the quester sells first,
+whatever its bags read (`needs_sale`), and the take of that quest is left for
+SELL_COOLDOWN_MINUTES (`bag_room_refused`), then asked again.
+
 PURE MODULE: rows in, moves and verdicts out. No MySQL; the clock is passed in.
 """
 
@@ -256,6 +264,11 @@ CANNOT_TURN_IN = "the world says no hand-in of it can go through"
 LOG_STATE_REFUSALS = frozenset(
     {"already turned in", "not in the quest log", "already in the quest log"}
 )
+# The module's words for a take refused only because the giver's start item
+# will not fit in the bags (mod-overseer#1393, retryable). A wall that moves:
+# never counted toward a broken quest, and the quester sells before the take
+# is asked again (#1992).
+BAG_ROOM_REFUSAL = "no bag room for the item the giver hands over"
 
 # The world's own words for a spawn that is not there (classquest.SPAWN_REFUSALS).
 GONE = "no such spawn in the world"
@@ -1013,6 +1026,8 @@ def refusals(name, tried) -> dict:
     for a in sorted(tried or (), key=lambda a: -a.age_minutes):
         if a.name != name or not a.failed or a.reason in LOG_STATE_REFUSALS:
             continue
+        if a.reason == BAG_ROOM_REFUSAL:
+            continue
         found = _CHAIN_ROW.match(a.command)
         if not found:
             continue
@@ -1020,6 +1035,22 @@ def refusals(name, tried) -> dict:
         count, _words = out.get(key, (0, ""))
         out[key] = (count + 1, a.reason)
     return out
+
+
+def bag_room_refused(name, tried) -> frozenset:
+    """The quest ids whose take this quester's world refused for bag room
+    (BAG_ROOM_REFUSAL) inside SELL_COOLDOWN_MINUTES: the sale goes first, and
+    the take is asked again after it (#1992)."""
+    out = set()
+    for a in tried or ():
+        if a.name != name or not a.failed or a.reason != BAG_ROOM_REFUSAL:
+            continue
+        if a.age_minutes >= SELL_COOLDOWN_MINUTES:
+            continue
+        found = _CHAIN_ROW.match(a.command)
+        if found and found.group(1) == "take":
+            out.add(int(found.group(2)))
+    return frozenset(out)
 
 
 def cannot_turn_in(name, tried) -> dict:
@@ -1594,6 +1625,8 @@ def next_move(
     if move is not None:
         return move, "", []
     skip = set(broken) | {b.quest for b in found}
+    # A take just refused for bag room waits on the sale (#1992).
+    take_skip = skip | bag_room_refused(member.name, tried)
     # 2. A complete quest, the nearest turn-in NPC first. One only the ledger
     # holds broken is still handed in; one whose turn-in NPC this pass found
     # missing is left, and so is one whose hand-in the world keeps refusing,
@@ -1607,7 +1640,8 @@ def next_move(
         return move, "", []
     # 3. A quest in reach in its zone, the nearest giver first, while the log
     # has room.
-    takes, never_held = _takes(cat, member, skip, left, tried)
+    takes, never_held = _takes(cat, member, take_skip, left, tried)
+    skip |= {b.quest for b in never_held}
     if takes and len(member.quest_log) < LOG_SLOTS:
         _d, _q, quest, spot = min(takes, key=_by_yards)
         said = "%s walks to %s and takes %s" % (
@@ -1849,12 +1883,16 @@ def _selling_lately(name, recent) -> bool:
     )
 
 
-def needs_sale(member) -> bool:
-    """Whether the quester's bags are read and at SELL_FLOOR or under."""
+def needs_sale(member, tried=()) -> bool:
+    """Whether the quester's bags are read and at SELL_FLOOR or under, or the
+    world just refused one of its takes for bag room (`bag_room_refused`),
+    whatever its bags read (#1992)."""
+    if bag_room_refused(member.name, tried):
+        return True
     return member.free_slots is not None and int(member.free_slots) <= SELL_FLOOR
 
 
-def sell_step(member, carried, worn, kept, cat: Catalogue, recent, cap):
+def sell_step(member, carried, worn, kept, cat: Catalogue, recent, cap, tried=()):
     """The guildcorps.Step that sends a quester with full bags to a vendor, or
     None: its bags have room or are unread, it is offline, dead or unplaced,
     its last sale is younger than SELL_COOLDOWN_MINUTES, the reservations are
@@ -1864,8 +1902,9 @@ def sell_step(member, carried, worn, kept, cat: Catalogue, recent, cap):
     (None unread: no weapon or armor short of outgrown is sold), `kept` the
     keep.py reservations, `recent` guildjobs.Recent rows of the questers' own
     sources. What it sells is guildjobs.vendor_stacks with every item a quest
-    of the catalogue needs, hands over or uses protected."""
-    if not needs_sale(member) or kept is None:
+    of the catalogue needs, hands over or uses protected. `tried` is its
+    Attempt rows: a take refused for bag room sends it too (#1992)."""
+    if not needs_sale(member, tried) or kept is None:
         return None
     if not member.online or not member.alive or not member.placed:
         return None
@@ -1878,19 +1917,17 @@ def sell_step(member, carried, worn, kept, cat: Catalogue, recent, cap):
     if not stacks:
         return None
     source = guildjobs.source_for(SELL_ACTION, member.name)
+    free = member.free_slots
+    if bag_room_refused(member.name, tried):
+        room = "was refused a quest for %s" % BAG_ROOM_REFUSAL
+    else:
+        room = "has %d free bag slot%s" % (int(free), "" if int(free) == 1 else "s")
     return guildcorps.Step(
         member.name,
         SELL_ACTION,
         len(stacks),
-        "%s has %d free bag slot%s and walks to a vendor to sell %d stack(s) it "
-        "has no use for, worth %dc"
-        % (
-            member.name,
-            int(member.free_slots),
-            "" if int(member.free_slots) == 1 else "s",
-            len(stacks),
-            vendorsale.worth(stacks),
-        ),
+        "%s %s and walks to a vendor to sell %d stack(s) it has no use for, "
+        "worth %dc" % (member.name, room, len(stacks), vendorsale.worth(stacks)),
         rows=tuple(
             guildcorps.Row("sell", "guid:%d" % int(c.guid), "", source) for c in stacks
         ),
