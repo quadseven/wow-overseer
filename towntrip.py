@@ -289,9 +289,14 @@ class Member:
         so the conjurer never feeds the party by starving itself - and only a
         CONJURED stack is offered, because that is the one this family can
         remake for free and the one measured to be tradable.
+
+        THE STACK KEPT IS FOR SOMEBODY WHO USES IT (#2037). A priest holding
+        34 conjured waters keeps 20 and the 14 are spare; a warrior handed
+        water by a mage long ago keeps none of it, because a drink is a bag
+        slot and nothing else to a class that does not run on mana.
         """
         mine = tuple(s for s in self.stacks if s.what == what and s.conjured)
-        keep = STACK
+        keep = STACK if _wants(self, what) else 0
         out = []
         remaining = self.carries(what)
         for stack in sorted(mine, key=lambda s: s.guid):
@@ -503,22 +508,30 @@ def _buy(member: Member, town: Town, what: str) -> tuple[list[Errand], list[str]
     return errands, notes
 
 
-def _hand_on(wanted, conjurers, what: str) -> tuple[list[Errand], set]:
-    """Hand a conjurer's spare stacks to whoever has none. The cheapest route.
+def _hand_on(wanted, givers, what: str) -> tuple[list[Errand], set]:
+    """Hand spare conjured stacks to whoever has none. The cheapest route.
 
     One stack per taker and each stack used once, so two people short of food
     are never promised the same twenty units. Returns the errands and the
     names they supplied, because "supplied for free this pass" is what stops
     the buy half selling somebody a stack they are already being handed.
+
+    ANY MEMBER GOING IN MAY GIVE, NOT ONLY A CONJURER (#2037). Grug's family
+    went into Blackrock Depths with its paladin healer carrying no drink while
+    the priest carried 34 conjured waters; the only giver ever asked was the
+    mage, and the mage was sitting the run out, 3056 yards away, so the
+    hand-over waited for a meeting that never came and the run stalled at its
+    first boss on "Waiting on Grog (low mana)". `givers` comes in conjurers
+    first - they can remake what they hand on - and then everybody else.
     """
     errands: list[Errand] = []
     supplied = set()
-    offers = {giver.name: list(giver.spare(what)) for giver in conjurers}
+    offers = {giver.name: list(giver.spare(what)) for giver in givers}
     for member in wanted:
         if member.conjures(what):
             continue
-        for giver in conjurers:
-            if not offers[giver.name]:
+        for giver in givers:
+            if giver.name == member.name or not offers[giver.name]:
                 continue
             stack = offers[giver.name].pop(0)
             # THE GIVER IS THE ROW'S CHARACTER AND THE TAKER IS ITS ARGUMENT,
@@ -529,7 +542,8 @@ def _hand_on(wanted, conjurers, what: str) -> tuple[list[Errand], set]:
                     giver.name,
                     GIVE_KIND,
                     f"guid:{stack.guid}",
-                    f"{giver.name} conjured {stack.name} and {member.name} carries "
+                    f"{giver.name} {'conjured' if giver.conjures(what) else 'carries a spare'}"
+                    f" {stack.name} and {member.name} carries "
                     f"{member.carries(what)} {what}",
                     taker=member.name,
                 )
@@ -587,7 +601,9 @@ def _conjure(conjurers, dependents, what: str) -> tuple[list[Errand], list[str],
     return errands, notes, supplied
 
 
-def _supply(members, town: Town, what: str) -> tuple[list[Errand], list[str]]:
+def _supply(
+    members, town: Town, what: str, sitting=frozenset()
+) -> tuple[list[Errand], list[str]]:
     """Get one consumable into every bag that should have it (infra#3464).
 
     THREE ROUTES, IN THE ONLY ORDER THAT MAKES SENSE, and this is the whole of
@@ -614,14 +630,23 @@ def _supply(members, town: Town, what: str) -> tuple[list[Errand], list[str]]:
     so the hand-off simply becomes possible on the cycle after the conjure
     lands, and a conjure that produced nothing is asked for again. That is the
     same property `_towntrip_once` already relies on for the walk to town.
+
+    A MEMBER SITTING THE CAMPAIGN OUT IS NOT IN THE PARTY (#2037). It is
+    neither supplied nor asked to supply: a hand-over needs the two to stand
+    together, and the one sitting out to craft is somewhere else on purpose,
+    so a row naming it as the giver waits for a meeting that never comes
+    while the party goes in without the drink.
     """
-    ordered = sorted(members, key=lambda m: m.name)
+    ordered = sorted(
+        (m for m in members if m.name not in sitting), key=lambda m: m.name
+    )
     wanted = [m for m in ordered if _wants(m, what) and m.carries(what) < STACK]
     if not wanted:
         return [], []
 
     conjurers = [m for m in ordered if m.conjures(what)]
-    errands, supplied = _hand_on(wanted, conjurers, what)
+    givers = conjurers + [m for m in ordered if not m.conjures(what)]
+    errands, supplied = _hand_on(wanted, givers, what)
     dependents = [m for m in wanted if not m.conjures(what) and m.name not in supplied]
     made, notes, cast_for = _conjure(conjurers, dependents, what)
     errands.extend(made)
@@ -639,7 +664,7 @@ def _supply(members, town: Town, what: str) -> tuple[list[Errand], list[str]]:
     return errands, notes
 
 
-def plan(members, town: Town) -> Plan:
+def plan(members, town: Town, sitting=frozenset()) -> Plan:
     """Everything this trip should do, in the order it should do it.
 
     REPAIR BEFORE ANYTHING THAT SPENDS, ALWAYS, and it is the one ordering
@@ -661,6 +686,10 @@ def plan(members, town: Town) -> Plan:
     an errand, because a row that will be refused is worse than no row: it
     costs a poll, it fills the queue, and it reads in the log like something
     that was tried.
+
+    `sitting` names the members sitting the campaign out (standin.py). Their
+    repairs are still planned; food and drink are planned for the party that
+    goes in, which they are not part of (#2037).
     """
     errands: list[Errand] = []
     notes: list[str] = []
@@ -681,7 +710,7 @@ def plan(members, town: Town) -> Plan:
     # Food before drink because everybody eats and only the mana users drink,
     # so the first pass is the one that reaches the whole party.
     for what in (FOOD_KIND, DRINK_KIND):
-        got, said = _supply(ordered, town, what)
+        got, said = _supply(ordered, town, what, frozenset(sitting))
         errands.extend(got)
         notes.extend(said)
 
