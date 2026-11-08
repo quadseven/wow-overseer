@@ -63,6 +63,7 @@ import leadcmd
 import attunestep
 import dungeonquests
 import bonds
+import campaignhandoff
 import campaignplan
 import campaignqueue
 import classic
@@ -2629,6 +2630,9 @@ def _mark_party_leader(head: str) -> None:
             + scope,
             (head, cohort) if cohort else (head,),
         )
+        # The module counts runs on the leader's row alone, so the family's
+        # count and cap follow the lead flag on the same connection (#1688).
+        campaignhandoff.hand_over(cur, head, cohort)
 
 
 def _aim_traveller(quest_id: int) -> int:
