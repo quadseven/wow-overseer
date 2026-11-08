@@ -677,6 +677,10 @@ class Member:
     # The member's purchase order (purse.Order), None when unread: gear and
     # food then spend as they did before it existed.
     purse: object = None
+    # Somebody else leads the group it is in (the snapshot's group leader is
+    # not its own guid): it stands where its leader stands, so its standing
+    # still says nothing of it (stood_still_step).
+    follows: bool = False
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -4565,6 +4569,59 @@ def death_loop_onward(m, loop, world, recent, cap):
     return row, choice.place or master.name
 
 
+# THE WALK ON IS TRIED AGAIN ONCE THE HEARTH HAS LANDED (#1882, #2014). The walk
+# row of death_loop_hearth is written in the same instant as the hearth row,
+# and the hearth holds the member until it lands: read on the dev realm on
+# 2026-11-08, of 39 level walks written within five minutes of a hearth row,
+# 33 were refused "character is held by another verb" and 6 started. A refused
+# walk starts no cooldown that matters (a passing refusal waits five minutes),
+# but nothing asked again: the member stood at its home, out of the loop's zone,
+# so the loop's rung returned None, no level step applied (nothing there is
+# outgrown), and its own wandering took it back to the zone it had just left.
+# Dustwallow Marsh that day: 87 deaths in the 8 hours after the 10:27 mark
+# among members the loop reader listed. So a member that hearthed out of the
+# loop lately, stands out of its zone, and has no walk on running, is walked to
+# the hub of another zone now.
+RESUME_MINUTES = 90
+
+
+def death_loop_resume(m, loop, recent, world, cap):
+    """The walk on to a hub of another zone, for a member that hearthed out of
+    its death loop and was not walked on, or None.
+
+    Only a member out of the loop's zone, online, alive and out of combat, in
+    the open world, whose newest hearth row applied (it landed) within
+    RESUME_MINUTES, with no level walk running or cooling (`_cooling` counts a
+    passing refusal as five minutes). The walk is death_loop_onward's: from the
+    home, never the loop's zone, written as a level walk."""
+    if loop is None or world is None or _in_loop_zone(m, loop):
+        return None
+    if not (m.online and m.alive and not m.in_combat) or not _in_the_open(m):
+        return None
+    hearths = [
+        r
+        for r in recent or ()
+        if r.name == m.name and r.action == "hearth" and r.status == "applied"
+    ]
+    if not hearths or min(int(r.age_minutes) for r in hearths) > RESUME_MINUTES:
+        return None
+    if _cooling(m, guildlevel.ACTION, recent):
+        return None
+    onward = death_loop_onward(m, loop, world, recent, cap)
+    if onward is None:
+        return None
+    walk, place = onward
+    said = (
+        "%s hearthed out of %s and was not walked on, so it walks on to the "
+        "flight master at %s" % (m.name, loop.place, place)
+    )
+    found = _WALK_SPAWN.search(walk.command)
+    key = int(found.group(2)) if found else 0
+    return guildcorps.Step(
+        m.name, guildlevel.ACTION, key, said, rows=(walk,), goal=place
+    )
+
+
 # A HEARTH BOUND IN THE LOOP'S ZONE IS NO WAY OUT (#1882). inn_step binds a
 # member's hearthstone at the inn of the zone it levels in, so the zone a member
 # keeps dying in is often the zone its hearth is bound in. Measured on the dev
@@ -4617,7 +4674,10 @@ def death_loop_first(
     if step is not None and not held:
         return step, doing, "", ""
     if not _in_loop_zone(m, loop):
-        return None
+        step = death_loop_resume(m, loop, recent, leveling, cap)
+        if step is None:
+            return None
+        return step, step.said, held, ""
     step = death_loop_hearth(m, loop, recent, leveling, cap)
     if step is not None:
         return step, step.said, held, ""
@@ -7063,6 +7123,12 @@ def stood_still_step(m, still_for, recent, leveling=None):
     if int(m.level) >= guildlevel.LEVEL_CAP:
         return None
     if m.name in getattr(leveling, "roster", ()):
+        return None
+    # A grouped follower stands where its leader stands. Hearthing it home
+    # undid its level crossing: Eggrok followed a bot outside the guild on
+    # Kalimdor, stood 71 minutes, was hearthed back to the Azuremyst isle,
+    # crossed again, and did so five times in a day.
+    if getattr(m, "follows", False):
         return None
     if not _in_the_open(m):
         return None

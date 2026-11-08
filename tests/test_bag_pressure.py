@@ -242,14 +242,27 @@ class BagPressureTests(unittest.TestCase):
                 },
             ]
         )
+        # The leader at a counter sells; a follower out of reach is not
+        # written rows the world refuses on its own range (#1962).
         self.assertEqual(
-            ("Grug", "Og"),
+            ("Grug",),
             vendor_holders_to_queue(
                 rows,
                 leader="Grug",
                 leader_at_counter=True,
                 holder_at_counter=lambda _: False,
                 leader_walking=True,
+            ),
+        )
+        # A follower standing at a counter of its own still sells.
+        self.assertEqual(
+            ("Grug", "Og"),
+            vendor_holders_to_queue(
+                rows,
+                leader="Grug",
+                leader_at_counter=True,
+                holder_at_counter=lambda name: name == "Og",
+                leader_walking=False,
             ),
         )
 
