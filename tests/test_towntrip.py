@@ -697,18 +697,35 @@ class TheDryHealerIsToppedUpInsideTheRun(unittest.TestCase):
 
     def _water(self, guid, count):
         return towntrip.Stack(
-            guid=guid, entry=8077, name="Conjured Mineral Water",
-            count=count, what="drink", conjured=True,
+            guid=guid,
+            entry=8077,
+            name="Conjured Mineral Water",
+            count=count,
+            what="drink",
+            conjured=True,
         )
 
     def _party(self, healer_drinks=0):
         og = Member(
-            "Og", "mage", 51, 10**6, 9, (), food_carried=20, drink_carried=55,
+            "Og",
+            "mage",
+            51,
+            10**6,
+            9,
+            (),
+            food_carried=20,
+            drink_carried=55,
             spells=frozenset({990, 5506}),
             stacks=(self._water(31, 20), self._water(32, 20), self._water(33, 15)),
         )
         grog = Member(
-            "Grog", "paladin", 53, 10**6, 8, (), food_carried=20,
+            "Grog",
+            "paladin",
+            53,
+            10**6,
+            8,
+            (),
+            food_carried=20,
             drink_carried=healer_drinks,
         )
         bork = Member("Bork", "rogue", 52, 10**6, 8, (), food_carried=20)
@@ -725,7 +742,9 @@ class TheDryHealerIsToppedUpInsideTheRun(unittest.TestCase):
         self.assertEqual(got, [("Og", "Grog", "guid:31")])
 
     def test_a_healer_below_the_floor_is_still_topped_up(self):
-        got = self._gives(self._party(towntrip.IN_RUN_DRINK_FLOOR - 1), lambda g, t: False)
+        got = self._gives(
+            self._party(towntrip.IN_RUN_DRINK_FLOOR - 1), lambda g, t: False
+        )
         self.assertEqual(got, [("Og", "Grog", "guid:31")])
 
     def test_a_healer_with_enough_is_left_alone(self):
@@ -741,7 +760,14 @@ class TheDryHealerIsToppedUpInsideTheRun(unittest.TestCase):
     def test_only_the_near_giver_is_used(self):
         og, grog, bork = self._party()
         ugga = Member(
-            "Ugga", "priest", 52, 10**6, 8, (), food_carried=20, drink_carried=40,
+            "Ugga",
+            "priest",
+            52,
+            10**6,
+            8,
+            (),
+            food_carried=20,
+            drink_carried=40,
             stacks=(self._water(41, 20), self._water(42, 20)),
         )
         far = {("Og", "Grog")}
