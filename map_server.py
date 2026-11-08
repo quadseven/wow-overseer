@@ -25,6 +25,7 @@ import pymysql
 
 import achievements
 import apiv2
+from apiv2 import operator as v2_operator
 from apiv2 import presence as v2_presence
 from apiv2._context import Context as _V2Context
 import agenda
@@ -204,6 +205,23 @@ LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT_SECONDS", "120"))
 # A chat POST is a name plus a sentence; anything larger is not a request
 # this page makes, and an unbounded read would be a memory hole.
 MAX_BODY = 4096
+
+# THE OPERATOR SWITCH IS THE SERVER'S, NOT ONLY THE APP'S (#1842). These
+# three routes queue orders the whole family obeys, start a game client, or
+# hold a request thread on the model gateway. The app already draws them
+# locked unless GET /api/v2/operator says OVERSEER_OPERATOR_ACTIONS is on, but
+# a post from anywhere on the network used to be obeyed regardless. Off (the
+# default, and what the deployment sets today), each answers 403 and does
+# nothing; on, the network-only trust model stands. /api/director keeps its
+# own token, and /api/frame is the capture agent's.
+OPERATOR_ROUTES = frozenset({"/api/chat", "/api/decree", "/api/watch"})
+
+# AT MOST THIS MANY /api/chat MODEL CALLS AT ONCE (#1842). Each one holds a
+# request thread on the gateway for up to LLM_TIMEOUT, and ThreadingHTTPServer
+# caps nothing, so past this the post is told to come back (429) instead of
+# opening another connection and writing another row.
+CHAT_MAX_CALLS = 2
+_CHAT_CALLS = threading.BoundedSemaphore(CHAT_MAX_CALLS)
 
 # The operator's key for POST /api/director. Unset, the Watcher cannot be
 # ordered over HTTP at all (the Discord door has its own allow-list of users).
@@ -5664,9 +5682,14 @@ class Handler(BaseHTTPRequestHandler):
         return 200, payload
 
     def do_POST(self):  # noqa: N802 (stdlib naming)
-        handler = self.POST_ROUTES.get(self.path.split("?", 1)[0])
+        route = self.path.split("?", 1)[0]
+        handler = self.POST_ROUTES.get(route)
         if handler is None:
             self._send(404, "text/plain", b"not found")
+            return
+        if route in OPERATOR_ROUTES and not v2_operator.enabled():
+            self._send(403, "application/json",
+                       b'{"error": "operator actions are off on this deployment"}')
             return
         handler(self)
 
@@ -5713,6 +5736,10 @@ class Handler(BaseHTTPRequestHandler):
         if not text:
             self._send(400, "application/json", b'{"error": "say something"}')
             return
+        if not _CHAT_CALLS.acquire(blocking=False):
+            self._send(429, "application/json",
+                       b'{"error": "the inner voice is busy; try again shortly"}')
+            return
         try:
             self._chat(name, text)
         except Exception:
@@ -5720,6 +5747,8 @@ class Handler(BaseHTTPRequestHandler):
             # and degrades); same contract as every other endpoint.
             log.exception("chat failed for %s", name)
             self._send(503, "application/json", b'{"error": "world unreachable"}')
+        finally:
+            _CHAT_CALLS.release()
 
     def _chat(self, name: str, text: str) -> None:
         grounding = _fetch_chat_grounding(name)
