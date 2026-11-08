@@ -398,18 +398,24 @@ def _follower_group_row(cur, holder: str):
     return cur.fetchone()
 
 
-def _held_as_follower(cur, holder: str, command: str) -> bool:
+def _held_as_follower(cur, holder: str, command: str, source: str = "") -> bool:
     """Is `command` a walk the world would refuse `holder` as a follower? (#995)
 
     Asked over the writer's own cursor before it inserts, so no walk row is
     written for a member somebody else leads. Logs the hold when there is one.
+    A quester sale walk (`source` is questers.SELL_WALK_ACTION's, written only
+    for a quester at questers.SELL_FLOOR free slots or fewer) is let through
+    for a follower, as the module's gate does (#1962), and says so.
     """
     if not followhold.is_walk(command):
         return False
     group = followhold.group_from_row(_follower_group_row(cur, holder))
-    why = _FOLLOWERS.held(holder, command, group, time.monotonic())
+    sale = guildjobs.action_of(source) == questers.SELL_WALK_ACTION
+    why = _FOLLOWERS.held(holder, command, group, time.monotonic(), sale=sale)
     if why:
         log.info("follower errand: %s", why)
+    elif sale and group is not None and group.follows and followhold.is_sale_walk(command):
+        log.info("questers: %s is grouped as a follower and sells with full bags", holder)
     return bool(why)
 
 
@@ -31188,7 +31194,7 @@ def _insert_corps_row(holder: str, row) -> int:
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", row.command, holder)
         return 0
     with _connect() as conn, conn.cursor() as cur:
-        if _held_as_follower(cur, holder, row.command):
+        if _held_as_follower(cur, holder, row.command, row.source):
             return 0
         try:
             cur.execute(

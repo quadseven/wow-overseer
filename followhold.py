@@ -34,6 +34,21 @@ THE TWO FACTS, AND WHICH WINS.
              member has left the group, so a missing or stale snapshot cannot
              let the same row be written straight back.
 
+THE ONE WALK THAT GOES THROUGH: A QUESTER SELLING WITH FULL BAGS (#1962,
+#1813). A quester in a quest group stays grouped for hours, often a whole day,
+so holding its sale until it is ungrouped meant it never sold: 651 of 1229
+quester sale passes in one 30 hour bridge log were held here, and twelve
+questers sat at 0 free bag slots, unable to take a quest that hands over an
+item. The quester sale (questers.sell_step) asks only for a quester at
+questers.SELL_FLOOR free slots or fewer, and the module lets a follower's
+`walk-to-vendor any` through its wall when it reads 1 or fewer free slots
+itself (mod-overseer#1395). So that walk, from that pass, is not held for
+following (`sale=True`). Every other walk of a follower still is. A follower
+refusal of the sale walk (the module read more room than the bridge did) is
+still noted and holds it for REFUSAL_HOLD_SECONDS; a newer snapshot lifts that
+hold only when it says the quester left the group, since a follower's sale
+walk is otherwise written while it follows.
+
 PURE: facts and a clock reading in, a sentence out. The bridge reads and logs.
 """
 
@@ -47,6 +62,10 @@ REFUSAL = "character is grouped as a follower"
 
 # The four walk verbs the gate stands in front of.
 WALK_VERBS = ("walk-to-mailbox", "walk-to-vendor", "walk-to-trainer", "walk-to-spawn")
+
+# The walk the quester sale writes (questers.sell_step), with or without its
+# errand cap word: the only follower walk the module lets through (#1962).
+SALE_WALK = "walk-to-vendor any"
 
 # How long a follower refusal holds a member no newer snapshot row clears:
 # long enough to cover several passes, short enough that a member whose
@@ -94,6 +113,12 @@ def is_walk(command) -> bool:
     return str(command or "").startswith(WALK_VERBS)
 
 
+def is_sale_walk(command) -> bool:
+    """Is this the sale walk to any vendor that buys (SALE_WALK)?"""
+    command = str(command or "")
+    return command == SALE_WALK or command.startswith(SALE_WALK + " ")
+
+
 def _verb(command) -> str:
     return str(command).split(" ", 1)[0]
 
@@ -113,12 +138,17 @@ class Holds:
         if name and str(detail or "").strip() == REFUSAL:
             self._refused[str(name)] = float(now)
 
-    def held(self, name, command, group: Group | None, now) -> str:
-        """Why `command` must not be written for `name` now; "" when it may."""
+    def held(self, name, command, group: Group | None, now, sale=False) -> str:
+        """Why `command` must not be written for `name` now; "" when it may.
+
+        `sale` is True for a row the quester sale wrote for a quester at
+        questers.SELL_FLOOR free slots or fewer: its SALE_WALK is not held for
+        following (#1962), only for a follower refusal still in force."""
         if not is_walk(command):
             return ""
         name = str(name)
-        if group is not None and group.follows:
+        follows = group is not None and group.follows
+        if follows and not (sale and is_sale_walk(command)):
             return (
                 "%s is grouped as a follower of %s, so its %s is held until it is "
                 "ungrouped rather than written for the world to refuse"
@@ -128,7 +158,9 @@ class Holds:
         if refused is None:
             return ""
         since = float(now) - refused
-        if since >= REFUSAL_HOLD_SECONDS or (group is not None and group.age < since):
+        if since >= REFUSAL_HOLD_SECONDS or (
+            group is not None and group.age < since and not follows
+        ):
             del self._refused[name]
             return ""
         return (
