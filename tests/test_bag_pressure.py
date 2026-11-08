@@ -603,6 +603,62 @@ class TheSurplusBagReadCarriesTheCorpsFacts(unittest.TestCase):
         self.assertIn("5 more are offered for sale", kept[0])
 
 
+def carried(**kw):
+    """One carried non-gear row, shaped as _VENDOR_ITEMS_SQL returns it."""
+    base = dict(
+        holder="Grog",
+        item_guid=75360748,
+        entry=8766,
+        count=20,
+        name="Morning Glory Dew",
+        quality=1,
+        sell_price=200,
+        item_class=0,
+        quest_item=False,
+        reagent=False,
+        profession_needed=False,
+    )
+    base.update(kw)
+    return base
+
+
+class TheFamilyKeepsItsFoodAndDrink(unittest.TestCase):
+    """wow-overseer#2017: the healer sold its only drink and stalled on mana."""
+
+    def test_a_common_drink_is_not_offered_to_a_vendor(self):
+        self.assertEqual(vendor_candidates([carried()]), ())
+        self.assertEqual(
+            bag_pressure.vendor_refusal(carried()), bag_pressure.KEPT_CONSUMABLE
+        )
+
+    def test_food_and_a_potion_are_kept_the_same_way(self):
+        rows = [
+            carried(item_guid=1, entry=4599, name="Cured Ham Steak", count=5),
+            carried(
+                item_guid=2,
+                entry=3928,
+                name="Superior Healing Potion",
+                quality=1,
+                count=3,
+            ),
+        ]
+        self.assertEqual(vendor_candidates(rows), ())
+
+    def test_a_grey_consumable_still_sells(self):
+        grey = carried(item_guid=3, entry=0, name="Stale bread", quality=0)
+        self.assertEqual([c.item_guid for c in vendor_candidates([grey])], [3])
+
+    def test_a_common_trade_good_still_sells(self):
+        cloth = carried(
+            item_guid=4, entry=4338, name="Mageweave Cloth", item_class=7, count=6
+        )
+        self.assertEqual([c.item_guid for c in vendor_candidates([cloth])], [4])
+
+    def test_the_floor_reason_names_the_kept_drink(self):
+        reason = bag_pressure.floor_reason("Grog", 0, [carried()])
+        self.assertIn(bag_pressure.KEPT_CONSUMABLE, reason)
+
+
 if __name__ == "__main__":
     unittest.main()
 
