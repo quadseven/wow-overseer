@@ -517,13 +517,64 @@ class TheWholePartyHandsOn(unittest.TestCase):
         self.assertEqual([e for e in got.errands if e.member == "Og"], [])
 
     def test_the_giver_keeps_its_own_stack(self):
+        """The 14 goes and the 20 stays: each give is counted by the stack it
+        names, so handing on the 20-stack instead would fail here."""
+        _, ugga, _, _, _ = self._family()
+        counts = {"guid:%d" % s.guid: s.count for s in ugga.stacks}
         got = towntrip.plan(self._family(), RATCHET, sitting=frozenset({"Og"}))
-        given = sum(
-            20 if e.command == "guid:41" else 14
-            for e in got.errands
-            if e.kind == "give"
+        gives = [e.command for e in got.errands if e.kind == "give"]
+        self.assertEqual(gives, ["guid:42"])
+        self.assertGreaterEqual(
+            ugga.drink_carried - sum(counts[g] for g in gives), towntrip.STACK
         )
-        self.assertGreaterEqual(34 - given, towntrip.STACK)
+
+    def test_two_takers_never_share_one_stack(self):
+        """One non-conjurer giver with two spare stacks feeds two drinkers,
+        a different stack each, and keeps its own."""
+        ugga = Member(
+            "Ugga",
+            "priest",
+            50,
+            10**6,
+            8,
+            (),
+            food_carried=20,
+            drink_carried=60,
+            stacks=(self._water(61, 20), self._water(62, 20), self._water(63, 20)),
+        )
+        grog = Member("Grog", "paladin", 50, 10**6, 8, (), food_carried=20)
+        pala = Member("Holy", "paladin", 50, 10**6, 8, (), food_carried=20)
+        got = towntrip.plan((ugga, grog, pala), RATCHET)
+        gives = [
+            (e.member, e.taker, e.command) for e in got.errands if e.kind == "give"
+        ]
+        self.assertEqual(
+            gives, [("Ugga", "Grog", "guid:61"), ("Ugga", "Holy", "guid:62")]
+        )
+
+    def test_a_conjurer_and_a_carrier_both_give_when_two_are_short(self):
+        """The conjurer's one spare goes first; the carrier covers the next."""
+        og = Member(
+            "Og",
+            "mage",
+            50,
+            10**6,
+            9,
+            (),
+            food_carried=20,
+            drink_carried=40,
+            spells=frozenset({990, 5506}),
+            stacks=(self._water(31, 20), self._water(32, 20)),
+        )
+        _, ugga, grog, _, _ = self._family()
+        pala = Member("Holy", "paladin", 50, 10**6, 8, (), food_carried=20)
+        got = towntrip.plan((og, ugga, grog, pala), RATCHET)
+        gives = [
+            (e.member, e.taker, e.command) for e in got.errands if e.kind == "give"
+        ]
+        self.assertEqual(
+            gives, [("Og", "Grog", "guid:31"), ("Ugga", "Holy", "guid:42")]
+        )
 
     def test_nobody_who_does_not_drink_is_handed_drink(self):
         got = towntrip.plan(self._family(), RATCHET, sitting=frozenset({"Og"}))
