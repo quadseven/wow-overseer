@@ -18,6 +18,49 @@ from itemplan import Context, Member, Stack  # noqa: E402
 RUNE, SHIELD, ORE, SWORD = 5001, 6002, 7003, 8004
 
 
+class ItemTemplates(unittest.TestCase):
+    def test_reads_required_item_facts_and_normalized_stats(self):
+        row = {
+            "entry": 1234,
+            "item_class": 4,
+            "subclass": 3,
+            "bonding": 1,
+            "inventory_type": 5,
+            "item_level": 30,
+            "req_level": 20,
+            "required_skill_rank": 225,
+            "container_slots": 14,
+            "fire_res": 12,
+            "stat_type1": 4,
+            "stat_value1": 5,
+            "armor": 80,
+            "block": 17,
+        }
+
+        self.assertEqual(
+            data.item_templates([row]),
+            {
+                1234: {
+                    "item_class": 4,
+                    "subclass": 3,
+                    "bonding": 1,
+                    "inventory_type": 5,
+                    "item_level": 30,
+                    "req_level": 20,
+                    "required_skill_rank": 225,
+                    "container_slots": 14,
+                    "fire_res": 12,
+                    "stats": {
+                        "strength": 5,
+                        "armor": 80,
+                        "block_value": 17,
+                        "fire_resistance": 12,
+                    },
+                }
+            },
+        )
+
+
 def template(quest, **kw):
     row = {"quest": quest}
     row.update(kw)
@@ -238,6 +281,7 @@ class PlanUsesTheData(unittest.TestCase):
                 count=1,
                 sell=50,
                 bind=0,
+                soulbound=False,
                 index=i,
             )
             for i in range(13)

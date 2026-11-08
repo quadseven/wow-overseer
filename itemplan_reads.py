@@ -14,8 +14,8 @@ prices, where nothing listed means the plan has no price at all.
 WHERE EACH INPUT COMES FROM.
 
   quest log            `itemplan_data.QUEST_LOG_SQL` and `QUEST_TEMPLATE_SQL`.
-  worn gear verdicts   `EQUIPPED_SQL` with `ITEM_TEMPLATE_SQL` for the carried
-                       gear's inventory type, item level and required level.
+  worn gear verdicts   `EQUIPPED_SQL` with `ITEM_TEMPLATE_SQL` for equipped
+                       slot, item stats, and the carried gear's template facts.
   binding              `ITEM_TEMPLATE_SQL`, `item_template.bonding` by entry,
                        for every carried row (the carried query holds none).
   auction prices       `LISTINGS_SQL` in the family's house and the neutral
@@ -27,7 +27,7 @@ WHERE EACH INPUT COMES FROM.
                        free slots per purchased tab. When no family member's
                        rank may deposit, every tab reads as full.
   guild roster         the guild pass's roster read: guildmates outside the
-                       family and the trades they work.
+                       family, the trades they work, and online presence.
 """
 
 from __future__ import annotations
@@ -94,6 +94,28 @@ def _worn(cur, names) -> dict:
     return itemplan_data.equipped(rows)
 
 
+def _instance_soulbound(cur, rows) -> dict:
+    """Read the soulbound bit from item instances belonging to carried rows."""
+    raw_guids = [_int(row.get("item_guid"), 0) for row in rows]
+    if any(guid <= 0 for guid in raw_guids):
+        raise ValueError("a carried item has no readable instance GUID")
+    guids = sorted(set(raw_guids))
+    if not guids:
+        return {}
+    sql = itemplan_data.ITEM_INSTANCE_SQL % _marks(guids)
+    found = _fetch(cur, sql, guids)
+    flags = {}
+    for row in found:
+        guid = _int(row.get("item_guid"), 0)
+        instance_flags = _int(row.get("instance_flags"), None)
+        if guid <= 0 or instance_flags is None:
+            raise ValueError("an item-instance row has unreadable flags")
+        flags[guid] = bool(instance_flags & 0x1)
+    if set(flags) != set(guids):
+        raise ValueError("item-instance flags are missing for carried items")
+    return flags
+
+
 def _prices(cur, names, entries) -> tuple:
     """(prices, why empty): live buyouts first, then history, no price invented."""
     races = _fetch(
@@ -141,20 +163,125 @@ def _guild_free(names, family, guild_setup):
     return {(family, tab): (free if may else 0) for tab, free in tabs.items()}
 
 
-def _crafters(names, roster) -> tuple | None:
-    """((name, trade, skill), ...) for guildmates outside the family."""
+def _roster_and_crafters(names, roster) -> tuple | None:
+    """Return all outside roster skills/presence and online usable crafters."""
     members = list(roster(list(names)))
     if not members:
         return None
-    out = []
+    all_skills = []
+    available = []
     for m in members:
         if m.family or m.name in names:
             continue
         for line, trade in itemplan.TRADE_OF_SKILL.items():
             value = m.rank_in(line)
             if value > 0 and line != itemplan.FISHING:
-                out.append((m.name, trade, value))
-    return tuple(sorted(out))
+                all_skills.append((m.name, trade, value, bool(m.online)))
+                if m.online:
+                    available.append((m.name, trade, value))
+    return tuple(sorted(all_skills)), tuple(sorted(available))
+
+
+def _read_cursor_inputs(connect, names, entries, rows):
+    reads = _Reads()
+    got: dict = {}
+    cursor_inputs = (
+        shadow.QUEST_LOG,
+        shadow.BINDING,
+        shadow.FIRE_RESISTANCE,
+        shadow.BAG_SLOTS,
+        shadow.RECIPE_RANK,
+        shadow.ITEM_STATS,
+        shadow.INSTANCE_SOULBOUND,
+        shadow.WORN_GEAR,
+        shadow.AUCTION_PRICES,
+    )
+    try:
+        with connect() as conn, conn.cursor() as cur:
+            got[shadow.QUEST_LOG] = reads.attempt(
+                shadow.QUEST_LOG, lambda: _quest_log(cur, names)
+            )
+            got[shadow.BINDING] = reads.attempt(
+                shadow.BINDING, lambda: _templates(cur, entries)
+            )
+            got[shadow.INSTANCE_SOULBOUND] = reads.attempt(
+                shadow.INSTANCE_SOULBOUND,
+                lambda: _instance_soulbound(cur, rows),
+            )
+            got[shadow.WORN_GEAR] = reads.attempt(
+                shadow.WORN_GEAR, lambda: _worn(cur, names)
+            )
+            got[shadow.AUCTION_PRICES] = reads.attempt(
+                shadow.AUCTION_PRICES, lambda: _prices(cur, names, entries)
+            )
+    except Exception as exc:
+        for name in cursor_inputs:
+            got[name] = None
+            reads.unread.setdefault(name, "read failed: %s" % type(exc).__name__)
+    return got, reads
+
+
+def _template_fire_gear(entries, templates, reads):
+    if templates is None:
+        return None
+    missing_entries = set(entries) - set(templates)
+    if missing_entries:
+        missing = ",".join(str(entry) for entry in sorted(missing_entries))
+        reads.unread[shadow.BINDING] = (
+            "item-template rows missing for carried entries: " + missing
+        )
+        for input_name in (
+            shadow.FIRE_RESISTANCE,
+            shadow.BAG_SLOTS,
+            shadow.RECIPE_RANK,
+            shadow.ITEM_STATS,
+        ):
+            reads.unread[input_name] = (
+                "item-template rows missing for carried entries: " + missing
+            )
+    fields = (
+        ("fire_res", shadow.FIRE_RESISTANCE),
+        ("container_slots", shadow.BAG_SLOTS),
+        ("required_skill_rank", shadow.RECIPE_RANK),
+        ("stats", shadow.ITEM_STATS),
+    )
+    for field, input_name in fields:
+        if any(field not in item for item in templates.values()):
+            reads.unread[input_name] = "one or more item template rows lack this field"
+    if shadow.FIRE_RESISTANCE in reads.unread:
+        return None
+    return frozenset(
+        entry for entry, item in templates.items() if _int(item.get("fire_res"), 0) > 0
+    )
+
+
+def _market_input(priced, reads):
+    if priced is None:
+        return None
+    prices, absent = priced
+    if absent:
+        reads.unread[shadow.AUCTION_PRICES] = absent
+    return prices
+
+
+def _side_inputs(names, family, bank_rows, guild_setup, roster, reads):
+    bank_free = reads.attempt(
+        shadow.BANK_CONTENTS, lambda: _bank_free(names, bank_rows)
+    )
+    guild_free = reads.attempt(
+        shadow.GUILD_ROOM, lambda: _guild_free(names, family, guild_setup)
+    )
+    if guild_free is None:
+        reads.unread.setdefault(shadow.GUILD_ROOM, "no guild bank setup was read")
+    roster_data = reads.attempt(
+        shadow.GUILD_ROSTER, lambda: _roster_and_crafters(names, roster)
+    )
+    if roster_data is None:
+        reads.unread.setdefault(shadow.GUILD_ROSTER, "no guild roster rows were read")
+        guild_roster = guild_crafters = None
+    else:
+        guild_roster, guild_crafters = roster_data
+    return bank_free, guild_free, guild_roster, guild_crafters
 
 
 def read(
@@ -176,62 +303,29 @@ def read(
     pass's and the guild pass's own reads.
     """
     names = sorted(str(n) for n in names)
-    reads = _Reads()
     entries = sorted({_int(r.get("entry")) for r in rows} - {0})
-    got: dict = {}
-    cursor_inputs = (
-        shadow.QUEST_LOG,
-        shadow.BINDING,
-        shadow.WORN_GEAR,
-        shadow.AUCTION_PRICES,
-    )
-    try:
-        with connect() as conn, conn.cursor() as cur:
-            got[shadow.QUEST_LOG] = reads.attempt(
-                shadow.QUEST_LOG, lambda: _quest_log(cur, names)
-            )
-            got[shadow.BINDING] = reads.attempt(
-                shadow.BINDING, lambda: _templates(cur, entries)
-            )
-            got[shadow.WORN_GEAR] = reads.attempt(
-                shadow.WORN_GEAR, lambda: _worn(cur, names)
-            )
-            got[shadow.AUCTION_PRICES] = reads.attempt(
-                shadow.AUCTION_PRICES, lambda: _prices(cur, names, entries)
-            )
-    except Exception as exc:
-        for name in cursor_inputs:
-            got[name] = None
-            reads.unread.setdefault(name, "read failed: %s" % type(exc).__name__)
+    got, reads = _read_cursor_inputs(connect, names, entries, rows)
     quest, templates = got.get(shadow.QUEST_LOG), got.get(shadow.BINDING)
     worn, priced = got.get(shadow.WORN_GEAR), got.get(shadow.AUCTION_PRICES)
-    market = None
-    if priced is not None:
-        market = priced[0]
-        if priced[1]:
-            reads.unread[shadow.AUCTION_PRICES] = priced[1]
+    market = _market_input(priced, reads)
     if templates is None and worn is not None:
         reads.unread.setdefault(
             shadow.WORN_GEAR, "needs the binding read, which failed"
         )
-    bank_free = reads.attempt(
-        shadow.BANK_CONTENTS, lambda: _bank_free(names, bank_rows)
+    fire_gear = _template_fire_gear(entries, templates, reads)
+    bank_free, guild_free, guild_roster, guild_crafters = _side_inputs(
+        names, family, bank_rows, guild_setup, roster, reads
     )
-    guild_free = reads.attempt(
-        shadow.GUILD_ROOM, lambda: _guild_free(names, family, guild_setup)
-    )
-    if guild_free is None:
-        reads.unread.setdefault(shadow.GUILD_ROOM, "no guild bank setup was read")
-    crafters = reads.attempt(shadow.GUILD_ROSTER, lambda: _crafters(names, roster))
-    if crafters is None:
-        reads.unread.setdefault(shadow.GUILD_ROSTER, "no guild roster rows were read")
     return shadow.Extras(
         open_quest_items=quest,
         worn=worn,
         market=market,
         guild_free=guild_free,
-        guild_crafters=crafters,
+        guild_crafters=guild_crafters,
+        guild_roster=guild_roster,
         templates=templates,
         bank_free=bank_free,
+        instance_soulbound=got.get(shadow.INSTANCE_SOULBOUND),
+        fire_gear=fire_gear,
         unread=dict(reads.unread),
     )

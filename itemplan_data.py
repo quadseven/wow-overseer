@@ -38,13 +38,26 @@ from __future__ import annotations
 import armory
 import auction
 import bankforecast
+import gearscore
 
 # --- item template: binding and gear facts -----------------------------------
 
 ITEM_TEMPLATE_SQL = (
     "SELECT it.entry AS entry, it.class AS item_class, it.subclass AS subclass, "
     "it.bonding AS bonding, it.InventoryType AS inventory_type, "
-    "it.ItemLevel AS item_level, it.RequiredLevel AS req_level "
+    "it.ItemLevel AS item_level, it.RequiredLevel AS req_level, "
+    "it.RequiredSkillRank AS required_skill_rank, "
+    "it.ContainerSlots AS container_slots, "
+    "it.armor AS armor, it.block AS block, it.dmg_min1 AS dmg_min1, "
+    "it.dmg_max1 AS dmg_max1, it.delay AS delay, "
+    "it.holy_res AS holy_res, it.fire_res AS fire_res, "
+    "it.nature_res AS nature_res, it.frost_res AS frost_res, "
+    "it.shadow_res AS shadow_res, it.arcane_res AS arcane_res, "
+    + ", ".join(
+        "it.stat_type%d AS stat_type%d, it.stat_value%d AS stat_value%d" % (n, n, n, n)
+        for n in range(1, 11)
+    )
+    + " "
     "FROM acore_world.item_template it WHERE it.entry IN (%s)"
 )
 
@@ -55,6 +68,14 @@ _TEMPLATE_FIELDS = (
     "inventory_type",
     "item_level",
     "req_level",
+    "required_skill_rank",
+    "container_slots",
+    "fire_res",
+)
+
+ITEM_INSTANCE_SQL = (
+    "SELECT ii.guid AS item_guid, ii.flags AS instance_flags "
+    "FROM item_instance ii WHERE ii.guid IN (%s)"
 )
 
 
@@ -106,6 +127,7 @@ def item_templates(rows) -> dict:
             continue
         if entry is None or entry <= 0 or any(v is None for v in item.values()):
             continue
+        item["stats"] = gearscore.stats_from_row(row)
         out[entry] = item
     return out
 
@@ -215,9 +237,22 @@ def open_quest_items(quest_rows, template_rows) -> dict:
 
 EQUIPPED_SQL = (  # noqa: S608 - the bound is an int from armory, names stay placeholders
     "SELECT c.name AS member, ci.slot AS slot, ii.itemEntry AS entry, "
+    "ii.flags AS instance_flags, "
     "it.name AS name, it.class AS item_class, it.subclass AS subclass, "
     "it.Quality AS quality, it.ItemLevel AS item_level, "
-    "it.InventoryType AS inventory_type, it.RequiredLevel AS req_level "
+    "it.InventoryType AS inventory_type, it.RequiredLevel AS req_level, "
+    "it.RequiredSkillRank AS required_skill_rank, "
+    "it.ContainerSlots AS container_slots, it.fire_res AS fire_res, "
+    "it.armor AS armor, it.block AS block, it.dmg_min1 AS dmg_min1, "
+    "it.dmg_max1 AS dmg_max1, it.delay AS delay, "
+    "it.holy_res AS holy_res, it.nature_res AS nature_res, "
+    "it.frost_res AS frost_res, it.shadow_res AS shadow_res, "
+    "it.arcane_res AS arcane_res, "
+    + ", ".join(
+        "it.stat_type%d AS stat_type%d, it.stat_value%d AS stat_value%d" % (n, n, n, n)
+        for n in range(1, 11)
+    )
+    + " "
     "FROM character_inventory ci "
     "JOIN characters c ON c.guid = ci.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
@@ -254,6 +289,9 @@ def equipped(rows) -> dict:
             if any(v is None for v in item.values()) or item["entry"] <= 0:
                 continue
             item["name"] = str(row.get("name") or "")
+            item["fire_res"] = _int(row.get("fire_res"), 0)
+            item["instance_flags"] = _int(row.get("instance_flags"), 0)
+            item["stats"] = gearscore.stats_from_row(row)
         except (KeyError, TypeError, AttributeError):
             continue
         out.setdefault(member, {}).setdefault(armory.EQUIPPED_SLOTS[slot], item)
@@ -400,6 +438,7 @@ def absent_reason(listing_rows, history_rows=()) -> str:
 
 __all__ = [
     "EQUIPPED_SQL",
+    "ITEM_INSTANCE_SQL",
     "ITEM_TEMPLATE_SQL",
     "LISTINGS_SQL",
     "NO_PRICE_SOURCE",

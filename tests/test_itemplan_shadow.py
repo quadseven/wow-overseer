@@ -152,6 +152,31 @@ class RunTest(unittest.TestCase):
 
     def test_names_a_stack_the_sale_pass_keeps_and_the_plan_sells(self):
         rows, gear, worn, free = fixture()
+        extras = shadow.Extras(
+            open_quest_items={"Ana": frozenset()},
+            templates={
+                entry: {
+                    "item_class": item_class,
+                    "subclass": 0,
+                    "bonding": 0,
+                    "inventory_type": 0,
+                    "item_level": 1,
+                    "req_level": 0,
+                    "required_skill_rank": 0,
+                    "container_slots": 0,
+                    "fire_res": 0,
+                    "stats": {},
+                }
+                for entry, item_class in (
+                    (2589, 7),
+                    (4540, 0),
+                    (9999, 15),
+                    (7777, 4),
+                )
+            },
+            instance_soulbound={1: False, 2: False, 3: False, 4: False},
+            fire_gear=frozenset(),
+        )
         cap = Capture()
         report = shadow.run(
             ["Ana"],
@@ -162,6 +187,7 @@ class RunTest(unittest.TestCase):
             logger=cap,
             gear_rows=gear,
             worn_rows=worn,
+            extras=extras,
         )
         hits = [
             x
