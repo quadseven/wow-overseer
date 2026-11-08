@@ -172,6 +172,34 @@ class WhoBinds(unittest.TestCase):
             bind_steps(plan([at("westfall")], leveling=world(inns=[]))), []
         )
 
+    def test_bound_at_the_zones_inn_by_its_area_id_it_does_not(self):
+        # #2006: the row holds the inn's area id, not Westfall's zone id; the
+        # position at Sentinel Hill's inn places the home in Westfall.
+        h = hub("westfall")
+        bound = at(
+            "westfall",
+            home_zone=108,
+            home_x=h.point[1] + 40.0,
+            home_y=h.point[2],
+        )
+        self.assertEqual(bind_steps(plan([bound])), [])
+
+    def test_bound_at_an_outgrown_zones_inn_by_its_area_id_it_binds(self):
+        # Bound at Sentinel Hill's inn by its area id, standing in Redridge at
+        # a level Westfall's quests have topped out under: it rebinds, and
+        # the sentence names Westfall rather than "somewhere".
+        h = hub("westfall")
+        bound = at(
+            "redridge",
+            level=20,
+            home_zone=108,
+            home_x=h.point[1] + 40.0,
+            home_y=h.point[2],
+        )
+        steps = bind_steps(plan([bound]))
+        self.assertEqual(len(steps), 1)
+        self.assertIn("bound in Westfall", steps[0].said)
+
     def test_an_unread_home_does_not(self):
         self.assertEqual(
             bind_steps(plan([at("westfall", home_map=None, home_zone=None)])), []
