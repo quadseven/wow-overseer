@@ -7650,6 +7650,7 @@ PASSES = (
     _Pass("_auction_loop"),
     _Pass("_recipebook_loop"),
     _Pass("_towntrip_loop"),
+    _Pass("_run_drink_loop"),
     _Pass("_flight_learn_loop"),
     _Pass("_restore_lost_lives"),
     _Pass("_reapply_strategies_loop"),
@@ -21291,6 +21292,62 @@ class Bridge(discord.Client):
             await self._for_other_families("towntrip", self._towntrip_once)
             await asyncio.sleep(cycle)
 
+    async def _run_drink_once(self, cohort=None) -> None:
+        """Hand a dry healer a drink stack from a party member beside it, mid-run.
+
+        THE OPPOSITE GATE TO `_towntrip_once`: that pass stands down inside an
+        open run, and the pre-run hand-over it plans waits for two members to
+        stand together, which a family between runs never does (Grug's run
+        1665107 reached its fourth boss and stopped on "Waiting on Grog (low
+        mana)" with the mage carrying spare drinks in the same party, #2037). Inside
+        the dungeon the party is together, so this pass runs ONLY mid-run and
+        writes only kind='give' rows, which move a stack between two bags in
+        place and send nobody anywhere. Every decision is towntrip.in_run_drink's.
+        """
+        names, _leader = await asyncio.to_thread(_family_of, cohort)
+        if not names or not await self._mid_run(names):
+            return
+        members = towntrip.members_from_rows(
+            await asyncio.to_thread(_fetch_town_worn, names),
+            await asyncio.to_thread(_fetch_town_carried, names),
+            await asyncio.to_thread(_fetch_town_spells, names),
+            await asyncio.to_thread(_fetch_free_slots, names),
+            names,
+        )
+        sitting = frozenset(names) & _standin_out()
+        where = handover.spots(await asyncio.to_thread(_fetch_positions, names))
+        errands = towntrip.in_run_drink(
+            [m for m in members if m.name not in sitting],
+            apart=lambda giver, taker: handover.verdict(
+                giver, taker, where).verb != handover.GIVE)
+        if not errands:
+            return
+        seen = await asyncio.to_thread(_recent_town_keys, RUN_DRINK_RETRY_MINUTES)
+        for errand in errands:
+            if (errand.member, errand.command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_town_errand, errand):
+                log.info("rundrink: %s give -> %s - %s%s",
+                         errand.member, errand.taker, errand.why,
+                         _family_label(cohort))
+
+    async def _run_drink_loop(self) -> None:
+        """Top up a dry healer inside an open dungeon run, every 45 seconds.
+
+        Short on purpose: the dungeon module gives up on a healer's mana after
+        180 seconds, so a 300-second cycle would always be too late.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("RUN_DRINK_CYCLE_SECONDS", "45"))
+        await asyncio.sleep(min(cycle, 60.0))
+        while not self.is_closed():
+            try:
+                await self._run_drink_once()
+            except Exception:
+                log.exception("run drink pass failed; retrying next cycle")
+            await self._for_other_families("run drink", self._run_drink_once)
+            await asyncio.sleep(cycle)
+
     async def _narrate_events(self) -> None:
         """The world narrates itself (infra#2602).
 
@@ -26206,6 +26263,9 @@ def _fetch_bag_room(names: list) -> dict:
 # reason: a give the worldserver refuses (receiver offline, bags full since
 # measured) must not fill the queue with an identical doomed row every cycle.
 GIVE_RETRY_MINUTES = int(os.environ.get("GIVE_RETRY_MINUTES", "60"))
+# A mid-run drink give that was queued and did not land is asked again after
+# this many minutes (one that landed is not planned again: the taker has it).
+RUN_DRINK_RETRY_MINUTES = int(os.environ.get("RUN_DRINK_RETRY_MINUTES", "4"))
 
 
 # How far back the family looks before deciding the world means it. A day,

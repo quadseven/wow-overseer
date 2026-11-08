@@ -508,7 +508,9 @@ def _buy(member: Member, town: Town, what: str) -> tuple[list[Errand], list[str]
     return errands, notes
 
 
-def _hand_on(wanted, givers, what: str, apart=None) -> tuple[list[Errand], set]:
+def _hand_on(
+    wanted, givers, what: str, apart=None, near_only: bool = False
+) -> tuple[list[Errand], set]:
     """Hand spare conjured stacks to whoever has none. The cheapest route.
 
     One stack per taker and each stack used once, so two people short of food
@@ -544,6 +546,11 @@ def _hand_on(wanted, givers, what: str, apart=None) -> tuple[list[Errand], set]:
             near_first = sorted(givers, key=lambda g: bool(apart(g.name, member.name)))
         for giver in near_first:
             if giver.name == member.name or not offers[giver.name]:
+                continue
+            # `near_only` is the in-run hand-over (in_run_drink): a giver out
+            # of trade range is skipped, not queued, because nothing walks two
+            # members together once the run is open.
+            if near_only and (apart is None or apart(giver.name, member.name)):
                 continue
             stack = offers[giver.name].pop(0)
             # THE GIVER IS THE ROW'S CHARACTER AND THE TAKER IS ITS ARGUMENT,
@@ -731,6 +738,43 @@ def plan(members, town: Town, sitting=frozenset(), apart=None) -> Plan:
         notes.extend(said)
 
     return Plan(tuple(errands), tuple(notes), tuple(blocked))
+
+
+# A mana member carrying fewer drinks than this inside an open run is topped up
+# from a party member standing beside it. Ten is about five full mana bars for a
+# healer, and the pass runs every 45 seconds while the dungeon module waits 180
+# before it gives up on "low mana" (#2037, #2060: run 1665107 stopped at its
+# fourth boss with the healer dry and the mage carrying spare stacks in the party).
+IN_RUN_DRINK_FLOOR = 10
+
+
+def in_run_drink(members, apart) -> list[Errand]:
+    """Hand a dry mana member a spare drink stack from beside it, mid-run.
+
+    THE TOWN TRIP DOES NOT RUN INSIDE AN OPEN RUN (`_mid_run`), and the family
+    never stands together between runs, so the pre-run hand-over (`plan`) can
+    wait for a meeting that never comes. Inside the dungeon the party IS
+    together, which is the one moment a give lands. Only a give is planned: it
+    moves one stack between two bags in place, so nobody leaves the instance
+    (no conjure, no buy, no walk). `apart(giver, taker)` must say the two are in
+    trade range; with no positions (None) nothing is planned.
+    """
+    if apart is None:
+        return []
+    ordered = sorted(members, key=lambda m: m.name)
+    wanted = [
+        m
+        for m in ordered
+        if _wants(m, DRINK_KIND)
+        and not m.conjures(DRINK_KIND)
+        and m.carries(DRINK_KIND) < IN_RUN_DRINK_FLOOR
+    ]
+    if not wanted:
+        return []
+    conjurers = [m for m in ordered if m.conjures(DRINK_KIND)]
+    givers = conjurers + [m for m in ordered if not m.conjures(DRINK_KIND)]
+    errands, _ = _hand_on(wanted, givers, DRINK_KIND, apart, near_only=True)
+    return errands
 
 
 def shop_supply_gaps(members) -> tuple[str, ...]:

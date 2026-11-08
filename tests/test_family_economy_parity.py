@@ -203,6 +203,7 @@ ECONOMY_LOOPS = (
     ("_auction_loop", "auction", "_auction_once"),
     ("_recipebook_loop", "recipebook", "_recipebook_once"),
     ("_towntrip_loop", "towntrip", "_towntrip_once"),
+    ("_run_drink_loop", "run drink", "_run_drink_once"),
     ("_forge_loop", "forge", "_forge_once"),
 )
 
