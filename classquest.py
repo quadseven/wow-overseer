@@ -2388,8 +2388,8 @@ def next_move(book: Book, member, avoid=None, held_off=frozenset()):
 # to the Eastern Kingdoms for Surena Caledon and found its hunt held for a while
 # (the one spawn refused or tried) took the next reward's first move, a boat back
 # to Kalimdor, and on Kalimdor the Voidwalker hold had lapsed, so it sailed
-# again: Nubb, Sogg and Lugg crossed three to four times a day and 21 of 26
-# warlocks without Summon Voidwalker held its quest unfinished. A quest of an
+# again: Nubb, Sogg and Lugg crossed three to four times a day and 11 of the 14
+# Alliance warlocks without Summon Voidwalker held its quest unfinished. A quest of an
 # earlier reward that is in the member's log, held for a reason of its own
 # (HOLDING), with its work on the member's own map, keeps the member on that
 # continent: the hold is waited out where it stands, as _live does within one

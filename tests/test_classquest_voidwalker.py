@@ -2,7 +2,7 @@
 
 Measured on the dev realm on 2026-11-07 (wow-overseer#2032): 26 of 52 guild
 warlocks at level 10 or more did not know Summon Voidwalker (spell 697, the
-reward of the level 10 class quest chain), and 21 of them held a quest of that
+reward of the level 10 class quest chain), and 16 of them held a quest of that
 chain. An Alliance warlock's chain is in Elwynn and Stormwind (Surena Caledon,
 1688, then The Binding, 1689); its next chain, the Succubus (Heartswood, 1738),
 is in Ashenvale on Kalimdor. The bridge log of that day shows the same members
