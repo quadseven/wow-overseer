@@ -6,7 +6,8 @@ route and draws that route locked unless this says so. The setting is the
 server's, read from the environment, and off unless it is set: a deployment
 that sets nothing shows a read-only app.
 
-This only gates what the app draws. The existing POST endpoints are unchanged.
+The server enforces the same switch: map_server refuses POST /api/chat,
+/api/decree and /api/watch with 403 while it is off (#1842).
 """
 
 from __future__ import annotations

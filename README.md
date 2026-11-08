@@ -10,7 +10,7 @@ An operator steers playerbots on an AzerothCore server in plain language from Di
 
 1. An allowed Discord user addresses a bot, for example `@Name follow`. The bridge writes an `overseer_command` row that the module delivers.
 2. Goals, guild runs, crafting, questing and raid preparation persist and advance on timers. Chatter is relayed to Discord.
-3. A browser gets the live map, the operations app and an API. GET routes are listed in [docs/API.md](docs/API.md). `map_server.py` also takes POST on `/api/chat`, `/api/decree`, `/api/watch`, `/api/director` and `/api/frame`.
+3. A browser gets the live map, the operations app and an API. GET routes are listed in [docs/API.md](docs/API.md). `map_server.py` also takes POST on `/api/chat`, `/api/decree`, `/api/watch`, `/api/director` and `/api/frame`. The first three answer 403 unless the deployment sets `OVERSEER_OPERATOR_ACTIONS` on (the switch `GET /api/v2/operator` reports), and `/api/chat` holds at most two model calls at once, answering 429 past that; `/api/director` takes its own token.
 
 ## Quick start
 

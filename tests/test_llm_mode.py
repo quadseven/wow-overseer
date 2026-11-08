@@ -120,13 +120,17 @@ class CallersDegradeTest(unittest.TestCase):
         self.urlopen.assert_not_called()
 
     def test_the_web_chat_answers_degraded_instead_of_failing(self):
-        with mock.patch.multiple(
-            map_server,
-            _fetch_chat_grounding=mock.Mock(
-                return_value={"snapshot_row": dict(SNAPSHOT), "recent": []}
+        # The operator posts with the deployment's switch on (#1842).
+        with (
+            mock.patch.dict("os.environ", {"OVERSEER_OPERATOR_ACTIONS": "1"}),
+            mock.patch.multiple(
+                map_server,
+                _fetch_chat_grounding=mock.Mock(
+                    return_value={"snapshot_row": dict(SNAPSHOT), "recent": []}
+                ),
+                _insert_thought=mock.Mock(),
+                _insert_command=mock.Mock(),
             ),
-            _insert_thought=mock.Mock(),
-            _insert_command=mock.Mock(),
         ):
             handler = post()
         self.assertEqual(handler.code, 200)
