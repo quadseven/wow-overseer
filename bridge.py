@@ -23746,7 +23746,14 @@ class Bridge(discord.Client):
                           campaignqueue._family(key))
         await _jev_override_recorded(judgment, jev_activity.snapshot(facts))
         if judgment.carried_out:
-            await self._carry_out_activity(key, fam, judgment.carried_out, own, job)
+            source = {
+                jev_activity.jev.JEV: "Jev",
+                jev_activity.jev.BOTH: "Jev and the heuristic",
+                jev_activity.jev.HEURISTIC: "the heuristic",
+            }.get(judgment.acted, "the heuristic")
+            await self._carry_out_activity(
+                key, fam, judgment.carried_out, own, job, source
+            )
 
     async def _activity_can(self, names: list, free: dict, own: bool) -> tuple:
         """(can gather, can train). Only this family's walk and trainer aim
@@ -23776,8 +23783,8 @@ class Bridge(discord.Client):
         return reason, since
 
     async def _carry_out_activity(self, key: str, fam: dict, activity: str,
-                                  own: bool, job: str) -> None:
-        """Carry out Jev's activity through the paths today's rules use.
+                                  own: bool, job: str, source: str = "Jev") -> None:
+        """Carry out the selected activity through the paths today's rules use.
 
         NEVER A QUEUE WRITE. The campaign is resumed by ending the interlude
         and letting the queue pass re-assert its own entry; every other
@@ -23823,8 +23830,9 @@ class Bridge(discord.Client):
             self._activity_restore[key] = (lease.until, activity, names)
         if activity == jev_activity.FISH:
             self._activity_fished[key] = time.monotonic()
-        log.info("activity: %s: Jev chose %s; job=%s for %.0f minutes, then "
-                 "today's rules resume", who, activity, want or job, minutes)
+        log.info("activity: %s: %s chose %s; job=%s for %.0f minutes, then "
+                 "today's rules resume", who, source, activity, want or job,
+                 minutes)
         await self._activity_emote(key, fam, activity)
 
     def _activity_minutes_since_fishing(self, key: str, now: float):
@@ -23835,9 +23843,9 @@ class Bridge(discord.Client):
     async def _activity_emote(self, key: str, fam: dict, activity: str) -> None:
         """The leader says what the family does next, as a player would (#267).
 
-        One text emote in the world's own emote channel, only when Jev has
-        changed the activity. Flavor: a failed write is logged and nothing
-        else changes.
+        One text emote in the world's own emote channel when the selected
+        activity changes. Flavor: a failed write is logged and nothing else
+        changes.
         """
         leader = str(fam["leader"].get("name") or "")
         text = jev_activity.emote(activity, key, time.monotonic())
@@ -23855,8 +23863,8 @@ class Bridge(discord.Client):
                                     names=(), leader: str = "") -> bool:
         """Put a family back on the default job when its fishing break ends.
 
-        Nothing else writes job=fish, so without this a family Jev sent
-        fishing would fish until somebody changed the job by hand. Only while
+        Nothing else writes job=fish, so without this a family sent fishing
+        would fish until somebody changed the job by hand. Only while
         the leader is still on the job the break set: a queue or a person that
         has moved the family on since wins. True when it wrote the jobs, so
         the caller asks again next cycle rather than on a stale read.

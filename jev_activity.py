@@ -29,8 +29,10 @@ WHAT JEV IS OFFERED. Only what the family can carry out now (`options`):
   fish      job=fish, mod-overseer's fishing drive (jobs.DRIVES): the bots'
             own fishing AI, which a player reaches for between errands (#267).
             Offered only with room in every member's bags and the run not
-            withheld. Nothing else ever writes job=fish, so when its lease
-            ends the bridge puts the family back on the default job.
+            withheld. The heuristic schedules a bounded break every few
+            hours, so this path works even while Jev is unavailable. Nothing
+            else writes job=fish, so when its lease ends the bridge puts the
+            family back on the default job and the queue resumes.
 
 REST IS NOT OFFERED, and that is the honest choice set rather than an
 omission. `jobs.MODES` names `rest` but it is not in `jobs.IMPLEMENTED`, and
@@ -48,9 +50,11 @@ operator named: sell or buy bags.
 
 ACT MODE WITH A CONFIDENCE FLOOR. `policy` defaults this kind to act at 0.6
 (JEV_MODE_ACTIVITY_CHOICE and JEV_THRESHOLD_ACTIVITY_CHOICE override both).
-The heuristic's answer is "carry on with what today's rules are doing", so
-whenever Jev is slow, down, busy, has no key, or is below the floor, nothing
-is written and today's rules stand.
+The heuristic normally means "carry on with what today's rules are doing".
+One safe exception is a due fishing break: when the family has room in every
+bag, that bounded interlude is carried out even if Jev is slow, down, busy,
+has no key, or answers below the floor. All other heuristic choices leave
+the existing job and queue alone.
 
 WHEN IT IS ASKED (`due`). On a cadence (`CADENCE_MINUTES`) and at the natural
 breakpoints a player stops at: a run finished, a level gained, a death, bags
@@ -136,6 +140,9 @@ SELL_FREE_SLOTS = 6
 # Fishing fills bags with the catch, so it is offered only while every member
 # has more than this many free slots.
 FISH_FREE_SLOTS = 10
+# A fishing break is an occasional interlude, not a replacement for the
+# campaign. `None` means the family has not fished in this bridge session.
+FISH_INTERVAL_MINUTES = 120
 
 # Why the question was asked now; recorded with it.
 CADENCE = "on the cadence"
@@ -403,6 +410,14 @@ def can_fish(f: Facts) -> bool:
     )
 
 
+def fishing_due(f: Facts) -> bool:
+    """Whether the safe fishing interlude is due for this family."""
+    return can_fish(f) and (
+        f.minutes_since_fishing is None
+        or f.minutes_since_fishing >= FISH_INTERVAL_MINUTES
+    )
+
+
 def heuristic(f: Facts) -> tuple:
     """(activity, why): what today's rules are doing, which acting changes nothing."""
     if f.queue and f.paused:
@@ -413,14 +428,23 @@ def heuristic(f: Facts) -> tuple:
                 "the operator's queue (%s); the run is withheld for bag space "
                 "and today's rules wait for the vendor pass" % f.queue
             )
+        if fishing_due(f):
+            return FISH, (
+                "a safe fishing break is due; the operator's queue remains "
+                "unchanged and resumes when the break ends"
+            )
         return CAMPAIGN, "the operator's queue: %s" % f.queue
     job = str(f.job or "").strip().lower()
     if jobs.is_dungeon_job(job):
+        if fishing_due(f):
+            return FISH, "a safe fishing break is due during the dungeon job"
         return CAMPAIGN, "the family is on the council's dungeon job (%s)" % job
     if job == JOB[CRAFT]:
         return CRAFT, "the craft rhythm has the family on job=craft"
     if job == JOB[TRAIN]:
         return TRAIN, "the family is on job=train"
+    if fishing_due(f):
+        return FISH, "a safe fishing break is due between errands"
     return QUEST, "the family is on job=%s, the default" % (job or jobs.DEFAULT)
 
 
@@ -635,8 +659,14 @@ class Judgment:
 
     @property
     def carried_out(self) -> str:
-        """The activity to carry out, or "" when today's rules stand."""
-        return self.jev if self.acted == jev.JEV else ""
+        """The action in act mode, including safe fishing when Jev stands down."""
+        if self.mode != jev.ACT:
+            return ""
+        if self.acted == jev.JEV:
+            return self.jev
+        if self.heuristic == FISH and self.acted in (jev.BOTH, jev.HEURISTIC):
+            return FISH
+        return ""
 
     def line(self) -> str:
         """One structured log line: who chose what, and from what."""
@@ -644,11 +674,14 @@ class Judgment:
             answer = "jev=%s conf=%.2f" % (self.jev, self.confidence or 0.0)
         else:
             answer = "jev=-"
-        chose = (
-            "Jev chose %s" % self.jev
-            if self.acted == jev.JEV
-            else "today's rules stand (%s)" % self.heuristic
-        )
+        if self.acted == jev.JEV:
+            chose = "Jev chose %s" % self.jev
+        elif self.acted == jev.BOTH and self.carried_out:
+            chose = "Jev agreed with the heuristic: %s" % self.heuristic
+        elif self.carried_out:
+            chose = "the heuristic chose %s" % self.heuristic
+        else:
+            chose = "today's rules stand (%s)" % self.heuristic
         return (
             "activity: family=%s %s; kind=%s heuristic=%s %s status=%s "
             "latency_ms=%d mode=%s acted=%s why_now=%r facts=%r"

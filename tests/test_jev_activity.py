@@ -106,6 +106,47 @@ class HumanTouches(unittest.TestCase):
         )
         self.assertNotIn(ja.FISH, ja.options(facts(members=unknown)))
 
+    def test_heuristic_gives_a_roomy_campaign_family_a_due_fishing_break(self):
+        f = facts(members=members(free=ROOMY), minutes_since_fishing=None)
+        self.assertEqual(ja.FISH, ja.heuristic(f)[0])
+
+    def test_heuristic_keeps_the_campaign_when_fishing_is_recent_or_unsafe(self):
+        recent = facts(members=members(free=ROOMY), minutes_since_fishing=30)
+        snug = facts(members=members(free=SNUG), minutes_since_fishing=None)
+        paused = facts(
+            members=members(free=ROOMY),
+            minutes_since_fishing=None,
+            paused="level gate",
+        )
+        self.assertEqual(ja.CAMPAIGN, ja.heuristic(recent)[0])
+        self.assertEqual(ja.CAMPAIGN, ja.heuristic(snug)[0])
+        self.assertEqual(ja.QUEST, ja.heuristic(paused)[0])
+
+    def test_safe_heuristic_fishing_runs_when_jev_has_no_answer(self):
+        client = jev.Client("", transport=FakeJev())
+        judgment = asyncio.run(
+            ja.ask(
+                client,
+                facts(members=members(free=ROOMY), minutes_since_fishing=None),
+                ja.policy({}),
+            )
+        )
+        self.assertEqual(jev.HEURISTIC, judgment.acted)
+        self.assertEqual(ja.FISH, judgment.carried_out)
+        self.assertIn("the heuristic chose fish", judgment.line())
+
+    def test_safe_fishing_fallback_does_not_act_in_shadow_mode(self):
+        client = jev.Client("", transport=FakeJev())
+        judgment = asyncio.run(
+            ja.ask(
+                client,
+                facts(members=members(free=ROOMY), minutes_since_fishing=None),
+                ja.policy({"JEV_MODE_ACTIVITY_CHOICE": jev.SHADOW}),
+            )
+        )
+        self.assertEqual(jev.SHADOW, judgment.mode)
+        self.assertEqual("", judgment.carried_out)
+
     def test_jev_can_choose_fishing_and_the_family_goes(self):
         fake = FakeJev(picks={"activity": ja.FISH}, confidence=0.8)
         j = ask(facts(queue="", job="quest", members=members(free=ROOMY)), fake)
@@ -638,6 +679,16 @@ class TheBridgeCarriesItOut(unittest.TestCase):
             any(line.startswith("activity: Zug emotes: ") for line in log.lines),
             log.lines,
         )
+
+    def test_safe_fishing_fallback_reaches_the_existing_job_writer(self):
+        world = FakeFamily({n: 20 for n, _, _ in HORDE})
+        me, log = _bridge(world, FakeJev())
+        me._jev = jev.Client("", transport=FakeJev())
+        asyncio.run(me._activity_for("Zug", _family(), _rows(), False, ja.policy({})))
+        [record] = world.records
+        self.assertEqual((ja.FISH, jev.HEURISTIC), (record.heuristic, record.acted))
+        self.assertEqual({(n, "fish", ja.SOURCE) for n, _, _ in HORDE}, set(world.jobs))
+        self.assertTrue(any("the heuristic chose fish" in line for line in log.lines))
 
     def test_a_fishing_break_ends_on_the_default_job(self):
         world = FakeFamily({n: 20 for n, _, _ in HORDE}, job="quest")
