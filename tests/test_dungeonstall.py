@@ -903,3 +903,63 @@ class TheBridgeOrder(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# 2026-11-08, wow-dev: an operator re-queued Grug's family on Blackrock Depths
+# x20 at 07:47:12Z (queue row 149) and the bridge cancelled it 45 seconds later
+# for two stalls (runs 1643433 and 1649476) that both began before the order
+# and before the healer-mana fix. (#2058)
+class AnOperatorsOrderIsJudgedOnRunsAfterIt(unittest.TestCase):
+    BRD = campaignplan.BY_KEYWORD["blackrock-depths"].map_id
+    GERSTAHN = "dungeon clear stopped: RepeatedTimeout at High Interrogator Gerstahn after 180s"
+
+    def runs(self, *starts):
+        return [
+            {
+                "id": 1643433 + i,
+                "map_id": self.BRD,
+                "portal_keyword": "blackrock-depths",
+                "outcome": "stalled",
+                "started_at": at,
+            }
+            for i, at in enumerate(starts)
+        ]
+
+    def events(self, runs):
+        return [stalled(r["id"], self.GERSTAHN) for r in runs]
+
+    def head(self, source, created):
+        return {
+            "id": 149,
+            "keyword": "blackrock-depths",
+            "source": source,
+            "created_at": created,
+        }
+
+    def judged(self, source, created, *starts):
+        runs = self.runs(*starts)
+        runs = stall.since_order(runs, self.head(source, created))
+        return stall.stuck_doors(runs, self.events(self.runs(*starts)))
+
+    def test_stalls_before_an_operators_order_do_not_cancel_it(self):
+        got = self.judged("web:overseer", 100, 10, 50)
+        self.assertEqual({}, got)
+
+    def test_stalls_after_an_operators_order_still_leave_the_door(self):
+        got = self.judged("web:overseer", 100, 110, 150)
+        self.assertEqual(["blackrock-depths"], sorted(got))
+
+    def test_one_stall_before_and_one_after_is_not_two_running(self):
+        self.assertEqual({}, self.judged("web:overseer", 100, 50, 150))
+
+    def test_the_overseers_own_entry_is_judged_on_the_whole_window(self):
+        got = self.judged("overseer:planner", 100, 10, 50)
+        self.assertEqual(["blackrock-depths"], sorted(got))
+
+    def test_the_sql_reads_when_each_run_began(self):
+        self.assertIn("started_at", stall.RUNS_SQL)
+        self.assertIn("r.outcome, r.started_at FROM", stall.RUNS_SQL_TIMELINE)
+
+    def test_the_breaker_reads_with_the_head_it_judges(self):
+        body = BRIDGE[BRIDGE.index("    async def _stall_breaker(") :]
+        self.assertIn("_stall_reads, names, rows[0]", body.split("leave =")[0])

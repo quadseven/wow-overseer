@@ -5278,8 +5278,11 @@ def _pace_score(unscored: list, runs: list) -> list:
 # column.
 
 
-def _stuck_doors(cur, names: list) -> dict:
-    """dungeonstall.stuck_doors for the family's runs in the window, on `cur`."""
+def _stuck_doors(cur, names: list, head: dict | None = None) -> dict:
+    """dungeonstall.stuck_doors for the family's runs in the window, on `cur`.
+
+    With the queue entry `head` (carrying `created_at`), an operator's order is
+    judged on the runs after it was queued (dungeonstall.since_order, #2058)."""
     marks = dungeonstall.holes(len(names))
     args = tuple(names) + (dungeonstall.WINDOW_HOURS,)
     # The timeline's door first, for the reason `_planner_facts` gives (#1375).
@@ -5289,7 +5292,8 @@ def _stuck_doors(cur, names: list) -> dict:
     if runs is None:
         runs = _planner_rows(cur, dungeonstall.RUNS_SQL.format(holes=marks), args,
                              "the run ledger by door")
-    ids = dungeonstall.event_ids(runs or [])
+    runs = dungeonstall.since_order(runs or [], head)
+    ids = dungeonstall.event_ids(runs)
     if not ids:
         return {}
     events = _planner_rows(
@@ -5308,10 +5312,17 @@ def _stall_barred(cur, key: str, names: list) -> dict:
     return {**dungeonstall.held_barred(held or []), **barred}
 
 
-def _stall_reads(names: list) -> dict:
-    """The family's stuck doors. Reads only."""
+def _stall_reads(names: list, head: dict | None = None) -> dict:
+    """The family's stuck doors. Reads only. An operator's `head` order is
+    judged on the runs after it was queued (#2058)."""
     with _connect() as conn, conn.cursor() as cur:
-        return _stuck_doors(cur, names)
+        if head is not None and dungeonpace.operator_ordered(head):
+            rows = _planner_rows(
+                cur, "SELECT created_at FROM overseer_dungeon_queue WHERE id = %s",
+                (int(head["id"]),), "the order's queue time")
+            if rows and rows[0].get("created_at") is not None:
+                head = {**head, "created_at": rows[0]["created_at"]}
+        return _stuck_doors(cur, names, head)
 
 
 def _silent_seconds(head_id: int, names: list) -> int | None:
@@ -22366,7 +22377,7 @@ class Bridge(discord.Client):
         if raidrun.is_raid(str(rows[0].get("keyword") or "")):
             return False
         names = list(fam["names"])
-        stuck = await asyncio.to_thread(_stall_reads, names)
+        stuck = await asyncio.to_thread(_stall_reads, names, rows[0])
         silent_stall = await asyncio.to_thread(_silent_stall, rows[0], names)
         if silent_stall is not None:
             stuck[silent_stall.door] = silent_stall
