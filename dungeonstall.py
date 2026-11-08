@@ -12,7 +12,8 @@ not a wipe, nobody died, and nothing else in the bridge read it.
 WHAT COUNTS (`stall_of`, `stuck_doors`). Per Run keyword (campaignplan.RUNS,
 an alternate door counting toward its wing), the two latest runs that met the
 dungeon (dungeonpace.FOUGHT; a staging or reset failure never reached an
-encounter and is skipped). The door is STUCK when both stalled and the later
+encounter and is skipped, and so is a run that ended within
+dungeonpace.NON_ENTRY_SECONDS of opening, #2092). The door is STUCK when both stalled and the later
 got no further than the earlier: every encounter it credited the earlier had
 credited too. "The same boss" is the common case; a later stall at an EARLIER
 boss is the same wall reached on a worse day (the family alternated between
@@ -78,7 +79,8 @@ WINDOW_HOURS = dungeonpace.WINDOW_HOURS
 NO_PROGRESS_AFTER = timedelta(hours=2)
 
 RUNS_SQL = (
-    "SELECT id, map_id, portal_keyword, outcome, started_at FROM overseer_dungeon_run "
+    "SELECT id, map_id, portal_keyword, outcome, started_at, ended_at "
+    "FROM overseer_dungeon_run "
     "WHERE state = 'ended' AND leader_name IN ({holes}) "
     "AND started_at >= NOW() - INTERVAL %s HOUR ORDER BY id"
 )
@@ -96,7 +98,7 @@ RUNS_SQL_TIMELINE = (
     "SELECT r.id, r.map_id, (SELECT e.portal FROM overseer_dungeon_run_event e "
     "WHERE e.run_id = r.id AND e.portal <> _utf8mb4'' COLLATE utf8mb4_unicode_ci "
     "ORDER BY e.id LIMIT 1) "
-    "AS portal_keyword, r.outcome, r.started_at FROM overseer_dungeon_run r "
+    "AS portal_keyword, r.outcome, r.started_at, r.ended_at FROM overseer_dungeon_run r "
     "WHERE r.state = 'ended' AND r.leader_name IN ({holes}) "
     "AND r.started_at >= NOW() - INTERVAL %s HOUR ORDER BY r.id"
 )
@@ -187,7 +189,11 @@ def _fought_by_door(runs: list) -> dict:
     out: dict = {}
     for row in sorted(runs or (), key=lambda r: int(r.get("id") or 0)):
         door = door_of(row)
-        if door and str(row.get("outcome") or "") in dungeonpace.FOUGHT:
+        if (
+            door
+            and str(row.get("outcome") or "") in dungeonpace.FOUGHT
+            and not dungeonpace.never_fought(row)
+        ):
             out.setdefault(door, []).append(row)
     return out
 

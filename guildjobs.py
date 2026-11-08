@@ -626,6 +626,9 @@ class Member:
     zone_id: int | None = None
     money: int = 0
     skills: dict = field(default_factory=dict)  # skill -> (value, max)
+    # True when `skills` was read from the realm, so an empty one means "no
+    # trade" and not "unread" (vendor_judge: a material no trade uses sells).
+    skills_read: bool = False
     known: frozenset = frozenset()
     carried: tuple = ()  # Carried
     eligible: bool = False
@@ -1984,6 +1987,11 @@ def vendor_judge(member, protected=frozenset()) -> vendorsale.Judge:
         worn=member.worn,
         reserved=member.reserved,
         protected=frozenset(guard) | frozenset(protected),
+        trades=(
+            frozenset(int(s) for s in member.skills if member.holds(s))
+            if member.skills_read
+            else None
+        ),
     )
 
 
