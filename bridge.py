@@ -1110,6 +1110,38 @@ def _ensure_event_store() -> None:
             log.info("overseer_event: added idx_character_kind_last_seen")
 
 
+def _ensure_command_store() -> None:
+    # The decree console's newest-job-per-character read (map_server
+    # _fetch_decree) is `SELECT target_name, MAX(id) ... WHERE kind = 'job'
+    # GROUP BY target_name`. The table ships with idx_kind_status_updated,
+    # which covers neither target_name nor id, so on a table that is never
+    # pruned the read was a scan with row lookups and a temp table: 7.0 s on
+    # a realm with 877k rows, past the site's 10 s read timeout (#2051).
+    # (kind, target_name, id) answers it as a loose index scan. The table is
+    # the worldserver's, so the index is ensured only when the table exists,
+    # and a failure here does not stop the bridge.
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM information_schema.TABLES "
+            "WHERE table_schema = DATABASE() "
+            "  AND table_name = 'overseer_command'"
+        )
+        if not (cur.fetchone() or {}).get("n"):
+            return
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM information_schema.STATISTICS "
+            "WHERE table_schema = DATABASE() "
+            "  AND table_name = 'overseer_command' "
+            "  AND index_name = 'idx_kind_target_id'"
+        )
+        if not (cur.fetchone() or {}).get("n"):
+            cur.execute(
+                "ALTER TABLE overseer_command "
+                "ADD KEY idx_kind_target_id (kind, target_name, id)"
+            )
+            log.info("overseer_command: added idx_kind_target_id")
+
+
 def _insert_thought(name: str, source: str, text: str) -> None:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
@@ -8029,6 +8061,7 @@ class Bridge(discord.Client):
             _ensure_thought_store,
             _ensure_dungeon_run_event_store,
             _ensure_event_store,
+            _ensure_command_store,
             _ensure_goal_store,
             _ensure_sample_store,
             _ensure_economy_store,
@@ -8047,7 +8080,11 @@ class Bridge(discord.Client):
             try:
                 await asyncio.to_thread(ensure)
             except Exception:
-                if ensure in (_ensure_dungeon_run_event_store, _ensure_event_store):
+                if ensure in (
+                    _ensure_dungeon_run_event_store,
+                    _ensure_event_store,
+                    _ensure_command_store,
+                ):
                     # An index on a worldserver table speeds a read; its
                     # absence never breaks one, so it never stops the bridge.
                     log.exception(
