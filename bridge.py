@@ -16591,7 +16591,7 @@ class Bridge(discord.Client):
         hunts_left = max(0, QUESTER_HUNTS - min(int(hunts_open or 0), QUESTER_HUNTS))
         # A quester with full bags sells before its move (questers.sell_step,
         # #1813): its bags, worn gear and sale rows are read only for those.
-        full = [m.name for m in members if questers.needs_sale(m)]
+        full = [m.name for m in members if questers.needs_sale(m, tried)]
         carried, worn, sold = (await asyncio.to_thread(_fetch_quester_bags, full)
                                if full else ({}, {}, ()))
         kept = await asyncio.to_thread(_KEEP.now) if full else None
@@ -16602,7 +16602,7 @@ class Bridge(discord.Client):
                                  self._quester_last.get(m.name, 0), crossings)
             await self._quester_ledger(m, plan, held, ledger, mono)
             sale = (questers.sell_step(m, carried.get(m.name, ()), worn.get(m.name), kept,
-                                       cat, sold, cap) if m.name in full else None)
+                                       cat, sold, cap, tried) if m.name in full else None)
             if self._quester_start(m, plan, cat, cap, mono, hunt_verb and hunts_left > 0,
                                    sale):
                 hunts_left -= 1
