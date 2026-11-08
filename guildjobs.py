@@ -4340,12 +4340,15 @@ def _in_loop_zone(m, loop) -> bool:
 # level, and gained no level. Every spirit healer and corpse run put it back
 # where its own AI kept choosing to quest. A player in that loop stops, goes to
 # town to repair, sell and train, and quests somewhere else.
-def death_loop_hearth(m, loop, recent):
+def death_loop_hearth(m, loop, recent, world=None, cap=None):
     """The hearth home of a member in its death loop's zone, or None.
 
     Only a member online, alive and out of combat, in the open world, that is
     in the loop's zone, with no hearth inside the hearth cooldown, and whose
-    hearthstone is not bound inside that same zone (`home_in_loop_zone`)."""
+    hearthstone is not bound inside that same zone (`home_in_loop_zone`).
+
+    With `world` (guildlevel.World) the step carries a second row, the walk on
+    from the home to a hub of another zone (death_loop_onward, #2014)."""
     if not _in_loop_zone(m, loop):
         return None
     if home_in_loop_zone(m, loop):
@@ -4354,14 +4357,90 @@ def death_loop_hearth(m, loop, recent):
         return None
     if _cooling(m, "hearth", recent):
         return None
-    return guildcorps.Step(
+    said = "%s hearths home to town for a town errand (repair, sell, train): %s" % (
         m.name,
-        "hearth",
-        0,
-        "%s hearths home to town for a town errand (repair, sell, train): %s"
-        % (m.name, loop.reason()),
-        rows=(guildcorps.Row("hearth", "use", "", source_for("hearth", m.name)),),
+        loop.reason(),
     )
+    rows = (guildcorps.Row("hearth", "use", "", source_for("hearth", m.name)),)
+    onward = death_loop_onward(m, loop, world, recent, cap)
+    if onward is not None:
+        walk, place = onward
+        rows += (walk,)
+        said = "%s, then walks on to the flight master at %s" % (said, place)
+    return guildcorps.Step(m.name, "hearth", 0, said, rows=rows)
+
+
+# THE HEARTH LETS GO ON ARRIVAL, SO THE WALK ON IS PART OF IT (#2014). The
+# hearth row releases its hold once the member lands, and the member's own
+# wandering then picks the nearest ground for its level, which is the zone it
+# was dying in; the next guild jobs pass comes 15 to 20 minutes later. Read on
+# the dev realm on 2026-11-08: of 184 guild-job hearths in a day, 58 were
+# followed by another death in the zone just left within two hours (median
+# about 22 minutes, 16 within 15), and Jawless hearthed out of The Hinterlands
+# to Hammerfall at 01:38 and died in The Hinterlands again at 01:43. So the
+# hearth step walks on, in the same step, to the flight master of a hub of
+# another zone that fits the member's level, chosen from the home and never in
+# the loop's zone; the walk holds the member until it gets there.
+def death_loop_onward(m, loop, world, recent, cap):
+    """(walk row, place) from the member's hearth home to a hub flight master
+    outside the loop's zone, or None.
+
+    None without a world read, for a roster family member (levelroute walks
+    those), at the level cap, with the home unread, when the hub is reached
+    only by a crossing or an orb, when the member's home is already at the hub,
+    or when a level walk to that hub has killed it (deadly_hub_note). The row
+    is written as a level walk (guildlevel.ACTION), so the level cooldown and
+    the deadly-way read see it."""
+    if world is None or loop is None:
+        return None
+    if cap is None:
+        cap = guildcorps.NEAR
+    if m.name in world.roster or int(m.level) >= guildlevel.LEVEL_CAP:
+        return None
+    home_map = getattr(m, "home_map", None)
+    home_x = getattr(m, "home_x", None)
+    home_y = getattr(m, "home_y", None)
+    if home_map is None or home_x is None or home_y is None:
+        return None
+    home_zone = guildlevel.home_zone_of(
+        home_map, home_x, home_y, getattr(m, "home_zone", None)
+    )
+    bands = world.bands.get(guildlevel.side_of(m.race), {})
+    opens = guildlevel.member_opens(world, m.race, m.level, m.rewarded)
+    choice = guildlevel.choose(
+        m.level,
+        m.race,
+        home_map,
+        bands,
+        world.masters,
+        zone_id=home_zone,
+        orbs=getattr(world, "orbs", None),
+        opens=opens,
+        nodes=m.taxi_nodes,
+        avoid=loop.zone,
+    )
+    if choice.refused or choice.orb is not None or choice.crosses:
+        return None
+    master = choice.master
+    if master is None or guildlevel.there(home_map, home_x, home_y, master):
+        return None
+    if deadly_hub_note(m, master, choice, recent):
+        return None
+    spot = Spot(
+        kind="creature",
+        spawn=master.spawn,
+        map_id=master.map_id,
+        x=master.x,
+        y=master.y,
+        name=master.name or choice.place,
+    )
+    row = guildcorps.Row(
+        "job",
+        spot.command + _cap_word(cap),
+        "",
+        source_for(guildlevel.ACTION, m.name),
+    )
+    return row, choice.place or master.name
 
 
 # A HEARTH BOUND IN THE LOOP'S ZONE IS NO WAY OUT (#1882). inn_step binds a
@@ -4417,7 +4496,7 @@ def death_loop_first(
         return step, doing, "", ""
     if not _in_loop_zone(m, loop):
         return None
-    step = death_loop_hearth(m, loop, recent)
+    step = death_loop_hearth(m, loop, recent, leveling, cap)
     if step is not None:
         return step, step.said, held, ""
     step, doing, note = level_step(m, leveling, recent, cap, loop, campaign)
