@@ -255,8 +255,10 @@ class BridgeWiringTest(unittest.TestCase):
     def test_the_queue_carries_route_sales_out(self):
         body = self.segments["_queue_vendor_sales"]
         self.assertIn("route_sales", body)
-        self.assertIn("carry_out", body)
-        self.assertIn("_insert_sell", body)
+        self.assertIn("_queue_route_sales", body)
+        helper = self.segments["_queue_route_sales"]
+        self.assertIn("carry_out", helper)
+        self.assertIn("_insert_sell", helper)
 
 
 if __name__ == "__main__":
