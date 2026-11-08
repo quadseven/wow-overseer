@@ -385,7 +385,9 @@ def _dungeon_milestone(guild, label, rule, runs) -> dict:
         )
     ladder = _ladder(guild)
     cleared = _cleared_wings(runs)
-    missing = [r.place for r in ladder if r.keyword not in cleared]
+    missing = [
+        r.place for r in ladder if campaignplan.wing_of(r.keyword) not in cleared
+    ]
     have = len(ladder) - len(missing)
     out = {
         "key": "D",
