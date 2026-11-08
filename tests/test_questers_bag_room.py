@@ -56,6 +56,13 @@ class ABagRoomRefusalIsNotBroken(unittest.TestCase):
         # Older than the hold: the take is asked again.
         self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 1))
 
+    def test_watchful_eye_bag_room_refusals_do_not_make_a_broken_ledger_row(self):
+        # Quest 94 was reported broken after the world refused its take for
+        # lack of room for the giver's start item. These are the same recent
+        # attempt rows read by questers.refusals() from the command log.
+        tried = [bag_room(94, age=m) for m in (300, 200, 100)]
+        self.assertEqual(questers.refusals("Mirra", tried), {})
+
     def test_a_real_eligibility_refusal_still_counts(self):
         tried = [not_eligible(age=m) for m in (300, 200, 100)]
         p = questers.plan(world(), mirra(x=0.0), questers.Clock(), 0.0, tried=tried)
