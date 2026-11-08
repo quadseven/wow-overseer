@@ -145,6 +145,9 @@ KEPT_REAGENT = "a reagent"
 KEPT_PROFESSION = "profession stock"
 KEPT_QUALITY = "uncommon or better"
 KEPT_NO_PRICE = "no vendor price"
+KEPT_CONSUMABLE = "food, drink or a potion its own AI uses"
+# Item class 0 in item_template: food, drink, potions, scrolls, bandages.
+CONSUMABLE_CLASS = 0
 _SALE_FLAGS = ("quest_item", "reagent", "profession_needed")
 
 
@@ -175,6 +178,14 @@ def _vendor_reading(row: dict, keep_names=()) -> tuple:
         return None, KEPT_UNREAD
     if candidate.item_guid <= 0 or candidate.count <= 0:
         return None, KEPT_UNREAD
+    # A CONSUMABLE THAT IS NOT GREY STAYS IN THE BAG (wow-overseer#2017). Its
+    # own AI eats, drinks and drinks potions from it between pulls; the healer
+    # that sold its only drink stalled eight dungeon clears in two days on
+    # "low mana". The guild rule (vendorsale.verdict) keeps the same class.
+    # A row without the column keeps the old answer: every adapter that reads
+    # carried goods for this pass selects it.
+    if item.quality >= 1 and _class_of(row) == CONSUMABLE_CLASS:
+        return None, KEPT_CONSUMABLE
     if sellable(item):
         return candidate, ""
     if any(flag not in row for flag in _SALE_FLAGS):
@@ -188,6 +199,14 @@ def _vendor_reading(row: dict, keep_names=()) -> tuple:
     if item.quality > 1:
         return None, KEPT_QUALITY
     return None, KEPT_NO_PRICE
+
+
+def _class_of(row: dict):
+    """The row's item_template class, or None when it was not read."""
+    try:
+        return int(row["item_class"])
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def vendor_refusal(row: dict, keep_names=()) -> str:
