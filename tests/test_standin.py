@@ -1575,6 +1575,13 @@ class AGateTheFamilyCannotOpen(unittest.TestCase):
         )
         self.assertEqual("Picky", standin.step(f).seat.in_name)
 
+    def test_a_stranded_member_ends_a_lockpicker_row_between_runs_only(self):
+        current = self._lock_row()
+        f = zug_facts(current=current)
+        self.assertEqual(standin.CLEAR, standin.step(f).action)
+        mid = dataclasses.replace(f, mid_run=True)
+        self.assertEqual(standin.KEEP, standin.step(mid).action)
+
     def test_lockpicking_is_read_off_the_member_row(self):
         self.assertEqual(280, guildrun.member_from_row(PICKY).lockpicking)
         self.assertEqual(0, guildrun.member_from_row(FROSTY).lockpicking)

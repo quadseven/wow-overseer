@@ -967,6 +967,11 @@ def _end_or_none(facts: Facts, current: Seat | None, why: str) -> Step:
 
 def _stranded_gate(facts: Facts, current: Seat | None, name: str) -> Step | None:
     """The answer when `name` cannot (or no longer) sit out stranded, else None."""
+    if current is not None and is_lock(current):
+        # A lockpicker's row gives way to a stranded member, between runs only.
+        return _end_or_none(
+            facts, current, "%s is stranded, so the lockpicker seat ends" % name
+        )
     if current is not None and not is_stranded(current):
         # A crafter's row with no order left: the craft path's own answer.
         return Step(CLEAR, "the %s order is removed" % ENV)
