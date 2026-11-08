@@ -163,6 +163,30 @@ class MemberStates(unittest.TestCase):
         ):
             self.assertNotIn("In state", self.state(word), word)
 
+    def waiting(self, word):
+        intent = {
+            "leader_name": "Grug",
+            "family": "Grug",
+            "current_kind": "none",
+            "members_state": "Og|%s|" % word,
+            "module_age": 0,
+        }
+        return card("Og", intents=[intent])["waiting"]
+
+    def test_a_member_walking_back_says_what_it_waits_for(self):
+        # The stuck list printed "Waiting for to catch up with <leader>.": the
+        # waiting words must name a thing, so "Waiting for " + them reads.
+        for word in ("walking back", "walking back to the leader"):
+            self.assertEqual(
+                "Waiting for " + self.waiting(word) + ".",
+                "Waiting for the walk back to Grug to finish.",
+                word,
+            )
+
+    def test_no_waiting_words_start_mid_sentence(self):
+        for word, (_doing, waiting) in nowstatus._MEMBER_STATES.items():
+            self.assertFalse(waiting.startswith("to "), word)
+
 
 class Counts(unittest.TestCase):
     ROW = {
