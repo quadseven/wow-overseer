@@ -492,7 +492,7 @@ FOLLOWING = "following"
 _MEMBER_STATES = {
     FOLLOWING: ("Following {leader}", "{leader} to move on"),
     "on an errand of its own": ("On an errand of its own", "the errand to finish"),
-    "walking back": ("Walking back to {leader}", "to catch up with {leader}"),
+    "walking back": ("Walking back to {leader}", "the walk back to {leader} to finish"),
     "held too far to walk": (
         "Held where it stands, too far to walk back",
         "{leader} to come back for it",
@@ -512,7 +512,7 @@ _MEMBER_STATES = {
     ),
     "walking back to the leader": (
         "Walking back to {leader}",
-        "to catch up with {leader}",
+        "the walk back to {leader} to finish",
     ),
     "walking to the inn": ("Walking to the inn", ""),
     "held still": ("Held still", "the hold to end"),
