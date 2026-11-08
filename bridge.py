@@ -5167,16 +5167,17 @@ def _pace_queue(cur, key: str, rows: list, decision, door_row: dict) -> int:
             dungeonpace.FURTHER, dungeonpace.QUEST, dungeonpace.STEP_UP,
             dungeonpace.ADVANCE):
         cur.execute(campaignqueue.FINISH_SQL, (int(head["id"]),))
+    runs = dungeonpace.step_down_runs(door_row)
     if decision.kind == dungeonpace.EXTEND:
         cur.execute(dungeonpace.EXTEND_SQL, (
-            dungeonpace.STEP_DOWN_RUNS, int(head["id"]), dungeonpace.SOURCE))
+            runs, int(head["id"]), dungeonpace.SOURCE))
     if decision.kind not in (dungeonpace.STEP_DOWN, dungeonpace.FURTHER,
                              dungeonpace.ADVANCE):
         return 0
     position = min(int(r.get("position") or 0) for r in rows)
     cur.execute(dungeonpace.SHIFT_SQL, (key,))
     cur.execute(campaignqueue.INSERT_SQL, (
-        key, position, decision.target, dungeonpace.STEP_DOWN_RUNS,
+        key, position, decision.target, runs,
         dungeonpace.SOURCE))
     new_id = int(cur.lastrowid or 0)
     cur.execute(dungeonpace.REQUEUE_SQL, (int(door_row["id"]),))
