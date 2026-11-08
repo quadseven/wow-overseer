@@ -1201,12 +1201,7 @@ def _lock_step(facts: Facts) -> Step:
     lock = lock_of(facts.door)
     unmet = lock_unmet(facts, current.out_name if current is not None else "")
     if lock is None or not unmet:
-        why = (
-            "%s's family can open its door's lock without a guest" % facts.family
-            if lock is not None
-            else "%s's door has no lock to open" % facts.family
-        )
-        return _end_or_none(facts, current, why)
+        return _end_or_none(facts, current, _lock_gone_why(facts, lock))
     if facts.mid_run:
         if current is None:
             return Step(
@@ -1214,32 +1209,52 @@ def _lock_step(facts: Facts) -> Step:
             )
         return Step(KEEP, "the family is inside; %s keeps the seat" % current.in_name)
     if current is not None:
-        guest = next((m for m in facts.candidates if m.name == current.in_name), None)
-        kept = ""
-        if guest is not None and opens(guest, lock):
-            kept = guildrun.why_not(
-                guest,
-                set(facts.busy),
-                set(facts.resting),
-                set(facts.every_family),
-                facts.benched,
-                facts.owed,
-            )
-            if kept in KEEPS_SEAT:
-                return Step(
-                    KEEP,
-                    "%s keeps the %s seat to open %s"
-                    % (guest.name, current.seat, lock.gate),
-                )
-        swap = _lock_swap(facts, current, current.seat, lost=True)
-        if swap is not None:
-            return swap
-        return Step(
-            CLEAR,
-            "%s can no longer open %s (%s) and no other lockpicker is free, so %s "
-            "rejoins"
-            % (current.in_name, lock.gate, kept or "not free", current.out_name),
+        return _lock_keep_or_end(facts, current, lock)
+    return _lock_seat_new(facts, lock, unmet)
+
+
+def _lock_gone_why(facts: Facts, lock: Lock | None) -> str:
+    """Why no lockpicker is needed now: no lock on the door, or the family
+    opens it itself."""
+    if lock is None:
+        return "%s's door has no lock to open" % facts.family
+    return "%s's family can open its door's lock without a guest" % facts.family
+
+
+def _lock_keep_or_end(facts: Facts, current: Seat, lock: Lock) -> Step:
+    """A standing lockpicker row between runs: kept while its guest still
+    opens the lock and is free (or grouped with the family), else given to
+    another lockpicker, else ended so the member rejoins."""
+    guest = next((m for m in facts.candidates if m.name == current.in_name), None)
+    kept = ""
+    if guest is not None and opens(guest, lock):
+        kept = guildrun.why_not(
+            guest,
+            set(facts.busy),
+            set(facts.resting),
+            set(facts.every_family),
+            facts.benched,
+            facts.owed,
         )
+        if kept in KEEPS_SEAT:
+            return Step(
+                KEEP,
+                "%s keeps the %s seat to open %s"
+                % (guest.name, current.seat, lock.gate),
+            )
+    swap = _lock_swap(facts, current, current.seat, lost=True)
+    if swap is not None:
+        return swap
+    return Step(
+        CLEAR,
+        "%s can no longer open %s (%s) and no other lockpicker is free, so %s "
+        "rejoins" % (current.in_name, lock.gate, kept or "not free", current.out_name),
+    )
+
+
+def _lock_seat_new(facts: Facts, lock: Lock, unmet: str) -> Step:
+    """No row: sit out the least needed damage dealer for a free lockpicker,
+    or write nothing when either is missing."""
     out = lock_sit_out(facts)
     if out is None:
         return Step(NONE, "%s; no damage dealer can give a lockpicker its seat" % unmet)
