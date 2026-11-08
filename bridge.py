@@ -19907,6 +19907,12 @@ class Bridge(discord.Client):
             gathered=gathered, step_done=step_done,
             bag_pressure_needed=bag_pressure_needed,
             stalled=_queue_stall_floor(names))
+        failed = townerrand.unlanded_aim(state, new)
+        if failed:
+            memory = globals().get("_TOWN_ERRAND_RELEASED")
+            if memory is not None:
+                memory[key] = townerrand.remember_released(
+                    memory.get(key), failed, now)
         if line:
             away = sorted(n for n in names if not townerrand.in_range(
                 hub, positions.get(n), townerrand.GATHER_YARDS))
@@ -20087,6 +20093,27 @@ class Bridge(discord.Client):
                                           teams.get(leader, ""), standing)
         home = await asyncio.to_thread(_fetch_bind_hub, leader)
         hub = townerrand.choose_hub(home, capital, standing, why)
+        # A BAG-ROOM ERRAND AIMS AT A VENDOR WHEN THE HUB IS A JOURNEY, and
+        # never at an aim whose walk was just released unlanded (#2065).
+        # Looked up: the adapter tests load this method in isolation.
+        released = globals().get("_TOWN_ERRAND_RELEASED", {}).get(
+            tuple(sorted(names)), [])
+        stops_of = globals().get("_fetch_errand_vendor_stops")
+        if why == townerrand.BAG_PRESSURE_WHY and standing and stops_of:
+            stops = townerrand.vendor_stops(
+                await asyncio.to_thread(stops_of, leader, standing),
+                situation.ALLIANCE_MASK if teams.get(leader) == "alliance"
+                else situation.HORDE_MASK if teams.get(leader) == "horde" else 0)
+            chosen = townerrand.choose_aim(
+                hub, stops, standing, why, released, now)
+            if chosen != hub:
+                log.info("town errand: %s%s aims at %s instead of %s (%s)",
+                         why, label, chosen.get("place", "a vendor"),
+                         hub.get("place", "no hub") if hub else "no hub",
+                         "released unlanded earlier" if hub and
+                         townerrand._was_released(hub, released, now)
+                         else "the hub is a long walk off")
+                hub = chosen
         if not hub:
             log.info("town errand: %s%s, but neither %s's hearthstone point nor "
                      "a capital of the family's own auction house on his map "
@@ -34535,6 +34562,40 @@ def _fetch_capital_hub(leader: str, team: str, standing) -> dict:
     hub["auctioneer"] = str(own.get("name") or "")
     hub["place"] = "the auctioneer %s" % hub["auctioneer"]
     return hub
+
+
+# Aims a family's errand was released for not landing: family key -> [(hub,
+# monotonic time)], kept townerrand.AIM_MEMORY_SECONDS (#2065).
+_TOWN_ERRAND_RELEASED: dict = {}
+# The nearest vendors on the map where the head stands, for a bag-room errand
+# whose capital is a journey away. Faction is judged by townerrand.vendor_stops.
+_ERRAND_VENDORS_SQL = (
+    "SELECT cr.map AS map_id, cr.position_x AS x, cr.position_y AS y, "
+    "cr.position_z AS z, ct.name AS name, ft.EnemyGroup AS enemy_group, "
+    "(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2)) AS d2 "
+    "FROM acore_world.creature cr "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
+    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 ORDER BY d2 LIMIT 60"
+)
+
+
+def _fetch_errand_vendor_stops(leader: str, standing) -> list:
+    """Vendor creature rows nearest `standing` ({map_id, pos_x, pos_y}) on its
+    map, nearest first, or []."""
+    try:
+        at = (float(standing["pos_x"]), float(standing["pos_y"]),
+              int(standing["map_id"]))
+    except (KeyError, TypeError, ValueError):
+        return []
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_ERRAND_VENDORS_SQL, (*at, towntrip.NPC_FLAG_VENDOR))
+            return [dict(r) for r in cur.fetchall()]
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
 
 
 # THE HOME TOWN: the mailbox spawn nearest the head's hearthstone point, on its

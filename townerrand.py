@@ -438,6 +438,130 @@ def _bound_at(hub: dict, bind) -> bool:
     return dx * dx + dy * dy <= WALK_YARDS**2
 
 
+# THE WALK THAT NEVER LANDS IS NOT TRIED AGAIN (wow-overseer#2065). A family
+# held for bag room stood in the south of the Eastern Kingdoms with its capital
+# 4,874 yards away. The walk was released at GO_SECONDS before any counter,
+# and the same capital was chosen again each cooldown, so the sale that ends
+# the hold was never reached for seven hours. A bag-room errand now aims at the
+# nearest vendor on the head's map when its default hub is a long walk off, and
+# a hub released as "did not land" is skipped for AIM_MEMORY_SECONDS.
+DID_NOT_LAND = "did not land"
+AIM_MEMORY_SECONDS = 4 * 3600.0
+# Two aims this close on one map are the same aim (a town square's counters).
+AIM_SAME_YARDS = 120.0
+# A default hub nearer than this stays the aim; a vendor is preferred only
+# when the hub is a journey (the module's own WALK_YARDS).
+VENDOR_FIRST_YARDS = WALK_YARDS
+# Vendor spawns within this of each other are one stop, not a list of choices.
+VENDOR_STOP_YARDS = 120.0
+
+
+def unlanded_aim(old: State, new: State) -> dict:
+    """The hub of an errand that `advance` just released for a walk that never
+    landed ({} for every other transition)."""
+    if old.phase == GO and new.phase == DONE and DID_NOT_LAND in new.why:
+        return dict(old.hub)
+    return {}
+
+
+def remember_released(released, hub: dict, now: float) -> list:
+    """`released` ([(hub, when)]) with `hub` added at `now`, and every entry
+    older than AIM_MEMORY_SECONDS dropped."""
+    kept = [(h, at) for h, at in released or () if now - at < AIM_MEMORY_SECONDS]
+    if hub:
+        kept.append((dict(hub), now))
+    return kept
+
+
+def _planar(spot, other) -> float:
+    """Yards between two {map_id, x, y} spots; inf on another map or unread."""
+    try:
+        if int(spot.get("map_id")) != int(other.get("map_id")):
+            return float("inf")
+        dx = float(spot.get("x")) - float(other.get("x"))
+        dy = float(spot.get("y")) - float(other.get("y"))
+    except (TypeError, ValueError, AttributeError):
+        return float("inf")
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def _was_released(spot: dict, released, now: float) -> bool:
+    return any(
+        now - at < AIM_MEMORY_SECONDS and _planar(spot, h) <= AIM_SAME_YARDS
+        for h, at in released or ()
+    )
+
+
+def vendor_stops(rows, side: int = 0) -> list:
+    """Vendor spots from creature rows ({map_id, x, y, name, enemy_group}),
+    nearest first as given, one per VENDOR_STOP_YARDS, none of the side that
+    attacks the family (`side` is situation.side_mask; 0 when unread)."""
+    out = []
+    for row in rows or ():
+        group = row.get("enemy_group")
+        if group is not None:
+            try:
+                if int(group) & 1 or (side and int(group) & side):
+                    continue
+            except (TypeError, ValueError):
+                continue
+        try:
+            spot = {
+                "map_id": int(row["map_id"]),
+                "x": float(row["x"]),
+                "y": float(row["y"]),
+                "z": float(row.get("z") or 0.0),
+            }
+        except (KeyError, TypeError, ValueError):
+            continue
+        if any(_planar(spot, kept) <= VENDOR_STOP_YARDS for kept in out):
+            continue
+        spot["place"] = "the vendor %s" % (row.get("name") or "nearby")
+        out.append(spot)
+    return out
+
+
+def choose_aim(
+    hub: dict, stops, leader_at, why: str, released=(), now: float = 0.0
+) -> dict:
+    """The errand's aim: `hub` (choose_hub), or a nearer vendor stop.
+
+    Only a bag-room errand moves off its hub, because it only needs a counter
+    that buys: a hub on the head's map further than VENDOR_FIRST_YARDS, or one
+    released in the last AIM_MEMORY_SECONDS for not landing, gives way to the
+    nearest vendor stop on his map (`stops`, vendor_stops) that was not itself
+    released. A hub on another map stays (a hearthstone reaches it) unless
+    it was released. With nothing fresh left the hub stands, as before.
+    """
+    hub = dict(hub or {})
+    if why != BAG_PRESSURE_WHY or not leader_at:
+        return hub
+    here = {
+        "map_id": leader_at.get("map_id"),
+        "x": leader_at.get("pos_x"),
+        "y": leader_at.get("pos_y"),
+    }
+    hub_used = bool(hub) and _was_released(hub, released, now)
+    hub_far = (
+        bool(hub)
+        and _same_map(hub, leader_at)
+        and _planar(hub, here) > VENDOR_FIRST_YARDS
+    )
+    if hub and not hub_used and not hub_far:
+        return hub
+    near = [
+        (_planar(s, here), i, s)
+        for i, s in enumerate(stops or ())
+        if _same_map(s, leader_at) and not _was_released(s, released, now)
+    ]
+    if not near:
+        return hub
+    d, _i, stop = min(near, key=lambda t: (t[0], t[1]))
+    if hub and not hub_used and _planar(hub, here) <= d:
+        return hub
+    return dict(stop)
+
+
 def hearthing(state: State, now: float) -> State:
     """The errand after hearth rows were written at `now`: the leader is left
     alone for the cast. A member still far from home while the family walks
@@ -498,7 +622,7 @@ def advance(
             return end(
                 state,
                 now,
-                "the walk to the capital did not land in %ds" % int(GO_SECONDS),
+                "the walk to the capital %s in %ds" % (DID_NOT_LAND, int(GO_SECONDS)),
             )
         return state, ""
     if state.phase == GATHER:
