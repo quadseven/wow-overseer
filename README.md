@@ -2,7 +2,7 @@
 
 The Discord bridge and live web site for a World of Warcraft server run by bots.
 
-Last checked against the code: 2026-11-05.
+Last checked against the code: 2026-11-07.
 
 An operator steers playerbots on an AzerothCore server in plain language from Discord, and a live map and operations site show the world. [mod-overseer](https://github.com/quadseven/mod-overseer) runs inside the worldserver. This service writes its commands and renders what it records.
 
@@ -79,9 +79,32 @@ Settings are environment variables. These are the ones to set first.
 
 ## Status
 
-Live. The bridge and site run as two deployments in the `wow-dev` namespace, the only realm left. The site is reachable only on the operator's private network, through a reverse proxy.
+Last checked 2026-11-07. The bridge and site run as two deployments in the `wow-dev` namespace, the only realm left. The site is reachable only on the operator's private network, through a reverse proxy.
 
-- Open work: [Goal: our guild one-shots Ragnaros](https://github.com/quadseven/wow-overseer/issues/512).
+"In code" means merged and covered by tests. "Seen live" would mean a merged pull request or ticket records proof on the realm. No line below claims "seen live", because no merged record here shows it. Open work: [Goal: our guild one-shots Ragnaros](https://github.com/quadseven/wow-overseer/issues/512).
+
+### What works (in code)
+
+- The Raid page shows a Road to Ragnaros card per guild, served by `GET /api/v2/ragnaros`: eight milestones A to H, a total over the measured ones, blockers sorted by seats short, and an attempt counter.
+- Guild runs and the dungeon queue. A stall breaker steps a family down to an easier dungeon after a door stalls twice.
+- Blackrock Depths is no longer locked behind a key it is the only source of, and a family's own run hands in the Ironfel quest at the Shrine.
+- Vendor and bag fixes: a follower held for the leader past 30 minutes no longer blocks the family's vendor trip, a refused sale walk is asked again in 5 minutes, a master tailor keeps a stock of corps bags, and a full guild bank funds its next tab.
+- The quest ledger no longer records reasons that the world database contradicts.
+
+### In code, not acting
+
+- The item plan (`itemplan.py`, [docs/ITEM_PLAN.md](docs/ITEM_PLAN.md)) decides keep, bank, give, sell, disenchant or auction per stack. It runs only in shadow, behind the `ITEMPLAN_SHADOW` switch (off by default), and logs lines prefixed `itemplan:`. Its executors are not built, so it changes nothing.
+
+### Does not work yet
+
+- Neither family has run Blackrock Depths. A member frozen in combat far away stalls the start, and bags too full to leave town hold others back.
+- Road to Ragnaros milestones D (classic dungeons cleared) and G (repair and summoning coverage) read "not measured" and stay out of the total.
+- Sale walks cannot reach a vendor for many members.
+- Many members are stuck. The live count is the Stuck metric, not a number written here.
+- Tickets carrying the `awaiting-live-check` label still wait for proof on the realm.
+
+### Other
+
 - Stubbed: `services/strands-decider` is built and deployed at zero replicas. The realm roller job is suspended on an older image.
 - Retired: the `wow` and `wow-hardcore` realms.
 - Metric snapshots require a scheduled `tools/metric_watcher.py` process and a JSONL file shared with the site. Scheduled collection still needs runtime verification.
