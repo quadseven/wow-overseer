@@ -16710,6 +16710,18 @@ class Bridge(discord.Client):
         kept = await asyncio.to_thread(_KEEP.now) if full else None
         for m in members:
             held = self._quester_broken.setdefault(m.name, {})
+            retry_stalls = questers.stalled_holds_with_actionable_objectives(
+                cat, m, held, tried, crossings
+            )
+            for qid in retry_stalls:
+                held.pop(qid)
+                self._quester_clock.reset(m.name, qid)
+                log.info(
+                    "questers: %s reopens stalled quest %d because an objective "
+                    "can now be pursued",
+                    m.name,
+                    qid,
+                )
             known = questers.known_broken(m.name, held, ledger)
             plan = questers.plan(cat, m, self._quester_clock, now, known, tried,
                                  self._quester_last.get(m.name, 0), crossings)
@@ -35712,6 +35724,8 @@ def _quester_memos_write(clock, broken: dict, now: float) -> None:
             value[QUESTER_STALL_CLOCK_KEY] = QUESTER_STALL_CLOCK
             _memo_upsert(QUESTER_BROKEN_MEMO, name, value,
                          now, now + QUESTER_MEMO_SECONDS)
+        else:
+            _memo_delete(QUESTER_BROKEN_MEMO, name)
 
 
 def _online_guild_members() -> list:

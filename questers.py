@@ -1152,6 +1152,10 @@ class Clock:
         for key in [k for k in self._by if k[0] == name and k[1] not in keep]:
             del self._by[key]
 
+    def reset(self, name, quest) -> None:
+        """Start a fresh no-progress interval for one quest."""
+        self._by.pop((str(name), int(quest)), None)
+
     def dump(self) -> dict:
         return {"%s:%d" % k: v for k, v in self._by.items()}
 
@@ -1779,25 +1783,10 @@ def _hunt(cat: Catalogue, member, skip, left):
     for qid, quest in _held(cat, member, STATUS_INCOMPLETE, skip):
         if _quest_complete(quest, STATUS_INCOMPLETE, member.quest_progress.get(qid, 0)):
             continue
-        progress = member.quest_objectives.get(qid)
-        kills = dict(quest.kills)
-        if progress:
-            kills = {
-                entry: count
-                for entry, count in kills.items()
-                if int(progress.get(entry, 0)) < count
-            }
-        # The per-creature counters name only kill objectives, so a quest
-        # that asks for an item (Pie for Billy, 86: four of an item a boar
-        # drops, and no creature to kill) has no kill entry to hunt by, and
-        # filtering its fields to kill entries left it with nowhere to hunt
-        # at all: its objectives never moved and it stalled as broken. A
-        # required item's droppers are hunt targets too, met or not by any
-        # counter the log names.
-        targets = set(kills) | {entry for _item, entry in quest.drops}
-        fields = classquest.within_level(
-            member,
-            tuple(s for s in classquest.solo_fields(quest) if s.entry in targets),
+        fields = tuple(
+            spot
+            for spot in _held_objective_fields(member, qid, quest)
+            if spot.guid not in left
         )
         spot = _nearest(member, fields, left)
         if spot is not None:
@@ -1827,6 +1816,64 @@ def _hunt(cat: Catalogue, member, skip, left):
         spot.name or "its objective",
     )
     return _move(classquest.HUNT, member, quest, spot, said)
+
+
+def stalled_holds_with_actionable_objectives(
+    cat, member, held, tried=(), crossings=()
+) -> frozenset:
+    """Stalled memo entries whose incomplete objectives can now be pursued.
+
+    World-fact holds remain durable. A stall is only retried when this pass can
+    route to an eligible local objective or across a known classic continent.
+    """
+    if not member.placed:
+        return frozenset()
+    left = left_spawns(member.name, tried)
+    retry = set()
+    for qid, reason in held.items():
+        if not str(reason).startswith(STALLED):
+            continue
+        if member.quest_log.get(qid) != STATUS_INCOMPLETE:
+            continue
+        quest = cat.quest(qid)
+        if quest is None or _quest_complete(
+            quest, STATUS_INCOMPLETE, member.quest_progress.get(qid, 0)
+        ):
+            continue
+        fields = tuple(
+            spot
+            for spot in _held_objective_fields(member, qid, quest)
+            if spot.guid not in left
+        )
+        if _nearest(member, fields, left) is not None:
+            retry.add(qid)
+            continue
+        to_map = classquest.far_map(member, fields)
+        if to_map < 0:
+            continue
+        crossing = _move(classquest.CROSS, member, quest, None, "", to_map=to_map)
+        if not crossing_held(member.name, crossing, crossings):
+            retry.add(qid)
+    return frozenset(retry)
+
+
+def _held_objective_fields(member, qid: int, quest: classquest.Quest) -> tuple:
+    """Eligible kill and item-drop fields for one incomplete held quest."""
+    progress = member.quest_objectives.get(qid)
+    kills = dict(quest.kills)
+    if progress:
+        kills = {
+            entry: count
+            for entry, count in kills.items()
+            if int(progress.get(entry, 0)) < count
+        }
+    # Item-only objectives have no creature counter, so their dropper fields
+    # remain eligible even when the quest log has no kill objective.
+    targets = set(kills) | {entry for _item, entry in quest.drops}
+    return classquest.within_level(
+        member,
+        tuple(s for s in classquest.solo_fields(quest) if s.entry in targets),
+    )
 
 
 # The module's verb for each move that is one quest row.
