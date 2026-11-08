@@ -78,7 +78,7 @@ WINDOW_HOURS = dungeonpace.WINDOW_HOURS
 NO_PROGRESS_AFTER = timedelta(hours=2)
 
 RUNS_SQL = (
-    "SELECT id, map_id, portal_keyword, outcome FROM overseer_dungeon_run "
+    "SELECT id, map_id, portal_keyword, outcome, started_at FROM overseer_dungeon_run "
     "WHERE state = 'ended' AND leader_name IN ({holes}) "
     "AND started_at >= NOW() - INTERVAL %s HOUR ORDER BY id"
 )
@@ -96,7 +96,7 @@ RUNS_SQL_TIMELINE = (
     "SELECT r.id, r.map_id, (SELECT e.portal FROM overseer_dungeon_run_event e "
     "WHERE e.run_id = r.id AND e.portal <> _utf8mb4'' COLLATE utf8mb4_unicode_ci "
     "ORDER BY e.id LIMIT 1) "
-    "AS portal_keyword, r.outcome FROM overseer_dungeon_run r "
+    "AS portal_keyword, r.outcome, r.started_at FROM overseer_dungeon_run r "
     "WHERE r.state = 'ended' AND r.leader_name IN ({holes}) "
     "AND r.started_at >= NOW() - INTERVAL %s HOUR ORDER BY r.id"
 )
@@ -251,6 +251,27 @@ def stuck_doors(runs: list, events: list) -> dict:
         if earlier and later and not later.mask & ~earlier.mask:
             out[door] = Stuck(door, earlier, later)
     return out
+
+
+def since_order(runs: list, head: dict | None) -> list:
+    """The runs the stall breaker may judge for queue entry `head`.
+
+    AN ORDER IS NOT CANCELLED BY STALLS THAT PREDATE IT (#2058). On wow-dev
+    2026-11-08 an operator re-queued Grug's family on Blackrock Depths x20 at
+    07:47:12Z and the bridge cancelled it 45 seconds later for two stalls (runs
+    1643433 and 1649476) that both began before the order, and before the
+    fix for the healer running dry at High Interrogator Gerstahn went live.
+    Any new order would have been cancelled again until that history aged out
+    of the window. An operator's order is judged on the runs that began at or
+    after it was queued; the overseer's own entries keep the whole window. A
+    run with no start time is kept: it is not known to predate the order.
+    """
+    since = (head or {}).get("created_at")
+    if since is None or not dungeonpace.operator_ordered(head):
+        return list(runs or [])
+    return [
+        r for r in runs or () if r.get("started_at") is None or r["started_at"] >= since
+    ]
 
 
 def barred(stuck: dict) -> dict:
