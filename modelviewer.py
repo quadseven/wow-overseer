@@ -44,7 +44,9 @@ Ticket: infra#88 (the epic).
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import os
 import re
 import tempfile
@@ -61,8 +63,8 @@ UPSTREAM = "https://wow.zamimg.com/modelviewer/wrath/"
 # bone files, and textures. NPC, object and item-visual metadata are
 # deliberately absent - the Armory draws characters in gear and nothing
 # else, and a prefix nobody asks for is a prefix nobody can abuse. The
-# script itself is not here: the page loads it from Wowhead directly, the
-# same way it loads the icons. (The older build at wrath/viewer/ asks for
+# viewer script is the one file outside these prefixes, admitted by its
+# exact pinned path below. (The older build at wrath/viewer/ asks for
 # mo3/ files that no longer exist upstream; that is why the page pins a
 # deployment hash rather than the friendly path.)
 ALLOWED_PREFIXES = (
@@ -76,6 +78,25 @@ ALLOWED_PREFIXES = (
     "bone/",
     "textures/",
 )
+
+# THE VIEWER SCRIPT ITSELF (#1849). The page used to load it straight from
+# the model host, which cannot be pinned there: SRI needs a CORS request, and
+# the host answers 403 to any request carrying an Origin header. A script
+# loaded unpinned runs with the page's full rights, the operator view's
+# writes among them. So the one build the page was written against comes
+# through this cache like the model data, and is kept or served only while
+# its SHA-384 matches this pin. A new build means changing the path here,
+# the hash here and MODEL_SCRIPT in app/views/_model.js together.
+VIEWER_SCRIPT = "deployment/viewer/c3f890f/viewer.min.js"
+VIEWER_SHA384 = "ieV1oRrlrAWjOeyejtYbn99gNQCq/7zD+oe9RUkHcXyMHhbW5Z+tmOW4kBVhXGHw"
+VIEWER_CONTENT_TYPE = "text/javascript"
+
+
+def is_pinned_viewer(body: bytes) -> bool:
+    """True when `body` is the viewer build VIEWER_SHA384 names."""
+    digest = base64.b64encode(hashlib.sha384(body).digest()).decode()
+    return hmac.compare_digest(digest, VIEWER_SHA384)
+
 
 # The content type by extension, and the list of extensions there are.
 # An extension not here is not a file the viewer asks for.
@@ -133,6 +154,8 @@ def classify(path: str) -> tuple[str, str] | None:
     the viewer would never build, and anything with an extension there is
     no content type for. A refused path is never fetched.
     """
+    if path == VIEWER_SCRIPT:
+        return path, VIEWER_CONTENT_TYPE
     if not path or not path.startswith(ALLOWED_PREFIXES):
         return None
     segments = path.split("/")
@@ -287,8 +310,9 @@ class Store:
         if found is None:
             return Response(404, "text/plain", b"not a model-viewer file", "no-store")
         upstream_path, ctype = found
+        pinned = upstream_path == VIEWER_SCRIPT
         cached = self.cache.get(upstream_path)
-        if cached is not None:
+        if cached is not None and (not pinned or is_pinned_viewer(cached)):
             return Response(200, ctype, cached, BROWSER_CACHE_CONTROL)
         if self._missed(upstream_path):
             return Response(404, "text/plain", b"upstream has no such file", "no-store")
@@ -296,6 +320,15 @@ class Store:
             status, body = self.fetcher(UPSTREAM + upstream_path)
         except Exception:  # noqa: BLE001 - every network failure is one answer
             return Response(502, "text/plain", b"model host unreachable", "no-store")
+        if status == 200 and pinned and not is_pinned_viewer(body):
+            # Not the build the page was written against: never kept, never
+            # served. The page's own timeout draws the portrait instead.
+            return Response(
+                502,
+                "text/plain",
+                b"the viewer build upstream is not the pinned one",
+                "no-store",
+            )
         if status == 200:
             try:
                 self.cache.put(upstream_path, body)

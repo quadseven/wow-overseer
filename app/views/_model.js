@@ -16,7 +16,14 @@
 import { html, iconUrl } from "../ui.js";
 import { u } from "../api.js";
 
-const MODEL_SCRIPT = "https://wow.zamimg.com/modelviewer/wrath/deployment/viewer/c3f890f/viewer.min.js";
+// THE VIEWER SCRIPT COMES FROM THIS SERVER, NOT FROM THE MODEL HOST (#1849).
+// The host answers 403 to any request with an Origin header, so the page
+// cannot pin its copy with an integrity hash, and a script loaded unpinned
+// runs with the page's full rights, the operator view's writes among them.
+// The server fetches this one build through its model cache and serves it
+// only while its SHA-384 matches modelviewer.VIEWER_SHA384; a new build
+// changes the path here and the pin there together.
+const MODEL_SCRIPT = "/modelviewer/deployment/viewer/c3f890f/viewer.min.js";
 const LOAD_TIMEOUT = 10000;
 const TURN = 0.0035;
 const ASPECT = 0.8;
@@ -55,7 +62,7 @@ function ensureViewer() {
     WH.debug = WH.debug || (() => {});
     WH.defaultAnimation = WH.defaultAnimation || "Stand";
     WH.WebP = WH.WebP || { getImageExtension: () => ".webp" };
-    return (await loadScript(u("/jquery.min.js"))) && (await loadScript(MODEL_SCRIPT)) && typeof window.ZamModelViewer === "function";
+    return (await loadScript(u("/jquery.min.js"))) && (await loadScript(u(MODEL_SCRIPT))) && typeof window.ZamModelViewer === "function";
   })();
   return viewerReady;
 }
