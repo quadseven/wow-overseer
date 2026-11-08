@@ -508,7 +508,7 @@ def _buy(member: Member, town: Town, what: str) -> tuple[list[Errand], list[str]
     return errands, notes
 
 
-def _hand_on(wanted, givers, what: str) -> tuple[list[Errand], set]:
+def _hand_on(wanted, givers, what: str, apart=None) -> tuple[list[Errand], set]:
     """Hand spare conjured stacks to whoever has none. The cheapest route.
 
     One stack per taker and each stack used once, so two people short of food
@@ -523,6 +523,15 @@ def _hand_on(wanted, givers, what: str) -> tuple[list[Errand], set]:
     hand-over waited for a meeting that never came and the run stalled at its
     first boss on "Waiting on Grog (low mana)". `givers` comes in conjurers
     first - they can remake what they hand on - and then everybody else.
+
+    THE GIVER STANDING WITH THE TAKER GOES FIRST (#2060). A hand-over only
+    lands when the two stand within trade range, and the conjurer is not
+    always beside the drinker: Grug's family went into Blackrock Depths a
+    second time with Grog still dry, because every pass named the mage 900 to
+    2900 yards away while the priest holding 31 waters stood three yards from
+    him. `apart(giver, taker)` says the two cannot trade now; givers that are
+    not apart are tried first, in the same conjurers-first order, and the far
+    ones only after. Without `apart` the order is the one it always was.
     """
     errands: list[Errand] = []
     supplied = set()
@@ -530,7 +539,12 @@ def _hand_on(wanted, givers, what: str) -> tuple[list[Errand], set]:
     for member in wanted:
         if member.conjures(what):
             continue
-        for giver in givers:
+        near_first = givers
+        if apart is not None:
+            near_first = sorted(
+                givers, key=lambda g: bool(apart(g.name, member.name))
+            )
+        for giver in near_first:
             if giver.name == member.name or not offers[giver.name]:
                 continue
             stack = offers[giver.name].pop(0)
@@ -602,7 +616,7 @@ def _conjure(conjurers, dependents, what: str) -> tuple[list[Errand], list[str],
 
 
 def _supply(
-    members, town: Town, what: str, sitting=frozenset()
+    members, town: Town, what: str, sitting=frozenset(), apart=None
 ) -> tuple[list[Errand], list[str]]:
     """Get one consumable into every bag that should have it (infra#3464).
 
@@ -646,7 +660,7 @@ def _supply(
 
     conjurers = [m for m in ordered if m.conjures(what)]
     givers = conjurers + [m for m in ordered if not m.conjures(what)]
-    errands, supplied = _hand_on(wanted, givers, what)
+    errands, supplied = _hand_on(wanted, givers, what, apart)
     dependents = [m for m in wanted if not m.conjures(what) and m.name not in supplied]
     made, notes, cast_for = _conjure(conjurers, dependents, what)
     errands.extend(made)
@@ -664,7 +678,7 @@ def _supply(
     return errands, notes
 
 
-def plan(members, town: Town, sitting=frozenset()) -> Plan:
+def plan(members, town: Town, sitting=frozenset(), apart=None) -> Plan:
     """Everything this trip should do, in the order it should do it.
 
     REPAIR BEFORE ANYTHING THAT SPENDS, ALWAYS, and it is the one ordering
@@ -690,6 +704,10 @@ def plan(members, town: Town, sitting=frozenset()) -> Plan:
     `sitting` names the members sitting the campaign out (standin.py). Their
     repairs are still planned; food and drink are planned for the party that
     goes in, which they are not part of (#2037).
+
+    `apart(giver, taker)` is True when the two cannot trade right now (other
+    map or past trade range); a hand-over prefers a giver that is not apart
+    (#2060). None means positions are unknown and the order is unchanged.
     """
     errands: list[Errand] = []
     notes: list[str] = []
@@ -710,7 +728,7 @@ def plan(members, town: Town, sitting=frozenset()) -> Plan:
     # Food before drink because everybody eats and only the mana users drink,
     # so the first pass is the one that reaches the whole party.
     for what in (FOOD_KIND, DRINK_KIND):
-        got, said = _supply(ordered, town, what, frozenset(sitting))
+        got, said = _supply(ordered, town, what, frozenset(sitting), apart)
         errands.extend(got)
         notes.extend(said)
 

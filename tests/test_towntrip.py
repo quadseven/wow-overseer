@@ -620,6 +620,59 @@ class TheWholePartyHandsOn(unittest.TestCase):
         self.assertEqual([(e.member, e.taker) for e in gives], [("Og", "Grog")])
 
 
+class TheGiverBesideTheTakerIsAskedFirst(unittest.TestCase):
+    """A hand-over lands only inside trade range, so the near giver goes first (#2060).
+
+    MEASURED LIVE, 2026-11-08: Grog went into Blackrock Depths dry a second
+    time. Every pass named the mage, 842 to 2909 yards off, while the priest
+    carrying 31 conjured waters stood three yards from him.
+    """
+
+    def _water(self, guid, count):
+        return towntrip.Stack(
+            guid=guid, entry=8079, name="Conjured Crystal Water",
+            count=count, what="drink", conjured=True,
+        )
+
+    def _party(self):
+        og = Member(
+            "Og", "mage", 50, 10**6, 9, (), food_carried=20, drink_carried=40,
+            spells=frozenset({990, 5506}),
+            stacks=(self._water(31, 20), self._water(32, 20)),
+        )
+        ugga = Member(
+            "Ugga", "priest", 50, 10**6, 8, (), food_carried=20,
+            drink_carried=34, stacks=(self._water(41, 20), self._water(42, 14)),
+        )
+        grog = Member("Grog", "paladin", 50, 10**6, 8, (), food_carried=20)
+        return og, ugga, grog
+
+    def _gives(self, apart):
+        got = towntrip.plan(self._party(), RATCHET, apart=apart)
+        return [(e.member, e.taker, e.command) for e in got.errands
+                if e.kind == "give"]
+
+    def test_the_priest_beside_the_healer_is_asked_when_the_mage_is_far(self):
+        far = {("Og", "Grog")}
+        self.assertEqual(
+            self._gives(lambda g, t: (g, t) in far),
+            [("Ugga", "Grog", "guid:42")],
+        )
+
+    def test_the_conjurer_is_still_first_when_both_are_near(self):
+        self.assertEqual(
+            self._gives(lambda g, t: False), [("Og", "Grog", "guid:31")]
+        )
+
+    def test_with_everyone_far_the_conjurer_is_named_as_before(self):
+        self.assertEqual(
+            self._gives(lambda g, t: True), [("Og", "Grog", "guid:31")]
+        )
+
+    def test_without_positions_the_order_is_unchanged(self):
+        self.assertEqual(self._gives(None), [("Og", "Grog", "guid:31")])
+
+
 class TheEmptyCases(unittest.TestCase):
     def test_no_members_is_an_empty_plan_and_not_a_crash(self):
         self.assertEqual(towntrip.plan((), RATCHET), towntrip.Plan())
