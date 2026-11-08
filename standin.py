@@ -445,6 +445,12 @@ class Facts:
     stranded_pass: bool = False
     # The seats the rest of the family plays (seat_of each), for open_seat.
     seats_held: frozenset = frozenset()
+    # LOCKED GATES (#2056): every roster member read as a guildrun.Member, its
+    # carried keys and Lockpicking with it; empty when unread, which judges no
+    # lock. And whether this pass is the lockpicker pass (the bridge sets it
+    # for a family with a locked door and no craft order or stranded member).
+    family_members: tuple = ()
+    lock_pass: bool = False
 
 
 def _minutes(seconds: float) -> str:
@@ -502,7 +508,7 @@ def next_turn(facts: Facts, step: "Step") -> Turn | None:
     (its record from an earlier turn) begins a full family turn. A standing
     row with no turn recorded (one written before turns) starts its turn now.
     """
-    if facts.now is None or facts.stranded_pass:
+    if facts.now is None or facts.stranded_pass or facts.lock_pass:
         return None
     turn = _turn(facts)
     current = facts.current
@@ -588,6 +594,8 @@ def step(facts: Facts) -> Step:
     """What to do with this family's stand-in row this pass."""
     if facts.stranded_pass:
         return _stranded_step(facts)
+    if facts.lock_pass:
+        return _lock_step(facts)
     current = facts.current
     held = _held_in(facts)
     # A crafting turn that is over ends the row like a release, between runs
@@ -650,8 +658,10 @@ def waits_for_the_run(current: Seat, why: str) -> Step:
 
 
 def _found(facts: Facts, seat: str, free) -> list:
-    """The guests who may take `seat` now, best fit first."""
-    return guests(
+    """The guests who may take `seat` now, best fit first. When the rest of
+    the family cannot open the door's lock (`lock_unmet`), a guest who can
+    goes first (#2056)."""
+    found = guests(
         facts.candidates,
         seat,
         facts.out_member.level,
@@ -661,6 +671,10 @@ def _found(facts: Facts, seat: str, free) -> list:
         facts.guild,
         free,
     )
+    lock = lock_of(facts.door)
+    if lock is not None and lock_unmet(facts, facts.ordered):
+        found.sort(key=lambda m: not opens(m, lock))
+    return found
 
 
 def _free_for(facts: Facts):
@@ -771,6 +785,9 @@ def _keep_or_clear(facts: Facts, current: Seat, seat: str) -> Step:
     the seat is emptied (`_guest_lost`)."""
     if facts.mid_run:
         return Step(KEEP, "the family is inside; %s keeps the seat" % current.in_name)
+    swap = _lock_swap(facts, current, seat)
+    if swap is not None:
+        return swap
     guest = next((m for m in facts.candidates if m.name == current.in_name), None)
     if guest is None:
         return _guest_lost(
@@ -994,3 +1011,248 @@ def _stranded_seat(facts: Facts, current: Seat | None, name: str) -> Step:
     if not found:
         return _no_guest(facts, seat)
     return _seat_guest(facts, seat, found[0])
+
+
+# ------------------------------------------------------------ lockpicker --
+#
+# A GATE THE FAMILY CANNOT OPEN (#2056). On wow-dev, 2026-11-08, Zug's family
+# went into Blackrock Depths and stopped at its first gate: the dungeon clear
+# flagged the Shadowforge Gate as blocking the corridor, could not open it,
+# and paused, and the clearing watchdog spent its three `dc skip`s over 15
+# minutes. The gate opens only for a party member who carries the Shadowforge
+# Key or picks it at Lockpicking 250, and the family has no rogue and no key.
+#
+# The family's open seat is the way through: a free guild rogue who picks the
+# lock takes a damage dealer's seat, between runs, as a crafter's or a
+# stranded member's guest does. Three places read it:
+#   - a family with no row (and no craft order or stranded member) sits out
+#     its least needed damage dealer for a lockpicker (`_lock_step`); with no
+#     lockpicker free nothing is written, so the family is never left
+#     short-handed for a lock;
+#   - a standing row whose guest cannot open the lock gets a lockpicker in
+#     its seat instead (`_lock_swap`);
+#   - a new guest for any row is a lockpicker first when one fits (`_found`).
+# A lockpicker row ends between runs once the family opens the lock itself,
+# the door changes, or its guest is lost with no other lockpicker free.
+LOCKPICKING = 633
+ROGUE = 4
+# The reason of every lockpicker row starts with this.
+LOCK_MARK = "lockpick: "
+
+
+@dataclass(frozen=True)
+class Lock:
+    """A gate inside a dungeon that opens for a party member carrying `item`
+    or a rogue at Lockpicking `skill`."""
+
+    item: int
+    skill: int
+    gate: str
+    key_name: str
+
+
+# By the dungeon's map id (guildrun.Door.map_id). Blackrock Depths: the
+# Shadowforge Gate (gameobject 170559) and the other Shadowforge gates take
+# the Shadowforge Key (11000) or Lockpicking 250.
+LOCKS = {
+    230: Lock(11000, 250, "the Shadowforge Gate", "the Shadowforge Key"),
+}
+
+
+def lock_of(door) -> Lock | None:
+    """The lock inside `door`'s dungeon the party must open, or None."""
+    if door is None:
+        return None
+    return LOCKS.get(int(getattr(door, "map_id", 0) or 0))
+
+
+def opens(member: guildrun.Member, lock: Lock) -> bool:
+    """Whether `member` gets `lock` open: it carries the key, or it is a rogue
+    at the lock's Lockpicking."""
+    if lock.item in (member.keys or ()):
+        return True
+    return int(member.class_id) == ROGUE and int(member.lockpicking) >= lock.skill
+
+
+def is_lock(seat: Seat | None) -> bool:
+    """True for a row written to seat a lockpicker."""
+    return seat is not None and seat.reason.startswith(LOCK_MARK)
+
+
+def lock_unmet(facts: Facts, out_name: str) -> str:
+    """Why the family, without `out_name`, cannot open its door's lock
+    ("nobody in Zug's family carries the Shadowforge Key or picks the
+    Shadowforge Gate at Lockpicking 250"), or "" when it can, the door has no
+    lock, or the family was not read."""
+    lock = lock_of(facts.door)
+    if lock is None or not facts.family_members:
+        return ""
+    if any(opens(m, lock) for m in facts.family_members if m.name != out_name):
+        return ""
+    return "nobody in %s's family carries %s or picks %s at Lockpicking %d" % (
+        facts.family,
+        lock.key_name,
+        lock.gate,
+        lock.skill,
+    )
+
+
+def _pickers(facts: Facts, seat: str, out_level: int, levels, lock: Lock) -> list:
+    """Free guild members who open `lock` and can take `seat`, best fit first."""
+    found = guests(
+        facts.candidates,
+        seat,
+        out_level,
+        levels,
+        facts.door,
+        facts.faction,
+        facts.guild,
+        _free_for(facts),
+    )
+    return [m for m in found if opens(m, lock)]
+
+
+def _lock_words(guest: guildrun.Member, lock: Lock) -> str:
+    if lock.item in (guest.keys or ()):
+        return "%s carries %s" % (guest.name, lock.key_name)
+    return "%s picks %s (Lockpicking %d)" % (guest.name, lock.gate, guest.lockpicking)
+
+
+def _lock_swap(
+    facts: Facts, current: Seat, seat: str, lost: bool = False
+) -> Step | None:
+    """Between runs, a standing row whose guest cannot open the door's lock
+    (and nobody else in the family can) gets a free lockpicker in its seat;
+    so does a lockpicker row whose guest is `lost`. None when there is
+    nothing to change or no lockpicker is free."""
+    lock = lock_of(facts.door)
+    if lock is None or not lock_unmet(facts, current.out_name):
+        return None
+    guest = next((m for m in facts.candidates if m.name == current.in_name), None)
+    if not lost and guest is not None and opens(guest, lock):
+        return None
+    levels = tuple(
+        m.level for m in facts.family_members if m.name != current.out_name
+    ) or tuple(facts.family_levels)
+    out = next(
+        (m for m in facts.family_members if m.name == current.out_name),
+        facts.out_member,
+    )
+    out_level = out.level if out is not None else 0
+    found = [
+        m
+        for m in _pickers(facts, current.seat or seat, out_level, levels, lock)
+        if m.name != current.in_name
+    ]
+    if not found:
+        return None
+    picker = found[0]
+    if is_stranded(current):
+        mark = STRANDED_MARK
+    elif is_lock(current):
+        mark = LOCK_MARK
+    else:
+        mark = ""
+    reason = "%s%s sits out; %s, so %s takes the %s seat at %s from %s" % (
+        mark,
+        current.out_name,
+        _lock_words(picker, lock),
+        picker.name,
+        current.seat or seat,
+        facts.door.keyword,
+        current.guest_word,
+    )
+    return Step(
+        SEAT,
+        reason,
+        Seat(
+            current.family, current.out_name, picker.name, current.seat or seat, reason
+        ),
+    )
+
+
+def lock_sit_out(facts: Facts) -> guildrun.Member | None:
+    """The member who gives a lockpicker its seat: the family's least needed
+    damage dealer (its talents play no tank or healer seat), the lowest level
+    first, then the name. Never the head or the roster leader."""
+    dps = [
+        m
+        for m in facts.family_members
+        if m.name not in (facts.family, facts.leader)
+        and m.name in facts.roster
+        and seat_of(m) == DPS
+    ]
+    dps.sort(key=lambda m: (m.level, m.name))
+    return dps[0] if dps else None
+
+
+def _lock_step(facts: Facts) -> Step:
+    """What to do with a family's row on the lockpicker pass: the family has a
+    lock row, or a door with a lock, and no craft order or stranded member."""
+    current = facts.current
+    if current is not None and not is_lock(current):
+        # Not this pass's row: the craft path's own answer, as on a stranded pass.
+        return Step(CLEAR, "the %s order is removed" % ENV)
+    lock = lock_of(facts.door)
+    unmet = lock_unmet(facts, current.out_name if current is not None else "")
+    if lock is None or not unmet:
+        why = (
+            "%s's family can open its door's lock without a guest" % facts.family
+            if lock is not None
+            else "%s's door has no lock to open" % facts.family
+        )
+        return _end_or_none(facts, current, why)
+    if facts.mid_run:
+        if current is None:
+            return Step(
+                NONE, "the family is inside; a lockpicker is seated between runs"
+            )
+        return Step(KEEP, "the family is inside; %s keeps the seat" % current.in_name)
+    if current is not None:
+        guest = next((m for m in facts.candidates if m.name == current.in_name), None)
+        kept = ""
+        if guest is not None and opens(guest, lock):
+            kept = guildrun.why_not(
+                guest,
+                set(facts.busy),
+                set(facts.resting),
+                set(facts.every_family),
+                facts.benched,
+                facts.owed,
+            )
+            if kept in KEEPS_SEAT:
+                return Step(
+                    KEEP,
+                    "%s keeps the %s seat to open %s"
+                    % (guest.name, current.seat, lock.gate),
+                )
+        swap = _lock_swap(facts, current, current.seat, lost=True)
+        if swap is not None:
+            return swap
+        return Step(
+            CLEAR,
+            "%s can no longer open %s (%s) and no other lockpicker is free, so %s "
+            "rejoins"
+            % (current.in_name, lock.gate, kept or "not free", current.out_name),
+        )
+    out = lock_sit_out(facts)
+    if out is None:
+        return Step(NONE, "%s; no damage dealer can give a lockpicker its seat" % unmet)
+    levels = tuple(m.level for m in facts.family_members if m.name != out.name)
+    found = _pickers(facts, DPS, out.level, levels, lock)
+    if not found:
+        return Step(
+            NONE,
+            "%s, and no free %s rogue picks it at %d or carries the key"
+            % (unmet, facts.guild or "guild", lock.skill),
+        )
+    picker = found[0]
+    reason = "%s%s; %s, so %s sits out and %s takes the dps seat at %s" % (
+        LOCK_MARK,
+        unmet,
+        _lock_words(picker, lock),
+        out.name,
+        picker.name,
+        facts.door.keyword,
+    )
+    return Step(SEAT, reason, Seat(facts.family, out.name, picker.name, DPS, reason))

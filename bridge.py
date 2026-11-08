@@ -3582,6 +3582,14 @@ def _standin_door(rows: list, doors: dict):
     return None
 
 
+def _standin_locked(pending: dict, fams: dict) -> bool:
+    """True when any family's queued door has a lock the party must open
+    (standin.LOCKS, #2056), so the lockpicker pass has a family to judge."""
+    doors = {d.keyword: d for d in guildrun.doors()}
+    return any(standin.lock_of(_standin_door(pending.get(k) or [], doors))
+               for k in fams)
+
+
 def _standin_out() -> frozenset:
     """The members sitting out their family's campaign to craft."""
     return _STANDIN_OUT
@@ -22047,7 +22055,7 @@ class Bridge(discord.Client):
                 log.exception("standin: the stranded read failed; nobody is "
                               "judged stranded this pass")
                 stranded = None
-            if asked or rows or stranded:
+            if asked or rows or stranded or _standin_locked(pending, fams):
                 seated = await self._standin_families(asked, rows, pending, fams,
                                                       stranded)
             else:
@@ -22083,7 +22091,14 @@ class Bridge(discord.Client):
         strand_keys = set(stranded or {}) | (
             {k for k, r in rows.items() if standin.is_stranded(r)} if stranded is not None
             else set())
-        for key in sorted(set(asked) | set(rows) | (strand_keys - set(asked))):
+        # A LOCKED GATE (#2056): a family with no craft order and nobody
+        # stranded whose door has a lock, or whose lockpicker row stands.
+        lock_keys = {k for k in set(fams) | set(rows)
+                     if k not in asked and k not in strand_keys
+                     and (standin.is_lock(rows.get(k))
+                          or (rows.get(k) is None and standin.lock_of(
+                              _standin_door(pending.get(k) or [], doors))))}
+        for key in sorted(set(asked) | set(rows) | (strand_keys - set(asked)) | lock_keys):
             # In a guild run, or the guest of another family (this pass's
             # seats included); never busy by its own family's row.
             busy = set(gfacts["in_runs"]) | {s.in_name for f, s in seated.items()
@@ -22092,7 +22107,11 @@ class Bridge(discord.Client):
                 # The stranded read failed: the stranded row stands as it is.
                 continue
             try:
-                if key in asked or key not in strand_keys:
+                if key in lock_keys:
+                    facts = await self._standin_lock_facts(
+                        key, rows.get(key), pending.get(key) or [], fams.get(key),
+                        dict(gfacts, busy=busy), doors, candidates)
+                elif key in asked or key not in strand_keys:
                     facts = await self._standin_facts(
                         key, asked.get(key, ""), rows.get(key), pending.get(key) or [],
                         fams.get(key), dict(gfacts, busy=busy), doors, candidates)
@@ -22127,7 +22146,7 @@ class Bridge(discord.Client):
                 log.info("standin: %s: %s", campaignqueue._family(key), step.why)
             _STANDIN_SAID[key] = step.why
             if key in seated and not facts.mid_run:
-                if standin.is_stranded(seated[key]):
+                if standin.is_stranded(seated[key]) or standin.is_lock(seated[key]):
                     await asyncio.to_thread(_standin_quests, seated[key].out_name, key)
                 else:
                     await asyncio.to_thread(_standin_crafts, seated[key].out_name, key)
@@ -22143,6 +22162,7 @@ class Bridge(discord.Client):
         leader = str(fam["leader"].get("name") or "") if fam else ""
         name = name or (current.out_name if current is not None else "")
         out_member, levels, guild, faction, held = None, (), "", "", frozenset()
+        family_members = ()
         if name and name in roster:
             read = await asyncio.to_thread(_fetch_standin_members, list(roster))
             members = {n: guildrun.member_from_row(r) for n, r in read.items()}
@@ -22153,6 +22173,7 @@ class Bridge(discord.Client):
             guild = head.guild if head is not None else ""
             faction = guildrun.faction_of([m for m in members.values() if m is not None])
             out_member = members.get(name)
+            family_members = tuple(m for m in members.values() if m is not None)
         door = _standin_door(rows, doors)
         mid_run = bool(roster and await self._mid_run(list(roster)))
         return standin.Facts(
@@ -22162,7 +22183,33 @@ class Bridge(discord.Client):
             resting=frozenset(gfacts["resting"]), benched=frozenset(gfacts["benched"]),
             owed=frozenset(_class_owed_names(self)),
             every_family=frozenset(gfacts["family"]), mid_run=mid_run, current=current,
-            stranded=why, stranded_pass=True, seats_held=held)
+            stranded=why, stranded_pass=True, seats_held=held,
+            family_members=family_members)
+
+    async def _standin_lock_facts(self, key: str, current, rows: list, fam,
+                                  gfacts: dict, doors: dict, candidates: tuple):
+        """standin.Facts for the lockpicker pass (#2056): a family with no
+        craft order and nobody stranded whose door has a lock, or whose
+        lockpicker row stands. Reads only."""
+        roster = tuple(fam["names"]) if fam else ()
+        leader = str(fam["leader"].get("name") or "") if fam else ""
+        family_members, guild, faction = (), "", ""
+        if roster:
+            read = await asyncio.to_thread(_fetch_standin_members, list(roster))
+            members = {n: guildrun.member_from_row(r) for n, r in read.items()}
+            family_members = tuple(m for _n, m in sorted(members.items()) if m is not None)
+            head = members.get(key) or members.get(leader)
+            guild = head.guild if head is not None else ""
+            faction = guildrun.faction_of(list(family_members))
+        door = _standin_door(rows, doors)
+        mid_run = bool(roster and await self._mid_run(list(roster)))
+        return standin.Facts(
+            family=key, leader=leader, roster=roster, guild=guild, faction=faction,
+            door=door, candidates=candidates, busy=frozenset(gfacts["busy"]),
+            resting=frozenset(gfacts["resting"]), benched=frozenset(gfacts["benched"]),
+            owed=frozenset(_class_owed_names(self)),
+            every_family=frozenset(gfacts["family"]), mid_run=mid_run, current=current,
+            family_members=family_members, lock_pass=True)
 
     async def _note_turn(self, key: str, turn) -> None:
         """Record a family's new turn. A failed write is logged and the pass
@@ -22180,7 +22227,8 @@ class Bridge(discord.Client):
     async def _standin_out_facts(self, key: str, leader: str, ordered: str,
                                  roster: tuple) -> tuple:
         """(skills, known spells, reagents, out member, the others' levels,
-        guild, faction) for the member ordered to sit out. Reads only."""
+        guild, faction, every member read) for the member ordered to sit out.
+        Reads only."""
         skills = (await asyncio.to_thread(_fetch_trade_skills, [ordered])).get(ordered, {})
         known = await asyncio.to_thread(_fetch_standin_known, ordered)
         reagents = await asyncio.to_thread(_fetch_standin_reagents, ordered)
@@ -22191,7 +22239,8 @@ class Bridge(discord.Client):
         head = members.get(key) or members.get(leader)
         guild = head.guild if head is not None else ""
         faction = guildrun.faction_of([m for m in members.values() if m is not None])
-        return skills, known, reagents, members.get(ordered), levels, guild, faction
+        return (skills, known, reagents, members.get(ordered), levels, guild, faction,
+                tuple(m for _n, m in sorted(members.items()) if m is not None))
 
     async def _standin_facts(self, key: str, ordered: str, current, rows: list,
                              fam, gfacts: dict, doors: dict, candidates: tuple):
@@ -22199,10 +22248,11 @@ class Bridge(discord.Client):
         roster = tuple(fam["names"]) if fam else ()
         leader = str(fam["leader"].get("name") or "") if fam else ""
         skills, known, reagents = {}, None, None
-        out_member, levels, guild, faction = None, (), "", ""
+        out_member, levels, guild, faction, family_members = None, (), "", "", ()
         if ordered and ordered in roster:
             (skills, known, reagents, out_member, levels, guild,
-             faction) = await self._standin_out_facts(key, leader, ordered, roster)
+             faction, family_members) = await self._standin_out_facts(
+                 key, leader, ordered, roster)
         door = _standin_door(rows, doors)
         mid_run = bool(roster and (current is not None or ordered in roster)
                        and await self._mid_run(list(roster)))
@@ -22214,7 +22264,8 @@ class Bridge(discord.Client):
             door=door, candidates=candidates, busy=frozenset(gfacts["busy"]),
             resting=frozenset(gfacts["resting"]), benched=frozenset(gfacts["benched"]),
             owed=frozenset(_class_owed_names(self)),
-            every_family=frozenset(gfacts["family"]), mid_run=mid_run, current=current)
+            every_family=frozenset(gfacts["family"]), mid_run=mid_run, current=current,
+            family_members=family_members)
 
     async def _send_queue_item_notices(self) -> None:
         """Retry saved completion notices, acknowledging only a Discord send."""
@@ -27054,6 +27105,16 @@ def _fetch_standin_rows() -> dict:
 # be in the snapshot's guild read).
 _STANDIN_MEMBERS_SQL = (
     "SELECT c.name, c.level, c.class AS class_id, c.race, g.name AS guild_name, "
+    # A LOCKED GATE (standin.LOCKS, #2056): the door keys each member carries
+    # in its bags or key ring (never the bank), and its Lockpicking.
+    "(SELECT GROUP_CONCAT(DISTINCT ii.itemEntry) FROM character_inventory ci "
+    "JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = c.guid "
+    "AND ii.itemEntry IN (" + ", ".join(str(int(k)) for k in campaignplan.KEY_ITEMS) + ") "
+    "AND ((ci.bag = 0 AND ci.slot NOT BETWEEN 39 AND 73) OR ci.bag IN ("
+    "SELECT b.item FROM character_inventory b WHERE b.guid = c.guid AND b.bag = 0 "
+    "AND b.slot BETWEEN 19 AND 22))) AS door_keys, "
+    "(SELECT MAX(lp.value) FROM character_skills lp WHERE lp.guid = c.guid "
+    "AND lp.skill = " + str(int(standin.LOCKPICKING)) + ") AS lockpicking, "
     + raidroles.TALENTS_COLUMN + " "
     "FROM characters c LEFT JOIN guild_member gm ON gm.guid = c.guid "
     "LEFT JOIN guild g ON g.guildid = gm.guildid WHERE c.name IN ({holes})"
@@ -27500,6 +27561,9 @@ _GUILD_RUN_MEMBERS_SQL = (
     "AND ((ci.bag = 0 AND ci.slot NOT BETWEEN 39 AND 73) OR ci.bag IN ("
     "SELECT b.item FROM character_inventory b WHERE b.guid = s.guid AND b.bag = 0 "
     "AND b.slot BETWEEN 19 AND 22))) AS door_keys, "
+    # Its Lockpicking, for a locked gate's seat (standin.LOCKS, #2056).
+    "(SELECT MAX(lp.value) FROM character_skills lp WHERE lp.guid = s.guid "
+    "AND lp.skill = " + str(int(standin.LOCKPICKING)) + ") AS lockpicking, "
     # IN THE WORLD IS A FRESH SNAPSHOT, NOT characters.online. The flag reads
     # 0 for random bots that are in the world (8 guild members flipped to 0 at
     # once on the dev realm while their snapshots kept updating), and the

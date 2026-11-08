@@ -335,6 +335,9 @@ class Member:
     # The door keys it carries in its bags or key ring (campaignplan.KEY_ITEMS;
     # the bank does not count), empty when none or unread.
     keys: frozenset = frozenset()
+    # Its Lockpicking skill (633), 0 when it has none or it was not read. A
+    # locked gate opens for a rogue at the lock's skill (standin.LOCKS).
+    lockpicking: int = 0
 
     @property
     def played_tree(self) -> str:
@@ -425,6 +428,7 @@ def member_from_row(row: dict) -> Member | None:
         has_shield=_optional(row, "has_shield", bool),
         has_tank_kit=_optional(row, "has_tank_kit", bool),
         keys=keys_of(row.get("door_keys")),
+        lockpicking=int(row.get("lockpicking") or 0),
     )
 
 

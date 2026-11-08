@@ -8,6 +8,7 @@ pure decisions and drive the bridge's half with its reads stubbed.
 
 import asyncio
 import contextlib
+import dataclasses
 import time
 import types
 import unittest
@@ -1384,7 +1385,9 @@ class TheBridgePass(unittest.TestCase):
 
     def test_a_fresh_far_fight_only_starts_the_clock(self):
         fams, written, jobs_told, _ = self._zug_pass(anchors={})
-        self.assertEqual([], written)
+        # Blackrock Depths has a lock, so the lockpicker pass also judges the
+        # family (#2056); with no rogue in the guild it writes nothing.
+        self.assertEqual([], [w for w in written if w[1] != standin.NONE])
         self.assertIn("Zork", fams["Zug"]["names"])
         self.assertEqual([("put", bridge.STANDIN_STRAND_MEMO, "Zork")], self.memo)
 
@@ -1434,6 +1437,183 @@ class TheBridgePass(unittest.TestCase):
             body.index("standin_pass(pending, fams)"),
             body.index("self._plan_campaigns(pending, fams)"),
         )
+
+
+# --- a gate the family cannot open (#2056) ----------------------------------------
+
+PICKY = row("Picky", 54, ROGUE, race=ORC, guild_name="Bonkers", lockpicking=280)
+CLUMSY = row("Clumsy", 54, ROGUE, race=ORC, guild_name="Bonkers", lockpicking=1)
+
+
+def lock_facts(**over):
+    """Zug's family queued for Blackrock Depths with no key and no rogue."""
+    base = dict(
+        family="Zug",
+        leader="Zug",
+        roster=ZUG_ROSTER,
+        guild="Bonkers",
+        faction="Horde",
+        door=BRD,
+        candidates=(guildrun.member_from_row(PICKY),),
+        every_family=frozenset(ZUG_ROSTER),
+        family_members=tuple(m for _n, m in sorted(ZUG.items())),
+        lock_pass=True,
+    )
+    base.update(over)
+    return standin.Facts(**base)
+
+
+class AGateTheFamilyCannotOpen(unittest.TestCase):
+    """2026-11-08: Zug's family stopped at the Shadowforge Gate in Blackrock
+    Depths with no rogue and no Shadowforge Key."""
+
+    def test_a_guild_rogue_who_picks_it_takes_a_damage_seat(self):
+        step = standin.step(lock_facts())
+        self.assertEqual(standin.SEAT, step.action, step.why)
+        self.assertEqual(("Picky", "dps"), (step.seat.in_name, step.seat.seat))
+        self.assertTrue(standin.is_lock(step.seat))
+        self.assertIn("Lockpicking 280", step.seat.reason)
+
+    def test_never_the_head_the_tank_or_the_healer_sits_out(self):
+        step = standin.step(lock_facts())
+        self.assertNotIn(step.seat.out_name, ("Zug", "Uzza"))
+        # The least needed damage dealer: the lowest level, then the name.
+        self.assertEqual("Oz", step.seat.out_name)
+
+    def test_a_rogue_below_the_lock_is_no_guest(self):
+        step = standin.step(lock_facts(candidates=(guildrun.member_from_row(CLUMSY),)))
+        self.assertEqual(standin.NONE, step.action)
+        self.assertIn("no free Bonkers rogue", step.why)
+
+    def test_a_member_carrying_the_key_writes_nothing(self):
+        keyed = dict(ZUG)
+        keyed["Oz"] = dataclasses.replace(ZUG["Oz"], keys=frozenset({11000}))
+        step = standin.step(
+            lock_facts(family_members=tuple(m for _n, m in sorted(keyed.items())))
+        )
+        self.assertEqual(standin.NONE, step.action)
+
+    def test_a_family_rogue_at_250_writes_nothing(self):
+        picker = guildrun.member_from_row(
+            row("Zrog", 55, ROGUE, race=ORC, guild_name="Bonkers", lockpicking=250)
+        )
+        members = dict(ZUG, Zrog=picker)
+        step = standin.step(
+            lock_facts(family_members=tuple(m for _n, m in sorted(members.items())))
+        )
+        self.assertEqual(standin.NONE, step.action)
+
+    def test_a_door_with_no_lock_writes_nothing(self):
+        step = standin.step(lock_facts(door=DEADMINES))
+        self.assertEqual(standin.NONE, step.action)
+
+    def test_never_seated_mid_run(self):
+        step = standin.step(lock_facts(mid_run=True))
+        self.assertEqual(standin.NONE, step.action)
+
+    def _lock_row(self):
+        return standin.Seat("Zug", "Oz", "Picky", "dps", standin.LOCK_MARK + "x")
+
+    def test_the_row_stands_while_the_guest_is_grouped(self):
+        picky = dataclasses.replace(guildrun.member_from_row(PICKY), grouped=True)
+        step = standin.step(lock_facts(current=self._lock_row(), candidates=(picky,)))
+        self.assertEqual(standin.KEEP, step.action, step.why)
+
+    def test_the_row_ends_between_runs_once_the_family_opens_it(self):
+        keyed = dict(ZUG)
+        keyed["Zug"] = dataclasses.replace(ZUG["Zug"], keys=frozenset({11000}))
+        members = tuple(m for _n, m in sorted(keyed.items()))
+        f = lock_facts(current=self._lock_row(), family_members=members)
+        self.assertEqual(standin.CLEAR, standin.step(f).action)
+        mid = dataclasses.replace(f, mid_run=True)
+        self.assertEqual(standin.KEEP, standin.step(mid).action)
+
+    def test_a_lost_lockpicker_with_no_other_ends_the_row(self):
+        step = standin.step(lock_facts(current=self._lock_row(), candidates=()))
+        self.assertEqual(standin.CLEAR, step.action, step.why)
+
+    def test_a_lost_lockpicker_is_replaced_by_another(self):
+        other = row(
+            "Sneaky", 53, ROGUE, race=ORC, guild_name="Bonkers", lockpicking=265
+        )
+        step = standin.step(
+            lock_facts(
+                current=self._lock_row(),
+                candidates=(guildrun.member_from_row(other),),
+            )
+        )
+        self.assertEqual(standin.SEAT, step.action, step.why)
+        self.assertEqual("Sneaky", step.seat.in_name)
+        self.assertTrue(standin.is_lock(step.seat))
+
+    def test_a_stranded_rows_guest_gives_its_seat_to_a_lockpicker(self):
+        # Zork stranded, Frosty (a mage) in his seat: between runs a free
+        # rogue who picks the gate takes it, and the row stays a stranded one.
+        current = standin.Seat(
+            "Zug", "Zork", "Frosty", "dps", standin.STRANDED_MARK + WHY
+        )
+        frosty = dataclasses.replace(guildrun.member_from_row(FROSTY), grouped=True)
+        f = zug_facts(
+            current=current,
+            candidates=(frosty, guildrun.member_from_row(PICKY)),
+            family_members=tuple(m for _n, m in sorted(ZUG.items())),
+        )
+        step = standin.step(f)
+        self.assertEqual(standin.SEAT, step.action, step.why)
+        self.assertEqual("Picky", step.seat.in_name)
+        self.assertTrue(standin.is_stranded(step.seat))
+        mid = standin.step(dataclasses.replace(f, mid_run=True))
+        self.assertEqual(standin.KEEP, mid.action)
+
+    def test_a_new_stranded_guest_is_a_lockpicker_first(self):
+        f = zug_facts(
+            candidates=(
+                guildrun.member_from_row(FROSTY),
+                guildrun.member_from_row(PICKY),
+            ),
+            family_members=tuple(m for _n, m in sorted(ZUG.items())),
+        )
+        self.assertEqual("Picky", standin.step(f).seat.in_name)
+
+    def test_lockpicking_is_read_off_the_member_row(self):
+        self.assertEqual(280, guildrun.member_from_row(PICKY).lockpicking)
+        self.assertEqual(0, guildrun.member_from_row(FROSTY).lockpicking)
+
+
+class TheBridgeSeatsALockpicker(unittest.TestCase):
+    setUp = TheBridgePass.setUp
+    tearDown = TheBridgePass.tearDown
+    run_pass = TheBridgePass.run_pass
+
+    def test_zugs_family_at_blackrock_depths_gets_a_lockpicker(self):
+        pending = {
+            "Zug": [{"id": 145, "keyword": "blackrock-depths", "status": "active"}],
+        }
+        fams = {
+            "Zug": {
+                "leader": {"name": "Zug", "job": "dungeon:blackrock-depths"},
+                "names": ["Oz", "Uzza", "Zork", "Zrog", "Zug"],
+            }
+        }
+        fams, written, jobs_told, lines = self.run_pass(
+            order="", pending=pending, fams=fams, guild_rows=(PICKY,)
+        )
+        seats = [
+            (f, a, (s.out_name, s.in_name, s.seat))
+            for f, a, s in written
+            if a == standin.SEAT
+        ]
+        self.assertEqual([("Zug", standin.SEAT, ("Oz", "Picky", "dps"))], seats)
+        self.assertNotIn("Oz", fams["Zug"]["names"])
+        self.assertEqual(frozenset({"Picky"}), bridge._STANDIN_GUESTS)
+        self.assertEqual([("Oz", "quest", standin.SOURCE)], jobs_told)
+        self.assertEqual([], self.noted, "no crafting turn for a lockpicker seat")
+
+    def test_the_member_reads_carry_keys_and_lockpicking(self):
+        for sql in (bridge._STANDIN_MEMBERS_SQL, bridge._GUILD_RUN_MEMBERS_SQL):
+            self.assertIn("AS lockpicking", sql)
+            self.assertIn("lp.skill = 633", sql)
+        self.assertIn("AS door_keys", bridge._STANDIN_MEMBERS_SQL)
 
 
 if __name__ == "__main__":
