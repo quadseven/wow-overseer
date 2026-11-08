@@ -51,7 +51,12 @@ NEEDED = dataclasses.replace(SCROLL, guid=8110, name="Needed Scroll", quest_need
 UNPRICED = dataclasses.replace(SCROLL, guid=8111, name="Soulstone", sell_price=0)
 GREEN = dataclasses.replace(SCROLL, guid=8112, name="Green Scroll", quality=2)
 UNSAID = guildjobs.Carried(
-    guid=8113, entry=8113, name="Unsaid", item_class=0, subclass=4, quality=1,
+    guid=8113,
+    entry=8113,
+    name="Unsaid",
+    item_class=0,
+    subclass=4,
+    quality=1,
     sell_price=250,
 )
 
