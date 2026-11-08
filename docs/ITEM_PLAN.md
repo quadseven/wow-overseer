@@ -1,6 +1,6 @@
 # Item plan: what each member keeps, banks, gives, sells or breaks down
 
-Status: design, an unwired prototype (`itemplan.py`) and a measured simulation. Nothing here changes the bridge, the realm or any pass. Last checked 2026-11-07. Ticket: #1967.
+Status: design, an unwired prototype (`itemplan.py`) and a measured simulation. Nothing here changes the bridge, the realm or any pass. Last checked 2026-11-08. Data-read coverage: #1973.
 
 ## The question
 
@@ -26,15 +26,15 @@ Priority is a goal tier, then vendor copper per slot. Lowest priority leaves a f
 
 | Rule | What it decides | Why this order | Extends or replaces |
 | --- | --- | --- | --- |
-| R1 | A row with an unreadable binding is kept. | Unknown fails closed. | `disposition` |
+| R1 | A row with an unreadable binding or soulbound flag is kept. | Unknown fails closed. | `disposition` |
 | R2 | Worn bags, keys and the hearthstone stay. A spare bag larger than a worn bag stays for `bag_upgrade`. A spare bag fits an empty bank bag position first (more bank room), then goes to a sibling with an empty position, then to the vendor. | Bags are room; the cheapest room is a bag already owned. | `bag_upgrade` |
 | R3 | Quest items. An open quest names the item: keep. A quest log that was not read keeps every quest-class stack and never sells or destroys one. | Losing a quest item costs the run. | `bag_pressure.QUEST_NEEDED_SQL` |
 | R4 | Gear the gear pass says to wear stays. Soulbound or any gear the holder can wear in its level window and the gear pass has not judged: a second set in the personal bank, capped at 6 pieces (`SPARE_SET_MAX`), best first. | Never lose the holder's own upgrade; a set is not a hoard. | `bankpolicy` rule 2, `gear` |
 | R5 | A trade tool stays with a member who works the trade, else goes to the sibling who does. | A tool has no level to outgrow. | `disposition.TOOL_TRADES` |
-| R6 | Molten Core supplies, their reagents and fire resistance gear: carried on the raid night, held by the member who crafts them, else the Raid Supplies tab, else banked. Never sold. | Raid readiness. | `bankpolicy` rule 3, `raidsupply` |
+| R6 | Molten Core supplies, their reagents and items with positive per-item fire resistance: carried on the raid night, held by the member who crafts them, else the Raid Supplies tab, else banked. Never sold. If fire resistance is unreadable, keep gear. | Raid readiness. | `bankpolicy` rule 3, `raidsupply` |
 | R7 | Trade stock and food. Reagents that recipes still giving skill points use at the current range are kept in the bags; the next range's stock is banked; whole stacks, up to the need. The sibling who works the trade gets the others' surplus. | Skill-ups are the family's progress. | `disposition.profession_keeps`, `material_keeps` |
 | R8 | Gear by binding. Soulbound gear belongs to its holder only. Bind-on-equip gear goes to the sibling who wears it now (give), or to the Gear for Later tab for a later level. Gear nobody will wear: disenchant if an enchanter at that skill exists, rare gear to the Gear for Later tab, else vendor. Epic gear is never sold. | Binding decides which routes exist. | `bankpolicy` rule 4, `disposition.decide` |
-| R9 | Recipes. Kept for a member whose trade reaches it, given to the sibling whose trade reaches it, raid recipes never sold, else the guild tab, else bank if worth it, else vendor. | A recipe is rare; the vendor price is the floor. | `clearance` |
+| R9 | Recipes. Use `RequiredSkillRank` to find a member whose trade reaches it; give it to the sibling whose trade reaches it, raid recipes never sold, else the guild tab, else bank if worth it, else vendor. If the rank is unreadable, keep it. | A recipe is rare; the vendor price is the floor. | `clearance` |
 | R10 | Surplus materials: the sibling who works the trade, a guildmate who does, the Materials tab, bank when a stack is worth `BANK_WORTH` per slot (gems always), else vendor. | Materials feed crafters before a vendor. | `clearance`, `guildshare.FEEDS` |
 | R11 | Anything else with a price: auction when the price beats the vendor by 4x, else vendor. | Vendor price is the floor. | `disposition.AUCTION_BEATS_VENDOR_BY` |
 | R12 | No price and no use: bank while at least 6 bank slots stay free, else destroy. | Destroy is last. | `jev_keep` destroy shadow |
@@ -65,15 +65,15 @@ DESTROY needs vendor price 0, no market price, quality 2 or less and a stack no 
 | --- | --- | --- |
 | Item rows (entry, class, subclass, quality, count, vendor price, binding, required and item level) | `item_template` and `item_instance`, as `bag_pressure` reads them | yes |
 | Member level, class, skills (value, max) | `characters`, `character_skills` | yes |
-| Worn bags and bank bag positions bought | character inventory, `characters.bankSlots` | partly: no bag slot, no `ContainerSlots` |
+| Worn bags and bank bag positions bought | character inventory, `characters.bankSlots`, `item_template.ContainerSlots` | yes |
 | Guild bank tab contents | `guild_bank_item` | yes |
-| Quest log (open quests naming an item) | `QUEST_NEEDED_SQL` | no |
-| Equipped gear, inventory type, stats | character inventory, `item_template` | no |
-| Fire resistance per item | `item_template.fire_res` | no |
-| Auction prices | the auction pass's quotes (`bag_market`, `auction`) | no |
-| Recipe required skill rank | `item_template.RequiredSkillRank` | no |
-| Soulbound flag of a bind-on-equip piece | `item_instance.flags` | no |
-| Guild roster by trade and online state | `guildshare`, `guildcorps` | no |
+| Quest log (open quests naming an item) | `character_queststatus`, `quest_template` | yes |
+| Equipped gear, slot and stats | character inventory, `item_instance`, `item_template` | yes |
+| Fire resistance per item | each `item_template.fire_res` value | yes |
+| Auction prices | live auction listings, then auction history | yes |
+| Recipe required skill rank | `item_template.RequiredSkillRank` | yes |
+| Soulbound flag of a bind-on-equip piece | `item_instance.flags` | yes |
+| Guild roster by trade and online state | guild roster and `character_skills` | yes |
 
 Where a field is absent the plan fails closed, and the follow-up ticket for the missing data lists each one.
 
@@ -81,7 +81,7 @@ Where a field is absent the plan fails closed, and the follow-up ticket for the 
 
 `tools/itemplan_simulate.py` runs the plan over every member of both families from the 2026-11-07 TSV dump (1,299 rows). The dump itself holds character names and stays out of the repository.
 
-Assumptions the run states: the quest log is unread, so every quest-class stack is kept (13 stacks for each of the two members below); no market price exists, so nothing is auctioned and the vendor price is the floor; no guild roster exists, so no guildmate takes a gift; equipped gear is absent, so the gear pass's verdict is "unjudged"; bag sizes come from `bag_slots` (issue-confirmed sizes for the Runecloth Bag, Huge Brown Sack and Large Knapsack, an item-level band for the rest). Bank capacity for the Zug pair is 88 and 78 slots under that model, and 61 and 76 are in use now.
+Assumptions in this historical run: the quest log is unread, so every quest-class stack is kept (13 stacks for each of the two members below); no market price exists, so nothing is auctioned and the vendor price is the floor; no guild roster exists, so no guildmate takes a gift; equipped gear is absent, so the gear pass's verdict is "unjudged"; bag sizes use the item-level estimate that #1973 replaces. Bank capacity for the Zug pair was 88 and 78 slots under that model, and 61 and 76 were in use.
 
 | Member (level 54) | Carried slots | Free now | Free after the plan | Free after, vendor out of reach | Carried stacks to bank | to vendor | to destroy | to disenchant | to give | Vendor gold, carried stacks | Vendor gold, whole plan | 8-slot bar |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -120,4 +120,4 @@ Each executor route has its own ticket, and each ticket refers to #1967.
 
 ## Scope notes
 
-`itemplan.py` imports this repository's tables and nothing else. `itemplan_shadow.py` (#1972) runs it beside the economy pass when `ITEMPLAN_SHADOW` is on, and logs `itemplan:` lines (one plan line per member, one line per disagreement with the sale, bank and clearance passes); it acts on nothing. `itemplan_reads.py` (#1973) reads the plan's other inputs for the shadow: quest log, worn gear, binding, auction prices, personal bank room, guild bank room per tab and the guild roster. A read that fails is named in the tick line under `ran without` and never raises. The bank route is capped at the free room read (a bank with 2 free takes nothing, matching the bank pass's reserve), and a stack no destination has room for carries a `NO_ROOM` reason. The log writes a member's plan and disagreement lines only when that member's plan changed or 30 minutes passed; every other tick is one tick line. The `Dockerfile` copies all four. It is not `item_plan.py`, the sale-retry memo: the names are close and the jobs are not.
+`itemplan.py` imports this repository's tables and nothing else. `itemplan_shadow.py` (#1972) runs it beside the economy pass when `ITEMPLAN_SHADOW` is on, and logs `itemplan:` lines (one plan line per member, one line per disagreement with the sale, bank and clearance passes); it acts on nothing. `itemplan_reads.py` (#1973) reads the plan's other inputs for the shadow: quest log, equipped slots and stats, binding and soulbound flags, per-item fire resistance, container capacity, recipe skill rank, auction prices, personal bank room, guild bank room per tab and guild roster trade/online state. A read that fails is named in the tick line under `ran without` and never raises; missing binding, soulbound flag, bag size, recipe rank or fire resistance fails closed. The bank route is capped at the free room read (a bank with 2 free takes nothing, matching the bank pass's reserve), and a stack no destination has room for carries a `NO_ROOM` reason. The log writes a member's plan and disagreement lines only when that member's plan changed or 30 minutes passed; every other tick is one tick line. The `Dockerfile` copies all four. It is not `item_plan.py`, the sale-retry memo: the names are close and the jobs are not.

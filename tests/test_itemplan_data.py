@@ -238,6 +238,7 @@ class PlanUsesTheData(unittest.TestCase):
                 count=1,
                 sell=50,
                 bind=0,
+                soulbound=False,
                 index=i,
             )
             for i in range(13)

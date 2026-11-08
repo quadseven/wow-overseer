@@ -5,6 +5,7 @@ from __future__ import annotations
 import pathlib
 import sys
 import unittest
+from types import SimpleNamespace
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -53,10 +54,19 @@ def banked(report):
     return [d for d in report.plan.decisions if d.route == itemplan.BANK_PERSONAL]
 
 
+def read_flags(rows, **kwargs):
+    """Mark fixture flags as read and explicitly unbound by the instance."""
+    return shadow.Extras(
+        instance_soulbound={r["item_guid"]: False for r in rows},
+        fire_gear=frozenset(),
+        **kwargs,
+    )
+
+
 class BankRoomTest(unittest.TestCase):
     def test_two_free_bank_slots_hold_nothing_and_say_no_room(self):
         rows, gear, worn, free = bank_fixture()
-        extras = shadow.Extras(bank_free={"Zork": 2})
+        extras = read_flags(rows, bank_free={"Zork": 2})
         rep = shadow.shadow(
             ["Zork"], "Fam", rows, free, gear_rows=gear, worn_rows=worn, extras=extras
         )
@@ -67,7 +77,7 @@ class BankRoomTest(unittest.TestCase):
 
     def test_free_bank_room_caps_the_route_at_what_is_there(self):
         rows, gear, worn, free = bank_fixture()
-        extras = shadow.Extras(bank_free={"Zork": 5})
+        extras = read_flags(rows, bank_free={"Zork": 5})
         rep = shadow.shadow(
             ["Zork"], "Fam", rows, free, gear_rows=gear, worn_rows=worn, extras=extras
         )
@@ -84,7 +94,7 @@ class BankRoomTest(unittest.TestCase):
                 free,
                 gear_rows=gear,
                 worn_rows=worn,
-                extras=shadow.Extras(bank_free={"Zork": room}),
+                extras=read_flags(rows, bank_free={"Zork": room}),
             )
             m = rep.plan.members[0]
             stacks = shadow.build_stacks(rows, gear)
@@ -95,7 +105,15 @@ class BankRoomTest(unittest.TestCase):
 
     def test_without_the_bank_read_the_plan_assumes_an_empty_bank(self):
         rows, gear, worn, free = bank_fixture()
-        rep = shadow.shadow(["Zork"], "Fam", rows, free, gear_rows=gear, worn_rows=worn)
+        rep = shadow.shadow(
+            ["Zork"],
+            "Fam",
+            rows,
+            free,
+            gear_rows=gear,
+            worn_rows=worn,
+            extras=read_flags(rows),
+        )
         self.assertEqual(len(banked(rep)), 11)
         self.assertIn("bank contents", "; ".join(rep.missing))
 
@@ -112,7 +130,7 @@ class BankRoomTest(unittest.TestCase):
             free,
             gear_rows=gear,
             worn_rows=worn,
-            extras=shadow.Extras(guild_free=full),
+            extras=read_flags(rows, guild_free=full),
         )
         self.assertFalse(
             [d for d in quiet.plan.decisions if d.route == itemplan.GUILD_BANK]
@@ -122,6 +140,8 @@ class BankRoomTest(unittest.TestCase):
 class VerdictTest(unittest.TestCase):
     def extras(self, worn_level):
         return shadow.Extras(
+            instance_soulbound={1: False, 2: False, 3: False, 4: False},
+            fire_gear=frozenset(),
             worn={
                 "Ana": {
                     "back": {
@@ -166,7 +186,22 @@ class VerdictTest(unittest.TestCase):
         self.assertNotIn("equipped gear verdicts", rep.missing)
 
     def test_without_worn_gear_the_same_piece_is_sold(self):
-        d, rep = self.cloak(None)
+        d, rep = self.cloak(
+            shadow.Extras(
+                instance_soulbound={1: False, 2: False, 3: False, 4: False},
+                fire_gear=frozenset(),
+                templates={
+                    7777: {
+                        "item_class": 4,
+                        "subclass": 4,
+                        "bonding": 0,
+                        "inventory_type": 16,
+                        "item_level": 40,
+                        "req_level": 1,
+                    }
+                },
+            )
+        )
         self.assertEqual(d.route, itemplan.SELL_VENDOR)
         self.assertIn("equipped gear verdicts", rep.missing)
 
@@ -193,15 +228,17 @@ class BindingTest(unittest.TestCase):
         self.assertEqual((trinket.bind, trinket.item_level), (1, 30))
         self.assertFalse(trinket.tradable)
         plain = shadow.build_stacks(rows, gear)
-        self.assertEqual(next(s for s in plain if s.entry == 9999).bind, 0)
+        self.assertIsNone(next(s for s in plain if s.entry == 9999).bind)
 
 
 class FakeCursor:
     def __init__(self, fail=(), tables=None):
         self.fail, self.tables, self.sql = fail, tables or {}, ""
+        self.executed = []
 
     def execute(self, sql, params=()):
         self.sql = sql
+        self.executed.append((sql, params))
         for marker in self.fail:
             if sql.startswith(marker):
                 raise RuntimeError("boom")
@@ -249,6 +286,45 @@ def read_with(cur, bank_rows=None, guild=None, roster=None, connect=None):
 
 
 class ReadTest(unittest.TestCase):
+    def test_unread_quest_log_keeps_quest_stack(self):
+        quest = row(
+            "Ana",
+            55,
+            12345,
+            "Quest Item",
+            item_class=itemplan.C_QUEST,
+            quest_item=False,
+        )
+        extras = shadow.Extras(
+            open_quest_items=None,
+            instance_soulbound={55: False},
+            templates={
+                12345: {
+                    "item_class": itemplan.C_QUEST,
+                    "subclass": 0,
+                    "bonding": 0,
+                    "req_level": 1,
+                    "item_level": 1,
+                    "required_skill_rank": 0,
+                    "container_slots": 0,
+                    "fire_res": 0,
+                    "stats": {},
+                }
+            },
+            fire_gear=frozenset(),
+        )
+        report = shadow.shadow(
+            ["Ana"],
+            "Fam",
+            [quest],
+            {"Ana": 10},
+            extras=extras,
+        )
+
+        decision = report.plan.decisions[0]
+        self.assertEqual(decision.route, itemplan.KEEP_CARRY)
+        self.assertIn("quest log was not read", decision.reason)
+
     def test_a_failed_read_is_named_and_the_plan_still_runs(self):
         extras = read_with(FakeCursor(fail=("SELECT c.name AS member, qs.quest",)))
         self.assertIsNone(extras.open_quest_items)
@@ -259,7 +335,7 @@ class ReadTest(unittest.TestCase):
         )
         self.assertTrue(rep.plan.decisions)
         self.assertIn(
-            "quest log (using the sale query's quest flag) [read failed: RuntimeError]",
+            "quest log [read failed: RuntimeError]",
             rep.missing,
         )
 
@@ -388,6 +464,193 @@ class ReadTest(unittest.TestCase):
         self.assertEqual(extras.open_quest_items, {"Ana": frozenset({9999})})
         self.assertIn("Ana", extras.worn)
         self.assertEqual(itemplan_data.worn_entries(extras.worn)["Ana"], {1})
+
+    def test_shadow_read_captures_live_item_facts_and_roster_presence(self):
+        rows, gear, worn, free = fixture()
+        rows = [next(r for r in rows if r["entry"] == 7777)]
+        gear = [next(r for r in gear if r["entry"] == 7777)]
+        cur = FakeCursor(
+            tables={
+                "SELECT it.entry AS entry": [
+                    {
+                        "entry": 7777,
+                        "item_class": 4,
+                        "subclass": 4,
+                        "bonding": 0,
+                        "inventory_type": 4,
+                        "item_level": 40,
+                        "req_level": 30,
+                        "required_skill_rank": 225,
+                        "container_slots": 14,
+                        "fire_res": 12,
+                        "stat_type1": 4,
+                        "stat_value1": 5,
+                        "armor": 80,
+                        "block": 0,
+                    }
+                ],
+                "SELECT c.name AS member, ci.slot": [
+                    {
+                        "member": "Ana",
+                        "slot": 0,
+                        "entry": 9000,
+                        "name": "Iron Helm",
+                        "item_class": 4,
+                        "subclass": 4,
+                        "quality": 2,
+                        "item_level": 35,
+                        "inventory_type": 1,
+                        "req_level": 30,
+                        "required_skill_rank": 0,
+                        "container_slots": 0,
+                        "fire_res": 15,
+                        "stat_type1": 4,
+                        "stat_value1": 7,
+                        "armor": 100,
+                        "block": 0,
+                    }
+                ],
+                "SELECT ii.guid AS item_guid": [{"item_guid": 4, "instance_flags": 1}],
+                "SELECT race FROM characters": [{"race": 1}],
+                "SELECT a.id AS auction_id": [
+                    {
+                        "auction_id": 17,
+                        "house": reads.auction.HOUSE_ALLIANCE,
+                        "buyout": 2500,
+                        "entry": 7777,
+                        "count": 2,
+                        "label": "Plain Green Cloak",
+                    }
+                ],
+            }
+        )
+        roster = [
+            SimpleNamespace(
+                name="Offline Smith",
+                family=False,
+                online=False,
+                rank_in=lambda skill: (
+                    300
+                    if skill == reads.itemplan.guildshare.SKILL_LINES["blacksmithing"]
+                    else 0
+                ),
+            ),
+            SimpleNamespace(
+                name="Online Smith",
+                family=False,
+                online=True,
+                rank_in=lambda skill: (
+                    225
+                    if skill == reads.itemplan.guildshare.SKILL_LINES["blacksmithing"]
+                    else 0
+                ),
+            ),
+        ]
+        extras = reads.read(
+            ["Ana"],
+            "Fam",
+            rows,
+            gear,
+            worn,
+            connect=lambda: FakeConn(cur),
+            bank_rows=lambda _names: [],
+            guild_setup=lambda _names: None,
+            roster=lambda _names: roster,
+        )
+
+        self.assertEqual(extras.templates[7777]["required_skill_rank"], 225)
+        self.assertEqual(extras.templates[7777]["container_slots"], 14)
+        self.assertEqual(extras.templates[7777]["fire_res"], 12)
+        self.assertEqual(extras.market[7777][0], 1250)
+        self.assertEqual(
+            extras.worn["Ana"]["head"]["stats"],
+            {"strength": 7, "armor": 100, "fire_resistance": 15},
+        )
+        self.assertEqual(extras.instance_soulbound, {4: True})
+        self.assertIn(("Online Smith", "blacksmithing", 225, True), extras.guild_roster)
+        self.assertIn(
+            ("Offline Smith", "blacksmithing", 300, False), extras.guild_roster
+        )
+        self.assertEqual(
+            extras.guild_crafters, (("Online Smith", "blacksmithing", 225),)
+        )
+        self.assertTrue(
+            all(sql.lstrip().upper().startswith("SELECT") for sql, _ in cur.executed)
+        )
+
+    def test_failed_instance_flag_read_keeps_item_untradable(self):
+        rows, gear, worn, _free = fixture()
+        rows = [rows[-1]]
+        gear = [gear[-1]]
+        cur = FakeCursor(fail=("SELECT ii.guid AS item_guid",))
+        extras = reads.read(
+            ["Ana"],
+            "Fam",
+            rows,
+            gear,
+            worn,
+            connect=lambda: FakeConn(cur),
+            bank_rows=lambda _names: [],
+            guild_setup=lambda _names: None,
+            roster=lambda _names: [
+                SimpleNamespace(
+                    name="Smith", family=False, online=True, rank_in=lambda _skill: 0
+                )
+            ],
+        )
+
+        self.assertIsNone(extras.instance_soulbound)
+        self.assertIn(shadow.INSTANCE_SOULBOUND, extras.unread)
+        stack = shadow.build_stacks(
+            rows, gear, extras.templates, extras.instance_soulbound
+        )[0]
+        self.assertIsNone(stack.soulbound)
+        self.assertFalse(stack.tradable)
+
+    def test_partial_instance_flag_read_marks_the_input_unread(self):
+        rows, gear, worn, _free = fixture()
+        rows = [rows[0], rows[-1]]
+        cur = FakeCursor(
+            tables={
+                "SELECT ii.guid AS item_guid": [
+                    {"item_guid": rows[0]["item_guid"], "instance_flags": 0}
+                ]
+            }
+        )
+
+        extras = reads.read(
+            ["Ana"],
+            "Fam",
+            rows,
+            gear,
+            worn,
+            connect=lambda: FakeConn(cur),
+            bank_rows=lambda _names: [],
+            guild_setup=lambda _names: None,
+            roster=lambda _names: [],
+        )
+
+        self.assertIsNone(extras.instance_soulbound)
+        self.assertIn(shadow.INSTANCE_SOULBOUND, extras.unread)
+
+    def test_missing_template_does_not_claim_fire_resistance_is_known(self):
+        rows, gear, worn, _free = fixture()
+        cur = FakeCursor()
+
+        extras = reads.read(
+            ["Ana"],
+            "Fam",
+            rows,
+            gear,
+            worn,
+            connect=lambda: FakeConn(cur),
+            bank_rows=lambda _names: [],
+            guild_setup=lambda _names: None,
+            roster=lambda _names: [],
+        )
+
+        self.assertIsNone(extras.fire_gear)
+        self.assertIn(shadow.FIRE_RESISTANCE, extras.unread)
 
 
 class QuietLogTest(unittest.TestCase):

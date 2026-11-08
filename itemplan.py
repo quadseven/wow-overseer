@@ -233,40 +233,11 @@ RECIPE_TRADE = {
 }
 
 
-# `item_template.RequiredSkillRank` is not in the dump. A recipe's item level
-# tracks it (checked against the Tailoring and Enchanting rows in the 2026-11-07
-# dump: item level 54 pattern, rank 260; item level 52 formula, rank 230), so
-# the plan estimates the rank and the data ticket asks for the column.
-def recipe_rank(item_level: int) -> int:
-    return max(1, 5 * int(item_level) - 25)
-
-
 # Disenchant skill by item level (classic): 5 * (ilvl - 21) from ilvl 26, 1 up
 # to it. A convention until the data ticket reads the core's own table; the
 # plan only breaks down what an enchanter at that skill can break down.
 def disenchant_skill(item_level: int) -> int:
     return max(1, 5 * (int(item_level) - 21)) if item_level > 25 else 1
-
-
-# Bag slots by item entry where the repo or the operator's own reports confirm
-# them, else by item level band. `ContainerSlots` is not in the dump.
-BAG_SLOTS_BY_ENTRY = {
-    14046: 14,  # Runecloth Bag (wow-overseer#1967)
-    4499: 12,  # Huge Brown Sack
-    1725: 12,  # Large Knapsack
-    4240: 8,  # Woolen Bag (craft.RECIPES, "8 slots")
-    10050: 12,  # Mageweave Bag
-}
-_BAG_BANDS = ((9, 6), (19, 8), (29, 10), (39, 12), (10_000, 14))
-
-
-def bag_slots(entry: int, item_level: int) -> int:
-    if int(entry) in BAG_SLOTS_BY_ENTRY:
-        return BAG_SLOTS_BY_ENTRY[int(entry)]
-    for top, slots in _BAG_BANDS:
-        if int(item_level) <= top:
-            return slots
-    return 14
 
 
 # Armor each class wears, by item level of the member (classic proficiencies).
@@ -338,11 +309,15 @@ class Stack:
     quality: int
     count: int
     sell: int  # vendor copper per unit
-    bind: int
+    bind: int | None
     req_level: int = 0
     item_level: int = 0
     stackable: int = 1
     index: int = 0  # row order within the holder, the last tie-break
+    required_skill_rank: int | None = None
+    container_slots: int | None = None
+    fire_res: int | None = None
+    soulbound: bool | None = None
 
     @property
     def key(self) -> tuple:
@@ -367,7 +342,11 @@ class Stack:
     @property
     def tradable(self) -> bool:
         """Soulbound and quest-bound stacks cannot be given or listed."""
-        return self.bind in (BIND_NONE, BIND_EQUIP, BIND_USE)
+        return self.soulbound is False and self.bind in (
+            BIND_NONE,
+            BIND_EQUIP,
+            BIND_USE,
+        )
 
 
 @dataclass(frozen=True)
@@ -411,8 +390,8 @@ class Context:
     guild_free: Mapping[tuple, int] = field(default_factory=dict)
     # guildmates outside the family who work a trade: ((name, trade, skill), ...)
     guild_crafters: tuple = ()
-    # entries that are fire resistance gear (the dump has no resistance column)
-    fire_gear: frozenset = frozenset()
+    # None means per-item fire resistance was not read.
+    fire_gear: frozenset | None = None
     # entries an attunement or a key quest needs besides the open quests
     attunement_items: frozenset = frozenset()
     # (holder, entry) -> route chosen on the previous pass
@@ -486,9 +465,9 @@ def capacities(
     """
     bags = sorted(
         (b for b in worn_bags if b.item_class == C_CONTAINER),
-        key=lambda b: (-bag_slots(b.entry, b.item_level), b.entry, b.index),
+        key=lambda b: (-(b.container_slots or 0), b.entry, b.index),
     )
-    sizes = [bag_slots(b.entry, b.item_level) for b in bags]
+    sizes = [max(0, int(b.container_slots or 0)) for b in bags]
     carried = sizes[:CARRIED_BAGS]
     bank = sizes[CARRIED_BAGS:]
     empty = max(0, int(bank_positions) - len(bank))
@@ -726,12 +705,12 @@ def _rule_quest(w: _World, s: Stack, me: Member):
 
 
 def _rule_basics(w: _World, s: Stack, me: Member):
-    if s.bind not in _KNOWN_BINDS:
+    if s.bind not in _KNOWN_BINDS or s.soulbound is None:
         return [
             _opt(
                 KEEP_CARRY,
                 EQUIPMENT,
-                "binding unreadable: failing closed",
+                "binding or soulbound flag unreadable: failing closed",
                 "R1",
                 carry_forced=True,
             )
@@ -756,9 +735,19 @@ def _rule_basics(w: _World, s: Stack, me: Member):
 def _rule_bag(w: _World, s: Stack, me: Member):
     if s.item_class != C_CONTAINER:
         return None
-    slots = bag_slots(s.entry, s.item_level)
+    slots = max(0, int(s.container_slots or 0))
+    if slots == 0:
+        return [
+            _opt(
+                KEEP_CARRY,
+                BAG_ROOM,
+                "bag capacity was not read; keep the bag",
+                "R2",
+                carry_forced=True,
+            )
+        ]
     worn = [
-        bag_slots(b.entry, b.item_level)
+        max(0, int(b.container_slots or 0))
         for b in w.stacks
         if b.holder == s.holder and b.loc == WORN and b.item_class == C_CONTAINER
     ]
@@ -877,7 +866,22 @@ def raid_entries() -> dict:
 
 def _rule_raid(w: _World, s: Stack, me: Member):
     kind = raid_entries().get(s.entry)
-    fire = s.entry in w.ctx.fire_gear
+    fire_known = s.fire_res is not None or w.ctx.fire_gear is not None
+    if not fire_known and s.gear:
+        return [
+            _opt(
+                KEEP_CARRY,
+                EQUIPMENT,
+                "fire resistance was not read; keep the gear",
+                "R6",
+                carry_forced=True,
+            )
+        ]
+    fire = (
+        s.fire_res > 0
+        if s.fire_res is not None
+        else s.entry in (w.ctx.fire_gear or frozenset())
+    )
     if not kind and not fire:
         return None
     if not s.tradable:
@@ -1221,8 +1225,18 @@ def _rule_gear(w: _World, s: Stack, me: Member):
 def _rule_recipe(w: _World, s: Stack, me: Member):
     if s.item_class != C_RECIPE:
         return None
+    if s.required_skill_rank is None:
+        return [
+            _opt(
+                KEEP_CARRY,
+                RECIPE,
+                "recipe skill rank was not read; keep the recipe",
+                "R9",
+                carry_forced=True,
+            )
+        ]
     trade = RECIPE_TRADE.get(s.subclass)
-    rank = recipe_rank(s.item_level)
+    rank = s.required_skill_rank
     drop = s.entry in raidsupply.DROP_RECIPES
     out = []
     if trade and me.skill(trade) > 0 and rank <= range_top(me.skill(trade)) + RANGE:
@@ -1610,7 +1624,7 @@ def _commit(
             carry_used[m] += 1
     elif o.route == BANK_PERSONAL:
         if o.cap_group and o.cap_group[0] == "bankbag":
-            spare_bag_gain[m] += bag_slots(s.entry, s.item_level)
+            spare_bag_gain[m] += max(0, int(s.container_slots or 0))
         else:
             bank_used[m] += 1
     elif o.route == GUILD_BANK:

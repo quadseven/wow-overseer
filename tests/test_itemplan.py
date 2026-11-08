@@ -41,6 +41,7 @@ def stack(holder="Ana", loc="carried_bag", entry=1, name="Thing", **kw):
         count=1,
         sell=0,
         bind=0,
+        soulbound=False,
         req_level=0,
         item_level=1,
         stackable=1,
@@ -57,7 +58,7 @@ def member(name="Ana", level=54, cls=MAGE, skills=(), **kw):
 
 
 def decide(stacks, members, ctx=None):
-    plan = itemplan.plan(stacks, members, ctx)
+    plan = itemplan.plan(stacks, members, ctx or Context(fire_gear=frozenset()))
     return {d.key: d for d in plan.decisions}, plan
 
 
@@ -172,6 +173,20 @@ class Capacity(unittest.TestCase):
 
 
 class Gear(unittest.TestCase):
+    def test_gear_with_unread_fire_resistance_is_kept(self):
+        unknown = stack(
+            entry=76,
+            item_class=4,
+            quality=1,
+            sell=100,
+            bind=0,
+            fire_res=None,
+        )
+        plan = itemplan.plan([unknown], [member()], Context(fire_gear=None))
+        decision = plan.decisions[0]
+        self.assertEqual(decision.route, KEEP_CARRY)
+        self.assertIn("fire resistance was not read", decision.reason)
+
     def test_soulbound_upgrade_for_the_holder_is_kept_not_sold(self):
         robe = stack(
             entry=77,
@@ -437,11 +452,29 @@ ZORK_BLUES = [
 class ZorkBlues(unittest.TestCase):
     def setUp(self):
         self.rows = [
-            Stack("Zork", loc, e, n, c, sub, 3, cnt, sell, bind, rl, il, 1, i)
+            Stack(
+                "Zork",
+                loc,
+                e,
+                n,
+                c,
+                sub,
+                3,
+                cnt,
+                sell,
+                bind,
+                rl,
+                il,
+                1,
+                i,
+                soulbound=False,
+            )
             for i, (e, n, c, sub, loc, cnt, sell, bind, rl, il) in enumerate(ZORK_BLUES)
         ]
         self.zork = Member("Zork", "Zug", 54, DRUID, ((LEATHERWORKING, 1, 75),), 64, 78)
-        self.plan = itemplan.plan(self.rows, [self.zork])
+        self.plan = itemplan.plan(
+            self.rows, [self.zork], Context(fire_gear=frozenset())
+        )
         self.by_name = {}
         for d in self.plan.decisions:
             self.by_name.setdefault(d.name, []).append(d)
@@ -489,9 +522,23 @@ class Shapes(unittest.TestCase):
 
     def test_capacities_split_carried_and_bank_bags(self):
         worn = [
-            stack(loc="equipped_or_other", item_class=1, entry=14046, item_level=52)
+            stack(
+                loc="equipped_or_other",
+                item_class=1,
+                entry=14046,
+                item_level=52,
+                container_slots=14,
+            )
             for _ in range(4)
-        ] + [stack(loc="equipped_or_other", item_class=1, entry=4499, item_level=35)]
+        ] + [
+            stack(
+                loc="equipped_or_other",
+                item_class=1,
+                entry=4499,
+                item_level=35,
+                container_slots=12,
+            )
+        ]
         carried, bank, empty, _ = itemplan.capacities(worn, 2)
         self.assertEqual((carried, bank, empty), (16 + 4 * 14, 28 + 12, 1))
 

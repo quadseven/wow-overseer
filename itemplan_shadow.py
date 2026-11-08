@@ -59,6 +59,11 @@ GUILD_ROSTER = "guild roster"
 GUILD_ROOM = "guild bank room"
 BANK_CONTENTS = "bank contents"
 BINDING = "binding of non-gear rows"
+FIRE_RESISTANCE = "per-item fire resistance"
+BAG_SLOTS = "bag slot capacity"
+RECIPE_RANK = "recipe skill rank"
+ITEM_STATS = "item template stats"
+INSTANCE_SOULBOUND = "item-instance soulbound flags"
 INPUTS = (
     QUEST_LOG,
     WORN_GEAR,
@@ -67,6 +72,11 @@ INPUTS = (
     GUILD_ROOM,
     BANK_CONTENTS,
     BINDING,
+    FIRE_RESISTANCE,
+    BAG_SLOTS,
+    RECIPE_RANK,
+    ITEM_STATS,
+    INSTANCE_SOULBOUND,
 )
 
 # Pass names in the disagreement lines.
@@ -103,7 +113,8 @@ class Extras:
     gear verdicts unless `gear_verdict` is given. `templates` is
     `itemplan_data.item_templates`' answer. `bank_free` is holder -> free
     slots in the personal bank and its bags. `guild_free` is (family, tab) ->
-    free slots. `guild_crafters` is ((name, trade, skill), ...).
+    free slots. `guild_roster` is ((name, trade, skill, online), ...), and
+    `guild_crafters` contains only online members from that roster.
     """
 
     open_quest_items: Mapping[str, frozenset] | None = None
@@ -112,8 +123,11 @@ class Extras:
     market: Mapping[int, tuple] | None = None
     guild_free: Mapping[tuple, int] | None = None
     guild_crafters: tuple | None = None
+    guild_roster: tuple | None = None
     templates: Mapping[int, dict] | None = None
     bank_free: Mapping[str, int] | None = None
+    instance_soulbound: Mapping[int, bool] | None = None
+    fire_gear: frozenset | None = None
     unread: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -144,7 +158,7 @@ def characters_from_worn(worn_rows) -> dict:
     return out
 
 
-def build_stacks(rows, gear_rows=(), templates=None) -> list:
+def build_stacks(rows, gear_rows=(), templates=None, instance_soulbound=None) -> list:
     """One itemplan.Stack per carried row, in row order within the holder.
 
     The surplus gear row (by item guid) wins; `templates` (by entry) fills in
@@ -164,6 +178,17 @@ def build_stacks(rows, gear_rows=(), templates=None) -> list:
             "required_level": t.get("req_level"),
             "item_level": t.get("item_level"),
         }
+        soulbound = None if instance_soulbound is None else instance_soulbound.get(guid)
+        raw_bonding = g.get("bonding")
+        if raw_bonding is None:
+            raw_bonding = t.get("bonding")
+        binding_default = itemplan.BIND_NONE if raw_bonding is not None else None
+        raw_required_level = g.get("required_level")
+        if raw_required_level is None:
+            raw_required_level = t.get("req_level")
+        raw_item_level = g.get("item_level")
+        if raw_item_level is None:
+            raw_item_level = t.get("item_level")
         index = seen.get(holder, 0)
         seen[holder] = index + 1
         out.append(
@@ -179,10 +204,14 @@ def build_stacks(rows, gear_rows=(), templates=None) -> list:
                 quality=_int(row.get("quality")),
                 count=max(1, _int(row.get("count"), 1)),
                 sell=max(0, _int(row.get("sell_price"))),
-                bind=_int(g.get("bonding"), itemplan.BIND_NONE),
-                req_level=_int(g.get("required_level")),
-                item_level=_int(g.get("item_level"), 1),
+                bind=_int(raw_bonding, binding_default),
+                req_level=_int(raw_required_level),
+                item_level=_int(raw_item_level, 1),
                 index=index,
+                required_skill_rank=t.get("required_skill_rank"),
+                container_slots=t.get("container_slots"),
+                fire_res=t.get("fire_res"),
+                soulbound=soulbound,
             )
         )
     return out
@@ -222,14 +251,6 @@ def build_members(
     return out
 
 
-def _quest_items(rows) -> dict:
-    out: dict = {}
-    for row in rows:
-        if _int(row.get("item_class")) == itemplan.C_QUEST and row.get("quest_item"):
-            out.setdefault(str(row["holder"]), set()).add(_int(row.get("entry")))
-    return {h: frozenset(v) for h, v in out.items()}
-
-
 def _opinions(rows, sales, keep_names, bank_keeps, clear) -> dict:
     """pass name -> {(holder, guid): route in the plan's words}."""
     sold = {}
@@ -255,13 +276,18 @@ def _opinions(rows, sales, keep_names, bank_keeps, clear) -> dict:
 
 
 _ABSENT_NOTE = {
-    QUEST_LOG: "quest log (using the sale query's quest flag)",
+    QUEST_LOG: "quest log",
     WORN_GEAR: "equipped gear verdicts",
     AUCTION_PRICES: "auction prices",
     GUILD_ROSTER: "guild roster",
     GUILD_ROOM: "guild bank room",
     BANK_CONTENTS: "bank contents",
     BINDING: "binding of non-gear rows",
+    FIRE_RESISTANCE: "per-item fire resistance",
+    BAG_SLOTS: "bag slot capacity",
+    RECIPE_RANK: "recipe skill rank",
+    ITEM_STATS: "item template stats",
+    INSTANCE_SOULBOUND: "item-instance soulbound flags",
 }
 
 
@@ -287,7 +313,15 @@ def _missing(extras: Extras, verdicts=None) -> tuple:
         GUILD_ROSTER: extras.guild_crafters is None,
         GUILD_ROOM: extras.guild_free is None,
         BANK_CONTENTS: extras.bank_free is None,
-        BINDING: extras.templates is None,
+        BINDING: extras.templates is None or BINDING in extras.unread,
+        FIRE_RESISTANCE: extras.templates is None or FIRE_RESISTANCE in extras.unread,
+        BAG_SLOTS: extras.templates is None or BAG_SLOTS in extras.unread,
+        RECIPE_RANK: extras.templates is None or RECIPE_RANK in extras.unread,
+        ITEM_STATS: extras.templates is None
+        or extras.worn is None
+        or ITEM_STATS in extras.unread,
+        INSTANCE_SOULBOUND: extras.instance_soulbound is None
+        or INSTANCE_SOULBOUND in extras.unread,
     }
     out = []
     for name in INPUTS:
@@ -395,7 +429,12 @@ def shadow(
     """Plan and compare. Pure: no log, no read, no write."""
     extras = extras or Extras()
     rows = list(rows)
-    stacks = build_stacks(rows, gear_rows, extras.templates)
+    stacks = build_stacks(
+        rows,
+        gear_rows,
+        extras.templates,
+        extras.instance_soulbound,
+    )
     characters = characters_from_worn(worn_rows)
     members = build_members(
         names, family, stacks, free_slots, characters, extras.bank_free
@@ -403,11 +442,12 @@ def shadow(
     verdicts = _verdicts(extras, stacks, characters)
     quest = extras.open_quest_items
     ctx = itemplan.Context(
-        open_quest_items=_quest_items(rows) if quest is None else quest,
+        open_quest_items=quest,
         gear_verdict=verdicts or {},
         market=extras.market or {},
         guild_free=extras.guild_free or {},
         guild_crafters=extras.guild_crafters or (),
+        fire_gear=extras.fire_gear,
     )
     plan_ = itemplan.plan(stacks, members, ctx)
     rows_by_key = {s.key: r for s, r in zip(stacks, rows, strict=True)}
