@@ -2365,14 +2365,59 @@ def next_move(book: Book, member, avoid=None, held_off=frozenset()):
     """(the move to make or None, [blocker sentences]) for one member.
 
     The first move that is not blocked wins; every blocked one is named, so a
-    member that does nothing says why."""
+    member that does nothing says why. A later reward's CROSS does not pass
+    over an earlier reward held here (_held_here, NO BOAT BACK)."""
     blocked = []
+    held = None
     for move in moves(book, member, avoid, held_off):
         if move.kind == BLOCKED:
             blocked.append(blocked_sentence(member, move))
+            if held is None and _held_here(book, member, move):
+                held = move
+            continue
+        if move.kind == CROSS and held is not None:
+            blocked.append(_waits_sentence(member, move, held))
             continue
         return move, blocked
     return None, blocked
+
+
+# NO BOAT BACK (wow-overseer#2032, 2026-11-07). An Alliance warlock's Voidwalker
+# chain is in Elwynn and Stormwind and its Succubus chain (Heartswood) in
+# Ashenvale. Each reward group was judged on its own, so a member that crossed
+# to the Eastern Kingdoms for Surena Caledon and found its hunt held for a while
+# (the one spawn refused or tried) took the next reward's first move, a boat back
+# to Kalimdor, and on Kalimdor the Voidwalker hold had lapsed, so it sailed
+# again: Nubb, Sogg and Lugg crossed three to four times a day and 21 of 26
+# warlocks without Summon Voidwalker held its quest unfinished. A quest of an
+# earlier reward that is in the member's log, held for a reason of its own
+# (HOLDING), with its work on the member's own map, keeps the member on that
+# continent: the hold is waited out where it stands, as _live does within one
+# reward. Moves on the same continent still go.
+
+
+def _held_here(book: Book, member, move: Move) -> bool:
+    """True when a BLOCKED move is a HOLDING one, its quest is in the member's
+    log, and its work (the objective, or a use's targets) lies on the member's
+    map."""
+    if move.blocker not in HOLDING or not _status(member, move.quest):
+        return False
+    quest = book.quests.get(int(move.quest))
+    if quest is None or member.map_id is None:
+        return False
+    here = int(member.map_id)
+    spots = list(quest.fields) + [s for u in quest.uses for s in u.spots]
+    return any(int(s.map_id) == here for s in spots)
+
+
+def _waits_sentence(member, move: Move, held: Move) -> str:
+    return "%s does not cross to %s for %s: %s waits here first (%s)" % (
+        member.name,
+        CONTINENTS.get(int(move.to_map), "map %d" % int(move.to_map)),
+        move.title or move.why,
+        held.title or held.why,
+        held.blocker,
+    )
 
 
 # --- the hunt's clock and the asks ----------------------------------------------
