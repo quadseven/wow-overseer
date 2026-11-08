@@ -380,10 +380,17 @@ def vendor_holders_to_queue(
 ) -> tuple:
     """Which candidate holders may receive sell rows this pass.
 
-    The leader's arrival owns the family's vendor trip. Once the leader is at
-    the counter, queueing the already-judged rows for followers is safe: the
-    world executor will retry a follower until that character catches up. If
-    the leader is not there yet, retain the old per-holder range gate.
+    The leader's arrival owns the family's vendor trip, but a sale is judged on
+    the SELLER's own range, so the leader standing at the counter does not make
+    a follower's rows work. The world refuses a sale from a seller out of reach
+    at once and does not hold the row until the seller catches up
+    (mod-overseer#230 stopped that). Measured on wow-dev 2026-11-08: the
+    leader of one family sold at a counter in a city while four followers
+    1,600 to 4,300 yards away were written the same pass and all four answered
+    `vendor not in range`, again every few minutes (wow-overseer#1962: 133
+    refused sell rows in the day before the ship, 509 after). So the leader
+    stands as its own holder and every other holder queues only when it is at
+    a counter itself.
 
     A LEADER NOT AT A COUNTER GETS ROWS ONLY WHILE IT WALKS TO ONE (#297).
     `leader_walking` is whether the leader carries this pass's vendor aim. The
@@ -400,12 +407,11 @@ def vendor_holders_to_queue(
             if getattr(candidate, "holder", "")
         }
     )
-    if leader_at_counter:
-        return tuple(holders)
     return tuple(
         name
         for name in holders
-        if (name == leader and leader_walking) or holder_at_counter(name)
+        if (name == leader and (leader_at_counter or leader_walking))
+        or holder_at_counter(name)
     )
 
 
