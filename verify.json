@@ -1,0 +1,32 @@
+{
+  "kind": "docs",
+  "revision": "06671b6276de7e465b873bad7d92ca08476dee0c",
+  "observed": {
+    "start": "2026-11-08T10:45:13Z",
+    "end": "2026-11-08T10:47:22Z"
+  },
+  "sources": [
+    "quadseven/wow-overseer pull request #1562, merged at 2026-10-27T19:09:51Z, merge commit 06671b6276de7e465b873bad7d92ca08476dee0c, contained in the head of main, changed Dockerfile, bridge.py, strategybook.py and tests/test_strategybook.py (station GitHub data)",
+    "strategybook.py in the worktree: module docstring, memo store kinds strategy_book and strategy_start, Reapplier class",
+    "bridge.py in the worktree: _record_strategy at line 464, _strategy_start_seen at line 1640, _reapply_strategies at line 1652, pass _reapply_strategies_loop registered at line 7654 and defined at line 9228",
+    "tests/test_strategybook.py in the worktree: 22 tests across Parse, Book, Reapply, OwedSurvivesABridgeRestart, NameCase and TheBridgeWiresIt",
+    "local run of python3 -m unittest tests.test_strategybook at 2026-11-08T10:47:21Z: Ran 22 tests in 0.768s, OK, exit 0"
+  ],
+  "criteria": [
+    {
+      "criterion": "The bridge records the desired runtime strategy set for each member it changes, in its own store rather than only in the worldserver.",
+      "result": "pass",
+      "evidence": "strategybook.py keeps the book in the bridge's own memo store (overseer_bridge_memo rows of kind strategy_book, one row per member, engine and strategy, last word winning); bridge.py:464 _record_strategy upserts those rows after the command row is written, for operator orders only (strategybook.is_operator, source discord:). test_only_operator_orders_are_recorded, test_only_operator_orders_reach_the_book and test_an_order_is_recorded_after_its_row_is_written all passed in the local run at 2026-11-08T10:47:21Z."
+    },
+    {
+      "criterion": "After a worldserver restart (a new worldserver start seen by the bridge), the bridge reapplies the recorded strategies to each member once that member is back in world.",
+      "result": "pass",
+      "evidence": "bridge.py:1652 _reapply_strategies, run as the registered pass _reapply_strategies_loop (bridge.py:7654, bridge.py:9228), reads the worldserver start (acore_auth.uptime) and the book from the memo store, offers each page only while its member is back in world (_bot_held_names), resends the recorded strategies via _insert_command with source overseer:reapply, marks a member paid only once its rows are written, and saves the new start only once nobody is owed. test_a_recorded_strategy_is_sent_again_after_a_restart, test_it_waits_until_the_member_is_back_in_world, test_it_is_not_sent_twice_for_one_restart, test_a_first_look_only_seeds and test_an_unreadable_start_changes_nothing all passed in the local run at 2026-11-08T10:47:21Z. The station's GitHub data records unittest / check on the merge commit as cancelled, so this stands on the code in main and the local run, not on a green CI run of the merge commit."
+    },
+    {
+      "criterion": "A test covers the reapply path: a recorded strategy is sent again after a simulated restart, and is not sent twice when no restart happened.",
+      "result": "pass",
+      "evidence": "Pull request #1562 added tests/test_strategybook.py, which carries test_a_recorded_strategy_is_sent_again_after_a_restart (start 1000 to 2000 resends ('Ana', 'nc +grind') and ('Bo', 'co -flee')) and test_nothing_is_sent_when_no_restart_happened (start still 1000 sends nothing and saves nothing). Both are in main at merge commit 06671b6276de7e465b873bad7d92ca08476dee0c and both passed in the local run at 2026-11-08T10:47:21Z (Ran 22 tests, OK)."
+    }
+  ]
+}
