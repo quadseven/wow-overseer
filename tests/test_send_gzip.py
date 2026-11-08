@@ -78,6 +78,20 @@ class GzipOnTheWire(unittest.TestCase):
         got = send(BIG, headers={"Accept-Encoding": "gzip;q=0"})
         self.assertNotIn("Content-Encoding", got.sent_headers)
 
+    def test_gzip_refused_after_another_coding(self):
+        got = send(BIG, headers={"Accept-Encoding": "deflate, gzip;q=0"})
+        self.assertNotIn("Content-Encoding", got.sent_headers)
+
+    def test_a_wildcard_alone_is_not_taken_as_gzip(self):
+        # Not honoured on purpose: the plain body is always a valid answer.
+        got = send(BIG, headers={"Accept-Encoding": "*"})
+        self.assertNotIn("Content-Encoding", got.sent_headers)
+        self.assertEqual(got.wfile.getvalue(), BIG)
+
+    def test_the_coding_name_is_case_blind(self):
+        got = send(BIG, headers={"Accept-Encoding": "GZIP"})
+        self.assertEqual(got.sent_headers.get("Content-Encoding"), "gzip")
+
     def test_a_malformed_weight_is_not_a_server_error(self):
         got = send(BIG, headers={"Accept-Encoding": "gzip;q=abc"})
         self.assertEqual(got.status, 200)
