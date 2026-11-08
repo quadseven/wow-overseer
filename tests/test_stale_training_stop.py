@@ -21,7 +21,6 @@ Pinned here:
     pending learn, and every other aim through the economy fence.
 """
 
-import ast
 import pathlib
 import unittest
 
@@ -53,8 +52,17 @@ def release(slot, column, now):
 class TheStopPredicate(unittest.TestCase):
     def test_only_a_numeric_trainer_entry(self):
         self.assertTrue(townslot.is_training_stop_aim(STOP))
-        for aim in ("", "vendor", "1228", learnaim.TRAINER_ROLE, "trainer:",
-                    "trainer:0", "trainer:12a", GROUND, None):
+        for aim in (
+            "",
+            "vendor",
+            "1228",
+            learnaim.TRAINER_ROLE,
+            "trainer:",
+            "trainer:0",
+            "trainer:12a",
+            GROUND,
+            None,
+        ):
             self.assertFalse(townslot.is_training_stop_aim(aim), aim)
 
     def test_the_bound_is_past_the_longest_stop_the_module_walks(self):

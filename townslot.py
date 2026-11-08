@@ -509,7 +509,7 @@ def is_training_stop_aim(aim) -> bool:
     text = str(aim or "")
     if not text.startswith(TRAINING_STOP_PREFIX):
         return False
-    entry = text[len(TRAINING_STOP_PREFIX):]
+    entry = text[len(TRAINING_STOP_PREFIX) :]
     return entry.isascii() and entry.isdecimal() and int(entry) > 0
 
 

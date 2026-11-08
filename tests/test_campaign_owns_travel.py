@@ -313,9 +313,7 @@ class WhatTheBridgeHandsBack(unittest.TestCase):
                 now=5000.0 + townslot.ORPHAN_LEASE_SECONDS - 1.0, **ask
             )
         )
-        again = slot.campaign_release(
-            now=5000.0 + townslot.ORPHAN_LEASE_SECONDS, **ask
-        )
+        again = slot.campaign_release(now=5000.0 + townslot.ORPHAN_LEASE_SECONDS, **ask)
         self.assertEqual(MAILBOX, again.aim)
 
     def test_never_an_aim_the_economy_cannot_release(self):
