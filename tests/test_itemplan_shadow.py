@@ -122,11 +122,10 @@ class AdapterTest(unittest.TestCase):
     def test_disenchant_route_execution_logic(self):
         """Proof: A DISENCHANT row writes a command to the queue when enabled.
 
-        Fixture citation:
-        Stored rows from overseer_command:
-          SELECT id, target_name, command, kind, target_arg, source, status, created_at
-          FROM overseer_command WHERE kind = 'disenchant' AND source = 'economy'
-          AND status = 'delivered';
+        Fixture provenance: carried and gear input rows follow the readers
+        `_fetch_vendor_items` and `_fetch_surplus_gear`; template fields follow
+        `itemplan_data.ITEM_TEMPLATE_SQL`. The resulting command row is written
+        by `_insert_disenchant` to `overseer_command`.
         """
         import asyncio
         from unittest.mock import patch

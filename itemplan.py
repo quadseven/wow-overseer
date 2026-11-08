@@ -233,62 +233,6 @@ RECIPE_TRADE = {
 }
 
 
-# Disenchant skill by item level and quality, matching the core's table
-# (ItemDisenchantLoot.dbc / acore_world.item_template).
-_DISENCHANT_UNCOMMON = (
-    (20, 1),
-    (25, 25),
-    (30, 50),
-    (35, 75),
-    (40, 100),
-    (45, 125),
-    (50, 150),
-    (55, 175),
-    (60, 200),
-    (65, 225),
-    (70, 275),
-    (75, 325),
-    (80, 350),
-)
-
-_DISENCHANT_RARE = (
-    (25, 25),
-    (30, 50),
-    (35, 75),
-    (40, 100),
-    (45, 125),
-    (50, 150),
-    (55, 175),
-    (60, 200),
-    (65, 225),
-    (70, 275),
-    (75, 325),
-    (80, 350),
-)
-
-_DISENCHANT_EPIC = (
-    (50, 225),
-    (55, 250),
-    (60, 275),
-    (70, 300),
-    (80, 375),
-)
-
-
-def disenchant_skill(item_level: int, quality: int = 2) -> int:
-    """The skill required to disenchant an item, matching the core's table."""
-    table = _DISENCHANT_UNCOMMON
-    if quality == 3:
-        table = _DISENCHANT_RARE
-    elif quality == 4:
-        table = _DISENCHANT_EPIC
-    ilvl = int(item_level)
-    for max_ilvl, skill in table:
-        if ilvl <= max_ilvl:
-            return skill
-    return table[-1][1]
-
-
 # Armor each class wears, by item level of the member (classic proficiencies).
 CLOTH, LEATHER, MAIL, PLATE, SHIELD = 1, 2, 3, 4, 6
 WARRIOR, PALADIN, HUNTER, ROGUE, PRIEST, SHAMAN, MAGE, WARLOCK, DRUID = (
@@ -1198,12 +1142,9 @@ def _gear_surplus(w: _World, s: Stack, me: Member, why: str) -> list:
 def _disenchant_option(w: _World, s: Stack, me: Member):
     if s.quality < 2 or s.quality > 4 or not s.gear:
         return None
-    if s.disenchant_skill is not None:
-        if s.disenchant_skill < 0:
-            return None
-        need = s.disenchant_skill
-    else:
-        need = disenchant_skill(s.item_level, s.quality)
+    if s.disenchant_skill is None or s.disenchant_skill < 0:
+        return None
+    need = s.disenchant_skill
     if me.skill("enchanting") >= need and s.value < DE_VENDOR_CEILING:
         return _opt(
             DISENCHANT,

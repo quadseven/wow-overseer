@@ -25,7 +25,6 @@ from itemplan import (  # noqa: E402
     Context,
     Member,
     Stack,
-    disenchant_skill,
 )
 
 TAILORING, FIRST_AID, LEATHERWORKING = 197, 129, 165
@@ -546,28 +545,6 @@ class Shapes(unittest.TestCase):
 
 
 class DisenchantTests(unittest.TestCase):
-    def test_disenchant_skill_table_matches_core_brackets(self):
-        # Uncommon quality brackets
-        self.assertEqual(disenchant_skill(1, quality=2), 1)
-        self.assertEqual(disenchant_skill(20, quality=2), 1)
-        self.assertEqual(disenchant_skill(21, quality=2), 25)
-        self.assertEqual(disenchant_skill(25, quality=2), 25)
-        self.assertEqual(disenchant_skill(26, quality=2), 50)
-        self.assertEqual(disenchant_skill(35, quality=2), 75)
-        self.assertEqual(disenchant_skill(60, quality=2), 200)
-        self.assertEqual(disenchant_skill(70, quality=2), 275)
-        self.assertEqual(disenchant_skill(80, quality=2), 350)
-
-        # Rare quality brackets
-        self.assertEqual(disenchant_skill(20, quality=3), 25)
-        self.assertEqual(disenchant_skill(35, quality=3), 75)
-        self.assertEqual(disenchant_skill(70, quality=3), 275)
-
-        # Epic quality brackets
-        self.assertEqual(disenchant_skill(40, quality=4), 225)
-        self.assertEqual(disenchant_skill(60, quality=4), 275)
-        self.assertEqual(disenchant_skill(80, quality=4), 375)
-
     def test_disenchant_option_honors_explicit_template_skill(self):
         # Skill -1 means not disenchantable in core
         not_de = stack(
@@ -597,7 +574,7 @@ class DisenchantTests(unittest.TestCase):
         self.assertIsNotNone(opt)
         self.assertEqual(opt.route, DISENCHANT)
 
-    def test_disenchant_option_falls_back_to_core_table_when_none(self):
+    def test_disenchant_option_requires_core_table_skill(self):
         green_ilvl20 = stack(
             item_class=4,
             quality=2,
@@ -606,9 +583,7 @@ class DisenchantTests(unittest.TestCase):
         )
         novice = member(skills=((333, 1, 75),))
         w = itemplan._World([green_ilvl20], [novice], Context())
-        opt = itemplan._disenchant_option(w, green_ilvl20, novice)
-        self.assertIsNotNone(opt)
-        self.assertEqual(opt.route, DISENCHANT)
+        self.assertIsNone(itemplan._disenchant_option(w, green_ilvl20, novice))
 
         green_ilvl25 = stack(
             item_class=4,
