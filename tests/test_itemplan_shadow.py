@@ -80,6 +80,21 @@ class Capture:
 
 
 class AdapterTest(unittest.TestCase):
+    def test_give_route_has_an_independent_switch(self):
+        self.assertFalse(shadow.give_enabled({}))
+        self.assertFalse(shadow.give_enabled({"ITEMPLAN_GIVE": "off"}))
+        self.assertTrue(shadow.give_enabled({"ITEMPLAN_GIVE": "on"}))
+
+    def test_give_executor_uses_the_plan_and_existing_gift_writer(self):
+        start = BRIDGE.index("    async def _itemplan_give(")
+        end = BRIDGE.index("    async def _clearance_plan(", start)
+        executor = BRIDGE[start:end]
+        self.assertIn("itemplan_shadow.give_enabled()", executor)
+        self.assertIn("decision.route != itemplan.GIVE", executor)
+        self.assertIn("not stack.tradable", executor)
+        self.assertIn("await self._write_guild_gifts(gifts)", executor)
+        self.assertIn("_run_itemplan_give(", BRIDGE)
+
     def test_rows_become_stacks_and_members(self):
         rows, gear, worn, free = fixture()
         stacks = shadow.build_stacks(rows, gear)
