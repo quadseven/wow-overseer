@@ -223,6 +223,78 @@ class ARefusal(FollowerTest):
         self.assertEqual(len(inserts), 1)
 
 
+class AQuesterSale(FollowerTest):
+    """A grouped quester with full bags takes its sale walk (#1962, #1813).
+
+    The quester sale (questers.sell_step) is built only for a quester at
+    SELL_FLOOR free slots or fewer; the module lets that walk through its
+    follower wall when it reads the same (mod-overseer#1395)."""
+
+    SALE_SOURCE = bridge.guildjobs.source_for(bridge.questers.SELL_WALK_ACTION, "Blingz")
+
+    def sale_row(self, command="walk-to-vendor any max:600", source=None):
+        return bridge.guildcorps.Row("buy", command, "", source or self.SALE_SOURCE)
+
+    def test_a_follower_s_quester_sale_walk_is_written(self):
+        with self.assertLogs(bridge.log, "INFO") as said:
+            row_id, inserts = self.write(
+                bridge._insert_corps_row, "Blingz", self.sale_row(), group=FOLLOWER
+            )
+        self.assertEqual(row_id, 41)
+        self.assertEqual([a[1] for a in inserts], ["walk-to-vendor any max:600"])
+        self.assertIn(
+            "questers: Blingz is grouped as a follower and sells with full bags",
+            "\n".join(said.output),
+        )
+
+    def test_every_other_follower_walk_is_still_held(self):
+        for row in (
+            # an item vendor walk from the quester sale's own source
+            self.sale_row(command="walk-to-vendor item:2901"),
+            # the same sale walk from any other pass
+            self.sale_row(source="guildcorps"),
+            self.sale_row(source=bridge.guildjobs.source_for(
+                bridge.questers.WALK_ACTION, "Blingz")),
+            # the quester sale's other walks
+            self.sale_row(command="walk-to-mailbox max:600"),
+            self.sale_row(command="walk-to-spawn creature:10076 near:3"),
+        ):
+            with self.subTest(row=row):
+                row_id, inserts = self.write(
+                    bridge._insert_corps_row, "Blingz", row, group=FOLLOWER
+                )
+                self.assertEqual((row_id, inserts), (0, []))
+
+    def test_a_follower_refusal_of_the_sale_walk_holds_it_again(self):
+        """The module read 2 or more free slots and refused it as a follower:
+        the sale walk is held for REFUSAL_HOLD_SECONDS, even though fresh
+        snapshot rows keep saying the quester follows."""
+        answer = {
+            "target_name": "Blingz",
+            "status": "error",
+            "detail": "character is grouped as a follower",
+            "result": "",
+        }
+        clock = [100.0]
+        with mock.patch.object(bridge.time, "monotonic", lambda: clock[0]):
+            with mock.patch.object(bridge, "_connect", lambda: _Conn([], None, answer)):
+                bridge._command_answer(41)
+            clock[0] = 400.0
+            fresh = dict(FOLLOWER, age=0)
+            with self.assertLogs(bridge.log, "INFO") as said:
+                row_id, inserts = self.write(
+                    bridge._insert_corps_row, "Blingz", self.sale_row(), group=fresh
+                )
+            self.assertEqual((row_id, inserts), (0, []))
+            self.assertIn("held until it is ungrouped", "\n".join(said.output))
+            clock[0] = 100.0 + bridge.followhold.REFUSAL_HOLD_SECONDS
+            row_id, inserts = self.write(
+                bridge._insert_corps_row, "Blingz", self.sale_row(), group=fresh
+            )
+        self.assertEqual(row_id, 41)
+        self.assertEqual(len(inserts), 1)
+
+
 class EveryWalkWriter(unittest.TestCase):
     """Every writer a guild walk row goes through asks before it inserts."""
 
