@@ -541,9 +541,7 @@ def _hand_on(wanted, givers, what: str, apart=None) -> tuple[list[Errand], set]:
             continue
         near_first = givers
         if apart is not None:
-            near_first = sorted(
-                givers, key=lambda g: bool(apart(g.name, member.name))
-            )
+            near_first = sorted(givers, key=lambda g: bool(apart(g.name, member.name)))
         for giver in near_first:
             if giver.name == member.name or not offers[giver.name]:
                 continue

@@ -630,27 +630,44 @@ class TheGiverBesideTheTakerIsAskedFirst(unittest.TestCase):
 
     def _water(self, guid, count):
         return towntrip.Stack(
-            guid=guid, entry=8079, name="Conjured Crystal Water",
-            count=count, what="drink", conjured=True,
+            guid=guid,
+            entry=8079,
+            name="Conjured Crystal Water",
+            count=count,
+            what="drink",
+            conjured=True,
         )
 
     def _party(self):
         og = Member(
-            "Og", "mage", 50, 10**6, 9, (), food_carried=20, drink_carried=40,
+            "Og",
+            "mage",
+            50,
+            10**6,
+            9,
+            (),
+            food_carried=20,
+            drink_carried=40,
             spells=frozenset({990, 5506}),
             stacks=(self._water(31, 20), self._water(32, 20)),
         )
         ugga = Member(
-            "Ugga", "priest", 50, 10**6, 8, (), food_carried=20,
-            drink_carried=34, stacks=(self._water(41, 20), self._water(42, 14)),
+            "Ugga",
+            "priest",
+            50,
+            10**6,
+            8,
+            (),
+            food_carried=20,
+            drink_carried=34,
+            stacks=(self._water(41, 20), self._water(42, 14)),
         )
         grog = Member("Grog", "paladin", 50, 10**6, 8, (), food_carried=20)
         return og, ugga, grog
 
     def _gives(self, apart):
         got = towntrip.plan(self._party(), RATCHET, apart=apart)
-        return [(e.member, e.taker, e.command) for e in got.errands
-                if e.kind == "give"]
+        return [(e.member, e.taker, e.command) for e in got.errands if e.kind == "give"]
 
     def test_the_priest_beside_the_healer_is_asked_when_the_mage_is_far(self):
         far = {("Og", "Grog")}
@@ -660,14 +677,10 @@ class TheGiverBesideTheTakerIsAskedFirst(unittest.TestCase):
         )
 
     def test_the_conjurer_is_still_first_when_both_are_near(self):
-        self.assertEqual(
-            self._gives(lambda g, t: False), [("Og", "Grog", "guid:31")]
-        )
+        self.assertEqual(self._gives(lambda g, t: False), [("Og", "Grog", "guid:31")])
 
     def test_with_everyone_far_the_conjurer_is_named_as_before(self):
-        self.assertEqual(
-            self._gives(lambda g, t: True), [("Og", "Grog", "guid:31")]
-        )
+        self.assertEqual(self._gives(lambda g, t: True), [("Og", "Grog", "guid:31")])
 
     def test_without_positions_the_order_is_unchanged(self):
         self.assertEqual(self._gives(None), [("Og", "Grog", "guid:31")])

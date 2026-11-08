@@ -76,7 +76,8 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         code = _code("    async def _towntrip_once(self")
         self.assertRegex(code, r"apart=lambda giver, taker: handover\.verdict\(")
         self.assertLess(
-            code.index("_fetch_positions"), code.index("towntrip.plan("),
+            code.index("_fetch_positions"),
+            code.index("towntrip.plan("),
             "positions are read before the plan is made",
         )
 
