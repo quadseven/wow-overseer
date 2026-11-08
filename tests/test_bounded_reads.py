@@ -46,7 +46,8 @@ with stub_modules(pymysql=PYMYSQL):
     import realmread
     import recap
     import vision
-    from apiv2 import chronicle, guild
+    from apiv2 import chronicle, guild, members
+    import guildsocial
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 TABLES = ("overseer_death", "overseer_guild_ask")
@@ -201,6 +202,37 @@ class EveryReadIsBounded(unittest.TestCase):
             ("overseer_guild_ask", "FROM overseer_guild_ask WHERE kind = 'quest'"),
         ):
             self.assertFalse(bounded(table, clause), clause)
+
+
+class TheStuckAskReadNamesItsKey(unittest.TestCase):
+    """The /api/v2/stuck ask read is bounded in text and was not in practice.
+
+    It reads quest asks for every guild member (162 names on the dev realm)
+    in the last ASK_DAYS days. With an asker list that long MySQL dropped
+    both keys and read the whole table: EXPLAIN on 2026-11-08 gave type ALL
+    over 40,463 rows with a filesort, for the same 57 rows, and the table is
+    never pruned, so the scan grew every day (#795). With the asker key named
+    it is a range on idx_asker (asker, created_at), which also serves the
+    read's ORDER BY, so the filesort goes too.
+    """
+
+    def _sql(self):
+        return " ".join(members.ASKS_SQL.split())
+
+    def test_the_stuck_read_names_the_asker_key(self):
+        self.assertIn(
+            "FROM overseer_guild_ask FORCE INDEX (idx_asker) WHERE", self._sql()
+        )
+
+    def test_the_key_it_names_is_one_the_table_defines(self):
+        ddl = " ".join(guildsocial.ASK_TABLE_SQL.split())
+        self.assertIn("KEY idx_asker (asker, created_at)", ddl)
+
+    def test_the_key_leads_the_columns_the_read_filters_and_orders_by(self):
+        sql = self._sql()
+        self.assertIn("asker IN ({holes})", sql)
+        self.assertIn("created_at > NOW() - INTERVAL %s DAY", sql)
+        self.assertTrue(sql.endswith("ORDER BY asker, created_at, id"), sql)
 
 
 # ---- the reads ----------------------------------------------------------------

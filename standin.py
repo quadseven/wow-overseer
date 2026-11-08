@@ -12,6 +12,13 @@ by commas: `FAMILY_STANDIN=Grug:Og` sits Og out of Grug's family's campaign.
 Unset or empty, nothing sits out and no row is written. A pair naming the head
 itself is ignored: the head leads the campaign and never sits out.
 
+A STRANDED MEMBER (#2018) sits out too, with no order: one frozen in a fight
+far from its family head for STRANDED_SECONDS while the family has a door
+queued and no craft order. Its row's reason starts with STRANDED_MARK, its
+guest takes the seat the rest of the family leaves open (`open_seat`), it
+goes to job='quest', and it rejoins between runs once it is out of that
+fight. See the "stranded" section at the end of this file.
+
 WHAT THIS DECIDES, one family at a time (`step`):
 
   who sits out   the ordered member, only while its crafting goal is live:
@@ -430,6 +437,14 @@ class Facts:
     # it is read against (Unix seconds). With no clock turns are not judged.
     turn: Turn | None = None
     now: float | None = None
+    # STRANDED (#2018): why `ordered` is stranded now (stranded_why), or ""
+    # when it is not, and whether this pass judges a stranded member at all
+    # (the bridge sets it for a family with no craft order). With it set,
+    # `ordered` is the stranded member and the craft rules do not apply.
+    stranded: str = ""
+    stranded_pass: bool = False
+    # The seats the rest of the family plays (seat_of each), for open_seat.
+    seats_held: frozenset = frozenset()
 
 
 def _minutes(seconds: float) -> str:
@@ -487,7 +502,7 @@ def next_turn(facts: Facts, step: "Step") -> Turn | None:
     (its record from an earlier turn) begins a full family turn. A standing
     row with no turn recorded (one written before turns) starts its turn now.
     """
-    if facts.now is None:
+    if facts.now is None or facts.stranded_pass:
         return None
     turn = _turn(facts)
     current = facts.current
@@ -571,6 +586,8 @@ def released(facts: Facts) -> str:
 
 def step(facts: Facts) -> Step:
     """What to do with this family's stand-in row this pass."""
+    if facts.stranded_pass:
+        return _stranded_step(facts)
     current = facts.current
     held = _held_in(facts)
     # A crafting turn that is over ends the row like a release, between runs
@@ -678,7 +695,7 @@ def short_handed_reason(facts: Facts) -> str:
 def _no_guest(facts: Facts, seat: str) -> Step:
     """No guildmate can take the seat: the member still sits out, and the
     family runs without it (operator decision, 2026-10-05)."""
-    reason = short_handed_reason(facts)
+    reason = _marked(facts, short_handed_reason(facts))
     why = "no free %s member can take the %s seat at %s, so %s sits out: %s" % (
         facts.guild or "guild",
         seat,
@@ -691,13 +708,22 @@ def _no_guest(facts: Facts, seat: str) -> Step:
 
 def _seat_guest(facts: Facts, seat: str, guest: guildrun.Member) -> Step:
     """Seat `guest` in the ordered member's place."""
-    reason = "%s crafts (%s); %s takes the %s seat at %s" % (
-        facts.ordered,
-        goal(facts.skills),
-        guest.name,
-        seat,
-        facts.door.keyword,
-    )
+    if facts.stranded_pass:
+        reason = "%s%s; %s takes the %s seat at %s" % (
+            STRANDED_MARK,
+            facts.stranded,
+            guest.name,
+            seat,
+            facts.door.keyword,
+        )
+    else:
+        reason = "%s crafts (%s); %s takes the %s seat at %s" % (
+            facts.ordered,
+            goal(facts.skills),
+            guest.name,
+            seat,
+            facts.door.keyword,
+        )
     return Step(
         SEAT, reason, Seat(facts.family, facts.ordered, guest.name, seat, reason)
     )
@@ -730,6 +756,8 @@ def _guest_lost(facts: Facts, current: Seat, why: str) -> Step:
         if facts.door is not None
         else "%s sits out with no guest" % current.out_name
     )
+    if is_stranded(current):
+        reason = STRANDED_MARK + reason
     return Step(
         SEAT,
         "%s, so %s sits out with no guest until another guildmate can take the "
@@ -777,3 +805,192 @@ def _keep_or_clear(facts: Facts, current: Seat, seat: str) -> Step:
                 facts, current, "%s no longer fits: %s" % (current.in_name, why)
             )
     return Step(KEEP, "%s keeps the %s seat" % (current.in_name, current.seat))
+
+
+# ------------------------------------------------------------- stranded --
+#
+# A MEMBER FROZEN IN A FIGHT FAR FROM ITS FAMILY (#2018). On wow-dev,
+# 2026-11-07, Zork stood in Tanaris about 10,600 yards from Zug, at full
+# health and "in combat" with two Rabid Blisterpaws, unmoved for hours. The
+# family's way into Blackrock Depths from Kalimdor is the dungeon finder, and
+# the module's finder poll counts any member in combat as not ready, so the
+# finder waited on Zork forever; before that the reset failed on him 12 times
+# in a row, and the town-first gate held the order on his bags although he
+# could reach no vendor. A member like that sits out the way a crafter does:
+# a guildmate takes the seat, so the other four go, and he rejoins between
+# runs once he is out of the fight.
+#
+# STRANDED means all of: in combat, far from the head (on another map or
+# more than STRANDED_FAR_YARDS away), and within STRANDED_STILL_YARDS of
+# where it stood when that began, for at least STRANDED_SECONDS. A member
+# walking back to its family moves, so it is never stranded; a member in a
+# fight beside its family is not far. Only a family with a door queued and no
+# craft order is judged (the bridge decides that), and only one member sits
+# out per family: the row is one per family.
+STRANDED_SECONDS = 30 * 60
+STRANDED_FAR_YARDS = 500.0
+STRANDED_STILL_YARDS = 30.0
+# The reason of every stranded row starts with this, so a later pass knows
+# the row is a stranded one and not a crafter's.
+STRANDED_MARK = "stranded: "
+
+
+@dataclass(frozen=True)
+class Spot:
+    """Where one character stands and whether it is in combat (the snapshot)."""
+
+    map_id: int
+    x: float
+    y: float
+    in_combat: bool = False
+
+
+@dataclass(frozen=True)
+class Anchor:
+    """Where a member stood when its far, unmoving fight began, and when."""
+
+    map_id: int
+    x: float
+    y: float
+    since: float
+
+
+def _yards(a, b) -> float:
+    return ((a.x - b.x) ** 2 + (a.y - b.y) ** 2) ** 0.5
+
+
+def far_from(spot: Spot, head: Spot) -> str:
+    """How far `spot` is from the head ("10602 yards from the head", "on
+    another map"), or "" when it is within STRANDED_FAR_YARDS."""
+    if spot.map_id != head.map_id:
+        return "on another map than the head"
+    yards = _yards(spot, head)
+    if yards <= STRANDED_FAR_YARDS:
+        return ""
+    return "%d yards from the head" % int(yards)
+
+
+def anchor_after(prev: Anchor | None, spot: Spot | None, head: Spot | None, now: float):
+    """The member's anchor after this reading, or None when it is not in a
+    far fight now (out of combat, near the head, or either unread).
+
+    An anchor is kept while the member stays within STRANDED_STILL_YARDS of
+    it on the same map; a member that moved further starts a new one."""
+    if spot is None or head is None or not spot.in_combat or not far_from(spot, head):
+        return None
+    if (
+        prev is not None
+        and prev.map_id == spot.map_id
+        and _yards(prev, spot) <= STRANDED_STILL_YARDS
+    ):
+        return prev
+    return Anchor(spot.map_id, spot.x, spot.y, now)
+
+
+def stranded_why(
+    name: str, anchor: Anchor | None, spot: Spot | None, head: Spot | None, now: float
+) -> str:
+    """Why `name` is stranded ("Zork has been in combat without moving for
+    34 minute(s), 10602 yards from the head"), or "" when it is not (yet)."""
+    if anchor is None or spot is None or head is None:
+        return ""
+    held = now - anchor.since
+    if held < STRANDED_SECONDS:
+        return ""
+    return "%s has been in combat without moving for %s, %s" % (
+        name,
+        _minutes(held),
+        far_from(spot, head),
+    )
+
+
+def open_seat(member: guildrun.Member, seats_held) -> str:
+    """The seat a stranded member's guest takes: the first seat the member
+    plays that the rest of the family does not (tank, healer), else damage
+    when it plays damage, else its own seat. A feral druid in a family that
+    has a tank and a healer opens a damage seat, so the finder's one tank and
+    one healer stay the family's own."""
+    held = set(seats_held or ())
+    for seat in (TANK, HEALER):
+        if member.plays(seat) and seat not in held:
+            return seat
+    if member.plays(DPS):
+        return DPS
+    return seat_of(member)
+
+
+def is_stranded(seat: Seat | None) -> bool:
+    """True for a row written for a stranded member."""
+    return seat is not None and seat.reason.startswith(STRANDED_MARK)
+
+
+def _marked(facts: Facts, reason: str) -> str:
+    """A stranded row's reason carries STRANDED_MARK; a crafter's does not."""
+    return STRANDED_MARK + reason if facts.stranded_pass else reason
+
+
+def _stranded_step(facts: Facts) -> Step:
+    """What to do with a family's row on a stranded pass (no craft order).
+
+    `ordered` is the stranded member, or the member of the stranded row
+    standing; `stranded` says why it is stranded now, "" once it is not."""
+    current = facts.current
+    name = facts.ordered or (current.out_name if current is not None else "")
+    return _stranded_gate(facts, current, name) or _stranded_seat(facts, current, name)
+
+
+def _end_or_none(facts: Facts, current: Seat | None, why: str) -> Step:
+    """No row: NONE. A row: CLEAR between runs, kept mid-run."""
+    if current is None:
+        return Step(NONE, why)
+    if facts.mid_run:
+        return waits_for_the_run(current, why)
+    return Step(CLEAR, why)
+
+
+def _stranded_gate(facts: Facts, current: Seat | None, name: str) -> Step | None:
+    """The answer when `name` cannot (or no longer) sit out stranded, else None."""
+    if current is not None and not is_stranded(current):
+        # A crafter's row with no order left: the craft path's own answer.
+        return Step(CLEAR, "the %s order is removed" % ENV)
+    if not name:
+        return Step(NONE, "nobody in %s's family is stranded" % facts.family)
+    if name in (facts.family, facts.leader) or name not in facts.roster:
+        why = "%s leads the family or is off its roster" % name
+        return Step(CLEAR, why) if current is not None else Step(NONE, why)
+    if current is not None and current.out_name != name:
+        return _end_or_none(
+            facts, current, "%s is stranded now, not %s" % (name, current.out_name)
+        )
+    if not facts.stranded:
+        return _end_or_none(
+            facts,
+            current,
+            "%s is not stranded (out of combat, moving, or near its family)" % name,
+        )
+    return None
+
+
+def _stranded_seat(facts: Facts, current: Seat | None, name: str) -> Step:
+    """Seat, keep or refill the stranded member's row."""
+    if facts.out_member is None:
+        if current is not None:
+            return Step(
+                KEEP,
+                "%s could not be read; %s keeps the seat" % (name, current.guest_word),
+            )
+        return Step(NONE, "%s could not be read, so no seat is known" % name)
+    seat = open_seat(facts.out_member, facts.seats_held)
+    if current is not None:
+        if not current.has_guest:
+            return _fill_or_keep(facts, current, seat)
+        return _keep_or_clear(facts, current, seat)
+    if facts.door is None:
+        return Step(
+            NONE,
+            "no dungeon is queued for %s's family, so nobody stands in" % facts.family,
+        )
+    found = _found(facts, seat, _free_for(facts))
+    if not found:
+        return _no_guest(facts, seat)
+    return _seat_guest(facts, seat, found[0])
