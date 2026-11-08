@@ -19,7 +19,17 @@ from typing import Optional
 
 import jobs
 
-_COLUMNS = ("dungeon_runs_done", "dungeon_runs_wanted")
+_RAISE = {
+    "dungeon_runs_done": (
+        "UPDATE overseer_roster SET dungeon_runs_done = %s "
+        "WHERE name = %s AND dungeon_runs_done < %s"
+    ),
+    "dungeon_runs_wanted": (
+        "UPDATE overseer_roster SET dungeon_runs_wanted = %s "
+        "WHERE name = %s AND dungeon_runs_wanted < %s"
+    ),
+}
+_COLUMNS = tuple(_RAISE)
 
 
 def _num(value) -> int:
@@ -50,7 +60,8 @@ def hand_over(cur, head: str, cohort: Optional[str]) -> int:
     if lead is None or not jobs.is_dungeon_job(lead.get("job")):
         return 0
     members = [
-        r for r in rows
+        r
+        for r in rows
         if _num(r.get("enabled")) and _same_job(r.get("job"), lead.get("job"))
     ]
     if lead not in members:
@@ -63,10 +74,6 @@ def hand_over(cur, head: str, cohort: Optional[str]) -> int:
                 continue
             # `<` in the statement as well: a count the module wrote since the
             # read above is never lowered or overwritten.
-            cur.execute(
-                "UPDATE overseer_roster SET %s = %%s WHERE name = %%s AND %s < %%s"
-                % (col, col),  # noqa: S608 - col is from the fixed tuple above
-                (best[col], row["name"], best[col]),
-            )
+            cur.execute(_RAISE[col], (best[col], row["name"], best[col]))
             raised += cur.rowcount or 0
     return raised

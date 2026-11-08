@@ -56,7 +56,9 @@ def _done(db, name):
 def _complete_run(db, leader):
     db.execute(
         "UPDATE overseer_roster SET dungeon_runs_done = dungeon_runs_done + 1 "
-        "WHERE name = ?", (leader,))
+        "WHERE name = ?",
+        (leader,),
+    )
 
 
 class HandOver(unittest.TestCase):
@@ -92,8 +94,11 @@ class HandOver(unittest.TestCase):
             real(sql, params)
             if sql.startswith("SELECT"):
                 # the module finishes a run after the read, before the write
-                db.execute("UPDATE overseer_roster SET dungeon_runs_done = 9 "
-                           "WHERE name = 'Bork'")
+                db.execute(
+                    "UPDATE overseer_roster SET dungeon_runs_done = 9 "
+                    "WHERE name = 'Bork'"
+                )
+
         cur.execute = interleave
         campaignhandoff.hand_over(cur, "Bork", "cave")
         self.assertEqual(9, _done(db, "Bork"))
@@ -108,8 +113,10 @@ class HandOver(unittest.TestCase):
     def test_other_job_and_disabled_rows_do_not_leak(self):
         db = _db()
         db.execute("UPDATE overseer_roster SET job='dungeon:other' WHERE name='Og'")
-        db.execute("UPDATE overseer_roster SET dungeon_runs_done=8, enabled=0 "
-                   "WHERE name='Ugga'")
+        db.execute(
+            "UPDATE overseer_roster SET dungeon_runs_done=8, enabled=0 "
+            "WHERE name='Ugga'"
+        )
         campaignhandoff.hand_over(_Cur(db), "Bork", "cave")
         self.assertEqual(3, _done(db, "Bork"))
         self.assertEqual(0, _done(db, "Og"))
@@ -125,8 +132,11 @@ class HandOver(unittest.TestCase):
 class BridgeWiring(unittest.TestCase):
     def test_mark_party_leader_hands_over(self):
         tree = ast.parse((ROOT / "bridge.py").read_text(encoding="utf-8"))
-        fn = next(n for n in ast.walk(tree)
-                  if isinstance(n, ast.FunctionDef) and n.name == "_mark_party_leader")
+        fn = next(
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "_mark_party_leader"
+        )
         calls = [ast.unparse(n.func) for n in ast.walk(fn) if isinstance(n, ast.Call)]
         self.assertIn("campaignhandoff.hand_over", calls)
 
