@@ -31746,9 +31746,11 @@ _JOB_ITEMS_SQL = (
     "it.AllowableClass AS allowable_class, "
     # Soulbound (vendorsale.py: a bound rare piece is the member's own).
     "(ii.flags & 1) AS bound, "
-    # Whether an open quest still needs a class-12 stack (bag_pressure.py,
-    # #144): the sale lets go of a priced one nothing asks for (#1592).
-    + bag_pressure.QUEST_NEEDED_SQL + " AS quest_needed "
+    # Whether an open quest still needs a class-12 stack or a consumable
+    # (bag_pressure.py, #144): the sale lets go of a priced one nothing asks
+    # for (#1592).
+    + "(it.class IN (0, 12) AND " + bag_pressure.STACK_QUEST_NEEDED_SQL
+    + ") AS quest_needed "
     "FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
     "WHERE ci.guid IN ({guids}) "
@@ -31758,7 +31760,10 @@ _JOB_ITEMS_SQL = (
     # goods, recipes and miscellaneous items with a price.
     "OR (it.class IN (2, 3, 4, 7, 9, 15) AND it.SellPrice > 0) "
     # A priced quest-class stack: the verdict keeps it while quest_needed.
-    "OR (it.class = 12 AND it.Quality <= 1 AND it.SellPrice > 0)) "
+    "OR (it.class = 12 AND it.Quality <= 1 AND it.SellPrice > 0) "
+    # A priced white scroll, generic or other-kind consumable (vendorsale.py).
+    "OR (it.class = 0 AND it.Quality <= 1 AND it.subclass IN (0, 4, 8) "
+    "AND it.SellPrice > 0)) "
     "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
     "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
     "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"
