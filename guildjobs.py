@@ -3713,6 +3713,7 @@ def plan(
         "train": {},
         "pvp": {},
         "level": {},
+        "cross": {},
         "classquest": {},
         "room": {},
         "supply": {},
@@ -3830,10 +3831,33 @@ def _release_slots(name, far, hunts) -> None:
             slots.release(name)
 
 
+# A LEVEL CROSSING IS NO LEVEL WALK (2026-11-08). The level step's
+# `cross-to-map` and `ride-to-stop` rows (level_cross_step) counted against
+# guildlevel.STEPS_PER_GUILD, the allowance kept for the realm's far walks. The
+# walks of a guild's higher members, planned first (_class_ordered), used it up
+# every pass, so Cave's Draenei at 27 to 32 stood on Azuremyst Isle and in the
+# Exodar for three weeks with their crossing planned and refused "waits: 2 guild
+# job steps per guild per pass": 128 level walks in a day, no crossing. The
+# module paces crossings itself (Overseer.Cross.AtOnce, asked again on its
+# retry flag) and the bridge holds each member on the shared crossing clock
+# (crossing_cooling), so a level crossing has an allowance of its own.
+CROSS_STEPS_PER_GUILD = 2
+
+
+def _level_crossing(step) -> bool:
+    """A level step whose row rides a boat or zeppelin (level_cross_step)."""
+    return (
+        step.action == guildlevel.ACTION
+        and bool(step.rows)
+        and classquest.is_cross_row(step.rows[0].command)
+    )
+
+
 def _allowance(step, counters, per_guild):
     """(the counter, the cap) a step is started against: STEPS_PER_GUILD for
     every job, GEAR_STEPS_PER_GUILD for gear and hearth steps,
-    TRAIN_STEPS_PER_GUILD for trainer walks, PVP_STEPS_PER_GUILD for PvP queues and honor buys, and
+    TRAIN_STEPS_PER_GUILD for trainer walks, PVP_STEPS_PER_GUILD for PvP queues and honor buys,
+    CROSS_STEPS_PER_GUILD for a level step's boat or zeppelin, and
     guildlevel.STEPS_PER_GUILD for walks out of an outgrown zone."""
     if step.action == ROOM_ACTION:
         return counters["room"], ROOM_STEPS_PER_GUILD
@@ -3847,6 +3871,8 @@ def _allowance(step, counters, per_guild):
         return counters["classquest"], CLASSQUEST_STEPS_PER_GUILD
     if step.action == pvpgear.ACTION:
         return counters["pvp"], PVP_STEPS_PER_GUILD
+    if _level_crossing(step):
+        return counters["cross"], CROSS_STEPS_PER_GUILD
     if step.action == guildlevel.ACTION:
         return counters["level"], guildlevel.STEPS_PER_GUILD
     if step.action in ("gear", "hearth", WEAPON_ACTION):
