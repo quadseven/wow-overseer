@@ -95,6 +95,22 @@ class AdapterTest(unittest.TestCase):
         self.assertIn("await self._write_guild_gifts(gifts)", executor)
         self.assertIn("_run_itemplan_give(", BRIDGE)
 
+    def test_auction_route_has_an_independent_executor_and_listing_writer(self):
+        start = BRIDGE.index("    async def _itemplan_auction(")
+        end = BRIDGE.index("    async def _clearance_plan(", start)
+        executor = BRIDGE[start:end]
+        self.assertIn("itemplan_shadow.auction_enabled()", executor)
+        self.assertIn("decision.route != itemplan.AUCTION", executor)
+        self.assertIn("auction.plan_sales", executor)
+        self.assertIn("_auction_holder_houses", executor)
+        self.assertIn("_insert_auction", executor)
+        self.assertIn("_run_itemplan_auction(", BRIDGE)
+
+    def test_auction_route_switch_is_independent(self):
+        self.assertFalse(shadow.auction_enabled({}))
+        self.assertFalse(shadow.auction_enabled({"ITEMPLAN_AUCTION": "off"}))
+        self.assertTrue(shadow.auction_enabled({"ITEMPLAN_AUCTION": "on"}))
+
     def test_rows_become_stacks_and_members(self):
         rows, gear, worn, free = fixture()
         stacks = shadow.build_stacks(rows, gear)
