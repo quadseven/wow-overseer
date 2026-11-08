@@ -59,6 +59,10 @@ THE RULE (`verdict`), the first line that applies:
   * other weapon or armor                    sell: not an upgrade
   * a trade good, gem or recipe while the    keep
     bank forecast is unread
+  * a white trade good none of the member's  sell (#1592)
+    trades uses, or an uncommon-or-lower
+    recipe for a trade the member lacks
+    (`Judge.trades`; unread, kept)
   * a trade good, gem or recipe the bank     keep
     forecast reserves (bankforecast.py)
   * a recipe the forecast did not judge      keep
@@ -109,6 +113,7 @@ MISC = 15
 # item_template.Quality
 POOR = 0
 COMMON = 1
+UNCOMMON = 2
 RARE = 3
 
 # The classes a member never sells, and why (the verdict's words).
@@ -124,6 +129,29 @@ KEPT_CLASSES = {
 # (kept); the rest (reagents, holiday items, other) are kept.
 MISC_JUNK = 0
 MISC_KEPT = {2: "a companion pet", 5: "a mount"}
+# The trade skills (character_skills.skill) that use a trade good by its
+# subclass: guildshare.FEEDS spelled in skill ids (tests pin the two together).
+TRADE_GOOD_USERS = {
+    4: frozenset({755}),  # jewelcrafting
+    5: frozenset({197, 129}),  # tailoring, first aid
+    6: frozenset({165}),  # leatherworking
+    7: frozenset({164, 202}),  # blacksmithing, engineering
+    8: frozenset({185}),  # cooking
+    9: frozenset({171}),  # alchemy
+    12: frozenset({333}),  # enchanting
+}
+# The trade skill a recipe teaches by its item subclass.
+RECIPE_TRADE = {
+    1: 165,  # leatherworking
+    2: 197,  # tailoring
+    3: 202,  # engineering
+    4: 164,  # blacksmithing
+    5: 185,  # cooking
+    6: 171,  # alchemy
+    7: 129,  # first aid
+    8: 333,  # enchanting
+    10: 755,  # jewelcrafting
+}
 # Consumable subclasses a member lets go when white and no open quest names
 # it: 0 generic (Bag of Marbles, Flash Bundle, prize tickets), 4 scrolls
 # (Scroll of Spirit), 8 other (Enriched Lasher Root, Explosive Rocket). No bot
@@ -158,13 +186,15 @@ class Judge:
     unread (no weapon or armor short of outgrown is then sold). `reserved` is
     the set of entries the guild's bank forecast keeps, None while the forecast
     is unread (no trade good, gem or recipe is then sold). `protected` are the
-    entries never sold at all.
+    entries never sold at all. `trades` is the set of trade skill ids the
+    member holds, None while they are unread (the trade-use rule is then off).
     """
 
     level: int
     worn: object = None
     reserved: frozenset | None = None
     protected: frozenset = frozenset()
+    trades: frozenset | None = None
 
 
 def _int(value, default=0) -> int:
@@ -196,9 +226,35 @@ def _gear_verdict(item, judge: Judge) -> tuple:
     return SELL, said
 
 
+def _unused_by_trades(item, judge: Judge) -> str:
+    """Why this stack is no use to the member's own trades, '' when it may be.
+
+    The forecast reserves a material for the guild as a whole, so every member
+    that looted a stack of it kept the stack; only a member holding a trade
+    that uses it can craft with it (#1592). Gems and rare goods are left to
+    the forecast."""
+    if judge.trades is None:
+        return ""
+    item_class = _int(item.item_class)
+    subclass = _int(item.subclass)
+    quality = _int(item.quality)
+    if item_class == TRADE_GOODS and quality <= COMMON:
+        users = TRADE_GOOD_USERS.get(subclass)
+        if users and not (judge.trades & users):
+            return "a material none of this member's trades uses"
+    if item_class == RECIPE and quality <= UNCOMMON:
+        trade = RECIPE_TRADE.get(subclass)
+        if trade is not None and trade not in judge.trades:
+            return "a recipe for a trade this member does not hold"
+    return ""
+
+
 def _forecast_verdict(item, judge: Judge) -> tuple:
     if judge.reserved is None:
         return KEEP, "the bank forecast is unread"
+    unused = _unused_by_trades(item, judge)
+    if unused:
+        return SELL, unused
     if _int(item.entry) in judge.reserved:
         return KEEP, "the guild's bank forecast keeps it"
     if _int(item.item_class) == RECIPE:

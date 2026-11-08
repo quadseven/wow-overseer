@@ -32355,6 +32355,7 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             z=_row_float(r, "pos_z"),
             zone_id=_row_int(r, "zone_id"),
             money=int(r.get("money") or 0), skills=skills.get(guid, {}),
+            skills_read=True,
             known=frozenset(known.get(guid, ())), carried=carried.get(guid, ()),
             eligible=name in eligible, quest_log=quest_log.get(guid, {}),
             quests_done=frozenset(quests_done.get(guid, ())),
