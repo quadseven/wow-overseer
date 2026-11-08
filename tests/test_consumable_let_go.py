@@ -91,6 +91,18 @@ class AScrollOrOddConsumableNothingNeedsSells(unittest.TestCase):
         )
 
 
+class AMemberWithRoomDoesNotWalkToSell(unittest.TestCase):
+    def test_no_sale_step_while_the_bags_have_room(self):
+        roomy = bonk(
+            name="Ekka",
+            level=35,
+            free_slots=12,
+            bag_slots=16,
+            carried=(SCROLL, OTHER, GENERIC),
+        )
+        self.assertIsNone(guildjobs._full_bags_first(roomy, None, (), 600.0))
+
+
 class WhatAMemberDrinksOrHealsWithStays(unittest.TestCase):
     def test_potions_elixirs_flasks_food_bandages_and_enhancers_are_kept(self):
         for item in (POTION, ELIXIR, FLASK, FOOD, BANDAGE, ENHANCER):
