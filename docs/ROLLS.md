@@ -42,9 +42,13 @@ The `kubectl` commands below take the deployment's own names from the shell, so 
        python3 .github/scripts/wow_bridge_ship.py --sha <merge sha>               # dry run
        python3 .github/scripts/wow_bridge_ship.py --sha <merge sha> --write --body-out body.md
 
-   It finds that merge's successful `build.yml` run on main, reads the one digest its log published, rewrites
-   the one stanza in `$MANIFESTS_DIR/kustomization.yaml`, writes the Chief-format PR body
-   (the carried commits and their Refs lines) to `body.md`, and prints the PR title. The stanza it writes:
+    It finds that merge's successful `build.yml` run on main, reads the one digest its log published, rewrites
+    the one stanza in `$MANIFESTS_DIR/kustomization.yaml`, writes the Chief-format PR body
+    (the carried commits and their Refs lines, plus their player stories) to `body.md`, and prints the PR title.
+
+    The body carries each PR's player story (from the `## Player story` section) or, if that section is missing,
+    the PR title. A player story is one sentence in game terms naming who or what was affected and the effect,
+    for example "Zork and Oz could not sell their loot, so Blackrock Depths waited on their bags." The stanza it writes:
 
        # Published from wow-overseer <what shipped, e.g. #857 and #858>, merge <10 chars>, build run <run id>.
        - name: ghcr.io/quadseven/wow-overseer

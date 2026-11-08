@@ -238,3 +238,24 @@ The section `How work moves here` above is synced. These lines are where this re
 
 - Leak scan: exceptions are in `allowed-repo-refs` in `check.leak-scan.yml`.
 - Trust gate: none here. Every job in this repo runs on a GitHub-hosted runner.
+
+## Appendix: PR format the Grug checks require
+
+Agent-authored PR bodies need the headings `## Why`, `## Summary` (or `## What`), `## Acceptance` with exactly
+three `- [ ]` boxes, a `Size:` line, `## Out of scope`, and the session link as the final line. Answer every
+bot review thread before the squash merge, and resolve it. `/grug recheck` re-runs the Chief check only.
+
+## Player story (optional)
+
+The `## Player story` section is optional. When present, it should be one sentence in game terms naming who or what was
+affected and the effect, for example:
+
+```
+## Player story
+Zork and Oz could not sell their loot, so Blackrock Depths waited on their bags.
+```
+
+The player story is collected by the deploy workflow's ship helper (`wow_bridge_ship.py`) and used as the ship PR
+note when the ship PR body lists each included PR with its player story or title. This helps the operator read the ship
+note straight from the ship PR without looking at individual PR titles.
+
