@@ -677,6 +677,10 @@ class Member:
     # The member's purchase order (purse.Order), None when unread: gear and
     # food then spend as they did before it existed.
     purse: object = None
+    # Somebody else leads the group it is in (the snapshot's group leader is
+    # not its own guid): it stands where its leader stands, so its standing
+    # still says nothing of it (stood_still_step).
+    follows: bool = False
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -7063,6 +7067,12 @@ def stood_still_step(m, still_for, recent, leveling=None):
     if int(m.level) >= guildlevel.LEVEL_CAP:
         return None
     if m.name in getattr(leveling, "roster", ()):
+        return None
+    # A grouped follower stands where its leader stands. Hearthing it home
+    # undid its level crossing: Eggrok followed a bot outside the guild on
+    # Kalimdor, stood 71 minutes, was hearthed back to the Azuremyst isle,
+    # crossed again, and did so five times in a day.
+    if getattr(m, "follows", False):
         return None
     if not _in_the_open(m):
         return None
