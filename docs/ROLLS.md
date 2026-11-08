@@ -190,6 +190,23 @@ API from inside the cluster (read-only). From a pod that has `python3` (for exam
   wait for the passes they depend on, so each restart idles the realm for a cycle or more (the gates open at
   the latest after 30 minutes of uptime).
 
+### A bridge change that needs a module change (Requires-module)
+
+A wow-overseer PR that only works once a mod-overseer or mod-dungeon-clear change runs on the realm declares
+that with one line in its PR body, at the start of the line:
+
+    Requires-module: quadseven/mod-overseer#1403
+    Requires-module: quadseven/mod-overseer@<commit sha>
+
+Use the module PR number (it must be merged) or a commit; give one line per module change. The fleet merge
+gate then refuses the PR, on its `module-dependency` row, until that commit equals or is an ancestor of the
+deployed worldserver pin in the deploy repository (the banner, `$MANIFESTS_DIR/overseer-pin.yaml`, which moves
+with the image in step 5 of section 1b, not the source pins of step 2). For mod-overseer it also reads the
+running build the site reports (`/api/v2/roll`, field `module_commit`, written by the worldserver at startup)
+when it can, so a pin merged but not yet rolled out still holds the PR. Saying "wait for the roll" in prose
+is not enough: on 2026-11-07 a meeting-walk change (#1988) shipped two hours before the roll that carried its
+module half, and the module refused class-party meetings as malformed until the roll landed.
+
 ### What blocks a roll
 
 Any of: failing checks or an unanswered bot thread on the infra PRs (`Grug - Chief` and `Grug - Elder` must
