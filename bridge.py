@@ -33442,8 +33442,8 @@ _CAMPAIGN_WAITING_SQL = (
 
 
 def _town_first_hold(names: list) -> bool:
-    """True when a campaign waits on this family and none of it carries a
-    dungeon job: a fresh start or one handed to town (#265), which only the
+    """True when a campaign waits on this family and none of it carries that
+    campaign's job: a fresh start or one handed to town (#265), which only the
     resume floor lets back in. An armed campaign is never a town hold.
 
     NOR IS ONE THE PACE HOLDS ON THE QUESTING FALLBACK. Nobody carries a dungeon
@@ -33454,12 +33454,54 @@ def _town_first_hold(names: list) -> bool:
     """
     if any(n in globals().get("_PACE_QUESTERS", ()) for n in names):
         return False
-    if not _campaign_waiting(names):
+    waiting = _campaign_jobs(names)
+    if not waiting:
         return False
     jobs_now = _jobs_of(names)
     if not jobs_now:
         return False
-    return not any(job.startswith("dungeon") for job in jobs_now.values())
+    # ARMED MEANS THE CAMPAIGN'S OWN JOB, THE SAME TEST `_town_first` MAKES
+    # (#2049). This used to read any job starting with "dungeon" as armed. On
+    # the dev realm 2026-11-08 the Zug and Grug families carried the bare
+    # `dungeon` job while their Blackrock Depths rows waited: `_town_first`
+    # withheld the run (no member carried dungeon:blackrock-depths), but this
+    # said "armed, no town hold", so the vendor pass judged the trip at the
+    # floor of 3 instead of the resume floor of 8. Grug (6 free, 4 sellable)
+    # and Ugga (7 free, 2 sellable) logged "no vendor trip is worth taking"
+    # for the whole wait although one trip lifted both to 8.
+    return not any(job in waiting for job in jobs_now.values())
+
+
+# The keywords of the campaigns queued or running for these characters' family:
+# `_town_first_hold` compares the family's jobs with the jobs those write.
+_CAMPAIGN_KEYWORDS_SQL = (
+    "SELECT DISTINCT q.keyword AS keyword FROM overseer_dungeon_queue q "
+    "JOIN overseer_roster r "
+    "ON q.family COLLATE utf8mb4_unicode_ci = r.family "
+    "WHERE r.name IN (%s) AND q.status IN ('queued', 'active')"
+)
+
+
+def _campaign_jobs(names: list) -> frozenset:
+    """The jobs the family's waiting campaigns write (jobs.dungeon_job of each
+    queued or active row's keyword); empty when none waits or unreadable."""
+    if not names:
+        return frozenset()
+    sql = _CAMPAIGN_KEYWORDS_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return frozenset()
+            raise
+        rows = cur.fetchall()
+    out = set()
+    for row in rows:
+        job = jobs.dungeon_job(str(row["keyword"] or ""))
+        if job:
+            out.add(job)
+    return frozenset(out)
 
 
 def _campaign_waiting(names: list) -> bool:

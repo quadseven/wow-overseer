@@ -36,7 +36,8 @@ class VendorPassAsksTheHold(unittest.TestCase):
         src = (ROOT / "bridge.py").read_text()
         start = src.index("def _town_first_hold(")
         body = src[start : src.index("\n\n\n", start)]
-        self.assertIn('startswith("dungeon")', body)
+        self.assertIn("_campaign_jobs(names)", body)
+        self.assertIn("job in waiting", body)
 
 
 if __name__ == "__main__":

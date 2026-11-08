@@ -32,7 +32,7 @@ def _source(name):
 
 def _hold(jobs_now, questers=()):
     ns = {
-        "_campaign_waiting": lambda names: True,
+        "_campaign_jobs": lambda names: frozenset({"dungeon:ragefire"}),
         "_jobs_of": lambda names: {n: jobs_now for n in names},
         "_PACE_QUESTERS": set(questers),
     }
