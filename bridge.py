@@ -18914,6 +18914,11 @@ class Bridge(discord.Client):
             if not meeting.met:
                 run.outcome = "the meeting failed: " + meeting.why
                 board.fail(run.ask_id)
+                if classparty.leader_road_refused(run):
+                    # THE ASKER'S OWN ROAD IS REFUSED FOR GOOD: another helper
+                    # cannot open it, so the ask is given up now instead of
+                    # walking two more helpers across the map to wait for it.
+                    board.give_up(run.ask_id)
                 log.info("class party: the meeting for %s's %s fails: %s", run.leader,
                          run.title, meeting.why)
                 return False

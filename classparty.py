@@ -346,6 +346,16 @@ def walk_why(holder, said) -> str:
     return said[len(prefix) :] if said.startswith(prefix) else said
 
 
+def leader_road_refused(run) -> bool:
+    """True when the leader's own meeting walk was refused for good: the
+    module's lasting words for a spawn it will not take the member to
+    (classquest.SPAWN_REFUSALS that are not SPAWN_SHORT_REFUSALS, such as
+    "the road to the spawn crosses ground far above its level"). No other
+    helper changes the leader's own road, so the ask is over at once."""
+    lasting = classquest.SPAWN_REFUSALS - classquest.SPAWN_SHORT_REFUSALS
+    return run.walks.get(run.leader) in lasting
+
+
 def _missed(run, name, where) -> str:
     """One member that did not reach the objective, and why when its walk said
     (PartyRun.walks): "character is held by another verb" names the verb
@@ -614,6 +624,10 @@ class Board:
         """One more failure for this ask; the count so far."""
         self._failures[int(ask_id)] = self._failures.get(int(ask_id), 0) + 1
         return self._failures[int(ask_id)]
+
+    def give_up(self, ask_id) -> None:
+        """Count the ask out at once: its failures reach MAX_FAILURES."""
+        self._failures[int(ask_id)] = MAX_FAILURES
 
     def failures(self, ask_id) -> int:
         return self._failures.get(int(ask_id), 0)
