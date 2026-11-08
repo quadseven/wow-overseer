@@ -332,12 +332,16 @@ class StoreCursor:
             # _stall_held: the latest stall_left row for this family and door,
             # and the seconds its hold has left (store.held_left, default the
             # whole window).
-            want = tuple(params[1:4])
+            want = tuple(params[2:5])
             left = store.held_left
             if left is None:
                 left = stall.WINDOW_HOURS * 3600
+            # ordered_after: the head row (params[1]) was created after the
+            # leave, as the database reads it (store.ordered_after holds the
+            # ids the test says were ordered later).
+            later = int(params[1] in store.ordered_after)
             return [
-                {"id": n, "left_s": left}
+                {"id": n, "left_s": left, "ordered_after": later}
                 for n, r in reversed(list(enumerate(store.records, 1)))
                 if tuple(r[:3]) == want
             ][:1]
@@ -407,6 +411,7 @@ class StallWorld(FakeWorld):
         self.fail_on = ""
         self.commits = 0
         self.held_left = None
+        self.ordered_after = set()
         self.hold_said = {}
         self.silent_seconds = None
         self.dungeonquest_held = set()
@@ -571,7 +576,7 @@ class TheCampaignDoesNotStartAThirdRun(unittest.TestCase):
         self.assertEqual({jobs.DEFAULT}, self.zug_jobs(w))
         held_reads = [params for sql, params in w.calls if "decision = %s" in sql]
         self.assertEqual(
-            [("Zug", stall.DECISION, "gnomeregan")], [p[1:4] for p in held_reads]
+            [("Zug", stall.DECISION, "gnomeregan")], [p[2:5] for p in held_reads]
         )
 
     def test_silent_head_is_left_on_the_first_pass_at_the_bound(self):
@@ -742,6 +747,52 @@ class TheBreakerWritesInOrder(unittest.TestCase):
         self.assertEqual(1, len(held), lines)
         self.assertIn("nothing else", held[0])
 
+    def test_an_operator_order_given_after_the_leave_runs(self):
+        """#2033: the operator re-ordered the left door after its leave; that
+        order is not stepped past, it starts on its own record."""
+        later = dict(_q(9, "shadowfang", 30, "queued", 1), source="web:overseer")
+        w = self.left_2h_ago([later, _q(10, "deadmines", 10, "queued", 2)])
+        w.ordered_after = {9}
+        w.runs = []
+        w.events = []
+        lines = _pass(w)
+        self.assertEqual(
+            ["cancelled", "active", "queued"], [r["status"] for r in w.queue]
+        )
+        self.assertEqual({"dungeon:shadowfang"}, self.zug_jobs(w))
+        self.assertEqual([], self.held_lines(lines), lines)
+
+    def test_a_silent_operator_order_earns_its_own_leave(self):
+        """The same order, silent for two hours on its own: a fresh leave is
+        written for it rather than the old hold stepping past it."""
+        later = dict(_q(9, "shadowfang", 30, "active", 1), source="web:overseer")
+        w = self.left_2h_ago([later, _q(10, "deadmines", 10, "queued", 2)])
+        w.ordered_after = {9}
+        w.queue[0]["status"] = "cancelled"
+        w.runs = []
+        w.events = []
+        w.silent_seconds = 2 * 3600 + 5
+        for row in w.family("Zug"):
+            row["job"] = "dungeon:shadowfang"
+        _pass(w)
+        self.assertEqual("cancelled", w.queue[1]["status"])
+        self.assertEqual(2, len(w.records))
+
+    def test_an_older_order_or_the_overseers_entry_stays_held(self):
+        for source, ordered_after in (
+            ("web:overseer", set()),
+            ("overseer:planner", {9}),
+        ):
+            with self.subTest(source=source):
+                row = dict(_q(9, "shadowfang", 30, "queued", 1), source=source)
+                w = self.left_2h_ago([row, _q(10, "deadmines", 10, "queued", 2)])
+                w.ordered_after = ordered_after
+                _pass(w)
+                self.assertEqual(
+                    ["cancelled", "queued", "active"], [r["status"] for r in w.queue]
+                )
+                self.assertEqual({"dungeon:deadmines"}, self.zug_jobs(w))
+
     def test_a_cancelled_entry_closes_its_step_down_pace_row(self):
         w = self.world([_q(7, "shadowfang", 30, "active", 0)])
         w.open_pace = [
@@ -762,6 +813,29 @@ class TheBreakerWritesInOrder(unittest.TestCase):
 BRIDGE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
     encoding="utf-8"
 )
+
+
+class TheHoldReadKnowsTheOrder(unittest.TestCase):
+    def test_the_hold_read_compares_the_heads_creation_with_the_leave(self):
+        read = BRIDGE[BRIDGE.index("def _stall_held(") :]
+        read = read[: read.index("\ndef ", 10)]
+        self.assertIn("WHERE q.id = %s) > created_at, 0) AS ordered_after", read)
+        body = BRIDGE[BRIDGE.index("    async def _stall_breaker(") :]
+        body = body[: body.index("\n    async def ", 10)]
+        self.assertIn('_stall_held, key, leave.door, int(rows[0]["id"])', body)
+        self.assertIn("dungeonstall.order_outlives(rows[0], held)", body)
+
+    def test_order_outlives_is_the_operators_later_order_only(self):
+        held = {"id": 1, "left_s": 100, "ordered_after": 1}
+        self.assertTrue(stall.order_outlives({"source": "web:overseer"}, held))
+        self.assertFalse(stall.order_outlives({"source": "overseer:planner"}, held))
+        self.assertFalse(stall.order_outlives({"source": ""}, held))
+        self.assertFalse(
+            stall.order_outlives(
+                {"source": "web:overseer"}, dict(held, ordered_after=0)
+            )
+        )
+        self.assertFalse(stall.order_outlives({"source": "web:overseer"}, None))
 
 
 class TheBridgeOrder(unittest.TestCase):

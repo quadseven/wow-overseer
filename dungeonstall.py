@@ -292,6 +292,25 @@ def held_barred(rows: list) -> dict:
     return out
 
 
+def order_outlives(head: dict, held: dict | None) -> bool:
+    """Whether the queue head runs although its door was left in the window.
+
+    AN ORDER GIVEN AFTER THE LEAVE IS NOT HELD BY IT (#2033). A leave holds the
+    door against the overseer's own choices and against the orders it judged.
+    On wow-dev 2026-11-07/08 Zug's family's Blackrock Depths order (row 132)
+    was left at 22:05Z after two silent hours, all of them spent waiting on
+    one member frozen in combat far away, with no run ever reaching the door.
+    The operator ordered the door again at 00:10Z (row 136), and when that
+    order went silent at 03:23Z the old hold stepped past it until 22:05Z the
+    next day. An operator's order given after the leave is judged on its own
+    record: its own silence, its own stalls, and a leave of its own if it
+    earns one. Older orders and the overseer's entries stay held.
+    """
+    return dungeonpace.operator_ordered(head) and bool(
+        (held or {}).get("ordered_after")
+    )
+
+
 @dataclass(frozen=True)
 class Leave:
     """The queue entries to cancel for a stuck door, and the sentence for it."""
