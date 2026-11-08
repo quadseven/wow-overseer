@@ -49,6 +49,7 @@ class Pass:
         self.cat = cat or world()
         self.hunts_open = 0
         self.crossings = ()
+        self.tried = ()
         self.started, self.recorded, self.shared, self.asked = [], [], [], []
         self.self = types.SimpleNamespace(
             _job_steps={},
@@ -69,7 +70,7 @@ class Pass:
 
     def _facts(self, names):
         self.asked.append(list(names))
-        return self.members, (), self.ledger, self.hunts_open, self.crossings
+        return self.members, self.tried, self.ledger, self.hunts_open, self.crossings
 
     def run(self, now=0.0):
         with (
