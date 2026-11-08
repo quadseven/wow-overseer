@@ -30,13 +30,16 @@ class CouncilCardsCache(unittest.TestCase):
         self.addCleanup(patch.stop)
 
     def test_polls_inside_the_window_build_the_chronicle_once(self):
-        with mock.patch.object(
-            map_server, "_fetch_achievements", return_value={}
-        ) as fetch, mock.patch.object(
-            map_server.achievements,
-            "build_achievements",
-            return_value={"cards": [{"kind": "run"}]},
-        ) as build:
+        with (
+            mock.patch.object(
+                map_server, "_fetch_achievements", return_value={}
+            ) as fetch,
+            mock.patch.object(
+                map_server.achievements,
+                "build_achievements",
+                return_value={"cards": [{"kind": "run"}]},
+            ) as build,
+        ):
             first = map_server._cards_for_council()
             self.clock[0] += map_server.COUNCIL_CARDS_SECONDS - 1
             second = map_server._cards_for_council()
