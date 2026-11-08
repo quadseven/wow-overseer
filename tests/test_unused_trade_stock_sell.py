@@ -91,6 +91,12 @@ class AMaterialNoHeldTradeUsesSells(unittest.TestCase):
         self.assertEqual("sell", step.action)
 
 
+class AMemberWithRoomDoesNotWalkToSell(unittest.TestCase):
+    def test_no_sale_step_while_the_bags_have_room(self):
+        roomy = dataclasses.replace(member(()), free_slots=12)
+        self.assertIsNone(guildjobs._full_bags_first(roomy, None, (), 600.0))
+
+
 class WhatAHeldTradeNeedsStays(unittest.TestCase):
     def test_a_tailor_keeps_cloth_and_the_tailoring_pattern(self):
         got = sold(member((TAILORING,)))
