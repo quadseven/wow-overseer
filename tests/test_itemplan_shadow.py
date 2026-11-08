@@ -10,9 +10,12 @@ import pathlib
 import sys
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
+import itemplan  # noqa: E402
 import itemplan_shadow as shadow  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
@@ -95,6 +98,22 @@ class AdapterTest(unittest.TestCase):
         self.assertIn("await self._write_guild_gifts(gifts)", executor)
         self.assertIn("_run_itemplan_give(", BRIDGE)
 
+    def test_auction_route_has_an_independent_switch(self):
+        self.assertFalse(shadow.auction_enabled({}))
+        self.assertFalse(shadow.auction_enabled({"ITEMPLAN_AUCTION": "off"}))
+        self.assertTrue(shadow.auction_enabled({"ITEMPLAN_AUCTION": "on"}))
+
+    def test_auction_executor_uses_the_plan_and_existing_listing_path(self):
+        start = BRIDGE.index("    async def _itemplan_auction(")
+        end = BRIDGE.index("    async def _clearance_plan(", start)
+        executor = BRIDGE[start:end]
+        self.assertIn("itemplan_shadow.auction_enabled()", executor)
+        self.assertIn("decision.route != itemplan.AUCTION", executor)
+        self.assertIn("not stack.tradable", executor)
+        self.assertIn("auction.list_command(", executor)
+        self.assertIn("_insert_auction", executor)
+        self.assertIn("_run_itemplan_auction(", BRIDGE)
+
     def test_rows_become_stacks_and_members(self):
         rows, gear, worn, free = fixture()
         stacks = shadow.build_stacks(rows, gear)
@@ -114,6 +133,29 @@ class AdapterTest(unittest.TestCase):
         self.assertFalse(shadow.enabled({}))
         self.assertFalse(shadow.enabled({"ITEMPLAN_SHADOW": "off"}))
         self.assertTrue(shadow.enabled(ON))
+
+
+def ore_extras(market, instance_soulbound=None):
+    tpl = {
+        "item_class": 15,
+        "subclass": 0,
+        "bonding": 0,
+        "inventory_type": 0,
+        "item_level": 1,
+        "req_level": 0,
+        "required_skill_rank": 0,
+        "container_slots": 0,
+        "fire_res": 0,
+        "stats": {},
+    }
+    sb = {1: False, 2: False}
+    if instance_soulbound is not None:
+        sb.update(instance_soulbound)
+    return shadow.Extras(
+        market=market,
+        templates={1001: tpl, 1002: tpl},
+        instance_soulbound=sb,
+    )
 
 
 class RunTest(unittest.TestCase):
@@ -251,12 +293,148 @@ class RunTest(unittest.TestCase):
         self.assertNotIn("auction prices", report.missing)
         self.assertFalse(any(m.startswith("quest log") for m in report.missing))
 
+    def test_shadow_run_with_quotes_lists_over_4x_vendor_and_not_at_3_4x(self):
+        rows = [
+            row("Ana", 1, 1001, "Dear Ore", count=3, sell=1000, item_class=7),
+            row("Ana", 2, 1002, "Cheap Ore", count=3, sell=1000, item_class=7),
+        ]
+        extras = ore_extras(
+            {
+                1001: (4400, 5),
+                1002: (3400, 5),
+            }
+        )
+        cap = Capture()
+        report = shadow.run(
+            ["Ana"],
+            "Fam",
+            rows,
+            {"Ana": 10},
+            environ=ON,
+            logger=cap,
+            extras=extras,
+        )
+        decisions = {d.entry: d.route for d in report.plan.decisions}
+        self.assertEqual(decisions.get(1001), itemplan.AUCTION)
+        self.assertEqual(decisions.get(1002), itemplan.SELL_VENDOR)
+        self.assertTrue(any("AUCTION 1" in line for line in report.lines))
+
+
+class AuctionExecutorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_itemplan_auction_lists_only_when_enabled(self):
+        from test_guildsocial_bridge import bridge
+
+        rows = [
+            row("Ana", 1, 1001, "Dear Ore", count=3, sell=1000, item_class=7),
+            row("Ana", 2, 1002, "Cheap Ore", count=3, sell=1000, item_class=7),
+        ]
+        extras = ore_extras(
+            {
+                1001: (4400, 5),
+                1002: (3400, 5),
+            }
+        )
+        inserted = []
+
+        def fake_insert(member, command, source="auction"):
+            inserted.append((member, command))
+            return 1
+
+        b = SimpleNamespace()
+        with (
+            mock.patch.object(
+                bridge.itemplan_shadow, "auction_enabled", return_value=False
+            ),
+            mock.patch.object(bridge, "_itemplan_reads", return_value=extras),
+            mock.patch.object(bridge, "_recent_auction_keys", return_value=set()),
+            mock.patch.object(bridge, "_insert_auction", side_effect=fake_insert),
+        ):
+            await bridge.Bridge._itemplan_auction(b, ["Ana"], "Fam", rows, {"Ana": 10})
+            self.assertEqual(inserted, [])
+
+        with (
+            mock.patch.object(
+                bridge.itemplan_shadow, "auction_enabled", return_value=True
+            ),
+            mock.patch.object(bridge, "_itemplan_reads", return_value=extras),
+            mock.patch.object(bridge, "_recent_auction_keys", return_value=set()),
+            mock.patch.object(bridge, "_insert_auction", side_effect=fake_insert),
+        ):
+            await bridge.Bridge._itemplan_auction(b, ["Ana"], "Fam", rows, {"Ana": 10})
+            self.assertEqual(len(inserted), 1)
+            member, cmd = inserted[0]
+            self.assertEqual(member, "Ana")
+            self.assertIn("guid:1", cmd)
+            self.assertIn("buyout:13200", cmd)
+            self.assertIn("bid:10560", cmd)
+            self.assertIn("hours:12", cmd)
+
+    async def test_itemplan_auction_skips_recent_seen_keys(self):
+        from test_guildsocial_bridge import bridge
+
+        rows = [
+            row("Ana", 1, 1001, "Dear Ore", count=3, sell=1000, item_class=7),
+        ]
+        extras = ore_extras({1001: (4400, 5)})
+        inserted = []
+        cmd = "list guid:1 bid:10560 buyout:13200 hours:12"
+        b = SimpleNamespace()
+        with (
+            mock.patch.object(
+                bridge.itemplan_shadow, "auction_enabled", return_value=True
+            ),
+            mock.patch.object(bridge, "_itemplan_reads", return_value=extras),
+            mock.patch.object(
+                bridge, "_recent_auction_keys", return_value={("Ana", cmd)}
+            ),
+            mock.patch.object(
+                bridge,
+                "_insert_auction",
+                side_effect=lambda m, c: inserted.append((m, c)),
+            ),
+        ):
+            await bridge.Bridge._itemplan_auction(b, ["Ana"], "Fam", rows, {"Ana": 10})
+            self.assertEqual(inserted, [])
+
+    async def test_itemplan_auction_skips_untradable(self):
+        from test_guildsocial_bridge import bridge
+
+        rows = [
+            row("Ana", 1, 1001, "Dear Ore", count=3, sell=1000, item_class=7),
+        ]
+        extras = ore_extras(
+            {1001: (4400, 5)},
+            instance_soulbound={1: True},
+        )
+        inserted = []
+        b = SimpleNamespace()
+        with (
+            mock.patch.object(
+                bridge.itemplan_shadow, "auction_enabled", return_value=True
+            ),
+            mock.patch.object(bridge, "_itemplan_reads", return_value=extras),
+            mock.patch.object(bridge, "_recent_auction_keys", return_value=set()),
+            mock.patch.object(
+                bridge,
+                "_insert_auction",
+                side_effect=lambda m, c: inserted.append((m, c)),
+            ),
+        ):
+            await bridge.Bridge._itemplan_auction(b, ["Ana"], "Fam", rows, {"Ana": 10})
+            self.assertEqual(inserted, [])
+
 
 class BridgeShapeTest(unittest.TestCase):
     def test_one_guarded_call_after_the_sale_inputs_exist(self):
         at = BRIDGE.index('"_shadow_itemplan", lambda')
         self.assertEqual(BRIDGE.count('"_shadow_itemplan", lambda'), 1)
         self.assertLess(BRIDGE.index("_count_sales(sellable_counts, gear_sales)"), at)
+        self.assertLess(at, BRIDGE.index("held_seller_for_leader = await"))
+
+    def test_one_guarded_auction_call_after_give(self):
+        at = BRIDGE.index('"_run_itemplan_auction"')
+        self.assertEqual(BRIDGE.count('"_run_itemplan_auction"'), 1)
+        self.assertLess(BRIDGE.index('"_run_itemplan_give"'), at)
         self.assertLess(at, BRIDGE.index("held_seller_for_leader = await"))
 
 

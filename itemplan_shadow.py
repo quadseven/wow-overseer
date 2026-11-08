@@ -48,6 +48,7 @@ log = logging.getLogger("wow-overseer.itemplan")
 
 ENV_SWITCH = "ITEMPLAN_SHADOW"
 GIVE_ENV_SWITCH = "ITEMPLAN_GIVE"
+AUCTION_ENV_SWITCH = "ITEMPLAN_AUCTION"
 PREFIX = "itemplan:"
 # Seconds between full detail for a member whose plan has not changed.
 REFRESH_SECONDS = 30 * 60
@@ -104,6 +105,13 @@ def give_enabled(environ=None) -> bool:
     """On only when ITEMPLAN_GIVE says so; independent of shadow logging."""
     env = os.environ if environ is None else environ
     raw = str(env.get(GIVE_ENV_SWITCH, "") or "").strip().lower()
+    return raw in ("on", "1", "true", "yes")
+
+
+def auction_enabled(environ=None) -> bool:
+    """On only when ITEMPLAN_AUCTION says so; independent of shadow logging."""
+    env = os.environ if environ is None else environ
+    raw = str(env.get(AUCTION_ENV_SWITCH, "") or "").strip().lower()
     return raw in ("on", "1", "true", "yes")
 
 
@@ -420,6 +428,19 @@ def _disagreements(plan_, rows_by_key, opinions, keep_names) -> list:
     return out
 
 
+def _normalize_market(market: Mapping | None) -> dict:
+    """Entry -> (copper per unit, sample count), supporting scalar quotes."""
+    if not market:
+        return {}
+    out = {}
+    for entry, quote in market.items():
+        if isinstance(quote, (tuple, list)):
+            out[_int(entry)] = tuple(quote)
+        elif quote is not None:
+            out[_int(entry)] = (_int(quote), 1)
+    return out
+
+
 def shadow(
     names,
     family,
@@ -452,7 +473,7 @@ def shadow(
     ctx = itemplan.Context(
         open_quest_items=quest,
         gear_verdict=verdicts or {},
-        market=extras.market or {},
+        market=_normalize_market(extras.market),
         guild_free=extras.guild_free or {},
         guild_crafters=extras.guild_crafters or (),
         fire_gear=extras.fire_gear,

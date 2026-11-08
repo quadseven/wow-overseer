@@ -93,7 +93,7 @@ Last checked 2026-11-07. The bridge and site run as two deployments in the `wow-
 
 ### In code, not acting
 
-- The item plan (`itemplan.py`, [docs/ITEM_PLAN.md](docs/ITEM_PLAN.md)) decides keep, bank, give, sell, disenchant or auction per stack. Shadow logging uses `ITEMPLAN_SHADOW` (off by default). The GIVE executor has its own `ITEMPLAN_GIVE` switch (off by default) and uses the existing guild gift writer for tradable stacks.
+- The item plan (`itemplan.py`, [docs/ITEM_PLAN.md](docs/ITEM_PLAN.md)) decides keep, bank, give, sell, disenchant or auction per stack. Shadow logging uses `ITEMPLAN_SHADOW` (off by default). The GIVE executor has its own `ITEMPLAN_GIVE` switch (off by default) and uses the existing guild gift writer for tradable stacks. The AUCTION executor has its own `ITEMPLAN_AUCTION` switch (off by default) and carries out tradable AUCTION rows through the existing listing path.
 
 ### Does not work yet
 
