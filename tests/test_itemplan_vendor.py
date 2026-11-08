@@ -209,5 +209,55 @@ class CarryOutTest(unittest.TestCase):
             self.assertTrue(any(holder in line for line in report.lines))
 
 
+class BridgeWiringTest(unittest.TestCase):
+    """The town-run pass carries the route out (#1977, second slice).
+
+    The pure route above acted on nothing until the bridge called it:
+    `_vendor_once` asks `_itemplan_vendor_sales` for the route's sales
+    and hands them to `_queue_vendor_sales`, which writes them through
+    the same `_insert_sell` only for a holder queued at a counter, and
+    reports the gold through the route's own `carry_out`.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import ast
+
+        root = pathlib.Path(__file__).resolve().parents[1]
+        cls.bridge = (root / "bridge.py").read_text(encoding="utf-8")
+        cls.dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
+        tree = ast.parse(cls.bridge)
+        cls.segments = {}
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                seg = ast.get_source_segment(cls.bridge, node)
+                if seg:
+                    cls.segments.setdefault(node.name, seg)
+
+    def test_bridge_imports_the_route_and_ships_it(self):
+        self.assertIn("import itemplan_vendor", self.bridge)
+        self.assertIn("itemplan_vendor.py", self.dockerfile)
+
+    def test_vendor_once_hands_route_sales_to_the_queue(self):
+        body = self.segments["_vendor_once"]
+        self.assertIn("_itemplan_vendor_sales", body)
+        self.assertLess(
+            body.index("_itemplan_vendor_sales"), body.index("_queue_vendor_sales(")
+        )
+        self.assertIn("route_sales=route_sales", body)
+
+    def test_the_helper_builds_sales_from_the_shadow_plan(self):
+        body = self.segments["_itemplan_vendor_sales"]
+        self.assertIn("itemplan_vendor.enabled", body)
+        self.assertIn("itemplan_shadow.shadow", body)
+        self.assertIn("itemplan_vendor.sales_for", body)
+
+    def test_the_queue_carries_route_sales_out(self):
+        body = self.segments["_queue_vendor_sales"]
+        self.assertIn("route_sales", body)
+        self.assertIn("carry_out", body)
+        self.assertIn("_insert_sell", body)
+
+
 if __name__ == "__main__":
     unittest.main()
