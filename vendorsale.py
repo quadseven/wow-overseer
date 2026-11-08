@@ -37,8 +37,12 @@ THE RULE (`verdict`), the first line that applies:
     False)
   * a bag, reagent, ammunition, quiver,      keep
     quest item or key
-  * food, drink, potions and the rest of     keep: its own AI eats and drinks
-    the consumables                          them
+  * a white scroll, or a white consumable    sell (#1592)
+    of the generic or "other" kind that no
+    open quest names
+  * food, drink, potions, elixirs,           keep: its own AI eats and drinks
+    bandages and the rest of the             them
+    consumables
   * a pet or a mount (miscellaneous)         keep
   * other miscellaneous junk                 sell
   * rare or better weapon or armor that is   keep: guild loot, for the loot
@@ -120,6 +124,19 @@ KEPT_CLASSES = {
 # (kept); the rest (reagents, holiday items, other) are kept.
 MISC_JUNK = 0
 MISC_KEPT = {2: "a companion pet", 5: "a mount"}
+# Consumable subclasses a member lets go when white and no open quest names
+# it: 0 generic (Bag of Marbles, Flash Bundle, prize tickets), 4 scrolls
+# (Scroll of Spirit), 8 other (Enriched Lasher Root, Explosive Rocket). No bot
+# AI casts or drinks one of these on its own; the stones a class conjures have
+# no price, so they never reach the counter. Kept on purpose: 1 potions, 2
+# elixirs, 3 flasks (what a healer drinks between pulls, wow-overseer#2017),
+# 5 food and drink, 6 item enhancements and 7 bandages (a first-aid crafter's
+# product; whether a bot binds a wound with it is unproven).
+CONSUMABLE_LET_GO = {
+    0: "a generic consumable",
+    4: "a scroll",
+    8: "an other-kind consumable",
+}
 # The classes the bank forecast judges (bankforecast.judge).
 FORECAST_CLASSES = frozenset({TRADE_GOODS, GEM, RECIPE})
 
@@ -207,6 +224,15 @@ def verdict(item, judge: Judge) -> tuple:
     if item_class in KEPT_CLASSES:
         return KEEP, KEPT_CLASSES[item_class]
     if item_class == CONSUMABLE:
+        subclass = _int(item.subclass)
+        if (
+            _int(item.quality) <= COMMON
+            and subclass in CONSUMABLE_LET_GO
+            and not getattr(item, "quest_needed", True)
+        ):
+            return SELL, "%s no bot uses and no open quest names" % (
+                CONSUMABLE_LET_GO[subclass]
+            )
         return KEEP, "its own AI eats, drinks or uses it"
     if item_class == MISC:
         subclass = _int(item.subclass)
