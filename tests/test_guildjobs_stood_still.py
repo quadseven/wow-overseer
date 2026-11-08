@@ -24,6 +24,7 @@ import guildjobs
 import guildlevel
 import guildroute
 import standstill
+from test_guildsocial_bridge import bridge
 
 OUTLAND, EASTERN_KINGDOMS, KALIMDOR = 530, 0, 1
 BLOOD_ELF, WARLOCK = 10, 9
@@ -143,6 +144,37 @@ class TheHearth(unittest.TestCase):
         self.assertEqual(
             hearths(plan([member()], still={"Highlights": 90}, recent=recent)), []
         )
+
+    def test_not_a_grouped_follower_that_stands_where_its_leader_stands(self):
+        # Eggrok crossed to Kalimdor, followed a bot outside the guild, stood
+        # 71 minutes and was hearthed back to the isle, five times in a day.
+        self.assertEqual(
+            hearths(plan([member(follows=True)], still={"Highlights": 71})), []
+        )
+
+    def test_the_bridge_reads_a_member_as_following_only_when_another_leads(self):
+        def read(group_leader):
+            rows = [
+                {
+                    "name": "Highlights",
+                    "guid": 1184,
+                    "guild_name": "Bonkers",
+                    "level": 7,
+                    "class_id": WARLOCK,
+                    "race": BLOOD_ELF,
+                    "online": 1,
+                    "group_leader": group_leader,
+                }
+            ]
+            members, _ = bridge._guild_members_and_crafters(
+                rows, set(), {"Highlights": guildjobs.RAIDER}, {}, {}, {}, set()
+            )
+            return members[0].follows
+
+        self.assertTrue(read(999))
+        self.assertFalse(read(1184))
+        self.assertFalse(read(0))
+        self.assertFalse(read(None))
 
     def test_not_fighting_dead_offline_or_at_the_cap(self):
         for m in (
