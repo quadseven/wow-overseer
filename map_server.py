@@ -4480,8 +4480,14 @@ def _gzipped(handler, ctype: str, body: bytes) -> bytes | None:
         name, _, params = part.strip().partition(";")
         if name.strip().lower() in ("gzip", "x-gzip"):
             weight = params.replace(" ", "").lower()
-            if weight.startswith("q=") and float(weight[2:] or 1) == 0:
-                return None
+            if weight.startswith("q="):
+                try:
+                    refused = float(weight[2:] or 1) == 0
+                except ValueError:
+                    # A malformed weight is the caller's mistake, not a 500.
+                    refused = False
+                if refused:
+                    return None
             return gzip.compress(body, 5, mtime=0)
     return None
 

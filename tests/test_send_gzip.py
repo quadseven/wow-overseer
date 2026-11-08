@@ -78,6 +78,10 @@ class GzipOnTheWire(unittest.TestCase):
         got = send(BIG, headers={"Accept-Encoding": "gzip;q=0"})
         self.assertNotIn("Content-Encoding", got.sent_headers)
 
+    def test_a_malformed_weight_is_not_a_server_error(self):
+        got = send(BIG, headers={"Accept-Encoding": "gzip;q=abc"})
+        self.assertEqual(got.status, 200)
+
     def test_a_small_answer_is_not_compressed(self):
         got = send(SMALL, headers={"Accept-Encoding": "gzip"})
         self.assertNotIn("Content-Encoding", got.sent_headers)
