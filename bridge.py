@@ -13554,6 +13554,13 @@ class Bridge(discord.Client):
         await globals().get(
             "_run_itemplan_give", skip_itemplan_give
         )(itemplan_give, names, leader, rows, free_slots, gear_rows, worn)
+        itemplan_auction = getattr(self, "_itemplan_auction", None)
+        async def skip_itemplan_auction(*args):
+            return None
+
+        await globals().get(
+            "_run_itemplan_auction", skip_itemplan_auction
+        )(itemplan_auction, names, leader, rows, free_slots, gear_rows, worn)
 
         # A CAMPAIGN WITHHELD FOR BAG SPACE STILL SELLS (#225); see
         # `_vendor_pass_mode`.
@@ -14784,6 +14791,61 @@ class Bridge(discord.Client):
             ))
         if gifts:
             await self._write_guild_gifts(gifts)
+
+    async def _itemplan_auction(self, names: list, family: str, rows: list,
+                                free_slots: dict, gear_rows=(), worn_rows=()) -> None:
+        """Carry out only tradable AUCTION rows when ITEMPLAN_AUCTION is enabled."""
+        if not itemplan_shadow.auction_enabled():
+            return
+        extras = await asyncio.to_thread(
+            _itemplan_reads, names, family, rows, gear_rows, worn_rows)
+        report = await asyncio.to_thread(
+            itemplan_shadow.shadow, names, family, rows, free_slots,
+            gear_rows=gear_rows, worn_rows=worn_rows, extras=extras)
+        if report is None:
+            return
+        stacks = itemplan_shadow.build_stacks(
+            rows, gear_rows, extras.templates, extras.instance_soulbound)
+        by_key = {stack.key: stack for stack in stacks}
+        row_by_key = {}
+        indexes = {}
+        for row in rows:
+            holder = str(row["holder"])
+            index = indexes.get(holder, 0)
+            indexes[holder] = index + 1
+            row_by_key[(holder, 1, int(row["entry"]), index)] = row
+        market = {}
+        for entry, quote in (extras.market or {}).items():
+            try:
+                market[int(entry)] = int(quote[0])
+            except (TypeError, ValueError, IndexError):
+                continue
+        candidates = []
+        for decision in report.plan.decisions:
+            stack = by_key.get(decision.key)
+            row = row_by_key.get(decision.key)
+            if (decision.route != itemplan.AUCTION or stack is None
+                    or not stack.tradable or row is None):
+                continue
+            candidates.append({
+                "holder": decision.holder,
+                "item_guid": int(row["item_guid"]),
+                "entry": decision.entry,
+                "label": decision.name,
+                "quality": stack.quality,
+                "binding": "boe",
+                "quest_item": False,
+                "recipient": "",
+                "sell_price": stack.sell,
+                "count": max(1, decision.count),
+                "fair_price": market.get(decision.entry, 0),
+            })
+        if not candidates:
+            return
+        sales = auction.plan_sales(auction.price_candidates(candidates, market))
+        for sale in sales:
+            await asyncio.to_thread(
+                _insert_auction, sale.candidate.holder, sale.command)
 
     async def _clearance_plan(self, names: list, leader: str,
                               auction_open: bool = False) -> tuple:
@@ -29200,6 +29262,14 @@ async def _run_itemplan_give(itemplan_give, names, family, rows, free_slots,
     """Call the plan executor when this economy pass exposes it."""
     if itemplan_give is not None:
         await itemplan_give(names, family, rows, free_slots, gear_rows, worn_rows)
+
+
+async def _run_itemplan_auction(itemplan_auction, names, family, rows, free_slots,
+                                gear_rows, worn_rows) -> None:
+    """Call the plan auction executor when this economy pass exposes it."""
+    if itemplan_auction is not None:
+        await itemplan_auction(names, family, rows, free_slots,
+                               gear_rows, worn_rows)
 
 
 def _shadow_itemplan(*args, **facts) -> None:

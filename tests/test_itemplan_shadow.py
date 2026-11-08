@@ -85,6 +85,11 @@ class AdapterTest(unittest.TestCase):
         self.assertFalse(shadow.give_enabled({"ITEMPLAN_GIVE": "off"}))
         self.assertTrue(shadow.give_enabled({"ITEMPLAN_GIVE": "on"}))
 
+    def test_auction_route_has_an_independent_switch(self):
+        self.assertFalse(shadow.auction_enabled({}))
+        self.assertFalse(shadow.auction_enabled({"ITEMPLAN_AUCTION": "off"}))
+        self.assertTrue(shadow.auction_enabled({"ITEMPLAN_AUCTION": "on"}))
+
     def test_give_executor_uses_the_plan_and_existing_gift_writer(self):
         start = BRIDGE.index("    async def _itemplan_give(")
         end = BRIDGE.index("    async def _clearance_plan(", start)
@@ -94,6 +99,17 @@ class AdapterTest(unittest.TestCase):
         self.assertIn("not stack.tradable", executor)
         self.assertIn("await self._write_guild_gifts(gifts)", executor)
         self.assertIn("_run_itemplan_give(", BRIDGE)
+
+    def test_auction_executor_uses_the_plan_and_existing_listing_path(self):
+        start = BRIDGE.index("    async def _itemplan_auction(")
+        end = BRIDGE.index("    async def _clearance_plan(", start)
+        executor = BRIDGE[start:end]
+        self.assertIn("itemplan_shadow.auction_enabled()", executor)
+        self.assertIn("decision.route != itemplan.AUCTION", executor)
+        self.assertIn("not stack.tradable", executor)
+        self.assertIn("auction.plan_sales(", executor)
+        self.assertIn("_insert_auction", executor)
+        self.assertIn("_run_itemplan_auction(", BRIDGE)
 
     def test_rows_become_stacks_and_members(self):
         rows, gear, worn, free = fixture()
@@ -250,6 +266,46 @@ class RunTest(unittest.TestCase):
         )
         self.assertNotIn("auction prices", report.missing)
         self.assertFalse(any(m.startswith("quest log") for m in report.missing))
+
+    def test_shadow_lists_only_where_the_quote_beats_the_vendor(self):
+        rows = [
+            row("Ana", 1, 9501, "High Trinket", quality=1, sell=1000, count=3),
+            row("Ana", 2, 9502, "Low Trinket", quality=1, sell=1000, count=3),
+        ]
+        templates = {
+            entry: {
+                "item_class": 15,
+                "subclass": 0,
+                "bonding": 0,
+                "inventory_type": 0,
+                "item_level": 1,
+                "req_level": 0,
+                "required_skill_rank": 0,
+                "container_slots": 0,
+                "fire_res": 0,
+                "stats": {},
+            }
+            for entry in (9501, 9502)
+        }
+        extras = shadow.Extras(
+            open_quest_items={"Ana": frozenset()},
+            market={9501: (4400, 5), 9502: (3400, 5)},
+            templates=templates,
+            instance_soulbound={1: False, 2: False},
+            fire_gear=frozenset(),
+        )
+        report = shadow.shadow(
+            ["Ana"],
+            "Fam",
+            rows,
+            {"Ana": 20},
+            gear_rows=[],
+            worn_rows=[{"name": "Ana", "class_id": 8, "level": 54}],
+            extras=extras,
+        )
+        routes = {d.entry: d.route for d in report.plan.decisions}
+        self.assertEqual(routes[9501], "AUCTION", report.plan.decisions)
+        self.assertNotEqual(routes[9502], "AUCTION", report.plan.decisions)
 
 
 class BridgeShapeTest(unittest.TestCase):
