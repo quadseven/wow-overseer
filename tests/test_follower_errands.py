@@ -230,7 +230,9 @@ class AQuesterSale(FollowerTest):
     SELL_FLOOR free slots or fewer; the module lets that walk through its
     follower wall when it reads the same (mod-overseer#1395)."""
 
-    SALE_SOURCE = bridge.guildjobs.source_for(bridge.questers.SELL_WALK_ACTION, "Blingz")
+    SALE_SOURCE = bridge.guildjobs.source_for(
+        bridge.questers.SELL_WALK_ACTION, "Blingz"
+    )
 
     def sale_row(self, command="walk-to-vendor any max:600", source=None):
         return bridge.guildcorps.Row("buy", command, "", source or self.SALE_SOURCE)
@@ -253,8 +255,11 @@ class AQuesterSale(FollowerTest):
             self.sale_row(command="walk-to-vendor item:2901"),
             # the same sale walk from any other pass
             self.sale_row(source="guildcorps"),
-            self.sale_row(source=bridge.guildjobs.source_for(
-                bridge.questers.WALK_ACTION, "Blingz")),
+            self.sale_row(
+                source=bridge.guildjobs.source_for(
+                    bridge.questers.WALK_ACTION, "Blingz"
+                )
+            ),
             # the quester sale's other walks
             self.sale_row(command="walk-to-mailbox max:600"),
             self.sale_row(command="walk-to-spawn creature:10076 near:3"),
