@@ -21999,7 +21999,7 @@ class Bridge(discord.Client):
             try:
                 stranded = await asyncio.to_thread(
                     _standin_stranded, pending, fams, asked, rows)
-            except Exception:
+            except pymysql.err.MySQLError:
                 log.exception("standin: the stranded read failed; nobody is "
                               "judged stranded this pass")
                 stranded = None
@@ -27207,6 +27207,51 @@ def _fetch_strand_anchors() -> dict:
     return anchors
 
 
+def _strand_has_door(rows: list) -> bool:
+    """True when a family's pending rows name a dungeon (never a raid)."""
+    return any(str(r.get("keyword") or "") and not raidrun.is_raid(str(r.get("keyword")))
+               for r in rows or [])
+
+
+def _strand_note(name: str, prev, anchor) -> None:
+    """Keep the memo store's anchor for `name` in step with this reading."""
+    if anchor is None and prev is not None:
+        _memo_delete(STANDIN_STRAND_MEMO, name)
+    elif anchor is not None and anchor != prev:
+        _memo_upsert(STANDIN_STRAND_MEMO, name,
+                     {"map": anchor.map_id, "x": anchor.x, "y": anchor.y},
+                     anchor.since, anchor.since + STANDIN_STRAND_MEMO_SECONDS)
+
+
+def _strand_longest(names: list, skip: tuple, spots: dict, anchors: dict,
+                    now: float):
+    """(member, why) for the member stranded longest among `names`, or None.
+    Writes each member's anchor as it reads it."""
+    head = spots.get(skip[-1])
+    best = None
+    for name in names:
+        if name in skip:
+            continue
+        prev = anchors.get(name)
+        anchor = standin.anchor_after(prev, spots.get(name), head, now)
+        _strand_note(name, prev, anchor)
+        why = standin.stranded_why(name, anchor, spots.get(name), head, now)
+        if why and (best is None or anchor.since < best[2]):
+            best = (name, why, anchor.since)
+    return (best[0], best[1]) if best is not None else None
+
+
+def _strand_kept(name: str, spot, head) -> str:
+    """Why the member of a standing stranded row is still stranded, or "":
+    still in combat far from the head, or not read in the world at all."""
+    if spot is None or head is None:
+        return "%s is not read in the world" % name
+    far = standin.far_from(spot, head)
+    if spot.in_combat and far:
+        return "%s is still in combat, %s" % (name, far)
+    return ""
+
+
 def _standin_stranded(pending: dict, fams: dict, asked: dict, rows: dict) -> dict:
     """family -> (member, why) for every family with no craft order that has a
     door queued or a stranded row standing (standin.py, #2018).
@@ -27220,46 +27265,21 @@ def _standin_stranded(pending: dict, fams: dict, asked: dict, rows: dict) -> dic
     out = {}
     anchors = None
     for key, fam in sorted(fams.items()):
-        if key in asked:
-            continue
         current = rows.get(key)
-        door = any(str(r.get("keyword") or "") and not raidrun.is_raid(str(r.get("keyword")))
-                   for r in pending.get(key) or [])
-        if not door and not standin.is_stranded(current):
+        if key in asked or not (_strand_has_door(pending.get(key))
+                                or standin.is_stranded(current)):
             continue
         names = list(fam.get("names") or [])
         leader = str((fam.get("leader") or {}).get("name") or key)
         spots = _fetch_strand_spots(names)
-        head = spots.get(leader)
         if anchors is None:
             anchors = _fetch_strand_anchors()
-        best = None
-        for name in names:
-            if name in (key, leader):
-                continue
-            prev = anchors.get(name)
-            anchor = standin.anchor_after(prev, spots.get(name), head, now)
-            if anchor is None and prev is not None:
-                _memo_delete(STANDIN_STRAND_MEMO, name)
-            elif anchor is not None and anchor != prev:
-                _memo_upsert(STANDIN_STRAND_MEMO, name,
-                             {"map": anchor.map_id, "x": anchor.x, "y": anchor.y},
-                             anchor.since, anchor.since + STANDIN_STRAND_MEMO_SECONDS)
-            why = standin.stranded_why(name, anchor, spots.get(name), head, now)
-            if why and (best is None or anchor.since < best[2]):
-                best = (name, why, anchor.since)
+        best = _strand_longest(names, (key, leader), spots, anchors, now)
         if standin.is_stranded(current):
             name = current.out_name
-            spot = spots.get(name)
-            if spot is None or head is None:
-                why = "%s is not read in the world" % name
-            elif spot.in_combat and standin.far_from(spot, head):
-                why = "%s is still in combat, %s" % (name, standin.far_from(spot, head))
-            else:
-                why = ""
-            out[key] = (name, why)
+            out[key] = (name, _strand_kept(name, spots.get(name), spots.get(leader)))
         elif best is not None:
-            out[key] = (best[0], best[1])
+            out[key] = best
     return out
 
 

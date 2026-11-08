@@ -1408,7 +1408,7 @@ class TheBridgePass(unittest.TestCase):
         row_ = standin.Seat("Zug", "Zork", "Frosty", "dps", standin.STRANDED_MARK + WHY)
 
         def boom(*a, **kw):
-            raise RuntimeError("snapshot gone")
+            raise bridge.pymysql.err.MySQLError("snapshot gone")
 
         with mock.patch.object(bridge, "_standin_stranded", boom):
             fams, written, _, _ = self._zug_pass(rows={"Zug": row_})

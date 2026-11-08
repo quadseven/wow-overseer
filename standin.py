@@ -936,27 +936,43 @@ def _stranded_step(facts: Facts) -> Step:
     standing; `stranded` says why it is stranded now, "" once it is not."""
     current = facts.current
     name = facts.ordered or (current.out_name if current is not None else "")
+    return _stranded_gate(facts, current, name) or _stranded_seat(facts, current, name)
+
+
+def _end_or_none(facts: Facts, current: Seat | None, why: str) -> Step:
+    """No row: NONE. A row: CLEAR between runs, kept mid-run."""
+    if current is None:
+        return Step(NONE, why)
+    if facts.mid_run:
+        return waits_for_the_run(current, why)
+    return Step(CLEAR, why)
+
+
+def _stranded_gate(facts: Facts, current: Seat | None, name: str) -> Step | None:
+    """The answer when `name` cannot (or no longer) sit out stranded, else None."""
     if current is not None and not is_stranded(current):
         # A crafter's row with no order left: the craft path's own answer.
         return Step(CLEAR, "the %s order is removed" % ENV)
     if not name:
         return Step(NONE, "nobody in %s's family is stranded" % facts.family)
     if name in (facts.family, facts.leader) or name not in facts.roster:
-        if current is None:
-            return Step(NONE, "%s leads the family or is off its roster" % name)
-        return Step(CLEAR, "%s leads the family or is off its roster" % name)
+        why = "%s leads the family or is off its roster" % name
+        return Step(CLEAR, why) if current is not None else Step(NONE, why)
     if current is not None and current.out_name != name:
-        why = "%s is stranded now, not %s" % (name, current.out_name)
-        if facts.mid_run:
-            return waits_for_the_run(current, why)
-        return Step(CLEAR, why)
+        return _end_or_none(
+            facts, current, "%s is stranded now, not %s" % (name, current.out_name)
+        )
     if not facts.stranded:
-        why = "%s is not stranded (out of combat, moving, or near its family)" % name
-        if current is None:
-            return Step(NONE, why)
-        if facts.mid_run:
-            return waits_for_the_run(current, why)
-        return Step(CLEAR, why)
+        return _end_or_none(
+            facts,
+            current,
+            "%s is not stranded (out of combat, moving, or near its family)" % name,
+        )
+    return None
+
+
+def _stranded_seat(facts: Facts, current: Seat | None, name: str) -> Step:
+    """Seat, keep or refill the stranded member's row."""
     if facts.out_member is None:
         if current is not None:
             return Step(
