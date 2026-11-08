@@ -67,7 +67,18 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         code = _code("    async def _towntrip_once(self")
         self.assertRegex(
             code,
-            r"towntrip\.plan\(members, town,\s*sitting=frozenset\(names\) & _standin_out\(\)\)",
+            r"towntrip\.plan\(\s*members, town, sitting=frozenset\(names\) & _standin_out\(\),",
+        )
+
+    def test_the_plan_is_told_who_stands_with_whom(self):
+        """The giver beside the drinker is asked first, because a hand-over only
+        lands inside trade range (#2060)."""
+        code = _code("    async def _towntrip_once(self")
+        self.assertRegex(code, r"apart=lambda giver, taker: handover\.verdict\(")
+        self.assertLess(
+            code.index("_fetch_positions"),
+            code.index("towntrip.plan("),
+            "positions are read before the plan is made",
         )
 
     def test_the_bridge_imports_the_planner(self):

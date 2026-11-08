@@ -21116,8 +21116,14 @@ class Bridge(discord.Client):
         )
         # A member sitting the campaign out is not in the party that goes in,
         # so it neither gives nor is given food or drink (towntrip._supply).
-        trip = towntrip.plan(members, town,
-                             sitting=frozenset(names) & _standin_out())
+        # WHO STANDS WITH WHOM decides which spare stack is asked for first: a
+        # hand-over only lands inside trade range, so the giver beside the
+        # drinker beats the conjurer across the map.
+        where = handover.spots(await asyncio.to_thread(_fetch_positions, names))
+        trip = towntrip.plan(
+            members, town, sitting=frozenset(names) & _standin_out(),
+            apart=lambda giver, taker: handover.verdict(
+                giver, taker, where).verb != handover.GIVE)
         for note in trip.notes:
             log.info("towntrip: %s", note)
         for stopped in trip.blocked:
@@ -21150,9 +21156,6 @@ class Bridge(discord.Client):
         # post refuses conjured items and mod-overseer#566 refuses a give
         # outside trade range, so a follower standing apart waits for the
         # next pass.
-        where = {}
-        if any(e.kind == towntrip.GIVE_KIND for e in trip.errands):
-            where = handover.spots(await asyncio.to_thread(_fetch_positions, names))
         waits = []
         for errand in trip.errands:
             if (errand.member, errand.command) in seen:
