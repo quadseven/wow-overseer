@@ -15,6 +15,7 @@ import * as tooltip from "./tooltip.js";
 import * as gestures from "./gestures.js";
 import * as update from "./update.js";
 import { legacy, parse, resolve } from "./router.js";
+import { captureAnchor, resolveAnchor, scrollShift } from "./scrollanchor.js";
 import { learn as learnRealm } from "./families.js";
 import { savedTheme, saveTheme, lastPage, saveLastPage, stampVisit, previousVisit } from "./store.js";
 import { html, ago, plural } from "./ui.js";
@@ -103,10 +104,18 @@ function savedBanner(h) {
   return html`<div class="banner" role="status" data-stale-cache><i class="ph ph-clock-counter-clockwise" aria-hidden="true"></i><div><div style="font-weight:500">Showing the copy saved ${ago(secs)}</div><div class="muted">Reading the world for fresh data.</div></div></div>`;
 }
 
+// The reader's line for scroll anchoring: a fixed depth into the viewport,
+// below the phone's header, where the eye rests while scrolling.
+const READ_LINE = 160;
+
 function draw(keepPlace) {
   if (!current) return;
   const { module, ctx } = current;
   const y = window.scrollY;
+  // The element at the reader's line, named before the swap so the restore
+  // below can follow the content when the redraw moves it (scrollanchor.js).
+  // A reader parked at the very top is not anchored: the top is the top.
+  const anchor = keepPlace && y > 0 ? captureAnchor(main, READ_LINE) : null;
   const focused = document.activeElement && main.contains(document.activeElement) ? document.activeElement : null;
   const focusKey = focused ? (focused.id || focused.getAttribute("data-focus") || "") : "";
   const caret = focused && typeof focused.selectionStart === "number" ? [focused.selectionStart, focused.selectionEnd] : null;
@@ -128,6 +137,14 @@ function draw(keepPlace) {
   }
   if (keepPlace) {
     window.scrollTo(0, y);
+    // Follow the anchored content to its new place: the pixel restore alone
+    // lands on different content whenever the redraw changed a height above
+    // the reader.
+    const anchorEl = anchor ? resolveAnchor(main, anchor) : null;
+    if (anchorEl) {
+      const shift = scrollShift(anchorEl, anchor, READ_LINE);
+      if (shift) window.scrollTo(0, Math.max(0, y + shift));
+    }
     if (focusKey) {
       const el = main.querySelector("#" + CSS.escape(focusKey)) || main.querySelector('[data-focus="' + CSS.escape(focusKey) + '"]');
       if (el) {

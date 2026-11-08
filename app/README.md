@@ -22,6 +22,7 @@ empty list means no zone met the routing threshold on the sampled member's map.
 | `tooltip.js` | The one item tooltip, for any element with `data-item="<entry>"`. It reads `/api/item`. |
 | `search.js` | The search dialog and `addProvider(fn)`. |
 | `tabstrip.js` | A view's tab strip on a phone: a new page scrolls its lit tab into view, and a redraw keeps where the reader scrolled the strip. |
+| `scrollanchor.js` | Keeping the reader's place across a redraw by content, not pixels: the element at the reader's line, named as a child-index path plus offset before the swap and found again after it. Pure functions, tested under node. |
 | `shell.js` | The sidebar, phone header and tab bar, data age, `setBadge`, and `setThumb` (the guild switch on phone). |
 | `families.js` | The realm's families and family guilds from `/api/realm`: the routes, the nav and the views draw these, never names written into the app. |
 | `badges.js` | Nav badge providers. |
