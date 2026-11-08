@@ -277,6 +277,8 @@ class TheDecision(unittest.TestCase):
         self.assertEqual(pace.NOTHING, pace.decide(returned).kind)
 
     def test_wipe_or_stall_outside_restart_still_steps_away_on_return(self):
+        """The overseer's own entry; an operator's order is
+        AnOperatorsOrderIsSteppedDownOnceAndComesBack."""
         restarted = T0 + timedelta(hours=1)
         for outcome in ("wipe", "stalled"):
             run_row = {
@@ -288,7 +290,7 @@ class TheDecision(unittest.TestCase):
                 "ended_reason": "heartbeat cold - nobody from the roster seen on the map",
             }
             f = facts(
-                head("scarlet-library"),
+                head("scarlet-library", source="overseer:planner"),
                 members(ALLIANCE),
                 [run_row],
                 world_started_at=restarted,
@@ -672,11 +674,12 @@ class NoEasierDoor(unittest.TestCase):
         changed="",
         returned=False,
         world_started_at=None,
+        source="overseer:planner",
     ):
         levels = levels or self.LEVELS
         rows = members(levels, worn=14)
         f = facts(
-            head("blackfathom"),
+            head("blackfathom", source=source),
             rows,
             runs,
             open_=open_,
@@ -727,7 +730,7 @@ class NoEasierDoor(unittest.TestCase):
     def test_a_return_with_an_easier_door_steps_down_and_jev_may_not_keep_it(self):
         rows = [dict(r, level=26) for r in HORDE]
         f = facts(
-            head("blackfathom"),
+            head("blackfathom", source="overseer:planner"),
             members(rows),
             [run("stalled", 0, self.BFD)],
             level_rows=rows,
@@ -1037,3 +1040,96 @@ def replace_returned(f):
     from dataclasses import replace
 
     return replace(f, returned=True)
+
+
+# 2026-11-08, wow-dev: both families held an operator's Blackrock Depths x20
+# order. Grug's family stepped back up to it at 03:21Z, its first run back
+# stalled at High Interrogator Gerstahn waiting on a healer's mana (nobody
+# died), and at 04:09Z the pace stepped it down to five runs of Uldaman (queue
+# entry 143). Zug's family's first run back emptied one second after it opened
+# and it went to five runs of Maraudon (entry 144).
+class AnOperatorsOrderIsSteppedDownOnceAndComesBack(unittest.TestCase):
+    BRD_MAP = pace.campaignplan.BY_KEYWORD["blackrock-depths"].map_id
+    ULDA_MAP = pace.campaignplan.BY_KEYWORD["uldaman"].map_id
+    ROWS = [dict(r, level=52) if r["name"] == "Og" else r for r in BRD_FAMILY]
+
+    def at_brd(self, outcome, source="web:overseer"):
+        row = head("blackrock-depths", source=source, id_=138, runs=20)
+        rows = members(self.ROWS)
+        gates, notes = pace.door_gates(row, rows)
+        f = facts(row, rows, runs=[run(outcome, 5, self.BRD_MAP)], level_rows=self.ROWS)
+        return pace.decide(replace_returned(replace_gates(f, gates, notes)))
+
+    def test_a_stall_on_the_way_back_does_not_step_the_order_down(self):
+        d = self.at_brd("stalled")
+        self.assertEqual(pace.NOTHING, d.kind, d)
+        self.assertNotIn("beat the family again", d.why)
+
+    def test_a_wipe_on_the_way_back_still_steps_it_down(self):
+        self.assertEqual(pace.STEP_DOWN, self.at_brd("wipe").kind)
+
+    def test_the_overseers_own_entry_still_steps_away_at_a_stall(self):
+        d = self.at_brd("stalled", source="overseer:planner")
+        self.assertEqual(pace.STEP_DOWN, d.kind)
+        self.assertIn("beat the family again", d.why)
+
+    def test_three_stalls_in_a_row_still_step_the_order_down(self):
+        row = head("blackrock-depths", id_=138, runs=20)
+        runs = [run("stalled", m, self.BRD_MAP) for m in (5, 60, 120)]
+        f = facts(row, members(self.ROWS), runs=runs, level_rows=self.ROWS)
+        f = replace_gates(f, *pace.door_gates(row, members(self.ROWS)))
+        self.assertEqual(pace.STEP_DOWN, pace.decide(replace_returned(f)).kind)
+
+    def test_a_step_down_ahead_of_an_operators_order_is_one_run(self):
+        self.assertEqual(1, pace.step_down_runs(head("blackrock-depths")))
+        for source in ("overseer:planner", "overseer:stepdown", ""):
+            self.assertEqual(
+                pace.STEP_DOWN_RUNS,
+                pace.step_down_runs(head("blackrock-depths", source=source)),
+            )
+
+    def stepping(self, runs=(), done=0, door_source="web:overseer", rows=None):
+        rows = rows or self.ROWS
+        step = head("uldaman", source=pace.SOURCE, id_=143, runs=5)
+        door = head(
+            "blackrock-depths", status="queued", source=door_source, id_=138, runs=20
+        )
+        gates, notes = pace.door_gates(door, members(rows))
+        f = facts(
+            step,
+            members(rows),
+            runs=list(runs),
+            door="blackrock-depths",
+            open_={"id": 153, "decision": pace.STEP_DOWN, "baseline": ""},
+            done=done,
+            level_rows=rows,
+        )
+        f = pace.replace(f, door_row=door, gates=gates, notes=notes)
+        return pace.decide(f)
+
+    def test_after_one_run_the_order_is_next(self):
+        """Entry 143 was queued for five; one run ends it."""
+        for runs, done in (
+            ([run("stalled", 5, self.ULDA_MAP)], 0),
+            ([run("complete", 5, self.ULDA_MAP)], 1),
+        ):
+            d = self.stepping(runs, done)
+            self.assertEqual((pace.STEP_UP, "blackrock-depths"), (d.kind, d.target))
+
+    def test_before_its_one_run_the_step_down_runs_on(self):
+        self.assertFalse(self.stepping().acts)
+
+    def test_a_planners_door_still_farms_its_five(self):
+        d = self.stepping(
+            [run("complete", 5, self.ULDA_MAP)], 1, door_source="overseer:planner"
+        )
+        self.assertFalse(d.acts, d)
+
+    def test_an_order_whose_door_is_not_ready_is_not_sent_back(self):
+        rows = [dict(r, level=49) if r["name"] == "Og" else r for r in self.ROWS]
+        d = self.stepping([run("complete", 5, self.ULDA_MAP)], 1, rows=rows)
+        self.assertNotEqual(pace.STEP_UP, d.kind)
+
+    def test_the_bridge_queues_the_door_rows_count(self):
+        self.assertIn("runs = dungeonpace.step_down_runs(door_row)", BRIDGE)
+        self.assertNotIn("dungeonpace.STEP_DOWN_RUNS", BRIDGE)

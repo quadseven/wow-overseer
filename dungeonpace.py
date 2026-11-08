@@ -59,7 +59,14 @@ WHAT HAPPENS (`decide`).
 
 A RETURN ENDS AT ITS FIRST FAILURE. A family back at a door after a step up or
 a release (`returned`) steps away again at its first attempt there without a
-clear, and Jev is not offered the door to keep.
+clear, and Jev is not offered the door to keep. On an operator's order only a
+wipe ends the return at once (`_at_the_door`); a stall or an empty run there is
+judged by the ordinary record.
+
+AN OPERATOR'S ORDER GETS ITS DOOR BACK AFTER ONE RUN. A step-down ahead of an
+operator's order is `OPERATOR_STEP_DOWN_RUNS` runs (`step_down_runs`), and once
+the family has run it, the order is next whenever its door is ready
+(`_grown_or_farming`), with no named change and no advance in between.
 
 WHICH EASIER DOOR (`candidates`, `ladder`). Every Run below the failing one in
 campaignplan.RUNS (lowest band first), that council.door_refusal allows, whose
@@ -148,6 +155,16 @@ RATE_WINDOW = 6
 WINDOW_HOURS = 48
 
 STEP_DOWN_RUNS = 5
+# AN OPERATOR'S ORDER IS STEPPED DOWN FOR ONE RUN, NOT FIVE. On wow-dev
+# 2026-11-08 both families held a Blackrock Depths x20 order from the operator
+# and both were stepped down on the way back for something they could recover
+# from: Grug's family at 04:09Z for one stall at High Interrogator Gerstahn (a
+# healer low on mana; nobody died) into five runs of Uldaman, Zug's family at
+# 04:11Z for a run that emptied one second after it opened into five runs of
+# Maraudon. Five runs of a door the operator did not order is hours away from
+# the one they did, so a step-down ahead of an operator's order runs once and
+# the order is next.
+OPERATOR_STEP_DOWN_RUNS = 1
 # A door is MASTERED at this many clears with no wipe in a row (and a rate the
 # family can hold). Measured on wow-dev 2026-09-29: the Stockade cleared in 37
 # minutes with no wipe; two clears show the party can do the door twice.
@@ -534,6 +551,13 @@ def operator_ordered(row) -> bool:
     return bool(source) and not source.startswith("overseer:")
 
 
+def step_down_runs(door_row) -> int:
+    """How many runs a step-down entry ahead of `door_row` is queued for, and
+    how many more an extension adds: one ahead of an operator's order
+    (`OPERATOR_STEP_DOWN_RUNS`), else `STEP_DOWN_RUNS`."""
+    return OPERATOR_STEP_DOWN_RUNS if operator_ordered(door_row) else STEP_DOWN_RUNS
+
+
 def door_gates(door_row, members) -> tuple:
     """(gates, notes) for the door a queue row names (#2022).
 
@@ -835,6 +859,7 @@ class Decision:
     target: str = ""
     why: str = ""
     offer: tuple = ()  # Choice options Jev may pick among: keywords, STAY, LEVEL
+    runs: int = 0  # EXTEND: runs added; 0 means STEP_DOWN_RUNS
 
     @property
     def acts(self) -> bool:
@@ -923,8 +948,24 @@ def _count_reached(f: Facts) -> int:
     return wanted if f.done is not None and wanted and f.done >= wanted else 0
 
 
+def _ran_once(f: Facts) -> bool:
+    """Whether the family has run the step-down entry at the head at least
+    once: the leader's count, or any attempt at its door since it started (a
+    stalled run is not counted by the module but was still a run)."""
+    return bool((f.done or 0) >= 1 or f.record.fought or f.record.uncleared_streak)
+
+
 def _grown_or_farming(f: Facts, place: str) -> Decision:
     """A clearable step-down door: back up, run more, or keep farming."""
+    if operator_ordered(f.door_row) and not f.gates and _ran_once(f):
+        # BACK TO THE OPERATOR'S ORDER AFTER ONE RUN (OPERATOR_STEP_DOWN_RUNS).
+        # Entries queued before that rule carry five runs; they end here too.
+        return Decision(
+            STEP_UP,
+            f.door,
+            "one run at %s is the step-down an operator's order gets, so %s is "
+            "next" % (place, council.keyword_place(f.door)),
+        )
     blockers = step_up_blockers(f.members)
     grown = bool(f.changed) and not f.gates and not blockers
     if grown:
@@ -945,11 +986,13 @@ def _grown_or_farming(f: Facts, place: str) -> Decision:
                 % (place, f.record.line(), nxt.said()),
             )
     if wanted and not (f.changed and not blockers):
+        more = step_down_runs(f.door_row)
         return Decision(
             EXTEND,
             str(f.head.get("keyword") or ""),
             "%s is at %d of %d with no level or upgrade since stepping down, so "
-            "it runs %d more" % (place, f.done, wanted, STEP_DOWN_RUNS),
+            "it runs %d more" % (place, f.done, wanted, more),
+            runs=more,
         )
     held = ""
     if f.changed and blockers:
@@ -974,13 +1017,29 @@ def _at_the_door(f: Facts, place: str) -> Decision:
     active = str(f.head.get("status") or "") == "active"
     if active and not f.record.clearable:
         why = "%s is not clearable: %s" % (place, f.record.line())
-    elif active and f.returned and (f.record.wipes or f.record.uncleared_streak):
+    elif (
+        active
+        and f.returned
+        and (
+            f.record.wipes
+            or (f.record.uncleared_streak and not operator_ordered(f.door_row))
+        )
+    ):
         # BACK DOWN AT ONCE (2026-09-28). The door already beat this family
         # once; a wipe on the way back in is the same answer, not bad luck,
         # and waiting for a second one costs five corpse runs to learn it.
         # So is any attempt that did not clear (#1074): the record restarts at
         # the return, and a stall, an empty run or a lost client there held
         # Blackfathom Deeps for two more tries after a release.
+        #
+        # NOT A STALL ON AN OPERATOR'S ORDER. On wow-dev 2026-11-08 Grug's
+        # family went back to the operator's Blackrock Depths order and its
+        # first run stalled at High Interrogator Gerstahn waiting on a healer's
+        # mana, with nobody dead; this rule stepped the order down at 04:09Z.
+        # The operator chose that door, and a stall is something the family
+        # recovers from, so on an operator's order only a wipe ends the return
+        # at once; the ordinary record (three attempts without a clear) still
+        # steps it down.
         why = "%s beat the family again on its way back: %s" % (
             place,
             f.record.line(),
@@ -1243,7 +1302,8 @@ def line(family: str, d: Decision, by: str) -> str:
         FURTHER: "steps further down to %s" % target,
         STEP_UP: "steps back up to %s" % target,
         ADVANCE: "advances to %s" % target,
-        EXTEND: "farms %s %d more runs" % (target, STEP_DOWN_RUNS),
+        EXTEND: "farms %s %d more run%s"
+        % (target, d.runs or STEP_DOWN_RUNS, "" if d.runs == 1 else "s"),
         QUEST: "quests at its level",
         RELEASE: "stops questing and goes back to its queue",
     }.get(d.kind, "holds")
