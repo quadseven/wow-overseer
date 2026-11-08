@@ -324,7 +324,7 @@ class TheUsesAreReadFromTheWorld(unittest.TestCase):
         quest = b.quests[28]
         use = quest.uses[0]
         self.assertEqual((use.verb, use.item), (classquest.USE_HERE, 15877))
-        self.assertEqual([spot.guid for spot in use.spots], [1])
+        self.assertEqual([spot.guid for spot in use.spots], [90001])
         self.assertEqual(
             classquest.use_command(use, use.spots[0]), "use-item-here item:15877"
         )
