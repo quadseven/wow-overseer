@@ -29216,6 +29216,26 @@ def _count_sales(counts: dict, sales) -> None:
         counts[sale.holder] = counts.get(sale.holder, 0) + 1
 
 
+async def _queue_route_sales(route_sales, holder: str) -> int:
+    """Carry one holder's item plan route sales out (#1977).
+
+    Through the same `_insert_sell` the ordinary rows use: a row the
+    insert refuses is skipped and asked again next pass, and the gold
+    the member realized is the route's own report line. Returns how
+    many rows were written. Looked up: the economy tests load this
+    pass in isolation.
+    """
+    vendor_mod = globals().get("itemplan_vendor")
+    route_mine = tuple(sale for sale in route_sales if sale.holder == holder)
+    if not route_mine or vendor_mod is None:
+        return 0
+    report = await asyncio.to_thread(
+        vendor_mod.carry_out, route_mine, _insert_sell)
+    for line in report.lines:
+        log.info("%s", line)
+    return len(report.carried)
+
+
 async def _queue_vendor_sales(
     candidates, leader: str, aimed: bool, mode: str, attempts,
     route_sales=(),
@@ -29236,17 +29256,22 @@ async def _queue_vendor_sales(
     by_holder: dict[str, list] = {}
     for candidate in candidates:
         by_holder.setdefault(candidate.holder, []).append(candidate)
-    # The item plan route's holders (#1977): a route stack is one the
-    # ordinary selectors kept, so its holder may hold no candidate here
-    # at all, and still has a sale to queue when it reaches a counter.
-    holders = sorted(set(by_holder) | {sale.holder for sale in route_sales})
+    # The item plan route's extra holders (#1977): a route stack is one
+    # the ordinary selectors kept, so its holder may hold no candidate
+    # here at all, and still has a sale to queue when it reaches a
+    # counter. The per-holder loops below stay over `by_holder` exactly
+    # as they were; route-only holders are read and carried after them.
+    route_only = sorted({sale.holder for sale in route_sales} - set(by_holder))
     inserted = 0
     considered = 0
     holder_town = {}
     leader_town = await asyncio.to_thread(_fetch_town, leader)
     holder_town[leader] = leader_town
     leader_at_counter = bool(leader_town.vendor)
-    for holder in holders:
+    for holder in sorted(by_holder):
+        town = await asyncio.to_thread(_fetch_town, holder)
+        holder_town[holder] = town
+    for holder in route_only:
         town = await asyncio.to_thread(_fetch_town, holder)
         holder_town[holder] = town
     queue_holders = set(bag_pressure.vendor_holders_to_queue(
@@ -29263,8 +29288,11 @@ async def _queue_vendor_sales(
         queue_holders, mode, leader_at_counter,
         lambda holder: bool(holder_town[holder].vendor),
     )
-    for holder in holders:
-        holder_candidates = tuple(by_holder.get(holder, ()))
+    # Looked up: the economy tests load this pass in isolation, without
+    # the route helper defined.
+    route_fn = globals().get("_queue_route_sales")
+    for holder in sorted(by_holder):
+        holder_candidates = tuple(by_holder[holder])
         town = holder_town[holder]
         if holder not in queue_holders:
             # A STACK THE WORLD ALREADY ANSWERED IS NOT A VENDOR WAIT (#1261).
@@ -29308,18 +29336,17 @@ async def _queue_vendor_sales(
             item_plan.reasons(plan.skipped),
         )
         # THE ROUTE'S SALES FOR THIS HOLDER (#1977), through the same
-        # insert and the same counter gate: a row the insert refuses is
-        # skipped and asked again next pass, and the gold each member
-        # realized is the route's own report line. Looked up: the
-        # economy tests load this pass in isolation.
-        route_mine = tuple(sale for sale in route_sales if sale.holder == holder)
-        vendor_mod = globals().get("itemplan_vendor")
-        if route_mine and vendor_mod is not None:
-            report = await asyncio.to_thread(
-                vendor_mod.carry_out, route_mine, _insert_sell)
-            inserted += len(report.carried)
-            for line in report.lines:
-                log.info("%s", line)
+        # insert and the same counter gate.
+        if route_fn is not None:
+            inserted += await route_fn(route_sales, holder)
+    # ROUTE-ONLY HOLDERS (#1977): no ordinary candidate, so the loop
+    # above never reaches them; carry their sales under the same
+    # counter gate, or they wait for the next pass like any holder
+    # who is not queued.
+    if route_fn is not None:
+        for holder in route_only:
+            if holder in queue_holders:
+                inserted += await route_fn(route_sales, holder)
     log.info("economy: queued %d/%d vendor sale(s) across %d holder(s), "
              "one errand on leader=%s (taken=%s)",
              inserted, considered, len(by_holder), leader, aimed)
