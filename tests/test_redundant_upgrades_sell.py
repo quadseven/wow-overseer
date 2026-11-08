@@ -14,6 +14,7 @@ uncommon-or-lower piece beyond them sells. Rare pieces, pieces the member
 would not wear and unreserved pieces keep their old answers.
 """
 
+import dataclasses
 import unittest
 
 import gear
@@ -99,6 +100,12 @@ class OnlyTheBestOfASlotIsKept(unittest.TestCase):
     def test_three_weapons_are_kept_and_the_fourth_sells(self):
         m = member(sword(11, 30), sword(12, 31), sword(13, 32), sword(14, 29))
         self.assertEqual({"Sword 14"}, sold(m))
+
+
+class AMemberWithRoomDoesNotWalkToSell(unittest.TestCase):
+    def test_no_sale_step_while_the_bags_have_room(self):
+        roomy = dataclasses.replace(member(belt(1, 30), belt(2, 32)), free_slots=12)
+        self.assertIsNone(guildjobs._full_bags_first(roomy, None, (), 600.0))
 
 
 class WhatIsNotARedundantUpgradeStays(unittest.TestCase):
