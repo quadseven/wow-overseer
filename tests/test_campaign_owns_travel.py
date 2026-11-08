@@ -556,7 +556,7 @@ class AStaleTrainingStopOnTheLeader(unittest.TestCase):
         self.assertEqual("", self.world.column["Zug"], self.log.lines)
         self.assertEqual([("Zug", self.STOP)], self.world.stop_releases)
         self.assertEqual([], self.world.releases)
-        line = [l for l in self.log.lines if "handed Zug" in l][0]
+        line = [x for x in self.log.lines if "handed Zug" in x][0]
         self.assertIn("after it stood 1200s", line)
         self.assertIn("released=True", line)
 
