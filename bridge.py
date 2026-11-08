@@ -22389,7 +22389,7 @@ class Bridge(discord.Client):
                      campaignqueue._family(key), head.get("id"), door)
             return None, reads
         head_kw = str(head.get("keyword") or "")
-        gates, notes = dungeonpace.readiness(door, members)
+        gates, notes = dungeonpace.door_gates(door_row, members)
         since = dungeonpace.since(reads["started"].get(int(head["id"])),
                                   reads["back"].get(head_kw))
         changed = ""
