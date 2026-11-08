@@ -959,7 +959,9 @@ class AnOperatorsOrderIsJudgedOnRunsAfterIt(unittest.TestCase):
 
     def test_the_sql_reads_when_each_run_began(self):
         self.assertIn("started_at", stall.RUNS_SQL)
-        self.assertIn("r.outcome, r.started_at, r.ended_at FROM", stall.RUNS_SQL_TIMELINE)
+        self.assertIn(
+            "r.outcome, r.started_at, r.ended_at FROM", stall.RUNS_SQL_TIMELINE
+        )
         self.assertIn("ended_at", stall.RUNS_SQL)
 
     def test_the_breaker_reads_with_the_head_it_judges(self):
