@@ -8,8 +8,12 @@ from __future__ import annotations
 import copy
 import pathlib
 import sys
+import types
 import unittest
 from types import SimpleNamespace
+from unittest import mock
+
+from _stub_modules import PYMYSQL, fresh_import
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -17,6 +21,13 @@ import itemplan_shadow as shadow  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
+
+
+def import_bridge():
+    discord = types.ModuleType("discord")
+    discord.Client = object
+    return fresh_import("bridge", discord=discord, pymysql=PYMYSQL)
+
 
 ON = {"ITEMPLAN_SHADOW": "on"}
 
@@ -266,6 +277,69 @@ class RunTest(unittest.TestCase):
         )
         self.assertNotIn("auction prices", report.missing)
         self.assertFalse(any(m.startswith("quest log") for m in report.missing))
+
+
+class AuctionExecutorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_shadow_lists_only_quotes_above_the_vendor_floor(self):
+        rows = [
+            row("Ana", 101, 1001, "Worth listing", sell=10_000),
+            row("Ana", 102, 1002, "Below listing floor", sell=10_000),
+        ]
+        extras = shadow.Extras(
+            open_quest_items={"Ana": frozenset()},
+            market={1001: (60_000, 1), 1002: (34_000, 1)},
+            templates={
+                entry: {
+                    "item_class": 15,
+                    "subclass": 0,
+                    "bonding": 0,
+                    "inventory_type": 0,
+                    "item_level": 1,
+                    "req_level": 0,
+                    "required_skill_rank": 0,
+                    "container_slots": 0,
+                    "fire_res": 0,
+                    "stats": {},
+                }
+                for entry in (1001, 1002)
+            },
+            instance_soulbound={101: False, 102: False},
+            fire_gear=frozenset(),
+        )
+        queued = []
+        executor = SimpleNamespace(
+            _auction_holder_houses=mock.AsyncMock(return_value={"Ana": 2})
+        )
+        bridge = import_bridge()
+
+        def insert(holder, command):
+            queued.append((holder, command))
+            return 1
+
+        shadow.reset()
+        with (
+            mock.patch.object(
+                bridge.itemplan_shadow,
+                "auction_enabled",
+                return_value=True,
+                create=True,
+            ),
+            mock.patch.object(bridge, "_itemplan_reads", return_value=extras),
+            mock.patch.object(bridge, "_recent_auction_keys", return_value=set()),
+            mock.patch.object(bridge, "_insert_auction", side_effect=insert),
+        ):
+            await bridge.Bridge._itemplan_auction(
+                executor,
+                ["Ana"],
+                "Fam",
+                rows,
+                {"Ana": 10},
+            )
+
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0][0], "Ana")
+        self.assertIn("guid:101", queued[0][1])
+        self.assertNotIn("guid:102", queued[0][1])
 
 
 class BridgeShapeTest(unittest.TestCase):
