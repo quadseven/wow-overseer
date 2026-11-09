@@ -243,6 +243,7 @@ FORGOTTEN_HEIRLOOM = (
 FARGODEEP_EXPLORATION = (
     "requires exploring Fargodeep Mine; questers cannot earn exploration credit"
 )
+SELLING_FISH = "Selling Fish (quest 127) requires fishing; questers cannot fish"
 UNDERBELLY_SCALES = "Underbelly Scales (quest 122) requires Black Dragonspawn with no spawns in Redridge Mountains"
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
@@ -1410,6 +1411,8 @@ def _broken_reason(
         return FORGOTTEN_HEIRLOOM
     if quest.id == 62 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return FARGODEEP_EXPLORATION
+    if quest.id == 127 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
+        return SELLING_FISH
     if quest.id == 122 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return UNDERBELLY_SCALES
     missing = _ender_missing(quest, facts, gone, object_gone)
