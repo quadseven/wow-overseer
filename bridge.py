@@ -14511,7 +14511,11 @@ class Bridge(discord.Client):
                 decision = await lootcouncil.answer(
                     self._jev, council_row, describe, rule)
             else:
-                decision = lootcouncil.skipped(council_row)
+                # The item card arms the council's fit gates (#2124) on the
+                # unasked path too; without one the gates abstain.
+                describe = await self._jev_describer({council_row.item_entry})
+                decision = lootcouncil.skipped(
+                    council_row, describe(council_row.item_entry))
             wrote = await asyncio.to_thread(_decide_council, decision)
             if wrote:
                 log.info(
