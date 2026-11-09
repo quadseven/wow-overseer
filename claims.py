@@ -234,7 +234,6 @@ class MemberHold:
         )
 
 
-
 def member_hold_observe(
     names,
     free_slots: dict,
@@ -485,6 +484,7 @@ class Claims:
         if not release.legal and kw.get("pressure") and kw["ground"](kw["aim"]):
             log.info(
                 "economy: kept leader ground aim %s under bag pressure: %s",
-                kw["aim"], release.why,
+                kw["aim"],
+                release.why,
             )
         return release

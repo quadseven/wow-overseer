@@ -39,7 +39,9 @@ class TheBridgeHoldsOneClaims(unittest.TestCase):
     def test_a_refused_release_logs_its_reason(self):
         fleet = claims.Claims()
         ask = dict(
-            aim="at:1:1,2,3", pressure=True, in_run=True,
+            aim="at:1:1,2,3",
+            pressure=True,
+            in_run=True,
             ground=lambda aim: aim.startswith("at:"),
         )
         with self.assertLogs(claims.log, level="INFO") as caught:
@@ -51,7 +53,9 @@ class TheBridgeHoldsOneClaims(unittest.TestCase):
         fleet = claims.Claims()
         with self.assertNoLogs(claims.log, level="INFO"):
             release = fleet.release_ground(
-                aim="at:1:1,2,3", pressure=True, in_run=False,
+                aim="at:1:1,2,3",
+                pressure=True,
+                in_run=False,
                 ground=lambda aim: aim.startswith("at:"),
             )
         self.assertTrue(release.legal)
@@ -60,8 +64,14 @@ class TheBridgeHoldsOneClaims(unittest.TestCase):
 class NothingInTheFacadeIsLeftUnused(unittest.TestCase):
     def test_every_public_facade_member_has_a_bridge_caller(self):
         for name in (
-            "slot_for", "member_observe", "member_released", "member_stuck",
-            "member_hold", "member_restore", "member_reset", "release_ground",
+            "slot_for",
+            "member_observe",
+            "member_released",
+            "member_stuck",
+            "member_hold",
+            "member_restore",
+            "member_reset",
+            "release_ground",
         ):
             self.assertIn("_CLAIMS." + name + "(", SOURCE, name)
         for gone in ("want_column", "busy", "freed_knights"):

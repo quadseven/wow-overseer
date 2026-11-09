@@ -524,9 +524,7 @@ def _bridge_self(world, clock, log):
             "_staging_phase": world.staging_phase,
         },
     )
-    me = types.SimpleNamespace(
-        _town_slot=townslot.Slot(releasable=economy)
-    )
+    me = types.SimpleNamespace(_town_slot=townslot.Slot(releasable=economy))
     for name in (
         "_campaign_owns_travel",
         "_staging_campaign",
