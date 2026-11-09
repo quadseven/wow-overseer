@@ -20,7 +20,8 @@ left, is not returned; a line spoken before a member joined may still be.
 The realm records nothing that tells those apart.
 
 BOUNDS. At most MAX_LIMIT lines (default DEFAULT_LIMIT) from the last
-MAX_HOURS hours (default DEFAULT_HOURS), newest first. Both bounds and the
+MAX_HOURS hours (default DEFAULT_HOURS): the newest N lines in the window,
+returned oldest first so the newest is last. Both bounds and the
 caps are in the payload. A bad number is a 400, never a silent default.
 
 PRIVACY. Whispers, yells and custom channels are not readable: CHANNELS is the
@@ -123,7 +124,7 @@ def chat(query: dict, ctx) -> tuple[int, dict]:
             "hours": hours,
             "max_limit": MAX_LIMIT,
             "max_hours": MAX_HOURS,
-            "order": "newest first",
+            "order": "newest last",
             "markup": "stripped",
             "lines": [
                 {
@@ -133,7 +134,7 @@ def chat(query: dict, ctx) -> tuple[int, dict]:
                     "text": relay.sanitize(str(r["text"] or "")),
                     "at": _at(r["created_at"]),
                 }
-                for r in spoken
+                for r in reversed(spoken)
             ],
         }
     )

@@ -57,12 +57,13 @@ class TheRoute(unittest.TestCase):
     def test_registered(self):
         self.assertIn("/api/v2/chat", apiv2.ROUTES)
 
-    def test_party_scoped_to_family_names_newest_first(self):
+    def test_party_scoped_to_family_names_newest_last(self):
         rows = [row(9, "Og", "party", "later", 5), row(8, "Grug", "party", "first", 1)]
         code, body, mem = run({"channel": ["party"], "family": ["Grug"]}, rows)
         self.assertEqual(code, 200)
-        self.assertEqual([m["id"] for m in body["lines"]], [9, 8])
-        self.assertEqual(body["lines"][0]["speaker"], "Og")
+        self.assertEqual([m["id"] for m in body["lines"]], [8, 9])
+        self.assertEqual(body["lines"][-1]["speaker"], "Og")
+        self.assertEqual(body["order"], "newest last")
         self.assertEqual(body["channel"], "party")
         sql, params = mem.asked[0]
         self.assertIn("overseer_chat", sql)
