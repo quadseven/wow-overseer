@@ -20120,10 +20120,15 @@ class Bridge(discord.Client):
                     now=time.monotonic(),
                 )
                 if current != "vendor":
+                    away = bag_pressure.stranded_distance(
+                        positions.get(leader), positions.get(name))
                     log.info(
-                        "town errand: %s is cut off on another map with fewer "
-                        "than %d free slots; its guarded self-contained vendor "
+                        "town errand: %s is cut off %s with %s free slots "
+                        "(fewer than %d); its guarded self-contained vendor "
                         "aim was set", name,
+                        "on another map" if away is None
+                        else "%d yards from the leader on the same map" % away,
+                        (free_slots or {}).get(name),
                         bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS,
                     )
             else:
