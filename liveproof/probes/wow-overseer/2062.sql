@@ -15,6 +15,7 @@ FROM (SELECT
     WHERE r.map_id = 230 AND r.started_at >= '2026-11-08 13:45:00' AND r.outcome = 'evacuated') AS evacuated,
   (SELECT COUNT(*) FROM acore_characters.overseer_dungeon_run_event e
     JOIN acore_characters.overseer_dungeon_run r ON r.id = e.run_id
-    WHERE r.map_id = 230 AND e.created_at >= '2026-11-08 13:45:00'
+    WHERE r.map_id = 230 AND r.started_at >= '2026-11-08 13:45:00'
+      AND e.created_at >= '2026-11-08 13:45:00'
       AND (e.detail LIKE '%bag%' OR e.detail LIKE '%evacuat%')) AS bag_events
 ) s;
