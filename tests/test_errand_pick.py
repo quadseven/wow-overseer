@@ -1,11 +1,9 @@
 """A bag-room town errand outranks a regroup, a fetch and a training stop.
 
-Measured on the dev realm, 2026-11-08 03:40 to 2026-11-09 03:11 UTC: 25
-bag-room errands started and 7 ended unlanded after the full 1200 seconds
-because the family leader stood still. The module's static order ranks regroup,
-fetch, hearth and training above an errand, and the intent choice is paused
-here (no model key), so nothing ever lifted the errand over them. These tests
-run on fake rows; none touches a database.
+A bag-room town errand's walk failed to land because the family leader stood
+still: the module's static order ranks regroup, fetch, hearth and training
+above an errand, and the intent choice is paused where no model key is set, so
+nothing ever lifted the errand over them. These tests run on fake rows; none touches a database.
 """
 
 import asyncio
@@ -50,8 +48,11 @@ ERRAND = "errand|town trip|" + AIM
 
 class ThePolicy(unittest.TestCase):
     def test_each_outranking_kind_loses_to_the_errand(self):
-        for outranker in ("regroup|regroup|Uzza", "fetch|fetch|Oz",
-                          "training|training stop|Hukk"):
+        for outranker in (
+            "regroup|regroup|Uzza",
+            "fetch|fetch|Oz",
+            "training|training stop|Hukk",
+        ):
             with self.subTest(outranker):
                 pick = jfi.errand_pick(row(outranker + "\n" + ERRAND), True)
                 self.assertIsNotNone(pick)
@@ -60,17 +61,20 @@ class ThePolicy(unittest.TestCase):
 
     def test_the_vendor_walk_is_the_errand_too(self):
         pick = jfi.errand_pick(
-            row("regroup|regroup|Uzza\neconomy|travel column|vendor"), True)
+            row("regroup|regroup|Uzza\neconomy|travel column|vendor"), True
+        )
         self.assertEqual("economy:vendor", pick.ask.option)
 
     def test_the_errand_ask_ranks_highest_among_errand_kinds(self):
-        pick = jfi.errand_pick(row(
-            "regroup|regroup|Uzza\neconomy|travel column|vendor\n" + ERRAND), True)
+        pick = jfi.errand_pick(
+            row("regroup|regroup|Uzza\neconomy|travel column|vendor\n" + ERRAND), True
+        )
         self.assertEqual("errand", pick.ask.kind)
 
     def test_no_active_bag_room_errand_picks_nothing(self):
         self.assertIsNone(
-            jfi.errand_pick(row("regroup|regroup|Uzza\n" + ERRAND), False))
+            jfi.errand_pick(row("regroup|regroup|Uzza\n" + ERRAND), False)
+        )
 
     def test_an_errand_not_on_the_table_picks_nothing(self):
         self.assertIsNone(jfi.errand_pick(row("regroup|regroup|Uzza"), True))
@@ -81,19 +85,28 @@ class ThePolicy(unittest.TestCase):
     def test_a_dungeon_run_or_an_operator_order_still_comes_first(self):
         for kind in ("dungeon", "operator"):
             with self.subTest(kind):
-                self.assertIsNone(jfi.errand_pick(row(
-                    "regroup|regroup|Uzza\n" + ERRAND, current_kind=kind), True))
+                self.assertIsNone(
+                    jfi.errand_pick(
+                        row("regroup|regroup|Uzza\n" + ERRAND, current_kind=kind), True
+                    )
+                )
 
     def test_a_row_the_module_has_not_refreshed_is_not_acted_on(self):
-        self.assertIsNone(jfi.errand_pick(row(
-            "regroup|regroup|Uzza\n" + ERRAND,
-            module_age=jfi.FRESH_SECONDS + 1), True))
+        self.assertIsNone(
+            jfi.errand_pick(
+                row(
+                    "regroup|regroup|Uzza\n" + ERRAND, module_age=jfi.FRESH_SECONDS + 1
+                ),
+                True,
+            )
+        )
 
     def test_the_cap_gives_the_regroup_its_turn_back(self):
         table = "regroup|regroup|Uzza\n" + ERRAND
         self.assertIsNotNone(jfi.errand_pick(row(table), True, held_for=60))
-        self.assertIsNone(jfi.errand_pick(
-            row(table), True, held_for=jfi.ERRAND_PICK_CAP_SECONDS))
+        self.assertIsNone(
+            jfi.errand_pick(row(table), True, held_for=jfi.ERRAND_PICK_CAP_SECONDS)
+        )
 
     def test_the_cap_is_the_walks_own_window(self):
         self.assertEqual(townerrand.GO_SECONDS, jfi.ERRAND_PICK_CAP_SECONDS)
@@ -101,7 +114,8 @@ class ThePolicy(unittest.TestCase):
     def test_a_long_target_is_written_as_any_errand(self):
         long_aim = "at:1:" + "9" * 120
         pick = jfi.errand_pick(
-            row("regroup|regroup|Uzza\nerrand|town trip|" + long_aim), True)
+            row("regroup|regroup|Uzza\nerrand|town trip|" + long_aim), True
+        )
         self.assertEqual(("errand", ""), jfi.errand_pick_columns(pick))
 
 
@@ -115,7 +129,8 @@ class TheStep(unittest.TestCase):
         s2 = jfi.errand_step(row(self.TABLE), 100.0, s.memory, 1030.0)
         self.assertEqual("", s2.action)
         s3 = jfi.errand_step(
-            row(self.TABLE), 100.0, s2.memory, 1000.0 + jfi.PICK_SECONDS / 2)
+            row(self.TABLE), 100.0, s2.memory, 1000.0 + jfi.PICK_SECONDS / 2
+        )
         self.assertEqual("write", s3.action)
         self.assertFalse(s3.first)
 
@@ -172,27 +187,42 @@ class TheBridge(unittest.TestCase):
                 "_TOWN_ERRANDS": errands,
                 "_ERRAND_PICKS": {},
                 "_fetch_family_intents": lambda: rows,
-                "_write_family_pick":
-                    lambda *a: calls["write"].append(a) or 1,
+                "_write_family_pick": lambda *a: calls["write"].append(a) or 1,
                 "_clear_family_pick": calls["clear"].append,
                 "log": types.SimpleNamespace(
                     info=lambda *a: calls["log"].append(a[0] % a[1:]),
-                    exception=lambda *a: None),
+                    exception=lambda *a: None,
+                ),
             },
         )
         return ns, calls
 
     def bag_errand(self, names=("Zug", "Uzza"), why=townerrand.BAG_PRESSURE_WHY):
-        return {tuple(sorted(names)): townerrand.State(
-            phase=townerrand.GO, started=100.0, why=why)}
+        return {
+            tuple(sorted(names)): townerrand.State(
+                phase=townerrand.GO, started=100.0, why=why
+            )
+        }
 
     def table_row(self):
-        return {"Zug": dict(
-            leader_name="Zug", family="Zug", current_kind="regroup",
-            current_owner="regroup", current_target="Uzza", current_for=5,
-            on_the_table="regroup|regroup|Uzza\n" + ERRAND, goal_yards=403,
-            members_state="", module_age=5, chosen_kind="", chosen_target="",
-            chosen_by="", changes=1)}
+        return {
+            "Zug": dict(
+                leader_name="Zug",
+                family="Zug",
+                current_kind="regroup",
+                current_owner="regroup",
+                current_target="Uzza",
+                current_for=5,
+                on_the_table="regroup|regroup|Uzza\n" + ERRAND,
+                goal_yards=403,
+                members_state="",
+                module_age=5,
+                chosen_kind="",
+                chosen_target="",
+                chosen_by="",
+                changes=1,
+            )
+        }
 
     def test_the_bridge_writes_the_errand_pick_without_a_model(self):
         ns, calls = self.load(self.bag_errand(), self.table_row())
@@ -210,8 +240,7 @@ class TheBridge(unittest.TestCase):
         self.assertEqual(1, len(calls["log"]))
 
     def test_a_town_errand_for_anything_but_bag_room_is_left_alone(self):
-        ns, calls = self.load(
-            self.bag_errand(why="gear in the post"), self.table_row())
+        ns, calls = self.load(self.bag_errand(why="gear in the post"), self.table_row())
         asyncio.run(ns["_errand_pick_once"](object()))
         self.assertEqual([], calls["write"])
 
