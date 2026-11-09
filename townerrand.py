@@ -160,6 +160,9 @@ class State:
     # A dungeon run was seen after this errand ended (note_run): its bags are
     # new, so a bag-room errand is not held back by the cooldown (#2116).
     ran_since: bool = False
+    # The errand was released because its walk never landed (#2116): the next
+    # one may start after UNLANDED_RETRY_SECONDS, not the whole cooldown.
+    unlanded: bool = False
 
     @property
     def active(self) -> bool:
@@ -223,6 +226,13 @@ def should_start(
     if state.active or in_run:
         return ""
     cooldown = FLOOR_SALE_COOLDOWN_SECONDS if floor_sale else COOLDOWN_SECONDS
+    if state.unlanded:
+        # AN ERRAND THAT NEVER REACHED A COUNTER DID NOTHING TO REST ON (#2116).
+        # wow-dev 2026-11-09: the walk to a vendor released at 04:57 after 20
+        # minutes, and the family went back to questing with full bags for the
+        # rest of a 30 minute to two hour cooldown. The aim that failed is not
+        # chosen again (AIM_MEMORY_SECONDS), so the retry goes elsewhere.
+        cooldown = min(cooldown, UNLANDED_RETRY_SECONDS)
     if state.ended and now - state.ended < cooldown:
         # A RUN SINCE THE LAST ERRAND ENDED MADE ITS BAGS NEW (#2116). The
         # cooldown keeps two errands from running back to back on one set of
@@ -463,6 +473,8 @@ def _bound_at(hub: dict, bind) -> bool:
 # nearest vendor on the head's map when its default hub is a long walk off, and
 # a hub released as "did not land" is skipped for AIM_MEMORY_SECONDS.
 DID_NOT_LAND = "did not land"
+# How soon an errand whose walk never landed may be tried again, at another aim.
+UNLANDED_RETRY_SECONDS = 300.0
 AIM_MEMORY_SECONDS = 4 * 3600.0
 # Two aims this close on one map are the same aim (a town square's counters).
 AIM_SAME_YARDS = 120.0
@@ -595,7 +607,14 @@ def aim_now(state: State, now: float) -> bool:
 def end(state: State, now: float, why: str) -> tuple:
     """Release the family, with the reason."""
     return (
-        replace(state, phase=DONE, ended=now, why=why, ran_since=False),
+        replace(
+            state,
+            phase=DONE,
+            ended=now,
+            why=why,
+            ran_since=False,
+            unlanded=state.phase == GO and DID_NOT_LAND in why,
+        ),
         "released: %s" % why,
     )
 

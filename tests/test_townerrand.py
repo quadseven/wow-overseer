@@ -1280,3 +1280,50 @@ class ARunMakesTheBagsNewForTheCooldown(unittest.TestCase):
 
     def test_the_adapter_notes_a_run_it_sees(self):
         self.assertIn("townerrand.note_run(state)", BRIDGE)
+
+
+class AWalkThatNeverLandedMayBeTriedAgainSoon(unittest.TestCase):
+    """#2116. wow-dev 2026-11-09: the walk to a vendor was released at 04:57
+    after 20 minutes without landing, and the family went back to questing with
+    full bags for the rest of the cooldown."""
+
+    def _released(self, why_go=True):
+        state = te.start(0.0, HUB, te.BAG_PRESSURE_WHY)
+        new, line = te.advance(state, te.GO_SECONDS + 1.0)
+        self.assertEqual(te.DONE, new.phase, line)
+        return new
+
+    def _start(self, state, gap, floor_sale=False):
+        return te.should_start(
+            state,
+            now=state.ended + gap,
+            in_run=False,
+            mail_gear={},
+            facts={},
+            bag_pressure_needed=True,
+            floor_sale=floor_sale,
+        )
+
+    def test_the_unlanded_release_is_marked(self):
+        self.assertTrue(self._released().unlanded)
+
+    def test_it_may_start_again_after_the_short_retry(self):
+        state = self._released()
+        self.assertEqual("", self._start(state, te.UNLANDED_RETRY_SECONDS - 1))
+        self.assertEqual(
+            te.BAG_PRESSURE_WHY, self._start(state, te.UNLANDED_RETRY_SECONDS + 1)
+        )
+
+    def test_any_other_release_keeps_the_whole_cooldown(self):
+        state = te.start(0.0, HUB, te.BAG_PRESSURE_WHY)
+        done, _ = te.advance(state, 10.0, in_run=True)
+        self.assertFalse(done.unlanded)
+        self.assertEqual("", self._start(done, te.UNLANDED_RETRY_SECONDS + 1))
+        steps, _ = te.advance(replace_phase(state, te.STEPS), te.TOTAL_SECONDS + 1.0)
+        self.assertFalse(steps.unlanded)
+
+
+def replace_phase(state, phase):
+    import dataclasses
+
+    return dataclasses.replace(state, phase=phase)
