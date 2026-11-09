@@ -210,6 +210,101 @@ class TheStuckReaderListsIt(unittest.TestCase):
         self.assertIn("deathloop.SQL.format(holes=h)", source)
         self.assertIn("five or more deaths", members.BASIS)
 
+
+# ---- the loop clears once the member has left the zone (#2152) ------------------
+
+
+def roster_at(rows, zone_id, life="alive", level=21):
+    """The roster with Clunk's fresh snapshot standing in `zone_id`."""
+    guild = [dict(GUILD[0]), dict(GUILD[1], level=level)]
+    readings = {
+        "Grug": {"online": True, "life": "alive", "fresh_at": NOW},
+        "Clunk": {"online": True, "life": life, "fresh_at": NOW},
+    }
+    snaps = (
+        []
+        if zone_id is None
+        else [
+            {
+                "name": "Clunk",
+                "zone_id": zone_id,
+                "map_id": EASTERN_KINGDOMS,
+                "in_combat": False,
+            }
+        ]
+    )
+    return members.build(
+        {"Grug": ["Grug"]},
+        guild,
+        [],
+        snaps,
+        [],
+        {},
+        NOW,
+        readings=readings,
+        deaths=rows,
+    )
+
+
+class TheLoopClearsOnceTheMemberLeaves(unittest.TestCase):
+    def test_a_member_standing_in_another_zone_is_not_listed(self):
+        view = members.stuck_view(roster_at(deaths(6), WESTFALL))
+        self.assertEqual(view["members"], [])
+
+    def test_the_roster_row_itself_is_not_stuck(self):
+        built = roster_at(deaths(6), WESTFALL)
+        row = {r["name"]: r for r in built["members"]}["Clunk"]
+        self.assertFalse(row["stuck"])
+        self.assertEqual(row["stuck_kind"], "")
+        self.assertEqual(row["blocker"], "")
+
+    def test_a_member_still_in_the_zone_is_listed(self):
+        view = members.stuck_view(roster_at(deaths(6), REDRIDGE))
+        rows = {r["name"]: r for r in view["members"]}
+        self.assertEqual(rows["Clunk"]["kind"], "death-loop")
+        self.assertIn("Redridge Mountains", rows["Clunk"]["blocker"])
+
+    def test_without_a_snapshot_the_loop_still_lists(self):
+        view = members.stuck_view(roster_at(deaths(6), None))
+        self.assertEqual([r["name"] for r in view["members"]], ["Clunk"])
+
+    def test_a_ghost_in_another_zone_is_not_listed_as_dying_in_the_loop_zone(self):
+        view = members.stuck_view(roster_at(deaths(6), WETLANDS, life="ghost"))
+        self.assertEqual(view["members"], [])
+
+    def test_one_member_leaving_does_not_clear_another_still_in_its_loop(self):
+        rows = deaths(6) + deaths(5, name="Grug", level=30)
+        built = members.build(
+            {"Grug": ["Grug"]},
+            [dict(GUILD[0]), dict(GUILD[1])],
+            [],
+            [
+                {
+                    "name": "Clunk",
+                    "zone_id": WESTFALL,
+                    "map_id": EASTERN_KINGDOMS,
+                    "in_combat": False,
+                },
+                {
+                    "name": "Grug",
+                    "zone_id": REDRIDGE,
+                    "map_id": EASTERN_KINGDOMS,
+                    "in_combat": False,
+                },
+            ],
+            [],
+            {},
+            NOW,
+            readings={
+                "Grug": {"online": True, "life": "alive", "fresh_at": NOW},
+                "Clunk": {"online": True, "life": "alive", "fresh_at": NOW},
+            },
+            deaths=rows,
+        )
+        view = members.stuck_view(built)
+        self.assertEqual([r["name"] for r in view["members"]], ["Grug"])
+        self.assertEqual(view["members"][0]["kind"], "death-loop")
+
     def test_a_health_finding_files_it_under_deaths(self):
         self.assertEqual(health.STUCK_AREAS["death-loop"], "deaths")
 
