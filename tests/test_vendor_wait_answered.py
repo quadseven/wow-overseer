@@ -25,6 +25,10 @@ import nowstatus
 BRIDGE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
 
 
+async def _no_sale_reading(holder, standing, refused_age):
+    return None
+
+
 def _queue_vendor_sales(town_vendor: dict, logged: list, inserted: list):
     tree = ast.parse(BRIDGE)
     fn = next(
@@ -40,6 +44,10 @@ def _queue_vendor_sales(town_vendor: dict, logged: list, inserted: list):
             vendor=town_vendor.get(name, False)
         ),
         "_insert_sell": lambda candidate: inserted.append(candidate) or True,
+        "_recent_range_refusals": lambda seconds: {},
+        "_fetch_vendor_position": lambda name: None,
+        "_log_sale_reading": _no_sale_reading,
+        "_SALE_WRITE_SPOT": {},
         "log": types.SimpleNamespace(
             info=lambda msg, *args: logged.append(msg % args if args else msg)
         ),
