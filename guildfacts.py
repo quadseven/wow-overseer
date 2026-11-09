@@ -10,8 +10,8 @@ import campaignplan
 import raidroles
 import standin
 
-MEMBERS_SQL = (  # noqa: S608 - bound by .format(holes=%s placeholders) at the call
-    "SELECT s.name, s.level, s.class AS class_id, s.map_id, s.in_combat, s.health, "
+MEMBERS_SQL = (
+    "SELECT s.name, s.level, s.class AS class_id, s.map_id, s.in_combat, s.health, "  # noqa: S608 - only the guild placeholder list is formatted in; values stay bound
     "s.race, s.zone_id, s.pos_x, s.pos_y, "
     "(SELECT AVG(it.ItemLevel) FROM character_inventory ci "
     "JOIN item_instance ii ON ii.guid = ci.item "
