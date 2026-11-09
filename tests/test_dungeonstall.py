@@ -28,6 +28,7 @@ import council  # noqa: E402
 import crossing  # noqa: E402
 import dungeonpace  # noqa: E402
 import dungeonstall as stall  # noqa: E402
+import jev_family_intent  # noqa: E402
 import jobs  # noqa: E402
 import raidrun  # noqa: E402
 
@@ -415,6 +416,7 @@ class StallWorld(FakeWorld):
         self.ordered_after = set()
         self.hold_said = {}
         self.silent_seconds = None
+        self.wedge = None
         self.dungeonquest_held = set()
         self.world = self
 
@@ -461,6 +463,7 @@ def _pass(world):
             "pymysql": PYMYSQL,
             "_connect": lambda: StoreConn(world),
             "_silent_seconds": lambda head_id, names: world.silent_seconds,
+            "_door_wedge": lambda head, names, leader: world.wedge,
             "_jobs_of": lambda names: {n: world.member_job(n) for n in names},
             "_fetch_queue_rows": world.fetch_queue,
             "_fetch_queue_roster": world.fetch_roster,
@@ -1008,3 +1011,183 @@ class ARunThatNeverGotInIsNotAStall(unittest.TestCase):
     def test_the_events_read_skips_the_non_entry(self):
         runs = [self.row(1, "stalled", 5000), self.row(2, "stalled", 65)]
         self.assertEqual([1], stall.event_ids(runs))
+
+
+class TheWedgeAtTheDoor(unittest.TestCase):
+    """#2151's three shapes, as pure verdicts. The two-stall rule judges runs
+    that ENDED and the silence rule a family nothing happened to; a run that
+    stays open with the party split across its door is neither, so it was
+    never left. These judge the open run itself: the leader's walk, the
+    members' holds, and a member dead at the door."""
+
+    def test_a_walk_that_restarts_past_the_bound_leaves_the_door(self):
+        got = stall.door_unreachable("maraudon-orange", 38)
+        self.assertIsNotNone(got)
+        self.assertEqual("maraudon-orange", got.door)
+        self.assertIn("restarted 38 times", got.why)
+
+    def test_a_walk_at_the_bound_leaves_and_one_under_it_does_not(self):
+        self.assertIsNotNone(stall.door_unreachable("shadowfang", stall.RESTART_BOUND))
+        self.assertIsNone(stall.door_unreachable("shadowfang", stall.RESTART_BOUND - 1))
+
+    def test_an_unreachable_verdict_needs_a_real_door_and_a_count(self):
+        self.assertIsNone(stall.door_unreachable("nowhere", 500))
+        self.assertIsNone(stall.door_unreachable("shadowfang", None))
+
+    def test_a_member_held_on_an_errand_past_the_bound_leaves_the_door(self):
+        got = stall.party_held(
+            "shadowfang", "Bork", "on an errand of its own", stall.HOLD_SECONDS
+        )
+        self.assertIsNotNone(got)
+        self.assertEqual("shadowfang", got.door)
+        self.assertIn("Bork", got.why)
+        self.assertIn("errand", got.why)
+
+    def test_a_member_held_briefly_is_left_alone(self):
+        self.assertIsNone(
+            stall.party_held(
+                "shadowfang", "Bork", "on an errand of its own", stall.HOLD_SECONDS - 1
+            )
+        )
+
+    def test_a_member_dead_at_the_door_past_the_bound_leaves_the_door(self):
+        got = stall.member_dead("dire-maul-east-east", "Zrog", stall.DEAD_SECONDS)
+        self.assertIsNotNone(got)
+        self.assertEqual("dire-maul-east-east", got.door)
+        self.assertIn("Zrog", got.why)
+        self.assertIn("dead", got.why)
+
+    def test_a_member_dead_briefly_is_left_alone(self):
+        """A death the party is still recovering from is the module's work:
+        the breaker speaks only once the run has plainly failed to recover
+        the member itself."""
+        self.assertIsNone(
+            stall.member_dead("shadowfang", "Zrog", stall.DEAD_SECONDS - 1)
+        )
+
+
+class TheWedgeIsLeftLikeAStall(unittest.TestCase):
+    """The breaker's leave for a wedge is the stall leave: the door's queue
+    entries are cancelled, the reason is recorded in a pace row, and the
+    family goes on the default job, which stands the run coordinator down
+    and walks the party out (#2151)."""
+
+    def wedged_world(self):
+        w = StallWorld([_q(7, "maraudon-orange", 23, "active", 0)], [], [])
+        for row in w.family("Zug"):
+            row["job"] = "dungeon:maraudon-orange"
+        w.wedge = stall.door_unreachable("maraudon-orange", 38)
+        return w
+
+    def test_the_family_is_stood_down_and_the_reason_names_the_restarts(self):
+        w = self.wedged_world()
+        lines = _pass(w)
+        self.assertEqual("cancelled", w.queue[0]["status"])
+        self.assertEqual({jobs.DEFAULT}, {r["job"] for r in w.family("Zug")})
+        self.assertEqual(1, len(w.records))
+        family, decision, door = w.records[0][:3]
+        self.assertEqual(
+            ("Zug", stall.DECISION, "maraudon-orange"), (family, decision, door)
+        )
+        self.assertIn("restarted 38 times", w.records[0][7])
+        self.assertTrue([ln for ln in lines if "restarted 38 times" in ln], lines)
+
+    def test_no_wedge_no_leave(self):
+        w = self.wedged_world()
+        w.wedge = None
+        _pass(w)
+        self.assertEqual("active", w.queue[0]["status"])
+        self.assertEqual([], w.records)
+
+
+class TheDoorWedgeReads(unittest.TestCase):
+    """The bridge's wedge judge (_door_wedge), loaded the way the breaker
+    harness loads its neighbours: the evidence read and the clock are fakes,
+    the verdicts are dungeonstall's own."""
+
+    HEAD = {"id": 7, "keyword": "maraudon-orange", "status": "active"}
+
+    def judge(self, evidence, clock):
+        ns = _load(
+            ["_door_wedge", "_door_wedge_ages"],
+            {
+                "campaignqueue": campaignqueue,
+                "dungeonstall": stall,
+                "jobs": jobs,
+                "time": types.SimpleNamespace(monotonic=lambda: clock[0]),
+                "_jobs_of": lambda names: {n: "dungeon:maraudon-orange" for n in names},
+                "_door_wedge_evidence": lambda leader: evidence,
+                "_DOOR_HOLD_SINCE": {},
+            },
+        )
+        return ns["_door_wedge"]
+
+    def member(self, name, state):
+        return jev_family_intent.Member(name, state, "0")
+
+    def test_restarts_past_the_bound_are_a_verdict_on_the_first_pass(self):
+        judge = self.judge((38, ()), [1000.0])
+        got = judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertIn("restarted 38 times", got.why)
+
+    def test_an_errand_hold_becomes_a_verdict_only_past_its_bound(self):
+        clock = [1000.0]
+        judge = self.judge(
+            (0, (self.member("Uzza", "on an errand of its own"),)), clock
+        )
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+        clock[0] += stall.HOLD_SECONDS
+        got = judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertIn("Uzza", got.why)
+
+    def test_a_dead_member_becomes_a_verdict_past_the_shorter_bound(self):
+        clock = [1000.0]
+        judge = self.judge((0, (self.member("Uzza", "dead"),)), clock)
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+        clock[0] += stall.DEAD_SECONDS
+        got = judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertIn("dead", got.why)
+
+    def test_a_hold_that_clears_and_returns_starts_a_new_clock(self):
+        clock = [1000.0]
+        box = [(0, (self.member("Uzza", "on an errand of its own"),))]
+        ns = _load(
+            ["_door_wedge", "_door_wedge_ages"],
+            {
+                "campaignqueue": campaignqueue,
+                "dungeonstall": stall,
+                "jobs": jobs,
+                "time": types.SimpleNamespace(monotonic=lambda: clock[0]),
+                "_jobs_of": lambda names: {n: "dungeon:maraudon-orange" for n in names},
+                "_door_wedge_evidence": lambda leader: box[0],
+                "_DOOR_HOLD_SINCE": {},
+            },
+        )
+        judge = ns["_door_wedge"]
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+        clock[0] += stall.HOLD_SECONDS - 1
+        box[0] = (0, (self.member("Uzza", "following"),))
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+        box[0] = (0, (self.member("Uzza", "on an errand of its own"),))
+        clock[0] += 2
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+
+    def test_a_new_head_starts_new_clocks(self):
+        """A hold timed under one queue entry must not hang the next entry
+        for the same door: the entry is the attempt being judged."""
+        clock = [1000.0]
+        judge = self.judge(
+            (0, (self.member("Uzza", "on an errand of its own"),)), clock
+        )
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+        clock[0] += stall.HOLD_SECONDS + 1
+        self.assertIsNone(judge(dict(self.HEAD, id=8), ["Zug", "Uzza"], "Zug"))
+
+    def test_no_verdict_without_a_started_dungeon_head(self):
+        judge = self.judge((38, ()), [1000.0])
+        self.assertIsNone(
+            judge(dict(self.HEAD, status="queued"), ["Zug", "Uzza"], "Zug")
+        )

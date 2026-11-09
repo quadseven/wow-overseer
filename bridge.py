@@ -5390,6 +5390,115 @@ def _silent_stall(head: dict, names: list):
     return dungeonstall.silent_run(str(head.get("keyword") or ""), seconds)
 
 
+# --- the wedge at the door (#2151) ---------------------------------------------
+#
+# dungeonstall's third shape. The reads are the watch's own evidence: the
+# leader's steps in overseer_now_step (the fold the Watch tab prints) and the
+# member states the module publishes in its intent book. The hold and death
+# clocks are kept here, keyed by the queue entry being judged: a hold timed
+# under one entry must not hang the next entry for the same door.
+
+# The member-state words the wedge judges are named inside _door_wedge.
+
+# (leader, member, state) -> (queue head id, monotonic first seen).
+_DOOR_HOLD_SINCE: dict = {}
+
+_DOOR_STEPS_SQL = (
+    "SELECT kind, doing, occurrences, UNIX_TIMESTAMP(first_seen) AS first_at, "
+    "UNIX_TIMESTAMP(last_seen) AS last_at, UNIX_TIMESTAMP() AS now_at "
+    "FROM overseer_now_step WHERE subject = %s AND kind = 'intent' "
+    "AND last_seen > NOW() - INTERVAL 1 HOUR ORDER BY last_seen DESC LIMIT 60"
+)
+
+
+def _door_wedge_evidence(leader: str) -> tuple:
+    """(the leader's walk restarts in the watch's window, the members' states)
+    for the door wedge. Reads only. An intent book or step store this realm
+    cannot answer (1054 or 1146) reads as no evidence, so no door is left on
+    a missing table: the same degradation as the stall reads above."""
+    steps = []
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_DOOR_STEPS_SQL, (leader,))
+            steps = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+    restarts = 0
+    if steps:
+        now_at = int(steps[0].get("now_at") or 0) or int(time.time())
+        restarts = nowstatus.restart_count(steps, now_at)
+    row = _fetch_family_intents().get(leader, {})
+    members = jev_family_intent.parse_members(row.get("members_state"))
+    return restarts, members
+
+
+def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
+    """name -> (state, seconds in it) for the members in a wedged state,
+    with _DOOR_HOLD_SINCE kept current: a state no longer published loses
+    its clock, and a clock from an earlier queue entry starts over.
+
+    The states are the module's member-state words (MemberStateWord):
+    "dead", and the holds with no errand of the member's own choosing at
+    the end of them. The safety holds ("held off a walk that kept killing
+    it", "held where it stands, too far to walk back") are not judged:
+    they name their reason, and the module's fetch and regroup intents are
+    their recovery while a run is merely slow. In a wedge they end with
+    the run like everything else; they do not trigger it.
+    """
+    now = time.monotonic()
+    seen = {}
+    for member in members:
+        if member.name == leader:
+            continue
+        if member.state == "dead" or member.state in (
+            "on an errand of its own",
+            "held still",
+        ):
+            seen[(leader, member.name, member.state)] = member
+    for key in [k for k in _DOOR_HOLD_SINCE if k[0] == leader and k not in seen]:
+        del _DOOR_HOLD_SINCE[key]
+    ages = {}
+    for key, member in seen.items():
+        stamp = _DOOR_HOLD_SINCE.get(key)
+        if stamp is None or stamp[0] != head_id:
+            stamp = (head_id, now)
+            _DOOR_HOLD_SINCE[key] = stamp
+        ages[member.name] = (member.state, now - stamp[1])
+    return ages
+
+
+def _door_wedge(head: dict, names: list, leader: str):
+    """The Stuck for a family wedged at the door `head` holds, or None.
+
+    Only a started head on a family still on a dungeon job, like the silent
+    stall: a hold that took the job away has said why it did. The verdicts
+    are dungeonstall's; this gathers their evidence and keeps their clocks.
+    A corpse outranks a walk, and a walk outranks a hold: the recorded
+    reason names the worst thing wrong at the door.
+    """
+    if head.get("status") != campaignqueue.ACTIVE:
+        return None
+    if not any(jobs.is_dungeon_job(job) for job in _jobs_of(names).values()):
+        return None
+    keyword = str(head.get("keyword") or "")
+    restarts, members = _door_wedge_evidence(leader)
+    ages = _door_wedge_ages(leader, members, int(head.get("id") or 0))
+    for name, (state, age) in ages.items():
+        if state == "dead":
+            verdict = dungeonstall.member_dead(keyword, name, age)
+            if verdict is not None:
+                return verdict
+    verdict = dungeonstall.door_unreachable(keyword, restarts)
+    if verdict is not None:
+        return verdict
+    for name, (state, age) in ages.items():
+        verdict = dungeonstall.party_held(keyword, name, state, age)
+        if verdict is not None:
+            return verdict
+    return None
+
+
 def _stall_held(key: str, door: str, head_id: int = 0) -> dict | None:
     """This door's leave in its recent stall window, or None: the pace row's
     id, the seconds its hold has left (`left_s`), and whether queue row
@@ -22670,6 +22779,13 @@ class Bridge(discord.Client):
         silent_stall = await asyncio.to_thread(_silent_stall, rows[0], names)
         if silent_stall is not None:
             stuck[silent_stall.door] = silent_stall
+        # The wedge at the door (#2151): a run still open, judged on the
+        # leader's walk and the members' states, because neither ended runs
+        # nor family-wide silence can see a party split across a door.
+        wedge = await asyncio.to_thread(
+            _door_wedge, rows[0], names, str(fam["leader"].get("name") or ""))
+        if wedge is not None:
+            stuck[wedge.door] = wedge
         leave = dungeonstall.leave(rows, stuck)
         if leave is None:
             return False

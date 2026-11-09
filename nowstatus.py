@@ -885,6 +885,13 @@ def _restarts(steps, now_at, window=900) -> int:
     return n
 
 
+def restart_count(steps, now_at) -> int:
+    """The restart fold above, for a caller outside this module: the bridge's
+    stall breaker judges a door by the same count the Watch tab prints
+    (#2151), so the number it acts on is the number the operator saw."""
+    return _restarts(steps, now_at)
+
+
 def _first_restart(steps, now_at, window=900):
     firsts = [
         int(s["first_at"])

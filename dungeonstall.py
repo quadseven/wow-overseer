@@ -49,6 +49,13 @@ which a realm before the worldserver roll cannot answer, and that read as no
 silence. The head of the queue is what puts a family on the job, so the clock
 is the head's and the family's, like the stuck read's own.
 
+THE WEDGE AT THE DOOR (#2151) is the third shape, judged below (`door_unreachable`,
+`party_held`, `member_dead`): a run that never ends at all, because the leader
+cannot get through the door to finish or fail it. It is judged from the watch's
+restart fold and the module's member states, never from presence inside, and
+its leave is the same leave: stand the family down and the coordinator lets
+the party go.
+
 WHAT CAUSED THAT READING is not fully measured: no run or event rows from those
 hours were read for it. Two parts are known from code and later measurements.
 The stuck read then counted no boss credit (Members page fixed in #1473), so
@@ -245,6 +252,97 @@ def silent_run(keyword: str, seconds) -> Stuck | None:
     )
     stall = Stall(0, 0, reason)
     return Stuck(door, stall, stall)
+
+
+# --- the wedge at the door (#2151) ---------------------------------------------
+#
+# The two verdicts above judge a family from runs that ENDED, or from nothing
+# happening at all. Neither sees a run that stays open with the party split
+# across its door: the leader outside, his walk to the door ending and
+# restarting; members inside, held on errands that cannot finish while he
+# never arrives; one member dead at the door with the party stalled around
+# it. Measured on the dev realm 2026-11-09: one such run stayed open 15
+# hours, its leader's walk restarted 38 times in the watch's own fold, and
+# the run read as under way the whole time because somebody was standing
+# inside. The three verdicts below judge that shape from the evidence the
+# bridge already keeps, and presence inside is never one of the inputs: a
+# member standing in the instance is not the run progressing.
+
+# The leader's walk to the same door, ended and restarted this many times
+# inside the watch's quarter-hour fold (nowstatus.restart_count), is not
+# staging any more. Staging re-arms a handful of times on a bad approach;
+# past this the world is refusing the walk, and reissuing it identically
+# is not a plan.
+RESTART_BOUND = 10
+# A member held on an errand of its own, or held still, this long while its
+# family waits at a door. The errand's own backstops release an aim that
+# cannot land in the open world; inside a split run the aim is renewed by
+# the run that cannot start, so the bound here is what ends it, by ending
+# the run it waits on.
+HOLD_SECONDS = 30 * 60
+# A member dead this long at the family's door with no recovery under way.
+# Shorter than the hold bound: a fresh death is the module's to recover
+# (a resurrection, a corpse run), and this speaks only once the run has
+# plainly failed to recover the member itself.
+DEAD_SECONDS = 15 * 60
+
+
+def _wedged(keyword: str, reason: str) -> Stuck | None:
+    """The Stuck for `reason` at the queue keyword's door, or None when the
+    keyword names no door the campaign runs."""
+    door = campaignplan.wing_of(keyword)
+    if not door:
+        return None
+    stall = Stall(0, 0, reason)
+    return Stuck(door, stall, stall)
+
+
+def door_unreachable(keyword: str, restarts) -> Stuck | None:
+    """The leader's walk to this door keeps ending without arriving.
+
+    `restarts` is the watch's fold over the leader's steps (nowstatus): how
+    many times his present walk ended and restarted inside its window. The
+    verdict is the count, nothing else: not the family's progress events,
+    which a member questing on another map can keep warm forever, and not
+    anybody's presence inside, which is how the wedged run read as under
+    way for fifteen hours.
+    """
+    if restarts is None or int(restarts) < RESTART_BOUND:
+        return None
+    return _wedged(
+        keyword,
+        "the leader's walk to the door ended and restarted %d times without "
+        "arriving; the run is stood down and the door left" % int(restarts),
+    )
+
+
+def party_held(keyword: str, member: str, state: str, seconds) -> Stuck | None:
+    """A member held on an errand (or held still) past its bound while the
+    family waits at this door: the hold releases by standing the run down,
+    which walks the party out to the leader instead of waiting for a leader
+    who is not coming."""
+    if seconds is None or float(seconds) < HOLD_SECONDS:
+        return None
+    return _wedged(
+        keyword,
+        "%s has been %s for over %d minutes while the family waits at this "
+        "door; the run is stood down so the party regroups"
+        % (member, state, HOLD_SECONDS // 60),
+    )
+
+
+def member_dead(keyword: str, member: str, seconds) -> Stuck | None:
+    """A member dead at this door past the bound, unrecovered: the run
+    stands down so the recovery the run was outranking (a resurrection, a
+    guided corpse run, a regroup) can happen without it."""
+    if seconds is None or float(seconds) < DEAD_SECONDS:
+        return None
+    return _wedged(
+        keyword,
+        "%s has been dead for over %d minutes at this door and the run has "
+        "not recovered them; the run is stood down so the party can"
+        % (member, DEAD_SECONDS // 60),
+    )
 
 
 def stuck_doors(runs: list, events: list) -> dict:
