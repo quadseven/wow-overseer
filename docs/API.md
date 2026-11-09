@@ -290,6 +290,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Answers: one guild's progress, as the Guilds view draws it.
 - Example: `overseer get /api/v2/guild guild=cave`
 
+## `GET /api/v2/guildbank`
+
+- Query: `guild`
+- Answers: a family guild's bank, tab by tab.
+- Example: `overseer get /api/v2/guildbank guild=cave`
+
 ## `GET /api/v2/health`
 
 - Query: none
