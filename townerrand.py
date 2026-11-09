@@ -157,6 +157,9 @@ class State:
     ended: float = 0.0
     why: str = ""
     hearth_until: float = 0.0
+    # A dungeon run was seen after this errand ended (note_run): its bags are
+    # new, so a bag-room errand is not held back by the cooldown (#2116).
+    ran_since: bool = False
 
     @property
     def active(self) -> bool:
@@ -171,6 +174,13 @@ class State:
         if self.phase != STEPS or self.step >= len(self.steps):
             return ""
         return self.steps[self.step]
+
+
+def note_run(state: State) -> State:
+    """`state` once a dungeon run has been seen after its errand ended."""
+    if state.active or not state.ended or state.ran_since:
+        return state
+    return replace(state, ran_since=True)
 
 
 def should_start(
@@ -214,7 +224,14 @@ def should_start(
         return ""
     cooldown = FLOOR_SALE_COOLDOWN_SECONDS if floor_sale else COOLDOWN_SECONDS
     if state.ended and now - state.ended < cooldown:
-        return ""
+        # A RUN SINCE THE LAST ERRAND ENDED MADE ITS BAGS NEW (#2116). The
+        # cooldown keeps two errands from running back to back on one set of
+        # bags; it was holding a family at the floor for the rest of two hours
+        # after a run (wow-dev 2026-11-09: 24 minutes idle with a member at no
+        # free slots, until a bridge restart forgot the cooldown and the errand
+        # began at once). Only the bag-room errand skips it.
+        if not (bag_pressure_needed and state.ran_since):
+            return ""
     if bag_pressure_needed:
         return BAG_PRESSURE_WHY
     if stalled >= HOLD_CEILING_SECONDS:
@@ -577,7 +594,10 @@ def aim_now(state: State, now: float) -> bool:
 
 def end(state: State, now: float, why: str) -> tuple:
     """Release the family, with the reason."""
-    return replace(state, phase=DONE, ended=now, why=why), "released: %s" % why
+    return (
+        replace(state, phase=DONE, ended=now, why=why, ran_since=False),
+        "released: %s" % why,
+    )
 
 
 def advance(

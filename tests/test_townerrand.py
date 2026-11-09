@@ -735,6 +735,24 @@ class TheAdapter(unittest.TestCase):
         self.assertEqual(te.DONE, self.tick().phase)
         self.assertEqual([(["Bork", "Grug"], "Grug")], released)
 
+    def test_a_run_seen_after_an_errand_clears_its_cooldown_for_bag_room(self):
+        """#2116: the run's ticks mark the idle state, and the bag-room errand
+        then starts inside the two hour cooldown."""
+        self.ns["_TOWN_ERRANDS"][("Bork", "Grug")] = te.State(ended=self.now - 3600.0)
+        self.ns["_mail_gear_holders"] = lambda names: {}
+        self.ns["_campaign_waiting"] = lambda names: True
+        self.ns["_bag_hold_stuck"] = lambda names, free_slots: False
+        self.ns["_fetch_free_slots"] = lambda names: {"Bork": 0, "Grug": 1}
+        self.fam._mid_run = lambda names: asyncio.sleep(0, result=True)
+        state = self.tick()
+        self.assertTrue(state.ran_since)
+        self.assertEqual(te.IDLE, state.phase)
+        self.fam._mid_run = lambda names: asyncio.sleep(0, result=False)
+        self.fam._aim_stranded_bag_pressure_members = lambda *a, **k: asyncio.sleep(
+            0, result=0
+        )
+        self.assertEqual(te.GO, self.tick().phase)
+
     def test_no_take_is_written_until_the_member_stands_at_the_mailbox(self):
         self.tick()
         self.positions = {"Grug": _at(101, 100), "Bork": _at(160, 100)}
@@ -1215,3 +1233,50 @@ class TheFloorSaleCooldown(unittest.TestCase):
 
     def test_it_is_still_a_cooldown(self):
         self.assertEqual("", self._start(60.0, True))
+
+
+class ARunMakesTheBagsNewForTheCooldown(unittest.TestCase):
+    """#2116. wow-dev 2026-11-09: Zug's run ended 04:12 with members at 0 to 3
+    free slots, the last errand had ended 03:11, and the two hour cooldown kept
+    the bag-room errand from starting until a bridge restart forgot it at 04:36."""
+
+    def _start(self, state, gap, bag=True, why_gear=False):
+        return te.should_start(
+            state,
+            now=state.ended + gap,
+            in_run=False,
+            mail_gear={"Bork": 2} if why_gear else {},
+            facts={},
+            bag_pressure_needed=bag,
+        )
+
+    def test_without_a_run_the_cooldown_holds(self):
+        state = te.State(ended=1000.0)
+        self.assertEqual("", self._start(state, 3600.0))
+
+    def test_after_a_run_the_bag_room_errand_starts_at_once(self):
+        state = te.note_run(te.State(ended=1000.0))
+        self.assertTrue(state.ran_since)
+        self.assertEqual(te.BAG_PRESSURE_WHY, self._start(state, 60.0))
+
+    def test_after_a_run_other_errands_still_wait_out_the_cooldown(self):
+        state = te.note_run(te.State(ended=1000.0))
+        self.assertEqual("", self._start(state, 3600.0, bag=False, why_gear=True))
+
+    def test_a_run_before_any_errand_or_during_one_changes_nothing(self):
+        fresh = te.State()
+        self.assertEqual(fresh, te.note_run(fresh))
+        active = te.start(0.0, HUB, te.BAG_PRESSURE_WHY)
+        self.assertEqual(active, te.note_run(active))
+
+    def test_a_finished_errand_forgets_the_run_it_followed(self):
+        state = te.note_run(te.State(ended=1000.0))
+        new, _ = te.advance(
+            te.start(2000.0, HUB, te.BAG_PRESSURE_WHY), 2100.0, bag_room_made=True
+        )
+        self.assertFalse(new.ran_since)
+        self.assertFalse(te.start(2000.0, HUB, "x").ran_since)
+        self.assertTrue(state.ran_since)
+
+    def test_the_adapter_notes_a_run_it_sees(self):
+        self.assertIn("townerrand.note_run(state)", BRIDGE)
