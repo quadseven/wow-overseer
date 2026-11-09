@@ -1296,7 +1296,15 @@ def _working(cat: Catalogue, member, last_quest=0, left=frozenset()) -> set:
     a dozen more in one day, each one a quest no quester had yet gone after.
     A quest it could hunt waits its turn; one it cannot hunt has nothing to
     wait for, so its clock still runs and a quest nobody can work still
-    stalls (STALLED_UNSOURCED)."""
+    stalls (STALLED_UNSOURCED).
+
+    ITEM-ONLY QUESTS ARE ALSO WORKED (2026-11-08). A quest that requires items
+    but no creatures to hunt (item-only quests like Dwarven Outfitters, which
+    needs Tough Wolf Meat from creatures 704, 705) should have its clock run
+    for it, even though it has no fields. The stall clock tracks the quest's
+    objectives (status and progress), not whether the quester is hunting a
+    creature for it.
+    """
     out = {
         qid
         for qid in member.quest_log
@@ -1306,6 +1314,21 @@ def _working(cat: Catalogue, member, last_quest=0, left=frozenset()) -> set:
             and _unhuntable(cat, member, qid, left)
         )
     }
+    # Add item-only quests (quests with items but no fields) that the quester
+    # holds, even if they are not unhuntable. The stall clock needs to track
+    # these quests to detect when they stall.
+    for qid in member.quest_log:
+        if qid in out:
+            continue
+        quest = cat.quest(qid)
+        if (
+            quest
+            and quest.items
+            and not quest.fields
+            and cat.facts.get(qid) is not None
+            and cat.facts[qid].zone == member.zone
+        ):
+            out.add(int(qid))
     if last_quest and int(last_quest) in member.quest_log:
         out.add(int(last_quest))
     return out
