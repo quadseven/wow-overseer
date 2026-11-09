@@ -104,6 +104,23 @@ def _entrypoint_closure() -> set[pathlib.Path]:
     return {path.relative_to(ROOT) for path in visited}
 
 
+def _served_files() -> set[pathlib.Path]:
+    tree = ast.parse((ROOT / "map_server.py").read_text(encoding="utf-8"))
+    names = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_send_file"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+            and node.args[0].value != "app file"
+        ):
+            names.add(pathlib.Path(node.args[0].value))
+    return names
+
+
 def _world_data_paths(path: pathlib.Path) -> set[pathlib.Path]:
     tree = ast.parse((ROOT / path).read_text(encoding="utf-8"), filename=str(path))
 
@@ -143,6 +160,7 @@ class ImageClosureTests(unittest.TestCase):
             missing, [], "entrypoint imports missing from image: " + ", ".join(missing)
         )
         required = set().union(*(_world_data_paths(path) for path in closure))
+        required.update(_served_files())
         absent = []
         for source in required:
             target = ROOT / source
@@ -177,7 +195,12 @@ class ImageClosureTests(unittest.TestCase):
             path for path in copied if path.suffix == ".py" and path.parts[0] != "app"
         )
         data_paths = sorted(
-            path for path in copied if path.suffix == ".json" or path.parts[0] == "data"
+            {
+                path
+                for path in copied
+                if path.suffix == ".json" or path.parts[0] == "data"
+            }
+            | _served_files()
         )
 
         module_names = []
