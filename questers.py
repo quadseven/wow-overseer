@@ -249,6 +249,10 @@ DEFIAS_BROTHERHOOD = (
     "The Defias Brotherhood (quest 132) requires Wiley's Note (item 1327), "
     "which no spawned creature drops"
 )
+GHOST_HAIR_THREAD = (
+    "Ghost Hair Thread (quest 149) requires Spectral Comb (item 1453), "
+    "which no spawned creature drops"
+)
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
 NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
@@ -1449,6 +1453,13 @@ def _broken_reason(
         and played >= STALL_SECONDS
     ):
         return DEFIAS_BROTHERHOOD
+    if (
+        quest.id == 149
+        and status == STATUS_INCOMPLETE
+        and (1453, 1) in quest.items
+        and played >= STALL_SECONDS
+    ):
+        return GHOST_HAIR_THREAD
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that

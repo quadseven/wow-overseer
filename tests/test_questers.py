@@ -8,7 +8,7 @@ import classquest
 import guildjobs
 import questers
 
-ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE = 12, 9, 40, 44
+ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE, DUSKWOOD = 12, 9, 40, 44, 10
 HUMAN, ORC = 1, 2
 PRIEST, WARRIOR = 5, 1
 ALLIANCE_MASK, HORDE_MASK = 1101, 690
@@ -1086,6 +1086,80 @@ class Broken(unittest.TestCase):
         self.assertEqual(p.broken[0].quest, 132)
         self.assertIn("Wiley's Note", p.broken[0].reason)
         self.assertIn("no spawned creature drops", p.broken[0].reason)
+
+    def test_ghost_hair_thread_names_the_missing_spectral_comb_source(self):
+        thread = quest(
+            149,
+            DUSKWOOD,
+            24,
+            min_level=20,
+            prev=148,
+            title="Ghost Hair Thread",
+        )
+        thread.update(item1=1453, item_count1=1)
+        cat = world(
+            extra_quests=[thread],
+            extra_givers=[
+                giver(149, "start", 1149, 149, 0, 0),
+                giver(149, "end", 1149, 149, 0, 0),
+            ],
+        )
+        member = mirra(
+            level=24,
+            zone_id=DUSKWOOD,
+            quest_log={149: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({20, 21, 148}),
+            quest_progress={149: 0},
+            quest_objectives={149: {1453: 0}},
+        )
+
+        p, _ = self._play(member, 120, cat=cat)
+
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 149)
+        self.assertIn("Spectral Comb", p.broken[0].reason)
+        self.assertIn("no spawned creature drops", p.broken[0].reason)
+
+    def test_ghost_hair_thread_ledger_explains_missing_spectral_comb_source(self):
+        thread = classquest.Quest(
+            149,
+            "Ghost Hair Thread",
+            0,
+            24,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((1453, 1),),
+            enders=(classquest.Spawn(1149, 264, 0, 0.0, 0.0, name="Madame Eva"),),
+        )
+        facts = questers.Facts(zone=DUSKWOOD, level=24, ender_npcs=True)
+
+        early = questers._broken_reason(
+            thread,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            0,
+            frozenset(),
+            {},
+        )
+        self.assertEqual(early, "")
+
+        reason = questers._broken_reason(
+            thread,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertEqual(
+            reason,
+            "Ghost Hair Thread (quest 149) requires Spectral Comb (item 1453), "
+            "which no spawned creature drops",
+        )
 
     def test_quest_64_the_forgotten_heirloom_has_specific_stall_reason(self):
         # Quest 64 "The Forgotten Heirloom" in Westfall (level 12) requires an
