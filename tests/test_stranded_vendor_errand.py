@@ -695,21 +695,22 @@ class BagPressureRetentionAndCutOffAim(unittest.TestCase):
 class SameMapFarMemberGetsItsOwnVendorAim(unittest.TestCase):
     """wow-overseer#2117: a member far away on the leader's map pinned its family."""
 
-    NAMES = ("Zug", "Oz", "Zork")
+    NAMES = ("Lead", "Near", "Far")
 
-    def aims(self, zork_xy, zork_free=2, zork_map=0, oz_free=2, leader_free=2):
+    def aims(self, far_xy, far_free=2, far_map=0, near_free=2, leader_free=2):
         positions = {
-            "Zug": {"map_id": 0, "pos_x": 0.0, "pos_y": 0.0},
-            "Oz": {"map_id": 0, "pos_x": 20.0, "pos_y": 10.0},
-            "Zork": {"map_id": zork_map, "pos_x": zork_xy[0], "pos_y": zork_xy[1]},
+            "Lead": {"map_id": 0, "pos_x": 0.0, "pos_y": 0.0},
+            "Near": {"map_id": 0, "pos_x": 20.0, "pos_y": 10.0},
+            "Far": {"map_id": far_map, "pos_x": far_xy[0], "pos_y": far_xy[1]},
         }
-        slots = {"Zug": leader_free, "Oz": oz_free, "Zork": zork_free}
+        slots = {"Lead": leader_free, "Near": near_free, "Far": far_free}
         return bag_pressure.stranded_vendor_aims(
-            self.NAMES, "Zug", positions, slots, pressure=True, in_run=False)
+            self.NAMES, "Lead", positions, slots, pressure=True, in_run=False
+        )
 
     def test_member_thousands_of_yards_away_on_the_same_map_is_aimed(self):
-        # The measured spread at 00:38 was 8,049 yards.
-        self.assertEqual(self.aims((8049.0, 0.0)), ("Zork",))
+        # A spread of this size was measured live: 8,049 yards.
+        self.assertEqual(self.aims((8049.0, 0.0)), ("Far",))
 
     def test_member_within_a_walk_is_left_to_the_family_trip(self):
         self.assertEqual(self.aims((300.0, 400.0)), ())
@@ -717,21 +718,29 @@ class SameMapFarMemberGetsItsOwnVendorAim(unittest.TestCase):
 
     def test_just_past_the_distance_is_aimed(self):
         self.assertEqual(
-            self.aims((bag_pressure.SAME_MAP_FAR_YARDS + 1.0, 0.0)), ("Zork",))
+            self.aims((bag_pressure.SAME_MAP_FAR_YARDS + 1.0, 0.0)), ("Far",)
+        )
 
     def test_far_member_with_room_is_not_aimed(self):
-        self.assertEqual(self.aims((8049.0, 0.0), zork_free=12), ())
+        self.assertEqual(self.aims((8049.0, 0.0), far_free=12), ())
 
     def test_far_member_with_unreadable_coordinates_is_not_guessed(self):
         self.assertEqual(self.aims((None, 0.0)), ())
 
     def test_distance_helper_is_none_across_maps(self):
-        self.assertIsNone(bag_pressure.stranded_distance(
-            {"map_id": 0, "pos_x": 0, "pos_y": 0},
-            {"map_id": 1, "pos_x": 0, "pos_y": 0}))
-        self.assertEqual(bag_pressure.stranded_distance(
-            {"map_id": 0, "pos_x": 0, "pos_y": 0},
-            {"map_id": 0, "pos_x": 3, "pos_y": 4}), 5.0)
+        self.assertIsNone(
+            bag_pressure.stranded_distance(
+                {"map_id": 0, "pos_x": 0, "pos_y": 0},
+                {"map_id": 1, "pos_x": 0, "pos_y": 0},
+            )
+        )
+        self.assertEqual(
+            bag_pressure.stranded_distance(
+                {"map_id": 0, "pos_x": 0, "pos_y": 0},
+                {"map_id": 0, "pos_x": 3, "pos_y": 4},
+            ),
+            5.0,
+        )
 
 
 if __name__ == "__main__":

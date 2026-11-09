@@ -986,11 +986,10 @@ def _position_map(position: dict | None) -> int | None:
 # How far from the leader, on the leader's own map, a member may stand and still
 # be left to the family's trip. townerrand.WALK_YARDS is the same number: it is
 # how far the errand will send a family on foot, so a member further than that
-# is not reached by the trip it is waiting for. Measured on the dev realm
-# 2026-11-09: Zork stood about 8,000 yards from its family on the same map and
-# held the whole family out of Blackrock Depths for 145 of 156 idle minutes
-# (wow-overseer#2117); any distance between a walk and that spread catches it,
-# and a member inside a walk was never the problem.
+# is not reached by the trip it is waiting for. A member thousands of yards off
+# on the same map held its whole family out of its next dungeon run for most of
+# a three hour gap (wow-overseer#2117); any distance between a walk and such a
+# spread catches it, and a member inside a walk was never the problem.
 SAME_MAP_FAR_YARDS = 600.0
 
 
