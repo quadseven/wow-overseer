@@ -23599,6 +23599,11 @@ class Bridge(discord.Client):
             log.info("movement: %s hearths home together and meets at the inn "
                      "(%s, conf %.2f)", who, actor,
                      judgment.confidence or 0.0)
+        elif chosen == jev_movement.HEARTH_LEADER:
+            await asyncio.to_thread(_insert_hearth, facts.where.leader)
+            log.info("movement: %s hearths home - it stands under the ground "
+                     "its family stands on and cannot walk up (%s)",
+                     facts.where.leader, actor)
         elif chosen == jev_movement.DROP_ERRAND and facts.errand and slot is not None:
             leader = facts.where.leader
             released = await asyncio.to_thread(_release_trade_errand, leader,
