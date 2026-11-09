@@ -187,6 +187,53 @@ def walk(member, cat, rounds=20, clock=None):
 
 
 class EveryQuestInReach(unittest.TestCase):
+    def test_collecting_memories_item_droppers_are_hunt_fields(self):
+        # Fixture rows mirror the quest's required item and its three named
+        # creature sources. Keep the catalog connected exactly as LOOT_SQL and
+        # SPAWNS_SQL provide it.
+        q = quest(168, WESTFALL, 18, min_level=14, title="Collecting Memories")
+        q["item1"] = 1894
+        q["item_count1"] = 4
+        cat = questers.catalogue(
+            [q],
+            [
+                giver(168, "start", 1168, 500, 0, 0),
+                giver(168, "end", 1168, 500, 0, 0),
+            ],
+            [
+                spawn(1623, 623, 100, 0, level=16),
+                spawn(1624, 624, 120, 0, level=17),
+                spawn(1625, 625, 140, 0, level=18),
+            ],
+            [{"item": 1894, "entry": entry} for entry in (623, 624, 625)],
+            [started(168, 500)],
+            [ended(168, 500)],
+        )
+
+        member = mirra(
+            name="Quester",
+            level=18,
+            zone_id=WESTFALL,
+            quest_log={168: questers.STATUS_INCOMPLETE},
+            x=100,
+        )
+        move = questers.plan(cat, member, questers.Clock(), 0.0).move
+
+        self.assertEqual(move.kind, classquest.HUNT)
+        self.assertEqual(move.quest, 168)
+        self.assertIn(move.spot.entry, (623, 624, 625))
+
+        complete = mirra(
+            name="Quester",
+            level=18,
+            zone_id=WESTFALL,
+            quest_log={168: questers.STATUS_INCOMPLETE},
+            quest_progress={168: 4},
+            x=100,
+        )
+        hand_in = questers.plan(cat, complete, questers.Clock(), 60.0).move
+        self.assertEqual((hand_in.kind, hand_in.quest), (classquest.TURN_IN, 168))
+
     def test_a_starting_area_quest_is_of_the_zone_the_quester_stands_in(self):
         cat = world()
         self.assertEqual(cat.facts[1].zone, ELWYNN)
