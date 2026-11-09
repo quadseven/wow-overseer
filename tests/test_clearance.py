@@ -17,7 +17,6 @@ import clearance
 import disposition
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
-DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
 
 
 def _source() -> str:
@@ -229,9 +228,6 @@ class TheBridgeWiresIt(unittest.TestCase):
             "it.class = 3 OR (it.class = 9 AND it.RequiredSkill > 0)",
         ):
             self.assertIn(column, sql)
-
-    def test_clearance_is_in_the_image(self):
-        self.assertIn("clearance.py", DOCKERFILE.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

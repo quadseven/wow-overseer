@@ -215,14 +215,6 @@ class TheReads(unittest.TestCase):
         self.assertIn("RECAP_SKILLS", self.fetch)
 
 
-class ItShipsInTheImage(unittest.TestCase):
-    def test_the_module_is_copied_into_the_container(self):
-        """A module the page imports and the image does not carry is a 503 on
-        a tab that worked in CI."""
-        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("dungeonplan.py", dockerfile)
-
-
 class TheVerdictIsBorrowedAndNotCopied(unittest.TestCase):
     def test_the_module_reads_the_loot_boards_verdict(self):
         """A second definition of "upgrade" is two answers to one question

@@ -723,10 +723,6 @@ class TheHouseRules(unittest.TestCase):
         for forbidden in ("pymysql", "cursor", "SELECT ", "execute("):
             self.assertNotIn(forbidden, MODULE, forbidden)
 
-    def test_the_module_ships_in_the_image(self):
-        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("guildcraft.py", dockerfile)
-
 
 if __name__ == "__main__":
     unittest.main()

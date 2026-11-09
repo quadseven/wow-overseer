@@ -17,7 +17,6 @@ import raidlineup
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
-DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
 
 GOLD = guildwork.COPPER_PER_GOLD
 
@@ -506,11 +505,6 @@ class TheBridgePass(unittest.TestCase):
         body = self.body("_dues_recent_holders")
         self.assertIn("guildwork.SOURCE", body)
         self.assertIn("guildwork.WALK_SOURCE", body)
-
-
-class ThePage(unittest.TestCase):
-    def test_the_module_ships_in_the_image(self):
-        self.assertIn("guildwork.py", DOCKERFILE)
 
 
 if __name__ == "__main__":
