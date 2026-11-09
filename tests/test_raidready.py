@@ -47,12 +47,28 @@ _BODY = (
 )
 
 
+# Every piece also clears every role's floor (#2110) so these fixtures stay
+# about best in slot: armor, stamina, intellect and both powers, per piece.
+FLOOR_STATS = {
+    "armor": 700,
+    "stat_type2": 7,
+    "stat_value2": 100,
+    "stat_type3": 5,
+    "stat_value3": 30,
+    "stat_type4": 45,
+    "stat_value4": 300,
+    "stat_type5": 38,
+    "stat_value5": 100,
+}
+
+
 def _gear_row(entry, strength):
     return {
         "entry": entry,
         "item_name": "Item %d" % entry,
         "stat_type1": 4,
         "stat_value1": strength,
+        **FLOOR_STATS,
     }
 
 
@@ -459,6 +475,60 @@ class NoSourceRepairBotIsNotStillToGather(unittest.TestCase):
             any("No source on this realm for a rare elixir" in t for t in soft),
             soft,
         )
+
+
+def _floor_row(name, slot, **stats):
+    """One worn piece of `name` carrying only the stats given (s7=stamina)."""
+    row = {"name": name, "slot": slot, "entry": 910000 + slot, "item_name": "Floor"}
+    for n, (stat_type, value) in enumerate(stats.items(), 1):
+        row["stat_type%d" % n] = int(stat_type[1:])
+        row["stat_value%d" % n] = value
+    return row
+
+
+class ARoleGearFloorIsAHardBlocker(unittest.TestCase):
+    """#2110: a tank under its effective health and a healer under their
+    healing power stop the raid, with the stat and the gap in the sentence."""
+
+    def setUp(self):
+        self.rows = _guild("Cave", 23, FULL)
+        self.card = self._with_thin()
+
+    def _thin(self, role):
+        return next(r["name"] for r in self.card["raiders"] if r["role"] == role)
+
+    def _with_thin(self, *names):
+        worn = [
+            row
+            for r in self.rows
+            if r["name"] not in names
+            for row in _geared(r["name"], 9)
+        ]
+        worn += [_floor_row(n, 0, s7=10) for n in names]
+        return _card(self.rows, [self.rows[0]["name"]], worn=worn, item_rows=ITEM_ROWS)
+
+    def test_a_fully_floored_guild_has_no_floor_blocker(self):
+        text = " ".join(b["text"] for b in self.card["blockers"])
+        self.assertNotIn("gear floor", text)
+
+    def test_a_thin_tank_and_healer_are_hard_blockers_naming_stat_and_gap(self):
+        tank, healer = self._thin("tank"), self._thin("healer")
+        card = self._with_thin(tank, healer)
+        hard = [b["text"] for b in card["blockers"] if b["tone"] == raidready.HARD]
+        floor = [t for t in hard if "gear floor" in t]
+        self.assertEqual(1, len(floor), hard)
+        self.assertIn(
+            "%s tank effective health 100 of 5000 (short 4900)" % tank, floor[0]
+        )
+        self.assertIn(
+            "%s healer healing power 0 of 2500 (short 2500)" % healer, floor[0]
+        )
+        self.assertFalse(card["ready"])
+
+    def test_a_seat_with_no_worn_rows_is_not_read_so_not_blocked(self):
+        card = _card(self.rows, [self.rows[0]["name"]], item_rows=ITEM_ROWS)
+        text = " ".join(b["text"] for b in card["blockers"])
+        self.assertNotIn("gear floor", text)
 
 
 class SeatsAreChosenByPreRaidReadiness(unittest.TestCase):
