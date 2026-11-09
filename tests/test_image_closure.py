@@ -70,14 +70,15 @@ def _local_module(name: str) -> pathlib.Path | None:
 def _imports(path: pathlib.Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     names: set[str] = set()
-    package = path.with_suffix("").parts[:-1]
+    package = path.relative_to(ROOT).with_suffix("").parts[:-1]
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             if node.level:
                 parent = package[: len(package) - node.level + 1]
-                base = ".".join((*parent, *((node.module or "").split("."))))
+                module_parts = node.module.split(".") if node.module else ()
+                base = ".".join((*parent, *module_parts))
             else:
                 base = node.module or ""
             if base:
@@ -148,6 +149,13 @@ def _world_data_paths(path: pathlib.Path) -> set[pathlib.Path]:
 
 
 class ImageClosureTests(unittest.TestCase):
+    def test_relative_imports_resolve_from_the_module_package(self):
+        imports = _imports(ROOT / "apiv2" / "classchain.py")
+
+        self.assertIn("apiv2.members", imports)
+        self.assertIn("apiv2._scope", imports)
+        self.assertEqual(_local_module("apiv2.members"), ROOT / "apiv2" / "members.py")
+
     def test_entrypoint_import_closure_is_in_the_copy_list(self):
         copied = _copied_image_files()
         closure = _entrypoint_closure()
