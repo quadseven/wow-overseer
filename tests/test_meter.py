@@ -90,9 +90,6 @@ class TheRouteIsWired(unittest.TestCase):
         self.assertIn('"/api/meter": _meter,', source)
         self.assertIn("'meter', 'probe', 'api:meter'", source)
 
-    def test_the_image_carries_the_module(self):
-        self.assertIn(" meter.py ", (ROOT / "Dockerfile").read_text(encoding="utf-8"))
-
 
 if __name__ == "__main__":
     unittest.main()

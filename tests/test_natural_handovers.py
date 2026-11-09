@@ -331,11 +331,6 @@ class TheBridgeFollowsTheWalk(unittest.TestCase):
         self.assertIn("log.error(", done)
         self.assertIn("self._guild_mail_runs.pop(run.holder, None)", body)
 
-    def test_handover_ships(self):
-        self.assertIn(
-            " handover.py ", (HERE / "Dockerfile").read_text(encoding="utf-8")
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

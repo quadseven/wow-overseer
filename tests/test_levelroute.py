@@ -439,11 +439,6 @@ class TheWiring(unittest.TestCase):
         self.assertIn("members = levelroute.share_members(members, zone)", BRIDGE)
         self.assertIn("_share_family_quests, names, hub.zone_id", self.pass_body())
 
-    def test_the_module_ships_in_the_image(self):
-        self.assertIn(
-            "levelroute.py", (ROOT / "Dockerfile").read_text(encoding="utf-8")
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

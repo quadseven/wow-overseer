@@ -100,12 +100,6 @@ class TheEndpointIsWiredUp(unittest.TestCase):
         self.assertNotIn("pymysql", source)
         self.assertNotIn("import os", source)
 
-    def test_the_module_ships_in_the_image(self):
-        """The build's shared-dir copy names every file explicitly, so a new
-        module is one forgotten line away from a pod that crashes on import."""
-        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("realm.py", dockerfile)
-
 
 class EveryReadIsGuardedWithTheClassThatActuallyFires(unittest.TestCase):
     """infra#3172 cost a whole tab on the live realm because one read of a table

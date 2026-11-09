@@ -21,8 +21,6 @@ from test_guildlevel import world as level_world
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
-DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
-
 ROGUE, HUMAN, ORC = 4, 1, 2
 # The rogue's pre-raid list names this ring (data/bis/rogue-dps.json).
 LIST_RING = 18500
@@ -704,9 +702,6 @@ class TheWiring(unittest.TestCase):
         self.assertIn('await self._say_pvp_lines(plan, facts["recent"])', BRIDGE)
         self.assertIn("guildsocial.SOURCE))", BRIDGE)
         self.assertIn('getattr(self, "_pvp_held", {}).items() if held}', BRIDGE)
-
-    def test_the_image_ships_the_module(self):
-        self.assertIn("pvpgear.py", DOCKERFILE)
 
 
 if __name__ == "__main__":

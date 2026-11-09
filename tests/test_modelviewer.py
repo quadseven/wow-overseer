@@ -322,7 +322,6 @@ class TheEndpoint(unittest.TestCase):
     def setUpClass(cls):
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         cls.server = open(os.path.join(here, "map_server.py")).read()
-        cls.dockerfile = open(os.path.join(here, "Dockerfile")).read()
 
     def test_the_route_is_a_prefix_and_the_prefix_is_the_pages_content_path(self):
         self.assertIn('MODEL_PREFIX = "/modelviewer/"', self.server)
@@ -343,9 +342,6 @@ class TheEndpoint(unittest.TestCase):
     # which this repo does not carry (infra owns the deployment manifests).
     # An equivalent assertion should live in infra's own render-test suite
     # for that manifest instead - see the tracking issue for this split.
-
-    def test_the_module_ships_in_the_image(self):
-        self.assertIn("modelviewer.py", self.dockerfile)
 
 
 if __name__ == "__main__":

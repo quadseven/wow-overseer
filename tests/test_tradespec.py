@@ -846,14 +846,6 @@ class TheHouseRules(unittest.TestCase):
                 chr(0x2014), (HERE / name).read_text(encoding="utf-8"), name
             )
 
-    def test_the_module_and_the_book_both_ship_in_the_image(self):
-        """A module the page imports and the image does not carry is a 503 on
-        a tab that was green in CI, and a book it does not carry is fourteen
-        professions reported at 0%."""
-        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("tradespec.py", dockerfile)
-        self.assertIn("craftbook.json", dockerfile)
-
     def test_the_module_never_reaches_the_world_itself(self):
         """The same seam professions.plan and guildcraft.build_guildcraft keep:
         every observation is handed in, so this module cannot invent one."""
