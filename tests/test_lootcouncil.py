@@ -284,6 +284,215 @@ class FirstCall(unittest.TestCase):
         )
 
 
+# Stonerender Gauntlets, Blackrock Depths, 2026-11-08 (#2124): an epic mail
+# piece whose stats beyond stamina are a caster's, greed-won by the druid and
+# handed by the council to the warrior tank over the family shaman. The card
+# is the Armory's reading of the piece, the shape describe() hands over.
+STONERENDER = {
+    "name": "Stonerender Gauntlets",
+    "quality": "epic",
+    "item_level": 51,
+    "slot": "Hands",
+    "kind": "Mail",
+    "armor": 238,
+    "stats": ["+20 Spirit", "+10 Stamina", "+10 Intellect"],
+}
+
+
+def stonerender_candidates():
+    return [
+        {
+            "name": "Zug",
+            "family": True,
+            "wearable": True,
+            "comparison": "better",
+            "gain": 55.0,
+            "score": 210.0,
+            "upgrade_percent": 25,
+            "item_level_gain": 6,
+            "role": "tank",
+            "class": "Warrior",
+            "spec": "Protection",
+            "tank": True,
+            "why": "mail, 238 armour",
+            "main_tank": True,
+            "role_piece": True,
+            "priority": 0,
+        },
+        {
+            "name": "Zrog",
+            "family": True,
+            "wearable": True,
+            "comparison": "better",
+            "gain": 48.0,
+            "score": 190.0,
+            "upgrade_percent": 30,
+            "item_level_gain": 9,
+            "role": "healer",
+            "class": "Shaman",
+            "spec": "Restoration",
+            "tank": False,
+            "why": "mail",
+            "main_tank": False,
+            "role_piece": False,
+            "priority": 3,
+        },
+        {
+            "name": "Zork",
+            "family": True,
+            "wearable": False,
+            "comparison": "not_better",
+            "gain": 0.0,
+            "score": 0.0,
+            "upgrade_percent": 0,
+            "item_level_gain": 0,
+            "role": "healer",
+            "class": "Druid",
+            "spec": "Restoration",
+            "tank": False,
+            "why": "no mail proficiency",
+            "main_tank": False,
+            "role_piece": False,
+            "priority": 3,
+        },
+    ]
+
+
+def stonerender(**kw):
+    base = dict(
+        kind="roll",
+        item_name="Stonerender Gauntlets",
+        candidates=json.dumps(stonerender_candidates()),
+        heuristic="Zug",
+        heuristic_why="the main tank has first call on a tank's piece",
+    )
+    base.update(kw)
+    return council(**base)
+
+
+class FitGates(unittest.TestCase):
+    """The fit gates (#2124): armor class and stat role decide whose piece a
+    drop is before armor and stamina get a say."""
+
+    def test_the_heuristic_cannot_give_a_caster_mail_piece_to_the_tank(self):
+        d = lootcouncil.decide(
+            stonerender(), jev.Outcome(jev.TIMEOUT, 3000), rule(), STONERENDER
+        )
+        self.assertEqual(d.recipient, "Zrog")
+        self.assertEqual(d.decided_by, jev.HEURISTIC)
+        self.assertIn("mail", d.reason.lower())
+        self.assertIn("spirit", d.reason.lower())
+        self.assertIn("intellect", d.reason.lower())
+
+    def test_jev_is_never_offered_the_tank_for_it(self):
+        state, questions = lootcouncil.question(stonerender(), STONERENDER)
+        options = questions["to"]["criteria"]
+        self.assertEqual(set(options), {"Zrog", lootcouncil.NOBODY})
+        self.assertEqual([c["name"] for c in state["candidates"]], ["Zrog"])
+        self.assertIn("own armor class", options["Zrog"])
+        self.assertIn("spirit and intellect", options["Zrog"])
+        instructions = questions["to"]["instructions"]
+        self.assertIn("armor class as their own", instructions)
+        self.assertIn("never a tank's", instructions)
+
+    def test_a_confident_jev_cannot_pick_the_tank_either(self):
+        d = lootcouncil.decide(stonerender(), outcome("Zug", 0.95), rule(), STONERENDER)
+        self.assertEqual(d.recipient, "Zrog")
+        self.assertEqual(d.decided_by, jev.HEURISTIC)
+
+    def test_the_unasked_decision_is_gated_too(self):
+        d = lootcouncil.skipped(stonerender(), STONERENDER)
+        self.assertEqual(d.recipient, "Zrog")
+        self.assertEqual(d.decided_by, jev.HEURISTIC)
+        self.assertIn("mail", d.reason.lower())
+        self.assertIn("spirit and intellect", d.reason.lower())
+
+    def test_answer_decides_through_the_gate(self):
+        client = FakeClient("Zug", 0.99)
+        d = asyncio.run(
+            lootcouncil.answer(client, stonerender(), lambda e: STONERENDER, rule())
+        )
+        self.assertEqual(d.recipient, "Zrog")
+        asked = client.asked[0][1]
+        self.assertEqual([c["name"] for c in asked["candidates"]], ["Zrog"])
+
+    def test_answer_with_jev_off_is_gated_too(self):
+        client = FakeClient("Zug", 0.99)
+        d = asyncio.run(
+            lootcouncil.answer(
+                client, stonerender(), lambda e: STONERENDER, rule(jev.OFF)
+            )
+        )
+        self.assertEqual(client.asked, [])
+        self.assertEqual(d.recipient, "Zrog")
+
+    def test_the_gate_covers_an_elemental_shaman_too(self):
+        candidates = stonerender_candidates()
+        candidates[1] = dict(candidates[1], spec="Elemental", role="caster")
+        c = stonerender(candidates=json.dumps(candidates))
+        d = lootcouncil.decide(c, jev.Outcome(jev.TIMEOUT, 3000), rule(), STONERENDER)
+        self.assertEqual(d.recipient, "Zrog")
+
+    def test_without_item_facts_the_gate_abstains(self):
+        d = lootcouncil.decide(stonerender(), jev.Outcome(jev.TIMEOUT, 3000), rule())
+        self.assertEqual(d.recipient, "Zug")
+        self.assertEqual(lootcouncil.skipped(stonerender()).recipient, "Zug")
+
+    def test_no_fitting_wearer_leaves_the_pick_alone(self):
+        only = [c for c in stonerender_candidates() if c["name"] != "Zrog"]
+        c = stonerender(candidates=json.dumps(only))
+        d = lootcouncil.decide(c, jev.Outcome(jev.TIMEOUT, 3000), rule(), STONERENDER)
+        self.assertEqual(d.recipient, "Zug")
+        _, questions = lootcouncil.question(c, STONERENDER)
+        self.assertIn("Zug", questions["to"]["criteria"])
+
+    def test_a_real_tank_piece_keeps_the_main_tanks_first_call(self):
+        plate = {
+            "name": "Big Bad Pauldrons",
+            "kind": "Plate",
+            "armor": 415,
+            "stats": ["+15 Strength", "+10 Stamina"],
+        }
+        d = lootcouncil.decide(
+            pauldrons(), jev.Outcome(jev.TIMEOUT, 3000), rule(), plate
+        )
+        self.assertEqual(d.recipient, "Grug")
+        _, questions = lootcouncil.question(pauldrons(), plate)
+        self.assertIn(
+            "first call as the main tank on a tank's piece",
+            questions["to"]["criteria"]["Grug"],
+        )
+
+    def test_a_caster_plate_piece_is_not_the_tanks_either(self):
+        holy_plate = {
+            "name": "Gauntlets of the Dawn",
+            "kind": "Plate",
+            "armor": 300,
+            "stats": ["+18 Intellect", "+12 Spirit", "+10 Stamina"],
+        }
+        candidates = [
+            dict(CANDIDATES[0], main_tank=True, role_piece=True, priority=0),
+            dict(
+                CANDIDATES[3],
+                name="Grog",
+                spec="Holy",
+                role="healer",
+                comparison="better",
+                upgrade_percent=35,
+            ),
+        ]
+        c = council(
+            candidates=json.dumps(candidates),
+            heuristic="Grug",
+            heuristic_why="the main tank has first call on a tank's piece",
+        )
+        d = lootcouncil.decide(c, jev.Outcome(jev.TIMEOUT, 3000), rule(), holy_plate)
+        self.assertEqual(d.recipient, "Grog")
+        _, questions = lootcouncil.question(c, holy_plate)
+        self.assertNotIn("Grug", questions["to"]["criteria"])
+        self.assertNotIn("tank's piece", questions["to"]["criteria"]["Grog"])
+
+
 class TheDecision(unittest.TestCase):
     def test_a_confident_different_pick_acts_with_jevs_reason(self):
         d = lootcouncil.decide(council(), outcome("Og", 0.9), rule())
