@@ -411,6 +411,81 @@ class TheSlotRemembersAWalkGivenUp(unittest.TestCase):
         self.assertFalse(slot.spent("guild bank", aim, 100.0 + townslot.SPENT_SECONDS))
 
 
+class TheLeaderBeneathTheGround(unittest.TestCase):
+    """The Zug family, 2026-11-09: the leader stood 63 yards below the ground
+    its four followers stood on, in Tirisfal, with no navmesh under it. Every
+    town errand failed after two seconds for hours and the dungeon campaign
+    never started. Nothing the family does walks a character up from below
+    the ground, so the leader uses the hearthstone."""
+
+    def under(self, leader_z=-25.3, others_z=37.6, moving=(), **kw):
+        rows = [snap("Grug", -6911.6, -2873.7, leader_z, **kw)]
+        for i, n in enumerate(NAMES[1:]):
+            rows.append(snap(n, -6911.0 + i, -2874.0, others_z))
+        tr = sit.Tracker()
+        for i in range(8):
+            for r in rows:
+                dx = i * 20.0 if r["name"] in moving else 0.0
+                tr.record(
+                    r["name"],
+                    sit.Point(r["map_id"], r["pos_x"] + dx, r["pos_y"], r["pos_z"]),
+                    i * 30.0,
+                )
+        return sit.build(NAMES, "Grug", rows, tr, 210.0, leader_travel="",
+                         death_rows=[])
+
+    def test_a_leader_far_below_the_members_beside_it_may_hearth(self):
+        f = facts(self.under())
+        self.assertEqual("Grug", jm.beneath(f))
+        self.assertIn(jm.HEARTH_LEADER, jm.options(f))
+        self.assertIn("below", jm.trouble(f))
+
+    def test_the_rule_hearths_without_a_model_answer_even_in_shadow(self):
+        f = facts(self.under())
+        self.assertEqual(jm.HEARTH_LEADER, jm.heuristic(f)[0])
+        j = ask(f, FakeJev(picks={"movement": jm.CARRY_ON}, confidence=0.99),
+                {"JEV_MODE_MOVEMENT": "shadow"})
+        self.assertEqual(jm.HEARTH_LEADER, j.carried_out)
+
+    def test_a_leader_on_the_same_floor_is_not_beneath_anything(self):
+        self.assertEqual("", jm.beneath(facts(self.under(leader_z=30.0))))
+
+    def test_a_leader_a_little_lower_on_a_slope_is_left_alone(self):
+        self.assertEqual("", jm.beneath(facts(self.under(leader_z=10.0))))
+
+    def test_a_walking_leader_is_left_alone(self):
+        self.assertEqual("", jm.beneath(facts(self.under(moving=("Grug",)))))
+
+    def test_a_used_hearthstone_or_a_fight_leaves_it_to_the_rest(self):
+        self.assertEqual("", jm.beneath(facts(self.under(), hearthed=("Grug",))))
+        self.assertEqual("", jm.beneath(facts(self.under(in_combat=1))))
+
+    def test_nobody_beside_the_leader_says_nothing_about_the_ground(self):
+        w = where(bork=(-8182.8, -2090.9, -114.3))
+        self.assertEqual("", jm.beneath(facts(w)))
+
+    def test_the_bridge_hearths_the_leader(self):
+        written = []
+        ns = _load(
+            ["_carry_out_movement"],
+            {
+                "asyncio": asyncio,
+                "time": __import__("time"),
+                "jev_movement": jm,
+                "campaignqueue": __import__("campaignqueue"),
+                "log": types.SimpleNamespace(info=lambda *a: None),
+                "_insert_hearth": written.append,
+                "_release_trade_errand": lambda c, a: True,
+            },
+        )
+        f = facts(self.under())
+        j = ask(f, FakeJev(picks={"movement": jm.CARRY_ON}, confidence=0.99))
+        asyncio.run(
+            ns["_carry_out_movement"](types.SimpleNamespace(), "Grug", f, j, None)
+        )
+        self.assertEqual(["Grug"], written)
+
+
 class TheBridge(unittest.TestCase):
     """_movement_due and _carry_out_movement, run on fakes."""
 
