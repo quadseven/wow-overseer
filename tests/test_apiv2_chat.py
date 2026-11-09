@@ -139,6 +139,12 @@ class TheRoute(unittest.TestCase):
         )
         self.assertEqual(body["markup"], "stripped")
 
+    def test_api_doc_names_the_query_keys(self):
+        doc = (HERE / "docs" / "API.md").read_text()
+        section = doc.split("## `GET /api/v2/chat`")[1].split("## ")[0]
+        for key in ("channel", "family", "guild", "limit", "hours"):
+            self.assertIn("`" + key + "`", section)
+
     def test_read_only(self):
         _c, _b, mem = run({"channel": ["party"], "family": ["Grug"]})
         for sql, _p in mem.asked:

@@ -80,6 +80,7 @@ def _at(value) -> str:
 
 
 def chat(query: dict, ctx) -> tuple[int, dict]:
+    """GET /api/v2/chat?channel=party&family=X&guild=X&limit=N&hours=N - recent party, raid, say or guild lines, bounded and read only."""
     channel = (query.get("channel") or [""])[0].strip().lower()
     if channel not in CHANNELS:
         return 400, {"error": "bad channel", "channels": list(CHANNELS)}

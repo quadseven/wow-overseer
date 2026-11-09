@@ -244,9 +244,9 @@ Each entry: path, query parameters, what it answers, one example.
 
 ## `GET /api/v2/chat`
 
-- Query: none
-- Answers: recent in-game chat lines, bounded and read only.
-- Example: `overseer get /api/v2/chat`
+- Query: `channel`, `family`, `guild`, `limit`, `hours`
+- Answers: recent party, raid, say or guild lines, bounded and read only.
+- Example: `overseer get /api/v2/chat channel=X`
 
 ## `GET /api/v2/chronicle`
 
