@@ -3,6 +3,7 @@ and a quest that stops progressing is broken with its reason."""
 
 import unittest
 
+import classhunt
 import classquest
 import guildjobs
 import questers
@@ -1951,7 +1952,7 @@ class ASummonedObjectEnder(unittest.TestCase):
     def test_log_rows_keep_each_creature_objective_counter(self):
         self.assertIn("q.RequiredNpcOrGo1 AS npc1", questers.LOG_SQL)
         self.assertIn("s.mobcount1", questers.LOG_SQL)
-        logs, progress, objectives, _done = questers._logs_by_guid(
+        logs, progress, objectives, _items, _done = questers._logs_by_guid(
             [
                 {
                     "guid": 1,
@@ -1973,6 +1974,102 @@ class ASummonedObjectEnder(unittest.TestCase):
         self.assertEqual(logs[1][104], questers.STATUS_INCOMPLETE)
         self.assertEqual(progress[1][104], 10)
         self.assertEqual(objectives[1][104], {127: 10, 171: 0, 456: 0})
+
+    def test_log_rows_keep_each_item_objective_counter(self):
+        self.assertIn("q.RequiredItemId1 AS item1", questers.LOG_SQL)
+        self.assertIn("s.itemcount1", questers.LOG_SQL)
+        log_row = {
+            "guid": 1,
+            "quest": 92,
+            "status": questers.STATUS_INCOMPLETE,
+            "progress": 9,
+            "item1": 731,
+            "item2": 1080,
+            "item3": 1081,
+            "item4": 0,
+            "item5": 0,
+            "item6": 0,
+            "itemcount1": 5,
+            "itemcount2": 4,
+            "itemcount3": 0,
+            "itemcount4": 0,
+            "itemcount5": 0,
+            "itemcount6": 0,
+        }
+        logs, progress, creatures, items, _done = questers._logs_by_guid([log_row], [])
+        self.assertEqual(logs[1][92], questers.STATUS_INCOMPLETE)
+        self.assertEqual(progress[1][92], 9)
+        self.assertEqual(creatures.get(1, {}).get(92), {})
+        self.assertEqual(items[1][92], {731: 5, 1080: 4, 1081: 0})
+        member = questers.members_from_rows(
+            [
+                {
+                    "guid": 1,
+                    "name": "Mirra",
+                    "level": 18,
+                    "race": HUMAN,
+                    "class_id": PRIEST,
+                    "online": 1,
+                    "map_id": 0,
+                    "pos_x": 0.0,
+                    "pos_y": 0.0,
+                    "zone_id": REDRIDGE,
+                }
+            ],
+            [log_row],
+            [],
+        )[0]
+        self.assertEqual(member.quest_item_objectives[92], {731: 5, 1080: 4, 1081: 0})
+
+    def test_redridge_goulash_skips_item_sources_whose_objective_is_complete(self):
+        goulash = quest(92, REDRIDGE, 18, title="Redridge Goulash")
+        goulash.update(
+            item1=731,
+            item_count1=5,
+            item2=1080,
+            item_count2=5,
+            item3=1081,
+            item_count3=5,
+        )
+        cat = world(
+            extra_quests=[goulash],
+            extra_givers=[
+                giver(92, "start", 5092, 1051, 0, 0),
+                giver(92, "end", 5092, 1051, 400, 0),
+            ],
+            extra_spawns=[
+                spawn(2092, 1001, 1, 0, level=18),
+                spawn(2093, 1002, 90, 0, level=18),
+                spawn(2094, 1003, 180, 0, level=18),
+            ],
+            extra_loot=[
+                {"item": 731, "entry": 1001},
+                {"item": 1080, "entry": 1002},
+                {"item": 1081, "entry": 1003},
+            ],
+        )
+        member = mirra(
+            level=18,
+            zone_id=REDRIDGE,
+            quest_log={92: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({30, 31}),
+            quest_progress={92: 5},
+            quest_objectives={92: {}},
+            quest_item_objectives={92: {731: 5, 1080: 4}},
+        )
+
+        plan = questers.plan(cat, member, questers.Clock(), 0.0)
+
+        self.assertEqual(plan.move.kind, classquest.HUNT)
+        self.assertEqual(plan.move.spot.entry, 1002)
+        step = questers.step_for(member, plan.move, 0, cat.quest(92))
+        self.assertEqual(
+            [row.command for row in step.rows],
+            [
+                "hunt-spawn creature:1002 item:1080 count:1 max:%d"
+                % classhunt.MAX_SECONDS
+            ],
+        )
 
     def test_coastal_menace_hunts_only_objectives_with_remaining_kills(self):
         coastal = quest(
