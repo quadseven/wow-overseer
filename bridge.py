@@ -19985,6 +19985,10 @@ class Bridge(discord.Client):
         state = _TOWN_ERRANDS.get(key, townerrand.State())
         now = time.monotonic()
         in_run = await self._mid_run(names)
+        if in_run:
+            # A RUN SEEN AFTER THE LAST ERRAND ENDED (#2116): see note_run.
+            state = townerrand.note_run(state)
+            _TOWN_ERRANDS[key] = state
         slot = self._cohort_town_slot(_cohort_key(cohort))
         label = _family_label(cohort)
         critical = False
