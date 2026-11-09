@@ -7,10 +7,17 @@ WHY. The realm's chat reactions could only be checked by reading a stream
 screenshot. This answers "did the party react" and "is guild chat alive" from
 data.
 
-SCOPE. overseer_chat has no guild or family column, so a line is scoped by its
-speaker: party, raid and say lines by the names of one family (the roster,
-never the request), guild and officer lines by the members of one family
-guild (guild_member). A family or guild outside the families answers 404.
+SCOPE. overseer_chat records the speaker's name and guid, the listener and
+the channel, but no guild or family id, and guild_member has no join date. So
+party, raid and say lines are scoped by the names of one family (the roster,
+never the request), and guild lines by the speaker's guid AND the listener
+both being CURRENT members of one family guild. A family or guild outside the
+families answers 404. Officer chat is never readable.
+
+KNOWN LIMITATION. Membership is judged as of now, not as of the line. A line
+from a member who has since left, or heard only by a listener who has since
+left, is not returned; a line spoken before a member joined may still be.
+The realm records nothing that tells those apart.
 
 BOUNDS. At most MAX_LIMIT lines (default DEFAULT_LIMIT) from the last
 MAX_HOURS hours (default DEFAULT_HOURS), newest first. Both bounds and the
@@ -32,7 +39,7 @@ import relay
 from . import _scope
 from ._scope import holes
 
-CHANNELS = ("party", "raid", "say", "guild", "officer")
+CHANNELS = ("party", "raid", "say", "guild")
 FAMILY_CHANNELS = ("party", "raid", "say")
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
@@ -49,10 +56,13 @@ _TAIL = (
     "ORDER BY line_id DESC LIMIT %s"
 )
 # {scope} is either a run of placeholders (a family) or a guild subquery.
-CHAT_SQL = _HEAD + "sender_name IN ({scope})" + _TAIL
+CHAT_SQL = _HEAD + "{scope}" + _TAIL
 _GUILD_SCOPE = (
-    "SELECT c.name FROM characters c JOIN guild_member gm ON gm.guid = c.guid "
-    "JOIN guild g ON g.guildid = gm.guildid WHERE g.name = %s"
+    "sender_guid IN (SELECT gm.guid FROM guild_member gm "
+    "JOIN guild g ON g.guildid = gm.guildid WHERE g.name = %s) "
+    "AND heard_by IN (SELECT c.name FROM characters c "
+    "JOIN guild_member gm ON gm.guid = c.guid "
+    "JOIN guild g ON g.guildid = gm.guildid WHERE g.name = %s)"
 )
 
 
@@ -90,7 +100,7 @@ def chat(query: dict, ctx) -> tuple[int, dict]:
         if key is None:
             return 404, {"error": "no such family", "families": sorted(families)}
         names = list(families[key])
-        sql = CHAT_SQL.format(scope=holes(len(names)))  # noqa: S608
+        sql = CHAT_SQL.format(scope="sender_name IN (" + holes(len(names)) + ")")  # noqa: S608
         scope = tuple(names)
         out["family"] = key
     else:
@@ -101,7 +111,7 @@ def chat(query: dict, ctx) -> tuple[int, dict]:
         if name is None:
             return 404, _scope.no_such_guild(ctx)
         sql = CHAT_SQL.format(scope=_GUILD_SCOPE)  # noqa: S608
-        scope = (name,)
+        scope = (name, name)
         out["guild"] = name
 
     rows = ctx.read.rows(sql, (channel, *scope, hours, limit), what="overseer_chat")

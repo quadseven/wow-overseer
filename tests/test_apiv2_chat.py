@@ -76,6 +76,20 @@ class TheRoute(unittest.TestCase):
         self.assertEqual(mem.asked[0][1][0], "guild")
         self.assertIn("Cave", mem.asked[0][1])
 
+    def test_officer_is_rejected_before_any_read(self):
+        code, body, mem = run({"channel": ["officer"], "guild": ["Cave"]})
+        self.assertEqual(code, 400)
+        self.assertNotIn("officer", body["channels"])
+        self.assertEqual(mem.asked, [])
+
+    def test_guild_lines_need_speaker_guid_and_listener_in_the_guild(self):
+        _c, _b, mem = run({"channel": ["guild"], "guild": ["Cave"]})
+        sql, params = mem.asked[0]
+        self.assertIn("sender_guid IN", sql)
+        self.assertIn("heard_by IN", sql)
+        self.assertNotIn("sender_name IN", sql)
+        self.assertEqual(list(params[:3]), ["guild", "Cave", "Cave"])
+
     def test_whisper_and_unknown_channels_refused_before_any_read(self):
         for ch in ("whisper", "yell", "channel", "x"):
             code, _body, mem = run({"channel": [ch], "family": ["Grug"]})
