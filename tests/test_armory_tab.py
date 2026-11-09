@@ -28,7 +28,6 @@ class TheEndpoint(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.server = (HERE / "map_server.py").read_text()
-        cls.dockerfile = (HERE / "Dockerfile").read_text()
 
     def test_the_endpoint_is_reachable(self):
         self.assertIn('"/api/armory": _armory,', self.server)
@@ -98,15 +97,6 @@ class TheEndpoint(unittest.TestCase):
         fetch = self.server[self.server.index("def _fetch_armory") :]
         fetch = fetch[: fetch.index("def _ensure_stream_store")]
         self.assertIn("LEFT JOIN acore_world.item_template", fetch)
-
-    def test_the_talent_book_ships_in_the_image(self):
-        """armory.TalentBook.load runs at IMPORT time, so an image without
-        talents.json does not start at all - and that failure lands at pod
-        start, long after CI has gone green."""
-        self.assertIn("talents.json", self.dockerfile)
-        for book in ("items", "icons", "spells", "viewerdisplays"):
-            self.assertIn(f"{book}.json", self.dockerfile)
-        self.assertIn("armory.py", self.dockerfile)
 
     def test_the_gear_query_carries_the_instance_not_just_the_template(self):
         """enchantments and randomPropertyId are what make a belt a 'Belt

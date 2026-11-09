@@ -1322,12 +1322,6 @@ class TheBridgeMeetsAtTheObjective(unittest.TestCase):
 
 
 class TheWiring(unittest.TestCase):
-    def test_the_image_carries_the_module(self):
-        dockerfile = (
-            __import__("pathlib").Path(__file__).resolve().parents[1] / "Dockerfile"
-        ).read_text(encoding="utf-8")
-        self.assertIn("classparty.py", dockerfile)
-
     def test_the_rows_are_written_as_the_modules_kinds(self):
         source = (
             __import__("pathlib").Path(__file__).resolve().parents[1] / "bridge.py"

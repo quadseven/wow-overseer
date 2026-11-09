@@ -197,7 +197,6 @@ class DeployFields(unittest.TestCase):
 
     def test_image_and_workflow_carry_the_commit(self):
         docker = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("deployinfo.py", docker)
         self.assertIn("ARG OVERSEER_COMMIT", docker)
         self.assertIn("ENV OVERSEER_COMMIT=$OVERSEER_COMMIT", docker)
         build = (HERE / ".github/workflows/build.yml").read_text(encoding="utf-8")

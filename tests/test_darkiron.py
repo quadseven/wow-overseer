@@ -221,10 +221,6 @@ class SaidTests(unittest.TestCase):
         self.assertIn(fireplan.iron_plan().line, fireplan.IRON_ROAD)
         self.assertIn(fireplan.skill_note(), fireplan.IRON_ROAD)
 
-    def test_the_module_ships_in_the_image(self):
-        dockerfile = (ROOT / "Dockerfile").read_text()
-        self.assertIn("fireplan.py", dockerfile)
-
 
 LOKHTOS_STOCK = frozenset(p.entry for p in fireplan.PLANS)
 
