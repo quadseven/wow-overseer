@@ -550,7 +550,7 @@ def _next_trade(family: Sequence) -> tuple:
     return None, ""
 
 
-def plan(family: Sequence) -> TradePlan:
+def plan(family: Sequence, guild_cover: Mapping[str, int] | None = None) -> TradePlan:
     """The family's trade decision: state in, errands and notes out.
 
     Deterministic - the same family always produces the same plan, so a test
@@ -561,7 +561,7 @@ def plan(family: Sequence) -> TradePlan:
     if not family:
         return TradePlan()
 
-    notes = _notes(family)
+    notes = _notes(family, guild_cover)
     taker, skill = _next_trade(family)
     if taker is None:
         return TradePlan(notes=notes)
@@ -628,7 +628,7 @@ def _take(taker: Member, skill: str) -> Assignment:
     )
 
 
-def _notes(family: Sequence) -> tuple:
+def _notes(family: Sequence, guild_cover: Mapping[str, int] | None = None) -> tuple:
     """Everything true about the plan that costs nobody a trainer visit."""
     notes: list = []
 
@@ -687,11 +687,21 @@ def _notes(family: Sequence) -> tuple:
         )
 
     if UNASSIGNED:
-        notes.append(
-            f"Deliberately unassigned: {', '.join(UNASSIGNED)}. The guild "
-            "(#2831) is meant to cover these professions, so this is a "
-            "decision and not a gap to be filled in."
-        )
+        counts = guild_cover or {}
+        if any(int(counts.get(t, 0)) > 0 for t in UNASSIGNED):
+            covered = ", ".join(
+                f"{t} ({int(counts.get(t, 0))} at 260+)" for t in UNASSIGNED
+            )
+            notes.append(
+                f"The guild covers: {covered}. A gem or glyph ask is "
+                "answered by an online guildmate."
+            )
+        else:
+            notes.append(
+                f"Deliberately unassigned: {', '.join(UNASSIGNED)}. The guild "
+                "(#2831) is meant to cover these professions, so this is a "
+                "decision and not a gap to be filled in."
+            )
     return tuple(notes)
 
 
