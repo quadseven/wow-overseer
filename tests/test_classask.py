@@ -1060,7 +1060,13 @@ class TheDungeonPasses(unittest.TestCase):
         seen = {}
 
         def free_members(
-            rows, busy, resting, family, benched=frozenset(), owed=frozenset()
+            rows,
+            busy,
+            resting,
+            family,
+            benched=frozenset(),
+            owed=frozenset(),
+            seated=frozenset(),
         ):
             seen["busy"] = set(busy)
             return [], {}

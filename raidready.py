@@ -31,6 +31,7 @@ import bank
 import jobs
 import places
 import raidcraft
+import raidfloor
 import raidgear
 import raidgoals
 import raidlineup
@@ -442,10 +443,15 @@ def _blockers(
     runnable: bool,
     clears: bool = True,
     gathers: bool = True,
+    worn_rows: list = (),
 ) -> list:
     """Everything between this guild and its first raid, hard ones first."""
     level_hard, level_soft = _level_blockers(raiders, min_level)
-    hard = _staffing_blockers(lineup, raiders, runnable, clears, gathers) + level_hard
+    hard = (
+        _staffing_blockers(lineup, raiders, runnable, clears, gathers)
+        + level_hard
+        + raidfloor.hard_blockers(raiders, worn_rows)
+    )
     soft = (
         level_soft
         + _thin_role_blockers(lineup)
@@ -850,6 +856,7 @@ def build_guild(
         RAID_PORTAL in jobs.RAID_KEYWORDS,
         raidrun.CLEARS,
         raidrun.GATHERS,
+        worn_rows,
     )
     names = [m["name"] for m in raiders]
     classes = {m["name"]: m.get("class_id") for m in members}

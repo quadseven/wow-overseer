@@ -102,7 +102,12 @@ class TheBareDungeonJobIsNotTheCampaign(unittest.TestCase):
         free = {"Bork": 12, "Grog": 12, "Grug": 6, "Og": 13, "Ugga": 7}
         sellable = {"Bork": 8, "Grog": 12, "Grug": 4, "Og": 6, "Ugga": 2}
         self.assertFalse(bag_pressure.family_town_run_needed(free, sellable=sellable))
-        self.assertTrue(bag_pressure.town_first_trip_worth(free, sellable))
+        # The trip the 8-slot band asked for; the wait is 4 slots now (#2116).
+        self.assertTrue(
+            bag_pressure.town_first_trip_worth(
+                free, sellable, resume=bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS
+            )
+        )
 
 
 class TheCampaignJobsRead(unittest.TestCase):

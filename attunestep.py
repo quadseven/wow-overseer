@@ -12,8 +12,9 @@ was on Kalimdor.
 WHAT THIS DECIDES, per family, on the campaign queue's own cycle:
 
   * Every member attuned: nothing to do.
-  * Somebody below the quest's own minimum level (quest_template.MinLevel):
-    wait.
+  * Nobody able to take it (below quest_template.MinLevel, or a race no row
+    admits): wait, naming each member and why. A member who cannot yet never
+    holds back one who can; the others go, and the line says who is not yet.
   * Nobody needs Lothos (every member not yet attuned holds the quest without
     a fragment): nothing to do here; Blackrock Depths is the planner's.
   * Not every member on the Eastern Kingdoms, where Lothos stands: wait.
@@ -30,7 +31,7 @@ WHAT THIS DECIDES, per family, on the campaign queue's own cycle:
     again for ROW_RETRY_SECONDS, whatever it answered.
 
 WHICH QUEST ROW. The core carries two, 7848 and 7487, one per faction. The row
-whose quest_template.AllowableRaces admits every member's race is the one;
+whose quest_template.AllowableRaces admits the member's race is that member's;
 nothing here names a faction.
 
 WHERE HE STANDS comes from acore_world.creature, and where the members stand
@@ -49,7 +50,7 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import raidrun
 import raidready
@@ -225,26 +226,51 @@ def _s(items) -> str:
     return "s" if len(items) == 1 else ""
 
 
-def _unready(facts: Facts, members: tuple):
-    """(a waiting Step, None) when nobody can go yet, else (None, the row)."""
-    if all(m.rewarded for m in members):
-        return Step(DONE, "every member is attuned to the Core"), None
-    quest = quest_for(members, facts.quests)
-    if quest is None:
-        return Step(
-            WAIT,
-            "no Attunement to the Core row in the world admits every member's race",
-        ), None
-    if facts.spawn is None:
-        return Step(WAIT, "Lothos Riftwaker has no spawn in the world database"), None
-    low = [m for m in members if m.level < quest.min_level]
-    if low:
-        return Step(
-            WAIT,
-            "%s below level %d, the attunement's own minimum"
-            % (_names(low), quest.min_level),
-        ), None
-    return None, quest
+def quest_for_member(member: Member, quests) -> QuestRow | None:
+    """The lowest-numbered attunement row this member's own race may take."""
+    for row in sorted(quests or (), key=lambda q: q.quest_id):
+        if race_admitted(row.races, member.race):
+            return row
+    return None
+
+
+def _blocked_reason(member: Member, row: QuestRow | None) -> str:
+    """Why this member cannot take or hand in the quest yet, or empty."""
+    if row is None:
+        return "no row admits the race"
+    if need(member) == TAKE and member.level < row.min_level:
+        return "below level %d" % row.min_level
+    return ""
+
+
+def _partition(members: tuple, quests):
+    """(ready, blocked): (member, row) pairs who can go to Lothos now, and
+    (member, reason) pairs who need him but cannot yet. Members who are
+    attuned or hold the quest need nothing and are in neither.
+
+    Only level and race block a member here. Position is not a block: the
+    family walks together, so a member off the Eastern Kingdoms is named by
+    _not_now as the one the walk waits for (and a member out of reach of
+    Lothos is simply walked there), never folded into this reason list."""
+    ready, blocked = [], []
+    for m in members:
+        if not need(m):
+            continue
+        row = quest_for_member(m, quests)
+        why = _blocked_reason(m, row)
+        if why:
+            blocked.append((m, why))
+        else:
+            ready.append((m, row))
+    return ready, blocked
+
+
+def _blocked_note(blocked) -> str:
+    """The members who cannot go, grouped by reason."""
+    reasons: dict = {}
+    for m, why in blocked:
+        reasons.setdefault(why, []).append(m)
+    return "; ".join("%s %s" % (_names(ms), why) for why, ms in reasons.items())
 
 
 def _not_now(facts: Facts, members: tuple, needing: list, idle_jobs) -> Step | None:
@@ -285,9 +311,10 @@ def _not_now(facts: Facts, members: tuple, needing: list, idle_jobs) -> Step | N
     return None
 
 
-def _go(facts: Facts, members: tuple, needing: list, quest: QuestRow) -> Step:
+def _go(facts: Facts, members: tuple, ready: list) -> Step:
     """The walk, and the rows for the members standing at Lothos."""
-    wanted = [(m, command(need(m), quest.quest_id)) for m in needing]
+    needing = [m for m, _ in ready]
+    wanted = [(m, command(need(m), row.quest_id)) for m, row in ready]
     rows = tuple(
         (m.name, said)
         for m, said in wanted
@@ -318,17 +345,26 @@ def _go(facts: Facts, members: tuple, needing: list, quest: QuestRow) -> Step:
     )
 
 
+def _with_note(result: Step, blocked) -> Step:
+    """The step, naming the members who cannot go yet and why."""
+    if not blocked:
+        return result
+    note = _blocked_note(blocked)
+    return replace(result, line="%s; not yet: %s" % (result.line, note))
+
+
 def step(facts: Facts, idle_jobs=("", "quest")) -> Step:
     """What the family does about the attunement this pass (see the module
     docstring for the order the checks are made in)."""
     members = tuple(facts.members)
     if not members:
         return Step(WAIT, "no member of the family could be read")
-    waiting, quest = _unready(facts, members)
-    if waiting is not None:
-        return waiting
-    needing = [m for m in members if need(m)]
-    if not needing:
+    if all(m.rewarded for m in members):
+        return Step(DONE, "every member is attuned to the Core")
+    ready, blocked = _partition(members, facts.quests)
+    if not ready and blocked:
+        return Step(WAIT, "nobody can take it yet: %s" % _blocked_note(blocked))
+    if not ready:
         holding = [m for m in members if not m.rewarded]
         return Step(
             BLACKROCK,
@@ -336,8 +372,12 @@ def step(facts: Facts, idle_jobs=("", "quest")) -> Step:
             "Blackrock Depths is next, and the planner ranks it first"
             % (_names(holding), _s(holding)),
         )
-    return _not_now(facts, members, needing, idle_jobs) or _go(
-        facts, members, needing, quest
+    if facts.spawn is None:
+        return Step(WAIT, "Lothos Riftwaker has no spawn in the world database")
+    needing = [m for m, _ in ready]
+    return _with_note(
+        _not_now(facts, members, needing, idle_jobs) or _go(facts, members, ready),
+        blocked,
     )
 
 

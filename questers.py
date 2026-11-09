@@ -243,6 +243,7 @@ FORGOTTEN_HEIRLOOM = (
 FARGODEEP_EXPLORATION = (
     "requires exploring Fargodeep Mine; questers cannot earn exploration credit"
 )
+SELLING_FISH = "Selling Fish (quest 127) requires fishing; questers cannot fish"
 UNDERBELLY_SCALES = "Underbelly Scales (quest 122) requires Black Dragonspawn with no spawns in Redridge Mountains"
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
@@ -1314,12 +1315,18 @@ def _working(cat: Catalogue, member, last_quest=0, left=frozenset()) -> set:
 def _unhuntable(cat: Catalogue, member, qid, left=frozenset()) -> bool:
     """True when the quester has no objective spawn of this quest to hunt
     (`_hunt`'s own choice: a solo field within its level, on its map, not one
-    it leaves for now)."""
+    it leaves for now, or on the other classic continent, which `_hunt`
+    crosses to)."""
     quest = cat.quest(qid)
     if quest is None:
         return True
     fields = classquest.within_level(member, classquest.solo_fields(quest))
-    return _nearest(member, fields, left) is None
+    if _nearest(member, fields, left) is not None:
+        return False
+    if member.placed:
+        routable = tuple(s for s in fields if s.guid not in left)
+        return classquest.far_map(member, routable) < 0
+    return True
 
 
 def _fields_gone(quest, gone) -> bool:
@@ -1404,6 +1411,8 @@ def _broken_reason(
         return FORGOTTEN_HEIRLOOM
     if quest.id == 62 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return FARGODEEP_EXPLORATION
+    if quest.id == 127 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
+        return SELLING_FISH
     if quest.id == 122 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return UNDERBELLY_SCALES
     missing = _ender_missing(quest, facts, gone, object_gone)
