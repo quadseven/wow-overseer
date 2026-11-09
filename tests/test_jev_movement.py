@@ -431,8 +431,9 @@ class TheLeaderBeneathTheGround(unittest.TestCase):
                     sit.Point(r["map_id"], r["pos_x"] + dx, r["pos_y"], r["pos_z"]),
                     i * 30.0,
                 )
-        return sit.build(NAMES, "Grug", rows, tr, 210.0, leader_travel="",
-                         death_rows=[])
+        return sit.build(
+            NAMES, "Grug", rows, tr, 210.0, leader_travel="", death_rows=[]
+        )
 
     def test_a_leader_far_below_the_members_beside_it_may_hearth(self):
         f = facts(self.under())
@@ -443,8 +444,11 @@ class TheLeaderBeneathTheGround(unittest.TestCase):
     def test_the_rule_hearths_without_a_model_answer_even_in_shadow(self):
         f = facts(self.under())
         self.assertEqual(jm.HEARTH_LEADER, jm.heuristic(f)[0])
-        j = ask(f, FakeJev(picks={"movement": jm.CARRY_ON}, confidence=0.99),
-                {"JEV_MODE_MOVEMENT": "shadow"})
+        j = ask(
+            f,
+            FakeJev(picks={"movement": jm.CARRY_ON}, confidence=0.99),
+            {"JEV_MODE_MOVEMENT": "shadow"},
+        )
         self.assertEqual(jm.HEARTH_LEADER, j.carried_out)
 
     def test_a_leader_on_the_same_floor_is_not_beneath_anything(self):
