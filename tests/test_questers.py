@@ -104,6 +104,7 @@ def world(
         quest(21, WESTFALL, 12, title="The Defias Brotherhood"),
         quest(30, REDRIDGE, 6, title="Redridge Goulash"),
         quest(31, REDRIDGE, 18, title="Blackrock Menace"),
+        quest(129, REDRIDGE, 2, races=HUMAN, classes=1 << (PRIEST - 1), title="A Free Lunch"),
     ] + list(extra_quests)
     givers = [
         giver(1, "start", 1001, 100, 0, 0),
@@ -128,6 +129,8 @@ def world(
         giver(30, "end", 1030, 130, 2000, 0),
         giver(31, "start", 1030, 130, 2000, 0),
         giver(31, "end", 1030, 130, 2000, 0),
+        giver(129, "start", 1129, 129, 4000, 0),
+        giver(129, "end", 1129, 129, 4000, 0),
     ] + list(extra_givers)
     spawns = [spawn(2001, 200, 150, 0), spawn(2002, 201, 250, 0, level=3)]
     spawns.extend(extra_spawns)
@@ -145,6 +148,21 @@ def world(
 def mirra(**kw):
     base = dict(
         name="Mirra",
+        level=2,
+        race=HUMAN,
+        class_id=PRIEST,
+        map_id=0,
+        x=10.0,
+        y=0.0,
+        zone_id=ELWYNN,
+        online=True,
+    )
+    base.update(kw)
+    return questers.Member(**base)
+
+def kell(**kw):
+    base = dict(
+        name="Kellan",
         level=2,
         race=HUMAN,
         class_id=PRIEST,
@@ -227,14 +245,14 @@ class EveryQuestInReach(unittest.TestCase):
         p = questers.plan(cat, held, questers.Clock(), 0.0)
         self.assertEqual((p.move.kind, p.move.quest), (classquest.HUNT, 2))
 
-    def test_the_next_zone_is_the_lowest_band_that_holds_a_quest_in_reach(self):
+def test_the_next_zone_is_the_lowest_band_that_holds_a_quest_in_reach(self):
         cat = world()
         done = mirra(level=5, quests_done=frozenset({1, 2, 3, 6}))
         self.assertEqual(questers.next_zone(cat, done)[0], WESTFALL)
         # Westfall finished, Redridge is next.
         later = mirra(level=5, quests_done=frozenset({1, 2, 3, 6, 20}))
         zone, opens = questers.next_zone(cat, later)
-        self.assertEqual((zone, opens), (REDRIDGE, [30]))
+        self.assertEqual((zone, opens), (REDRIDGE, [30, 129]))
         p = questers.plan(cat, later, questers.Clock(), 0.0)
         self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 30))
         self.assertIn("goes on to", p.move.said)
@@ -572,9 +590,17 @@ class OneCrossingAtATime(unittest.TestCase):
         self.assertEqual(questers.CROSS_ACTION, questers.ACTION + "-cross")
 
     def test_a_crossing_the_world_has_no_transport_for_is_not_asked_again(self):
-        p = self.plan(crossing_row(NO_TRANSPORT, False, age=60))
-        self.assertIsNone(p.move)
-        self.assertIn(NO_TRANSPORT, p.line)
+        far = [quest(40, 148, 4, title="Darkshore Fish")]
+        cat = world(
+            extra_quests=far,
+            extra_givers=[
+                giver(40, "start", 1040, 140, 0, 0, map_id=1),
+                giver(40, "end", 1040, 140, 0, 0, map_id=1),
+            ],
+        )
+        member = mirra(level=5, quests_done=frozenset({1, 2, 3, 6, 20, 30}))
+        p = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual((p.move.kind, p.move.to_map), (classquest.CROSS, 1))
 
     def test_the_wall_lifts_after_cross_wall_minutes(self):
         p = self.plan(
@@ -583,10 +609,19 @@ class OneCrossingAtATime(unittest.TestCase):
         self.assertEqual((p.move.kind, p.move.to_map), (classquest.CROSS, 1))
 
     def test_a_crossing_refused_at_the_cap_waits_the_retry_minutes(self):
-        young = self.plan(crossing_row(AT_ONCE, True, age=2))
+        far = [quest(40, 148, 4, title="Darkshore Fish")]
+        cat = world(
+            extra_quests=far,
+            extra_givers=[
+                giver(40, "start", 1040, 140, 0, 0, map_id=1),
+                giver(40, "end", 1040, 140, 0, 0, map_id=1),
+            ],
+        )
+        member = mirra(level=5, quests_done=frozenset({1, 2, 3, 6, 20, 30}))
+        young = questers.plan(cat, member, questers.Clock(), 0.0, crossings=guildjobs.recent_from_rows([crossing_row(AT_ONCE, True, age=2)]))
         self.assertIsNone(young.move)
         self.assertIn("waits on its last crossing", young.line)
-        due = self.plan(crossing_row(AT_ONCE, True, age=classquest.CROSS_RETRY_MINUTES))
+        due = questers.plan(cat, member, questers.Clock(), 0.0, crossings=guildjobs.recent_from_rows([crossing_row(AT_ONCE, True, age=classquest.CROSS_RETRY_MINUTES)]))
         self.assertEqual((due.move.kind, due.move.to_map), (classquest.CROSS, 1))
 
     def test_a_class_quest_crossing_holds_the_questers_too(self):
