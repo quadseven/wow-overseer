@@ -462,5 +462,84 @@ class Quest120MessengerToStormwind(unittest.TestCase):
         )
 
 
+class Quest131DeliveringDaffodils(unittest.TestCase):
+    """Quest 131 "Delivering Daffodils" is broken - questers are not eligible for it."""
+
+    def test_quest_131_is_defined(self):
+        """Quest 131 "Delivering Daffodils" should be defined in the catalogue."""
+        cat = catalogue(
+            [
+                row(
+                    131,
+                    "Delivering Daffodils",
+                    REDRIDGE,
+                    15,
+                    min_level=15,
+                    races=ALLIANCE,
+                    classes=0,
+                )
+            ]
+        )
+        quest = cat.quest(131)
+        self.assertIsNotNone(quest, "Quest 131 should be in the catalogue")
+        self.assertEqual(quest.id, 131)
+        self.assertEqual(quest.title, "Delivering Daffodils")
+        self.assertEqual(quest.quest_level, 15)
+        self.assertEqual(quest.zone, REDRIDGE)
+        self.assertEqual(quest.min_level, 15)
+        self.assertEqual(quest.allowable_races, ALLIANCE)
+        self.assertEqual(quest.allowable_classes, 0)
+
+    def test_quest_131_is_eligible_for_alliance_questers(self):
+        """Quest 131 should be eligible for Alliance questers like Bromli."""
+        cat = catalogue(
+            [
+                row(
+                    131,
+                    "Delivering Daffodils",
+                    REDRIDGE,
+                    15,
+                    min_level=15,
+                    races=ALLIANCE,
+                    classes=0,
+                )
+            ]
+        )
+        # Bromli is a Dwarf (race_id=3), which is in ALLIANCE_MASK
+        bromli = member("Bromli", DWARF, 15, REDRIDGE, class_id=2)
+        
+        # Quest 131 should be in reach for Bromli
+        reachable_quests = questers.in_reach(cat, bromli, REDRIDGE)
+        self.assertIn(131, reachable_quests, "Quest 131 should be in reach for Bromli")
+
+    def test_quest_131_is_eligible_for_questers_in_redridge_mountains(self):
+        """Quest 131 should be available to questers standing in Redridge Mountains."""
+        cat = catalogue(
+            [
+                row(
+                    131,
+                    "Delivering Daffodils",
+                    REDRIDGE,
+                    15,
+                    min_level=15,
+                    races=ALLIANCE,
+                    classes=0,
+                )
+            ]
+        )
+        
+        # Various questers standing in Redridge Mountains should be able to take quest 131
+        questers_redridge = [
+            member("Bromli", DWARF, 15, REDRIDGE, class_id=2),
+            member("Mirra", HUMAN, 15, REDRIDGE, class_id=5),
+            member("Velo", NIGHT_ELF, 15, REDRIDGE, class_id=4),
+        ]
+        
+        for quester in questers_redridge:
+            reachable_quests = questers.in_reach(cat, quester, REDRIDGE)
+            self.assertIn(131, reachable_quests, 
+                         f"Quest 131 should be in reach for {quester.name} in Redridge Mountains")
+
+
 if __name__ == "__main__":
     unittest.main()
