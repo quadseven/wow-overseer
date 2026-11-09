@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import armory  # noqa: E402
 import gearscore  # noqa: E402
+import raidfloor  # noqa: E402
 import raidgoals  # noqa: E402
 import raidready  # noqa: E402
 from raidlineup import (
@@ -517,13 +518,22 @@ class ARoleGearFloorIsAHardBlocker(unittest.TestCase):
         hard = [b["text"] for b in card["blockers"] if b["tone"] == raidready.HARD]
         floor = [t for t in hard if "gear floor" in t]
         self.assertEqual(1, len(floor), hard)
+        eh = raidfloor.FLOORS["tank"]["effective health"][0]
+        hp = raidfloor.FLOORS["healer"]["healing power"][0]
         self.assertIn(
-            "%s tank effective health 100 of 5000 (short 4900)" % tank, floor[0]
+            "%s tank effective health 100 of %d (short %d)" % (tank, eh, eh - 100),
+            floor[0],
         )
         self.assertIn(
-            "%s healer healing power 0 of 2500 (short 2500)" % healer, floor[0]
+            "%s healer healing power 0 of %d (short %d)" % (healer, hp, hp), floor[0]
         )
         self.assertFalse(card["ready"])
+
+    def test_a_thin_damage_seat_is_a_hard_blocker_too(self):
+        dps = self._thin("dps")
+        card = self._with_thin(dps)
+        text = " ".join(b["text"] for b in card["blockers"] if b["tone"] == "hard")
+        self.assertIn("%s dps attack or spell power 0 of" % dps, text)
 
     def test_a_seat_with_no_worn_rows_is_not_read_so_not_blocked(self):
         card = _card(self.rows, [self.rows[0]["name"]], item_rows=ITEM_ROWS)

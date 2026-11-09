@@ -51,6 +51,8 @@ HEAL_MANA_COST = 150
 HEAL_BASE_SHARE = 0.4
 # Damage seats burn the adds in this many seconds.
 ADD_BURN_SECONDS = 30
+# Damage seats that share the add burn (planning number).
+DAMAGE_SEATS = 4
 
 
 def _derive() -> dict:
@@ -80,9 +82,19 @@ def _derive() -> dict:
         },
         DPS: {
             "attack or spell power": (
-                math.ceil(MAJORDOMO_ADDS * MAJORDOMO_ADD_HEALTH / ADD_BURN_SECONDS / 4),
-                "Majordomo's %d adds of %d health in %ds"
-                % (MAJORDOMO_ADDS, MAJORDOMO_ADD_HEALTH, ADD_BURN_SECONDS),
+                math.ceil(
+                    MAJORDOMO_ADDS
+                    * MAJORDOMO_ADD_HEALTH
+                    / ADD_BURN_SECONDS
+                    / DAMAGE_SEATS
+                ),
+                "Majordomo's %d adds of %d health in %ds across %d damage seats"
+                % (
+                    MAJORDOMO_ADDS,
+                    MAJORDOMO_ADD_HEALTH,
+                    ADD_BURN_SECONDS,
+                    DAMAGE_SEATS,
+                ),
             ),
         },
     }
