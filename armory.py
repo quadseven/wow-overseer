@@ -54,6 +54,7 @@ import bonds
 import bag_pressure
 import family
 import raidlineup
+import statweights
 from core import _ALLIANCE_RACES, _HORDE_RACES
 from panel import (  # noqa: F401 - CLASS_COLOURS is re-exported for its old callers
     CLASS_COLOURS,
@@ -1762,7 +1763,7 @@ def _member(
     # bond_of reads every family bonds describes, so a Horde member's card
     # says "chief" where an Alliance one says "father". A guildmate has no
     # bond, and that is not an error: it has no family role, only the party
-    # role party_roles gives it from its class.
+    # role party_roles reads off the tree it plays.
     bond = bonds.bond_of(name)
     if char_row is None:
         return _absent_member(name, bond)
@@ -1857,16 +1858,28 @@ def _member(
 # on the left, Horde on the right, one row per party role, so the tank is
 # beside the tank and the healer beside the healer.
 #
-# THE ROLE IS THE CLASS'S, BY THE SAME PACKING THE RAID LINEUP USES. A five
-# has one tank and one healer. raidlineup already decides who can fill each
-# (TANKS, HEALERS) and spends the classes that can ONLY do one thing first,
-# so a warrior tanks before a paladin is asked to and a priest heals before
-# a druid is. Reading it off the talent tree instead would put a level-11
-# character with two points in Fury into the damage row, and the spec a
-# character is levelling in is not the seat it holds in the party.
+# THE ROLE IS THE TREE'S, BY THE SAME TABLE THE SCORERS READ (#2126). A
+# member's role is statweights.role_for over the tree they play, the one
+# table the gear pass and the loot council already judge them by, so the
+# word on the card cannot disagree with the decisions made about the
+# character. It used to be the class's seat from raidlineup's packing,
+# which labelled a Holy paladin tank and an Enhancement shaman healer:
+# true of their classes, false of the characters. The packing survives
+# here only as the fallback for a member whose tree is not known (no
+# points spent, a tie at the top, or a tree the table does not carry):
+# it fills in a word for the comparison below, whose rows pair a five by
+# seat, and it never overrides a tree that is known. raidlineup itself
+# is untouched, where seating a run is a different question from naming
+# the role a member plays.
 TANK, HEALER, DAMAGE = "tank", "healer", "damage"
 UNKNOWN_ROLE = "unknown"
 ROLE_ORDER = (TANK, HEALER, DAMAGE)
+# The words that all mean "deals damage" in a comparison row, now the role
+# is the tree's: statweights spells them melee, ranged and caster, and
+# DAMAGE is the word the packing fallback still uses.
+DAMAGE_ROLES = frozenset(
+    {DAMAGE, statweights.MELEE, statweights.RANGED, statweights.CASTER}
+)
 # How the damage row is matched when the classes differ: melee against
 # melee, casters against casters. Druids and shamans are either, and their
 # deepest tree says which.
@@ -1880,16 +1893,52 @@ NO_COUNTERPART = "no one in this role on this side"
 FACTION_HEADINGS = {"alliance": "Alliance", "horde": "Horde"}
 
 
-def party_roles(members: list[dict]) -> dict[str, str]:
-    """name -> tank, healer or damage, for one family of five.
+def _played_tree(m: dict) -> str | None:
+    """The tree the scorers would read off this member's card, or None.
 
-    Present members only; in roster order within a class band, so the lead
-    is chosen first when two could do it. A member with no saved character
-    has no class to read and gets no role. The packing itself is
-    raidlineup.party_roles, which gear.py's role guard reads as well (#174),
-    so the Armory and the hand-off passes cannot disagree about who tanks.
+    spec.primary is the deepest tree on the card, but a tie at the top is
+    no tree at all: raidroles.tree_of refuses one, so a build split
+    evenly between two trees is played in neither, whatever order the
+    card lists them in.
     """
-    return raidlineup.party_roles([m for m in members if m.get("present")])
+    spec = m.get("spec") or {}
+    primary = spec.get("primary")
+    if not primary:
+        return None
+    points = {t.get("name"): t.get("points") or 0 for t in spec.get("trees") or ()}
+    top = points.get(primary, 0)
+    if top and any(p == top for name, p in points.items() if name != primary):
+        return None
+    return primary
+
+
+def party_roles(members: list[dict]) -> dict[str, str]:
+    """name -> the role each member's own tree plays, for one family of five.
+
+    Present members only. The word is statweights.role_for over the tree
+    the member plays (_played_tree), the one table the gear pass and the
+    loot council share (#2126). A member that leaves unknown (no tree
+    played, or a tree the table does not carry) falls back to
+    raidlineup's packing over just those members, so the comparison
+    below still pairs a five whose talents are not read; the packing
+    never overrides a known tree. A member with no saved character has
+    no class to read and gets no role. raidlineup.party_roles itself is
+    untouched: seating a run is its job, and gear.py's role guard reads
+    it for that (#174).
+    """
+    roles: dict[str, str] = {}
+    unknown = []
+    for m in members:
+        if not m.get("present") or not m.get("name"):
+            continue
+        role = statweights.role_for(m.get("class_id"), _played_tree(m))
+        if role == statweights.UNKNOWN:
+            unknown.append(m)
+        else:
+            roles[m["name"]] = role
+    if unknown:
+        roles.update(raidlineup.party_roles(unknown))
+    return roles
 
 
 def _style(m: dict) -> str:
@@ -1956,15 +2005,15 @@ def pair_by_role(left: list[dict], right: list[dict]) -> list[dict]:
     then whoever is left, in roster order. Either side may be None.
     """
 
-    def by_role(side, role):
-        return [m for m in side if m.get("party_role") == role]
+    def pick(side, wanted):
+        return [m for m in side if m.get("party_role") in wanted]
 
     def names(side, role):
-        return [m["name"] for m in by_role(side, role)]
+        return [m["name"] for m in pick(side, {role})]
 
     rows = _zip_rows(TANK, names(left, TANK), names(right, TANK))
     rows += _zip_rows(HEALER, names(left, HEALER), names(right, HEALER))
-    rows += _match_damage(by_role(left, DAMAGE), by_role(right, DAMAGE))
+    rows += _match_damage(pick(left, DAMAGE_ROLES), pick(right, DAMAGE_ROLES))
     # A member with no role (no saved character) still gets a row: a
     # comparison that quietly drops somebody is the failure this tab is for.
     rows += _zip_rows(
