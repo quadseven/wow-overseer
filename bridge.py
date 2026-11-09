@@ -5349,8 +5349,8 @@ def _silent_seconds(head_id: int, names: list) -> int | None:
 
     A BOSS CREDIT COUNTS THE FIRST TIME A RUN WRITES IT (#2147). A party sealed
     inside a finished dungeon loops EXIT, IDLE, CLEARING, and every pass writes
-    the same "7 encounters credited" row again; on wow-dev that kept the clock
-    under ten minutes for twelve hours and the breaker never fired. A repeat of
+    the same "all encounters credited" row again, which kept the clock near
+    zero for as long as the loop ran and the breaker never fired. A repeat of
     a credit the run already wrote is not progress, so the NOT EXISTS keeps only
     the first row of each distinct credit per run.
 

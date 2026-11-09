@@ -874,9 +874,9 @@ class TheBridgeOrder(unittest.TestCase):
     def test_a_boss_credit_written_again_is_not_progress(self):
         # wow-overseer#2147: a party sealed in a finished dungeon loops
         # EXIT -> IDLE -> CLEARING, and every pass writes the same boss row
-        # ("7 encounters credited, 7 in all (mask 0 -> 191)") again. Counting
-        # the newest boss row reset the clock every ten minutes for twelve
-        # hours. Only the first sighting of a credit on a run is progress.
+        # ("N encounters credited, N in all") again. Counting the newest boss
+        # row reset the clock on every pass for as long as the loop ran. Only
+        # the first sighting of a credit on a run is progress.
         read = self.silence_read()
         boss = read[read.index("re.kind = 'boss'") :]
         self.assertIn("NOT EXISTS", boss)
