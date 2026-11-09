@@ -1373,6 +1373,33 @@ def _fetch_guild_gear() -> list[dict]:
     return rows
 
 
+# EVERY MEMBER OF EVERY FAMILY GUILD AND THE TRADES THEY HOLD (#2157), the same
+# guilds _GUILD_GEAR binds. The skill join is a LEFT JOIN restricted to the
+# profession ids, so a member with no trade comes back once with a NULL skill
+# rather than dropping out. Read-only; nothing from the request reaches it.
+_GUILD_PROFESSIONS = (
+    "SELECT g.name AS guild_name, c.name, k.skill, k.value, k.`max` "  # noqa: S608
+    "FROM guild g JOIN guild_member gm ON gm.guildid = g.guildid "
+    "JOIN characters c ON c.guid = gm.guid "
+    "LEFT JOIN character_skills k ON k.guid = c.guid AND k.skill IN ({ids}) "
+    "WHERE g.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes}))"
+)
+
+
+def _fetch_guild_professions() -> list[dict]:
+    """The rows armory.guild_professions reads, for every family guild."""
+    names = FAMILIES.names()
+    if not names:
+        return []
+    holes = ", ".join(["%s"] * len(names))
+    ids = tuple(armory.PROFESSION_NAMES)
+    with realmread.Session(_connect) as rd:
+        # S608: placeholders only; every value is bound.
+        return rd.must(_GUILD_PROFESSIONS.format(  # noqa: S608
+            ids=", ".join(["%s"] * len(ids)), holes=holes), (*ids, *names))
+
+
 # WHAT THE GUILD ROUTING PASS READS (gearrouting.py): every member of every
 # family guild - not only the families themselves. The wearer facts
 # equipscore.wearer_from_row reads, the scored gear of the bridge's equip
@@ -1616,10 +1643,22 @@ def _fetch_armory(names: list[str] | None = None) -> dict:
             f"WHERE c.name IN ({holes})",
             tuple(names),
         )
+        # The trades a member holds, with the rank trained to (`max`, backticked
+        # as in _TRADE_SKILLS). The ids are armory.PROFESSION_NAMES, bound as
+        # values; character_skills also holds languages and weapon skills.
+        skill_ids = tuple(armory.PROFESSION_NAMES)
+        skill_rows = rd.must(
+            "SELECT c.name, k.skill, k.value, k.`max` "  # noqa: S608
+            "FROM characters c JOIN character_skills k ON k.guid = c.guid "
+            f"WHERE c.name IN ({holes}) "
+            f"AND k.skill IN ({', '.join(['%s'] * len(skill_ids))})",
+            (*names, *skill_ids),
+        )
     return {"equip_event_rows": equip_event_rows,
             "char_rows": char_rows, "equipment_rows": equipment_rows,
             "talent_rows": talent_rows, "stats_rows": stats_rows,
-            "base_rows": base_rows, "set_rows": set_rows}
+            "base_rows": base_rows, "set_rows": set_rows,
+            "skill_rows": skill_rows}
 
 
 # WHERE EACH WORN ITEM CAME FROM (#371), for the character sheet's tooltip.
@@ -6374,6 +6413,15 @@ class Handler(BaseHTTPRequestHandler):
         payload = guildgear.build(_fetch_guild_gear())
         return 200, payload
 
+    @_get_route("guild professions query failed")
+    def _guild_professions(_query: dict, _ctx) -> tuple[int, dict]:
+        """GET /api/guildprofessions - every family-guild member's trades.
+
+        No parameters, like /api/guildgear: it answers about the guilds the
+        families are in and nothing else (armory.guild_professions)."""
+        # A failed read answers 503 (_answer).
+        return 200, armory.guild_professions(_fetch_guild_professions())
+
     @_get_route("guild routing query failed")
     def _guild_routing(_query: dict, _ctx) -> tuple[int, dict]:
         """GET /api/guildrouting - the guild gear-routing dry run.
@@ -6773,6 +6821,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/runtimeline": _run_timeline,
         "/api/raidgoals": _raidgoals,
         "/api/guildgear": _guild_gear,
+        "/api/guildprofessions": _guild_professions,
         "/api/guildrouting": _guild_routing,
         "/api/trades": _trades,
         "/api/recap": _recap,

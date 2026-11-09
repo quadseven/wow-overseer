@@ -53,6 +53,7 @@ from dataclasses import dataclass, field
 import bonds
 import bag_pressure
 import family
+import goals
 import raidlineup
 import statweights
 from core import _ALLIANCE_RACES, _HORDE_RACES
@@ -1749,6 +1750,71 @@ def _absent_member(name: str, bond) -> dict:
     }
 
 
+# WHAT A MEMBER CRAFTS (quadseven/wow-overseer#2157). character_skills also
+# holds languages, Defence and every weapon skill, so the profession set is
+# goals.SKILL_IDS, the one table the rest of the project names trades by, and
+# the read binds exactly those ids. `cap` is the `max` column: the rank the
+# member has trained to, which is what separates 1/75 from 1/300.
+PROFESSION_NAMES = {
+    skill_id: name.title() for name, skill_id in goals.SKILL_IDS.items()
+}
+
+
+def professions_of(rows: list[dict]) -> list[dict]:
+    """One member's character_skills rows -> [{name, skill, cap}], by name.
+
+    A row for a skill that is not a profession, or a LEFT JOIN row with no
+    skill at all, is skipped; a member with none gets an empty list.
+    """
+    out = [
+        {
+            "name": PROFESSION_NAMES[r["skill"]],
+            "skill": int(r["value"] or 0),
+            "cap": int(r["max"] or 0),
+        }
+        for r in rows
+        if r.get("skill") in PROFESSION_NAMES
+    ]
+    return sorted(out, key=lambda p: p["name"])
+
+
+def guild_professions(rows: list[dict]) -> dict:
+    """Guild-joined character_skills rows -> every member of every guild.
+
+    `rows` carry guild_name, name, skill, value and max, one per profession a
+    member holds and one skill-less row for a member who holds none, so nobody
+    drops out. Per guild: `members` (name order, each with `professions`) and
+    `by_profession`, the same members grouped under each trade, best skill
+    first, which is the raid-supply question in one read.
+    """
+    guilds: dict[str, dict[str, list[dict]]] = {}
+    for r in rows:
+        guilds.setdefault(r["guild_name"], {}).setdefault(r["name"], []).append(r)
+    out = []
+    for guild in sorted(guilds):
+        members = [
+            {"name": name, "professions": professions_of(guilds[guild][name])}
+            for name in sorted(guilds[guild])
+        ]
+        by_trade: dict[str, list[dict]] = {}
+        for m in members:
+            for p in m["professions"]:
+                by_trade.setdefault(p["name"], []).append(
+                    {"name": m["name"], "skill": p["skill"], "cap": p["cap"]}
+                )
+        for holders in by_trade.values():
+            holders.sort(key=lambda h: (-h["skill"], h["name"]))
+        out.append(
+            {
+                "name": guild,
+                "count": len(members),
+                "members": members,
+                "by_profession": dict(sorted(by_trade.items())),
+            }
+        )
+    return {"guilds": out}
+
+
 def _member(
     name: str,
     char_row: dict | None,
@@ -1759,6 +1825,7 @@ def _member(
     set_names: dict[int, str],
     book: TalentBook,
     items: ItemBook,
+    skill_rows: list[dict] | None = None,
 ) -> dict:
     # bond_of reads every family bonds describes, so a Horde member's card
     # says "chief" where an Alliance one says "father". A guildmate has no
@@ -1849,6 +1916,7 @@ def _member(
         "weakest": weakest_payload(
             char_row["name"], class_id, char_row["level"], slots
         ),
+        "professions": professions_of(skill_rows or []),
     }
 
 
@@ -2210,6 +2278,7 @@ def build_armory(
     set_rows: list[dict] | None = None,
     families: list[tuple[str, list[str]]] | None = None,
     guild_sizes: dict[str, int] | None = None,
+    skill_rows: list[dict] | None = None,
 ) -> dict:
     """Every member's profile, in roster order.
 
@@ -2231,6 +2300,7 @@ def build_armory(
     chars = {r["name"]: r for r in char_rows}
     equipment = _by_name(equipment_rows)
     talents = _by_name(talent_rows)
+    skills = _by_name(skill_rows or [])
     stats = {r["name"]: r for r in (stats_rows or [])}
     base = {(r["race"], r["class"], r["level"]): r for r in (base_rows or [])}
     set_names = {r["entry"]: r["item_name"] for r in (set_rows or [])}
@@ -2255,6 +2325,7 @@ def build_armory(
                 set_names,
                 book,
                 items,
+                skills.get(name, []),
             )
         )
     flag_weakest(members)
