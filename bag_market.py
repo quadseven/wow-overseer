@@ -111,7 +111,7 @@ def cap_yields(free_slots, held: bool = False) -> bool:
     AND BELOW THE RESUME LINE WHILE THE FAMILY IS HELD IN TOWN (#1375).
     `held` is the family's campaign waiting in town for bag room
     (`townslot.Slot.town_first`). The hold is let go only once every member
-    has `bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS`, so a member between the two
+    has `bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS`, so a member between the two
     lines keeps the whole family in town, and the hold is the wait the cap
     would otherwise ask it to sit out. Measured on the dev realm 2026-10-24:
     Grug's family was held 45 minutes on "Bork, Grog, Ugga below 8 free
@@ -122,7 +122,7 @@ def cap_yields(free_slots, held: bool = False) -> bool:
     if not isinstance(free_slots, int) or isinstance(free_slots, bool):
         return False
     line = (
-        bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS - 1
+        bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS - 1
         if held
         else bag_pressure.TOWN_RUN_FREE_SLOTS
     )

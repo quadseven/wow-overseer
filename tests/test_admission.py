@@ -83,20 +83,38 @@ class Gates(unittest.TestCase):
         verdict = decide(free_slots=full, hold=hold, armed=True)
         self.assertEqual(verdict.gate, cq.GATE_BAG_FULL)
 
-    def test_unarmed_family_short_of_the_resume_floor_waits(self):
-        verdict = decide(free_slots={"Grug": 5, "Bork": 30})
-        self.assertEqual(verdict.gate, cq.GATE_TOWN_FIRST)
+    def test_the_wait_is_for_the_modules_floor_plus_one(self):
+        """#2116: a family whose members all have 4 free slots is let in at
+        once; the 45 minute wait for 8 cost 46 to 53 minutes between runs."""
+        self.assertEqual(
+            bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS, bag_pressure.TOWN_RUN_FREE_SLOTS + 1
+        )
+        measured = {"Oz": 12, "Uzza": 12, "Zork": 11, "Zrog": 7, "Zug": 4}
+        self.assertEqual(decide(free_slots=measured), cq.Admit())
+        self.assertEqual(decide(free_slots={"Grug": 4, "Bork": 30}), cq.Admit())
+
+    def test_a_member_at_the_floor_still_waits(self):
+        verdict = decide(free_slots={"Grug": 3, "Bork": 30})
+        self.assertEqual(verdict.gate, cq.GATE_BAG_FULL)
 
     def test_armed_family_is_not_held_by_the_resume_floor(self):
         self.assertEqual(
             decide(free_slots={"Grug": 5, "Bork": 30}, armed=True), cq.Admit()
         )
 
+    def test_town_first_gate_asks_for_the_admission_floor(self):
+        """Its own gate is the near-full gate's twin now, so it is asked on its
+        own: a reading under the floor is short, at the floor is not."""
+        facts_ = facts(free_slots={"Grug": 3, "Bork": 4})
+        short = cq._town_first_gate(facts_, NOW, facts_.free_slots)
+        self.assertEqual(short.gate, cq.GATE_TOWN_FIRST)
+        self.assertIn("Grug", short.reason)
+        self.assertNotIn("Bork", short.reason)
+        self.assertIn("below 4 free slots", short.reason)
+
     def test_town_first_releases_past_the_ceiling(self):
-        verdict = decide(
-            free_slots={"Grug": 5, "Bork": 30}, town_since=NOW - CEILING - 1
-        )
-        self.assertEqual(verdict, cq.Admit())
+        facts_ = facts(free_slots={"Grug": 3, "Bork": 30}, town_since=NOW - CEILING - 1)
+        self.assertIsNone(cq._town_first_gate(facts_, NOW, facts_.free_slots))
 
     def test_errand_speaks_before_gear(self):
         verdict = decide(errand_active=True, gear={"Grug": NAKED})

@@ -628,13 +628,31 @@ def vendor_trip_makes_room(free_slots: dict, sellable: dict) -> bool:
 
 
 # TOWN FIRST, THEN THE DUNGEON (#265). A campaign that was withheld at
-# TOWN_RUN_FREE_SLOTS and let go again at TOWN_RUN_FREE_SLOTS + 1 flaps: one
-# sale lifts a member to four, the run opens, the first loot puts him back at
-# three, and the module walks the family out. Measured on wow-dev 2026-09-23 as
+# TOWN_RUN_FREE_SLOTS and let go again at TOWN_RUN_FREE_SLOTS + 1 flapped: one
+# sale lifted a member to four, the run opened, the first loot put him back at
+# three, and the module walked the family out. Measured on wow-dev 2026-09-23 as
 # an evacuation every ten seconds while every counter sat on another map. So the
-# campaign is let go at three and taken back only when every member has room
-# for a run's worth of loot: this many free slots each.
+# campaign was let go at three and taken back only when every member had room
+# for a run's worth of loot: eight free slots each.
+#
+# THE WAIT'S BAND IS ONE SLOT WIDE NOW (#2116). mod-overseer#1443 (live since roll 103,
+# 2026-11-08) ended the walk-out: a member with no bag room leaves the drop and
+# the run keeps clearing, so loot taking a member back to three costs a drop,
+# not the run. The module still refuses to open a run while any member has three
+# or fewer free slots, which is the one thing left for the bridge to wait for.
+# Measured on wow-dev 2026-11-08: a five-member family with 12, 12, 11, 7 and 4
+# free slots waited the whole 45 minute ceiling on "below 8" and then cleared
+# Blackrock Depths with no evacuation; a run that started with a member at no
+# free slots cleared it too. Eight free slots each cost 46 to 53
+# minutes between runs, every run, for no run saved. The wait therefore reads
+# CAMPAIGN_ADMIT_FREE_SLOTS, below.
 CAMPAIGN_RESUME_FREE_SLOTS = 8
+
+# What the ADMISSION gate asks of a family held in town (#2116): the module's
+# own start floor plus one. CAMPAIGN_RESUME_FREE_SLOTS above stays the room
+# other passes keep for a run's loot (a material hand-out, a bank withdrawal);
+# only the wait, and the trips and caps that serve the wait, read this one.
+CAMPAIGN_ADMIT_FREE_SLOTS = TOWN_RUN_FREE_SLOTS + 1
 
 # The resume floor is a hysteresis band, not a new wall. A member the town
 # passes cannot lift to it (everything it carries is protected, say) would hold
@@ -646,7 +664,7 @@ CAMPAIGN_RESUME_CEILING_SECONDS = 45 * 60
 def campaign_resume_short(
     free_slots: dict,
     held_seconds: float = 0.0,
-    resume: int = CAMPAIGN_RESUME_FREE_SLOTS,
+    resume: int = CAMPAIGN_ADMIT_FREE_SLOTS,
     ceiling: float = CAMPAIGN_RESUME_CEILING_SECONDS,
 ) -> tuple:
     """Members still short of the resume floor, sorted; () when the run may go.
@@ -669,6 +687,21 @@ def campaign_resume_short(
     )
 
 
+def bag_room_made(free_slots: dict) -> bool:
+    """Whether the family has the bag room a waiting campaign asks for (#2116).
+
+    The two questions the admission gate asks, at once: nobody at or below
+    TOWN_RUN_FREE_SLOTS (the module's own start floor) and nobody short of the
+    resume floor. A reading nobody took is no room made: an errand must not end
+    on a read that failed.
+    """
+    return (
+        bool(free_slots)
+        and not family_town_run_needed(free_slots)
+        and not campaign_resume_short(free_slots)
+    )
+
+
 # WHAT THE ECONOMY PASS DOES THIS CYCLE (#225). Three answers, not a bool,
 # because the middle one is new. "trip" takes the travel column and writes
 # sales; "counter" writes sales only for holders already at a vendor and takes
@@ -676,7 +709,7 @@ def campaign_resume_short(
 def town_first_trip_worth(
     free_slots: dict,
     sellable: dict | None,
-    resume: int = CAMPAIGN_RESUME_FREE_SLOTS,
+    resume: int = CAMPAIGN_ADMIT_FREE_SLOTS,
 ) -> bool:
     """Whether a family held in town for bag room should walk to a vendor.
 
@@ -975,7 +1008,7 @@ def stranded_vendor_aims(
     free_slots: dict,
     pressure: bool,
     in_run: bool,
-    resume: int = CAMPAIGN_RESUME_FREE_SLOTS,
+    resume: int = CAMPAIGN_ADMIT_FREE_SLOTS,
 ) -> tuple[str, ...]:
     """Names of cut-off members that need their own local vendor errand."""
     if not pressure or in_run or not leader:

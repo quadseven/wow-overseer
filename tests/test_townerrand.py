@@ -381,6 +381,60 @@ class TheHoldCeiling(unittest.TestCase):
         self.assertEqual("", line)
 
 
+class TheErrandEndsWhenTheRoomIsMade(unittest.TestCase):
+    """#2116. wow-dev 2026-11-08: the vendor step was done at 14:04 and the
+    family sat through bank, tidy, equip, hand-down, fund and mail until 14:27,
+    when the 45 minute campaign ceiling released it; the run began at 14:34."""
+
+    def in_steps(self, why=te.BAG_PRESSURE_WHY):
+        state = te.start(0.0, HUB, why)
+        state, _ = te.advance(state, 10.0, leader_at_hub=True)
+        state, _ = te.advance(state, 20.0, gathered=True)
+        state, line = te.advance(state, 30.0, step_done=True)
+        self.assertEqual(te.STEPS, state.phase, line)
+        return state
+
+    def test_the_room_ends_a_bag_room_errand_after_its_vendor_step(self):
+        state = self.in_steps()
+        self.assertEqual(te.BANK, state.current_step)
+        held, line = te.advance(state, 40.0)
+        self.assertTrue(held.active, line)
+        gone, line = te.advance(state, 40.0, bag_room_made=True)
+        self.assertEqual(te.DONE, gone.phase)
+        self.assertIn("bag room is made", line)
+
+    def test_the_room_ends_it_on_the_walk_too(self):
+        state = te.start(0.0, HUB, te.BAG_PRESSURE_WHY)
+        gone, line = te.advance(state, 60.0, bag_room_made=True)
+        self.assertEqual(te.DONE, gone.phase)
+        self.assertIn("bag room is made", line)
+
+    def test_an_errand_for_gear_is_not_ended_by_room(self):
+        state = self.in_steps("bought gear waits in the mailbox for Bork")
+        held, line = te.advance(state, 40.0, bag_room_made=True)
+        self.assertTrue(held.active, line)
+
+    def test_the_default_is_no_room_made(self):
+        state = self.in_steps()
+        held, line = te.advance(state, 40.0)
+        self.assertTrue(held.active, line)
+
+
+class TheRoomTheCampaignWaitsFor(unittest.TestCase):
+    def test_the_measured_zug_family_has_room(self):
+        # wow-dev 2026-11-08, 22:42 UTC: waited the 45 minute ceiling on this.
+        free = {"Oz": 12, "Uzza": 12, "Zork": 11, "Zrog": 7, "Zug": 4}
+        self.assertTrue(bag_pressure.bag_room_made(free))
+
+    def test_a_member_at_the_modules_floor_is_not_room(self):
+        free = {"Oz": 12, "Uzza": 12, "Zork": 11, "Zrog": 7, "Zug": 3}
+        self.assertFalse(bag_pressure.bag_room_made(free))
+
+    def test_no_reading_is_not_room(self):
+        self.assertFalse(bag_pressure.bag_room_made({}))
+        self.assertFalse(bag_pressure.bag_room_made(None))
+
+
 def _functions(*names):
     out = []
     for node in ast.walk(ast.parse(BRIDGE)):
@@ -644,6 +698,42 @@ class TheAdapter(unittest.TestCase):
         state = self.tick()
         self.assertEqual(te.GO, state.phase)
         self.assertEqual([], released)
+
+    def test_a_bag_room_errand_ends_when_the_family_has_room(self):
+        """#2116: the vendor step lifted every member to 4 free slots, the
+        campaign waits, so the errand is released at once and the remaining
+        steps do not run."""
+        released = []
+
+        async def release(names, leader, slot, label):
+            released.append((sorted(names), leader))
+
+        async def aim_stranded(*args, **kwargs):
+            return 0
+
+        self.fam._town_errand_release = release
+        self.fam._aim_stranded_bag_pressure_members = aim_stranded
+        # The step's own counter work is not what is under test.
+        self.fam._town_errand_step = lambda *a: asyncio.sleep(0, result=False)
+        self.ns["_campaign_waiting"] = lambda names: True
+        self.ns["_bag_hold_stuck"] = lambda names, free_slots: False
+        self.ns["_fetch_free_slots"] = lambda names: {"Bork": 0, "Grug": 0}
+        self.ns["_TOWN_ERRANDS"][("Bork", "Grug")] = te.State(
+            phase=te.STEPS,
+            started=self.now - 600.0,
+            phase_since=self.now - 100.0,
+            hub=dict(HUB),
+            why=te.BAG_PRESSURE_WHY,
+            step=1,
+        )
+        self.positions = {"Grug": _at(101, 100), "Bork": _at(103, 101)}
+        # Both members still at the floor: the errand goes on.
+        self.assertEqual(te.STEPS, self.tick().phase)
+        self.assertEqual([], released)
+        # The vendor step lifted everyone to 4: the room is made.
+        self.ns["_fetch_free_slots"] = lambda names: {"Bork": 4, "Grug": 7}
+        self.assertEqual(te.DONE, self.tick().phase)
+        self.assertEqual([(["Bork", "Grug"], "Grug")], released)
 
     def test_no_take_is_written_until_the_member_stands_at_the_mailbox(self):
         self.tick()
