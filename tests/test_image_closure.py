@@ -9,6 +9,7 @@ import pathlib
 import shlex
 import subprocess
 import sys
+import tempfile
 import unittest
 
 
@@ -16,10 +17,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 DOCKERFILE = ROOT / "Dockerfile"
 
 
-def _copied_sources() -> set[pathlib.Path]:
+def _copied_image_files() -> dict[pathlib.Path, pathlib.PurePosixPath]:
     text = DOCKERFILE.read_text(encoding="utf-8")
     lines = text.splitlines()
-    copied: set[pathlib.Path] = set()
+    copied: dict[pathlib.Path, pathlib.PurePosixPath] = {}
     instruction: list[str] = []
     for line in lines:
         stripped = line.strip()
@@ -34,16 +35,27 @@ def _copied_sources() -> set[pathlib.Path]:
             continue
         parts = shlex.split(" ".join(instruction))
         instruction.clear()
-        if len(parts) < 3 or any(part.startswith("--from") for part in parts[1:-1]):
+        if len(parts) < 3:
             continue
-        for source in parts[1:-1]:
+        sources = parts[1:-1]
+        while sources and sources[0].startswith("--"):
+            sources = sources[1:]
+        if any(part.startswith("--from") for part in parts[1:-1]):
+            continue
+        destination = pathlib.PurePosixPath(parts[-1])
+        is_directory_destination = parts[-1].endswith("/") or len(sources) > 1
+        for source in sources:
             path = ROOT / source
             if path.is_dir():
-                copied.update(
-                    p.relative_to(ROOT) for p in path.rglob("*") if p.is_file()
-                )
+                for child in path.rglob("*"):
+                    if child.is_file():
+                        relative = child.relative_to(path)
+                        copied[child.relative_to(ROOT)] = destination / relative
             elif path.is_file():
-                copied.add(path.relative_to(ROOT))
+                target = (
+                    destination / path.name if is_directory_destination else destination
+                )
+                copied[path.relative_to(ROOT)] = target
     return copied
 
 
@@ -120,9 +132,13 @@ def _world_data_paths(path: pathlib.Path) -> set[pathlib.Path]:
 
 class ImageClosureTests(unittest.TestCase):
     def test_entrypoint_import_closure_is_in_the_copy_list(self):
-        copied = _copied_sources()
+        copied = _copied_image_files()
         closure = _entrypoint_closure()
-        missing = sorted(str(path) for path in closure - copied)
+        missing = sorted(
+            str(path)
+            for path in closure
+            if copied.get(path) != pathlib.PurePosixPath("/app") / path.as_posix()
+        )
         self.assertEqual(
             missing, [], "entrypoint imports missing from image: " + ", ".join(missing)
         )
@@ -131,7 +147,8 @@ class ImageClosureTests(unittest.TestCase):
         for source in required:
             target = ROOT / source
             if target.is_file():
-                if source not in copied:
+                expected = pathlib.PurePosixPath("/app") / source.as_posix()
+                if copied.get(source) != expected:
                     absent.append(str(source))
             elif target.is_dir():
                 contents = {
@@ -139,7 +156,12 @@ class ImageClosureTests(unittest.TestCase):
                     for path in target.rglob("*")
                     if path.is_file()
                 }
-                absent.extend(str(path) for path in sorted(contents - copied))
+                absent.extend(
+                    str(path)
+                    for path in sorted(contents)
+                    if copied.get(path)
+                    != pathlib.PurePosixPath("/app") / path.as_posix()
+                )
             else:
                 absent.append(str(source))
         absent.sort()
@@ -150,7 +172,7 @@ class ImageClosureTests(unittest.TestCase):
         )
 
     def test_every_shipped_module_imports_and_every_data_file_opens(self):
-        copied = _copied_sources()
+        copied = _copied_image_files()
         module_paths = sorted(
             path for path in copied if path.suffix == ".py" and path.parts[0] != "app"
         )
@@ -178,23 +200,31 @@ with stub_modules(discord=discord, pymysql=PYMYSQL):
         importlib.import_module(name)
 """
         env = os.environ.copy()
-        env["PYTHONPATH"] = os.pathsep.join(
-            (str(ROOT / "tests"), str(ROOT), env.get("PYTHONPATH", ""))
-        )
-        result = subprocess.run(
-            [sys.executable, "-B", "-c", code, json.dumps(module_names)],
-            cwd=ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        for path in data_paths:
-            contents = (ROOT / path).read_bytes()
-            self.assertTrue(contents, f"empty shipped data file: {path}")
-            if path.suffix == ".json":
-                json.loads(contents)
+        env.pop("PYTHONPATH", None)
+        with tempfile.TemporaryDirectory() as temporary:
+            image_root = pathlib.Path(temporary)
+            for source, target in copied.items():
+                destination = image_root / target.relative_to("/")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes((ROOT / source).read_bytes())
+            env["PYTHONPATH"] = os.pathsep.join(
+                (str(ROOT / "tests"), str(image_root / "app"))
+            )
+            result = subprocess.run(
+                [sys.executable, "-B", "-c", code, json.dumps(module_names)],
+                cwd=image_root / "app",
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for path in data_paths:
+                image_path = image_root / copied[path].relative_to("/")
+                contents = image_path.read_bytes()
+                self.assertTrue(contents, f"empty shipped data file: {path}")
+                if path.suffix == ".json":
+                    json.loads(contents)
 
 
 if __name__ == "__main__":
