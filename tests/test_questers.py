@@ -1161,6 +1161,44 @@ class Broken(unittest.TestCase):
             "which no spawned creature drops",
         )
 
+    def test_poor_old_blanchy_names_the_missing_handful_of_oats_source(self):
+        # Fixture of the ticket's world rows for quest 151 (Poor Old
+        # Blanchy, Westfall, level 14, min level 9): required item 1528 x8
+        # (Handful of Oats) with no source in the world rows, so no spawn
+        # dropping it and no field to hunt. The quest row is of the shape
+        # questers.QUESTS_SQL reads; the giver rows are of the shape
+        # classquest's giver read takes.
+        blanchy = quest(
+            151,
+            WESTFALL,
+            14,
+            min_level=9,
+            title="Poor Old Blanchy",
+        )
+        blanchy.update(item1=1528, item_count1=8)
+        cat = world(
+            extra_quests=[blanchy],
+            extra_givers=[
+                giver(151, "start", 1151, 151, 0, 0),
+                giver(151, "end", 1151, 151, 0, 0),
+            ],
+        )
+        member = mirra(
+            level=14,
+            zone_id=WESTFALL,
+            quest_log={151: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({20, 21}),
+            quest_progress={151: 0},
+            quest_objectives={151: {1528: 0}},
+        )
+
+        p, _ = self._play(member, 120, cat=cat)
+
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 151)
+        self.assertIn("Handful of Oats", p.broken[0].reason)
+        self.assertIn("no spawned creature drops", p.broken[0].reason)
+
     def test_quest_64_the_forgotten_heirloom_has_specific_stall_reason(self):
         # Quest 64 "The Forgotten Heirloom" in Westfall (level 12) requires an
         # item that no spawned creature drops. The quest has items but no
