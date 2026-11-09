@@ -450,6 +450,12 @@ OWES_CLASS_QUEST = "owes a class quest"
 # why_not's word for a family member; familyseat.release lends one of an idle
 # family to a tank or healer seat (#784).
 FAMILY_MEMBER = "a family member"
+# why_not's word for a character that holds a seat in an ordered raid (#2105).
+# The seat rows are the hold: the bridge reads overseer_raid_seat on every
+# pass, so the hold lasts exactly as long as the order's rows do and ends when
+# they are deleted (the order ended, was cancelled, or was stood down).
+SEATED_IN_RAID = "seated in an ordered raid"
+SEATED_SQL = "SELECT DISTINCT name FROM overseer_raid_seat"
 
 
 def why_not(
@@ -459,13 +465,19 @@ def why_not(
     family: set,
     benched=frozenset(),
     owed=frozenset(),
+    seated=frozenset(),
 ) -> str:
     """Why this member cannot be picked now, or "".
+
+    `seated` is the names that hold a seat in an ordered raid: a finder run
+    never takes one, so the raid keeps every seat to the pull (#2105).
 
     `owed` is the names of the members that owe a class quest: the operator's
     rule is that a class quest comes before any dungeon, so none is picked."""
     if member.name in family:
         return FAMILY_MEMBER
+    if member.name in seated:
+        return SEATED_IN_RAID
     if not member.online:
         return "offline"
     if member.name in busy:
@@ -496,6 +508,7 @@ def free_members(
     family: set[str],
     benched: frozenset[str] = frozenset(),
     owed: frozenset[str] = frozenset(),
+    seated: frozenset[str] = frozenset(),
 ) -> tuple[list[Member], dict[str, int]]:
     """The free guild roster and the reasons each other member was held."""
     free = []
@@ -504,7 +517,7 @@ def free_members(
         member = member_from_row(row)
         if member is None:
             continue
-        why = why_not(member, busy, resting, family, benched, owed)
+        why = why_not(member, busy, resting, family, benched, owed, seated)
         if why:
             held[why] = held.get(why, 0) + 1
             continue
