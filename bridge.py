@@ -21915,7 +21915,8 @@ class Bridge(discord.Client):
 
         members, skipped = guildrun.free_members(
             facts["rows"], facts["busy"], facts["resting"],
-            facts["family"], facts["benched"], owed=frozenset(_class_owed_names(self)))
+            facts["family"], facts["benched"], owed=frozenset(_class_owed_names(self)),
+            seated=frozenset(facts.get("seated", ())))
         # ROOM TO LOOT BEFORE THE DOOR (#1568).
         members = _skip_bag_room(members, skipped, _bag_room_short(self, facts))
         pools = guildrun.pools(members, doors)
@@ -27924,6 +27925,19 @@ def _standin_guest_names(cur) -> set:
     return {str(r["in_name"]) for r in cur.fetchall() if r.get("in_name")}
 
 
+def _raid_seated_names(cur) -> set:
+    """The characters that hold a seat in an ordered raid (overseer_raid_seat,
+    #2105): no finder run or ask takes one while the rows stand. Empty on a
+    world without the table."""
+    try:
+        cur.execute(guildrun.SEATED_SQL)
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] == 1146:
+            return set()
+        raise
+    return {str(r["name"]) for r in cur.fetchall() if r.get("name")}
+
+
 def _active_guild_run_names() -> list:
     with _connect() as conn, conn.cursor() as cur:
         try:
@@ -28011,7 +28025,9 @@ def _fetch_guild_run_facts(bounds) -> dict:
         )
         family_benched = guildrun.family_seat_benched(list(cur.fetchall()))
         recipes = _guild_raid_recipes(cur, guilds)
-    return {"rows": rows, "family": family, "busy": busy, "in_runs": in_runs,
+        seated = _raid_seated_names(cur)
+    return {"rows": rows, "family": family, "busy": busy | seated, "in_runs": in_runs,
+            "seated": seated,
             "resting": resting,
             "benched": benched, "family_benched": family_benched,
             "in_flight_by_guild": by_guild, "history": history,
