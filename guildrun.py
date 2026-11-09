@@ -2054,6 +2054,157 @@ async def decide(client, plan: Plan, environ=None) -> Decision:
     return Decision(plan, comp, door)
 
 
+def resolve_guild(name, guilds) -> str:
+    """The configured guild `name` spells, in its own capitals, or "" when it
+    names none of `guilds` (limits().guilds, the guilds the planner forms for)."""
+    wanted = name.strip().lower() if isinstance(name, str) else ""
+    return next((g for g in guilds if wanted and g.lower() == wanted), "")
+
+
+def decide_by_order(plan: Plan, keyword: str) -> Decision:
+    """The planner's own composition, and the door an operator named.
+
+    No Jev call: the person chose the door, and the composition is the
+    heuristic's pick (heuristic_composition). Both judgments are recorded as
+    off, the same shape decide gives when Jev is off, so a reader of the run
+    sees who chose. `keyword` must be one of plan.doors."""
+    label, comp_why = heuristic_composition(plan)
+    holder = plan.options[0].tank.name
+    subject = plan.pool.guild[:12]
+    comp = GuildJudgment(
+        kind=KIND_COMPOSITION,
+        subject=subject,
+        holder=holder,
+        heuristic=label,
+        heuristic_why=comp_why,
+        mode=jev.OFF,
+        status="off",
+        item_name=("band %s: %s" % (plan.band, ", ".join(plan.labels)))[:120],
+    )
+    door = GuildJudgment(
+        kind=KIND_DUNGEON,
+        subject=subject,
+        holder=holder,
+        heuristic=keyword,
+        heuristic_why="ordered from the operator console",
+        mode=jev.OFF,
+        status="off",
+        item_name=("band %s: %s" % (plan.band, keyword))[:120],
+    )
+    return Decision(plan, comp, door)
+
+
+def order_facts(cur, cooldown_minutes: int) -> dict:
+    """What the run table says a new run must respect, read on `cur`: the
+    members in a run (busy), the guilds with a run going (active), the
+    members resting after one, those benched by a refusal, and the record
+    the door rates are made from. The same reads the bridge's pass makes."""
+    busy: set = set()
+    active: dict = {}
+    cur.execute(
+        "SELECT guild, members FROM overseer_guild_run WHERE state IN (%s, %s)",
+        (QUEUED, INSIDE),
+    )
+    for run in cur.fetchall():
+        busy |= {m["name"] for m in _member_list(run["members"])}
+        active[run["guild"]] = active.get(run["guild"], 0) + 1
+    cur.execute(
+        "SELECT members, outcome, bosses_done, seconds_inside "
+        "FROM overseer_guild_run WHERE state = 'ended' "
+        "AND ended_at > NOW() - INTERVAL %s MINUTE AND outcome IN ("
+        + ",".join(["%s"] * len(WENT_IN))
+        + ")",
+        (cooldown_minutes, *WENT_IN),
+    )
+    resting: set = set()
+    for run in cur.fetchall():
+        if rests_members(run):
+            resting |= {m["name"] for m in _member_list(run["members"])}
+    cur.execute(
+        "SELECT outcome, why, TIMESTAMPDIFF(MINUTE, ended_at, NOW()) AS age_minutes "
+        "FROM overseer_guild_run WHERE state = 'ended' "
+        "AND ended_at > NOW() - INTERVAL %s MINUTE",
+        (QUEUE_BENCH_MINUTES,),
+    )
+    benched_now = benched(list(cur.fetchall()))
+    cur.execute(
+        "SELECT guild, keyword, band, composition, state, outcome, deaths, ended_at "
+        "FROM overseer_guild_run WHERE state = 'ended' ORDER BY id DESC LIMIT 2000"
+    )
+    return {
+        "busy": busy,
+        "active": active,
+        "resting": resting,
+        "benched": benched_now,
+        "history": list(cur.fetchall()),
+    }
+
+
+RUN_INSERT_SQL = (
+    "INSERT INTO overseer_guild_run (guild, band, composition, keyword, tank, "
+    "members, dungeon_by, dungeon_jev, dungeon_confidence, composition_by, "
+    "composition_jev, composition_confidence, prior_rate, prior_runs) "
+    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+)
+
+
+def run_row(decision: Decision) -> tuple:
+    """The parameters of RUN_INSERT_SQL for one decision."""
+    comp = decision.chosen
+    door = decision.door
+    prior = decision.prior
+    return (
+        decision.plan.pool.guild[:24],
+        decision.plan.band[:8],
+        comp.key[:40],
+        door.keyword[:32],
+        comp.tank.name[:12],
+        members_text(comp)[:255],
+        decision.dungeon.chosen_by[:10],
+        decision.dungeon.jev[:40] or None,
+        decision.dungeon.confidence,
+        decision.composition.chosen_by[:10],
+        decision.composition.jev[:40] or None,
+        decision.composition.confidence,
+        prior.smoothed if prior.runs else None,
+        prior.runs,
+    )
+
+
+def start_run(cur, decision: Decision) -> int | None:
+    """The run's row and its finder command, linked, on one cursor. Returns
+    the run id, or None when the guild already has a run going.
+
+    The check is made again HERE, locking the guild's live rows, because the
+    planner's read was taken earlier and the bridge forms runs on its own
+    clock: a run that began in between must not be started over.
+    The statements and the command are the bridge's own."""
+    cur.execute(
+        "SELECT id FROM overseer_guild_run WHERE guild = %s "
+        "AND state IN (%s, %s) LIMIT 1 FOR UPDATE",
+        (decision.plan.pool.guild[:24], QUEUED, INSIDE),
+    )
+    if cur.fetchone():
+        return None
+    cur.execute(RUN_INSERT_SQL, run_row(decision))
+    run_id = int(cur.lastrowid)
+    cur.execute(
+        "INSERT INTO overseer_command (target_name, command, kind, source) "
+        "VALUES (%s, %s, 'guild', %s)",
+        (
+            decision.chosen.tank.name,
+            decision.chosen.command(decision.door.keyword),
+            SOURCE,
+        ),
+    )
+    command_id = int(cur.lastrowid)
+    cur.execute(
+        "UPDATE overseer_guild_run SET command_id = %s WHERE id = %s",
+        (command_id, run_id),
+    )
+    return run_id
+
+
 # --- the run's record -------------------------------------------------------------
 
 

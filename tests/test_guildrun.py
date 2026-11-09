@@ -25,6 +25,7 @@ from test_jev_items import FakeJev
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
+FACTS = (HERE / "guildfacts.py").read_text(encoding="utf-8")
 
 WARRIOR, PALADIN, ROGUE, PRIEST, MAGE, WARLOCK, DRUID = 1, 2, 4, 5, 8, 9, 11
 PROTECTION_TALENT = "12301"
@@ -485,7 +486,7 @@ class OnlyAMemberWhoCanGoIsPicked(unittest.TestCase):
         self.assertTrue(guildrun.rests_members(timeout))
 
     def test_the_bridge_reads_online_and_the_corpse(self):
-        sql = BRIDGE[BRIDGE.index("_GUILD_RUN_MEMBERS_SQL = (") :]
+        sql = FACTS[FACTS.index("MEMBERS_SQL = (") :]
         sql = sql[: sql.index("\n)\n")]
         self.assertNotIn("c.online", sql)
         self.assertIn("(s.updated_at > NOW() - INTERVAL 60 SECOND) AS online", sql)
@@ -695,7 +696,7 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
         self.assertNotIn("forming without it", coordinator)
 
     def test_the_bridge_reads_worn_item_level(self):
-        sql = BRIDGE[BRIDGE.index("_GUILD_RUN_MEMBERS_SQL = (") :]
+        sql = FACTS[FACTS.index("MEMBERS_SQL = (") :]
         sql = sql[: sql.index("\n)\n")]
         self.assertIn("AVG(it.ItemLevel)", sql)
         self.assertIn("AS gear_ilvl", sql)
@@ -707,7 +708,7 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
     def test_the_gate_skips_the_shirt_and_tabard(self):
         """wow-dev 2026-10-04: an item level 1 shirt pulled members under the
         gate; the gear step's own stale test already leaves both slots out."""
-        sql = BRIDGE[BRIDGE.index("_GUILD_RUN_MEMBERS_SQL = (") :]
+        sql = FACTS[FACTS.index("MEMBERS_SQL = (") :]
         sql = sql[: sql.index("\n)\n")]
         self.assertIn("ci.slot NOT IN (3, 18)", sql)
 

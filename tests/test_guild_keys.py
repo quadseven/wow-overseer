@@ -301,8 +301,11 @@ class TheCoordinatorsOwnPickHoldsToTheKeyToo(unittest.TestCase):
 
 class TheBridgeReadsTheKeysAndSaysTheHolder(unittest.TestCase):
     def test_the_member_read_carries_the_keys_column(self):
-        start = BRIDGE.index("_GUILD_RUN_MEMBERS_SQL = (")
-        sql = BRIDGE[start : BRIDGE.index("\n)\n", start)]
+        facts = (
+            pathlib.Path(__file__).resolve().parents[1] / "guildfacts.py"
+        ).read_text(encoding="utf-8")
+        start = facts.index("MEMBERS_SQL = (")
+        sql = facts[start : facts.index("\n)\n", start)]
         self.assertIn("AS door_keys", sql)
         self.assertIn("campaignplan.KEY_ITEMS", sql)
         # A key in the bank opens nothing: bank slots (39 to 73) and bank bags
