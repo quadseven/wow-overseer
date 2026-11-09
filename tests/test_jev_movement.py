@@ -490,6 +490,65 @@ class TheLeaderBeneathTheGround(unittest.TestCase):
         self.assertEqual(["Grug"], written)
 
 
+class AMemberOnAGuildRunDoesNotSuspendTheLeadersRescue(unittest.TestCase):
+    """#2144: Uzza was inside Razorfen Downs on a guild run while the Zug leader
+    stood under the Tirisfal ground; the movement pass skipped the family."""
+
+    def run_pass(self, w, family_mid_run, leader_mid_run=False):
+        written = []
+        recorded = []
+
+        async def mid_run(names):
+            return leader_mid_run if list(names) == ["Grug"] else family_mid_run
+
+        async def facts_of(key, names, leader):
+            return facts(w)
+
+        async def record(key, judgment):
+            recorded.append(judgment.heuristic)
+
+        async def carry_out(key, f, judgment, slot):
+            written.append(judgment.carried_out)
+
+        ns = _load(
+            ["_movement_for"],
+            {
+                "asyncio": asyncio,
+                "time": __import__("time"),
+                "jev_movement": jm,
+                "campaignqueue": __import__("campaignqueue"),
+                "jobs": __import__("jobs"),
+            },
+        )
+        me = types.SimpleNamespace(
+            _movement_seen={},
+            _movement_due=lambda key, job, now: True,
+            _mid_run=mid_run,
+            _movement_facts=facts_of,
+            _movement_record=record,
+            _carry_out_movement=carry_out,
+            _travel_slot_of=lambda key: None,
+            _jev=jev.Client("k", transport=FakeJev()),
+        )
+        fam = {"names": list(NAMES), "leader": {"name": "Grug", "job": "quest"}}
+        asyncio.run(ns["_movement_for"](me, "k", fam, jm.policy(ACT)))
+        return written, recorded
+
+    def test_the_fallen_leader_hearths_while_a_member_is_on_a_guild_run(self):
+        w = TheLeaderBeneathTheGround().under()
+        written, _ = self.run_pass(w, family_mid_run=True)
+        self.assertEqual([jm.HEARTH_LEADER], written)
+
+    def test_nothing_else_is_done_for_a_family_with_a_member_on_a_guild_run(self):
+        written, recorded = self.run_pass(where(), family_mid_run=True)
+        self.assertEqual(([], []), (written, recorded))
+
+    def test_a_leader_inside_a_run_is_never_hearthed(self):
+        w = TheLeaderBeneathTheGround().under()
+        written, recorded = self.run_pass(w, family_mid_run=True, leader_mid_run=True)
+        self.assertEqual(([], []), (written, recorded))
+
+
 class TheBridge(unittest.TestCase):
     """_movement_due and _carry_out_movement, run on fakes."""
 

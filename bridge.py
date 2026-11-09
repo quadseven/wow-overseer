@@ -23521,16 +23521,29 @@ class Bridge(discord.Client):
         now = time.monotonic()
         if not names or not self._movement_due(key, job, now):
             return
+        # A MEMBER ON A GUILD RUN DOES NOT SUSPEND THE LEADER'S RESCUE (#2144).
+        # Uzza was inside Razorfen Downs on a guild run for over an hour while
+        # the Zug leader stood 63 yards under the Tirisfal ground; the family's
+        # whole movement pass was skipped for it. When only a member is mid-run
+        # and the leader is not, the one thing the pass may still do is hearth
+        # a leader that stands under its family's ground.
+        leader_only = False
         if await self._mid_run(names):
-            return
+            if not leader or await self._mid_run([leader]):
+                return
+            leader_only = True
         facts = await self._movement_facts(key, names, leader)
         if facts is None:
+            return
+        if leader_only and not jev_movement.beneath(facts):
             return
         judgment = await jev_movement.ask(self._jev, facts, rule)
         if judgment is None:
             return
         self._movement_seen.setdefault(key, {})["asked"] = now
         await self._movement_record(key, judgment)
+        if leader_only and judgment.carried_out != jev_movement.HEARTH_LEADER:
+            return
         if judgment.carried_out:
             await self._carry_out_movement(key, facts, judgment,
                                            self._travel_slot_of(key))
