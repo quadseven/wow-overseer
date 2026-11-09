@@ -920,7 +920,7 @@ def _town_first_gate(facts: Facts, now: float, free_slots: dict):
     return Withhold(
         GATE_TOWN_FIRST,
         "town first: %s below %d free slots"
-        % (", ".join(short), bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS),
+        % (", ".join(short), bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS),
     )
 
 

@@ -2848,7 +2848,7 @@ def _hand_to_town(keyword: str, mode: str, names: list) -> int:
         "passes have the head. The campaign goes back in when every member has "
         "%d free slots (wow-overseer#265)",
         keyword or "(default)", bag_pressure.TOWN_RUN_FREE_SLOTS, handed,
-        jobs.TOWN_RUN, bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS,
+        jobs.TOWN_RUN, bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS,
     )
     return handed
 
@@ -2938,7 +2938,7 @@ def _town_first(mode: str, names: list, free_slots: dict) -> str:
 
     An armed campaign is never held here: it is withheld only at the floor,
     above. One that is not armed (a fresh start, or one handed to town) goes in
-    only when every member has bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS free, or
+    only when every member has bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS free, or
     after CAMPAIGN_RESUME_CEILING_SECONDS in town.
     """
     key = tuple(sorted(names))
@@ -2953,7 +2953,7 @@ def _town_first(mode: str, names: list, free_slots: dict) -> str:
         _TOWN_FIRST_SINCE.pop(key, None)
         return ""
     return "town first: %s below %d free slots, and the run waits for room" % (
-        ", ".join(short), bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS)
+        ", ".join(short), bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS)
 
 
 # THE HOLD AT THE FLOOR, PER FAMILY (bag_pressure.bag_hold_progress), keyed
@@ -13090,7 +13090,7 @@ class Bridge(discord.Client):
             member_bag_hold = (
                 bag_pressure_hold
                 and isinstance(free, int)
-                and 0 <= free < bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS
+                and 0 <= free < bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS
             )
             step = bag_pressure.stranded_errand_step(
                 outstanding, bag_pressure_hold=member_bag_hold,
@@ -13251,7 +13251,7 @@ class Bridge(discord.Client):
             log.info("economy: the family's campaign waits in town for %d free "
                      "slots each (free slots %s, sellable %s) - a vendor trip "
                      "goes now rather than at the trigger of %d",
-                     bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS, free_slots,
+                     bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS, free_slots,
                      sellable_counts, bag_pressure.TOWN_RUN_FREE_SLOTS)
             trip_worth = True
         withheld = not trip_worth and jev_activity.withheld(
@@ -19986,6 +19986,10 @@ class Bridge(discord.Client):
         state = _TOWN_ERRANDS.get(key, townerrand.State())
         now = time.monotonic()
         in_run = await self._mid_run(names)
+        if in_run:
+            # A RUN SEEN AFTER THE LAST ERRAND ENDED (#2116): see note_run.
+            state = townerrand.note_run(state)
+            _TOWN_ERRANDS[key] = state
         slot = self._cohort_town_slot(_cohort_key(cohort))
         label = _family_label(cohort)
         critical = False
@@ -20022,11 +20026,17 @@ class Bridge(discord.Client):
         state = await self._town_errand_regroup(state, names, positions, now,
                                                 label)
         bag_pressure_needed = False
+        bag_room_made = False
         if state.why == townerrand.BAG_PRESSURE_WHY:
             free_slots = await asyncio.to_thread(_fetch_free_slots, names)
             campaign_waiting = await asyncio.to_thread(_campaign_waiting, names)
             bag_pressure_needed = await asyncio.to_thread(
                 _bag_errand_needed, names, free_slots, campaign_waiting)
+            # THE ROOM THE ADMISSION GATE ASKS FOR (#2116): the same two
+            # questions it asks, so an errand ends exactly when the campaign
+            # it was sent for would be let in.
+            bag_room_made = bool(campaign_waiting) and bag_pressure.bag_room_made(
+                free_slots)
             if bag_pressure_needed and not in_run:
                 await self._aim_stranded_bag_pressure_members(
                     names, leader, positions, free_slots, in_run,
@@ -20046,6 +20056,7 @@ class Bridge(discord.Client):
             state, now, in_run=in_run, leader_at_hub=leader_at_hub,
             gathered=gathered, step_done=step_done,
             bag_pressure_needed=bag_pressure_needed,
+            bag_room_made=bag_room_made,
             stalled=_queue_stall_floor(names))
         failed = townerrand.unlanded_aim(state, new)
         if failed:
@@ -20114,7 +20125,7 @@ class Bridge(discord.Client):
                         "town errand: %s is cut off on another map with fewer "
                         "than %d free slots; its guarded self-contained vendor "
                         "aim was set", name,
-                        bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS,
+                        bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS,
                     )
             else:
                 log.info(
@@ -23193,7 +23204,7 @@ class Bridge(discord.Client):
             log.info("town slot: %s's campaign waits in town for bag room "
                      "(%s short of %d free slots) - the learn trips wait for "
                      "the town trip", leader, ", ".join(short),
-                     bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS)
+                     bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS)
         slot.hold_for_town("bag room for %s" % ", ".join(short))
         column = await asyncio.to_thread(_current_travel_npc, leader)
         if (column == learnaim.TRAINER_ROLE
@@ -33962,8 +33973,9 @@ def _plan_bank(names: list) -> "bank.Plan":
     )
     # WHILE A CAMPAIGN WAITS, BAGS ARE KEPT AT RUN ROOM: a member short of
     # the resume floor puts its trade goods down, and nothing is fetched back
-    # below it. The town hold's floor is the bank's floor, so the bank makes
-    # exactly the room the hold is waiting for.
+    # below it. The bank keeps the larger run-room floor (the town hold itself
+    # waits only for CAMPAIGN_ADMIT_FREE_SLOTS, #2116), so the bank makes at
+    # least the room the hold is waiting for.
     room_floor = (bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS
                   if _campaign_waiting(names) else 0)
     return bank.plan(

@@ -1315,12 +1315,18 @@ def _working(cat: Catalogue, member, last_quest=0, left=frozenset()) -> set:
 def _unhuntable(cat: Catalogue, member, qid, left=frozenset()) -> bool:
     """True when the quester has no objective spawn of this quest to hunt
     (`_hunt`'s own choice: a solo field within its level, on its map, not one
-    it leaves for now)."""
+    it leaves for now, or on the other classic continent, which `_hunt`
+    crosses to)."""
     quest = cat.quest(qid)
     if quest is None:
         return True
     fields = classquest.within_level(member, classquest.solo_fields(quest))
-    return _nearest(member, fields, left) is None
+    if _nearest(member, fields, left) is not None:
+        return False
+    if member.placed:
+        routable = tuple(s for s in fields if s.guid not in left)
+        return classquest.far_map(member, routable) < 0
+    return True
 
 
 def _fields_gone(quest, gone) -> bool:
