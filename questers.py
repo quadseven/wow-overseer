@@ -310,6 +310,9 @@ _ITEMS = "".join(
 _PROVIDED = "q.StartItem AS provided0, " + "".join(
     "q.ItemDrop%d AS source%d, " % (i, i) for i in range(1, 5)
 )
+_ITEM_OBJECTIVES = "".join(
+    "q.RequiredItemId%d AS item%d, s.itemcount%d, " % (i, i, i) for i in range(1, 7)
+)
 
 # Every quest with a zone, of the classic level range, that a five may reach.
 # The world's quests, the same columns classquest.QUESTS_SQL reads and the
@@ -412,7 +415,8 @@ LOG_SQL = (
     "itemcount3 + itemcount4 + itemcount5 + itemcount6) AS progress, "
     "q.RequiredNpcOrGo1 AS npc1, q.RequiredNpcOrGo2 AS npc2, "
     "q.RequiredNpcOrGo3 AS npc3, q.RequiredNpcOrGo4 AS npc4, "
-    "s.mobcount1, s.mobcount2, s.mobcount3, s.mobcount4 "
+    + _ITEM_OBJECTIVES
+    + "s.mobcount1, s.mobcount2, s.mobcount3, s.mobcount4 "
     "FROM character_queststatus s JOIN acore_world.quest_template q ON q.ID = s.quest "
     "WHERE s.guid IN ({guids}) AND s.status IN (1, 3, 5)"
 )
@@ -484,7 +488,9 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
 
     `reputation_rows` are REPUTATION_SQL's; None (not read) leaves each
     member's reputation unknown, and a reputation gate is then not judged."""
-    log_by, progress_by, objectives_by, done_by = _logs_by_guid(log_rows, rewarded_rows)
+    log_by, progress_by, objectives_by, item_objectives_by, done_by = _logs_by_guid(
+        log_rows, rewarded_rows
+    )
     rep_by = None
     if reputation_rows is not None:
         rep_by = {}
@@ -501,6 +507,7 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
             frozenset(done_by.get(guid, ())),
             progress_by.get(guid, {}),
             objectives_by.get(guid, {}),
+            item_objectives_by.get(guid, {}),
         )
         if rep_by is not None:
             member = replace(member, reputation=rep_by.get(guid, {}))
@@ -509,8 +516,8 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
 
 
 def _logs_by_guid(log_rows, rewarded_rows) -> tuple:
-    """Status, total and per-creature objective progress, and rewards by guid."""
-    log_by, progress_by, objectives_by, done_by = {}, {}, {}, {}
+    """Status, total, creature and item objective progress, and rewards by guid."""
+    log_by, progress_by, objectives_by, item_objectives_by, done_by = {}, {}, {}, {}, {}
     for r in log_rows or ():
         guid, qid = _int(r.get("guid")), _int(r.get("quest"))
         log_by.setdefault(guid, {})[qid] = _int(r.get("status"))
@@ -521,9 +528,15 @@ def _logs_by_guid(log_rows, rewarded_rows) -> tuple:
             if _int(r.get("npc%d" % i)) > 0
         }
         objectives_by.setdefault(guid, {})[qid] = objectives
+        item_objectives = {
+            _int(r.get("item%d" % i)): _int(r.get("itemcount%d" % i))
+            for i in range(1, 7)
+            if _int(r.get("item%d" % i)) > 0
+        }
+        item_objectives_by.setdefault(guid, {})[qid] = item_objectives
     for r in rewarded_rows or ():
         done_by.setdefault(_int(r.get("guid")), set()).add(_int(r.get("quest")))
-    return log_by, progress_by, objectives_by, done_by
+    return log_by, progress_by, objectives_by, item_objectives_by, done_by
 
 
 def _alive(row) -> bool:
@@ -534,7 +547,14 @@ def _alive(row) -> bool:
     return _int(health) > 1 or (_int(health) == 1 and not row.get("has_corpse"))
 
 
-def _member_from_row(r, quest_log, quests_done, quest_progress, quest_objectives):
+def _member_from_row(
+    r,
+    quest_log,
+    quests_done,
+    quest_progress,
+    quest_objectives,
+    quest_item_objectives,
+):
     fresh = r.get("pos_x") is not None and r.get("pos_y") is not None
     map_id = r.get("map_id")
     return Member(
@@ -552,6 +572,7 @@ def _member_from_row(r, quest_log, quests_done, quest_progress, quest_objectives
         quests_done=quests_done,
         quest_progress=quest_progress,
         quest_objectives=quest_objectives,
+        quest_item_objectives=quest_item_objectives,
     )
 
 
@@ -863,6 +884,8 @@ class Member:
     free_slots: int | None = None
     # faction id -> stored standing (REPUTATION_SQL); None when not read.
     reputation: dict | None = None
+    # quest id -> required item id -> its objective counter
+    quest_item_objectives: dict = field(default_factory=dict)
 
     @property
     def zone(self) -> int:
@@ -1869,6 +1892,7 @@ def stalled_holds_with_actionable_objectives(
 def _held_objective_fields(member, qid: int, quest: classquest.Quest) -> tuple:
     """Eligible kill and item-drop fields for one incomplete held quest."""
     progress = member.quest_objectives.get(qid)
+    item_progress = member.quest_item_objectives.get(qid, {})
     kills = dict(quest.kills)
     if progress:
         kills = {
@@ -1876,9 +1900,16 @@ def _held_objective_fields(member, qid: int, quest: classquest.Quest) -> tuple:
             for entry, count in kills.items()
             if int(progress.get(entry, 0)) < count
         }
-    # Item-only objectives have no creature counter, so their dropper fields
-    # remain eligible even when the quest log has no kill objective.
-    targets = set(kills) | {entry for _item, entry in quest.drops}
+    # Item-only objectives have no creature counter. Keep only droppers for
+    # item objectives whose own counters are still short; the aggregate quest
+    # counter cannot distinguish which ingredient a shared collection quest
+    # still needs.
+    items = dict(quest.items)
+    targets = set(kills) | {
+        entry
+        for item, entry in quest.drops
+        if int(item_progress.get(item, 0)) < items.get(item, 0)
+    }
     return classquest.within_level(
         member,
         tuple(s for s in classquest.solo_fields(quest) if s.entry in targets),
@@ -1908,8 +1939,14 @@ def step_for(member, move, cap, quest=None, hunt=True, item_form=True):
     source = guildjobs.source_for(ACTION, member.name)
     walk = _walk_row(member, move, cap)
     if move.kind == classquest.HUNT:
+        item_progress = member.quest_item_objectives.get(int(move.quest), {})
         row = (
-            classhunt.command(quest, move.spot.entry, None, item_form)
+            classhunt.command(
+                quest,
+                move.spot.entry,
+                lambda item: item_progress.get(int(item), 0),
+                item_form,
+            )
             if (hunt and quest is not None)
             else ""
         )

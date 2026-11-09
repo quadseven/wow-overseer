@@ -64,6 +64,27 @@ class TheRow(unittest.TestCase):
         quest = warrior_book().quests[1498]
         self.assertIn("count:1 ", classhunt.command(quest, 3130, lambda i: 9))
 
+    def test_an_item_hunt_skips_a_completed_item_from_the_same_creature(self):
+        quest = classquest.Quest(
+            92,
+            "Redridge Goulash",
+            0,
+            18,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((731, 5), (1080, 5)),
+            drops=((731, 1001), (1080, 1001)),
+        )
+        held = {731: 5, 1080: 4}.get
+
+        self.assertEqual(
+            classhunt.command(quest, 1001, held),
+            "hunt-spawn creature:1001 item:1080 count:1 max:%d" % classhunt.MAX_SECONDS,
+        )
+
     def test_an_older_worldserver_gets_the_row_with_no_item_key(self):
         quest = warrior_book().quests[1498]
         self.assertEqual(
