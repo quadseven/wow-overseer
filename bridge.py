@@ -29548,6 +29548,90 @@ def _count_sales(counts: dict, sales) -> None:
         counts[sale.holder] = counts.get(sale.holder, 0) + 1
 
 
+# Where each member stood when its sell rows were last written, so the next
+# pass can tell "refused and has not moved" from "refused and walked on"
+# (#1962). Process memory only: after a restart the clock alone decides.
+_SALE_WRITE_SPOT: dict = {}
+
+_RANGE_REFUSALS_SQL = (
+    "SELECT target_name, "
+    "MIN(CASE WHEN detail = %s THEN TIMESTAMPDIFF(SECOND, created_at, NOW()) "
+    "END) AS refused_age, "
+    "MIN(CASE WHEN status IN ('delivered', 'applied') "
+    "THEN TIMESTAMPDIFF(SECOND, created_at, NOW()) END) AS served_age "
+    "FROM overseer_command "
+    "WHERE kind = 'sell' AND created_at > NOW() - INTERVAL %s SECOND "
+    "GROUP BY target_name"
+)
+
+
+def _recent_range_refusals(seconds: int) -> dict:
+    """holder -> (seconds since its last `vendor not in range`, since its last
+    served sale), for holders refused inside the window. Fail-open: a world
+    image without the table has refused nobody."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_RANGE_REFUSALS_SQL,
+                        (item_plan.RANGE_REFUSAL_DETAIL, int(seconds)))
+            rows = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return {}
+            raise
+    return {
+        str(row["target_name"]): (
+            None if row["refused_age"] is None else int(row["refused_age"]),
+            None if row["served_age"] is None else int(row["served_age"]),
+        )
+        for row in rows if row["refused_age"] is not None
+    }
+
+
+# The nearest vendor's offset from the seller, in all three axes, for the sale
+# pass's reading line (#1962). Diagnostic only; nothing gates on it.
+_NEAREST_VENDOR_OFFSET_SQL = (
+    "SELECT cr.position_x - s.pos_x AS dx, cr.position_y - s.pos_y AS dy, "
+    "cr.position_z - s.pos_z AS dz "
+    "FROM overseer_snapshot s "
+    "JOIN acore_world.creature cr ON cr.map = s.map_id "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "AND (ct.npcflag & %s) <> 0 "
+    "ORDER BY POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2) "
+    "+ POW(cr.position_z - s.pos_z, 2) LIMIT 1"
+)
+
+
+def _nearest_vendor_offsets(name: str):
+    """(dx, dy, dz) from `name` to its nearest vendor on its map, or None."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_NEAREST_VENDOR_OFFSET_SQL,
+                        (name, towntrip.NPC_FLAG_VENDOR))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+        row = cur.fetchone()
+    return (row["dx"], row["dy"], row["dz"]) if row else None
+
+
+async def _log_sale_reading(holder: str, standing, refused_age) -> None:
+    """Log where the seller stands against its nearest counter (#1962).
+
+    A DIAGNOSTIC THAT MUST NOT STOP A SALE: a failed read is logged and the
+    pass carries on.
+    """
+    try:
+        offsets = await asyncio.to_thread(_nearest_vendor_offsets, holder)
+        log.info("economy: sale reading: %s (TOWN_COUNTER_YARDS=%d, core "
+                 "interaction check about 5)",
+                 item_plan.sale_reading(holder, standing, offsets, refused_age),
+                 TOWN_COUNTER_YARDS)
+    except Exception:
+        log.exception("economy: the sale reading for %s failed", holder)
+
+
 async def _queue_vendor_sales(
     candidates, leader: str, aimed: bool, mode: str, attempts,
 ) -> int:
@@ -29590,6 +29674,8 @@ async def _queue_vendor_sales(
         queue_holders, mode, leader_at_counter,
         lambda holder: bool(holder_town[holder].vendor),
     )
+    refusals = await asyncio.to_thread(
+        _recent_range_refusals, item_plan.RANGE_BACKOFF_SECONDS)
     for holder in sorted(by_holder):
         holder_candidates = tuple(by_holder[holder])
         town = holder_town[holder]
@@ -29626,6 +29712,21 @@ async def _queue_vendor_sales(
         plan = item_plan.plan(holder_candidates, attempts,
                               at_vendor=bool(town.vendor))
         considered += len(holder_candidates)
+        if plan.write:
+            # A MEMBER JUST REFUSED `vendor not in range` WAITS (#1962): 126
+            # rows in five passes were all refused while the counter read said
+            # "in reach". The reading line is logged either way, so the next
+            # burst shows where the member stood against the counter.
+            ages = refusals.get(holder, (None, None))
+            standing = await asyncio.to_thread(_fetch_vendor_position, holder)
+            await _log_sale_reading(holder, standing, ages[0])
+            held = item_plan.range_backoff(
+                ages[0], ages[1], _SALE_WRITE_SPOT.get(holder), standing)
+            if held:
+                log.info("economy: holder=%s %d sale(s) wait: %s",
+                         holder, len(plan.write), held)
+                continue
+            _SALE_WRITE_SPOT[holder] = standing
         for candidate in plan.write:
             if await asyncio.to_thread(_insert_sell, candidate):
                 inserted += 1
