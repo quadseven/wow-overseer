@@ -6,3 +6,4 @@ __pycache__/
 # Hand-run output (AGENTS.md, Layout): new files stay local.
 logs/
 reports/
+liveproof/verdicts/
