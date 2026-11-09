@@ -169,6 +169,15 @@ class PerMember(unittest.TestCase):
         self.assertNotIn("not yet", s.line)
 
 
+class PositionIsNamed(unittest.TestCase):
+    def test_the_member_off_the_continent_is_the_one_named(self):
+        members = [member("A"), member("B"), member("C", map_id=1)]
+        s = attunestep.step(facts(members, leader="A"))
+        self.assertEqual(s.verdict, attunestep.WAIT)
+        self.assertIn("C is not there", s.line)
+        self.assertNotIn("B is not there", s.line)
+
+
 class WhenItWalks(unittest.TestCase):
     def test_far_from_lothos_the_leader_walks_and_the_planner_waits(self):
         s = attunestep.step(facts([member(n) for n in FAMILY]))

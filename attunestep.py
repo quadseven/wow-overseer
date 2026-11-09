@@ -246,7 +246,12 @@ def _blocked_reason(member: Member, row: QuestRow | None) -> str:
 def _partition(members: tuple, quests):
     """(ready, blocked): (member, row) pairs who can go to Lothos now, and
     (member, reason) pairs who need him but cannot yet. Members who are
-    attuned or hold the quest need nothing and are in neither."""
+    attuned or hold the quest need nothing and are in neither.
+
+    Only level and race block a member here. Position is not a block: the
+    family walks together, so a member off the Eastern Kingdoms is named by
+    _not_now as the one the walk waits for (and a member out of reach of
+    Lothos is simply walked there), never folded into this reason list."""
     ready, blocked = [], []
     for m in members:
         if not need(m):
