@@ -1,0 +1,392 @@
+Subject: [PATCH] Molten Core: Sulfuron priests die first and are interrupted, one healer follows the Living Bomb
+
+WHY THIS PATCH EXISTS
+
+Sulfuron Harbinger stands with four Flamewaker Priests (11662). Their Dark
+Mending (19775) heals them faster than the raid kills, and the bots spread
+their damage over Sulfuron and the priests alike. Every bot with an interrupt
+also fires it on every cast, so the interrupts are spent together and a Dark
+Mending lands in the gap. At Baron Geddon, the Living Bomb carrier runs from
+the group and no healer goes with it, so the carrier dies.
+
+WHAT IT DOES
+
+1. Damage target selection excludes Sulfuron while a Flamewaker Priest is alive
+   and within spell distance and line of sight of the bot, in the same hook
+   that already excludes Majordomo. A priest that is excluded, out of range or
+   out of sight does not count, so the bot is never left without a target. It
+   applies to the DPS target type only.
+2. While Sulfuron is present, a multiplier blocks the interrupt actions (kick,
+   pummel, shield bash, counterspell, earth shock) for every bot except the
+   two assigned. The assigned are the two living members with an interrupt and
+   the lowest guids in the group, so the bots agree without talking.
+3. Exactly one healer, the living one without a bomb and with the lowest guid,
+   follows a Living Bomb carrier until it is within 25 yards, outside the blast
+   and inside healing range. The movement is allowed while Inferno is active.
+   No other bot is given a reason to leave the group.
+
+WHAT THIS PATCH DELIBERATELY DOES NOT DO
+
+It does not change the Inferno move-away or the return to the boss (the
+existing Inferno trigger and multiplier handle both). It does not touch
+Golemagg, Core Hounds or the Majordomo series (patches 0017 to 0021). It keys
+on creature and spell ids, so no other encounter is affected. Priest
+exclusion is an exclusion, not a priority: the fork exposes no priority hook.
+
+WHEN THIS PATCH SHOULD BE DELETED
+
+When the fork's Molten Core strategy orders the Sulfuron priests, assigns the
+Dark Mending interrupts and sends a healer after the bomb carrier itself.
+
+diff --git a/src/Ai/Raid/MC/MCActionContext.h b/src/Ai/Raid/MC/MCActionContext.h
+index bf301825..3968260f 100644
+--- a/src/Ai/Raid/MC/MCActionContext.h
++++ b/src/Ai/Raid/MC/MCActionContext.h
+@@ -23,6 +23,7 @@ public:
+         creators["mc garr fire resistance"] = &RaidMcActionContext::garr_fire_resistance;
+         creators["mc baron geddon fire resistance"] = &RaidMcActionContext::baron_geddon_fire_resistance;
+         creators["mc move from group"] = &RaidMcActionContext::check_should_move_from_group;
++        creators["mc follow living bomb"] = &RaidMcActionContext::follow_living_bomb;
+         creators["mc move from baron geddon"] = &RaidMcActionContext::move_from_baron_geddon;
+         creators["mc shazzrah move away"] = &RaidMcActionContext::shazzrah_move_away;
+         creators["mc sulfuron harbinger fire resistance"] = &RaidMcActionContext::sulfuron_harbinger_fire_resistance;
+@@ -45,6 +46,7 @@ private:
+     static Action* garr_fire_resistance(PlayerbotAI* botAI) { return new BossFireResistanceAction(botAI, "garr"); }
+     static Action* baron_geddon_fire_resistance(PlayerbotAI* botAI) { return new BossFireResistanceAction(botAI, "baron geddon"); }
+     static Action* check_should_move_from_group(PlayerbotAI* botAI) { return new McMoveFromGroupAction(botAI); }
++    static Action* follow_living_bomb(PlayerbotAI* botAI) { return new McFollowLivingBombAction(botAI); }
+     static Action* move_from_baron_geddon(PlayerbotAI* botAI) { return new McMoveFromBaronGeddonAction(botAI); }
+     static Action* shazzrah_move_away(PlayerbotAI* botAI) { return new McShazzrahMoveAwayAction(botAI); }
+     static Action* sulfuron_harbinger_fire_resistance(PlayerbotAI* botAI) { return new BossFireResistanceAction(botAI, "sulfuron harbinger"); }
+diff --git a/src/Ai/Raid/MC/MCActions.cpp b/src/Ai/Raid/MC/MCActions.cpp
+index 3707c59f..052daf3a 100644
+--- a/src/Ai/Raid/MC/MCActions.cpp
++++ b/src/Ai/Raid/MC/MCActions.cpp
+@@ -31,6 +31,16 @@ bool McMoveFromGroupAction::Execute(Event /*event*/)
+     return MoveFromGroup(LIVING_BOMB_DISTANCE);
+ }
+ 
++bool McFollowLivingBombAction::Execute(Event /*event*/)
++{
++    Player* carrier = LivingBombFollowTarget(bot);
++    if (!carrier || bot->GetDistance2d(carrier) <= LIVING_BOMB_FOLLOW_DISTANCE)
++        return false;
++
++    return MoveTo(carrier->GetMapId(), carrier->GetPositionX(), carrier->GetPositionY(), carrier->GetPositionZ(),
++                  false, false, false, true, MovementPriority::MOVEMENT_COMBAT);
++}
++
+ bool McMoveFromBaronGeddonAction::Execute(Event /*event*/)
+ {
+     if (Unit* boss = AI_VALUE2(Unit*, "find target", "baron geddon"))
+diff --git a/src/Ai/Raid/MC/MCActions.h b/src/Ai/Raid/MC/MCActions.h
+index d4156a79..8134dd1c 100644
+--- a/src/Ai/Raid/MC/MCActions.h
++++ b/src/Ai/Raid/MC/MCActions.h
+@@ -20,6 +20,14 @@ public:
+     bool Execute(Event event) override;
+ };
+ 
++class McFollowLivingBombAction : public MovementAction
++{
++public:
++    McFollowLivingBombAction(PlayerbotAI* botAI, std::string const name = "mc follow living bomb")
++        : MovementAction(botAI, name) {}
++    bool Execute(Event event) override;
++};
++
+ class McMoveFromBaronGeddonAction : public MovementAction
+ {
+ public:
+diff --git a/src/Ai/Raid/MC/MCHelpers.h b/src/Ai/Raid/MC/MCHelpers.h
+index 2b9a1aa5..6922eae0 100644
+--- a/src/Ai/Raid/MC/MCHelpers.h
++++ b/src/Ai/Raid/MC/MCHelpers.h
+@@ -7,10 +7,18 @@
+ #ifndef PLAYERBOTS_MCHELPERS_H
+ #define PLAYERBOTS_MCHELPERS_H
+ 
++#include "Group.h"
++#include "Player.h"
++#include "PlayerbotAI.h"
++
+ namespace MoltenCoreHelpers
+ {
+ enum MoltenCoreNPCs
+ {
++    // Sulfuron Harbinger and the four priests that stand with him
++    NPC_SULFURON_HARBINGER = 12098,
++    NPC_FLAMEWAKER_PRIEST = 11662,
++
+     // Golemagg
+     NPC_CORE_RAGER = 11672,
+ 
+@@ -28,6 +36,9 @@ enum MoltenCoreSpells
+     SPELL_INFERNO = 19695,
+     SPELL_LIVING_BOMB = 20475,
+ 
++    // Sulfuron Harbinger: the priests heal each other with this
++    SPELL_DARK_MENDING = 19775,
++
+     // Golemagg
+     SPELL_GOLEMAGGS_TRUST = 20553,
+     SPELL_MAGMA_SPLASH = 13880,
+@@ -44,6 +55,82 @@ constexpr float MAGMA_SPLASH_BACK_OFF_DISTANCE = 12.0f;
+ 
+ // Shazzrah's Arcane Explosion radius
+ constexpr float ARCANE_EXPLOSION_DISTANCE = 26.0f;
++
++// Dark Mending is interrupted by exactly this many bots, no more, no fewer
++constexpr uint32 DARK_MENDING_INTERRUPTER_COUNT = 2;
++
++// The healer that follows a Living Bomb carrier stays this close, which is
++// outside the bomb's blast and inside healing range
++constexpr float LIVING_BOMB_FOLLOW_DISTANCE = 25.0f;
++
++// Classes with a reliable interrupt of their own. Warlock (needs a felhunter)
++// and hunter (talent) are left out so an assignment is never wasted.
++inline bool CanInterruptCasts(Player* player)
++{
++    switch (player->getClass())
++    {
++        case CLASS_WARRIOR:
++        case CLASS_ROGUE:
++        case CLASS_MAGE:
++        case CLASS_SHAMAN:
++            return true;
++        default:
++            return false;
++    }
++}
++
++// The two assigned interrupters are the two living members with an interrupt
++// and the lowest guids in the group. The rule is the same on every bot, so
++// the bots agree without talking to each other.
++inline bool IsDarkMendingInterrupter(Player* bot)
++{
++    if (!CanInterruptCasts(bot))
++        return false;
++
++    Group* group = bot->GetGroup();
++    if (!group)
++        return true;
++
++    uint32 ahead = 0;
++    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
++    {
++        Player* member = ref->GetSource();
++        if (!member || member == bot || !member->IsAlive() || member->GetMapId() != bot->GetMapId() ||
++            !CanInterruptCasts(member))
++            continue;
++        if (member->GetGUID().GetCounter() < bot->GetGUID().GetCounter())
++            ++ahead;
++    }
++    return ahead < DARK_MENDING_INTERRUPTER_COUNT;
++}
++
++// The bomb carrier this bot must follow, or null. Exactly one healer, the
++// living one with the lowest guid that is not carrying a bomb, follows the
++// carrier. Nobody else is given a reason to leave the group.
++inline Player* LivingBombFollowTarget(Player* bot)
++{
++    Group* group = bot->GetGroup();
++    if (!group || !PlayerbotAI::IsHeal(bot) || bot->HasAura(SPELL_LIVING_BOMB))
++        return nullptr;
++
++    Player* carrier = nullptr;
++    Player* follower = nullptr;
++    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
++    {
++        Player* member = ref->GetSource();
++        if (!member || !member->IsAlive() || member->GetMapId() != bot->GetMapId())
++            continue;
++        if (member->HasAura(SPELL_LIVING_BOMB))
++        {
++            if (!carrier)
++                carrier = member;
++        }
++        else if (PlayerbotAI::IsHeal(member) &&
++                 (!follower || member->GetGUID().GetCounter() < follower->GetGUID().GetCounter()))
++            follower = member;
++    }
++    return carrier && follower == bot ? carrier : nullptr;
++}
+ }
+ 
+ #endif
+diff --git a/src/Ai/Raid/MC/MCMultipliers.cpp b/src/Ai/Raid/MC/MCMultipliers.cpp
+index 99cda3cd..f7b624b9 100644
+--- a/src/Ai/Raid/MC/MCMultipliers.cpp
++++ b/src/Ai/Raid/MC/MCMultipliers.cpp
+@@ -56,6 +56,7 @@ static bool IsAllowedGeddonMovementAction(Action* action)
+ {
+     if (dynamic_cast<MovementAction*>(action) &&
+                 !dynamic_cast<McMoveFromGroupAction*>(action) &&
++                !dynamic_cast<McFollowLivingBombAction*>(action) &&
+                 !dynamic_cast<McMoveFromBaronGeddonAction*>(action))
+         return false;
+ 
+@@ -86,6 +87,29 @@ float BaronGeddonAbilityMultiplier::GetValue(Action* action)
+     return 1.0f;
+ }
+ 
++// The interrupt actions of the classes in CanInterruptCasts, including their
++// enemy-healer variants.
++static bool IsInterruptAction(Action* action)
++{
++    std::string const name = action->getName();
++    for (char const* interrupt : {"kick", "pummel", "shield bash", "counterspell", "earth shock"})
++    {
++        if (name.rfind(interrupt, 0) == 0)
++            return true;
++    }
++    return false;
++}
++
++float SulfuronInterruptMultiplier::GetValue(Action* action)
++{
++    // Every bot with an interrupt would use it on every Dark Mending, and
++    // the wasted casts leave the next one free. Two assigned bots take them.
++    if (AI_VALUE2(Unit*, "find target", "sulfuron harbinger") && IsInterruptAction(action) &&
++        !IsDarkMendingInterrupter(bot))
++        return 0.0f;
++    return 1.0f;
++}
++
+ static bool IsSingleLivingTankInGroup(Player* bot)
+ {
+     if (Group* group = bot->GetGroup())
+diff --git a/src/Ai/Raid/MC/MCMultipliers.h b/src/Ai/Raid/MC/MCMultipliers.h
+index 7dee7681..a72942ed 100644
+--- a/src/Ai/Raid/MC/MCMultipliers.h
++++ b/src/Ai/Raid/MC/MCMultipliers.h
+@@ -23,6 +23,13 @@ public:
+     float GetValue(Action* action) override;
+ };
+ 
++class SulfuronInterruptMultiplier : public Multiplier
++{
++public:
++    SulfuronInterruptMultiplier(PlayerbotAI* botAI) : Multiplier(botAI, "sulfuron interrupt multiplier") {}
++    float GetValue(Action* action) override;
++};
++
+ class GolemaggMultiplier : public Multiplier
+ {
+ public:
+diff --git a/src/Ai/Raid/MC/MCStrategy.cpp b/src/Ai/Raid/MC/MCStrategy.cpp
+index 91e699ab..b79ec73f 100644
+--- a/src/Ai/Raid/MC/MCStrategy.cpp
++++ b/src/Ai/Raid/MC/MCStrategy.cpp
+@@ -60,6 +60,11 @@ void RaidMcStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
+         new TriggerNode("mc sulfuron harbinger fire resistance",
+                         { NextAction("mc sulfuron harbinger fire resistance", ACTION_RAID) }));
+ 
++    // Baron Geddon: one healer follows the bomb carrier
++    triggers.push_back(
++        new TriggerNode("mc living bomb follower",
++                        { NextAction("mc follow living bomb", ACTION_RAID) }));
++
+     // Golemagg the Incinerator
+     triggers.push_back(
+         new TriggerNode("mc golemagg fire resistance",
+@@ -106,6 +111,7 @@ void RaidMcStrategy::InitMultipliers(std::vector<Multiplier*>& multipliers)
+     multipliers.push_back(new GarrDisableDpsAoeMultiplier(botAI));
+     multipliers.push_back(new BaronGeddonAbilityMultiplier(botAI));
+     multipliers.push_back(new GolemaggMultiplier(botAI));
++    multipliers.push_back(new SulfuronInterruptMultiplier(botAI));
+ }
+ 
+ void RaidMcStrategy::AppendTargetExclusions(GuidSet& exclusions, TargetValueExclusionType type)
+@@ -227,6 +233,35 @@ void RaidMcStrategy::AppendTargetExclusions(GuidSet& exclusions, TargetValueExcl
+         }
+     }
+ 
++    // Sulfuron Harbinger: his four Flamewaker Priests die first. Dark Mending
++    // heals them faster than the raid kills, so while a priest is alive and
++    // in reach of this bot, Sulfuron is excluded from damage target
++    // selection. A priest that is excluded, out of spell range or out of line
++    // of sight does not count, so the bot is never left without a target.
++    bool priestInReach = false;
++    if (type == TargetValueExclusionType::DpsTarget)
++    {
++        for (ObjectGuid const guid : AI_VALUE(GuidVector, "attackers"))
++        {
++            Unit* unit = botAI->GetUnit(guid);
++            if (unit && unit->GetEntry() == NPC_FLAMEWAKER_PRIEST && exclusions.find(guid) == exclusions.end() &&
++                bot->GetDistance(unit) <= sPlayerbotAIConfig.SpellDistance && bot->IsWithinLOSInMap(unit))
++            {
++                priestInReach = true;
++                break;
++            }
++        }
++    }
++    if (priestInReach)
++    {
++        for (ObjectGuid const guid : AI_VALUE(GuidVector, "attackers"))
++        {
++            Unit* unit = botAI->GetUnit(guid);
++            if (unit && unit->GetEntry() == NPC_SULFURON_HARBINGER)
++                exclusions.insert(guid);
++        }
++    }
++
+     if (reflecting)
+     {
+         // Casters that held in the last three seconds, counted across the
+diff --git a/src/Ai/Raid/MC/MCTriggerContext.h b/src/Ai/Raid/MC/MCTriggerContext.h
+index 6c67a46c..bb683bf0 100644
+--- a/src/Ai/Raid/MC/MCTriggerContext.h
++++ b/src/Ai/Raid/MC/MCTriggerContext.h
+@@ -22,6 +22,7 @@ public:
+         creators["mc garr fire resistance"] = &RaidMcTriggerContext::garr_fire_resistance;
+         creators["mc baron geddon fire resistance"] = &RaidMcTriggerContext::baron_geddon_fire_resistance;
+         creators["mc living bomb debuff"] = &RaidMcTriggerContext::living_bomb_debuff;
++        creators["mc living bomb follower"] = &RaidMcTriggerContext::living_bomb_follower;
+         creators["mc baron geddon inferno"] = &RaidMcTriggerContext::baron_geddon_inferno;
+         creators["mc shazzrah ranged"] = &RaidMcTriggerContext::shazzrah_ranged;
+         creators["mc sulfuron harbinger fire resistance"] = &RaidMcTriggerContext::sulfuron_harbinger_fire_resistance;
+@@ -44,6 +45,7 @@ private:
+     static Trigger* garr_fire_resistance(PlayerbotAI* botAI) { return new BossFireResistanceTrigger(botAI, "garr"); }
+     static Trigger* baron_geddon_fire_resistance(PlayerbotAI* botAI) { return new BossFireResistanceTrigger(botAI, "baron geddon"); }
+     static Trigger* living_bomb_debuff(PlayerbotAI* botAI) { return new McLivingBombDebuffTrigger(botAI); }
++    static Trigger* living_bomb_follower(PlayerbotAI* botAI) { return new McLivingBombFollowerTrigger(botAI); }
+     static Trigger* baron_geddon_inferno(PlayerbotAI* botAI) { return new McBaronGeddonInfernoTrigger(botAI); }
+     static Trigger* shazzrah_ranged(PlayerbotAI* botAI) { return new McShazzrahRangedTrigger(botAI); }
+     static Trigger* sulfuron_harbinger_fire_resistance(PlayerbotAI* botAI) { return new BossFireResistanceTrigger(botAI, "sulfuron harbinger"); }
+diff --git a/src/Ai/Raid/MC/MCTriggers.cpp b/src/Ai/Raid/MC/MCTriggers.cpp
+index be448802..5cfdc612 100644
+--- a/src/Ai/Raid/MC/MCTriggers.cpp
++++ b/src/Ai/Raid/MC/MCTriggers.cpp
+@@ -17,6 +17,12 @@ bool McLivingBombDebuffTrigger::IsActive()
+     return bot->HasAura(SPELL_LIVING_BOMB);
+ }
+ 
++bool McLivingBombFollowerTrigger::IsActive()
++{
++    Player* carrier = LivingBombFollowTarget(bot);
++    return carrier && bot->GetDistance2d(carrier) > LIVING_BOMB_FOLLOW_DISTANCE;
++}
++
+ bool McBaronGeddonInfernoTrigger::IsActive()
+ {
+     if (Unit* boss = AI_VALUE2(Unit*, "find target", "baron geddon"))
+diff --git a/src/Ai/Raid/MC/MCTriggers.h b/src/Ai/Raid/MC/MCTriggers.h
+index c66e000d..2044c542 100644
+--- a/src/Ai/Raid/MC/MCTriggers.h
++++ b/src/Ai/Raid/MC/MCTriggers.h
+@@ -18,6 +18,14 @@ public:
+     bool IsActive() override;
+ };
+ 
++// The one healer assigned to a Living Bomb carrier is too far from it
++class McLivingBombFollowerTrigger : public Trigger
++{
++public:
++    McLivingBombFollowerTrigger(PlayerbotAI* botAI) : Trigger(botAI, "mc living bomb follower") {}
++    bool IsActive() override;
++};
++
+ class McBaronGeddonInfernoTrigger : public Trigger
+ {
+ public:
