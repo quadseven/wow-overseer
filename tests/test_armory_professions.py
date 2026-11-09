@@ -116,29 +116,61 @@ class TheGuildRead(unittest.TestCase):
 
     def test_every_member_of_both_guilds_is_listed_trades_or_not(self):
         rows = [
-            {"guild_name": "Cave", "name": "Og", "skill": ALCHEMY, "value": 5, "max": 75},
-            {"guild_name": "Cave", "name": "Bare", "skill": None, "value": None, "max": None},
-            {"guild_name": "Bonkers", "name": "Zed", "skill": None, "value": None, "max": None},
+            {
+                "guild_name": "Cave",
+                "name": "Og",
+                "skill": ALCHEMY,
+                "value": 5,
+                "max": 75,
+            },
+            {
+                "guild_name": "Cave",
+                "name": "Bare",
+                "skill": None,
+                "value": None,
+                "max": None,
+            },
+            {
+                "guild_name": "Bonkers",
+                "name": "Zed",
+                "skill": None,
+                "value": None,
+                "max": None,
+            },
         ]
         guilds = {g["name"]: g for g in self.read(rows)["guilds"]}
         self.assertEqual(sorted(guilds), ["Bonkers", "Cave"])
         cave = {m["name"]: m for m in guilds["Cave"]["members"]}
-        self.assertEqual(cave["Og"]["professions"], [{"name": "Alchemy", "skill": 5, "cap": 75}])
+        self.assertEqual(
+            cave["Og"]["professions"], [{"name": "Alchemy", "skill": 5, "cap": 75}]
+        )
         self.assertEqual(cave["Bare"]["professions"], [])
         self.assertEqual(guilds["Cave"]["count"], 2)
         self.assertEqual(guilds["Bonkers"]["members"][0]["professions"], [])
 
     def test_a_trade_is_listed_by_who_holds_it(self):
         rows = [
-            {"guild_name": "Cave", "name": "Og", "skill": ALCHEMY, "value": 5, "max": 75},
-            {"guild_name": "Cave", "name": "Ug", "skill": ALCHEMY, "value": 60, "max": 75},
+            {
+                "guild_name": "Cave",
+                "name": "Og",
+                "skill": ALCHEMY,
+                "value": 5,
+                "max": 75,
+            },
+            {
+                "guild_name": "Cave",
+                "name": "Ug",
+                "skill": ALCHEMY,
+                "value": 60,
+                "max": 75,
+            },
         ]
         by_trade = self.read(rows)["guilds"][0]["by_profession"]
         self.assertEqual([m["name"] for m in by_trade["Alchemy"]], ["Ug", "Og"])
 
     def test_the_route_takes_no_name_and_is_read_only(self):
         src = pathlib.Path(HERE / "map_server.py").read_text()
-        sql = src[src.index("_GUILD_PROFESSIONS = ("):]
+        sql = src[src.index("_GUILD_PROFESSIONS = (") :]
         sql = sql[: sql.index("def _fetch_guild_professions")]
         self.assertTrue(sql.lstrip().split('"')[1].startswith("SELECT"))
         for word in ("INSERT", "UPDATE", "DELETE", "REPLACE"):
