@@ -2158,9 +2158,21 @@ def run_row(decision: Decision) -> tuple:
     )
 
 
-def start_run(cur, decision: Decision) -> int:
+def start_run(cur, decision: Decision) -> int | None:
     """The run's row and its finder command, linked, on one cursor. Returns
-    the run id. The statements and the command are the bridge's own."""
+    the run id, or None when the guild already has a run going.
+
+    The check is made again HERE, locking the guild's live rows, because the
+    planner's read was taken earlier and the bridge forms runs on its own
+    clock: a run that began in between must not be started over.
+    The statements and the command are the bridge's own."""
+    cur.execute(
+        "SELECT id FROM overseer_guild_run WHERE guild = %s "
+        "AND state IN (%s, %s) LIMIT 1 FOR UPDATE",
+        (decision.plan.pool.guild[:24], QUEUED, INSIDE),
+    )
+    if cur.fetchone():
+        return None
     cur.execute(RUN_INSERT_SQL, run_row(decision))
     run_id = int(cur.lastrowid)
     cur.execute(

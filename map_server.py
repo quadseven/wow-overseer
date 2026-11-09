@@ -4754,6 +4754,10 @@ def _apply_guild_run(cur, decision) -> int:
         log.warning("decree: overseer_guild_run is not writable on this realm "
                     "(%s) - the bridge creates it when it starts", exc.args[0])
         return 0
+    if run_id is None:
+        log.info("decree: %s began a run before this order was written; "
+                 "nothing formed", decision.plan.pool.guild)
+        return 0
     log.info("decree: guild run %d for %s into %s: %s", run_id,
              decision.plan.pool.guild, decision.door.keyword,
              ", ".join(decision.chosen.names))

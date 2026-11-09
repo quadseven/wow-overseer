@@ -92,6 +92,9 @@ class FakeCursor:
         self.calls = []
         self.lastrowid = 0
 
+    def fetchone(self):
+        return None
+
     def execute(self, sql, params=None):
         self.calls.append((sql, params))
         self.lastrowid += 40
@@ -123,22 +126,22 @@ class AnAcceptedOrder(unittest.TestCase):
             conn.cursor.return_value.__enter__.return_value = cursor
             changed = map_server._apply_order(order)
         self.assertEqual(changed, 1)
-        run_sql, run_params = cursor.calls[0]
+        run_sql, run_params = cursor.calls[1]
         self.assertIn("INSERT INTO overseer_guild_run", run_sql)
         self.assertEqual(run_params[0], "Cave")
         self.assertEqual(run_params[3], "deadmines")
         self.assertEqual(run_params[4], "Tanky")
         self.assertEqual(run_params[6], "heuristic")
-        command_sql, command_params = cursor.calls[1]
+        command_sql, command_params = cursor.calls[2]
         self.assertIn("INSERT INTO overseer_command", command_sql)
         self.assertIn("'guild'", command_sql)
         self.assertEqual(command_params[0], "Tanky")
         self.assertTrue(command_params[1].startswith("finder-run deadmines Healy "))
         self.assertEqual(command_params[2], guildrun.SOURCE)
-        link_sql, link_params = cursor.calls[2]
+        link_sql, link_params = cursor.calls[3]
         self.assertIn("UPDATE overseer_guild_run SET command_id", link_sql)
-        self.assertEqual(link_params, (80, 40))
-        self.assertEqual(len(cursor.calls), 3)
+        self.assertEqual(link_params, (120, 80))
+        self.assertEqual(len(cursor.calls), 4)
 
     def test_a_realm_without_the_run_table_reports_nothing_formed(self):
         order = plan()
@@ -245,6 +248,39 @@ class TheFactsRead(unittest.TestCase):
         self.assertEqual(found["active"], {"Cave": 1})
         self.assertTrue({"Tanky", "Healy"} <= found["busy"])
         self.assertEqual(found["history"], [])
+
+
+class TheWriteChecksAgain(unittest.TestCase):
+    def test_a_run_that_began_since_the_read_is_not_started_over(self):
+        order = plan()
+
+        class Busy(FakeCursor):
+            def fetchone(self):
+                return {"id": 9}
+
+        cursor = Busy()
+        with mock.patch.object(map_server, "_connect") as connect:
+            connect.return_value.cursor.return_value.__enter__.return_value = cursor
+            changed = map_server._apply_order(order)
+        self.assertEqual(changed, 0)
+        self.assertEqual(len(cursor.calls), 1)
+        self.assertIn("FOR UPDATE", cursor.calls[0][0])
+        self.assertIn("overseer_guild_run", cursor.calls[0][0])
+
+    def test_a_clear_guild_is_written_after_the_locked_check(self):
+        order = plan()
+
+        class Free(FakeCursor):
+            def fetchone(self):
+                return None
+
+        cursor = Free()
+        with mock.patch.object(map_server, "_connect") as connect:
+            connect.return_value.cursor.return_value.__enter__.return_value = cursor
+            changed = map_server._apply_order(order)
+        self.assertEqual(changed, 1)
+        self.assertIn("FOR UPDATE", cursor.calls[0][0])
+        self.assertIn("INSERT INTO overseer_guild_run", cursor.calls[1][0])
 
 
 class TheGate(unittest.TestCase):

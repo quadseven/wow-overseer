@@ -1351,42 +1351,44 @@ def _plan_muster(request: dict, members: list, guild_names: dict) -> Order:
     )
 
 
-def _plan_guildrun(request: dict, facts: dict, roster_names: set) -> Order:
-    """One guild finder run for the named guild, or the sentence that says why not.
-
-    Every judgement is the planner's own (guildrun.free_members, pools,
-    plan_for, heuristic_composition): the order only names the guild and the
-    door, and the planner's picks for who goes are checked against the family
-    roster a second time before anything is written.
-    """
+def _guildrun_target(request: dict, facts: dict) -> tuple:
+    """(guild, door, refusal): the guild and door an order names, or why not."""
     raw_key = request.get("keyword")
     keyword = raw_key.strip().lower() if isinstance(raw_key, str) else ""
     guilds = tuple(facts.get("guilds") or ())
     if not guilds:
-        return _refuse(GUILDRUN, ORDER_REFUSALS["guildrun_unread"])
+        return "", None, ORDER_REFUSALS["guildrun_unread"]
     guild = guildrun.resolve_guild(request.get("guild"), guilds)
     if not guild:
-        return _refuse(
-            GUILDRUN,
+        return (
+            "",
+            None,
             "That is not a guild that forms finder runs. The guilds are: %s."
             % ", ".join(guilds),
         )
     if not keyword:
-        return _refuse(GUILDRUN, ORDER_REFUSALS["guildrun_keyword"])
+        return "", None, ORDER_REFUSALS["guildrun_keyword"]
     doors = guildrun.doors(facts.get("finder_floors"), facts.get("boss_levels"))
     door = next((d for d in doors if d.keyword == keyword), None)
     if door is None:
-        return _refuse(
-            GUILDRUN,
+        return (
+            "",
+            None,
             "%s is not a dungeon the guild finder runs. The keywords are: %s."
             % (keyword, ", ".join(d.keyword for d in doors)),
         )
     if facts.get("active", {}).get(guild):
-        return _refuse(
-            GUILDRUN,
+        return (
+            "",
+            None,
             "%s already has a run going. A second one is not started over it." % guild,
         )
-    family = set(facts.get("family") or ()) | roster_names
+    return guild, door, ""
+
+
+def _guildrun_plan(guild: str, door, facts: dict, family: set) -> tuple:
+    """(plan, refusal): the planner's plan for `guild` that reaches `door`."""
+    doors = guildrun.doors(facts.get("finder_floors"), facts.get("boss_levels"))
     free, held = guildrun.free_members(
         [r for r in facts.get("rows", []) if r.get("guild_name") == guild],
         set(facts.get("busy") or ()),
@@ -1400,52 +1402,70 @@ def _plan_guildrun(request: dict, facts: dict, roster_names: set) -> Order:
     )
     if not pools:
         why = ", ".join("%d %s" % (n, w) for w, n in sorted(held.items()))
-        return _refuse(
-            GUILDRUN,
+        return None, (
             "%s has no five idle members of one level band to seat for a "
-            "dungeon (%d idle%s)."
-            % (guild, len(free), "; held: " + why if why else ""),
+            "dungeon (%d idle%s)." % (guild, len(free), "; held: " + why if why else "")
         )
     table = guildrun.rates(facts.get("history", []))
-    plan = next(
-        (
-            p
-            for p in (guildrun.plan_for(pool, doors, table) for pool in pools)
-            if p is not None and any(d.keyword == keyword for d in p.doors)
-        ),
-        None,
+    for pool in pools:
+        plan = guildrun.plan_for(pool, doors, table)
+        if plan is not None and any(d.keyword == door.keyword for d in plan.doors):
+            return plan, ""
+    return None, (
+        "%s's idle members do not fit %s, which wants levels %d to %d "
+        "with a tank and healer who can carry it."
+        % (guild, door.place, door.floor, door.ceiling)
     )
-    if plan is None:
-        return _refuse(
-            GUILDRUN,
-            "%s's idle members do not fit %s, which wants levels %d to %d "
-            "with a tank and healer who can carry it."
-            % (guild, door.place, door.floor, door.ceiling),
-        )
-    decision = guildrun.decide_by_order(plan, keyword)
+
+
+def _guildrun_pick_refusal(decision, door, guild: str, family: set) -> str:
+    """Why the planner's pick may not go, or "": the door must open for it and
+    no family member may be in it."""
     chosen = decision.chosen
     opens = guildrun.opens_for(chosen.members, door) and guildrun.fitting_doors(
         chosen.levels, [door], guildrun.faction_of(chosen.members), chosen.members
     )
     if not opens:
-        return _refuse(
-            GUILDRUN,
-            "The members picked for %s cannot get through %s without its key."
-            % (guild, door.place),
+        return "The members picked for %s cannot get through %s without its key." % (
+            guild,
+            door.place,
         )
     clash = sorted(set(chosen.names) & family)
     if clash:
-        return _refuse(
-            GUILDRUN,
+        return (
             "The pick would take %s, who belong to a family. A run never takes them."
-            % ", ".join(clash),
+            % ", ".join(clash)
         )
+    return ""
+
+
+def _plan_guildrun(request: dict, facts: dict, roster_names: set) -> Order:
+    """One guild finder run for the named guild, or the sentence that says why not.
+
+    Every judgement is the planner's own (guildrun.free_members, pools,
+    plan_for, heuristic_composition): the order only names the guild and the
+    door, and the planner's picks for who goes are checked against the family
+    roster a second time before anything is written. The active-run check is
+    made once more inside the write (guildrun.start_run).
+    """
+    guild, door, why = _guildrun_target(request, facts)
+    if why:
+        return _refuse(GUILDRUN, why)
+    family = set(facts.get("family") or ()) | roster_names
+    plan, why = _guildrun_plan(guild, door, facts, family)
+    if why:
+        return _refuse(GUILDRUN, why)
+    decision = guildrun.decide_by_order(plan, door.keyword)
+    why = _guildrun_pick_refusal(decision, door, guild, family)
+    if why:
+        return _refuse(GUILDRUN, why)
     return Order(
         section=GUILDRUN,
         refusal="",
         rows=(),
         updates=(),
-        says="%s sends %s into %s." % (guild, ", ".join(chosen.names), door.place),
+        says="%s sends %s into %s."
+        % (guild, ", ".join(decision.chosen.names), door.place),
         guild_run=decision,
     )
 
@@ -1727,8 +1747,9 @@ ORDER_NOTHING = {
         "has no dungeon queue yet; it appears once the overseer has started."
     ),
     GUILDRUN: (
-        "Nothing was formed. This realm has no guild run table yet; it "
-        "appears once the bridge has started."
+        "Nothing was formed. Either this realm has no guild run table yet "
+        "(it appears once the bridge has started), or the guild began a run "
+        "a moment ago and a second is not started over it."
     ),
     PRIORITIES: (
         "Nothing changed. Either the family already had this order, or this "
