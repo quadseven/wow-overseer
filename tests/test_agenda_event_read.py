@@ -179,9 +179,9 @@ class TheReadIsIndexBacked(unittest.TestCase):
         self.assertEqual(altered, [])
 
     def test_the_index_is_ensured_at_start_up_and_never_stops_it(self):
-        import inspect
+        from source_utils import function_source
 
-        src = inspect.getsource(bridge.Bridge._ensure_stores)
+        src = function_source(bridge, "Bridge._ensure_stores")
         self.assertIn("_ensure_event_store,", src)
         self.assertRegex(
             src,

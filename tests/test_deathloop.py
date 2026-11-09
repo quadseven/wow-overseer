@@ -419,8 +419,6 @@ class ThePassLeavesTheZone(unittest.TestCase):
         bridge = (HERE / "bridge.py").read_text(encoding="utf-8")
         self.assertIn('facts["death_loops"] = deathloop.loops(', bridge)
         self.assertIn('loops=facts.get("death_loops"))', bridge)
-        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn(" deathloop.py ", dockerfile)
 
 
 if __name__ == "__main__":

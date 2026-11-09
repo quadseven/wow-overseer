@@ -689,11 +689,6 @@ class TheBridgeActuallyCallsThisTest(unittest.TestCase):
         self.assertIn("character_skills", body)
         self.assertNotIn("character_spell", body)
 
-    def test_the_module_ships_in_the_image(self):
-        # A module missing from the Dockerfile COPY imports fine in the test
-        # suite and ImportErrors the container on boot.
-        self.assertIn("guildshare.py", DOCKERFILE.read_text(encoding="utf-8"))
-
 
 if __name__ == "__main__":
     unittest.main()

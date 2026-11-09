@@ -575,9 +575,6 @@ class TheBankQueueWaitsForTheWalkTests(unittest.TestCase):
 
 
 class TheModuleShips(unittest.TestCase):
-    def test_bank_is_in_the_image(self):
-        self.assertIn("bank.py", DOCKERFILE.read_text(encoding="utf-8"))
-
     def test_the_bridge_imports_it(self):
         self.assertIn("\nimport bank\n", _source())
 

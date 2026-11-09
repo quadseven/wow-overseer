@@ -106,7 +106,6 @@ class TheEndpoint(unittest.TestCase):
         self.assertIn("talents.json", self.dockerfile)
         for book in ("items", "icons", "spells", "viewerdisplays"):
             self.assertIn(f"{book}.json", self.dockerfile)
-        self.assertIn("armory.py", self.dockerfile)
 
     def test_the_gear_query_carries_the_instance_not_just_the_template(self):
         """enchantments and randomPropertyId are what make a belt a 'Belt

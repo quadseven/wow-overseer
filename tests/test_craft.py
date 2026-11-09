@@ -14,6 +14,7 @@ from unittest import mock
 
 import craft
 import craft_rhythm
+from source_utils import source_path
 import goals
 import professions
 import travel
@@ -1368,9 +1369,8 @@ class NoForecastOfTheWorldserversAnswer(unittest.TestCase):
         )
 
     def test_the_module_records_why(self):
-        import inspect
 
-        source = inspect.getsource(craft)
+        source = source_path(craft).read_text(encoding="utf-8")
         self.assertIn("3695", source)
         self.assertIn("_SaveSpells", source)
 
@@ -1684,9 +1684,8 @@ class SpellFocusTests(unittest.TestCase):
         # The measurements behind this are the expensive part of infra#3738,
         # infra#3747 and infra#3748, and the reason none of it will be
         # re-litigated from a wiki.
-        import inspect
 
-        source = inspect.getsource(craft)
+        source = source_path(craft).read_text(encoding="utf-8")
         self.assertIn("3738", source)
         self.assertIn("3748", source)
         self.assertIn("RequiresSpellFocus", source)
@@ -1701,9 +1700,8 @@ class SpellFocusTests(unittest.TestCase):
         # (spell 818 -> gameobject 29784, type 8 / Data0 4 / Data1 10) is the
         # expensive part of infra#3614, and it is what stops the next reader
         # concluding that Cooking is merely missing a bracket.
-        import inspect
 
-        source = inspect.getsource(craft)
+        source = source_path(craft).read_text(encoding="utf-8")
         self.assertIn("818", source)
         self.assertIn("29784", source)
         self.assertIn("Cooking Fire", source)
@@ -1793,9 +1791,8 @@ class ColourBandTests(unittest.TestCase):
     def test_the_module_records_the_colour_band_finding(self):
         """The expensive part of this pass is the measurement, not the ten
         edits, and craft.py is where the next reader will look."""
-        import inspect
 
-        source = inspect.getsource(craft)
+        source = source_path(craft).read_text(encoding="utf-8")
         self.assertIn("TrivialSkillLineRankHigh", source)
         self.assertIn("MinSkillLineRank", source)
         self.assertIn("COLOUR BANDS", source)

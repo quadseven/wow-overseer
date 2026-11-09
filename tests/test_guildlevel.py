@@ -432,9 +432,6 @@ class TheWiring(unittest.TestCase):
         for zone in (BLOODMYST, GHOSTLANDS):
             self.assertIn(str(zone), levelroute.QUESTS_SQL)
 
-    def test_the_module_ships(self):
-        self.assertIn("guildlevel.py", DOCKERFILE)
-
 
 if __name__ == "__main__":
     unittest.main()

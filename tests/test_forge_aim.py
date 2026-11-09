@@ -177,9 +177,9 @@ class TheFactsAboutTheGame(unittest.TestCase):
         """infra#3617 read `Data1` as the focus id and parked the whole
         forge/anvil question on the strength of it. The counts that tell the two
         columns apart live in the module so the misreading is not repeated."""
-        import inspect
+        from source_utils import source_path
 
-        source = inspect.getsource(travel)
+        source = source_path(travel).read_text(encoding="utf-8")
         self.assertIn("3617", source)
         self.assertIn("Data0", source)
         self.assertIn("radius", source)

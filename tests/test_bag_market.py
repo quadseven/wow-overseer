@@ -715,9 +715,6 @@ class TheBridgeWiring(unittest.TestCase):
             sql = _body(self.source, name, "\n)\n")
             self.assertIn("it.subclass = 0", sql)
 
-    def test_the_image_carries_the_module(self):
-        self.assertIn("bag_market.py", (ROOT / "Dockerfile").read_text())
-
 
 if __name__ == "__main__":
     unittest.main()

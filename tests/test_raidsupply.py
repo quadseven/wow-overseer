@@ -937,9 +937,6 @@ class TheRaidTab(unittest.TestCase):
         fire = {row["cells"][0]: row["cells"] for row in card["supply"]["fire"]}
         self.assertEqual(fire["Grug"][3], "10")
 
-    def test_the_module_ships_in_the_image(self):
-        self.assertIn("raidsupply.py", DOCKERFILE)
-
 
 class TheBridgePass(unittest.TestCase):
     def body(self, name):

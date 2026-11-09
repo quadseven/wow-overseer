@@ -9,12 +9,12 @@ hold.
 """
 
 import asyncio
-import inspect
 import types
 import unittest
 from unittest import mock
 
 from _stub_modules import PYMYSQL, stub_modules
+from source_utils import function_source
 
 with stub_modules(pymysql=PYMYSQL):
     import familyseat as fs
@@ -255,7 +255,7 @@ class TheBridgeHalf(unittest.TestCase):
         self.assertNotIn("Ugga", [m for m, _r in self.social_once(set())])
 
     def test_the_facts_read_who_is_lendable(self):
-        body = inspect.getsource(bridge._fetch_guild_social_facts)
+        body = function_source(bridge, "_fetch_guild_social_facts")
         self.assertIn("familyseat.ROSTER_SQL", body)
         self.assertIn('"lendable": lendable', body)
 
@@ -283,7 +283,7 @@ class TheBridgeHalf(unittest.TestCase):
         self.assertFalse(held)
 
     def test_the_hold_comes_before_the_step(self):
-        body = inspect.getsource(bridge.Bridge._campaign_queue_family_once)
+        body = function_source(bridge, "Bridge._campaign_queue_family_once")
         self.assertLess(
             body.index('"_family_lent_hold"'), body.index("campaignqueue.step(")
         )

@@ -501,9 +501,6 @@ class TheViewReadsTheWeek(unittest.TestCase):
             "overseer_economy_sample in _fetch_wealth_holdings",
         )
 
-    def test_the_module_ships_in_the_image(self):
-        self.assertIn("holdings.py", (HERE / "Dockerfile").read_text(encoding="utf-8"))
-
 
 if __name__ == "__main__":
     unittest.main()

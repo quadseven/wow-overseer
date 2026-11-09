@@ -851,7 +851,6 @@ class TheHouseRules(unittest.TestCase):
         a tab that was green in CI, and a book it does not carry is fourteen
         professions reported at 0%."""
         dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("tradespec.py", dockerfile)
         self.assertIn("craftbook.json", dockerfile)
 
     def test_the_module_never_reaches_the_world_itself(self):

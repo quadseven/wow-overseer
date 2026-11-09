@@ -80,11 +80,6 @@ class TheEndpoint(unittest.TestCase):
         self.assertIn("_fetch_raidgoals()", handler)
         self.assertNotIn("query.get", handler)
 
-    def test_the_module_ships_in_the_image(self):
-        """A module the page imports and the image does not carry is a crash
-        at pod start, long after CI went green."""
-        self.assertIn("raidgoals.py", DOCKERFILE)
-
 
 class TheReads(unittest.TestCase):
     @classmethod
@@ -244,9 +239,6 @@ class BothGuildsGetAReadinessCard(unittest.TestCase):
         self.assertIn('"dungeon_access_template")', fetch)
         self.assertIn("raidready.ATTUNEMENT_QUESTS", fetch)
         self.assertIn("_RAID_WORN_OLD.format(holes=rholes)", fetch)
-
-    def test_the_module_ships_in_the_image(self):
-        self.assertIn("raidready.py", DOCKERFILE)
 
 
 if __name__ == "__main__":

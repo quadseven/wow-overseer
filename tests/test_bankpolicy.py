@@ -723,11 +723,6 @@ class TheSellPassesSkipWhatThePolicyKeeps(unittest.TestCase):
         body = body[: body.index("\n    def ")]
         self.assertIn("asyncio.to_thread(_bank_policy_lines_or_none, names)", body)
 
-    def test_the_module_is_in_the_image(self):
-        self.assertIn(
-            "bankpolicy.py", (ROOT / "Dockerfile").read_text(encoding="utf-8")
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

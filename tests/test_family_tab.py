@@ -241,9 +241,3 @@ class TheNeedsTheHandoversAndTheBonds(unittest.TestCase):
         fetch = fetch[: fetch.index("def _ensure_stream_store")]
         self.assertIn("JOIN character_skills k ON k.guid = c.guid", fetch)
         self.assertNotIn("k.skill IN", fetch)
-
-    def test_the_module_ships_in_the_image(self):
-        """The build's shared-dir copy takes top-level files only and the
-        Dockerfile names them explicitly, so a new module is one forgotten line
-        away from a pod that crashes at start, long after CI went green."""
-        self.assertIn("needs.py", self.dockerfile)

@@ -177,9 +177,6 @@ class ThePlanIsSaid(unittest.TestCase):
             state["fire_resistance"][0]["next_piece"].startswith("Wildfire")
         )
 
-    def test_the_module_ships_in_the_image(self):
-        self.assertIn("fireplan.py", DOCKERFILE)
-
 
 # The planner half: a protection warrior tank and a holy priest, level 60 in
 # the Eastern Kingdoms, with a fire piece of the warrior set dropping in

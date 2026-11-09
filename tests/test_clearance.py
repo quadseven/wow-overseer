@@ -230,9 +230,6 @@ class TheBridgeWiresIt(unittest.TestCase):
         ):
             self.assertIn(column, sql)
 
-    def test_clearance_is_in_the_image(self):
-        self.assertIn("clearance.py", DOCKERFILE.read_text(encoding="utf-8"))
-
 
 if __name__ == "__main__":
     unittest.main()

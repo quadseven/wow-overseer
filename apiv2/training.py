@@ -28,7 +28,6 @@ The trainer rows do not change under a running server and are kept per class.
 from __future__ import annotations
 
 import json
-import os
 import threading
 from functools import lru_cache
 
@@ -38,6 +37,8 @@ import guildjobs
 from panel import _CLASS_NAMES
 
 from ._scope import NOT_A_MEMBER, may_answer, wanted_name
+
+from world_data import DATA_ROOT
 
 CHAR_SQL = (
     "SELECT guid, level, class AS class_id, money FROM characters WHERE name = %s"
@@ -145,7 +146,7 @@ def trade_state(skill: int, value: int, ceiling: int, level: int) -> dict:
 def _craftbook() -> dict:
     """skill id -> {craft spell id: name}, from the committed craftbook.json."""
     try:
-        with open(os.path.join(os.path.dirname(__file__), "..", "craftbook.json")) as f:
+        with open(DATA_ROOT / "craftbook.json") as f:
             book = json.load(f)
     except (OSError, ValueError):
         return {}

@@ -30,10 +30,11 @@ from __future__ import annotations
 
 import json
 import math
-import os
 from functools import lru_cache
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+from world_data import DATA_ROOT
+
+HERE = DATA_ROOT
 
 CONTINENT, DUNGEON, RAID, BATTLEGROUND, ARENA, TRANSPORT, CITY = (
     "continent",
@@ -281,7 +282,7 @@ def _geometry():
 @lru_cache(maxsize=1)
 def triggers() -> dict:
     """trigger id -> {map, x, y, to_map, to_x, to_y}, from triggers.json."""
-    with open(os.path.join(HERE, "triggers.json")) as f:
+    with open(DATA_ROOT / "triggers.json") as f:
         return {int(k): v for k, v in json.load(f).items()}
 
 
@@ -295,7 +296,7 @@ def _towns() -> tuple:
     The node's own zone is used rather than the zone rectangles', which
     overlap: the Crossroads stands inside Mulgore's rectangle.
     """
-    with open(os.path.join(HERE, "taxinodes.json")) as f:
+    with open(DATA_ROOT / "taxinodes.json") as f:
         nodes = json.load(f)["nodes"]
     out = []
     for n in nodes:

@@ -207,9 +207,9 @@ class TheVendorPassJudgesThePresentMembersTest(unittest.TestCase):
         )
 
     def test_the_vendor_pass_filters_before_it_settles_the_errand(self):
-        import inspect
+        from source_utils import function_source
 
-        body = inspect.getsource(bridge.Bridge._vendor_once)
+        body = function_source(bridge, "Bridge._vendor_once")
         self.assertLess(
             body.index("_present_members"),
             body.index("_settle_vendor_errand_and_should_yield"),

@@ -603,10 +603,6 @@ class TheSiteDrawsIt(unittest.TestCase):
         ]
         self.assertIn('deaths=fetched["deaths"]', timeline)
 
-    def test_the_module_is_copied_into_the_container(self):
-        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("runstory.py", dockerfile)
-
 
 if __name__ == "__main__":
     unittest.main()

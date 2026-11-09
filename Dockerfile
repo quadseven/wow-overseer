@@ -9,11 +9,9 @@
 # against this repo's own tree (build.yml, GitHub-hosted runner), so that
 # indirection is gone.
 #
-# Every top-level *.py module is copied into the image. The list below is
-# hand-maintained and names each one; tests/test_ship_manifest.py fails when a
-# top-level module is missing from it, and states this rule in the same words.
-# A module the image never imports therefore leaves the top level rather than
-# the list (tests/test_bridge_image_modules.py tracks the ones still waiting).
+# Runtime modules and data are copied explicitly. tests/test_image_closure.py
+# checks the transitive imports of bridge.py and map_server.py against this
+# list, then imports every shipped module and opens every shipped data file.
 # Tests, module sources and patches stay outside the image; the scheduled
 # watcher and its dependency are copied separately below.
 FROM python:3.12-slim
@@ -60,7 +58,7 @@ COPY core.py bridge.py voice.py transform.py \
      campaignhandoff.py campaignplan.py dungeonladder.py director.py levelroute.py \
      preraid.py fireplan.py gearscore.py gearupgrades.py pvpgear.py equipscore.py \
      runtimeline.py runreport.py runstory.py places.py commandwords.py orderrecord.py \
-     vclient.py guildgear.py gearrouting.py \
+     vclient.py guildgear.py gearrouting.py world_data.py \
      situation.py standstill.py deathloop.py restsupply.py vision.py llmmode.py llmpool.py jev_movement.py jev_family_intent.py jev_outcomes.py leadcmd.py strategybook.py \
      realmroller.py realmroller_world.py realmroller_plan.py realmroller_act.py \
      zones.json entrances.json shapes.json \

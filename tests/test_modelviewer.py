@@ -344,9 +344,6 @@ class TheEndpoint(unittest.TestCase):
     # An equivalent assertion should live in infra's own render-test suite
     # for that manifest instead - see the tracking issue for this split.
 
-    def test_the_module_ships_in_the_image(self):
-        self.assertIn("modelviewer.py", self.dockerfile)
-
 
 if __name__ == "__main__":
     unittest.main()

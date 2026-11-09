@@ -137,9 +137,7 @@ class TheArmoryLinksBackToTheChronicle(unittest.TestCase):
 
 
 class TheModuleShipsInTheImage(unittest.TestCase):
-    def test_recap_is_copied_into_the_container(self):
-        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("recap.py", dockerfile)
+    pass
 
 
 if __name__ == "__main__":

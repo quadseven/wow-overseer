@@ -705,9 +705,6 @@ class TheWiring(unittest.TestCase):
         self.assertIn("guildsocial.SOURCE))", BRIDGE)
         self.assertIn('getattr(self, "_pvp_held", {}).items() if held}', BRIDGE)
 
-    def test_the_image_ships_the_module(self):
-        self.assertIn("pvpgear.py", DOCKERFILE)
-
 
 if __name__ == "__main__":
     unittest.main()

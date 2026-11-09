@@ -152,9 +152,6 @@ class TheBridgeIsWired(unittest.TestCase):
         self.assertIn("cur.execute(_NATURALIZED_SQL)", BRIDGE)
         self.assertIn("takers = {str(n) for n in family_names or ()}", BRIDGE)
 
-    def test_the_image_ships_the_module(self):
-        self.assertIn("natural.py", DOCKERFILE)
-
 
 if __name__ == "__main__":
     unittest.main()

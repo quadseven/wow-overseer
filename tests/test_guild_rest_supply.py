@@ -299,9 +299,9 @@ class InThePass(unittest.TestCase):
     def test_the_class_quest_still_comes_first(self):
         source = member_rungs.names()
         self.assertLess(source.index("class_step"), source.index("_supply_first"))
-        import inspect
+        from source_utils import function_source
 
-        upkeep = inspect.getsource(guildjobs._upkeep_first)
+        upkeep = function_source(guildjobs, "_upkeep_first")
         gear = upkeep.index("step, doing, gear_note = _gear_first")
         ordinary_supply = upkeep.index(
             "step, doing, supply_note = _supply_first", upkeep.index("if not hungry:")

@@ -483,9 +483,6 @@ class TheWiring(unittest.TestCase):
         ):
             self.assertIn(needle, BRIDGE)
 
-    def test_the_image_carries_the_module(self):
-        self.assertIn("classquest.py", DOCKERFILE)
-
 
 if __name__ == "__main__":
     unittest.main()

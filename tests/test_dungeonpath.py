@@ -388,9 +388,7 @@ class TheGuildCount(unittest.TestCase):
 
 
 class ItShipsInTheImage(unittest.TestCase):
-    def test_the_module_is_copied_into_the_container(self):
-        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("dungeonpath.py", dockerfile)
+    pass
 
 
 class NoEmDashes(unittest.TestCase):

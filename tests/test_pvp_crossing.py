@@ -8,7 +8,6 @@ budget is never spent on a trip that cannot succeed. These pin the pure gate
 in pvpgear.py, the guild job step it becomes, and the bridge wiring as source.
 """
 
-import inspect
 import pathlib
 import re
 import unittest
@@ -16,6 +15,7 @@ import unittest
 import guildjobs
 import guildsocial
 import pvpgear
+from source_utils import function_source
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
@@ -340,7 +340,7 @@ class NaturalOnly(unittest.TestCase):
 
     def test_the_code_names_no_teleport_summon_or_gm_verb(self):
         sources = [
-            inspect.getsource(f)
+            function_source(f)
             for f in (
                 pvpgear.crossing_move,
                 pvpgear._buy_move,

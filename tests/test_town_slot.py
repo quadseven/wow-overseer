@@ -554,7 +554,6 @@ class TheSlotIsHeldForTheLifeOfTheProcess(unittest.TestCase):
 
     def test_the_module_is_imported_and_shipped(self):
         self.assertIn("\nimport townslot\n", _source())
-        self.assertIn("townslot.py", DOCKERFILE.read_text(encoding="utf-8"))
 
     def test_the_default_lease_is_the_modules_own(self):
         """One number, argued for in one place. A second default here would be

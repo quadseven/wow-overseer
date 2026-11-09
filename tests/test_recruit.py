@@ -780,10 +780,7 @@ class TheInterviewIntegration(unittest.TestCase):
 
 
 class TheModuleShipsInTheImage(unittest.TestCase):
-    def test_recruit_is_copied_into_the_image(self):
-        """test_ship_manifest checks this generically; named here too so a
-        failure points at the module that moved rather than at a list."""
-        self.assertIn("recruit.py", DOCKERFILE.read_text(encoding="utf-8"))
+    pass
 
 
 class GuildRecruitingPolicy(unittest.TestCase):

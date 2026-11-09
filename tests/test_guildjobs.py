@@ -1592,9 +1592,6 @@ class TheBridgePass(unittest.TestCase):
 
 
 class ThePage(unittest.TestCase):
-    def test_the_module_ships_in_the_image(self):
-        self.assertIn("guildjobs.py", DOCKERFILE)
-
     def test_walk_caps_are_the_guild_passes_own(self):
         self.assertEqual(guildjobs.FIELD_REACH, 400.0)
         self.assertEqual(guildroute.errand_cap_word(20000), " max:20000")

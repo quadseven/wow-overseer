@@ -248,12 +248,6 @@ class TheEndpoint(unittest.TestCase):
         self.assertIn("guild_bank_right_rows", self.fetch)
         self.assertIn("1146", self.fetch)
 
-    def test_the_module_ships_in_the_image(self):
-        """map_server imports wealth at module scope, so an image without it
-        does not start at all - and that failure lands at pod start, long
-        after CI has gone green."""
-        self.assertIn("wealth.py", self.dockerfile)
-
     def test_the_builder_is_the_only_thing_that_decides_anything(self):
         """Same seam rule as every other endpoint here (infra#2597): rows in,
         payload out, bytes over HTTP."""

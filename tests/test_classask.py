@@ -1143,9 +1143,6 @@ class TheSkippedCohort(unittest.TestCase):
 
 
 class TheWiring(unittest.TestCase):
-    def test_the_image_carries_the_module(self):
-        self.assertIn("classask.py", DOCKERFILE)
-
     def test_the_bridge_keeps_the_hunt_clock_and_hands_it_to_the_plan(self):
         self.assertIn("hunts=self._class_hunts, now=time.time()", BRIDGE)
         self.assertIn("_keep_class_plan(self, cohort, plan)", BRIDGE)

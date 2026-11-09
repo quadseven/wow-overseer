@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 import agenda
 import jobs
+from source_utils import function_source
 
 NOW = datetime(2026, 9, 3, 2, 0, 0)
 FAMILY = ("Og", "Bork", "Grog", "Grug", "Ugga")
@@ -648,9 +649,8 @@ class TheRunProgressColumnIsNotAProgressSignal(unittest.TestCase):
     """
 
     def test_last_movement_ignores_the_run_table_entirely(self):
-        import inspect
 
-        source = inspect.getsource(agenda.last_movement)
+        source = function_source(agenda, "last_movement")
         body = source.split('"""')[2]
         self.assertNotIn("last_progress_at", body)
 

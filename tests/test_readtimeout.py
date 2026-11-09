@@ -123,11 +123,6 @@ class TheBridgeIsWired(unittest.TestCase):
                 self.src, r'log, "%s", "[^"]*pass failed; retrying next cycle"\)' % name
             )
 
-    def test_the_module_ships_in_the_image(self):
-        self.assertIn(
-            "readtimeout.py", (ROOT / "Dockerfile").read_text(encoding="utf-8")
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

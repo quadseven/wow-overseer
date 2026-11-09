@@ -317,9 +317,9 @@ class TheBridgePass(unittest.TestCase):
                 self.bridge._record_quests()
 
     def test_the_table_is_ensured_and_the_pass_runs(self):
-        import inspect
+        from source_utils import function_source
 
-        src = inspect.getsource(self.bridge.Bridge._ensure_stores)
+        src = function_source(self.bridge, "Bridge._ensure_stores")
         self.assertIn("_ensure_quest_ledger_store", src)
         self.assertIn("_quest_ledger_loop", [p.name for p in self.bridge.PASSES])
 

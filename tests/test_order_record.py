@@ -382,9 +382,6 @@ class TheWiring(unittest.TestCase):
             body = ast.get_source_segment(BRIDGE, _function(name))
             self.assertIn("orderrecord.%s" % kind, body, name)
 
-    def test_the_module_ships_in_the_image(self):
-        self.assertIn(" orderrecord.py", DOCKERFILE)
-
 
 if __name__ == "__main__":
     unittest.main()
