@@ -48,6 +48,7 @@ import campaignqueue
 import chat
 import core  # noqa: F401 - named by SUCCESS_STATUSES' comment, and by the suite
 import fanout
+import guildrun
 import jobs
 import priorities
 import professions
@@ -81,6 +82,9 @@ COMMAND = "command"  # POST /api/decree, one overseer_command row per character
 ROSTER = "roster"  # POST /api/decree, one overseer_roster column
 QUEUE_STORE = "queue"  # POST /api/decree, the bridge's campaign queue table
 PRIORITY_STORE = "priorities"  # POST /api/decree, the family priorities row
+GUILD_RUN_STORE = (
+    "guildrun"  # POST /api/decree, one guild finder run row and its command
+)
 NOWHERE = ""  # no write path from this page
 
 JOB = "job"
@@ -90,6 +94,7 @@ QUEUE = "queue"
 TRAVEL = "travel"
 WILL = "will"
 PRIORITIES = "priorities"
+GUILDRUN = "guildrun"
 
 
 @dataclass(frozen=True)
@@ -218,6 +223,19 @@ SECTIONS = (
             "the family asks Jev to make, and break the tie when more than "
             "one goal wants the family's job. Only the fixed priorities can "
             "be ranked; nothing is typed."
+        ),
+    ),
+    Section(
+        key=GUILDRUN,
+        title="Guild finder run",
+        writes=GUILD_RUN_STORE,
+        why_not="",
+        instead="",
+        does=(
+            "Forms one dungeon run for the named guild now, from members who "
+            "are idle, and sends it to the dungeon named. It never takes a "
+            "member of a family, never starts while the guild already has a "
+            "run going, and says in a sentence why when it cannot."
         ),
     ),
 )
@@ -1199,6 +1217,12 @@ ORDER_REFUSALS = {
         "or a creature entry." % ", ".join(travel.ROLES)
     ),
     "queue": ('Say the queue as dungeons and runs, in order: "%s".' % QUEUE_EXAMPLE),
+    "guildrun_keyword": (
+        "Say which dungeon the run is for, by its keyword, such as scarlet-armory."
+    ),
+    "guildrun_unread": (
+        "The guild finder could not be read just now, so no run was formed."
+    ),
 }
 
 
@@ -1246,6 +1270,9 @@ class Order:
     # The validated priority order for the priorities card (#1559), None for
     # every other card. One row, so one write.
     priorities: tuple | None = None
+    # A guildrun.Decision for the guild finder card, None for every other
+    # card. One run, so one write.
+    guild_run: object = None
 
     @property
     def asked(self) -> int:
@@ -1254,7 +1281,8 @@ class Order:
         if self.queue is not None:
             queued = len(self.queue.entries) or 1
         ranked = 0 if self.priorities is None else 1
-        return len(self.rows) + len(self.updates) + queued + ranked
+        formed = 0 if self.guild_run is None else 1
+        return len(self.rows) + len(self.updates) + queued + ranked + formed
 
 
 def _refuse(section: str, why: str) -> Order:
@@ -1320,6 +1348,105 @@ def _plan_muster(request: dict, members: list, guild_names: dict) -> Order:
         tuple(Row(name, command, "bot") for name in names),
         (),
         f"The order went to {who}.",
+    )
+
+
+def _plan_guildrun(request: dict, facts: dict, roster_names: set) -> Order:
+    """One guild finder run for the named guild, or the sentence that says why not.
+
+    Every judgement is the planner's own (guildrun.free_members, pools,
+    plan_for, heuristic_composition): the order only names the guild and the
+    door, and the planner's picks for who goes are checked against the family
+    roster a second time before anything is written.
+    """
+    raw_key = request.get("keyword")
+    keyword = raw_key.strip().lower() if isinstance(raw_key, str) else ""
+    guilds = tuple(facts.get("guilds") or ())
+    if not guilds:
+        return _refuse(GUILDRUN, ORDER_REFUSALS["guildrun_unread"])
+    guild = guildrun.resolve_guild(request.get("guild"), guilds)
+    if not guild:
+        return _refuse(
+            GUILDRUN,
+            "That is not a guild that forms finder runs. The guilds are: %s."
+            % ", ".join(guilds),
+        )
+    if not keyword:
+        return _refuse(GUILDRUN, ORDER_REFUSALS["guildrun_keyword"])
+    doors = guildrun.doors(facts.get("finder_floors"), facts.get("boss_levels"))
+    door = next((d for d in doors if d.keyword == keyword), None)
+    if door is None:
+        return _refuse(
+            GUILDRUN,
+            "%s is not a dungeon the guild finder runs. The keywords are: %s."
+            % (keyword, ", ".join(d.keyword for d in doors)),
+        )
+    if facts.get("active", {}).get(guild):
+        return _refuse(
+            GUILDRUN,
+            "%s already has a run going. A second one is not started over it." % guild,
+        )
+    family = set(facts.get("family") or ()) | roster_names
+    free, held = guildrun.free_members(
+        [r for r in facts.get("rows", []) if r.get("guild_name") == guild],
+        set(facts.get("busy") or ()),
+        set(facts.get("resting") or ()),
+        family,
+        frozenset(facts.get("benched") or ()),
+    )
+    pools = sorted(
+        (p for p in guildrun.pools(free, doors) if p.guild == guild),
+        key=lambda p: -max(p.levels),
+    )
+    if not pools:
+        why = ", ".join("%d %s" % (n, w) for w, n in sorted(held.items()))
+        return _refuse(
+            GUILDRUN,
+            "%s has no five idle members of one level band to seat for a "
+            "dungeon (%d idle%s)."
+            % (guild, len(free), "; held: " + why if why else ""),
+        )
+    table = guildrun.rates(facts.get("history", []))
+    plan = next(
+        (
+            p
+            for p in (guildrun.plan_for(pool, doors, table) for pool in pools)
+            if p is not None and any(d.keyword == keyword for d in p.doors)
+        ),
+        None,
+    )
+    if plan is None:
+        return _refuse(
+            GUILDRUN,
+            "%s's idle members do not fit %s, which wants levels %d to %d "
+            "with a tank and healer who can carry it."
+            % (guild, door.place, door.floor, door.ceiling),
+        )
+    decision = guildrun.decide_by_order(plan, keyword)
+    chosen = decision.chosen
+    opens = guildrun.opens_for(chosen.members, door) and guildrun.fitting_doors(
+        chosen.levels, [door], guildrun.faction_of(chosen.members), chosen.members
+    )
+    if not opens:
+        return _refuse(
+            GUILDRUN,
+            "The members picked for %s cannot get through %s without its key."
+            % (guild, door.place),
+        )
+    clash = sorted(set(chosen.names) & family)
+    if clash:
+        return _refuse(
+            GUILDRUN,
+            "The pick would take %s, who belong to a family. A run never takes them."
+            % ", ".join(clash),
+        )
+    return Order(
+        section=GUILDRUN,
+        refusal="",
+        rows=(),
+        updates=(),
+        says="%s sends %s into %s." % (guild, ", ".join(chosen.names), door.place),
+        guild_run=decision,
     )
 
 
@@ -1515,6 +1642,7 @@ def plan_order(
     roster_rows: list,
     guild_members: list | None = None,
     guild_names: dict | None = None,
+    guild_facts: dict | None = None,
 ) -> Order:
     """One order from the console: a refusal with a reason, or what to write.
 
@@ -1532,6 +1660,12 @@ def plan_order(
     section = request.get("section") if isinstance(request.get("section"), str) else ""
     if section == WILL:
         return _refuse(WILL, ORDER_REFUSALS["will"])
+    if section == GUILDRUN:
+        return _plan_guildrun(
+            request,
+            guild_facts or {},
+            {str(r.get("name")) for r in roster_rows if r.get("name")},
+        )
     if section == MUSTER:
         return _plan_muster(request, guild_members or [], guild_names or {})
     planner = PLANNERS.get(section)
@@ -1591,6 +1725,10 @@ ORDER_NOTHING = {
     QUEUE: (
         "Nothing changed. Either there was no queue to clear, or this realm "
         "has no dungeon queue yet; it appears once the overseer has started."
+    ),
+    GUILDRUN: (
+        "Nothing was formed. This realm has no guild run table yet; it "
+        "appears once the bridge has started."
     ),
     PRIORITIES: (
         "Nothing changed. Either the family already had this order, or this "

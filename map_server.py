@@ -72,6 +72,7 @@ import questlog
 import raidgoals
 import holdings
 import itemsource
+import guildfacts
 import guildrun
 import nowstatus
 import raidgear
@@ -4700,6 +4701,65 @@ _DECREE_LOCK = threading.Lock()
 _DEGRADED = (1054, 1146, 1265)
 
 
+def _fetch_guildrun_facts(guild=None) -> dict:
+    """What the planner needs to seat one guild run, read fresh for this order.
+
+    The statements are the bridge's own (guildfacts.MEMBERS_SQL and the
+    guildrun constants); nothing is judged here. A name that is not one of
+    the planner's guilds reads no members, and decree.plan_order refuses it
+    in its own words.
+    """
+    guilds = guildrun.limits().guilds
+    named = guildrun.resolve_guild(guild, guilds)
+    facts = {"guilds": guilds, "guild": named, "rows": [], "family": set(),
+             "busy": set(), "resting": set(), "benched": frozenset(),
+             "active": {}, "history": [], "finder_floors": {}, "boss_levels": {}}
+    if not named:
+        return facts
+    bounds = guildrun.limits()
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(guildfacts.MEMBERS_SQL.format(holes="%s"), [named])
+            facts["rows"] = list(cur.fetchall())
+            cur.execute("SELECT name FROM overseer_roster")
+            facts["family"] = {r["name"] for r in cur.fetchall()}
+            ran = guildrun.order_facts(cur, bounds.cooldown_minutes)
+            facts.update(ran)
+            try:
+                cur.execute("SELECT in_name FROM overseer_family_standin")
+                facts["busy"] = facts["busy"] | {str(r["in_name"]) for r in cur.fetchall() if r.get("in_name")}
+            except pymysql.err.MySQLError as exc:
+                if not (exc.args and exc.args[0] == 1146):
+                    raise
+            cur.execute("SELECT map_id, min_level FROM acore_world.dungeon_access_template "
+                        "WHERE difficulty = 0")
+            facts["finder_floors"] = {r["map_id"]: r["min_level"] for r in cur.fetchall()}
+            cur.execute(guildrun.BOSS_LEVELS_SQL)
+            facts["boss_levels"] = {r["map_id"]: r["level"] for r in cur.fetchall()
+                                    if r.get("map_id") is not None and r.get("level") is not None}
+    finally:
+        conn.close()
+    return facts
+
+
+def _apply_guild_run(cur, decision) -> int:
+    """Write one planned guild run: the planner's own row and finder command.
+    1 when written, 0 when this realm has no guild run table yet."""
+    try:
+        run_id = guildrun.start_run(cur, decision)
+    except pymysql.err.MySQLError as exc:
+        if not (exc.args and exc.args[0] in _DEGRADED):
+            raise
+        log.warning("decree: overseer_guild_run is not writable on this realm "
+                    "(%s) - the bridge creates it when it starts", exc.args[0])
+        return 0
+    log.info("decree: guild run %d for %s into %s: %s", run_id,
+             decision.plan.pool.guild, decision.door.keyword,
+             ", ".join(decision.chosen.names))
+    return 1
+
+
 def _fetch_roster_rows() -> list:
     """The roster an order is planned against.
 
@@ -4818,6 +4878,8 @@ def _apply_order(order) -> int:
                 changed += _apply_queue(cur, order.queue)
             if order.priorities is not None:
                 changed += _apply_priorities(cur, order.priorities)
+            if order.guild_run is not None:
+                changed += _apply_guild_run(cur, order.guild_run)
     finally:
         conn.close()
     return changed
@@ -5916,7 +5978,13 @@ class Handler(BaseHTTPRequestHandler):
                     if request.get("section") == decree.MUSTER
                     else ([], {})
                 )
-                order = decree.plan_order(request, roster_rows, members, guild_names)
+                facts = (
+                    _fetch_guildrun_facts(request.get("guild"))
+                    if request.get("section") == decree.GUILDRUN
+                    else {}
+                )
+                order = decree.plan_order(request, roster_rows, members, guild_names,
+                                          guild_facts=facts)
                 changed = 0 if order.refusal else _apply_order(order)
             if order.refusal:
                 log.info("decree: refused section=%r", order.section)
