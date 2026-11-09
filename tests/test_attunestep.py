@@ -118,9 +118,64 @@ class WhenItWaits(unittest.TestCase):
             "no spawn", attunestep.step(facts([member("Grug")], spawn=None)).line
         )
         self.assertIn(
-            "admits every member",
+            "no row admits the race",
             attunestep.step(facts([member("Grug")], quests=())).line,
         )
+
+
+class PerMember(unittest.TestCase):
+    """One member under the level or of the other mask never holds the rest."""
+
+    def test_an_under_level_member_does_not_hold_the_others(self):
+        members = [at_lothos("Zug", race=ORC), at_lothos("Zrog", race=ORC)]
+        members.append(at_lothos("Grug", race=ORC, level=52))
+        s = attunestep.step(facts(members, leader="Zug"))
+        self.assertEqual(s.verdict, attunestep.GO)
+        self.assertEqual(
+            list(s.rows), [("Zug", "take quest:7487"), ("Zrog", "take quest:7487")]
+        )
+        self.assertIn("not yet: Grug below level 55", s.line)
+
+    def test_a_cross_mask_member_takes_their_own_row(self):
+        members = [at_lothos("A"), at_lothos("B", race=ORC)]
+        s = attunestep.step(facts(members, leader="A"))
+        self.assertEqual(
+            list(s.rows), [("A", "take quest:7848"), ("B", "take quest:7487")]
+        )
+
+    def test_a_race_no_row_admits_is_named_not_waited_on(self):
+        members = [at_lothos("A"), at_lothos("B", race=ORC)]
+        s = attunestep.step(facts(members, leader="A", quests=QUESTS[1:]))
+        self.assertEqual(s.verdict, attunestep.GO)
+        self.assertEqual([r[0] for r in s.rows], ["A"])
+        self.assertIn("not yet: B no row admits the race", s.line)
+
+    def test_nobody_able_waits_and_names_each_reason(self):
+        members = [member("A", level=50), member("B", level=52)]
+        s = attunestep.step(facts(members))
+        self.assertEqual(s.verdict, attunestep.WAIT)
+        self.assertIn("A, B below level 55", s.line)
+        self.assertFalse(s.hold_planner)
+
+    def test_a_low_member_holding_the_quest_blocks_nobody(self):
+        members = [at_lothos("A"), member("B", level=20, status=3)]
+        s = attunestep.step(facts(members, leader="A"))
+        self.assertEqual(list(s.rows), [("A", "take quest:7848")])
+        self.assertNotIn("not yet", s.line)
+
+    def test_the_hold_is_unchanged_when_every_member_can_take_it(self):
+        s = attunestep.step(facts([member(n) for n in FAMILY]))
+        self.assertTrue(s.hold_planner)
+        self.assertNotIn("not yet", s.line)
+
+
+class PositionIsNamed(unittest.TestCase):
+    def test_the_member_off_the_continent_is_the_one_named(self):
+        members = [member("A"), member("B"), member("C", map_id=1)]
+        s = attunestep.step(facts(members, leader="A"))
+        self.assertEqual(s.verdict, attunestep.WAIT)
+        self.assertIn("C is not there", s.line)
+        self.assertNotIn("B is not there", s.line)
 
 
 class WhenItWalks(unittest.TestCase):
