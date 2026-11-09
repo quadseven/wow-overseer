@@ -245,6 +245,10 @@ FARGODEEP_EXPLORATION = (
 )
 SELLING_FISH = "Selling Fish (quest 127) requires fishing; questers cannot fish"
 UNDERBELLY_SCALES = "Underbelly Scales (quest 122) requires Black Dragonspawn with no spawns in Redridge Mountains"
+DEFIAS_BROTHERHOOD = (
+    "The Defias Brotherhood (quest 132) requires Wiley's Note (item 1327), "
+    "which no spawned creature drops"
+)
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
 NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
@@ -1438,6 +1442,13 @@ def _broken_reason(
         return SELLING_FISH
     if quest.id == 122 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return UNDERBELLY_SCALES
+    if (
+        quest.id == 132
+        and status == STATUS_INCOMPLETE
+        and (1327, 1) in quest.items
+        and played >= STALL_SECONDS
+    ):
+        return DEFIAS_BROTHERHOOD
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that

@@ -1054,6 +1054,39 @@ class Broken(unittest.TestCase):
         reason = next(reason for qid, reason in self.found if qid == 8)
         self.assertIn("questers cannot buy items from vendors", reason)
 
+    def test_defias_brotherhood_names_the_missing_wileys_note_source(self):
+        defias = quest(
+            132,
+            WESTFALL,
+            18,
+            min_level=14,
+            prev=65,
+            title="The Defias Brotherhood",
+        )
+        defias.update(item1=1327, item_count1=1)
+        cat = world(
+            extra_quests=[defias],
+            extra_givers=[
+                giver(132, "start", 1132, 132, 0, 0),
+                giver(132, "end", 1132, 132, 0, 0),
+            ],
+        )
+        member = mirra(
+            level=18,
+            zone_id=WESTFALL,
+            quest_log={132: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({20, 21, 65}),
+            quest_progress={132: 0},
+            quest_objectives={132: {1327: 0}},
+        )
+
+        p, _ = self._play(member, 120, cat=cat)
+
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 132)
+        self.assertIn("Wiley's Note", p.broken[0].reason)
+        self.assertIn("no spawned creature drops", p.broken[0].reason)
+
     def test_quest_64_the_forgotten_heirloom_has_specific_stall_reason(self):
         # Quest 64 "The Forgotten Heirloom" in Westfall (level 12) requires an
         # item that no spawned creature drops. The quest has items but no
