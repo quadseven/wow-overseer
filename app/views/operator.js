@@ -34,6 +34,11 @@ export const ACTIONS = {
     fields: [{ name: "guild", label: "Guild name", typed: "a guild name" },
       { name: "command", label: "Order", kind: "textarea" }],
   },
+  guildrun: {
+    path: "/api/decree", fixed: { section: "guildrun" }, submit: "Form the run",
+    fields: [{ name: "guild", label: "Guild name", typed: "a guild name" },
+      { name: "keyword", label: "Dungeon keyword", typed: "a dungeon keyword such as scarlet-armory" }],
+  },
   cap: {
     path: "/api/decree", fixed: { section: "campaign" }, submit: "Set the run cap",
     fields: [FAMILY, { name: "wanted", label: "Runs wanted", kind: "number", hint: "0 stops the campaign outright." }],
@@ -413,6 +418,7 @@ ${prioritiesCard(d, agendaRead)}
 <div class="op-grid">
 <div class="card op-card">${formOf("job", "Standing job", sectionDoes(d, "job"), d)}</div>
 <div class="card op-card">${formOf("muster", "Guild muster", sectionDoes(d, "muster"), d)}</div>
+<div class="card op-card">${formOf("guildrun", "Guild finder run", sectionDoes(d, "guildrun"), d)}</div>
 <div class="card op-card">${formOf("cap", "Campaign counter", sectionDoes(d, "campaign"), d)}${formOf("restart", "Start the count again", "Sets the runs done back to the start on every member of the family.", d)}</div>
 <div class="card op-card">${formOf("queue", "Dungeon queue", sectionDoes(d, "queue"), d)}${formOf("unqueue", "Clear the queue", "", d)}</div>
 <div class="card op-card">${formOf("aim", "Travel", (d && d.travel && d.travel.caveat) || sectionDoes(d, "travel"), d)}${formOf("standdown", "Stand them down", "", d)}</div>

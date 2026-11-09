@@ -93,6 +93,11 @@ WRITERS = {
         _composition().command("dm")
     ],
     (
+        "guildrun.py",
+        "start_run",
+        "decision.chosen.command(decision.door.keyword)",
+    ): lambda: [_composition().command("dm")],
+    (
         "bridge.py",
         "_start_social_run",
         "comp.command(door.keyword) + guildpug.pug_tail(form.pugs)",

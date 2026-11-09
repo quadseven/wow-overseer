@@ -262,6 +262,7 @@ class FormsPostWhereTheHandlersRead(unittest.TestCase):
             decree.QUEUE,
             decree.TRAVEL,
             decree.PRIORITIES,
+            decree.GUILDRUN,
         }
         for aid, action in self.actions.items():
             fixed = action.get("fixed", {})
