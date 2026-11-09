@@ -1,0 +1,23 @@
+[
+  {
+    "pr1": {
+      "number": 1872,
+      "title": "feat: implement overlap-scoped freshness gate",
+      "state": "closed",
+      "merged_at": "2026-11-07T14:35:00Z",
+      "bases": [
+        "main"
+      ]
+    },
+    "pr2": {
+      "number": 1873,
+      "title": "feat: add stacked PR support for dependent work",
+      "state": "closed",
+      "merged_at": "2026-11-07T14:35:00Z",
+      "bases": [
+        "1872"
+      ]
+    },
+    "dependency": "overlap row gate enables stacked PR workflow"
+  }
+]

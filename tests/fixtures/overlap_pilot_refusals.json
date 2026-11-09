@@ -1,0 +1,23 @@
+[
+  {
+    "timestamp": "2026-11-07T08:15:00Z",
+    "pr_number": 1870,
+    "reason": "Base changed lines in questers.py",
+    "base_sha": "a1b2c3d4e5f6",
+    "head_sha": "b2c3d4e5f6a1"
+  },
+  {
+    "timestamp": "2026-11-08T09:22:00Z",
+    "pr_number": 1871,
+    "reason": "Base changed lines in questers.py",
+    "base_sha": "c3d4e5f6a1b2",
+    "head_sha": "d4e5f6a1b2c3"
+  },
+  {
+    "timestamp": "2026-11-08T11:45:00Z",
+    "pr_number": 1872,
+    "reason": "Overlap-scoped freshness check blocked PR until base was updated",
+    "base_sha": "d4e5f6a1b2c3",
+    "head_sha": "e5f6a1b2c3d4"
+  }
+]

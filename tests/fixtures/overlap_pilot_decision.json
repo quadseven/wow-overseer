@@ -1,0 +1,41 @@
+{
+  "recommendation": "keep",
+  "text": "The overlap-scoped freshness rule should be kept fleet-wide. Conflicted PRs dropped from 3 to 1 (-67%), open PRs decreased from 47 to 44 (-6%), and CI failures went from 2 to 1 (-50%). The three overlap refusals observed during the pilot were all legitimate: each case involved a PR attempting to merge against a base that had changed, which the gate correctly blocked until the PR was updated. This confirms the gate is working as intended.",
+  "baseline_counts": {
+    "open_prs": 47,
+    "conflicted_prs": 3,
+    "ci_failures": 2
+  },
+  "golive_counts": {
+    "open_prs": 44,
+    "conflicted_prs": 1,
+    "ci_failures": 1
+  },
+  "baseline_stats": {
+    "open_prs": 47,
+    "conflicted_prs": 3,
+    "ci_failures": 2,
+    "average_per_day": {
+      "open_prs": 6.71,
+      "conflicted_prs": 0.43,
+      "ci_failures": 0.29
+    }
+  },
+  "golive_stats": {
+    "open_prs": 44,
+    "conflicted_prs": 1,
+    "ci_failures": 1,
+    "average_per_day": {
+      "open_prs": 6.29,
+      "conflicted_prs": 0.14,
+      "ci_failures": 0.14
+    }
+  },
+  "improvement": {
+    "conflicted_prs": "67% reduction",
+    "open_prs": "6% reduction",
+    "ci_failures": "50% reduction"
+  },
+  "overlap_refusals_count": 3,
+  "stacked_pr_pair_merged": true
+}
