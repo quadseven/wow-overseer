@@ -5394,6 +5394,13 @@ def _silent_seconds(head_id: int, names: list) -> int | None:
     a credit the run already wrote is not progress, so the NOT EXISTS keeps only
     the first row of each distinct credit per run.
 
+    A QUEST COUNTS THE FIRST TIME A CHARACTER WRITES IT (#2147). The event
+    table keeps one row per character and quest and moves its `last_seen` on
+    every repeat, so a bot that accepts and completes the same quest once an
+    hour (a sealed party's Grog, "Stoley's Debt") kept the clock near zero
+    for sixteen hours. The quest kinds are read by `first_seen`, which a repeat
+    never moves; level, equip and unlearn keep `last_seen`.
+
     The COLLATE sits on each bound name, never on `e.character_name`
     (wow-overseer#1513). overseer_event is utf8mb4_unicode_ci; collating the
     names to that same collation keeps the column bare, so MySQL can use
@@ -5405,7 +5412,9 @@ def _silent_seconds(head_id: int, names: list) -> int | None:
     more_names = ", %s COLLATE utf8mb4_unicode_ci" * (len(names) - 1)
     sql = (
         "SELECT TIMESTAMPDIFF(SECOND, GREATEST(COALESCE(q.started_at, q.created_at), "
-        "COALESCE((SELECT MAX(e.last_seen) FROM overseer_event e "
+        "COALESCE((SELECT MAX(CASE WHEN e.kind IN "
+        "('quest_accept', 'quest_complete', 'quest_reward') "
+        "THEN e.first_seen ELSE e.last_seen END) FROM overseer_event e "
         "WHERE e.character_name IN (%s COLLATE utf8mb4_unicode_ci{more_names}) "
         "AND e.kind IN "
         "('quest_accept', 'quest_complete', 'quest_reward', 'level_up', "
