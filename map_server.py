@@ -1390,7 +1390,7 @@ _ROUTING_RAID_TREE = (
     "(SELECT s.tree FROM overseer_raid_spec s WHERE s.name = c.name LIMIT 1)"
 )
 _ROUTING_WEARERS = (
-    "SELECT g.name AS guild, c.name AS name, c.class AS class_id, "  # noqa: S608
+    "SELECT g.name AS guild, c.name AS name, c.class AS class_id, "  # noqa: S608 - SQL fragments are constants; values use placeholders
     "c.level AS level, c.race AS race, "
     + raidroles.TALENTS_COLUMN + ", "
     "{target} AS target_tree, "
@@ -1425,7 +1425,7 @@ _ROUTING_GEAR_KINDS = (
     "11, 12, 13, 14, 15, 16, 17, 20, 21, 22, 23, 25, 26, 28)"
 )
 _ROUTING_GEAR = (
-    "SELECT c.name AS holder, g.name AS guild, "  # noqa: S608
+    "SELECT c.name AS holder, g.name AS guild, "  # noqa: S608 - SQL fragments are constants; values use placeholders
     "IF(ci.bag = 0 AND ci.slot < 19, ci.slot, NULL) AS equipment_slot, "
     + _ROUTING_ITEM_COLUMNS
     + " FROM guild g JOIN guild_member gm ON gm.guildid = g.guildid "
@@ -1441,7 +1441,7 @@ _ROUTING_GEAR = (
     "AND " + _ROUTING_GEAR_KINDS
 )
 _ROUTING_BANK = (
-    "SELECT 'guild bank' AS holder, g.name AS guild, "  # noqa: S608
+    "SELECT 'guild bank' AS holder, g.name AS guild, "  # noqa: S608 - SQL fragments are constants; values use placeholders
     "NULL AS equipment_slot, "
     + _ROUTING_ITEM_COLUMNS
     + " FROM guild g JOIN guild_bank_item gbi ON gbi.guildid = g.guildid "
@@ -1472,16 +1472,18 @@ def _fetch_guild_routing() -> dict:
     params = tuple(names)
     with realmread.Session(_connect) as rd:
         wearers = rd.rows(
-            _ROUTING_WEARERS.format(holes=holes, target=_ROUTING_RAID_TREE),  # noqa: S608
+            _ROUTING_WEARERS.format(holes=holes, target=_ROUTING_RAID_TREE),  # noqa: S608 - holes is a generated placeholder list; names are bound
             params,
-            fallback=_ROUTING_WEARERS.format(holes=holes, target="''"),  # noqa: S608
+            fallback=_ROUTING_WEARERS.format(holes=holes, target="''"),  # noqa: S608 - holes is a generated placeholder list; names are bound
             what="routing wearers",
         )
         gear = rd.rows(
-            _ROUTING_GEAR.format(holes=holes), params, what="routing gear"  # noqa: S608
+            _ROUTING_GEAR.format(holes=holes),  # noqa: S608 - holes is a generated placeholder list; names are bound
+            params,
+            what="routing gear",
         )
         bank = rd.rows(
-            _ROUTING_BANK.format(holes=holes),  # noqa: S608
+            _ROUTING_BANK.format(holes=holes),  # noqa: S608 - holes is a generated placeholder list; names are bound
             params,
             what="guild_bank_item routing",
         )

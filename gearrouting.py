@@ -240,21 +240,11 @@ def _displaced(pick, candidate, wearer, worn, book) -> tuple:
 # --- the pass ------------------------------------------------------------------
 
 
-def plan(wearer_rows, gear_rows, bank_rows=(), keep_names=(), tanks=(), book=None):
-    """Every cross-member upgrade in the guilds the rows describe.
-
-    `wearer_rows` are member rows for `equipscore.wearer_from_row` (one per
-    member of each guild, carrying `guild`); `gear_rows` are worn
-    (`equipment_slot` 0..18) and carried rows in the scored-gear shape plus
-    `bonding` and `instance_flags`, each naming its `holder` and `guild`;
-    `bank_rows` are the guild bank's rows in the same shape, holder
-    BANK_HOLDER. A member the scorer cannot judge is counted and named,
-    never routed to or from.
-    """
+def _wearers(rows, tanks):
     guilds: dict = {}
     wearers: dict = {}
     unjudged: list = []
-    for row in wearer_rows or ():
+    for row in rows:
         name = str(row.get("name") or "")
         if not name:
             continue
@@ -264,10 +254,13 @@ def plan(wearer_rows, gear_rows, bank_rows=(), keep_names=(), tanks=(), book=Non
             wearers[name] = wearer
         else:
             unjudged.append(name)
+    return guilds, wearers, unjudged
 
+
+def _gear_by_holder(gear_rows, bank_rows, keep_names, guilds, unjudged):
     worn: dict = {}
     carried: dict = {}
-    for row in list(gear_rows or ()) + list(bank_rows or ()):
+    for row in gear_rows + bank_rows:
         holder = str(row.get("holder") or "")
         if _is_worn(row):
             worn.setdefault(holder, []).append(row)
@@ -276,16 +269,20 @@ def plan(wearer_rows, gear_rows, bank_rows=(), keep_names=(), tanks=(), book=Non
     for holder in carried:
         if holder != BANK_HOLDER and holder not in guilds and holder not in unjudged:
             unjudged.append(holder)
+    return worn, carried, unjudged
 
-    # What each judged member's own equip pass would put on them is spoken
-    # for: it never leaves its holder to become somebody else's route.
+
+def _spoken_items(wearers, worn, carried, book):
     spoken: dict = {}
     for name, wearer in wearers.items():
         picks = equipscore.choose(
             wearer, worn.get(name, ()), carried.get(name, ()), book
         )
         spoken[name] = {_int(e.guid) for e in picks}
+    return spoken
 
+
+def _routing_pool(carried, wearers, spoken):
     pool: list = []
     for holder, rows in carried.items():
         if holder != BANK_HOLDER and holder not in wearers:
@@ -296,19 +293,42 @@ def plan(wearer_rows, gear_rows, bank_rows=(), keep_names=(), tanks=(), book=Non
             if _int(row.get("item_guid")) in spoken.get(holder, set()):
                 continue
             pool.append(row)
+    return pool
 
+
+def _available_for(wearer_name, guild, guilds, pool, routed):
+    return [
+        row
+        for row in pool
+        if str(row.get("holder") or "") != wearer_name
+        and _int(row.get("item_guid")) not in routed
+        and _same_guild(row, guilds, guild)
+    ]
+
+
+def _route_pick(pick, row, wearer, worn, book):
+    displaced, new, old = _displaced(pick, row, wearer, worn, book)
+    return Route(
+        wearer=wearer.name,
+        holder=str(row.get("holder") or ""),
+        guid=_int(pick.guid),
+        entry=_int(row.get("entry")),
+        item=str(row.get("name") or ""),
+        slot=pick.slot,
+        worn=str((displaced or {}).get("name") or ""),
+        worn_entry=_int((displaced or {}).get("entry")),
+        gain=_gain(new, old),
+        reason=pick.reason,
+    )
+
+
+def _routes_for(wearers, guilds, worn, carried, pool, book):
     routes: list = []
     routed: set = set()
     for name in sorted(wearers):
         wearer = wearers[name]
         guild = guilds.get(name, "")
-        available = [
-            row
-            for row in pool
-            if str(row.get("holder") or "") != name
-            and _int(row.get("item_guid")) not in routed
-            and _same_guild(row, guilds, guild)
-        ]
+        available = _available_for(name, guild, guilds, pool, routed)
         if not available:
             continue
         by_guid = {_int(r.get("item_guid")): r for r in available}
@@ -322,25 +342,12 @@ def plan(wearer_rows, gear_rows, bank_rows=(), keep_names=(), tanks=(), book=Non
             row = by_guid.get(_int(pick.guid))
             if row is None:
                 continue
+            routes.append(_route_pick(pick, row, wearer, worn.get(name, ()), book))
             routed.add(_int(pick.guid))
-            displaced, new, old = _displaced(
-                pick, row, wearer, worn.get(name, ()), book
-            )
-            routes.append(
-                Route(
-                    wearer=name,
-                    holder=str(row.get("holder") or ""),
-                    guid=_int(pick.guid),
-                    entry=_int(row.get("entry")),
-                    item=str(row.get("name") or ""),
-                    slot=pick.slot,
-                    worn=str((displaced or {}).get("name") or ""),
-                    worn_entry=_int((displaced or {}).get("entry")),
-                    gain=_gain(new, old),
-                    reason=pick.reason,
-                )
-            )
+    return routes
 
+
+def _notes(unjudged, has_bank_rows):
     notes: list = []
     if unjudged:
         notes.append(
@@ -352,18 +359,40 @@ def plan(wearer_rows, gear_rows, bank_rows=(), keep_names=(), tanks=(), book=Non
                 ", ".join(sorted(unjudged)),
             )
         )
-    if not bank_rows:
+    if not has_bank_rows:
         notes.append(
             "no guild-bank gear was read, so only bags were routed; the guild "
             "bank joins the pool when a read supplies its rows"
         )
+    return tuple(notes)
+
+
+def plan(wearer_rows, gear_rows, bank_rows=(), keep_names=(), tanks=(), book=None):
+    """Every cross-member upgrade in the guilds the rows describe.
+
+    `wearer_rows` are member rows for `equipscore.wearer_from_row` (one per
+    member of each guild, carrying `guild`); `gear_rows` are worn
+    (`equipment_slot` 0..18) and carried rows in the scored-gear shape plus
+    `bonding` and `instance_flags`, each naming its `holder` and `guild`;
+    `bank_rows` are the guild bank's rows in the same shape, holder
+    BANK_HOLDER. A member the scorer cannot judge is counted and named,
+    never routed to or from.
+    """
+    members = list(wearer_rows or ())
+    gear = list(gear_rows or ())
+    bank = list(bank_rows or ())
+    guilds, wearers, unjudged = _wearers(members, tanks)
+    worn, carried, unjudged = _gear_by_holder(gear, bank, keep_names, guilds, unjudged)
+    spoken = _spoken_items(wearers, worn, carried, book)
+    pool = _routing_pool(carried, wearers, spoken)
+    routes = _routes_for(wearers, guilds, worn, carried, pool, book)
     return Report(
         routes=tuple(routes),
         members=len(guilds),
         judged=len(wearers),
         unjudged=tuple(sorted(unjudged)),
         candidates=len(pool),
-        notes=tuple(notes),
+        notes=_notes(unjudged, bool(bank)),
     )
 
 

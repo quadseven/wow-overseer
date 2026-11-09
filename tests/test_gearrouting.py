@@ -300,6 +300,12 @@ class TheReportReads(unittest.TestCase):
         nobody = gr.plan([member("Nameless", 0, 40)], [])
         self.assertIn("nobody in either guild could be scored", gr.headline(nobody))
 
+    def test_an_empty_bank_iterator_is_reported_as_unread(self):
+        report = gr.plan([tank("Grug")], [old_breastplate("Grug")], bank_rows=iter(()))
+        self.assertTrue(
+            any("no guild-bank gear was read" in note for note in report.notes)
+        )
+
 
 class PairsAndHandsAndEmptySlots(unittest.TestCase):
     def test_a_routed_ring_displaces_the_weaker_of_the_pair(self):
