@@ -33,6 +33,7 @@ import types
 import unittest
 
 import bag_pressure
+import claims
 import bank
 import jobs
 import townerrand
@@ -344,7 +345,7 @@ def _drive(world, clock, log):
         "TOWN_FIRST_SOURCE": TOWN_FIRST,
         "TOWN_ERRAND_SOURCE": TOWN_ERRAND,
         "_TOWN_FIRST_SINCE": {},
-        "_BAG_HOLD": {},
+        "_CLAIMS": claims.Claims(),
         "_BAG_HOLD_STUCK": {},
         "_fetch_enabled_names": lambda: list(NAMES),
         "_fetch_free_slots": lambda names: {n: world.free[n] for n in names},

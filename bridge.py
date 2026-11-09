@@ -2956,9 +2956,9 @@ def _town_first(mode: str, names: list, free_slots: dict) -> str:
         ", ".join(short), bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS)
 
 
-# THE HOLD AT THE FLOOR, PER FAMILY (bag_pressure.bag_hold_progress), keyed
-# like the clocks above. Its timestamps are persisted as wall time across restarts.
-_BAG_HOLD: dict = {}
+# THE HOLD AT THE FLOOR, PER FAMILY, lives in `_CLAIMS` (claims.MemberHold,
+# judged by bag_pressure.bag_hold_progress), keyed like the clocks above. Its
+# timestamps are persisted as wall time across restarts.
 # Latest bag-floor result observed by a bag pass, keyed by family member. The
 # family key is its leader's name, so queue ownership reads its entry without
 # doing roster or inventory queries. The queue pass removes departed members.
@@ -3082,7 +3082,7 @@ def _bag_hold_why(names, at_least: float = 0.0) -> str:
     floor, or '' when there is no hold or it is younger than `at_least`
     seconds without a gain."""
     key = tuple(sorted(names))
-    progress = _BAG_HOLD.get(key)
+    progress = _CLAIMS.member_hold(key)
     if progress is None or time.monotonic() - progress.since < at_least:
         return ""
     held = [name for name, _free in progress.best]
@@ -3117,10 +3117,11 @@ def _say_bag_hold(key: tuple, names, progress, now: float) -> None:
         return
     _BAG_HOLD_SAID[key] = progress.since
     log.warning("bag hold: %s at %d or fewer free slots for %d minutes with "
-                "no slot gained: %s",
+                "no slot gained: %s (%s)",
                 ", ".join(name for name, _free in progress.best),
                 bag_pressure.TOWN_RUN_FREE_SLOTS,
-                int((now - progress.since) // 60), _bag_hold_why(names))
+                int((now - progress.since) // 60), _bag_hold_why(names),
+                progress.why)
 
 _MEMO_CREATE_SQL = ("CREATE TABLE IF NOT EXISTS overseer_bridge_memo ("
                     "kind VARCHAR(32) NOT NULL, subject VARCHAR(191) NOT NULL, "
@@ -3348,11 +3349,9 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
     # Looked up, not called by name: the campaign tests load this function in
     # isolation. A town errand under way is a pass not yet failed (#986).
     errand = globals().get("_town_errand_active")
-    progress = bag_pressure.bag_hold_progress(
-        _BAG_HOLD.get(key), free_slots, now,
-        running=bool(errand and errand(names)))
+    progress = _CLAIMS.member_observe(
+        key, free_slots, now, running=bool(errand and errand(names)))
     if progress is None:
-        _BAG_HOLD.pop(key, None)
         # The hold ended: clear the memo this function writes below.
         _memo_delete("bag_hold", ",".join(key))
         result = ()
@@ -3362,30 +3361,33 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
         # the bag floor, the stuck list stops reporting it, and the family is
         # free to take another route (banker, mailbox, or next town). This is
         # the #872 bound - no banker/vendor wait longer than 2 hours.
-        if (progress.released
+        if (_CLAIMS.member_released(key)
                 and now - progress.since >= bag_pressure.BAG_HOLD_FORGET_SECONDS):
             hold_why = globals().get("_bag_hold_why")
             reason = hold_why(names) if hold_why else ""
-            _BAG_HOLD.pop(key, None)
+            _CLAIMS.member_reset(key)
             _memo_delete("bag_hold", ",".join(key))
             log.warning(
                 "bag hold: %s at the bag floor timed out after %d minutes "
                 "with no room made (bag floor full of kept items, timeout "
-                "reached); %s, so the family is routed to another option",
+                "reached); %s, so the family is routed to another option (%s)",
                 ", ".join(name for name, _free in progress.best),
-                int(bag_pressure.BAG_HOLD_FORGET_SECONDS // 60), reason)
+                int(bag_pressure.BAG_HOLD_FORGET_SECONDS // 60), reason,
+                progress.why)
             result = ()
         else:
-            _BAG_HOLD[key] = progress
             wall = time.time()
             value = {"best": progress.best, "since": wall - (now - progress.since),
                      "seen": wall - (now - progress.seen), "released": progress.released}
             _memo_upsert("bag_hold", ",".join(key), value, value["since"],
                          wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
-            result = bag_pressure.bag_hold_stuck(progress)
+            result = _CLAIMS.member_stuck(key)
     say = globals().get("_say_bag_hold")
     if say is not None:
         say(key, names, progress, now)
+    if result and not any(_BAG_HOLD_STUCK.get(name) for name in names):
+        log.warning("bag hold: released for %s: %s",
+                    ", ".join(result), progress.why)
     for name in names:
         # The family key is its leader's name, one of these members, so
         # _queue_owns_job reads that member's bag hold result.
@@ -3461,7 +3463,7 @@ def _bag_hold_read(names) -> tuple:
     # Looked up: the queue tests load this function in isolation.
     running = globals().get("_standin_running")
     names = list(running(names) if running is not None else names)
-    if not names or tuple(sorted(names)) not in _BAG_HOLD:
+    if not names or _CLAIMS.member_hold(tuple(sorted(names))) is None:
         return ()
     try:
         return _bag_hold_stuck(names, _fetch_free_slots(names))
@@ -3476,13 +3478,14 @@ def _restore_bag_holds() -> None:
     for subject, (value, _) in _memo_read("bag_hold").items():
         try:
             key = tuple(subject.split(","))
-            _BAG_HOLD[key] = bag_pressure.BagHoldProgress(
+            _CLAIMS.member_restore(key, claims.MemberHold(
+                names=key,
                 best=tuple((str(name), int(slots)) for name, slots in value["best"]),
                 since=now_mono - (now_wall - float(value["since"])),
                 # A bridge restart is not evidence that the hold ended. Make
                 # startup the last observation so BAG_HOLD_GAP does not reset it.
                 seen=now_mono,
-                released=bool(value["released"]))
+                released=bool(value["released"])))
         except (KeyError, TypeError, ValueError):
             log.exception("bridge memo: invalid bag hold memo for %s", subject)
 
@@ -3748,7 +3751,7 @@ def _admission_facts(names, mode: str) -> campaignqueue.Facts:
         mailed=_mail_gear_holders(names),
         gear_since=_GEAR_HOLD_SINCE.get(key),
         free_slots=_fetch_free_slots(names),
-        hold=_BAG_HOLD.get(key),
+        hold=_CLAIMS.member_hold(key),
         armed=any(job == mode for job in _jobs_of(names).values()),
         town_since=_TOWN_FIRST_SINCE.get(key),
         stall=_queue_stall_floor(names),
@@ -7698,6 +7701,27 @@ def _shadow_class_step(step) -> None:
                           "the real class quest pass is not affected")
 
 
+# THE ONE CLAIMS FACADE (#1950): the family travel columns (one slot per
+# cohort) and the bag holds at the floor (one hold per member set) both live
+# here, so the "why, expiry, legal release" answers are what the bridge acts
+# on. In memory only, as both were before.
+_CLAIMS = claims.Claims(
+    lease=TOWN_SLOT_LEASE_SECONDS,
+    releasable=_is_economy_aim,
+    long_leases={
+        GATHER_CLAIMANT: TOWN_SLOT_GATHER_LEASE_SECONDS,
+        FLIGHT_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
+        LEVEL_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
+        ATTUNE_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
+        "dungeon quests": TOWN_SLOT_FLIGHT_LEASE_SECONDS,
+        GEAR_HOUSE_CLAIMANT: TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS,
+    },
+    firm_leases={
+        CRAFT_SUPPLY_CLAIMANT: TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS,
+    },
+)
+
+
 class Bridge(discord.Client):
     def __init__(self, allowed_ids: frozenset[str]):
         intents = discord.Intents.default()
@@ -7751,21 +7775,7 @@ class Bridge(discord.Client):
         # townslot.Slot is written to survive that: a restart finds the column
         # still set, adopts it as an errand with no owner, and gives it the
         # longer of the two leases.
-        self._town_slot = townslot.Slot(
-            lease=TOWN_SLOT_LEASE_SECONDS,
-            releasable=_is_economy_aim,
-            long_leases={
-                GATHER_CLAIMANT: TOWN_SLOT_GATHER_LEASE_SECONDS,
-                FLIGHT_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
-                LEVEL_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
-                ATTUNE_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
-                "dungeon quests": TOWN_SLOT_FLIGHT_LEASE_SECONDS,
-                GEAR_HOUSE_CLAIMANT: TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS,
-            },
-            firm_leases={
-                CRAFT_SUPPLY_CLAIMANT: TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS,
-            },
-        )
+        self._town_slot = _CLAIMS.slot_for(None)
         # A cut-off follower can make one self-contained vendor walk during a
         # bag hold. It is not the family's leader travel slot, so record these
         # independent writes in per-character ledgers instead of replacing the
@@ -7852,9 +7862,9 @@ class Bridge(discord.Client):
         self._bank_family_movement: dict[str, vendor_stall.FamilyMovement] = _ClockMemo(
             "bank_family", "banker trip family split", vendor_stall.family_memo,
             vendor_stall.family_from_memo, _trip_clock, TRIP_CLOCK_MEMO_SECONDS)
-        # One town slot per OTHER family (#150), keyed by the roster's
-        # `family` value. This bridge's own family keeps `self._town_slot`.
-        self._cohort_town_slots: dict[str, townslot.Slot] = {}
+        # One town slot per OTHER family (#150) comes from `_CLAIMS.slot_for`,
+        # keyed by the roster's `family` value. This bridge's own family keeps
+        # `self._town_slot`.
         # When each other family's trainee first borrowed its lead for the
         # learn errand it still has (#211), keyed by the roster's `family`.
         # Kept in the memo store (#817), so a deploy does not restart the
@@ -9929,25 +9939,7 @@ class Bridge(discord.Client):
         key = getattr(cohort, "key", cohort)
         if not key:
             return self._town_slot
-        slot = self._cohort_town_slots.get(key)
-        if slot is None:
-            slot = claims.new_column_slot(
-                lease=TOWN_SLOT_LEASE_SECONDS,
-                releasable=_is_economy_aim,
-                long_leases={
-                    GATHER_CLAIMANT: TOWN_SLOT_GATHER_LEASE_SECONDS,
-                    FLIGHT_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
-                    LEVEL_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
-                    ATTUNE_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
-                    "dungeon quests": TOWN_SLOT_FLIGHT_LEASE_SECONDS,
-                    GEAR_HOUSE_CLAIMANT: TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS,
-                },
-                firm_leases={
-                    CRAFT_SUPPLY_CLAIMANT: TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS,
-                },
-            )
-            self._cohort_town_slots[key] = slot
-        return slot
+        return _CLAIMS.slot_for(key)
 
     async def _idle_town_slot(self, claimant: str, cohort=None) -> bool:
         """Ask for the family's traveller to be idle, with no successor aim.
@@ -13437,14 +13429,16 @@ class Bridge(discord.Client):
         # economy tests load this pass in isolation.
         hold_released = globals().get("_bag_hold_released")
         current_aim = await asyncio.to_thread(_current_travel_npc, leader)
-        if claims.may_release_ground(
-                aim=current_aim,
-                pressure=bag_pressure.family_town_run_needed(
-                    free_slots, sellable=sellable_counts),
-                in_run=in_run,
-                errand_active=_town_errand_active(names),
-                hold_released=bool(hold_released and hold_released(names)),
-                ground=travel.is_ground_aim):
+        # A refusal under bag pressure is logged by the facade with its reason.
+        release = _CLAIMS.release_ground(
+            aim=current_aim,
+            pressure=bag_pressure.family_town_run_needed(
+                free_slots, sellable=sellable_counts),
+            in_run=in_run,
+            errand_active=_town_errand_active(names),
+            hold_released=bool(hold_released and hold_released(names)),
+            ground=travel.is_ground_aim)
+        if release.legal:
             if await asyncio.to_thread(_release_trade_errand, leader, current_aim):
                 log.warning(
                     "economy: released stale leader ground aim %s under bag "
@@ -23167,7 +23161,8 @@ class Bridge(discord.Client):
                          campaignqueue._family(key), name, active)
             slot.yield_to_campaign(owns)
             await self._hand_back_for_campaign(slot, name)
-        for slot in (self._town_slot, *self._cohort_town_slots.values()):
+        for slot in (self._town_slot, *(other for other in _CLAIMS.slots()
+                                         if other is not self._town_slot)):
             if id(slot) not in owning and slot.campaign:
                 log.info("town slot: the campaign no longer owns %s - town "
                          "errands resume", slot.campaign)
@@ -23825,7 +23820,7 @@ class Bridge(discord.Client):
         """The family's town slot: this bridge's own, or another family's."""
         if key == self._activity_own_key:
             return self._town_slot
-        return self._cohort_town_slots.get(key)
+        return _CLAIMS.existing_slot(key)
 
     async def _situation_for(self, key: str, names: list, leader: str):
         """The family's movement picture (situation.Situation), or None.

@@ -33,6 +33,7 @@ import pathlib
 import unittest
 
 import bag_pressure
+import claims
 import jobs
 import townerrand
 
@@ -135,7 +136,7 @@ def _bridge(world, clock, log, reasons=True):
         "TOWN_FIRST_SOURCE": TOWN_FIRST,
         "TOWN_ERRAND_SOURCE": TOWN_ERRAND,
         "_TOWN_FIRST_SINCE": {},
-        "_BAG_HOLD": {},
+        "_CLAIMS": claims.Claims(),
         "_BAG_HOLD_STUCK": {},
         "_BAG_FLOOR_WHY": {},
         "_TOWN_PASS_NOTE": {},

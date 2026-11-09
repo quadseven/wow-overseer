@@ -150,27 +150,6 @@ class ColumnLeaseRules(unittest.TestCase):
         self.assertTrue(d.writes)
         self.assertIsNotNone(d.release)
 
-    def test_release_is_legal_only_for_a_releasable_aim(self):
-        holder = townslot.Holder("economy", "Grug", "vendor", since=0.0)
-        trainer = townslot.Holder("economy", "Grug", "trainer:1", since=0.0)
-        self.assertTrue(claims.release_legal(holder, economy))
-        self.assertFalse(claims.release_legal(trainer, economy))
-
-    def test_a_predicate_programming_error_is_not_swallowed(self):
-        holder = townslot.Holder("economy", "Grug", "vendor", since=0.0)
-
-        def broken_predicate(_aim):
-            return unknown_name  # noqa: F821
-
-        with self.assertRaises(NameError):
-            claims.release_legal(holder, broken_predicate)
-
-    def test_expiry_is_since_plus_the_lease(self):
-        holder = townslot.Holder("economy", "Grug", "vendor", since=10.0)
-        self.assertEqual(
-            10.0 + claims.LEASE_SECONDS, claims.column_expiry(holder, 100.0)
-        )
-
     def test_an_orphan_gets_the_longer_lease(self):
         orphan = townslot.Holder("", "Grug", "vendor", since=0.0)
         self.assertEqual(claims.ORPHAN_LEASE_SECONDS, claims.lease_for(orphan))
@@ -243,7 +222,6 @@ class MemberHoldsOverTime(unittest.TestCase):
         hold = claims.member_hold_observe(FAMILY, MEASURED, 0.0)
         self.assertEqual((), hold.stuck)
         self.assertIn("Grog", hold.why)
-        self.assertEqual(hold.since + WINDOW, hold.expires_at)
 
     def test_no_gain_in_the_window_releases(self):
         hold = claims.member_hold_observe(FAMILY, MEASURED, 0.0)

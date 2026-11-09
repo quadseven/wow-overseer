@@ -1927,9 +1927,9 @@ class AReagentTripIsNotCutShortByAnUrgentAsk(unittest.TestCase):
         )
         self.assertIn('CRAFT_SUPPLY_CLAIMANT = "craft_supply"', source)
         self.assertEqual(
-            2,
+            1,
             source.count("CRAFT_SUPPLY_CLAIMANT: TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS"),
-            "both the family's own slot and every cohort slot carry the lease",
+            "the one claims facade builds the family's own slot and every cohort slot",
         )
         walk = source[source.index("async def _aim_at_reagent_vendor(") :]
         walk = walk[: walk.index("async def _craft_supply_loop(")]

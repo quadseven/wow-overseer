@@ -473,6 +473,19 @@ def _bridge_self(world, clock, log):
             "log": log,
             "townslot": townslot,
             "claims": claims,
+            "_CLAIMS": claims.Claims(
+                lease=townslot.LEASE_SECONDS,
+                releasable=economy,
+                long_leases={
+                    "gather": townslot.GATHER_LEASE_SECONDS,
+                    "flight": townslot.GATHER_LEASE_SECONDS,
+                    "level": townslot.GATHER_LEASE_SECONDS,
+                    "attunement": townslot.GATHER_LEASE_SECONDS,
+                    "dungeon quests": townslot.GATHER_LEASE_SECONDS,
+                    "gear house": townslot.GATHER_LEASE_SECONDS,
+                },
+                firm_leases={"craft_supply": townslot.REAGENT_TRIP_LEASE_SECONDS},
+            ),
             "travel": travel,
             "jobs": jobs,
             "learnaim": learnaim,
@@ -512,7 +525,7 @@ def _bridge_self(world, clock, log):
         },
     )
     me = types.SimpleNamespace(
-        _town_slot=townslot.Slot(releasable=economy), _cohort_town_slots={}
+        _town_slot=townslot.Slot(releasable=economy)
     )
     for name in (
         "_campaign_owns_travel",

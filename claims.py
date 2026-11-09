@@ -32,10 +32,13 @@ slot and never sees another family's holder.
 from __future__ import annotations
 
 import dataclasses
+import logging
 
 import bag_pressure
 import classquest
 import townslot
+
+log = logging.getLogger(__name__)
 
 # The column vocabulary, re-exported so a caller names one module.
 SLOT_TAKE = townslot.SLOT_TAKE
@@ -113,46 +116,16 @@ def new_column_slot(
     )
 
 
-def column_expiry(
-    holder: Holder | None,
-    now: float,
-    lease: float = LEASE_SECONDS,
-    orphan_lease: float = ORPHAN_LEASE_SECONDS,
-    long_leases=None,
-) -> float:
-    """When this holder's lease runs out, or now when there is none."""
-    if holder is None:
-        return now
-    return holder.since + lease_for(holder, lease, orphan_lease, long_leases)
-
-
-def release_legal(holder: Holder | None, releasable) -> bool:
-    """Whether this process may hand that holder's aim back.
-
-    A trainer errand answers False and can never be preempted by
-    anybody: the predicate is the same guard the write's WHERE clause
-    is built from, so this never grants a release the update refuses.
-    """
-    if holder is None or releasable is None:
-        return False
-    try:
-        return bool(releasable(holder.aim))
-    except (AttributeError, KeyError, TypeError, ValueError):
-        return False
-
-
 @dataclasses.dataclass(frozen=True)
 class Release:
     """Whether a ground aim may be handed back, and why not.
 
     `why` names the walk being kept (a quest walk under a released
     bag hold) so a refused release reads as a reason, not a silence.
-    `expires_at` is when the underlying hold times out, when known.
     """
 
     legal: bool
     why: str
-    expires_at: float | None = None
 
 
 def may_release_ground(
@@ -188,7 +161,6 @@ def ground_release(
     errand_active: bool = False,
     hold_released: bool = False,
     ground,
-    hold_expires_at: float | None = None,
 ) -> Release:
     """The legality of releasing `aim` under bag pressure, in words."""
     legal = may_release_ground(
@@ -211,15 +183,15 @@ def ground_release(
             "errand owns it, or the bag hold is released so the "
             "quest walk must be kept" % aim
         )
-    return Release(legal=legal, why=why, expires_at=hold_expires_at)
+    return Release(legal=legal, why=why)
 
 
 @dataclasses.dataclass(frozen=True)
 class MemberHold:
     """One family's hold at the bag floor: why, when, and what release.
 
-    `why` names the members at the floor. `expires_at` is when the
-    hold times out with no slot gained. `legal_release` is the
+    `why` names the members at the floor and when the hold times out
+    with no slot gained. `legal_release` is the
     stuck members once released, else None: no town pass may release
     the hold early for any other reason.
     """
@@ -261,9 +233,6 @@ class MemberHold:
             % (held, int(self.window // 60))
         )
 
-    @property
-    def expires_at(self) -> float:
-        return self.since + self.window
 
 
 def member_hold_observe(
@@ -345,7 +314,11 @@ class MemberClaims:
 
     def stuck(self, names) -> tuple:
         hold = self.current(names)
-        return hold.stuck if hold is not None else ()
+        return (hold.legal_release or ()) if hold is not None else ()
+
+    def restore(self, names, hold: MemberHold) -> None:
+        """Seed a hold the bridge persisted across a restart."""
+        self._holds[self.key(names)] = hold
 
     def reset(self, names) -> None:
         self._holds.pop(self.key(names), None)
@@ -477,9 +450,13 @@ class Claims:
             self._slots[key] = new_column_slot(**self.kwargs)
         return self._slots[key]
 
-    def want_column(self, cohort=None, **ask) -> Decision:
-        """May this pass have the traveller now, and what says so."""
-        return self.slot_for(cohort).want(**ask)
+    def existing_slot(self, cohort=None):
+        """The cohort's column ledger if one was made, else None."""
+        return self._slots.get(str(getattr(cohort, "key", cohort) or ""))
+
+    def slots(self) -> list:
+        """Every column ledger made so far, one per cohort key."""
+        return list(self._slots.values())
 
     def member_observe(
         self, names, free_slots: dict, now: float, running: bool = False
@@ -492,11 +469,22 @@ class Claims:
     def member_stuck(self, names) -> tuple:
         return self.members.stuck(names)
 
+    def member_hold(self, names) -> MemberHold | None:
+        return self.members.current(names)
+
+    def member_restore(self, names, hold: MemberHold) -> None:
+        self.members.restore(names, hold)
+
+    def member_reset(self, names) -> None:
+        self.members.reset(names)
+
     def release_ground(self, **kw) -> Release:
-        return ground_release(**kw)
-
-    def busy(self, *sets) -> set:
-        return busy_members(*sets)
-
-    def freed_knights(self, members, own_steps, held) -> set:
-        return stranded_knights(members, own_steps, held)
+        """The legality of releasing a ground aim; a refusal under bag
+        pressure on a ground aim is logged with its reason."""
+        release = ground_release(**kw)
+        if not release.legal and kw.get("pressure") and kw["ground"](kw["aim"]):
+            log.info(
+                "economy: kept leader ground aim %s under bag pressure: %s",
+                kw["aim"], release.why,
+            )
+        return release

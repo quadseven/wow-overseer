@@ -122,18 +122,18 @@ class TheHoldKeepsItsClockThroughAnInterlude(unittest.TestCase):
 
         self.ns["_fetch_free_slots"] = no_read
         self.assertEqual((), self.ns["_bag_hold_read"](list(NAMES)))
-        self.assertEqual({}, self.ns["_BAG_HOLD"])
+        self.assertIsNone(self.ns["_CLAIMS"].member_hold(tuple(sorted(NAMES))))
 
     def test_a_failed_read_is_logged_and_keeps_the_hold(self):
         self._gate(5)
-        before = dict(self.ns["_BAG_HOLD"])
+        before = self.ns["_CLAIMS"].member_hold(tuple(sorted(NAMES)))
 
         def broken(names):
             raise RuntimeError("database gone")
 
         self.ns["_fetch_free_slots"] = broken
         self.assertEqual((), self.ns["_bag_hold_read"](list(NAMES)))
-        self.assertEqual(before, self.ns["_BAG_HOLD"])
+        self.assertEqual(before, self.ns["_CLAIMS"].member_hold(tuple(sorted(NAMES))))
         self.assertTrue(
             any("during an interlude failed" in line for line in self.log.lines)
         )

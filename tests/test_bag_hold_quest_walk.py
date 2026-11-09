@@ -189,6 +189,7 @@ def _run_vendor_once(stuck):
             "log": _Log(),
             "townslot": townslot,
             "claims": claims,
+            "_CLAIMS": claims.Claims(),
             "bag_pressure": bag_pressure,
             "vendor_stall": vendor_stall,
             "jev_activity": jev_activity,

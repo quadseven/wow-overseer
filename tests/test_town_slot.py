@@ -536,21 +536,19 @@ class TheSlotIsHeldForTheLifeOfTheProcess(unittest.TestCase):
 
     def test_the_ledger_is_built_once_on_the_client(self):
         init = _block("    def __init__(self, allowed_ids: frozenset[str]):")
-        self.assertIn("self._town_slot = townslot.Slot(", init)
+        self.assertIn("self._town_slot = _CLAIMS.slot_for(None)", init)
 
     def test_it_is_wired_to_the_release_guard(self):
         """Without the predicate the slot is fail-closed and preempts nothing,
         which would be this change shipped inert."""
-        init = _block("    def __init__(self, allowed_ids: frozenset[str]):")
-        self.assertIn("releasable=_is_economy_aim", init)
+        self.assertIn("releasable=_is_economy_aim", _source())
 
     def test_the_lease_is_an_env_knob_like_every_other_cadence(self):
         source = _source()
         self.assertIn(
             'os.environ.get("TOWN_SLOT_LEASE_SECONDS", townslot.LEASE_SECONDS)', source
         )
-        init = _block("    def __init__(self, allowed_ids: frozenset[str]):")
-        self.assertIn("lease=TOWN_SLOT_LEASE_SECONDS", init)
+        self.assertIn("lease=TOWN_SLOT_LEASE_SECONDS", source)
 
     def test_the_module_is_imported_and_shipped(self):
         self.assertIn("\nimport townslot\n", _source())

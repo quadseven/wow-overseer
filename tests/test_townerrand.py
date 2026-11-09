@@ -15,6 +15,7 @@ import types
 import unittest
 
 import bag_pressure
+import claims
 import gearup
 import guildbank
 import guildwork
@@ -563,7 +564,7 @@ class TheAdapter(unittest.TestCase):
             "_queue_stall_floor": lambda names: self.stall,
             "_campaign_waiting": lambda names: False,
             "bag_pressure": bag_pressure,
-            "_BAG_HOLD": {},
+            "_CLAIMS": claims.Claims(),
             "_BAG_HOLD_STUCK": {},
             "_insert_hearth": lambda name, source: self.hearths.append(name) or 1,
             "_town_errand_jobs": lambda names: self.jobs.append("town run") or 2,

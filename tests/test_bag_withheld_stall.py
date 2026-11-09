@@ -388,7 +388,20 @@ class FakeWorld:
         ]
 
 
-def _bridge_self(world, clock, log):
+def _bridge_self(world, clock, log, fleet=None):
+    fleet = fleet or claims.Claims(
+        lease=townslot.LEASE_SECONDS,
+        releasable=economy,
+        long_leases={
+            "gather": townslot.GATHER_LEASE_SECONDS,
+            "flight": townslot.GATHER_LEASE_SECONDS,
+            "level": townslot.GATHER_LEASE_SECONDS,
+            "attunement": townslot.GATHER_LEASE_SECONDS,
+            "dungeon quests": townslot.GATHER_LEASE_SECONDS,
+            "gear house": townslot.GATHER_LEASE_SECONDS,
+        },
+        firm_leases={"craft_supply": townslot.REAGENT_TRIP_LEASE_SECONDS},
+    )
     ns = _load(
         ["_claim_town_slot", "_aim_at_bag_vendor", "_cohort_town_slot"],
         {
@@ -397,6 +410,7 @@ def _bridge_self(world, clock, log):
             "log": log,
             "townslot": townslot,
             "claims": claims,
+            "_CLAIMS": fleet,
             "bag_pressure": bag_pressure,
             "jev_activity": jev_activity,
             "professions": types.SimpleNamespace(
@@ -433,7 +447,7 @@ def _bridge_self(world, clock, log):
             "_present_members": lambda names, leader="": list(names),
         },
     )
-    me = types.SimpleNamespace(_town_slot=townslot.Slot(), _cohort_town_slots={})
+    me = types.SimpleNamespace(_town_slot=townslot.Slot(), fleet=fleet)
 
     async def mid_run(names):
         return False
@@ -466,6 +480,7 @@ class TheBagTripKeepsTheTraveller(unittest.TestCase):
     def run_live_sequence(self, world):
         clock, log = Clock(), _Log()
         me = _bridge_self(world, clock, log)
+        self.fleet = me.fleet
         slot = me._cohort_town_slot(HORDE)
         # 04:15:17 - clearance first sees the orphan '3487' on Zug.
         asyncio.run(
@@ -505,8 +520,7 @@ class TheBagTripKeepsTheTraveller(unittest.TestCase):
         _, slot, _ = self.run_live_sequence(world)
         world.queued = False
         clock, log = Clock(1000.0), _Log()
-        me = _bridge_self(world, clock, log)
-        me._cohort_town_slots["Zug"] = slot
+        me = _bridge_self(world, clock, log, fleet=self.fleet)
         asyncio.run(me._aim_at_bag_vendor(_needy(), list(HORDE.names), HORDE))
         self.assertIsNone(slot.reservation)
 
@@ -605,6 +619,7 @@ def _run_vendor_once(queued, at_vendor=True):
             "log": log,
             "townslot": townslot,
             "claims": claims,
+            "_CLAIMS": claims.Claims(),
             "bag_pressure": bag_pressure,
             "vendor_stall": vendor_stall,
             "jev_activity": jev_activity,

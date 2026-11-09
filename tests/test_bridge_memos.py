@@ -9,6 +9,7 @@ import time
 import unittest
 
 import bag_pressure
+import claims
 import classquest
 import guildjobs
 
@@ -184,7 +185,7 @@ class BagHoldMemoTests(unittest.TestCase):
             for n in tree.body
             if isinstance(n, ast.FunctionDef) and n.name == "_restore_bag_holds"
         )
-        holds = {}
+        fleet = claims.Claims()
         memo = {
             "Member": (
                 {
@@ -198,14 +199,15 @@ class BagHoldMemoTests(unittest.TestCase):
         }
         ns = {
             "_memo_read": lambda kind: memo if kind == "bag_hold" else {},
-            "_BAG_HOLD": holds,
+            "_CLAIMS": fleet,
+            "claims": claims,
             "bag_pressure": bag_pressure,
             "time": types.SimpleNamespace(time=lambda: 5000.0, monotonic=lambda: 200.0),
             "log": logging.getLogger("memo-test"),
         }
         exec(compile(ast.Module(body=[node], type_ignores=[]), "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
         ns["_restore_bag_holds"]()
-        restored = holds[("Member",)]
+        restored = fleet.member_hold(("Member",))
         self.assertEqual((100.0, 200.0), (restored.since, restored.seen))
         for second in range(60, int(bag_pressure.BAG_HOLD_STUCK_SECONDS) + 1, 60):
             restored = bag_pressure.bag_hold_progress(
