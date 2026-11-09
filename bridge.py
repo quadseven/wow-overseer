@@ -59,6 +59,7 @@ import fireplan
 import flightlearn
 import followhold
 import goals
+import guildcover
 import leadcmd
 import attunestep
 import dungeonquests
@@ -2029,6 +2030,45 @@ def _ensure_trade_store() -> None:
             " UNIQUE KEY uq_char_verb_skill (character_name, verb, skill_name)"
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
         )
+
+
+_GUILD_TRADES_SQL = (
+    "SELECT c.name AS name, g.name AS guild, "
+    "(presence.name IS NOT NULL) AS online, "
+    "k.skill AS skill, k.value AS value "
+    "FROM guild_member gm "
+    "JOIN guild g ON g.guildid = gm.guildid "
+    "JOIN characters c ON c.guid = gm.guid "
+    + v2_presence.snapshot_join("c", "presence")
+    + "LEFT JOIN character_skills k ON k.guid = c.guid AND k.skill IN (755, 773) "
+    "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name = %s)"
+)
+
+
+def _fetch_guild_trades(asker: str) -> list:
+    """The asker's OWN guild, each member with jewelcrafting/inscription.
+
+    READ-ONLY, and scoped by the asker's guild id in SQL, so another guild's
+    members never reach the lookup (#1989).
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_GUILD_TRADES_SQL, (asker,))
+        rows = cur.fetchall()
+    return guildcover.members_from_rows(rows)
+
+
+def _fetch_guild_cover(names: list) -> dict:
+    """skill -> count of holders at 260+ in the family's guild, {} on failure."""
+    if not names:
+        return {}
+    try:
+        members = _fetch_guild_trades(names[0])
+    except Exception:
+        log.exception("trades: guild coverage unreadable")
+        return {}
+    guild = guildcover.guild_of(members, names[0])
+    return guildcover.coverage(members, guild, professions.UNASSIGNED)
 
 
 def _fetch_trade_skills(names: list) -> dict:
@@ -8319,6 +8359,8 @@ class Bridge(discord.Client):
             if row.get("sender_is_bot")
             for a in (craftpleas.parse_ask(
                 row.get("sender_name") or "", row.get("text") or ""
+            ) or craftpleas.parse_guild_ask(
+                row.get("sender_name") or "", row.get("text") or ""
             ),)
             if a is not None
         ]
@@ -8338,6 +8380,9 @@ class Bridge(discord.Client):
             return
         ask = asks[0]
         now = time.monotonic()
+        if not ask.crafter:
+            await self._answer_guild_ask(ask, now)
+            return
         if not chat.should_say(self._said, craftpleas.ask_key(ask), now=now):
             log.info(
                 "craft ask: %s already answered %s about %s - saying nothing",
@@ -8347,6 +8392,36 @@ class Bridge(discord.Client):
         if await self._stood_down_for_craft(ask, now):
             return
         await self._answer_craft_ask(ask, now)
+
+    async def _answer_guild_ask(self, ask, now: float) -> None:
+        """A gem or glyph ask: an online guildmate of the asker's own guild
+        holding the trade is named, spoken by a family member (#1989)."""
+        key = chat.say_key(speaker="guild", subject=ask.skill, listener=ask.asker)
+        if not chat.should_say(self._said, key, now=now):
+            return
+        members = await asyncio.to_thread(_fetch_guild_trades, ask.asker)
+        guild = guildcover.guild_of(members, ask.asker)
+        named, plain = craftpleas.guild_answer(ask, members, guild)
+        chat.remember_said(self._said, key, now=now)
+        speaker = next(
+            (n for n in sorted(professions.ROSTER)
+             if not chat.addressed_to_self(n, ask.asker)), "")
+        if not plain or not speaker:
+            log.info("guild craft ask: %s wants %s, no online holder",
+                     ask.asker, ask.product)
+            return
+        text = await self._in_character(
+            speaker, plain, "a family member naming a guildmate who can craft")
+        if named.crafter not in text:
+            text = plain
+        await asyncio.to_thread(
+            _insert_speak,
+            relay.SpeakCommand(
+                speaker, "party", text, "", f"overseer:craft:{ask.asker}"),
+        )
+        await asyncio.to_thread(_insert_thought, speaker, "council", text)
+        log.info("guild craft ask: %s asked for %s -> guildmate %s",
+                 ask.asker, ask.product, named.crafter)
 
     async def _stood_down_for_craft(self, ask, now: float) -> bool:
         """Mid-run, the answer is "not now" - said once, and only once.
@@ -9397,7 +9472,9 @@ class Bridge(discord.Client):
         skills = {m.name: dict(m.skills) for m in family}
         await self._announce_settled(skills)
 
-        plan = professions.plan(family)
+        cover = await asyncio.to_thread(
+            _fetch_guild_cover, [m.name for m in family])
+        plan = professions.plan(family, cover)
         for note in plan.notes:
             log.info("trades: %s", note)
         if not plan.assignments:
@@ -14445,7 +14522,11 @@ class Bridge(discord.Client):
                 decision = await lootcouncil.answer(
                     self._jev, council_row, describe, rule)
             else:
-                decision = lootcouncil.skipped(council_row)
+                # The item card arms the council's fit gates (#2124) on the
+                # unasked path too; without one the gates abstain.
+                describe = await self._jev_describer({council_row.item_entry})
+                decision = lootcouncil.skipped(
+                    council_row, describe(council_row.item_entry))
             wrote = await asyncio.to_thread(_decide_council, decision)
             if wrote:
                 log.info(
