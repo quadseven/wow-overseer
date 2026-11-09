@@ -279,12 +279,11 @@ def refused_here(attempts, give_up=ELSEWHERE_GIVE_UP, at_vendor=False) -> dict:
 
 
 # A MEMBER JUST REFUSED `vendor not in range` IS LEFT ALONE FOR A WHILE
-# (wow-overseer#1962). On 2026-11-09 five members were written 126 sell rows in
-# five passes five minutes apart and the world refused every one, because the
-# bridge's counter read said "in reach" while the core said otherwise. Until
-# that gap is explained, one refusal must not become a pass of rows every five
-# minutes: no sell row is written for the member until it has moved more than
-# RANGE_BACKOFF_MOVED_YARDS from where the refused rows were written, or
+# (wow-overseer#1962). The bridge's counter read can say "in reach" while the
+# core's own interaction check says otherwise, and a refused member was then
+# written a fresh pass of rows every cycle. One refusal must not become a
+# retry storm: no sell row is written for the member until it has moved more
+# than RANGE_BACKOFF_MOVED_YARDS from where the refused rows were written, or
 # RANGE_BACKOFF_SECONDS have gone by. A judgement (ten minutes, five yards),
 # not a measurement; a sale served after the refusal ends it at once.
 RANGE_BACKOFF_SECONDS = 600
@@ -302,15 +301,19 @@ def _moved_yards(then, now) -> float | None:
     if then[0] != now[0]:
         return math.inf
     try:
-        return math.dist([float(v) for v in then[1:4]],
-                         [float(v) for v in now[1:4]])
+        return math.dist([float(v) for v in then[1:4]], [float(v) for v in now[1:4]])
     except (TypeError, ValueError):
         return None
 
 
-def range_backoff(refused_age, served_age, then, now,
-                  hold_seconds=RANGE_BACKOFF_SECONDS,
-                  moved_yards=RANGE_BACKOFF_MOVED_YARDS) -> str:
+def range_backoff(
+    refused_age,
+    served_age,
+    then,
+    now,
+    hold_seconds=RANGE_BACKOFF_SECONDS,
+    moved_yards=RANGE_BACKOFF_MOVED_YARDS,
+) -> str:
     """Why a member's sell rows wait after a range refusal, or "" if they may go.
 
     `refused_age` and `served_age` are seconds since the member's latest
@@ -327,7 +330,8 @@ def range_backoff(refused_age, served_age, then, now,
     if moved is not None and moved > moved_yards:
         return ""
     return "refused %r %ds ago and has not moved (%s), so no row for %ds more" % (
-        RANGE_REFUSAL_DETAIL, refused_age,
+        RANGE_REFUSAL_DETAIL,
+        refused_age,
         "position unknown" if moved is None else "%.1f yards" % moved,
         max(0, hold_seconds - int(refused_age)),
     )
@@ -340,18 +344,28 @@ def sale_reading(holder, position, offsets, refused_age) -> str:
     straight-line distance beside the per-axis box the bridge gates on, so the
     next burst shows whether that box is wider than the core's 5 yards.
     """
-    where = ("map=%s at %.1f,%.1f,%.1f" % (
-        position[0], float(position[1]), float(position[2]), float(position[3]))
-        if position else "position unknown")
+    where = (
+        "map=%s at %.1f,%.1f,%.1f"
+        % (position[0], float(position[1]), float(position[2]), float(position[3]))
+        if position
+        else "position unknown"
+    )
     if offsets:
         dx, dy, dz = (abs(float(v)) for v in offsets)
         counter = "nearest vendor euclid=%.1f 2d=%.1f per-axis=%.1f/%.1f/%.1f" % (
-            math.sqrt(dx * dx + dy * dy + dz * dz), math.hypot(dx, dy),
-            dx, dy, dz)
+            math.sqrt(dx * dx + dy * dy + dz * dz),
+            math.hypot(dx, dy),
+            dx,
+            dy,
+            dz,
+        )
     else:
         counter = "no counter read"
-    answer = ("refused %ds ago" % refused_age if refused_age is not None
-              else "no refusal on record")
+    answer = (
+        "refused %ds ago" % refused_age
+        if refused_age is not None
+        else "no refusal on record"
+    )
     return "%s %s, %s, last range answer: %s" % (holder, where, counter, answer)
 
 
