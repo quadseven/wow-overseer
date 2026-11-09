@@ -18,45 +18,56 @@ DOCKERFILE = ROOT / "Dockerfile"
 
 
 def _copied_image_files() -> dict[pathlib.Path, pathlib.PurePosixPath]:
-    text = DOCKERFILE.read_text(encoding="utf-8")
-    lines = text.splitlines()
     copied: dict[pathlib.Path, pathlib.PurePosixPath] = {}
     instruction: list[str] = []
-    for line in lines:
+    for line in DOCKERFILE.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()
-        if not instruction:
-            if not stripped.upper().startswith("COPY "):
-                continue
-            instruction.append(stripped)
-        else:
-            instruction.append(stripped)
+        if not instruction and not stripped.upper().startswith("COPY "):
+            continue
+        instruction.append(stripped)
         if instruction[-1].endswith("\\"):
             instruction[-1] = instruction[-1][:-1].rstrip()
             continue
-        parts = shlex.split(" ".join(instruction))
+        copied.update(_copy_instruction_entries(instruction))
         instruction.clear()
-        if len(parts) < 3:
-            continue
-        sources = parts[1:-1]
-        while sources and sources[0].startswith("--"):
-            sources = sources[1:]
-        if any(part.startswith("--from") for part in parts[1:-1]):
-            continue
-        destination = pathlib.PurePosixPath(parts[-1])
-        is_directory_destination = parts[-1].endswith("/") or len(sources) > 1
-        for source in sources:
-            path = ROOT / source
-            if path.is_dir():
-                for child in path.rglob("*"):
-                    if child.is_file():
-                        relative = child.relative_to(path)
-                        copied[child.relative_to(ROOT)] = destination / relative
-            elif path.is_file():
-                target = (
-                    destination / path.name if is_directory_destination else destination
-                )
-                copied[path.relative_to(ROOT)] = target
     return copied
+
+
+def _copy_instruction_entries(
+    instruction: list[str],
+) -> dict[pathlib.Path, pathlib.PurePosixPath]:
+    parts = shlex.split(" ".join(instruction))
+    if len(parts) < 3:
+        return {}
+    sources = parts[1:-1]
+    while sources and sources[0].startswith("--"):
+        sources = sources[1:]
+    if not sources or any(part.startswith("--from") for part in parts[1:-1]):
+        return {}
+    destination = pathlib.PurePosixPath(parts[-1])
+    directory = parts[-1].endswith("/") or len(sources) > 1
+    entries: dict[pathlib.Path, pathlib.PurePosixPath] = {}
+    for source in sources:
+        entries.update(_copy_source_entries(source, destination, directory))
+    return entries
+
+
+def _copy_source_entries(
+    source: str,
+    destination: pathlib.PurePosixPath,
+    directory: bool,
+) -> dict[pathlib.Path, pathlib.PurePosixPath]:
+    path = ROOT / source
+    if path.is_dir():
+        return {
+            child.relative_to(ROOT): destination / child.relative_to(path)
+            for child in path.rglob("*")
+            if child.is_file()
+        }
+    if not path.is_file():
+        return {}
+    target = destination / path.name if directory else destination
+    return {path.relative_to(ROOT): target}
 
 
 def _local_module(name: str) -> pathlib.Path | None:
