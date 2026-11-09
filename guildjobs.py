@@ -141,6 +141,8 @@ import standstill
 import vendorsale
 import weaponskill
 
+from world_data import DATA_ROOT
+
 log = logging.getLogger(__name__)
 
 HERBALISM = guildcorps.HERBALISM
@@ -3190,8 +3192,7 @@ def _spot_step(member, spot, action, cap, said):
 @functools.lru_cache(maxsize=1)
 def entrances() -> dict:
     """entrances.json, the committed dungeon doors: map id -> {map, x, y}."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    with open(os.path.join(here, "entrances.json"), encoding="utf-8") as f:
+    with open(DATA_ROOT / "entrances.json", encoding="utf-8") as f:
         return json.load(f)
 
 

@@ -55,7 +55,8 @@ import os
 import re
 from collections import deque
 from dataclasses import dataclass, field
-from pathlib import Path
+
+from world_data import DATA_ROOT
 
 # How far back progress looks, and how much trail is kept per character.
 PROGRESS_SECONDS = 300.0
@@ -327,7 +328,7 @@ def _entrances() -> dict:
     """entrances.json, or {} when it cannot be read: every door is then
     unknown, which the goal and the dungeon distances already say."""
     try:
-        with open(Path(__file__).resolve().parent / "entrances.json") as f:
+        with open(DATA_ROOT / "entrances.json") as f:
             return json.load(f)
     except (OSError, ValueError):
         return {}
@@ -825,7 +826,7 @@ def _member_words(state: str, far: str) -> str:
 
 def zone_names() -> dict:
     """area id -> zone name, from the committed zones.json."""
-    with open(Path(__file__).resolve().parent / "zones.json") as f:
+    with open(DATA_ROOT / "zones.json") as f:
         doc = json.load(f)
     out = {}
     for cont in (doc.get("continents") or {}).values():

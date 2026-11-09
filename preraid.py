@@ -46,12 +46,13 @@ import functools
 import json
 import re
 from dataclasses import dataclass, field, replace
-from pathlib import Path
 
 import bag_pressure
 import campaignplan
 import council
 import fireplan
+
+from world_data import DATA_ROOT
 
 # --- the places ----------------------------------------------------------------
 
@@ -457,7 +458,7 @@ SPELL_ON_EQUIP = 1  # item_template.spelltrigger
 @functools.lru_cache(maxsize=1)
 def spell_text() -> dict:
     """spells.json, the committed equip spell text: id -> sentence."""
-    path = Path(__file__).resolve().parent / "spells.json"
+    path = DATA_ROOT / "spells.json"
     try:
         with open(path) as f:
             return {int(k): str(v or "") for k, v in json.load(f).items()}
@@ -862,7 +863,7 @@ _CLASS_NAMES = {
 
 @functools.lru_cache(maxsize=1)
 def _tree_names() -> dict:
-    path = Path(__file__).resolve().parent / "talents.json"
+    path = DATA_ROOT / "talents.json"
     try:
         with open(path) as f:
             trees = json.load(f)["trees"]
