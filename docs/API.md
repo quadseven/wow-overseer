@@ -248,6 +248,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Answers: the six fields for every roster and online guild member.
 - Example: `overseer get /api/v2/audit`
 
+## `GET /api/v2/chat`
+
+- Query: `channel`, `family`, `guild`, `limit`, `hours`
+- Answers: recent party, raid, say or guild lines, bounded and read only.
+- Example: `overseer get /api/v2/chat channel=X`
+
 ## `GET /api/v2/chronicle`
 
 - Query: `guild`
