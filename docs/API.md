@@ -116,6 +116,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Answers: every family-guild member's gear, one table.
 - Example: `overseer get /api/guildgear`
 
+## `GET /api/guildrouting`
+
+- Query: none
+- Answers: the guild gear-routing dry run.
+- Example: `overseer get /api/guildrouting`
+
 ## `GET /api/guildruns`
 
 - Query: none
