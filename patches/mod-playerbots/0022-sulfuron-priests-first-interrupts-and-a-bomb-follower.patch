@@ -99,7 +99,7 @@ index d4156a79..8134dd1c 100644
  {
  public:
 diff --git a/src/Ai/Raid/MC/MCHelpers.h b/src/Ai/Raid/MC/MCHelpers.h
-index 2b9a1aa5..6922eae0 100644
+index 2b9a1aa5..e55e264f 100644
 --- a/src/Ai/Raid/MC/MCHelpers.h
 +++ b/src/Ai/Raid/MC/MCHelpers.h
 @@ -7,10 +7,18 @@
@@ -121,17 +121,7 @@ index 2b9a1aa5..6922eae0 100644
      // Golemagg
      NPC_CORE_RAGER = 11672,
  
-@@ -28,6 +36,9 @@ enum MoltenCoreSpells
-     SPELL_INFERNO = 19695,
-     SPELL_LIVING_BOMB = 20475,
- 
-+    // Sulfuron Harbinger: the priests heal each other with this
-+    SPELL_DARK_MENDING = 19775,
-+
-     // Golemagg
-     SPELL_GOLEMAGGS_TRUST = 20553,
-     SPELL_MAGMA_SPLASH = 13880,
-@@ -44,6 +55,82 @@ constexpr float MAGMA_SPLASH_BACK_OFF_DISTANCE = 12.0f;
+@@ -44,6 +52,82 @@ constexpr float MAGMA_SPLASH_BACK_OFF_DISTANCE = 12.0f;
  
  // Shazzrah's Arcane Explosion radius
  constexpr float ARCANE_EXPLOSION_DISTANCE = 26.0f;
@@ -169,7 +159,7 @@ index 2b9a1aa5..6922eae0 100644
 +
 +    Group* group = bot->GetGroup();
 +    if (!group)
-+        return true;
++        return false;
 +
 +    uint32 ahead = 0;
 +    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
@@ -186,7 +176,7 @@ index 2b9a1aa5..6922eae0 100644
 +
 +// The bomb carrier this bot must follow, or null. Exactly one healer, the
 +// living one with the lowest guid that is not carrying a bomb, follows the
-+// carrier. Nobody else is given a reason to leave the group.
++// carrier with the lowest guid. Nobody else is given a reason to leave the group.
 +inline Player* LivingBombFollowTarget(Player* bot)
 +{
 +    Group* group = bot->GetGroup();
@@ -202,7 +192,7 @@ index 2b9a1aa5..6922eae0 100644
 +            continue;
 +        if (member->HasAura(SPELL_LIVING_BOMB))
 +        {
-+            if (!carrier)
++            if (!carrier || member->GetGUID().GetCounter() < carrier->GetGUID().GetCounter())
 +                carrier = member;
 +        }
 +        else if (PlayerbotAI::IsHeal(member) &&
@@ -215,7 +205,7 @@ index 2b9a1aa5..6922eae0 100644
  
  #endif
 diff --git a/src/Ai/Raid/MC/MCMultipliers.cpp b/src/Ai/Raid/MC/MCMultipliers.cpp
-index 99cda3cd..f7b624b9 100644
+index 99cda3cd..9126983f 100644
 --- a/src/Ai/Raid/MC/MCMultipliers.cpp
 +++ b/src/Ai/Raid/MC/MCMultipliers.cpp
 @@ -56,6 +56,7 @@ static bool IsAllowedGeddonMovementAction(Action* action)
@@ -226,7 +216,7 @@ index 99cda3cd..f7b624b9 100644
                  !dynamic_cast<McMoveFromBaronGeddonAction*>(action))
          return false;
  
-@@ -86,6 +87,29 @@ float BaronGeddonAbilityMultiplier::GetValue(Action* action)
+@@ -86,6 +87,37 @@ float BaronGeddonAbilityMultiplier::GetValue(Action* action)
      return 1.0f;
  }
  
@@ -247,9 +237,17 @@ index 99cda3cd..f7b624b9 100644
 +{
 +    // Every bot with an interrupt would use it on every Dark Mending, and
 +    // the wasted casts leave the next one free. Two assigned bots take them.
-+    if (AI_VALUE2(Unit*, "find target", "sulfuron harbinger") && IsInterruptAction(action) &&
-+        !IsDarkMendingInterrupter(bot))
-+        return 0.0f;
++    if (!IsInterruptAction(action) || IsDarkMendingInterrupter(bot))
++        return 1.0f;
++
++    // Sulfuron is present when he is among the attackers, whoever the bot
++    // itself is targeting.
++    for (ObjectGuid const guid : AI_VALUE(GuidVector, "attackers"))
++    {
++        Unit* unit = botAI->GetUnit(guid);
++        if (unit && unit->GetEntry() == NPC_SULFURON_HARBINGER)
++            return 0.0f;
++    }
 +    return 1.0f;
 +}
 +

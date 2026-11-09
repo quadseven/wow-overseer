@@ -101,7 +101,9 @@ class SulfuronGeddonPatchTest(unittest.TestCase):
             "exclusions.insert(guid); } }",
             self.strategy,
         )
-        self.assertEqual(1, len(re.findall(r"exclusions\.insert\(guid\);", self.strategy)))
+        self.assertEqual(
+            1, len(re.findall(r"exclusions\.insert\(guid\);", self.strategy))
+        )
         self.assertNotIn("NPC_FLAMEWAKER_PRIEST) exclusions", self.strategy)
 
     def test_priest_rule_is_dps_selection_only(self):
@@ -113,7 +115,7 @@ class SulfuronGeddonPatchTest(unittest.TestCase):
     def test_entry_and_spell_ids(self):
         self.assertIn("NPC_SULFURON_HARBINGER = 12098", self.helpers)
         self.assertIn("NPC_FLAMEWAKER_PRIEST = 11662", self.helpers)
-        self.assertIn("SPELL_DARK_MENDING = 19775", self.helpers)
+        self.assertNotIn("SPELL_DARK_MENDING", self.helpers)
 
     def test_exactly_two_interrupters_are_assigned(self):
         self.assertIn("DARK_MENDING_INTERRUPTER_COUNT = 2", self.helpers)
@@ -127,11 +129,26 @@ class SulfuronGeddonPatchTest(unittest.TestCase):
 
     def test_unassigned_bots_are_blocked_and_assigned_are_not(self):
         self.assertIn(
-            'if (AI_VALUE2(Unit*, "find target", "sulfuron harbinger") && '
-            "IsInterruptAction(action) && !IsDarkMendingInterrupter(bot)) return 0.0f;",
+            "if (!IsInterruptAction(action) || IsDarkMendingInterrupter(bot)) return 1.0f;",
             self.mults,
         )
-        self.assertIn("return 1.0f;", self.mults)
+        # Presence is a scan of the attackers, not the bot's own target.
+        self.assertNotIn("find target", self.mults)
+        self.assertIn(
+            "if (unit && unit->GetEntry() == NPC_SULFURON_HARBINGER) return 0.0f;",
+            self.mults,
+        )
+
+    def test_a_bot_with_no_group_is_not_assigned(self):
+        self.assertIn("if (!group) return false;", self.helpers)
+        self.assertNotIn("if (!group) return true;", self.helpers)
+
+    def test_the_carrier_is_the_lowest_guid_carrier(self):
+        self.assertIn(
+            "if (!carrier || member->GetGUID().GetCounter() < "
+            "carrier->GetGUID().GetCounter()) carrier = member;",
+            self.helpers,
+        )
 
     def test_strategy_registers_the_multiplier_and_the_follow_trigger(self):
         self.assertIn(
@@ -156,7 +173,9 @@ class SulfuronGeddonPatchTest(unittest.TestCase):
             "follower = member;",
             self.helpers,
         )
-        self.assertIn("return carrier && follower == bot ? carrier : nullptr;", self.helpers)
+        self.assertIn(
+            "return carrier && follower == bot ? carrier : nullptr;", self.helpers
+        )
 
     def test_follow_trigger_and_action_use_the_same_target_and_distance(self):
         self.assertIn(
