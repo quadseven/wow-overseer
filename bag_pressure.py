@@ -640,10 +640,10 @@ def vendor_trip_makes_room(free_slots: dict, sellable: dict) -> bool:
 # the run keeps clearing, so loot taking a member back to three costs a drop,
 # not the run. The module still refuses to open a run while any member has three
 # or fewer free slots, which is the one thing left for the bridge to wait for.
-# Measured on wow-dev 2026-11-08: a family with free slots Oz 12, Uzza 12,
-# Zork 11, Zrog 7, Zug 4 waited the whole 45 minute ceiling on "below 8" and
-# then cleared Blackrock Depths with no evacuation; a run that started with a
-# member at no free slots cleared it too. Eight free slots each cost 46 to 53
+# Measured on wow-dev 2026-11-08: a five-member family with 12, 12, 11, 7 and 4
+# free slots waited the whole 45 minute ceiling on "below 8" and then cleared
+# Blackrock Depths with no evacuation; a run that started with a member at no
+# free slots cleared it too. Eight free slots each cost 46 to 53
 # minutes between runs, every run, for no run saved. The wait therefore reads
 # CAMPAIGN_ADMIT_FREE_SLOTS, below.
 CAMPAIGN_RESUME_FREE_SLOTS = 8

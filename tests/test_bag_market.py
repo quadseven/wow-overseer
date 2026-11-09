@@ -742,6 +742,21 @@ class TheCapYieldsWhileTheFamilyIsHeldInTown(unittest.TestCase):
         for free in (-1, None, "2", True):
             self.assertFalse(bag_market.cap_yields(free, held=True), free)
 
+    def test_a_held_member_between_the_lines_buys_the_vendor_bag(self):
+        """Between the old lines (4 to 7 free) held is no longer special: the
+        hold waits for 4, so a member there is not at the floor, held or idle
+        (#2116 moved the held line from 7 to 3; this pinned the old one)."""
+        for held in (False, True):
+            bought, _ = bag_market.plan_upgrades(
+                [HELD],
+                HELD_PURSES,
+                VENDOR_STOCK,
+                reach={"Grog": EVERY_STOCK},
+                free_slots={"Grog": 6},
+                held=held,
+            )
+            self.assertEqual(bought, (), held)
+
     def test_held_and_idle_buy_the_vendor_bag_at_the_same_line(self):
         for held in (False, True):
             bought, _ = bag_market.plan_upgrades(
@@ -755,9 +770,10 @@ class TheCapYieldsWhileTheFamilyIsHeldInTown(unittest.TestCase):
             self.assertEqual([u.buyer for u in bought], ["Grog"], held)
             self.assertEqual(bought[0].listing.source, VENDOR)
 
-    def test_a_member_above_the_line_is_not_walked_to_the_vendor_held_or_idle(self):
+    def test_a_held_member_between_the_lines_is_walked_to_the_vendor(self):
+        """As above for the walk: at 4 to 7 free, held or idle, nobody is sent."""
         for held in (False, True):
-            trip = _upgrade_trip([HELD], HELD_PURSES, {"Grog": 4}, held=held)
+            trip = _upgrade_trip([HELD], HELD_PURSES, {"Grog": 6}, held=held)
             self.assertEqual(trip.buyers, (), held)
 
     def test_the_bags_pass_reads_the_hold_off_the_town_slot(self):
