@@ -165,76 +165,94 @@ def _gain(new: tuple, old: tuple) -> float | None:
     return new[axis] / old[axis] - 1.0
 
 
-def _displaced(pick, candidate, wearer, worn, book) -> tuple:
-    """(displaced worn row or None, new total, old total) for one pick,
-    over the slot group the pick is worn in - the arithmetic of
-    equipscore's own per-group comparisons, over equipscore.value."""
-    group = pick.slot
-    if group in _SINGLE_GROUPS:
-        on = _worn_in_group(worn, group)
-        old_row = on[0] if on else None
-        new = equipscore.value(candidate, wearer, _key(candidate), book)
-        old = equipscore.value(old_row, wearer, _key(old_row), book)
-        return old_row, new, old
-    if group in _PAIR_GROUPS:
-        on = _worn_in_group(worn, group)
-        values = [(equipscore.value(r, wearer, "", book), r) for r in on]
-        cand = equipscore.value(candidate, wearer, "", book)
-        ranked = sorted(
-            values + [(cand, candidate)], key=lambda t: (t[0][0], t[0][1]), reverse=True
-        )
-        kept = {id(r) for _v, r in ranked[:2]}
-        displaced = next((r for r in on if id(r) not in kept), None)
-        old = _total(v for v, _r in values)
-        new = _total(v for v, _r in ranked[:2])
-        return displaced, new, old
-    # The weapon hands: the candidate's hand against the worn set, the
-    # other hand unchanged (the module docstring owns the caveat). The
-    # values are equipscore.value under the keys its hand judge uses:
-    # a two-hander under "two_hand", any other main hand under
-    # "main_hand", an off-hand weapon under "off_hand", a held piece
-    # or shield under no key.
+def _single_displacement(pick, candidate, wearer, worn, book) -> tuple:
+    """Score a pick in a slot with only one worn item."""
+    on = _worn_in_group(worn, pick.slot)
+    old_row = on[0] if on else None
+    new = equipscore.value(candidate, wearer, _key(candidate), book)
+    old = equipscore.value(old_row, wearer, _key(old_row), book)
+    return old_row, new, old
+
+
+def _paired_displacement(pick, candidate, wearer, worn, book) -> tuple:
+    """Score a pick against both worn slots in a paired gear group."""
+    on = _worn_in_group(worn, pick.slot)
+    values = [(equipscore.value(row, wearer, "", book), row) for row in on]
+    cand = equipscore.value(candidate, wearer, "", book)
+    ranked = sorted(
+        values + [(cand, candidate)],
+        key=lambda pair: (pair[0][0], pair[0][1]),
+        reverse=True,
+    )
+    kept = {id(row) for _value, row in ranked[:2]}
+    displaced = next((row for row in on if id(row) not in kept), None)
+    old = _total(value for value, _row in values)
+    new = _total(value for value, _row in ranked[:2])
+    return displaced, new, old
+
+
+def _main_hand_value(row, wearer, book):
+    """Score a main-hand item with the key used by the equip judge."""
+    key = (
+        "two_hand"
+        if _int(row.get("inventory_type")) == equipscore.TWO_HAND
+        else "main_hand"
+    )
+    return equipscore.value(row, wearer, key, book)
+
+
+def _off_hand_value(row, wearer, book):
+    """Score an off-hand weapon or held item with the equip judge's key."""
+    key = (
+        "off_hand"
+        if _int(row.get("item_class")) == equipscore.ITEM_CLASS_WEAPON
+        else ""
+    )
+    return equipscore.value(row, wearer, key, book)
+
+
+def _weapon_displacement(group, candidate, wearer, worn, book) -> tuple:
+    """Score one weapon-hand pick against the current pair of hands."""
     main = next(
-        (r for r in worn if _int(r.get("equipment_slot")) == equipscore.MAIN_HAND_SLOT),
+        (
+            row
+            for row in worn
+            if _int(row.get("equipment_slot")) == equipscore.MAIN_HAND_SLOT
+        ),
         None,
     )
     off = next(
-        (r for r in worn if _int(r.get("equipment_slot")) == equipscore.OFF_HAND_SLOT),
+        (
+            row
+            for row in worn
+            if _int(row.get("equipment_slot")) == equipscore.OFF_HAND_SLOT
+        ),
         None,
     )
-
-    def main_value(row):
-        key = (
-            "two_hand"
-            if _int(row.get("inventory_type")) == equipscore.TWO_HAND
-            else "main_hand"
-        )
-        return equipscore.value(row, wearer, key, book)
-
-    def off_value(row):
-        key = (
-            "off_hand"
-            if _int(row.get("item_class")) == equipscore.ITEM_CLASS_WEAPON
-            else ""
-        )
-        return equipscore.value(row, wearer, key, book)
-
-    old = _total(
-        [main_value(r) for r in (main,) if r is not None]
-        + [off_value(r) for r in (off,) if r is not None]
-    )
+    old_parts = [_main_hand_value(main, wearer, book)] if main is not None else []
+    if off is not None:
+        old_parts.append(_off_hand_value(off, wearer, book))
+    old = _total(old_parts)
     if group == "two_hand":
-        return main, main_value(candidate), old
+        return main, _main_hand_value(candidate, wearer, book), old
     if group == "main_hand":
-        parts = [main_value(candidate)]
+        parts = [_main_hand_value(candidate, wearer, book)]
         if off is not None:
-            parts.append(off_value(off))
+            parts.append(_off_hand_value(off, wearer, book))
         return main, _total(parts), old
-    parts = []
-    if main is not None:
-        parts.append(main_value(main))
-    parts.append(off_value(candidate))
+    parts = [_main_hand_value(main, wearer, book)] if main is not None else []
+    parts.append(_off_hand_value(candidate, wearer, book))
     return off, _total(parts), old
+
+
+def _displaced(pick, candidate, wearer, worn, book) -> tuple:
+    """Return the displaced row and old/new scores for one equip pick."""
+    if pick.slot in _SINGLE_GROUPS:
+        return _single_displacement(pick, candidate, wearer, worn, book)
+    if pick.slot in _PAIR_GROUPS:
+        return _paired_displacement(pick, candidate, wearer, worn, book)
+    # Weapon hands are judged as a set, with the untouched hand preserved.
+    return _weapon_displacement(pick.slot, candidate, wearer, worn, book)
 
 
 # --- the pass ------------------------------------------------------------------
