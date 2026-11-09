@@ -1977,6 +1977,50 @@ class ASummonedObjectEnder(unittest.TestCase):
             (classquest.HUNT, 86, 113),
         )
 
+    def test_dwarven_outfitters_hunts_wolves_that_drop_tough_wolf_meat(self):
+        # Quest 179 has an item objective but no creature kill counter.
+        # Its required item 750 comes from creatures 704 and 705, so the
+        # item-only objective must still give the quester a hunt to perform.
+        outfitters = quest(179, 1, 1, title="Dwarven Outfitters")
+        outfitters.update(item1=750, item_count1=8)
+        cat = world(
+            extra_quests=[outfitters],
+            extra_givers=[
+                giver(179, "start", 5179, 179, 0, 0),
+                giver(179, "end", 5179, 179, 0, 0),
+            ],
+            extra_spawns=[
+                spawn(5704, 704, 30, 0, level=1, name="Young Wolf"),
+                spawn(5705, 705, 40, 0, level=1, name="Timber Wolf"),
+            ],
+            extra_loot=[{"item": 750, "entry": 704}, {"item": 750, "entry": 705}],
+        )
+        member = mirra(
+            level=1,
+            zone_id=1,
+            quest_log={179: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({1, 2, 3, 6}),
+            quest_progress={179: 0},
+            quest_objectives={179: {}},
+        )
+
+        move = questers.plan(cat, member, questers.Clock(), 0.0).move
+
+        self.assertEqual(
+            (move.kind, move.quest, move.spot.entry),
+            (classquest.HUNT, 179, 704),
+        )
+
+        completed = questers.Member(
+            **{
+                **member.__dict__,
+                "quest_log": {179: questers.STATUS_COMPLETE},
+                "quest_progress": {179: 8},
+            }
+        )
+        hand_in = questers.plan(cat, completed, questers.Clock(), 60.0).move
+        self.assertEqual((hand_in.kind, hand_in.quest), (classquest.TURN_IN, 179))
+
     def test_oh_brother_hunts_the_rare_that_drops_its_badge(self):
         # Oh Brother (167) has no kill counter: its required item 1875 comes
         # from Foreman Thistlenettle (626), a rare spawn. The world read must
