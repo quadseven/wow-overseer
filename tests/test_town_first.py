@@ -12,10 +12,12 @@ Pinned here, running bridge._drive_dungeon for real against fakes:
   * An armed campaign at the floor is handed to town: its job is taken off
     every member with the town-first source.
   * A campaign that is not armed waits until every member has
-    CAMPAIGN_RESUME_FREE_SLOTS free, and says who is short.
+    CAMPAIGN_ADMIT_FREE_SLOTS free, and says who is short. That was 8 until
+    #2116 and is the module's own start floor plus one now: the walk-out the
+    wide band guarded against ended with mod-overseer#1443.
   * The band has a ceiling, so a member nobody can lift does not hold the
     campaign in town for ever.
-  * An armed campaign between the floor and the resume floor is not held.
+  * An armed campaign at or above the floor is not held.
 """
 
 import ast
@@ -131,12 +133,21 @@ def _drive(world, clock, log, since):
 
 class TheResumeFloor(unittest.TestCase):
     def test_who_is_short(self):
-        self.assertEqual(
-            ("Bork", "Grog", "Ugga"), bag_pressure.campaign_resume_short(MEASURED)
-        )
+        self.assertEqual(("Bork", "Ugga"), bag_pressure.campaign_resume_short(MEASURED))
 
     def test_nobody_short_when_everyone_has_room(self):
         self.assertEqual((), bag_pressure.campaign_resume_short({"Grug": 8, "Og": 30}))
+
+    def test_four_free_slots_is_room_enough(self):
+        self.assertEqual(
+            (), bag_pressure.campaign_resume_short({"Zrog": 7, "Zug": 4, "Oz": 12})
+        )
+        self.assertEqual(("Zug",), bag_pressure.campaign_resume_short({"Zug": 3}))
+
+    def test_the_wait_asks_for_the_modules_floor_plus_one(self):
+        self.assertEqual(
+            bag_pressure.TOWN_RUN_FREE_SLOTS + 1, bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS
+        )
 
     def test_an_unknown_reading_holds_nothing(self):
         self.assertEqual(
@@ -151,10 +162,10 @@ class TheResumeFloor(unittest.TestCase):
             ),
         )
 
-    def test_the_band_is_above_the_floor(self):
+    def test_the_run_room_other_passes_keep_is_still_wider(self):
         self.assertGreater(
             bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS,
-            bag_pressure.TOWN_RUN_FREE_SLOTS + 1,
+            bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS,
         )
 
 
@@ -189,16 +200,27 @@ class TownFirstThenTheDungeon(unittest.TestCase):
         self.drive(world)
         self.assertEqual([], world.inserted)
 
-    def test_one_sale_past_the_floor_does_not_send_it_back_in(self):
+    def test_one_member_still_at_the_floor_keeps_it_in_town(self):
         world = World(MEASURED, ZF)
         self.drive(world)
         world.inserted.clear()
-        # Town upkeep lifted Bork and Ugga past the floor, not to the band.
-        world.free.update({"Bork": 4, "Ugga": 5})
+        # Town upkeep lifted Bork past the floor; Ugga is still on it.
+        world.free.update({"Bork": 4, "Ugga": 3})
         result, withheld = self.drive(world)
         self.assertEqual((0, 0), result)
-        self.assertEqual([], world.inserted, "a run was sent in at four free slots")
-        self.assertIn("town first: Bork, Grog, Ugga below 8 free slots", withheld[0])
+        self.assertEqual([], world.inserted)
+        self.assertIn("bags are near full", withheld[0])
+
+    def test_four_free_slots_each_sends_it_back_in(self):
+        """#2116: the run no longer waits for the wide band, because the
+        module no longer walks a family out for a full bag."""
+        world = World(MEASURED, ZF)
+        self.drive(world)
+        world.inserted.clear()
+        world.free.update({"Bork": 4, "Ugga": 4})
+        result, withheld = self.drive(world)
+        self.assertEqual((5, 5), result)
+        self.assertEqual([], withheld)
 
     def test_room_for_a_run_sends_it_back_in(self):
         world = World(MEASURED, ZF)
@@ -211,22 +233,18 @@ class TownFirstThenTheDungeon(unittest.TestCase):
         self.assertEqual({ZF}, {mode for _, mode, _ in world.inserted})
         self.assertEqual({}, self.since)
 
-    def test_the_ceiling_sends_it_back_in_at_the_floor(self):
-        world = World(MEASURED, ZF)
-        self.drive(world)
-        world.inserted.clear()
-        world.free.update({"Bork": 5, "Ugga": 5})
-        self.assertEqual((0, 0), self.drive(world)[0])
-        self.clock.now += bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS
-        result, _ = self.drive(world)
-        self.assertEqual((5, 5), result)
-
     def test_a_fresh_start_waits_for_room_too(self):
-        world = World({n: 5 for n in NAMES}, jobs.TOWN_RUN)
+        world = World({n: 3 for n in NAMES}, jobs.TOWN_RUN)
         result, withheld = self.drive(world)
         self.assertEqual((0, 0), result)
         self.assertEqual([], world.inserted)
-        self.assertIn("town first", withheld[0])
+        self.assertIn("bags are near full", withheld[0])
+
+    def test_a_fresh_start_with_four_free_slots_each_goes_in(self):
+        world = World({n: 4 for n in NAMES}, jobs.TOWN_RUN)
+        result, withheld = self.drive(world)
+        self.assertEqual((5, 5), result)
+        self.assertEqual([], withheld)
 
     def test_an_armed_campaign_between_the_floor_and_the_band_is_not_held(self):
         world = World({n: 5 for n in NAMES}, ZF)
@@ -270,7 +288,7 @@ class TheWaitIsSpentInTown(unittest.TestCase):
         )
 
     def test_a_fresh_start_short_of_room_waits_in_town(self):
-        world = World({n: 5 for n in NAMES}, jobs.DEFAULT)
+        world = World({n: 3 for n in NAMES}, jobs.DEFAULT)
         self.drive(world)
         self.assertEqual({jobs.TOWN_RUN}, {mode for _, mode, _ in world.inserted})
 

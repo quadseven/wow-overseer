@@ -760,7 +760,9 @@ class TheStagingPhaseRead(unittest.TestCase):
 
 # The Horde family on 2026-09-24 at 03:55 UTC: Ragefire held "town first", the
 # Jev sell interlude on (job=quest), and a trainer walk on the leader.
-TOWN_FIRST = {"Oz": 4, "Uzza": 6, "Zork": 4, "Zrog": 6, "Zug": 4}
+# (Free slots 4 to 6 then; the hold waits for 4 now, #2116, so the same family
+# is held while its members stand at 2 and 3.)
+TOWN_FIRST = {"Oz": 2, "Uzza": 3, "Zork": 2, "Zrog": 3, "Zug": 2}
 
 
 class ACampaignHeldInTownSells(unittest.TestCase):

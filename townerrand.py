@@ -590,6 +590,7 @@ def advance(
     step_done: bool = False,
     stalled: float = 0.0,
     bag_pressure_needed: bool = False,
+    bag_room_made: bool = False,
 ) -> tuple:
     """The next state and one sentence about what changed ('' when nothing).
 
@@ -598,11 +599,25 @@ def advance(
     step. `bag_pressure_needed` is a fresh reading that the campaign still
     waits and the family still needs the counter; it lets that errand continue
     past the campaign ceiling until the bags can support a run.
+    `bag_room_made` is the opposite fresh reading: the campaign waits and the
+    admission gate would let it in (no member at or below the town-run floor,
+    none below the resume floor).
+
+    A BAG-ROOM ERRAND ENDS WHEN ITS ROOM IS MADE (#2116). It was started so the
+    campaign could go in, and it used to run every remaining step first: on
+    wow-dev 2026-11-08 the vendor step was done at 14:04, the bank, tidy,
+    equip, hand-down, fund and mail steps ran 23 more minutes, and the family's
+    next Blackrock Depths run started at 14:34 instead of about 14:11. Those
+    steps wait for a stretch when no campaign is waiting.
     """
     if not state.active:
         return state, ""
     if in_run:
         return end(state, now, "a dungeon run started")
+    if bag_room_made and state.why == BAG_PRESSURE_WHY:
+        return end(
+            state, now, "bag room is made, so the campaign takes the family back"
+        )
     if stalled >= HOLD_CEILING_SECONDS and not bag_pressure_needed:
         return end(
             state,

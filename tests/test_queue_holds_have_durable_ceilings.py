@@ -239,12 +239,12 @@ class StallFloorTest(unittest.TestCase):
 
     def test_the_town_first_wait_ends_on_the_stall_after_a_restart(self):
         self.restart_after(CEILING + 5)
-        free = {n: 4 for n in NAMES}
+        free = {n: 3 for n in NAMES}
         self.assertEqual(self.ns["_town_first"]("dungeon:ragefire", NAMES, free), "")
 
     def test_the_town_first_wait_holds_a_young_queue(self):
         self.restart_after(30)
-        free = {n: 4 for n in NAMES}
+        free = {n: 3 for n in NAMES}
         self.assertIn(
             "town first", self.ns["_town_first"]("dungeon:ragefire", NAMES, free)
         )
