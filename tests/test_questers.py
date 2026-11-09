@@ -900,6 +900,82 @@ class Broken(unittest.TestCase):
             "requires exploring Fargodeep Mine; questers cannot earn exploration credit",
         )
 
+    def test_selling_fish_ledger_explains_unsupported_fishing_step(self):
+        # The world rows name ten Spotted Sunfish (item 1467) as a required
+        # item. The quester can hunt drops, but has no fishing step to
+        # gather this item (fishing pools and fishing loot are not hunt
+        # fields).
+        quest = classquest.Quest(
+            127,
+            "Selling Fish",
+            0,
+            16,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((1467, 10),),
+            enders=(classquest.Spawn(1127, 315, 0, 0.0, 0.0, name="Dockmaster Baren"),),
+        )
+        facts = questers.Facts(zone=REDRIDGE, level=21, ender_npcs=True)
+
+        early = questers._broken_reason(
+            quest,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            0,
+            frozenset(),
+            {},
+        )
+        self.assertEqual(early, "")
+
+        reason = questers._broken_reason(
+            quest,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertEqual(
+            reason,
+            "Selling Fish (quest 127) requires fishing; questers cannot fish",
+        )
+
+    def test_quest_127_selling_fish_has_specific_stall_reason(self):
+        # Quest 127 "Selling Fish" in Redridge Mountains (level 21) requires
+        # collecting 10 Spotted Sunfish (item 1467). With no huntable field
+        # for fishing, the quest stalls; the stall carries a specific reason.
+        fish = quest(127, REDRIDGE, 21, title="Selling Fish")
+        fish["item1"] = 1467
+        fish["item_count1"] = 10
+        cat = world(
+            extra_quests=[fish],
+            extra_givers=[
+                giver(127, "start", 1127, 315, 0, 0),
+                giver(127, "end", 1127, 315, 0, 0),
+            ],
+        )
+        member = mirra(
+            level=21,
+            zone_id=REDRIDGE,
+            quest_log={127: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({30, 31}),
+            quest_progress={127: 0},
+            quest_objectives={127: {}},
+        )
+        clock = questers.Clock()
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 127)
+        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("Selling Fish", p.broken[0].reason)
+
     def test_objectives_that_move_never_stall(self):
         p, _ = self._play(
             mirra(quest_log={1: 3}), 240, progress=lambda minute: {1: minute // 60}
