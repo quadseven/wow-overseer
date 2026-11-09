@@ -23636,11 +23636,50 @@ class Bridge(discord.Client):
         await asyncio.sleep(max(cycle, 90.0))
         while not self.is_closed():
             try:
+                # BEFORE THE MODEL'S CHOICE, AND WITHOUT IT (#2122): the
+                # errand's own pick needs no model key.
+                await self._errand_pick_once()
+            except Exception:
+                log.exception("family intent: the errand pick failed; the "
+                              "module's order stands")
+            try:
                 await self._family_intent_once()
             except Exception:
                 log.exception("family intent: pass failed; the module's order "
                               "stands")
             await asyncio.sleep(cycle)
+
+    async def _errand_pick_once(self) -> None:
+        """Pick a family's bag-room town errand over the regroup, fetch or
+        training request that holds its leader still (#2122).
+
+        Deterministic, not a model answer: written through the same choice
+        writer, bounded by jev_family_intent.ERRAND_PICK_CAP_SECONDS, and
+        cleared when the errand ends."""
+        rows = await asyncio.to_thread(_fetch_family_intents)
+        mono = time.monotonic()
+        for leader in sorted(set(rows) | set(_ERRAND_PICKS)):
+            row = jev_family_intent.row_from_db(
+                rows.get(leader, {"leader_name": leader}))
+            step = jev_family_intent.errand_step(
+                row, _bag_errand_started(leader), _ERRAND_PICKS.get(leader), mono)
+            if step.memory is None:
+                _ERRAND_PICKS.pop(leader, None)
+            else:
+                _ERRAND_PICKS[leader] = step.memory
+            if step.action == "write":
+                kind, target = jev_family_intent.errand_pick_columns(step.pick)
+                await asyncio.to_thread(
+                    _write_family_pick, leader, kind, target, None)
+                if step.first:
+                    log.info("family intent: %s's bag-room errand (%s) is picked "
+                             "over %s %s, which held the leader (bridge pick, "
+                             "no model)", leader, step.pick.ask.option,
+                             step.pick.outranked.kind, step.pick.outranked.target)
+            elif step.action == "clear":
+                await asyncio.to_thread(_clear_family_pick, leader)
+                log.info("family intent: %s's errand pick is cleared; the "
+                         "module's order stands", leader)
 
     async def _family_intent_once(self) -> None:
         rule = jev_family_intent.policy()
@@ -23695,6 +23734,11 @@ class Bridge(discord.Client):
 
     async def _family_intent_for(self, key: str, names: list, raw: dict, rule) -> None:
         row = jev_family_intent.row_from_db(raw)
+        # A STANDING BAG-ROOM ERRAND PICK IS NOT OVERWRITTEN BY AN ANSWER (#2122)
+        # Looked up: the adapter tests load this method in isolation.
+        standing = globals().get("_errand_pick_standing_for")
+        if standing is not None and standing(row.leader):
+            return
         where = await self._situation_for(key, names, row.leader)
         deaths = ((where.deaths or {}).get("count", 0) if where is not None else 0)
         weapon_option = await self._critical_weapon_intent_option(names, row)
@@ -34712,6 +34756,25 @@ def _town_errand_active(names) -> bool:
     """Whether this family is on its town errand (the campaign yields)."""
     state = _TOWN_ERRANDS.get(tuple(sorted(names)))
     return bool(state and state.active)
+
+
+# leader -> jev_family_intent.PickMemory of the bridge's own errand pick (#2122).
+_ERRAND_PICKS: dict = {}
+
+
+def _bag_errand_started(leader: str):
+    """When the bag-room town errand of the family `leader` leads began (the
+    errand's own clock, a stable per-errand value), or None with no such
+    errand active."""
+    for key, state in _TOWN_ERRANDS.items():
+        if (leader in key and state.active
+                and state.why == townerrand.BAG_PRESSURE_WHY):
+            return state.started
+    return None
+
+
+def _errand_pick_standing_for(leader: str) -> bool:
+    return jev_family_intent.errand_pick_standing(_ERRAND_PICKS.get(leader))
 
 
 def _hub_aim(hub) -> str:
