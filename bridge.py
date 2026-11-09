@@ -5390,6 +5390,13 @@ def _silent_seconds(head_id: int, names: list) -> int | None:
     and it needs no run row: dungeonstall's WHY IT IS THE HEAD'S CLOCK says why.
     None when the realm cannot answer.
 
+    A BOSS CREDIT COUNTS THE FIRST TIME A RUN WRITES IT (#2147). A party sealed
+    inside a finished dungeon loops EXIT, IDLE, CLEARING, and every pass writes
+    the same "all encounters credited" row again, which kept the clock near
+    zero for as long as the loop ran and the breaker never fired. A repeat of
+    a credit the run already wrote is not progress, so the NOT EXISTS keeps only
+    the first row of each distinct credit per run.
+
     The COLLATE sits on each bound name, never on `e.character_name`
     (wow-overseer#1513). overseer_event is utf8mb4_unicode_ci; collating the
     names to that same collation keeps the column bare, so MySQL can use
@@ -5410,7 +5417,11 @@ def _silent_seconds(head_id: int, names: list) -> int | None:
         "JOIN overseer_dungeon_run_event re ON re.run_id = r.id "
         "WHERE r.leader_name IN ({holes}) "
         "AND r.started_at >= COALESCE(q.started_at, q.created_at) "
-        "AND re.kind = 'boss'), q.created_at)), NOW()) AS silent_seconds "
+        "AND re.kind = 'boss' "
+        "AND NOT EXISTS (SELECT 1 FROM overseer_dungeon_run_event p "
+        "WHERE p.run_id = re.run_id AND p.kind = 'boss' "
+        "AND p.detail = re.detail AND p.id < re.id)), q.created_at)), "
+        "NOW()) AS silent_seconds "
         "FROM overseer_dungeon_queue q WHERE q.id = %s"
     ).format(holes=holes, more_names=more_names)
     with _connect() as conn, conn.cursor() as cur:
@@ -14505,7 +14516,11 @@ class Bridge(discord.Client):
                 decision = await lootcouncil.answer(
                     self._jev, council_row, describe, rule)
             else:
-                decision = lootcouncil.skipped(council_row)
+                # The item card arms the council's fit gates (#2124) on the
+                # unasked path too; without one the gates abstain.
+                describe = await self._jev_describer({council_row.item_entry})
+                decision = lootcouncil.skipped(
+                    council_row, describe(council_row.item_entry))
             wrote = await asyncio.to_thread(_decide_council, decision)
             if wrote:
                 log.info(
