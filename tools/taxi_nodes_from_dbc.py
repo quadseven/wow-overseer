@@ -86,6 +86,9 @@ import pathlib
 import struct
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from world_data import DATA_ROOT
+
 HEADER = struct.Struct("<4sIIII")
 MAGIC = b"WDBC"
 
@@ -184,7 +187,7 @@ def main(argv: list) -> int:
     source = pathlib.Path(argv[1])
     nodes = parse(source.read_bytes())
     check(nodes)
-    out = pathlib.Path(__file__).resolve().parents[1] / "taxinodes.json"
+    out = DATA_ROOT / "taxinodes.json"
     out.write_text(
         json.dumps({"nodes": nodes}, indent=1, sort_keys=True) + "\n",
         encoding="utf-8",

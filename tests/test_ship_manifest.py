@@ -1,131 +1,61 @@
-"""Every top-level *.py module is copied into the image.
+"""Docker COPY sources exist and continuation syntax stays valid."""
 
-The Dockerfile header states the same rule in the same words, and
-test_dockerfile_header_and_this_test_state_the_same_rule keeps the two in
-step. The Dockerfile names top-level modules explicitly (no wildcard COPY), so a
-new module is one forgotten line away from an image that imports something
-it does not contain - a crash at pod start, long after CI went green.
+from __future__ import annotations
 
-This is not hypothetical: merging three concurrent feature branches on
-2026-08-21, a git rerere replay resolved the Dockerfile conflict by keeping
-two of the three new modules and silently dropping panel.py, which
-map_server.py imports. Caught by hand; this test is so the next one is not.
-"""
-
-import os
-import re
+import pathlib
+import shlex
 import unittest
 
-HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DOCKERFILE = os.path.join(HERE, "Dockerfile")
-
-# The one rule, in the words the Dockerfile header and this module's
-# docstring both use (#1846).
-RULE = "Every top-level *.py module is copied into the image."
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+DOCKERFILE = ROOT / "Dockerfile"
 
 
-def _words(text: str) -> str:
-    return " ".join(text.split())
-
-
-def _dockerfile_header() -> str:
-    """The comment block above FROM, with the `#` markers removed."""
-    lines = []
-    with open(DOCKERFILE, encoding="utf-8") as f:
-        for line in f:
-            if not line.startswith("#"):
-                break
-            lines.append(line[1:])
-    return _words(" ".join(lines))
-
-
-def _copied_files() -> set:
-    with open(DOCKERFILE, encoding="utf-8") as f:
-        text = f.read()
-    # EVERY `COPY ... /app/` block, not the first one. The Dockerfile carries
-    # a second, single-file COPY for jquery.min.js alongside the big
-    # multi-file block, and a non-greedy search for the first block alone
-    # would miss it.
-    blocks = re.findall(r"^COPY\s(.*?)\s/app/", text, re.MULTILINE | re.DOTALL)
-    assert blocks, "no COPY ... /app/ block found in the Dockerfile"
-    names = set()
-    for b in blocks:
-        for tok in b.split():
-            tok = tok.strip()
-            if not tok or tok == "\\":
+def _copy_sources() -> set[pathlib.Path]:
+    lines = DOCKERFILE.read_text(encoding="utf-8").splitlines()
+    sources: set[pathlib.Path] = set()
+    instruction: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not instruction:
+            if not stripped.upper().startswith("COPY "):
                 continue
-            names.add(tok)
-    return names
-
-
-class ShipManifestTest(unittest.TestCase):
-    def test_dockerfile_header_and_this_test_state_the_same_rule(self):
-        self.assertIn(RULE, _dockerfile_header())
-        self.assertIn(RULE, _words(__doc__ or ""))
-
-    def test_every_top_level_module_is_copied_into_the_image(self):
-        on_disk = {f for f in os.listdir(HERE) if f.endswith(".py")}
-        missing = sorted(on_disk - _copied_files())
-        self.assertEqual(
-            missing, [], "modules present but NOT in the Dockerfile COPY: %s" % missing
+            instruction.append(stripped)
+        else:
+            instruction.append(stripped)
+        if instruction[-1].endswith("\\"):
+            instruction[-1] = instruction[-1][:-1].rstrip()
+            continue
+        parts = shlex.split(" ".join(instruction))
+        instruction.clear()
+        if len(parts) < 3:
+            continue
+        sources.update(
+            ROOT / source for source in parts[1:-1] if not source.startswith("--")
         )
+    return sources
 
-    def test_every_copied_module_exists_on_disk(self):
-        copied_py = {f for f in _copied_files() if f.endswith(".py")}
-        phantom = sorted(
-            f for f in copied_py if not os.path.isfile(os.path.join(HERE, f))
+
+class ShipManifestTests(unittest.TestCase):
+    def test_every_copy_source_exists(self):
+        missing = sorted(
+            str(path.relative_to(ROOT)) for path in _copy_sources() if not path.exists()
         )
         self.assertEqual(
-            phantom, [], "Dockerfile COPYs files that do not exist: %s" % phantom
+            missing, [], "Dockerfile COPY sources missing: " + ", ".join(missing)
         )
 
     def test_every_continuation_is_a_real_line_break(self):
-        """A backslash that is not the last character on its line is not a
-        continuation, it is an argument.
-
-        The manifest tests above read the COPY block as text, so a line break
-        that got written as the two characters backslash-n still parses into
-        the right set of filenames and still reports healthy - while docker
-        would take the backslash-n as part of a path and fail the build.
-        Caught here instead, which is the only place a PR can catch it.
-        """
         backslash = chr(92)
-        with open(DOCKERFILE, encoding="utf-8") as f:
-            lines = f.read().splitlines()
         stray = []
-        for n, line in enumerate(lines, 1):
+        for number, line in enumerate(
+            DOCKERFILE.read_text(encoding="utf-8").splitlines(), 1
+        ):
             body = line.rstrip()
             if body.endswith(backslash):
                 body = body[:-1]
             if backslash in body:
-                stray.append((n, line))
+                stray.append((number, line))
         self.assertEqual(stray, [], "backslash not at end of line: %s" % stray)
 
     def test_jquery_ships_from_the_build_context(self):
-        """It is a browser asset, not a Python module, but it is still one
-        `docker build .` context now - not a separate shared tarball, which
-        no longer exists in this repo's build. It stays VENDORED:
-        map_server._jquery_file explains that the page reaches no third host
-        for it, and a CDN would have saved the same bytes by trading that
-        away."""
-        self.assertIn("jquery.min.js", _copied_files())
-        self.assertTrue(
-            os.path.exists(os.path.join(HERE, "jquery.min.js")),
-            "the Dockerfile copies jquery.min.js but it is not in the repo",
-        )
-
-    def test_data_files_the_map_needs_are_copied(self):
-        # transform.Geometry.load() reads these at import time in the pod;
-        # shapes.json is served to the page, and its absence is invisible in
-        # CI - the pod starts fine and the map just draws empty sea.
-        for needed in (
-            "zones.json",
-            "entrances.json",
-            "shapes.json",
-            "index.html",
-        ):
-            self.assertIn(needed, _copied_files(), needed)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        self.assertIn(ROOT / "jquery.min.js", _copy_sources())

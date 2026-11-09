@@ -75,6 +75,9 @@ import pathlib
 import struct
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from world_data import DATA_ROOT
+
 # 3.3.5a Spell.dbc field offsets. `spell_focus_from_dbc.py` documents F_NAME,
 # F_REAGENT and F_REQUIRES_SPELL_FOCUS and this file re-derives nothing: the
 # same three numbers appear here so the two tools' anchors can be compared.
@@ -304,7 +307,7 @@ def main(argv):
     out = (
         where.parent / "craftbook.json"
         if len(argv) > 2
-        else pathlib.Path(__file__).resolve().parents[1] / "craftbook.json"
+        else DATA_ROOT / "craftbook.json"
     )
     out.write_text(
         json.dumps(book, sort_keys=True, separators=(",", ":")), encoding="utf-8"
