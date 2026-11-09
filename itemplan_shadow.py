@@ -48,6 +48,7 @@ log = logging.getLogger("wow-overseer.itemplan")
 
 ENV_SWITCH = "ITEMPLAN_SHADOW"
 GIVE_ENV_SWITCH = "ITEMPLAN_GIVE"
+AUCTION_ENV_SWITCH = "ITEMPLAN_AUCTION"
 PREFIX = "itemplan:"
 # Seconds between full detail for a member whose plan has not changed.
 REFRESH_SECONDS = 30 * 60
@@ -104,6 +105,13 @@ def give_enabled(environ=None) -> bool:
     """On only when ITEMPLAN_GIVE says so; independent of shadow logging."""
     env = os.environ if environ is None else environ
     raw = str(env.get(GIVE_ENV_SWITCH, "") or "").strip().lower()
+    return raw in ("on", "1", "true", "yes")
+
+
+def auction_enabled(environ=None) -> bool:
+    """On only when ITEMPLAN_AUCTION says so; independent of shadow logging."""
+    env = os.environ if environ is None else environ
+    raw = str(env.get(AUCTION_ENV_SWITCH, "") or "").strip().lower()
     return raw in ("on", "1", "true", "yes")
 
 

@@ -13565,6 +13565,13 @@ class Bridge(discord.Client):
         await globals().get(
             "_run_itemplan_give", skip_itemplan_give
         )(itemplan_give, names, leader, rows, free_slots, gear_rows, worn)
+        itemplan_auction = getattr(self, "_itemplan_auction", None)
+        async def skip_itemplan_auction(*args):
+            return None
+
+        await globals().get(
+            "_run_itemplan_auction", skip_itemplan_auction
+        )(itemplan_auction, names, leader, rows, free_slots, gear_rows, worn)
 
         # A CAMPAIGN WITHHELD FOR BAG SPACE STILL SELLS (#225); see
         # `_vendor_pass_mode`.
@@ -14795,6 +14802,63 @@ class Bridge(discord.Client):
             ))
         if gifts:
             await self._write_guild_gifts(gifts)
+
+    async def _itemplan_auction(self, names: list, family: str, rows: list,
+                                free_slots: dict, gear_rows=(), worn_rows=()) -> None:
+        """List only planned AUCTION rows when ITEMPLAN_AUCTION is enabled."""
+        if not itemplan_shadow.auction_enabled():
+            return
+        extras = await asyncio.to_thread(
+            _itemplan_reads, names, family, rows, gear_rows, worn_rows)
+        report = await asyncio.to_thread(
+            itemplan_shadow.shadow, names, family, rows, free_slots,
+            gear_rows=gear_rows, worn_rows=worn_rows, extras=extras)
+        if report is None:
+            return
+        stacks = itemplan_shadow.build_stacks(
+            rows, gear_rows, extras.templates, extras.instance_soulbound)
+        by_key = {stack.key: stack for stack in stacks}
+        row_by_key = {}
+        indexes = {}
+        for source in rows:
+            holder = str(source["holder"])
+            index = indexes.get(holder, 0)
+            indexes[holder] = index + 1
+            row_by_key[(holder, 1, int(source["entry"]), index)] = source
+        candidates = []
+        for decision in report.plan.decisions:
+            stack = by_key.get(decision.key)
+            source = row_by_key.get(decision.key)
+            quote = (extras.market or {}).get(decision.entry)
+            if (decision.route != itemplan.AUCTION or stack is None
+                    or source is None or not stack.tradable or not quote):
+                continue
+            candidates.append({
+                "holder": decision.holder,
+                "item_guid": int(source["item_guid"]),
+                "entry": decision.entry,
+                "label": decision.name,
+                "quality": stack.quality,
+                "binding": "none",
+                "quest_item": False,
+                "sell_price": stack.sell,
+                "market_price": int(quote[0]),
+                "count": decision.count,
+            })
+        holder_house = await self._auction_holder_houses(candidates, names)
+        candidates = [candidate for candidate in candidates
+                      if candidate["holder"] in holder_house]
+        sales = auction.plan_sales(candidates)
+        if not sales:
+            return
+        seen = await asyncio.to_thread(_recent_auction_keys, GIVE_RETRY_MINUTES)
+        for sale in sales:
+            key = (sale.candidate.holder, sale.command)
+            if key in seen:
+                continue
+            if await asyncio.to_thread(_insert_auction, *key):
+                log.info("itemplan: auction %s - %s", sale.candidate.holder,
+                         sale.candidate.label)
 
     async def _clearance_plan(self, names: list, leader: str,
                               auction_open: bool = False) -> tuple:
@@ -29300,6 +29364,13 @@ async def _run_itemplan_give(itemplan_give, names, family, rows, free_slots,
     """Call the plan executor when this economy pass exposes it."""
     if itemplan_give is not None:
         await itemplan_give(names, family, rows, free_slots, gear_rows, worn_rows)
+
+
+async def _run_itemplan_auction(itemplan_auction, names, family, rows,
+                               free_slots, gear_rows, worn_rows) -> None:
+    """Call the auction route executor when this economy pass exposes it."""
+    if itemplan_auction is not None:
+        await itemplan_auction(names, family, rows, free_slots, gear_rows, worn_rows)
 
 
 def _shadow_itemplan(*args, **facts) -> None:
