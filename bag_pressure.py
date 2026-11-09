@@ -983,6 +983,34 @@ def _position_map(position: dict | None) -> int | None:
         return None
 
 
+# How far from the leader, on the leader's own map, a member may stand and still
+# be left to the family's trip. townerrand.WALK_YARDS is the same number: it is
+# how far the errand will send a family on foot, so a member further than that
+# is not reached by the trip it is waiting for. A member thousands of yards off
+# on the same map held its whole family out of its next dungeon run for most of
+# a three hour gap (wow-overseer#2117); any distance between a walk and such a
+# spread catches it, and a member inside a walk was never the problem.
+SAME_MAP_FAR_YARDS = 600.0
+
+
+def stranded_distance(leader_pos: dict | None, member_pos: dict | None) -> float | None:
+    """Planar yards between two settled rows on one map, else None.
+
+    None means the two cannot be compared (a different map, a missing row, or
+    a coordinate that is not a number); the caller never guesses a distance.
+    """
+    if not leader_pos or not member_pos:
+        return None
+    try:
+        if int(leader_pos.get("map_id")) != int(member_pos.get("map_id")):
+            return None
+        dx = float(leader_pos.get("pos_x")) - float(member_pos.get("pos_x"))
+        dy = float(leader_pos.get("pos_y")) - float(member_pos.get("pos_y"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return (dx * dx + dy * dy) ** 0.5
+
+
 def _stranded_vendor_candidate(
     name: str,
     leader: str,
@@ -991,14 +1019,25 @@ def _stranded_vendor_candidate(
     free_slots: dict,
     resume: int,
 ) -> bool:
-    """Whether one member is away from the leader and short on bag room."""
+    """Whether one member is away from the leader and short on bag room.
+
+    Away means another map, or the leader's map but further than
+    SAME_MAP_FAR_YARDS (wow-overseer#2117): the family's town trip sells only
+    for the members who stand at the vendor with the leader.
+    """
     if name == leader:
         return False
     free = (free_slots or {}).get(name)
     if type(free) is not int or not 0 <= free < resume:
         return False
-    member_map = _position_map((positions or {}).get(name))
-    return member_map is not None and member_map != leader_map
+    member_pos = (positions or {}).get(name)
+    member_map = _position_map(member_pos)
+    if member_map is None:
+        return False
+    if member_map != leader_map:
+        return True
+    far = stranded_distance((positions or {}).get(leader), member_pos)
+    return far is not None and far > SAME_MAP_FAR_YARDS
 
 
 def stranded_vendor_aims(
