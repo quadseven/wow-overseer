@@ -27,18 +27,28 @@ TABS = [
 
 
 def item(tab, slot, entry, name, count=1):
-    return {"tab_id": tab, "slot_id": slot, "entry": entry, "count": count,
-            "item_name": name, "quality": 4, "displayid": 1,
-            "item_class": 4, "item_subclass": 1}
+    return {
+        "tab_id": tab,
+        "slot_id": slot,
+        "entry": entry,
+        "count": count,
+        "item_name": name,
+        "quality": 4,
+        "displayid": 1,
+        "item_class": 4,
+        "item_subclass": 1,
+    }
 
 
 class Ctx:
     def __init__(self, found=(GUILD_ROW,), tabs=TABS, items=()):
-        self.read = realmread.Memory({
-            guildbank.GUILD_SQL: list(found),
-            guildbank.TABS_SQL: list(tabs),
-            guildbank.ITEMS_SQL: list(items),
-        })
+        self.read = realmread.Memory(
+            {
+                guildbank.GUILD_SQL: list(found),
+                guildbank.TABS_SQL: list(tabs),
+                guildbank.ITEMS_SQL: list(items),
+            }
+        )
         self.server = types.SimpleNamespace(CLIENT_ICONS={1: "icon"})
         self.families = FAMILIES
 
@@ -52,8 +62,9 @@ class TheGuildBank(unittest.TestCase):
         self.assertIn("/api/v2/guildbank", apiv2.ROUTES)
 
     def test_items_per_tab_with_counts_and_names(self):
-        status, out = get(Ctx(items=[item(0, 3, 100, "Sword", 1),
-                                     item(1, 0, 200, "Linen Cloth", 20)]))
+        status, out = get(
+            Ctx(items=[item(0, 3, 100, "Sword", 1), item(1, 0, 200, "Linen Cloth", 20)])
+        )
         self.assertEqual(status, 200)
         self.assertEqual(out["guild"], "Cave")
         self.assertEqual([t["tab"] for t in out["tabs"]], [0, 1])
@@ -82,8 +93,9 @@ class TheGuildBank(unittest.TestCase):
         self.assertFalse(keys & {"guid", "item_guid", "owner", "creator"})
 
     def test_the_response_is_capped(self):
-        rows = [item(0, i % 98, 1000 + i, "I%d" % i)
-                for i in range(guildbank.MAX_ITEMS + 1)]
+        rows = [
+            item(0, i % 98, 1000 + i, "I%d" % i) for i in range(guildbank.MAX_ITEMS + 1)
+        ]
         _, out = get(Ctx(items=rows))
         self.assertTrue(out["truncated"])
         self.assertEqual(out["item_total"], guildbank.MAX_ITEMS)
