@@ -977,6 +977,37 @@ class Broken(unittest.TestCase):
         reason = next(reason for qid, reason in self.found if qid == 8)
         self.assertIn("questers cannot buy items from vendors", reason)
 
+    def test_look_to_the_stars_ledger_explains_bronze_tube_source_limit(self):
+        # World rows require one Bronze Tube (item 4371). Its listed creature
+        # and vendor sources are not objective fields in Duskwood, and questers
+        # do not purchase quest items from vendors.
+        look_to_the_stars = quest(174, 10, 25, title="Look To The Stars")
+        look_to_the_stars.update(item1=4371, item_count1=1)
+        cat = world(
+            extra_quests=[look_to_the_stars],
+            extra_givers=[
+                giver(174, "start", 1740, 174, 0, 0),
+                giver(174, "end", 1740, 174, 0, 0),
+            ],
+        )
+        member = mirra(
+            level=25,
+            zone_id=10,
+            quest_log={174: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({2, 3}),
+            quest_progress={174: 0},
+        )
+        clock = questers.Clock()
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        for minute in range(10, 121, 10):
+            p = questers.plan(cat, member, clock, minute * 60.0)
+
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 174)
+        self.assertEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("cannot buy items from vendors", p.broken[0].reason)
+
     def test_quest_64_the_forgotten_heirloom_has_specific_stall_reason(self):
         # Quest 64 "The Forgotten Heirloom" in Westfall (level 12) requires an
         # item that no spawned creature drops. The quest has items but no
