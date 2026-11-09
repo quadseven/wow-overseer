@@ -199,8 +199,10 @@ class TheBridgeSendsTheLeader(unittest.TestCase):
             "auction.HOUSE_TRIP_MAX_YARDS)",
             src,
         )
+        # One entry, in the single _CLAIMS long_leases map (#1950); the
+        # separate per-cohort slot dict that repeated it is gone.
         self.assertEqual(
-            2,
+            1,
             src.count("GEAR_HOUSE_CLAIMANT: TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS,"),
         )
 
