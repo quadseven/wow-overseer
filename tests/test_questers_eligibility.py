@@ -463,7 +463,7 @@ class Quest120MessengerToStormwind(unittest.TestCase):
 
 
 class Quest131DeliveringDaffodils(unittest.TestCase):
-    """Quest 131 "Delivering Daffodils" is broken - questers are not eligible for it."""
+    """Quest 131 is checked against the eligibility rows the catalogue reads."""
 
     def test_quest_131_is_defined(self):
         """Quest 131 "Delivering Daffodils" should be defined in the catalogue."""
@@ -507,10 +507,29 @@ class Quest131DeliveringDaffodils(unittest.TestCase):
         )
         # Bromli is a Dwarf (race_id=3), which is in ALLIANCE_MASK
         bromli = member("Bromli", DWARF, 15, REDRIDGE, class_id=2)
-        
+
         # Quest 131 should be in reach for Bromli
         reachable_quests = questers.in_reach(cat, bromli, REDRIDGE)
         self.assertIn(131, reachable_quests, "Quest 131 should be in reach for Bromli")
+
+    def test_quest_131_waits_until_its_minimum_level(self):
+        cat = catalogue(
+            [
+                row(
+                    131,
+                    "Delivering Daffodils",
+                    REDRIDGE,
+                    15,
+                    min_level=15,
+                    races=ALLIANCE,
+                )
+            ]
+        )
+        under_level = member("Bromli", DWARF, 14, REDRIDGE)
+        at_level = member("Bromli", DWARF, 15, REDRIDGE)
+
+        self.assertNotIn(131, questers.in_reach(cat, under_level, REDRIDGE))
+        self.assertIn(131, questers.in_reach(cat, at_level, REDRIDGE))
 
     def test_quest_131_is_eligible_for_questers_in_redridge_mountains(self):
         """Quest 131 should be available to questers standing in Redridge Mountains."""
@@ -527,18 +546,21 @@ class Quest131DeliveringDaffodils(unittest.TestCase):
                 )
             ]
         )
-        
+
         # Various questers standing in Redridge Mountains should be able to take quest 131
         questers_redridge = [
             member("Bromli", DWARF, 15, REDRIDGE, class_id=2),
             member("Mirra", HUMAN, 15, REDRIDGE, class_id=5),
             member("Velo", NIGHT_ELF, 15, REDRIDGE, class_id=4),
         ]
-        
+
         for quester in questers_redridge:
             reachable_quests = questers.in_reach(cat, quester, REDRIDGE)
-            self.assertIn(131, reachable_quests, 
-                         f"Quest 131 should be in reach for {quester.name} in Redridge Mountains")
+            self.assertIn(
+                131,
+                reachable_quests,
+                f"Quest 131 should be in reach for {quester.name} in Redridge Mountains",
+            )
 
 
 if __name__ == "__main__":
