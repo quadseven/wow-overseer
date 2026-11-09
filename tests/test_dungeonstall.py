@@ -871,6 +871,19 @@ class TheBridgeOrder(unittest.TestCase):
         self.assertIn("_silent_seconds", helper)
         self.assertIn("dungeonstall.silent_run", helper)
 
+    def test_a_boss_credit_written_again_is_not_progress(self):
+        # wow-overseer#2147: a party sealed in a finished dungeon loops
+        # EXIT -> IDLE -> CLEARING, and every pass writes the same boss row
+        # ("7 encounters credited, 7 in all (mask 0 -> 191)") again. Counting
+        # the newest boss row reset the clock every ten minutes for twelve
+        # hours. Only the first sighting of a credit on a run is progress.
+        read = self.silence_read()
+        boss = read[read.index("re.kind = 'boss'") :]
+        self.assertIn("NOT EXISTS", boss)
+        self.assertIn("p.run_id = re.run_id", boss)
+        self.assertIn("p.detail = re.detail", boss)
+        self.assertIn("p.id < re.id", boss)
+
     def test_the_silence_clock_starts_at_the_head_not_at_a_run(self):
         # The stuck read's clock runs across runs. A clock restarted by each
         # run opening never reaches two hours on a campaign of short runs,
