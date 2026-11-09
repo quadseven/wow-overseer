@@ -153,7 +153,7 @@ class Report:
     lines: tuple  # every plan line
     disagreements: tuple  # every disagree line
     missing: tuple  # what the plan ran without
-    detail: tuple = ()  # ((member, plan line, disagree lines, signature), ...)
+    detail: tuple = ()  # ((member, plan line, detail lines, signature), ...)
     no_room: int = 0  # stacks no destination had room for
 
 
@@ -428,6 +428,57 @@ def _disagreements(plan_, rows_by_key, opinions, keep_names) -> list:
     return out
 
 
+def _ratio_text(numerator: int, denominator: int) -> str:
+    """Format a price multiple to two decimals without floating-point drift."""
+    hundredths = numerator * 100 // denominator
+    return "%d.%02dx" % (hundredths // 100, hundredths % 100)
+
+
+def _price_evidence(plan_, stacks, market) -> list:
+    """Explain auction decisions and near-threshold quotes in shadow output."""
+    decisions = {decision.key: decision for decision in plan_.decisions}
+    out = []
+    for stack in stacks:
+        decision = decisions.get(stack.key)
+        quote = market.get(stack.entry)
+        if decision is None or not quote or stack.sell <= 0:
+            continue
+        price = _int(quote[0])
+        if price <= 0:
+            continue
+        # Keep the evidence window useful: show every auction decision and
+        # every non-auction quote at or above 3x vendor. Other priced rows add
+        # noise without proving the threshold or why a candidate was excluded.
+        if decision.route != itemplan.AUCTION and price < stack.sell * 3:
+            continue
+        net = price * (100 - itemplan.AUCTION_CUT_PERCENT) // 100
+        out.append(
+            (
+                stack.holder,
+                "%s price evidence %s: %s x%d, quote %d (%s vendor), "
+                "net %d (%s vendor), vendor %d; auction requires net >= %dx "
+                "vendor and gain >= %d; route %s (%s, %s)"
+                % (
+                    PREFIX,
+                    stack.holder,
+                    stack.name,
+                    stack.count,
+                    price,
+                    _ratio_text(price, stack.sell),
+                    net,
+                    _ratio_text(net, stack.sell),
+                    stack.sell,
+                    itemplan.AUCTION_BEATS_VENDOR_BY,
+                    itemplan.AUCTION_MIN_GAIN,
+                    decision.route,
+                    decision.reason,
+                    decision.rule,
+                ),
+            )
+        )
+    return out
+
+
 def shadow(
     names,
     family,
@@ -470,9 +521,12 @@ def shadow(
     opinions = _opinions(rows, sales, keep_names, bank_keeps, clear)
     lines = _plan_lines(plan_, members, stacks)
     pairs = _disagreements(plan_, rows_by_key, opinions, keep_names)
+    price_evidence = _price_evidence(plan_, stacks, extras.market or {})
     detail = []
     for m, line in zip(members, lines, strict=True):
-        mine = tuple(text for holder, text in pairs if holder == m.name)
+        mine = tuple(text for holder, text in pairs if holder == m.name) + tuple(
+            text for holder, text in price_evidence if holder == m.name
+        )
         shape = tuple(
             (d.key, d.route, d.target, d.tab, d.reason) for d in plan_.by_holder(m.name)
         )
