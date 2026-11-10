@@ -213,8 +213,8 @@
 /* ---- the stage: on a phone the watched picture is pinned to the top ----
    The stage element (#stage) is drawn once by the shell, outside <main>, so a
    redraw never removes its video. Full width, 16:9, opaque, above the page and
-   below full screen (z 45) and the panels. The top bar scrolls away on Now so
-   the stage owns the top edge. Nothing here moves, so there is no motion to
+   below full screen (z 45) and the panels. It is the first thing in the column,
+   ahead of the top bar, so the picture owns the top edge from load. Nothing here moves, so there is no motion to
    reduce. */
 .stage { display: none; }
 .stage-switch[hidden] { display: none; }
@@ -243,8 +243,10 @@
   @media (orientation: landscape) {
     .stage .stage-slot { aspect-ratio: auto; height: min(56.25vw, 50vh); height: min(56.25vw, 50dvh); }
   }
-  /* The top bar scrolls away on Now, and the family units sit as cards. */
-  .app[data-view="now"] .topbar { position: static; }
+  /* Under a shown stage the top bar scrolls away (the stage carries the
+     safe-area inset); with no stage it stays pinned as on every other view.
+     The family units sit as cards. */
+  .stage:not([hidden]) + .topbar { position: static; padding-top: 8px; }
   .st-cap-top, .st-cap-acts { background: var(--color-surface); border-radius: 12px; }
 }
 

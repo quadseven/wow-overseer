@@ -401,5 +401,22 @@ class TheNowMarkup(unittest.TestCase):
         self.assertEqual(render(True, saved="Mok").count("data-hear="), 1)
 
 
+class TheStageOwnsTheTopEdge(unittest.TestCase):
+    """On a phone the picture is the first thing on the page at load: the
+    stage precedes the top bar in the shell, and the top bar scrolls away
+    beneath it."""
+
+    def test_the_shell_draws_the_stage_before_the_top_bar_and_the_page(self):
+        shell = (APP / "shell.js").read_text(encoding="utf-8")
+        stage = shell.index('<section class="stage" id="stage"')
+        self.assertLess(stage, shell.index('<header class="topbar">'))
+        self.assertLess(shell.index('<header class="topbar">'), shell.index("<main "))
+
+    def test_the_top_bar_scrolls_away_only_under_a_shown_stage(self):
+        css = (APP / "views" / "now.css").read_text(encoding="utf-8")
+        self.assertIn(".stage:not([hidden]) + .topbar { position: static;", css)
+        self.assertNotIn('.app[data-view="now"] .topbar', css)
+
+
 if __name__ == "__main__":
     unittest.main()
