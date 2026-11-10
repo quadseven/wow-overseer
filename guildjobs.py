@@ -5081,7 +5081,12 @@ def class_walk_backoff(name, recent) -> int:
     class quest walk for a far walk wall (classquest.BACKOFF_MINUTES), 0 when
     the newest class row was anything else, or the wall has had its time."""
     rows = sorted(
-        (r for r in recent or () if r.name == name and r.action == classquest.ACTION),
+        (
+            r
+            for r in recent or ()
+            if r.name == name
+            and r.action in (classquest.ACTION, classquest.CROSS_ACTION)
+        ),
         key=lambda r: int(r.age_minutes),
     )
     if not rows:
@@ -6368,6 +6373,10 @@ def _class_move_step(
     if move.kind == classquest.ABANDON:
         return _abandon_step(m, move, recent, note)
     spot = _class_spot(move)
+    boat = class_boat_step(m, move, spot, recent, hunts, now)
+    if boat is not None:
+        step, said, why = boat
+        return step, said, _join(note, why)
     # A pack tried without progress is left, so a member is "at" the next one
     # only within a pack's width, not the whole field's.
     tried = class_avoid(m, book, recent, hunts, now)[0].get(move.quest)
@@ -6411,6 +6420,68 @@ def _class_move_step(
         goal=spot.name,
     )
     return step, move.said, note
+
+
+# A SPAWN ACROSS THE ISLAND'S SHORE IS REACHED BY THE BOAT (#2182). Teldrassil
+# and the mainland are one map, so a member on the island whose class quest
+# spot is on the mainland was planned the walk the module refuses as across the
+# water, and asked again each class cool-down. The module's own island leg is a
+# same-map ride to the Auberdine stop (classquest.ISLAND_BOAT_STOP); the member
+# is planned that ride, on the crossing clock and walls it shares with every
+# other crossing. A boat the module refused for good holds the walk, named, for
+# classquest.CROSS_WALL_MINUTES. A member on the mainland is walked as before.
+ISLAND_MAP = 1
+
+
+def across_the_water(m, spot) -> bool:
+    """Whether the member stands on the island and the spot on the mainland of
+    the same map (weaponskill.ground_of); False when a place cannot be read."""
+    if m.map_id is None or int(m.map_id) != ISLAND_MAP:
+        return False
+    if int(spot.map_id) != ISLAND_MAP:
+        return False
+    here = weaponskill.ground_of(m.map_id, m.x, m.y)
+    there = weaponskill.ground_of(spot.map_id, spot.x, spot.y)
+    return here != weaponskill.MAINLAND and there == weaponskill.MAINLAND
+
+
+def class_boat_step(m, move, spot, recent, hunts=None, now=0.0):
+    """(step or None, what it does, note) for a class move whose spot is across
+    the island's shore from the member, None when it is not."""
+    if not across_the_water(m, spot):
+        return None
+    if not m.alive:
+        return None, move.said, _held_note(m, 0)
+    wall = class_walls(m.name, recent).get(ISLAND_MAP)
+    if wall:
+        if hunts:
+            hunts.pause(m.name, move.quest, now)
+        return (
+            None,
+            move.said,
+            "%s: across the water; no boat step available (the module refused it: %s)"
+            % (m.name, wall),
+        )
+    if class_crossing_cooling(m.name, recent):
+        if hunts:
+            hunts.pause(m.name, move.quest, now)
+        return None, move.said, ""
+    step = guildcorps.Step(
+        m.name,
+        classquest.ACTION,
+        int(move.quest),
+        move.said,
+        rows=(
+            guildcorps.Row(
+                "job",
+                classquest.ride_command(ISLAND_MAP, *classquest.ISLAND_BOAT_STOP),
+                "",
+                source_for(classquest.CROSS_ACTION, m.name),
+            ),
+        ),
+        goal="the Rut'theran boat",
+    )
+    return step, move.said, ""
 
 
 def _class_held(m, move, spot, cap, recent, hunts, now, far, book=None):
