@@ -4295,14 +4295,15 @@ def sweep_quiet_streams(clock=time.time) -> list:
     return expired
 
 
-def _sweep_until(stop: threading.Event, every: float, sweep) -> None:
+def _sweep_until(stop: threading.Event, every: float, sweep,
+                 failed: str = "stream sweep failed") -> None:
     while not stop.wait(every):
         try:
             sweep()
         except Exception:
             # Never fatal: the next tick tries again, and a database that is
             # down is already a 503 everywhere else.
-            log.exception("stream sweep failed")
+            log.exception(failed)
 
 
 def start_stream_sweeper(every: float = STREAM_SWEEP_SECONDS, sweep=None,
@@ -4338,9 +4339,33 @@ _CLIP_LOOT_SQL = (
     "LEFT JOIN guild_member gm ON gm.guid = c.guid "
     "LEFT JOIN guild g ON g.guildid = gm.guildid "
     "WHERE e.kind IN ('item_loot', 'item_equip') "
-    "AND e.first_seen >= NOW() - INTERVAL %d MINUTE "
+    "AND e.first_seen >= NOW() - INTERVAL %s MINUTE "
     "ORDER BY e.first_seen ASC LIMIT 2000"
-) % _CLIP_LOOT_MINUTES
+)
+
+# THE NARROW CANDIDATE READS. What might earn a clip right now is read from the
+# recent window only, never from the Chronicle's history: that fetch keeps the
+# OLDEST 20000 rows, so once history grows it would miss new events. History is
+# read afterwards, and only to decide whether a candidate is a first.
+_CLIP_EVENT_SQL = (
+    "SELECT id, character_name, kind, subject_id, subject_name, level, first_seen "
+    "FROM overseer_event "
+    "WHERE (kind = 'boss_kill' OR (kind = 'level_up' AND level = 60)) "
+    "AND character_name IN ({holes}) "
+    "AND first_seen >= NOW() - INTERVAL %s MINUTE "
+    "ORDER BY first_seen ASC LIMIT 500"
+)
+_CLIP_RUN_SQL = (
+    "SELECT id, leader_name, map_id, state, started_at, "
+    "last_progress_at, ended_at, ended_reason "
+    "FROM overseer_dungeon_run WHERE leader_name IN ({holes}) "
+    "AND ended_at >= NOW() - INTERVAL %s MINUTE "
+    "ORDER BY ended_at DESC LIMIT 50"
+)
+# Ledger keys worth checking for a repeat: an event is skipped once its window
+# starts past the agent's buffer, so older keys cannot matter (INSERT IGNORE
+# still guards the rest).
+_CLIP_KEY_MINUTES = 30
 
 
 def _cleared_run_cards(f: dict) -> list:
@@ -4367,20 +4392,46 @@ def _clip_path(name: str) -> str:
     return family.broadcast_path(name) if family.is_streamed(name) else ""
 
 
-def _read_clip_inputs() -> dict:
-    """Everything clipledger.plan_requests reads, from the realm."""
+def _clip_who() -> tuple:
+    """(roster names across the families, names of the family guilds)."""
     roster = [n for names in FAMILIES.families().values() for n in names]
-    f = _fetch_achievements(roster)
+    return roster, [g["name"] for g in FAMILIES.guilds()]
+
+
+def _read_clip_candidates(roster: list) -> dict:
+    """Recent loot and equips, boss kills, level 60s and ended runs: one narrow
+    read each, bounded to the recent window."""
+    holes = ", ".join(["%s"] * len(roster))
+    names = tuple(roster)
     with realmread.Session(_connect) as rd:
-        loot_rows = rd.rows(_CLIP_LOOT_SQL, what="clip loot")
+        loot_rows = rd.rows(_CLIP_LOOT_SQL, (_CLIP_LOOT_MINUTES,), what="clip loot")
+        event_rows = rd.rows(
+            _CLIP_EVENT_SQL.format(holes=holes),  # noqa: S608 - placeholders from a COUNT, values bound
+            (*names, _CLIP_LOOT_MINUTES),
+            what="clip events",
+        )
+        try:
+            run_rows = rd.must(
+                _CLIP_RUN_SQL.format(holes=holes),  # noqa: S608 - placeholders from a COUNT, values bound
+                (*names, _CLIP_LOOT_MINUTES),
+            )
+        except realmread.Gap as gap:
+            if gap.code != realmread.MISSING_TABLE:
+                raise
+            run_rows = []
+        now = rd.db_now()
     return {
         "loot_rows": loot_rows,
-        "event_rows": f["event_rows"],
-        "cleared_runs": _cleared_run_cards(f),
-        "family_guilds": [g["name"] for g in FAMILIES.guilds()],
-        "roster": roster,
-        "now": f["now"],
+        "event_rows": event_rows,
+        "run_rows": run_rows,
+        "now": now,
     }
+
+
+def _read_clip_history(roster: list) -> dict:
+    """The Chronicle's history, for deciding whether a candidate is a first."""
+    f = _fetch_achievements(roster)
+    return {"event_rows": f["event_rows"], "cleared_runs": _cleared_run_cards(f)}
 
 
 def _ensure_clip_store() -> None:
@@ -4395,32 +4446,58 @@ _CLIP_INSERT = (
     "  window_end, state, detail)"
     " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
 )
+_CLIP_EXPIRE = (
+    "UPDATE overseer_clip SET state = 'expired' WHERE id = %s AND state = 'ready'"
+)
 
 
 def scan_clips() -> dict:
     """One pass: write a row for each new trigger, then mark retention.
 
     Safe to run any number of times and across restarts: event_key is unique
-    and INSERT IGNORE drops a repeat. Nothing is ever deleted here.
+    and INSERT IGNORE drops a repeat. Nothing is ever deleted here. The table
+    is created here too, so a database that was down at start-up costs one
+    failed tick, not a scanner that fails until the process restarts.
     """
-    sources = _read_clip_inputs()
+    _ensure_clip_store()
+    roster, guilds = _clip_who()
+    found = _read_clip_candidates(roster)
+    events = list(found["event_rows"])
+    cleared = []
+    # History is needed only to decide a boss or dungeon first.
+    if found["run_rows"] or any(e["kind"] == "boss_kill" for e in events):
+        history = _read_clip_history(roster)
+        have = {e["id"] for e in history["event_rows"]}
+        events = history["event_rows"] + [e for e in events if e["id"] not in have]
+        cleared = history["cleared_runs"]
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT id, event_key, state, created_at FROM overseer_clip")
-        ledger = list(cur.fetchall())
+        cur.execute(
+            "SELECT event_key FROM overseer_clip"
+            " WHERE created_at >= NOW() - INTERVAL %s MINUTE",
+            (_CLIP_KEY_MINUTES,),
+        )
+        keys = [r["event_key"] for r in cur.fetchall()]
         planned = clipledger.plan_requests(
-            existing_keys=[r["event_key"] for r in ledger],
-            path_of=_clip_path, **sources)
+            loot_rows=found["loot_rows"],
+            event_rows=events,
+            cleared_runs=cleared,
+            family_guilds=guilds,
+            roster=roster,
+            now=found["now"],
+            existing_keys=keys,
+            path_of=_clip_path,
+        )
         for row in planned:
             cur.execute(_CLIP_INSERT, (
                 row["kind"], row["character"], row["stream_path"],
                 row["event_key"], row["event_at"], row["window_start"],
                 row["window_end"], row["state"], row["detail"]))
-        stale = clipledger.expired_ids(ledger, now=sources["now"])
+        cur.execute(
+            "SELECT id, event_key, state, created_at FROM overseer_clip"
+            " WHERE state = 'ready'")
+        stale = clipledger.expired_ids(cur.fetchall(), now=found["now"])
         if stale:
-            marks = ", ".join(["%s"] * len(stale))
-            cur.execute(
-                "UPDATE overseer_clip SET state = 'expired'"  # noqa: S608 - placeholders from a COUNT, values bound
-                " WHERE state = 'ready' AND id IN (%s)" % marks, tuple(stale))
+            cur.executemany(_CLIP_EXPIRE, [(i,) for i in stale])
     return {"written": len(planned), "expired": len(stale)}
 
 
@@ -4429,7 +4506,8 @@ def start_clip_scanner(every: float = CLIP_SCAN_SECONDS, scan=None,
     """Run `scan` (scan_clips) every `every` seconds on a daemon thread."""
     thread = threading.Thread(
         target=_sweep_until,
-        args=(stop or threading.Event(), every, scan or scan_clips),
+        args=(stop or threading.Event(), every, scan or scan_clips,
+              "clip scan failed"),
         name="clip-scan", daemon=True)
     thread.start()
     return thread
@@ -6998,12 +7076,9 @@ def main() -> None:
     # again on the next tick.
     start_stream_sweeper()
 
-    # The clip ledger: a missing table or a failed scan is logged and retried
-    # on the next tick; it never stops the map.
-    try:
-        _ensure_clip_store()
-    except Exception:
-        log.exception("clip ledger unavailable - no clip requests will be written")
+    # The clip ledger. The scan creates its own table on every tick, so a
+    # database that is down now costs a logged failed tick, never a scanner
+    # that stays broken until restart; it never stops the map.
     start_clip_scanner()
 
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
