@@ -7,6 +7,7 @@ const KEYS = {
   theme: "overseer.theme",
   last: "overseer.last",
   visit: "overseer.visit",
+  stage: "overseer.stage",
 };
 
 function read(key) {
@@ -41,3 +42,8 @@ const previous = Number(read(KEYS.visit)) || 0;
 export function previousVisit() { return previous; }
 
 export function stampVisit() { write(KEYS.visit, String(Date.now())); }
+
+// The family on Now's stage on a phone: its key, or "" for no choice yet.
+export function savedStage() { return read(KEYS.stage) || ""; }
+
+export function saveStage(family) { write(KEYS.stage, String(family || "")); }

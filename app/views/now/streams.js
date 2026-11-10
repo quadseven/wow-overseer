@@ -122,6 +122,32 @@ export function connect(name, url) {
   }
 }
 
+// Let a picture go: its connection stops and it reads as off. A tile never
+// made is left alone. The broadcast itself is not this page's to stop.
+export function disconnect(name) {
+  const t = tiles.get(name);
+  if (!t || (!t.started && t.state === "off")) return;
+  t.player.stop();
+  t.started = false;
+  setState(t, "off", "");
+}
+
+// The picture state of `name` ("live", "connecting", "dark", "off").
+export function stateOf(name) {
+  const t = tiles.get(name);
+  return t ? t.state : "off";
+}
+
+// True when a connect() now would retry a picture that has been off a while.
+// A view that skips identical redraws asks, so the retry is not skipped too.
+export function retryDue() {
+  const now = Date.now();
+  for (const t of tiles.values()) {
+    if (t.started && t.state === "off" && now - t.lastAttempt > RETRY_MS) return true;
+  }
+  return false;
+}
+
 // Move every living picture into its slot under `root`.
 export function mount(root) {
   root.querySelectorAll("[data-stream]").forEach((slot) => {
@@ -353,15 +379,40 @@ function doingLine(now) {
 // /api/wall member, `t` its wall tile.
 export function tileHtml(m, t) {
   const name = m.name;
-  const sub = [t && t.standing, t && t.line].filter(Boolean).join(", ");
   return html`<figure class="st" data-class="${m["class"] || ""}">
 <div class="st-slot" data-stream="${name}"></div>
 <figcaption class="st-cap">
-<div class="st-head"><a class="st-name" href="${memberHref(name)}" style="color:${classVar(m["class"])}">${name}</a><span class="st-sub">${sub}</span><span class="st-age" data-frame-age="${name}">no frame</span></div>
-${doingLine(t && t.now)}
-<div class="st-bar"><button type="button" class="st-hear" data-hear="${name}" data-focus="${"hear-" + name}" aria-pressed="false"><i class="ph ph-speaker-slash" aria-hidden="true"></i><span class="st-hear-l">Hear</span></button><span class="st-hear-note dim" data-hear-note="${name}" role="status"></span></div>
-<div class="st-acts" role="group" aria-label="${name + "'s frames"}">${ACTIONS.map(([key, label, icon]) => html`<button type="button" class="st-act" data-panel="${key}" data-name="${name}" data-focus="${"act-" + key + "-" + name}" aria-haspopup="dialog" aria-label="${label + ", " + name}"><i class="${"ph " + icon}" aria-hidden="true"></i><span>${label}</span></button>`)}</div>
+${capHead(m, t)}
+${capHear(name)}
+${capActs(name)}
 </figcaption></figure>`;
+}
+
+function capHead(m, t) {
+  const name = m.name;
+  const sub = [t && t.standing, t && t.line].filter(Boolean).join(", ");
+  return html`<div class="st-head"><a class="st-name" href="${memberHref(name)}" style="color:${classVar(m["class"])}">${name}</a><span class="st-sub">${sub}</span><span class="st-age" data-frame-age="${name}">no frame</span></div>
+${doingLine(t && t.now)}`;
+}
+
+function capHear(name) {
+  return html`<div class="st-bar"><button type="button" class="st-hear" data-hear="${name}" data-focus="${"hear-" + name}" aria-pressed="false"><i class="ph ph-speaker-slash" aria-hidden="true"></i><span class="st-hear-l">Hear</span></button><span class="st-hear-note dim" data-hear-note="${name}" role="status"></span></div>`;
+}
+
+function capActs(name) {
+  return html`<div class="st-acts" role="group" aria-label="${name + "'s frames"}">${ACTIONS.map(([key, label, icon]) => html`<button type="button" class="st-act" data-panel="${key}" data-name="${name}" data-focus="${"act-" + key + "-" + name}" aria-haspopup="dialog" aria-label="${label + ", " + name}"><i class="${"ph " + icon}" aria-hidden="true"></i><span>${label}</span></button>`)}</div>`;
+}
+
+// On a phone the picture is on the stage (stage.js), not in the page. The
+// caption comes in two parts so the agenda card can sit between them: the
+// name, Doing line and Hear (`hear` false for a family not on stage, whose
+// stream is not connected), then the frame buttons.
+export function captionTop(m, t, hear) {
+  return html`<div class="st-cap st-cap-top" data-class="${m["class"] || ""}">${capHead(m, t)}${hear ? capHear(m.name) : ""}</div>`;
+}
+
+export function captionActs(m) {
+  return html`<div class="st-cap st-cap-acts">${capActs(m.name)}</div>`;
 }
 
 // Bind the Hear buttons and the frame buttons under `root`. A frame button

@@ -17,6 +17,9 @@ import { seatChips } from "./_runs.js";
 import { firstFamily, firstGuild, guilds as allGuilds } from "../families.js";
 import { announce, CSS as ACH_CSS } from "./_achievements.js";
 import { reportSection } from "./now/report.js";
+import * as stage from "./now/stage.js";
+import { pickStaged, connectPlan } from "./now/stagechoice.js";
+import { savedStage } from "../store.js";
 
 const READS = ["/api/eye", "/api/v2/roll", "/api/wall", "/api/guildruns", "/api/v2/stuck", "/api/v2/roster", "/api/map", "/shapes.json", "/api/v2/achievements"];
 // The realm strip's two reads are the cheap ones, so they are asked for every
@@ -158,13 +161,47 @@ function showReadAloud(b, on) {
   b.querySelector("span").textContent = ALOUD_WORD[on];
 }
 
+// The families that have a head on the wall, with the stream each plays:
+// [{fam, name, url}] ("" url: not streamed). Empty until the wall is read.
+function stageOptions(ctx) {
+  const w = wallModel(ctx.get("/api/wall"));
+  if (!w.ready) return [];
+  return D.familyKeys().map((fam) => {
+    const m = w.head(fam);
+    if (!m) return null;
+    const t = w.tile(m.name);
+    return { fam, name: m.name, url: (t && t.playable !== false && t.url) || m.broadcast_url || "" };
+  }).filter(Boolean);
+}
+
+// A phone's family unit: no video slot (the picture is on the stage), the
+// name and Doing line, Hear for the staged family only, then the agenda card,
+// the frame buttons and the map.
+function narrowFam(f, i, agendas, w, staged) {
+  const m = w.ready ? w.head(f) : null;
+  const t = m ? w.tile(m.name) : null;
+  const on = f === staged;
+  return html`<div class="fam" data-family="${f}"${on ? raw(" data-staged") : ""}>${m ? streams.captionTop(m, t, on) : ""}${agendaCard(f, agendas[i])}${m ? streams.captionActs(m) : ""}${miniMap(f)}</div>`;
+}
+
+function narrowFamilies(ctx, agendas, aloud) {
+  const w = wallModel(ctx.get("/api/wall"));
+  const staged = pickStaged(stageOptions(ctx), savedStage());
+  const keys = D.familyKeys();
+  const order = keys.map((f, i) => i).sort((a, b) => (keys[b] === staged) - (keys[a] === staged) || a - b);
+  const units = order.map((i) => narrowFam(keys[i], i, agendas, w, staged));
+  const row = html`<div class="sec-row"><h2 class="kicker" id="fams-title">Families, live</h2>${aloud}</div>`;
+  return html`<section class="fams" aria-labelledby="fams-title"><div class="families" data-wall="stacked">${units[0] || ""}${row}${units.slice(1)}</div></section>`;
+}
+
 function familiesSection(ctx, agendas) {
   const wall = ctx.get("/api/wall");
   const w = wallModel(wall);
   const hs = heads(ctx);
   const layout = readLayout();
-  const seg = html`<div class="seg live-seg" role="radiogroup" aria-label="Stream layout">${[["side", "Side by side"], ["stacked", "Stacked"]].map(([k, label]) => html`<button type="button" role="radio" aria-checked="${String(layout === k)}" data-layout="${k}">${label}</button>`)}</div>`;
   const aloud = streams.canReadAloud() ? readAloudButton(streams.readingAloud()) : "";
+  if (stage.isNarrow()) return narrowFamilies(ctx, agendas, aloud);
+  const seg = html`<div class="seg live-seg" role="radiogroup" aria-label="Stream layout">${[["side", "Side by side"], ["stacked", "Stacked"]].map(([k, label]) => html`<button type="button" role="radio" aria-checked="${String(layout === k)}" data-layout="${k}">${label}</button>`)}</div>`;
   const streamed = hs ? hs.filter((m) => (w.tile(m.name) || {}).url || m.broadcast_url).length : null;
   return html`<section class="fams" aria-labelledby="fams-title"><div class="sec-row"><h2 class="kicker" id="fams-title">Families, live</h2><span class="dim small">${streamed === null ? "" : streamed + " of " + hs.length + " streamed"}</span>${aloud}${seg}</div>
 <div class="families" data-wall="${layout}">${D.familyKeys().map((f, i) => html`<div class="fam" data-family="${f}">${agendaCard(f, agendas[i])}<div class="fam-live">${familyLive(f, w, wall)}</div>${miniMap(f)}</div>`)}</div>
@@ -289,18 +326,37 @@ export default {
   render(ctx) {
     const agendas = D.familyKeys().map((f) => ctx.get(D.agendaPath(f)));
     const need = needs(ctx);
-    return html`<header class="page-head now-head"><h1>Now</h1>${realmLine(ctx)}</header>
-${chips(ctx, agendas, need)}
-${familiesSection(ctx, agendas)}
-${fold(ctx, agendas, need)}
+    const head = html`<header class="page-head now-head"><h1>Now</h1>${realmLine(ctx)}</header>
+${chips(ctx, agendas, need)}`;
+    const fams = familiesSection(ctx, agendas);
+    const rest = html`${fold(ctx, agendas, need)}
 ${reportSection(ctx, allGuilds())}`;
+    // On a phone the families lead, under the stage; the realm facts and the
+    // chips follow them.
+    return stage.isNarrow() ? html`${fams}${head}${rest}` : html`${head}${fams}${rest}`;
+  },
+  // What the markup does not say but after() draws from: the map's dots, who
+  // is a ghost, the achievements, and whether a stream is due a retry. A
+  // redraw whose markup and stamp both match the last one is skipped.
+  stamp(ctx) {
+    const map = ctx.get("/api/map");
+    const wall = ctx.get("/api/wall");
+    return JSON.stringify([
+      stage.isNarrow(), savedStage(), streams.retryDue(),
+      map.data && map.data.dots, wall.data && wall.data.members,
+      [...rosterModel(ctx.get("/api/v2/roster")).ghostNames()],
+      ctx.get("/api/v2/achievements").data,
+    ]);
   },
   after(main, ctx) {
-    const w = wallModel(ctx.get("/api/wall"));
-    (heads(ctx) || []).forEach((m) => {
-      const t = w.tile(m.name);
-      streams.connect(m.name, (t && t.playable !== false && t.url) || m.broadcast_url || "");
-    });
+    // A phone connects the staged stream only; the wall connects every head.
+    const options = stageOptions(ctx);
+    const narrow = stage.isNarrow();
+    const staged = pickStaged(options, savedStage());
+    const plan = connectPlan(options, staged, narrow);
+    plan.connect.forEach((c) => streams.connect(c.name, c.url));
+    plan.release.forEach((name) => streams.disconnect(name));
+    stage.sync(options, staged, narrow);
     streams.mount(main);
     streams.bind(main, openPanel);
     pressed();

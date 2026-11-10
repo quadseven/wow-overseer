@@ -23,6 +23,8 @@ empty list means no zone met the routing threshold on the sampled member's map.
 | `search.js` | The search dialog and `addProvider(fn)`. |
 | `tabstrip.js` | A view's tab strip on a phone: a new page scrolls its lit tab into view, and a redraw keeps where the reader scrolled the strip. |
 | `scrollanchor.js` | Keeping the reader's place across a redraw by content, not pixels: the element at the reader's line, named as a child-index path plus offset before the swap and found again after it. Pure functions, tested under node. |
+| `redraw.js` | A redraw that does not fight the reader: `makeHold` waits while a touch is down or the page just scrolled (a fake clock tests it), and `makeGate` skips a body identical to the one on screen. A view may export `stamp(ctx)` for what its `after` draws from outside its markup. A `overseer:redraw` event on `window` redraws at once. |
+| `views/now/stage.js` | Now's stage on a phone: `#stage`, drawn once by the shell outside `<main>`, holds the staged family's picture and a switcher. `stagechoice.js` picks the staged family (saved in `store.js`) and plans which streams connect: the staged one only on a phone. |
 | `shell.js` | The sidebar, phone header and tab bar, data age, `setBadge`, and `setThumb` (the guild switch on phone). |
 | `families.js` | The realm's families and family guilds from `/api/realm`: the routes, the nav and the views draw these, never names written into the app. |
 | `badges.js` | Nav badge providers. |

@@ -88,6 +88,11 @@ export function mount(root) {
     <button type="button" class="btn btn-icon" aria-label="Search" data-action="search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i></button>
     <button type="button" class="btn btn-icon" data-action="theme" data-slot="theme-icon"></button>
   </header>
+  <!-- Now's stage on a phone (views/now/stage.js). Drawn once, outside <main>, so a redraw never touches it. -->
+  <section class="stage" id="stage" aria-label="Live picture" hidden>
+    <div class="st-slot stage-slot" data-stream=""></div>
+    <div class="stage-switch" role="group" aria-label="Family on stage" hidden></div>
+  </section>
   <main class="main" id="main" tabindex="-1"></main>
   <nav data-slot="thumb" aria-label="Switch guild" hidden></nav>
   <span class="sr-only" role="status" data-slot="age-state"></span>
