@@ -154,6 +154,26 @@ class Fillers(unittest.TestCase):
         _, moves, _ = run(seekers)
         self.assertEqual([], queuing(moves))
 
+    def test_a_filler_under_level_40_is_never_used(self):
+        # Its time goes to the class quest and the level walk (#2178).
+        seekers = rows("A", 8, level=35) + rows("F", 5, filler, level=35)
+        aims, moves, _ = run(seekers)
+        self.assertEqual([], queuing(moves))
+        self.assertFalse(any(a.filler for a in aims.values()))
+
+    def test_a_filler_at_level_40_still_closes_the_gap(self):
+        seekers = rows("A", 8, level=45) + rows("F", 5, filler, level=40)
+        aims, moves, _ = run(seekers)
+        self.assertEqual(10, len(queuing(moves)))
+        self.assertEqual(["F00", "F01"], sorted(n for n, a in aims.items() if a.filler))
+
+    def test_a_queued_filler_under_level_40_is_released(self):
+        seekers = rows("A", 8, level=35) + rows("F", 2, filler, level=35)
+        recent = [recent_row(s.name, "bg-queue wsg", 20) for s in seekers]
+        _, moves, _ = run(seekers, recent=recent)
+        self.assertNotIn("F00", moves)
+        self.assertNotIn("F01", moves)
+
     def test_a_filler_never_buys_or_queues_alone(self):
         _, moves, _ = run(rows("F", 12, filler))
         self.assertEqual({}, moves)

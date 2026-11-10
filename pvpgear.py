@@ -900,6 +900,13 @@ def _queued_key(name: str, recent):
     return (key, int(row.age_minutes)) if key in BATTLEGROUNDS else None
 
 
+# A FILLER IS NEVER A MEMBER STILL LEVELLING (#2178). A filler has no upgrade to
+# win, only a seat to lend, and the queue holds it ahead of its level walk and
+# its supply runs. Under this level the seat is on its class quest and level
+# walk instead; a raid seat needs level 40 for its milestone.
+FILLER_MIN_LEVEL = 40
+
+
 def _filler(s, bg: Battleground, cohort: str = "") -> Aim:
     return Aim(s.name, s.guild, s.level, 0, "", 0, 0, bg, "", s.faction, True, cohort)
 
@@ -907,6 +914,8 @@ def _filler(s, bg: Battleground, cohort: str = "") -> Aim:
 def _hold_fillers(by_name: dict, aims: dict, moves: dict, recent, maps) -> None:
     """A filler already in a queue is held there like any member (in place)."""
     for name, s in by_name.items():
+        if int(s.level) < FILLER_MIN_LEVEL:
+            continue
         queued = _queued_key(name, recent) if name not in aims else None
         if queued is not None:
             aims[name] = _filler(s, BATTLEGROUNDS[queued[0]])
@@ -941,7 +950,7 @@ def _fillers_for(bg, bracket, faction, gap, by_name, aims, cooling) -> tuple:
         n for n, s in by_name.items()
         if n not in aims and n not in cooling and s.idle
         and s.faction == faction and bracket_of(s.level) == bracket
-        and int(s.level) >= bg.min_level
+        and int(s.level) >= max(bg.min_level, FILLER_MIN_LEVEL)
     )  # fmt: skip
     return tuple(pool[:gap]) if len(pool) >= gap else ()
 
