@@ -754,10 +754,11 @@ def in_run_drink(members, apart) -> list[Errand]:
     THE TOWN TRIP DOES NOT RUN INSIDE AN OPEN RUN (`_mid_run`), and the family
     never stands together between runs, so the pre-run hand-over (`plan`) can
     wait for a meeting that never comes. Inside the dungeon the party IS
-    together, which is the one moment a give lands. Only a give is planned: it
-    moves one stack between two bags in place, so nobody leaves the instance
-    (no conjure, no buy, no walk). `apart(giver, taker)` must say the two are in
-    trade range; with no positions (None) nothing is planned.
+    together, which is the one moment a give lands. A give moves one stack
+    between two bags in place, and a conjure (`_in_run_conjure`, #2213) makes
+    one where the party stands, so nobody leaves the instance (no buy, no
+    walk). `apart(giver, taker)` must say the two are in trade range; with no
+    positions (None) nothing is planned.
     """
     if apart is None:
         return []
@@ -769,11 +770,39 @@ def in_run_drink(members, apart) -> list[Errand]:
         and not m.conjures(DRINK_KIND)
         and m.carries(DRINK_KIND) < IN_RUN_DRINK_FLOOR
     ]
-    if not wanted:
-        return []
     conjurers = [m for m in ordered if m.conjures(DRINK_KIND)]
     givers = conjurers + [m for m in ordered if not m.conjures(DRINK_KIND)]
-    errands, _ = _hand_on(wanted, givers, DRINK_KIND, apart, near_only=True)
+    errands, supplied = _hand_on(wanted, givers, DRINK_KIND, apart, near_only=True)
+    return errands + _in_run_conjure(ordered, wanted, supplied)
+
+
+def _in_run_conjure(ordered, wanted, supplied) -> list[Errand]:
+    """Have a conjurer inside the run make the drink the party is about to lack.
+
+    A GIVE ONLY MOVES WHAT EXISTS, AND A LONG RUN OUTLASTS IT (#2213). Grug's
+    run 1761047 held its mage's 45 waters for one 20-stack give ten minutes in;
+    that left the mage one kept stack, `Member.spare` offered nothing, the
+    healer's stack ran out 59 minutes later, and the party stopped twice more
+    on "Waiting on Grog (low mana)" with nothing in the bridge able to make
+    another. A conjure is free, moves nobody (the module holds the caster still
+    for a few seconds and refuses it in combat, which the next 45 second pass
+    retries) and is the same row the pre-run trip already writes, so the pass
+    asks for one when a mana member below the floor is not being handed a stack
+    this pass, or when a conjurer is itself below the floor.
+
+    The target is the pre-run one (`_conjure`): a stack for itself and one per
+    mouth still dry, under the free bag slots and the module's row ceiling.
+    """
+    dependents = [m for m in wanted if m.name not in supplied]
+    errands: list[Errand] = []
+    for caster in (m for m in ordered if m.conjures(DRINK_KIND)):
+        short = caster.carries(DRINK_KIND) < IN_RUN_DRINK_FLOOR
+        if not dependents and not short:
+            continue
+        got, _notes, _made = _conjure([caster], dependents, DRINK_KIND)
+        errands.extend(got)
+        if got:
+            break  # one conjurer covers the party, as before the run
     return errands
 
 
