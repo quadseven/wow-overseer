@@ -16,7 +16,8 @@ import * as gestures from "./gestures.js";
 import * as update from "./update.js";
 import { legacy, parse, resolve } from "./router.js";
 import { captureAnchor, resolveAnchor, scrollShift, restoreTarget } from "./scrollanchor.js";
-import { makeHold, makeGate } from "./redraw.js";
+import { makeHold, makeGate, endOnce } from "./redraw.js";
+import { NARROW, onCross } from "./breakpoint.js";
 import { learn as learnRealm } from "./families.js";
 import { savedTheme, saveTheme, lastPage, saveLastPage, stampVisit, previousVisit } from "./store.js";
 import { html, ago, plural } from "./ui.js";
@@ -81,7 +82,7 @@ function loadView(name) {
   return views.get(name);
 }
 
-const isPhone = () => window.matchMedia("(max-width: 759.98px)").matches;
+const isPhone = () => window.matchMedia(NARROW).matches;
 
 // A view's own stylesheet (paths under app/), linked once.
 function useCss(path) {
@@ -200,8 +201,14 @@ const hold = makeHold({
   clearTimer: (id) => window.clearTimeout(id),
   apply: () => draw(true),
 });
-window.addEventListener("touchstart", () => hold.touchStart(), { passive: true });
-["touchend", "touchcancel"].forEach((t) => window.addEventListener(t, () => hold.touchEnd(), { passive: true }));
+// The end is heard on the touched element itself: a pull redraws <main> and
+// removes it, and nothing from a removed element reaches window.
+window.addEventListener("touchstart", (e) => {
+  hold.touchStart();
+  endOnce(e.target, () => hold.touchEnd());
+}, { passive: true });
+// Turning the screen across the breakpoint redraws the current view once.
+onCross(() => draw(true));
 window.addEventListener("scroll", () => hold.scrolled(), { passive: true });
 window.addEventListener("scrollend", () => hold.scrollEnd(), { passive: true });
 window.addEventListener("overseer:redraw", () => draw(true));

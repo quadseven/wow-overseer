@@ -54,6 +54,23 @@ export function makeHold({ now, setTimer, clearTimer, apply, quiet = QUIET_MS })
   };
 }
 
+// Run `fn` once, at the first touchend or touchcancel heard on `target`.
+// A touch is always dispatched at the element it began on, even after a
+// redraw removed that element from the page; an event on a removed element
+// does not bubble, so a listener on <main> or window never hears it.
+export function endOnce(target, fn) {
+  let done = false;
+  const end = (e) => {
+    if (done) return;
+    done = true;
+    target.removeEventListener("touchend", end);
+    target.removeEventListener("touchcancel", end);
+    fn(e);
+  };
+  target.addEventListener("touchend", end, { passive: true });
+  target.addEventListener("touchcancel", end, { passive: true });
+}
+
 // True when `key` is not what was drawn last for this page.
 export function makeGate() {
   let page = null;

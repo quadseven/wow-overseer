@@ -44,6 +44,13 @@ export function previousVisit() { return previous; }
 export function stampVisit() { write(KEYS.visit, String(Date.now())); }
 
 // The family on Now's stage on a phone: its key, or "" for no choice yet.
-export function savedStage() { return read(KEYS.stage) || ""; }
+// With storage blocked a pick would vanish, so it is also kept for the life
+// of the page and the switcher still works.
+let stageNow = null;
 
-export function saveStage(family) { write(KEYS.stage, String(family || "")); }
+export function savedStage() { return stageNow !== null ? stageNow : read(KEYS.stage) || ""; }
+
+export function saveStage(family) {
+  stageNow = String(family || "");
+  write(KEYS.stage, stageNow);
+}

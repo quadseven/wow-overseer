@@ -11,9 +11,10 @@
 import { html } from "../../ui.js";
 import * as streams from "./streams.js";
 import { saveStage } from "../../store.js";
+import { NARROW } from "../../breakpoint.js";
 import { pickScroll, dotOn } from "./stagechoice.js";
 
-export const NARROW = "(max-width: 759.98px)";
+export { NARROW };
 
 export function isNarrow() {
   return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(NARROW).matches;

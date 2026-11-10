@@ -3,6 +3,7 @@
 // row on screen. Pulling down more than 90px from the top refreshes.
 
 import { swipeSiblings } from "./router.js";
+import { endOnce } from "./redraw.js";
 
 export function install(main, opts) {
   let x0 = 0, y0 = 0, top = false, active = false;
@@ -13,15 +14,20 @@ export function install(main, opts) {
     active = true;
     x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
     top = window.scrollY <= 0;
+    endOnce(e.target, onEnd);
   }, { passive: true });
   main.addEventListener("touchmove", (e) => {
     if (!active || !top) return;
     const dy = e.touches[0].clientY - y0;
     opts.onPull(dy > 90);
   }, { passive: true });
-  main.addEventListener("touchend", (e) => {
+  // The end is heard on the touched element itself: a pull redraws <main>
+  // and removes that element, and an event on a removed element does not
+  // bubble up to <main>.
+  function onEnd(e) {
     if (!active) return;
     active = false;
+    if (e.type === "touchcancel") { opts.onPull(false); return; }
     const t = e.changedTouches[0];
     const dx = t.clientX - x0, dy = t.clientY - y0;
     if (top && dy > 90 && Math.abs(dx) < 60) { opts.onRefresh(); return; }
@@ -35,5 +41,5 @@ export function install(main, opts) {
       const to = dx < 0 ? next : prev;
       if (to) location.hash = to;
     }
-  }, { passive: true });
+  }
 }
