@@ -304,7 +304,8 @@ class TheActivityLogSaysWhy(unittest.TestCase):
 
     def test_a_command_is_said_with_its_objects_named(self):
         names = {
-            "creature": {10076: "High Priestess of Thaurissan"},
+            "spawn": {10076: "High Priestess of Thaurissan"},
+            "creature": {4788: "Bodley"},
             "item": {3771: "Wild Hog Shank"},
             "quest": {710: "Mudsnout Blossoms"},
         }
@@ -336,7 +337,13 @@ class TheActivityLogSaysWhy(unittest.TestCase):
         self.assertIn("does not hold", say("quest", "turnin quest:1473"))
         self.assertEqual(
             commandwords.wanted([{"command": "walk-to-spawn creature:10076"}]),
-            {"creature": [10076]},
+            {"spawn": [10076]},
+        )
+        # walk-to-spawn names a spawn id, hunt-spawn a template entry (#2194).
+        self.assertEqual(say("job", "hunt-spawn creature:4788 count:2"), "Hunt Bodley")
+        self.assertEqual(
+            commandwords.wanted([{"command": "hunt-spawn creature:4788"}]),
+            {"creature": [4788]},
         )
 
     def test_a_blocked_class_quest_walk_names_its_creature(self):
