@@ -237,6 +237,51 @@ class StagedChoiceSurvivesAReload(unittest.TestCase):
 
 
 @needs_node
+class APickBringsTheStagedFamilyUnderTheStage(unittest.TestCase):
+    def scroll(self, y, main_top, stage_height):
+        return node_module(
+            "views/now/stagechoice.js",
+            "console.log(JSON.stringify(M.pickScroll(%s, %s, %s)));"
+            % (y, main_top, stage_height),
+        )
+
+    def test_a_reader_far_down_the_page_is_brought_back_to_the_staged_family(self):
+        # The page starts 319 px down the document and the stage is 259 px
+        # tall, so the stage first pins at 60.
+        self.assertEqual(self.scroll(600, 319, 259), 60)
+
+    def test_a_reader_above_the_pin_point_is_left_alone(self):
+        self.assertIsNone(self.scroll(0, 319, 259))
+        self.assertIsNone(self.scroll(60, 319, 259))
+
+    def test_the_target_never_goes_above_the_top(self):
+        self.assertEqual(self.scroll(40, 200, 259), 0)
+
+
+@needs_node
+class TheSwitcherDot(unittest.TestCase):
+    def dot(self, option, staged, state):
+        return node_module(
+            "views/now/stagechoice.js",
+            "console.log(JSON.stringify(M.dotOn(%s, %s, %s)));"
+            % (json.dumps(option), json.dumps(staged), json.dumps(state)),
+        )
+
+    def test_the_staged_family_follows_its_picture(self):
+        option = {"fam": "Zug", "name": "b", "url": "u2"}
+        self.assertTrue(self.dot(option, "Zug", "live"))
+        self.assertFalse(self.dot(option, "Zug", "connecting"))
+
+    def test_another_family_is_lit_when_it_is_streamed(self):
+        # Its picture is not connected on a phone, so its state is always off.
+        self.assertTrue(self.dot({"fam": "Grug", "name": "a", "url": "u1"}, "Zug", "off"))
+        self.assertFalse(self.dot({"fam": "Mok", "name": "c", "url": ""}, "Zug", "off"))
+
+    def test_no_such_family_is_dark(self):
+        self.assertFalse(self.dot(None, "Zug", "live"))
+
+
+@needs_node
 class OneStreamAtNarrowWidths(unittest.TestCase):
     OPTS = (
         'const opts = [{ fam: "Grug", name: "a", url: "u1" },'

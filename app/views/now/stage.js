@@ -11,6 +11,7 @@
 import { html } from "../../ui.js";
 import * as streams from "./streams.js";
 import { saveStage } from "../../store.js";
+import { pickScroll, dotOn } from "./stagechoice.js";
 
 export const NARROW = "(max-width: 759.98px)";
 
@@ -19,13 +20,15 @@ export function isNarrow() {
 }
 
 let wired = false;
+// What sync() last showed: the dots' ticker reads it between redraws.
+let last = { options: [], staged: "" };
 
 function stageEl() { return document.getElementById("stage"); }
 
 function dotsOf(el, options) {
   el.querySelectorAll("[data-stage-pick]").forEach((b) => {
     const o = options.find((x) => x.fam === b.getAttribute("data-stage-pick"));
-    const live = o && streams.stateOf(o.name) === "live";
+    const live = dotOn(o, last.staged, o ? streams.stateOf(o.name) : "off");
     if (b.getAttribute("data-live") !== (live ? "1" : "0")) b.setAttribute("data-live", live ? "1" : "0");
   });
 }
@@ -33,8 +36,6 @@ function dotsOf(el, options) {
 function switcher(options, staged) {
   return options.map((o) => html`<button type="button" class="stage-pick" data-stage-pick="${o.fam}" data-live="0" aria-pressed="${String(o.fam === staged)}" aria-label="${"Watch " + o.fam + "'s family"}"><span class="stage-dot" aria-hidden="true"></span><span class="stage-pick-l">${o.fam}</span></button>`).map(String).join("");
 }
-
-let last = { options: [], staged: "" };
 
 // Show the stage for `staged` (a family key) or hide it. `options` are the
 // families that have a stream; only more than one gets a switcher.
@@ -79,7 +80,12 @@ function wire(el) {
     if (!b) return;
     const fam = b.getAttribute("data-stage-pick");
     saveStage(fam);
+    // The redraw is synchronous, so the page is already reordered here.
     window.dispatchEvent(new Event("overseer:redraw"));
+    const main = document.getElementById("main") || document.querySelector("main");
+    if (!main) return;
+    const to = pickScroll(window.scrollY, main.getBoundingClientRect().top + window.scrollY, el.getBoundingClientRect().height);
+    if (to !== null) window.scrollTo(0, to);
   });
   // The picture states change without the page's markup changing, so the
   // dots follow on the second.

@@ -22,3 +22,19 @@ export function connectPlan(options, staged, narrow) {
     release: options.filter((o) => o !== on).map((o) => o.name),
   };
 }
+
+// After a pick the staged family's unit is first on the page, so a reader
+// further down is brought back to it: the scroll offset where the stage first
+// pins (the page's own top less the stage's height). A reader at or above
+// that offset is left alone. null means no scroll write.
+export function pickScroll(y, mainTop, stageHeight) {
+  const target = Math.max(0, Math.round(mainTop - stageHeight));
+  return y > target ? target : null;
+}
+
+// A switcher dot. The staged family's follows its picture. Another family's
+// stream is not connected on a phone, so its dot says whether it is streamed.
+export function dotOn(option, staged, state) {
+  if (!option) return false;
+  return option.fam === staged ? state === "live" : !!option.url;
+}
