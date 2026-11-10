@@ -5395,11 +5395,12 @@ def _silent_seconds(head_id: int, names: list) -> int | None:
     the first row of each distinct credit per run.
 
     A QUEST COUNTS THE FIRST TIME A CHARACTER WRITES IT (#2147). The event
-    table keeps one row per character and quest and moves its `last_seen` on
-    every repeat, so a bot that accepts and completes the same quest once an
-    hour (a sealed party's Grog, "Stoley's Debt") kept the clock near zero
-    for sixteen hours. The quest kinds are read by `first_seen`, which a repeat
-    never moves; level, equip and unlearn keep `last_seen`.
+    table keeps one row per character, kind, subject and HOUR BUCKET, so a bot
+    that repeats a quest writes a new row per hour bucket, each with its own
+    first_seen. Reading first_seen (#2165) still moved hourly. A quest row now
+    counts only when no earlier row exists for the same character, kind and
+    subject inside the head's window (the NOT EXISTS on p.id < e.id); level,
+    equip and unlearn keep `last_seen`.
 
     The COLLATE sits on each bound name, never on `e.character_name`
     (wow-overseer#1513). overseer_event is utf8mb4_unicode_ci; collating the
@@ -5414,7 +5415,11 @@ def _silent_seconds(head_id: int, names: list) -> int | None:
         "SELECT TIMESTAMPDIFF(SECOND, GREATEST(COALESCE(q.started_at, q.created_at), "
         "COALESCE((SELECT MAX(CASE WHEN e.kind IN "
         "('quest_accept', 'quest_complete', 'quest_reward') "
-        "THEN e.first_seen ELSE e.last_seen END) FROM overseer_event e "
+        "THEN (CASE WHEN NOT EXISTS (SELECT 1 FROM overseer_event p "
+        "WHERE p.character_name = e.character_name AND p.kind = e.kind "
+        "AND p.subject_id = e.subject_id AND p.id < e.id "
+        "AND p.first_seen >= COALESCE(q.started_at, q.created_at)) "
+        "THEN e.first_seen END) ELSE e.last_seen END) FROM overseer_event e "
         "WHERE e.character_name IN (%s COLLATE utf8mb4_unicode_ci{more_names}) "
         "AND e.kind IN "
         "('quest_accept', 'quest_complete', 'quest_reward', 'level_up', "
