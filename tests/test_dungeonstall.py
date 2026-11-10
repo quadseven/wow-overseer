@@ -470,6 +470,7 @@ def _pass(world):
             "_stall_reads",
             "_stall_held",
             "_order_parked",
+            "_order_hold",
             "_order_step_past",
             "_stall_write",
             "_silent_stall",
@@ -532,6 +533,7 @@ def _pass(world):
         "_stall_breaker",
         "_stall_step_past",
         "_order_step_past",
+        "_order_hold",
     ):
         setattr(me, name, types.MethodType(ns[name], me))
     asyncio.run(ns["_campaign_queue_once"](me))
@@ -1336,12 +1338,8 @@ class TheDoorWedgeReads(unittest.TestCase):
 
 # --- an operator's order is held, never cancelled (#2216) ----------------------
 #
-# 2026-11-10, wow-dev: the operator's Blackrock Depths x20 order for Zug's
-# family (queue row 162) was cancelled 52 seconds after run 1770257 ended.
-# Run 1759455 had stalled after encounter 9; run 1764856 credited 18
-# encounters and ended split_failed (invisible to the stall read); run 1770257
-# opened six seconds later with one member inside, and stalled after 258
-# seconds, past the non-entry bound, with no boss credit.
+# An operator's order was cancelled by a run that never got in, which read as
+# the second stall running after an earlier real stall (#2216).
 
 
 class AnOperatorOrderIsHeldNotCancelled(unittest.TestCase):
@@ -1351,19 +1349,19 @@ class AnOperatorOrderIsHeldNotCancelled(unittest.TestCase):
     def stuck(self):
         runs = [
             {
-                "id": 1759455,
+                "id": 101,
                 "map_id": self.BRD,
                 "portal_keyword": "blackrock-depths",
                 "outcome": "stalled",
             },
             {
-                "id": 1770257,
+                "id": 102,
                 "map_id": self.BRD,
                 "portal_keyword": "blackrock-depths",
                 "outcome": "stalled",
             },
         ]
-        return stall.stuck_doors(runs, [boss(1759455, 255, 511), stalled(1770257, "x")])
+        return stall.stuck_doors(runs, [boss(101, 255, 511), stalled(102, "x")])
 
     def order(self, qid, keyword="blackrock-depths", source=None, status="active"):
         return dict(
@@ -1373,19 +1371,19 @@ class AnOperatorOrderIsHeldNotCancelled(unittest.TestCase):
 
     def test_the_operators_rows_are_held_and_the_overseers_are_dropped(self):
         rows = [
-            self.order(162),
+            self.order(501),
             queue_row(163, "blackrock-depths", "queued", 1),
             queue_row(164, "uldaman", "queued", 2),
         ]
         got = stall.leave(rows, self.stuck())
-        self.assertEqual((162,), got.park)
+        self.assertEqual((501,), got.park)
         self.assertEqual((163,), got.drop)
         self.assertEqual(stall.ORDER_DECISION, got.decision)
 
     def test_a_lone_operator_order_is_not_dropped(self):
-        got = stall.leave([self.order(162)], self.stuck())
+        got = stall.leave([self.order(501)], self.stuck())
         self.assertEqual((), got.drop)
-        self.assertEqual((162,), got.park)
+        self.assertEqual((501,), got.park)
 
     def test_the_overseers_own_entry_is_still_left(self):
         got = stall.leave([queue_row(7, "blackrock-depths")], self.stuck())
@@ -1394,7 +1392,7 @@ class AnOperatorOrderIsHeldNotCancelled(unittest.TestCase):
         self.assertEqual(stall.DECISION, got.decision)
 
     def test_the_sentence_says_held_not_left_and_when_it_runs_again(self):
-        got = stall.leave([self.order(162)], self.stuck())
+        got = stall.leave([self.order(501)], self.stuck())
         minutes = int(stall.ORDER_BACKOFF.total_seconds() // 60)
         self.assertIn("the order is held, not left", got.why)
         self.assertIn("runs again in %d minutes" % minutes, got.why)
@@ -1405,9 +1403,9 @@ class AnOperatorOrderIsHeldNotCancelled(unittest.TestCase):
 
     def test_a_hold_older_than_the_order_does_not_rest_it(self):
         row = {"id": 5, "left_s": 600, "ordered_after": 1}
-        self.assertIsNone(stall.order_hold(self.order(162), row))
+        self.assertIsNone(stall.order_hold(self.order(501), row))
         row["ordered_after"] = 0
-        self.assertEqual(600, stall.order_hold(self.order(162), row)["left_s"])
+        self.assertEqual(600, stall.order_hold(self.order(501), row)["left_s"])
         self.assertIsNone(stall.order_hold(queue_row(7, "blackrock-depths"), row))
 
     def test_the_stalls_that_earned_a_hold_are_not_read_again(self):
@@ -1424,12 +1422,12 @@ class AnOperatorOrderIsHeldNotCancelled(unittest.TestCase):
 
     def world(self):
         w = StallWorld(
-            [dict(_q(162, "blackrock-depths", 20, "active", 0), source=self.OPERATOR)],
+            [dict(_q(501, "blackrock-depths", 20, "active", 0), source=self.OPERATOR)],
             [
-                ledger_row(1759455, map_id=self.BRD, portal="blackrock-depths"),
-                ledger_row(1770257, map_id=self.BRD, portal="blackrock-depths"),
+                ledger_row(101, map_id=self.BRD, portal="blackrock-depths"),
+                ledger_row(102, map_id=self.BRD, portal="blackrock-depths"),
             ],
-            [boss(1759455, 255, 511), stalled(1770257, "x")],
+            [boss(101, 255, 511), stalled(102, "x")],
         )
         for r in w.family("Zug"):
             r["job"] = "dungeon:blackrock-depths"
@@ -1509,7 +1507,7 @@ class AnOperatorOrderIsHeldNotCancelled(unittest.TestCase):
     def test_the_hold_is_read_before_the_stalls_and_is_never_a_leave_row(self):
         body = BRIDGE[BRIDGE.index("    async def _stall_breaker(") :]
         body = body[: body.index("\n    def ", 10)]
-        self.assertLess(body.index("_order_parked"), body.index("_stall_reads"))
+        self.assertLess(body.index("_order_hold"), body.index("_stall_reads"))
         self.assertIn("if not leave.park:", body)
         write = BRIDGE[BRIDGE.index("def _stall_write(") :]
         write = write[: write.index("\n\n\n", 10)]

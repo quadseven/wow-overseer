@@ -468,18 +468,17 @@ class Leave:
         return ORDER_DECISION if self.park else DECISION
 
 
-# THE BREAKER NEVER CANCELS AN OPERATOR'S ORDER (#2216). On wow-dev 2026-11-10
-# the operator's Blackrock Depths x20 order for Zug's family (queue row 162)
-# was cancelled 52 seconds after run 1770257 ended: a run that opened right
-# after a two-hour run ended split_failed, had one member inside and four
-# outside, and stalled after 258 seconds, over the non-entry bound (#2092). It
-# read as the second stall running after run 1759455 (the real run 1764856
-# between them credited 18 encounters, but ended split_failed, which the
-# stall read does not see). The door was then barred for 48 hours and the
-# operator had to order it again. An order the operator gave is held, never
-# cancelled: the overseer's own entries for the door are still dropped, the
-# operator's rows stay pending, the family steps past them for ORDER_BACKOFF,
-# and then the order runs again, judged on the runs after the hold.
+# THE BREAKER NEVER CANCELS AN OPERATOR'S ORDER (#2216). Once, an operator's
+# dungeon order was cancelled seconds after a run that never really got in: it
+# opened right after a long run ended split_failed, had one member inside and
+# the rest outside, and stalled just over the non-entry bound (#2092). It read
+# as the second stall running, because the real run between the two stalls
+# ended split_failed, which the stall read does not see. The door was then
+# barred for 48 hours and the operator had to order it again. An order the
+# operator gave is held, never cancelled: the overseer's own entries for the
+# door are still dropped, the operator's rows stay pending, the family steps
+# past them for ORDER_BACKOFF, and then the order runs again, judged on the
+# runs after the hold.
 
 
 def leave(rows: list, stuck: dict) -> Leave | None:

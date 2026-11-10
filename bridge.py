@@ -5366,7 +5366,9 @@ def _stall_barred(cur, key: str, names: list) -> dict:
     return {**dungeonstall.held_barred(held or []), **barred}
 
 
-def _stall_reads(names: list, head: dict | None = None, parked_at=None) -> dict:
+def _stall_reads(
+    names: list, head: dict | None = None, parked: dict | None = None
+) -> dict:
     """The family's stuck doors. Reads only. An operator's `head` order is
     judged on the runs after it was queued (#2058), and after its last hold
     (`parked_at`, #2216)."""
@@ -5377,7 +5379,7 @@ def _stall_reads(names: list, head: dict | None = None, parked_at=None) -> dict:
                 (int(head["id"]),), "the order's queue time")
             if rows and rows[0].get("created_at") is not None:
                 head = {**head, "created_at": rows[0]["created_at"]}
-        return _stuck_doors(cur, names, head, parked_at)
+        return _stuck_doors(cur, names, head, (parked or {}).get("created_at"))
 
 
 def _silent_seconds(head_id: int, names: list) -> int | None:
@@ -22944,17 +22946,10 @@ class Bridge(discord.Client):
         # AN OPERATOR'S ORDER IS HELD, NEVER CANCELLED (#2216): inside its
         # backoff the family steps past it; after, it runs again and is
         # judged on the runs after the hold only.
-        parked = None
-        if dungeonpace.operator_ordered(rows[0]):
-            door = campaignplan.wing_of(str(rows[0].get("keyword") or ""))
-            if door:
-                parked = dungeonstall.order_hold(rows[0], await asyncio.to_thread(
-                    _order_parked, key, door, int(rows[0]["id"])))
-            if parked is not None and int(parked.get("left_s") or 0) > 0:
-                return self._order_step_past(key, rows, door, parked)
-        stuck = await asyncio.to_thread(
-            _stall_reads, names, rows[0],
-            parked["created_at"] if parked is not None else None)
+        parked, resting = await self._order_hold(key, rows[0])
+        if resting:
+            return self._order_step_past(key, rows, parked)
+        stuck = await asyncio.to_thread(_stall_reads, names, rows[0], parked)
         silent_stall = await asyncio.to_thread(_silent_stall, rows[0], names)
         if silent_stall is not None:
             stuck[silent_stall.door] = silent_stall
@@ -22993,10 +22988,21 @@ class Bridge(discord.Client):
         log.warning("stall: %s: %s", campaignqueue._family(key), said)
         return True
 
-    def _order_step_past(self, key: str, rows: list, door: str, parked: dict) -> bool:
-        """An operator's order for `door` is held (#2216): step past it until
-        its backoff ends, saying so once per hold. Only when nothing is left
-        behind it does the queue hold (True)."""
+    async def _order_hold(self, key: str, head: dict) -> tuple:
+        """(the hold on operator order `head`, whether it is resting now), or
+        (None, False) when `head` is not held (#2216)."""
+        door = campaignplan.wing_of(str(head.get("keyword") or ""))
+        if not door or not dungeonpace.operator_ordered(head):
+            return None, False
+        parked = dungeonstall.order_hold(head, await asyncio.to_thread(
+            _order_parked, key, door, int(head["id"])))
+        return parked, parked is not None and int(parked.get("left_s") or 0) > 0
+
+    def _order_step_past(self, key: str, rows: list, parked: dict) -> bool:
+        """The head order is held (#2216): step past it until its backoff
+        ends, saying so once per hold. Only when nothing is left behind it
+        does the queue hold (True)."""
+        door = campaignplan.wing_of(str(rows[0].get("keyword") or ""))
         rest = [r for r in rows
                 if campaignplan.wing_of(str(r.get("keyword") or "")) != door]
         marker = (key, door)
