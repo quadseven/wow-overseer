@@ -895,7 +895,29 @@ class TheBridgeOrder(unittest.TestCase):
         quest = quest[: quest.index("FROM overseer_event e")]
         for kind in ("'quest_accept'", "'quest_complete'", "'quest_reward'"):
             self.assertIn(kind, quest)
-        self.assertIn("THEN e.first_seen ELSE e.last_seen END", quest)
+        self.assertIn("THEN e.first_seen END) ELSE e.last_seen END", quest)
+
+    def test_a_quest_row_in_a_later_hour_bucket_is_not_progress(self):
+        # wow-overseer#2147 round 2: overseer_event keeps one row per
+        # character, kind, subject AND hour bucket, so the same quest written
+        # each hour is a NEW row with its own first_seen (#2165's first_seen
+        # read still moved hourly). A quest row counts only when no earlier
+        # row exists for the same character, kind and subject inside the
+        # head's window; a first-time quest has none and counts.
+        read = self.silence_read()
+        quest = read[read.index("CASE WHEN e.kind IN") :]
+        quest = quest[: quest.index("FROM overseer_event e")]
+        self.assertIn("NOT EXISTS", quest)
+        self.assertIn("FROM overseer_event p", quest)
+        self.assertIn("p.character_name = e.character_name", quest)
+        self.assertIn("p.kind = e.kind", quest)
+        self.assertIn("p.subject_id = e.subject_id", quest)
+        self.assertIn("p.id < e.id", quest)
+        self.assertIn("p.first_seen >= COALESCE(q.started_at, q.created_at)", quest)
+        # the #2165 first_seen read and the #2148 boss NOT EXISTS stay
+        self.assertIn("THEN e.first_seen END) ELSE e.last_seen END", quest)
+        boss = read[read.index("re.kind = 'boss'") :]
+        self.assertIn("p.id < re.id", boss)
 
     def test_the_silence_clock_starts_at_the_head_not_at_a_run(self):
         # The stuck read's clock runs across runs. A clock restarted by each
