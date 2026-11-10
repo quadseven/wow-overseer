@@ -202,8 +202,7 @@ def left_a_remainder(attempt) -> bool:
     guid and carries `remaining`; a stack that kept 9 of 16 is the same guid
     afterwards and grows again as more of it is looted. Reading the delivery as
     "the item left the bags" held that guid back for the whole memory window,
-    so a member at the bag floor carried three such stacks for eleven hours,
-    unable to sell the stacks that would have made room.
+    so a member at the bag floor could not sell the stack that would make room.
     """
     return (
         attempt.status in SUCCESS_STATUSES
