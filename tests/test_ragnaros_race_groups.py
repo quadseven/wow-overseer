@@ -68,6 +68,12 @@ class TheMilestoneRace(unittest.TestCase):
         self.assertTrue(ragnaros._quest_done(book(), WARRIOR, {1, 2}, set(), ORC))
         self.assertFalse(ragnaros._quest_done(book(), WARRIOR, {1, 3}, set(), ORC))
 
+    def test_a_seat_with_no_race_read_owes_every_group_of_its_class(self):
+        # A row with no race cannot be tested against a race mask, so the
+        # milestone asks for every group, as it did before race was read.
+        self.assertFalse(ragnaros._quest_done(book(), WARRIOR, {1, 3}, set(), 0))
+        self.assertTrue(ragnaros._quest_done(book(), WARRIOR, {1, 2, 3}, set(), 0))
+
     def test_the_chain_view_and_the_milestone_agree(self):
         # The view lists exactly the human's takeable groups; rewarding the
         # last quest of each listed chain satisfies the milestone, and

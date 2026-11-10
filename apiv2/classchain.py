@@ -204,11 +204,12 @@ def _learned(key, rewards, known: set, done: set) -> bool:
 
 def race_groups(book, klass: int, race: int):
     """(key, reward quest ids) for each reward group of the class that a quest
-    sold by no trainer offers and the race may take."""
+    sold by no trainer offers and the race may take. A race that was not read
+    (0) cannot be tested against a race mask, so it is owed every group."""
     for key, rewards in book.groups.items():
         if key[0] != klass or book.trained.intersection(key[1]):
             continue
-        if any(book.quests[q].admits(race) for q in rewards):
+        if race < 1 or any(book.quests[q].admits(race) for q in rewards):
             yield key, rewards
 
 
