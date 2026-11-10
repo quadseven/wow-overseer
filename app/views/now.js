@@ -341,8 +341,11 @@ ${reportSection(ctx, allGuilds())}`;
   stamp(ctx) {
     const map = ctx.get("/api/map");
     const wall = ctx.get("/api/wall");
+    const shapes = ctx.get("/shapes.json");
     return JSON.stringify([
       stage.isNarrow(), savedStage(), streams.retryDue(),
+      // The mini maps draw from the shapes, which can arrive after the markup.
+      shapes.data && Object.keys(shapes.data),
       map.data && map.data.dots, wall.data && wall.data.members,
       [...rosterModel(ctx.get("/api/v2/roster")).ghostNames()],
       ctx.get("/api/v2/achievements").data,

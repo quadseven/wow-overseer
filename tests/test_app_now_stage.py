@@ -341,14 +341,17 @@ const wall = {
   },
   at: 1, error: null, loading: false,
 };
-const get = (path) => (path === "/api/wall" ? wall : waiting);
+const get = (path) => (path === "/api/wall" ? wall : path === "/shapes.json" && fx.shapes ? fx.shapes : waiting);
+if (fx.stamp) { console.log(JSON.stringify(now.stamp({ get }))); process.exit(0); }
 const out = now.render({ get, isPhone: fx.narrow, previousVisit: 0, params: {}, query: {} });
 console.log(JSON.stringify(String(out && out.s !== undefined ? out.s : out)));
 process.exit(0);
 """
 
 
-def render(narrow, saved=None, families=("Grug", "Zug", "Mok")):
+def render(
+    narrow, saved=None, families=("Grug", "Zug", "Mok"), stamp=False, shapes=None
+):
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
         shutil.copytree(APP, root / "app")
@@ -359,7 +362,13 @@ def render(narrow, saved=None, families=("Grug", "Zug", "Mok")):
                 NODE,
                 str(root / "run.js"),
                 json.dumps(
-                    {"narrow": narrow, "saved": saved, "families": list(families)}
+                    {
+                        "narrow": narrow,
+                        "saved": saved,
+                        "families": list(families),
+                        "stamp": stamp,
+                        "shapes": shapes,
+                    }
                 ),
             ],
             capture_output=True,
@@ -416,6 +425,202 @@ class TheStageOwnsTheTopEdge(unittest.TestCase):
         css = (APP / "views" / "now.css").read_text(encoding="utf-8")
         self.assertIn(".stage:not([hidden]) + .topbar { position: static;", css)
         self.assertNotIn('.app[data-view="now"] .topbar', css)
+
+
+FAKE_TARGET = """
+function target() {
+  const L = new Map();
+  return {
+    closest: () => null,
+    addEventListener(t, f) { L.set(t, [...(L.get(t) || []), f]); },
+    removeEventListener(t, f) { L.set(t, (L.get(t) || []).filter((g) => g !== f)); },
+    fire(t, ev) { (L.get(t) || []).slice().forEach((f) => f({ type: t, target: this, ...ev })); },
+    count: (t) => (L.get(t) || []).length,
+  };
+}
+"""
+
+
+@needs_node
+class ATouchEndIsHeardOnItsOwnTarget(unittest.TestCase):
+    """A touch is dispatched at the element it began on, even once a redraw
+    has removed that element, and nothing from a removed element bubbles."""
+
+    def test_the_hold_ends_when_touchend_comes_on_a_removed_target(self):
+        got = hold(
+            """
+            const el = { l: {}, addEventListener(t, f) { this.l[t] = f; }, removeEventListener() {} };
+            hold.touchStart();
+            M.endOnce(el, () => hold.touchEnd());
+            hold.request();
+            const held = applied;
+            el.l.touchend({ type: "touchend" });
+            clock.advance(200);
+            return [held, applied];
+            """
+        )
+        self.assertEqual(got, [0, 1])
+
+    def test_touchcancel_ends_it_too(self):
+        got = hold(
+            """
+            const el = { l: {}, addEventListener(t, f) { this.l[t] = f; }, removeEventListener() {} };
+            hold.touchStart();
+            M.endOnce(el, () => hold.touchEnd());
+            hold.request();
+            el.l.touchcancel({ type: "touchcancel" });
+            clock.advance(200);
+            return applied;
+            """
+        )
+        self.assertEqual(got, 1)
+
+    def test_one_end_is_counted_once_and_the_listeners_come_off(self):
+        got = node_module(
+            "redraw.js",
+            FAKE_TARGET
+            + """
+            const el = target();
+            let n = 0;
+            M.endOnce(el, () => { n++; });
+            el.fire("touchend", {}); el.fire("touchcancel", {}); el.fire("touchend", {});
+            console.log(JSON.stringify([n, el.count("touchend"), el.count("touchcancel")]));
+            """,
+        )
+        self.assertEqual(got, [1, 0, 0])
+
+
+GESTURE = (
+    FAKE_TARGET
+    + """
+globalThis.window = { scrollY: 0 };
+const main = target();
+const calls = [];
+M.install(main, { onPull: (s) => calls.push("pull:" + s), onRefresh: () => calls.push("refresh") });
+const touch = (y) => ({ clientX: 0, clientY: y });
+function begin(el) {
+  main.fire("touchstart", { target: el, touches: [touch(0)] });
+}
+"""
+)
+
+
+@needs_node
+class APullSurvivesItsIndicatorRedraw(unittest.TestCase):
+    def run_gesture(self, body):
+        return node_module(
+            "gestures.js", GESTURE + body + "\nconsole.log(JSON.stringify(calls));"
+        )
+
+    def test_a_pull_past_the_threshold_refreshes_though_its_target_was_removed(self):
+        # The end is fired on the child only: a removed element does not
+        # bubble to <main>.
+        got = self.run_gesture(
+            """
+            const child = target();
+            begin(child);
+            main.fire("touchmove", { touches: [touch(100)] });
+            child.fire("touchend", { changedTouches: [touch(120)] });
+            """
+        )
+        self.assertEqual(got, ["pull:true", "refresh"])
+
+    def test_an_attached_target_that_also_bubbles_refreshes_once(self):
+        got = self.run_gesture(
+            """
+            const child = target();
+            begin(child);
+            main.fire("touchmove", { touches: [touch(100)] });
+            const end = { changedTouches: [touch(120)] };
+            child.fire("touchend", end);
+            main.fire("touchend", end);
+            """
+        )
+        self.assertEqual(got.count("refresh"), 1)
+
+    def test_a_cancelled_pull_clears_the_indicator_and_does_not_refresh(self):
+        got = self.run_gesture(
+            """
+            const child = target();
+            begin(child);
+            main.fire("touchmove", { touches: [touch(100)] });
+            child.fire("touchcancel", { changedTouches: [touch(120)] });
+            """
+        )
+        self.assertEqual(got, ["pull:true", "pull:false"])
+
+    def test_a_short_pull_clears_the_indicator(self):
+        got = self.run_gesture(
+            """
+            const child = target();
+            begin(child);
+            main.fire("touchmove", { touches: [touch(100)] });
+            child.fire("touchend", { changedTouches: [touch(40)] });
+            """
+        )
+        self.assertEqual(got, ["pull:true", "pull:false"])
+
+
+@needs_node
+class NowRedrawsWhenItsOutsideInputsArrive(unittest.TestCase):
+    def stamp(self, shapes):
+        return render(True, stamp=True, shapes=shapes)
+
+    def test_shapes_arriving_after_the_first_draw_change_the_stamp(self):
+        before = self.stamp(None)
+        after = self.stamp(
+            {"data": {"eastern": {"x": 1}}, "at": 1, "error": None, "loading": False}
+        )
+        self.assertNotEqual(before, after)
+
+
+@needs_node
+class AFamilyPickSurvivesBlockedStorage(unittest.TestCase):
+    BLOCKED = """
+    globalThis.window = { localStorage: {
+      getItem: () => { throw new Error("blocked"); },
+      setItem: () => { throw new Error("blocked"); },
+    } };
+    """
+
+    def test_the_pick_is_kept_in_memory_when_storage_throws(self):
+        got = node_module(
+            "store.js",
+            self.BLOCKED
+            + "M.saveStage('Zug'); console.log(JSON.stringify(M.savedStage()));",
+        )
+        self.assertEqual(got, "Zug")
+
+    def test_the_latest_pick_wins(self):
+        got = node_module(
+            "store.js",
+            self.BLOCKED
+            + "M.saveStage('Zug'); M.saveStage('Mok'); console.log(JSON.stringify(M.savedStage()));",
+        )
+        self.assertEqual(got, "Mok")
+
+
+@needs_node
+class CrossingTheBreakpointRedrawsOnce(unittest.TestCase):
+    def test_a_change_event_on_the_stage_query_calls_back_once(self):
+        got = node_module(
+            "breakpoint.js",
+            """
+            const seen = [];
+            const mq = { l: [], addEventListener(t, f) { if (t === "change") this.l.push(f); } };
+            globalThis.window = { matchMedia: (q) => { seen.push(q); return mq; } };
+            let n = 0;
+            M.onCross(() => { n++; });
+            mq.l.forEach((f) => f({}));
+            console.log(JSON.stringify([seen, n, mq.l.length]));
+            """,
+        )
+        self.assertEqual(got, [["(max-width: 759.98px)"], 1, 1])
+
+    def test_the_stage_uses_the_same_breakpoint(self):
+        stage = (APP / "views" / "now" / "stage.js").read_text(encoding="utf-8")
+        self.assertIn('from "../../breakpoint.js"', stage)
+        self.assertNotIn("759.98", stage)
 
 
 if __name__ == "__main__":
