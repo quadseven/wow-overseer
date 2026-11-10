@@ -5465,21 +5465,24 @@ _DOOR_HOLD_SINCE: dict = {}
 
 _DOOR_STEPS_SQL = (
     "SELECT kind, doing, occurrences, UNIX_TIMESTAMP(first_seen) AS first_at, "
-    "UNIX_TIMESTAMP(last_seen) AS last_at, UNIX_TIMESTAMP() AS now_at "
+    "UNIX_TIMESTAMP(last_seen) AS last_at, UNIX_TIMESTAMP() AS now_at, "
+    "(SELECT UNIX_TIMESTAMP(q.started_at) FROM overseer_dungeon_queue q "
+    "WHERE q.id = %s) AS since_at "
     "FROM overseer_now_step WHERE subject = %s AND kind = 'intent' "
     "AND last_seen > NOW() - INTERVAL 1 HOUR ORDER BY last_seen DESC LIMIT 60"
 )
 
 
-def _door_wedge_evidence(leader: str) -> tuple:
-    """(the leader's walk restarts in the watch's window, the members' states)
-    for the door wedge. Reads only. An intent book or step store this realm
-    cannot answer (1054 or 1146) reads as no evidence, so no door is left on
-    a missing table: the same degradation as the stall reads above."""
+def _door_wedge_evidence(leader: str, head_id: int) -> tuple:
+    """(the restarts of the leader's walk for queue entry `head_id` in the
+    watch's window, the members' states) for the door wedge. Reads only. An
+    intent book or step store this realm cannot answer (1054 or 1146) reads
+    as no evidence, so no door is left on a missing table: the same
+    degradation as the stall reads above."""
     steps = []
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(_DOOR_STEPS_SQL, (leader,))
+            cur.execute(_DOOR_STEPS_SQL, (head_id, leader))
             steps = cur.fetchall()
         except pymysql.err.MySQLError as exc:
             if not (exc.args and exc.args[0] in (1054, 1146)):
@@ -5487,7 +5490,8 @@ def _door_wedge_evidence(leader: str) -> tuple:
     restarts = 0
     if steps:
         now_at = int(steps[0].get("now_at") or 0) or int(time.time())
-        restarts = nowstatus.restart_count(steps, now_at)
+        since_at = int(steps[0].get("since_at") or 0)
+        restarts = nowstatus.restart_count(steps, now_at, since_at)
     row = _fetch_family_intents().get(leader, {})
     members = jev_family_intent.parse_members(row.get("members_state"))
     return restarts, members
@@ -5542,8 +5546,9 @@ def _door_wedge(head: dict, names: list, leader: str):
     if not any(jobs.is_dungeon_job(job) for job in _jobs_of(names).values()):
         return None
     keyword = str(head.get("keyword") or "")
-    restarts, members = _door_wedge_evidence(leader)
-    ages = _door_wedge_ages(leader, members, int(head.get("id") or 0))
+    head_id = int(head.get("id") or 0)
+    restarts, members = _door_wedge_evidence(leader, head_id)
+    ages = _door_wedge_ages(leader, members, head_id)
     for name, (state, age) in ages.items():
         if state == "dead":
             verdict = dungeonstall.member_dead(keyword, name, age)

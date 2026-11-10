@@ -674,3 +674,19 @@ class TheRestartFoldIsReadableOutside(unittest.TestCase):
             times=9,
         )
         self.assertEqual(0, nowstatus.restart_count([other], NOW))
+
+    def test_restart_count_ignores_a_walk_the_dungeon_run_does_not_own(self):
+        errand = step(
+            "Zug",
+            "the errand walk took over: walking to a murloc on a town errand",
+            kind="intent",
+            times=38,
+            first=800,
+            last=20,
+        )
+        self.assertEqual(0, nowstatus.restart_count([errand], NOW))
+
+    def test_restart_count_ignores_a_walk_begun_before_the_run(self):
+        took = step("Zug", self.TOOK, kind="intent", times=38, first=800, last=20)
+        self.assertEqual(0, nowstatus.restart_count([took], NOW, NOW - 500))
+        self.assertEqual(38, nowstatus.restart_count([took], NOW, NOW - 900))

@@ -12,6 +12,7 @@ against a fake queue, roster and store.
 """
 
 from datetime import datetime, timedelta
+import ast
 import asyncio
 import pathlib
 import time
@@ -1134,6 +1135,7 @@ class TheDoorWedgeReads(unittest.TestCase):
     HEAD = {"id": 7, "keyword": "maraudon-orange", "status": "active"}
 
     def judge(self, evidence, clock):
+        self.asked = []
         ns = _load(
             ["_door_wedge", "_door_wedge_ages"],
             {
@@ -1142,7 +1144,9 @@ class TheDoorWedgeReads(unittest.TestCase):
                 "jobs": jobs,
                 "time": types.SimpleNamespace(monotonic=lambda: clock[0]),
                 "_jobs_of": lambda names: {n: "dungeon:maraudon-orange" for n in names},
-                "_door_wedge_evidence": lambda leader: evidence,
+                "_door_wedge_evidence": lambda leader, head_id: (
+                    self.asked.append((leader, head_id)) or evidence
+                ),
                 "_DOOR_HOLD_SINCE": {},
             },
         )
@@ -1156,6 +1160,21 @@ class TheDoorWedgeReads(unittest.TestCase):
         got = judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
         self.assertIsNotNone(got)
         self.assertIn("restarted 38 times", got.why)
+
+    def test_the_walk_is_counted_for_the_queue_entry_being_judged(self):
+        judge = self.judge((0, ()), [1000.0])
+        judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
+        self.assertEqual([("Zug", 7)], self.asked)
+
+    def test_the_steps_read_bounds_the_walk_by_when_the_run_started(self):
+        sql = next(
+            ast.literal_eval(node.value)
+            for node in ast.parse(BRIDGE).body
+            if isinstance(node, ast.Assign)
+            and any(getattr(t, "id", "") == "_DOOR_STEPS_SQL" for t in node.targets)
+        )
+        self.assertIn("started_at", sql)
+        self.assertEqual(2, sql.count("%s"))
 
     def test_an_errand_hold_becomes_a_verdict_only_past_its_bound(self):
         clock = [1000.0]
@@ -1188,7 +1207,7 @@ class TheDoorWedgeReads(unittest.TestCase):
                 "jobs": jobs,
                 "time": types.SimpleNamespace(monotonic=lambda: clock[0]),
                 "_jobs_of": lambda names: {n: "dungeon:maraudon-orange" for n in names},
-                "_door_wedge_evidence": lambda leader: box[0],
+                "_door_wedge_evidence": lambda leader, head_id: box[0],
                 "_DOOR_HOLD_SINCE": {},
             },
         )
