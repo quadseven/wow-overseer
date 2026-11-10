@@ -6116,7 +6116,7 @@ def _ensure_now_store() -> None:
 
 
 def _store_now_steps(steps, seen=None, mono=None) -> int:
-    """Insert each step, or bump the identical one seen a moment ago.
+    """Store each step, or bump the identical one seen a moment ago.
 
     A step missing from the in-memory map is looked up among the stored rows
     before it is inserted: a bridge restart (every ship) empties the map, and
