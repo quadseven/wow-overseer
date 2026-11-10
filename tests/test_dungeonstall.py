@@ -1149,6 +1149,47 @@ class TheWedgeIsLeftLikeAStall(unittest.TestCase):
         self.assertEqual([], w.records)
 
 
+class TheWedgeLeaveIsNotSteppedPast(unittest.TestCase):
+    """The held-door step-past (#1078) exists for a door left on ended runs
+    and then re-queued: the re-queued entry is not cancelled a second time
+    on stale evidence. A wedge verdict is not stale evidence. It is judged
+    fresh each pass on the run open now (an active head, a walk restarting
+    now, members held now), so stepping past it leaves that run open past
+    every bound for as long as the earlier leave is in its window. Run
+    1690476 sat open for 25 hours that way (#2191): the entry was never
+    cancelled and the family never stood down, until the module's own
+    hearth recovery ended the run."""
+
+    def world(self):
+        w = StallWorld([_q(7, "maraudon-orange", 23, "active", 0)], [], [])
+        for row in w.family("Zug"):
+            row["job"] = "dungeon:maraudon-orange"
+        w.wedge = stall.door_unreachable("maraudon-orange", 33)
+        return w
+
+    def test_the_first_wedge_leave_cancels_and_records(self):
+        w = self.world()
+        _pass(w)
+        self.assertEqual("cancelled", w.queue[0]["status"])
+        self.assertEqual(1, len(w.records))
+        self.assertEqual({jobs.DEFAULT}, {r["job"] for r in w.family("Zug")})
+
+    def test_a_wedged_run_open_inside_the_hold_is_left_anyway(self):
+        w = self.world()
+        _pass(w)
+        # The door is re-engaged under a new entry, its run is open, and it
+        # wedges again while the first leave's hold is still in its window.
+        w.queue.append(_q(9, "maraudon-orange", 23, "active", 1))
+        for row in w.family("Zug"):
+            row["job"] = "dungeon:maraudon-orange"
+        w.held_left = (stall.WINDOW_HOURS - 2) * 3600
+        _pass(w)
+        self.assertEqual("cancelled", w.queue[1]["status"])
+        self.assertEqual(2, len(w.records))
+        self.assertIn("restarted 33 times", w.records[1][7])
+        self.assertEqual({jobs.DEFAULT}, {r["job"] for r in w.family("Zug")})
+
+
 class TheDoorWedgeReads(unittest.TestCase):
     """The bridge's wedge judge (_door_wedge), loaded the way the breaker
     harness loads its neighbours: the evidence read and the clock are fakes,

@@ -22906,7 +22906,18 @@ class Bridge(discord.Client):
         if leave is None:
             return False
         held = await asyncio.to_thread(_stall_held, key, leave.door, int(rows[0]["id"]))
-        if held is not None and not dungeonstall.order_outlives(rows[0], held):
+        # The held door is stepped past (#1078) only when this pass judges
+        # it on ended runs or on silence: evidence about attempts already
+        # over, which the leave inside the window already answered. A wedge
+        # verdict is judged on the run open now, and stepping past it would
+        # leave that run open past every bound until the window lapses
+        # (#2191), so a wedged door is left again, and its hold written
+        # afresh, like an operator's later order.
+        if (
+            wedge is None
+            and held is not None
+            and not dungeonstall.order_outlives(rows[0], held)
+        ):
             return self._stall_step_past(key, rows, leave, held)
         await asyncio.to_thread(_stall_write, key, leave)
         # The cancellation and its pace record are durable before the job
