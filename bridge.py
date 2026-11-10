@@ -13576,8 +13576,10 @@ class Bridge(discord.Client):
         # Read once and used for both halves, because releasing an errand from
         # one leader and aiming another would be two leaders.
         step = await self._settle_vendor_errand_and_should_yield(names, leader)
-        if step == vendor_stall.YIELD:
-            return
+        # A YIELD ENDS THE LEADER'S VISIT, NOT THE PASS (#2215): the rows for
+        # members standing at a counter are written below, and this pass is
+        # the only one that writes them.
+        step = bag_pressure.step_after_yield(step)
         # AND THE SAME SETTLING FOR EVERY OTHER ROW CARRYING THIS PASS'S OWN
         # KEYWORD (infra#3746). The line above hands back the errand the LEADER
         # is walking; this one hands back a `vendor` aim that ended up on
@@ -20332,9 +20334,19 @@ class Bridge(discord.Client):
         free_slots: dict, in_run: bool,
     ) -> int:
         """Give an isolated, pressured member its own same-map vendor walk."""
+        # A MEMBER AT A COUNTER IS LEFT TO SELL, NOT RE-AIMED (#2215): the
+        # aim would end the hold the module put on it so its rows find it.
+        # Looked up: the adapter tests load this method in isolation.
+        fetch_town = globals().get("_fetch_town")
+        standing = set()
+        for name in names if fetch_town is not None else ():
+            if name != leader and bool(
+                    (await asyncio.to_thread(fetch_town, name)).vendor):
+                standing.add(name)
+        at_counter = frozenset(standing)
         targets = bag_pressure.stranded_vendor_aims(
             names, leader, positions, free_slots,
-            pressure=True, in_run=in_run,
+            pressure=True, in_run=in_run, at_counter=at_counter,
         )
         aimed = 0
         for name in targets:
