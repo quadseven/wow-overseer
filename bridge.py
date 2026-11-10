@@ -6118,9 +6118,10 @@ def _ensure_now_store() -> None:
 def _store_now_steps(steps, seen=None, mono=None) -> int:
     """Insert each step, or bump the identical one seen a moment ago.
 
-    "Seen a moment ago" is the in-memory map first, then the stored rows: a
-    bridge restart (every ship) empties the map, and a fresh row would reset
-    the first_seen that waits such as the 30-minute vendor wait are read from.
+    A step missing from the in-memory map is looked up among the stored rows
+    before it is inserted: a bridge restart (every ship) empties the map, and
+    a fresh row would restart the 30-minute vendor wait, which is read from
+    the row's first sighting.
     """
     seen = _NOW_SEEN if seen is None else seen
     now = time.monotonic() if mono is None else mono
