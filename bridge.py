@@ -5441,17 +5441,38 @@ def _silent_seconds(head_id: int, names: list) -> int | None:
     return rows[0]["silent_seconds"] if rows else None
 
 
+# queue head id -> monotonic time of the last stall pass that found the family
+# off its dungeon job (held at the bag floor, on a town errand). Read only by
+# _silent_stall.
+_OFF_DUNGEON_JOB_AT: dict = {}
+
+
 def _silent_stall(head: dict, names: list):
     """The Stuck for a family silent on the dungeon job `head` holds, or None.
 
     Only a started head on a family still on a dungeon job: a hold that took
-    the job away (town first, the bag hold) has said why it did.
+    the job away (town first, the bag hold) has said why it did, and the time it
+    held the family off the job is not silence on the door.
     """
     if head.get("status") != campaignqueue.ACTIVE:
         return None
+    head_id = int(head["id"])
     if not any(jobs.is_dungeon_job(job) for job in _jobs_of(names).values()):
+        # NOTE WHEN THE FAMILY WAS LAST OFF THE JOB. The database clock below
+        # runs from the head's start, so ten hours held at the bag floor read
+        # as ten hours of silence on a door the family was never on, and the
+        # pass that put it back on the job left the door and cancelled its row.
+        if len(_OFF_DUNGEON_JOB_AT) > 256:
+            _OFF_DUNGEON_JOB_AT.clear()
+        _OFF_DUNGEON_JOB_AT[head_id] = time.monotonic()
         return None
-    seconds = _silent_seconds(int(head["id"]), names)
+    seconds = _silent_seconds(head_id, names)
+    off_at = _OFF_DUNGEON_JOB_AT.get(head_id)
+    if seconds is not None and off_at is not None:
+        # The silence is the family's time ON the job: from the last pass it
+        # was held off it. A bridge restart forgets this and falls back to the
+        # database clock, which can only make the breaker fire later.
+        seconds = min(seconds, int(time.monotonic() - off_at))
     return dungeonstall.silent_run(str(head.get("keyword") or ""), seconds)
 
 

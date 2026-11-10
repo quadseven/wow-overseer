@@ -464,6 +464,7 @@ def _pass(world):
             "pymysql": PYMYSQL,
             "_connect": lambda: StoreConn(world),
             "_silent_seconds": lambda head_id, names: world.silent_seconds,
+            "_OFF_DUNGEON_JOB_AT": {},
             "_door_wedge": lambda head, names, leader: world.wedge,
             "_jobs_of": lambda names: {n: world.member_job(n) for n in names},
             "_fetch_queue_rows": world.fetch_queue,
