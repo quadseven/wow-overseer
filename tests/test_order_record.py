@@ -32,8 +32,6 @@ from test_campaign_queue import ORDER, FakeWorld, roster_rows  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
-DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
-
 TYPED = "queue Zug: ragefire 50 times, then wailing caverns 50 times"
 
 
@@ -381,9 +379,6 @@ class TheWiring(unittest.TestCase):
         ):
             body = ast.get_source_segment(BRIDGE, _function(name))
             self.assertIn("orderrecord.%s" % kind, body, name)
-
-    def test_the_module_ships_in_the_image(self):
-        self.assertIn(" orderrecord.py", DOCKERFILE)
 
 
 if __name__ == "__main__":

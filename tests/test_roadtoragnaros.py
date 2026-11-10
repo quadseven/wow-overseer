@@ -279,9 +279,6 @@ class TheRaidView(unittest.TestCase):
         self.assertIn("if (!m.measured)", body)
         self.assertIn("notMeasured()", body)
 
-    def test_the_dockerfile_ships_the_module(self):
-        self.assertIn("roadtoragnaros.py", self._read("Dockerfile"))
-
 
 if __name__ == "__main__":
     unittest.main()

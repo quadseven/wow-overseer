@@ -531,10 +531,6 @@ class ModelCallsHaveTheirOwnThreads(unittest.TestCase):
         self.assertEqual(off_pool, [], "_ask_llm handed to a non-model pool")
         self.assertEqual(on_pool, 6)
 
-    def test_the_image_ships_the_module(self):
-        docker = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn(" llmpool.py ", docker)
-
 
 if __name__ == "__main__":
     unittest.main()

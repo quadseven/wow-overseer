@@ -228,12 +228,6 @@ class TheHouseRules(unittest.TestCase):
                 chr(0x2014), (HERE / name).read_text(encoding="utf-8"), name
             )
 
-    def test_the_module_ships_in_the_image(self):
-        """A module the page imports and the image does not carry is a 503 on
-        a tab that was green in CI."""
-        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("guildcraft.py", dockerfile)
-
 
 if __name__ == "__main__":
     unittest.main()

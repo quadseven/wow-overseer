@@ -185,9 +185,6 @@ class ReviewFindings(unittest.TestCase):
         self.assertEqual(guildjobs._door_map("ubrs"), 229)
         self.assertEqual(guildjobs._door_map("moltencore"), 409)
 
-    def test_the_image_carries_the_module(self):
-        self.assertIn("spirerun.py", (HERE / "Dockerfile").read_text(encoding="utf-8"))
-
 
 class AStopSticks(unittest.TestCase):
     def test_a_cancelled_entry_stops_the_order_for_its_whole_wait(self):

@@ -366,14 +366,6 @@ class TheLoopServesEveryFamily(unittest.TestCase):
         )
         self.assertEqual(1, text.count('\n    _Pass("_tidy_loop"),\n'))
 
-    def test_the_image_ships_the_module(self):
-        import pathlib
-
-        docker = (
-            pathlib.Path(__file__).resolve().parent.parent / "Dockerfile"
-        ).read_text(encoding="utf-8")
-        self.assertIn(" tidy.py ", docker)
-
 
 if __name__ == "__main__":
     unittest.main()

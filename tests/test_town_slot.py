@@ -31,7 +31,6 @@ import travel
 
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = PACKAGE / "bridge.py"
-DOCKERFILE = PACKAGE / "Dockerfile"
 
 
 def _source() -> str:
@@ -552,9 +551,8 @@ class TheSlotIsHeldForTheLifeOfTheProcess(unittest.TestCase):
         init = _block("    def __init__(self, allowed_ids: frozenset[str]):")
         self.assertIn("lease=TOWN_SLOT_LEASE_SECONDS", init)
 
-    def test_the_module_is_imported_and_shipped(self):
+    def test_the_module_is_imported(self):
         self.assertIn("\nimport townslot\n", _source())
-        self.assertIn("townslot.py", DOCKERFILE.read_text(encoding="utf-8"))
 
     def test_the_default_lease_is_the_modules_own(self):
         """One number, argued for in one place. A second default here would be

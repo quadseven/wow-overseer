@@ -20,8 +20,6 @@ import natural
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
-DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
-
 FAMILY = ["Grug", "Grog", "Bork", "Og", "Ugga"]
 GOLD = guildwork.COPPER_PER_GOLD
 
@@ -151,9 +149,6 @@ class TheBridgeIsWired(unittest.TestCase):
     def test_the_ledger_read_fails_closed(self):
         self.assertIn("cur.execute(_NATURALIZED_SQL)", BRIDGE)
         self.assertIn("takers = {str(n) for n in family_names or ()}", BRIDGE)
-
-    def test_the_image_ships_the_module(self):
-        self.assertIn("natural.py", DOCKERFILE)
 
 
 if __name__ == "__main__":

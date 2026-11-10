@@ -35,8 +35,6 @@ import unittest
 HERE = pathlib.Path(__file__).resolve().parent.parent
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 MODULE = (HERE / "raidgoals.py").read_text(encoding="utf-8")
-DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
-
 BANNER = "// --- what the guild still needs before it can raid (infra#3508)"
 CSS_BANNER = "/* --- what the guild still needs before it can raid (infra#3508)"
 NEXT = "// --- the item tooltip, on every gear name (infra#3501)"
@@ -79,11 +77,6 @@ class TheEndpoint(unittest.TestCase):
         handler = SERVER[SERVER.index("def _raidgoals") : SERVER.index("def _loot")]
         self.assertIn("_fetch_raidgoals()", handler)
         self.assertNotIn("query.get", handler)
-
-    def test_the_module_ships_in_the_image(self):
-        """A module the page imports and the image does not carry is a crash
-        at pod start, long after CI went green."""
-        self.assertIn("raidgoals.py", DOCKERFILE)
 
 
 class TheReads(unittest.TestCase):
@@ -244,9 +237,6 @@ class BothGuildsGetAReadinessCard(unittest.TestCase):
         self.assertIn('"dungeon_access_template")', fetch)
         self.assertIn("raidready.ATTUNEMENT_QUESTS", fetch)
         self.assertIn("_RAID_WORN_OLD.format(holes=rholes)", fetch)
-
-    def test_the_module_ships_in_the_image(self):
-        self.assertIn("raidready.py", DOCKERFILE)
 
 
 if __name__ == "__main__":

@@ -28,8 +28,6 @@ with stub_modules(pymysql=PYMYSQL):
     import recruit
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
-DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
-
 # The family, as the planner sees them: names that are online and in the guild.
 ACTORS = ["Grug", "Ugga"]
 
@@ -777,13 +775,6 @@ class TheInterviewIntegration(unittest.TestCase):
 
         self.mocks["_interview_candidate"].assert_not_called()
         self.mocks["_insert_guild"].assert_not_called()
-
-
-class TheModuleShipsInTheImage(unittest.TestCase):
-    def test_recruit_is_copied_into_the_image(self):
-        """test_ship_manifest checks this generically; named here too so a
-        failure points at the module that moved rather than at a list."""
-        self.assertIn("recruit.py", DOCKERFILE.read_text(encoding="utf-8"))
 
 
 class GuildRecruitingPolicy(unittest.TestCase):

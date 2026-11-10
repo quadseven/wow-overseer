@@ -19,9 +19,6 @@ import unittest
 
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = PACKAGE / "bridge.py"
-DOCKERFILE = (
-    pathlib.Path(__file__).resolve().parents[1] / "docker/wow-overseer/Dockerfile"
-)
 
 
 def _source() -> str:
@@ -333,14 +330,6 @@ class TheRowIsTheRowTheExecutorReads(unittest.TestCase):
         for kind in ("'repair'", "'buy'", "'conjure'", "'give'"):
             with self.subTest(kind=kind):
                 self.assertIn(kind, code)
-
-
-class TheModuleShips(unittest.TestCase):
-    def test_the_planner_is_copied_into_the_image(self):
-        """A module the Dockerfile does not COPY is an ImportError at start."""
-        if not DOCKERFILE.exists():
-            self.skipTest("Dockerfile not in this checkout")
-        self.assertIn("towntrip.py", DOCKERFILE.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

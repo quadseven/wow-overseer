@@ -64,11 +64,6 @@ class BridgeWiringTests(unittest.TestCase):
         self.assertIn("WHERE house = %s", body)
         self.assertIn("overseer_auction_history", body)
 
-    def test_dockerfile_ships_the_module(self):
-        self.assertIn(
-            "housedemand.py", (ROOT / "Dockerfile").read_text(encoding="utf-8")
-        )
-
 
 if __name__ == "__main__":
     unittest.main()
