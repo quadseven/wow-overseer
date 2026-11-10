@@ -92,6 +92,10 @@
   transition: opacity 160ms ease-out, transform 160ms ease-out;
 }
 .ach-toast.is-leaving { opacity: 0; transform: translateY(-6px); }
+/* On a phone the toast opens above the tab bar, never over the pinned picture. */
+@media (max-width: 759.98px) {
+  .ach-toast { top: auto; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 12px); }
+}
 @media (min-width: 760px) {
   .ach-toast { left: auto; right: calc(24px + env(safe-area-inset-right)); top: 20px; width: min(420px, calc(100vw - var(--sidebar-w) - 48px)); }
 }
