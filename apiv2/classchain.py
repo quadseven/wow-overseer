@@ -202,13 +202,22 @@ def _learned(key, rewards, known: set, done: set) -> bool:
     return any(s in known for s in key[1]) or any(q in done for q in rewards)
 
 
+def race_groups(book, klass: int, race: int):
+    """(key, reward quest ids) for each reward group of the class that a quest
+    sold by no trainer offers and the race may take. A race that was not read
+    (0) cannot be tested against a race mask, so it is owed every group."""
+    for key, rewards in book.groups.items():
+        if key[0] != klass or book.trained.intersection(key[1]):
+            continue
+        if race < 1 or any(book.quests[q].admits(race) for q in rewards):
+            yield key, rewards
+
+
 def chains(book, char: dict, status: dict, done: set, known: set, blocked: int) -> list:
     klass, race = int(char.get("class_id") or 0), int(char.get("race") or 0)
     look = (status, done, blocked, int(char.get("level") or 0))
     out = []
-    for key, rewards in book.groups.items():
-        if key[0] != klass or book.trained.intersection(key[1]):
-            continue
+    for key, rewards in race_groups(book, klass, race):
         last = _variant(book, rewards, race, status, done)
         if last is not None:
             out.append(
