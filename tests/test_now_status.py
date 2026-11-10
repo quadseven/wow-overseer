@@ -538,8 +538,14 @@ class ARestartKeepsTheClock(unittest.TestCase):
         self.assertEqual(list(seen.values())[0][0], 41)
 
     def test_every_step_kind_takes_the_same_lookup_and_bump_path(self):
-        for kind in ("no_vendor", "bag_room", "equip_held", "bank_wait",
-                     "town_errand", "intent"):
+        for kind in (
+            "no_vendor",
+            "bag_room",
+            "equip_held",
+            "bank_wait",
+            "town_errand",
+            "intent",
+        ):
             with self.subTest(kind=kind):
                 log, _ = self.run_store(kind=kind, row_age=60)
                 finds = [a for v, sql, a in log if sql == nowstatus.FIND_SQL]
