@@ -17070,7 +17070,7 @@ class Bridge(discord.Client):
                      else "%s is on a step" % m.name)
             return False
         self._quester_last[m.name] = int(plan.move.quest)
-        step = questers.step_for(
+        step = plan.boat or questers.step_for(
             m, plan.move, cap, cat.quest(plan.move.quest), hunt=hunt,
             item_form=mono >= getattr(self, "_class_hunt_itemless_until", 0.0))
         if step is None:
