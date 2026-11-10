@@ -95,6 +95,30 @@ def kill(event_id, boss, at, who="Alder"):
     }
 
 
+# The columns _fetch_achievements selects from overseer_event. There is no id.
+HISTORY_COLUMNS = (
+    "character_name",
+    "kind",
+    "subject_id",
+    "subject_name",
+    "detail",
+    "level",
+    "map",
+    "zone",
+    "first_seen",
+    "last_seen",
+    "occurrences",
+    "item_guid",
+    "via",
+    "source",
+)
+
+
+def history_row(event):
+    """An event as the history read returns it: the real columns, no id."""
+    return {c: event.get(c) for c in HISTORY_COLUMNS}
+
+
 class Realm:
     """The realm reads, patched: narrow candidates and the history read."""
 
@@ -106,25 +130,28 @@ class Realm:
             "now": NOW,
         }
         self.history = {
-            "event_rows": list(history_events),
+            "event_rows": [history_row(e) for e in history_events],
             "cleared_runs": list(cleared),
         }
         self.history_reads = 0
+        self.candidate_reads = 0
+
+    def read_candidates(self, roster):
+        self.candidate_reads += 1
+        return self.candidates
 
     def read_history(self, roster):
         self.history_reads += 1
         return self.history
 
 
-def scan(store, realm):
+def scan(store, realm, roster=("Alder",)):
     with (
         mock.patch.object(map_server, "_connect", store.connect),
-        mock.patch.object(
-            map_server, "_read_clip_candidates", lambda roster: realm.candidates
-        ),
+        mock.patch.object(map_server, "_read_clip_candidates", realm.read_candidates),
         mock.patch.object(map_server, "_read_clip_history", realm.read_history),
         mock.patch.object(
-            map_server, "_clip_who", lambda: (["Alder"], ["Lantern Wardens"])
+            map_server, "_clip_who", lambda: (list(roster), ["Lantern Wardens"])
         ),
         mock.patch.object(map_server, "_clip_path", lambda name: "wd" + name),
     ):
@@ -255,6 +282,22 @@ class TheCandidateRead(unittest.TestCase):
         self.assertEqual(1, realm.history_reads)
         self.assertEqual(0, result["written"])
         self.assertEqual([], store.writes())
+
+    def test_history_rows_without_an_id_merge_with_candidates_on_the_natural_key(self):
+        recent = kill(9, 5, NOW - timedelta(minutes=3))
+        realm = Realm(events=[recent], history_events=[recent])
+        self.assertNotIn("id", realm.history["event_rows"][0])
+        result = scan(FakeStore(), realm)
+        self.assertEqual(1, result["written"])
+
+    def test_an_empty_roster_reads_nothing_and_writes_nothing(self):
+        realm = Realm(events=[kill(9, 5, NOW - timedelta(minutes=3))])
+        store = FakeStore()
+        result = scan(store, realm, roster=())
+        self.assertEqual(0, realm.candidate_reads)
+        self.assertEqual(0, realm.history_reads)
+        self.assertEqual({"written": 0, "expired": 0}, result)
+        self.assertEqual([], store.reads())
 
     def test_a_level_sixty_needs_no_history_read(self):
         up = {

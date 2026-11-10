@@ -4461,14 +4461,21 @@ def scan_clips() -> dict:
     """
     _ensure_clip_store()
     roster, guilds = _clip_who()
+    if not roster:
+        return {"written": 0, "expired": 0}  # IN () is not valid SQL
     found = _read_clip_candidates(roster)
     events = list(found["event_rows"])
     cleared = []
     # History is needed only to decide a boss or dungeon first.
     if found["run_rows"] or any(e["kind"] == "boss_kill" for e in events):
         history = _read_clip_history(roster)
-        have = {e["id"] for e in history["event_rows"]}
-        events = history["event_rows"] + [e for e in events if e["id"] not in have]
+        # The history read selects no id, so rows are matched on what they
+        # say: who, what kind, which subject, and when.
+        def natural(e):
+            return (e["character_name"], e["kind"], e["subject_id"], e["first_seen"])
+
+        have = {natural(e) for e in history["event_rows"]}
+        events = history["event_rows"] + [e for e in events if natural(e) not in have]
         cleared = history["cleared_runs"]
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
