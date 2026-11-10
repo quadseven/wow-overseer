@@ -29840,7 +29840,7 @@ _NEAREST_VENDOR_OFFSET_SQL = (
     "JOIN acore_world.creature cr ON cr.map = s.map_id "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
-    "AND (ct.npcflag & %s) <> 0 "
+    "AND (ct.npcflag & %s) <> 0 AND " + towntrip.REAL_SPAWN_SQL + " "
     "ORDER BY POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2) "
     "+ POW(cr.position_z - s.pos_z, 2) LIMIT 1"
 )
@@ -33854,7 +33854,8 @@ _BAG_VENDOR_SQL = (
     "JOIN acore_world.creature cr ON cr.id = nv.entry "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "JOIN acore_world.item_template it ON it.entry = nv.item "
-    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 "
+    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 AND "
+    + towntrip.REAL_SPAWN_SQL + " "
     "AND it.class = 1 AND it.subclass = 0 "
     "AND it.ContainerSlots > 0 AND it.BuyPrice > 0 "
     "AND ABS(cr.position_x - %s) <= %s AND ABS(cr.position_y - %s) <= %s "
@@ -33891,7 +33892,8 @@ _GEAR_VENDOR_SQL = (
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "JOIN acore_world.item_template it ON it.entry = nv.item "
     "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
-    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 AND nv.maxcount = 0 "
+    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 AND "
+    + towntrip.REAL_SPAWN_SQL + " AND nv.maxcount = 0 "
     "AND it.class IN (2,4) AND it.InventoryType BETWEEN 1 AND 28 "
     "AND it.BuyPrice > 0 "
     "AND ABS(cr.position_x - %s) <= %s AND ABS(cr.position_y - %s) <= %s "
@@ -33922,7 +33924,8 @@ _SUPPLY_VENDOR_SQL = (
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "JOIN acore_world.item_template it ON it.entry = nv.item "
     "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
-    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 AND nv.maxcount = 0 "
+    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 AND "
+    + towntrip.REAL_SPAWN_SQL + " AND nv.maxcount = 0 "
     "AND it.class = 0 AND it.subclass = 5 AND it.spellcategory_1 IN (%s, %s) "
     "AND (it.Flags & 2) = 0 AND it.BuyPrice > 0 AND it.RequiredLevel <= %s "
     "AND ABS(cr.position_x - %s) <= %s AND ABS(cr.position_y - %s) <= %s "
@@ -35082,7 +35085,7 @@ _NEAREST_COUNTER_SQL = (
     "JOIN acore_world.creature cr ON cr.map = s.map_id "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
-    "AND (ct.npcflag & %s) <> 0 "
+    "AND (ct.npcflag & %s) <> 0 AND " + towntrip.REAL_SPAWN_SQL + " "
     "ORDER BY d2 LIMIT 1"
 )
 
@@ -35326,7 +35329,8 @@ _ERRAND_VENDORS_SQL = (
     "FROM acore_world.creature cr "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
-    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 ORDER BY d2 LIMIT 60"
+    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 AND "
+    + towntrip.REAL_SPAWN_SQL + " ORDER BY d2 LIMIT 60"
 )
 
 
@@ -37026,7 +37030,7 @@ _TOWN_COUNTERS_SQL = (
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "LEFT JOIN acore_world.npc_vendor nv ON nv.entry = cr.id "
     "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
-    "AND (ct.npcflag & %s) <> 0"
+    "AND (ct.npcflag & %s) <> 0 AND " + towntrip.REAL_SPAWN_SQL
 )
 
 # Worn items and their wear, plus the three facts about the wearer that come
@@ -37347,7 +37351,8 @@ _REAGENT_VENDOR_SQL = (
     "FROM acore_world.npc_vendor nv "
     "JOIN acore_world.creature cr ON cr.id = nv.entry "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
-    "WHERE nv.item = %s AND cr.map = %s AND (ct.npcflag & %s) <> 0 "
+    "WHERE nv.item = %s AND cr.map = %s AND (ct.npcflag & %s) <> 0 AND "
+    + towntrip.REAL_SPAWN_SQL + " "
     "GROUP BY cr.id, ct.name, ct.faction, cr.map "
     "ORDER BY yards LIMIT %s"
 )
