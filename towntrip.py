@@ -779,12 +779,12 @@ def in_run_drink(members, apart) -> list[Errand]:
 def _in_run_conjure(ordered, wanted, supplied) -> list[Errand]:
     """Have a conjurer inside the run make the drink the party is about to lack.
 
-    A GIVE ONLY MOVES WHAT EXISTS, AND A LONG RUN OUTLASTS IT (#2213). Grug's
-    run 1761047 held its mage's 45 waters for one 20-stack give ten minutes in;
-    that left the mage one kept stack, `Member.spare` offered nothing, the
-    healer's stack ran out 59 minutes later, and the party stopped twice more
-    on "Waiting on Grog (low mana)" with nothing in the bridge able to make
-    another. A conjure is free, moves nobody (the module holds the caster still
+    A GIVE ONLY MOVES WHAT EXISTS, AND A LONG RUN OUTLASTS IT (#2213). A
+    mage entered a Blackrock Depths run with 45 waters and made one 20-stack
+    give ten minutes in; that left it one kept stack, `Member.spare` offered
+    nothing, the healer's stack ran out about an hour later, and the party
+    stopped twice more on "Waiting on <healer> (low mana)" with nothing in the
+    bridge able to make another. A conjure is free, moves nobody (the module holds the caster still
     for a few seconds and refuses it in combat, which the next 45 second pass
     retries) and is the same row the pre-run trip already writes, so the pass
     asks for one when a mana member below the floor is not being handed a stack

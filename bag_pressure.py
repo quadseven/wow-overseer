@@ -1055,8 +1055,8 @@ def stranded_vendor_aims(
     A MEMBER ALREADY STANDING AT A COUNTER IS NOT AIMED (#2215). It has done
     what the aim is for, and the module holds it there for a few minutes so the
     sell rows find it in range; a fresh aim ends that hold at once ("sent
-    somewhere else"). Measured live 2026-11-10: Grog reached a counter at
-    11:44:38 and was re-aimed at 11:45:20, and the stack it carried never sold.
+    somewhere else"). Seen on the dev realm: a member reached a counter and
+    was re-aimed under a minute later, and what it carried never sold.
     `at_counter` is the set of names the caller read at a counter.
     """
     if not pressure or in_run or not leader:
@@ -1081,10 +1081,10 @@ def step_after_yield(step: str) -> str:
 
     A vendor yield ends the LEADER's idle visit and hands its aim back. It does
     not end the pass: the pass is also the only writer of sell rows for members
-    standing at a counter, and returning on a yield skipped them (#2215: Grog
-    stood at a counter for five minutes with 16 sellable stacks, and the pass
-    at 12:14:25 yielded before it queued one). The pass carries on holding, so
-    it takes no aim and still writes rows for those already at a counter.
+    standing at a counter, and returning on a yield skipped them (#2215: a
+    member stood at a counter for its whole five minute hold with sellable
+    stacks and the pass yielded before it queued one). The pass carries on
+    holding, so it takes no aim and still writes rows for those at a counter.
     """
     return VENDOR_ERRAND_HOLD if step == "yield" else step
 

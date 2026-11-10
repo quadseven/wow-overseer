@@ -1,16 +1,14 @@
 """A member that reaches a vendor counter is sold for, not re-aimed or skipped (#2215).
 
-MEASURED LIVE, dev realm, 2026-11-10, Grug's family held in town for hours with
-Bork at 2 free slots and Grog at 0:
+Two hand-off gaps were seen on the dev realm, both from a cut-off member that
+had reached a counter with sellable stacks and 0 free slots:
 
-- 11:44:38 Grog stood at a counter, held for 360 seconds so its rows would find
-  it there. At 11:45:20 the bridge wrote it a new vendor aim ("cut off ... its
-  guarded self-contained vendor aim was set") and the module dropped the hold:
-  "it has been sent somewhere else and cannot be both at a counter and on its
-  way to one". The same happened to Bork and Grog at 11:10.
-- 12:14:09 Grog stood at a counter for 300 seconds with 16 sellable stacks. The
-  vendor pass at 12:14:25 returned on a leader yield before it queued any sale,
-  so no row was written and the hold ended "nothing came back for it".
+- A fresh vendor aim was written to a member standing at a counter, and the
+  module dropped the counter hold it had put on that member ("it has been sent
+  somewhere else and cannot be both at a counter and on its way to one").
+- The vendor pass returned on a leader yield before it queued any sale, so a
+  member held at a counter for its full hold got no row ("nothing came back
+  for it").
 """
 
 import ast

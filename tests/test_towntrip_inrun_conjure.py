@@ -1,12 +1,12 @@
 """A long dungeon run keeps its healer in drink: the mage conjures inside it (#2213).
 
-MEASURED LIVE, 2026-11-10, run 1761047: the mage entered with 45 waters, one
-20-stack went to the healer ten minutes in, and that was the only give for the
-next 80 minutes. Giving left the mage one kept stack, so no whole stack
-was spare, and `in_run_drink` planned gives only; the healer's stack lasted 59
-minutes and the party stopped twice more on "Waiting on <healer> (low mana)".
-A conjure moves nobody and is free, and the module refuses it in combat, so the
-in-run pass can ask for one.
+Seen on the dev realm: the mage entered a long run with a little over two
+stacks, one 20-stack went to the healer early, and that was the only give for
+the rest of the run. Giving left the mage one kept stack, so no whole stack was
+spare, and `in_run_drink` planned gives only; the healer's stack ran out about
+an hour in and the party stopped on "Waiting on <healer> (low mana)". A conjure
+moves nobody and is free, and the module refuses it in combat, so the in-run
+pass can ask for one.
 """
 
 import unittest
@@ -71,8 +71,7 @@ FAR = lambda giver, taker: True  # noqa: E731 - nobody in trade range
 
 def rows(members, apart=NEAR):
     return [
-        (e.member, e.kind, e.command)
-        for e in towntrip.in_run_drink(members, apart)
+        (e.member, e.kind, e.command) for e in towntrip.in_run_drink(members, apart)
     ]
 
 
