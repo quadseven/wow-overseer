@@ -40,6 +40,7 @@ import basepath
 import campaignplan
 import campaignqueue
 import chat
+import clipledger
 import council
 import crossing
 import decree
@@ -4316,6 +4317,124 @@ def start_stream_sweeper(every: float = STREAM_SWEEP_SECONDS, sweep=None,
     return thread
 
 
+# --- the clip ledger (clipledger.py) ------------------------------------
+#
+# WHY THIS LOOP HOSTS THE SCAN. It already runs on a timer, already holds the
+# database, already creates the sibling table the stream agent polls
+# (overseer_stream), and the reads the scan needs (the Chronicle's events and
+# runs, the guild-joined loot rows, the families and their guilds) all live in
+# this process. The bridge tick has none of those helpers.
+CLIP_SCAN_SECONDS = 60
+
+# Loot is held until its equip is seen or the wait runs out, and a clip can be
+# cut only inside the agent's buffer, so rows older than this are never needed.
+_CLIP_LOOT_MINUTES = 20
+
+_CLIP_LOOT_SQL = (
+    "SELECT e.id, e.character_name, e.kind, e.subject_id, e.subject_name, "
+    "e.subject_quality, e.item_guid, e.first_seen, g.name AS guild "
+    "FROM overseer_event e "
+    "LEFT JOIN characters c ON c.name = e.character_name "
+    "LEFT JOIN guild_member gm ON gm.guid = c.guid "
+    "LEFT JOIN guild g ON g.guildid = gm.guildid "
+    "WHERE e.kind IN ('item_loot', 'item_equip') "
+    "AND e.first_seen >= NOW() - INTERVAL %d MINUTE "
+    "ORDER BY e.first_seen ASC LIMIT 2000"
+) % _CLIP_LOOT_MINUTES
+
+
+def _cleared_run_cards(f: dict) -> list:
+    """The Chronicle's assembled runs that cleared their dungeon, as the
+    ledger reads them: map, dungeon, leader and when."""
+    events = [e for e in f["event_rows"] if e["kind"] != "death"]
+    first_worn = recap.first_equips(f["event_rows"])
+    cards = []
+    for run in f["run_rows"]:
+        card = achievements.assemble_run(
+            run, events, f["death_rows"], f["items"], f["icons"],
+            f["boss_drops"], f["roster"], f["now"], first_worn, f["book"])
+        if card["cleared"] and card["at"]:
+            cards.append({
+                "map_id": card["map_id"], "dungeon": card["dungeon"],
+                "leader": card["leader"],
+                "at": datetime.strptime(card["at"], "%Y-%m-%dT%H:%M:%S"),
+            })
+    return cards
+
+
+def _clip_path(name: str) -> str:
+    """The family broadcast path a clip is cut from, or "" with no view."""
+    return family.broadcast_path(name) if family.is_streamed(name) else ""
+
+
+def _read_clip_inputs() -> dict:
+    """Everything clipledger.plan_requests reads, from the realm."""
+    roster = [n for names in FAMILIES.families().values() for n in names]
+    f = _fetch_achievements(roster)
+    with realmread.Session(_connect) as rd:
+        loot_rows = rd.rows(_CLIP_LOOT_SQL, what="clip loot")
+    return {
+        "loot_rows": loot_rows,
+        "event_rows": f["event_rows"],
+        "cleared_runs": _cleared_run_cards(f),
+        "family_guilds": [g["name"] for g in FAMILIES.guilds()],
+        "roster": roster,
+        "now": f["now"],
+    }
+
+
+def _ensure_clip_store() -> None:
+    """Create overseer_clip if it is missing. Idempotent."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(clipledger.DDL)
+
+
+_CLIP_INSERT = (
+    "INSERT IGNORE INTO overseer_clip"
+    " (kind, `character`, stream_path, event_key, event_at, window_start,"
+    "  window_end, state, detail)"
+    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+)
+
+
+def scan_clips() -> dict:
+    """One pass: write a row for each new trigger, then mark retention.
+
+    Safe to run any number of times and across restarts: event_key is unique
+    and INSERT IGNORE drops a repeat. Nothing is ever deleted here.
+    """
+    sources = _read_clip_inputs()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id, event_key, state, created_at FROM overseer_clip")
+        ledger = list(cur.fetchall())
+        planned = clipledger.plan_requests(
+            existing_keys=[r["event_key"] for r in ledger],
+            path_of=_clip_path, **sources)
+        for row in planned:
+            cur.execute(_CLIP_INSERT, (
+                row["kind"], row["character"], row["stream_path"],
+                row["event_key"], row["event_at"], row["window_start"],
+                row["window_end"], row["state"], row["detail"]))
+        stale = clipledger.expired_ids(ledger, now=sources["now"])
+        if stale:
+            marks = ", ".join(["%s"] * len(stale))
+            cur.execute(
+                "UPDATE overseer_clip SET state = 'expired'"  # noqa: S608 - placeholders from a COUNT, values bound
+                " WHERE state = 'ready' AND id IN (%s)" % marks, tuple(stale))
+    return {"written": len(planned), "expired": len(stale)}
+
+
+def start_clip_scanner(every: float = CLIP_SCAN_SECONDS, scan=None,
+                       stop: threading.Event | None = None) -> threading.Thread:
+    """Run `scan` (scan_clips) every `every` seconds on a daemon thread."""
+    thread = threading.Thread(
+        target=_sweep_until,
+        args=(stop or threading.Event(), every, scan or scan_clips),
+        name="clip-scan", daemon=True)
+    thread.start()
+    return thread
+
+
 def _character_exists_by_name(name: str) -> bool:
     """A watch request for a character that does not exist should say so,
     not queue a client for nobody."""
@@ -6878,6 +6997,14 @@ def main() -> None:
     # Started whatever the store said: a sweep that fails logs and tries
     # again on the next tick.
     start_stream_sweeper()
+
+    # The clip ledger: a missing table or a failed scan is logged and retried
+    # on the next tick; it never stops the map.
+    try:
+        _ensure_clip_store()
+    except Exception:
+        log.exception("clip ledger unavailable - no clip requests will be written")
+    start_clip_scanner()
 
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     log.info("serving on :%d (threads: %s)", PORT, threading.active_count())
