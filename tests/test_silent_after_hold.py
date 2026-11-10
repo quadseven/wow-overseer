@@ -11,7 +11,6 @@ The silence clock must restart when a family comes back from a hold, and still
 fire when a family is genuinely on the job and nothing happens.
 """
 
-import time
 import unittest
 
 import campaignqueue
