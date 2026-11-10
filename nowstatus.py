@@ -710,6 +710,50 @@ def compose(member: dict, facts: dict | None, now_at: int | None = None) -> dict
     }
 
 
+# AN IDLE SEAT IS EARNED (#2178). A member with no step, no intent and no guild
+# job used to read "Idle: no errand and no hold found" whatever it was doing:
+# the bridge records no step for a guildmate in a guild run or one the module's
+# own play is leveling. `idle_reading` re-reads such a member off records the
+# bridge keeps: an active guild run, the newest level gained (overseer_level),
+# and the raid tracker's next level milestone (roadtoragnaros, B: 40).
+IN_RUN = "In a guild run"
+OWN_PLAY = "Playing on its own"
+STALLED = "Stalled"
+READ_DOINGS = frozenset({IN_RUN, OWN_PLAY, STALLED})
+MILESTONE_LEVEL = 40
+STALL_SECONDS = 24 * 3600
+
+
+def idle_reading(now: dict, in_run, level, last_level_at, now_at) -> dict:
+    """`compose`'s answer for a member that came out Idle, re-read; anything
+    else is returned as it is. Adds `stalled_s`: seconds without a level for a
+    member below the milestone with none gained in STALL_SECONDS (a member with
+    no level on record is stalled for at least that long), else None.
+    """
+    out = dict(now, stalled_s=None)
+    if now.get("doing") != "Idle":
+        return out
+    since = None
+    if last_level_at and now_at:
+        since = max(0, int(now_at) - int(last_level_at))
+    if in_run:
+        doing, line, held = IN_RUN, "Doing: a guild run.", None
+    elif since is not None and since < STALL_SECONDS:
+        doing, held = OWN_PLAY, since
+        line = "Playing on its own; last level %s ago." % duration_words(since)
+    elif int(level or 0) < MILESTONE_LEVEL:
+        held = max(since or 0, STALL_SECONDS)
+        doing = STALLED
+        line = "Stalled: no level gained for %s%s." % (
+            "" if since is not None else "at least ",
+            duration_words(held),
+        )
+        out["stalled_s"] = held
+    else:
+        return out
+    return dict(out, doing=doing, waiting="", for_s=held, line=line, known=True)
+
+
 # The waiting text for a walk that keeps ending and restarting. apiv2/members.py
 # matches on RESTART_WAITING, so both read the wording from here.
 RESTART_WAITING = "the walk has ended and restarted"

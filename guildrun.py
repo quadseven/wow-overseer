@@ -2690,6 +2690,13 @@ def _runs(reader, where: str, params: tuple, n: int) -> list:
     return _rows(reader, sql, params + (n,), "overseer_guild_run", thin)
 
 
+def active_names(reader) -> set:
+    """Everyone in a run that is queued or inside, for the roster's reading of
+    a member the bridge records no step for (nowstatus.idle_reading)."""
+    rows = _runs(reader, "state IN (%s)" % ", ".join(["'queued'", "'inside'"]), (), 200)
+    return {m["name"] for r in rows for m in _member_list(r.get("members"))}
+
+
 def recent(reader, guild: str | None = None, n: int = 30) -> list:
     """The newest `n` runs in any state, of one guild or of every guild, as
     rows newest first (page folds them; run_view shapes one)."""
