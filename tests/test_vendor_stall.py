@@ -304,6 +304,65 @@ class MovementTests(unittest.TestCase):
         self.assertFalse(result.readable)
 
 
+class QueueBoundTests(unittest.TestCase):
+    """The sale queue itself is bounded (#1983).
+
+    Every verdict in `decide` treats an unanswered queue as a reason to
+    hold, because a draining queue is the one fact that says the trip
+    still has work to do. A queue whose oldest row has gone unanswered
+    for the whole bound is not draining, it is stuck: its holders cannot
+    be served from where they stand, and the leader, and every member
+    the module holds for the leader, waits on rows that can never be
+    answered. `queue_bound` is the recovery for that shape alone; it
+    never overrules a verdict `decide` already reached.
+    """
+
+    def bound(self, decision=None, outstanding=2, oldest=None):
+        if decision is None:
+            decision = vendor_stall.Decision(vendor_stall.HOLD, "held")
+        if oldest is None:
+            oldest = vendor_stall.QUEUE_BOUND_SECONDS
+        return vendor_stall.queue_bound(decision, outstanding, oldest)
+
+    def test_an_unanswered_queue_past_the_bound_releases_the_errand(self):
+        decision = self.bound()
+        self.assertEqual(decision.action, vendor_stall.RELEASE)
+        self.assertIn("unanswered", decision.reason)
+
+    def test_an_unanswered_queue_inside_the_bound_is_held(self):
+        held = vendor_stall.Decision(vendor_stall.HOLD, "held")
+        decision = self.bound(
+            decision=held, oldest=vendor_stall.QUEUE_BOUND_SECONDS - 1
+        )
+        self.assertIs(decision, held)
+
+    def test_a_drained_queue_is_not_the_bounds_business(self):
+        held = vendor_stall.Decision(vendor_stall.HOLD, "held")
+        decision = self.bound(
+            decision=held, outstanding=0, oldest=vendor_stall.QUEUE_BOUND_SECONDS * 10
+        )
+        self.assertIs(decision, held)
+
+    def test_an_unreadable_count_never_releases(self):
+        held = vendor_stall.Decision(vendor_stall.HOLD, "held")
+        decision = self.bound(
+            decision=held, outstanding=-1, oldest=vendor_stall.QUEUE_BOUND_SECONDS * 10
+        )
+        self.assertIs(decision, held)
+
+    def test_an_unknown_queue_age_never_releases(self):
+        held = vendor_stall.Decision(vendor_stall.HOLD, "held")
+        decision = vendor_stall.queue_bound(held, 2, None)
+        self.assertIs(decision, held)
+
+    def test_a_verdict_already_reached_is_not_overruled(self):
+        for action in (vendor_stall.RELEASE, vendor_stall.YIELD):
+            with self.subTest(action=action):
+                judged = vendor_stall.Decision(action, "already judged")
+                decision = self.bound(decision=judged)
+                self.assertIs(decision, judged)
+
+
 class BridgeIntegrationTests(unittest.TestCase):
     def test_snapshot_reader_guards_missing_tables_and_columns(self):
         source = _block("def _fetch_vendor_position(")

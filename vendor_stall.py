@@ -172,6 +172,59 @@ def without_left_behind(
     )
 
 
+# THE SALE QUEUE ITSELF IS BOUNDED (#1983). Every verdict in decide()
+# treats an unanswered queue as a reason to hold, and rightly: a queue
+# that is draining is the one fact that says the trip still has work to
+# do, which is why the completion settle (bag_pressure.vendor_errand_step)
+# may end an errand only on a quiet queue. But a queue whose oldest row
+# has gone unanswered for the whole bound is not draining. Its holders
+# cannot be served from where they stand (a member the module holds for
+# the leader is never walked to a counter), so the rows wait forever,
+# and with them the leader, and with the leader every member held for
+# it. Read live on the dev realm on 2026-11-10: a leader stood on a
+# vendor errand for over 55 minutes with all five members stuck, the
+# third vendor-shaped family stall in 24 hours. The one yield that does
+# not ask about the queue, the two-hour bag wait, does not reach a
+# leader standing at a counter, and the counter yield asks for a
+# drained queue first. So the queue's own age is the clock this shape
+# is judged on: the oldest unanswered row, read from the rows
+# themselves, which no restarting step age can hide. The same 30
+# minutes as the module's other vendor bounds.
+QUEUE_BOUND_SECONDS = 30 * 60.0
+
+
+def queue_bound(
+    decision: Decision,
+    outstanding: int,
+    oldest_seconds: float | None,
+    bound: float = QUEUE_BOUND_SECONDS,
+) -> Decision:
+    """Hand back a vendor errand whose sale queue can never be answered.
+
+    `decision` is the verdict decide() reached; anything but a hold is
+    returned untouched, because a recovery already judged is not this
+    function's to overrule. A drained queue (0) is the ordinary
+    completion settle's business, an unreadable one (-1) is a reason to
+    hold, as everywhere else in this module, and an unknown age (None)
+    proves nothing. Only a queue still owed an answer whose oldest row
+    has waited out the bound is released, and the release is what frees
+    the family: the module starts walking its held members back once
+    the errand leaves the leader's column, and the standing rows are
+    refused as their holders are polled away from the counter.
+    """
+    if decision.action != HOLD or outstanding <= 0 or oldest_seconds is None:
+        return decision
+    if oldest_seconds < max(0.0, float(bound)):
+        return decision
+    return Decision(
+        RELEASE,
+        "the sale queue has been unanswered for over %d minutes "
+        "(%d sale(s) still waiting, the oldest %d minutes old); "
+        "handing the errand back frees the family held on it"
+        % (int(bound // 60), outstanding, int(oldest_seconds // 60)),
+    )
+
+
 def following(names, states: Mapping[str, str]) -> tuple[str, ...]:
     """The members whose distance says whether the family follows the trip.
 
