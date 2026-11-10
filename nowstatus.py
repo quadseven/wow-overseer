@@ -76,6 +76,13 @@ BUMP_SQL = (
     "UPDATE overseer_now_step SET occurrences = occurrences + 1, last_seen = NOW() "
     "WHERE id = %s"
 )
+# The same step stored by an earlier bridge: a restart empties the in-memory
+# map, and a fresh row would restart every clock read from first_seen.
+FIND_SQL = (
+    "SELECT id FROM overseer_now_step WHERE subject = %s AND scope = %s "
+    "AND kind = %s AND doing = %s AND waiting = %s "
+    "AND last_seen > NOW() - INTERVAL %s SECOND ORDER BY id DESC LIMIT 1"
+)
 PRUNE_SQL = "DELETE FROM overseer_now_step WHERE last_seen < NOW() - INTERVAL %s HOUR"
 READ_SQL = (
     "SELECT subject, scope, kind, doing, waiting, occurrences, "

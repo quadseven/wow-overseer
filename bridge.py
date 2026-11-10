@@ -6116,7 +6116,13 @@ def _ensure_now_store() -> None:
 
 
 def _store_now_steps(steps, seen=None, mono=None) -> int:
-    """Insert each step, or bump the identical one seen a moment ago."""
+    """Store each step, or bump the identical one seen a moment ago.
+
+    A step missing from the in-memory map is looked up among the stored rows
+    before it is inserted: a bridge restart (every ship) empties the map, and
+    a fresh row would restart the 30-minute vendor wait, which is read from
+    the row's first sighting.
+    """
     seen = _NOW_SEEN if seen is None else seen
     now = time.monotonic() if mono is None else mono
     wrote = 0
@@ -6128,10 +6134,20 @@ def _store_now_steps(steps, seen=None, mono=None) -> int:
                 cur.execute(nowstatus.BUMP_SQL, (hit[0],))
                 seen[key] = (hit[0], now)
             else:
-                cur.execute(nowstatus.INSERT_SQL, (
-                    step.subject[:24], step.scope, step.kind[:24],
-                    step.doing[:200], step.waiting[:200]))
-                seen[key] = (int(cur.lastrowid), now)
+                values = (step.subject[:24], step.scope, step.kind[:24],
+                          step.doing[:200], step.waiting[:200])
+                cur.execute(nowstatus.FIND_SQL,
+                            (*values, int(nowstatus.SAME_STEP_SECONDS)))
+                found = cur.fetchone()
+                row_id = None
+                if found:
+                    row_id = found["id"] if isinstance(found, dict) else found[0]
+                if row_id:
+                    cur.execute(nowstatus.BUMP_SQL, (row_id,))
+                    seen[key] = (int(row_id), now)
+                else:
+                    cur.execute(nowstatus.INSERT_SQL, values)
+                    seen[key] = (int(cur.lastrowid), now)
             wrote += 1
         cur.execute(nowstatus.PRUNE_SQL, (nowstatus.KEEP_HOURS,))
     for key in [k for k, v in seen.items() if now - v[1] > nowstatus.SAME_STEP_SECONDS]:
