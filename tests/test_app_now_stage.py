@@ -274,7 +274,9 @@ class TheSwitcherDot(unittest.TestCase):
 
     def test_another_family_is_lit_when_it_is_streamed(self):
         # Its picture is not connected on a phone, so its state is always off.
-        self.assertTrue(self.dot({"fam": "Grug", "name": "a", "url": "u1"}, "Zug", "off"))
+        self.assertTrue(
+            self.dot({"fam": "Grug", "name": "a", "url": "u1"}, "Zug", "off")
+        )
         self.assertFalse(self.dot({"fam": "Mok", "name": "c", "url": ""}, "Zug", "off"))
 
     def test_no_such_family_is_dark(self):
