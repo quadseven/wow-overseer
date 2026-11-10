@@ -6448,6 +6448,25 @@ def across_the_water(m, spot) -> bool:
 def class_boat_step(m, move, spot, recent, hunts=None, now=0.0):
     """(step or None, what it does, note) for a class move whose spot is across
     the island's shore from the member, None when it is not."""
+    return island_boat_step(
+        m,
+        move,
+        spot,
+        recent,
+        classquest.ACTION,
+        classquest.CROSS_ACTION,
+        class_crossing_cooling,
+        hunts,
+        now,
+    )
+
+
+def island_boat_step(
+    m, move, spot, recent, action, cross_action, cooling, hunts=None, now=0.0
+):
+    """class_boat_step for any caller: the ride row is sourced as `cross_action`
+    and held by that caller's crossing clock `cooling`. The class quest and the
+    quester (#2194) share this one step and this one hold."""
     if not across_the_water(m, spot):
         return None
     if not m.alive:
@@ -6462,13 +6481,13 @@ def class_boat_step(m, move, spot, recent, hunts=None, now=0.0):
             "%s: across the water; no boat step available (the module refused it: %s)"
             % (m.name, wall),
         )
-    if class_crossing_cooling(m.name, recent):
+    if cooling(m.name, recent):
         if hunts:
             hunts.pause(m.name, move.quest, now)
         return None, move.said, ""
     step = guildcorps.Step(
         m.name,
-        classquest.ACTION,
+        action,
         int(move.quest),
         move.said,
         rows=(
@@ -6476,7 +6495,7 @@ def class_boat_step(m, move, spot, recent, hunts=None, now=0.0):
                 "job",
                 classquest.ride_command(ISLAND_MAP, *classquest.ISLAND_BOAT_STOP),
                 "",
-                source_for(classquest.CROSS_ACTION, m.name),
+                source_for(cross_action, m.name),
             ),
         ),
         goal="the Rut'theran boat",

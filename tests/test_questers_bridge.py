@@ -324,6 +324,14 @@ class TheQuesterPass(unittest.TestCase):
         run.self._class_hunt_unsupported_until = bridge.time.monotonic() + 600
         self.assertEqual(run.run().started, [])
 
+    def test_an_island_quester_with_a_mainland_giver_starts_the_boat_ride(self):
+        from test_questers_across_water import cat, isle
+
+        run = Pass([isle()], cat=cat())
+        (step,) = run.run().started
+        self.assertIsNone(step.walk)
+        self.assertTrue(step.rows[0].command.startswith("ride-to-stop map:1 "))
+
 
 if __name__ == "__main__":
     unittest.main()
