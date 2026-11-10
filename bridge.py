@@ -5332,7 +5332,7 @@ def _pace_score(unscored: list, runs: list) -> list:
 # column.
 
 
-def _stuck_doors(cur, names: list, head: dict | None = None) -> dict:
+def _stuck_doors(cur, names: list, head: dict | None = None, parked_at=None) -> dict:
     """dungeonstall.stuck_doors for the family's runs in the window, on `cur`.
 
     With the queue entry `head` (carrying `created_at`), an operator's order is
@@ -5346,7 +5346,7 @@ def _stuck_doors(cur, names: list, head: dict | None = None) -> dict:
     if runs is None:
         runs = _planner_rows(cur, dungeonstall.RUNS_SQL.format(holes=marks), args,
                              "the run ledger by door")
-    runs = dungeonstall.since_order(runs or [], head)
+    runs = dungeonstall.since_order(runs or [], head, parked_at)
     ids = dungeonstall.event_ids(runs)
     if not ids:
         return {}
@@ -5366,9 +5366,10 @@ def _stall_barred(cur, key: str, names: list) -> dict:
     return {**dungeonstall.held_barred(held or []), **barred}
 
 
-def _stall_reads(names: list, head: dict | None = None) -> dict:
+def _stall_reads(names: list, head: dict | None = None, parked_at=None) -> dict:
     """The family's stuck doors. Reads only. An operator's `head` order is
-    judged on the runs after it was queued (#2058)."""
+    judged on the runs after it was queued (#2058), and after its last hold
+    (`parked_at`, #2216)."""
     with _connect() as conn, conn.cursor() as cur:
         if head is not None and dungeonpace.operator_ordered(head):
             rows = _planner_rows(
@@ -5376,7 +5377,7 @@ def _stall_reads(names: list, head: dict | None = None) -> dict:
                 (int(head["id"]),), "the order's queue time")
             if rows and rows[0].get("created_at") is not None:
                 head = {**head, "created_at": rows[0]["created_at"]}
-        return _stuck_doors(cur, names, head)
+        return _stuck_doors(cur, names, head, parked_at)
 
 
 def _silent_seconds(head_id: int, names: list) -> int | None:
@@ -5617,13 +5618,26 @@ def _stall_held(key: str, door: str, head_id: int = 0) -> dict | None:
         return dict(rows[0]) if rows else None
 
 
+def _order_parked(key: str, door: str, head_id: int = 0) -> dict | None:
+    """The newest hold of an operator's order for this door (#2216), or None:
+    the pace row's id, when it was written (`created_at`), the seconds its
+    backoff has left (`left_s`, the database's clock) and whether queue row
+    `head_id` was ordered after it (`ordered_after`)."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(dungeonstall.PARKED_SQL,
+                    dungeonstall.parked_args(key, door, head_id))
+        rows = cur.fetchall()
+        return dict(rows[0]) if rows else None
+
+
 # (family key, door) -> the id of the pace row whose hold was last said, so
 # the held-door line is logged once per door per hold window (#1078).
 _STALL_HOLD_SAID: dict = {}
 
 
 def _stall_write(key: str, leave) -> None:
-    """Cancel the stuck door's entries and record why, in one transaction."""
+    """Cancel the stuck door's own entries (an operator's order is held, not
+    cancelled, #2216) and record why, in one transaction."""
     with _connect() as conn, conn.cursor() as cur:
         conn.begin()
         try:
@@ -5633,8 +5647,11 @@ def _stall_write(key: str, leave) -> None:
                 cur.execute(dungeonpace.CLOSE_SQL, ("left", int(opened["id"])))
             for qid in leave.drop:
                 cur.execute(dungeonstall.CANCEL_SQL, (qid,))
+            # An operator's order is held, never cancelled (#2216): its rows
+            # are not in `drop`, and its pace row is the hold's own decision.
             cur.execute(dungeonpace.INSERT_SQL, (
-                key, dungeonstall.DECISION, leave.door, "", leave.drop[0], "rule",
+                key, leave.decision, leave.door, "",
+                (leave.drop or leave.park)[0], "rule",
                 None, leave.why[:255], ""))
             cur.execute(dungeonpace.CLOSE_SQL, ("left", int(cur.lastrowid or 0)))
             conn.commit()
@@ -22924,7 +22941,20 @@ class Bridge(discord.Client):
         if raidrun.is_raid(str(rows[0].get("keyword") or "")):
             return False
         names = list(fam["names"])
-        stuck = await asyncio.to_thread(_stall_reads, names, rows[0])
+        # AN OPERATOR'S ORDER IS HELD, NEVER CANCELLED (#2216): inside its
+        # backoff the family steps past it; after, it runs again and is
+        # judged on the runs after the hold only.
+        parked = None
+        if dungeonpace.operator_ordered(rows[0]):
+            door = campaignplan.wing_of(str(rows[0].get("keyword") or ""))
+            if door:
+                parked = dungeonstall.order_hold(rows[0], await asyncio.to_thread(
+                    _order_parked, key, door, int(rows[0]["id"])))
+            if parked is not None and int(parked.get("left_s") or 0) > 0:
+                return self._order_step_past(key, rows, door, parked)
+        stuck = await asyncio.to_thread(
+            _stall_reads, names, rows[0],
+            parked["created_at"] if parked is not None else None)
         silent_stall = await asyncio.to_thread(_silent_stall, rows[0], names)
         if silent_stall is not None:
             stuck[silent_stall.door] = silent_stall
@@ -22938,7 +22968,10 @@ class Bridge(discord.Client):
         leave = dungeonstall.leave(rows, stuck)
         if leave is None:
             return False
-        held = await asyncio.to_thread(_stall_held, key, leave.door, int(rows[0]["id"]))
+        held = None
+        if not leave.park:
+            held = await asyncio.to_thread(
+                _stall_held, key, leave.door, int(rows[0]["id"]))
         # The held door is stepped past (#1078) only when this pass judges
         # it on ended runs or on silence: evidence about attempts already
         # over, which the leave inside the window already answered. A wedge
@@ -22959,6 +22992,25 @@ class Bridge(discord.Client):
             quest=True, why=leave.why), names, key)
         log.warning("stall: %s: %s", campaignqueue._family(key), said)
         return True
+
+    def _order_step_past(self, key: str, rows: list, door: str, parked: dict) -> bool:
+        """An operator's order for `door` is held (#2216): step past it until
+        its backoff ends, saying so once per hold. Only when nothing is left
+        behind it does the queue hold (True)."""
+        rest = [r for r in rows
+                if campaignplan.wing_of(str(r.get("keyword") or "")) != door]
+        marker = (key, door)
+        if _STALL_HOLD_SAID.get(marker) != parked["id"]:
+            _STALL_HOLD_SAID[marker] = parked["id"]
+            after = ("%s runs meanwhile" % council.keyword_place(str(rest[0]["keyword"]))
+                     if rest else "nothing else is queued, so the family waits")
+            log.info("stall: %s: the order for %s is held, not cancelled; it %s; %s",
+                     campaignqueue._family(key), door,
+                     dungeonstall.held_until_said(parked["left_s"]), after)
+        if not rest:
+            return True
+        rows[:] = rest
+        return False
 
     def _stall_step_past(self, key: str, rows: list, leave, held: dict) -> bool:
         """The head door was already left in this window (#1078): step past it.

@@ -25,7 +25,8 @@ progress, which earns the door another run.
   word). How far it got is the mask on its last `boss` row, 0 for none.
 
 WHAT HAPPENS (`leave`, carried out by the bridge). When the family's queue head
-is a stuck door, every pending entry for that door is cancelled, the family is
+is a stuck door, every pending entry for that door is cancelled (except an
+operator's order, which is held for ORDER_BACKOFF and then runs again, #2216), the family is
 put on the default job at once (mod-overseer stands its run coordinator down
 on a job that leaves `dungeon`, and walks the party out if it is inside), and
 a closed overseer_dungeon_pace row (decision DECISION) records why. The next
@@ -81,6 +82,13 @@ import jobs
 # The pace table's decision for a door left after two stalls. Recorded closed:
 # it opens no stretch for the ladder to close later.
 DECISION = "stall_out"
+# The pace row for an operator's order the breaker held instead of leaving
+# (#2216). It bars no door for the planner: only the order's own backoff reads it.
+ORDER_DECISION = "order_held"
+# How long a held operator order waits before it runs again. One named
+# constant, far shorter than WINDOW_HOURS: the order is the operator's, so the
+# door is not barred for two days, only given a short rest.
+ORDER_BACKOFF = timedelta(minutes=15)
 STALLED = "stalled"
 WINDOW_HOURS = dungeonpace.WINDOW_HOURS
 NO_PROGRESS_AFTER = timedelta(hours=2)
@@ -356,7 +364,7 @@ def stuck_doors(runs: list, events: list) -> dict:
     return out
 
 
-def since_order(runs: list, head: dict | None) -> list:
+def since_order(runs: list, head: dict | None, parked_at=None) -> list:
     """The runs the stall breaker may judge for queue entry `head`.
 
     AN ORDER IS NOT CANCELLED BY STALLS THAT PREDATE IT (#2058). On wow-dev
@@ -368,9 +376,18 @@ def since_order(runs: list, head: dict | None) -> list:
     of the window. An operator's order is judged on the runs that began at or
     after it was queued; the overseer's own entries keep the whole window. A
     run with no start time is kept: it is not known to predate the order.
+
+    A HELD ORDER IS JUDGED ON RUNS AFTER ITS HOLD (#2216). `parked_at` is when
+    the breaker last held this order (`order_hold`): the stalls that earned
+    the hold are not read again when the order runs after its backoff, or it
+    would be held again at once and never run.
     """
     since = (head or {}).get("created_at")
-    if since is None or not dungeonpace.operator_ordered(head):
+    if not dungeonpace.operator_ordered(head):
+        return list(runs or [])
+    if parked_at is not None and (since is None or parked_at > since):
+        since = parked_at
+    if since is None:
         return list(runs or [])
     return [
         r for r in runs or () if r.get("started_at") is None or r["started_at"] >= since
@@ -437,11 +454,32 @@ def order_outlives(head: dict, held: dict | None) -> bool:
 
 @dataclass(frozen=True)
 class Leave:
-    """The queue entries to cancel for a stuck door, and the sentence for it."""
+    """The queue entries to cancel for a stuck door, the operator's orders to
+    hold instead (`park`, #2216), and the sentence for it."""
 
     door: str
     drop: tuple
     why: str
+    park: tuple = ()
+
+    @property
+    def decision(self) -> str:
+        """The pace row's decision: a door left, or an order held."""
+        return ORDER_DECISION if self.park else DECISION
+
+
+# THE BREAKER NEVER CANCELS AN OPERATOR'S ORDER (#2216). On wow-dev 2026-11-10
+# the operator's Blackrock Depths x20 order for Zug's family (queue row 162)
+# was cancelled 52 seconds after run 1770257 ended: a run that opened right
+# after a two-hour run ended split_failed, had one member inside and four
+# outside, and stalled after 258 seconds, over the non-entry bound (#2092). It
+# read as the second stall running after run 1759455 (the real run 1764856
+# between them credited 18 encounters, but ended split_failed, which the
+# stall read does not see). The door was then barred for 48 hours and the
+# operator had to order it again. An order the operator gave is held, never
+# cancelled: the overseer's own entries for the door are still dropped, the
+# operator's rows stay pending, the family steps past them for ORDER_BACKOFF,
+# and then the order runs again, judged on the runs after the hold.
 
 
 def leave(rows: list, stuck: dict) -> Leave | None:
@@ -452,15 +490,69 @@ def leave(rows: list, stuck: dict) -> Leave | None:
     door = campaignplan.wing_of(str(rows[0].get("keyword") or ""))
     if door not in stuck:
         return None
-    drop = tuple(
-        int(r["id"])
-        for r in rows
-        if campaignplan.wing_of(str(r.get("keyword") or "")) == door
-    )
-    rest = [r for r in rows if int(r["id"]) not in drop]
+    ours = [
+        r for r in rows if campaignplan.wing_of(str(r.get("keyword") or "")) == door
+    ]
+    park = tuple(int(r["id"]) for r in ours if dungeonpace.operator_ordered(r))
+    drop = tuple(int(r["id"]) for r in ours if int(r["id"]) not in park)
+    rest = [r for r in rows if int(r["id"]) not in drop and int(r["id"]) not in park]
     after = (
         "%s runs next" % council.keyword_place(str(rest[0]["keyword"]))
         if rest
         else "back to %s until the planner finds another door" % jobs.DEFAULT
     )
+    if park:
+        minutes = int(ORDER_BACKOFF.total_seconds() // 60)
+        return Leave(
+            door,
+            drop,
+            "%s; the order is held, not left, and runs again in %d minutes; "
+            "meanwhile %s" % (stuck[door].why, minutes, after),
+            park,
+        )
     return Leave(door, drop, "%s; left, %s" % (stuck[door].why, after))
+
+
+# The newest hold of an operator's order for this door: the seconds its
+# backoff has left (negative once over) and when it was written.
+PARKED_SQL = (
+    "SELECT id, created_at, TIMESTAMPDIFF(SECOND, NOW(), created_at + INTERVAL %s "
+    "SECOND) AS left_s, COALESCE((SELECT q.created_at FROM overseer_dungeon_queue q "
+    "WHERE q.id = %s) > created_at, 0) AS ordered_after "
+    "FROM overseer_dungeon_pace WHERE family = %s "
+    "AND decision = %s AND door = %s ORDER BY created_at DESC, id DESC LIMIT 1"
+)
+
+
+def parked_args(key: str, door: str, head_id: int) -> tuple:
+    """PARKED_SQL's arguments for the family `key`, run keyword `door` and
+    queue row `head_id`."""
+    return (
+        int(ORDER_BACKOFF.total_seconds()),
+        int(head_id or 0),
+        key,
+        ORDER_DECISION,
+        door,
+    )
+
+
+def order_hold(head: dict, row: dict | None) -> dict | None:
+    """The hold on operator order `head` from PARKED_SQL's `row`, or None.
+
+    Returns the row (id, created_at, left_s) when the order is held: the head
+    is an operator's order and the hold was written after the order was
+    queued (`ordered_after` is false), so an older order's hold never rests a
+    newer one. `left_s` may be zero or negative: the backoff is over and the
+    order runs, judged on the runs after `created_at` (since_order).
+    """
+    if not row or not dungeonpace.operator_ordered(head):
+        return None
+    if row.get("ordered_after"):
+        return None
+    return dict(row)
+
+
+def held_until_said(left_s) -> str:
+    """The sentence for the order's hold: how long until it runs again."""
+    minutes = max(1, int(-(-max(0, int(left_s or 0)) // 60)))
+    return "runs again in about %d minute(s)" % minutes
