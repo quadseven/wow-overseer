@@ -261,12 +261,11 @@ def silent_run(keyword: str, seconds) -> Stuck | None:
 # across its door: the leader outside, his walk to the door ending and
 # restarting; members inside, held on errands that cannot finish while he
 # never arrives; one member dead at the door with the party stalled around
-# it. Measured on the dev realm 2026-11-09: one such run stayed open 15
-# hours, its leader's walk restarted 38 times in the watch's own fold, and
-# the run read as under way the whole time because somebody was standing
-# inside. The three verdicts below judge that shape from the evidence the
-# bridge already keeps, and presence inside is never one of the inputs: a
-# member standing in the instance is not the run progressing.
+# it. Such a run stays open indefinitely and reads as under way the whole
+# time, because somebody is standing inside. The three verdicts below judge
+# that shape from the evidence the bridge already keeps, and presence inside
+# is never one of the inputs: a member standing in the instance is not the
+# run progressing.
 
 # The leader's walk to the same door, ended and restarted this many times
 # inside the watch's quarter-hour fold (nowstatus.restart_count), is not
@@ -304,8 +303,8 @@ def door_unreachable(keyword: str, restarts) -> Stuck | None:
     many times his present walk ended and restarted inside its window. The
     verdict is the count, nothing else: not the family's progress events,
     which a member questing on another map can keep warm forever, and not
-    anybody's presence inside, which is how the wedged run read as under
-    way for fifteen hours.
+    anybody's presence inside, which is how a wedged run reads as under
+    way while it goes nowhere.
     """
     if restarts is None or int(restarts) < RESTART_BOUND:
         return None
