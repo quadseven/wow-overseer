@@ -176,7 +176,7 @@ class TheModuleWording(unittest.TestCase):
 
     def test_the_boat_stop_is_the_one_the_module_rides_first(self):
         src = modsource.read(modsource.DECISIONS_H, encoding="utf-8")
-        for axis, value in zip("XY", classquest.ISLAND_BOAT_STOP):
+        for axis, value in zip("XY", classquest.ISLAND_BOAT_STOP, strict=True):
             self.assertIn("AUBERDINE_STOP_%s = %.2ff" % (axis, value), src)
 
 
