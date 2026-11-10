@@ -58,10 +58,11 @@ from __future__ import annotations
 
 import functools
 import json
-import pathlib
 from dataclasses import dataclass
 
-DATA_DIR = pathlib.Path(__file__).resolve().parent / "data" / "bis"
+from world_data import DATA_ROOT
+
+DATA_DIR = DATA_ROOT / "data" / "bis"
 
 PREFER_PHASES = ("preraid", "mc")  # aim order: pre-raid list first, then raid
 PHASE_LABEL = {"preraid": "preraid", "mc": "raid"}

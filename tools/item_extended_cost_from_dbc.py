@@ -36,6 +36,9 @@ import pathlib
 import struct
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from world_data import DATA_ROOT
+
 HEADER = struct.Struct("<4sIIII")
 FIELDS = 16
 
@@ -80,7 +83,7 @@ def main(argv: list) -> int:
         return 2
     costs = parse(pathlib.Path(argv[1]).read_bytes())
     check(costs)
-    out = pathlib.Path(__file__).resolve().parents[1] / "itemextendedcost.json"
+    out = DATA_ROOT / "itemextendedcost.json"
     out.write_text(
         json.dumps({"costs": costs}, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",

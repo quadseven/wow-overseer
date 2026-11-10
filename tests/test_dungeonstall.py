@@ -874,6 +874,32 @@ class TheBridgeOrder(unittest.TestCase):
         self.assertIn("_silent_seconds", helper)
         self.assertIn("dungeonstall.silent_run", helper)
 
+    def test_a_boss_credit_written_again_is_not_progress(self):
+        # wow-overseer#2147: a party sealed in a finished dungeon loops
+        # EXIT -> IDLE -> CLEARING, and every pass writes the same boss row
+        # ("N encounters credited, N in all") again. Counting the newest boss
+        # row reset the clock on every pass for as long as the loop ran. Only
+        # the first sighting of a credit on a run is progress.
+        read = self.silence_read()
+        boss = read[read.index("re.kind = 'boss'") :]
+        self.assertIn("NOT EXISTS", boss)
+        self.assertIn("p.run_id = re.run_id", boss)
+        self.assertIn("p.detail = re.detail", boss)
+        self.assertIn("p.id < re.id", boss)
+
+    def test_a_quest_written_again_is_not_progress(self):
+        # wow-overseer#2147: one overseer_event row per character and quest
+        # moves last_seen on each repeat, so a bot accepting and completing
+        # the same quest every hour held the clock near zero. The quest kinds
+        # are timed by first_seen; the other kinds stay on last_seen.
+        read = self.silence_read()
+        self.assertNotIn("MAX(e.last_seen)", read)
+        quest = read[read.index("CASE WHEN e.kind IN") :]
+        quest = quest[: quest.index("FROM overseer_event e")]
+        for kind in ("'quest_accept'", "'quest_complete'", "'quest_reward'"):
+            self.assertIn(kind, quest)
+        self.assertIn("THEN e.first_seen ELSE e.last_seen END", quest)
+
     def test_the_silence_clock_starts_at_the_head_not_at_a_run(self):
         # The stuck read's clock runs across runs. A clock restarted by each
         # run opening never reaches two hours on a campaign of short runs,

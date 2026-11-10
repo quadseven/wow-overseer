@@ -733,12 +733,6 @@ class TheHouseRules(unittest.TestCase):
     def test_the_module_is_ascii(self):
         (HERE / "decree.py").read_text(encoding="utf-8").encode("ascii")
 
-    def test_it_ships_in_the_image(self):
-        """A new top-level module the map server imports is one forgotten
-        COPY line away from a pod that crashes at start."""
-        dockerfile = (HERE / "Dockerfile").resolve()
-        self.assertIn("decree.py", dockerfile.read_text(encoding="utf-8"))
-
 
 if __name__ == "__main__":
     unittest.main()

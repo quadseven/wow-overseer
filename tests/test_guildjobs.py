@@ -20,7 +20,6 @@ import keep
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
-DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
 
 H, M, S = guildjobs.HERBALISM, guildjobs.MINING, guildjobs.SKINNING
 WARLOCK = 9
@@ -1592,9 +1591,6 @@ class TheBridgePass(unittest.TestCase):
 
 
 class ThePage(unittest.TestCase):
-    def test_the_module_ships_in_the_image(self):
-        self.assertIn("guildjobs.py", DOCKERFILE)
-
     def test_walk_caps_are_the_guild_passes_own(self):
         self.assertEqual(guildjobs.FIELD_REACH, 400.0)
         self.assertEqual(guildroute.errand_cap_word(20000), " max:20000")

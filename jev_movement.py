@@ -73,12 +73,25 @@ HEARTH_STRAGGLER = "hearth_straggler"
 HEARTH_FAMILY = "hearth_family"
 HEARTH_TO_LEADER = "hearth_to_leader"
 DROP_ERRAND = "drop_errand"
-OPTIONS = (CARRY_ON, HEARTH_STRAGGLER, HEARTH_FAMILY, HEARTH_TO_LEADER, DROP_ERRAND)
+HEARTH_LEADER = "hearth_leader"
+OPTIONS = (
+    CARRY_ON,
+    HEARTH_STRAGGLER,
+    HEARTH_FAMILY,
+    HEARTH_TO_LEADER,
+    DROP_ERRAND,
+    HEARTH_LEADER,
+)
 
 # A member this far from the leader, and not moving, is stranded.
 STRANDED_YARDS = 300.0
 # Every member bound within this of the first is bound at one inn.
 INN_YARDS = 100.0
+# A leader this far below every member standing beside it is under the ground
+# they stand on (a floor of a tower is about 15 to 20 yards; 2026-11-09 the
+# leader was 63 below), and "beside" is this far across the ground.
+BENEATH_YARDS = 40.0
+BESIDE_YARDS = 40.0
 # Deaths in the situation's window that make a family "dying".
 DYING_DEATHS = 2
 # The hearthstone's own cooldown in 3.3.5a.
@@ -205,6 +218,42 @@ def homeward(f: Facts) -> tuple:
     return tuple(sorted(out))
 
 
+def beneath(f: Facts) -> str:
+    """The leader's name when it stands under the ground its family stands on.
+
+    The module's own ground check will not lift a leader it cannot measure
+    (layered geometry is real: a tower, a city), so a leader that fell through
+    the ground sits there with no route anywhere, every errand refused after
+    two seconds, and the family waits on it for hours (the Zug family,
+    2026-11-09, 63 yards under four followers). What tells the two apart is
+    the family: every other member standing beside the leader stands far
+    above it, and the leader is not moving. A leader with anyone level with it,
+    or with nobody beside it, or on the move, is not called beneath.
+    """
+    lead = f.where.lead_body
+    if lead is None or lead.at is None or lead.at.z is None:
+        return ""
+    if not _ready(f, f.where.leader):
+        return ""
+    beside = []
+    for b in f.where.bodies:
+        if b.name == f.where.leader or b.at is None or b.at.map != lead.at.map:
+            continue
+        across = situation.yards(
+            situation.Point(lead.at.map, lead.at.x, lead.at.y),
+            situation.Point(b.at.map, b.at.x, b.at.y),
+        )
+        if across is not None and across <= BESIDE_YARDS:
+            beside.append(b)
+    if not beside:
+        return ""
+    for b in beside:
+        up = situation.height(lead.at, b.at)
+        if up is None or up < BENEATH_YARDS:
+            return ""
+    return f.where.leader
+
+
 def one_inn(f: Facts) -> bool:
     """Every member ready to hearth, and all bound at one inn."""
     names = [b.name for b in f.where.bodies]
@@ -232,6 +281,8 @@ def trouble(f: Facts) -> str:
     deaths = (f.where.deaths or {}).get("count", 0)
     if deaths >= DYING_DEATHS:
         why.append("%d deaths in the last 30 minutes" % deaths)
+    if beneath(f):
+        why.append("the leader stands below the ground the members beside it stand on")
     return "; ".join(why)
 
 
@@ -275,6 +326,12 @@ def options(f: Facts) -> dict:
                 "its" if len(home) == 1 else "their",
             )
         )
+    if beneath(f):
+        out[HEARTH_LEADER] = (
+            "The leader stands under the ground the rest of the family "
+            "stands on and cannot walk up, so the leader uses the "
+            "hearthstone and the family walks to it."
+        )
     if one_inn(f):
         out[HEARTH_FAMILY] = (
             "Everybody uses the hearthstone and the family meets again at "
@@ -290,10 +347,21 @@ def options(f: Facts) -> dict:
 
 def heuristic(f: Facts) -> tuple:
     """Use a safe option when repeat deaths make carrying on reckless."""
-    safety = repeated_death_action(f)
+    safety = safety_action(f)
     if safety is not None:
         return safety
     return CARRY_ON, "the module's catch-up walk, regroup hold and stall give-up"
+
+
+def safety_action(f: Facts) -> tuple | None:
+    """The action no answer may overrule: repeat deaths, or a leader under
+    the ground."""
+    if beneath(f):
+        return HEARTH_LEADER, (
+            "the leader stands under the ground the family stands on; it "
+            "cannot walk up, so it uses the hearthstone"
+        )
+    return repeated_death_action(f)
 
 
 def repeated_death_action(f: Facts) -> tuple | None:
@@ -440,7 +508,7 @@ async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
     if not why or len(offered) < 2:
         return None
     current, heuristic_why = heuristic(f)
-    safety_action = repeated_death_action(f)
+    safety = safety_action(f)
     base = Judgment(
         subject=f.family,
         heuristic=current,
@@ -467,7 +535,7 @@ async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
         probabilities=answer.probabilities,
         acted=(
             _HEURISTIC
-            if safety_action is not None and rule.mode == jev.ACT
+            if safety is not None and rule.mode == jev.ACT
             else rule.acted(
                 current,
                 answer.choice,

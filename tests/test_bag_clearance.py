@@ -24,7 +24,6 @@ import disposition
 import lockbox
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
-DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
 
 
 def _source() -> str:
@@ -334,9 +333,6 @@ class LockboxesReachTheRogue(unittest.TestCase):
         self.assertIn("mailable=True", body)
         writer = _block("def _insert_lockbox_row(")
         self.assertIn('if kind not in ("bot", handover.GIVE, handover.MAIL)', writer)
-
-    def test_lockbox_is_in_the_image(self):
-        self.assertIn("lockbox.py", DOCKERFILE.read_text(encoding="utf-8"))
 
 
 def tool(entry, name, bag_family, guid, holder):

@@ -387,12 +387,6 @@ class TheGuildCount(unittest.TestCase):
         self.assertEqual(counts[43], {"gainers": [], "of": 2, "pieces": 0})
 
 
-class ItShipsInTheImage(unittest.TestCase):
-    def test_the_module_is_copied_into_the_container(self):
-        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("dungeonpath.py", dockerfile)
-
-
 class NoEmDashes(unittest.TestCase):
     def test_the_module_writes_none(self):
         text = (HERE / "dungeonpath.py").read_text(encoding="utf-8")

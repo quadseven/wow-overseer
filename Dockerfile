@@ -9,11 +9,9 @@
 # against this repo's own tree (build.yml, GitHub-hosted runner), so that
 # indirection is gone.
 #
-# Every top-level *.py module is copied into the image. The list below is
-# hand-maintained and names each one; tests/test_ship_manifest.py fails when a
-# top-level module is missing from it, and states this rule in the same words.
-# A module the image never imports therefore leaves the top level rather than
-# the list (tests/test_bridge_image_modules.py tracks the ones still waiting).
+# Runtime modules and data are copied explicitly. tests/test_image_closure.py
+# checks the transitive imports of bridge.py and map_server.py against this
+# list, then imports every shipped module and opens every shipped data file.
 # Tests, module sources and patches stay outside the image; the scheduled
 # watcher and its dependency are copied separately below.
 FROM python:3.12-slim
@@ -22,7 +20,7 @@ RUN pip install --no-cache-dir discord.py==2.4.0 PyMySQL==1.1.1
 
 WORKDIR /app
 
-COPY core.py bridge.py voice.py transform.py \
+COPY core.py bridge.py voice.py transform.py world_data.py \
      map_core.py map_server.py events.py \
      panel.py family.py families.py goals.py protect.py fanout.py chat.py \
      kin.py keep.py cast.py bonds.py council.py family_value.py persona.py \
@@ -42,7 +40,7 @@ COPY core.py bridge.py voice.py transform.py \
      achievements.py recap.py agenda.py eye.py decree.py priorities.py meter.py zone_danger.py \
      dungeonplan.py dungeonpath.py raidgoals.py raidcraft.py raidprep.py raidlineup.py mcencounters.py raidgear.py raidfloor.py raidroles.py raidteams.py teamsync.py attunestep.py raidready.py roadtoragnaros.py raidrun.py spirerun.py raidsupply.py readcache.py readtimeout.py \
      dungeonprogression.py dungeonquests.py \
-     guildcraft.py tradespec.py guildbank.py guildshare.py guildroute.py orders.py guildpost.py guildwork.py workorders.py workorderstore.py guildfund.py classtrain.py classcasts.py racespells.py taughtspells.py purse.py vendorsale.py bankbags.py natural.py guildcorps.py guildjobs.py guildlevel.py classquest.py steps.py classask.py classparty.py classuse.py classhunt.py guildrun.py guildfacts.py guildpug.py familyseat.py seatmeter.py guildsocial.py crafters.py recruit.py interview.py \
+     guildcraft.py guildcover.py tradespec.py guildbank.py guildshare.py guildroute.py orders.py guildpost.py guildwork.py workorders.py workorderstore.py guildfund.py classtrain.py classcasts.py racespells.py taughtspells.py purse.py vendorsale.py bankbags.py natural.py guildcorps.py guildjobs.py guildlevel.py classquest.py steps.py classask.py classparty.py classuse.py classhunt.py guildrun.py guildfacts.py guildpug.py familyseat.py seatmeter.py guildsocial.py crafters.py recruit.py interview.py \
      bag_pressure.py bag_upgrade.py bag_economy.py bag_market.py guildbags.py disposition.py bagfate.py tidy.py \
      lockbox.py clearance.py \
      item_plan.py itemplan.py itemplan_shadow.py itemplan_data.py itemplan_reads.py \
@@ -60,7 +58,7 @@ COPY core.py bridge.py voice.py transform.py \
      campaignhandoff.py campaignplan.py dungeonladder.py director.py levelroute.py \
      preraid.py fireplan.py gearscore.py gearupgrades.py pvpgear.py equipscore.py \
      runtimeline.py runreport.py runstory.py places.py commandwords.py orderrecord.py \
-     vclient.py guildgear.py \
+     vclient.py guildgear.py gearrouting.py \
      situation.py standstill.py deathloop.py restsupply.py vision.py llmmode.py llmpool.py jev_movement.py jev_family_intent.py jev_outcomes.py leadcmd.py strategybook.py \
      realmroller.py realmroller_world.py realmroller_plan.py realmroller_act.py \
      zones.json entrances.json shapes.json \

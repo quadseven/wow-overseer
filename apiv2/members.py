@@ -32,7 +32,11 @@ overseer_death rows: deathloop.MIN_DEATHS deaths in one zone within an hour at
 one level, with no level gained since and a death in the last two hours. It
 is read for a dead or released member too, since a member in that loop is
 dead half the time, and it comes before the other two: the deaths are the
-cause. Its first-seen time is the window's first death.
+cause. Its first-seen time is the window's first death. It stands only
+while the member is still in that zone: once its fresh snapshot places it
+in another zone, the plan has changed and the record clears, rather than
+lingering on the death history until the two hours run out (standing_loop,
+#2152).
 
 A MEMBER THAT ONLY FOLLOWS has neither record of its own. Near its leader it
 is stuck when the leader is, since the leader's hold began, and its blocker
@@ -139,9 +143,9 @@ ASKS_SQL = (
 
 BASIS = (
     "Stuck means one of three records the bridge keeps: five or more deaths "
-    "in one zone within an hour with no level gained, until it gains a level "
-    "or goes two hours without dying (first seen at the first of those "
-    "deaths), a class quest it has "
+    "in one zone within an hour with no level gained, until it gains a level, "
+    "leaves the zone, or goes two hours without dying there (first seen at "
+    "the first of those deaths), a class quest it has "
     "asked the guild for help with in the last two hours (first seen at the "
     "first ask of that run), or a reason to wait it has logged for 30 minutes "
     "or more (first seen when the reason was first logged). A family's leader "
@@ -538,6 +542,36 @@ def _member(name, row, ctx_rows) -> dict:
     return out
 
 
+# A LOOP THE MEMBER HAS WALKED AWAY FROM IS HISTORY, NOT A STUCK RECORD
+# (#2152). deathloop.loops judges the death record alone, so a loop stands
+# for up to two hours after the last death in its zone, wherever the member
+# has gone since: a member that hearthed out, walked on to another hub, or
+# went into a dungeon on a different plan altogether is still listed as
+# dying in the zone it left, for as long as the record takes to age out.
+# The stuck record is about where a member is stuck now, so
+# the loop is listed only while the member is still in its zone: once its
+# fresh snapshot places it in another zone, the plan has changed and the
+# record clears, because the dying there stopped, not because the window
+# moved. The snapshot is the one the member's own zone is read from; with
+# none (an offline member, an unread snapshot) the loop stands, since
+# nothing shows the member left. guildjobs keeps the full loop map: the
+# escape's walk on and the level walk's avoidance still need the loop after
+# the member has left the zone.
+def standing_loop(name: str, loops: dict, rows: dict):
+    """The member's death loop while it still stands in that zone, else None."""
+    loop = (loops or {}).get(name)
+    if loop is None:
+        return None
+    reading = rows["readings"].get(name) or {}
+    snap = rows["snaps"].get(name) if reading.get("online") else None
+    if not snap:
+        return loop
+    zone_id = snap.get("zone_id")
+    if zone_id is None or int(zone_id) == int(loop.zone):
+        return loop
+    return None
+
+
 def loop_blocker(loop, now_at: int) -> dict | None:
     """The stuck entry for a deathloop.Loop, or None for no loop."""
     if loop is None:
@@ -715,7 +749,7 @@ def build(
             continue
         m = _member(name, guild_of.get(name, {}), rows)
         found[name] = _stuck_entry(
-            m, streaks.get(name, []), rows["now_at"], loops.get(name)
+            m, streaks.get(name, []), rows["now_at"], standing_loop(name, loops, rows)
         )
         followed = nowstatus.followed(rows["facts"].get(name), m)
         if followed and not _asking(found[name]):

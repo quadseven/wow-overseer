@@ -551,10 +551,11 @@ class TheTreeIsRead(unittest.TestCase):
         # and the equip scorer's read (equipscore.py), which scores each
         # member's gear by its spec.
         # map_server.py: the lineup, the raid goals and the Lineup tab's gear
-        # table, which names each member's role. guildfacts.py holds the
-        # guild coordinator read, which moved there from the bridge.
+        # table, which names each member's role, and the guild routing read
+        # (#2127), which scores each member's gear by its spec. guildfacts.py
+        # holds the guild coordinator read, which moved there from the bridge.
         for name, count in (
-            ("map_server.py", 3),
+            ("map_server.py", 4),
             ("bridge.py", 6),
             ("guildfacts.py", 1),
         ):

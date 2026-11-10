@@ -156,6 +156,10 @@ def _vendor_rows():
     ]
 
 
+async def _no_sale_reading(holder, standing, refused_age):
+    return None
+
+
 def _run_vendor_once(stuck):
     """One economy pass with the leader on the quest walk; the aims it
     released."""
@@ -201,6 +205,10 @@ def _run_vendor_once(stuck):
             "OWNER_KEEPS": (),
             "SELL_ROUTES": (),
             "SELL_MEMORY_HOURS": 24,
+            "_recent_range_refusals": lambda seconds: {},
+            "_fetch_vendor_position": lambda name: None,
+            "_log_sale_reading": _no_sale_reading,
+            "_SALE_WRITE_SPOT": {},
             "_fetch_free_slots": lambda names: dict(FREE),
             "_present_members": lambda names, leader="": list(names),
             "_fetch_vendor_wait_seconds": lambda names: 0,

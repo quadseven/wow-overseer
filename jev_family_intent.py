@@ -402,6 +402,153 @@ def question(f: Facts, offered: dict):
 
 
 # ---------------------------------------------------------------------------
+# A BAG-ROOM ERRAND OUTRANKS THE REQUESTS THAT HOLD THE LEADER STILL (#2122)
+#
+# A bag-room town errand's walk to the capital failed to land in its window
+# because the family leader stood still. The module's static order ranks
+# regroup, fetch, hearth and training above an errand, so while a member walks
+# back to the leader or a campaign training stop is on the table the walk the
+# campaign waits on never moves him. The choice above is paused where no model
+# key is set, so the static order always stood.
+#
+# THIS IS NOT A MODEL ANSWER. While the family's bag-room town errand is
+# active and its own request is on the table, the bridge writes that request
+# as the pick through the same columns the choice uses; the module then ranks
+# it just under the run and the operator. It is bounded: the errand's own walk
+# window (townerrand.GO_SECONDS), after which the module's order stands again
+# so a real regroup is never starved. PURE: rows and numbers in, decisions out.
+
+# The requests that hold the leader still or walk the family somewhere else.
+ERRAND_OUTRANKED_BY = frozenset({"regroup", "fetch", "training"})
+# The errand's own walk, on the table as a town errand (the hub, a trainer) or,
+# for the vendor step, as the maintenance walk.
+ERRAND_KINDS = ("errand", "economy")
+# Equal to townerrand.GO_SECONDS (a test pins it; this module imports nothing
+# of the errand).
+ERRAND_PICK_CAP_SECONDS = 1200.0
+# The row's chosen_target column is this wide; a longer target would never
+# match the request's, so it is written as "any request of that kind".
+TARGET_COLUMN = 96
+
+
+@dataclass(frozen=True)
+class ErrandPick:
+    """The errand to pick, and the request that would otherwise have won."""
+
+    ask: Ask
+    outranked: Ask
+
+
+def errand_pick(
+    row: Row,
+    errand_active: bool,
+    held_for: float = 0.0,
+    cap: float = ERRAND_PICK_CAP_SECONDS,
+) -> ErrandPick | None:
+    """The errand to pick for a family now, or None.
+
+    Only while a bag-room errand is active, its request is on the table, and a
+    regroup, fetch or training request on the table outranks it; never over the
+    campaign's run or an operator's order, never on a row the module has not
+    refreshed, and not once the pick has stood for `cap` seconds.
+    """
+    if not errand_active or held_for >= cap:
+        return None
+    if row.module_age is None or row.module_age > FRESH_SECONDS:
+        return None
+    if row.current_kind in ALWAYS_FIRST:
+        return None
+    outranked = next(
+        (
+            a
+            for a in sorted(row.table, key=lambda a: -rank(a.kind))
+            if a.kind in ERRAND_OUTRANKED_BY
+        ),
+        None,
+    )
+    if outranked is None:
+        return None
+    errands = [a for a in row.table if a.kind in ERRAND_KINDS]
+    if not errands:
+        return None
+    errands.sort(key=lambda a: (-rank(a.kind), a.target))
+    return ErrandPick(errands[0], outranked)
+
+
+def errand_pick_columns(pick: ErrandPick) -> tuple:
+    """(kind, target) for the row's chosen_* columns."""
+    target = pick.ask.target
+    return pick.ask.kind, (target if len(target) <= TARGET_COLUMN else "")
+
+
+@dataclass(frozen=True)
+class PickMemory:
+    """What the bridge remembers of one leader's errand pick, in memory only:
+    a restart loses it and the module's own pick expiry (PICK_SECONDS) covers
+    the gap."""
+
+    started: float
+    since: float
+    written: float = 0.0
+    option: str = ""
+    cleared: bool = False
+
+
+@dataclass(frozen=True)
+class ErrandStep:
+    action: str = ""  # "write", "clear" or "" (nothing to do)
+    pick: ErrandPick | None = None
+    memory: PickMemory | None = None
+    first: bool = False  # the first write of this errand: log it
+
+
+def errand_pick_standing(memory: PickMemory | None) -> bool:
+    """Whether the bridge's own errand pick is standing, so a model answer
+    must not overwrite or clear it."""
+    return memory is not None and bool(memory.option) and not memory.cleared
+
+
+def errand_step(
+    row: Row,
+    started,
+    memory: PickMemory | None,
+    now: float,
+    cap: float = ERRAND_PICK_CAP_SECONDS,
+) -> ErrandStep:
+    """One pass for one leader. `started` is when this family's bag-room
+    errand began (any stable per-errand value), or None with no such errand.
+    Writes the pick, renews it halfway through PICK_SECONDS, switches it when
+    the errand's request changes, and clears it once when the errand ends or
+    the cap is reached."""
+    if started is None:
+        if errand_pick_standing(memory):
+            return ErrandStep("clear", None, None)
+        return ErrandStep()
+    if memory is None or memory.started != started:
+        memory = PickMemory(started=started, since=now)
+    pick = errand_pick(row, True, now - memory.since, cap)
+    if now - memory.since >= cap:
+        if errand_pick_standing(memory):
+            return ErrandStep("clear", None, replace(memory, cleared=True))
+        return ErrandStep("", None, memory)
+    if pick is None:
+        return ErrandStep("", None, memory)
+    if (
+        memory.option == pick.ask.option
+        and not memory.cleared
+        and now - memory.written < PICK_SECONDS / 2
+    ):
+        return ErrandStep("", None, memory)
+    first = not memory.option
+    return ErrandStep(
+        "write",
+        pick,
+        replace(memory, written=now, option=pick.ask.option, cleared=False),
+        first,
+    )
+
+
+# ---------------------------------------------------------------------------
 # WHAT FOLLOWED A PICK (#584, jev_outcomes)
 
 HISTORY_INSTRUCTION = (

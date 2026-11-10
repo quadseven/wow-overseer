@@ -692,5 +692,56 @@ class BagPressureRetentionAndCutOffAim(unittest.TestCase):
         )
 
 
+class SameMapFarMemberGetsItsOwnVendorAim(unittest.TestCase):
+    """wow-overseer#2117: a member far away on the leader's map pinned its family."""
+
+    NAMES = ("Lead", "Near", "Far")
+
+    def aims(self, far_xy, far_free=2, far_map=0, near_free=2, leader_free=2):
+        positions = {
+            "Lead": {"map_id": 0, "pos_x": 0.0, "pos_y": 0.0},
+            "Near": {"map_id": 0, "pos_x": 20.0, "pos_y": 10.0},
+            "Far": {"map_id": far_map, "pos_x": far_xy[0], "pos_y": far_xy[1]},
+        }
+        slots = {"Lead": leader_free, "Near": near_free, "Far": far_free}
+        return bag_pressure.stranded_vendor_aims(
+            self.NAMES, "Lead", positions, slots, pressure=True, in_run=False
+        )
+
+    def test_member_thousands_of_yards_away_on_the_same_map_is_aimed(self):
+        # A spread of this size was measured live: 8,049 yards.
+        self.assertEqual(self.aims((8049.0, 0.0)), ("Far",))
+
+    def test_member_within_a_walk_is_left_to_the_family_trip(self):
+        self.assertEqual(self.aims((300.0, 400.0)), ())
+        self.assertEqual(self.aims((bag_pressure.SAME_MAP_FAR_YARDS, 0.0)), ())
+
+    def test_just_past_the_distance_is_aimed(self):
+        self.assertEqual(
+            self.aims((bag_pressure.SAME_MAP_FAR_YARDS + 1.0, 0.0)), ("Far",)
+        )
+
+    def test_far_member_with_room_is_not_aimed(self):
+        self.assertEqual(self.aims((8049.0, 0.0), far_free=12), ())
+
+    def test_far_member_with_unreadable_coordinates_is_not_guessed(self):
+        self.assertEqual(self.aims((None, 0.0)), ())
+
+    def test_distance_helper_is_none_across_maps(self):
+        self.assertIsNone(
+            bag_pressure.stranded_distance(
+                {"map_id": 0, "pos_x": 0, "pos_y": 0},
+                {"map_id": 1, "pos_x": 0, "pos_y": 0},
+            )
+        )
+        self.assertEqual(
+            bag_pressure.stranded_distance(
+                {"map_id": 0, "pos_x": 0, "pos_y": 0},
+                {"map_id": 0, "pos_x": 3, "pos_y": 4},
+            ),
+            5.0,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

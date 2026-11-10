@@ -49,6 +49,7 @@ import re
 import sys
 import unittest
 import modsource
+import source_utils
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MODULE = modsource.MODULE
@@ -177,9 +178,7 @@ class TheFactsAboutTheGame(unittest.TestCase):
         """infra#3617 read `Data1` as the focus id and parked the whole
         forge/anvil question on the strength of it. The counts that tell the two
         columns apart live in the module so the misreading is not repeated."""
-        import inspect
-
-        source = inspect.getsource(travel)
+        source = source_utils.function_source(travel)
         self.assertIn("3617", source)
         self.assertIn("Data0", source)
         self.assertIn("radius", source)

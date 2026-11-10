@@ -116,6 +116,18 @@ Each entry: path, query parameters, what it answers, one example.
 - Answers: every family-guild member's gear, one table.
 - Example: `overseer get /api/guildgear`
 
+## `GET /api/guildprofessions`
+
+- Query: none
+- Answers: every family-guild member's trades.
+- Example: `overseer get /api/guildprofessions`
+
+## `GET /api/guildrouting`
+
+- Query: none
+- Answers: the guild gear-routing dry run.
+- Example: `overseer get /api/guildrouting`
+
 ## `GET /api/guildruns`
 
 - Query: none
@@ -236,6 +248,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Answers: the six fields for every roster and online guild member.
 - Example: `overseer get /api/v2/audit`
 
+## `GET /api/v2/chat`
+
+- Query: `channel`, `family`, `guild`, `limit`, `hours`
+- Answers: recent party, raid, say or guild lines, bounded and read only.
+- Example: `overseer get /api/v2/chat channel=X`
+
 ## `GET /api/v2/chronicle`
 
 - Query: `guild`
@@ -277,6 +295,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Query: `guild`
 - Answers: one guild's progress, as the Guilds view draws it.
 - Example: `overseer get /api/v2/guild guild=cave`
+
+## `GET /api/v2/guildbank`
+
+- Query: `guild`
+- Answers: a family guild's bank, tab by tab.
+- Example: `overseer get /api/v2/guildbank guild=cave`
 
 ## `GET /api/v2/health`
 

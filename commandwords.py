@@ -17,12 +17,13 @@ command itself.
 from __future__ import annotations
 
 import json
-import os
 import re
 from functools import lru_cache
 
 import council
 import places
+
+from world_data import DATA_ROOT
 
 # One read per table, ids bound as values; `{holes}` is sized by the caller.
 NAMES_SQL = {
@@ -108,7 +109,7 @@ def _name(names: dict, table: str, key: int, what: str) -> str:
 def _crafts() -> dict:
     """craft spell id -> what it makes, from the committed craftbook.json."""
     try:
-        with open(os.path.join(os.path.dirname(__file__), "craftbook.json")) as f:
+        with open(DATA_ROOT / "craftbook.json") as f:
             book = json.load(f)
     except (OSError, ValueError):
         return {}
