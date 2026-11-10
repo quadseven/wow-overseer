@@ -1048,8 +1048,17 @@ def stranded_vendor_aims(
     pressure: bool,
     in_run: bool,
     resume: int = CAMPAIGN_ADMIT_FREE_SLOTS,
+    at_counter: frozenset = frozenset(),
 ) -> tuple[str, ...]:
-    """Names of cut-off members that need their own local vendor errand."""
+    """Names of cut-off members that need their own local vendor errand.
+
+    A MEMBER ALREADY STANDING AT A COUNTER IS NOT AIMED (#2215). It has done
+    what the aim is for, and the module holds it there for a few minutes so the
+    sell rows find it in range; a fresh aim ends that hold at once ("sent
+    somewhere else"). Seen on the dev realm: a member reached a counter and
+    was re-aimed under a minute later, and what it carried never sold.
+    `at_counter` is the set of names the caller read at a counter.
+    """
     if not pressure or in_run or not leader:
         return ()
     leader_map = _position_map((positions or {}).get(leader))
@@ -1059,11 +1068,25 @@ def stranded_vendor_aims(
         sorted(
             str(name)
             for name in names or ()
-            if _stranded_vendor_candidate(
+            if name not in at_counter
+            and _stranded_vendor_candidate(
                 name, leader, leader_map, positions, free_slots, resume
             )
         )
     )
+
+
+def step_after_yield(step: str) -> str:
+    """The vendor step the pass goes on with once the leader's visit yielded.
+
+    A vendor yield ends the LEADER's idle visit and hands its aim back. It does
+    not end the pass: the pass is also the only writer of sell rows for members
+    standing at a counter, and returning on a yield skipped them (#2215: a
+    member stood at a counter for its whole five minute hold with sellable
+    stacks and the pass yielded before it queued one). The pass carries on
+    holding, so it takes no aim and still writes rows for those at a counter.
+    """
+    return VENDOR_ERRAND_HOLD if step == "yield" else step
 
 
 def stranded_errand_step(

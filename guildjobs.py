@@ -4659,24 +4659,75 @@ def home_in_loop_zone(m, loop) -> bool:
     return home is not None and int(home) == int(loop.zone)
 
 
+def _death_loop_reason(m, loop, leveling, recent, campaign="", level_note=""):
+    """Why the death loop's escape issued no step for `m`, as one phrase.
+
+    Every branch that can return nothing on the escape path is named, in
+    the order a reader checks them: the member's own state first (in
+    combat, offline, dead, out of the open world), then the holds that
+    keep a roster or campaign member on the family route, then the
+    hearth's own blocks (its cooldown, a hearthstone bound in the loop's
+    zone), then the level walk's cooldown, and last the hub choice
+    itself: no reachable hub (#2152)."""
+    if m.in_combat:
+        return "in combat"
+    if not m.online:
+        return "not online"
+    if not m.alive:
+        return "dead"
+    if not _in_the_open(m):
+        return "not in the open world"
+    if leveling is not None and m.name in leveling.roster:
+        if campaign:
+            return "campaign member"
+        if not _in_loop_zone(m, loop):
+            return "roster member"
+    if "hub fits" in level_note or "cannot be read off" in level_note:
+        return "no reachable hub"
+    if _cooling(m, "hearth", recent):
+        return "hearth cooling"
+    if home_in_loop_zone(m, loop):
+        return "hearthstone bound in the loop zone"
+    if _cooling(m, guildlevel.ACTION, recent):
+        return "level walk cooling"
+    return "no reachable hub"
+
+
+def _death_loop_no_escape_line(m, loop, leveling, recent, campaign="", level_note=""):
+    """The one line a pass logs when the escape issues nothing (#2152)."""
+    return "%s gets no death-loop escape from %s: %s" % (
+        m.name,
+        loop.place,
+        _death_loop_reason(m, loop, leveling, recent, campaign, level_note),
+    )
+
+
 def death_loop_first(
     m, loop, leveling, recent, cap, campaign="", supply=None, kept=None, book=None
 ):
     """(the member's step as _member_step returns it), or None: the way out of
     the zone a member keeps dying in (deathloop.Loop), ahead of every quest.
 
-    In the loop's zone: the hearth to its town first (death_loop_hearth), unless
-    the hearthstone is bound in that zone (home_in_loop_zone, #1882), then
-    the level walk to a hub of another zone (level_step), and while neither can
-    start, no step at all, so no quest or grind of that zone is planned for it.
+    In the loop's zone: the escape first on every pass (#2152): the hearth
+    to its town (death_loop_hearth), unless the hearthstone is bound in
+    that zone (home_in_loop_zone, #1882), then the level walk to a hub of
+    another zone (level_step), ahead of the food, quest, trade and gear
+    rungs. While neither can start, no step at all from those rungs, so no
+    quest or grind of that zone is planned for it, and the pass logs one
+    line naming why the escape issued nothing (_death_loop_no_escape_line).
     Out of the zone, None: the pass plans as usual, and its level walk never
-    chooses the loop's zone (level_step). The loop clears by itself
-    (deathloop.loops), and the planning with it.
+    chooses the loop's zone (level_step, with the loop as its avoid), so no
+    rung sends the member back into that zone while the loop is listed,
+    which is until its quiet window has passed (deathloop.loops). The loop
+    clears by itself (deathloop.loops), and the planning with it.
 
-    FOOD FIRST, IN THE ZONE OR OUT OF IT (test_death_loop_food_first). While
-    the loop is listed, a member short of food or drink with a vendor in
-    reach (`supply`, the bridge's read) buys some before the hearth, and in
-    town after it before every other rung: a member with none never rests.
+    FOOD AFTER THE ESCAPE, IN THE ZONE; FOOD FIRST OUT OF IT (#2152, was
+    food first everywhere, test_death_loop_food_first). While the loop is
+    listed, a member short of food or drink with a vendor in reach
+    (`supply`, the bridge's read) still buys some: in the loop's zone only
+    once the escape itself has issued nothing in that pass (the reason is
+    logged on that step's note), and in town after the hearth before every
+    other rung: a member with none never rests.
 
     A HELD FOOD WALK GIVES WAY (#1911). When the guild jobs walk wall
     (job_walk_held) would refuse the supply step, the rungs go on without it:
@@ -4686,13 +4737,30 @@ def death_loop_first(
         return None
     step, doing, _why = _supply_first(m, supply, recent, cap, kept, book)
     held = job_walk_held(m, step, recent) if step is not None else ""
-    if step is not None and not held:
-        return step, doing, "", ""
+    food = (step, doing) if step is not None and not held else None
     if not _in_loop_zone(m, loop):
+        if food is not None:
+            return food[0], food[1], "", ""
         step = death_loop_resume(m, loop, recent, leveling, cap)
-        if step is None:
-            return None
-        return step, step.said, held, ""
+        if step is not None:
+            return step, step.said, held, ""
+        # A member that hearthed out within the resume window is mid-escape:
+        # when the walk on issues nothing, this pass plans no other rung
+        # for it (one could send it back into the loop's zone, #2152) and
+        # logs the one reason line instead.
+        hearthed = any(
+            r.name == m.name
+            and r.action == "hearth"
+            and r.status == "applied"
+            and int(r.age_minutes) <= RESUME_MINUTES
+            for r in recent or ()
+        )
+        if hearthed:
+            reason = _death_loop_reason(m, loop, leveling, recent, campaign)
+            if reason in ("roster member", "campaign member"):
+                line = _death_loop_no_escape_line(m, loop, leveling, recent, campaign)
+                return None, line, line, ""
+        return None
     step = death_loop_hearth(m, loop, recent, leveling, cap)
     if step is not None:
         return step, step.said, held, ""
@@ -4705,8 +4773,11 @@ def death_loop_first(
         )
     if step is not None:
         return step, doing, note, ""
+    line = _death_loop_no_escape_line(m, loop, leveling, recent, campaign, note)
+    if food is not None:
+        return food[0], food[1], line, ""
     held = "%s plans no quest in %s: %s" % (m.name, loop.place, loop.reason())
-    return None, held, _join(note, held), ""
+    return None, held, _join(note, held, line), ""
 
 
 def inn_step(m, world, recent, cap):
@@ -5081,7 +5152,12 @@ def class_walk_backoff(name, recent) -> int:
     class quest walk for a far walk wall (classquest.BACKOFF_MINUTES), 0 when
     the newest class row was anything else, or the wall has had its time."""
     rows = sorted(
-        (r for r in recent or () if r.name == name and r.action == classquest.ACTION),
+        (
+            r
+            for r in recent or ()
+            if r.name == name
+            and r.action in (classquest.ACTION, classquest.CROSS_ACTION)
+        ),
         key=lambda r: int(r.age_minutes),
     )
     if not rows:
@@ -6368,6 +6444,10 @@ def _class_move_step(
     if move.kind == classquest.ABANDON:
         return _abandon_step(m, move, recent, note)
     spot = _class_spot(move)
+    boat = class_boat_step(m, move, spot, recent, hunts, now)
+    if boat is not None:
+        step, said, why = boat
+        return step, said, _join(note, why)
     # A pack tried without progress is left, so a member is "at" the next one
     # only within a pack's width, not the whole field's.
     tried = class_avoid(m, book, recent, hunts, now)[0].get(move.quest)
@@ -6411,6 +6491,87 @@ def _class_move_step(
         goal=spot.name,
     )
     return step, move.said, note
+
+
+# A SPAWN ACROSS THE ISLAND'S SHORE IS REACHED BY THE BOAT (#2182). Teldrassil
+# and the mainland are one map, so a member on the island whose class quest
+# spot is on the mainland was planned the walk the module refuses as across the
+# water, and asked again each class cool-down. The module's own island leg is a
+# same-map ride to the Auberdine stop (classquest.ISLAND_BOAT_STOP); the member
+# is planned that ride, on the crossing clock and walls it shares with every
+# other crossing. A boat the module refused for good holds the walk, named, for
+# classquest.CROSS_WALL_MINUTES. A member on the mainland is walked as before.
+ISLAND_MAP = 1
+
+
+def across_the_water(m, spot) -> bool:
+    """Whether the member stands on the island and the spot on the mainland of
+    the same map (weaponskill.ground_of); False when a place cannot be read."""
+    if m.map_id is None or int(m.map_id) != ISLAND_MAP:
+        return False
+    if int(spot.map_id) != ISLAND_MAP:
+        return False
+    here = weaponskill.ground_of(m.map_id, m.x, m.y)
+    there = weaponskill.ground_of(spot.map_id, spot.x, spot.y)
+    return here != weaponskill.MAINLAND and there == weaponskill.MAINLAND
+
+
+def class_boat_step(m, move, spot, recent, hunts=None, now=0.0):
+    """(step or None, what it does, note) for a class move whose spot is across
+    the island's shore from the member, None when it is not."""
+    return island_boat_step(
+        m,
+        move,
+        spot,
+        recent,
+        classquest.ACTION,
+        classquest.CROSS_ACTION,
+        class_crossing_cooling,
+        hunts,
+        now,
+    )
+
+
+def island_boat_step(
+    m, move, spot, recent, action, cross_action, cooling, hunts=None, now=0.0
+):
+    """class_boat_step for any caller: the ride row is sourced as `cross_action`
+    and held by that caller's crossing clock `cooling`. The class quest and the
+    quester (#2194) share this one step and this one hold."""
+    if not across_the_water(m, spot):
+        return None
+    if not m.alive:
+        return None, move.said, _held_note(m, 0)
+    wall = class_walls(m.name, recent).get(ISLAND_MAP)
+    if wall:
+        if hunts:
+            hunts.pause(m.name, move.quest, now)
+        return (
+            None,
+            move.said,
+            "%s: across the water; no boat step available (the module refused it: %s)"
+            % (m.name, wall),
+        )
+    if cooling(m.name, recent):
+        if hunts:
+            hunts.pause(m.name, move.quest, now)
+        return None, move.said, ""
+    step = guildcorps.Step(
+        m.name,
+        action,
+        int(move.quest),
+        move.said,
+        rows=(
+            guildcorps.Row(
+                "job",
+                classquest.ride_command(ISLAND_MAP, *classquest.ISLAND_BOAT_STOP),
+                "",
+                source_for(cross_action, m.name),
+            ),
+        ),
+        goal="the Rut'theran boat",
+    )
+    return step, move.said, ""
 
 
 def _class_held(m, move, spot, cap, recent, hunts, now, far, book=None):

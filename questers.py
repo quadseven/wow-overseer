@@ -1030,11 +1030,17 @@ def left_spawns(name, tried, kind="creature") -> frozenset:
 # (classquest.BACKOFF_MINUTES) instead of asking the same walk every pass:
 # from 2026-10-18 to 2026-10-20 the twenty questers' walks were refused 2,276
 # times for the budget and 2,453 times as held, about every two minutes.
+#
+# A walk refused as across the water (classquest.ACROSS_WATER_REASON, #2194) is
+# a wall too, at any distance: asking it again unchanged gets the same answer.
 WALK_WALLS = (
     classquest.REALM_FULL_REASON,
     classquest.BOT_BUDGET_REASON,
     classquest.HELD_REASON,
+    classquest.ACROSS_WATER_REASON,
 )
+# The walls that hold a near walk as well as a far one.
+NEAR_WALLS = (classquest.HELD_REASON, classquest.ACROSS_WATER_REASON)
 
 
 def walk_wall(name, tried) -> tuple:
@@ -1510,6 +1516,9 @@ class Plan:
     move: classquest.Move | None = None
     broken: tuple = ()
     line: str = ""
+    # The island boat step that takes the place of the move's walk when its
+    # spot is across the island's shore (guildjobs.island_boat_step, #2194).
+    boat: object = None
 
 
 def _move(kind, member, quest, spot, said, to_map=-1) -> classquest.Move:
@@ -2183,14 +2192,32 @@ def plan(
         held = crossing_held(member.name, move, crossings)
         if held:
             move, why = None, held
+    boat = None
     if move is not None and move.spot is not None:
+        # A spot across the island's shore is reached by the boat, or held with
+        # a named reason (#2194), as a class quest's is (#2182).
+        island = guildjobs.island_boat_step(
+            member,
+            move,
+            move.spot,
+            crossings,
+            ACTION,
+            CROSS_ACTION,
+            guildjobs.crossing_cooling,
+        )
+        if island is not None:
+            boat, _said, note = island
+            if boat is None:
+                move, why = None, note or "%s waits on its last crossing" % member.name
+    if boat is None and move is not None and move.spot is not None:
         # A drop does not walk. Only a far walk waits out the far walk
         # ceiling and budget, but another verb's hold is on the character, so
         # a near walk waits it out too (#1295: a 170-yard hunt walk was refused
-        # as held every pass, about every two minutes).
+        # as held every pass, about every two minutes). A walk refused as across
+        # the water waits too, at any distance (#2194).
         wall, wait = walk_wall(member.name, tried)
         far = _yards(member, move.spot) > guildroute.TRAINER_WALK_YARDS
-        if wall and (far or wall == classquest.HELD_REASON):
+        if wall and (far or wall in NEAR_WALLS):
             move, why = (
                 None,
                 "%s waits %d more minute%s to walk: %s"
@@ -2202,7 +2229,11 @@ def plan(
                 ),
             )
     return Plan(
-        member.name, move, tuple(found) + tuple(never_held), move.said if move else why
+        member.name,
+        move,
+        tuple(found) + tuple(never_held),
+        move.said if move else why,
+        boat,
     )
 
 

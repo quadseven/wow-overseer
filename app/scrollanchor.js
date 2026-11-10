@@ -59,3 +59,12 @@ export function scrollShift(el, anchor, lineY) {
   const r = el.getBoundingClientRect();
   return (r.top + anchor.offset) - lineY;
 }
+
+// Where to write the scroll after a redraw, or null when nothing needs
+// writing. `y` is the scroll before the swap, `shift` what scrollShift said
+// (0 with no anchor), `current` the scroll now. A write that would move the
+// page less than a pixel is not made: it can only interrupt a fling.
+export function restoreTarget(y, shift, current) {
+  const target = Math.max(0, y + shift);
+  return Math.abs(target - current) < 1 ? null : target;
+}

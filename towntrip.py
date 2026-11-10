@@ -754,10 +754,11 @@ def in_run_drink(members, apart) -> list[Errand]:
     THE TOWN TRIP DOES NOT RUN INSIDE AN OPEN RUN (`_mid_run`), and the family
     never stands together between runs, so the pre-run hand-over (`plan`) can
     wait for a meeting that never comes. Inside the dungeon the party IS
-    together, which is the one moment a give lands. Only a give is planned: it
-    moves one stack between two bags in place, so nobody leaves the instance
-    (no conjure, no buy, no walk). `apart(giver, taker)` must say the two are in
-    trade range; with no positions (None) nothing is planned.
+    together, which is the one moment a give lands. A give moves one stack
+    between two bags in place, and a conjure (`_in_run_conjure`, #2213) makes
+    one where the party stands, so nobody leaves the instance (no buy, no
+    walk). `apart(giver, taker)` must say the two are in trade range; with no
+    positions (None) nothing is planned.
     """
     if apart is None:
         return []
@@ -769,11 +770,39 @@ def in_run_drink(members, apart) -> list[Errand]:
         and not m.conjures(DRINK_KIND)
         and m.carries(DRINK_KIND) < IN_RUN_DRINK_FLOOR
     ]
-    if not wanted:
-        return []
     conjurers = [m for m in ordered if m.conjures(DRINK_KIND)]
     givers = conjurers + [m for m in ordered if not m.conjures(DRINK_KIND)]
-    errands, _ = _hand_on(wanted, givers, DRINK_KIND, apart, near_only=True)
+    errands, supplied = _hand_on(wanted, givers, DRINK_KIND, apart, near_only=True)
+    return errands + _in_run_conjure(ordered, wanted, supplied)
+
+
+def _in_run_conjure(ordered, wanted, supplied) -> list[Errand]:
+    """Have a conjurer inside the run make the drink the party is about to lack.
+
+    A GIVE ONLY MOVES WHAT EXISTS, AND A LONG RUN OUTLASTS IT (#2213). A
+    mage entered a Blackrock Depths run with 45 waters and made one 20-stack
+    give ten minutes in; that left it one kept stack, `Member.spare` offered
+    nothing, the healer's stack ran out about an hour later, and the party
+    stopped twice more on "Waiting on <healer> (low mana)" with nothing in the
+    bridge able to make another. A conjure is free, moves nobody (the module holds the caster still
+    for a few seconds and refuses it in combat, which the next 45 second pass
+    retries) and is the same row the pre-run trip already writes, so the pass
+    asks for one when a mana member below the floor is not being handed a stack
+    this pass, or when a conjurer is itself below the floor.
+
+    The target is the pre-run one (`_conjure`): a stack for itself and one per
+    mouth still dry, under the free bag slots and the module's row ceiling.
+    """
+    dependents = [m for m in wanted if m.name not in supplied]
+    errands: list[Errand] = []
+    for caster in (m for m in ordered if m.conjures(DRINK_KIND)):
+        short = caster.carries(DRINK_KIND) < IN_RUN_DRINK_FLOOR
+        if not dependents and not short:
+            continue
+        got, _notes, _made = _conjure([caster], dependents, DRINK_KIND)
+        errands.extend(got)
+        if got:
+            break  # one conjurer covers the party, as before the run
     return errands
 
 
@@ -949,6 +978,23 @@ def errand_step(at_counter: bool, rows_outstanding: int, work_unasked: bool) -> 
 NPC_FLAG_VENDOR = 0x80
 NPC_FLAG_REPAIR = 0x1000
 NPC_FLAG_BANKER = 0x20000
+
+# A VENDOR SPAWN THE WORLD NEVER PUTS IN PLAY IS NOT A COUNTER (#2220). Two
+# kinds sit in `acore_world.creature` carrying the vendor bit: the 752 "[DND]
+# TAR Pedestal" dummies (the Dungeon Finder menu's anchors; the module's travel
+# index skips them for the same reason) and any spawn a positive game_event
+# entry holds out of the world until its event runs, which the pedestals' own
+# event (31, Arena Tournament) never does here. The core spawns neither, so a
+# sale beside one is refused "vendor not in range" while the bridge, reading the
+# spawn table, called the member "at a counter" and wrote the rows there. One
+# fragment for every query that asks where a counter is; `cr` is the creature
+# spawn and `ct` its template. No percent sign: it rides inside parameterised
+# queries.
+REAL_SPAWN_SQL = (
+    "NOT EXISTS (SELECT 1 FROM acore_world.game_event_creature ge "
+    "WHERE ge.guid = cr.guid AND ge.eventEntry > 0) "
+    "AND LEFT(ct.name, 18) <> '[DND] TAR Pedestal'"
+)
 
 
 def _int(value, default=0):

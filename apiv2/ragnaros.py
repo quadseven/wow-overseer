@@ -101,15 +101,14 @@ def _coverage(rd, guild: str) -> list | None:
     ]
 
 
-def _quest_done(book, klass: int, rewarded: set, known: set) -> bool:
+def _quest_done(book, klass: int, rewarded: set, known: set, race: int) -> bool:
     """Every reward group of the class whose reward the member has.
 
     A reward a trainer sells for coin is the trainer's, not a quest's
-    (classquest's own rule), so those groups are left out.
+    (classquest's own rule), and a group no quest offers the member's race is
+    one that race cannot take, so those groups are left out.
     """
-    for key, quests in book.groups.items():
-        if key[0] != klass or book.trained.intersection(key[1]):
-            continue
+    for key, quests in classchain.race_groups(book, klass, race):
         spells, got = key[1], rewarded
         if not any(s in known for s in spells) and not any(q in got for q in quests):
             return False
@@ -165,7 +164,11 @@ def _class_quest_map(rd, names: list) -> dict | None:
         guid = int(row["guid"])
         klass = int(row.get("class_id") or 0)
         out[row["name"]] = _quest_done(
-            book, klass, rewarded.get(guid, set()), known.get(guid, set())
+            book,
+            klass,
+            rewarded.get(guid, set()),
+            known.get(guid, set()),
+            int(row.get("race") or 0),
         )
     return out
 

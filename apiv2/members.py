@@ -60,6 +60,7 @@ import re
 
 import agenda
 import deathloop
+import guildrun
 import nowstatus
 import raidteams
 import situation
@@ -87,6 +88,7 @@ HOLD_STUCK_SECONDS = 30 * 60
 # Doings that are not a hold: out of play, or a walk that is still walking.
 NOT_HOLDS = frozenset(
     {"Logged out", "Dead", "Fighting", "Idle", "Buying a bank bag slot"}
+    | nowstatus.READ_DOINGS
 )
 WALKING = "to get there"
 CHARS_SQL = (
@@ -110,6 +112,13 @@ JOBS_SQL = (
     "AND created_at > NOW() - INTERVAL %s MINUTE ORDER BY id DESC"
 )
 JOB_MINUTES = 30
+# Each member's newest level gained (#2178).
+LEVELED_SQL = (
+    "SELECT character_name AS name, UNIX_TIMESTAMP(MAX(created_at)) AS at "
+    "FROM overseer_level WHERE character_name IN ({holes}) "
+    "AND created_at > NOW() - INTERVAL %s DAY GROUP BY character_name"
+)
+LEVEL_DAYS = 30
 # When each family member last made progress: the Now page's STALLED reading
 # (agenda.MOVEMENT_KINDS, a quest, level or gear change; deaths are not).
 MOVED_SQL = (
@@ -234,6 +243,9 @@ def _read(ctx, names: list) -> dict:
         (*everyone, deathloop.READ_SECONDS),
         what="overseer_death",
     )
+    leveled = rd.rows(
+        LEVELED_SQL.format(holes=h), (*everyone, LEVEL_DAYS), what="overseer_level"
+    )
     clock = rd.must("SELECT UNIX_TIMESTAMP() AS now_at")
     now_at = int(clock[0]["now_at"]) if clock else 0
     return {
@@ -250,6 +262,8 @@ def _read(ctx, names: list) -> dict:
             if r.get("at")
         },
         "deaths": deaths or [],
+        "in_run": guildrun.active_names(rd),
+        "leveled": {r["name"]: int(r["at"]) for r in leveled or () if r.get("at")},
         "now_at": now_at,
     }
 
@@ -536,9 +550,18 @@ def _member(name, row, ctx_rows) -> dict:
         ctx_rows["facts"].get(name),
         ctx_rows["now_at"] or None,
     )
+    if not ctx_rows["jobs"].get(name):
+        now = nowstatus.idle_reading(
+            now,
+            name in ctx_rows["in_run"],
+            _either(char, row, "level"),
+            ctx_rows["leveled"].get(name),
+            ctx_rows["now_at"],
+        )
     out = _identity(name, row, char, ctx_rows["family"])
     out.update(zone=zone_of(snap, char), online=reading["online"], life=reading["life"])
     out.update(_doing(now, ctx_rows["jobs"].get(name)))
+    out["stalled_s"] = now.get("stalled_s")
     return out
 
 
@@ -695,7 +718,9 @@ def _order(families: dict, guild_of: dict) -> list:
     return names + sorted(n for n in guild_of if n not in names)
 
 
-def _lookups(families, chars, snaps, facts, now_at, jobs, readings) -> dict:
+def _lookups(
+    families, chars, snaps, facts, now_at, jobs, readings, in_run=None, leveled=None
+) -> dict:
     """The rows build() reads, keyed by name."""
     return {
         "jobs": _newest(jobs),
@@ -705,6 +730,8 @@ def _lookups(families, chars, snaps, facts, now_at, jobs, readings) -> dict:
         "family": _family_of(families),
         "facts": facts or {},
         "now_at": int(now_at or 0),
+        "in_run": in_run or set(),
+        "leveled": leveled or {},
     }
 
 
@@ -729,6 +756,8 @@ def build(
     moved=None,
     credits=None,
     deaths=None,
+    in_run=None,
+    leveled=None,
 ) -> dict:
     """The roster: one row per member, family first, with its stuck reading.
 
@@ -739,7 +768,9 @@ def build(
     `deaths` is deathloop.SQL's rows, judged against each member's level
     (deathloop.loops)."""
     families = families or {}
-    rows = _lookups(families, chars, snaps, facts, now_at, jobs, readings)
+    rows = _lookups(
+        families, chars, snaps, facts, now_at, jobs, readings, in_run, leveled
+    )
     guild_of = {r["name"]: r for r in guild or ()}
     streaks = ask_streaks(asks)
     members, found, follows = [], {}, {}
@@ -896,6 +927,8 @@ def _build_roster(ctx) -> dict:
         f.get("moved"),
         f.get("credits"),
         f.get("deaths"),
+        f.get("in_run"),
+        f.get("leveled"),
     )
 
 

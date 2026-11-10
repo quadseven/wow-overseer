@@ -348,6 +348,26 @@ class StoreCursor:
                 for n, r in reversed(list(enumerate(store.records, 1)))
                 if tuple(r[:3]) == want
             ][:1]
+        if flat.startswith(
+            "SELECT id, created_at, TIMESTAMPDIFF(SECOND, NOW(), created_at"
+        ):
+            # _order_parked: the newest ORDER_DECISION row for this family and
+            # door, with the backoff seconds left (store.park_left, default a
+            # full backoff) and when it was written (store.park_at).
+            want = tuple(params[2:5])
+            left = store.park_left
+            if left is None:
+                left = int(stall.ORDER_BACKOFF.total_seconds())
+            return [
+                {
+                    "id": n,
+                    "created_at": store.park_at,
+                    "left_s": left,
+                    "ordered_after": int(params[1] in store.ordered_after),
+                }
+                for n, r in reversed(list(enumerate(store.records, 1)))
+                if tuple(r[:3]) == want
+            ][:1]
         if flat.startswith("SELECT id, decision, door, target, queue_id"):
             # dungeonpace.OPEN_SQL: the family's open ladder row, if any.
             return [
@@ -414,6 +434,8 @@ class StallWorld(FakeWorld):
         self.fail_on = ""
         self.commits = 0
         self.held_left = None
+        self.park_left = None
+        self.park_at = None
         self.ordered_after = set()
         self.hold_said = {}
         self.silent_seconds = None
@@ -447,6 +469,9 @@ def _pass(world):
             "_stall_step_past",
             "_stall_reads",
             "_stall_held",
+            "_order_parked",
+            "_order_hold",
+            "_order_step_past",
             "_stall_write",
             "_silent_stall",
             "_stuck_doors",
@@ -464,6 +489,7 @@ def _pass(world):
             "pymysql": PYMYSQL,
             "_connect": lambda: StoreConn(world),
             "_silent_seconds": lambda head_id, names: world.silent_seconds,
+            "_OFF_DUNGEON_JOB_AT": {},
             "_door_wedge": lambda head, names, leader: world.wedge,
             "_jobs_of": lambda names: {n: world.member_job(n) for n in names},
             "_fetch_queue_rows": world.fetch_queue,
@@ -506,6 +532,8 @@ def _pass(world):
         "_queue_holds",
         "_stall_breaker",
         "_stall_step_past",
+        "_order_step_past",
+        "_order_hold",
     ):
         setattr(me, name, types.MethodType(ns[name], me))
     asyncio.run(ns["_campaign_queue_once"](me))
@@ -780,23 +808,30 @@ class TheBreakerWritesInOrder(unittest.TestCase):
         for row in w.family("Zug"):
             row["job"] = "dungeon:shadowfang"
         _pass(w)
-        self.assertEqual("cancelled", w.queue[1]["status"])
+        # Held, never cancelled (#2216): the order stays pending and its own
+        # hold is written.
+        self.assertEqual("active", w.queue[1]["status"])
         self.assertEqual(2, len(w.records))
+        self.assertEqual(stall.ORDER_DECISION, w.records[1][1])
 
-    def test_an_older_order_or_the_overseers_entry_stays_held(self):
-        for source, ordered_after in (
-            ("web:overseer", set()),
-            ("overseer:planner", {9}),
-        ):
-            with self.subTest(source=source):
-                row = dict(_q(9, "shadowfang", 30, "queued", 1), source=source)
-                w = self.left_2h_ago([row, _q(10, "deadmines", 10, "queued", 2)])
-                w.ordered_after = ordered_after
-                _pass(w)
-                self.assertEqual(
-                    ["cancelled", "queued", "active"], [r["status"] for r in w.queue]
-                )
-                self.assertEqual({"dungeon:deadmines"}, self.zug_jobs(w))
+    def test_an_older_overseer_entry_stays_held(self):
+        row = dict(_q(9, "shadowfang", 30, "queued", 1), source="overseer:planner")
+        w = self.left_2h_ago([row, _q(10, "deadmines", 10, "queued", 2)])
+        w.ordered_after = {9}
+        _pass(w)
+        self.assertEqual(
+            ["cancelled", "queued", "active"], [r["status"] for r in w.queue]
+        )
+        self.assertEqual({"dungeon:deadmines"}, self.zug_jobs(w))
+
+    def test_an_older_operator_order_is_held_not_barred_for_the_window(self):
+        """#2216: the old leave's 48 hour hold never applies to an operator's
+        order; it is held for the short backoff, never cancelled."""
+        row = dict(_q(9, "shadowfang", 30, "queued", 1), source="web:overseer")
+        w = self.left_2h_ago([row, _q(10, "deadmines", 10, "queued", 2)])
+        _pass(w)
+        self.assertEqual("queued", w.queue[1]["status"])
+        self.assertEqual(stall.ORDER_DECISION, w.records[-1][1])
 
     def test_a_cancelled_entry_closes_its_step_down_pace_row(self):
         w = self.world([_q(7, "shadowfang", 30, "active", 0)])
@@ -1149,6 +1184,47 @@ class TheWedgeIsLeftLikeAStall(unittest.TestCase):
         self.assertEqual([], w.records)
 
 
+class TheWedgeLeaveIsNotSteppedPast(unittest.TestCase):
+    """The held-door step-past (#1078) exists for a door left on ended runs
+    and then re-queued: the re-queued entry is not cancelled a second time
+    on stale evidence. A wedge verdict is not stale evidence. It is judged
+    fresh each pass on the run open now (an active head, a walk restarting
+    now, members held now), so stepping past it leaves that run open past
+    every bound for as long as the earlier leave is in its window. Run
+    1690476 sat open for 25 hours that way (#2191): the entry was never
+    cancelled and the family never stood down, until the module's own
+    hearth recovery ended the run."""
+
+    def world(self):
+        w = StallWorld([_q(7, "maraudon-orange", 23, "active", 0)], [], [])
+        for row in w.family("Zug"):
+            row["job"] = "dungeon:maraudon-orange"
+        w.wedge = stall.door_unreachable("maraudon-orange", 33)
+        return w
+
+    def test_the_first_wedge_leave_cancels_and_records(self):
+        w = self.world()
+        _pass(w)
+        self.assertEqual("cancelled", w.queue[0]["status"])
+        self.assertEqual(1, len(w.records))
+        self.assertEqual({jobs.DEFAULT}, {r["job"] for r in w.family("Zug")})
+
+    def test_a_wedged_run_open_inside_the_hold_is_left_anyway(self):
+        w = self.world()
+        _pass(w)
+        # The door is re-engaged under a new entry, its run is open, and it
+        # wedges again while the first leave's hold is still in its window.
+        w.queue.append(_q(9, "maraudon-orange", 23, "active", 1))
+        for row in w.family("Zug"):
+            row["job"] = "dungeon:maraudon-orange"
+        w.held_left = (stall.WINDOW_HOURS - 2) * 3600
+        _pass(w)
+        self.assertEqual("cancelled", w.queue[1]["status"])
+        self.assertEqual(2, len(w.records))
+        self.assertIn("restarted 33 times", w.records[1][7])
+        self.assertEqual({jobs.DEFAULT}, {r["job"] for r in w.family("Zug")})
+
+
 class TheDoorWedgeReads(unittest.TestCase):
     """The bridge's wedge judge (_door_wedge), loaded the way the breaker
     harness loads its neighbours: the evidence read and the clock are fakes,
@@ -1258,3 +1334,181 @@ class TheDoorWedgeReads(unittest.TestCase):
         self.assertIsNone(
             judge(dict(self.HEAD, status="queued"), ["Zug", "Uzza"], "Zug")
         )
+
+
+# --- an operator's order is held, never cancelled (#2216) ----------------------
+#
+# An operator's order was cancelled by a run that never got in, which read as
+# the second stall running after an earlier real stall (#2216).
+
+
+class AnOperatorOrderIsHeldNotCancelled(unittest.TestCase):
+    BRD = campaignplan.BY_KEYWORD["blackrock-depths"].map_id
+    OPERATOR = "web:overseer"
+
+    def stuck(self):
+        runs = [
+            {
+                "id": 101,
+                "map_id": self.BRD,
+                "portal_keyword": "blackrock-depths",
+                "outcome": "stalled",
+            },
+            {
+                "id": 102,
+                "map_id": self.BRD,
+                "portal_keyword": "blackrock-depths",
+                "outcome": "stalled",
+            },
+        ]
+        return stall.stuck_doors(runs, [boss(101, 255, 511), stalled(102, "x")])
+
+    def order(self, qid, keyword="blackrock-depths", source=None, status="active"):
+        return dict(
+            queue_row(qid, keyword, status),
+            source=source or self.OPERATOR,
+        )
+
+    def test_the_operators_rows_are_held_and_the_overseers_are_dropped(self):
+        rows = [
+            self.order(501),
+            queue_row(163, "blackrock-depths", "queued", 1),
+            queue_row(164, "uldaman", "queued", 2),
+        ]
+        got = stall.leave(rows, self.stuck())
+        self.assertEqual((501,), got.park)
+        self.assertEqual((163,), got.drop)
+        self.assertEqual(stall.ORDER_DECISION, got.decision)
+
+    def test_a_lone_operator_order_is_not_dropped(self):
+        got = stall.leave([self.order(501)], self.stuck())
+        self.assertEqual((), got.drop)
+        self.assertEqual((501,), got.park)
+
+    def test_the_overseers_own_entry_is_still_left(self):
+        got = stall.leave([queue_row(7, "blackrock-depths")], self.stuck())
+        self.assertEqual((7,), got.drop)
+        self.assertEqual((), got.park)
+        self.assertEqual(stall.DECISION, got.decision)
+
+    def test_the_sentence_says_held_not_left_and_when_it_runs_again(self):
+        got = stall.leave([self.order(501)], self.stuck())
+        minutes = int(stall.ORDER_BACKOFF.total_seconds() // 60)
+        self.assertIn("the order is held, not left", got.why)
+        self.assertIn("runs again in %d minutes" % minutes, got.why)
+        self.assertNotIn("; left,", got.why)
+
+    def test_the_backoff_is_far_shorter_than_the_door_window(self):
+        self.assertLess(stall.ORDER_BACKOFF, timedelta(hours=stall.WINDOW_HOURS))
+
+    def test_a_hold_older_than_the_order_does_not_rest_it(self):
+        row = {"id": 5, "left_s": 600, "ordered_after": 1}
+        self.assertIsNone(stall.order_hold(self.order(501), row))
+        row["ordered_after"] = 0
+        self.assertEqual(600, stall.order_hold(self.order(501), row)["left_s"])
+        self.assertIsNone(stall.order_hold(queue_row(7, "blackrock-depths"), row))
+
+    def test_the_stalls_that_earned_a_hold_are_not_read_again(self):
+        runs = [
+            {"id": 1, "started_at": 10},
+            {"id": 2, "started_at": 50},
+            {"id": 3, "started_at": 120},
+        ]
+        head = {"source": self.OPERATOR, "created_at": 5}
+        got = stall.since_order(runs, head, parked_at=100)
+        self.assertEqual([3], [r["id"] for r in got])
+        own = {"source": "overseer:planner", "created_at": 5}
+        self.assertEqual(3, len(stall.since_order(runs, own, parked_at=100)))
+
+    def world(self):
+        w = StallWorld(
+            [dict(_q(501, "blackrock-depths", 20, "active", 0), source=self.OPERATOR)],
+            [
+                ledger_row(101, map_id=self.BRD, portal="blackrock-depths"),
+                ledger_row(102, map_id=self.BRD, portal="blackrock-depths"),
+            ],
+            [boss(101, 255, 511), stalled(102, "x")],
+        )
+        for r in w.family("Zug"):
+            r["job"] = "dungeon:blackrock-depths"
+        return w
+
+    def cancels(self, w):
+        return [c for c in w.calls if "SET status = 'cancelled'" in c[0]]
+
+    def test_a_stalled_operator_order_stays_pending_and_the_family_quests(self):
+        w = self.world()
+        lines = _pass(w)
+        self.assertEqual("active", w.queue[0]["status"])
+        self.assertEqual([], self.cancels(w))
+        self.assertEqual(
+            {jobs.DEFAULT}, {r["job"] for r in w.family("Zug")}, (lines, w.jobs)
+        )
+        self.assertEqual(1, len(w.records))
+        self.assertEqual(stall.ORDER_DECISION, w.records[0][1])
+        self.assertTrue([ln for ln in lines if "the order is held, not left" in ln])
+
+    def test_the_family_steps_past_the_held_order_during_the_backoff(self):
+        w = self.world()
+        _pass(w)
+        w.queue.append(_q(170, "uldaman", 10, "queued", 1))
+        w.park_left = 600
+        lines = _pass(w)
+        self.assertEqual("active", w.queue[0]["status"])
+        self.assertEqual("active", w.queue[1]["status"])
+        self.assertEqual({"dungeon:uldaman"}, {r["job"] for r in w.family("Zug")})
+        self.assertEqual([], self.cancels(w))
+        self.assertEqual(1, len(w.records))
+        said = [ln for ln in lines if "is held, not cancelled" in ln]
+        self.assertEqual(1, len(said), lines)
+        self.assertIn("runs again in about 10 minute", said[0])
+
+    def test_alone_in_the_queue_the_held_order_waits_and_says_so_once(self):
+        w = self.world()
+        _pass(w)
+        w.park_left = 600
+        said = []
+        for _ in range(3):
+            said += [ln for ln in _pass(w) if "is held, not cancelled" in ln]
+        self.assertEqual(1, len(said), said)
+        self.assertIn("nothing else is queued", said[0])
+        self.assertEqual("active", w.queue[0]["status"])
+        self.assertEqual({jobs.DEFAULT}, {r["job"] for r in w.family("Zug")})
+
+    def test_after_the_backoff_the_same_order_runs_with_no_new_order(self):
+        w = self.world()
+        _pass(w)
+        # The stalls that earned the hold are before the hold: the read the
+        # database does for the breaker returns only runs after it.
+        w.runs, w.events = [], []
+        w.park_left = 0
+        w.park_at = datetime(2026, 11, 10, 12, 37, 59)
+        lines = _pass(w)
+        self.assertEqual("active", w.queue[0]["status"])
+        self.assertEqual([], self.cancels(w))
+        self.assertEqual(1, len(w.records), lines)
+        self.assertEqual(
+            {"dungeon:blackrock-depths"}, {r["job"] for r in w.family("Zug")}, lines
+        )
+
+    def test_a_repeated_stall_after_the_hold_holds_it_again_not_cancels_it(self):
+        w = self.world()
+        _pass(w)
+        w.park_left = 0
+        w.park_at = datetime(2026, 11, 10, 12, 37, 59)
+        for r in w.runs:
+            r["started_at"] = datetime(2026, 11, 10, 13, 0, 0)
+        _pass(w)
+        self.assertEqual("active", w.queue[0]["status"])
+        self.assertEqual([], self.cancels(w))
+        self.assertEqual(2, len(w.records))
+        self.assertEqual(stall.ORDER_DECISION, w.records[1][1])
+
+    def test_the_hold_is_read_before_the_stalls_and_is_never_a_leave_row(self):
+        body = BRIDGE[BRIDGE.index("    async def _stall_breaker(") :]
+        body = body[: body.index("\n    def ", 10)]
+        self.assertLess(body.index("_order_hold"), body.index("_stall_reads"))
+        self.assertIn("if not leave.park:", body)
+        write = BRIDGE[BRIDGE.index("def _stall_write(") :]
+        write = write[: write.index("\n\n\n", 10)]
+        self.assertIn("leave.decision", write)
