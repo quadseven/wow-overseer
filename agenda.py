@@ -833,7 +833,7 @@ def stall_blocker(leader: str, now: dict | None) -> str:
         return "%s's reading could not be taken, so nothing names the hold." % leader
     doing = str(now.get("doing") or "").strip()
     waiting = str(now.get("waiting") or "").strip()
-    if not doing or doing == "Idle":
+    if not doing or doing in ("Idle", "Stalled"):
         return (
             "Nothing the bridge recorded says why: %s has no errand and no hold."
             % leader
