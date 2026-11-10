@@ -787,6 +787,101 @@ class TheDryHealerIsToppedUpInsideTheRun(unittest.TestCase):
         self.assertEqual({e.kind for e in errands}, {towntrip.GIVE_KIND})
 
 
+class TheDryHealerIsHandedADrinkBeforeTheFirstPull(unittest.TestCase):
+    """A healer who enters a run with no drink is handed one before it starts.
+
+    LIVE CHECK, 2026-11-10: both earlier changes were in the running bridge.
+    A minute before one family's Blackrock Depths run, the planned hand-over
+    to the healer was logged as waiting, the healer entered with no drink,
+    and the in-run top-up fired about ten minutes in, after a low-mana stop
+    had already happened. The party stands together while the run gathers,
+    which is the one moment before the first pull when a give can land.
+    """
+
+    def _water(self, guid, count):
+        return towntrip.Stack(
+            guid=guid,
+            entry=8077,
+            name="Conjured Mineral Water",
+            count=count,
+            what="drink",
+            conjured=True,
+        )
+
+    def _party(self, healer_drinks=0):
+        og = Member(
+            "Og",
+            "mage",
+            51,
+            10**6,
+            9,
+            (),
+            food_carried=20,
+            drink_carried=55,
+            spells=frozenset({990, 5506}),
+            stacks=(self._water(31, 20), self._water(32, 20), self._water(33, 15)),
+        )
+        grog = Member(
+            "Grog",
+            "paladin",
+            53,
+            10**6,
+            8,
+            (),
+            food_carried=20,
+            drink_carried=healer_drinks,
+        )
+        bork = Member("Bork", "rogue", 52, 10**6, 8, (), food_carried=20)
+        return og, grog, bork
+
+    def _gives(self, members, apart):
+        return [
+            (e.member, e.taker, e.command)
+            for e in towntrip.entry_drink(members, apart)
+        ]
+
+    def test_a_dry_healer_beside_the_mage_is_handed_a_stack(self):
+        got = self._gives(self._party(), lambda g, t: False)
+        self.assertEqual(got, [("Og", "Grog", "guid:31")])
+
+    def test_the_priest_beside_the_healer_is_asked_when_the_mage_is_far(self):
+        og, grog, bork = self._party()
+        ugga = Member(
+            "Ugga",
+            "priest",
+            52,
+            10**6,
+            8,
+            (),
+            food_carried=20,
+            drink_carried=34,
+            stacks=(self._water(41, 20), self._water(42, 14)),
+        )
+        far = {("Og", "Grog")}
+        got = self._gives((og, grog, bork, ugga), lambda g, t: (g, t) in far)
+        self.assertEqual(got, [("Ugga", "Grog", "guid:42")])
+
+    def test_a_healer_carrying_any_drink_is_not_an_entry_case(self):
+        """One drink is the in-run top-up's case (< the floor), not this one:
+        before the run the town trip is what tops a carrier up."""
+        got = self._gives(self._party(healer_drinks=1), lambda g, t: False)
+        self.assertEqual(got, [])
+
+    def test_a_giver_out_of_trade_range_is_not_queued(self):
+        self.assertEqual(self._gives(self._party(), lambda g, t: True), [])
+
+    def test_without_positions_nothing_is_queued(self):
+        self.assertEqual(self._gives(self._party(), None), [])
+
+    def test_a_warrior_with_no_drink_is_never_handed_one(self):
+        og, grog, bork = self._party(healer_drinks=40)
+        self.assertEqual(self._gives((og, grog, bork), lambda g, t: False), [])
+
+    def test_only_a_give_is_ever_planned(self):
+        errands = towntrip.entry_drink(self._party(), lambda g, t: False)
+        self.assertEqual({e.kind for e in errands}, {towntrip.GIVE_KIND})
+
+
 class TheEmptyCases(unittest.TestCase):
     def test_no_members_is_an_empty_plan_and_not_a_crash(self):
         self.assertEqual(towntrip.plan((), RATCHET), towntrip.Plan())

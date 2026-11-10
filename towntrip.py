@@ -777,6 +777,44 @@ def in_run_drink(members, apart) -> list[Errand]:
     return errands
 
 
+def entry_drink(members, apart) -> list[Errand]:
+    """Hand a stack to a mana member about to enter a run with no drink at all.
+
+    THE BEFORE-THE-FIRST-PULL CASE, and narrower than `in_run_drink` on
+    purpose. The live check of 2026-11-10 found both earlier fixes in the
+    running bridge and the healer still dry at the first low-mana stop: a
+    minute before the run the town trip's hand-over was logged as waiting
+    (giver and healer apart), the healer entered with no drink, and the
+    in-run top-up fired about ten minutes in. While a run gathers, the party
+    stands together at the door, which is the one moment before the first
+    pull when a give can land, so this planner is asked then, with the same
+    trade-range rule as the in-run one.
+
+    Only a member carrying NO drink is an entry case. One carrying some is
+    the town trip's work before the run and the in-run top-up's work (below
+    IN_RUN_DRINK_FLOOR) once it opens; widening this one to match would
+    queue a second give for members those passes already serve. Only a
+    give is planned, for the in-run reason: it moves one stack between two
+    bags in place and sends nobody anywhere.
+    """
+    if apart is None:
+        return []
+    ordered = sorted(members, key=lambda m: m.name)
+    wanted = [
+        m
+        for m in ordered
+        if _wants(m, DRINK_KIND)
+        and not m.conjures(DRINK_KIND)
+        and m.carries(DRINK_KIND) == 0
+    ]
+    if not wanted:
+        return []
+    conjurers = [m for m in ordered if m.conjures(DRINK_KIND)]
+    givers = conjurers + [m for m in ordered if not m.conjures(DRINK_KIND)]
+    errands, _ = _hand_on(wanted, givers, DRINK_KIND, apart, near_only=True)
+    return errands
+
+
 def shop_supply_gaps(members) -> tuple[str, ...]:
     """Return member/resource pairs that need a vendor to reach one stack.
 

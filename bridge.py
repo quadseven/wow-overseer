@@ -21625,20 +21625,38 @@ class Bridge(discord.Client):
             await asyncio.sleep(cycle)
 
     async def _run_drink_once(self, cohort=None) -> None:
-        """Hand a dry healer a drink stack from a party member beside it, mid-run.
+        """Hand a dry healer a drink stack from a party member beside it.
 
         THE OPPOSITE GATE TO `_towntrip_once`: that pass stands down inside an
         open run, and the pre-run hand-over it plans waits for two members to
         stand together, which a family between runs never does (Grug's run
         1665107 reached its fourth boss and stopped on "Waiting on Grog (low
         mana)" with the mage carrying spare drinks in the same party, #2037). Inside
-        the dungeon the party is together, so this pass runs ONLY mid-run and
-        writes only kind='give' rows, which move a stack between two bags in
-        place and send nobody anywhere. Every decision is towntrip.in_run_drink's.
+        the dungeon the party is together, and while a run is staging the
+        party gathers at its door, so this pass runs in those two windows
+        and writes only kind='give' rows, which move a stack between two bags in
+        place and send nobody anywhere. Every decision is the planner's:
+        towntrip.in_run_drink's mid-run, towntrip.entry_drink's while staging.
         """
-        names, _leader = await asyncio.to_thread(_family_of, cohort)
-        if not names or not await self._mid_run(names):
+        names, leader = await asyncio.to_thread(_family_of, cohort)
+        if not names:
             return
+        mid_run = await self._mid_run(names)
+        staging = ""
+        if not mid_run:
+            # BEFORE THE RUN OPENS IS THE OTHER HALF OF THIS PASS (#2060).
+            # The 2026-11-10 live check found the in-run top-up firing about
+            # ten minutes into a run, after the first low-mana stop: the
+            # town trip's hand-over had been logged as waiting while the two
+            # stood apart, and the healer entered with no drink. While the
+            # coordinator is staging (townslot.STAGING_PHASES, read through
+            # _staging_phase) the party gathers at the door, so a dry healer
+            # can be handed a stack before the first pull instead.
+            staging = (
+                await asyncio.to_thread(_staging_phase, leader) if leader else ""
+            )
+            if not staging:
+                return
         members = towntrip.members_from_rows(
             await asyncio.to_thread(_fetch_town_worn, names),
             await asyncio.to_thread(_fetch_town_carried, names),
@@ -21648,10 +21666,17 @@ class Bridge(discord.Client):
         )
         sitting = frozenset(names) & _standin_out()
         where = handover.spots(await asyncio.to_thread(_fetch_positions, names))
-        errands = towntrip.in_run_drink(
-            [m for m in members if m.name not in sitting],
-            apart=lambda giver, taker: handover.verdict(
-                giver, taker, where).verb != handover.GIVE)
+        party = [m for m in members if m.name not in sitting]
+        if mid_run:
+            errands = towntrip.in_run_drink(
+                party,
+                apart=lambda giver, taker: handover.verdict(
+                    giver, taker, where).verb != handover.GIVE)
+        else:
+            errands = towntrip.entry_drink(
+                party,
+                apart=lambda giver, taker: handover.verdict(
+                    giver, taker, where).verb != handover.GIVE)
         if not errands:
             return
         seen = await asyncio.to_thread(_recent_town_keys, RUN_DRINK_RETRY_MINUTES)
