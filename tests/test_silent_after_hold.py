@@ -1,11 +1,11 @@
 """A family held out of its dungeon is not silent on it (the silent-head breaker).
 
-The dev realm's Zug family finished a Dire Maul East run at 20:08 UTC and was
-held at the bag floor until 06:15 UTC. The queue put the family back on its
-dungeon job at 06:16, and the very next stall pass read the ten hours since the
-last boss credit as ten hours of silence ON THE DOOR and left it, cancelling the
-queue row and sending the family back to quest until the planner found another
-door. The family had not been on the door at all: its own queue held it off.
+A family that finishes a run and is then held at the bag floor for many hours
+is put back on its dungeon job by the queue when room is made, and the very
+next stall pass used to read all those hours since the last boss credit as
+silence ON THE DOOR, leave it, cancel the queue row and send the family back to
+quest until the planner found another door. The family had not been on the door
+at all: its own queue held it off.
 
 The silence clock must restart when a family comes back from a hold, and still
 fire when a family is genuinely on the job and nothing happens.
@@ -19,7 +19,7 @@ import jobs
 from test_campaign_queue import _load
 
 HEAD = {"id": 159, "keyword": "dire-maul-east-east", "status": campaignqueue.ACTIVE}
-NAMES = ["Zug", "Oz"]
+NAMES = ["Ugga", "Bork"]
 TEN_HOURS = 10 * 3600
 
 
