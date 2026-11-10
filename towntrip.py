@@ -979,6 +979,23 @@ NPC_FLAG_VENDOR = 0x80
 NPC_FLAG_REPAIR = 0x1000
 NPC_FLAG_BANKER = 0x20000
 
+# A VENDOR SPAWN THE WORLD NEVER PUTS IN PLAY IS NOT A COUNTER (#2220). Two
+# kinds sit in `acore_world.creature` carrying the vendor bit: the 752 "[DND]
+# TAR Pedestal" dummies (the Dungeon Finder menu's anchors; the module's travel
+# index skips them for the same reason) and any spawn a positive game_event
+# entry holds out of the world until its event runs, which the pedestals' own
+# event (31, Arena Tournament) never does here. The core spawns neither, so a
+# sale beside one is refused "vendor not in range" while the bridge, reading the
+# spawn table, called the member "at a counter" and wrote the rows there. One
+# fragment for every query that asks where a counter is; `cr` is the creature
+# spawn and `ct` its template. No percent sign: it rides inside parameterised
+# queries.
+REAL_SPAWN_SQL = (
+    "NOT EXISTS (SELECT 1 FROM acore_world.game_event_creature ge "
+    "WHERE ge.guid = cr.guid AND ge.eventEntry > 0) "
+    "AND LEFT(ct.name, 18) <> '[DND] TAR Pedestal'"
+)
+
 
 def _int(value, default=0):
     try:
