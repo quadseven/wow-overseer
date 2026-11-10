@@ -5396,8 +5396,7 @@ def _silent_seconds(head_id: int, names: list) -> int | None:
 
     A QUEST COUNTS THE FIRST TIME A CHARACTER WRITES IT (#2147). The event
     table keeps one row per character, kind, subject and HOUR BUCKET, so a bot
-    that accepts and completes the same quest once an hour (a sealed party's
-    Grog, "Stoley's Debt") writes a new row each hour, each with its own
+    that repeats a quest writes a new row per hour bucket, each with its own
     first_seen. Reading first_seen (#2165) still moved hourly. A quest row now
     counts only when no earlier row exists for the same character, kind and
     subject inside the head's window (the NOT EXISTS on p.id < e.id); level,
