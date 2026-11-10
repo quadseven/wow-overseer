@@ -6,6 +6,7 @@ import ast
 import json
 import os
 import pathlib
+import re
 import shlex
 import subprocess
 import sys
@@ -131,6 +132,31 @@ def _served_files() -> set[pathlib.Path]:
         ):
             names.add(pathlib.Path(node.args[0].value))
     return names
+
+
+def _per_module_dockerfile_assertions() -> list[str]:
+    offenders = []
+    for path in sorted((ROOT / "tests").glob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(
+                node.func, ast.Attribute
+            ):
+                continue
+            if node.func.attr not in {"assertIn", "assertNotIn"} or len(node.args) < 2:
+                continue
+            needle = node.args[0]
+            if not isinstance(needle, ast.Constant) or not isinstance(
+                needle.value, str
+            ):
+                continue
+            if not re.search(r"\b[A-Za-z_][A-Za-z0-9_]*\.py\b", needle.value):
+                continue
+            target = ast.dump(node.args[1]).lower()
+            if "dockerfile" in target:
+                offenders.append(path.relative_to(ROOT).as_posix())
+                break
+    return offenders
 
 
 def _world_data_paths(path: pathlib.Path) -> set[pathlib.Path]:
@@ -267,6 +293,9 @@ with stub_modules(discord=discord, pymysql=PYMYSQL):
                 self.assertTrue(contents, f"empty shipped data file: {path}")
                 if path.suffix == ".json":
                     json.loads(contents)
+
+    def test_module_membership_uses_the_central_image_closure(self):
+        self.assertEqual([], _per_module_dockerfile_assertions())
 
 
 if __name__ == "__main__":
