@@ -133,6 +133,7 @@ class Attempt:
     retry: str = ""  # the world's own verdict, when it wrote one
     count: int = 0  # the count that was asked for
     stack: int | None = None  # the true stack the world reported, if it did
+    remaining: int | None = None  # what a sale left in the stack, if reported
 
 
 @dataclass(frozen=True)
@@ -167,7 +168,7 @@ def attempt_from_row(row) -> Attempt | None:
     guid, count = request
     if guid <= 0:
         return None
-    retry, stack = "", None
+    retry, stack, remaining = "", None, None
     raw = row.get("result") or ""
     if raw:
         try:
@@ -176,10 +177,12 @@ def attempt_from_row(row) -> Attempt | None:
             item = payload.get("item") or {}
             if "stack" in item:
                 stack = int(item["stack"])
+            if payload.get("remaining") is not None:
+                remaining = int(payload["remaining"])
         except (TypeError, ValueError, AttributeError):
             # A garbled payload costs us the world's verdict, not the row:
             # the detail literals still classify it.
-            retry, stack = "", None
+            retry, stack, remaining = "", None, None
     return Attempt(
         holder=str(row.get("target_name") or ""),
         item_guid=guid,
@@ -188,11 +191,32 @@ def attempt_from_row(row) -> Attempt | None:
         retry=retry,
         count=count,
         stack=stack,
+        remaining=remaining,
+    )
+
+
+def left_a_remainder(attempt) -> bool:
+    """True for a delivered sale the world says left part of the stack behind.
+
+    A PARTIAL SALE DOES NOT REMOVE THE ITEM. The sold row names the stack by
+    guid and carries `remaining`; a stack that kept 9 of 16 is the same guid
+    afterwards and grows again as more of it is looted. Reading the delivery as
+    "the item left the bags" held that guid back for the whole memory window,
+    so a member at the bag floor carried three such stacks for eleven hours,
+    unable to sell the stacks that would have made room.
+    """
+    return (
+        attempt.status in SUCCESS_STATUSES
+        and attempt.remaining is not None
+        and attempt.remaining > 0
     )
 
 
 def terminal_scope(attempt) -> str:
     """How far this attempt's answer reaches: ITEM, REQUEST, or not at all."""
+    if left_a_remainder(attempt):
+        # Only that request is answered; the rest of the stack may be asked for.
+        return REQUEST
     if attempt.status in SUCCESS_STATUSES:
         return ITEM
     if attempt.detail in TERMINAL_ITEM:
@@ -378,6 +402,10 @@ def true_stacks(attempts) -> dict:
     """The real stack size the world last reported, per (holder, item)."""
     stacks = {}
     for attempt in attempts:
+        if left_a_remainder(attempt):
+            # The stack the sale read is the size BEFORE it; the stack has
+            # since shrunk and grown, so it is no measure of what is carried.
+            continue
         if attempt.stack is not None and attempt.stack >= 0:
             stacks[(attempt.holder, attempt.item_guid)] = int(attempt.stack)
     return stacks

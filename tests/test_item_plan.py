@@ -395,5 +395,68 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(len(item_plan.plan([candidate()], []).write), 1)
 
 
+class APartialSaleDoesNotRemoveTheStack(unittest.TestCase):
+    """A delivered sale that left part of a stack behind settles only itself.
+
+    The family sat at the bag floor for eleven hours on three stacks (Red Wolf
+    Meat, Dark Iron Residue, Dark Iron Scraps) that each had one delivered
+    sale, of part of the stack, the day before. The gate read the delivery as
+    the item gone and held the guid back for the whole 24 hour memory, so the
+    whole-stack sale that would have freed three slots was never written.
+    Payloads below are the world's own, from the dev realm.
+    """
+
+    MEAT = (
+        '{"outcome":"sold","reason":"","retry":"","seller":"Zug",'
+        '"request":"guid:80051939 count:7","item":{"guid":80051939,'
+        '"entry":12203,"name":"Red Wolf Meat","count":7,"stack":16},'
+        '"remaining":9,"gained":609}'
+    )
+    GONE = (
+        '{"outcome":"sold","reason":"","retry":"","seller":"Zug",'
+        '"request":"guid:83242357 count:1","item":{"guid":83242357,'
+        '"entry":15627,"name":"Gryphon Mail Legguards","count":1,"stack":1},'
+        '"remaining":0,"gained":14493}'
+    )
+
+    def _sold(self, command, result):
+        return item_plan.attempt_from_row(
+            row(command=command, status="delivered", detail="", result=result,
+                holder="Zug")
+        )
+
+    def test_the_world_reports_what_a_sale_left(self):
+        self.assertEqual(
+            self._sold("guid:80051939 count:7", self.MEAT).remaining, 9
+        )
+
+    def test_the_rest_of_the_stack_may_be_sold_later(self):
+        sold = self._sold("guid:80051939 count:7", self.MEAT)
+        # The stack grew back to 14 by looting; the whole stack is offered.
+        plan = item_plan.plan(
+            [candidate(holder="Zug", guid=80051939, count=14)], [sold]
+        )
+        self.assertEqual([c.count for c in plan.write], [14])
+
+    def test_the_same_request_is_still_not_repeated(self):
+        sold = self._sold("guid:80051939 count:7", self.MEAT)
+        plan = item_plan.plan(
+            [candidate(holder="Zug", guid=80051939, count=7)], [sold]
+        )
+        self.assertEqual(plan.write, ())
+
+    def test_the_stack_a_sale_read_before_selling_is_not_a_cap(self):
+        sold = self._sold("guid:80051939 count:7", self.MEAT)
+        self.assertEqual(item_plan.true_stacks([sold]), {})
+
+    def test_a_sale_that_emptied_the_stack_still_ends_the_item(self):
+        sold = self._sold("guid:83242357 count:1", self.GONE)
+        plan = item_plan.plan(
+            [candidate(holder="Zug", guid=83242357, count=1)], [sold]
+        )
+        self.assertEqual(plan.write, ())
+        self.assertEqual(item_plan.terminal_scope(sold), item_plan.ITEM)
+
+
 if __name__ == "__main__":
     unittest.main()
