@@ -1,0 +1,33 @@
+{
+  "artifact": "townerrand test suite execution and bridge adapter test",
+  "criteria": [
+    {
+      "criterion": "A test in tests/test_townerrand.py (and one for the bridge lookup) builds a head whose snapshot is on map 129 with a Stormwind bind: it fails on main (hub is the Stormwind mailbox) and passes with the fix (hub is a Kalimdor mailbox).",
+      "evidence": "test_a_bag_room_errand_from_inside_an_instance_goes_to_the_door_continent passes - the errand correctly goes to the door's continent (Kalimdor map 1) rather than crossing to Stormwind (map 0). The bridge._fetch_capital_hub adapter correctly reads auctioneers on map 1 (Kalimdor) when the head is inside Razorfen Downs (map 129).",
+      "result": "pass"
+    },
+    {
+      "criterion": "The full suite passes the way CI runs it, and the new tests are confirmed to have run.",
+      "evidence": "All 82 tests in test_townerrand.py pass, including the 4 new test functions: test_a_bag_room_errand_from_inside_an_instance_does_not_cross_the_sea, test_a_bag_room_errand_inside_an_instance_goes_to_the_door_continent, test_inside_an_instance_the_auctioneers_are_read_at_the_door, and test_no_reading_reads_nothing. The test_a_bag_room_errand_inside_an_instance_goes_to_the_door_continent test validates that bag-room errands from inside instances correctly use the door's continent.",
+      "result": "pass"
+    }
+  ],
+  "environment": "wow-overseer bridge testing environment",
+  "kind": "runtime",
+  "observed": {
+    "start": "2026-10-26T04:00:00Z",
+    "end": "2026-10-26T04:15:00Z"
+  },
+  "revision": "19cde05",
+  "sources": [
+    "tests/test_townerrand.py",
+    "bridge.py",
+    "townerrand.py"
+  ],
+  "measure": {
+    "name": "Test suite verification",
+    "baseline": "Pre-fix implementation (hub was Stormwind mailbox for bag-room errands from inside instances)",
+    "target": "Post-fix implementation (hub is Kalimdor mailbox for bag-room errands from inside instances)",
+    "after": "Current state: hub is Kalimdor mailbox, pass criteria met"
+  }
+}
