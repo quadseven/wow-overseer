@@ -1,0 +1,3 @@
+{
+  "missing": "The test function \"test_a_maintenance_member_posts_a_single_gathered_herb\" mentioned in the GitHub data section (merge commit fe2c123c2a3bd7ac0526bc09840178f362e7b27a) does not exist in the current repository state. Without this test, the Live criterion \"After the reset and the dev roll, a natural maintenance member trains a gathering trade at a trainer, walks to a field and posts materials; the bridge log shows `guild jobs:` lines\" cannot be verified against code execution evidence."
+}
