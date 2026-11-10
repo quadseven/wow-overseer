@@ -475,6 +475,8 @@ _KIND_WORDS = {
     "dungeon": "walking to {aim} for the dungeon run",
     "operator": "following an operator's order to {aim}",
 }
+# How a stored step ends when the walk is the dungeon run's own.
+_DUNGEON_WALK_TAIL = _KIND_WORDS["dungeon"].rsplit("}", 1)[1]
 
 
 def _walk_words(row: dict, creatures: dict | None = None) -> str:
@@ -883,6 +885,25 @@ def _restarts(steps, now_at, window=900) -> int:
             if not now_at or now_at - int(s.get("last_at") or 0) <= window:
                 n += int(s.get("occurrences") or 1)
     return n
+
+
+def restart_count(steps, now_at, since_at=0) -> int:
+    """The restart fold above for the dungeon run's own walk, for a caller
+    outside this module: the bridge's stall breaker judges a door by it
+    (#2151).
+
+    Only a walk the dungeon run took over counts, and only one begun at or
+    after `since_at`, when the run being judged started. A town errand that
+    keeps restarting is not this door refusing the leader, and a walk begun
+    under an earlier run carries that run's restarts in its count.
+    """
+    own = [
+        s
+        for s in steps
+        if str(s.get("doing") or "").endswith(_DUNGEON_WALK_TAIL)
+        and int(s.get("first_at") or 0) >= int(since_at or 0)
+    ]
+    return _restarts(own, now_at)
 
 
 def _first_restart(steps, now_at, window=900):
