@@ -487,20 +487,25 @@ class ARestartKeepsTheClock(unittest.TestCase):
     (infra: Zug's family sat on 'waiting for a vendor within reach' across
     ships with the 30-minute bound never firing)."""
 
-    def run_store(self, stored):
-        """One call after a restart (empty map); `stored` is the row the
-        database still holds for the step inside the window, or None."""
+    def run_store(self, kind="no_vendor", row_age=None):
+        """One call after a restart (empty map). `row_age` is how many seconds
+        ago the database last saw the same step (None: never); the fake answers
+        the lookup the way the SQL window would."""
         bridge = _import_bridge()
         log = []
 
         class Cur:
             lastrowid = 99
+            answer = None
 
             def execute(self_, sql, args=()):
                 log.append((sql.split(" ")[0], sql, args))
+                if sql == nowstatus.FIND_SQL:
+                    inside = row_age is not None and row_age <= args[-1]
+                    self_.answer = {"id": 41} if inside else None
 
             def fetchone(self_):
-                return {"id": stored} if stored else None
+                return self_.answer
 
             def __enter__(self_):
                 return self_
@@ -518,28 +523,44 @@ class ARestartKeepsTheClock(unittest.TestCase):
             def cursor(self_):
                 return Cur()
 
-        step = nowstatus.Step("Zug", "character", "no_vendor", "a", "b")
+        step = nowstatus.Step("Zug", "character", kind, "a", "b")
         seen = {}
         with mock.patch.object(bridge, "_connect", return_value=Conn()):
             bridge._store_now_steps([step], seen, 5.0)
         return log, seen
 
     def test_a_stored_row_inside_the_window_is_continued_not_replaced(self):
-        log, seen = self.run_store(41)
+        log, seen = self.run_store(row_age=60)
         verbs = [v for v, _, _ in log]
         self.assertNotIn("INSERT", verbs)
         bump = [a for v, _, a in log if v == "UPDATE"]
         self.assertEqual(bump, [(41,)])
         self.assertEqual(list(seen.values())[0][0], 41)
 
+    def test_every_step_kind_takes_the_same_lookup_and_bump_path(self):
+        for kind in ("no_vendor", "bag_room", "equip_held", "bank_wait",
+                     "town_errand", "intent"):
+            with self.subTest(kind=kind):
+                log, _ = self.run_store(kind=kind, row_age=60)
+                finds = [a for v, sql, a in log if sql == nowstatus.FIND_SQL]
+                self.assertEqual(len(finds), 1)
+                self.assertEqual(finds[0][2], kind)
+                self.assertNotIn("INSERT", [v for v, _, _ in log])
+
     def test_the_lookup_is_bounded_by_the_same_step_window(self):
-        log, _ = self.run_store(41)
+        log, _ = self.run_store(row_age=60)
         find = [a for v, sql, a in log if sql == nowstatus.FIND_SQL][0]
         self.assertEqual(find[-1], nowstatus.SAME_STEP_SECONDS)
         self.assertEqual(find[:5], ("Zug", "character", "no_vendor", "a", "b"))
 
-    def test_no_stored_row_inside_the_window_starts_a_new_clock(self):
-        log, seen = self.run_store(None)
+    def test_a_stored_row_older_than_the_window_starts_a_new_clock(self):
+        log, seen = self.run_store(row_age=nowstatus.SAME_STEP_SECONDS + 1)
+        self.assertEqual([v for v, _, _ in log].count("INSERT"), 1)
+        self.assertNotIn("UPDATE", [v for v, _, _ in log])
+        self.assertEqual(list(seen.values())[0][0], 99)
+
+    def test_no_stored_row_starts_a_new_clock(self):
+        log, seen = self.run_store(row_age=None)
         self.assertEqual([v for v, _, _ in log].count("INSERT"), 1)
         self.assertEqual(list(seen.values())[0][0], 99)
 
