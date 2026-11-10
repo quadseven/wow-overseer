@@ -617,6 +617,34 @@ class CrossingTheBreakpointRedrawsOnce(unittest.TestCase):
         )
         self.assertEqual(got, [["(max-width: 759.98px)"], 1, 1])
 
+    def test_a_browser_with_only_the_old_listener_still_hears_the_crossing(self):
+        got = node_module(
+            "breakpoint.js",
+            """
+            const mq = { l: [], addListener(f) { this.l.push(f); } };
+            globalThis.window = { matchMedia: () => mq };
+            let n = 0;
+            M.onCross(() => { n++; });
+            mq.l.forEach((f) => f({}));
+            console.log(JSON.stringify([n, mq.l.length]));
+            """,
+        )
+        self.assertEqual(got, [1, 1])
+
+    def test_a_browser_that_cannot_listen_at_all_does_not_throw(self):
+        got = node_module(
+            "breakpoint.js",
+            """
+            const out = [];
+            for (const w of [{}, { matchMedia: () => null }, { matchMedia: () => ({}) }]) {
+              globalThis.window = w;
+              try { M.onCross(() => {}); out.push("ok"); } catch (e) { out.push("threw"); }
+            }
+            console.log(JSON.stringify(out));
+            """,
+        )
+        self.assertEqual(got, ["ok", "ok", "ok"])
+
     def test_the_stage_uses_the_same_breakpoint(self):
         stage = (APP / "views" / "now" / "stage.js").read_text(encoding="utf-8")
         self.assertIn('from "../../breakpoint.js"', stage)
