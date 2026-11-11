@@ -58,6 +58,49 @@ CHARTER_SIGNATURES = 10
 CROWD = 10
 
 
+# A tile whose newest frame is older than this many seconds reads "stale".
+STALE_AFTER_SECONDS = 30
+
+FRESH = "fresh"
+STALE = "stale"
+NO_FRAME = "no_frame"
+
+
+def build_tiles(
+    tiles: list[dict], frame_at: dict, buffer_at: dict, now: float
+) -> list[dict]:
+    """One entry per watched tile: its name, whether it is presented as live,
+    and the age of the newest frame behind it.
+
+    `tiles` are the watch wall's own tiles (name, playable). `frame_at` is the
+    frame-ingest clock by name and `buffer_at` the capture side's last report
+    of that view's buffer by name, both epoch seconds; `now` is the same clock.
+    The newer of the two wins. A tile with neither clock is `no_frame` with a
+    null age, never left out and never given an invented age.
+    """
+    out = []
+    for tile in tiles:
+        name = tile["name"]
+        clocks = [(frame_at.get(name), "frame"), (buffer_at.get(name), "buffer_report")]
+        known = [(at, source) for at, source in clocks if at is not None]
+        if known:
+            at, source = max(known, key=lambda pair: pair[0])
+            age = max(0, int(now - at))
+            state = FRESH if age <= STALE_AFTER_SECONDS else STALE
+        else:
+            age, source, state = None, None, NO_FRAME
+        out.append(
+            {
+                "name": name,
+                "live": bool(tile.get("playable")),
+                "frame_age_seconds": age,
+                "frame_state": state,
+                "frame_source": source,
+            }
+        )
+    return out
+
+
 def _iso(when: datetime | None) -> str | None:
     return when.isoformat() if when else None
 
