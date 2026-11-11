@@ -527,6 +527,33 @@ class ShelfViewOwnerTests(unittest.TestCase):
         self.assertEqual("Cedar", clip["view_owner"])
 
 
+class EventKeyTests(unittest.TestCase):
+    def test_the_key_functions_spell_what_the_planner_writes(self):
+        at = NOW - timedelta(minutes=3)
+        kill = {
+            "id": 1,
+            "character_name": "Alder",
+            "kind": "boss_kill",
+            "subject_id": 5,
+            "subject_name": "Boss 5",
+            "first_seen": at,
+        }
+        sixty = {
+            "id": 2,
+            "character_name": "Alder",
+            "kind": "level_up",
+            "level": 60,
+            "first_seen": at,
+        }
+        keys = [r["event_key"] for r in plan(event_rows=[kill, sixty])]
+        self.assertEqual(
+            sorted([clipledger.boss_key(5), clipledger.level_key("Alder")]),
+            sorted(keys),
+        )
+        self.assertEqual("boss_kill:5", clipledger.boss_key(5))
+        self.assertEqual("level_60:Alder", clipledger.level_key("Alder"))
+
+
 class ShelfSubjectTests(unittest.TestCase):
     def subject_of(self, **over):
         row = {

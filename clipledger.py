@@ -236,6 +236,16 @@ def _loot_requests(rows, guilds, now, views):
     return out
 
 
+def boss_key(subject_id) -> str:
+    """The ledger key of a boss's first family kill."""
+    return "boss_kill:%s" % subject_id
+
+
+def level_key(character) -> str:
+    """The ledger key of a character's level 60 moment."""
+    return "level_60:%s" % character
+
+
 def _first_kills(rows, roster, path_of):
     """The earliest family kill of each boss. Rows tied on the earliest time
     go to a streamed member, then to roster order, so the pick never depends
@@ -270,7 +280,7 @@ def _event_requests(rows, roster, views):
         )
         out.append(
             _request(
-                "boss_kill:%s" % row["subject_id"],
+                boss_key(row["subject_id"]),
                 kind,
                 row["character_name"],
                 views,
@@ -292,7 +302,7 @@ def _event_requests(rows, roster, views):
         who = row["character_name"]
         out.append(
             _request(
-                "%s:%s" % (kind, who),
+                level_key(who),
                 kind,
                 who,
                 views,
