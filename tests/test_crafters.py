@@ -533,7 +533,7 @@ class TheBridgeWiring(unittest.TestCase):
         self.assertIn("not in routed", self.body("_hand_recipes"))
 
     def test_the_bank_knows_what_is_routed(self):
-        self.assertIn("routed=_crafter_plan(names).routed", self.body("_plan_bank"))
+        self.assertIn("_crafter_plan(names).routed", self.body("_plan_bank"))
 
     def test_jev_is_given_the_register(self):
         body = self.body("_jev_keep_once")

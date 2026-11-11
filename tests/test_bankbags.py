@@ -19,6 +19,31 @@ def facts(**over):
     return bb.Facts(**base)
 
 
+class AVisitBuysThenPlacesInOrder(unittest.TestCase):
+    def test_a_slot_to_buy_and_a_bag_to_place_are_both_this_visit(self):
+        spare = (bb.Bag(guid=77, entry=4245, slots=6),)
+        steps = bb.visit_steps(facts(spare=spare))
+        self.assertEqual([s.command for s in steps], ["buy slot", "place-bag guid:77"])
+        self.assertEqual(steps[1].slots, 6)
+
+    def test_an_open_slot_is_filled_without_buying_another(self):
+        spare = (bb.Bag(guid=77, entry=4245, slots=6),)
+        steps = bb.visit_steps(facts(bought=1, placed=0, spare=spare))
+        self.assertEqual([s.command for s in steps], ["place-bag guid:77"])
+
+    def test_a_slot_to_buy_and_no_bag_is_the_buy_alone(self):
+        steps = bb.visit_steps(facts())
+        self.assertEqual([s.command for s in steps], ["buy slot"])
+
+    def test_nothing_to_do_is_no_steps(self):
+        self.assertEqual(bb.visit_steps(facts(money=0)), [])
+
+    def test_room_gain_is_the_size_of_the_bag_placed(self):
+        spare = (bb.Bag(guid=77, entry=4245, slots=6),)
+        gain = bb.room_gain([facts(spare=spare), facts(name="Og")])
+        self.assertEqual(gain, {"Grog": 6})
+
+
 class ASlotIsBoughtWhenAffordable(unittest.TestCase):
     def test_the_first_slot_with_grogs_purse(self):
         step, _ = bb.step(facts())
@@ -155,7 +180,7 @@ class TheRowsReadAsFacts(unittest.TestCase):
         body = BRIDGE[BRIDGE.index("    async def _bank_bag_slots(") :]
         body = body[: body.index("\n    async def ")]
         self.assertIn("town.banker", body)
-        self.assertIn("bankbags.step(f, floor)", body)
+        self.assertIn("bankbags.visit_steps(f, floor)", body)
 
 
 if __name__ == "__main__":

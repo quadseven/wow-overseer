@@ -99,6 +99,8 @@ class Step:
     name: str
     command: str
     why: str
+    # Bank slots a placed bag adds; 0 for a purchase.
+    slots: int = 0
 
 
 def _smallest_worn(facts: Facts) -> int:
@@ -178,6 +180,7 @@ def step(facts: Facts, floor=None):
             "place-bag guid:%d" % bag.guid,
             "%s puts a %d-slot bag in its bank bag slot %d"
             % (facts.name, bag.slots, facts.placed + 1),
+            bag.slots,
         ), ""
     if facts.bought >= BANK_BAG_SLOTS:
         return None, "%s has bought every bank bag slot" % facts.name
@@ -194,6 +197,44 @@ def step(facts: Facts, floor=None):
         "%s buys bank bag slot %d for %d copper of its %d"
         % (facts.name, facts.bought + 1, price, facts.money),
     ), ""
+
+
+def visit_steps(facts: Facts, floor=None) -> list:
+    """This character's steps for one visit, in the order they are sent.
+
+    `step` gives the one step the character's state calls for. When that is a
+    purchase and a placeable bag is already carried, the new slot is filled
+    on the same visit: buy, then place. Room grows before a deposit is judged.
+    """
+    first, _why = step(facts, floor)
+    if first is None:
+        return []
+    steps = [first]
+    if first.command == BUY_SLOT:
+        bags = placeable(facts, floor)
+        if bags:
+            bag = bags[0]
+            steps.append(
+                Step(
+                    facts.name,
+                    "place-bag guid:%d" % bag.guid,
+                    "%s puts a %d-slot bag in its bank bag slot %d"
+                    % (facts.name, bag.slots, facts.bought + 1),
+                    bag.slots,
+                )
+            )
+    return steps
+
+
+def room_gain(family) -> dict:
+    """name -> bank slots a bag placed this visit adds, for who has one."""
+    floor = family_floor(family)
+    return {
+        s.name: s.slots
+        for f in family or ()
+        for s in visit_steps(f, floor)
+        if s.slots > 0
+    }
 
 
 def pending_steps(family, floor=None) -> list:

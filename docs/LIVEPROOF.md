@@ -22,7 +22,7 @@ Remove a probe when its ticket closes.
 
 ## The read-only rule
 
-`liveproof/run.py` parses each file with sqlglot and refuses anything that is not exactly one plain SELECT: writes, a second statement, `SELECT ... INTO`, locking reads, a UNION, and functions such as `SLEEP` or `LOAD_FILE`. A refused or failing probe is recorded as an `error` verdict and never reaches the database. Use a database account with SELECT only; the connection also sets `SESSION TRANSACTION READ ONLY`.
+`liveproof/run.py` parses each file with sqlglot and refuses anything that is not exactly one plain SELECT: writes, a second statement, `SELECT ... INTO`, locking reads, a UNION, and functions such as `SLEEP` or `LOAD_FILE`. Missing sqlglot is an `error` verdict and no query is sent. The lane check uses `scripts/check-locally.sh all` to install the same pinned dependencies as CI. A refused or failing probe is recorded as an `error` verdict and never reaches the database. Use a database account with SELECT only; the connection also sets `SESSION TRANSACTION READ ONLY`.
 
 ## Run
 

@@ -71,7 +71,7 @@ ITEM_LOOT = "item_loot"
 QUEST_COMPLETE = "quest_complete"  # objectives done; the log says "complete"
 QUEST_REWARD = "quest_reward"  # turned in; the reward was taken
 LEVEL_UP = "level_up"
-BOSS_KILL = "boss_kill"  # not emitted yet - see infer_bosses
+BOSS_KILL = "boss_kill"  # the module writes it; when absent, see infer_bosses
 FLIGHT = "flight"  # not emitted yet - see first_flight
 
 # Card kinds, in the order they win a tie on the same second. A run ends

@@ -239,6 +239,32 @@ class TheBridge(unittest.TestCase):
         self.assertEqual(1, len(calls["write"]))
         self.assertEqual(1, len(calls["log"]))
 
+    def test_a_family_in_a_trade_turn_gets_the_pick_over_a_training_stop(self):
+        # #2271: the pick reads the errand and the module's row only, so a
+        # live trade turn changes nothing about it. The pick is written, and
+        # the training stop is what it is written over.
+        rows = self.table_row()
+        rows["Zug"].update(
+            current_kind="training",
+            current_owner="training stop",
+            current_target="trainer:4567",
+            on_the_table="training|training stop|trainer:4567\n" + ERRAND,
+        )
+        ns, calls = self.load(self.bag_errand(), rows)
+        ns["_TRADE_TURN"] = {"Zug"}
+        asyncio.run(ns["_errand_pick_once"](object()))
+        self.assertEqual([("Zug", "errand", AIM, None)], calls["write"])
+        self.assertIn("training", calls["log"][0])
+
+    def test_a_supplies_errand_in_a_trade_turn_is_still_left_alone(self):
+        rows = self.table_row()
+        ns, calls = self.load(
+            self.bag_errand(why="family short of usable supplies: drink"), rows
+        )
+        ns["_TRADE_TURN"] = {"Zug"}
+        asyncio.run(ns["_errand_pick_once"](object()))
+        self.assertEqual([], calls["write"])
+
     def test_a_town_errand_for_anything_but_bag_room_is_left_alone(self):
         ns, calls = self.load(self.bag_errand(why="gear in the post"), self.table_row())
         asyncio.run(ns["_errand_pick_once"](object()))

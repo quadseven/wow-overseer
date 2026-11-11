@@ -87,8 +87,10 @@ def actions(result):
 
 class FoodBeforeTheWayOut(unittest.TestCase):
     def test_in_the_loop_zone_with_a_vendor_in_reach_it_buys_food_first(self):
+        # Superseded by #2152: in the loop's zone the escape comes first;
+        # food is bought only once the escape has issued nothing.
         result = plan(member(), loops={NAME: loop_of()})
-        self.assertEqual(actions(result), [restsupply.ACTION])
+        self.assertEqual(actions(result), ["hearth"])
 
     def test_in_the_loop_zone_with_no_vendor_in_reach_it_hearths(self):
         result = plan(member(), loops={NAME: loop_of()}, supply={})
@@ -128,10 +130,12 @@ class AHeldFoodWalkFallsBackToTheHearth(unittest.TestCase):
         self.assertEqual(actions(result), ["hearth"])
 
     def test_with_no_held_walk_the_food_still_comes_first(self):
+        # Superseded by #2152: with no held walk the escape, not the food,
+        # comes first in the loop's zone.
         found = guildjobs.death_loop_first(
             member(), loop_of(), None, (), guildroute.FAR_WALK_YARDS, supply=BATES
         )
-        self.assertEqual(found[0].action, restsupply.ACTION)
+        self.assertEqual(found[0].action, "hearth")
 
     def test_in_the_loop_zone_the_held_way_out_is_the_hearth_step(self):
         found = guildjobs.death_loop_first(

@@ -51,6 +51,26 @@ an observed item completion in the overseer channel and advances the queue.
 Pending notices survive restarts and retry failed sends. Delivery is at least
 once: a crash after sending but before acknowledgement may repeat a notice.
 
+## Trade turn between dungeon runs
+
+A family with a campaign queue used to do no trade work, because the queue
+owns the family's job while it holds an entry. After a queued run ends, with
+any outcome, the queue now yields the job for one trade turn, then admits its
+next entry under the usual rules (the bag floor included). During the turn
+the craft rhythm, craft supply, learn trips and the town passes see a family
+with an empty queue. The turn never interrupts a run, and never removes or
+reorders an entry.
+
+| Variable | Meaning |
+|---|---|
+| `TRADE_TURN_SECONDS` | Length of the turn (default 1200). 0 turns the rule off. |
+
+A turn starts on the first queue pass after a run ends with no run in
+progress, once per finished run, and only when some member has a trade below
+the profession cap. Its start is stored in `overseer_dungeon_queue_turn`, so a
+restart resumes the turn with its remaining time. The log has one line for
+each turn start, end and skip, naming the family and the reason.
+
 ## Realm roller
 
 `realmroller.py` and `realmroller_world.py` hold the release and channel file
