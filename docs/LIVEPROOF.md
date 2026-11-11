@@ -22,7 +22,7 @@ Remove a probe when its ticket closes.
 
 ## The read-only rule
 
-`liveproof/run.py` checks each file with a standard-library token guard and refuses anything that is not exactly one plain SELECT: writes, a second statement, `SELECT ... INTO`, locking reads, a UNION, and functions such as `SLEEP` or `LOAD_FILE`. The guard needs no third-party parser, so the lane check (plain `python3`, nothing installed) runs it too. A refused or failing probe is recorded as an `error` verdict and never reaches the database. Use a database account with SELECT only; the connection also sets `SESSION TRANSACTION READ ONLY`.
+`liveproof/run.py` parses each file with sqlglot and refuses anything that is not exactly one plain SELECT: writes, a second statement, `SELECT ... INTO`, locking reads, a UNION, and functions such as `SLEEP` or `LOAD_FILE`. Missing sqlglot is an `error` verdict and no query is sent. The lane check uses `scripts/check-locally.sh all` to install the same pinned dependencies as CI. A refused or failing probe is recorded as an `error` verdict and never reaches the database. Use a database account with SELECT only; the connection also sets `SESSION TRANSACTION READ ONLY`.
 
 ## Run
 
@@ -30,7 +30,7 @@ Remove a probe when its ticket closes.
 LIVEPROOF_DB_HOST=... LIVEPROOF_DB_USER=... LIVEPROOF_DB_PASSWORD=... python3 liveproof/run.py
 ```
 
-This needs PyMySQL (`tests/requirements.txt`). It writes `liveproof/verdicts/verdicts-<UTC time>.json` (or `--out DIR`, `LIVEPROOF_OUT`) and exits 0. The directory is git-ignored.
+This needs PyMySQL and sqlglot (`tests/requirements.txt`). It writes `liveproof/verdicts/verdicts-<UTC time>.json` (or `--out DIR`, `LIVEPROOF_OUT`) and exits 0. The directory is git-ignored.
 
 ## The two-run rule
 
