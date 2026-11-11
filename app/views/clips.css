@@ -8,4 +8,5 @@
 .clip-slot { aspect-ratio: 16 / 9; }
 .clip-play { justify-content: center; width: 100%; }
 .clip-link { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+.clip-named { display: block; min-width: 0; overflow-wrap: anywhere; }
 .clip-note { font-size: var(--fs-1); }

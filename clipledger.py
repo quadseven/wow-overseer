@@ -246,7 +246,7 @@ def level_key(character) -> str:
     return "level_60:%s" % character
 
 
-def _first_kills(rows, roster, path_of):
+def first_kills(rows, roster, path_of):
     """The earliest family kill of each boss. Rows tied on the earliest time
     go to a streamed member, then to roster order, so the pick never depends
     on row order."""
@@ -273,7 +273,7 @@ def _first_kills(rows, roster, path_of):
 
 def _event_requests(rows, roster, views):
     out = []
-    for row in _first_kills(rows, roster, views.path_of):
+    for row in first_kills(rows, roster, views.path_of):
         at = row["first_seen"]
         kind = eventclips.trigger_kind(
             {"kind": "boss_kill", "family_member": True, "first_kill": True}
