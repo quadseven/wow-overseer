@@ -111,6 +111,8 @@ COLLATIONS = {
     "overseer_guild_pug_call": "utf8mb4_0900_ai_ci",
     # Bridge-owned (mod-overseer#767), named in dungeonpace.CREATE_SQL.
     "overseer_dungeon_pace": "utf8mb4_0900_ai_ci",
+    # Bridge-owned (#2262), named in campaignqueue.TURN_CREATE_SQL.
+    "overseer_dungeon_queue_turn": "utf8mb4_0900_ai_ci",
     # Bridge-owned (mod-overseer#152), named in runreport.CREATE_SQL the same way.
     "overseer_dungeon_run_report": "utf8mb4_0900_ai_ci",
     # A view (mod-overseer#152 reads it): information_schema.TABLES has no
@@ -351,6 +353,8 @@ STRING_COLUMNS = {
     # VARCHAR and ENUM column.
     # From its own DDL (questledger.TABLE_SQL): every VARCHAR column.
     "overseer_quest_ledger": frozenset({"character_name", "state", "reason"}),
+    # From its own DDL (campaignqueue.TURN_CREATE_SQL): every VARCHAR column.
+    "overseer_dungeon_queue_turn": frozenset({"family"}),
     # From its own DDL (dungeonpace.CREATE_SQL): every VARCHAR column.
     "overseer_dungeon_pace": frozenset(
         {

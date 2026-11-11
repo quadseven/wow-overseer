@@ -171,6 +171,7 @@ def purchase(cursor):
     connection = PurchaseConnection(cursor)
     ns = dict(craft=craft, craft_rhythm=craft_rhythm, _connect=lambda: connection)
     load("_hammer_purchase", ns)
+    load("_buy_pending", ns)
     writer = load("_insert_hammer_errand", ns)
     errand, _ = craft_supply.hammer_errand(
         "Smith",

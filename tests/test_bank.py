@@ -366,6 +366,18 @@ class TheMoveHasToFitOnBothSides(unittest.TestCase):
         self.assertEqual(plan.moves, ())
         self.assertTrue(any("bank is full" in note for note in plan.notes))
 
+    def test_a_bag_placed_this_visit_grows_the_room_before_the_reserve_is_judged(self):
+        import dataclasses
+
+        rows = [row(item_guid=11, name="Malachite", count=9, slot=23)]
+        (member,) = bank.members_from_rows(rows, ["Grug"])
+        tight = dataclasses.replace(member, bank_free=bank.BANK_FREE_RESERVE)
+        held = bank.plan((tight,), REAL)
+        self.assertEqual(held.moves, ())
+        self.assertTrue(any("keeps" in note for note in held.notes))
+        grown = bank.plan((tight,), REAL, room_gain={"Grug": 8})
+        self.assertEqual([m.verb for m in grown.moves], [bank.DEPOSIT])
+
     def test_a_withdrawal_needs_a_bag_slot_to_land_in(self):
         rows = [
             row(item_guid=n, name="Rough Stone", slot=n) for n in bank.BACKPACK_SLOTS
