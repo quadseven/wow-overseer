@@ -100,13 +100,12 @@ def names_line(names: list, most: int = 4) -> str:
     return ", ".join(names[: most - 1]) + " and %d more" % (len(names) - most + 1)
 
 
-def _clip_of(clips: dict | None, key: str, character: str) -> dict:
-    """The link for the ledger row under `key`, only when that row is for
-    `character`: a key is global to the realm, a clip belongs to one person."""
+def _clip_of(clips: dict | None, key: str) -> dict:
+    """The link for the ledger row under `key`. The key names the family and
+    the boss, or the character, so it is the identity: the row links whichever
+    member the ledger credited."""
     row = (clips or {}).get(key)
-    if row and row.get("character") == character:
-        return clipledger.link(row)
-    return {}
+    return clipledger.link(row) if row else {}
 
 
 def first_kill_items(kills: list, kin: list, clips: dict, now: int) -> list:
@@ -117,7 +116,7 @@ def first_kill_items(kills: list, kin: list, clips: dict, now: int) -> list:
     `now` is the database clock in Unix seconds.
     """
     items = []
-    for guild, _family, names in kin:
+    for guild, family, names in kin:
         for row in clipledger.first_kills(kills, names, lambda _n: ""):
             at = int(row["first_seen"])
             if at < now - DAYS * 24 * HOUR:
@@ -131,7 +130,7 @@ def first_kill_items(kills: list, kin: list, clips: dict, now: int) -> list:
                     "guild": guild,
                     "who": [who],
                     "text": "%s landed the family's first kill of %s." % (who, boss),
-                    **_clip_of(clips, clipledger.boss_key(row["subject_id"]), who),
+                    **_clip_of(clips, clipledger.boss_key(row["subject_id"], family)),
                 }
             )
     return items
@@ -165,7 +164,7 @@ def level_items(rows: list, guild_of: dict, clips: dict | None = None) -> list:
             "text": text,
         }
         sixty = [
-            {"who": who, **_clip_of(clips, clipledger.level_key(who), who)}
+            {"who": who, **_clip_of(clips, clipledger.level_key(who))}
             for who, lvl in best.items()
             if lvl == 60
         ]
@@ -333,7 +332,12 @@ def build(rd, guilds: list, maps: dict, kin: list | None = None) -> dict:
             else []
         )
         keys = sorted(
-            {clipledger.boss_key(k["subject_id"]) for k in kills}
+            {
+                clipledger.boss_key(k["subject_id"], family)
+                for _g, family, members in kin or []
+                for k in kills
+                if k["character_name"] in members
+            }
             | {
                 clipledger.level_key(r["name"])
                 for r in level_rows

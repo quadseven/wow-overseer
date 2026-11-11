@@ -4499,6 +4499,30 @@ def _read_clip_history(roster: list) -> dict:
     return {"event_rows": f["event_rows"], "cleared_runs": _cleared_run_cards(f)}
 
 
+# The rows that decide a boss first: boss kills only, for the roster and the
+# bosses of this scan's candidates, oldest first. A read that fills the cap
+# decides nothing (see scan_clips).
+_CLIP_BOSS_CAP = 5000
+_CLIP_BOSS_SQL = (
+    "SELECT character_name, kind, subject_id, subject_name, map, first_seen "
+    "FROM overseer_event WHERE kind = 'boss_kill' "
+    "AND character_name IN ({names}) AND subject_id IN ({subjects}) "
+    "ORDER BY first_seen ASC LIMIT %s"
+)
+
+
+def _read_boss_kills(roster: list, subjects: list) -> list:
+    """Every boss kill of `roster` on `subjects`, oldest first, up to the cap."""
+    sql = _CLIP_BOSS_SQL.format(  # noqa: S608 - placeholders from a COUNT, values bound
+        names=", ".join(["%s"] * len(roster)),
+        subjects=", ".join(["%s"] * len(subjects)),
+    )
+    with realmread.Session(_connect) as rd:
+        return rd.rows(
+            sql, (*roster, *subjects, _CLIP_BOSS_CAP), what="clip boss kills"
+        )
+
+
 _CLIP_SHELF_SQL = (
     "SELECT id, kind, `character`, event_at, state, file_name, detail"
     " FROM overseer_clip"
@@ -4582,6 +4606,21 @@ def scan_clips() -> dict:
         have = {natural(e) for e in history["event_rows"]}
         events = history["event_rows"] + [e for e in events if natural(e) not in have]
         cleared = history["cleared_runs"]
+        # The capped history never decides a boss first. The narrow read does.
+        subjects = sorted({e["subject_id"] for e in found["event_rows"]
+                           if e["kind"] == "boss_kill"})
+        events = [e for e in events if e["kind"] != "boss_kill"]
+        if subjects:
+            boss = _read_boss_kills(roster, subjects)
+            if len(boss) >= _CLIP_BOSS_CAP:
+                log.error("clip boss kills read hit its cap of %d rows;"
+                          " no boss first is written on this pass",
+                          _CLIP_BOSS_CAP)
+            else:
+                have = {natural(e) for e in boss}
+                events += boss + [e for e in found["event_rows"]
+                                  if e["kind"] == "boss_kill"
+                                  and natural(e) not in have]
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT event_key FROM overseer_clip"
