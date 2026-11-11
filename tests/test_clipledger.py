@@ -527,6 +527,68 @@ class ShelfViewOwnerTests(unittest.TestCase):
         self.assertEqual("Cedar", clip["view_owner"])
 
 
+class EventKeyTests(unittest.TestCase):
+    def test_the_key_functions_spell_what_the_planner_writes(self):
+        at = NOW - timedelta(minutes=3)
+        kill = {
+            "id": 1,
+            "character_name": "Alder",
+            "kind": "boss_kill",
+            "subject_id": 5,
+            "subject_name": "Boss 5",
+            "first_seen": at,
+        }
+        sixty = {
+            "id": 2,
+            "character_name": "Alder",
+            "kind": "level_up",
+            "level": 60,
+            "first_seen": at,
+        }
+        keys = [r["event_key"] for r in plan(event_rows=[kill, sixty])]
+        self.assertEqual(
+            sorted([clipledger.boss_key(5), clipledger.level_key("Alder")]),
+            sorted(keys),
+        )
+        self.assertEqual("boss_kill:5", clipledger.boss_key(5))
+        self.assertEqual("level_60:Alder", clipledger.level_key("Alder"))
+
+
+class ShelfSubjectTests(unittest.TestCase):
+    def subject_of(self, **over):
+        row = {
+            "id": 1,
+            "kind": "boss_kill",
+            "character": "Cedar",
+            "event_at": NOW,
+            "state": "ready",
+            "file_name": "clip-1-boss_kill.mp4",
+            "detail": "Test Warden",
+        }
+        row.update(over)
+        (clip,) = clipledger.shelf([row])["clips"]
+        return clip["subject"]
+
+    def test_a_boss_first_kill_names_the_boss(self):
+        self.assertEqual("Test Warden", self.subject_of())
+
+    def test_a_loot_clip_names_the_item(self):
+        self.assertEqual(
+            "Test Blade", self.subject_of(kind="loot", detail="Test Blade")
+        )
+
+    def test_the_view_text_and_a_cutter_note_are_not_the_subject(self):
+        self.assertEqual(
+            "Test Warden",
+            self.subject_of(detail="Test Warden; view: Alder (leader); dark 1 of 5"),
+        )
+        self.assertEqual("", self.subject_of(detail="view: Alder (leader)"))
+
+    def test_a_kind_without_a_named_subject_has_none(self):
+        self.assertEqual("", self.subject_of(kind="level_60", detail=""))
+        self.assertEqual("", self.subject_of(kind="clear", detail="Test Mines"))
+
+
 class RestartAndBackfillTests(unittest.TestCase):
     def test_a_second_scan_with_the_stored_keys_writes_nothing(self):
         args = dict(loot_rows=[loot(7), loot(8, guid=901)])
@@ -543,15 +605,84 @@ class RestartAndBackfillTests(unittest.TestCase):
         rows = plan(loot_rows=[loot(7), loot(7)])
         self.assertEqual(1, len(rows))
 
-    def test_events_older_than_the_agent_buffer_are_not_backfilled(self):
+    def test_an_event_seen_after_its_footage_left_the_buffer_is_a_failed_row(self):
         old = NOW - clipledger.AGENT_BUFFER - timedelta(minutes=1)
-        self.assertEqual([], plan(loot_rows=[loot(7, at=old)]))
+        (row,) = plan(loot_rows=[loot(7, at=old)])
+        self.assertEqual("failed", row["state"])
+        self.assertIn(clipledger.LATE_DETAIL, row["detail"])
         up = {"id": 3, "character_name": "Alder", "kind": "level_up", "level": 60}
-        self.assertEqual([], plan(event_rows=[dict(up, first_seen=old)]))
+        (row,) = plan(event_rows=[dict(up, first_seen=old)])
+        self.assertEqual("failed", row["state"])
+        self.assertIn(clipledger.LATE_DETAIL, row["detail"])
+
+    def test_history_older_than_the_late_horizon_is_not_recorded(self):
+        old = NOW - clipledger.LATE_HORIZON - timedelta(minutes=1)
+        self.assertEqual([], plan(loot_rows=[loot(7, at=old)]))
+
+    def test_a_late_row_is_written_once_per_event_key(self):
+        old = NOW - clipledger.AGENT_BUFFER - timedelta(minutes=1)
+        (row,) = plan(loot_rows=[loot(7, at=old), loot(7, at=old)])
+        again = plan(loot_rows=[loot(7, at=old)], existing_keys=[row["event_key"]])
+        self.assertEqual([], again)
+
+    def test_a_late_row_without_a_stream_path_is_late_not_no_view(self):
+        old = NOW - clipledger.AGENT_BUFFER - timedelta(minutes=1)
+        (row,) = plan(loot_rows=[loot(7, at=old)], path_of=lambda who: "")
+        self.assertEqual("failed", row["state"])
+
+    def test_a_late_row_keeps_the_view_text_ahead_of_its_reason(self):
+        old = NOW - clipledger.AGENT_BUFFER - timedelta(minutes=1)
+        (row,) = plan(
+            loot_rows=[in_dungeon(loot(7, who="Cedar", at=old))],
+            runs=[run()],
+            roster=FAMILY,
+            path_of=only("Alder"),
+        )
+        self.assertEqual("failed", row["state"])
+        self.assertIn("view: Alder (leader)", row["detail"])
+        self.assertTrue(row["detail"].endswith("; " + clipledger.LATE_DETAIL))
 
     def test_a_window_start_still_inside_the_buffer_is_written(self):
         at = NOW - clipledger.AGENT_BUFFER + timedelta(minutes=1)
         self.assertEqual(1, len(plan(loot_rows=[loot(7, at=at)])))
+
+
+class LateHorizonTests(unittest.TestCase):
+    def test_a_scan_with_no_last_scan_looks_back_a_day(self):
+        self.assertEqual(timedelta(hours=24), clipledger.scan_horizon(NOW, None))
+
+    def test_a_steady_scan_looks_back_twenty_minutes(self):
+        last = NOW - timedelta(minutes=1)
+        self.assertEqual(timedelta(minutes=20), clipledger.scan_horizon(NOW, last))
+
+    def test_a_longer_gap_looks_back_to_the_last_scan(self):
+        last = NOW - timedelta(minutes=90)
+        self.assertEqual(timedelta(minutes=90), clipledger.scan_horizon(NOW, last))
+
+    def test_a_gap_longer_than_a_day_is_capped_at_a_day(self):
+        last = NOW - timedelta(days=3)
+        self.assertEqual(timedelta(hours=24), clipledger.scan_horizon(NOW, last))
+
+    def test_an_event_inside_the_gap_is_one_failed_row_and_a_rescan_writes_nothing(
+        self,
+    ):
+        horizon = timedelta(hours=3)
+        inside = NOW - timedelta(hours=2)
+        (row,) = plan(loot_rows=[loot(7, at=inside)], late_horizon=horizon)
+        self.assertEqual("failed", row["state"])
+        self.assertEqual("loot:7", row["event_key"])
+        self.assertIn(clipledger.LATE_DETAIL, row["detail"])
+        again = plan(
+            loot_rows=[loot(7, at=inside)],
+            late_horizon=horizon,
+            existing_keys=[row["event_key"]],
+        )
+        self.assertEqual([], again)
+
+    def test_an_event_older_than_the_horizon_gets_no_row(self):
+        old = NOW - timedelta(hours=4)
+        rows = plan(loot_rows=[loot(7, at=old)], late_horizon=timedelta(hours=3))
+        self.assertEqual([], rows)
 
 
 class RetentionTests(unittest.TestCase):

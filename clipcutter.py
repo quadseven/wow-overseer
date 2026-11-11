@@ -48,9 +48,12 @@ _CLAIM = (
     "UPDATE overseer_clip SET state = 'cutting' WHERE id = %s AND state = 'pending'"
 )
 _APPEND = "CONCAT_WS('; ', NULLIF(detail, ''), NULLIF(%s, ''))"
+# A ready row keeps the planner's first part, the event's subject, in front
+# even when it is empty, so a note never moves up into the subject's place.
+_APPEND_AFTER_SUBJECT = "CONCAT_WS('; ', COALESCE(detail, ''), NULLIF(%s, ''))"
 _READY = (
     "UPDATE overseer_clip SET state = 'ready', file_name = %s, detail = "  # noqa: S608
-    + _APPEND
+    + _APPEND_AFTER_SUBJECT
     + " WHERE id = %s AND state = 'cutting'"
 )
 _DROP = (
@@ -115,11 +118,16 @@ def _public(row, *names):
     return {k: _iso(row.get(k)) for k in names}
 
 
+def paths_of(raw_paths: str) -> list[str]:
+    """The distinct paths a poll names, in order, from its paths=a,b value."""
+    return list(dict.fromkeys(p for p in (raw_paths or "").split(",") if p))
+
+
 def pending(rd, raw_paths: str):
     """GET /api/clips/pending: the pending rows on the asked paths, oldest
     first, at most MAX_PENDING, with the database clock. `rd` is a realm
     reader."""
-    paths = list(dict.fromkeys(p for p in (raw_paths or "").split(",") if p))
+    paths = paths_of(raw_paths)
     if not paths or len(paths) > MAX_PATHS:
         return _err(
             400, "Name between 1 and %d stream paths, as paths=a,b." % MAX_PATHS

@@ -19,7 +19,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -3791,19 +3791,22 @@ def _fetch_run_timeline() -> dict:
                 what="overseer_death")
         bosses = _run_bosses(rd) if deaths else frozenset()
         reports = _run_reports(rd, rows, len(families) * runtimeline.RUNS_PER_FAMILY)
-        clips = (rd.rows(_RUN_CLIPS_SQL, (runtimeline.WINDOW_HOURS,), what="clear clips")
+        clips = (rd.rows(_RUN_CLIPS_SQL, (runtimeline.WINDOW_HOURS,), what="run clips")
                  if rows else [])
     return {"rows": rows, "families": families, "present": present,
             "deaths": deaths, "bosses": bosses, "reports": reports, "clips": clips}
 
 
-# The ledger's clear rows over the timeline's hours, aged by the database the
-# same way the run rows are, so a run and its clear are matched on one clock.
+# The ledger's clear, boss kill and loot rows over the timeline's hours, aged by
+# the database the same way the run rows are, so a run and its clips are
+# matched on one clock. Newest first, so the cap sheds the oldest rows.
 _RUN_CLIPS_SQL = (
-    "SELECT event_key, kind, `character`, state, file_name,"
+    "SELECT event_key, kind, `character`, state, file_name, stream_path, detail,"
     " TIMESTAMPDIFF(SECOND, event_at, NOW()) AS age_seconds FROM overseer_clip"
-    " WHERE event_key LIKE 'clear:%%' AND state IN ('ready', 'no_view')"
+    " WHERE kind IN ('clear', 'boss_kill', 'loot')"
+    " AND state IN ('ready', 'no_view', 'failed')"
     " AND event_at > NOW() - INTERVAL %s HOUR"
+    " ORDER BY event_at DESC LIMIT 2000"
 )
 
 # The ledger rows of these loot events, for the story links. Only the two
@@ -4354,8 +4357,9 @@ def start_stream_sweeper(every: float = STREAM_SWEEP_SECONDS, sweep=None,
 # this process. The bridge tick has none of those helpers.
 CLIP_SCAN_SECONDS = 60
 
-# The directory the stream agent's saved clips are mounted in, read-only. Unset
-# or missing means no clips: the shelf is empty and nothing errors.
+# The directory the stream agent's saved clips live in. Uploads write it and
+# expiry deletes from it; it is not mounted read-only. Unset or missing means
+# no clips: the shelf is empty and nothing errors.
 CLIPS_DIR = os.environ.get("CLIPS_DIR", "")
 CLIPS_PREFIX = "/clips/"
 
@@ -4413,6 +4417,15 @@ _CLIP_OPEN_RUN_SQL = (
 # still guards the rest).
 _CLIP_KEY_MINUTES = 30
 
+# When the last scan that completed began, on this process's clock. None until
+# one completes, so the first scan after a start looks back the full day. It is
+# kept in memory only: a restart forgets it, which is the safe direction.
+_clip_last_scan = None
+
+
+def _clip_now() -> datetime:
+    return datetime.now(timezone.utc)
+
 
 def _cleared_run_cards(f: dict) -> list:
     """The Chronicle's assembled runs that cleared their dungeon, as the
@@ -4445,22 +4458,22 @@ def _clip_who() -> tuple:
     return roster, [g["name"] for g in FAMILIES.guilds()], families
 
 
-def _read_clip_candidates(roster: list) -> dict:
+def _read_clip_candidates(roster: list, minutes: int = _CLIP_LOOT_MINUTES) -> dict:
     """Recent loot and equips, boss kills, level 60s and ended runs: one narrow
     read each, bounded to the recent window."""
     holes = ", ".join(["%s"] * len(roster))
     names = tuple(roster)
     with realmread.Session(_connect) as rd:
-        loot_rows = rd.rows(_CLIP_LOOT_SQL, (_CLIP_LOOT_MINUTES,), what="clip loot")
+        loot_rows = rd.rows(_CLIP_LOOT_SQL, (minutes,), what="clip loot")
         event_rows = rd.rows(
             _CLIP_EVENT_SQL.format(holes=holes),  # noqa: S608 - placeholders from a COUNT, values bound
-            (*names, _CLIP_LOOT_MINUTES),
+            (*names, minutes),
             what="clip events",
         )
         try:
             run_rows = rd.must(
                 _CLIP_RUN_SQL.format(holes=holes),  # noqa: S608 - placeholders from a COUNT, values bound
-                (*names, _CLIP_LOOT_MINUTES),
+                (*names, minutes),
             )
             open_run_rows = rd.must(
                 _CLIP_OPEN_RUN_SQL.format(holes=holes),  # noqa: S608 - placeholders from a COUNT, values bound
@@ -4545,11 +4558,17 @@ def scan_clips() -> dict:
     is created here too, so a database that was down at start-up costs one
     failed tick, not a scanner that fails until the process restarts.
     """
+    global _clip_last_scan
+    began = _clip_now()
+    horizon = clipledger.scan_horizon(began, _clip_last_scan)
+    # Whole minutes, rounded up, so the reads never cover less than the horizon.
+    minutes = -(-int(horizon.total_seconds()) // 60)
     _ensure_clip_store()
     roster, guilds, families = _clip_who()
     if not roster:
+        _clip_last_scan = began
         return {"written": 0, "expired": 0}  # IN () is not valid SQL
-    found = _read_clip_candidates(roster)
+    found = _read_clip_candidates(roster, minutes)
     events = list(found["event_rows"])
     cleared = []
     # History is needed only to decide a boss or dungeon first.
@@ -4567,7 +4586,7 @@ def scan_clips() -> dict:
         cur.execute(
             "SELECT event_key FROM overseer_clip"
             " WHERE created_at >= NOW() - INTERVAL %s MINUTE",
-            (_CLIP_KEY_MINUTES,),
+            (max(_CLIP_KEY_MINUTES, minutes),),
         )
         keys = [r["event_key"] for r in cur.fetchall()]
         planned = clipledger.plan_requests(
@@ -4581,6 +4600,7 @@ def scan_clips() -> dict:
             path_of=_clip_path,
             runs=list(found["run_rows"]) + list(found.get("open_run_rows", [])),
             families=families,
+            late_horizon=horizon,
         )
         for row in planned:
             cur.execute(_CLIP_INSERT, (
@@ -4594,6 +4614,7 @@ def scan_clips() -> dict:
         if stale:
             cur.executemany(_CLIP_EXPIRE, [(i,) for i in stale])
         timed_out = clipledger.time_out(cur, now=found["now"])
+    _clip_last_scan = began
     return {"written": len(planned), "expired": len(stale), "timed_out": timed_out}
 
 
@@ -4858,6 +4879,13 @@ _FRAMES_LOCK = threading.Lock()
 # it the record that was last touched longest ago goes. Four times the
 # streams that can run at once is more than any watch wall shows.
 MAX_FRAMES = 4 * stream.MAX_CHANNELS
+# The last time the cutter's poll named each stream path, epoch seconds: the
+# only per-view clock a streamed view has. The poll names the views whose
+# recorder is running, so this proves a running recorder, not a moving
+# picture. Empty after a restart, so a streamed view reads no_frame until the
+# next poll.
+_VIEW_SEEN: dict = {}
+_VIEW_SEEN_LOCK = threading.Lock()
 
 
 # Where the page reaches the model-viewer cache. Also the value of the
@@ -6103,7 +6131,7 @@ class Handler(BaseHTTPRequestHandler):
             fetched["rows"], fetched["families"], present=fetched["present"],
             deaths=fetched["deaths"], bosses=fetched["bosses"],
             zones=recap.zone_names(GEO.continents), reports=fetched["reports"],
-            clips=fetched.get("clips"))
+            clips=fetched.get("clips"), path_of=_clip_path)
         return 200, payload
 
     @_get_route("recap query failed")
@@ -6220,6 +6248,21 @@ class Handler(BaseHTTPRequestHandler):
         # rollup that exists to say what is NOT real, rendering empty,
         # reads as a realm where nothing is real at all.
         payload = eye.build_eye(**_fetch_eye())
+        # The watch wall's own tiles, so the watched set and the live flag are
+        # the page's, built with no snapshot rows (only names and URLs are used).
+        wall = watchwall.build_heads(
+            [(key, family.build_family([], GEO, names, {}))
+             for key, names in FAMILIES.families().items()],
+            family.build_observers([], GEO, (director.WATCHER_NAME,)))["wall"]
+        with _FRAMES_LOCK:
+            frame_at = {n: r.get("frame_at") for n, r in _FRAMES.items()}
+        with _VIEW_SEEN_LOCK:
+            seen = dict(_VIEW_SEEN)
+        recorder_at = {t["name"]: seen[family.broadcast_path(t["name"])]
+                     for t in wall["tiles"]
+                     if family.broadcast_path(t["name"]) in seen}
+        payload["tiles"] = eye.build_tiles(
+            wall["tiles"], frame_at, recorder_at, time.time())
         return 200, payload
 
     @_get_route("wealth query failed")
@@ -7184,7 +7227,16 @@ class Handler(BaseHTTPRequestHandler):
         oldest first, at most 10, with the database clock."""
         if not _clips_root():
             return 503, {"error": clipcutter.NO_DIR}
-        return clipcutter.pending(ctx.read, query.get("paths", [""])[0])
+        raw = query.get("paths", [""])[0]
+        code, payload = clipcutter.pending(ctx.read, raw)
+        if code == 200:
+            now = time.time()
+            with _VIEW_SEEN_LOCK:
+                for path in clipcutter.paths_of(raw):
+                    _VIEW_SEEN[path] = now
+                while len(_VIEW_SEEN) > MAX_FRAMES:
+                    del _VIEW_SEEN[min(_VIEW_SEEN, key=_VIEW_SEEN.get)]
+        return code, payload
 
     def _cutter_call(self, call, late: bool = False) -> None:
         """Answer a cutter POST: call(cur, query, root) -> (status, payload).

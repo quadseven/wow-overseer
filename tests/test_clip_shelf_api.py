@@ -27,6 +27,7 @@ class ShelfList(unittest.TestCase):
             [
                 clip_row(
                     id=1,
+                    detail="Test Blade",
                     file_name="clip-1-loot.mp4",
                     event_at=datetime(2026, 11, 9, 10, 0, 0),
                 ),
@@ -35,6 +36,7 @@ class ShelfList(unittest.TestCase):
                     kind="boss_kill",
                     character="Otherchar",
                     event_key="boss_kill:7",
+                    detail="Test Warden",
                     file_name="clip-2-boss_kill.mp4",
                     event_at=datetime(2026, 11, 9, 11, 30, 0),
                 ),
@@ -49,6 +51,7 @@ class ShelfList(unittest.TestCase):
                     "kind": "boss_kill",
                     "character": "Otherchar",
                     "view_owner": "Otherchar",
+                    "subject": "Test Warden",
                     "at": "2026-11-09T11:30:00",
                     "url": "/clips/clip-2-boss_kill.mp4",
                 },
@@ -57,6 +60,7 @@ class ShelfList(unittest.TestCase):
                     "kind": "loot",
                     "character": "Testchar",
                     "view_owner": "Testchar",
+                    "subject": "Test Blade",
                     "at": "2026-11-09T10:00:00",
                     "url": "/clips/clip-1-loot.mp4",
                 },

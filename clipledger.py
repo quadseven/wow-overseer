@@ -52,6 +52,24 @@ LOOT_QUALITY_KEY = "subject_quality"
 FLUSH_INTERVAL = timedelta(seconds=5)
 # How much recent video the stream agent keeps; older events cannot be cut.
 AGENT_BUFFER = timedelta(minutes=10)
+# How old a late event may be and still get a failed row. The site reads its
+# recent candidates over the same span; anything older is history.
+LATE_HORIZON = timedelta(minutes=20)
+# The longest a scan looks back, however long ago the last one completed.
+MAX_LATE_HORIZON = timedelta(hours=24)
+
+
+def scan_horizon(now: datetime, last_scan: datetime | None) -> timedelta:
+    """How far back this scan looks for events to record.
+
+    LATE_HORIZON in steady state; back to the last completed scan when that is
+    longer; MAX_LATE_HORIZON at most. No last scan (the first scan after a
+    process start) looks back the maximum, so a gap cannot drop events.
+    """
+    if last_scan is None:
+        return MAX_LATE_HORIZON
+    return min(max(LATE_HORIZON, now - last_scan), MAX_LATE_HORIZON)
+
 
 # The Chronicle's own "earliest qualifying row" rule, so a first here is the
 # same first the Chronicle shows.
@@ -233,7 +251,17 @@ def _loot_requests(rows, guilds, now, views):
     return out
 
 
-def _first_kills(rows, roster, path_of):
+def boss_key(subject_id) -> str:
+    """The ledger key of a boss's first family kill."""
+    return "boss_kill:%s" % subject_id
+
+
+def level_key(character) -> str:
+    """The ledger key of a character's level 60 moment."""
+    return "level_60:%s" % character
+
+
+def first_kills(rows, roster, path_of):
     """The earliest family kill of each boss. Rows tied on the earliest time
     go to a streamed member, then to roster order, so the pick never depends
     on row order."""
@@ -260,14 +288,14 @@ def _first_kills(rows, roster, path_of):
 
 def _event_requests(rows, roster, views):
     out = []
-    for row in _first_kills(rows, roster, views.path_of):
+    for row in first_kills(rows, roster, views.path_of):
         at = row["first_seen"]
         kind = eventclips.trigger_kind(
             {"kind": "boss_kill", "family_member": True, "first_kill": True}
         )
         out.append(
             _request(
-                "boss_kill:%s" % row["subject_id"],
+                boss_key(row["subject_id"]),
                 kind,
                 row["character_name"],
                 views,
@@ -289,7 +317,7 @@ def _event_requests(rows, roster, views):
         who = row["character_name"]
         out.append(
             _request(
-                "%s:%s" % (kind, who),
+                level_key(who),
                 kind,
                 who,
                 views,
@@ -366,8 +394,12 @@ def plan_requests(
     path_of: Callable[[str], str],
     runs: Iterable[Mapping] = (),
     families: Mapping[str, Iterable[str]] | None = None,
+    late_horizon: timedelta = LATE_HORIZON,
 ) -> list[dict]:
     """The ledger rows to insert now, oldest event first.
+
+    `late_horizon` is how old an event may be and still get a failed row
+    (see scan_horizon).
 
     `runs` are the dungeon runs, open or ended, that an event may sit in; an
     event row names its map as `map`. `families` maps each family to its
@@ -387,12 +419,20 @@ def plan_requests(
     for row in rows:
         if row["event_key"] in seen:
             continue
-        # Footage older than the agent's buffer no longer exists to be cut.
         if row["window_start"] < now - AGENT_BUFFER:
-            continue
-        seen.add(row["event_key"])
-        if not row["stream_path"]:
-            row["state"] = "no_view"
+            # Footage older than the agent's buffer no longer exists to be
+            # cut. A recent event is recorded as failed, so no cutter is
+            # offered it; an event older than late_horizon is history that
+            # only decides what is a first, and is not recorded.
+            if row["event_at"] < now - late_horizon:
+                continue
+            seen.add(row["event_key"])
+            row["state"] = "failed"
+            row["detail"] = "; ".join(p for p in (row["detail"], LATE_DETAIL) if p)
+        else:
+            seen.add(row["event_key"])
+            if not row["stream_path"]:
+                row["state"] = "no_view"
         out.append(row)
     return out
 
@@ -400,8 +440,10 @@ def plan_requests(
 # --- timing out rows the agent never finished ----------------------------
 
 # The agent keeps AGENT_BUFFER of video; a pending row this long past its window
-# end can no longer be cut, so it is declared no_view (buffer plus 5 minutes).
+# end can no longer be cut, so it is declared failed (buffer plus 5 minutes).
 PENDING_TIMEOUT = timedelta(minutes=15)
+PENDING_FAILED_DETAIL = "no cutter picked this up before the footage aged out"
+LATE_DETAIL = "seen after the footage left the buffer"
 # A cutting row nobody has touched for this long lost its cutter mid-cut.
 CUTTING_TIMEOUT = timedelta(minutes=10)
 CUTTING_FAILED_DETAIL = "cutter went silent"
@@ -411,22 +453,29 @@ _STALE_SELECT = (
     " WHERE state IN ('pending', 'cutting')"
 )
 # Each update names the state it replaces, so a row the agent moved on since
-# the read (ready, failed, ...) matches nothing and is left alone.
-_TO_NO_VIEW = "UPDATE overseer_clip SET state = %s WHERE id = %s AND state = %s"
+# the read (ready, failed, ...) matches nothing and is left alone. The reason
+# is appended to the detail, so the planner's view text stays in front of it.
 _TO_FAILED = (
-    "UPDATE overseer_clip SET state = %s, detail = %s WHERE id = %s AND state = %s"
+    "UPDATE overseer_clip SET state = %s, detail = "
+    "CONCAT_WS('; ', NULLIF(detail, ''), NULLIF(%s, ''))"
+    " WHERE id = %s AND state = %s"
 )
 
 
 def stale_changes(rows: Iterable[Mapping], *, now: datetime) -> list[dict]:
     """The state changes owed to rows that sat too long: pending past its
-    window end by more than PENDING_TIMEOUT becomes no_view; cutting not
-    updated for more than CUTTING_TIMEOUT becomes failed, with a detail."""
+    window end by more than PENDING_TIMEOUT and cutting not updated for more
+    than CUTTING_TIMEOUT both become failed, each with its own detail."""
     out = []
     for r in rows:
         if r.get("state") == "pending" and r["window_end"] < now - PENDING_TIMEOUT:
             out.append(
-                {"id": r["id"], "from": "pending", "to": "no_view", "detail": None}
+                {
+                    "id": r["id"],
+                    "from": "pending",
+                    "to": "failed",
+                    "detail": PENDING_FAILED_DETAIL,
+                }
             )
         elif r.get("state") == "cutting" and r["updated_at"] < now - CUTTING_TIMEOUT:
             out.append(
@@ -448,13 +497,10 @@ def time_out(cur, *, now: datetime) -> dict:
     cur.execute(_STALE_SELECT)
     counts = {"no_view": 0, "failed": 0}
     for change in stale_changes(cur.fetchall(), now=now):
-        if change["detail"] is None:
-            cur.execute(_TO_NO_VIEW, (change["to"], change["id"], change["from"]))
-        else:
-            cur.execute(
-                _TO_FAILED,
-                (change["to"], change["detail"], change["id"], change["from"]),
-            )
+        cur.execute(
+            _TO_FAILED,
+            (change["to"], change["detail"], change["id"], change["from"]),
+        )
         counts[change["to"]] += 1 if cur.rowcount else 0
     return counts
 
@@ -504,6 +550,7 @@ def delete_expired(cur, root: str) -> int:
 
 CLIPS_PATH = "/clips/"
 NO_VIEW_LINE = "No live view was up, so no clip was saved."
+FAILED_LINE = "No clip was saved."
 SHELF_EMPTY = "No clips have been saved yet."
 SHELF_LIMIT = 100
 
@@ -532,6 +579,34 @@ def view_owner(row: Mapping) -> str:
     return row["character"]
 
 
+SUBJECT_KINDS = ("loot", "boss_kill")
+
+
+def subject(row: Mapping) -> str:
+    """The item of a loot clip or the boss of a boss first kill, or "".
+
+    The planner writes the event's subject name as the first part of the
+    detail; a view marker or a later note is never taken for it.
+    """
+    if row.get("kind") not in SUBJECT_KINDS:
+        return ""
+    first = (row.get("detail") or "").split("; ")[0]
+    return "" if _VIEW_NOTE.match(first) else first.strip()
+
+
+def failed_line(row: Mapping) -> str:
+    """The note for a failed row: its recorded reason, without the planner's
+    view text (the "view:" parts of the detail)."""
+    parts = [
+        p
+        for p in (row.get("detail") or "").split("; ")
+        if p.strip() and not _VIEW_NOTE.match(p)
+    ]
+    if not parts:
+        return FAILED_LINE
+    return "%s: %s." % (FAILED_LINE[:-1], "; ".join(parts).rstrip(". "))
+
+
 def shelf(rows: Iterable[Mapping]) -> dict:
     """The /api/clips payload: ready rows with a file, newest event first."""
     ready = [r for r in rows if r.get("state") == "ready" and r.get("file_name")]
@@ -545,6 +620,7 @@ def shelf(rows: Iterable[Mapping]) -> dict:
                 "kind": r["kind"],
                 "character": r["character"],
                 "view_owner": view_owner(r),
+                "subject": subject(r),
                 "at": _iso(r.get("event_at")),
                 "url": clip_url(r["file_name"]),
             }
@@ -558,8 +634,9 @@ def link(row: Mapping | None) -> dict:
     """What a story or timeline entry adds for its event's ledger row.
 
     A ready row with a file adds `clip` (url and kind). A no_view row adds
-    `clip_note`, saying no live view was up. Any other state, or no row at
-    all, adds nothing: the entry says nothing about clips.
+    `clip_note`, saying no live view was up. A failed row adds `clip_note`
+    with its recorded reason. Any other state, or no row at all, adds
+    nothing: the entry says nothing about clips.
     """
     if not row:
         return {}
@@ -567,4 +644,6 @@ def link(row: Mapping | None) -> dict:
         return {"clip": {"url": clip_url(row["file_name"]), "kind": row["kind"]}}
     if row.get("state") == "no_view":
         return {"clip_note": NO_VIEW_LINE}
+    if row.get("state") == "failed":
+        return {"clip_note": failed_line(row)}
     return {}

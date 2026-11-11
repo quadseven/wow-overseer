@@ -88,6 +88,14 @@ class Pending(CutterCase):
         )
         self.assertEqual(got["now"], NOW.isoformat())
 
+    def test_a_failed_late_row_is_never_offered_to_a_cutter(self):
+        rows = [
+            row(id=1, stream_path="cama"),
+            row(id=2, stream_path="cama", state="failed", detail="late"),
+        ]
+        _s, body = self.run_with(rows, lambda c: c.get("/api/clips/pending?paths=cama"))
+        self.assertEqual([c["id"] for c in json.loads(body)["clips"]], [1])
+
     def test_at_most_ten_rows(self):
         rows = [row(id=i, stream_path="cama") for i in range(1, 15)]
         _s, body = self.run_with(rows, lambda c: c.get("/api/clips/pending?paths=cama"))
@@ -181,6 +189,21 @@ class Upload(CutterCase):
         self.sentence(body)
         self.assertEqual(self.files(), [])
         self.assertEqual(self.state()["state"], "cutting")
+
+    def test_a_note_on_a_row_with_no_subject_is_not_shown_as_the_subject(self):
+        def go(c):
+            return (
+                c.post("/api/clips/file?id=1&note=cut%20late", MP4),
+                c.get("/api/clips"),
+            )
+
+        (status, _body), (_s, shelf) = self.run_with(
+            [row(state="cutting", detail="")], go
+        )
+        self.assertEqual(status, 200)
+        (clip,) = json.loads(shelf)["clips"]
+        self.assertEqual(clip["subject"], "")
+        self.assertIn("cut late", self.state()["detail"])
 
     def test_an_upload_without_a_note_keeps_the_detail(self):
         self.up()

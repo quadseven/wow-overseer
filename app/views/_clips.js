@@ -35,11 +35,20 @@ export function clipLink(entry) {
   return "";
 }
 
+// One link or quiet line per character on an entry that holds several, such as
+// a level 60 feed item or the clips inside a run: each is the same markup
+// clipLink draws, with the name (`who` on a feed item, `character` on a run).
+export function clipLinks(entry) {
+  const list = (entry && entry.clips) || [];
+  if (!list.length) return "";
+  return html`${list.map((c) => html`<span class="clip-named"><span class="muted">${c.who || c.character}</span> ${clipLink(c)}</span>`)}`;
+}
+
 function card(c) {
   const body = kept.has(c.url)
     ? html`<div class="clip-slot" data-clip-slot="${c.url}"></div>`
     : html`<button type="button" class="btn clip-play" data-clip="${c.url}"><i class="ph-fill ph-play" aria-hidden="true"></i>Play</button>`;
-  return html`<article class="card clip-card"><div class="clip-head"><span class="tag tag-outline">${kindWord(c.kind)}</span><span class="clip-who">${c.character}</span><span class="muted g-when">${since(c.at)}</span></div>${body}</article>`;
+  return html`<article class="card clip-card"><div class="clip-head"><span class="tag tag-outline">${kindWord(c.kind)}</span><span class="clip-who">${c.character}</span>${c.subject ? html`<span class="clip-subject">${c.subject}</span>` : ""}<span class="muted g-when">${since(c.at)}</span></div>${body}</article>`;
 }
 
 // The shelf section's body, from the /api/clips read.
