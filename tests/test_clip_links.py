@@ -341,7 +341,13 @@ class RunCardClips(unittest.TestCase):
     def test_a_no_view_row_is_listed_with_the_no_live_view_line(self):
         card = self.card([inner_row(state="no_view", file_name=None)])
         self.assertEqual(
-            [{"clip_note": clipledger.NO_VIEW_LINE, "kind": "boss_kill", "character": "Oz"}],
+            [
+                {
+                    "clip_note": clipledger.NO_VIEW_LINE,
+                    "kind": "boss_kill",
+                    "character": "Oz",
+                }
+            ],
             card["clips"],
         )
 
@@ -361,9 +367,15 @@ class RunCardClips(unittest.TestCase):
         self.assertNotIn("clips", self.card([before, after]))
 
     def test_the_span_has_the_clear_match_slack_at_both_ends(self):
-        edge_in = [inner_row(age_seconds=1800), inner_row(event_key="b:2", age_seconds=300)]
+        edge_in = [
+            inner_row(age_seconds=1800),
+            inner_row(event_key="b:2", age_seconds=300),
+        ]
         self.assertEqual(2, len(self.card(edge_in)["clips"]))
-        edge_out = [inner_row(age_seconds=1801), inner_row(event_key="b:3", age_seconds=299)]
+        edge_out = [
+            inner_row(age_seconds=1801),
+            inner_row(event_key="b:3", age_seconds=299),
+        ]
         self.assertNotIn("clips", self.card(edge_out))
 
     def test_the_clear_row_is_not_repeated_in_the_list(self):
