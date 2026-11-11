@@ -8,6 +8,8 @@ in eventclips; this module is the wiring around it.
 
 from __future__ import annotations
 
+import logging
+import os
 import re
 from datetime import datetime, timedelta
 from typing import Callable, Iterable, Mapping
@@ -15,6 +17,8 @@ from urllib.parse import quote
 
 import achievements
 import eventclips
+
+log = logging.getLogger(__name__)
 
 STATES = ("pending", "cutting", "ready", "no_view", "failed", "expired", "deleted")
 
@@ -398,9 +402,9 @@ def plan_requests(
 # The agent keeps AGENT_BUFFER of video; a pending row this long past its window
 # end can no longer be cut, so it is declared no_view (buffer plus 5 minutes).
 PENDING_TIMEOUT = timedelta(minutes=15)
-# A cutting row nobody has touched for this long lost its agent mid-cut.
-CUTTING_TIMEOUT = timedelta(hours=1)
-CUTTING_FAILED_DETAIL = "cutting timed out after an hour"
+# A cutting row nobody has touched for this long lost its cutter mid-cut.
+CUTTING_TIMEOUT = timedelta(minutes=10)
+CUTTING_FAILED_DETAIL = "cutter went silent"
 
 _STALE_SELECT = (
     "SELECT id, state, window_end, updated_at FROM overseer_clip"
@@ -455,6 +459,47 @@ def time_out(cur, *, now: datetime) -> dict:
     return counts
 
 
+# --- removing the files of expired rows ----------------------------------
+
+_EXPIRED_SELECT = "SELECT id, file_name FROM overseer_clip WHERE state = 'expired'"
+_TO_DELETED = (
+    "UPDATE overseer_clip SET state = 'deleted',"
+    " detail = CONCAT_WS('; ', NULLIF(detail, ''), NULLIF(%s, ''))"
+    " WHERE id = %s AND state = 'expired'"
+)
+FILE_MISSING_DETAIL = "file was already missing"
+
+
+def delete_expired(cur, root: str) -> int:
+    """Remove the file of each expired row from `root`, then mark the row
+    deleted. A missing file, or a stored name that is not one plain file name,
+    still ends in deleted, with a note. A file that cannot be removed for
+    another reason leaves its row expired, logs one warning, and the pass goes
+    on. Returns how many rows the update took.
+    """
+    cur.execute(_EXPIRED_SELECT)
+    done = 0
+    for r in cur.fetchall():
+        name = r.get("file_name") or ""
+        note = FILE_MISSING_DETAIL
+        if name and name == os.path.basename(name) and not name.startswith("."):
+            try:
+                os.unlink(os.path.join(root, name))
+                note = ""
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                log.warning(
+                    "expired clip %s: file not removed, row stays expired: %s",
+                    r["id"],
+                    exc.strerror or exc,
+                )
+                continue
+        cur.execute(_TO_DELETED, (note, r["id"]))
+        done += 1 if cur.rowcount else 0
+    return done
+
+
 # --- reading the ledger back out: the shelf and the story links ----------
 
 CLIPS_PATH = "/clips/"
@@ -473,13 +518,18 @@ def _iso(t) -> str | None:
     return t.isoformat() if isinstance(t, datetime) else (t or None)
 
 
-_VIEW_NOTE = re.compile(r"view: (\S+) \((?:leader|party member)\)")
+_VIEW_NOTE = re.compile(r"view: ([A-Za-z]{2,12}) \((?:leader|party member)\)")
 
 
 def view_owner(row: Mapping) -> str:
     """Whose eyes a clip shows: the member the detail names, else the subject."""
-    found = _VIEW_NOTE.search(row.get("detail") or "")
-    return found.group(1) if found else row["character"]
+    # The planner writes the marker at the start of a "; " part. Any other
+    # text in the detail, such as a cutter's note, is never read for it.
+    for part in (row.get("detail") or "").split("; "):
+        found = _VIEW_NOTE.match(part)
+        if found:
+            return found.group(1)
+    return row["character"]
 
 
 def shelf(rows: Iterable[Mapping]) -> dict:
