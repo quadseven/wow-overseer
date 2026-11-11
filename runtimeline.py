@@ -305,14 +305,11 @@ def _clear_clip(run: dict, report: dict, clips: list) -> dict:
     The ledger keys a clear by dungeon map ("clear:<map id>"), once, for the
     family's first clear, so a run is that clear only when it cleared that
     map, was led by the ledger row's character, and ended when the row's event
-    happened. A run that did not clear carries nothing.
+    happened. The run's own outcome word does not veto the link: the ledger row
+    is the record of the clear. A run with no such row carries nothing.
     """
     ended = run["ended"]
-    if (
-        report.get("outcome") != "complete"
-        or ended is None
-        or ended.get("age_seconds") is None
-    ):
+    if ended is None or ended.get("age_seconds") is None:
         return {}
     key = "clear:%s" % report.get("map_id")
     for row in clips:

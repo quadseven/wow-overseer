@@ -248,14 +248,23 @@ class TimelineEntries(unittest.TestCase):
         card = self.card([clear_row(event_key="clear:33")])
         self.assertNotIn("clip", card)
 
-    def test_a_run_that_did_not_clear_carries_no_link(self):
+    def test_a_run_whose_clear_has_a_row_shows_the_link_whatever_its_outcome(self):
         rows, reports = a_cleared_run()
         rows[1]["detail"] = "wipe: everyone died"
         reports[12]["outcome"] = "wipe"
         built = runtimeline.build_run_timeline(
             rows, {"Zug": ["Zug"]}, now=NOW, reports=reports, clips=[clear_row()]
         )
-        self.assertNotIn("clip", built["families"][0]["runs"][0])
+        self.assertEqual(
+            {"url": "/clips/clip-5-clear.mp4", "kind": "clear"},
+            built["families"][0]["runs"][0]["clip"],
+        )
+
+    def test_a_complete_run_with_no_row_for_its_clear_shows_no_link(self):
+        card = self.card([clear_row(event_key="clear:33")])
+        self.assertEqual("complete", card["report"]["outcome"])
+        self.assertNotIn("clip", card)
+        self.assertNotIn("clip_note", card)
 
     def test_the_payload_is_json(self):
         json.dumps(self.card([clear_row()]))
