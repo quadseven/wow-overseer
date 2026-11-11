@@ -1,0 +1,82 @@
+{
+  "args": {
+    "guilds": [
+      "Cave"
+    ],
+    "maps": {
+      "230": "Blackrock Depths"
+    }
+  },
+  "expect": {
+    "runs": [
+      {
+        "clear": false,
+        "credited": 5,
+        "of": 6,
+        "run": 41
+      }
+    ]
+  },
+  "format": 1,
+  "name": "synthetic-not-a-full-clear",
+  "provenance": {
+    "kind": "synthetic",
+    "source": "rows written for the machinery tests; not a realm capture"
+  },
+  "reads": [
+    {
+      "params": [
+        "Cave"
+      ],
+      "rows": [
+        {
+          "guildid": 7,
+          "name": "Cave"
+        }
+      ],
+      "sql": "SELECT guildid, name FROM guild WHERE name IN (%s)"
+    },
+    {
+      "params": [
+        7,
+        7,
+        20000
+      ],
+      "rows": [],
+      "sql": "SELECT character_name AS name, new_level AS level, guild_id, UNIX_TIMESTAMP(created_at) AS at FROM overseer_level WHERE guild_id IN (%s) AND created_at >= NOW() - INTERVAL %s DAY ORDER BY created_at DESC LIMIT %s"
+    },
+    {
+      "params": [
+        "Cave",
+        7,
+        "cleared",
+        "wiped",
+        "abandoned",
+        "timed out",
+        "stalled",
+        20000
+      ],
+      "rows": [
+        {
+          "bosses_done": 5,
+          "bosses_total": 6,
+          "ended_unix": 1041,
+          "guild": "Cave",
+          "id": 41,
+          "keyword": "razorfen-kraul",
+          "members": "",
+          "outcome": "cleared"
+        }
+      ],
+      "sql": "SELECT id, guild, band, composition, keyword, tank, members, dungeon_by, dungeon_jev, dungeon_confidence, composition_by, composition_jev, composition_confidence, prior_rate, prior_runs, state, outcome, why, deaths, seconds_inside, bosses_done, bosses_total, loot_items, loot_notable, ilvl_gained, levels_gained, created_at, ended_at, proposer, UNIX_TIMESTAMP(created_at) AS created_unix, UNIX_TIMESTAMP(ended_at) AS ended_unix FROM overseer_guild_run WHERE guild IN (%s) AND ended_at >= NOW() - INTERVAL %s DAY AND outcome IN (%s, %s, %s, %s, %s) ORDER BY id DESC LIMIT %s"
+    },
+    {
+      "params": [
+        7
+      ],
+      "rows": [],
+      "sql": "SELECT c.name, gm.guildid AS guild_id FROM guild_member gm JOIN characters c ON c.guid = gm.guid WHERE gm.guildid IN (%s)"
+    }
+  ],
+  "surface": "chronicle"
+}

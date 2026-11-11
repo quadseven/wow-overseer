@@ -39,7 +39,9 @@ class Refused(ValueError):
 def guard(sql: str) -> None:
     """Refuse anything but a single read-only SELECT. Parameter placeholders
     stand in as a literal first, as they do not change what the statement is."""
-    liveproof.check_select_only(_PLACEHOLDER.sub(lambda m: "%" if m.group() == "%%" else "1", sql))
+    liveproof.check_select_only(
+        _PLACEHOLDER.sub(lambda m: "%" if m.group() == "%%" else "1", sql)
+    )
 
 
 class RecordingReader(realmread.Reader):

@@ -42,9 +42,7 @@ class RecordingReader(unittest.TestCase):
         rd = record.RecordingReader(inner)
         rd.must(NOT_A_FULL_CLEAR["reads"][0]["sql"], (GUILD,))
         rd.must(NOT_A_FULL_CLEAR["reads"][1]["sql"], (7, 7, 20000))
-        self.assertEqual(
-            [r["params"] for r in rd.reads], [[GUILD], [7, 7, 20000]]
-        )
+        self.assertEqual([r["params"] for r in rd.reads], [[GUILD], [7, 7, 20000]])
         self.assertEqual(rd.reads[0]["rows"], [{"guildid": 7, "name": GUILD}])
 
     def test_a_statement_that_is_not_one_select_never_reaches_the_realm(self):
@@ -98,9 +96,7 @@ class Record(unittest.TestCase):
         )
 
     def test_expected_claims_come_from_the_capture_not_the_code_under_test(self):
-        doc = self.record(
-            scenario([run_row(51, "cleared", 18, 19)], [], "synthetic-x")
-        )
+        doc = self.record(scenario([run_row(51, "cleared", 18, 19)], [], "synthetic-x"))
         self.assertFalse(doc["expect"]["runs"][0]["clear"])
 
     def test_a_capture_with_no_credited_tally_is_not_accepted(self):
@@ -133,8 +129,9 @@ class Record(unittest.TestCase):
 
 
 def quietly(call):
-    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
-        io.StringIO()
+    with (
+        contextlib.redirect_stdout(io.StringIO()),
+        contextlib.redirect_stderr(io.StringIO()),
     ):
         return call()
 
@@ -146,12 +143,18 @@ class Command(unittest.TestCase):
             code = quietly(
                 lambda: record.main(
                     [
-                        "--surface", "chronicle",
-                        "--guild", GUILD,
-                        "--name", "synthetic-cli",
-                        "--kind", "synthetic",
-                        "--source", "recorder unit test",
-                        "--out", str(out),
+                        "--surface",
+                        "chronicle",
+                        "--guild",
+                        GUILD,
+                        "--name",
+                        "synthetic-cli",
+                        "--kind",
+                        "synthetic",
+                        "--source",
+                        "recorder unit test",
+                        "--out",
+                        str(out),
                     ],
                     reader=source_of(NOT_A_FULL_CLEAR),
                 )
@@ -166,13 +169,20 @@ class Command(unittest.TestCase):
             code = quietly(
                 lambda: record.main(
                     [
-                        "--surface", "chronicle", "--guild", GUILD,
-                        "--name", "x", "--kind", "synthetic",
-                        "--source", "recorder unit test", "--out", str(out),
+                        "--surface",
+                        "chronicle",
+                        "--guild",
+                        GUILD,
+                        "--name",
+                        "x",
+                        "--kind",
+                        "synthetic",
+                        "--source",
+                        "recorder unit test",
+                        "--out",
+                        str(out),
                     ],
-                    reader=source_of(
-                        scenario([run_row(54, "cleared", 0, 19)], [])
-                    ),
+                    reader=source_of(scenario([run_row(54, "cleared", 0, 19)], [])),
                 )
             )
             self.assertEqual(code, 1)

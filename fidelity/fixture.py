@@ -8,6 +8,7 @@
       "args": {...},                    what the surface is asked
       "reads": [{"sql", "params", "rows"}, ...],   recorded realm reads, in order
       "expect": {...},                  claims from the credited record
+      "proves": [2000, ...]             optional; realm fixtures only
     }
 
 `synthetic` marks rows written to exercise the machinery. They are never
@@ -76,6 +77,7 @@ class Fixture:
     args: dict
     reads: tuple
     expect: dict
+    proves: tuple = ()  # awaiting-live-check tickets whose behavior this proves
 
 
 def _need(doc: dict, key: str, kind: type):
@@ -109,6 +111,13 @@ def parse(doc: dict) -> Fixture:
                 int(read.get("gap") or 0),
             )
         )
+    proves = doc.get("proves") or []
+    if not isinstance(proves, list) or not all(isinstance(t, int) for t in proves):
+        raise FixtureError("proves must be a list of ticket numbers")
+    if proves and provenance["kind"] != REALM:
+        raise FixtureError("a synthetic fixture cannot prove a ticket")
+    if provenance["kind"] == REALM and not str(provenance.get("source") or "").strip():
+        raise FixtureError("a realm fixture must say where and when it was captured")
     return Fixture(
         name=_need(doc, "name", str),
         kind=provenance["kind"],
@@ -117,6 +126,7 @@ def parse(doc: dict) -> Fixture:
         args=_need(doc, "args", dict),
         reads=tuple(reads),
         expect=_need(doc, "expect", dict),
+        proves=tuple(proves),
     )
 
 

@@ -64,7 +64,12 @@ def scenario(rows, claims, name="synthetic-test"):
             },
             {
                 "sql": run_sql,
-                "params": [GUILD, chronicle.DAYS, *guildrun.WENT_IN, chronicle.MAX_ROWS],
+                "params": [
+                    GUILD,
+                    chronicle.DAYS,
+                    *guildrun.WENT_IN,
+                    chronicle.MAX_ROWS,
+                ],
                 "rows": rows,
             },
             {
