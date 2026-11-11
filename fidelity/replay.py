@@ -51,7 +51,11 @@ class Result:
         return not self.problems
 
 
-def compare(expected: dict, observed: dict) -> list:
+def compare(
+    expected: dict,
+    observed: dict,
+    words: tuple = ("the record says", "the overseer said"),
+) -> list:
     """What differs between the claims the record holds and what was observed."""
     problems = []
     want = {r["run"]: r for r in expected.get("runs", [])}
@@ -59,8 +63,8 @@ def compare(expected: dict, observed: dict) -> list:
     for run in sorted(set(want) | set(got)):
         if want.get(run) != got.get(run):
             problems.append(
-                "run %s: the record says %s, the overseer said %s"
-                % (run, want.get(run), got.get(run))
+                "run %s: %s %s, %s %s"
+                % (run, words[0], want.get(run), words[1], got.get(run))
             )
     return problems
 
