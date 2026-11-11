@@ -27,7 +27,10 @@ class FakeStore:
     """overseer_clip behind `_connect`. The two ledger reads are told apart by
     their SQL: the retention read asks for ready rows, the key read for keys."""
 
-    def __init__(self, ready=(), keys=(), fail_first_with=None):
+    rowcount = 1
+
+    def __init__(self, ready=(), keys=(), fail_first_with=None, inflight=()):
+        self.inflight = list(inflight)
         self.ready = list(ready)
         self.keys = [{"event_key": k} for k in keys]
         self.statements = []
@@ -57,6 +60,8 @@ class FakeStore:
     def fetchall(self):
         if "state = 'ready'" in self._last:
             return list(self.ready)
+        if "state IN ('pending', 'cutting')" in self._last:
+            return list(self.inflight)
         return list(self.keys)
 
     def reads(self):
@@ -221,13 +226,44 @@ class TheScan(unittest.TestCase):
         self.assertNotIn(" IN ", read[0])
         self.assertEqual(1, len(read[1]))
 
-    def test_a_quiet_minute_costs_two_small_ledger_reads_and_no_writes(self):
+    def test_a_quiet_minute_costs_three_small_ledger_reads_and_no_writes(self):
         store = FakeStore()
         result = scan(store, Realm())
-        self.assertEqual(2, len(store.reads()))
+        self.assertEqual(3, len(store.reads()))
         self.assertTrue(any("state = 'ready'" in s[0] for s in store.reads()))
+        self.assertTrue(
+            any("state IN ('pending', 'cutting')" in s[0] for s in store.reads())
+        )
         self.assertEqual([], store.writes())
-        self.assertEqual({"written": 0, "expired": 0}, result)
+        self.assertEqual(
+            {"written": 0, "expired": 0, "timed_out": {"no_view": 0, "failed": 0}},
+            result,
+        )
+
+    def test_the_scan_times_out_stale_rows_with_conditional_updates(self):
+        store = FakeStore(
+            inflight=[
+                {
+                    "id": 5,
+                    "state": "pending",
+                    "window_end": NOW - timedelta(minutes=20),
+                    "updated_at": NOW,
+                },
+                {
+                    "id": 6,
+                    "state": "cutting",
+                    "window_end": NOW,
+                    "updated_at": NOW - timedelta(hours=2),
+                },
+            ]
+        )
+        result = scan(store, Realm())
+        self.assertEqual({"no_view": 1, "failed": 1}, result["timed_out"])
+        writes = store.writes()
+        self.assertEqual(2, len(writes))
+        for sql, _params in writes:
+            self.assertIn("AND state = %s", sql)
+        self.assertEqual((("no_view", 5, "pending")), writes[0][1])
 
     def test_retention_updates_state_one_id_at_a_time_and_never_deletes(self):
         old = NOW - timedelta(days=45)

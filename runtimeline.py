@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, timezone
 
 import re
 
+import clipledger
 import council
 import places
 import runreport
@@ -288,7 +289,42 @@ def _run_card(run: dict, latest: bool, now: datetime, told: dict | None = None) 
     report = (told.get("reports") or {}).get(run_id(run))
     if report and report.get("ended"):
         card["report"] = runreport.card(report)
+        card.update(_clear_clip(run, report, told.get("clips") or []))
     return card
+
+
+# How far a clear's ledger time may sit from the run's `ended` row and still be
+# that run. Both are aged by the database's own NOW(), so no zone is involved;
+# the slack covers the scan reading the run a tick after it ended.
+_CLEAR_SLACK_SECONDS = 300
+
+
+def _clear_clip(run: dict, report: dict, clips: list) -> dict:
+    """The clip link (or the no-live-view line) of the clear this run was.
+
+    The ledger keys a clear by dungeon map ("clear:<map id>"), once, for the
+    family's first clear, so a run is that clear only when it cleared that
+    map, was led by the ledger row's character, and ended when the row's event
+    happened. A run that did not clear carries nothing.
+    """
+    ended = run["ended"]
+    if (
+        report.get("outcome") != "complete"
+        or ended is None
+        or ended.get("age_seconds") is None
+    ):
+        return {}
+    key = "clear:%s" % report.get("map_id")
+    for row in clips:
+        if (
+            row.get("event_key") == key
+            and row.get("character") == report.get("leader")
+            and row.get("age_seconds") is not None
+            and abs(int(row["age_seconds"]) - int(ended["age_seconds"]))
+            <= _CLEAR_SLACK_SECONDS
+        ):
+            return clipledger.link(row)
+    return {}
 
 
 def run_id(run: dict) -> int:
@@ -323,6 +359,7 @@ def build_run_timeline(
     bosses: frozenset = frozenset(),
     zones: dict | None = None,
     reports: dict | None = None,
+    clips: list | None = None,
 ) -> dict:
     """The timeline payload for every family.
 
@@ -365,6 +402,7 @@ def build_run_timeline(
                     "bosses": bosses,
                     "zones": zones or {},
                     "reports": reports or {},
+                    "clips": clips or [],
                 },
             )
             for f in names

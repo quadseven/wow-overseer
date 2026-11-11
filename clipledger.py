@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Callable, Iterable, Mapping
+from urllib.parse import quote
 
 import achievements
 import eventclips
@@ -248,3 +249,120 @@ def plan_requests(
             row["state"] = "no_view"
         out.append(row)
     return out
+
+
+# --- timing out rows the agent never finished ----------------------------
+
+# The agent keeps AGENT_BUFFER of video; a pending row this long past its window
+# end can no longer be cut, so it is declared no_view (buffer plus 5 minutes).
+PENDING_TIMEOUT = timedelta(minutes=15)
+# A cutting row nobody has touched for this long lost its agent mid-cut.
+CUTTING_TIMEOUT = timedelta(hours=1)
+CUTTING_FAILED_DETAIL = "cutting timed out after an hour"
+
+_STALE_SELECT = (
+    "SELECT id, state, window_end, updated_at FROM overseer_clip"
+    " WHERE state IN ('pending', 'cutting')"
+)
+# Each update names the state it replaces, so a row the agent moved on since
+# the read (ready, failed, ...) matches nothing and is left alone.
+_TO_NO_VIEW = "UPDATE overseer_clip SET state = %s WHERE id = %s AND state = %s"
+_TO_FAILED = (
+    "UPDATE overseer_clip SET state = %s, detail = %s WHERE id = %s AND state = %s"
+)
+
+
+def stale_changes(rows: Iterable[Mapping], *, now: datetime) -> list[dict]:
+    """The state changes owed to rows that sat too long: pending past its
+    window end by more than PENDING_TIMEOUT becomes no_view; cutting not
+    updated for more than CUTTING_TIMEOUT becomes failed, with a detail."""
+    out = []
+    for r in rows:
+        if r.get("state") == "pending" and r["window_end"] < now - PENDING_TIMEOUT:
+            out.append(
+                {"id": r["id"], "from": "pending", "to": "no_view", "detail": None}
+            )
+        elif r.get("state") == "cutting" and r["updated_at"] < now - CUTTING_TIMEOUT:
+            out.append(
+                {
+                    "id": r["id"],
+                    "from": "cutting",
+                    "to": "failed",
+                    "detail": CUTTING_FAILED_DETAIL,
+                }
+            )
+    return out
+
+
+def time_out(cur, *, now: datetime) -> dict:
+    """Read the in-flight rows and time out the stale ones through `cur`.
+
+    Returns how many rows each change actually took (a conditional update that
+    matched nothing is not counted)."""
+    cur.execute(_STALE_SELECT)
+    counts = {"no_view": 0, "failed": 0}
+    for change in stale_changes(cur.fetchall(), now=now):
+        if change["detail"] is None:
+            cur.execute(_TO_NO_VIEW, (change["to"], change["id"], change["from"]))
+        else:
+            cur.execute(
+                _TO_FAILED,
+                (change["to"], change["detail"], change["id"], change["from"]),
+            )
+        counts[change["to"]] += 1 if cur.rowcount else 0
+    return counts
+
+
+# --- reading the ledger back out: the shelf and the story links ----------
+
+CLIPS_PATH = "/clips/"
+NO_VIEW_LINE = "No live view was up, so no clip was saved."
+SHELF_EMPTY = "No clips have been saved yet."
+SHELF_LIMIT = 100
+
+
+def clip_url(file_name: str) -> str:
+    """The path a saved clip is served at, mount-relative (the page adds the
+    mount). The name is quoted, so a stored name cannot add a path segment."""
+    return CLIPS_PATH + quote(file_name, safe="")
+
+
+def _iso(t) -> str | None:
+    return t.isoformat() if isinstance(t, datetime) else (t or None)
+
+
+def shelf(rows: Iterable[Mapping]) -> dict:
+    """The /api/clips payload: ready rows with a file, newest event first."""
+    ready = [r for r in rows if r.get("state") == "ready" and r.get("file_name")]
+    ready.sort(
+        key=lambda r: (str(_iso(r.get("event_at")) or ""), r["id"]), reverse=True
+    )
+    return {
+        "clips": [
+            {
+                "id": r["id"],
+                "kind": r["kind"],
+                "character": r["character"],
+                "at": _iso(r.get("event_at")),
+                "url": clip_url(r["file_name"]),
+            }
+            for r in ready[:SHELF_LIMIT]
+        ],
+        "empty": SHELF_EMPTY,
+    }
+
+
+def link(row: Mapping | None) -> dict:
+    """What a story or timeline entry adds for its event's ledger row.
+
+    A ready row with a file adds `clip` (url and kind). A no_view row adds
+    `clip_note`, saying no live view was up. Any other state, or no row at
+    all, adds nothing: the entry says nothing about clips.
+    """
+    if not row:
+        return {}
+    if row.get("state") == "ready" and row.get("file_name"):
+        return {"clip": {"url": clip_url(row["file_name"]), "kind": row["kind"]}}
+    if row.get("state") == "no_view":
+        return {"clip_note": NO_VIEW_LINE}
+    return {}

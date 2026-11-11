@@ -68,6 +68,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Answers: one character's quest log, for the frame.
 - Example: `overseer get /api/client/quests name=Grug`
 
+## `GET /api/clips`
+
+- Query: none
+- Answers: the saved clips, newest first.
+- Example: `overseer get /api/clips`
+
 ## `GET /api/council`
 
 - Query: none
