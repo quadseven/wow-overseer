@@ -576,14 +576,30 @@ def _near_line(spot: dict, a: dict, b: dict) -> float:
     return ((px - ax - t * dx) ** 2 + (py - ay - t * dy) ** 2) ** 0.5
 
 
+def _deaths_along(stop: dict, here: dict, deaths) -> int:
+    return sum(
+        1 for d in deaths or () if _near_line(d, here, stop) <= DEATH_CORRIDOR_YARDS
+    )
+
+
 def lethal_stop(stop: dict, here: dict, deaths) -> bool:
     """Whether the family's recent deaths ({map_id, x, y}) lie along the line
     from `here` to `stop`. Straight-line, as the rest of the aim choice is: it
-    knows deaths, not routes."""
-    count = sum(
-        1 for d in deaths or () if _near_line(d, here, stop) <= DEATH_CORRIDOR_YARDS
-    )
-    return count >= DEATHS_MAKE_A_STOP_LETHAL
+    knows deaths, not routes. The line starts where the head stands, so deaths
+    within the corridor of the head count against every stop on the map and the
+    family hearths instead, which is intended."""
+    return _deaths_along(stop, here, deaths) >= DEATHS_MAKE_A_STOP_LETHAL
+
+
+def lethal_stops(stops, here: dict, deaths) -> list:
+    """[(stop, deaths along the walk)] for every stop `lethal_stop` passes
+    over, so the bridge can say each one. Pure."""
+    out = []
+    for stop in stops or ():
+        count = _deaths_along(stop, here, deaths)
+        if count >= DEATHS_MAKE_A_STOP_LETHAL:
+            out.append((stop, count))
+    return out
 
 
 def choose_aim(

@@ -659,6 +659,95 @@ class TheAdapter(unittest.TestCase):
         self.assertEqual([_at(-4666.5, -2536.8, 1)], asked)
         self.assertEqual([], self.hearths)
 
+    def far_bag_room_start(self, deaths):
+        """A bag-room errand whose capital is a long walk off on the head's own
+        map, with one vendor 1,270 yards away (#2271). `deaths` is what the
+        death reader returns, or None to leave the reader out of the module."""
+        said = []
+        self.ns["log"] = types.SimpleNamespace(
+            info=lambda fmt, *a: said.append(fmt % a if a else fmt),
+            warning=lambda fmt, *a: said.append(fmt % a if a else fmt),
+        )
+        self.ns["situation"] = situation
+        self.ns["_fetch_errand_vendor_stops"] = lambda leader, standing: [
+            {"map_id": 0, "x": -5800.0, "y": -1300.0, "name": "Near Vendor"}
+        ]
+        if deaths is not None:
+            self.ns["_fetch_family_death_spots"] = lambda names: deaths
+        self.home = {}
+        self.positions = {
+            "Grug": _at(-6705.0, -2195.0),
+            "Bork": _at(-6700.0, -2190.0),
+        }
+        self.ns["_mail_gear_holders"] = lambda names: {}
+        self.ns["_campaign_waiting"] = lambda names: True
+        self.ns["_fetch_free_slots"] = lambda names: {"Bork": 0, "Grug": 0}
+        self.ns["_bag_hold_stuck"] = lambda names, free_slots: False
+        state = asyncio.run(
+            self.fam._town_errand_start(
+                te.State(), ["Bork", "Grug"], "Grug", False, self.now, ""
+            )
+        )
+        return state, said
+
+    def test_a_vendor_over_the_familys_deaths_is_passed_over_and_said(self):
+        deaths = [{"map_id": 0, "x": -6000.0, "y": -1500.0}] * 2
+        state, said = self.far_bag_room_start(deaths)
+        self.assertEqual(HUB["x"], state.hub["x"])
+        self.assertIn(
+            "town errand: %s passes over the vendor Near Vendor: 2 deaths of the "
+            "family in the last day lie along the walk to it" % te.BAG_PRESSURE_WHY,
+            said,
+        )
+
+    def test_with_no_death_reader_the_nearest_vendor_is_aimed_as_before(self):
+        state, said = self.far_bag_room_start(None)
+        self.assertEqual(-5800.0, state.hub["x"])
+        self.assertFalse([s for s in said if "passes over" in s])
+
+    def test_a_vendor_with_no_deaths_along_the_walk_is_aimed_and_nothing_is_said(self):
+        state, said = self.far_bag_room_start([])
+        self.assertEqual(-5800.0, state.hub["x"])
+        self.assertFalse([s for s in said if "passes over" in s])
+
+    def test_a_failed_death_read_warns_and_returns_nothing(self):
+        # A stand-in, not the real package: other tests replace pymysql in
+        # sys.modules, and importing it here would leak into theirs.
+        class Broken(Exception):
+            pass
+
+        pymysql = types.SimpleNamespace(err=types.SimpleNamespace(MySQLError=Broken))
+        warned = []
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, sql, args):
+                raise Broken(2013, "lost connection")
+
+        class Conn(Cursor):
+            def cursor(self):
+                return Cursor()
+
+        ns = {
+            "pymysql": pymysql,
+            "_connect": lambda: Conn(),
+            "log": types.SimpleNamespace(
+                warning=lambda fmt, *a: warned.append(fmt % a)
+            ),
+        }
+        module = ast.Module(
+            body=_functions("_fetch_family_death_spots"), type_ignores=[]
+        )
+        exec(compile(module, "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+        self.assertEqual([], ns["_fetch_family_death_spots"](["Bork"]))
+        self.assertEqual(1, len(warned))
+        self.assertIn("2013", warned[0])
+
     def test_usable_vendor_supply_gap_starts_the_errand_between_runs(self):
         self.ns["_mail_gear_holders"] = lambda names: {}
         self.ns["_fetch_gearup_facts"] = lambda names: {

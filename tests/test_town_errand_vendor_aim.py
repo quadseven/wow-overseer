@@ -128,6 +128,22 @@ class TheAimAvoidsGroundTheFamilyDiedOn(unittest.TestCase):
         pick = te.choose_aim(CAPITAL, stops, HEAD, WHY, deaths=self.deaths_between())
         self.assertEqual(-8300.0, pick["x"])
 
+    def test_deaths_where_the_head_stands_count_against_every_stop(self):
+        # The line starts at the head, so ground he stands on and dies on
+        # makes every stop on the map lethal: the family hearths instead.
+        at_head = [{"map_id": 0, "x": -6700.0, "y": -2190.0}] * 2
+        stops = te.vendor_stops([self.LETHAL, self.SAFE])
+        self.assertEqual(
+            CAPITAL, te.choose_aim(CAPITAL, stops, HEAD, WHY, deaths=at_head)
+        )
+
+    def test_the_passed_over_stops_come_back_with_their_death_counts(self):
+        stops = te.vendor_stops([self.LETHAL, self.SAFE])
+        here = {"map_id": 0, "x": HEAD["pos_x"], "y": HEAD["pos_y"]}
+        dropped = te.lethal_stops(stops, here, self.deaths_between(3))
+        self.assertEqual([(-5800.0, 3)], [(s["x"], n) for s, n in dropped])
+        self.assertEqual([], te.lethal_stops(stops, here, self.deaths_between(1)))
+
     def test_one_death_is_not_a_pattern(self):
         stops = te.vendor_stops([self.LETHAL])
         pick = te.choose_aim(CAPITAL, stops, HEAD, WHY, deaths=self.deaths_between(1))

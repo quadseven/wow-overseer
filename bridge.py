@@ -20707,6 +20707,16 @@ class Bridge(discord.Client):
             died_of = globals().get("_fetch_family_death_spots")
             deaths = (await asyncio.to_thread(died_of, list(names))
                       if died_of else ())
+            here = {"map_id": standing.get("map_id"),
+                    "x": standing.get("pos_x"), "y": standing.get("pos_y")}
+            # EVERY STOP PASSED OVER IS SAID, whether another vendor is chosen
+            # or the hub stands; at most three lines.
+            for stop, count in townerrand.lethal_stops(
+                    [s for s in stops if townerrand._same_map(s, standing)],
+                    here, deaths)[:3]:
+                log.info("town errand: %s%s passes over %s: %d deaths of the "
+                         "family in the last day lie along the walk to it",
+                         why, label, stop.get("place", "a vendor"), count)
             chosen = townerrand.choose_aim(
                 hub, stops, standing, why, released, now, deaths=deaths)
             if chosen != hub:
@@ -35654,9 +35664,10 @@ def _fetch_family_death_spots(names: list) -> list:
             cur.execute(sql, tuple(names))
             return [dict(r) for r in cur.fetchall()]
         except pymysql.err.MySQLError as exc:
-            if exc.args and exc.args[0] in (1054, 1146):
-                return []
-            raise
+            # ADVISORY: a broken read must not stop the errand from starting.
+            log.warning("town errand: the family's deaths could not be read "
+                        "(%s); the aim is chosen without them", exc.args[:1])
+            return []
 
 
 def _fetch_errand_vendor_stops(leader: str, standing) -> list:
