@@ -4370,7 +4370,7 @@ _CLIP_LOOT_MINUTES = 20
 
 _CLIP_LOOT_SQL = (
     "SELECT e.id, e.character_name, e.kind, e.subject_id, e.subject_name, "
-    "e.subject_quality, e.item_guid, e.first_seen, g.name AS guild "
+    "e.subject_quality, e.item_guid, e.map, e.first_seen, g.name AS guild "
     "FROM overseer_event e "
     "LEFT JOIN characters c ON c.name = e.character_name "
     "LEFT JOIN guild_member gm ON gm.guid = c.guid "
@@ -4385,8 +4385,8 @@ _CLIP_LOOT_SQL = (
 # OLDEST 20000 rows, so once history grows it would miss new events. History is
 # read afterwards, and only to decide whether a candidate is a first.
 _CLIP_EVENT_SQL = (
-    "SELECT id, character_name, kind, subject_id, subject_name, level, first_seen "
-    "FROM overseer_event "
+    "SELECT id, character_name, kind, subject_id, subject_name, level, map, "
+    "first_seen FROM overseer_event "
     "WHERE (kind = 'boss_kill' OR (kind = 'level_up' AND level = 60)) "
     "AND character_name IN ({holes}) "
     "AND first_seen >= NOW() - INTERVAL %s MINUTE "
@@ -4398,6 +4398,13 @@ _CLIP_RUN_SQL = (
     "FROM overseer_dungeon_run WHERE leader_name IN ({holes}) "
     "AND ended_at >= NOW() - INTERVAL %s MINUTE "
     "ORDER BY ended_at DESC LIMIT 50"
+)
+# Runs still in progress: an event inside one takes its view from that run.
+_CLIP_OPEN_RUN_SQL = (
+    "SELECT id, leader_name, map_id, state, started_at, "
+    "last_progress_at, ended_at, ended_reason "
+    "FROM overseer_dungeon_run WHERE leader_name IN ({holes}) "
+    "AND ended_at IS NULL ORDER BY started_at DESC LIMIT 50"
 )
 # Ledger keys worth checking for a repeat: an event is skipped once its window
 # starts past the agent's buffer, so older keys cannot matter (INSERT IGNORE
@@ -4418,7 +4425,7 @@ def _cleared_run_cards(f: dict) -> list:
         if card["cleared"] and card["at"]:
             cards.append({
                 "map_id": card["map_id"], "dungeon": card["dungeon"],
-                "leader": card["leader"],
+                "leader": card["leader"], "members": card["members"],
                 "at": datetime.strptime(card["at"], "%Y-%m-%dT%H:%M:%S"),
             })
     return cards
@@ -4430,9 +4437,10 @@ def _clip_path(name: str) -> str:
 
 
 def _clip_who() -> tuple:
-    """(roster names across the families, names of the family guilds)."""
-    roster = [n for names in FAMILIES.families().values() for n in names]
-    return roster, [g["name"] for g in FAMILIES.guilds()]
+    """(roster names across the families, family guild names, the families)."""
+    families = FAMILIES.families()
+    roster = [n for names in families.values() for n in names]
+    return roster, [g["name"] for g in FAMILIES.guilds()], families
 
 
 def _read_clip_candidates(roster: list) -> dict:
@@ -4452,15 +4460,20 @@ def _read_clip_candidates(roster: list) -> dict:
                 _CLIP_RUN_SQL.format(holes=holes),  # noqa: S608 - placeholders from a COUNT, values bound
                 (*names, _CLIP_LOOT_MINUTES),
             )
+            open_run_rows = rd.must(
+                _CLIP_OPEN_RUN_SQL.format(holes=holes),  # noqa: S608 - placeholders from a COUNT, values bound
+                names,
+            )
         except realmread.Gap as gap:
             if gap.code != realmread.MISSING_TABLE:
                 raise
-            run_rows = []
+            run_rows, open_run_rows = [], []
         now = rd.db_now()
     return {
         "loot_rows": loot_rows,
         "event_rows": event_rows,
         "run_rows": run_rows,
+        "open_run_rows": open_run_rows,
         "now": now,
     }
 
@@ -4472,7 +4485,8 @@ def _read_clip_history(roster: list) -> dict:
 
 
 _CLIP_SHELF_SQL = (
-    "SELECT id, kind, `character`, event_at, state, file_name FROM overseer_clip"
+    "SELECT id, kind, `character`, event_at, state, file_name, detail"
+    " FROM overseer_clip"
     " WHERE state = 'ready' AND file_name IS NOT NULL"
     " ORDER BY event_at DESC, id DESC LIMIT %s"
 )
@@ -4530,7 +4544,7 @@ def scan_clips() -> dict:
     failed tick, not a scanner that fails until the process restarts.
     """
     _ensure_clip_store()
-    roster, guilds = _clip_who()
+    roster, guilds, families = _clip_who()
     if not roster:
         return {"written": 0, "expired": 0}  # IN () is not valid SQL
     found = _read_clip_candidates(roster)
@@ -4563,6 +4577,8 @@ def scan_clips() -> dict:
             now=found["now"],
             existing_keys=keys,
             path_of=_clip_path,
+            runs=list(found["run_rows"]) + list(found.get("open_run_rows", [])),
+            families=families,
         )
         for row in planned:
             cur.execute(_CLIP_INSERT, (
@@ -7116,10 +7132,12 @@ class Handler(BaseHTTPRequestHandler):
 
     @_get_route("clip shelf query failed", default=str)
     def _clips(_query: dict, ctx) -> tuple[int, dict]:
-        """GET /api/clips - the saved clips, newest first.
+        """GET /api/clips - the saved clips, newest first, each naming whose view it shows.
 
         Only clips in a ready row, each with its kind, character, event time
-        and the URL the file is served at. A realm with no ledger yet answers
+        and the URL the file is served at, plus `view_owner`, the member whose
+        live view the clip shows (the subject unless the ledger detail names
+        the leader or a party member). A realm with no ledger yet answers
         an empty shelf. A failed read answers 503 (_answer).
         """
         rows = ctx.read.rows(_CLIP_SHELF_SQL, (clipledger.SHELF_LIMIT,),

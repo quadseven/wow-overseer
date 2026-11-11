@@ -46,6 +46,7 @@ def plan(**kw):
         roster=["Alder", "Birch"],
         now=NOW,
         existing_keys=(),
+        runs=(),
         path_of=streamed,
     )
     args.update(kw)
@@ -196,6 +197,334 @@ class NoViewTests(unittest.TestCase):
         up = {"id": 3, "character_name": "Alder", "kind": "level_up", "level": 60}
         rows = plan(event_rows=[dict(up, first_seen=at)], path_of=lambda name: "")
         self.assertEqual(["no_view"], [r["state"] for r in rows])
+
+
+def only(*names):
+    """A path_of that streams just the named characters."""
+    return lambda name: "wd" + name.lower() if name in names else ""
+
+
+FAMILY = ["Alder", "Birch", "Cedar", "Dogwood"]
+MAP = 33
+
+
+def run(leader="Alder", map_id=MAP, ended=None, run_id=1, started_min=40):
+    """A dungeon run row; ended=None is a run still in progress."""
+    return {
+        "id": run_id,
+        "leader_name": leader,
+        "map_id": map_id,
+        "state": "ended" if ended else "active",
+        "started_at": NOW - timedelta(minutes=started_min),
+        "ended_at": ended,
+    }
+
+
+def seen_in(who, map_id=MAP, minutes=20, event_id=500):
+    """Something the character did inside the instance: presence in the run."""
+    return {
+        "id": event_id,
+        "character_name": who,
+        "kind": "item_equip",
+        "item_guid": 1,
+        "map": map_id,
+        "first_seen": NOW - timedelta(minutes=minutes),
+    }
+
+
+def in_dungeon(row, map_id=MAP):
+    return dict(row, map=map_id)
+
+
+class FamilyViewTests(unittest.TestCase):
+    """Fixed decision 1: own view, then the run leader, then a party member."""
+
+    def family_plan(self, path_of, runs, extra=(), who="Cedar"):
+        return plan(
+            loot_rows=[in_dungeon(loot(7, who=who))] + list(extra),
+            runs=runs,
+            roster=FAMILY,
+            path_of=path_of,
+        )
+
+    def test_unstreamed_winner_in_a_run_led_by_a_streamed_member_uses_the_leader(
+        self,
+    ):
+        (row,) = self.family_plan(only("Alder"), [run()])
+        self.assertEqual("pending", row["state"])
+        self.assertEqual("Cedar", row["character"])
+        self.assertEqual("wdalder", row["stream_path"])
+        self.assertIn("view: Alder (leader)", row["detail"])
+        self.assertIn("Test Blade", row["detail"])
+
+    def test_leader_not_streamed_falls_to_a_streamed_party_member_in_roster_order(
+        self,
+    ):
+        present = [seen_in("Dogwood", event_id=501), seen_in("Birch", event_id=502)]
+        (row,) = self.family_plan(only("Birch", "Dogwood"), [run()], extra=present)
+        self.assertEqual("pending", row["state"])
+        self.assertEqual("wdbirch", row["stream_path"])
+        self.assertIn("view: Birch (party member)", row["detail"])
+
+    def test_a_streamed_subject_keeps_its_own_path_and_detail(self):
+        (row,) = self.family_plan(only("Alder", "Cedar"), [run()])
+        self.assertEqual("wdcedar", row["stream_path"])
+        self.assertEqual("Test Blade", row["detail"])
+
+    def test_a_streamed_subject_outside_any_run_keeps_its_own_path_and_detail(self):
+        (row,) = self.family_plan(only("Cedar"), [])
+        self.assertEqual("wdcedar", row["stream_path"])
+        self.assertEqual("Test Blade", row["detail"])
+
+    def test_no_streamed_family_member_in_the_run_is_no_view_with_that_reason(self):
+        (row,) = self.family_plan(only("Dogwood"), [run()], extra=[seen_in("Birch")])
+        self.assertEqual("no_view", row["state"])
+        self.assertEqual("", row["stream_path"])
+        self.assertIn("no streamed family member in the run", row["detail"])
+
+    def test_no_run_is_no_view_with_the_not_in_a_run_reason(self):
+        (row,) = self.family_plan(only("Alder"), [])
+        self.assertEqual("no_view", row["state"])
+        self.assertIn("subject not streamed and not in a run", row["detail"])
+
+    def test_a_run_on_another_map_or_after_the_event_does_not_count(self):
+        (row,) = self.family_plan(only("Alder"), [run(map_id=99)])
+        self.assertEqual("no_view", row["state"])
+        later = run()
+        later["started_at"] = NOW
+        (row,) = self.family_plan(only("Alder"), [later])
+        self.assertEqual("no_view", row["state"])
+
+    def test_a_streamed_family_member_who_was_not_in_the_run_is_not_a_view(self):
+        (row,) = self.family_plan(
+            only("Birch"), [run()], extra=[seen_in("Birch", map_id=99)]
+        )
+        self.assertEqual("no_view", row["state"])
+
+    def test_a_run_still_in_progress_supplies_the_leader_view(self):
+        still_open = run(ended=None)
+        self.assertIsNone(still_open["ended_at"])
+        (row,) = self.family_plan(only("Alder"), [still_open])
+        self.assertEqual("wdalder", row["stream_path"])
+        self.assertIn("view: Alder (leader)", row["detail"])
+
+    def test_a_run_still_in_progress_supplies_a_party_member_view(self):
+        (row,) = self.family_plan(
+            only("Birch"), [run(ended=None)], extra=[seen_in("Birch")]
+        )
+        self.assertEqual("wdbirch", row["stream_path"])
+        self.assertIn("view: Birch (party member)", row["detail"])
+
+    def test_an_ended_run_still_resolves(self):
+        ended = run(ended=NOW - timedelta(minutes=2))
+        (row,) = self.family_plan(only("Alder"), [ended])
+        self.assertIn("view: Alder (leader)", row["detail"])
+
+    def test_the_ledger_character_stays_the_subject_for_a_boss_kill(self):
+        kill = {
+            "id": 1,
+            "character_name": "Cedar",
+            "kind": "boss_kill",
+            "subject_id": 5,
+            "subject_name": "Boss 5",
+            "map": MAP,
+            "first_seen": NOW - timedelta(minutes=3),
+        }
+        (row,) = plan(
+            event_rows=[kill], runs=[run()], roster=FAMILY, path_of=only("Alder")
+        )
+        self.assertEqual("Cedar", row["character"])
+        self.assertEqual("wdalder", row["stream_path"])
+        self.assertIn("view: Alder (leader)", row["detail"])
+
+    def test_a_clear_falls_to_a_streamed_party_member_when_the_leader_is_not(self):
+        clear = {
+            "map_id": MAP,
+            "dungeon": "Test Mines",
+            "leader": "Alder",
+            "members": ["Alder", "Birch"],
+            "at": NOW - timedelta(minutes=3),
+        }
+        (row,) = plan(cleared_runs=[clear], roster=FAMILY, path_of=only("Birch"))
+        self.assertEqual("Alder", row["character"])
+        self.assertEqual("wdbirch", row["stream_path"])
+        self.assertIn("view: Birch (party member)", row["detail"])
+        self.assertIn("Test Mines", row["detail"])
+
+    def test_a_clear_with_no_streamed_member_is_no_view_with_the_run_reason(self):
+        clear = {
+            "map_id": MAP,
+            "dungeon": "T",
+            "leader": "Alder",
+            "at": NOW - timedelta(minutes=3),
+        }
+        (row,) = plan(cleared_runs=[clear], roster=FAMILY, path_of=only())
+        self.assertEqual("no_view", row["state"])
+        self.assertIn("no streamed family member in the run", row["detail"])
+
+
+TWO_FAMILIES = {"first": ["Alder", "Birch"], "second": ["Cedar", "Dogwood"]}
+
+
+class TwoFamiliesOneDungeonTests(unittest.TestCase):
+    """Two families inside one dungeon at once: each event stays in its own."""
+
+    def two_runs(self):
+        # The first family's run started earlier, so a map-and-time match
+        # alone would pick it for everyone.
+        return [
+            run(leader="Alder", run_id=1, started_min=50),
+            run(leader="Cedar", run_id=2, started_min=40),
+        ]
+
+    def loot_plan(
+        self, path_of, extra=(), runs=None, families=TWO_FAMILIES, who="Dogwood"
+    ):
+        return plan(
+            loot_rows=[in_dungeon(loot(7, who=who))] + list(extra),
+            runs=self.two_runs() if runs is None else runs,
+            roster=FAMILY,
+            families=families,
+            path_of=path_of,
+        )
+
+    def test_a_second_family_member_takes_their_own_leaders_view(self):
+        (row,) = self.loot_plan(only("Alder", "Cedar"))
+        self.assertEqual("wdcedar", row["stream_path"])
+        self.assertIn("view: Cedar (leader)", row["detail"])
+
+    def test_a_second_family_party_member_comes_from_that_family_only(self):
+        extra = [seen_in("Birch", event_id=501), seen_in("Cedar", event_id=502)]
+        (row,) = self.loot_plan(only("Birch", "Alder"), extra=extra)
+        self.assertEqual("no_view", row["state"])
+        self.assertIn("no streamed family member in the run", row["detail"])
+        self.assertNotIn("Birch", row["detail"])
+
+    def test_the_party_member_is_the_one_from_the_subjects_family(self):
+        runs = self.two_runs()
+        extra = [seen_in("Birch", event_id=501), seen_in("Dogwood", event_id=502)]
+        (row,) = self.loot_plan(
+            only("Birch", "Dogwood"), extra=extra, runs=runs, who="Cedar"
+        )
+        self.assertEqual("wddogwood", row["stream_path"])
+        self.assertIn("view: Dogwood (party member)", row["detail"])
+
+    def test_presence_does_not_cross_families(self):
+        extra = [seen_in("Cedar", event_id=501)]
+        (row,) = self.loot_plan(
+            only("Cedar"), extra=extra, runs=[run(leader="Alder")], who="Birch"
+        )
+        self.assertEqual("no_view", row["state"])
+        self.assertEqual("", row["stream_path"])
+
+    def test_an_unknown_family_with_one_matching_run_keeps_the_old_behavior(self):
+        (row,) = self.loot_plan(
+            only("Alder"), runs=[run(leader="Alder")], families={}, who="Cedar"
+        )
+        self.assertEqual("wdalder", row["stream_path"])
+
+    def test_an_unknown_family_with_two_matching_runs_is_ambiguous(self):
+        (row,) = self.loot_plan(only("Alder", "Cedar"), families={}, who="Dogwood")
+        self.assertEqual("no_view", row["state"])
+        self.assertEqual("", row["stream_path"])
+        self.assertIn("run ambiguous", row["detail"])
+
+    def test_a_clear_does_not_borrow_a_view_from_the_other_family(self):
+        clear = {
+            "map_id": MAP,
+            "dungeon": "T",
+            "leader": "Alder",
+            "members": ["Alder", "Birch", "Cedar"],
+            "at": NOW - timedelta(minutes=3),
+        }
+        (row,) = plan(
+            cleared_runs=[clear],
+            roster=FAMILY,
+            families=TWO_FAMILIES,
+            path_of=only("Cedar"),
+        )
+        self.assertEqual("no_view", row["state"])
+        self.assertIn("no streamed family member in the run", row["detail"])
+
+
+class TiedFirstKillTests(unittest.TestCase):
+    def kill(self, event_id, who, at):
+        return {
+            "id": event_id,
+            "character_name": who,
+            "kind": "boss_kill",
+            "subject_id": 5,
+            "subject_name": "Boss 5",
+            "first_seen": at,
+        }
+
+    def tie(self, order):
+        at = NOW - timedelta(minutes=3)
+        return [self.kill(i, who, at) for i, who in enumerate(order, 1)]
+
+    def test_a_tie_picks_the_streamed_member_whatever_the_row_order(self):
+        for order in (["Alder", "Birch", "Cedar"], ["Cedar", "Birch", "Alder"]):
+            (row,) = plan(
+                event_rows=self.tie(order), roster=FAMILY, path_of=only("Birch")
+            )
+            self.assertEqual("Birch", row["character"], order)
+            self.assertEqual("wdbirch", row["stream_path"])
+
+    def test_a_tie_among_streamed_members_picks_roster_order(self):
+        for order in (["Cedar", "Birch"], ["Birch", "Cedar"]):
+            (row,) = plan(
+                event_rows=self.tie(order),
+                roster=FAMILY,
+                path_of=only("Birch", "Cedar"),
+            )
+            self.assertEqual("Birch", row["character"], order)
+
+    def test_a_tie_with_no_streamed_member_still_picks_by_roster_order(self):
+        (row,) = plan(
+            event_rows=self.tie(["Cedar", "Birch"]), roster=FAMILY, path_of=only()
+        )
+        self.assertEqual("Birch", row["character"])
+        self.assertEqual("no_view", row["state"])
+
+    def test_an_earlier_row_beats_a_streamed_later_one(self):
+        early = self.kill(1, "Alder", NOW - timedelta(minutes=4))
+        late = self.kill(2, "Birch", NOW - timedelta(minutes=3))
+        (row,) = plan(event_rows=[late, early], roster=FAMILY, path_of=only("Birch"))
+        self.assertEqual("Alder", row["character"])
+
+
+class ShelfViewOwnerTests(unittest.TestCase):
+    def shelf_of(self, **over):
+        row = {
+            "id": 1,
+            "kind": "loot",
+            "character": "Cedar",
+            "event_at": NOW,
+            "state": "ready",
+            "file_name": "clip-1-loot.mp4",
+            "stream_path": "wdalder",
+            "detail": "",
+        }
+        row.update(over)
+        (clip,) = clipledger.shelf([row])["clips"]
+        return clip
+
+    def test_a_clip_from_the_leaders_view_names_the_leader(self):
+        clip = self.shelf_of(detail="Test Blade; view: Alder (leader)")
+        self.assertEqual("Alder", clip["view_owner"])
+        self.assertEqual("Cedar", clip["character"])
+
+    def test_a_clip_from_a_party_members_view_names_that_member(self):
+        clip = self.shelf_of(detail="view: Birch (party member)")
+        self.assertEqual("Birch", clip["view_owner"])
+
+    def test_a_trailing_note_after_the_view_does_not_hide_the_owner(self):
+        clip = self.shelf_of(detail="Test Blade; view: Alder (leader) | dark 1 of 5")
+        self.assertEqual("Alder", clip["view_owner"])
+
+    def test_a_clip_from_the_subjects_own_view_names_the_subject(self):
+        clip = self.shelf_of(detail="Test Blade")
+        self.assertEqual("Cedar", clip["view_owner"])
 
 
 class RestartAndBackfillTests(unittest.TestCase):
