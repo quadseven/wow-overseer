@@ -550,8 +550,66 @@ def vendor_stops(rows, side: int = 0) -> list:
     return out
 
 
+# GROUND THE FAMILY DIED ON IS NOT A WALK (wow-overseer#2271). The nearest vendor
+# was chosen by straight-line yards alone, and the walk to it crossed ground
+# where the family had died that day; the leader died on it again and the
+# module ended the errand. A stop with this many of the family's recent deaths
+# within DEATH_CORRIDOR_YARDS of the line from the head to it is passed over.
+DEATHS_MAKE_A_STOP_LETHAL = 2
+DEATH_CORRIDOR_YARDS = 300.0
+
+
+def _near_line(spot: dict, a: dict, b: dict) -> float:
+    """Yards from `spot` to the segment a-b on one map; inf on another map."""
+    try:
+        if int(spot.get("map_id")) != int(a.get("map_id")):
+            return float("inf")
+        px, py = float(spot["x"]), float(spot["y"])
+        ax, ay = float(a["x"]), float(a["y"])
+        bx, by = float(b["x"]), float(b["y"])
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return float("inf")
+    dx, dy = bx - ax, by - ay
+    span = dx * dx + dy * dy
+    t = 0.0 if span == 0 else ((px - ax) * dx + (py - ay) * dy) / span
+    t = max(0.0, min(1.0, t))
+    return ((px - ax - t * dx) ** 2 + (py - ay - t * dy) ** 2) ** 0.5
+
+
+def _deaths_along(stop: dict, here: dict, deaths) -> int:
+    return sum(
+        1 for d in deaths or () if _near_line(d, here, stop) <= DEATH_CORRIDOR_YARDS
+    )
+
+
+def lethal_stop(stop: dict, here: dict, deaths) -> bool:
+    """Whether the family's recent deaths ({map_id, x, y}) lie along the line
+    from `here` to `stop`. Straight-line, as the rest of the aim choice is: it
+    knows deaths, not routes. The line starts where the head stands, so deaths
+    within the corridor of the head count against every stop on the map and the
+    family hearths instead, which is intended."""
+    return _deaths_along(stop, here, deaths) >= DEATHS_MAKE_A_STOP_LETHAL
+
+
+def lethal_stops(stops, here: dict, deaths) -> list:
+    """[(stop, deaths along the walk)] for every stop `lethal_stop` passes
+    over, so the bridge can say each one. Pure."""
+    out = []
+    for stop in stops or ():
+        count = _deaths_along(stop, here, deaths)
+        if count >= DEATHS_MAKE_A_STOP_LETHAL:
+            out.append((stop, count))
+    return out
+
+
 def choose_aim(
-    hub: dict, stops, leader_at, why: str, released=(), now: float = 0.0
+    hub: dict,
+    stops,
+    leader_at,
+    why: str,
+    released=(),
+    now: float = 0.0,
+    deaths=(),
 ) -> dict:
     """The errand's aim: `hub` (choose_hub), or a nearer vendor stop.
 
@@ -581,7 +639,9 @@ def choose_aim(
     near = [
         (_planar(s, here), i, s)
         for i, s in enumerate(stops or ())
-        if _same_map(s, leader_at) and not _was_released(s, released, now)
+        if _same_map(s, leader_at)
+        and not _was_released(s, released, now)
+        and not lethal_stop(s, here, deaths)
     ]
     if not near:
         return hub
