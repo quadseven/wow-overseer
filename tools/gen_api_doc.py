@@ -149,7 +149,11 @@ def render(items: list[dict]) -> str:
         "an upload is capped at 128 MiB, must start with an MP4 `ftyp` box, is",
         "saved only under a name derived from the row, and never overwrites an",
         "existing file; a note or reason may not contain the planner's `view:`",
-        "marker. Keep the port on a network that only trusted hosts can reach.",
+        "marker. An upload is refused (404 or 409) before its body is read unless",
+        "the row is `cutting` with no file; at most 2 uploads run at once (a third",
+        "answers 503); the body must arrive within 600 seconds, and no single read",
+        "may wait over 30 seconds (408). No database connection is held while the",
+        "body is read. Keep the port on a network that only trusted hosts can reach.",
         "",
     ]
     for e in items:

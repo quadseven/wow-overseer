@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import threading
 import time
 from datetime import datetime
 
@@ -24,6 +25,11 @@ MAX_PATHS = 20
 MAX_NOTE = 200
 # The whole body must arrive within this many seconds (wall clock).
 UPLOAD_SECONDS = 600
+# No single read may wait longer than this, or longer than what is left.
+IDLE_SECONDS = 30
+# Uploads in flight at once; one more answers 503 (as the chat route caps calls).
+MAX_UPLOADS = 2
+_SLOTS = threading.BoundedSemaphore(MAX_UPLOADS)
 
 NO_DIR = "The clip folder is not set up on this site, so the cutter API is off."
 
@@ -185,73 +191,142 @@ def result(cur, raw_id, state, reason):
 
 
 def _discard(path):
+    if path is None:
+        return
     try:
         os.unlink(path)
     except OSError:
         pass
 
 
-def stage(rfile, length, root, clock=time.monotonic):
+class _Late(TimeoutError):
+    pass
+
+
+def _no_bound(_seconds):
+    """The default socket seam: nothing to set."""
+
+
+def stage(rfile, length, root, clock=time.monotonic, bound=_no_bound):
     """Read the whole body into a temporary file in `root`, touching no
     database. Returns (path, None), or (None, refusal) with nothing left behind.
 
-    The checks that need only the body come first: length, cap, ftyp box. A
-    stalled or slow sender is cut off by the socket timeout (TimeoutError) or
-    by the wall-clock deadline, and answers 408."""
+    The checks that need only the body come first: length, cap, ftyp box.
+    EVERY read is bounded. Before it, `bound(seconds)` sets the socket timeout
+    to the smaller of IDLE_SECONDS and what is left of UPLOAD_SECONDS, and the
+    deadline is checked. A read returns once any data arrives (read1), so a
+    sender trickling bytes is cut off at the deadline. A timeout answers 408."""
     if length <= 0:
         return None, _err(400, "The body is empty; send the MP4 as the request body.")
     if length > MAX_UPLOAD:
         return None, _err(
             413, "The clip is over the %d MiB limit." % (MAX_UPLOAD // (1024 * 1024))
         )
-    late = _err(408, "The body did not arrive in time; send it faster or in one go.")
     deadline = clock() + UPLOAD_SECONDS
+    pull = getattr(rfile, "read1", None) or rfile.read
+
+    def take(n):
+        left = deadline - clock()
+        if left <= 0:
+            raise _Late("deadline")
+        bound(min(IDLE_SECONDS, left))
+        return pull(n)
+
+    short = _err(400, "The body ended before its stated length.")
+    tmp = None
     try:
-        head = rfile.read(min(length, CHUNK))
-    except OSError:
-        return None, late
-    if not is_mp4(head):
-        return None, _err(
-            400, "The body is not an MP4 file (no ftyp box at the start)."
-        )
-    fd, tmp = tempfile.mkstemp(prefix=".upload-", suffix=".part", dir=root)
-    try:
+        head = b""
+        while len(head) < min(length, 8):
+            got = take(min(CHUNK, length - len(head)))
+            if not got:
+                return None, short
+            head += got
+        if not is_mp4(head):
+            return None, _err(
+                400, "The body is not an MP4 file (no ftyp box at the start)."
+            )
+        fd, tmp = tempfile.mkstemp(prefix=".upload-", suffix=".part", dir=root)
         with os.fdopen(fd, "wb") as out:
             out.write(head)
             left = length - len(head)
             while left > 0:
-                if clock() > deadline:
-                    raise TimeoutError("deadline")
-                chunk = rfile.read(min(CHUNK, left))
+                chunk = take(min(CHUNK, left))
                 if not chunk:
-                    _discard(tmp)
-                    return None, _err(400, "The body ended before its stated length.")
+                    raise EOFError("short")
                 out.write(chunk)
                 left -= len(chunk)
+    except EOFError:
+        _discard(tmp)
+        return None, short
     except OSError:
         _discard(tmp)
-        return None, late
+        return None, _err(
+            408, "The body did not arrive in time; send it faster or in one go."
+        )
     except BaseException:
         _discard(tmp)
         raise
     return tmp, None
 
 
-def upload(connect, raw_id, rfile, length, root, raw_note, clock=time.monotonic):
+def _precheck(connect, raw_id, root):
+    """A short read-only look, connection closed before the body is read: the
+    row exists, is cutting and has no file. A cheap filter; the conditional
+    UPDATE after the body is still the gate. Returns a refusal or None."""
+    with connect() as cur:
+        row, refusal = _find(cur, raw_id)
+    if refusal:
+        return refusal
+    if row["state"] != "cutting":
+        return _moved(row)
+    name = file_name(row["id"], row["kind"])
+    if row.get("file_name") or (name and os.path.lexists(os.path.join(root, name))):
+        return _err(409, _EXISTS)
+    return None
+
+
+_EXISTS = "A file for that clip is already saved and is never overwritten."
+
+
+def upload(
+    connect,
+    raw_id,
+    rfile,
+    length,
+    root,
+    raw_note,
+    clock=time.monotonic,
+    bound=_no_bound,
+):
     """POST /api/clips/file: `length` bytes of MP4 from `rfile` into `root`
     under the name the row gives, then the row becomes ready.
 
-    `connect()` opens a database cursor as a context manager. It is called only
-    after the whole body is on disk, so a slow sender never holds a connection.
-    The temporary file is linked into place, which fails if the name exists, so
-    an existing file is never overwritten. A row that moved on while the body
+    At most MAX_UPLOADS run at once (503 past that). The row is checked first
+    with a short read; then the whole body lands in a temporary file with no
+    connection held; then `connect()` opens a cursor only for the conditional
+    UPDATE and the link into place. The link fails if the name exists, so an
+    existing file is never overwritten. A row that moved on while the body
     streamed loses its new file."""
     if parse_id(raw_id) is None:
         return _err(400, "The id must be a whole number above zero, as id=N.")
     note = clean_note(raw_note)
     if spoofs_view(note):
         return _err(400, _SPOOF)
-    tmp, refusal = stage(rfile, length, root, clock)
+    if length > MAX_UPLOAD:
+        return stage(rfile, length, root, clock, bound)[1]
+    if not _SLOTS.acquire(blocking=False):
+        return _err(503, "Too many uploads are running; try again shortly.")
+    try:
+        return _store(connect, raw_id, rfile, length, root, note, clock, bound)
+    finally:
+        _SLOTS.release()
+
+
+def _store(connect, raw_id, rfile, length, root, note, clock, bound):
+    refusal = _precheck(connect, raw_id, root)
+    if refusal:
+        return refusal
+    tmp, refusal = stage(rfile, length, root, clock, bound)
     if refusal:
         return refusal
     try:
@@ -267,15 +342,12 @@ def upload(connect, raw_id, rfile, length, root, raw_note, clock=time.monotonic)
                     409, "That clip request has a kind that cannot be saved as a file."
                 )
             target = os.path.join(root, name)
-            exists = _err(
-                409, "A file for that clip is already saved and is never overwritten."
-            )
             if os.path.lexists(target):
-                return exists
+                return _err(409, _EXISTS)
             try:
                 os.link(tmp, target)
             except FileExistsError:
-                return exists
+                return _err(409, _EXISTS)
             try:
                 cur.execute(_READY, (name, note, row["id"]))
                 landed = cur.rowcount

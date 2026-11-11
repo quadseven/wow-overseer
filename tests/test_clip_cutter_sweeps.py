@@ -5,6 +5,7 @@ import os
 import pathlib
 import sys
 import tempfile
+import threading
 import unittest
 from datetime import timedelta
 from unittest import mock
@@ -172,103 +173,245 @@ class Upload(unittest.TestCase):
         class Counting(io.BytesIO):
             biggest = 0
 
-            def read(self, n=-1):
+            def read1(self, n=-1):
                 Counting.biggest = max(Counting.biggest, n)
-                return super().read(n)
+                return super().read1(n)
 
-        ledger = CutterLedger([clip_row(state="cutting")])
+        ledger = CutterLedger([clip_row(state="cutting", file_name=None)])
         code, _p = clipcutter.upload(
             lambda: ledger, "1", Counting(body), len(body), tmp.name, ""
         )
         self.assertEqual(code, 200)
-        self.assertLessEqual(Counting.biggest, clipcutter.CHUNK)
+        self.assertTrue(0 < Counting.biggest <= clipcutter.CHUNK)
         self.assertEqual(os.listdir(tmp.name), ["clip-1-loot.mp4"])
 
-    def test_a_short_body_leaves_no_file(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        body = b"\x00\x00\x00\x18ftypisom" + b"\x01" * 100
-        ledger = CutterLedger([clip_row(state="cutting")])
-        code, payload = clipcutter.upload(
-            lambda: ledger, "1", io.BytesIO(body), len(body) + 500, tmp.name, ""
-        )
-        self.assertEqual(code, 400)
-        self.assertIn("error", payload)
-        self.assertEqual(os.listdir(tmp.name), [])
-        self.assertEqual(ledger.rows[0]["state"], "cutting")
+
+class Conn:
+    """A connection factory that counts opens and the connections live now."""
+
+    def __init__(self, ledger):
+        self.ledger = ledger
+        self.opened = 0
+        self.live = 0
+
+    def __call__(self):
+        return self
+
+    def __enter__(self):
+        self.opened += 1
+        self.live += 1
+        return self.ledger
+
+    def __exit__(self, *exc):
+        self.live -= 1
+        return False
 
 
-class TheBodyIsReadBeforeTheDatabaseIsOpened(unittest.TestCase):
+class UploadCase(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.dir = tmp.name
-        self.ledger = CutterLedger([clip_row(state="cutting")])
-        self.opened = 0
-
-    def connect(self):
-        self.opened += 1
-        return self.ledger
+        self.ledger = CutterLedger([clip_row(state="cutting", file_name=None)])
+        self.conn = Conn(self.ledger)
 
     def upload(self, rfile, length, **kw):
-        return clipcutter.upload(self.connect, "1", rfile, length, self.dir, "", **kw)
+        return clipcutter.upload(self.conn, "1", rfile, length, self.dir, "", **kw)
 
-    def test_no_connection_exists_while_the_body_is_read(self):
+
+class TheBodyIsReadBeforeTheDatabaseIsOpened(UploadCase):
+    def test_no_connection_is_live_while_the_body_is_read(self):
         body = b"\x00\x00\x00\x18ftypisom" + b"\x01" * 200000
         seen = []
 
         class Watching(io.BytesIO):
-            def read(inner, n=-1):
-                seen.append(self.opened)
-                return super().read(n)
+            def read1(inner, n=-1):
+                seen.append(self.conn.live)
+                return super().read1(n)
 
         code, _p = self.upload(Watching(body), len(body))
         self.assertEqual(code, 200)
         self.assertTrue(seen)
         self.assertEqual(set(seen), {0})
-        self.assertEqual(self.opened, 1)
+        self.assertEqual(self.conn.opened, 2)  # the pre-check, then the commit
 
-    def test_a_refused_body_never_opens_a_connection(self):
+    def test_a_not_mp4_body_leaves_nothing(self):
         code, _p = self.upload(io.BytesIO(b"GIF89a" + b"\x00" * 40), 46)
-        self.assertEqual((code, self.opened), (400, 0))
+        self.assertEqual(code, 400)
         self.assertEqual(os.listdir(self.dir), [])
 
     def test_a_short_body_leaves_no_temp_file(self):
         body = b"\x00\x00\x00\x18ftypisom" + b"\x01" * 100
         code, _p = self.upload(io.BytesIO(body), len(body) + 500)
-        self.assertEqual((code, self.opened), (400, 0))
+        self.assertEqual((code, self.conn.opened), (400, 1))
         self.assertEqual(os.listdir(self.dir), [])
 
     def test_a_stalled_sender_times_out_with_a_4xx_and_no_temp_file(self):
         class Stalls(io.BytesIO):
-            def read(self, n=-1):
+            def read1(self, n=-1):
                 if self.tell() > 100:
                     raise TimeoutError("timed out")
-                return super().read(min(n, 50))
+                return super().read1(min(n, 50))
 
         body = b"\x00\x00\x00\x18ftypisom" + b"\x01" * 5000
         code, payload = self.upload(Stalls(body), len(body))
-        self.assertEqual((code, self.opened), (408, 0))
+        self.assertEqual((code, self.conn.opened), (408, 1))
         self.assertIn("error", payload)
-        self.assertEqual(os.listdir(self.dir), [])
-
-    def test_a_body_past_the_wall_clock_deadline_is_408_and_leaves_nothing(self):
-        ticks = iter(range(0, 10000, 400))
-        body = b"\x00\x00\x00\x18ftypisom" + b"\x01" * 300000
-        code, _p = self.upload(io.BytesIO(body), len(body), clock=lambda: next(ticks))
-        self.assertEqual((code, self.opened), (408, 0))
         self.assertEqual(os.listdir(self.dir), [])
 
     def test_a_note_with_a_view_marker_is_refused_before_anything_is_read(self):
         class Never(io.BytesIO):
-            def read(self, n=-1):
+            def read1(self, n=-1):
                 raise AssertionError("the body was read")
 
         code, payload = clipcutter.upload(
-            self.connect, "1", Never(b"x"), 1, self.dir, "view:Other"
+            self.conn, "1", Never(b"x"), 1, self.dir, "view:Other"
         )
-        self.assertEqual((code, self.opened), (400, 0))
+        self.assertEqual((code, self.conn.opened), (400, 0))
         self.assertIn("error", payload)
+
+
+class Trickle:
+    """A sender that gives one byte a call and takes a fake second for each."""
+
+    def __init__(self, body, clock):
+        self.body, self.at, self.clock = body, 0, clock
+        self.reads = 0
+
+    def read1(self, n=-1):
+        self.reads += 1
+        self.clock.now += 1
+        chunk = self.body[self.at : self.at + 1]
+        self.at += len(chunk)
+        return chunk
+
+
+class FakeClock:
+    now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+class EveryReadIsBounded(UploadCase):
+    def test_a_trickling_sender_is_cut_off_at_the_deadline(self):
+        clock = FakeClock()
+        body = b"\x00\x00\x00\x18ftypisom" + b"\x01" * 100000
+        sender = Trickle(body, clock)
+        code, payload = self.upload(sender, len(body), clock=clock)
+        self.assertEqual(code, 408)
+        self.assertIn("error", payload)
+        self.assertLessEqual(clock.now, clipcutter.UPLOAD_SECONDS + 2)
+        self.assertLess(sender.reads, 700)
+        self.assertEqual(os.listdir(self.dir), [])
+
+    def test_the_socket_timeout_never_outlives_the_deadline(self):
+        clock = FakeClock()
+        body = b"\x00\x00\x00\x18ftypisom" + b"\x01" * 100000
+        timeouts = []
+
+        def bound(seconds):
+            timeouts.append((seconds, clipcutter.UPLOAD_SECONDS - clock.now))
+
+        self.upload(Trickle(body, clock), len(body), clock=clock, bound=bound)
+        self.assertTrue(timeouts)
+        for seconds, remaining in timeouts:
+            self.assertGreater(seconds, 0)
+            self.assertLessEqual(seconds, clipcutter.IDLE_SECONDS)
+            self.assertLessEqual(seconds, remaining + 1e-9)
+        self.assertLess(timeouts[-1][0], clipcutter.IDLE_SECONDS)
+
+    def test_an_expired_deadline_before_the_first_read_reads_nothing(self):
+        clock = FakeClock()
+        ticks = iter([0.0, 10**6, 10**6, 10**6])
+
+        class Never:
+            def read1(self, n=-1):
+                raise AssertionError("read after the deadline")
+
+        code, _p = self.upload(Never(), 100, clock=lambda: next(ticks))
+        self.assertEqual(code, 408)
+        self.assertEqual(clock.now, 0.0)
+
+
+class AnUploadForTheWrongRowReadsNoBody(UploadCase):
+    def refused(self, rows, expect):
+        self.ledger.rows[:] = rows
+        self.conn.opened = 0
+
+        class Never:
+            def read1(self, n=-1):
+                raise AssertionError("the body was read")
+
+            read = read1
+
+        code, payload = self.upload(Never(), 4096)
+        self.assertEqual(code, expect)
+        self.assertIn("error", payload)
+        self.assertEqual(os.listdir(self.dir), [])
+        self.assertEqual(self.conn.live, 0)
+        self.assertEqual(self.conn.opened, 1)
+
+    def test_a_pending_row(self):
+        self.refused([clip_row(state="pending", file_name=None)], 409)
+
+    def test_a_ready_row_or_a_row_that_already_has_a_file(self):
+        self.refused([clip_row(state="ready")], 409)
+        self.refused([clip_row(state="cutting")], 409)
+
+    def test_an_unknown_id(self):
+        self.refused([clip_row(id=7, state="cutting", file_name=None)], 404)
+
+    def test_a_file_already_on_disk(self):
+        with open(os.path.join(self.dir, "clip-1-loot.mp4"), "wb") as f:
+            f.write(b"original")
+        self.ledger.rows[0]["file_name"] = None
+        code, _p = self.upload(io.BytesIO(b"x"), 1)
+        self.assertEqual(code, 409)
+        self.assertEqual(os.listdir(self.dir), ["clip-1-loot.mp4"])
+
+
+class ConcurrentUploadsAreCapped(UploadCase):
+    def test_a_third_concurrent_upload_is_503(self):
+        gate = threading.Event()
+        entered = threading.Semaphore(0)
+        body = b"\x00\x00\x00\x18ftypisom" + b"\x01" * 100
+
+        class Blocked(io.BytesIO):
+            def read1(self, n=-1):
+                entered.release()
+                gate.wait(10)
+                return super().read1(n)
+
+        results = []
+        threads = [
+            threading.Thread(
+                target=lambda: results.append(self.upload(Blocked(body), len(body))[0])
+            )
+            for _ in range(clipcutter.MAX_UPLOADS)
+        ]
+        for t in threads:
+            t.start()
+        for _ in threads:
+            self.assertTrue(entered.acquire(timeout=10))
+
+        class Never:
+            def read1(self, n=-1):
+                raise AssertionError("the body was read")
+
+        code, payload = self.upload(Never(), 100)
+        gate.set()
+        for t in threads:
+            t.join(10)
+        self.assertEqual(code, 503)
+        self.assertIn("error", payload)
+        self.assertEqual(clipcutter.MAX_UPLOADS, 2)
+        self.assertEqual(len(results), 2)
+
+    def test_a_slot_is_given_back_after_every_outcome(self):
+        for _ in range(clipcutter.MAX_UPLOADS + 3):
+            code, _p = self.upload(io.BytesIO(b"GIF89a" + b"\x00" * 40), 46)
+            self.assertEqual(code, 400)
 
 
 class AMarkerInANoteCannotMoveTheView(unittest.TestCase):
@@ -278,7 +421,7 @@ class AMarkerInANoteCannotMoveTheView(unittest.TestCase):
         self.assertFalse(clipcutter.spoofs_view("cut late, preview ok"))
 
     def test_a_reason_with_a_marker_is_refused_by_result(self):
-        ledger = CutterLedger([clip_row(state="cutting")])
+        ledger = CutterLedger([clip_row(state="cutting", file_name=None)])
         code, _p = clipcutter.result(ledger, "1", "failed", "view: Zug (leader)")
         self.assertEqual(code, 400)
         self.assertEqual(ledger.rows[0]["state"], "cutting")

@@ -4609,10 +4609,6 @@ def _clip_cursor():
         yield cur
 
 
-# A sender that sends nothing for this long loses its upload (seconds).
-_CUTTER_IDLE_SECONDS = 30
-
-
 def sweep_clips() -> dict:
     """The sweeps that hold whether or not any stream is live: a cutting row
     whose cutter went silent fails, and an expired row loses its file. Without
@@ -7225,10 +7221,10 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             length = -1
-        self.connection.settimeout(_CUTTER_IDLE_SECONDS)
         self._cutter_call(lambda connect, q, root: clipcutter.upload(
             connect, q.get("id", [""])[0], self.rfile, length, root,
-            q.get("note", [""])[0]), late=True)
+            q.get("note", [""])[0], bound=self.connection.settimeout),
+            late=True)
 
     def _clips_result(self) -> None:
         """POST /api/clips/result?id=N&state=no_view|failed&reason=X - a drop, from a
