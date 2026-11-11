@@ -3,16 +3,19 @@
 // The stream can be connected and still show nothing: a minimized game client,
 // an asleep display, or a loading screen all produce valid black frames that
 // read as healthy because the video keeps arriving. This samples the rendered
-// video and reports when the mean brightness stays below a small threshold for
+// video and reports when its brightest tenth stays below a small threshold for
 // a few frames, so the panel can say why instead of "LIVE".
 //
 // The sampler is deliberately cheap: a small canvas, a luma average, and a
 // short streak. It does not try to guess the exact cause from pixels alone;
 // waking or re-aiming the client is the infra agent's job.
 
-// A mean luma below this is treated as black. 18/255 is just above a fully
-// black loading screen but well below any normal scene.
-export const DARK_THRESHOLD = 18;
+// A picture is black when even its brightest tenth is dim: the 90th percentile
+// of pixel luma below this. A mean cannot tell a dark room from an empty
+// picture: a family view inside a dungeon sat near a mean of 22 to 35 for
+// minutes, dipped as low as 16.5, and still held a real scene whose 90th
+// percentile never fell below 38. A fully black loading screen reads near 0.
+export const DARK_HIGH_THRESHOLD = 20;
 
 // How many consecutive dark samples are needed before the panel changes.
 // At SAMPLE_INTERVAL_MS this is about 1.5 s, long enough to ignore a single
@@ -22,19 +25,25 @@ export const DARK_STREAK = 3;
 export const SAMPLE_INTERVAL_MS = 500;
 export const SAMPLE_WIDTH = 96;
 
-// The luma of an ImageData object, 0-255, or 0 for an empty buffer.
-export function meanBrightness(imageData) {
+// The luma at the bottom of an ImageData's brightest tenth of pixels, 0-255:
+// the sorted lumas read at index floor(0.9 n), so "the brightest tenth sits at
+// 39 or more" reads 39 or more. 0 for an empty buffer.
+export function highBrightness(imageData) {
   const data = imageData && imageData.data;
   if (!data || !data.length) return 0;
-  let sum = 0;
-  for (let i = 0; i < data.length; i += 4) {
-    sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+  const count = Math.floor(data.length / 4);
+  if (!count) return 0;
+  const luma = new Float64Array(count);
+  for (let i = 0; i < count; i++) {
+    const j = i * 4;
+    luma[i] = 0.299 * data[j] + 0.587 * data[j + 1] + 0.114 * data[j + 2];
   }
-  return sum / (data.length / 4);
+  luma.sort();
+  return luma[Math.min(count - 1, Math.floor(count * 0.9))];
 }
 
-export function isDarkFrame(imageData, threshold = DARK_THRESHOLD) {
-  return meanBrightness(imageData) < threshold;
+export function isDarkFrame(imageData, threshold = DARK_HIGH_THRESHOLD) {
+  return highBrightness(imageData) < threshold;
 }
 
 // What the panel says when the picture is dark. The exact cause (asleep
@@ -67,7 +76,7 @@ export function badgeWord(state, stalled) {
 // Sample a <video> and call onChange(dark) when the picture becomes or stops
 // being dark. Returns {start, stop}. Safe to call start() repeatedly.
 export function darkSampler(video, onChange, options = {}) {
-  const threshold = options.threshold ?? DARK_THRESHOLD;
+  const threshold = options.threshold ?? DARK_HIGH_THRESHOLD;
   const streak = options.streak ?? DARK_STREAK;
   const interval = options.interval ?? SAMPLE_INTERVAL_MS;
   const width = options.width ?? SAMPLE_WIDTH;

@@ -28,8 +28,21 @@ def run(module, script):
     )
 
 
+# A frame of `n` grey pixels per level, as the sampler's ImageData would hold it.
+FRAMES = r"""
+const grey = (...runs) => {
+  const px = [];
+  for (const [count, v] of runs) for (let i = 0; i < count; i++) px.push(v, v, v, 255);
+  return {data: new Uint8ClampedArray(px), width: px.length / 4, height: 1};
+};
+"""
+
+
 @NODE
-class MeanBrightness(unittest.TestCase):
+class HighBrightness(unittest.TestCase):
+    """A picture is black when even its brightest tenth is dim; a mean cannot
+    tell a dark room from an empty picture (#2240)."""
+
     def test_a_black_frame_is_dark(self):
         got = run(
             "dark.js",
@@ -44,19 +57,52 @@ class MeanBrightness(unittest.TestCase):
         )
         self.assertFalse(got)
 
-    def test_mean_brightness_uses_luma(self):
+    def test_a_dim_dungeon_with_a_lit_tenth_is_not_dark(self):
+        # Mean 16.5 (under the old 18 line); ninety pixels at 14, ten at 39.
+        got = run(
+            "dark.js",
+            "(() => {" + FRAMES + "const f = grey([90, 14], [10, 39]);"
+            " return [M.isDarkFrame(f), M.highBrightness(f)]; })()",
+        )
+        self.assertFalse(got[0])
+        self.assertAlmostEqual(got[1], 39, places=6)
+
+    def test_the_line_sits_between_uniform_nineteen_and_twenty_one(self):
+        got = run(
+            "dark.js",
+            "(() => {" + FRAMES + "return [M.isDarkFrame(grey([50, 19])),"
+            " M.isDarkFrame(grey([50, 21]))]; })()",
+        )
+        self.assertEqual(got, [True, False])
+
+    def test_a_dark_picture_with_one_bright_pixel_is_still_dark(self):
+        # One pixel in a hundred is not the brightest tenth.
+        got = run(
+            "dark.js",
+            "(() => {" + FRAMES + "return M.isDarkFrame(grey([99, 2], [1, 255])); })()",
+        )
+        self.assertTrue(got)
+
+    def test_high_brightness_uses_luma(self):
         # Pure blue has low luma; pure yellow has high luma.
         got = run(
             "dark.js",
-            "[M.meanBrightness({data: new Uint8ClampedArray([0,0,255,255]), width: 1, height: 1}),"
-            " M.meanBrightness({data: new Uint8ClampedArray([255,255,0,255]), width: 1, height: 1})]",
+            "[M.highBrightness({data: new Uint8ClampedArray([0,0,255,255]), width: 1, height: 1}),"
+            " M.highBrightness({data: new Uint8ClampedArray([255,255,0,255]), width: 1, height: 1})]",
         )
         self.assertLess(got[0], got[1])
 
-    def test_the_threshold_is_a_small_number(self):
-        got = run("dark.js", "M.DARK_THRESHOLD")
-        self.assertGreater(got, 0)
-        self.assertLess(got, 50)
+    def test_an_empty_buffer_reads_as_it_did(self):
+        got = run(
+            "dark.js",
+            "[M.highBrightness({data: new Uint8ClampedArray([]), width: 0, height: 0}),"
+            " M.highBrightness(null), M.isDarkFrame(null)]",
+        )
+        self.assertEqual(got, [0, 0, True])
+
+    def test_the_threshold_is_twenty_and_the_mean_line_is_gone(self):
+        got = run("dark.js", "[M.DARK_HIGH_THRESHOLD, typeof M.DARK_THRESHOLD, typeof M.meanBrightness]")
+        self.assertEqual(got, [20, "undefined", "undefined"])
 
 
 @NODE
