@@ -603,6 +603,71 @@ def hammer_errand(
     )
 
 
+def gather_tool_errand(
+    name: str,
+    trades: frozenset,
+    held: frozenset,
+    money: int,
+    free_slots: int,
+    town: "towntrip.Town",
+    tools: dict,
+    tool_entries: dict,
+) -> tuple["towntrip.Errand | None", "str | None"]:
+    """The buy errand for the gathering tool a held trade lacks, or why not.
+
+    `hammer_errand`'s shape, with no standing craft: the trade being held is
+    the whole condition. `tools` and `tool_entries` are guildjobs.TOOLS and
+    guildjobs.TOOL_ENTRIES, passed in because guildjobs imports this module.
+    `held` holds every item entry carried in the bags or banked. The first
+    trade without its tool decides, so a member short of two tools is sold
+    the first now and the second on a later pass.
+    """
+    for skill, (entry, label, price) in tools.items():
+        if skill not in trades or held & tool_entries[skill]:
+            continue
+        if entry not in town.stocks:
+            return None, f"no reachable vendor stocks a {label} ({entry}) for {name}"
+        if free_slots < 1:
+            return None, f"{name} has no free bag slot for a {label}"
+        if money < price:
+            return (
+                None,
+                f"{name} cannot afford a {label} ({price} copper against {money})",
+            )
+        return (
+            towntrip.Errand(
+                name,
+                "buy",
+                f"entry:{entry} count:1 max:{price}",
+                f"holds the trade for a {label} and carries none in bags or bank",
+                price,
+            ),
+            None,
+        )
+    return None, None
+
+
+def gather_tool_need(
+    name: str,
+    trades: frozenset,
+    held: frozenset,
+    town: "towntrip.Town",
+    tools: dict,
+    tool_entries: dict,
+) -> "Need | None":
+    """The trip this member's gathering tool needs, or None.
+
+    `gather_tool_errand`'s sibling, as `hammer_need` is `hammer_errand`'s:
+    the trade is held, no tool of it is carried or banked, and no counter in
+    reach stocks it. The first such trade, as in the errand.
+    """
+    for skill, (entry, label, _price) in tools.items():
+        if skill not in trades or held & tool_entries[skill]:
+            continue
+        return None if entry in town.stocks else Need(name, entry, label)
+    return None
+
+
 def hammer_need(
     name: str, craft_spell: int, holds_hammer: bool, town: "towntrip.Town"
 ) -> "Need | None":
