@@ -127,11 +127,14 @@ def history_row(event):
 class Realm:
     """The realm reads, patched: narrow candidates and the history read."""
 
-    def __init__(self, loot=(), events=(), runs=(), history_events=(), cleared=()):
+    def __init__(
+        self, loot=(), events=(), runs=(), history_events=(), cleared=(), open_runs=()
+    ):
         self.candidates = {
             "loot_rows": list(loot),
             "event_rows": list(events),
             "run_rows": list(runs),
+            "open_run_rows": list(open_runs),
             "now": NOW,
         }
         self.history = {
@@ -150,7 +153,7 @@ class Realm:
         return self.history
 
 
-def scan(store, realm, roster=("Alder",)):
+def scan(store, realm, roster=("Alder",), path_of=lambda name: "wd" + name):
     with (
         mock.patch.object(map_server, "_connect", store.connect),
         mock.patch.object(map_server, "_read_clip_candidates", realm.read_candidates),
@@ -158,7 +161,7 @@ def scan(store, realm, roster=("Alder",)):
         mock.patch.object(
             map_server, "_clip_who", lambda: (list(roster), ["Lantern Wardens"])
         ),
-        mock.patch.object(map_server, "_clip_path", lambda name: "wd" + name),
+        mock.patch.object(map_server, "_clip_path", path_of),
     ):
         return map_server.scan_clips()
 
@@ -351,12 +354,49 @@ class TheCandidateRead(unittest.TestCase):
     def test_a_recently_ended_run_triggers_the_history_read_for_clears(self):
         at = NOW - timedelta(minutes=3)
         cleared = {"map_id": 36, "dungeon": "Test Mines", "leader": "Alder", "at": at}
-        realm = Realm(runs=[{"id": 1}], cleared=[cleared])
+        ended = {
+            "id": 1,
+            "leader_name": "Alder",
+            "map_id": 36,
+            "started_at": at - timedelta(minutes=30),
+            "ended_at": at,
+        }
+        realm = Realm(runs=[ended], cleared=[cleared])
         store = FakeStore()
         scan(store, realm)
         self.assertEqual(1, realm.history_reads)
         (write,) = store.writes()
         self.assertIn("clear:36", write[1])
+
+
+class TheViewRule(unittest.TestCase):
+    def test_a_run_still_open_gives_the_scan_its_leader_view(self):
+        open_run = {
+            "id": 1,
+            "leader_name": "Alder",
+            "map_id": 33,
+            "state": "active",
+            "started_at": NOW - timedelta(minutes=40),
+            "ended_at": None,
+        }
+        row = dict(loot_row(), character_name="Birch", map=33)
+        store = FakeStore()
+        realm = Realm(loot=[row], open_runs=[open_run])
+        scan(
+            store,
+            realm,
+            roster=("Alder", "Birch"),
+            path_of=lambda name: "wdalder" if name == "Alder" else "",
+        )
+        self.assertEqual(0, realm.history_reads)
+        (write,) = store.writes()
+        self.assertIn("view: Alder (leader)", write[1][-1])
+
+    def test_the_clip_reads_carry_the_event_map_and_the_open_run_read_exists(self):
+        self.assertIn("e.map", map_server._CLIP_LOOT_SQL)
+        self.assertIn(" map,", map_server._CLIP_EVENT_SQL)
+        self.assertIn("ended_at IS NULL", map_server._CLIP_OPEN_RUN_SQL)
+        self.assertIn("{holes}", map_server._CLIP_OPEN_RUN_SQL)
 
 
 class TheSql(unittest.TestCase):

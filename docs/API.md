@@ -71,7 +71,7 @@ Each entry: path, query parameters, what it answers, one example.
 ## `GET /api/clips`
 
 - Query: none
-- Answers: the saved clips, newest first.
+- Answers: the saved clips, newest first, each naming whose view it shows.
 - Example: `overseer get /api/clips`
 
 ## `GET /api/council`

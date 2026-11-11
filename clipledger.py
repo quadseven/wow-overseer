@@ -8,6 +8,7 @@ in eventclips; this module is the wiring around it.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from typing import Callable, Iterable, Mapping
 from urllib.parse import quote
@@ -53,13 +54,87 @@ AGENT_BUFFER = timedelta(minutes=10)
 earliest = achievements._earliest
 
 
-def _request(key, kind, who, path_of, at, window, detail):
+NOT_IN_A_RUN = "subject not streamed and not in a run"
+NO_STREAMED_IN_RUN = "no streamed family member in the run"
+
+
+def _with_view(detail, extra):
+    return "%s; %s" % (detail, extra) if detail else extra
+
+
+class Views:
+    """Which live view films an event, by fixed decision 1: the subject's own,
+    else the leader of the run the subject is in, else a streamed family member
+    in that run (roster order), else none.
+
+    The run is the Chronicle's own join, achievements.in_run: the same map and
+    the event time inside the run's window, which runs to `now` for a run still
+    in progress. Who was in the run is the Chronicle's presence rule too: the
+    leader, plus anyone with an event inside it (achievements._who_was_there).
+    """
+
+    def __init__(self, path_of, roster, runs, rows, now):
+        self.path_of = path_of
+        self.roster = list(roster)
+        self.runs = sorted(runs, key=lambda r: (r["started_at"], r["id"]))
+        self.rows = [r for r in rows if r.get("map") is not None]
+        self.now = now
+
+    def _run_of(self, at, map_id):
+        if map_id is None:
+            return None
+        for run in self.runs:
+            if achievements.in_run(run, at, int(map_id), self.now):
+                return run
+        return None
+
+    def _present(self, run):
+        return {
+            r["character_name"]
+            for r in self.rows
+            if achievements.in_run(run, r["first_seen"], int(r["map"]), self.now)
+        }
+
+    def pick(self, who, leader, members, detail):
+        """(path, detail) for `who`; `leader` is None when no run is known."""
+        own = self.path_of(who)
+        if own:
+            return own, detail
+        if leader is None:
+            return "", _with_view(detail, NOT_IN_A_RUN)
+        if leader != who and self.path_of(leader):
+            return self.path_of(leader), _with_view(
+                detail, "view: %s (leader)" % leader
+            )
+        present = set(members)
+        for name in self.roster:
+            if name in present and name not in (who, leader) and self.path_of(name):
+                return self.path_of(name), _with_view(
+                    detail, "view: %s (party member)" % name
+                )
+        return "", _with_view(detail, NO_STREAMED_IN_RUN)
+
+    def for_event(self, who, at, map_id, detail):
+        run = self._run_of(at, map_id)
+        if run is None:
+            return self.pick(who, None, (), detail)
+        return self.pick(who, run["leader_name"], self._present(run), detail)
+
+    def for_run(self, who, members, detail):
+        return self.pick(who, who, members, detail)
+
+
+def _request(key, kind, who, views, at, window, detail, map_id=None, members=None):
     start, end = window
+    if members is None:
+        path, detail = views.for_event(who, at, map_id, detail)
+    else:
+        path, detail = views.for_run(who, members, detail)
     return {
         "event_key": key,
         "kind": kind,
         "character": who,
-        "stream_path": path_of(who),
+        "stream_path": path,
         "event_at": at,
         "window_start": start,
         "window_end": end,
@@ -90,7 +165,7 @@ def _equip_at(loot_row, rows):
     return min(seen) if seen else None
 
 
-def _loot_requests(rows, guilds, now, path_of):
+def _loot_requests(rows, guilds, now, views):
     out = []
     for row in rows:
         if row.get("kind") != "item_loot":
@@ -115,27 +190,44 @@ def _loot_requests(rows, guilds, now, path_of):
                 "loot:%s" % row["id"],
                 kind,
                 row["character_name"],
-                path_of,
+                views,
                 at,
                 _window(at, equip),
                 row.get("subject_name") or "",
+                row.get("map"),
             )
         )
     return out
 
 
-def _first_kills(rows, roster):
-    """The earliest family kill of each boss."""
+def _first_kills(rows, roster, path_of):
+    """The earliest family kill of each boss. Rows tied on the earliest time
+    go to a streamed member, then to roster order, so the pick never depends
+    on row order."""
+    order = {name: i for i, name in enumerate(roster)}
     by_boss = {}
     for r in rows:
-        if r.get("kind") == "boss_kill" and r["character_name"] in roster:
+        if r.get("kind") == "boss_kill" and r["character_name"] in order:
             by_boss.setdefault(r["subject_id"], []).append(r)
-    return [earliest(group, "first_seen") for group in by_boss.values()]
+    picks = []
+    for group in by_boss.values():
+        first = earliest(group, "first_seen")["first_seen"]
+        tied = [r for r in group if r["first_seen"] == first]
+        picks.append(
+            min(
+                tied,
+                key=lambda r: (
+                    not path_of(r["character_name"]),
+                    order[r["character_name"]],
+                ),
+            )
+        )
+    return picks
 
 
-def _event_requests(rows, roster, path_of):
+def _event_requests(rows, roster, views):
     out = []
-    for row in _first_kills(rows, roster):
+    for row in _first_kills(rows, roster, views.path_of):
         at = row["first_seen"]
         kind = eventclips.trigger_kind(
             {"kind": "boss_kill", "family_member": True, "first_kill": True}
@@ -145,10 +237,11 @@ def _event_requests(rows, roster, path_of):
                 "boss_kill:%s" % row["subject_id"],
                 kind,
                 row["character_name"],
-                path_of,
+                views,
                 at,
                 _window(at),
                 row.get("subject_name") or "",
+                row.get("map"),
             )
         )
     for row in rows:
@@ -162,12 +255,21 @@ def _event_requests(rows, roster, path_of):
         at = row["first_seen"]
         who = row["character_name"]
         out.append(
-            _request("%s:%s" % (kind, who), kind, who, path_of, at, _window(at), "")
+            _request(
+                "%s:%s" % (kind, who),
+                kind,
+                who,
+                views,
+                at,
+                _window(at),
+                "",
+                row.get("map"),
+            )
         )
     return out
 
 
-def _clear_requests(runs, roster, path_of):
+def _clear_requests(runs, roster, views):
     out = []
     by_map = {}
     for run in runs:
@@ -184,10 +286,11 @@ def _clear_requests(runs, roster, path_of):
                 "clear:%s" % map_id,
                 kind,
                 run["leader"],
-                path_of,
+                views,
                 run["at"],
                 _window(run["at"]),
                 run.get("dungeon") or "",
+                members=run.get("members") or (),
             )
         )
     return out
@@ -228,13 +331,21 @@ def plan_requests(
     now: datetime,
     existing_keys: Iterable[str],
     path_of: Callable[[str], str],
+    runs: Iterable[Mapping] = (),
 ) -> list[dict]:
-    """The ledger rows to insert now, oldest event first."""
+    """The ledger rows to insert now, oldest event first.
+
+    `runs` are the dungeon runs, open or ended, that an event may sit in; an
+    event row names its map as `map`.
+    """
     guilds = frozenset(family_guilds)
-    names = frozenset(roster)
-    rows = _loot_requests(list(loot_rows), guilds, now, path_of)
-    rows += _event_requests(list(event_rows), names, path_of)
-    rows += _clear_requests(list(cleared_runs), names, path_of)
+    order = list(roster)
+    names = frozenset(order)
+    loot_rows, event_rows = list(loot_rows), list(event_rows)
+    views = Views(path_of, order, list(runs), loot_rows + event_rows, now)
+    rows = _loot_requests(loot_rows, guilds, now, views)
+    rows += _event_requests(event_rows, order, views)
+    rows += _clear_requests(list(cleared_runs), names, views)
     rows.sort(key=lambda r: r["event_at"])
     seen = set(existing_keys)
     out = []
@@ -331,6 +442,15 @@ def _iso(t) -> str | None:
     return t.isoformat() if isinstance(t, datetime) else (t or None)
 
 
+_VIEW_NOTE = re.compile(r"view: (\S+) \((?:leader|party member)\)")
+
+
+def view_owner(row: Mapping) -> str:
+    """Whose eyes a clip shows: the member the detail names, else the subject."""
+    found = _VIEW_NOTE.search(row.get("detail") or "")
+    return found.group(1) if found else row["character"]
+
+
 def shelf(rows: Iterable[Mapping]) -> dict:
     """The /api/clips payload: ready rows with a file, newest event first."""
     ready = [r for r in rows if r.get("state") == "ready" and r.get("file_name")]
@@ -343,6 +463,7 @@ def shelf(rows: Iterable[Mapping]) -> dict:
                 "id": r["id"],
                 "kind": r["kind"],
                 "character": r["character"],
+                "view_owner": view_owner(r),
                 "at": _iso(r.get("event_at")),
                 "url": clip_url(r["file_name"]),
             }
