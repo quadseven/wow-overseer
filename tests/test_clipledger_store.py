@@ -503,6 +503,10 @@ class TheRunCardRead(unittest.TestCase):
         self.assertIn("'failed'", sql)
         self.assertIn("INTERVAL %s HOUR", sql)
 
+    def test_the_run_clips_read_keeps_the_newest_rows_under_its_cap(self):
+        # A cap that sorts oldest first would drop the latest runs' clips.
+        self.assertIn("ORDER BY event_at DESC LIMIT", map_server._RUN_CLIPS_SQL)
+
 
 class TheTimer(unittest.TestCase):
     def test_the_scanner_thread_runs_the_scan_on_its_timer(self):

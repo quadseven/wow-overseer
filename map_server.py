@@ -3791,21 +3791,22 @@ def _fetch_run_timeline() -> dict:
                 what="overseer_death")
         bosses = _run_bosses(rd) if deaths else frozenset()
         reports = _run_reports(rd, rows, len(families) * runtimeline.RUNS_PER_FAMILY)
-        clips = (rd.rows(_RUN_CLIPS_SQL, (runtimeline.WINDOW_HOURS,), what="clear clips")
+        clips = (rd.rows(_RUN_CLIPS_SQL, (runtimeline.WINDOW_HOURS,), what="run clips")
                  if rows else [])
     return {"rows": rows, "families": families, "present": present,
             "deaths": deaths, "bosses": bosses, "reports": reports, "clips": clips}
 
 
-# The ledger's clear rows over the timeline's hours, aged by the database the
-# same way the run rows are, so a run and its clear are matched on one clock.
+# The ledger's clear, boss kill and loot rows over the timeline's hours, aged by
+# the database the same way the run rows are, so a run and its clips are
+# matched on one clock. Newest first, so the cap sheds the oldest rows.
 _RUN_CLIPS_SQL = (
     "SELECT event_key, kind, `character`, state, file_name, stream_path, detail,"
     " TIMESTAMPDIFF(SECOND, event_at, NOW()) AS age_seconds FROM overseer_clip"
     " WHERE kind IN ('clear', 'boss_kill', 'loot')"
     " AND state IN ('ready', 'no_view', 'failed')"
     " AND event_at > NOW() - INTERVAL %s HOUR"
-    " ORDER BY event_at ASC LIMIT 2000"
+    " ORDER BY event_at DESC LIMIT 2000"
 )
 
 # The ledger rows of these loot events, for the story links. Only the two
