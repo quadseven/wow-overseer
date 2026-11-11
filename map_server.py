@@ -4491,7 +4491,10 @@ def _ready_clip_path(name: str):
     try:
         with realmread.Session(_connect) as rd:
             rows = rd.rows(_CLIP_FILE_SQL, (name,), what="a clip file")
-    except Exception:
+    except (pymysql.err.MySQLError, OSError):
+        # What a ledger read raises: the driver's errors (the same class the
+        # rest of this file catches) and a refused or dropped connection. A
+        # programming error is not caught, so it surfaces.
         log.exception("clip ledger read failed")
         return _LEDGER_DOWN
     stored = (rows[0].get("file_name") or "") if rows else ""

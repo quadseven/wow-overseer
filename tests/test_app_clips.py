@@ -114,6 +114,57 @@ class PlayInPlace(unittest.TestCase):
             },
         )
 
+    def test_a_playing_clip_is_the_same_element_after_a_redraw(self):
+        out = run(
+            'const C = await import("./views/_clips.js");\n'
+            "const made = [];\n"
+            "globalThis.document = { createElement(tag) { const e = { tag, attrs: {},"
+            " setAttribute(k, v) { this.attrs[k] = v; }, play() {}, pause() {} };"
+            " made.push(e); return e; } };\n"
+            "const url = '/clips/clip-1-loot.mp4';\n"
+            "const read = {data: {clips: [{id: 1, kind: 'loot', character: 'A',"
+            " at: '2026-11-09T10:00:00', url}]}, loading: false};\n"
+            "let click; let first;\n"
+            "const button = { getAttribute: () => url, addEventListener(_t, f) { click = f; },"
+            " replaceWith(e) { first = e; } };\n"
+            "C.shelf(read);\n"
+            "C.bindShelf({ querySelectorAll: (q) => (q.startsWith('button') ? [button] : []) });\n"
+            "click();\n"
+            "const markup = String(C.shelf(read));\n"
+            "let placed;\n"
+            "const slot = { getAttribute: () => url, replaceWith(e) { placed = e; } };\n"
+            "C.bindShelf({ querySelectorAll: (q) => (q.startsWith('[data-clip-slot]') ? [slot] : []) });\n"
+            "console.log(JSON.stringify({same: placed === first, created: made.length,"
+            " video: markup.includes('<video'), slot: markup.includes('data-clip-slot'),"
+            " play: markup.includes('data-clip=')}));\n"
+        )
+        self.assertEqual(
+            out,
+            {"same": True, "created": 1, "video": False, "slot": True, "play": False},
+        )
+
+    def test_a_kept_video_is_dropped_when_its_clip_leaves_the_list(self):
+        out = run(
+            'const C = await import("./views/_clips.js");\n'
+            "const made = [];\n"
+            "globalThis.document = { createElement(tag) { const e = { tag, attrs: {},"
+            " setAttribute() {}, play() {}, pause() { this.paused = true; } };"
+            " made.push(e); return e; } };\n"
+            "const url = '/clips/clip-1-loot.mp4';\n"
+            "const row = {id: 1, kind: 'loot', character: 'A', at: '2026-11-09T10:00:00', url};\n"
+            "let click;\n"
+            "const button = { getAttribute: () => url, addEventListener(_t, f) { click = f; },"
+            " replaceWith() {} };\n"
+            "C.shelf({data: {clips: [row]}, loading: false});\n"
+            "C.bindShelf({ querySelectorAll: (q) => (q.startsWith('button') ? [button] : []) });\n"
+            "click();\n"
+            "const gone = String(C.shelf({data: {clips: []}, loading: false}));\n"
+            "const back = String(C.shelf({data: {clips: [row]}, loading: false}));\n"
+            "console.log(JSON.stringify({gone: gone.includes('data-clip-slot'),"
+            " back: back.includes('data-clip-slot'), paused: !!made[0].paused}));\n"
+        )
+        self.assertEqual(out, {"gone": False, "back": False, "paused": True})
+
 
 @needs_node
 class TheClipLink(unittest.TestCase):
@@ -152,9 +203,9 @@ class TheShelfIsWiredIntoTheChronicle(unittest.TestCase):
 
     def test_the_video_is_native_and_phone_friendly(self):
         src = app_file("views/_clips.js")
-        self.assertIn('preload="metadata"', src)
-        self.assertIn("playsinline", src)
-        self.assertIn("controls", src)
+        self.assertIn('v.preload = "metadata"', src)
+        self.assertIn('"playsinline"', src)
+        self.assertIn("v.controls = true", src)
         css = app_file("views/clips.css")
         self.assertIn("max-width: 100%", css)
         self.assertIn("min-height: 44px", css)

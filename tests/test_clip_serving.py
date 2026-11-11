@@ -9,6 +9,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from _stub_modules import PYMYSQL, stub_modules
 from sandbox_caps import LOCALHOST, NO_LOCALHOST
@@ -16,6 +17,7 @@ from sandbox_caps import LOCALHOST, NO_LOCALHOST
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 with stub_modules(pymysql=PYMYSQL):
+    import map_server
     from clip_fakes import FakeLedger, clip_row, serving
 
 BODY = bytes(range(256)) * 4  # 1024 bytes
@@ -139,10 +141,27 @@ class OnlyLedgerNamesAreServed(unittest.TestCase):
 
     def test_an_unreadable_ledger_is_503_not_a_crash(self):
         def boom():
-            raise RuntimeError("down")
+            raise map_server.pymysql.err.OperationalError(2003, "down")
 
         self.ledger.connect = boom
         self.assertEqual(self.get("/clips/" + NAME)[0], 503)
+
+    def test_a_dropped_connection_is_503_too(self):
+        def boom():
+            raise ConnectionResetError("reset")
+
+        self.ledger.connect = boom
+        self.assertEqual(self.get("/clips/" + NAME)[0], 503)
+
+    def test_a_programming_error_surfaces_instead_of_becoming_503(self):
+        def boom():
+            raise RuntimeError("a bug")
+
+        self.ledger.connect = boom
+        with mock.patch.object(map_server, "_connect", boom):
+            with mock.patch.object(map_server, "CLIPS_DIR", self.dir.name):
+                with self.assertRaises(RuntimeError):
+                    map_server._ready_clip_path(NAME)
 
 
 class RangeRules(unittest.TestCase):

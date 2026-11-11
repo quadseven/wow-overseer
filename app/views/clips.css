@@ -4,6 +4,7 @@
 .clip-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .clip-who { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
 .clip-video { width: 100%; max-width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: var(--radius-md); }
+.clip-slot { aspect-ratio: 16 / 9; }
 .clip-play { justify-content: center; width: 100%; }
 .clip-link { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
 .clip-note { font-size: var(--fs-1); }
