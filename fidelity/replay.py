@@ -27,7 +27,7 @@ class ReplayReader(realmread.Reader):
     def __init__(self, reads) -> None:
         self._queues: dict = defaultdict(deque)
         for read in reads:
-            self._queues[key_of(read.sql, read.params)].append(read.rows)
+            self._queues[key_of(read.sql, read.params)].append(read)
 
     def _run(self, sql: str, params) -> list:
         queue = self._queues.get(key_of(sql, params))
@@ -35,7 +35,10 @@ class ReplayReader(realmread.Reader):
             raise realmread.UnknownQuery(
                 "read not in the capture (or already answered): %s %r" % (sql, params)
             )
-        return [dict(r) for r in queue.popleft()]
+        read = queue.popleft()
+        if read.gap:
+            raise realmread.Gap(read.gap, sql)
+        return [dict(r) for r in read.rows]
 
     def unanswered(self) -> int:
         return sum(len(q) for q in self._queues.values())

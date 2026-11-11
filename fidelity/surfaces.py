@@ -43,4 +43,17 @@ def claims_chronicle(payload: dict) -> dict:
     return {"runs": sorted(runs, key=lambda r: r["run"])}
 
 
+def default_args(surface: str, guilds: list) -> dict:
+    """What the recorder asks `surface` for `guilds`: the site's own dungeon
+    names, and no family (so no first-kill items, which need the live roster)."""
+    if surface != "chronicle":
+        raise KeyError(surface)
+    import achievements
+
+    return {
+        "guilds": list(guilds),
+        "maps": {str(k): v for k, v in achievements.MAP_NAMES.items()},
+    }
+
+
 SURFACES = {"chronicle": (run_chronicle, claims_chronicle)}

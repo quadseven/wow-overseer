@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 
 FORMAT = 1
@@ -30,11 +32,39 @@ class FixtureError(ValueError):
     """A fixture file that does not follow the format."""
 
 
+def encode(value):
+    """`value` with the types MySQL rows carry that JSON lacks tagged: a time
+    as {"$datetime": ISO}, a decimal as {"$decimal": text}."""
+    if isinstance(value, datetime):
+        return {"$datetime": value.isoformat()}
+    if isinstance(value, Decimal):
+        return {"$decimal": str(value)}
+    if isinstance(value, dict):
+        return {k: encode(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [encode(v) for v in value]
+    return value
+
+
+def decode(value):
+    """The inverse of `encode`."""
+    if isinstance(value, dict):
+        if set(value) == {"$datetime"}:
+            return datetime.fromisoformat(value["$datetime"])
+        if set(value) == {"$decimal"}:
+            return Decimal(value["$decimal"])
+        return {k: decode(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [decode(v) for v in value]
+    return value
+
+
 @dataclass(frozen=True)
 class Read:
     sql: str
     params: tuple
     rows: list
+    gap: int = 0  # a missing table (1146) or column (1054) the realm answered with
 
 
 @dataclass(frozen=True)
@@ -71,7 +101,14 @@ def parse(doc: dict) -> Fixture:
             raise FixtureError("read %d needs a params list" % i)
         if not isinstance(read.get("rows"), list):
             raise FixtureError("read %d needs a rows list" % i)
-        reads.append(Read(read["sql"], tuple(read["params"]), read["rows"]))
+        reads.append(
+            Read(
+                read["sql"],
+                tuple(decode(read["params"])),
+                decode(read["rows"]),
+                int(read.get("gap") or 0),
+            )
+        )
     return Fixture(
         name=_need(doc, "name", str),
         kind=provenance["kind"],
