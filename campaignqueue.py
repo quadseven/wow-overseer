@@ -131,6 +131,35 @@ ACK_ITEM_NOTICE_SQL = (
     "WHERE id = %s AND status = 'done'"
 )
 
+# THE TRADE TURN'S RECORD (tradeturn.py, #2262), beside the queue's own table
+# so a restart resumes a turn with its remaining time. One row per family: the
+# finished run the turn follows, when it began (epoch seconds), and whether it
+# is over (a skipped turn is stored over, so its skip is said once per run).
+TURN_TABLE = "overseer_dungeon_queue_turn"
+TURN_CREATE_SQL = (
+    "CREATE TABLE IF NOT EXISTS overseer_dungeon_queue_turn ("
+    " family VARCHAR(32) NOT NULL,"
+    " run_ended BIGINT UNSIGNED NOT NULL,"
+    " started_at DOUBLE NOT NULL,"
+    " finished TINYINT UNSIGNED NOT NULL DEFAULT 0,"
+    " PRIMARY KEY (family)"
+    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+)
+TURN_SELECT_SQL = (
+    "SELECT family, run_ended, started_at, finished FROM overseer_dungeon_queue_turn"
+)
+TURN_UPSERT_SQL = (
+    "INSERT INTO overseer_dungeon_queue_turn (family, run_ended, started_at, finished) "
+    "VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE "
+    "run_ended = VALUES(run_ended), started_at = VALUES(started_at), "
+    "finished = VALUES(finished)"
+)
+# The newest finished run of a leader, as epoch seconds; NULL with none.
+LAST_RUN_END_SQL = (
+    "SELECT UNIX_TIMESTAMP(MAX(ended_at)) AS ended FROM overseer_dungeon_run "
+    "WHERE leader_name = %s AND state = 'ended'"
+)
+
 # What the validation reads: each member's saved level, race and map. The
 # `characters` row and not the snapshot, for the reason
 # map_server._fetch_council gives: a family that logged out ten minutes ago
