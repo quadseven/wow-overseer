@@ -9977,6 +9977,8 @@ class Bridge(discord.Client):
         # pass for a smith whose recipe names no vendor reagent
         # (the module ticket): its buy rows and its walk join the same single trip.
         queued, needs = await self._buy_blacksmith_hammers(spells, names)
+        # The family's own Mining Pick and Skinning Knife: guild jobs never plan for the family.
+        await self._buy_gather_tools(names)
         if not candidates and not multi_candidates:
             await self._walk_for_hammers(needs, cohort)
             log.info(
@@ -10486,6 +10488,36 @@ class Bridge(discord.Client):
             elif errand or not handled:
                 log.info("craft_supply: %s - %s", name, note)
         return queued, needs
+
+    async def _buy_gather_tools(self, names: list) -> int:
+        """Queue a Mining Pick or Skinning Knife for each member holding the trade without it.
+
+        Guild jobs plan this buy for guild members outside the family only
+        (ticket 2267). The decision is `craft_supply.gather_tool_errand`, fed
+        the guildjobs tables; this reads the world and writes its answer.
+        One buy per member per pass. Returns the rows queued.
+        """
+        trades = await asyncio.to_thread(_fetch_gather_trades, names)
+        if not trades:
+            return 0
+        held = await asyncio.to_thread(_fetch_tool_holdings, list(trades))
+        purses = await asyncio.to_thread(_fetch_purses, list(trades))
+        free_slots = await asyncio.to_thread(_fetch_free_slots, list(trades))
+        queued = 0
+        for name in sorted(trades):
+            town = await asyncio.to_thread(_fetch_town, name)
+            _level, money = purses.get(name, (0, 0))
+            errand, note = craft_supply.gather_tool_errand(
+                name, frozenset(trades[name]), frozenset(held.get(name, ())),
+                money, free_slots.get(name, 0), town,
+                guildjobs.TOOLS, guildjobs.TOOL_ENTRIES,
+            )
+            if note:
+                log.info("craft_supply: %s", note)
+            elif errand and await asyncio.to_thread(_insert_town_errand, errand):
+                queued += 1
+                log.info("craft_supply: %s %s - %s", name, errand.command, errand.why)
+        return queued
 
     async def _buy_fishing_poles(self, names: list, cohort=None) -> tuple:
         """Queue a Fishing Pole for every member holding none (mod-overseer#530).
@@ -37402,6 +37434,52 @@ def _fetch_pole_holders(names: list) -> set:
             names,
         )
         return {row["name"] for row in cur.fetchall()}
+
+
+def _fetch_gather_trades(names: list) -> dict:
+    """name -> the gathering trades (Mining, Skinning) each of `names` holds."""
+    if not names:
+        return {}
+    skills = tuple(guildjobs.TOOLS)
+    marks = ",".join(["%s"] * len(names))
+    skill_marks = ",".join(["%s"] * len(skills))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT c.name AS name, k.skill AS skill "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "FROM characters c JOIN character_skills k ON k.guid = c.guid "
+            f"WHERE c.name IN ({marks}) AND k.skill IN ({skill_marks})",
+            (*names, *skills),
+        )
+        out: dict = {}
+        for row in cur.fetchall():
+            out.setdefault(row["name"], set()).add(row["skill"])
+        return out
+
+
+def _fetch_tool_holdings(names: list) -> dict:
+    """name -> the gathering-tool entries held in the bags or bank.
+
+    Every slot a character owns counts, as for the hammer: a tool banked is
+    still owned and a second must not be bought.
+    """
+    if not names:
+        return {}
+    entries = sorted({e for tools in guildjobs.TOOL_ENTRIES.values() for e in tools})
+    marks = ",".join(["%s"] * len(names))
+    entry_marks = ",".join(["%s"] * len(entries))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT c.name AS name, ii.itemEntry AS entry "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "FROM characters c "
+            "JOIN character_inventory ci ON ci.guid = c.guid "
+            "JOIN item_instance ii ON ii.guid = ci.item "
+            f"WHERE c.name IN ({marks}) AND ii.itemEntry IN ({entry_marks})",
+            (*names, *entries),
+        )
+        out: dict = {}
+        for row in cur.fetchall():
+            out.setdefault(row["name"], set()).add(row["entry"])
+        return out
 
 
 def _fetch_hammer_holders(names: list) -> set:
