@@ -110,7 +110,12 @@ class CutterLedger(FakeLedger):
         self.rowcount = 0
         if row and row["state"] in allowed:
             if "detail" in change:
-                change["detail"] = _joined(row.get("detail"), change["detail"])
+                if change["state"] == "ready":
+                    # mirrors clipcutter._READY: the first part is kept even if empty
+                    old, note = row.get("detail") or "", change["detail"]
+                    change["detail"] = "%s; %s" % (old, note) if note else old
+                else:
+                    change["detail"] = _joined(row.get("detail"), change["detail"])
             row.update(change)
             self.rowcount = 1
 

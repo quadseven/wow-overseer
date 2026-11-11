@@ -48,9 +48,12 @@ _CLAIM = (
     "UPDATE overseer_clip SET state = 'cutting' WHERE id = %s AND state = 'pending'"
 )
 _APPEND = "CONCAT_WS('; ', NULLIF(detail, ''), NULLIF(%s, ''))"
+# A ready row keeps the planner's first part, the event's subject, in front
+# even when it is empty, so a note never moves up into the subject's place.
+_APPEND_AFTER_SUBJECT = "CONCAT_WS('; ', COALESCE(detail, ''), NULLIF(%s, ''))"
 _READY = (
     "UPDATE overseer_clip SET state = 'ready', file_name = %s, detail = "  # noqa: S608
-    + _APPEND
+    + _APPEND_AFTER_SUBJECT
     + " WHERE id = %s AND state = 'cutting'"
 )
 _DROP = (
