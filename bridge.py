@@ -11692,6 +11692,29 @@ class Bridge(discord.Client):
             key=(leader,), capped=False)
         if not sales:
             return
+        # THE SAME MAP GUARD THE CRAFT-REAGENT WALK ALREADY CARRIES (#2141).
+        # ResolveTravelTarget can only search auctioneer spawns on the
+        # leader's current map, so on a map with no auctioneer spawn this
+        # aim can never resolve: release a carried auctioneer aim and skip
+        # the walk instead of re-arming it cycle after cycle while the
+        # family records no movement and no reason to wait.
+        live_maps = await asyncio.to_thread(_fetch_live_maps, [leader])
+        auctioneer_maps = await asyncio.to_thread(_fetch_auctioneer_maps)
+        leader_map = live_maps.get(leader) if live_maps is not None else None
+        if (live_maps is not None and leader_map is None) or (
+            auctioneer_maps is not None
+            and not auction.auctioneer_map_available(leader_map, auctioneer_maps)
+        ):
+            await asyncio.to_thread(
+                _release_trade_errand, leader, auction.AUCTIONEER_ROLE,
+            )
+            log.info(
+                "auction: no auctioneer spawn is available on leader=%s "
+                "map=%s; skipping the listing walk instead of re-arming a "
+                "doomed aim",
+                leader, leader_map if leader_map is not None else "unknown",
+            )
+            return
         # A LISTING THAT FREES A FULL BAG IS AS URGENT AS A SALE (#148).
         # The vendor pass claims the traveller urgently on bag pressure;
         # without the same standing a listing waited behind every other
