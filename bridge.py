@@ -42,6 +42,7 @@ import bankbags
 import bankforecast
 import housedemand
 import bankpolicy
+import setswap
 import chat
 import clearance
 import council
@@ -27460,11 +27461,22 @@ _WEARERS_SQL = (
 _RAID_TREE = "(SELECT s.tree FROM overseer_raid_spec s WHERE s.name = c.name LIMIT 1)"
 
 
-def _fetch_scored_gear(names: list) -> list:
-    """Worn and carried gear with its stats; equipscore decides what it means."""
+# The same scored item facts from the personal bank, never equipped directly.
+# The bank planner withdraws selected upgrades before the ordinary equip drive
+# sees them in the bags. Keep the template and instance columns identical.
+_BANKED_SCORED_GEAR_SQL = _SCORED_GEAR_SQL.replace(
+    "(ci.bag = 0 AND ci.slot < 19) OR ", "", 1,
+).replace("ci.slot BETWEEN 19 AND 38", "ci.slot BETWEEN 39 AND 66").replace(
+    "bag.slot BETWEEN 19 AND 22", "bag.slot BETWEEN 67 AND 73",
+)
+
+
+def _fetch_scored_gear(names: list, *, banked: bool = False) -> list:
+    """Scored item facts: worn/carried by default, or banked when requested."""
     if not names:
         return []
-    sql = _SCORED_GEAR_SQL % ",".join(["%s"] * len(names))
+    template = _BANKED_SCORED_GEAR_SQL if banked else _SCORED_GEAR_SQL
+    sql = template % ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(sql, names)
@@ -34918,6 +34930,22 @@ _BANK_ITEMS_SQL = (
 )
 
 
+def _bank_role_routes(names: list) -> dict:
+    """Banked upgrades for family members who actually play tank or healer.
+
+    Called from the blocking bank read, not from the event loop. The bank's
+    existing room, visit and counter gates still decide when a row is sent.
+    """
+    wearers = _fetch_wearers(names)
+    gear_rows = _fetch_scored_gear(names)
+    if not wearers or not gear_rows:
+        return {}
+    return setswap.bank_routes(
+        wearers, gear_rows, _fetch_scored_gear(names, banked=True), names,
+        keep_names=OWNER_KEEPS, book=_jev_item_book(),
+    )
+
+
 def _plan_bank(names: list) -> "bank.Plan":
     """bank.plan over the family's rows, with the keeper rule switched on.
 
@@ -34933,7 +34961,7 @@ def _plan_bank(names: list) -> "bank.Plan":
     # for the hand-off, and comes back out of the bank for it (#248).
     storage = bank.storage_from(
         held, _worked_by(names), REAGENT_TRADES, _fetch_guild_bank_setup(names),
-        routed=_crafter_plan(names).routed | _tidy_routes(names)
+        routed=_bank_role_routes(names) | _crafter_plan(names).routed | _tidy_routes(names)
         | _withdrawn_for_sale_routes(names),
         guild_later=dict(_GUILD_BANK_KEEPS),
         policy=_bank_policy(names),
