@@ -980,7 +980,9 @@ def _no_room_note(name, item, room):
     )
 
 
-def _plan_deposits(member, candidates, storage, guild_room, visit_limit, notes):
+def _plan_deposits(
+    member, candidates, storage, guild_room, visit_limit, notes, room_gain=0
+):
     """(personal deposits, guild deposits, guild room left) for one member.
 
     A keeper that may go to the guild goes there while its tab has room and
@@ -991,7 +993,9 @@ def _plan_deposits(member, candidates, storage, guild_room, visit_limit, notes):
     guild's. `guild_room` is tab id -> free slots, and is updated in place.
     """
     deposits, sent = [], []
-    room = member.bank_free
+    # A bag placed on this visit is sent before the deposits, so its slots
+    # exist when the reserve is judged.
+    room = member.bank_free + max(0, room_gain)
     for holding, why, keeper in candidates:
         placed = storage.policy.get(holding.guid) if storage else None
         personal = placed is not None and placed.to == bankpolicy.PERSONAL
@@ -1159,7 +1163,15 @@ def _room_by_tab(storage):
     return room
 
 
-def plan(members, family, *, visit_limit=VISIT_LIMIT, storage=None, room_floor=0):
+def plan(
+    members,
+    family,
+    *,
+    visit_limit=VISIT_LIMIT,
+    storage=None,
+    room_floor=0,
+    room_gain=None,
+):
     """Every bank move worth making, in the order it should be sent.
 
     DEPOSITS BEFORE WITHDRAWALS, per character, and the withdrawal budget is
@@ -1185,6 +1197,9 @@ def plan(members, family, *, visit_limit=VISIT_LIMIT, storage=None, room_floor=0
     plan as it was. A member under it also deposits its trade goods and gems
     (`_room_candidates`) up to the floor, and no withdrawal takes anybody below
     it, so a stack put down for room is not fetched straight back.
+
+    `room_gain` is name -> bank slots a bag placed on this visit adds
+    (`bankbags.room_gain`); a deposit is judged against the grown room.
     """
     totals = reagent_totals(members)
     moves, notes, guild = [], [], []
@@ -1198,7 +1213,13 @@ def plan(members, family, *, visit_limit=VISIT_LIMIT, storage=None, room_floor=0
             room_floor,
         )
         deposits, sent, guild_room = _plan_deposits(
-            member, candidates, storage, guild_room, visit_limit, notes
+            member,
+            candidates,
+            storage,
+            guild_room,
+            visit_limit,
+            notes,
+            (room_gain or {}).get(member.name, 0),
         )
         # Every deposit hands a bag slot back, so the room to receive a
         # withdrawal is larger than it was measured. A guild deposit does not
