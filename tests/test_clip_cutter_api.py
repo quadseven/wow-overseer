@@ -190,6 +190,21 @@ class Upload(CutterCase):
         self.assertEqual(self.files(), [])
         self.assertEqual(self.state()["state"], "cutting")
 
+    def test_a_note_on_a_row_with_no_subject_is_not_shown_as_the_subject(self):
+        def go(c):
+            return (
+                c.post("/api/clips/file?id=1&note=cut%20late", MP4),
+                c.get("/api/clips"),
+            )
+
+        (status, _body), (_s, shelf) = self.run_with(
+            [row(state="cutting", detail="")], go
+        )
+        self.assertEqual(status, 200)
+        (clip,) = json.loads(shelf)["clips"]
+        self.assertEqual(clip["subject"], "")
+        self.assertIn("cut late", self.state()["detail"])
+
     def test_an_upload_without_a_note_keeps_the_detail(self):
         self.up()
         self.assertEqual(self.state()["detail"], "earlier")

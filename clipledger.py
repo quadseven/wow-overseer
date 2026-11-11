@@ -236,7 +236,17 @@ def _loot_requests(rows, guilds, now, views):
     return out
 
 
-def _first_kills(rows, roster, path_of):
+def boss_key(subject_id) -> str:
+    """The ledger key of a boss's first family kill."""
+    return "boss_kill:%s" % subject_id
+
+
+def level_key(character) -> str:
+    """The ledger key of a character's level 60 moment."""
+    return "level_60:%s" % character
+
+
+def first_kills(rows, roster, path_of):
     """The earliest family kill of each boss. Rows tied on the earliest time
     go to a streamed member, then to roster order, so the pick never depends
     on row order."""
@@ -263,14 +273,14 @@ def _first_kills(rows, roster, path_of):
 
 def _event_requests(rows, roster, views):
     out = []
-    for row in _first_kills(rows, roster, views.path_of):
+    for row in first_kills(rows, roster, views.path_of):
         at = row["first_seen"]
         kind = eventclips.trigger_kind(
             {"kind": "boss_kill", "family_member": True, "first_kill": True}
         )
         out.append(
             _request(
-                "boss_kill:%s" % row["subject_id"],
+                boss_key(row["subject_id"]),
                 kind,
                 row["character_name"],
                 views,
@@ -292,7 +302,7 @@ def _event_requests(rows, roster, views):
         who = row["character_name"]
         out.append(
             _request(
-                "%s:%s" % (kind, who),
+                level_key(who),
                 kind,
                 who,
                 views,
@@ -550,6 +560,21 @@ def view_owner(row: Mapping) -> str:
     return row["character"]
 
 
+SUBJECT_KINDS = ("loot", "boss_kill")
+
+
+def subject(row: Mapping) -> str:
+    """The item of a loot clip or the boss of a boss first kill, or "".
+
+    The planner writes the event's subject name as the first part of the
+    detail; a view marker or a later note is never taken for it.
+    """
+    if row.get("kind") not in SUBJECT_KINDS:
+        return ""
+    first = (row.get("detail") or "").split("; ")[0]
+    return "" if _VIEW_NOTE.match(first) else first.strip()
+
+
 def failed_line(row: Mapping) -> str:
     """The note for a failed row: its recorded reason, without the planner's
     view text (the "view:" parts of the detail)."""
@@ -576,6 +601,7 @@ def shelf(rows: Iterable[Mapping]) -> dict:
                 "kind": r["kind"],
                 "character": r["character"],
                 "view_owner": view_owner(r),
+                "subject": subject(r),
                 "at": _iso(r.get("event_at")),
                 "url": clip_url(r["file_name"]),
             }

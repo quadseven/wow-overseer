@@ -22,6 +22,7 @@ CLIPS = [
         "id": 2,
         "kind": "boss_kill",
         "character": "Otherchar",
+        "subject": "Test Warden",
         "at": "2026-11-09T11:30:00",
         "url": "/clips/clip-2-boss_kill.mp4",
     },
@@ -29,6 +30,7 @@ CLIPS = [
         "id": 1,
         "kind": "loot",
         "character": "Testchar",
+        "subject": "Test Blade",
         "at": "2026-11-09T10:00:00",
         "url": "/clips/clip-1-loot.mp4",
     },
@@ -63,6 +65,14 @@ class TheShelf(unittest.TestCase):
         self.assertLess(m.index("Otherchar"), m.index("Testchar"))
         self.assertIn("Boss kill", m)
         self.assertIn('data-clip="/clips/clip-1-loot.mp4"', m)
+
+    def test_a_card_shows_the_boss_or_the_item_and_none_when_unnamed(self):
+        m = self.draw({"data": {"clips": CLIPS, "empty": "none"}, "loading": False})
+        self.assertIn("Test Warden", m)
+        self.assertIn("Test Blade", m)
+        bare = [dict(CLIPS[0], subject="")]
+        m = self.draw({"data": {"clips": bare, "empty": "none"}, "loading": False})
+        self.assertNotIn("clip-subject", m)
 
     def test_no_video_is_loaded_until_play(self):
         m = self.draw({"data": {"clips": CLIPS, "empty": "none"}, "loading": False})
@@ -188,6 +198,56 @@ class TheClipLink(unittest.TestCase):
 
     def test_no_clip_fields_draw_nothing(self):
         self.assertEqual(self.link({"line": "x"}), "")
+
+
+@needs_node
+class TheNamedClipLinks(unittest.TestCase):
+    def links(self, entry):
+        out = run(
+            'const C = await import("./views/_clips.js");\n'
+            "console.log(JSON.stringify({m: String(C.clipLinks(%s))}));\n"
+            % json.dumps(entry)
+        )
+        return out["m"]
+
+    def test_each_character_gets_the_same_link_or_note_with_the_name(self):
+        m = self.links(
+            {
+                "clips": [
+                    {
+                        "who": "Bonk",
+                        "clip": {
+                            "url": "/clips/clip-9-level_60.mp4",
+                            "kind": "level_60",
+                        },
+                    },
+                    {
+                        "who": "Durg",
+                        "clip_note": "No live view was up, so no clip was saved.",
+                    },
+                ]
+            }
+        )
+        self.assertIn('href="/m/clips/clip-9-level_60.mp4"', m)
+        self.assertIn("Watch the clip", m)
+        self.assertIn("Bonk", m)
+        self.assertIn("Durg", m)
+        self.assertIn("No live view was up", m)
+        self.assertEqual(m.count('class="clip-link"'), 1)
+
+    def test_an_entry_without_clips_draws_nothing(self):
+        self.assertEqual(self.links({"line": "x"}), "")
+        self.assertEqual(self.links({"clips": []}), "")
+
+
+class TheFeedDrawsFirstKillsAndSixtyClips(unittest.TestCase):
+    def test_the_feed_row_draws_every_clip_shape_with_the_shared_helpers(self):
+        guild = app_file("views/guild.js")
+        self.assertIn("first_kill:", guild)
+        self.assertIn("clipLinks(", guild)
+        self.assertIn("clipLink(x)", guild)
+        self.assertNotIn('x.kind === "loot" ? clipLink(x)', guild)
+        self.assertIn('["level", "clear", "run", "first_kill"]', guild)
 
 
 class TheShelfIsWiredIntoTheChronicle(unittest.TestCase):

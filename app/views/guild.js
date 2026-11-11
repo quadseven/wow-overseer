@@ -21,12 +21,12 @@ import { guild as guildModel } from "../models/guild.js";
 import { roster as rosterModel } from "../models/roster.js";
 import { items as achItems, notable } from "../models/achievements.js";
 import { feedRow as achRow, CSS as ACH_CSS } from "./_achievements.js";
-import { clipLink, shelf as clipShelf, bindShelf as bindClips, CSS as CLIPS_CSS, READ as CLIPS_READ } from "./_clips.js";
+import { clipLink, clipLinks, shelf as clipShelf, bindShelf as bindClips, CSS as CLIPS_CSS, READ as CLIPS_READ } from "./_clips.js";
 
 const TABS = [["progress", "Progress"], ["runs", "Runs"], ["chronicle", "Chronicle"]];
 const FEED_KINDS = [
   ["all", "All", null],
-  ["levels", "Levels and runs", ["level", "clear", "run"]],
+  ["levels", "Levels and runs", ["level", "clear", "run", "first_kill"]],
   ["loot", "Loot", ["loot"]],
   ["death", "Deaths", ["death"]],
   ["achievements", "Achievements", ["achievement"]],
@@ -324,7 +324,7 @@ function feedItems(ctx) {
 function inAll(x) { return x.kind !== "achievement" || x.notable; }
 
 const FEED_ICON = {
-  level: ["ph-fill ph-arrow-fat-up", "gold"], clear: ["ph-fill ph-trophy", "gold"],
+  level: ["ph-fill ph-arrow-fat-up", "gold"], first_kill: ["ph-fill ph-crown-simple", "gold"], clear: ["ph-fill ph-trophy", "gold"],
   run: ["ph ph-door-open", "warn"], loot: ["ph-fill ph-sword", "accent"], death: ["ph ph-skull", "bad"],
 };
 
@@ -345,7 +345,7 @@ function feedRow(ctx, x) {
   const body = x.kind === "loot" && x.item
     ? lootLine(x.text, x.item)
     : x.run ? html`<a href="${runHref({ id: x.run })}" class="g-feed-link">${x.text}</a>` : x.text;
-  return html`<div class="g-row g-feed"><i class="${icon}" data-gt="${tone}" aria-hidden="true"></i><span class="g-grow">${body}${x.kind === "loot" ? clipLink(x) : ""}</span>${fresh ? html`<span class="tag tag-accent">New</span>` : ""}<span class="muted g-when">${since(x.at)}</span></div>`;
+  return html`<div class="g-row g-feed"><i class="${icon}" data-gt="${tone}" aria-hidden="true"></i><span class="g-grow">${body}${clipLink(x)}${clipLinks(x)}</span>${fresh ? html`<span class="tag tag-accent">New</span>` : ""}<span class="muted g-when">${since(x.at)}</span></div>`;
 }
 
 // An empty filter: the achievements read may still be on its way, or have
