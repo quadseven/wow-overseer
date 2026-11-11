@@ -119,6 +119,29 @@ MAX_SWAPS = 3
 
 SOURCE = "overseer:guildrun"
 
+# THE STONE ON COOLDOWN IS NOT ASKED AGAIN AT ONCE (#2183). The module refuses
+# a hearth with these words when the stone is still cooling; the refusal carries
+# no end time, and the once-an-hour spacing counts only hearths that went
+# through, so a stranded member was asked again every cycle. A refusal for the
+# cooldown holds the member for this long, which stays well inside the stone's
+# own hour (jev_movement.HEARTH_COOLDOWN_SECONDS), so a stone that becomes ready
+# is not left unused for long. Any other answer is asked again at once.
+HEARTH_COOLDOWN_WORDS = "hearthstone is on cooldown"
+HEARTH_BACKOFF_SECONDS = 900
+
+
+def hearth_backed_off(newest: list) -> set:
+    """The members whose newest hearth row for this source was refused for the
+    stone's cooldown less than HEARTH_BACKOFF_SECONDS ago. `newest` is one row
+    per member: {name, status, detail, age} with the age in seconds."""
+    return {
+        str(row["name"])
+        for row in newest or ()
+        if str(row.get("status") or "") == "error"
+        and HEARTH_COOLDOWN_WORDS in str(row.get("detail") or "")
+        and int(row.get("age") or 0) < HEARTH_BACKOFF_SECONDS
+    }
+
 
 def carry_xp_lines(keyword, carrier, start, end, xp_for_level):
     """Format XP gained by each carried member, counting level-ups."""
