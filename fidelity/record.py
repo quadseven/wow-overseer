@@ -60,7 +60,7 @@ class RecordingReader(realmread.Reader):
             "rows": [],
         }
         try:
-            rows = self.inner._run(sql, params)
+            rows = self.inner.must(sql, params)
         except realmread.Gap as gap:
             entry["gap"] = gap.code
             self.reads.append(entry)
