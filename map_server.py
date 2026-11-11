@@ -19,7 +19,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -4414,6 +4414,15 @@ _CLIP_OPEN_RUN_SQL = (
 # still guards the rest).
 _CLIP_KEY_MINUTES = 30
 
+# When the last scan that completed began, on this process's clock. None until
+# one completes, so the first scan after a start looks back the full day. It is
+# kept in memory only: a restart forgets it, which is the safe direction.
+_clip_last_scan = None
+
+
+def _clip_now() -> datetime:
+    return datetime.now(timezone.utc)
+
 
 def _cleared_run_cards(f: dict) -> list:
     """The Chronicle's assembled runs that cleared their dungeon, as the
@@ -4446,22 +4455,22 @@ def _clip_who() -> tuple:
     return roster, [g["name"] for g in FAMILIES.guilds()], families
 
 
-def _read_clip_candidates(roster: list) -> dict:
+def _read_clip_candidates(roster: list, minutes: int = _CLIP_LOOT_MINUTES) -> dict:
     """Recent loot and equips, boss kills, level 60s and ended runs: one narrow
     read each, bounded to the recent window."""
     holes = ", ".join(["%s"] * len(roster))
     names = tuple(roster)
     with realmread.Session(_connect) as rd:
-        loot_rows = rd.rows(_CLIP_LOOT_SQL, (_CLIP_LOOT_MINUTES,), what="clip loot")
+        loot_rows = rd.rows(_CLIP_LOOT_SQL, (minutes,), what="clip loot")
         event_rows = rd.rows(
             _CLIP_EVENT_SQL.format(holes=holes),  # noqa: S608 - placeholders from a COUNT, values bound
-            (*names, _CLIP_LOOT_MINUTES),
+            (*names, minutes),
             what="clip events",
         )
         try:
             run_rows = rd.must(
                 _CLIP_RUN_SQL.format(holes=holes),  # noqa: S608 - placeholders from a COUNT, values bound
-                (*names, _CLIP_LOOT_MINUTES),
+                (*names, minutes),
             )
             open_run_rows = rd.must(
                 _CLIP_OPEN_RUN_SQL.format(holes=holes),  # noqa: S608 - placeholders from a COUNT, values bound
@@ -4546,11 +4555,17 @@ def scan_clips() -> dict:
     is created here too, so a database that was down at start-up costs one
     failed tick, not a scanner that fails until the process restarts.
     """
+    global _clip_last_scan
+    began = _clip_now()
+    horizon = clipledger.scan_horizon(began, _clip_last_scan)
+    # Whole minutes, rounded up, so the reads never cover less than the horizon.
+    minutes = -(-int(horizon.total_seconds()) // 60)
     _ensure_clip_store()
     roster, guilds, families = _clip_who()
     if not roster:
+        _clip_last_scan = began
         return {"written": 0, "expired": 0}  # IN () is not valid SQL
-    found = _read_clip_candidates(roster)
+    found = _read_clip_candidates(roster, minutes)
     events = list(found["event_rows"])
     cleared = []
     # History is needed only to decide a boss or dungeon first.
@@ -4568,7 +4583,7 @@ def scan_clips() -> dict:
         cur.execute(
             "SELECT event_key FROM overseer_clip"
             " WHERE created_at >= NOW() - INTERVAL %s MINUTE",
-            (_CLIP_KEY_MINUTES,),
+            (max(_CLIP_KEY_MINUTES, minutes),),
         )
         keys = [r["event_key"] for r in cur.fetchall()]
         planned = clipledger.plan_requests(
@@ -4582,6 +4597,7 @@ def scan_clips() -> dict:
             path_of=_clip_path,
             runs=list(found["run_rows"]) + list(found.get("open_run_rows", [])),
             families=families,
+            late_horizon=horizon,
         )
         for row in planned:
             cur.execute(_CLIP_INSERT, (
@@ -4595,6 +4611,7 @@ def scan_clips() -> dict:
         if stale:
             cur.executemany(_CLIP_EXPIRE, [(i,) for i in stale])
         timed_out = clipledger.time_out(cur, now=found["now"])
+    _clip_last_scan = began
     return {"written": len(planned), "expired": len(stale), "timed_out": timed_out}
 
 
