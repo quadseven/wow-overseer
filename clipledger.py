@@ -8,6 +8,7 @@ in eventclips; this module is the wiring around it.
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime, timedelta
 from typing import Callable, Iterable, Mapping
@@ -398,9 +399,9 @@ def plan_requests(
 # The agent keeps AGENT_BUFFER of video; a pending row this long past its window
 # end can no longer be cut, so it is declared no_view (buffer plus 5 minutes).
 PENDING_TIMEOUT = timedelta(minutes=15)
-# A cutting row nobody has touched for this long lost its agent mid-cut.
-CUTTING_TIMEOUT = timedelta(hours=1)
-CUTTING_FAILED_DETAIL = "cutting timed out after an hour"
+# A cutting row nobody has touched for this long lost its cutter mid-cut.
+CUTTING_TIMEOUT = timedelta(minutes=10)
+CUTTING_FAILED_DETAIL = "cutter went silent"
 
 _STALE_SELECT = (
     "SELECT id, state, window_end, updated_at FROM overseer_clip"
@@ -453,6 +454,38 @@ def time_out(cur, *, now: datetime) -> dict:
             )
         counts[change["to"]] += 1 if cur.rowcount else 0
     return counts
+
+
+# --- removing the files of expired rows ----------------------------------
+
+_EXPIRED_SELECT = "SELECT id, file_name FROM overseer_clip WHERE state = 'expired'"
+_TO_DELETED = (
+    "UPDATE overseer_clip SET state = 'deleted',"
+    " detail = CONCAT_WS('; ', NULLIF(detail, ''), NULLIF(%s, ''))"
+    " WHERE id = %s AND state = 'expired'"
+)
+FILE_MISSING_DETAIL = "file was already missing"
+
+
+def delete_expired(cur, root: str) -> int:
+    """Remove the file of each expired row from `root`, then mark the row
+    deleted. A missing file, or a stored name that is not one plain file name,
+    still ends in deleted, with a note. Returns how many rows the update took.
+    """
+    cur.execute(_EXPIRED_SELECT)
+    done = 0
+    for r in cur.fetchall():
+        name = r.get("file_name") or ""
+        note = FILE_MISSING_DETAIL
+        if name and name == os.path.basename(name) and not name.startswith("."):
+            try:
+                os.unlink(os.path.join(root, name))
+                note = ""
+            except FileNotFoundError:
+                pass
+        cur.execute(_TO_DELETED, (note, r["id"]))
+        done += 1 if cur.rowcount else 0
+    return done
 
 
 # --- reading the ledger back out: the shelf and the story links ----------

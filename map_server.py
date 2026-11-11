@@ -40,6 +40,7 @@ import basepath
 import campaignplan
 import campaignqueue
 import chat
+import clipcutter
 import clipledger
 import clipserve
 import council
@@ -4595,12 +4596,38 @@ def scan_clips() -> dict:
     return {"written": len(planned), "expired": len(stale), "timed_out": timed_out}
 
 
+def _clips_root() -> str:
+    """The clip folder as a real path, or "" when it is unset or missing."""
+    root = os.path.realpath(CLIPS_DIR) if CLIPS_DIR else ""
+    return root if root and os.path.isdir(root) else ""
+
+
+def sweep_clips() -> dict:
+    """The sweeps that hold whether or not any stream is live: a cutting row
+    whose cutter went silent fails, and an expired row loses its file. Without
+    a clip folder nothing is deleted and no row is marked."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT NOW() AS now")
+        timed_out = clipledger.time_out(cur, now=cur.fetchone()["now"])
+        root = _clips_root()
+        return {"timed_out": timed_out,
+                "deleted": clipledger.delete_expired(cur, root) if root else 0}
+
+
+def clip_tick() -> dict:
+    """One timer pass: the scan, then the sweeps, even when the scan fails."""
+    try:
+        return scan_clips()
+    finally:
+        sweep_clips()
+
+
 def start_clip_scanner(every: float = CLIP_SCAN_SECONDS, scan=None,
                        stop: threading.Event | None = None) -> threading.Thread:
-    """Run `scan` (scan_clips) every `every` seconds on a daemon thread."""
+    """Run `scan` (clip_tick) every `every` seconds on a daemon thread."""
     thread = threading.Thread(
         target=_sweep_until,
-        args=(stop or threading.Event(), every, scan or scan_clips,
+        args=(stop or threading.Event(), every, scan or clip_tick,
               "clip scan failed"),
         name="clip-scan", daemon=True)
     thread.start()
@@ -7144,6 +7171,56 @@ class Handler(BaseHTTPRequestHandler):
                              what="the clip shelf")
         return 200, clipledger.shelf(rows)
 
+    @_get_route("pending clips query failed")
+    def _clips_pending(query: dict, ctx) -> tuple[int, dict]:
+        """GET /api/clips/pending?paths=a,b - the pending rows on those stream paths,
+        oldest first, at most 10, with the database clock."""
+        if not _clips_root():
+            return 503, {"error": clipcutter.NO_DIR}
+        return clipcutter.pending(ctx.read, query.get("paths", [""])[0])
+
+    def _cutter_call(self, call) -> None:
+        """Answer a cutter POST: call(cur, query, root) -> (status, payload).
+        No clip folder is a 503 with a sentence; a failed write is the same 503
+        as every other route's."""
+        query = parse_qs(urlsplit(self.path).query)
+        root = _clips_root()
+        if not root:
+            code, payload = 503, {"error": clipcutter.NO_DIR}
+        else:
+            try:
+                with _connect() as conn, conn.cursor() as cur:
+                    code, payload = call(cur, query, root)
+            except Exception:
+                log.exception("cutter call failed: %s", self.path.split("?", 1)[0])
+                code, payload = 503, {"error": "world unreachable"}
+        self._send(code, "application/json", json.dumps(payload, default=str).encode())
+
+    def _clips_claim(self) -> None:
+        """POST /api/clips/claim?id=N - takes a pending row, which becomes cutting."""
+        self._cutter_call(lambda cur, q, _root: clipcutter.claim(
+            cur, q.get("id", [""])[0]))
+
+    def _clips_file(self) -> None:
+        """POST /api/clips/file?id=N[&note=...] - the MP4 as the request body, for a
+        cutting row; saved under a name the server derives, 128 MiB at most.
+
+        Streamed to the clip folder, never read whole."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        self._cutter_call(lambda cur, q, root: clipcutter.upload(
+            cur, q.get("id", [""])[0], self.rfile, length, root,
+            q.get("note", [""])[0]))
+
+    def _clips_result(self) -> None:
+        """POST /api/clips/result?id=N&state=no_view|failed&reason=X - a drop, from a
+        pending or cutting row, with its reason."""
+        self._cutter_call(lambda cur, q, _root: clipcutter.result(
+            cur, q.get("id", [""])[0], q.get("state", [""])[0],
+            q.get("reason", [""])[0]))
+
     GET_ROUTES = {
         # First, because it is the question every other row here answers
         # inside of (quadseven/mod-overseer#184).
@@ -7166,6 +7243,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/needs": _needs,
         "/api/loot": _loot,
         "/api/clips": _clips,
+        "/api/clips/pending": _clips_pending,
         "/api/runtimeline": _run_timeline,
         "/api/raidgoals": _raidgoals,
         "/api/guildgear": _guild_gear,
@@ -7203,6 +7281,11 @@ class Handler(BaseHTTPRequestHandler):
         "/api/watch": _watch_post,
         "/api/director": _director_post,
         "/api/frame": _frame_post,
+        # The cutter routes trust what /api/frame trusts: the capture agent's
+        # network path, with no token and no new credential.
+        "/api/clips/claim": _clips_claim,
+        "/api/clips/file": _clips_file,
+        "/api/clips/result": _clips_result,
     }
 
 

@@ -94,6 +94,9 @@ class TheRoutesSomethingReadsStay(unittest.TestCase):
                 "/api/watch": "_watch_post",
                 "/api/director": "_director_post",
                 "/api/frame": "_frame_post",
+                "/api/clips/claim": "_clips_claim",
+                "/api/clips/file": "_clips_file",
+                "/api/clips/result": "_clips_result",
             },
         )
 

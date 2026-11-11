@@ -3,7 +3,7 @@
 The stream agent reads the ledger only while it drives that stream, so a
 request it never saw would stay pending forever. A pending row whose window
 end is over 15 minutes old becomes no_view; a cutting row not touched for over
-an hour becomes failed. Each update names the state it replaces, so a row the
+10 minutes becomes failed. Each update names the state it replaces, so a row the
 agent finished in the meantime is left alone.
 """
 
@@ -48,8 +48,10 @@ class WhichRowsAreStale(unittest.TestCase):
     def test_a_fresh_pending_row_waits(self):
         self.assertEqual(self.plan(row(1, "pending", NOW - timedelta(minutes=3))), [])
 
-    def test_cutting_not_updated_for_over_an_hour_becomes_failed_with_a_detail(self):
-        stale = NOW - timedelta(hours=1, seconds=1)
+    def test_cutting_not_updated_for_over_ten_minutes_becomes_failed_with_a_detail(
+        self,
+    ):
+        stale = NOW - timedelta(minutes=10, seconds=1)
         (change,) = self.plan(row(2, "cutting", updated_at=stale))
         self.assertEqual((change["from"], change["to"]), ("cutting", "failed"))
         self.assertTrue(0 < len(change["detail"]) <= 80)

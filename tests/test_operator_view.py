@@ -223,7 +223,9 @@ class FormsPostWhereTheHandlersRead(unittest.TestCase):
         used = {a["path"] for a in self.actions.values()}
         # Frame uploads come from the stream agent, and watch lifecycle calls
         # remain available to clients outside this operator page.
-        self.assertEqual(used, routes - {"/api/frame", "/api/watch"})
+        # The cutter routes are called by the capture host, never by a form.
+        cutter = {r for r in routes if r.startswith("/api/clips/")}
+        self.assertEqual(used, routes - {"/api/frame", "/api/watch"} - cutter)
         self.assertIn("/api/frame", self.html)
 
     def test_each_form_posts_its_own_path_with_its_own_names(self):
