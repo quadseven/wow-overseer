@@ -5417,7 +5417,7 @@ def _pace_score(unscored: list, runs: list) -> list:
 # column.
 
 
-def _stuck_doors(cur, names: list, head: dict | None = None) -> dict:
+def _stuck_doors(cur, names: list, head: dict | None = None, parked_at=None) -> dict:
     """dungeonstall.stuck_doors for the family's runs in the window, on `cur`.
 
     With the queue entry `head` (carrying `created_at`), an operator's order is
@@ -5431,7 +5431,7 @@ def _stuck_doors(cur, names: list, head: dict | None = None) -> dict:
     if runs is None:
         runs = _planner_rows(cur, dungeonstall.RUNS_SQL.format(holes=marks), args,
                              "the run ledger by door")
-    runs = dungeonstall.since_order(runs or [], head)
+    runs = dungeonstall.since_order(runs or [], head, parked_at)
     ids = dungeonstall.event_ids(runs)
     if not ids:
         return {}
@@ -5451,9 +5451,12 @@ def _stall_barred(cur, key: str, names: list) -> dict:
     return {**dungeonstall.held_barred(held or []), **barred}
 
 
-def _stall_reads(names: list, head: dict | None = None) -> dict:
+def _stall_reads(
+    names: list, head: dict | None = None, parked: dict | None = None
+) -> dict:
     """The family's stuck doors. Reads only. An operator's `head` order is
-    judged on the runs after it was queued (#2058)."""
+    judged on the runs after it was queued (#2058), and after its last hold
+    (`parked_at`, #2216)."""
     with _connect() as conn, conn.cursor() as cur:
         if head is not None and dungeonpace.operator_ordered(head):
             rows = _planner_rows(
@@ -5461,7 +5464,7 @@ def _stall_reads(names: list, head: dict | None = None) -> dict:
                 (int(head["id"]),), "the order's queue time")
             if rows and rows[0].get("created_at") is not None:
                 head = {**head, "created_at": rows[0]["created_at"]}
-        return _stuck_doors(cur, names, head)
+        return _stuck_doors(cur, names, head, (parked or {}).get("created_at"))
 
 
 def _silent_seconds(head_id: int, names: list) -> int | None:
@@ -5702,13 +5705,26 @@ def _stall_held(key: str, door: str, head_id: int = 0) -> dict | None:
         return dict(rows[0]) if rows else None
 
 
+def _order_parked(key: str, door: str, head_id: int = 0) -> dict | None:
+    """The newest hold of an operator's order for this door (#2216), or None:
+    the pace row's id, when it was written (`created_at`), the seconds its
+    backoff has left (`left_s`, the database's clock) and whether queue row
+    `head_id` was ordered after it (`ordered_after`)."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(dungeonstall.PARKED_SQL,
+                    dungeonstall.parked_args(key, door, head_id))
+        rows = cur.fetchall()
+        return dict(rows[0]) if rows else None
+
+
 # (family key, door) -> the id of the pace row whose hold was last said, so
 # the held-door line is logged once per door per hold window (#1078).
 _STALL_HOLD_SAID: dict = {}
 
 
 def _stall_write(key: str, leave) -> None:
-    """Cancel the stuck door's entries and record why, in one transaction."""
+    """Cancel the stuck door's own entries (an operator's order is held, not
+    cancelled, #2216) and record why, in one transaction."""
     with _connect() as conn, conn.cursor() as cur:
         conn.begin()
         try:
@@ -5718,8 +5734,11 @@ def _stall_write(key: str, leave) -> None:
                 cur.execute(dungeonpace.CLOSE_SQL, ("left", int(opened["id"])))
             for qid in leave.drop:
                 cur.execute(dungeonstall.CANCEL_SQL, (qid,))
+            # An operator's order is held, never cancelled (#2216): its rows
+            # are not in `drop`, and its pace row is the hold's own decision.
             cur.execute(dungeonpace.INSERT_SQL, (
-                key, dungeonstall.DECISION, leave.door, "", leave.drop[0], "rule",
+                key, leave.decision, leave.door, "",
+                (leave.drop or leave.park)[0], "rule",
                 None, leave.why[:255], ""))
             cur.execute(dungeonpace.CLOSE_SQL, ("left", int(cur.lastrowid or 0)))
             conn.commit()
@@ -6182,7 +6201,13 @@ def _ensure_now_store() -> None:
 
 
 def _store_now_steps(steps, seen=None, mono=None) -> int:
-    """Insert each step, or bump the identical one seen a moment ago."""
+    """Store each step, or bump the identical one seen a moment ago.
+
+    A step missing from the in-memory map is looked up among the stored rows
+    before it is inserted: a bridge restart (every ship) empties the map, and
+    a fresh row would restart the 30-minute vendor wait, which is read from
+    the row's first sighting.
+    """
     seen = _NOW_SEEN if seen is None else seen
     now = time.monotonic() if mono is None else mono
     wrote = 0
@@ -6194,10 +6219,20 @@ def _store_now_steps(steps, seen=None, mono=None) -> int:
                 cur.execute(nowstatus.BUMP_SQL, (hit[0],))
                 seen[key] = (hit[0], now)
             else:
-                cur.execute(nowstatus.INSERT_SQL, (
-                    step.subject[:24], step.scope, step.kind[:24],
-                    step.doing[:200], step.waiting[:200]))
-                seen[key] = (int(cur.lastrowid), now)
+                values = (step.subject[:24], step.scope, step.kind[:24],
+                          step.doing[:200], step.waiting[:200])
+                cur.execute(nowstatus.FIND_SQL,
+                            (*values, int(nowstatus.SAME_STEP_SECONDS)))
+                found = cur.fetchone()
+                row_id = None
+                if found:
+                    row_id = found["id"] if isinstance(found, dict) else found[0]
+                if row_id:
+                    cur.execute(nowstatus.BUMP_SQL, (row_id,))
+                    seen[key] = (int(row_id), now)
+                else:
+                    cur.execute(nowstatus.INSERT_SQL, values)
+                    seen[key] = (int(cur.lastrowid), now)
             wrote += 1
         cur.execute(nowstatus.PRUNE_SQL, (nowstatus.KEEP_HOURS,))
     for key in [k for k, v in seen.items() if now - v[1] > nowstatus.SAME_STEP_SECONDS]:
@@ -13747,8 +13782,10 @@ class Bridge(discord.Client):
         # Read once and used for both halves, because releasing an errand from
         # one leader and aiming another would be two leaders.
         step = await self._settle_vendor_errand_and_should_yield(names, leader)
-        if step == vendor_stall.YIELD:
-            return
+        # A YIELD ENDS THE LEADER'S VISIT, NOT THE PASS (#2215): the rows for
+        # members standing at a counter are written below, and this pass is
+        # the only one that writes them.
+        step = bag_pressure.step_after_yield(step)
         # AND THE SAME SETTLING FOR EVERY OTHER ROW CARRYING THIS PASS'S OWN
         # KEYWORD (infra#3746). The line above hands back the errand the LEADER
         # is walking; this one hands back a `vendor` aim that ended up on
@@ -20543,9 +20580,19 @@ class Bridge(discord.Client):
         free_slots: dict, in_run: bool,
     ) -> int:
         """Give an isolated, pressured member its own same-map vendor walk."""
+        # A MEMBER AT A COUNTER IS LEFT TO SELL, NOT RE-AIMED (#2215): the
+        # aim would end the hold the module put on it so its rows find it.
+        # Looked up: the adapter tests load this method in isolation.
+        fetch_town = globals().get("_fetch_town")
+        standing = set()
+        for name in names if fetch_town is not None else ():
+            if name != leader and bool(
+                    (await asyncio.to_thread(fetch_town, name)).vendor):
+                standing.add(name)
+        at_counter = frozenset(standing)
         targets = bag_pressure.stranded_vendor_aims(
             names, leader, positions, free_slots,
-            pressure=True, in_run=in_run,
+            pressure=True, in_run=in_run, at_counter=at_counter,
         )
         aimed = 0
         for name in targets:
@@ -23282,7 +23329,13 @@ class Bridge(discord.Client):
         if raidrun.is_raid(str(rows[0].get("keyword") or "")):
             return False
         names = list(fam["names"])
-        stuck = await asyncio.to_thread(_stall_reads, names, rows[0])
+        # AN OPERATOR'S ORDER IS HELD, NEVER CANCELLED (#2216): inside its
+        # backoff the family steps past it; after, it runs again and is
+        # judged on the runs after the hold only.
+        parked, resting = await self._order_hold(key, rows[0])
+        if resting:
+            return self._order_step_past(key, rows, parked)
+        stuck = await asyncio.to_thread(_stall_reads, names, rows[0], parked)
         silent_stall = await asyncio.to_thread(_silent_stall, rows[0], names)
         if silent_stall is not None:
             stuck[silent_stall.door] = silent_stall
@@ -23296,7 +23349,10 @@ class Bridge(discord.Client):
         leave = dungeonstall.leave(rows, stuck)
         if leave is None:
             return False
-        held = await asyncio.to_thread(_stall_held, key, leave.door, int(rows[0]["id"]))
+        held = None
+        if not leave.park:
+            held = await asyncio.to_thread(
+                _stall_held, key, leave.door, int(rows[0]["id"]))
         # The held door is stepped past (#1078) only when this pass judges
         # it on ended runs or on silence: evidence about attempts already
         # over, which the leave inside the window already answered. A wedge
@@ -23317,6 +23373,36 @@ class Bridge(discord.Client):
             quest=True, why=leave.why), names, key)
         log.warning("stall: %s: %s", campaignqueue._family(key), said)
         return True
+
+    async def _order_hold(self, key: str, head: dict) -> tuple:
+        """(the hold on operator order `head`, whether it is resting now), or
+        (None, False) when `head` is not held (#2216)."""
+        door = campaignplan.wing_of(str(head.get("keyword") or ""))
+        if not door or not dungeonpace.operator_ordered(head):
+            return None, False
+        parked = dungeonstall.order_hold(head, await asyncio.to_thread(
+            _order_parked, key, door, int(head["id"])))
+        return parked, parked is not None and int(parked.get("left_s") or 0) > 0
+
+    def _order_step_past(self, key: str, rows: list, parked: dict) -> bool:
+        """The head order is held (#2216): step past it until its backoff
+        ends, saying so once per hold. Only when nothing is left behind it
+        does the queue hold (True)."""
+        door = campaignplan.wing_of(str(rows[0].get("keyword") or ""))
+        rest = [r for r in rows
+                if campaignplan.wing_of(str(r.get("keyword") or "")) != door]
+        marker = (key, door)
+        if _STALL_HOLD_SAID.get(marker) != parked["id"]:
+            _STALL_HOLD_SAID[marker] = parked["id"]
+            after = ("%s runs meanwhile" % council.keyword_place(str(rest[0]["keyword"]))
+                     if rest else "nothing else is queued, so the family waits")
+            log.info("stall: %s: the order for %s is held, not cancelled; it %s; %s",
+                     campaignqueue._family(key), door,
+                     dungeonstall.held_until_said(parked["left_s"]), after)
+        if not rest:
+            return True
+        rows[:] = rest
+        return False
 
     def _stall_step_past(self, key: str, rows: list, leave, held: dict) -> bool:
         """The head door was already left in this window (#1078): step past it.
@@ -30214,7 +30300,7 @@ _NEAREST_VENDOR_OFFSET_SQL = (
     "JOIN acore_world.creature cr ON cr.map = s.map_id "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
-    "AND (ct.npcflag & %s) <> 0 "
+    "AND (ct.npcflag & %s) <> 0 AND " + towntrip.REAL_SPAWN_SQL + " "
     "ORDER BY POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2) "
     "+ POW(cr.position_z - s.pos_z, 2) LIMIT 1"
 )
@@ -34291,7 +34377,8 @@ _BAG_VENDOR_SQL = (
     "JOIN acore_world.creature cr ON cr.id = nv.entry "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "JOIN acore_world.item_template it ON it.entry = nv.item "
-    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 "
+    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 AND "
+    + towntrip.REAL_SPAWN_SQL + " "
     "AND it.class = 1 AND it.subclass = 0 "
     "AND it.ContainerSlots > 0 AND it.BuyPrice > 0 "
     "AND ABS(cr.position_x - %s) <= %s AND ABS(cr.position_y - %s) <= %s "
@@ -34328,7 +34415,8 @@ _GEAR_VENDOR_SQL = (
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "JOIN acore_world.item_template it ON it.entry = nv.item "
     "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
-    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 AND nv.maxcount = 0 "
+    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 AND "
+    + towntrip.REAL_SPAWN_SQL + " AND nv.maxcount = 0 "
     "AND it.class IN (2,4) AND it.InventoryType BETWEEN 1 AND 28 "
     "AND it.BuyPrice > 0 "
     "AND ABS(cr.position_x - %s) <= %s AND ABS(cr.position_y - %s) <= %s "
@@ -34359,7 +34447,8 @@ _SUPPLY_VENDOR_SQL = (
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "JOIN acore_world.item_template it ON it.entry = nv.item "
     "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
-    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 AND nv.maxcount = 0 "
+    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 AND "
+    + towntrip.REAL_SPAWN_SQL + " AND nv.maxcount = 0 "
     "AND it.class = 0 AND it.subclass = 5 AND it.spellcategory_1 IN (%s, %s) "
     "AND (it.Flags & 2) = 0 AND it.BuyPrice > 0 AND it.RequiredLevel <= %s "
     "AND ABS(cr.position_x - %s) <= %s AND ABS(cr.position_y - %s) <= %s "
@@ -35537,7 +35626,7 @@ _NEAREST_COUNTER_SQL = (
     "JOIN acore_world.creature cr ON cr.map = s.map_id "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
-    "AND (ct.npcflag & %s) <> 0 "
+    "AND (ct.npcflag & %s) <> 0 AND " + towntrip.REAL_SPAWN_SQL + " "
     "ORDER BY d2 LIMIT 1"
 )
 
@@ -35781,7 +35870,8 @@ _ERRAND_VENDORS_SQL = (
     "FROM acore_world.creature cr "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
-    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 ORDER BY d2 LIMIT 60"
+    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 AND "
+    + towntrip.REAL_SPAWN_SQL + " ORDER BY d2 LIMIT 60"
 )
 
 
@@ -37502,7 +37592,7 @@ _TOWN_COUNTERS_SQL = (
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "LEFT JOIN acore_world.npc_vendor nv ON nv.entry = cr.id "
     "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
-    "AND (ct.npcflag & %s) <> 0"
+    "AND (ct.npcflag & %s) <> 0 AND " + towntrip.REAL_SPAWN_SQL
 )
 
 # Worn items and their wear, plus the three facts about the wearer that come
@@ -37869,7 +37959,8 @@ _REAGENT_VENDOR_SQL = (
     "FROM acore_world.npc_vendor nv "
     "JOIN acore_world.creature cr ON cr.id = nv.entry "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
-    "WHERE nv.item = %s AND cr.map = %s AND (ct.npcflag & %s) <> 0 "
+    "WHERE nv.item = %s AND cr.map = %s AND (ct.npcflag & %s) <> 0 AND "
+    + towntrip.REAL_SPAWN_SQL + " "
     "GROUP BY cr.id, ct.name, ct.faction, cr.map "
     "ORDER BY yards LIMIT %s"
 )
