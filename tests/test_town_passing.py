@@ -506,6 +506,11 @@ class TheListingWalkIsTakenOnlyForWhatCanBeListed(unittest.TestCase):
                 "_bank_policy": lambda names, fresh: {},
                 "_fetch_free_slots": lambda names: {n: 0 for n in names},
                 "_fetch_teams": lambda names: {n: "alliance" for n in names},
+                "_fetch_live_maps": lambda names: {n: 0 for n in names},
+                "_fetch_auctioneer_maps": lambda: {0, 1},
+                "_release_trade_errand": lambda name, role: (
+                    world.setdefault("released", []).append((name, role)) or True
+                ),
                 "_fetch_auction_listings": lambda entries, house: (
                     world.setdefault("priced", []).append((entries, house)) or listings
                 ),
@@ -593,6 +598,108 @@ class TheListingWalkIsTakenOnlyForWhatCanBeListed(unittest.TestCase):
         self.assertIn(
             "auction: leader=Grug aimed to list 1 surplus BoE item(s)", log.lines
         )
+
+
+class TheListingWalkSkipsAMapWithNoAuctioneer(unittest.TestCase):
+    """wow-overseer#2141: the listing walk aimed the leader at an auctioneer
+    with no map check, so on a map carrying no auctioneer spawn the aim could
+    never resolve and was re-issued while the family recorded no movement and
+    no reason to wait. The craft-reagent walk already releases and skips on
+    such a map; the listing walk now does the same."""
+
+    def run_pass(self, leader_map, auctioneer_maps):
+        import auction
+
+        world, log = {"written": []}, _Log()
+        candidate = {
+            "holder": "Og",
+            "item_guid": 7,
+            "entry": 18665,
+            "quality": 2,
+            "binding": "boe",
+            "sell_price": 100,
+            "label": "Eye",
+        }
+        listing = auction.Listing(auction_id=1, entry=18665, buyout=5000)
+        ns = _base(world)
+        ns.update(
+            {
+                "log": log,
+                "auction": auction,
+                "_fetch_surplus_gear": lambda names: [],
+                "_fetch_family_equipped": lambda names: [],
+                "bag_pressure": types.SimpleNamespace(
+                    family_fits=lambda gear, equipped, names: {},
+                    family_town_run_needed=lambda slots: True,
+                    VENDOR_ERRAND_AIM="aim",
+                ),
+                "tidy": types.SimpleNamespace(members_from_rows=lambda rows: []),
+                "_clearance_listings": lambda plan: [candidate],
+                "_bank_policy": lambda names, fresh: {},
+                "_fetch_free_slots": lambda names: {n: 0 for n in names},
+                "_fetch_teams": lambda names: {n: "alliance" for n in names},
+                "_fetch_live_maps": lambda names: {n: leader_map for n in names},
+                "_fetch_auctioneer_maps": lambda: auctioneer_maps,
+                "_release_trade_errand": lambda name, role: (
+                    world.setdefault("released", []).append((name, role)) or True
+                ),
+                "_fetch_auction_listings": lambda entries, house: [listing],
+                "_log_changed": lambda prefix, notes, key=(), capped=True: (
+                    log.lines.extend("%s: %s" % (prefix, n) for n in notes)
+                ),
+            }
+        )
+        ns = _load(
+            [
+                "_auction_sales_once",
+                "_auction_list_walk",
+                "_auction_listable_at_home",
+                *HELPERS,
+            ],
+            ns,
+        )
+
+        class Me:
+            claims = []
+            spent = []
+
+            async def _clearance_plan(self, names, leader, auction_open):
+                return ()
+
+            async def _auction_holder_houses(self, candidates, names):
+                return {}
+
+            async def _claim_town_slot(self, *a, urgent=False, cohort=None):
+                self.claims.append((a, urgent, cohort))
+                return True
+
+            def _auction_urgency_spent(self, cohort, why, urgent):
+                self.spent.append((why, urgent))
+
+            async def _auction_listable_at_home(self, candidates, leader):
+                return await ns["_auction_listable_at_home"](self, candidates, leader)
+
+            async def _auction_list_walk(self, candidates, names, leader, cohort):
+                return await ns["_auction_list_walk"](
+                    self, candidates, names, leader, cohort
+                )
+
+        me = Me()
+        me.claims, me.spent = [], []
+        asyncio.run(ns["_auction_sales_once"](me, ALLIANCE, "Grug", "aim", None))
+        return world, log, me
+
+    def test_no_aim_and_a_release_when_the_map_has_no_auctioneer(self):
+        world, log, me = self.run_pass(leader_map=1, auctioneer_maps={0})
+        self.assertEqual([], me.claims)
+        self.assertEqual([], me.spent)
+        self.assertEqual([("Grug", "auctioneer")], world.get("released", []))
+        self.assertTrue(any("no auctioneer spawn" in ln for ln in log.lines), log.lines)
+
+    def test_the_walk_still_aims_when_the_map_has_an_auctioneer(self):
+        world, log, me = self.run_pass(leader_map=0, auctioneer_maps={0})
+        self.assertEqual(1, len(me.claims))
+        self.assertEqual([], world.get("released", []))
 
 
 if __name__ == "__main__":
