@@ -647,6 +647,27 @@ def gather_tool_errand(
     return None, None
 
 
+def gather_tool_need(
+    name: str,
+    trades: frozenset,
+    held: frozenset,
+    town: "towntrip.Town",
+    tools: dict,
+    tool_entries: dict,
+) -> "Need | None":
+    """The trip this member's gathering tool needs, or None.
+
+    `gather_tool_errand`'s sibling, as `hammer_need` is `hammer_errand`'s:
+    the trade is held, no tool of it is carried or banked, and no counter in
+    reach stocks it. The first such trade, as in the errand.
+    """
+    for skill, (entry, label, _price) in tools.items():
+        if skill not in trades or held & tool_entries[skill]:
+            continue
+        return None if entry in town.stocks else Need(name, entry, label)
+    return None
+
+
 def hammer_need(
     name: str, craft_spell: int, holds_hammer: bool, town: "towntrip.Town"
 ) -> "Need | None":

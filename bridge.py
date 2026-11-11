@@ -9978,7 +9978,8 @@ class Bridge(discord.Client):
         # (the module ticket): its buy rows and its walk join the same single trip.
         queued, needs = await self._buy_blacksmith_hammers(spells, names)
         # The family's own Mining Pick and Skinning Knife: guild jobs never plan for the family.
-        await self._buy_gather_tools(names)
+        _tool_rows, tool_needs = await self._buy_gather_tools(names)
+        needs = [*needs, *tool_needs]
         if not candidates and not multi_candidates:
             await self._walk_for_hammers(needs, cohort)
             log.info(
@@ -10489,35 +10490,49 @@ class Bridge(discord.Client):
                 log.info("craft_supply: %s - %s", name, note)
         return queued, needs
 
-    async def _buy_gather_tools(self, names: list) -> int:
+    async def _buy_gather_tools(self, names: list) -> tuple:
         """Queue a Mining Pick or Skinning Knife for each member holding the trade without it.
 
         Guild jobs plan this buy for guild members outside the family only
         (ticket 2267). The decision is `craft_supply.gather_tool_errand`, fed
         the guildjobs tables; this reads the world and writes its answer.
-        One buy per member per pass. Returns the rows queued.
+        One buy per member per pass, and none while an earlier row for the
+        same tool is still open. Returns (rows queued, needs for the
+        caller's one walk).
         """
         trades = await asyncio.to_thread(_fetch_gather_trades, names)
         if not trades:
-            return 0
+            return 0, []
         held = await asyncio.to_thread(_fetch_tool_holdings, list(trades))
         purses = await asyncio.to_thread(_fetch_purses, list(trades))
         free_slots = await asyncio.to_thread(_fetch_free_slots, list(trades))
         queued = 0
+        needs: list = []
         for name in sorted(trades):
             town = await asyncio.to_thread(_fetch_town, name)
             _level, money = purses.get(name, (0, 0))
+            owned = frozenset(held.get(name, ()))
+            need = craft_supply.gather_tool_need(
+                name, frozenset(trades[name]), owned, town,
+                guildjobs.TOOLS, guildjobs.TOOL_ENTRIES,
+            )
+            if need:
+                needs.append(need)
             errand, note = craft_supply.gather_tool_errand(
-                name, frozenset(trades[name]), frozenset(held.get(name, ())),
+                name, frozenset(trades[name]), owned,
                 money, free_slots.get(name, 0), town,
                 guildjobs.TOOLS, guildjobs.TOOL_ENTRIES,
             )
             if note:
                 log.info("craft_supply: %s", note)
-            elif errand and await asyncio.to_thread(_insert_town_errand, errand):
-                queued += 1
-                log.info("craft_supply: %s %s - %s", name, errand.command, errand.why)
-        return queued
+            elif errand:
+                row_id, note = await asyncio.to_thread(_insert_gather_tool_errand, errand)
+                if row_id:
+                    queued += 1
+                    log.info("craft_supply: %s %s - %s", name, errand.command, errand.why)
+                else:
+                    log.info("craft_supply: %s - %s", name, note)
+        return queued, needs
 
     async def _buy_fishing_poles(self, names: list, cohort=None) -> tuple:
         """Queue a Fishing Pole for every member holding none (mod-overseer#530).
@@ -38861,17 +38876,51 @@ def _hammer_purchase(cur, errand, recipe: int) -> tuple:
         (errand.member, craft.BLACKSMITH_HAMMER))
     if cur.fetchone():
         return 0, "hammer already owned"
-    cur.execute(
-        "SELECT id FROM overseer_command WHERE target_name = %s "
-        "AND kind = 'buy' AND command = %s AND source = 'towntrip' "
-        "AND status IN ('pending', 'claimed', 'verifying') LIMIT 1",
-        (errand.member, errand.command))
-    if cur.fetchone():
+    if _buy_pending(cur, errand.member, craft.BLACKSMITH_HAMMER):
         return 0, "purchase already pending"
     cur.execute(
         "INSERT INTO overseer_command (target_name, command, kind, target_arg, source) "
         "VALUES (%s, %s, 'buy', '', 'towntrip')", (errand.member, errand.command))
     return int(cur.lastrowid or 0), "hammer purchase queued"
+
+
+def _buy_pending(cur, member: str, entry: int) -> bool:
+    """Whether this member has a town buy row for `entry` the world has not finished."""
+    cur.execute(
+        "SELECT id FROM overseer_command WHERE target_name = %s "
+        "AND kind = 'buy' AND command LIKE %s AND source = 'towntrip' "
+        "AND status IN ('pending', 'claimed', 'verifying') LIMIT 1",
+        (member, f"entry:{entry} %"))
+    return bool(cur.fetchone())
+
+
+def _insert_gather_tool_errand(errand) -> tuple:
+    """Queue a gathering-tool buy unless one for the same entry is still open.
+
+    The hammer's transaction, without its standing-craft recheck: the roster
+    row is locked so two passes cannot both see no pending row.
+    """
+    entry = int(errand.command.split()[0].split(":")[1])
+    with _connect() as conn, conn.cursor() as cur:
+        conn.begin()
+        try:
+            cur.execute("SELECT name FROM overseer_roster WHERE name = %s FOR UPDATE",
+                        (errand.member,))
+            cur.fetchone()
+            if _buy_pending(cur, errand.member, entry):
+                result = (0, "purchase already pending")
+            else:
+                cur.execute(
+                    "INSERT INTO overseer_command "
+                    "(target_name, command, kind, target_arg, source) "
+                    "VALUES (%s, %s, 'buy', '', 'towntrip')",
+                    (errand.member, errand.command))
+                result = (int(cur.lastrowid or 0), "tool purchase queued")
+            conn.commit()
+            return result
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def _insert_hammer_errand(errand, recipe: int) -> tuple:

@@ -9,9 +9,11 @@ import asyncio
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
+import craft_rhythm
 import craft_supply
+import guildcorps
 import guildjobs
 from towntrip import Town
 
@@ -86,6 +88,37 @@ class GatherToolErrand(unittest.TestCase):
         self.assertEqual(errand.command, "entry:7005 count:1 max:82")
 
 
+class GatherToolNeed(unittest.TestCase):
+    def need(self, trades, held=(), at=()):
+        return craft_supply.gather_tool_need(
+            "Og",
+            frozenset(trades),
+            frozenset(held),
+            town(*at),
+            guildjobs.TOOLS,
+            guildjobs.TOOL_ENTRIES,
+        )
+
+    def test_a_miner_away_from_a_pick_counter_needs_a_pick(self):
+        self.assertEqual(
+            self.need({MINING}), craft_supply.Need("Og", PICK, "Mining Pick")
+        )
+
+    def test_a_skinner_away_from_a_knife_counter_needs_a_knife(self):
+        self.assertEqual(
+            self.need({SKINNING}), craft_supply.Need("Og", KNIFE, "Skinning Knife")
+        )
+
+    def test_no_need_at_a_stocking_counter(self):
+        self.assertIsNone(self.need({MINING}, at=(PICK,)))
+
+    def test_no_need_when_the_tool_is_held(self):
+        self.assertIsNone(self.need({MINING}, held={PICK}))
+
+    def test_no_need_without_the_trade(self):
+        self.assertIsNone(self.need(set()))
+
+
 _TREE = ast.parse((Path(__file__).resolve().parents[1] / "bridge.py").read_text())
 
 
@@ -93,7 +126,7 @@ def load(name, namespace):
     node = next(
         n
         for n in ast.walk(_TREE)
-        if isinstance(n, ast.AsyncFunctionDef) and n.name == name
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name
     )
     exec(
         compile(ast.Module(body=[node], type_ignores=[]), "bridge.py", "exec"),
@@ -103,9 +136,24 @@ def load(name, namespace):
 
 
 class BridgeBuyer(unittest.TestCase):
-    def run_pass(self, trades, held=None, purses=None, slots=None, at=(PICK, KNIFE)):
+    def run_pass(
+        self,
+        trades,
+        held=None,
+        purses=None,
+        slots=None,
+        at=(PICK, KNIFE),
+        pending=False,
+    ):
         written = []
         log = Mock()
+
+        def insert(errand):
+            if pending:
+                return 0, "purchase already pending"
+            written.append(errand)
+            return len(written), "tool purchase queued"
+
         ns = dict(
             asyncio=asyncio,
             craft_supply=craft_supply,
@@ -116,10 +164,10 @@ class BridgeBuyer(unittest.TestCase):
             _fetch_purses=lambda names: purses or {"Og": (20, 1000)},
             _fetch_free_slots=lambda names: slots if slots is not None else {"Og": 3},
             _fetch_town=lambda name: town(*at),
-            _insert_town_errand=lambda errand: written.append(errand) or len(written),
+            _insert_gather_tool_errand=insert,
         )
         buyer = load("_buy_gather_tools", ns)
-        queued = asyncio.run(buyer(SimpleNamespace(), ["Og"]))
+        queued, self.needs = asyncio.run(buyer(SimpleNamespace(), ["Og"]))
         lines = [call.args[0] % call.args[1:] for call in log.info.call_args_list]
         return queued, written, lines
 
@@ -156,6 +204,144 @@ class BridgeBuyer(unittest.TestCase):
         self.assertEqual(written, [])
         self.assertEqual(len(lines), 1)
         self.assertIn("no reachable vendor", lines[0])
+
+    def test_no_vendor_returns_the_need_for_the_walk(self):
+        self.run_pass({"Og": {MINING}}, at=())
+        self.assertEqual(self.needs, [craft_supply.Need("Og", PICK, "Mining Pick")])
+
+    def test_a_stocking_counter_returns_no_need(self):
+        self.run_pass({"Og": {MINING}})
+        self.assertEqual(self.needs, [])
+
+    def test_a_pending_buy_gets_no_second_row_and_the_log_says_so_once(self):
+        queued, written, lines = self.run_pass({"Og": {MINING}}, pending=True)
+        self.assertEqual((queued, written), (0, []))
+        self.assertEqual(len(lines), 1)
+        self.assertIn("already pending", lines[0])
+
+    def test_no_pending_buy_inserts_one_row(self):
+        queued, written, _ = self.run_pass({"Og": {MINING}})
+        self.assertEqual((queued, len(written)), (1, 1))
+
+
+class PendingCursor:
+    """SQL boundary double for the tool writer: pending state is the database's."""
+
+    def __init__(self, pending=False):
+        self.pending = pending
+        self.inserts = []
+        self.calls = []
+        self.result = None
+        self.lastrowid = 88
+
+    def execute(self, sql, params):
+        self.calls.append((sql, params))
+        if sql.startswith("SELECT id FROM overseer_command"):
+            self.result = {"id": 71} if self.pending else None
+        elif "FOR UPDATE" in sql:
+            self.result = {"name": "Og"}
+        elif sql.startswith("INSERT INTO overseer_command"):
+            self.inserts.append(params)
+        else:
+            raise AssertionError(sql)
+
+    def fetchone(self):
+        return self.result
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def begin(self):
+        pass
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+    def cursor(self):
+        return self
+
+
+class ToolWriter(unittest.TestCase):
+    def write(self, cursor):
+        ns = dict(_connect=lambda: cursor)
+        load("_buy_pending", ns)
+        writer = load("_insert_gather_tool_errand", ns)
+        errand, _ = craft_supply.gather_tool_errand(
+            "Og",
+            frozenset({MINING}),
+            frozenset(),
+            1000,
+            3,
+            town(PICK),
+            guildjobs.TOOLS,
+            guildjobs.TOOL_ENTRIES,
+        )
+        return writer(errand)
+
+    def test_a_pending_row_for_the_entry_blocks_a_second(self):
+        cursor = PendingCursor(pending=True)
+        self.assertEqual(self.write(cursor), (0, "purchase already pending"))
+        self.assertEqual(cursor.inserts, [])
+
+    def test_no_pending_row_inserts_one(self):
+        cursor = PendingCursor()
+        row_id, _ = self.write(cursor)
+        self.assertEqual(row_id, 88)
+        self.assertEqual(cursor.inserts, [("Og", "entry:2901 count:1 max:81")])
+        pending_sql, pending_params = next(
+            c for c in cursor.calls if c[0].startswith("SELECT id")
+        )
+        self.assertIn("'pending', 'claimed', 'verifying'", pending_sql)
+        self.assertIn("entry:2901 ", str(pending_params))
+
+
+class SupplyPassWiring(unittest.IsolatedAsyncioTestCase):
+    def namespace(self, mode="quest"):
+        return dict(
+            asyncio=asyncio,
+            craft_rhythm=craft_rhythm,
+            craft_supply=craft_supply,
+            guildcorps=guildcorps,
+            _names_of=lambda cohort: ["Og"],
+            _standing_jobs=lambda family: {"Og": mode},
+            _standin_out=lambda: set(),
+            _fetch_standing_crafts=lambda names: {},
+            log=Mock(),
+        )
+
+    def owner(self, needs):
+        return SimpleNamespace(
+            _dark_iron_once=AsyncMock(),
+            _buy_blacksmith_hammers=AsyncMock(return_value=(0, [])),
+            _buy_gather_tools=AsyncMock(return_value=(1, needs)),
+            _walk_for_hammers=AsyncMock(),
+            _walk_for_reagents=AsyncMock(),
+        )
+
+    async def test_the_pass_calls_the_tool_buyer_on_a_gather_job(self):
+        run = load("_craft_supply_once", self.namespace())
+        owner = self.owner([])
+        await run(owner, None)
+        owner._buy_gather_tools.assert_awaited_once_with(["Og"])
+
+    async def test_the_tool_needs_reach_the_walk(self):
+        need = craft_supply.Need("Og", PICK, "Mining Pick")
+        run = load("_craft_supply_once", self.namespace())
+        owner = self.owner([need])
+        await run(owner, None)
+        self.assertIn(need, owner._walk_for_hammers.await_args.args[0])
+
+    async def test_a_job_the_pass_does_not_act_on_never_buys_tools(self):
+        run = load("_craft_supply_once", self.namespace(mode="dungeon:zulfarrak"))
+        owner = self.owner([])
+        await run(owner, None)
+        owner._buy_gather_tools.assert_not_awaited()
 
 
 if __name__ == "__main__":
