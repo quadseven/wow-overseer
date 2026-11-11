@@ -263,12 +263,14 @@ class TheScan(unittest.TestCase):
             ]
         )
         result = scan(store, Realm())
-        self.assertEqual({"no_view": 1, "failed": 1}, result["timed_out"])
+        self.assertEqual({"no_view": 0, "failed": 2}, result["timed_out"])
         writes = store.writes()
         self.assertEqual(2, len(writes))
         for sql, _params in writes:
             self.assertIn("AND state = %s", sql)
-        self.assertEqual((("no_view", 5, "pending")), writes[0][1])
+        self.assertEqual(
+            ("failed", clipledger.PENDING_FAILED_DETAIL, 5, "pending"), writes[0][1]
+        )
 
     def test_retention_updates_state_one_id_at_a_time_and_never_deletes(self):
         old = NOW - timedelta(days=45)

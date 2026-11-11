@@ -543,11 +543,42 @@ class RestartAndBackfillTests(unittest.TestCase):
         rows = plan(loot_rows=[loot(7), loot(7)])
         self.assertEqual(1, len(rows))
 
-    def test_events_older_than_the_agent_buffer_are_not_backfilled(self):
+    def test_an_event_seen_after_its_footage_left_the_buffer_is_a_failed_row(self):
         old = NOW - clipledger.AGENT_BUFFER - timedelta(minutes=1)
-        self.assertEqual([], plan(loot_rows=[loot(7, at=old)]))
+        (row,) = plan(loot_rows=[loot(7, at=old)])
+        self.assertEqual("failed", row["state"])
+        self.assertIn(clipledger.LATE_DETAIL, row["detail"])
         up = {"id": 3, "character_name": "Alder", "kind": "level_up", "level": 60}
-        self.assertEqual([], plan(event_rows=[dict(up, first_seen=old)]))
+        (row,) = plan(event_rows=[dict(up, first_seen=old)])
+        self.assertEqual("failed", row["state"])
+        self.assertIn(clipledger.LATE_DETAIL, row["detail"])
+
+    def test_history_older_than_the_late_horizon_is_not_recorded(self):
+        old = NOW - clipledger.LATE_HORIZON - timedelta(minutes=1)
+        self.assertEqual([], plan(loot_rows=[loot(7, at=old)]))
+
+    def test_a_late_row_is_written_once_per_event_key(self):
+        old = NOW - clipledger.AGENT_BUFFER - timedelta(minutes=1)
+        (row,) = plan(loot_rows=[loot(7, at=old), loot(7, at=old)])
+        again = plan(loot_rows=[loot(7, at=old)], existing_keys=[row["event_key"]])
+        self.assertEqual([], again)
+
+    def test_a_late_row_without_a_stream_path_is_late_not_no_view(self):
+        old = NOW - clipledger.AGENT_BUFFER - timedelta(minutes=1)
+        (row,) = plan(loot_rows=[loot(7, at=old)], path_of=lambda who: "")
+        self.assertEqual("failed", row["state"])
+
+    def test_a_late_row_keeps_the_view_text_ahead_of_its_reason(self):
+        old = NOW - clipledger.AGENT_BUFFER - timedelta(minutes=1)
+        (row,) = plan(
+            loot_rows=[in_dungeon(loot(7, who="Cedar", at=old))],
+            runs=[run()],
+            roster=FAMILY,
+            path_of=only("Alder"),
+        )
+        self.assertEqual("failed", row["state"])
+        self.assertIn("view: Alder (leader)", row["detail"])
+        self.assertTrue(row["detail"].endswith("; " + clipledger.LATE_DETAIL))
 
     def test_a_window_start_still_inside_the_buffer_is_written(self):
         at = NOW - clipledger.AGENT_BUFFER + timedelta(minutes=1)
