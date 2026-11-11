@@ -1,0 +1,9 @@
+/* The clips shelf, and the clip link on stories and run cards. */
+.clip-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); }
+.clip-card { gap: 8px; min-width: 0; }
+.clip-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.clip-who { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
+.clip-video { width: 100%; max-width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: var(--radius-md); }
+.clip-play { justify-content: center; width: 100%; }
+.clip-link { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+.clip-note { font-size: var(--fs-1); }

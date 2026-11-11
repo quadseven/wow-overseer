@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import pymysql
 
@@ -41,6 +41,7 @@ import campaignplan
 import campaignqueue
 import chat
 import clipledger
+import clipserve
 import council
 import crossing
 import decree
@@ -2060,8 +2061,13 @@ def _fetch_loot() -> dict:
                 tuple(entries),
             )
             items = {int(r["entry"]): r for r in item_rows}
+        keys = lootstory.clip_keys(rows)
+        clip_rows = (rd.rows(
+            _LOOT_CLIPS_SQL.format(holes=", ".join(["%s"] * len(keys))),  # noqa: S608 - placeholders from a COUNT, values bound
+            tuple(keys), what="the loot clips") if keys else [])
     return {"rows": rows, "items": items, "icons": ITEMS.icons, "book": ITEMS,
-            "council_rows": council_rows}
+            "council_rows": council_rows,
+            "clips": {r["event_key"]: r for r in clip_rows}}
 
 
 # THE LOOT COUNCIL'S ROWS (#194), newest first, for the Chronicle and Bags.
@@ -3783,8 +3789,27 @@ def _fetch_run_timeline() -> dict:
                 what="overseer_death")
         bosses = _run_bosses(rd) if deaths else frozenset()
         reports = _run_reports(rd, rows, len(families) * runtimeline.RUNS_PER_FAMILY)
+        clips = (rd.rows(_RUN_CLIPS_SQL, (runtimeline.WINDOW_HOURS,), what="clear clips")
+                 if rows else [])
     return {"rows": rows, "families": families, "present": present,
-            "deaths": deaths, "bosses": bosses, "reports": reports}
+            "deaths": deaths, "bosses": bosses, "reports": reports, "clips": clips}
+
+
+# The ledger's clear rows over the timeline's hours, aged by the database the
+# same way the run rows are, so a run and its clear are matched on one clock.
+_RUN_CLIPS_SQL = (
+    "SELECT event_key, kind, `character`, state, file_name,"
+    " TIMESTAMPDIFF(SECOND, event_at, NOW()) AS age_seconds FROM overseer_clip"
+    " WHERE event_key LIKE 'clear:%%' AND state IN ('ready', 'no_view')"
+    " AND event_at > NOW() - INTERVAL %s HOUR"
+)
+
+# The ledger rows of these loot events, for the story links. Only the two
+# states a story says something about.
+_LOOT_CLIPS_SQL = (
+    "SELECT event_key, kind, state, file_name FROM overseer_clip"
+    " WHERE event_key IN ({holes}) AND state IN ('ready', 'no_view')"
+)
 
 
 def _run_reports(rd, rows: list, limit: int) -> dict:
@@ -4327,6 +4352,18 @@ def start_stream_sweeper(every: float = STREAM_SWEEP_SECONDS, sweep=None,
 # this process. The bridge tick has none of those helpers.
 CLIP_SCAN_SECONDS = 60
 
+# The directory the stream agent's saved clips are mounted in, read-only. Unset
+# or missing means no clips: the shelf is empty and nothing errors.
+CLIPS_DIR = os.environ.get("CLIPS_DIR", "")
+CLIPS_PREFIX = "/clips/"
+
+# The ONLY way a request's name reaches a file: as a bound value here. The
+# path that is opened is built from the file_name this row gives back.
+_CLIP_FILE_SQL = (
+    "SELECT file_name FROM overseer_clip"
+    " WHERE file_name = %s AND state = 'ready' LIMIT 1"
+)
+
 # Loot is held until its equip is seen or the wait runs out, and a clip can be
 # cut only inside the agent's buffer, so rows older than this are never needed.
 _CLIP_LOOT_MINUTES = 20
@@ -4434,6 +4471,36 @@ def _read_clip_history(roster: list) -> dict:
     return {"event_rows": f["event_rows"], "cleared_runs": _cleared_run_cards(f)}
 
 
+_CLIP_SHELF_SQL = (
+    "SELECT id, kind, `character`, event_at, state, file_name FROM overseer_clip"
+    " WHERE state = 'ready' AND file_name IS NOT NULL"
+    " ORDER BY event_at DESC, id DESC LIMIT %s"
+)
+
+_LEDGER_DOWN = object()
+
+
+def _ready_clip_path(name: str):
+    """The path of the ready clip whose ledger file_name is `name`, or "" for
+    anything else (no directory, no ready row, a stored name that is not one
+    plain file name, a file outside the directory). _LEDGER_DOWN when the
+    ledger cannot be read."""
+    root = os.path.realpath(CLIPS_DIR) if CLIPS_DIR else ""
+    if not root or not os.path.isdir(root):
+        return ""
+    try:
+        with realmread.Session(_connect) as rd:
+            rows = rd.rows(_CLIP_FILE_SQL, (name,), what="a clip file")
+    except Exception:
+        log.exception("clip ledger read failed")
+        return _LEDGER_DOWN
+    stored = (rows[0].get("file_name") or "") if rows else ""
+    if not stored or stored != os.path.basename(stored) or stored.startswith("."):
+        return ""
+    full = os.path.realpath(os.path.join(root, stored))
+    return full if full.startswith(root + os.sep) and os.path.isfile(full) else ""
+
+
 def _ensure_clip_store() -> None:
     """Create overseer_clip if it is missing. Idempotent."""
     with _connect() as conn, conn.cursor() as cur:
@@ -4505,7 +4572,8 @@ def scan_clips() -> dict:
         stale = clipledger.expired_ids(cur.fetchall(), now=found["now"])
         if stale:
             cur.executemany(_CLIP_EXPIRE, [(i,) for i in stale])
-    return {"written": len(planned), "expired": len(stale)}
+        timed_out = clipledger.time_out(cur, now=found["now"])
+    return {"written": len(planned), "expired": len(stale), "timed_out": timed_out}
 
 
 def start_clip_scanner(every: float = CLIP_SCAN_SECONDS, scan=None,
@@ -5418,6 +5486,9 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith(APP_PREFIX):
                 self._app_file(path[len(APP_PREFIX):])
                 return
+            if path.startswith(CLIPS_PREFIX):
+                self._clip_file(unquote(path[len(CLIPS_PREFIX):]))
+                return
             if path.startswith(apiv2.PREFIX):
                 with FAMILIES.request():
                     self._v2(path, parse_qs(urlsplit(self.path).query))
@@ -5500,6 +5571,43 @@ class Handler(BaseHTTPRequestHandler):
             return
         # Open the path that was checked, not one rebuilt from `rel`.
         self._send_file("app file", _APP_TYPES[kind], path=full)
+
+    def _clip_file(self, name: str) -> None:
+        """GET /clips/<file> - a saved clip, streamed, with Range support.
+
+        Only a file name the ledger holds in a ready row is served, and the
+        file opened is the one the ROW names, never the request's text. No
+        directory, or no such row or file, is a 404 and no error.
+        """
+        found = _ready_clip_path(name)
+        if found is _LEDGER_DOWN:
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+            return
+        try:
+            f = open(found, "rb") if found else None
+        except OSError:
+            f = None
+        if f is None:
+            self._send(404, "text/plain", b"not found")
+            return
+        with f:
+            size = os.fstat(f.fileno()).st_size
+            span = clipserve.parse_range(self.headers.get("Range"), size)
+            if span == clipserve.UNSATISFIABLE:
+                self.send_response(416)
+                self.send_header("Content-Range", "bytes */%d" % size)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(206 if span else 200)
+            clipserve.headers(size, span, send=self.send_header)
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            first, last = span if span else (0, size - 1)
+            try:
+                clipserve.stream(f, self.wfile, first, last)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the player seeked away or closed; nothing to report
 
     def _v2(self, path: str, query: dict) -> None:
         """GET /api/v2/... - the reads the operations app adds (apiv2/)."""
@@ -5768,7 +5876,8 @@ class Handler(BaseHTTPRequestHandler):
         payload = lootstory.build_loot(
             fetched["rows"], recap.zone_names(GEO.continents),
             items=fetched["items"], icons=fetched["icons"], book=fetched["book"],
-            council=lootcouncil.by_item_guid(council))
+            council=lootcouncil.by_item_guid(council),
+            clips=fetched.get("clips"))
         payload["council"] = lootcouncil.board(council)
         return 200, payload
 
@@ -5940,7 +6049,8 @@ class Handler(BaseHTTPRequestHandler):
         payload = runtimeline.build_run_timeline(
             fetched["rows"], fetched["families"], present=fetched["present"],
             deaths=fetched["deaths"], bosses=fetched["bosses"],
-            zones=recap.zone_names(GEO.continents), reports=fetched["reports"])
+            zones=recap.zone_names(GEO.continents), reports=fetched["reports"],
+            clips=fetched.get("clips"))
         return 200, payload
 
     @_get_route("recap query failed")
@@ -7001,6 +7111,18 @@ class Handler(BaseHTTPRequestHandler):
             return 404, {"error": "no such item"}
         return 200, payload
 
+    @_get_route("clip shelf query failed", default=str)
+    def _clips(_query: dict, ctx) -> tuple[int, dict]:
+        """GET /api/clips - the saved clips, newest first.
+
+        Only clips in a ready row, each with its kind, character, event time
+        and the URL the file is served at. A realm with no ledger yet answers
+        an empty shelf. A failed read answers 503 (_answer).
+        """
+        rows = ctx.read.rows(_CLIP_SHELF_SQL, (clipledger.SHELF_LIMIT,),
+                             what="the clip shelf")
+        return 200, clipledger.shelf(rows)
+
     GET_ROUTES = {
         # First, because it is the question every other row here answers
         # inside of (quadseven/mod-overseer#184).
@@ -7022,6 +7144,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/questlog": _questlog,
         "/api/needs": _needs,
         "/api/loot": _loot,
+        "/api/clips": _clips,
         "/api/runtimeline": _run_timeline,
         "/api/raidgoals": _raidgoals,
         "/api/guildgear": _guild_gear,

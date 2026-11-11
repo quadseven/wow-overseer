@@ -21,6 +21,7 @@ import { guild as guildModel } from "../models/guild.js";
 import { roster as rosterModel } from "../models/roster.js";
 import { items as achItems, notable } from "../models/achievements.js";
 import { feedRow as achRow, CSS as ACH_CSS } from "./_achievements.js";
+import { clipLink, shelf as clipShelf, bindShelf as bindClips, CSS as CLIPS_CSS, READ as CLIPS_READ } from "./_clips.js";
 
 const TABS = [["progress", "Progress"], ["runs", "Runs"], ["chronicle", "Chronicle"]];
 const FEED_KINDS = [
@@ -55,6 +56,7 @@ const P = {
   timeline: () => "/api/runtimeline",
   chronicle: (ctx) => "/api/v2/chronicle?guild=" + slug(ctx),
   loot: () => "/api/loot",
+  clips: () => CLIPS_READ,
   recap: () => "/api/recap",
   council: () => "/api/council",
   chat: (ctx) => "/api/guildchat?guild=" + encodeURIComponent(gname(ctx)),
@@ -64,7 +66,7 @@ const P = {
 const TAB_READS = {
   progress: ["guild", "series", "roster"],
   runs: ["guild", "runs", "ups", "timeline", "seats"],
-  chronicle: ["guild", "runs", "chronicle", "loot", "recap", "council", "chat", "achievements"],
+  chronicle: ["guild", "runs", "chronicle", "loot", "clips", "recap", "council", "chat", "achievements"],
 };
 
 // Per-device view state that is not worth a URL: the feed's page length and
@@ -293,7 +295,7 @@ function timelines(ctx, tl) {
   if (wait) return wait;
   const fam = (tl.data.families || []).find((f) => f.title === family(ctx));
   if (!fam || !(fam.runs || []).length) return state("empty", "No run of " + family(ctx) + "'s family in the last 14 days.");
-  return html`<p class="muted g-lede">${family(ctx)}'s family. ${fam.line || ""}</p><div class="g-timelines">${fam.runs.map((r) => html`<div class="card g-timeline"><span class="g-name">${r.title}</span><span class="muted">${r.line}</span>${r.cause ? html`<span class="g-tl-cause">${r.cause}</span>` : ""}${runReport(r.report)}<div class="g-steps">${(r.events || []).map((e) => html`<div class="g-step" data-gt="${e.tone || ""}"><span class="g-step-t">${e.at}</span><span>${e.line}</span></div>`)}</div></div>`)}</div>`;
+  return html`<p class="muted g-lede">${family(ctx)}'s family. ${fam.line || ""}</p><div class="g-timelines">${fam.runs.map((r) => html`<div class="card g-timeline"><span class="g-name">${r.title}</span><span class="muted">${r.line}</span>${r.cause ? html`<span class="g-tl-cause">${r.cause}</span>` : ""}${runReport(r.report)}${clipLink(r)}<div class="g-steps">${(r.events || []).map((e) => html`<div class="g-step" data-gt="${e.tone || ""}"><span class="g-step-t">${e.at}</span><span>${e.line}</span></div>`)}</div></div>`)}</div>`;
 }
 
 // ---- chronicle ----------------------------------------------------------------
@@ -307,7 +309,7 @@ function feedItems(ctx) {
   const items = c.data ? c.data.items.slice() : [];
   if (loot.data) {
     (loot.data.stories || []).filter((s) => s.guild === gname(ctx)).forEach((s) => {
-      items.push({ kind: "loot", at: toSeconds(s.at), text: s.line, item: s.item });
+      items.push({ kind: "loot", at: toSeconds(s.at), text: s.line, item: s.item, clip: s.clip, clip_note: s.clip_note });
     });
   }
   achItems(peek(P.achievements(ctx))).forEach((a) => {
@@ -343,7 +345,7 @@ function feedRow(ctx, x) {
   const body = x.kind === "loot" && x.item
     ? lootLine(x.text, x.item)
     : x.run ? html`<a href="${runHref({ id: x.run })}" class="g-feed-link">${x.text}</a>` : x.text;
-  return html`<div class="g-row g-feed"><i class="${icon}" data-gt="${tone}" aria-hidden="true"></i><span class="g-grow">${body}</span>${fresh ? html`<span class="tag tag-accent">New</span>` : ""}<span class="muted g-when">${since(x.at)}</span></div>`;
+  return html`<div class="g-row g-feed"><i class="${icon}" data-gt="${tone}" aria-hidden="true"></i><span class="g-grow">${body}${x.kind === "loot" ? clipLink(x) : ""}</span>${fresh ? html`<span class="tag tag-accent">New</span>` : ""}<span class="muted g-when">${since(x.at)}</span></div>`;
 }
 
 // An empty filter: the achievements read may still be on its way, or have
@@ -412,7 +414,7 @@ function lootSection(ctx) {
   const wait = pendingRead(l, 2);
   if (wait) return { loot: wait, council: wait };
   const stories = (l.data.stories || []).filter((s) => s.guild === gname(ctx)).slice(0, 12);
-  const loot = html`<div class="card g-list">${stories.length ? stories.map((s) => html`<div class="g-row g-loot"><span class="g-loot-top"><span>${lootLine(s.line, s.item)}</span><span class="muted g-when">${since(s.at)}</span></span></div>`) : html`<div class="g-row muted">${l.data.empty || "No notable loot yet."}</div>`}</div>
+  const loot = html`<div class="card g-list">${stories.length ? stories.map((s) => html`<div class="g-row g-loot"><span class="g-loot-top"><span>${lootLine(s.line, s.item)}</span><span class="muted g-when">${since(s.at)}</span></span>${clipLink(s)}</div>`) : html`<div class="g-row muted">${l.data.empty || "No notable loot yet."}</div>`}</div>
 <details class="fold"><summary>How this is worked out</summary><p class="muted g-basis">${l.data.basis || ""}</p></details>`;
   const c = l.data.council || {};
   const awards = (c.awards || []).filter((a) => a.family === family(ctx)).slice(0, 12);
@@ -488,13 +490,14 @@ function chronicleTab(ctx) {
 <section class="section">${sectionHead("04", "The loot council: who got what, and why")}${ls.council}</section>
 </div>
 <section class="section">${sectionHead("05", "The council: last sitting, what it carried, where next")}${sittings(ctx)}</section>
-<section class="section">${sectionHead("06", "Guild chat: asks and answers")}${chat(ctx)}</section>`;
+<section class="section">${sectionHead("06", "Guild chat: asks and answers")}${chat(ctx)}</section>
+<section class="section">${sectionHead("07", "Clips", "Saved moments, newest first")}${clipShelf(peek(P.clips()))}</section>`;
 }
 
 // ---- the view -------------------------------------------------------------------
 
 export default {
-  css: ["views/guild.css", ACH_CSS],
+  css: ["views/guild.css", ACH_CSS, CLIPS_CSS],
   every: 30000,
   reads: (ctx) => (TAB_READS[ctx.params.tab] || TAB_READS.progress).map((k) => P[k](ctx)),
   title: (ctx) => gname(ctx) + (ctx.params.tab === "progress" ? "" : " " + ctx.params.tab),
@@ -513,6 +516,7 @@ export default {
   },
   after(main, ctx) {
     bindRunCards(main, () => window.matchMedia("(max-width: 759.98px)").matches);
+    bindClips(main);
     main.querySelectorAll("details[data-path]").forEach((d) => {
       d.addEventListener("toggle", () => {
         if (d.open) view.open.add(d.getAttribute("data-path"));
