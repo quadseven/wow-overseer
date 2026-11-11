@@ -7,6 +7,7 @@ proven in BOTH of the last two runs, and nothing runs gh without --apply.
 
 import io
 import json
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -63,6 +64,21 @@ class SelectOnlyGuard(unittest.TestCase):
     def refused(self, sql):
         with self.assertRaises(run.UnsafeStatement):
             run.check_select_only(sql)
+
+    def test_a_missing_parser_fails_closed_before_a_probe_reaches_the_database(self):
+        conn = FakeConn({"1": [("1", "proven", "fixture")]})
+        with mock.patch.dict(sys.modules, {"sqlglot": None}):
+            with self.assertRaises(run.UnsafeStatement):
+                run.check_select_only("SELECT 1")
+            result = run.run_probe(conn, probe("1"))
+        self.assertEqual(run.ERROR, result["verdict"])
+        self.assertIn("sqlglot", result["evidence"])
+        self.assertEqual([], conn.log)
+
+    def test_quoted_forbidden_functions_are_refused_too(self):
+        for function in ("LOAD_FILE", "GET_LOCK", "SYS_EXEC"):
+            with self.subTest(function=function):
+                self.refused(f"SELECT `{function}`('fixture')")
 
     def test_a_plain_select_passes_with_or_without_a_semicolon(self):
         run.check_select_only("SELECT 1")

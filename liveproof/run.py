@@ -42,7 +42,6 @@ FORBIDDEN_FUNCTIONS = frozenset(
         "SYS_EVAL",
     }
 )
-
 _HEADER = re.compile(r"^--\s*(ticket|repo):\s*(\S+)\s*$")
 
 
@@ -64,8 +63,16 @@ class Probe:
 
 def check_select_only(sql: str) -> None:
     """Raise UnsafeStatement unless `sql` parses as exactly one plain SELECT."""
-    import sqlglot
-    from sqlglot import exp
+    # AI-REVIEW 2026-11-11 [Codex/in-process/security-review] 2242-R1:
+    # Parse function identities, including quoted names; never fall back to
+    # a lexer that can miss the forbidden functions below (PR #2242).
+    try:
+        import sqlglot
+        from sqlglot import exp
+    except ImportError as err:
+        raise UnsafeStatement(
+            "SELECT validation requires sqlglot; install tests/requirements.txt"
+        ) from err
 
     try:
         statements = [s for s in sqlglot.parse(sql, read="mysql") if s is not None]
