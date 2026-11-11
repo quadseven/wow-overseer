@@ -115,6 +115,8 @@ class SalesForTest(unittest.TestCase):
         )
         self.assertIsInstance(sale.candidate, bag_pressure.SellCandidate)
         self.assertEqual((sale.candidate.item_guid, sale.candidate.count), (4, 1))
+        self.assertEqual(sale.key, prs[0][0].key)
+        self.assertEqual(sale.candidate.holder, "Ana")
 
     def test_a_stack_the_current_pass_already_sells_is_not_the_routes(self):
         # A grey junk stack: the sale pass sells it itself, so the route,
@@ -159,7 +161,9 @@ class SalesForTest(unittest.TestCase):
         self.assertEqual(len(sales), len(confirms))
 
 
-def fallback_fixture(options, item_class=4, subclass=0, name="Plain Green Cloak"):
+def fallback_fixture(
+    options, value=4000, item_class=4, subclass=0, name="Plain Green Cloak"
+):
     """One carried green and a plan whose only decision sells it."""
     item = row("Ana", 4, 7777, name, quality=2, sell=4000, item_class=item_class)
     key = ("Ana", 7777, 0)
@@ -173,7 +177,7 @@ def fallback_fixture(options, item_class=4, subclass=0, name="Plain Green Cloak"
         goal=itemplan.ROOM,
         reason="sold",
         rule="R8",
-        value=4000,
+        value=value,
         irreversible=True,
         refusable=True,
         key=key,
@@ -193,6 +197,19 @@ class FallbackSaleTest(unittest.TestCase):
             [(d.name, why) for d, why in held],
             [("Plain Green Cloak", vendor.HELD_FALLBACK)],
         )
+
+    def test_a_valuable_fallback_sale_is_held_back_too(self):
+        plan_, prs, _ = fallback_fixture(
+            (itemplan.GUILD_BANK, itemplan.SELL_VENDOR), value=900000
+        )
+        held = []
+        self.assertEqual(
+            vendor.sales_for(
+                plan_, prs, released=frozenset([prs[0][0].key]), held=held
+            ),
+            (),
+        )
+        self.assertEqual([why for _d, why in held], [vendor.HELD_FALLBACK])
 
     def test_a_sale_that_was_the_first_choice_still_goes_out(self):
         for options in ((itemplan.SELL_VENDOR, itemplan.BANK_PERSONAL), ()):
@@ -259,6 +276,23 @@ class CarryOutTest(unittest.TestCase):
         self.assertEqual(report.worth, {"Bob": 3000})
         self.assertEqual(len(report.skipped), 1)
         self.assertTrue(any("Bob" in line and "30s" in line for line in report.lines))
+
+    def test_each_line_pairs_its_own_holders_count_with_its_own_worth(self):
+        sales = (
+            route_sale("Ana", 1, 3000),
+            route_sale("Ana", 2, 3000),
+            route_sale("Bob", 3, 6000),
+            route_sale("Cy", 4, 1),
+        )
+        report = vendor.carry_out(sales, lambda c: 0 if c.holder == "Cy" else 1)
+        self.assertEqual(report.worth, {"Ana": 6000, "Bob": 6000})
+        self.assertEqual(
+            report.lines,
+            (
+                "itemplan vendor: Ana: 2 sale(s) queued, worth 60s",
+                "itemplan vendor: Bob: 1 sale(s) queued, worth 60s",
+            ),
+        )
 
     def test_the_line_says_queued_and_worth_not_sold(self):
         sales = self._sales()
@@ -476,6 +510,24 @@ class RouteSalesAtTheBridgeTest(unittest.TestCase):
         self.assertNotIn(20, guids)
         self.assertNotIn(2, guids)
         self.assertEqual(inserted, len(guids))
+
+    def test_the_route_executor_writes_for_the_holders_it_is_given_only(self):
+        # `_queue_vendor_sales` owns the counter gate and hands the executor
+        # only holders that passed it; the executor must not widen that set.
+        bridge = self.bridge
+        written = []
+        with mock.patch.object(
+            bridge, "_insert_sell", side_effect=lambda c: written.append(c) or 1
+        ):
+            wrote, asked = asyncio.run(
+                bridge._queue_route_sales(
+                    (route_sale("Ana", 10), route_sale("Bob", 20)),
+                    ["Ana"],
+                    (),
+                )
+            )
+        self.assertEqual([c.item_guid for c in written], [10])
+        self.assertEqual((wrote, asked), (1, 1))
 
     def test_a_route_only_holder_at_a_counter_gets_its_sale(self):
         _, guids, _ = self.run_pass(
