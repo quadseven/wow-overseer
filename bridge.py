@@ -15909,7 +15909,8 @@ class Bridge(discord.Client):
 
     async def _settle_bank_errand(self, names: list, leader: str,
                                   moves_unasked: bool,
-                                  cohort: str | None = None) -> str:
+                                  cohort: str | None = None,
+                                  waiting: int = 0) -> str:
         """Aim, hold or hand back the bank pass's `banker` errand (infra#3728).
 
         THE HALF THAT WAS NEVER BUILT, HERE TOO. `banker` is one of the four
@@ -15998,9 +15999,9 @@ class Bridge(discord.Client):
         elif step == bank.BANK_ERRAND_DEFER:
             log.warning(
                 "bank: leader=%s is not taking a banker trip while the family "
-                "has remained split for %d seconds; unasked moves stay queued "
-                "until the family is together",
-                leader, int(family_stall.split_seconds),
+                "has remained split for %d seconds; %d planned move(s) waiting "
+                "for a member to stand at a banker",
+                leader, int(family_stall.split_seconds), waiting,
             )
         elif step == bank.BANK_ERRAND_HOLD:
             # THE TWO HOLDS READ IDENTICALLY IN A LOG AND ARE DIFFERENT STATES
@@ -16135,10 +16136,20 @@ class Bridge(discord.Client):
         # every pass and was never walked to one.
         bag_facts, bag_steps = await self._bank_bag_pending(names, seen,
                                                             watched)
+        # THE SPLIT RULE GOVERNS THE FAMILY'S WALK, NOT A MEMBER'S OWN MOVES:
+        # the reach read is per mover, so a deferral counts only the moves
+        # whose holder has no banker within reach. The move loop reuses it.
+        at_the_counter: dict = {}
+        holders = [m.character for m in unasked] + [s.name for s in bag_steps]
+        for holder in dict.fromkeys(holders):
+            mover_town = await asyncio.to_thread(_fetch_town, holder)
+            at_the_counter[holder] = bool(mover_town.banker)
         await self._settle_bank_errand(names, leader,
                                        _bank_trip_wanted(names, unasked,
                                                          bag_steps),
-                                       cohort=_cohort_key(cohort))
+                                       cohort=_cohort_key(cohort),
+                                       waiting=sum(1 for h in holders
+                                                   if not at_the_counter[h]))
         # Below the settling, so the aim still precedes the row, and above the
         # `no moves` return, so a family that walked here for a bag step alone
         # has it written on the cycle it arrives.
@@ -16158,7 +16169,6 @@ class Bridge(discord.Client):
         # reader keyed on a name list - the third reader infra#3815 exists to
         # avoid. The cost is bounded by the family, not by the queue: at most
         # five reads, once per BANK_CYCLE_SECONDS (600).
-        at_the_counter: dict = {}
         walking = []
         fresh = []
         for move, command in planned:
@@ -16238,21 +16248,23 @@ class Bridge(discord.Client):
         floor = bankbags.family_floor(facts)
         notes = []
         for f in facts:
-            step, why = bankbags.step(f, floor)
-            if step is None:
-                notes.append(why)
+            steps = bankbags.visit_steps(f, floor)
+            if not steps:
+                notes.append(bankbags.step(f, floor)[1])
                 continue
-            if (step.name, step.command) in seen:
-                continue
-            town = await asyncio.to_thread(_fetch_town, step.name)
-            if not town.banker:
-                notes.append(_bank_bag_wait_note(step))
-                continue
-            move = bank.Move(step.name, step.command.split(" ")[0], 0,
-                             "bank bag slot", 1, step.why)
-            if await asyncio.to_thread(_insert_bank, move, step.command):
-                log.info("bank bags: %s (%s)%s", step.why, step.command,
-                         _family_label(cohort))
+            # BUY, THEN PLACE: the room exists before a deposit is judged.
+            for step in steps:
+                if (step.name, step.command) in seen:
+                    continue
+                town = await asyncio.to_thread(_fetch_town, step.name)
+                if not town.banker:
+                    notes.append(_bank_bag_wait_note(step))
+                    break
+                move = bank.Move(step.name, step.command.split(" ")[0], 0,
+                                 "bank bag slot", 1, step.why)
+                if await asyncio.to_thread(_insert_bank, move, step.command):
+                    log.info("bank bags: %s (%s)%s", step.why, step.command,
+                             _family_label(cohort))
         _log_changed("bank bags", notes, tuple(sorted(names)))
 
     async def _bank_passing_once(self, cohort=None) -> None:
@@ -34497,6 +34509,8 @@ def _plan_bank(names: list) -> "bank.Plan":
     return bank.plan(
         bank.members_from_rows(rows, names), bank.family_from_skills(held),
         storage=storage, room_floor=room_floor,
+        # A bag placed on this visit is sent before the deposits (#2263).
+        room_gain=bankbags.room_gain(_fetch_bank_bag_facts(names)),
     )
 
 
