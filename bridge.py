@@ -191,6 +191,7 @@ import claims
 import tradechoice
 import vendor_stall
 import vendorsale
+import tradeturn
 import trainjob
 import travel
 import vision
@@ -201,6 +202,9 @@ from transform import Geometry
 log = logging.getLogger("wow-overseer")
 
 POLL_SECONDS = float(os.environ.get("POLL_SECONDS", "3"))
+# How long a family's campaign queue yields its job for trade work after a
+# queued run ends (tradeturn.py, #2262). 0 turns the rule off.
+TRADE_TURN_SECONDS = tradeturn.seconds(os.environ.get("TRADE_TURN_SECONDS"))
 # The overseer's own channel: unaddressed messages there get answered
 # (roster / help) instead of the shared-channel silence rule.
 OVERSEER_CHANNEL_ID = os.environ.get("OVERSEER_CHANNEL_ID", "")
@@ -4332,6 +4336,12 @@ def _ensure_queue_store() -> None:
                       "family's queue can be set or advanced")
     try:
         with _connect() as conn, conn.cursor() as cur:
+            cur.execute(campaignqueue.TURN_CREATE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("trade turn: the turn store is unavailable, so no family "
+                      "takes a trade turn")
+    try:
+        with _connect() as conn, conn.cursor() as cur:
             cur.execute(dungeonpace.CREATE_SQL)
     except pymysql.err.MySQLError:
         log.exception("pace: the dungeon pace store is unavailable, so no family "
@@ -5098,6 +5108,46 @@ def _append_planned(family: str, rows: list, finish: int, option,
     return changed
 
 
+# Families in a trade turn now, rebuilt by every queue pass (_trade_turn_pass).
+# A restart empties it and the next pass refills it from the stored turn.
+_TRADE_TURN: set = set()
+
+
+def _fetch_trade_turns() -> dict:
+    """family key -> its recorded tradeturn.Turn. {} with no table yet."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(campaignqueue.TURN_SELECT_SQL)
+            return {
+                str(row["family"]): tradeturn.Turn(
+                    run_ended=int(row["run_ended"]),
+                    started=float(row["started_at"]),
+                    over=bool(row["finished"]),
+                )
+                for row in cur.fetchall()
+            }
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return {}
+        raise
+
+
+def _save_trade_turn(family: str, turn) -> None:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(campaignqueue.TURN_UPSERT_SQL,
+                    (family, int(turn.run_ended), float(turn.started),
+                     1 if turn.over else 0))
+
+
+def _fetch_last_run_end(leader: str):
+    """Epoch seconds the leader's newest run ended; None with none."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(campaignqueue.LAST_RUN_END_SQL, (leader,))
+        row = cur.fetchone()
+    ended = (row or {}).get("ended")
+    return int(ended) if ended is not None else None
+
+
 def _queue_owns_job(family: str | None = None, dungeon: bool = False) -> bool:
     """Whether a family's campaign queue owns its job now.
 
@@ -5116,6 +5166,11 @@ def _queue_owns_job(family: str | None = None, dungeon: bool = False) -> bool:
             # QUESTING WHILE THE DOOR WAITS (mod-overseer#767): the queue does
             # not own the job then, so the craft rhythm and the skill goal
             # get the family's time back.
+            return False
+        if not dungeon and family in globals().get("_TRADE_TURN", ()):
+            # A TRADE TURN (tradeturn.py, #2262): between two queued runs the
+            # queue yields the job, so the craft rhythm, craft supply and the
+            # learn trips see a family with an empty queue until it ends.
             return False
         if not dungeon:
             # A released bag hold gives the family's own passes time to buy
@@ -22878,6 +22933,12 @@ class Bridge(discord.Client):
         if spire_pass is not None and await spire_pass(pending, fams):
             pending = campaignqueue.pending_by_family(
                 await asyncio.to_thread(_fetch_queue_rows))
+        # THE TRADE TURN (tradeturn.py, #2262), after the planner and the spire
+        # pass so neither sees a queue it must not extend. A family in a turn
+        # is an empty queue to everything below: no step, no travel claim.
+        trade_turn = getattr(self, "_trade_turn_pass", None)
+        if trade_turn is not None:
+            pending = await trade_turn(pending, fams)
         # THE TRAVEL COLUMN FIRST, AND FOR EVERY FAMILY (#227): a family whose
         # queue emptied must get its town errands back this pass too.
         note_stalls = getattr(self, "_note_stalls", None)
@@ -22892,6 +22953,80 @@ class Bridge(discord.Client):
             return
         for key, rows in pending.items():
             await self._campaign_queue_family_once(key, rows, fams, held)
+
+    async def _trade_turn_pass(self, pending: dict, fams: dict) -> dict:
+        """Give each family a trade turn after a finished run (tradeturn.py).
+
+        Returns `pending` without the families in a turn, so the step and the
+        travel claim below treat them as having an empty queue; their entries
+        stay in the table untouched. A failed read or write ends the turn for
+        this pass and leaves the queue as it was: it never holds a family.
+        """
+        try:
+            turns = await asyncio.to_thread(_fetch_trade_turns)
+        except Exception:
+            log.exception("trade turn: the turns could not be read; the queue "
+                          "keeps every family this pass")
+            _TRADE_TURN.clear()
+            return pending
+        kept: dict = {}
+        in_turn: set = set()
+        for key, rows in pending.items():
+            fam = fams.get(key)
+            if fam is not None and rows:
+                try:
+                    if await self._trade_turn_family(
+                            key, fam, turns.get(key), TRADE_TURN_SECONDS):
+                        in_turn.add(key)
+                        continue
+                except Exception:
+                    log.exception("trade turn: the pass for %s failed; its "
+                                  "queue stands", campaignqueue._family(key))
+            kept[key] = rows
+        _TRADE_TURN.clear()
+        _TRADE_TURN.update(in_turn)
+        return kept
+
+    async def _trade_turn_family(self, key: str, fam: dict, turn,
+                                 setting: int) -> bool:
+        """One family's turn: True while the queue yields its job."""
+        label = campaignqueue._family(key)
+        names = list(fam["names"])
+        leader = str(fam["leader"].get("name") or "")
+        last = await asyncio.to_thread(_fetch_last_run_end, leader)
+        mid_run = False
+        trades: dict = {}
+        if tradeturn.needs_facts(last, turn):
+            mid_run = await self._mid_run(names)
+            if not mid_run:
+                trades = await asyncio.to_thread(_fetch_trade_skills, names)
+        said = tradeturn.decide(last, turn, time.time(), setting, trades, mid_run)
+        if said.action == tradeturn.HOLD:
+            return True
+        if said.action == tradeturn.END:
+            await asyncio.to_thread(
+                _save_trade_turn, key,
+                tradeturn.Turn(turn.run_ended, turn.started, True))
+            log.info("trade turn: %s ends - %s; the queue admits its next "
+                     "entry", label, said.reason)
+            return False
+        if said.action == tradeturn.SKIP:
+            await asyncio.to_thread(
+                _save_trade_turn, key, tradeturn.Turn(last, time.time(), True))
+            log.info("trade turn: %s skips - %s", label, said.reason)
+            return False
+        if said.action != tradeturn.START:
+            return False
+        job = str(fam["leader"].get("job") or "").strip().lower()
+        if job.startswith("dungeon") or jobs.is_raid_job(job):
+            for name in names:
+                await asyncio.to_thread(_insert_job, name, jobs.DEFAULT,
+                                        campaignqueue.SOURCE)
+        await asyncio.to_thread(
+            _save_trade_turn, key, tradeturn.Turn(last, time.time(), False))
+        log.info("trade turn: %s starts for %d seconds - %s", label, setting,
+                 said.reason)
+        return True
 
     async def _spire_pass(self, pending: dict, fams: dict) -> bool:
         """Each family's Upper Spire pass; True when any queue moved. A failed
