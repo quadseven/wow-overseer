@@ -178,7 +178,7 @@ class Upload(unittest.TestCase):
 
         ledger = CutterLedger([clip_row(state="cutting")])
         code, _p = clipcutter.upload(
-            ledger, "1", Counting(body), len(body), tmp.name, ""
+            lambda: ledger, "1", Counting(body), len(body), tmp.name, ""
         )
         self.assertEqual(code, 200)
         self.assertLessEqual(Counting.biggest, clipcutter.CHUNK)
@@ -190,12 +190,115 @@ class Upload(unittest.TestCase):
         body = b"\x00\x00\x00\x18ftypisom" + b"\x01" * 100
         ledger = CutterLedger([clip_row(state="cutting")])
         code, payload = clipcutter.upload(
-            ledger, "1", io.BytesIO(body), len(body) + 500, tmp.name, ""
+            lambda: ledger, "1", io.BytesIO(body), len(body) + 500, tmp.name, ""
         )
         self.assertEqual(code, 400)
         self.assertIn("error", payload)
         self.assertEqual(os.listdir(tmp.name), [])
         self.assertEqual(ledger.rows[0]["state"], "cutting")
+
+
+class TheBodyIsReadBeforeTheDatabaseIsOpened(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = tmp.name
+        self.ledger = CutterLedger([clip_row(state="cutting")])
+        self.opened = 0
+
+    def connect(self):
+        self.opened += 1
+        return self.ledger
+
+    def upload(self, rfile, length, **kw):
+        return clipcutter.upload(self.connect, "1", rfile, length, self.dir, "", **kw)
+
+    def test_no_connection_exists_while_the_body_is_read(self):
+        body = b"\x00\x00\x00\x18ftypisom" + b"\x01" * 200000
+        seen = []
+
+        class Watching(io.BytesIO):
+            def read(inner, n=-1):
+                seen.append(self.opened)
+                return super().read(n)
+
+        code, _p = self.upload(Watching(body), len(body))
+        self.assertEqual(code, 200)
+        self.assertTrue(seen)
+        self.assertEqual(set(seen), {0})
+        self.assertEqual(self.opened, 1)
+
+    def test_a_refused_body_never_opens_a_connection(self):
+        code, _p = self.upload(io.BytesIO(b"GIF89a" + b"\x00" * 40), 46)
+        self.assertEqual((code, self.opened), (400, 0))
+        self.assertEqual(os.listdir(self.dir), [])
+
+    def test_a_short_body_leaves_no_temp_file(self):
+        body = b"\x00\x00\x00\x18ftypisom" + b"\x01" * 100
+        code, _p = self.upload(io.BytesIO(body), len(body) + 500)
+        self.assertEqual((code, self.opened), (400, 0))
+        self.assertEqual(os.listdir(self.dir), [])
+
+    def test_a_stalled_sender_times_out_with_a_4xx_and_no_temp_file(self):
+        class Stalls(io.BytesIO):
+            def read(self, n=-1):
+                if self.tell() > 100:
+                    raise TimeoutError("timed out")
+                return super().read(min(n, 50))
+
+        body = b"\x00\x00\x00\x18ftypisom" + b"\x01" * 5000
+        code, payload = self.upload(Stalls(body), len(body))
+        self.assertEqual((code, self.opened), (408, 0))
+        self.assertIn("error", payload)
+        self.assertEqual(os.listdir(self.dir), [])
+
+    def test_a_body_past_the_wall_clock_deadline_is_408_and_leaves_nothing(self):
+        ticks = iter(range(0, 10000, 400))
+        body = b"\x00\x00\x00\x18ftypisom" + b"\x01" * 300000
+        code, _p = self.upload(io.BytesIO(body), len(body), clock=lambda: next(ticks))
+        self.assertEqual((code, self.opened), (408, 0))
+        self.assertEqual(os.listdir(self.dir), [])
+
+    def test_a_note_with_a_view_marker_is_refused_before_anything_is_read(self):
+        class Never(io.BytesIO):
+            def read(self, n=-1):
+                raise AssertionError("the body was read")
+
+        code, payload = clipcutter.upload(
+            self.connect, "1", Never(b"x"), 1, self.dir, "view:Other"
+        )
+        self.assertEqual((code, self.opened), (400, 0))
+        self.assertIn("error", payload)
+
+
+class AMarkerInANoteCannotMoveTheView(unittest.TestCase):
+    def test_a_note_or_reason_with_view_marker_is_refused_in_any_case(self):
+        for text in ("view:Other", "see VIEW: Zug (leader)", "a View:b"):
+            self.assertTrue(clipcutter.spoofs_view(text), text)
+        self.assertFalse(clipcutter.spoofs_view("cut late, preview ok"))
+
+    def test_a_reason_with_a_marker_is_refused_by_result(self):
+        ledger = CutterLedger([clip_row(state="cutting")])
+        code, _p = clipcutter.result(ledger, "1", "failed", "view: Zug (leader)")
+        self.assertEqual(code, 400)
+        self.assertEqual(ledger.rows[0]["state"], "cutting")
+
+    def test_only_the_planner_part_of_the_detail_names_the_owner(self):
+        owner = clipledger.view_owner
+        row = lambda d: {"character": "Testchar", "detail": d}  # noqa: E731
+        self.assertEqual(
+            owner(row("view: Grug (leader); note view: Zug (leader)")), "Grug"
+        )
+        self.assertEqual(
+            owner(row("Blade; view: Grug (leader); view: Zug (leader)")), "Grug"
+        )
+        self.assertEqual(owner(row("anything view: Zug (leader)")), "Testchar")
+
+    def test_a_marker_name_with_punctuation_or_spaces_names_nobody(self):
+        owner = clipledger.view_owner
+        for bad in ("Gr ug", "Grug!", "G", "Abcdefghijklm", "Gr-ug", "Gr1"):
+            row = {"character": "Testchar", "detail": "view: %s (leader)" % bad}
+            self.assertEqual(owner(row), "Testchar", bad)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,18 @@ fails when a served route is missing here. Read them with
 
 Each entry: path, query parameters, what it answers, one example.
 
+## Who may call the cutter routes
+
+`GET /api/clips/pending` and the three `POST /api/clips/` routes carry no
+token, the same trust model as `POST /api/frame`: anything that can reach
+the site's port can call them. A token would be a new credential, which a
+person adds, so none is used. What bounds the damage: every state change
+is conditional on the row's current state and a lost race answers 409;
+an upload is capped at 128 MiB, must start with an MP4 `ftyp` box, is
+saved only under a name derived from the row, and never overwrites an
+existing file; a note or reason may not contain the planner's `view:`
+marker. Keep the port on a network that only trusted hosts can reach.
+
 ## `GET /`
 
 - Query: none

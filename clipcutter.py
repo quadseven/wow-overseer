@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import time
 from datetime import datetime
 
 MAX_UPLOAD = 128 * 1024 * 1024
@@ -21,6 +22,8 @@ CHUNK = 64 * 1024
 MAX_PENDING = 10
 MAX_PATHS = 20
 MAX_NOTE = 200
+# The whole body must arrive within this many seconds (wall clock).
+UPLOAD_SECONDS = 600
 
 NO_DIR = "The clip folder is not set up on this site, so the cutter API is off."
 
@@ -85,6 +88,16 @@ def clean_note(raw) -> str:
     return "".join(c if c.isprintable() else " " for c in " ".join(plain.split()))[
         :MAX_NOTE
     ].strip()
+
+
+def spoofs_view(text: str) -> bool:
+    """True for text that carries the planner's `view:` marker. A note or a
+    reason is appended to the detail that marker is read from, so it may not
+    hold one."""
+    return "view:" in text.lower()
+
+
+_SPOOF = "A note may not contain the text view:, which the clip planner uses."
 
 
 def _iso(value):
@@ -163,6 +176,8 @@ def result(cur, raw_id, state, reason):
         return _err(
             400, "Say why the clip was dropped, as reason=...; it may not be empty."
         )
+    if spoofs_view(why):
+        return _err(400, _SPOOF)
     cur.execute(_DROP, (state, why, row["id"]))
     if not cur.rowcount:
         return _moved(_lookup(cur, row["id"]) or row)
@@ -176,62 +191,100 @@ def _discard(path):
         pass
 
 
-def upload(cur, raw_id, rfile, length, root, raw_note):
-    """POST /api/clips/file: stream `length` bytes of MP4 from `rfile` into
-    `root` under the name the row gives, then move the row to ready.
+def stage(rfile, length, root, clock=time.monotonic):
+    """Read the whole body into a temporary file in `root`, touching no
+    database. Returns (path, None), or (None, refusal) with nothing left behind.
 
-    The body is never held whole: it goes to a temporary file in 64 KiB reads
-    and is linked into place, which fails if the name exists, so an existing
-    file is never overwritten. A row that moved on while the body streamed
-    loses its new file."""
-    row, refusal = _find(cur, raw_id)
-    if refusal:
-        return refusal
-    if row["state"] != "cutting":
-        return _moved(row)
-    name = file_name(row["id"], row["kind"])
-    if name is None:
-        return _err(409, "That clip request has a kind that cannot be saved as a file.")
+    The checks that need only the body come first: length, cap, ftyp box. A
+    stalled or slow sender is cut off by the socket timeout (TimeoutError) or
+    by the wall-clock deadline, and answers 408."""
     if length <= 0:
-        return _err(400, "The body is empty; send the MP4 as the request body.")
+        return None, _err(400, "The body is empty; send the MP4 as the request body.")
     if length > MAX_UPLOAD:
-        return _err(
+        return None, _err(
             413, "The clip is over the %d MiB limit." % (MAX_UPLOAD // (1024 * 1024))
         )
-    target = os.path.join(root, name)
-    if os.path.lexists(target):
-        return _err(
-            409, "A file for that clip is already saved and is never overwritten."
-        )
-    head = rfile.read(min(length, CHUNK))
+    late = _err(408, "The body did not arrive in time; send it faster or in one go.")
+    deadline = clock() + UPLOAD_SECONDS
+    try:
+        head = rfile.read(min(length, CHUNK))
+    except OSError:
+        return None, late
     if not is_mp4(head):
-        return _err(400, "The body is not an MP4 file (no ftyp box at the start).")
+        return None, _err(
+            400, "The body is not an MP4 file (no ftyp box at the start)."
+        )
     fd, tmp = tempfile.mkstemp(prefix=".upload-", suffix=".part", dir=root)
     try:
         with os.fdopen(fd, "wb") as out:
             out.write(head)
             left = length - len(head)
             while left > 0:
+                if clock() > deadline:
+                    raise TimeoutError("deadline")
                 chunk = rfile.read(min(CHUNK, left))
                 if not chunk:
-                    return _err(400, "The body ended before its stated length.")
+                    _discard(tmp)
+                    return None, _err(400, "The body ended before its stated length.")
                 out.write(chunk)
                 left -= len(chunk)
-        try:
-            os.link(tmp, target)
-        except FileExistsError:
-            return _err(
+    except OSError:
+        _discard(tmp)
+        return None, late
+    except BaseException:
+        _discard(tmp)
+        raise
+    return tmp, None
+
+
+def upload(connect, raw_id, rfile, length, root, raw_note, clock=time.monotonic):
+    """POST /api/clips/file: `length` bytes of MP4 from `rfile` into `root`
+    under the name the row gives, then the row becomes ready.
+
+    `connect()` opens a database cursor as a context manager. It is called only
+    after the whole body is on disk, so a slow sender never holds a connection.
+    The temporary file is linked into place, which fails if the name exists, so
+    an existing file is never overwritten. A row that moved on while the body
+    streamed loses its new file."""
+    if parse_id(raw_id) is None:
+        return _err(400, "The id must be a whole number above zero, as id=N.")
+    note = clean_note(raw_note)
+    if spoofs_view(note):
+        return _err(400, _SPOOF)
+    tmp, refusal = stage(rfile, length, root, clock)
+    if refusal:
+        return refusal
+    try:
+        with connect() as cur:
+            row, refusal = _find(cur, raw_id)
+            if refusal:
+                return refusal
+            if row["state"] != "cutting":
+                return _moved(row)
+            name = file_name(row["id"], row["kind"])
+            if name is None:
+                return _err(
+                    409, "That clip request has a kind that cannot be saved as a file."
+                )
+            target = os.path.join(root, name)
+            exists = _err(
                 409, "A file for that clip is already saved and is never overwritten."
             )
+            if os.path.lexists(target):
+                return exists
+            try:
+                os.link(tmp, target)
+            except FileExistsError:
+                return exists
+            try:
+                cur.execute(_READY, (name, note, row["id"]))
+                landed = cur.rowcount
+            except BaseException:
+                _discard(target)
+                raise
+            if not landed:
+                _discard(target)
+                return _moved(_lookup(cur, row["id"]) or row)
+            return 200, _public(_lookup(cur, row["id"]), *_COLUMNS.split(", "))
     finally:
         _discard(tmp)
-    try:
-        cur.execute(_READY, (name, clean_note(raw_note), row["id"]))
-        landed = cur.rowcount
-    except Exception:
-        _discard(target)
-        raise
-    if not landed:
-        _discard(target)
-        return _moved(_lookup(cur, row["id"]) or row)
-    return 200, _public(_lookup(cur, row["id"]), *_COLUMNS.split(", "))

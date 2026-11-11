@@ -5,6 +5,7 @@ out, bytes over HTTP. No logic here that tests would want to reach.
 """
 from __future__ import annotations
 
+import contextlib
 import functools
 import gzip
 import hashlib
@@ -4602,6 +4603,16 @@ def _clips_root() -> str:
     return root if root and os.path.isdir(root) else ""
 
 
+@contextlib.contextmanager
+def _clip_cursor():
+    with _connect() as conn, conn.cursor() as cur:
+        yield cur
+
+
+# A sender that sends nothing for this long loses its upload (seconds).
+_CUTTER_IDLE_SECONDS = 30
+
+
 def sweep_clips() -> dict:
     """The sweeps that hold whether or not any stream is live: a cutting row
     whose cutter went silent fails, and an expired row loses its file. Without
@@ -7179,8 +7190,9 @@ class Handler(BaseHTTPRequestHandler):
             return 503, {"error": clipcutter.NO_DIR}
         return clipcutter.pending(ctx.read, query.get("paths", [""])[0])
 
-    def _cutter_call(self, call) -> None:
+    def _cutter_call(self, call, late: bool = False) -> None:
         """Answer a cutter POST: call(cur, query, root) -> (status, payload).
+        With `late`, call gets a connect() to open itself instead of a cursor.
         No clip folder is a 503 with a sentence; a failed write is the same 503
         as every other route's."""
         query = parse_qs(urlsplit(self.path).query)
@@ -7189,8 +7201,11 @@ class Handler(BaseHTTPRequestHandler):
             code, payload = 503, {"error": clipcutter.NO_DIR}
         else:
             try:
-                with _connect() as conn, conn.cursor() as cur:
-                    code, payload = call(cur, query, root)
+                if late:
+                    code, payload = call(_clip_cursor, query, root)
+                else:
+                    with _clip_cursor() as cur:
+                        code, payload = call(cur, query, root)
             except Exception:
                 log.exception("cutter call failed: %s", self.path.split("?", 1)[0])
                 code, payload = 503, {"error": "world unreachable"}
@@ -7210,9 +7225,10 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             length = -1
-        self._cutter_call(lambda cur, q, root: clipcutter.upload(
-            cur, q.get("id", [""])[0], self.rfile, length, root,
-            q.get("note", [""])[0]))
+        self.connection.settimeout(_CUTTER_IDLE_SECONDS)
+        self._cutter_call(lambda connect, q, root: clipcutter.upload(
+            connect, q.get("id", [""])[0], self.rfile, length, root,
+            q.get("note", [""])[0]), late=True)
 
     def _clips_result(self) -> None:
         """POST /api/clips/result?id=N&state=no_view|failed&reason=X - a drop, from a

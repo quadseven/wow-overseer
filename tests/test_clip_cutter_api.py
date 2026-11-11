@@ -175,6 +175,13 @@ class Upload(CutterCase):
         )
         self.assertEqual(served, MP4)
 
+    def test_a_note_that_forges_a_view_marker_is_400_and_leaves_no_file(self):
+        status, body = self.up(query="id=1&note=view%3AOther")
+        self.assertEqual(status, 400)
+        self.sentence(body)
+        self.assertEqual(self.files(), [])
+        self.assertEqual(self.state()["state"], "cutting")
+
     def test_an_upload_without_a_note_keeps_the_detail(self):
         self.up()
         self.assertEqual(self.state()["detail"], "earlier")

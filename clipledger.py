@@ -506,13 +506,18 @@ def _iso(t) -> str | None:
     return t.isoformat() if isinstance(t, datetime) else (t or None)
 
 
-_VIEW_NOTE = re.compile(r"view: (\S+) \((?:leader|party member)\)")
+_VIEW_NOTE = re.compile(r"view: ([A-Za-z]{2,12}) \((?:leader|party member)\)")
 
 
 def view_owner(row: Mapping) -> str:
     """Whose eyes a clip shows: the member the detail names, else the subject."""
-    found = _VIEW_NOTE.search(row.get("detail") or "")
-    return found.group(1) if found else row["character"]
+    # The planner writes the marker at the start of a "; " part. Any other
+    # text in the detail, such as a cutter's note, is never read for it.
+    for part in (row.get("detail") or "").split("; "):
+        found = _VIEW_NOTE.match(part)
+        if found:
+            return found.group(1)
+    return row["character"]
 
 
 def shelf(rows: Iterable[Mapping]) -> dict:
