@@ -117,7 +117,7 @@ def first_kill_items(kills: list, kin: list, clips: dict, now: int) -> list:
     `now` is the database clock in Unix seconds.
     """
     items = []
-    for guild, _family, names in kin:
+    for guild, family, names in kin:
         for row in clipledger.first_kills(kills, names, lambda _n: ""):
             at = int(row["first_seen"])
             if at < now - DAYS * 24 * HOUR:
@@ -131,7 +131,9 @@ def first_kill_items(kills: list, kin: list, clips: dict, now: int) -> list:
                     "guild": guild,
                     "who": [who],
                     "text": "%s landed the family's first kill of %s." % (who, boss),
-                    **_clip_of(clips, clipledger.boss_key(row["subject_id"]), who),
+                    **_clip_of(
+                        clips, clipledger.boss_key(row["subject_id"], family), who
+                    ),
                 }
             )
     return items
@@ -333,7 +335,12 @@ def build(rd, guilds: list, maps: dict, kin: list | None = None) -> dict:
             else []
         )
         keys = sorted(
-            {clipledger.boss_key(k["subject_id"]) for k in kills}
+            {
+                clipledger.boss_key(k["subject_id"], family)
+                for _g, family, members in kin or []
+                for k in kills
+                if k["character_name"] in members
+            }
             | {
                 clipledger.level_key(r["name"])
                 for r in level_rows

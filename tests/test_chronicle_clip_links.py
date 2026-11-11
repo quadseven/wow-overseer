@@ -95,7 +95,7 @@ class FirstKillLink(unittest.TestCase):
         return item
 
     def test_a_ready_row_gives_a_clip(self):
-        item = self.one(ledger(clipledger.boss_key(5)))
+        item = self.one(ledger(clipledger.boss_key(5, "Grug")))
         self.assertEqual(
             item["clip"], {"url": "/clips/clip-3-boss_kill.mp4", "kind": "boss_kill"}
         )
@@ -103,13 +103,15 @@ class FirstKillLink(unittest.TestCase):
 
     def test_no_view_and_failed_rows_give_a_note(self):
         for state in ("no_view", "failed"):
-            item = self.one(ledger(clipledger.boss_key(5), state=state, file_name=None))
+            item = self.one(
+                ledger(clipledger.boss_key(5, "Grug"), state=state, file_name=None)
+            )
             self.assertIn("clip_note", item, state)
             self.assertNotIn("clip", item, state)
 
     def test_no_row_and_in_flight_rows_give_neither(self):
         cases = [{}] + [
-            ledger(clipledger.boss_key(5), state=s, file_name=None)
+            ledger(clipledger.boss_key(5, "Grug"), state=s, file_name=None)
             for s in ("pending", "cutting")
         ]
         for clips in cases:
@@ -118,7 +120,30 @@ class FirstKillLink(unittest.TestCase):
             self.assertNotIn("clip_note", item)
 
     def test_a_row_credited_to_another_character_is_not_this_kills(self):
-        item = self.one(ledger(clipledger.boss_key(5), character="Zug"))
+        item = self.one(ledger(clipledger.boss_key(5, "Grug"), character="Zug"))
+        self.assertNotIn("clip", item)
+        self.assertNotIn("clip_note", item)
+
+
+class FirstKillPerFamilyLink(unittest.TestCase):
+    def test_each_family_item_links_its_own_row_and_never_the_others(self):
+        kills = [kill("Grug", NOW - 100), kill("Zug", NOW - 50)]
+        clips = {}
+        clips.update(ledger(clipledger.boss_key(5, "Grug"), character="Grug"))
+        zug = ledger(
+            clipledger.boss_key(5, "Zug"),
+            character="Zug",
+            file_name="clip-4-boss_kill.mp4",
+        )
+        by_guild = {i["guild"]: i for i in items(kills, {**clips, **zug})}
+        self.assertEqual(by_guild["Cave"]["clip"]["url"], "/clips/clip-3-boss_kill.mp4")
+        self.assertEqual(
+            by_guild["Bonkers"]["clip"]["url"], "/clips/clip-4-boss_kill.mp4"
+        )
+
+    def test_a_row_under_the_old_realm_wide_key_is_never_matched(self):
+        old = ledger("boss_kill:5", character="Grug")
+        (item,) = items([kill("Grug", NOW - 100)], old)
         self.assertNotIn("clip", item)
         self.assertNotIn("clip_note", item)
 
@@ -202,7 +227,7 @@ class Route(unittest.TestCase):
         return body["items"], ctx
 
     def test_the_payload_carries_the_first_kill_with_its_clip(self):
-        rows = list(ledger(clipledger.boss_key(5)).values())
+        rows = list(ledger(clipledger.boss_key(5, "Grug")).values())
         found, _ctx = self.ask(rows)
         (first,) = [i for i in found if i["kind"] == "first_kill"]
         self.assertEqual(first["guild"], "Cave")
@@ -222,5 +247,5 @@ class Route(unittest.TestCase):
         (params,) = [p for sql, p in ctx.read.asked if "overseer_clip" in sql]
         self.assertEqual(
             sorted(params),
-            sorted([clipledger.boss_key(5), clipledger.level_key("Bonk")]),
+            sorted([clipledger.boss_key(5, "Grug"), clipledger.level_key("Bonk")]),
         )

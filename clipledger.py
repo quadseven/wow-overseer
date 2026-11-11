@@ -251,9 +251,10 @@ def _loot_requests(rows, guilds, now, views):
     return out
 
 
-def boss_key(subject_id) -> str:
-    """The ledger key of a boss's first family kill."""
-    return "boss_kill:%s" % subject_id
+def boss_key(subject_id, family) -> str:
+    """The ledger key of one family's first kill of a boss. The ledger and
+    the Chronicle feed both build it here."""
+    return "boss_kill:%s:%s" % (subject_id, family)
 
 
 def level_key(character) -> str:
@@ -286,25 +287,31 @@ def first_kills(rows, roster, path_of):
     return picks
 
 
-def _event_requests(rows, roster, views):
+# The family of a call without `families`: the whole roster counts as one.
+ROSTER_FAMILY = "roster"
+
+
+def _event_requests(rows, roster, views, families=None):
     out = []
-    for row in first_kills(rows, roster, views.path_of):
-        at = row["first_seen"]
-        kind = eventclips.trigger_kind(
-            {"kind": "boss_kill", "family_member": True, "first_kill": True}
-        )
-        out.append(
-            _request(
-                boss_key(row["subject_id"]),
-                kind,
-                row["character_name"],
-                views,
-                at,
-                _window(at),
-                row.get("subject_name") or "",
-                row.get("map"),
+    groups = dict(families) if families else {ROSTER_FAMILY: roster}
+    for family, members in groups.items():
+        for row in first_kills(rows, list(members), views.path_of):
+            at = row["first_seen"]
+            kind = eventclips.trigger_kind(
+                {"kind": "boss_kill", "family_member": True, "first_kill": True}
             )
-        )
+            out.append(
+                _request(
+                    boss_key(row["subject_id"], family),
+                    kind,
+                    row["character_name"],
+                    views,
+                    at,
+                    _window(at),
+                    row.get("subject_name") or "",
+                    row.get("map"),
+                )
+            )
     for row in rows:
         if row.get("kind") != "level_up" or row["character_name"] not in roster:
             continue
@@ -411,7 +418,7 @@ def plan_requests(
     loot_rows, event_rows = list(loot_rows), list(event_rows)
     views = Views(path_of, order, list(runs), loot_rows + event_rows, now, families)
     rows = _loot_requests(loot_rows, guilds, now, views)
-    rows += _event_requests(event_rows, order, views)
+    rows += _event_requests(event_rows, order, views, families)
     rows += _clear_requests(list(cleared_runs), names, views)
     rows.sort(key=lambda r: r["event_at"])
     seen = set(existing_keys)

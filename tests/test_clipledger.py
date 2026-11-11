@@ -132,7 +132,7 @@ class OtherTriggerTests(unittest.TestCase):
         rows = plan(event_rows=[self.kill(1, "Alder", 5, at)])
         self.assertEqual(1, len(rows))
         self.assertEqual("boss_kill", rows[0]["kind"])
-        self.assertEqual("boss_kill:5", rows[0]["event_key"])
+        self.assertEqual("boss_kill:5:roster", rows[0]["event_key"])
         self.assertEqual("pending", rows[0]["state"])
         self.assertEqual(at + secs(15), rows[0]["window_end"])
 
@@ -146,6 +146,43 @@ class OtherTriggerTests(unittest.TestCase):
             ]
         )
         self.assertEqual([], rows)
+
+    def test_each_family_lands_its_own_first_of_one_boss_under_its_own_key(self):
+        old = NOW - timedelta(minutes=9)
+        recent = NOW - timedelta(minutes=3)
+        rows = plan(
+            roster=["Alder", "Birch", "Cedar"],
+            families={"oaks": ["Alder", "Birch"], "pines": ["Cedar"]},
+            event_rows=[
+                self.kill(1, "Alder", 5, old),
+                self.kill(2, "Cedar", 5, recent),
+            ],
+        )
+        self.assertEqual(
+            ["boss_kill:5:oaks", "boss_kill:5:pines"],
+            sorted(r["event_key"] for r in rows),
+        )
+        self.assertEqual({"Alder", "Cedar"}, {r["character"] for r in rows})
+
+    def test_a_later_member_of_the_same_family_is_not_a_first(self):
+        rows = plan(
+            families={"oaks": ["Alder", "Birch"]},
+            event_rows=[
+                self.kill(1, "Alder", 5, NOW - timedelta(minutes=9)),
+                self.kill(2, "Birch", 5, NOW - timedelta(minutes=3)),
+            ],
+        )
+        self.assertEqual(["boss_kill:5:oaks"], [r["event_key"] for r in rows])
+        self.assertEqual(["Alder"], [r["character"] for r in rows])
+
+    def test_without_families_the_whole_roster_is_one_family(self):
+        rows = plan(
+            event_rows=[
+                self.kill(1, "Alder", 5, NOW - timedelta(minutes=5)),
+                self.kill(2, "Birch", 5, NOW - timedelta(minutes=3)),
+            ]
+        )
+        self.assertEqual(["boss_kill:5:roster"], [r["event_key"] for r in rows])
 
     def test_a_kill_by_a_stranger_is_not_a_family_first(self):
         at = NOW - timedelta(minutes=3)
@@ -547,10 +584,10 @@ class EventKeyTests(unittest.TestCase):
         }
         keys = [r["event_key"] for r in plan(event_rows=[kill, sixty])]
         self.assertEqual(
-            sorted([clipledger.boss_key(5), clipledger.level_key("Alder")]),
+            sorted([clipledger.boss_key(5, "roster"), clipledger.level_key("Alder")]),
             sorted(keys),
         )
-        self.assertEqual("boss_kill:5", clipledger.boss_key(5))
+        self.assertEqual("boss_kill:5:oaks", clipledger.boss_key(5, "oaks"))
         self.assertEqual("level_60:Alder", clipledger.level_key("Alder"))
 
 

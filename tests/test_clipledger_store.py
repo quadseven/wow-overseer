@@ -128,8 +128,20 @@ class Realm:
     """The realm reads, patched: narrow candidates and the history read."""
 
     def __init__(
-        self, loot=(), events=(), runs=(), history_events=(), cleared=(), open_runs=()
+        self,
+        loot=(),
+        events=(),
+        runs=(),
+        history_events=(),
+        cleared=(),
+        open_runs=(),
+        boss_rows=None,
     ):
+        # The narrow boss read. Unless a test sets it, it holds the boss kills
+        # of the history rows, which is what an uncapped read would return.
+        self.boss_rows = boss_rows
+        self.history_source = list(history_events)
+        self.boss_reads = []
         self.candidates = {
             "loot_rows": list(loot),
             "event_rows": list(events),
@@ -158,12 +170,25 @@ class Realm:
         self.history_reads += 1
         return self.history
 
+    def read_boss_kills(self, roster, subjects):
+        self.boss_reads.append((list(roster), sorted(subjects)))
+        if self.boss_rows is not None:
+            return list(self.boss_rows)
+        return [
+            e
+            for e in self.history_source
+            if e["kind"] == "boss_kill"
+            and e["character_name"] in roster
+            and e["subject_id"] in subjects
+        ]
+
 
 def scan(store, realm, roster=("Alder",), path_of=lambda name: "wd" + name):
     with (
         mock.patch.object(map_server, "_connect", store.connect),
         mock.patch.object(map_server, "_read_clip_candidates", realm.read_candidates),
         mock.patch.object(map_server, "_read_clip_history", realm.read_history),
+        mock.patch.object(map_server, "_read_boss_kills", realm.read_boss_kills),
         mock.patch.object(
             map_server,
             "_clip_who",
@@ -385,7 +410,7 @@ class TheCandidateRead(unittest.TestCase):
         self.assertEqual(1, realm.history_reads)
         self.assertEqual(1, result["written"])
         (write,) = store.writes()
-        self.assertIn("boss_kill:5", write[1])
+        self.assertIn("boss_kill:5:one", write[1])
 
     def test_a_candidate_missing_from_a_truncated_history_is_still_judged(self):
         recent = kill(9, 5, NOW - timedelta(minutes=3))
@@ -448,6 +473,93 @@ class TheCandidateRead(unittest.TestCase):
         self.assertEqual(1, realm.history_reads)
         (write,) = store.writes()
         self.assertIn("clear:36", write[1])
+
+
+TWO_FAMILIES = {"oaks": ["Alder", "Birch"], "pines": ["Cedar", "Dogwood"]}
+
+
+def scan_families(store, realm, families=None):
+    families = families or TWO_FAMILIES
+    roster = [n for names in families.values() for n in names]
+    with (
+        mock.patch.object(map_server, "_connect", store.connect),
+        mock.patch.object(map_server, "_read_clip_candidates", realm.read_candidates),
+        mock.patch.object(map_server, "_read_clip_history", realm.read_history),
+        mock.patch.object(map_server, "_read_boss_kills", realm.read_boss_kills),
+        mock.patch.object(
+            map_server,
+            "_clip_who",
+            lambda: (roster, ["Lantern Wardens"], families),
+        ),
+        mock.patch.object(map_server, "_clip_path", lambda name: "wd" + name),
+    ):
+        return map_server.scan_clips()
+
+
+class TheBossFirst(unittest.TestCase):
+    """A boss first is decided by the narrow boss read, per family."""
+
+    def test_an_earlier_kill_past_the_history_cap_still_blocks_a_later_member(self):
+        old = kill(1, 5, NOW - timedelta(days=30), who="Birch")
+        recent = kill(9, 5, NOW - timedelta(minutes=3), who="Alder")
+        # The capped history lost the old kill; the narrow read holds it.
+        realm = Realm(events=[recent], history_events=[recent], boss_rows=[old, recent])
+        store = FakeStore()
+        result = scan_families(store, realm)
+        self.assertEqual(0, result["written"])
+        self.assertEqual([], store.writes())
+
+    def test_two_families_each_write_their_own_row_for_one_boss(self):
+        first = kill(1, 5, NOW - timedelta(minutes=9), who="Alder")
+        second = kill(2, 5, NOW - timedelta(minutes=3), who="Cedar")
+        realm = Realm(events=[first, second], history_events=[first, second])
+        store = FakeStore()
+        result = scan_families(store, realm)
+        self.assertEqual(2, result["written"])
+        keys = sorted(w[1][3] for w in store.writes())
+        self.assertEqual(["boss_kill:5:oaks", "boss_kill:5:pines"], keys)
+
+    def test_the_boss_read_asks_for_the_roster_and_the_candidate_subjects(self):
+        recent = kill(9, 6, NOW - timedelta(minutes=3), who="Alder")
+        realm = Realm(events=[recent], history_events=[recent])
+        scan_families(FakeStore(), realm)
+        self.assertEqual(
+            [(["Alder", "Birch", "Cedar", "Dogwood"], [6])], realm.boss_reads
+        )
+
+    def test_a_boss_read_at_its_cap_writes_no_boss_first_and_logs_an_error(self):
+        recent = kill(9, 5, NOW - timedelta(minutes=3), who="Alder")
+        up = {
+            "id": 4,
+            "character_name": "Birch",
+            "kind": "level_up",
+            "subject_id": None,
+            "level": 60,
+            "first_seen": NOW - timedelta(minutes=3),
+        }
+        realm = Realm(events=[recent, up], history_events=[recent])
+        store = FakeStore()
+        with (
+            mock.patch.object(map_server, "_CLIP_BOSS_CAP", 1),
+            self.assertLogs("wow-map", level=logging.ERROR) as logs,
+        ):
+            result = scan_families(store, realm)
+        self.assertEqual(1, result["written"])
+        (write,) = store.writes()
+        self.assertIn("level_60:Birch", write[1])
+        self.assertEqual(1, len(logs.records))
+        self.assertIn("clip boss kills", logs.output[0])
+
+    def test_a_row_under_the_old_key_is_not_touched_and_does_not_block(self):
+        recent = kill(9, 5, NOW - timedelta(minutes=3), who="Alder")
+        realm = Realm(events=[recent], history_events=[recent])
+        store = FakeStore(keys=["boss_kill:5"])
+        result = scan_families(store, realm)
+        self.assertEqual(1, result["written"])
+        (write,) = store.writes()
+        self.assertTrue(write[0].lstrip().startswith("INSERT IGNORE"))
+        self.assertIn("boss_kill:5:oaks", write[1])
+        self.assertEqual([], [s for s in store.statements if "boss_kill:5'" in s[0]])
 
 
 class TheViewRule(unittest.TestCase):
