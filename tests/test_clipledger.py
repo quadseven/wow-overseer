@@ -527,6 +527,41 @@ class ShelfViewOwnerTests(unittest.TestCase):
         self.assertEqual("Cedar", clip["view_owner"])
 
 
+class ShelfSubjectTests(unittest.TestCase):
+    def subject_of(self, **over):
+        row = {
+            "id": 1,
+            "kind": "boss_kill",
+            "character": "Cedar",
+            "event_at": NOW,
+            "state": "ready",
+            "file_name": "clip-1-boss_kill.mp4",
+            "detail": "Test Warden",
+        }
+        row.update(over)
+        (clip,) = clipledger.shelf([row])["clips"]
+        return clip["subject"]
+
+    def test_a_boss_first_kill_names_the_boss(self):
+        self.assertEqual("Test Warden", self.subject_of())
+
+    def test_a_loot_clip_names_the_item(self):
+        self.assertEqual(
+            "Test Blade", self.subject_of(kind="loot", detail="Test Blade")
+        )
+
+    def test_the_view_text_and_a_cutter_note_are_not_the_subject(self):
+        self.assertEqual(
+            "Test Warden",
+            self.subject_of(detail="Test Warden; view: Alder (leader); dark 1 of 5"),
+        )
+        self.assertEqual("", self.subject_of(detail="view: Alder (leader)"))
+
+    def test_a_kind_without_a_named_subject_has_none(self):
+        self.assertEqual("", self.subject_of(kind="level_60", detail=""))
+        self.assertEqual("", self.subject_of(kind="clear", detail="Test Mines"))
+
+
 class RestartAndBackfillTests(unittest.TestCase):
     def test_a_second_scan_with_the_stored_keys_writes_nothing(self):
         args = dict(loot_rows=[loot(7), loot(8, guid=901)])

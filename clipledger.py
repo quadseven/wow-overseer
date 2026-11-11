@@ -550,6 +550,21 @@ def view_owner(row: Mapping) -> str:
     return row["character"]
 
 
+SUBJECT_KINDS = ("loot", "boss_kill")
+
+
+def subject(row: Mapping) -> str:
+    """The item of a loot clip or the boss of a boss first kill, or "".
+
+    The planner writes the event's subject name as the first part of the
+    detail; a view marker or a later note is never taken for it.
+    """
+    if row.get("kind") not in SUBJECT_KINDS:
+        return ""
+    first = (row.get("detail") or "").split("; ")[0]
+    return "" if _VIEW_NOTE.match(first) else first.strip()
+
+
 def failed_line(row: Mapping) -> str:
     """The note for a failed row: its recorded reason, without the planner's
     view text (the "view:" parts of the detail)."""
@@ -576,6 +591,7 @@ def shelf(rows: Iterable[Mapping]) -> dict:
                 "kind": r["kind"],
                 "character": r["character"],
                 "view_owner": view_owner(r),
+                "subject": subject(r),
                 "at": _iso(r.get("event_at")),
                 "url": clip_url(r["file_name"]),
             }

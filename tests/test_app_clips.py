@@ -22,6 +22,7 @@ CLIPS = [
         "id": 2,
         "kind": "boss_kill",
         "character": "Otherchar",
+        "subject": "Test Warden",
         "at": "2026-11-09T11:30:00",
         "url": "/clips/clip-2-boss_kill.mp4",
     },
@@ -29,6 +30,7 @@ CLIPS = [
         "id": 1,
         "kind": "loot",
         "character": "Testchar",
+        "subject": "Test Blade",
         "at": "2026-11-09T10:00:00",
         "url": "/clips/clip-1-loot.mp4",
     },
@@ -63,6 +65,14 @@ class TheShelf(unittest.TestCase):
         self.assertLess(m.index("Otherchar"), m.index("Testchar"))
         self.assertIn("Boss kill", m)
         self.assertIn('data-clip="/clips/clip-1-loot.mp4"', m)
+
+    def test_a_card_shows_the_boss_or_the_item_and_none_when_unnamed(self):
+        m = self.draw({"data": {"clips": CLIPS, "empty": "none"}, "loading": False})
+        self.assertIn("Test Warden", m)
+        self.assertIn("Test Blade", m)
+        bare = [dict(CLIPS[0], subject="")]
+        m = self.draw({"data": {"clips": bare, "empty": "none"}, "loading": False})
+        self.assertNotIn("clip-subject", m)
 
     def test_no_video_is_loaded_until_play(self):
         m = self.draw({"data": {"clips": CLIPS, "empty": "none"}, "loading": False})

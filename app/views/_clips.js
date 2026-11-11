@@ -39,7 +39,7 @@ function card(c) {
   const body = kept.has(c.url)
     ? html`<div class="clip-slot" data-clip-slot="${c.url}"></div>`
     : html`<button type="button" class="btn clip-play" data-clip="${c.url}"><i class="ph-fill ph-play" aria-hidden="true"></i>Play</button>`;
-  return html`<article class="card clip-card"><div class="clip-head"><span class="tag tag-outline">${kindWord(c.kind)}</span><span class="clip-who">${c.character}</span><span class="muted g-when">${since(c.at)}</span></div>${body}</article>`;
+  return html`<article class="card clip-card"><div class="clip-head"><span class="tag tag-outline">${kindWord(c.kind)}</span><span class="clip-who">${c.character}</span>${c.subject ? html`<span class="clip-subject">${c.subject}</span>` : ""}<span class="muted g-when">${since(c.at)}</span></div>${body}</article>`;
 }
 
 // The shelf section's body, from the /api/clips read.
