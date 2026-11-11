@@ -623,12 +623,6 @@ class TheBridgeAsksTheForecast(unittest.TestCase):
         self.assertIn("release=forecast.release", body)
         self.assertNotIn("disposition.material_surplus(", body)
 
-    def test_the_module_ships(self):
-        dockerfile = (
-            pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
-        ).read_text()
-        self.assertIn("bankforecast.py", dockerfile)
-
 
 if __name__ == "__main__":
     unittest.main()

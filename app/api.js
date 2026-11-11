@@ -20,10 +20,43 @@ const TIMEOUT_MS = 30000;
 const cache = new Map(); // path -> entry
 const listeners = new Set();
 
+// Payload fields that tick with the clock rather than the world: an uptime
+// or a "generated at" stamp differs on every poll even when nothing else
+// moved. A read is "changed" by its stable projection (below), which drops
+// these keys at any depth, so a poll whose only news is a ticking clock
+// redraws nothing. The data itself is still served whole and fresh; only
+// the changed judgement ignores the clock.
+const VOLATILE_KEYS = new Set(["uptime_seconds", "when_seconds", "generated_at"]);
+
+function stableValue(v) {
+  if (Array.isArray(v)) return v.map(stableValue);
+  if (v && typeof v === "object") {
+    // No prototype: a payload key like "__proto__" is data to carry, not a
+    // prototype to set (assigning it to a plain object would lose the key
+    // and let different answers share one projection).
+    const out = Object.create(null);
+    Object.keys(v).sort().forEach((k) => {
+      if (!VOLATILE_KEYS.has(k)) out[k] = stableValue(v[k]);
+    });
+    return out;
+  }
+  return v;
+}
+
+// The canonical text a read is compared by: parsed, clock fields dropped,
+// keys in a fixed order. Text that is not JSON compares as itself.
+export function stableProjection(text) {
+  try {
+    return JSON.stringify(stableValue(JSON.parse(text)));
+  } catch (err) {
+    return text;
+  }
+}
+
 function entry(path) {
   let e = cache.get(path) || restore(path);
   if (!e) {
-    e = { data: undefined, text: "", at: 0, error: null, failures: 0, inflight: null, saved: false };
+    e = { data: undefined, text: "", projection: "", at: 0, error: null, failures: 0, inflight: null, saved: false };
     cache.set(path, e);
   }
   return e;
@@ -46,8 +79,9 @@ export function peek(path) {
 //
 // Revalidation is the browser's: `cache: "no-cache"` sends the stored ETag
 // and turns the server's 304 into the stored body. An answer is "changed"
-// when its text differs from the last one, so an unchanged poll redraws
-// nothing.
+// when its stable projection differs from the last one (see
+// stableProjection), so an unchanged poll, or one whose only news is a
+// ticking clock, redraws nothing.
 export function load(path) {
   const e = entry(path);
   if (e.inflight) return e.inflight;
@@ -55,12 +89,13 @@ export function load(path) {
     .then(async (r) => {
       if (!r.ok) throw new Error("HTTP " + r.status);
       const text = await r.text();
-      const changed = text !== e.text;
-      if (changed) {
-        let data;
-        try { data = JSON.parse(text); } catch (err) { throw new Error("not JSON from " + path); }
-        e.data = data; e.text = text;
-      }
+      let data;
+      try { data = JSON.parse(text); } catch (err) { throw new Error("not JSON from " + path); }
+      const projection = stableProjection(text);
+      const changed = projection !== e.projection;
+      // The freshest answer is always what views are served, clock fields
+      // and all; a clock-only answer just does not count as a change.
+      e.data = data; e.text = text; e.projection = projection;
       // A saved copy the world has just confirmed is still a change on
       // screen: its "saved" mark has to go.
       const wasSaved = e.saved;
@@ -205,7 +240,7 @@ function restore(path) {
   if (!kept || typeof kept.text !== "string" || !kept.at) return null;
   let data;
   try { data = JSON.parse(kept.text); } catch (err) { return null; }
-  const e = { data, text: kept.text, at: kept.at, error: null, failures: 0, inflight: null, saved: true };
+  const e = { data, text: kept.text, projection: stableProjection(kept.text), at: kept.at, error: null, failures: 0, inflight: null, saved: true };
   cache.set(path, e);
   return e;
 }

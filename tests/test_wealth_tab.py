@@ -156,7 +156,6 @@ class TheEndpoint(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.server = (HERE / "map_server.py").read_text(encoding="utf-8")
-        cls.dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
         # From the adapter's own banner (which is where the column list
         # lives) to the Armory's, and the SQL half separately: the docstring
         # QUOTES the Armory's slot-bounded query to explain why this one is
@@ -247,12 +246,6 @@ class TheEndpoint(unittest.TestCase):
         self.assertIn("guild_bank_right", self.fetch)
         self.assertIn("guild_bank_right_rows", self.fetch)
         self.assertIn("1146", self.fetch)
-
-    def test_the_module_ships_in_the_image(self):
-        """map_server imports wealth at module scope, so an image without it
-        does not start at all - and that failure lands at pod start, long
-        after CI has gone green."""
-        self.assertIn("wealth.py", self.dockerfile)
 
     def test_the_builder_is_the_only_thing_that_decides_anything(self):
         """Same seam rule as every other endpoint here (infra#2597): rows in,

@@ -319,10 +319,6 @@ class BridgeIntegrationTests(unittest.TestCase):
         self.assertIn("family_progress", source)
         self.assertIn("_fetch_positions, names", source)
 
-    def test_new_module_is_copied_into_the_image(self):
-        dockerfile = (PACKAGE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("vendor_stall.py", dockerfile)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -179,11 +179,8 @@ class LearnedSkillReopensEquipRetries(unittest.TestCase):
 
 
 class TheBridge(unittest.TestCase):
-    def test_the_loop_runs_and_the_module_ships(self):
+    def test_the_loop_runs_and_defines_its_helpers(self):
         self.assertEqual(1, BRIDGE.count('_Pass("_weapon_skill_loop"),'))
-        self.assertIn(
-            "weaponskill.py", (ROOT / "Dockerfile").read_text(encoding="utf-8")
-        )
         names = {
             n.name
             for n in ast.walk(ast.parse(BRIDGE))

@@ -15,6 +15,9 @@ import * as tooltip from "./tooltip.js";
 import * as gestures from "./gestures.js";
 import * as update from "./update.js";
 import { legacy, parse, resolve } from "./router.js";
+import { captureAnchor, resolveAnchor, scrollShift, restoreTarget } from "./scrollanchor.js";
+import { makeHold, makeGate, endOnce } from "./redraw.js";
+import { NARROW, onCross } from "./breakpoint.js";
 import { learn as learnRealm } from "./families.js";
 import { savedTheme, saveTheme, lastPage, saveLastPage, stampVisit, previousVisit } from "./store.js";
 import { html, ago, plural } from "./ui.js";
@@ -79,7 +82,7 @@ function loadView(name) {
   return views.get(name);
 }
 
-const isPhone = () => window.matchMedia("(max-width: 759.98px)").matches;
+const isPhone = () => window.matchMedia(NARROW).matches;
 
 // A view's own stylesheet (paths under app/), linked once.
 function useCss(path) {
@@ -103,10 +106,45 @@ function savedBanner(h) {
   return html`<div class="banner" role="status" data-stale-cache><i class="ph ph-clock-counter-clockwise" aria-hidden="true"></i><div><div style="font-weight:500">Showing the copy saved ${ago(secs)}</div><div class="muted">Reading the world for fresh data.</div></div></div>`;
 }
 
+// The reader's line for scroll anchoring: a fixed depth into the viewport,
+// below the phone's header, where the eye rests while scrolling.
+const READ_LINE = 160;
+
+// The line sits below the stage when one is pinned over the page.
+function readLine() {
+  const st = document.getElementById("stage");
+  return st && !st.hidden ? Math.max(READ_LINE, st.getBoundingClientRect().bottom + 16) : READ_LINE;
+}
+
+// Now's stage belongs to Now alone.
+function hideStage() {
+  const st = document.getElementById("stage");
+  if (st) st.hidden = true;
+  document.documentElement.removeAttribute("data-stage");
+}
+
+// A view may widen its reads once its first data is in (a member page reads
+// the roster first, then that member's own reads), so they are asked again
+// after every draw and polling follows when they change.
+function widenReads(module, ctx) {
+  const next = module.reads(ctx) || [];
+  if (next.join("\n") !== current.reads.join("\n")) {
+    current.reads = next;
+    api.watch(next, module.every || 15000, module.quick);
+  }
+}
+
+const gate = makeGate();
+
 function draw(keepPlace) {
   if (!current) return;
   const { module, ctx } = current;
   const y = window.scrollY;
+  // The element at the reader's line, named before the swap so the restore
+  // below can follow the content when the redraw moves it (scrollanchor.js).
+  // A reader parked at the very top is not anchored: the top is the top.
+  const line = readLine();
+  const anchor = keepPlace && y > 0 ? captureAnchor(main, line) : null;
   const focused = document.activeElement && main.contains(document.activeElement) ? document.activeElement : null;
   const focusKey = focused ? (focused.id || focused.getAttribute("data-focus") || "") : "";
   const caret = focused && typeof focused.selectionStart === "number" ? [focused.selectionStart, focused.selectionEnd] : null;
@@ -114,20 +152,30 @@ function draw(keepPlace) {
   const pull = pulling ? html`<div class="refreshing" role="status"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i>Refreshing. Data was ${h.at ? ago((Date.now() - h.at) / 1000) : "not read yet"}.</div>` : "";
   const hadSkeleton = !!main.querySelector(".skeleton");
   const strips = keepPlace ? stripPlaces(main) : null;
-  main.innerHTML = html`${pull}${banner(h)}${module.render(ctx)}`.s;
+  const body = html`${pull}${banner(h)}${module.render(ctx)}`.s;
+  // A body identical to the one on screen (and nothing the view draws from
+  // outside its markup changed) is not swapped in: a swap re-lays out the
+  // page for nothing.
+  const key = body + "\u0000" + (module.stamp ? module.stamp(ctx) : "");
+  const differs = gate.changed(current.hash, key);
+  if (keepPlace && !differs) {
+    widenReads(module, ctx);
+    drawShell();
+    return;
+  }
+  main.innerHTML = body;
   if (hadSkeleton && !main.querySelector(".skeleton")) easeIn();
   if (module.after) module.after(main, ctx);
   placeStrips(main, strips);
-  // A view may widen its reads once its first data is in (a member page reads
-  // the roster first, then that member's own reads), so they are asked again
-  // after every draw and polling follows when they change.
-  const next = module.reads(ctx) || [];
-  if (next.join("\n") !== current.reads.join("\n")) {
-    current.reads = next;
-    api.watch(next, module.every || 15000, module.quick);
-  }
+  widenReads(module, ctx);
   if (keepPlace) {
-    window.scrollTo(0, y);
+    // Follow the anchored content to its new place: the pixel restore alone
+    // lands on different content whenever the redraw changed a height above
+    // the reader. Nothing is written when the page is already there.
+    const anchorEl = anchor ? resolveAnchor(main, anchor) : null;
+    const shift = anchorEl ? scrollShift(anchorEl, anchor, line) : 0;
+    const to = restoreTarget(y, shift, window.scrollY);
+    if (to !== null) window.scrollTo(0, to);
     if (focusKey) {
       const el = main.querySelector("#" + CSS.escape(focusKey)) || main.querySelector('[data-focus="' + CSS.escape(focusKey) + '"]');
       if (el) {
@@ -136,9 +184,34 @@ function draw(keepPlace) {
       }
     }
   }
+  if (current.view !== "now") hideStage();
+  root.setAttribute("data-view", current.view);
   shell.setThumb(root, module.thumb ? module.thumb(ctx) : null);
   drawShell();
 }
+
+// ---- redraws that wait for the reader's finger ---------------------------------
+// A poll's new data redraws the page. While a touch is down, or the page
+// scrolled a moment ago, that redraw waits and is applied once the scroll has
+// settled (redraw.js); a redraw the reader asked for (a pull, a stage switch)
+// does not wait.
+const hold = makeHold({
+  now: () => Date.now(),
+  setTimer: (fn, ms) => window.setTimeout(fn, ms),
+  clearTimer: (id) => window.clearTimeout(id),
+  apply: () => draw(true),
+});
+// The end is heard on the touched element itself: a pull redraws <main> and
+// removes it, and nothing from a removed element reaches window.
+window.addEventListener("touchstart", (e) => {
+  hold.touchStart();
+  endOnce(e.target, () => hold.touchEnd());
+}, { passive: true });
+// Turning the screen across the breakpoint redraws the current view once.
+onCross(() => draw(true));
+window.addEventListener("scroll", () => hold.scrolled(), { passive: true });
+window.addEventListener("scrollend", () => hold.scrollEnd(), { passive: true });
+window.addEventListener("overseer:redraw", () => draw(true));
 
 async function route() {
   let hash = location.hash;
@@ -178,7 +251,7 @@ async function route() {
 
 api.onChange((path, changed) => {
   if (!current) return;
-  if (changed && current.reads.includes(path)) draw(true);
+  if (changed && current.reads.includes(path)) hold.request();
   else drawShell();
 });
 

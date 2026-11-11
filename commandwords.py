@@ -17,12 +17,13 @@ command itself.
 from __future__ import annotations
 
 import json
-import os
 import re
 from functools import lru_cache
 
 import council
 import places
+
+from world_data import DATA_ROOT
 
 # One read per table, ids bound as values; `{holes}` is sized by the caller.
 NAMES_SQL = {
@@ -30,6 +31,12 @@ NAMES_SQL = {
     "WHERE entry IN ({holes})",
     "creature": "SELECT entry AS id, name FROM acore_world.creature_template "
     "WHERE entry IN ({holes})",
+    # `walk-to-spawn creature:` and `party-walk creature:` carry a SPAWN id (the
+    # creature table's guid), not a template entry: naming one as an entry named
+    # a different creature than the one walked to (#2194).
+    "spawn": "SELECT cr.guid AS id, ct.name FROM acore_world.creature cr "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "WHERE cr.guid IN ({holes})",
     "quest": "SELECT ID AS id, LogTitle AS name FROM acore_world.quest_template "
     "WHERE ID IN ({holes})",
     "object": "SELECT entry AS id, name FROM acore_world.gameobject_template "
@@ -44,6 +51,7 @@ NAMES_SQL = {
 _ARG = re.compile(r"\b(item|creature|quest|entry|guid|skill|mail|map|count):(\d+)")
 _HITEM = re.compile(r"Hitem:(\d+)")
 # Commands whose `item:` is an item entry; in mail commands it is an instance.
+_SPAWN_ID_HEADS = ("walk-to-spawn", "party-walk")
 _ENTRY_ITEM_HEADS = ("walk-to-vendor", "hunt-spawn", "use-item-on")
 
 # playerbots strategy sets: `co` in combat, `nc` out of it; "+" on, "-" off.
@@ -79,7 +87,8 @@ def wanted(rows) -> dict:
         head = command.split(" ", 1)[0]
         args = _args(command)
         if "creature" in args:
-            out["creature"].add(args["creature"])
+            table = "spawn" if head in _SPAWN_ID_HEADS else "creature"
+            out[table].add(args["creature"])
         if "quest" in args:
             out["quest"].add(args["quest"])
         if "entry" in args:
@@ -108,7 +117,7 @@ def _name(names: dict, table: str, key: int, what: str) -> str:
 def _crafts() -> dict:
     """craft spell id -> what it makes, from the committed craftbook.json."""
     try:
-        with open(os.path.join(os.path.dirname(__file__), "craftbook.json")) as f:
+        with open(DATA_ROOT / "craftbook.json") as f:
             book = json.load(f)
     except (OSError, ValueError):
         return {}
@@ -175,6 +184,10 @@ def _with_arg(row: dict) -> str:
 
 def _creature(args: dict, names: dict) -> str:
     return _name(names, "creature", args["creature"], "creature")
+
+
+def _spawn(args: dict, names: dict) -> str:
+    return _name(names, "spawn", args["creature"], "creature")
 
 
 def _quest(args: dict, names: dict) -> str:
@@ -264,8 +277,8 @@ _BY_HEAD = {
     "finder-run": lambda rest, row, args, names: _finder(rest) if rest else "",
     "cross-to-map": _cross,
     "walk-to-vendor": lambda rest, row, args, names: _vendor(args, names),
-    "walk-to-spawn": _needs("creature", "Walk to ", _creature),
-    "party-walk": _needs("creature", "Walk the party to ", _creature),
+    "walk-to-spawn": _needs("creature", "Walk to ", _spawn),
+    "party-walk": _needs("creature", "Walk the party to ", _spawn),
     "use-gameobject": _gameobject,
     "take": _needs("quest", "Take the quest ", _quest),
     "turnin": _needs("quest", "Hand in ", _quest),

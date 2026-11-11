@@ -7,9 +7,15 @@ is the one `itemplan_shadow.shadow` builds from them.
 
 from __future__ import annotations
 
+import asyncio
+import os
 import pathlib
 import sys
+import types
 import unittest
+from unittest import mock
+
+from _stub_modules import PYMYSQL, fresh_import
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -122,16 +128,16 @@ class SalesForTest(unittest.TestCase):
             self.assertEqual(vendor.sales_for(plan_, prs), ())
 
     def test_confirm_sale_waits_for_a_release(self):
-        # Quality 3 or a value of 1 gold or more marks a sale `confirm`:
+        # A value of 1 gold or more marks a sale `confirm`:
         # it is carried out only when its key is in the released set.
-        rows = [row("Ana", 9, 8888, "Blue Sword", quality=3, sell=20000, item_class=2)]
+        rows = [row("Ana", 9, 8888, "Green Sword", quality=2, sell=20000, item_class=2)]
         gear = [
             {
                 "holder": "Ana",
                 "item_guid": 9,
                 "entry": 8888,
-                "name": "Blue Sword",
-                "quality": 3,
+                "name": "Green Sword",
+                "quality": 2,
                 "sell_price": 20000,
                 "item_class": 2,
                 "item_subclass": 0,
@@ -151,6 +157,55 @@ class SalesForTest(unittest.TestCase):
         released = frozenset(d.key for d in confirms)
         sales = vendor.sales_for(plan_, prs, released=released)
         self.assertEqual(len(sales), len(confirms))
+
+
+def fallback_fixture(options):
+    """One carried green and a plan whose only decision sells it."""
+    item = row("Ana", 4, 7777, "Plain Green Cloak", quality=2, sell=4000, item_class=4)
+    key = ("Ana", 7777, 0)
+    decision = itemplan.Decision(
+        holder="Ana",
+        entry=7777,
+        name="Plain Green Cloak",
+        count=1,
+        from_loc=itemplan.CARRIED_BAG,
+        route=itemplan.SELL_VENDOR,
+        goal=itemplan.ROOM,
+        reason="sold",
+        rule="R8",
+        value=4000,
+        irreversible=True,
+        refusable=True,
+        key=key,
+        options=options,
+    )
+    plan_ = types.SimpleNamespace(decisions=(decision,))
+    return plan_, [(types.SimpleNamespace(key=key), item)], item
+
+
+class FallbackSaleTest(unittest.TestCase):
+    def test_a_sale_chosen_after_a_better_route_failed_is_held_back(self):
+        plan_, prs, _ = fallback_fixture((itemplan.GUILD_BANK, itemplan.SELL_VENDOR))
+        held = []
+        self.assertEqual(vendor.sales_for(plan_, prs, held=held), ())
+        self.assertEqual([d.name for d in held], ["Plain Green Cloak"])
+
+    def test_a_sale_that_was_the_first_choice_still_goes_out(self):
+        for options in ((itemplan.SELL_VENDOR, itemplan.BANK_PERSONAL), ()):
+            with self.subTest(options=options):
+                plan_, prs, _ = fallback_fixture(options)
+                held = []
+                self.assertEqual(len(vendor.sales_for(plan_, prs, held=held)), 1)
+                self.assertEqual(held, [])
+
+    def test_the_held_back_line_names_the_holder_count_and_stacks(self):
+        plan_, prs, _ = fallback_fixture((itemplan.GUILD_BANK, itemplan.SELL_VENDOR))
+        held = []
+        vendor.sales_for(plan_, prs, held=held)
+        self.assertEqual(
+            vendor.held_lines(held),
+            ("itemplan vendor: Ana holds back 1 fallback sale(s): Plain Green Cloak",),
+        )
 
 
 class CarryOutTest(unittest.TestCase):
@@ -194,71 +249,261 @@ class CarryOutTest(unittest.TestCase):
 
         report = vendor.carry_out(sales, insert)
         self.assertEqual([c.holder for c in queued], ["Bob"])
-        self.assertEqual(report.gold, {"Bob": 3000})
+        self.assertEqual(report.worth, {"Bob": 3000})
         self.assertEqual(len(report.skipped), 1)
         self.assertTrue(any("Bob" in line and "30s" in line for line in report.lines))
 
-    def test_gold_is_reported_per_member(self):
+    def test_the_line_says_queued_and_worth_not_sold(self):
+        sales = self._sales()
+        report = vendor.carry_out(sales, lambda candidate: 1)
+        self.assertTrue(report.lines)
+        for line in report.lines:
+            self.assertIn("sale(s) queued, worth ", line)
+            self.assertNotIn("carried out", line)
+            self.assertNotIn("gold", line)
+
+    def test_worth_is_reported_per_member(self):
         sales = self._sales()
         report = vendor.carry_out(sales, lambda candidate: 1)
         self.assertEqual(
-            report.gold,
+            report.worth,
             {sale.holder: sale.copper for sale in sales},
         )
-        for holder in report.gold:
+        for holder in report.worth:
             self.assertTrue(any(holder in line for line in report.lines))
 
 
-class BridgeWiringTest(unittest.TestCase):
-    """The town-run pass carries the route out (#1977, second slice).
+def plan_one(item_row, sub=0, **template):
+    """The plan the shadow builds for one carried row, with its binding read."""
+    tpl = {"subclass": sub, "bonding": 0, "req_level": 1, "item_level": 5}
+    tpl.update(template)
+    extras = shadow.Extras(
+        templates={item_row["entry"]: tpl},
+        instance_soulbound={item_row["item_guid"]: False},
+        open_quest_items={"Ana": frozenset({3000})},
+        fire_gear=frozenset(),
+    )
+    report = shadow.shadow(
+        ["Ana"],
+        "Fam",
+        [item_row],
+        {"Ana": 5},
+        worn_rows=[{"name": "Ana", "class_id": 8, "level": 54}],
+        extras=extras,
+    )
+    stacks = shadow.build_stacks(
+        [item_row], (), extras.templates, extras.instance_soulbound
+    )
+    return report.plan, list(zip(stacks, [item_row], strict=True))
 
-    The pure route above acted on nothing until the bridge called it:
-    `_vendor_once` asks `_itemplan_vendor_sales` for the route's sales
-    and hands them to `_queue_vendor_sales`, which writes them through
-    the same `_insert_sell` only for a holder queued at a counter, and
-    reports the gold through the route's own `carry_out`.
-    """
 
-    @classmethod
-    def setUpClass(cls):
-        import ast
+def tool_row(guid, entry, name):
+    return row("Ana", guid, entry, name, sell=100, item_class=2, profession_needed=True)
 
-        root = pathlib.Path(__file__).resolve().parents[1]
-        cls.bridge = (root / "bridge.py").read_text(encoding="utf-8")
-        cls.dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
-        tree = ast.parse(cls.bridge)
-        cls.segments = {}
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                seg = ast.get_source_segment(cls.bridge, node)
-                if seg:
-                    cls.segments.setdefault(node.name, seg)
 
-    def test_bridge_imports_the_route_and_ships_it(self):
-        self.assertIn("import itemplan_vendor", self.bridge)
-        self.assertIn("itemplan_vendor.py", self.dockerfile)
+# Working stock the current protection keeps (profession stock, quest item,
+# no price): none of it may reach a vendor through this route.
+PROTECTED_STOCK = {
+    "mining pick": (tool_row(11, 2901, "Mining Pick"), 14),
+    "skinning knife": (tool_row(12, 7005, "Skinning Knife"), 14),
+    "blacksmith hammer": (tool_row(13, 5956, "Blacksmith Hammer"), 14),
+    "hearthstone": (row("Ana", 15, 6948, "Hearthstone", sell=0, item_class=15), 0),
+    "key": (row("Ana", 16, 5396, "Skeleton Key", sell=10, item_class=13), 0),
+    "quest item of an open quest": (
+        row("Ana", 17, 3000, "Crate of Tools", sell=10, item_class=12, quest_item=True),
+        0,
+    ),
+}
 
-    def test_vendor_once_hands_route_sales_to_the_queue(self):
-        body = self.segments["_vendor_once"]
-        self.assertIn("_itemplan_vendor_sales", body)
-        self.assertLess(
-            body.index("_itemplan_vendor_sales"), body.index("_queue_vendor_sales(")
+
+class ProtectedStockTest(unittest.TestCase):
+    def test_tools_keys_and_quest_items_are_never_route_sales(self):
+        for label, (item_row, sub) in PROTECTED_STOCK.items():
+            with self.subTest(label):
+                plan_, prs = plan_one(item_row, sub)
+                self.assertEqual(vendor.sales_for(plan_, prs), ())
+
+    @unittest.expectedFailure
+    def test_fishing_pole_is_not_a_route_sale(self):
+        # BLOCKING FINDING: the fishing pole is not in `disposition.TOOL_TRADES`,
+        # so rule R5 never sees it and R8 routes it SELL_VENDOR ("nobody in
+        # the family will wear it"). Remove the decorator once the plan keeps it.
+        plan_, prs = plan_one(tool_row(14, 6256, "Fishing Pole"), 20)
+        self.assertEqual(vendor.sales_for(plan_, prs), ())
+
+    @unittest.expectedFailure
+    def test_a_bag_the_holder_may_wear_is_not_a_route_sale(self):
+        # BLOCKING FINDING: the shadow's plan sees no worn bags, so rule R2's
+        # "no bigger than a worn one" holds for every carried bag and routes
+        # it SELL_VENDOR. The current protection keeps an uncommon bag.
+        bag = row("Ana", 19, 4497, "Heavy Brown Bag", quality=2, sell=400, item_class=1)
+        plan_, prs = plan_one(bag, 0, container_slots=10)
+        self.assertEqual(vendor.sales_for(plan_, prs), ())
+
+
+def import_bridge():
+    discord = types.ModuleType("discord")
+    discord.Client = object
+    return fresh_import("bridge", discord=discord, pymysql=PYMYSQL)
+
+
+def route_sale(holder, guid, copper=4000):
+    return vendor.Sale(
+        holder=holder,
+        name="Plain Green Cloak",
+        count=1,
+        copper=copper,
+        key=(holder, guid),
+        candidate=bag_pressure.SellCandidate(
+            holder=holder,
+            item_guid=guid,
+            count=1,
+            item=bag_pressure.ItemForSale(quality=2, sell_price=copper),
+        ),
+    )
+
+
+def grey(holder, guid):
+    return bag_pressure.SellCandidate(
+        holder=holder,
+        item_guid=guid,
+        count=1,
+        item=bag_pressure.ItemForSale(quality=0, sell_price=5),
+    )
+
+
+class RouteSalesAtTheBridgeTest(unittest.TestCase):
+    """The bridge seam, run for real with a fake world (#1977)."""
+
+    def setUp(self):
+        self.bridge = import_bridge()
+
+    def run_pass(self, candidates, route_sales, at_counter=("Ana", "Cy")):
+        written, lines = [], []
+        bridge = self.bridge
+
+        async def no_reading(*args):
+            return None
+
+        fake_log = types.SimpleNamespace(
+            info=lambda msg, *a: lines.append(msg % a if a else msg)
         )
-        self.assertIn("route_sales=route_sales", body)
+        with (
+            mock.patch.object(
+                bridge,
+                "_fetch_town",
+                side_effect=lambda n: types.SimpleNamespace(vendor=n in at_counter),
+            ),
+            mock.patch.object(
+                bridge, "_insert_sell", side_effect=lambda c: written.append(c) or 1
+            ),
+            mock.patch.object(bridge, "_recent_range_refusals", return_value={}),
+            mock.patch.object(bridge, "_fetch_vendor_position", return_value=None),
+            mock.patch.object(bridge, "_log_sale_reading", no_reading),
+            mock.patch.object(bridge, "_SALE_WRITE_SPOT", {}),
+            mock.patch.object(bridge, "log", fake_log),
+        ):
+            inserted = asyncio.run(
+                bridge._queue_vendor_sales(
+                    tuple(candidates),
+                    "Lead",
+                    False,
+                    "trip",
+                    (),
+                    route_sales=tuple(route_sales),
+                )
+            )
+        return inserted, [c.item_guid for c in written], lines
 
-    def test_the_helper_builds_sales_from_the_shadow_plan(self):
-        body = self.segments["_itemplan_vendor_sales"]
-        self.assertIn("itemplan_vendor.enabled", body)
-        self.assertIn("itemplan_shadow.shadow", body)
-        self.assertIn("itemplan_vendor.sales_for", body)
+    def test_switch_off_reads_nothing_and_returns_no_sales(self):
+        bridge = self.bridge
+        env = {k: v for k, v in os.environ.items() if k != "ITEMPLAN_SELL_VENDOR"}
+        with (
+            mock.patch.dict(os.environ, env, clear=True),
+            mock.patch.object(bridge, "_itemplan_reads") as reads,
+        ):
+            out = bridge._itemplan_vendor_sales(["Ana"], "Fam", [], {})
+        self.assertEqual(out, ())
+        reads.assert_not_called()
 
-    def test_the_queue_carries_route_sales_out(self):
-        body = self.segments["_queue_vendor_sales"]
-        self.assertIn("route_sales", body)
-        self.assertIn("_queue_route_sales", body)
-        helper = self.segments["_queue_route_sales"]
-        self.assertIn("carry_out", helper)
-        self.assertIn("_insert_sell", helper)
+    def test_a_failed_plan_read_is_logged_and_returns_no_sales(self):
+        bridge = self.bridge
+        fake_log = mock.Mock()
+        with (
+            mock.patch.dict(os.environ, ON),
+            mock.patch.object(bridge, "_itemplan_reads", side_effect=OSError("down")),
+            mock.patch.object(bridge, "log", fake_log),
+        ):
+            out = bridge._itemplan_vendor_sales(["Ana"], "Fam", [], {})
+        self.assertEqual(out, ())
+        fake_log.exception.assert_called_once()
+        self.assertIn("the route failed", fake_log.exception.call_args.args[0])
+
+    def test_a_route_sale_is_written_only_for_a_holder_at_a_counter(self):
+        # Ana stands at a counter; Bob does not. Each also has an ordinary row.
+        inserted, guids, _ = self.run_pass(
+            [grey("Ana", 1), grey("Bob", 2)],
+            [route_sale("Ana", 10), route_sale("Bob", 20)],
+        )
+        self.assertIn(10, guids)
+        self.assertNotIn(20, guids)
+        self.assertNotIn(2, guids)
+        self.assertEqual(inserted, len(guids))
+
+    def test_a_route_only_holder_at_a_counter_gets_its_sale(self):
+        _, guids, _ = self.run_pass(
+            [grey("Ana", 1)], [route_sale("Cy", 30), route_sale("Dee", 40)]
+        )
+        self.assertIn(30, guids)
+        self.assertNotIn(40, guids)
+
+    def test_an_item_is_written_once_when_it_is_also_an_ordinary_candidate(self):
+        # The gear, lock, clearance and bag sales ride in `candidates`; a
+        # route sale for the same guid must not queue a second sell row.
+        _, guids, _ = self.run_pass([grey("Ana", 7)], [route_sale("Ana", 7)])
+        self.assertEqual(guids.count(7), 1)
+
+    def test_the_summary_counts_route_rows_on_both_sides(self):
+        inserted, _, lines = self.run_pass([grey("Ana", 1)], [route_sale("Ana", 10)])
+        self.assertEqual(inserted, 2)
+        summary = [ln for ln in lines if ln.startswith("economy: queued ")]
+        self.assertEqual(len(summary), 1)
+        self.assertIn("queued 2/2 vendor sale(s)", summary[0])
+
+    def test_the_seam_logs_the_fallback_sales_it_held_back(self):
+        bridge = self.bridge
+        plan_, prs, item = fallback_fixture((itemplan.GUILD_BANK, itemplan.SELL_VENDOR))
+        fake_log = mock.Mock()
+        with (
+            mock.patch.dict(os.environ, ON),
+            mock.patch.object(
+                bridge,
+                "_itemplan_reads",
+                return_value=types.SimpleNamespace(
+                    templates=None, instance_soulbound=None
+                ),
+            ),
+            mock.patch.object(
+                bridge.itemplan_shadow,
+                "shadow",
+                return_value=types.SimpleNamespace(plan=plan_),
+            ),
+            mock.patch.object(
+                bridge.itemplan_shadow, "build_stacks", return_value=[prs[0][0]]
+            ),
+            mock.patch.object(bridge, "log", fake_log),
+        ):
+            out = bridge._itemplan_vendor_sales(["Ana"], "Fam", [item], {})
+        self.assertEqual(out, ())
+        fake_log.info.assert_called_once_with(
+            "%s",
+            "itemplan vendor: Ana holds back 1 fallback sale(s): Plain Green Cloak",
+        )
+
+    def test_the_dockerfile_ships_the_route(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        docker = (root / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("itemplan_vendor.py", docker)
 
 
 if __name__ == "__main__":

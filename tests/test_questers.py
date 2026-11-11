@@ -3,11 +3,12 @@ and a quest that stops progressing is broken with its reason."""
 
 import unittest
 
+import classhunt
 import classquest
 import guildjobs
 import questers
 
-ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE = 12, 9, 40, 44
+ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE, DUSKWOOD = 12, 9, 40, 44, 10
 HUMAN, ORC = 1, 2
 PRIEST, WARRIOR = 5, 1
 ALLIANCE_MASK, HORDE_MASK = 1101, 690
@@ -900,6 +901,82 @@ class Broken(unittest.TestCase):
             "requires exploring Fargodeep Mine; questers cannot earn exploration credit",
         )
 
+    def test_selling_fish_ledger_explains_unsupported_fishing_step(self):
+        # The world rows name ten Spotted Sunfish (item 1467) as a required
+        # item. The quester can hunt drops, but has no fishing step to
+        # gather this item (fishing pools and fishing loot are not hunt
+        # fields).
+        quest = classquest.Quest(
+            127,
+            "Selling Fish",
+            0,
+            16,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((1467, 10),),
+            enders=(classquest.Spawn(1127, 315, 0, 0.0, 0.0, name="Dockmaster Baren"),),
+        )
+        facts = questers.Facts(zone=REDRIDGE, level=21, ender_npcs=True)
+
+        early = questers._broken_reason(
+            quest,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            0,
+            frozenset(),
+            {},
+        )
+        self.assertEqual(early, "")
+
+        reason = questers._broken_reason(
+            quest,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertEqual(
+            reason,
+            "Selling Fish (quest 127) requires fishing; questers cannot fish",
+        )
+
+    def test_quest_127_selling_fish_has_specific_stall_reason(self):
+        # Quest 127 "Selling Fish" in Redridge Mountains (level 21) requires
+        # collecting 10 Spotted Sunfish (item 1467). With no huntable field
+        # for fishing, the quest stalls; the stall carries a specific reason.
+        fish = quest(127, REDRIDGE, 21, title="Selling Fish")
+        fish["item1"] = 1467
+        fish["item_count1"] = 10
+        cat = world(
+            extra_quests=[fish],
+            extra_givers=[
+                giver(127, "start", 1127, 315, 0, 0),
+                giver(127, "end", 1127, 315, 0, 0),
+            ],
+        )
+        member = mirra(
+            level=21,
+            zone_id=REDRIDGE,
+            quest_log={127: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({30, 31}),
+            quest_progress={127: 0},
+            quest_objectives={127: {}},
+        )
+        clock = questers.Clock()
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 127)
+        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("Selling Fish", p.broken[0].reason)
+
     def test_objectives_that_move_never_stall(self):
         p, _ = self._play(
             mirra(quest_log={1: 3}), 240, progress=lambda minute: {1: minute // 60}
@@ -976,6 +1053,113 @@ class Broken(unittest.TestCase):
 
         reason = next(reason for qid, reason in self.found if qid == 8)
         self.assertIn("questers cannot buy items from vendors", reason)
+
+    def test_defias_brotherhood_names_the_missing_wileys_note_source(self):
+        defias = quest(
+            132,
+            WESTFALL,
+            18,
+            min_level=14,
+            prev=65,
+            title="The Defias Brotherhood",
+        )
+        defias.update(item1=1327, item_count1=1)
+        cat = world(
+            extra_quests=[defias],
+            extra_givers=[
+                giver(132, "start", 1132, 132, 0, 0),
+                giver(132, "end", 1132, 132, 0, 0),
+            ],
+        )
+        member = mirra(
+            level=18,
+            zone_id=WESTFALL,
+            quest_log={132: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({20, 21, 65}),
+            quest_progress={132: 0},
+            quest_objectives={132: {1327: 0}},
+        )
+
+        p, _ = self._play(member, 120, cat=cat)
+
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 132)
+        self.assertIn("Wiley's Note", p.broken[0].reason)
+        self.assertIn("no spawned creature drops", p.broken[0].reason)
+
+    def test_ghost_hair_thread_names_the_missing_spectral_comb_source(self):
+        thread = quest(
+            149,
+            DUSKWOOD,
+            24,
+            min_level=20,
+            prev=148,
+            title="Ghost Hair Thread",
+        )
+        thread.update(item1=1453, item_count1=1)
+        cat = world(
+            extra_quests=[thread],
+            extra_givers=[
+                giver(149, "start", 1149, 149, 0, 0),
+                giver(149, "end", 1149, 149, 0, 0),
+            ],
+        )
+        member = mirra(
+            level=24,
+            zone_id=DUSKWOOD,
+            quest_log={149: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({20, 21, 148}),
+            quest_progress={149: 0},
+            quest_objectives={149: {1453: 0}},
+        )
+
+        p, _ = self._play(member, 120, cat=cat)
+
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 149)
+        self.assertIn("Spectral Comb", p.broken[0].reason)
+        self.assertIn("no spawned creature drops", p.broken[0].reason)
+
+    def test_ghost_hair_thread_ledger_explains_missing_spectral_comb_source(self):
+        thread = classquest.Quest(
+            149,
+            "Ghost Hair Thread",
+            0,
+            24,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((1453, 1),),
+            enders=(classquest.Spawn(1149, 264, 0, 0.0, 0.0, name="Madame Eva"),),
+        )
+        facts = questers.Facts(zone=DUSKWOOD, level=24, ender_npcs=True)
+
+        early = questers._broken_reason(
+            thread,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            0,
+            frozenset(),
+            {},
+        )
+        self.assertEqual(early, "")
+
+        reason = questers._broken_reason(
+            thread,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertEqual(
+            reason,
+            "Ghost Hair Thread (quest 149) requires Spectral Comb (item 1453), "
+            "which no spawned creature drops",
+        )
 
     def test_quest_64_the_forgotten_heirloom_has_specific_stall_reason(self):
         # Quest 64 "The Forgotten Heirloom" in Westfall (level 12) requires an
@@ -1875,7 +2059,7 @@ class ASummonedObjectEnder(unittest.TestCase):
     def test_log_rows_keep_each_creature_objective_counter(self):
         self.assertIn("q.RequiredNpcOrGo1 AS npc1", questers.LOG_SQL)
         self.assertIn("s.mobcount1", questers.LOG_SQL)
-        logs, progress, objectives, _done = questers._logs_by_guid(
+        logs, progress, objectives, _items, _done = questers._logs_by_guid(
             [
                 {
                     "guid": 1,
@@ -1897,6 +2081,102 @@ class ASummonedObjectEnder(unittest.TestCase):
         self.assertEqual(logs[1][104], questers.STATUS_INCOMPLETE)
         self.assertEqual(progress[1][104], 10)
         self.assertEqual(objectives[1][104], {127: 10, 171: 0, 456: 0})
+
+    def test_log_rows_keep_each_item_objective_counter(self):
+        self.assertIn("q.RequiredItemId1 AS item1", questers.LOG_SQL)
+        self.assertIn("s.itemcount1", questers.LOG_SQL)
+        log_row = {
+            "guid": 1,
+            "quest": 92,
+            "status": questers.STATUS_INCOMPLETE,
+            "progress": 9,
+            "item1": 731,
+            "item2": 1080,
+            "item3": 1081,
+            "item4": 0,
+            "item5": 0,
+            "item6": 0,
+            "itemcount1": 5,
+            "itemcount2": 4,
+            "itemcount3": 0,
+            "itemcount4": 0,
+            "itemcount5": 0,
+            "itemcount6": 0,
+        }
+        logs, progress, creatures, items, _done = questers._logs_by_guid([log_row], [])
+        self.assertEqual(logs[1][92], questers.STATUS_INCOMPLETE)
+        self.assertEqual(progress[1][92], 9)
+        self.assertEqual(creatures.get(1, {}).get(92), {})
+        self.assertEqual(items[1][92], {731: 5, 1080: 4, 1081: 0})
+        member = questers.members_from_rows(
+            [
+                {
+                    "guid": 1,
+                    "name": "Mirra",
+                    "level": 18,
+                    "race": HUMAN,
+                    "class_id": PRIEST,
+                    "online": 1,
+                    "map_id": 0,
+                    "pos_x": 0.0,
+                    "pos_y": 0.0,
+                    "zone_id": REDRIDGE,
+                }
+            ],
+            [log_row],
+            [],
+        )[0]
+        self.assertEqual(member.quest_item_objectives[92], {731: 5, 1080: 4, 1081: 0})
+
+    def test_redridge_goulash_skips_item_sources_whose_objective_is_complete(self):
+        goulash = quest(92, REDRIDGE, 18, title="Redridge Goulash")
+        goulash.update(
+            item1=731,
+            item_count1=5,
+            item2=1080,
+            item_count2=5,
+            item3=1081,
+            item_count3=5,
+        )
+        cat = world(
+            extra_quests=[goulash],
+            extra_givers=[
+                giver(92, "start", 5092, 1051, 0, 0),
+                giver(92, "end", 5092, 1051, 400, 0),
+            ],
+            extra_spawns=[
+                spawn(2092, 1001, 1, 0, level=18),
+                spawn(2093, 1002, 90, 0, level=18),
+                spawn(2094, 1003, 180, 0, level=18),
+            ],
+            extra_loot=[
+                {"item": 731, "entry": 1001},
+                {"item": 1080, "entry": 1002},
+                {"item": 1081, "entry": 1003},
+            ],
+        )
+        member = mirra(
+            level=18,
+            zone_id=REDRIDGE,
+            quest_log={92: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({30, 31}),
+            quest_progress={92: 5},
+            quest_objectives={92: {}},
+            quest_item_objectives={92: {731: 5, 1080: 4}},
+        )
+
+        plan = questers.plan(cat, member, questers.Clock(), 0.0)
+
+        self.assertEqual(plan.move.kind, classquest.HUNT)
+        self.assertEqual(plan.move.spot.entry, 1002)
+        step = questers.step_for(member, plan.move, 0, cat.quest(92))
+        self.assertEqual(
+            [row.command for row in step.rows],
+            [
+                "hunt-spawn creature:1002 item:1080 count:1 max:%d"
+                % classhunt.MAX_SECONDS
+            ],
+        )
 
     def test_coastal_menace_hunts_only_objectives_with_remaining_kills(self):
         coastal = quest(

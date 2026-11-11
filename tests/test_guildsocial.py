@@ -224,7 +224,7 @@ class TheTablesKeepTheContract(unittest.TestCase):
 
     def test_the_bridge_creates_both_and_credits_the_proposer(self):
         store = BRIDGE[BRIDGE.index("def _ensure_guild_run_store") :]
-        store = store[: store.index("_GUILD_RUN_MEMBERS_SQL = (")]
+        store = store[: store.index("_GUILD_RUN_MEMBERS_SQL = ")]
         self.assertIn("guildsocial.ASK_TABLE_SQL", store)
         self.assertIn("guildsocial.ANSWER_TABLE_SQL", store)
         self.assertIn("guildsocial.ANSWER_STANCE_SQL", store)

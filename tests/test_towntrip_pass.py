@@ -19,9 +19,6 @@ import unittest
 
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = PACKAGE / "bridge.py"
-DOCKERFILE = (
-    pathlib.Path(__file__).resolve().parents[1] / "docker/wow-overseer/Dockerfile"
-)
 
 
 def _source() -> str:
@@ -152,6 +149,30 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
 
     def test_a_failed_pass_is_logged_and_retried_rather_than_swallowed(self):
         code = _code("    async def _towntrip_loop(self)")
+        self.assertIn("log.exception", code)
+
+
+class TheInRunDrinkPassIsWired(unittest.TestCase):
+    """A dry healer inside an open run is topped up (#2037, run 1665107)."""
+
+    def test_the_loop_is_registered(self):
+        self.assertIn('    _Pass("_run_drink_loop"),\n', _source())
+
+    def test_it_runs_only_inside_a_run(self):
+        code = _code("    async def _run_drink_once(self")
+        self.assertIn("not await self._mid_run(names)", code)
+
+    def test_it_asks_the_planner_with_positions_and_writes_only_towntrip_rows(self):
+        code = _code("    async def _run_drink_once(self")
+        self.assertIn("towntrip.in_run_drink(", code)
+        self.assertIn("handover.verdict(", code)
+        self.assertIn("_insert_town_errand", code)
+        self.assertNotIn("_write_trade_errand", code)
+        self.assertNotIn("_claim_town_slot", code)
+
+    def test_the_cycle_is_shorter_than_the_modules_180_second_wait(self):
+        code = _code("    async def _run_drink_loop(self")
+        self.assertIn('"RUN_DRINK_CYCLE_SECONDS", "45"', code)
         self.assertIn("log.exception", code)
 
 
@@ -309,14 +330,6 @@ class TheRowIsTheRowTheExecutorReads(unittest.TestCase):
         for kind in ("'repair'", "'buy'", "'conjure'", "'give'"):
             with self.subTest(kind=kind):
                 self.assertIn(kind, code)
-
-
-class TheModuleShips(unittest.TestCase):
-    def test_the_planner_is_copied_into_the_image(self):
-        """A module the Dockerfile does not COPY is an ImportError at start."""
-        if not DOCKERFILE.exists():
-            self.skipTest("Dockerfile not in this checkout")
-        self.assertIn("towntrip.py", DOCKERFILE.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

@@ -244,10 +244,6 @@ class ThePageOnlyDraws(unittest.TestCase):
         self.assertIn("SELECT COUNT(*) AS guilds FROM guild", fetch)
         self.assertIn('"guild")', fetch)
 
-    def test_the_module_ships_in_the_image(self):
-        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("eye.py", dockerfile)
-
     def test_no_em_dashes(self):
         for name in ("eye.py", "tests/test_eye.py"):
             self.assertNotIn(

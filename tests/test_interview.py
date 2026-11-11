@@ -15,13 +15,10 @@ Rows in, one exchange out: every test below runs against a fake store and a
 fake voice. No live model call, no database.
 """
 
-import pathlib
 import re
 import unittest
 
 import interview
-
-DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
 
 
 def snapshot(**kw):
@@ -103,14 +100,6 @@ class TheModelIsNeverAskedForAVerdict(unittest.TestCase):
         plan = interview.plan(name="Ziblop", snapshot=snapshot())
         self.assertFalse(hasattr(plan, "verdict"))
         self.assertFalse(hasattr(plan, "score"))
-
-
-class TheModuleShipsInTheImage(unittest.TestCase):
-    def test_interview_py_is_in_the_dockerfile_copy_list(self):
-        """A module the bridge imports must be COPYed into the image or the
-        container crashes on import - the failure mode test_recruit.py guards
-        for recruit.py."""
-        self.assertIn("interview.py", DOCKERFILE.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

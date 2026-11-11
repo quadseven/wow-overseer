@@ -686,6 +686,109 @@ class TheGiverBesideTheTakerIsAskedFirst(unittest.TestCase):
         self.assertEqual(self._gives(None), [("Og", "Grog", "guid:31")])
 
 
+class TheDryHealerIsToppedUpInsideTheRun(unittest.TestCase):
+    """Run 1665107 stopped at its fourth boss on "Waiting on Grog (low mana)".
+
+    MEASURED LIVE, 2026-11-08: the healer carried no drink, the mage in the same
+    party carried spare stacks, and the town trip does not run inside an open run, so
+    nothing ever handed one over. The give is planned only for members in trade
+    range, because nothing walks anyone together once the run is open.
+    """
+
+    def _water(self, guid, count):
+        return towntrip.Stack(
+            guid=guid,
+            entry=8077,
+            name="Conjured Mineral Water",
+            count=count,
+            what="drink",
+            conjured=True,
+        )
+
+    def _party(self, healer_drinks=0):
+        og = Member(
+            "Og",
+            "mage",
+            51,
+            10**6,
+            9,
+            (),
+            food_carried=20,
+            drink_carried=55,
+            spells=frozenset({990, 5506}),
+            stacks=(self._water(31, 20), self._water(32, 20), self._water(33, 15)),
+        )
+        grog = Member(
+            "Grog",
+            "paladin",
+            53,
+            10**6,
+            8,
+            (),
+            food_carried=20,
+            drink_carried=healer_drinks,
+        )
+        bork = Member("Bork", "rogue", 52, 10**6, 8, (), food_carried=20)
+        return og, grog, bork
+
+    def _gives(self, members, apart):
+        return [
+            (e.member, e.taker, e.command)
+            for e in towntrip.in_run_drink(members, apart)
+        ]
+
+    def test_a_dry_healer_beside_the_mage_is_handed_a_stack(self):
+        got = self._gives(self._party(), lambda g, t: False)
+        self.assertEqual(got, [("Og", "Grog", "guid:31")])
+
+    def test_a_healer_below_the_floor_is_still_topped_up(self):
+        got = self._gives(
+            self._party(towntrip.IN_RUN_DRINK_FLOOR - 1), lambda g, t: False
+        )
+        self.assertEqual(got, [("Og", "Grog", "guid:31")])
+
+    def test_a_healer_with_enough_is_left_alone(self):
+        got = self._gives(self._party(towntrip.IN_RUN_DRINK_FLOOR), lambda g, t: False)
+        self.assertEqual(got, [])
+
+    def test_a_giver_out_of_trade_range_is_not_queued(self):
+        self.assertEqual(self._gives(self._party(), lambda g, t: True), [])
+
+    def test_without_positions_nothing_is_queued(self):
+        self.assertEqual(self._gives(self._party(), None), [])
+
+    def test_only_the_near_giver_is_used(self):
+        og, grog, bork = self._party()
+        ugga = Member(
+            "Ugga",
+            "priest",
+            52,
+            10**6,
+            8,
+            (),
+            food_carried=20,
+            drink_carried=40,
+            stacks=(self._water(41, 20), self._water(42, 20)),
+        )
+        far = {("Og", "Grog")}
+        got = self._gives((og, grog, bork, ugga), lambda g, t: (g, t) in far)
+        self.assertEqual(got, [("Ugga", "Grog", "guid:41")])
+
+    def test_a_warrior_or_a_mage_is_never_handed_a_drink(self):
+        og, grog, bork = self._party(healer_drinks=40)
+        self.assertEqual(self._gives((og, grog, bork), lambda g, t: False), [])
+        mage_dry = Member(
+            "Og", "mage", 51, 10**6, 9, (), spells=frozenset({5506}), drink_carried=0
+        )
+        # A dry mage is not handed a drink; it conjures its own (#2213).
+        got = towntrip.in_run_drink((mage_dry, bork), lambda g, t: False)
+        self.assertEqual([e for e in got if e.kind == towntrip.GIVE_KIND], [])
+
+    def test_only_a_give_is_ever_planned(self):
+        errands = towntrip.in_run_drink(self._party(), lambda g, t: False)
+        self.assertEqual({e.kind for e in errands}, {towntrip.GIVE_KIND})
+
+
 class TheEmptyCases(unittest.TestCase):
     def test_no_members_is_an_empty_plan_and_not_a_crash(self):
         self.assertEqual(towntrip.plan((), RATCHET), towntrip.Plan())

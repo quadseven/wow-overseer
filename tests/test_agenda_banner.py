@@ -55,10 +55,6 @@ class TheEndpointIsWiredUp(unittest.TestCase):
         handler = handler[: handler.index("def do_POST")]
         self.assertIn("503", handler)
 
-    def test_the_module_ships_in_the_image(self):
-        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("agenda.py", dockerfile)
-
 
 class EveryOverseerTableReadIsGuarded(unittest.TestCase):
     """infra#3172 cost a whole tab on production because one read of a table

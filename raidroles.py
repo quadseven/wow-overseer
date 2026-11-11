@@ -36,9 +36,10 @@ PURE: strings in, words out. The only file read is talents.json, once.
 from __future__ import annotations
 
 import json
-import os
 
 import statweights
+
+from world_data import DATA_ROOT
 
 TANK, HEALER = statweights.TANK, statweights.HEALER
 MELEE, RANGED, CASTER = statweights.MELEE, statweights.RANGED, statweights.CASTER
@@ -109,7 +110,7 @@ def _book() -> dict:
     """spell id -> (class id, tree name, rank), from talents.json, once."""
     global _BOOK
     if _BOOK is None:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "talents.json")
+        path = DATA_ROOT / "talents.json"
         with open(path) as f:
             raw = json.load(f)
         trees = raw.get("trees") or {}
@@ -185,7 +186,7 @@ def _tabs() -> dict:
     """(class id, tree name) -> tab page 0 to 2, from talents.json, once."""
     global _TABS
     if _TABS is None:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "talents.json")
+        path = DATA_ROOT / "talents.json"
         with open(path) as f:
             raw = json.load(f)
         _TABS = {

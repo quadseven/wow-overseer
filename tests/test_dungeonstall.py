@@ -11,6 +11,8 @@ Pure tests against dungeonstall.py, then the bridge's queue pass driven
 against a fake queue, roster and store.
 """
 
+from datetime import datetime, timedelta
+import ast
 import asyncio
 import pathlib
 import time
@@ -27,6 +29,7 @@ import council  # noqa: E402
 import crossing  # noqa: E402
 import dungeonpace  # noqa: E402
 import dungeonstall as stall  # noqa: E402
+import jev_family_intent  # noqa: E402
 import jobs  # noqa: E402
 import raidrun  # noqa: E402
 
@@ -345,6 +348,26 @@ class StoreCursor:
                 for n, r in reversed(list(enumerate(store.records, 1)))
                 if tuple(r[:3]) == want
             ][:1]
+        if flat.startswith(
+            "SELECT id, created_at, TIMESTAMPDIFF(SECOND, NOW(), created_at"
+        ):
+            # _order_parked: the newest ORDER_DECISION row for this family and
+            # door, with the backoff seconds left (store.park_left, default a
+            # full backoff) and when it was written (store.park_at).
+            want = tuple(params[2:5])
+            left = store.park_left
+            if left is None:
+                left = int(stall.ORDER_BACKOFF.total_seconds())
+            return [
+                {
+                    "id": n,
+                    "created_at": store.park_at,
+                    "left_s": left,
+                    "ordered_after": int(params[1] in store.ordered_after),
+                }
+                for n, r in reversed(list(enumerate(store.records, 1)))
+                if tuple(r[:3]) == want
+            ][:1]
         if flat.startswith("SELECT id, decision, door, target, queue_id"):
             # dungeonpace.OPEN_SQL: the family's open ladder row, if any.
             return [
@@ -411,9 +434,12 @@ class StallWorld(FakeWorld):
         self.fail_on = ""
         self.commits = 0
         self.held_left = None
+        self.park_left = None
+        self.park_at = None
         self.ordered_after = set()
         self.hold_said = {}
         self.silent_seconds = None
+        self.wedge = None
         self.dungeonquest_held = set()
         self.world = self
 
@@ -443,6 +469,9 @@ def _pass(world):
             "_stall_step_past",
             "_stall_reads",
             "_stall_held",
+            "_order_parked",
+            "_order_hold",
+            "_order_step_past",
             "_stall_write",
             "_silent_stall",
             "_stuck_doors",
@@ -460,6 +489,8 @@ def _pass(world):
             "pymysql": PYMYSQL,
             "_connect": lambda: StoreConn(world),
             "_silent_seconds": lambda head_id, names: world.silent_seconds,
+            "_OFF_DUNGEON_JOB_AT": {},
+            "_door_wedge": lambda head, names, leader: world.wedge,
             "_jobs_of": lambda names: {n: world.member_job(n) for n in names},
             "_fetch_queue_rows": world.fetch_queue,
             "_fetch_queue_roster": world.fetch_roster,
@@ -501,6 +532,8 @@ def _pass(world):
         "_queue_holds",
         "_stall_breaker",
         "_stall_step_past",
+        "_order_step_past",
+        "_order_hold",
     ):
         setattr(me, name, types.MethodType(ns[name], me))
     asyncio.run(ns["_campaign_queue_once"](me))
@@ -775,23 +808,30 @@ class TheBreakerWritesInOrder(unittest.TestCase):
         for row in w.family("Zug"):
             row["job"] = "dungeon:shadowfang"
         _pass(w)
-        self.assertEqual("cancelled", w.queue[1]["status"])
+        # Held, never cancelled (#2216): the order stays pending and its own
+        # hold is written.
+        self.assertEqual("active", w.queue[1]["status"])
         self.assertEqual(2, len(w.records))
+        self.assertEqual(stall.ORDER_DECISION, w.records[1][1])
 
-    def test_an_older_order_or_the_overseers_entry_stays_held(self):
-        for source, ordered_after in (
-            ("web:overseer", set()),
-            ("overseer:planner", {9}),
-        ):
-            with self.subTest(source=source):
-                row = dict(_q(9, "shadowfang", 30, "queued", 1), source=source)
-                w = self.left_2h_ago([row, _q(10, "deadmines", 10, "queued", 2)])
-                w.ordered_after = ordered_after
-                _pass(w)
-                self.assertEqual(
-                    ["cancelled", "queued", "active"], [r["status"] for r in w.queue]
-                )
-                self.assertEqual({"dungeon:deadmines"}, self.zug_jobs(w))
+    def test_an_older_overseer_entry_stays_held(self):
+        row = dict(_q(9, "shadowfang", 30, "queued", 1), source="overseer:planner")
+        w = self.left_2h_ago([row, _q(10, "deadmines", 10, "queued", 2)])
+        w.ordered_after = {9}
+        _pass(w)
+        self.assertEqual(
+            ["cancelled", "queued", "active"], [r["status"] for r in w.queue]
+        )
+        self.assertEqual({"dungeon:deadmines"}, self.zug_jobs(w))
+
+    def test_an_older_operator_order_is_held_not_barred_for_the_window(self):
+        """#2216: the old leave's 48 hour hold never applies to an operator's
+        order; it is held for the short backoff, never cancelled."""
+        row = dict(_q(9, "shadowfang", 30, "queued", 1), source="web:overseer")
+        w = self.left_2h_ago([row, _q(10, "deadmines", 10, "queued", 2)])
+        _pass(w)
+        self.assertEqual("queued", w.queue[1]["status"])
+        self.assertEqual(stall.ORDER_DECISION, w.records[-1][1])
 
     def test_a_cancelled_entry_closes_its_step_down_pace_row(self):
         w = self.world([_q(7, "shadowfang", 30, "active", 0)])
@@ -869,6 +909,54 @@ class TheBridgeOrder(unittest.TestCase):
         helper = helper[: helper.index("\ndef ", 10)]
         self.assertIn("_silent_seconds", helper)
         self.assertIn("dungeonstall.silent_run", helper)
+
+    def test_a_boss_credit_written_again_is_not_progress(self):
+        # wow-overseer#2147: a party sealed in a finished dungeon loops
+        # EXIT -> IDLE -> CLEARING, and every pass writes the same boss row
+        # ("N encounters credited, N in all") again. Counting the newest boss
+        # row reset the clock on every pass for as long as the loop ran. Only
+        # the first sighting of a credit on a run is progress.
+        read = self.silence_read()
+        boss = read[read.index("re.kind = 'boss'") :]
+        self.assertIn("NOT EXISTS", boss)
+        self.assertIn("p.run_id = re.run_id", boss)
+        self.assertIn("p.detail = re.detail", boss)
+        self.assertIn("p.id < re.id", boss)
+
+    def test_a_quest_written_again_is_not_progress(self):
+        # wow-overseer#2147: one overseer_event row per character and quest
+        # moves last_seen on each repeat, so a bot accepting and completing
+        # the same quest every hour held the clock near zero. The quest kinds
+        # are timed by first_seen; the other kinds stay on last_seen.
+        read = self.silence_read()
+        self.assertNotIn("MAX(e.last_seen)", read)
+        quest = read[read.index("CASE WHEN e.kind IN") :]
+        quest = quest[: quest.index("FROM overseer_event e")]
+        for kind in ("'quest_accept'", "'quest_complete'", "'quest_reward'"):
+            self.assertIn(kind, quest)
+        self.assertIn("THEN e.first_seen END) ELSE e.last_seen END", quest)
+
+    def test_a_quest_row_in_a_later_hour_bucket_is_not_progress(self):
+        # wow-overseer#2147 round 2: overseer_event keeps one row per
+        # character, kind, subject AND hour bucket, so the same quest written
+        # each hour is a NEW row with its own first_seen (#2165's first_seen
+        # read still moved hourly). A quest row counts only when no earlier
+        # row exists for the same character, kind and subject inside the
+        # head's window; a first-time quest has none and counts.
+        read = self.silence_read()
+        quest = read[read.index("CASE WHEN e.kind IN") :]
+        quest = quest[: quest.index("FROM overseer_event e")]
+        self.assertIn("NOT EXISTS", quest)
+        self.assertIn("FROM overseer_event p", quest)
+        self.assertIn("p.character_name = e.character_name", quest)
+        self.assertIn("p.kind = e.kind", quest)
+        self.assertIn("p.subject_id = e.subject_id", quest)
+        self.assertIn("p.id < e.id", quest)
+        self.assertIn("p.first_seen >= COALESCE(q.started_at, q.created_at)", quest)
+        # the #2165 first_seen read and the #2148 boss NOT EXISTS stay
+        self.assertIn("THEN e.first_seen END) ELSE e.last_seen END", quest)
+        boss = read[read.index("re.kind = 'boss'") :]
+        self.assertIn("p.id < re.id", boss)
 
     def test_the_silence_clock_starts_at_the_head_not_at_a_run(self):
         # The stuck read's clock runs across runs. A clock restarted by each
@@ -958,8 +1046,469 @@ class AnOperatorsOrderIsJudgedOnRunsAfterIt(unittest.TestCase):
 
     def test_the_sql_reads_when_each_run_began(self):
         self.assertIn("started_at", stall.RUNS_SQL)
-        self.assertIn("r.outcome, r.started_at FROM", stall.RUNS_SQL_TIMELINE)
+        self.assertIn(
+            "r.outcome, r.started_at, r.ended_at FROM", stall.RUNS_SQL_TIMELINE
+        )
+        self.assertIn("ended_at", stall.RUNS_SQL)
 
     def test_the_breaker_reads_with_the_head_it_judges(self):
         body = BRIDGE[BRIDGE.index("    async def _stall_breaker(") :]
         self.assertIn("_stall_reads, names, rows[0]", body.split("leave =")[0])
+
+
+# 2026-11-08, wow-dev: Grug's x40 Blackrock Depths order (row 155) was
+# cancelled at 19:51Z because run 1676285 stalled 65 seconds after it opened,
+# five seconds after the run before it ended split_failed. (#2092)
+class ARunThatNeverGotInIsNotAStall(unittest.TestCase):
+    BRD = campaignplan.BY_KEYWORD["blackrock-depths"].map_id
+    LORE = "dungeon clear stopped: RepeatedTimeout at Lord Incendius after 180s"
+
+    def row(self, rid, outcome, seconds, started=1000):
+        begun = datetime(2026, 11, 8, 19, 0) + timedelta(seconds=started + rid)
+        return {
+            "id": rid,
+            "map_id": self.BRD,
+            "portal_keyword": "blackrock-depths",
+            "outcome": outcome,
+            "started_at": begun,
+            "ended_at": None if seconds is None else begun + timedelta(seconds=seconds),
+        }
+
+    def judged(self, later_seconds):
+        runs = [
+            self.row(1665107, "stalled", 5000),
+            self.row(1671027, "split_failed", 5760),
+            self.row(1676285, "stalled", later_seconds),
+        ]
+        events = [stalled(1665107, self.LORE), stalled(1676285, self.LORE)]
+        return stall.stuck_doors(runs, events)
+
+    def test_a_65_second_stall_does_not_make_two_running(self):
+        self.assertEqual({}, self.judged(65))
+
+    def test_a_stall_after_three_minutes_still_does(self):
+        self.assertEqual(["blackrock-depths"], sorted(self.judged(180)))
+
+    def test_a_stall_with_no_end_time_still_counts(self):
+        self.assertEqual(["blackrock-depths"], sorted(self.judged(None)))
+
+    def test_the_events_read_skips_the_non_entry(self):
+        runs = [self.row(1, "stalled", 5000), self.row(2, "stalled", 65)]
+        self.assertEqual([1], stall.event_ids(runs))
+
+
+class TheWedgeAtTheDoor(unittest.TestCase):
+    """#2151's three shapes, as pure verdicts. The two-stall rule judges runs
+    that ENDED and the silence rule a family nothing happened to; a run that
+    stays open with the party split across its door is neither, so it was
+    never left. These judge the open run itself: the leader's walk, the
+    members' holds, and a member dead at the door."""
+
+    def test_a_walk_that_restarts_past_the_bound_leaves_the_door(self):
+        got = stall.door_unreachable("maraudon-orange", 38)
+        self.assertIsNotNone(got)
+        self.assertEqual("maraudon-orange", got.door)
+        self.assertIn("restarted 38 times", got.why)
+
+    def test_a_walk_at_the_bound_leaves_and_one_under_it_does_not(self):
+        self.assertIsNotNone(stall.door_unreachable("shadowfang", stall.RESTART_BOUND))
+        self.assertIsNone(stall.door_unreachable("shadowfang", stall.RESTART_BOUND - 1))
+
+    def test_an_unreachable_verdict_needs_a_real_door_and_a_count(self):
+        self.assertIsNone(stall.door_unreachable("nowhere", 500))
+        self.assertIsNone(stall.door_unreachable("shadowfang", None))
+
+    def test_a_member_held_on_an_errand_past_the_bound_leaves_the_door(self):
+        got = stall.party_held(
+            "shadowfang", "Bork", "on an errand of its own", stall.HOLD_SECONDS
+        )
+        self.assertIsNotNone(got)
+        self.assertEqual("shadowfang", got.door)
+        self.assertIn("Bork", got.why)
+        self.assertIn("errand", got.why)
+
+    def test_a_member_held_briefly_is_left_alone(self):
+        self.assertIsNone(
+            stall.party_held(
+                "shadowfang", "Bork", "on an errand of its own", stall.HOLD_SECONDS - 1
+            )
+        )
+
+    def test_a_member_dead_at_the_door_past_the_bound_leaves_the_door(self):
+        got = stall.member_dead("dire-maul-east-east", "Zrog", stall.DEAD_SECONDS)
+        self.assertIsNotNone(got)
+        self.assertEqual("dire-maul-east-east", got.door)
+        self.assertIn("Zrog", got.why)
+        self.assertIn("dead", got.why)
+
+    def test_a_member_dead_briefly_is_left_alone(self):
+        """A death the party is still recovering from is the module's work:
+        the breaker speaks only once the run has plainly failed to recover
+        the member itself."""
+        self.assertIsNone(
+            stall.member_dead("shadowfang", "Zrog", stall.DEAD_SECONDS - 1)
+        )
+
+
+class TheWedgeIsLeftLikeAStall(unittest.TestCase):
+    """The breaker's leave for a wedge is the stall leave: the door's queue
+    entries are cancelled, the reason is recorded in a pace row, and the
+    family goes on the default job, which stands the run coordinator down
+    and walks the party out (#2151)."""
+
+    def wedged_world(self):
+        w = StallWorld([_q(7, "maraudon-orange", 23, "active", 0)], [], [])
+        for row in w.family("Zug"):
+            row["job"] = "dungeon:maraudon-orange"
+        w.wedge = stall.door_unreachable("maraudon-orange", 38)
+        return w
+
+    def test_the_family_is_stood_down_and_the_reason_names_the_restarts(self):
+        w = self.wedged_world()
+        lines = _pass(w)
+        self.assertEqual("cancelled", w.queue[0]["status"])
+        self.assertEqual({jobs.DEFAULT}, {r["job"] for r in w.family("Zug")})
+        self.assertEqual(1, len(w.records))
+        family, decision, door = w.records[0][:3]
+        self.assertEqual(
+            ("Zug", stall.DECISION, "maraudon-orange"), (family, decision, door)
+        )
+        self.assertIn("restarted 38 times", w.records[0][7])
+        self.assertTrue([ln for ln in lines if "restarted 38 times" in ln], lines)
+
+    def test_no_wedge_no_leave(self):
+        w = self.wedged_world()
+        w.wedge = None
+        _pass(w)
+        self.assertEqual("active", w.queue[0]["status"])
+        self.assertEqual([], w.records)
+
+
+class TheWedgeLeaveIsNotSteppedPast(unittest.TestCase):
+    """The held-door step-past (#1078) exists for a door left on ended runs
+    and then re-queued: the re-queued entry is not cancelled a second time
+    on stale evidence. A wedge verdict is not stale evidence. It is judged
+    fresh each pass on the run open now (an active head, a walk restarting
+    now, members held now), so stepping past it leaves that run open past
+    every bound for as long as the earlier leave is in its window. Run
+    1690476 sat open for 25 hours that way (#2191): the entry was never
+    cancelled and the family never stood down, until the module's own
+    hearth recovery ended the run."""
+
+    def world(self):
+        w = StallWorld([_q(7, "maraudon-orange", 23, "active", 0)], [], [])
+        for row in w.family("Zug"):
+            row["job"] = "dungeon:maraudon-orange"
+        w.wedge = stall.door_unreachable("maraudon-orange", 33)
+        return w
+
+    def test_the_first_wedge_leave_cancels_and_records(self):
+        w = self.world()
+        _pass(w)
+        self.assertEqual("cancelled", w.queue[0]["status"])
+        self.assertEqual(1, len(w.records))
+        self.assertEqual({jobs.DEFAULT}, {r["job"] for r in w.family("Zug")})
+
+    def test_a_wedged_run_open_inside_the_hold_is_left_anyway(self):
+        w = self.world()
+        _pass(w)
+        # The door is re-engaged under a new entry, its run is open, and it
+        # wedges again while the first leave's hold is still in its window.
+        w.queue.append(_q(9, "maraudon-orange", 23, "active", 1))
+        for row in w.family("Zug"):
+            row["job"] = "dungeon:maraudon-orange"
+        w.held_left = (stall.WINDOW_HOURS - 2) * 3600
+        _pass(w)
+        self.assertEqual("cancelled", w.queue[1]["status"])
+        self.assertEqual(2, len(w.records))
+        self.assertIn("restarted 33 times", w.records[1][7])
+        self.assertEqual({jobs.DEFAULT}, {r["job"] for r in w.family("Zug")})
+
+
+class TheDoorWedgeReads(unittest.TestCase):
+    """The bridge's wedge judge (_door_wedge), loaded the way the breaker
+    harness loads its neighbours: the evidence read and the clock are fakes,
+    the verdicts are dungeonstall's own."""
+
+    HEAD = {"id": 7, "keyword": "maraudon-orange", "status": "active"}
+
+    def judge(self, evidence, clock):
+        self.asked = []
+        ns = _load(
+            ["_door_wedge", "_door_wedge_ages"],
+            {
+                "campaignqueue": campaignqueue,
+                "dungeonstall": stall,
+                "jobs": jobs,
+                "time": types.SimpleNamespace(monotonic=lambda: clock[0]),
+                "_jobs_of": lambda names: {n: "dungeon:maraudon-orange" for n in names},
+                "_door_wedge_evidence": lambda leader, head_id: (
+                    self.asked.append((leader, head_id)) or evidence
+                ),
+                "_DOOR_HOLD_SINCE": {},
+            },
+        )
+        return ns["_door_wedge"]
+
+    def member(self, name, state):
+        return jev_family_intent.Member(name, state, "0")
+
+    def test_restarts_past_the_bound_are_a_verdict_on_the_first_pass(self):
+        judge = self.judge((38, ()), [1000.0])
+        got = judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertIn("restarted 38 times", got.why)
+
+    def test_the_walk_is_counted_for_the_queue_entry_being_judged(self):
+        judge = self.judge((0, ()), [1000.0])
+        judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
+        self.assertEqual([("Zug", 7)], self.asked)
+
+    def test_the_steps_read_bounds_the_walk_by_when_the_run_started(self):
+        sql = next(
+            ast.literal_eval(node.value)
+            for node in ast.parse(BRIDGE).body
+            if isinstance(node, ast.Assign)
+            and any(getattr(t, "id", "") == "_DOOR_STEPS_SQL" for t in node.targets)
+        )
+        self.assertIn("started_at", sql)
+        self.assertEqual(2, sql.count("%s"))
+
+    def test_an_errand_hold_becomes_a_verdict_only_past_its_bound(self):
+        clock = [1000.0]
+        judge = self.judge(
+            (0, (self.member("Uzza", "on an errand of its own"),)), clock
+        )
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+        clock[0] += stall.HOLD_SECONDS
+        got = judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertIn("Uzza", got.why)
+
+    def test_a_dead_member_becomes_a_verdict_past_the_shorter_bound(self):
+        clock = [1000.0]
+        judge = self.judge((0, (self.member("Uzza", "dead"),)), clock)
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+        clock[0] += stall.DEAD_SECONDS
+        got = judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertIn("dead", got.why)
+
+    def test_a_hold_that_clears_and_returns_starts_a_new_clock(self):
+        clock = [1000.0]
+        box = [(0, (self.member("Uzza", "on an errand of its own"),))]
+        ns = _load(
+            ["_door_wedge", "_door_wedge_ages"],
+            {
+                "campaignqueue": campaignqueue,
+                "dungeonstall": stall,
+                "jobs": jobs,
+                "time": types.SimpleNamespace(monotonic=lambda: clock[0]),
+                "_jobs_of": lambda names: {n: "dungeon:maraudon-orange" for n in names},
+                "_door_wedge_evidence": lambda leader, head_id: box[0],
+                "_DOOR_HOLD_SINCE": {},
+            },
+        )
+        judge = ns["_door_wedge"]
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+        clock[0] += stall.HOLD_SECONDS - 1
+        box[0] = (0, (self.member("Uzza", "following"),))
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+        box[0] = (0, (self.member("Uzza", "on an errand of its own"),))
+        clock[0] += 2
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+
+    def test_a_new_head_starts_new_clocks(self):
+        """A hold timed under one queue entry must not hang the next entry
+        for the same door: the entry is the attempt being judged."""
+        clock = [1000.0]
+        judge = self.judge(
+            (0, (self.member("Uzza", "on an errand of its own"),)), clock
+        )
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+        clock[0] += stall.HOLD_SECONDS + 1
+        self.assertIsNone(judge(dict(self.HEAD, id=8), ["Zug", "Uzza"], "Zug"))
+
+    def test_no_verdict_without_a_started_dungeon_head(self):
+        judge = self.judge((38, ()), [1000.0])
+        self.assertIsNone(
+            judge(dict(self.HEAD, status="queued"), ["Zug", "Uzza"], "Zug")
+        )
+
+
+# --- an operator's order is held, never cancelled (#2216) ----------------------
+#
+# An operator's order was cancelled by a run that never got in, which read as
+# the second stall running after an earlier real stall (#2216).
+
+
+class AnOperatorOrderIsHeldNotCancelled(unittest.TestCase):
+    BRD = campaignplan.BY_KEYWORD["blackrock-depths"].map_id
+    OPERATOR = "web:overseer"
+
+    def stuck(self):
+        runs = [
+            {
+                "id": 101,
+                "map_id": self.BRD,
+                "portal_keyword": "blackrock-depths",
+                "outcome": "stalled",
+            },
+            {
+                "id": 102,
+                "map_id": self.BRD,
+                "portal_keyword": "blackrock-depths",
+                "outcome": "stalled",
+            },
+        ]
+        return stall.stuck_doors(runs, [boss(101, 255, 511), stalled(102, "x")])
+
+    def order(self, qid, keyword="blackrock-depths", source=None, status="active"):
+        return dict(
+            queue_row(qid, keyword, status),
+            source=source or self.OPERATOR,
+        )
+
+    def test_the_operators_rows_are_held_and_the_overseers_are_dropped(self):
+        rows = [
+            self.order(501),
+            queue_row(163, "blackrock-depths", "queued", 1),
+            queue_row(164, "uldaman", "queued", 2),
+        ]
+        got = stall.leave(rows, self.stuck())
+        self.assertEqual((501,), got.park)
+        self.assertEqual((163,), got.drop)
+        self.assertEqual(stall.ORDER_DECISION, got.decision)
+
+    def test_a_lone_operator_order_is_not_dropped(self):
+        got = stall.leave([self.order(501)], self.stuck())
+        self.assertEqual((), got.drop)
+        self.assertEqual((501,), got.park)
+
+    def test_the_overseers_own_entry_is_still_left(self):
+        got = stall.leave([queue_row(7, "blackrock-depths")], self.stuck())
+        self.assertEqual((7,), got.drop)
+        self.assertEqual((), got.park)
+        self.assertEqual(stall.DECISION, got.decision)
+
+    def test_the_sentence_says_held_not_left_and_when_it_runs_again(self):
+        got = stall.leave([self.order(501)], self.stuck())
+        minutes = int(stall.ORDER_BACKOFF.total_seconds() // 60)
+        self.assertIn("the order is held, not left", got.why)
+        self.assertIn("runs again in %d minutes" % minutes, got.why)
+        self.assertNotIn("; left,", got.why)
+
+    def test_the_backoff_is_far_shorter_than_the_door_window(self):
+        self.assertLess(stall.ORDER_BACKOFF, timedelta(hours=stall.WINDOW_HOURS))
+
+    def test_a_hold_older_than_the_order_does_not_rest_it(self):
+        row = {"id": 5, "left_s": 600, "ordered_after": 1}
+        self.assertIsNone(stall.order_hold(self.order(501), row))
+        row["ordered_after"] = 0
+        self.assertEqual(600, stall.order_hold(self.order(501), row)["left_s"])
+        self.assertIsNone(stall.order_hold(queue_row(7, "blackrock-depths"), row))
+
+    def test_the_stalls_that_earned_a_hold_are_not_read_again(self):
+        runs = [
+            {"id": 1, "started_at": 10},
+            {"id": 2, "started_at": 50},
+            {"id": 3, "started_at": 120},
+        ]
+        head = {"source": self.OPERATOR, "created_at": 5}
+        got = stall.since_order(runs, head, parked_at=100)
+        self.assertEqual([3], [r["id"] for r in got])
+        own = {"source": "overseer:planner", "created_at": 5}
+        self.assertEqual(3, len(stall.since_order(runs, own, parked_at=100)))
+
+    def world(self):
+        w = StallWorld(
+            [dict(_q(501, "blackrock-depths", 20, "active", 0), source=self.OPERATOR)],
+            [
+                ledger_row(101, map_id=self.BRD, portal="blackrock-depths"),
+                ledger_row(102, map_id=self.BRD, portal="blackrock-depths"),
+            ],
+            [boss(101, 255, 511), stalled(102, "x")],
+        )
+        for r in w.family("Zug"):
+            r["job"] = "dungeon:blackrock-depths"
+        return w
+
+    def cancels(self, w):
+        return [c for c in w.calls if "SET status = 'cancelled'" in c[0]]
+
+    def test_a_stalled_operator_order_stays_pending_and_the_family_quests(self):
+        w = self.world()
+        lines = _pass(w)
+        self.assertEqual("active", w.queue[0]["status"])
+        self.assertEqual([], self.cancels(w))
+        self.assertEqual(
+            {jobs.DEFAULT}, {r["job"] for r in w.family("Zug")}, (lines, w.jobs)
+        )
+        self.assertEqual(1, len(w.records))
+        self.assertEqual(stall.ORDER_DECISION, w.records[0][1])
+        self.assertTrue([ln for ln in lines if "the order is held, not left" in ln])
+
+    def test_the_family_steps_past_the_held_order_during_the_backoff(self):
+        w = self.world()
+        _pass(w)
+        w.queue.append(_q(170, "uldaman", 10, "queued", 1))
+        w.park_left = 600
+        lines = _pass(w)
+        self.assertEqual("active", w.queue[0]["status"])
+        self.assertEqual("active", w.queue[1]["status"])
+        self.assertEqual({"dungeon:uldaman"}, {r["job"] for r in w.family("Zug")})
+        self.assertEqual([], self.cancels(w))
+        self.assertEqual(1, len(w.records))
+        said = [ln for ln in lines if "is held, not cancelled" in ln]
+        self.assertEqual(1, len(said), lines)
+        self.assertIn("runs again in about 10 minute", said[0])
+
+    def test_alone_in_the_queue_the_held_order_waits_and_says_so_once(self):
+        w = self.world()
+        _pass(w)
+        w.park_left = 600
+        said = []
+        for _ in range(3):
+            said += [ln for ln in _pass(w) if "is held, not cancelled" in ln]
+        self.assertEqual(1, len(said), said)
+        self.assertIn("nothing else is queued", said[0])
+        self.assertEqual("active", w.queue[0]["status"])
+        self.assertEqual({jobs.DEFAULT}, {r["job"] for r in w.family("Zug")})
+
+    def test_after_the_backoff_the_same_order_runs_with_no_new_order(self):
+        w = self.world()
+        _pass(w)
+        # The stalls that earned the hold are before the hold: the read the
+        # database does for the breaker returns only runs after it.
+        w.runs, w.events = [], []
+        w.park_left = 0
+        w.park_at = datetime(2026, 11, 10, 12, 37, 59)
+        lines = _pass(w)
+        self.assertEqual("active", w.queue[0]["status"])
+        self.assertEqual([], self.cancels(w))
+        self.assertEqual(1, len(w.records), lines)
+        self.assertEqual(
+            {"dungeon:blackrock-depths"}, {r["job"] for r in w.family("Zug")}, lines
+        )
+
+    def test_a_repeated_stall_after_the_hold_holds_it_again_not_cancels_it(self):
+        w = self.world()
+        _pass(w)
+        w.park_left = 0
+        w.park_at = datetime(2026, 11, 10, 12, 37, 59)
+        for r in w.runs:
+            r["started_at"] = datetime(2026, 11, 10, 13, 0, 0)
+        _pass(w)
+        self.assertEqual("active", w.queue[0]["status"])
+        self.assertEqual([], self.cancels(w))
+        self.assertEqual(2, len(w.records))
+        self.assertEqual(stall.ORDER_DECISION, w.records[1][1])
+
+    def test_the_hold_is_read_before_the_stalls_and_is_never_a_leave_row(self):
+        body = BRIDGE[BRIDGE.index("    async def _stall_breaker(") :]
+        body = body[: body.index("\n    def ", 10)]
+        self.assertLess(body.index("_order_hold"), body.index("_stall_reads"))
+        self.assertIn("if not leave.park:", body)
+        write = BRIDGE[BRIDGE.index("def _stall_write(") :]
+        write = write[: write.index("\n\n\n", 10)]
+        self.assertIn("leave.decision", write)

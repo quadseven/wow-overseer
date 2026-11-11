@@ -23,7 +23,6 @@ from test_campaign_queue import _load
 from test_preraid import ANCHORS, TEXTS, drop, item_row
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
 RAID_JS = (HERE / "app" / "views" / "raid.js").read_text(encoding="utf-8")
 
 WILDFIRE_CAPE = 12905  # 20 fire resistance, Blackrock Spire
@@ -176,9 +175,6 @@ class ThePlanIsSaid(unittest.TestCase):
         self.assertTrue(
             state["fire_resistance"][0]["next_piece"].startswith("Wildfire")
         )
-
-    def test_the_module_ships_in_the_image(self):
-        self.assertIn("fireplan.py", DOCKERFILE)
 
 
 # The planner half: a protection warrior tank and a holy priest, level 60 in

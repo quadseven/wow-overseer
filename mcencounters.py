@@ -53,8 +53,9 @@ Missing member levels never count as a trained-level capability.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import NamedTuple
+
+from world_data import DATA_ROOT
 
 # WotLK class ids, as the realm's `characters.class` column stores them. The
 # same numbers as raidlineup.py; repeated so this module imports nothing.
@@ -156,7 +157,7 @@ _CLASS_NAMES = {
     WARLOCK: "Warlock",
     DRUID: "Druid",
 }
-_FACTS = json.loads((Path(__file__).parent / "data" / "mc-spells.json").read_text())
+_FACTS = json.loads((DATA_ROOT / "data" / "mc-spells.json").read_text())
 BOSS_SPELLS = {int(key): row for key, row in _FACTS["boss_spells"].items()}
 for _name, _classes in _CAPABILITY_SPELLS.items():
     CAPABILITIES[_name] = CAPABILITIES[_name]._replace(

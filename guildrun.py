@@ -450,6 +450,12 @@ OWES_CLASS_QUEST = "owes a class quest"
 # why_not's word for a family member; familyseat.release lends one of an idle
 # family to a tank or healer seat (#784).
 FAMILY_MEMBER = "a family member"
+# why_not's word for a character that holds a seat in an ordered raid (#2105).
+# The seat rows are the hold: the bridge reads overseer_raid_seat on every
+# pass, so the hold lasts exactly as long as the order's rows do and ends when
+# they are deleted (the order ended, was cancelled, or was stood down).
+SEATED_IN_RAID = "seated in an ordered raid"
+SEATED_SQL = "SELECT DISTINCT name FROM overseer_raid_seat"
 
 
 def why_not(
@@ -459,13 +465,19 @@ def why_not(
     family: set,
     benched=frozenset(),
     owed=frozenset(),
+    seated=frozenset(),
 ) -> str:
     """Why this member cannot be picked now, or "".
+
+    `seated` is the names that hold a seat in an ordered raid: a finder run
+    never takes one, so the raid keeps every seat to the pull (#2105).
 
     `owed` is the names of the members that owe a class quest: the operator's
     rule is that a class quest comes before any dungeon, so none is picked."""
     if member.name in family:
         return FAMILY_MEMBER
+    if member.name in seated:
+        return SEATED_IN_RAID
     if not member.online:
         return "offline"
     if member.name in busy:
@@ -496,6 +508,7 @@ def free_members(
     family: set[str],
     benched: frozenset[str] = frozenset(),
     owed: frozenset[str] = frozenset(),
+    seated: frozenset[str] = frozenset(),
 ) -> tuple[list[Member], dict[str, int]]:
     """The free guild roster and the reasons each other member was held."""
     free = []
@@ -504,7 +517,7 @@ def free_members(
         member = member_from_row(row)
         if member is None:
             continue
-        why = why_not(member, busy, resting, family, benched, owed)
+        why = why_not(member, busy, resting, family, benched, owed, seated)
         if why:
             held[why] = held.get(why, 0) + 1
             continue
@@ -2041,6 +2054,157 @@ async def decide(client, plan: Plan, environ=None) -> Decision:
     return Decision(plan, comp, door)
 
 
+def resolve_guild(name, guilds) -> str:
+    """The configured guild `name` spells, in its own capitals, or "" when it
+    names none of `guilds` (limits().guilds, the guilds the planner forms for)."""
+    wanted = name.strip().lower() if isinstance(name, str) else ""
+    return next((g for g in guilds if wanted and g.lower() == wanted), "")
+
+
+def decide_by_order(plan: Plan, keyword: str) -> Decision:
+    """The planner's own composition, and the door an operator named.
+
+    No Jev call: the person chose the door, and the composition is the
+    heuristic's pick (heuristic_composition). Both judgments are recorded as
+    off, the same shape decide gives when Jev is off, so a reader of the run
+    sees who chose. `keyword` must be one of plan.doors."""
+    label, comp_why = heuristic_composition(plan)
+    holder = plan.options[0].tank.name
+    subject = plan.pool.guild[:12]
+    comp = GuildJudgment(
+        kind=KIND_COMPOSITION,
+        subject=subject,
+        holder=holder,
+        heuristic=label,
+        heuristic_why=comp_why,
+        mode=jev.OFF,
+        status="off",
+        item_name=("band %s: %s" % (plan.band, ", ".join(plan.labels)))[:120],
+    )
+    door = GuildJudgment(
+        kind=KIND_DUNGEON,
+        subject=subject,
+        holder=holder,
+        heuristic=keyword,
+        heuristic_why="ordered from the operator console",
+        mode=jev.OFF,
+        status="off",
+        item_name=("band %s: %s" % (plan.band, keyword))[:120],
+    )
+    return Decision(plan, comp, door)
+
+
+def order_facts(cur, cooldown_minutes: int) -> dict:
+    """What the run table says a new run must respect, read on `cur`: the
+    members in a run (busy), the guilds with a run going (active), the
+    members resting after one, those benched by a refusal, and the record
+    the door rates are made from. The same reads the bridge's pass makes."""
+    busy: set = set()
+    active: dict = {}
+    cur.execute(
+        "SELECT guild, members FROM overseer_guild_run WHERE state IN (%s, %s)",
+        (QUEUED, INSIDE),
+    )
+    for run in cur.fetchall():
+        busy |= {m["name"] for m in _member_list(run["members"])}
+        active[run["guild"]] = active.get(run["guild"], 0) + 1
+    cur.execute(
+        "SELECT members, outcome, bosses_done, seconds_inside "
+        "FROM overseer_guild_run WHERE state = 'ended' "
+        "AND ended_at > NOW() - INTERVAL %s MINUTE AND outcome IN ("
+        + ",".join(["%s"] * len(WENT_IN))
+        + ")",
+        (cooldown_minutes, *WENT_IN),
+    )
+    resting: set = set()
+    for run in cur.fetchall():
+        if rests_members(run):
+            resting |= {m["name"] for m in _member_list(run["members"])}
+    cur.execute(
+        "SELECT outcome, why, TIMESTAMPDIFF(MINUTE, ended_at, NOW()) AS age_minutes "
+        "FROM overseer_guild_run WHERE state = 'ended' "
+        "AND ended_at > NOW() - INTERVAL %s MINUTE",
+        (QUEUE_BENCH_MINUTES,),
+    )
+    benched_now = benched(list(cur.fetchall()))
+    cur.execute(
+        "SELECT guild, keyword, band, composition, state, outcome, deaths, ended_at "
+        "FROM overseer_guild_run WHERE state = 'ended' ORDER BY id DESC LIMIT 2000"
+    )
+    return {
+        "busy": busy,
+        "active": active,
+        "resting": resting,
+        "benched": benched_now,
+        "history": list(cur.fetchall()),
+    }
+
+
+RUN_INSERT_SQL = (
+    "INSERT INTO overseer_guild_run (guild, band, composition, keyword, tank, "
+    "members, dungeon_by, dungeon_jev, dungeon_confidence, composition_by, "
+    "composition_jev, composition_confidence, prior_rate, prior_runs) "
+    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+)
+
+
+def run_row(decision: Decision) -> tuple:
+    """The parameters of RUN_INSERT_SQL for one decision."""
+    comp = decision.chosen
+    door = decision.door
+    prior = decision.prior
+    return (
+        decision.plan.pool.guild[:24],
+        decision.plan.band[:8],
+        comp.key[:40],
+        door.keyword[:32],
+        comp.tank.name[:12],
+        members_text(comp)[:255],
+        decision.dungeon.chosen_by[:10],
+        decision.dungeon.jev[:40] or None,
+        decision.dungeon.confidence,
+        decision.composition.chosen_by[:10],
+        decision.composition.jev[:40] or None,
+        decision.composition.confidence,
+        prior.smoothed if prior.runs else None,
+        prior.runs,
+    )
+
+
+def start_run(cur, decision: Decision) -> int | None:
+    """The run's row and its finder command, linked, on one cursor. Returns
+    the run id, or None when the guild already has a run going.
+
+    The check is made again HERE, locking the guild's live rows, because the
+    planner's read was taken earlier and the bridge forms runs on its own
+    clock: a run that began in between must not be started over.
+    The statements and the command are the bridge's own."""
+    cur.execute(
+        "SELECT id FROM overseer_guild_run WHERE guild = %s "
+        "AND state IN (%s, %s) LIMIT 1 FOR UPDATE",
+        (decision.plan.pool.guild[:24], QUEUED, INSIDE),
+    )
+    if cur.fetchone():
+        return None
+    cur.execute(RUN_INSERT_SQL, run_row(decision))
+    run_id = int(cur.lastrowid)
+    cur.execute(
+        "INSERT INTO overseer_command (target_name, command, kind, source) "
+        "VALUES (%s, %s, 'guild', %s)",
+        (
+            decision.chosen.tank.name,
+            decision.chosen.command(decision.door.keyword),
+            SOURCE,
+        ),
+    )
+    command_id = int(cur.lastrowid)
+    cur.execute(
+        "UPDATE overseer_guild_run SET command_id = %s WHERE id = %s",
+        (command_id, run_id),
+    )
+    return run_id
+
+
 # --- the run's record -------------------------------------------------------------
 
 
@@ -2524,6 +2688,13 @@ def _runs(reader, where: str, params: tuple, n: int) -> list:
     sql = _RUN_SQL.format(where=where)  # noqa: S608 - placeholders only
     thin = _RUN_SQL_THIN.format(where=where)  # noqa: S608 - placeholders only
     return _rows(reader, sql, params + (n,), "overseer_guild_run", thin)
+
+
+def active_names(reader) -> set:
+    """Everyone in a run that is queued or inside, for the roster's reading of
+    a member the bridge records no step for (nowstatus.idle_reading)."""
+    rows = _runs(reader, "state IN (%s)" % ", ".join(["'queued'", "'inside'"]), (), 200)
+    return {m["name"] for r in rows for m in _member_list(r.get("members"))}
 
 
 def recent(reader, guild: str | None = None, n: int = 30) -> list:

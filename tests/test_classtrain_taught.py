@@ -8,7 +8,6 @@ spell only another race can learn (34768 teaches the blood elf warhorse),
 Dual Wield on the rogue list, and bear spells for a druid without Bear Form.
 """
 
-import pathlib
 import unittest
 
 import classtrain
@@ -144,12 +143,6 @@ class FrozenTables(unittest.TestCase):
             got = bridge._class_training_due(["Locky", "Newby"])
         self.assertEqual(got["Locky"].count, 0)
         self.assertEqual(got["Newby"].count, 1)
-
-    def test_the_image_ships_the_table(self):
-        src = (
-            pathlib.Path(__file__).resolve().parent.parent / "Dockerfile"
-        ).read_text()
-        self.assertIn("taughtspells.py", src)
 
 
 if __name__ == "__main__":

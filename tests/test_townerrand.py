@@ -381,6 +381,60 @@ class TheHoldCeiling(unittest.TestCase):
         self.assertEqual("", line)
 
 
+class TheErrandEndsWhenTheRoomIsMade(unittest.TestCase):
+    """#2116. wow-dev 2026-11-08: the vendor step was done at 14:04 and the
+    family sat through bank, tidy, equip, hand-down, fund and mail until 14:27,
+    when the 45 minute campaign ceiling released it; the run began at 14:34."""
+
+    def in_steps(self, why=te.BAG_PRESSURE_WHY):
+        state = te.start(0.0, HUB, why)
+        state, _ = te.advance(state, 10.0, leader_at_hub=True)
+        state, _ = te.advance(state, 20.0, gathered=True)
+        state, line = te.advance(state, 30.0, step_done=True)
+        self.assertEqual(te.STEPS, state.phase, line)
+        return state
+
+    def test_the_room_ends_a_bag_room_errand_after_its_vendor_step(self):
+        state = self.in_steps()
+        self.assertEqual(te.BANK, state.current_step)
+        held, line = te.advance(state, 40.0)
+        self.assertTrue(held.active, line)
+        gone, line = te.advance(state, 40.0, bag_room_made=True)
+        self.assertEqual(te.DONE, gone.phase)
+        self.assertIn("bag room is made", line)
+
+    def test_the_room_ends_it_on_the_walk_too(self):
+        state = te.start(0.0, HUB, te.BAG_PRESSURE_WHY)
+        gone, line = te.advance(state, 60.0, bag_room_made=True)
+        self.assertEqual(te.DONE, gone.phase)
+        self.assertIn("bag room is made", line)
+
+    def test_an_errand_for_gear_is_not_ended_by_room(self):
+        state = self.in_steps("bought gear waits in the mailbox for Bork")
+        held, line = te.advance(state, 40.0, bag_room_made=True)
+        self.assertTrue(held.active, line)
+
+    def test_the_default_is_no_room_made(self):
+        state = self.in_steps()
+        held, line = te.advance(state, 40.0)
+        self.assertTrue(held.active, line)
+
+
+class TheRoomTheCampaignWaitsFor(unittest.TestCase):
+    def test_the_measured_zug_family_has_room(self):
+        # wow-dev 2026-11-08, 22:42 UTC: waited the 45 minute ceiling on this.
+        free = {"Oz": 12, "Uzza": 12, "Zork": 11, "Zrog": 7, "Zug": 4}
+        self.assertTrue(bag_pressure.bag_room_made(free))
+
+    def test_a_member_at_the_modules_floor_is_not_room(self):
+        free = {"Oz": 12, "Uzza": 12, "Zork": 11, "Zrog": 7, "Zug": 3}
+        self.assertFalse(bag_pressure.bag_room_made(free))
+
+    def test_no_reading_is_not_room(self):
+        self.assertFalse(bag_pressure.bag_room_made({}))
+        self.assertFalse(bag_pressure.bag_room_made(None))
+
+
 def _functions(*names):
     out = []
     for node in ast.walk(ast.parse(BRIDGE)):
@@ -605,6 +659,95 @@ class TheAdapter(unittest.TestCase):
         self.assertEqual([_at(-4666.5, -2536.8, 1)], asked)
         self.assertEqual([], self.hearths)
 
+    def far_bag_room_start(self, deaths):
+        """A bag-room errand whose capital is a long walk off on the head's own
+        map, with one vendor 1,270 yards away (#2271). `deaths` is what the
+        death reader returns, or None to leave the reader out of the module."""
+        said = []
+        self.ns["log"] = types.SimpleNamespace(
+            info=lambda fmt, *a: said.append(fmt % a if a else fmt),
+            warning=lambda fmt, *a: said.append(fmt % a if a else fmt),
+        )
+        self.ns["situation"] = situation
+        self.ns["_fetch_errand_vendor_stops"] = lambda leader, standing: [
+            {"map_id": 0, "x": -5800.0, "y": -1300.0, "name": "Near Vendor"}
+        ]
+        if deaths is not None:
+            self.ns["_fetch_family_death_spots"] = lambda names: deaths
+        self.home = {}
+        self.positions = {
+            "Grug": _at(-6705.0, -2195.0),
+            "Bork": _at(-6700.0, -2190.0),
+        }
+        self.ns["_mail_gear_holders"] = lambda names: {}
+        self.ns["_campaign_waiting"] = lambda names: True
+        self.ns["_fetch_free_slots"] = lambda names: {"Bork": 0, "Grug": 0}
+        self.ns["_bag_hold_stuck"] = lambda names, free_slots: False
+        state = asyncio.run(
+            self.fam._town_errand_start(
+                te.State(), ["Bork", "Grug"], "Grug", False, self.now, ""
+            )
+        )
+        return state, said
+
+    def test_a_vendor_over_the_familys_deaths_is_passed_over_and_said(self):
+        deaths = [{"map_id": 0, "x": -6000.0, "y": -1500.0}] * 2
+        state, said = self.far_bag_room_start(deaths)
+        self.assertEqual(HUB["x"], state.hub["x"])
+        self.assertIn(
+            "town errand: %s passes over the vendor Near Vendor: 2 deaths of the "
+            "family in the last day lie along the walk to it" % te.BAG_PRESSURE_WHY,
+            said,
+        )
+
+    def test_with_no_death_reader_the_nearest_vendor_is_aimed_as_before(self):
+        state, said = self.far_bag_room_start(None)
+        self.assertEqual(-5800.0, state.hub["x"])
+        self.assertFalse([s for s in said if "passes over" in s])
+
+    def test_a_vendor_with_no_deaths_along_the_walk_is_aimed_and_nothing_is_said(self):
+        state, said = self.far_bag_room_start([])
+        self.assertEqual(-5800.0, state.hub["x"])
+        self.assertFalse([s for s in said if "passes over" in s])
+
+    def test_a_failed_death_read_warns_and_returns_nothing(self):
+        # A stand-in, not the real package: other tests replace pymysql in
+        # sys.modules, and importing it here would leak into theirs.
+        class Broken(Exception):
+            pass
+
+        pymysql = types.SimpleNamespace(err=types.SimpleNamespace(MySQLError=Broken))
+        warned = []
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, sql, args):
+                raise Broken(2013, "lost connection")
+
+        class Conn(Cursor):
+            def cursor(self):
+                return Cursor()
+
+        ns = {
+            "pymysql": pymysql,
+            "_connect": lambda: Conn(),
+            "log": types.SimpleNamespace(
+                warning=lambda fmt, *a: warned.append(fmt % a)
+            ),
+        }
+        module = ast.Module(
+            body=_functions("_fetch_family_death_spots"), type_ignores=[]
+        )
+        exec(compile(module, "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+        self.assertEqual([], ns["_fetch_family_death_spots"](["Bork"]))
+        self.assertEqual(1, len(warned))
+        self.assertIn("2013", warned[0])
+
     def test_usable_vendor_supply_gap_starts_the_errand_between_runs(self):
         self.ns["_mail_gear_holders"] = lambda names: {}
         self.ns["_fetch_gearup_facts"] = lambda names: {
@@ -644,6 +787,92 @@ class TheAdapter(unittest.TestCase):
         state = self.tick()
         self.assertEqual(te.GO, state.phase)
         self.assertEqual([], released)
+
+    def watch_log(self):
+        lines = []
+        self.ns["log"] = types.SimpleNamespace(
+            info=lambda msg, *a, **k: lines.append(msg % a if a else msg)
+        )
+        return lines
+
+    def test_a_family_barred_by_its_trade_turn_starts_no_errand(self):
+        key = ("Bork", "Grug")
+        lines = self.watch_log()
+        self.ns["_TRADE_TURN_NO_TOWN"] = {key: False}
+        self.now += 30
+        asyncio.run(self.ns["_town_errand_once"](self.fam))
+        self.assertFalse(self.ns["_TOWN_ERRANDS"].get(key, te.State()).active)
+        self.assertEqual([], self.jobs)
+        # The wait is said once per turn, however many ticks pass.
+        for _ in range(3):
+            self.now += 30
+            asyncio.run(self.ns["_town_errand_once"](self.fam))
+        said = [ln for ln in lines if "trade turn" in ln]
+        self.assertEqual(1, len(said), lines)
+        self.assertEqual([], self.jobs)
+
+    def test_a_bar_does_not_touch_an_errand_already_under_way(self):
+        key = ("Bork", "Grug")
+        self.assertEqual(te.GO, self.tick().phase)
+        lines = self.watch_log()
+        self.ns["_TRADE_TURN_NO_TOWN"] = {key: False}
+        state = self.tick()
+        self.assertTrue(state.active)
+        self.assertEqual([], [ln for ln in lines if "trade turn" in ln])
+
+    def test_a_bag_room_errand_ends_when_the_family_has_room(self):
+        """#2116: the vendor step lifted every member to 4 free slots, the
+        campaign waits, so the errand is released at once and the remaining
+        steps do not run."""
+        released = []
+
+        async def release(names, leader, slot, label):
+            released.append((sorted(names), leader))
+
+        async def aim_stranded(*args, **kwargs):
+            return 0
+
+        self.fam._town_errand_release = release
+        self.fam._aim_stranded_bag_pressure_members = aim_stranded
+        # The step's own counter work is not what is under test.
+        self.fam._town_errand_step = lambda *a: asyncio.sleep(0, result=False)
+        self.ns["_campaign_waiting"] = lambda names: True
+        self.ns["_bag_hold_stuck"] = lambda names, free_slots: False
+        self.ns["_fetch_free_slots"] = lambda names: {"Bork": 0, "Grug": 0}
+        self.ns["_TOWN_ERRANDS"][("Bork", "Grug")] = te.State(
+            phase=te.STEPS,
+            started=self.now - 600.0,
+            phase_since=self.now - 100.0,
+            hub=dict(HUB),
+            why=te.BAG_PRESSURE_WHY,
+            step=1,
+        )
+        self.positions = {"Grug": _at(101, 100), "Bork": _at(103, 101)}
+        # Both members still at the floor: the errand goes on.
+        self.assertEqual(te.STEPS, self.tick().phase)
+        self.assertEqual([], released)
+        # The vendor step lifted everyone to 4: the room is made.
+        self.ns["_fetch_free_slots"] = lambda names: {"Bork": 4, "Grug": 7}
+        self.assertEqual(te.DONE, self.tick().phase)
+        self.assertEqual([(["Bork", "Grug"], "Grug")], released)
+
+    def test_a_run_seen_after_an_errand_clears_its_cooldown_for_bag_room(self):
+        """#2116: the run's ticks mark the idle state, and the bag-room errand
+        then starts inside the two hour cooldown."""
+        self.ns["_TOWN_ERRANDS"][("Bork", "Grug")] = te.State(ended=self.now - 3600.0)
+        self.ns["_mail_gear_holders"] = lambda names: {}
+        self.ns["_campaign_waiting"] = lambda names: True
+        self.ns["_bag_hold_stuck"] = lambda names, free_slots: False
+        self.ns["_fetch_free_slots"] = lambda names: {"Bork": 0, "Grug": 1}
+        self.fam._mid_run = lambda names: asyncio.sleep(0, result=True)
+        state = self.tick()
+        self.assertTrue(state.ran_since)
+        self.assertEqual(te.IDLE, state.phase)
+        self.fam._mid_run = lambda names: asyncio.sleep(0, result=False)
+        self.fam._aim_stranded_bag_pressure_members = lambda *a, **k: asyncio.sleep(
+            0, result=0
+        )
+        self.assertEqual(te.GO, self.tick().phase)
 
     def test_no_take_is_written_until_the_member_stands_at_the_mailbox(self):
         self.tick()
@@ -1125,3 +1354,97 @@ class TheFloorSaleCooldown(unittest.TestCase):
 
     def test_it_is_still_a_cooldown(self):
         self.assertEqual("", self._start(60.0, True))
+
+
+class ARunMakesTheBagsNewForTheCooldown(unittest.TestCase):
+    """#2116. wow-dev 2026-11-09: Zug's run ended 04:12 with members at 0 to 3
+    free slots, the last errand had ended 03:11, and the two hour cooldown kept
+    the bag-room errand from starting until a bridge restart forgot it at 04:36."""
+
+    def _start(self, state, gap, bag=True, why_gear=False):
+        return te.should_start(
+            state,
+            now=state.ended + gap,
+            in_run=False,
+            mail_gear={"Bork": 2} if why_gear else {},
+            facts={},
+            bag_pressure_needed=bag,
+        )
+
+    def test_without_a_run_the_cooldown_holds(self):
+        state = te.State(ended=1000.0)
+        self.assertEqual("", self._start(state, 3600.0))
+
+    def test_after_a_run_the_bag_room_errand_starts_at_once(self):
+        state = te.note_run(te.State(ended=1000.0))
+        self.assertTrue(state.ran_since)
+        self.assertEqual(te.BAG_PRESSURE_WHY, self._start(state, 60.0))
+
+    def test_after_a_run_other_errands_still_wait_out_the_cooldown(self):
+        state = te.note_run(te.State(ended=1000.0))
+        self.assertEqual("", self._start(state, 3600.0, bag=False, why_gear=True))
+
+    def test_a_run_before_any_errand_or_during_one_changes_nothing(self):
+        fresh = te.State()
+        self.assertEqual(fresh, te.note_run(fresh))
+        active = te.start(0.0, HUB, te.BAG_PRESSURE_WHY)
+        self.assertEqual(active, te.note_run(active))
+
+    def test_a_finished_errand_forgets_the_run_it_followed(self):
+        state = te.note_run(te.State(ended=1000.0))
+        new, _ = te.advance(
+            te.start(2000.0, HUB, te.BAG_PRESSURE_WHY), 2100.0, bag_room_made=True
+        )
+        self.assertFalse(new.ran_since)
+        self.assertFalse(te.start(2000.0, HUB, "x").ran_since)
+        self.assertTrue(state.ran_since)
+
+    def test_the_adapter_notes_a_run_it_sees(self):
+        self.assertIn("townerrand.note_run(state)", BRIDGE)
+
+
+class AWalkThatNeverLandedMayBeTriedAgainSoon(unittest.TestCase):
+    """#2116. wow-dev 2026-11-09: the walk to a vendor was released at 04:57
+    after 20 minutes without landing, and the family went back to questing with
+    full bags for the rest of the cooldown."""
+
+    def _released(self, why_go=True):
+        state = te.start(0.0, HUB, te.BAG_PRESSURE_WHY)
+        new, line = te.advance(state, te.GO_SECONDS + 1.0)
+        self.assertEqual(te.DONE, new.phase, line)
+        return new
+
+    def _start(self, state, gap, floor_sale=False):
+        return te.should_start(
+            state,
+            now=state.ended + gap,
+            in_run=False,
+            mail_gear={},
+            facts={},
+            bag_pressure_needed=True,
+            floor_sale=floor_sale,
+        )
+
+    def test_the_unlanded_release_is_marked(self):
+        self.assertTrue(self._released().unlanded)
+
+    def test_it_may_start_again_after_the_short_retry(self):
+        state = self._released()
+        self.assertEqual("", self._start(state, te.UNLANDED_RETRY_SECONDS - 1))
+        self.assertEqual(
+            te.BAG_PRESSURE_WHY, self._start(state, te.UNLANDED_RETRY_SECONDS + 1)
+        )
+
+    def test_any_other_release_keeps_the_whole_cooldown(self):
+        state = te.start(0.0, HUB, te.BAG_PRESSURE_WHY)
+        done, _ = te.advance(state, 10.0, in_run=True)
+        self.assertFalse(done.unlanded)
+        self.assertEqual("", self._start(done, te.UNLANDED_RETRY_SECONDS + 1))
+        steps, _ = te.advance(replace_phase(state, te.STEPS), te.TOTAL_SECONDS + 1.0)
+        self.assertFalse(steps.unlanded)
+
+
+def replace_phase(state, phase):
+    import dataclasses
+
+    return dataclasses.replace(state, phase=phase)

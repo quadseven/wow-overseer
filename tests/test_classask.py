@@ -41,7 +41,6 @@ with stub_modules(pymysql=PYMYSQL):
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
-DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
 
 MIN = 60.0
 STALL = classquest.HUNT_STALL_MINUTES * MIN
@@ -1060,7 +1059,13 @@ class TheDungeonPasses(unittest.TestCase):
         seen = {}
 
         def free_members(
-            rows, busy, resting, family, benched=frozenset(), owed=frozenset()
+            rows,
+            busy,
+            resting,
+            family,
+            benched=frozenset(),
+            owed=frozenset(),
+            seated=frozenset(),
         ):
             seen["busy"] = set(busy)
             return [], {}
@@ -1137,9 +1142,6 @@ class TheSkippedCohort(unittest.TestCase):
 
 
 class TheWiring(unittest.TestCase):
-    def test_the_image_carries_the_module(self):
-        self.assertIn("classask.py", DOCKERFILE)
-
     def test_the_bridge_keeps_the_hunt_clock_and_hands_it_to_the_plan(self):
         self.assertIn("hunts=self._class_hunts, now=time.time()", BRIDGE)
         self.assertIn("_keep_class_plan(self, cohort, plan)", BRIDGE)

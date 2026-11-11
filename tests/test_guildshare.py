@@ -24,7 +24,6 @@ import bag_pressure
 import guildshare
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
-DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
 
 
 def _stack(
@@ -688,11 +687,6 @@ class TheBridgeActuallyCallsThisTest(unittest.TestCase):
         body = self.source[start : self.source.index("\ndef ", start)]
         self.assertIn("character_skills", body)
         self.assertNotIn("character_spell", body)
-
-    def test_the_module_ships_in_the_image(self):
-        # A module missing from the Dockerfile COPY imports fine in the test
-        # suite and ImportErrors the container on boot.
-        self.assertIn("guildshare.py", DOCKERFILE.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

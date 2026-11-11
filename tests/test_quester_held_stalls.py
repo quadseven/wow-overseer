@@ -87,6 +87,18 @@ class AStallJudgedByTheCurrentClock(unittest.TestCase):
             _clock, broken = bridge._quester_memos()
         self.assertEqual({34: questers.STALLED}, broken["Velo"])
 
+    def test_an_empty_hold_deletes_its_persistent_memo(self):
+        deleted = []
+        with (
+            mock.patch.object(bridge, "_memo_upsert"),
+            mock.patch.object(
+                bridge, "_memo_delete", lambda *args: deleted.append(args)
+            ),
+        ):
+            bridge._quester_memos_write(questers.Clock(), {"Velo": {}}, 1.0)
+
+        self.assertIn((bridge.QUESTER_BROKEN_MEMO, "Velo"), deleted)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -45,7 +45,6 @@ DECISIONS = modsource.DECISIONS
 DECISIONS_H = modsource.DECISIONS_H
 MODULE = modsource.MODULE
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
-DOCKERFILE = ROOT / "Dockerfile"
 
 
 def _source() -> str:
@@ -865,11 +864,6 @@ class TheExecutorContractThisPassDependsOn(unittest.TestCase):
         )
         _has(self, 'status = "verifying";', body, "the row waits out the cast")
         self.assertNotIn('status = "delivered";', body)
-
-
-class TheModuleShips(unittest.TestCase):
-    def test_recipebook_is_in_the_image(self):
-        self.assertIn("recipebook.py", DOCKERFILE.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

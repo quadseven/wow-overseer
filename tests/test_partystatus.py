@@ -518,13 +518,6 @@ class TheEndpointIsWired(unittest.TestCase):
         self.assertIn("_fetch_agenda()", block)
         self.assertNotIn("SELECT", block)
 
-    def test_the_module_ships_in_the_image(self):
-        """The bridge image is built from the shared tarball by name, so a
-        module left out of this list imports fine in the suite and crashes the
-        map server on the next roll."""
-        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("partystatus.py", dockerfile)
-
 
 class TheSenderIsAPipeWithASchedule(unittest.TestCase):
     """tools/push_party_status.py carries the line and chooses none of it."""

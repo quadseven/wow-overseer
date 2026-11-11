@@ -41,6 +41,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import achievements
+import clipledger
 import recap
 from armory import QUALITY_NAMES, UNKNOWN_QUALITY
 
@@ -285,6 +286,22 @@ def wanted_entries(rows: list[dict]) -> list[int]:
     )
 
 
+def clip_keys(rows: list[dict]) -> list[str]:
+    """The ledger event keys of the loot events in `rows`: what the clip
+    ledger is asked about (clipledger writes "loot:<overseer_event id>")."""
+    return [
+        "loot:%s" % r["id"] for r in rows if r.get("kind") == ITEM_LOOT and r.get("id")
+    ]
+
+
+def _clip_key(story: dict) -> str:
+    """The ledger key of the loot event this story starts from, or ""."""
+    for row in story["steps"]:
+        if row.get("kind") == ITEM_LOOT and row.get("id"):
+            return "loot:%s" % row["id"]
+    return ""
+
+
 def _council_for(story: dict, council: dict) -> dict | None:
     """The loot council's award for any item guid in this story, or None."""
     for row in story["steps"]:
@@ -302,6 +319,7 @@ def build_loot(
     book=None,
     limit: int = STORY_LIMIT,
     council: dict | None = None,
+    clips: dict | None = None,
 ) -> dict:
     """The payload /api/loot serves.
 
@@ -341,6 +359,7 @@ def build_loot(
                 "at": _iso(latest),
                 "since": _iso(story["steps"][0].get("first_seen")),
                 "_sort": latest,
+                **clipledger.link((clips or {}).get(_clip_key(story))),
             }
         )
     out.sort(key=lambda s: s["_sort"], reverse=True)

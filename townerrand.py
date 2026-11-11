@@ -157,6 +157,12 @@ class State:
     ended: float = 0.0
     why: str = ""
     hearth_until: float = 0.0
+    # A dungeon run was seen after this errand ended (note_run): its bags are
+    # new, so a bag-room errand is not held back by the cooldown (#2116).
+    ran_since: bool = False
+    # The errand was released because its walk never landed (#2116): the next
+    # one may start after UNLANDED_RETRY_SECONDS, not the whole cooldown.
+    unlanded: bool = False
 
     @property
     def active(self) -> bool:
@@ -171,6 +177,13 @@ class State:
         if self.phase != STEPS or self.step >= len(self.steps):
             return ""
         return self.steps[self.step]
+
+
+def note_run(state: State) -> State:
+    """`state` once a dungeon run has been seen after its errand ended."""
+    if state.active or not state.ended or state.ran_since:
+        return state
+    return replace(state, ran_since=True)
 
 
 def should_start(
@@ -213,8 +226,22 @@ def should_start(
     if state.active or in_run:
         return ""
     cooldown = FLOOR_SALE_COOLDOWN_SECONDS if floor_sale else COOLDOWN_SECONDS
+    if state.unlanded:
+        # AN ERRAND THAT NEVER REACHED A COUNTER DID NOTHING TO REST ON (#2116).
+        # wow-dev 2026-11-09: the walk to a vendor released at 04:57 after 20
+        # minutes, and the family went back to questing with full bags for the
+        # rest of a 30 minute to two hour cooldown. The aim that failed is not
+        # chosen again (AIM_MEMORY_SECONDS), so the retry goes elsewhere.
+        cooldown = min(cooldown, UNLANDED_RETRY_SECONDS)
     if state.ended and now - state.ended < cooldown:
-        return ""
+        # A RUN SINCE THE LAST ERRAND ENDED MADE ITS BAGS NEW (#2116). The
+        # cooldown keeps two errands from running back to back on one set of
+        # bags; it was holding a family at the floor for the rest of two hours
+        # after a run (wow-dev 2026-11-09: 24 minutes idle with a member at no
+        # free slots, until a bridge restart forgot the cooldown and the errand
+        # began at once). Only the bag-room errand skips it.
+        if not (bag_pressure_needed and state.ran_since):
+            return ""
     if bag_pressure_needed:
         return BAG_PRESSURE_WHY
     if stalled >= HOLD_CEILING_SECONDS:
@@ -446,6 +473,8 @@ def _bound_at(hub: dict, bind) -> bool:
 # nearest vendor on the head's map when its default hub is a long walk off, and
 # a hub released as "did not land" is skipped for AIM_MEMORY_SECONDS.
 DID_NOT_LAND = "did not land"
+# How soon an errand whose walk never landed may be tried again, at another aim.
+UNLANDED_RETRY_SECONDS = 300.0
 AIM_MEMORY_SECONDS = 4 * 3600.0
 # Two aims this close on one map are the same aim (a town square's counters).
 AIM_SAME_YARDS = 120.0
@@ -521,8 +550,66 @@ def vendor_stops(rows, side: int = 0) -> list:
     return out
 
 
+# GROUND THE FAMILY DIED ON IS NOT A WALK (wow-overseer#2271). The nearest vendor
+# was chosen by straight-line yards alone, and the walk to it crossed ground
+# where the family had died that day; the leader died on it again and the
+# module ended the errand. A stop with this many of the family's recent deaths
+# within DEATH_CORRIDOR_YARDS of the line from the head to it is passed over.
+DEATHS_MAKE_A_STOP_LETHAL = 2
+DEATH_CORRIDOR_YARDS = 300.0
+
+
+def _near_line(spot: dict, a: dict, b: dict) -> float:
+    """Yards from `spot` to the segment a-b on one map; inf on another map."""
+    try:
+        if int(spot.get("map_id")) != int(a.get("map_id")):
+            return float("inf")
+        px, py = float(spot["x"]), float(spot["y"])
+        ax, ay = float(a["x"]), float(a["y"])
+        bx, by = float(b["x"]), float(b["y"])
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return float("inf")
+    dx, dy = bx - ax, by - ay
+    span = dx * dx + dy * dy
+    t = 0.0 if span == 0 else ((px - ax) * dx + (py - ay) * dy) / span
+    t = max(0.0, min(1.0, t))
+    return ((px - ax - t * dx) ** 2 + (py - ay - t * dy) ** 2) ** 0.5
+
+
+def _deaths_along(stop: dict, here: dict, deaths) -> int:
+    return sum(
+        1 for d in deaths or () if _near_line(d, here, stop) <= DEATH_CORRIDOR_YARDS
+    )
+
+
+def lethal_stop(stop: dict, here: dict, deaths) -> bool:
+    """Whether the family's recent deaths ({map_id, x, y}) lie along the line
+    from `here` to `stop`. Straight-line, as the rest of the aim choice is: it
+    knows deaths, not routes. The line starts where the head stands, so deaths
+    within the corridor of the head count against every stop on the map and the
+    family hearths instead, which is intended."""
+    return _deaths_along(stop, here, deaths) >= DEATHS_MAKE_A_STOP_LETHAL
+
+
+def lethal_stops(stops, here: dict, deaths) -> list:
+    """[(stop, deaths along the walk)] for every stop `lethal_stop` passes
+    over, so the bridge can say each one. Pure."""
+    out = []
+    for stop in stops or ():
+        count = _deaths_along(stop, here, deaths)
+        if count >= DEATHS_MAKE_A_STOP_LETHAL:
+            out.append((stop, count))
+    return out
+
+
 def choose_aim(
-    hub: dict, stops, leader_at, why: str, released=(), now: float = 0.0
+    hub: dict,
+    stops,
+    leader_at,
+    why: str,
+    released=(),
+    now: float = 0.0,
+    deaths=(),
 ) -> dict:
     """The errand's aim: `hub` (choose_hub), or a nearer vendor stop.
 
@@ -552,7 +639,9 @@ def choose_aim(
     near = [
         (_planar(s, here), i, s)
         for i, s in enumerate(stops or ())
-        if _same_map(s, leader_at) and not _was_released(s, released, now)
+        if _same_map(s, leader_at)
+        and not _was_released(s, released, now)
+        and not lethal_stop(s, here, deaths)
     ]
     if not near:
         return hub
@@ -577,7 +666,17 @@ def aim_now(state: State, now: float) -> bool:
 
 def end(state: State, now: float, why: str) -> tuple:
     """Release the family, with the reason."""
-    return replace(state, phase=DONE, ended=now, why=why), "released: %s" % why
+    return (
+        replace(
+            state,
+            phase=DONE,
+            ended=now,
+            why=why,
+            ran_since=False,
+            unlanded=state.phase == GO and DID_NOT_LAND in why,
+        ),
+        "released: %s" % why,
+    )
 
 
 def advance(
@@ -590,6 +689,7 @@ def advance(
     step_done: bool = False,
     stalled: float = 0.0,
     bag_pressure_needed: bool = False,
+    bag_room_made: bool = False,
 ) -> tuple:
     """The next state and one sentence about what changed ('' when nothing).
 
@@ -598,11 +698,25 @@ def advance(
     step. `bag_pressure_needed` is a fresh reading that the campaign still
     waits and the family still needs the counter; it lets that errand continue
     past the campaign ceiling until the bags can support a run.
+    `bag_room_made` is the opposite fresh reading: the campaign waits and the
+    admission gate would let it in (no member at or below the town-run floor,
+    none below the resume floor).
+
+    A BAG-ROOM ERRAND ENDS WHEN ITS ROOM IS MADE (#2116). It was started so the
+    campaign could go in, and it used to run every remaining step first: on
+    wow-dev 2026-11-08 the vendor step was done at 14:04, the bank, tidy,
+    equip, hand-down, fund and mail steps ran 23 more minutes, and the family's
+    next Blackrock Depths run started at 14:34 instead of about 14:11. Those
+    steps wait for a stretch when no campaign is waiting.
     """
     if not state.active:
         return state, ""
     if in_run:
         return end(state, now, "a dungeon run started")
+    if bag_room_made and state.why == BAG_PRESSURE_WHY:
+        return end(
+            state, now, "bag room is made, so the campaign takes the family back"
+        )
     if stalled >= HOLD_CEILING_SECONDS and not bag_pressure_needed:
         return end(
             state,

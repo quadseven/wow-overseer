@@ -155,9 +155,13 @@ def command(quest: classquest.Quest, entry, held=None, item_form=True) -> str:
     if entry in kills:
         word = " count:%d" % min(MAX_COUNT, max(1, int(kills[entry])))
         return "%s creature:%d%s max:%d" % (VERB, entry, word, MAX_SECONDS)
-    word = ""
     wants = dict(quest.items)
-    item = next((i for i, e in quest.drops if e == entry and i in wants), 0)
+    candidates = [i for i, e in quest.drops if e == entry and i in wants]
+    item = next(
+        (i for i in candidates if callable(held) and int(held(i)) < wants[i]),
+        candidates[0] if candidates else 0,
+    )
+    word = ""
     if item and item_form:
         have = int(held(item)) if callable(held) else 0
         need = min(MAX_COUNT, max(1, int(wants[item]) - have))

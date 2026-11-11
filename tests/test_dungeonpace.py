@@ -1025,8 +1025,8 @@ class AnEmptiedRunThatNeverFoughtCountsForNothing(unittest.TestCase):
         self.assertNotIn("beat the family again", d.why)
 
     def test_a_long_emptied_run_and_a_stall_still_count(self):
-        bound = pace.EMPTIED_UNFOUGHT_SECONDS
-        for run in (self.emptied(bound), self.emptied(1, "stalled")):
+        bound = pace.NON_ENTRY_SECONDS
+        for run in (self.emptied(bound), self.emptied(bound, "stalled")):
             v = pace.viability([run], self.BRD_MAP)
             self.assertEqual(1, v.fought, run)
             self.assertEqual(1, v.uncleared_streak, run)
@@ -1133,3 +1133,39 @@ class AnOperatorsOrderIsSteppedDownOnceAndComesBack(unittest.TestCase):
     def test_the_bridge_queues_the_door_rows_count(self):
         self.assertIn("runs = dungeonpace.step_down_runs(door_row)", BRIDGE)
         self.assertNotIn("dungeonpace.STEP_DOWN_RUNS", BRIDGE)
+
+
+# #2092: a `stalled` run over in 65 seconds (Grug's run 1676285, 2026-11-08,
+# reopened five seconds after a split failure) never got in either.
+class ARunThatNeverGotInCountsForNothing(unittest.TestCase):
+    BRD_MAP = pace.campaignplan.BY_KEYWORD["blackrock-depths"].map_id
+
+    def run_of(self, outcome, seconds):
+        start = T0 + timedelta(minutes=5)
+        return {
+            "map_id": self.BRD_MAP,
+            "outcome": outcome,
+            "started_at": start,
+            "ended_at": start + timedelta(seconds=seconds),
+        }
+
+    def test_a_65_second_stalled_run_is_not_fought(self):
+        v = pace.viability([self.run_of("stalled", 65)], self.BRD_MAP)
+        self.assertEqual(0, v.fought)
+        self.assertEqual(0, v.uncleared_streak)
+        self.assertEqual(
+            "",
+            pace.first_fight_after([self.run_of("stalled", 65)], self.BRD_MAP, T0),
+        )
+
+    def test_a_short_split_failure_counts_for_nothing(self):
+        self.assertTrue(pace.never_fought(self.run_of("split_failed", 10)))
+
+    def test_the_window_is_three_minutes(self):
+        self.assertEqual(180, pace.NON_ENTRY_SECONDS)
+        self.assertTrue(pace.never_fought(self.run_of("stalled", 179)))
+        self.assertFalse(pace.never_fought(self.run_of("stalled", 180)))
+
+    def test_a_short_wipe_or_clear_still_counts(self):
+        for outcome in ("wipe", "complete", "left"):
+            self.assertFalse(pace.never_fought(self.run_of(outcome, 5)), outcome)

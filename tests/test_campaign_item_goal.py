@@ -273,7 +273,8 @@ class BridgeItemGoal(unittest.TestCase):
         )
         ns["_ensure_queue_store"]()
         ns["_ensure_queue_store"]()
-        self.assertEqual(2, sum(sql.startswith("ALTER TABLE") for sql in calls))
+        # Two queue columns and the three the trade turn table gained.
+        self.assertEqual(5, sum(sql.startswith("ALTER TABLE") for sql in calls))
         self.assertIn("goal_item", queue.CREATE_SQL)
         self.assertIn("goal_item", queue.SELECT_PENDING_SQL)
 

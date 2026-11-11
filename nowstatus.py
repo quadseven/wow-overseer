@@ -76,6 +76,13 @@ BUMP_SQL = (
     "UPDATE overseer_now_step SET occurrences = occurrences + 1, last_seen = NOW() "
     "WHERE id = %s"
 )
+# The same step stored by an earlier bridge: a restart empties the in-memory
+# map, and a fresh row would restart every clock read from first_seen.
+FIND_SQL = (
+    "SELECT id FROM overseer_now_step WHERE subject = %s AND scope = %s "
+    "AND kind = %s AND doing = %s AND waiting = %s "
+    "AND last_seen > NOW() - INTERVAL %s SECOND ORDER BY id DESC LIMIT 1"
+)
 PRUNE_SQL = "DELETE FROM overseer_now_step WHERE last_seen < NOW() - INTERVAL %s HOUR"
 READ_SQL = (
     "SELECT subject, scope, kind, doing, waiting, occurrences, "
@@ -475,6 +482,8 @@ _KIND_WORDS = {
     "dungeon": "walking to {aim} for the dungeon run",
     "operator": "following an operator's order to {aim}",
 }
+# How a stored step ends when the walk is the dungeon run's own.
+_DUNGEON_WALK_TAIL = _KIND_WORDS["dungeon"].rsplit("}", 1)[1]
 
 
 def _walk_words(row: dict, creatures: dict | None = None) -> str:
@@ -708,6 +717,50 @@ def compose(member: dict, facts: dict | None, now_at: int | None = None) -> dict
     }
 
 
+# AN IDLE SEAT IS EARNED (#2178). A member with no step, no intent and no guild
+# job used to read "Idle: no errand and no hold found" whatever it was doing:
+# the bridge records no step for a guildmate in a guild run or one the module's
+# own play is leveling. `idle_reading` re-reads such a member off records the
+# bridge keeps: an active guild run, the newest level gained (overseer_level),
+# and the raid tracker's next level milestone (roadtoragnaros, B: 40).
+IN_RUN = "In a guild run"
+OWN_PLAY = "Playing on its own"
+STALLED = "Stalled"
+READ_DOINGS = frozenset({IN_RUN, OWN_PLAY, STALLED})
+MILESTONE_LEVEL = 40
+STALL_SECONDS = 24 * 3600
+
+
+def idle_reading(now: dict, in_run, level, last_level_at, now_at) -> dict:
+    """`compose`'s answer for a member that came out Idle, re-read; anything
+    else is returned as it is. Adds `stalled_s`: seconds without a level for a
+    member below the milestone with none gained in STALL_SECONDS (a member with
+    no level on record is stalled for at least that long), else None.
+    """
+    out = dict(now, stalled_s=None)
+    if now.get("doing") != "Idle":
+        return out
+    since = None
+    if last_level_at and now_at:
+        since = max(0, int(now_at) - int(last_level_at))
+    if in_run:
+        doing, line, held = IN_RUN, "Doing: a guild run.", None
+    elif since is not None and since < STALL_SECONDS:
+        doing, held = OWN_PLAY, since
+        line = "Playing on its own; last level %s ago." % duration_words(since)
+    elif int(level or 0) < MILESTONE_LEVEL:
+        held = max(since or 0, STALL_SECONDS)
+        doing = STALLED
+        line = "Stalled: no level gained for %s%s." % (
+            "" if since is not None else "at least ",
+            duration_words(held),
+        )
+        out["stalled_s"] = held
+    else:
+        return out
+    return dict(out, doing=doing, waiting="", for_s=held, line=line, known=True)
+
+
 # The waiting text for a walk that keeps ending and restarting. apiv2/members.py
 # matches on RESTART_WAITING, so both read the wording from here.
 RESTART_WAITING = "the walk has ended and restarted"
@@ -883,6 +936,25 @@ def _restarts(steps, now_at, window=900) -> int:
             if not now_at or now_at - int(s.get("last_at") or 0) <= window:
                 n += int(s.get("occurrences") or 1)
     return n
+
+
+def restart_count(steps, now_at, since_at=0) -> int:
+    """The restart fold above for the dungeon run's own walk, for a caller
+    outside this module: the bridge's stall breaker judges a door by it
+    (#2151).
+
+    Only a walk the dungeon run took over counts, and only one begun at or
+    after `since_at`, when the run being judged started. A town errand that
+    keeps restarting is not this door refusing the leader, and a walk begun
+    under an earlier run carries that run's restarts in its count.
+    """
+    own = [
+        s
+        for s in steps
+        if str(s.get("doing") or "").endswith(_DUNGEON_WALK_TAIL)
+        and int(s.get("first_at") or 0) >= int(since_at or 0)
+    ]
+    return _restarts(own, now_at)
 
 
 def _first_restart(steps, now_at, window=900):

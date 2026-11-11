@@ -18,10 +18,13 @@ import pathlib
 import struct
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from world_data import DATA_ROOT
+
 F_ID = 0
 F_REQUIRES_SPELL_FOCUS = 18
 F_TOTEM_CATEGORY = (222, 223)
-OUT = pathlib.Path(__file__).resolve().parents[1] / "tests" / "recipe_stations.json"
+OUT = DATA_ROOT / "tests" / "recipe_stations.json"
 
 
 def main(argv):

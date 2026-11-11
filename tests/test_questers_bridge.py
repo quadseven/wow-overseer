@@ -14,6 +14,7 @@ from test_guildsocial_bridge import bridge
 from test_questers import (
     ELWYNN,
     NO_TRANSPORT,
+    REDRIDGE,
     crossing_row,
     giver,
     quest,
@@ -43,10 +44,13 @@ def quester(name="Mirra", **kw):
 class Pass:
     """A bridge with only what the quester pass reads, and what it wrote."""
 
-    def __init__(self, members, ledger=None, cat=None):
+    def __init__(self, members, ledger=None, cat=None, broken=None, clock=None):
         self.members = list(members)
         self.ledger = dict(ledger or {})
         self.cat = cat or world()
+        self.broken = {name: dict(rows) for name, rows in (broken or {}).items()}
+        self.clock = dict(clock or {})
+        self.broken_written = None
         self.hunts_open = 0
         self.crossings = ()
         self.tried = ()
@@ -72,12 +76,15 @@ class Pass:
         self.asked.append(list(names))
         return self.members, self.tried, self.ledger, self.hunts_open, self.crossings
 
+    def _write_memos(self, _clock, broken, _now):
+        self.broken_written = {name: dict(rows) for name, rows in broken.items()}
+
     def run(self, now=0.0):
         with (
             mock.patch.multiple(
                 bridge,
-                _quester_memos=lambda: ({}, {}),
-                _quester_memos_write=lambda *a: None,
+                _quester_memos=lambda: (self.clock, self.broken),
+                _quester_memos_write=self._write_memos,
                 _quester_catalogue=lambda: self.cat,
                 _fetch_quester_facts=self._facts,
                 _record_quest_broken=lambda b: self.recorded.append(b) or True,
@@ -90,6 +97,50 @@ class Pass:
 
 
 class TheQuesterPass(unittest.TestCase):
+    def test_a_stalled_quest_with_remote_droppers_is_retried_and_unheld(self):
+        wanted = quest(180, REDRIDGE, 26, title="Wanted: Lieutenant Fangore")
+        wanted.update(item1=3632, item_count1=1)
+        cat = questers.catalogue(
+            [wanted],
+            [
+                giver(180, "start", 5180, 187, 0, 0),
+                giver(180, "end", 5181, 187, 400, 0),
+            ],
+            [spawn(5703, 703, 100, 0, level=26, map_id=0)],
+            [{"item": 3632, "entry": 703}],
+            [{"quest": 180, "kind": "creature", "entry": 187}],
+            [{"quest": 180, "kind": "creature", "entry": 187}],
+        )
+        sylvi = quester(
+            name="Sylvi",
+            level=28,
+            race=4,
+            map_id=1,
+            zone_id=1657,
+            quest_log={180: questers.STATUS_INCOMPLETE},
+            quest_progress={180: 0},
+            quest_objectives={180: {}},
+        )
+        clock = {
+            "Sylvi:180": [
+                [questers.STATUS_INCOMPLETE, 0],
+                questers.STALL_SECONDS,
+                questers.STALL_SECONDS,
+            ]
+        }
+        run = Pass(
+            [sylvi],
+            cat=cat,
+            broken={"Sylvi": {180: questers.STALLED}},
+            clock=clock,
+        ).run()
+
+        self.assertEqual(
+            [r.command for r in run.started[0].rows], ["cross-to-map map:0"]
+        )
+        self.assertEqual(run.broken_written, {"Sylvi": {}})
+        self.assertEqual(run.recorded, [])
+
     def test_it_reads_the_questers_and_nobody_else(self):
         run = Pass([quester()]).run()
         self.assertEqual(run.asked, [sorted(raidteams.quester_names())])
@@ -272,6 +323,14 @@ class TheQuesterPass(unittest.TestCase):
         run = Pass([member])
         run.self._class_hunt_unsupported_until = bridge.time.monotonic() + 600
         self.assertEqual(run.run().started, [])
+
+    def test_an_island_quester_with_a_mainland_giver_starts_the_boat_ride(self):
+        from test_questers_across_water import cat, isle
+
+        run = Pass([isle()], cat=cat())
+        (step,) = run.run().started
+        self.assertIsNone(step.walk)
+        self.assertTrue(step.rows[0].command.startswith("ride-to-stop map:1 "))
 
 
 if __name__ == "__main__":

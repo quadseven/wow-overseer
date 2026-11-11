@@ -192,7 +192,9 @@ class TheFamilyReadsAreHandlers(unittest.TestCase):
             ) as build,
         ):
             got = map_server.Handler._eye.__wrapped__({}, None)
-        self.assertEqual(got, (200, {"tiers": []}))
+        self.assertEqual(got[0], 200)
+        self.assertEqual(got[1]["tiers"], [])
+        self.assertIn("tiles", got[1])
         build.assert_called_once_with(x=1)
 
 

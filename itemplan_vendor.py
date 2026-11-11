@@ -23,6 +23,12 @@ when every one of these holds:
     been released: its decision key is in the caller's `released` set.
     An unreleased confirm sale is shown by the shadow and waits.
 
+NOT A FALLBACK. `Decision.options` lists the routes the plan weighed, best
+first. When SELL_VENDOR was chosen only because a better route had no
+room (a full guild bank tab), the plan wanted the stack kept and a sale
+cannot be undone, so it is held back: `sales_for` appends it to the
+`held` list its caller passes, and `held_lines` words it for the log.
+
 REFUSABLE ROWS. Every SELL_VENDOR decision is `refusable`: the executor
 may skip it and the next pass asks again. `carry_out` therefore treats
 an insert that writes nothing (a falsy row id, the shape `_insert_sell`
@@ -30,9 +36,10 @@ returns for a kept or unavailable row) as a refusal: that sale is
 counted as skipped and the rest still go out. A real failure raises, as
 it does in the pass today; this module does not swallow it.
 
-GOLD. `carry_out` reports the gold realized per member: the copper of
-the sales actually written, summed by holder, with one log line per
-member in `vendorsale.money` words.
+WORTH. `carry_out` only queues rows: the vendor has sold nothing yet. It
+reports what the queued rows are worth per member: the copper of the
+sales actually written, summed by holder, with one log line per member
+in `vendorsale.money` words.
 
 PURE. Decisions and rows in, sales and a report out. No MySQL, no clock.
 The bridge supplies the plan (through `itemplan_shadow.shadow`), the
@@ -75,8 +82,8 @@ class Sale:
 class Report:
     carried: tuple = ()  # the Sale rows the insert wrote
     skipped: tuple = ()  # the Sale rows the executor refused
-    gold: dict = field(default_factory=dict)  # holder -> copper written
-    lines: tuple = ()  # one line per member, naming its gold
+    worth: dict = field(default_factory=dict)  # holder -> copper queued
+    lines: tuple = ()  # one line per member, naming what it queued
 
 
 def _int(value, default=0) -> int:
@@ -86,13 +93,16 @@ def _int(value, default=0) -> int:
         return default
 
 
-def sales_for(plan_, stack_rows, keep_names=(), released=frozenset()) -> tuple:
+def sales_for(
+    plan_, stack_rows, keep_names=(), released=frozenset(), held=None
+) -> tuple:
     """The route's sales from a plan, in plan order.
 
     `stack_rows` is (stack, carried row) pairs in the shape
     `itemplan_shadow.build_stacks` produces from the economy pass's rows:
     the stack supplies the decision key, the row supplies the guid the
-    sell insert names and the current protection's reading.
+    sell insert names and the current protection's reading. A fallback
+    sale is not returned; when `held` is a list it is appended there.
     """
     rows_by_key = {stack.key: row for stack, row in stack_rows}
     out = []
@@ -110,6 +120,10 @@ def sales_for(plan_, stack_rows, keep_names=(), released=frozenset()) -> tuple:
             continue
         # Only where the current protection would keep the stack.
         if not bag_pressure.vendor_refusal(row, keep_names):
+            continue
+        if decision.options and decision.options[0] != itemplan.SELL_VENDOR:
+            if held is not None:
+                held.append(decision)
             continue
         guid = _int(row.get("item_guid"))
         count = max(1, _int(row.get("count"), 1))
@@ -137,28 +151,40 @@ def sales_for(plan_, stack_rows, keep_names=(), released=frozenset()) -> tuple:
     return tuple(out)
 
 
+def held_lines(held) -> tuple:
+    """One log line per holder for the fallback sales held back."""
+    names: dict = {}
+    for decision in held:
+        names.setdefault(decision.holder, []).append(decision.name)
+    return tuple(
+        "%s %s holds back %d fallback sale(s): %s"
+        % (PREFIX, holder, len(found), ", ".join(found))
+        for holder, found in sorted(names.items())
+    )
+
+
 def carry_out(sales, insert) -> Report:
     """Write each sale through `insert`; a refusal skips only that row.
 
     `insert(candidate)` returns the written row id, or a falsy value when
-    the executor refuses the row. Gold is counted only for written rows.
+    the executor refuses the row. Worth is counted only for written rows.
     """
     carried, skipped = [], []
-    gold: dict = {}
+    worth: dict = {}
     for sale in sales:
         if insert(sale.candidate):
             carried.append(sale)
-            gold[sale.holder] = gold.get(sale.holder, 0) + sale.copper
+            worth[sale.holder] = worth.get(sale.holder, 0) + sale.copper
         else:
             skipped.append(sale)
     lines = tuple(
-        "%s %s: %d sale(s) carried out, gold %s"
+        "%s %s: %d sale(s) queued, worth %s"
         % (
             PREFIX,
             holder,
             sum(1 for s in carried if s.holder == holder),
             vendorsale.money(copper),
         )
-        for holder, copper in sorted(gold.items())
+        for holder, copper in sorted(worth.items())
     )
-    return Report(tuple(carried), tuple(skipped), gold, lines)
+    return Report(tuple(carried), tuple(skipped), worth, lines)

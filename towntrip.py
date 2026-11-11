@@ -508,7 +508,9 @@ def _buy(member: Member, town: Town, what: str) -> tuple[list[Errand], list[str]
     return errands, notes
 
 
-def _hand_on(wanted, givers, what: str, apart=None) -> tuple[list[Errand], set]:
+def _hand_on(
+    wanted, givers, what: str, apart=None, near_only: bool = False
+) -> tuple[list[Errand], set]:
     """Hand spare conjured stacks to whoever has none. The cheapest route.
 
     One stack per taker and each stack used once, so two people short of food
@@ -544,6 +546,11 @@ def _hand_on(wanted, givers, what: str, apart=None) -> tuple[list[Errand], set]:
             near_first = sorted(givers, key=lambda g: bool(apart(g.name, member.name)))
         for giver in near_first:
             if giver.name == member.name or not offers[giver.name]:
+                continue
+            # `near_only` is the in-run hand-over (in_run_drink): a giver out
+            # of trade range is skipped, not queued, because nothing walks two
+            # members together once the run is open.
+            if near_only and (apart is None or apart(giver.name, member.name)):
                 continue
             stack = offers[giver.name].pop(0)
             # THE GIVER IS THE ROW'S CHARACTER AND THE TAKER IS ITS ARGUMENT,
@@ -733,6 +740,72 @@ def plan(members, town: Town, sitting=frozenset(), apart=None) -> Plan:
     return Plan(tuple(errands), tuple(notes), tuple(blocked))
 
 
+# A mana member carrying fewer drinks than this inside an open run is topped up
+# from a party member standing beside it. Ten is about five full mana bars for a
+# healer, and the pass runs every 45 seconds while the dungeon module waits 180
+# before it gives up on "low mana" (#2037, #2060: run 1665107 stopped at its
+# fourth boss with the healer dry and the mage carrying spare stacks in the party).
+IN_RUN_DRINK_FLOOR = 10
+
+
+def in_run_drink(members, apart) -> list[Errand]:
+    """Hand a dry mana member a spare drink stack from beside it, mid-run.
+
+    THE TOWN TRIP DOES NOT RUN INSIDE AN OPEN RUN (`_mid_run`), and the family
+    never stands together between runs, so the pre-run hand-over (`plan`) can
+    wait for a meeting that never comes. Inside the dungeon the party IS
+    together, which is the one moment a give lands. A give moves one stack
+    between two bags in place, and a conjure (`_in_run_conjure`, #2213) makes
+    one where the party stands, so nobody leaves the instance (no buy, no
+    walk). `apart(giver, taker)` must say the two are in trade range; with no
+    positions (None) nothing is planned.
+    """
+    if apart is None:
+        return []
+    ordered = sorted(members, key=lambda m: m.name)
+    wanted = [
+        m
+        for m in ordered
+        if _wants(m, DRINK_KIND)
+        and not m.conjures(DRINK_KIND)
+        and m.carries(DRINK_KIND) < IN_RUN_DRINK_FLOOR
+    ]
+    conjurers = [m for m in ordered if m.conjures(DRINK_KIND)]
+    givers = conjurers + [m for m in ordered if not m.conjures(DRINK_KIND)]
+    errands, supplied = _hand_on(wanted, givers, DRINK_KIND, apart, near_only=True)
+    return errands + _in_run_conjure(ordered, wanted, supplied)
+
+
+def _in_run_conjure(ordered, wanted, supplied) -> list[Errand]:
+    """Have a conjurer inside the run make the drink the party is about to lack.
+
+    A GIVE ONLY MOVES WHAT EXISTS, AND A LONG RUN OUTLASTS IT (#2213). A
+    mage entered a Blackrock Depths run with 45 waters and made one 20-stack
+    give ten minutes in; that left it one kept stack, `Member.spare` offered
+    nothing, the healer's stack ran out about an hour later, and the party
+    stopped twice more on "Waiting on <healer> (low mana)" with nothing in the
+    bridge able to make another. A conjure is free, moves nobody (the module holds the caster still
+    for a few seconds and refuses it in combat, which the next 45 second pass
+    retries) and is the same row the pre-run trip already writes, so the pass
+    asks for one when a mana member below the floor is not being handed a stack
+    this pass, or when a conjurer is itself below the floor.
+
+    The target is the pre-run one (`_conjure`): a stack for itself and one per
+    mouth still dry, under the free bag slots and the module's row ceiling.
+    """
+    dependents = [m for m in wanted if m.name not in supplied]
+    errands: list[Errand] = []
+    for caster in (m for m in ordered if m.conjures(DRINK_KIND)):
+        short = caster.carries(DRINK_KIND) < IN_RUN_DRINK_FLOOR
+        if not dependents and not short:
+            continue
+        got, _notes, _made = _conjure([caster], dependents, DRINK_KIND)
+        errands.extend(got)
+        if got:
+            break  # one conjurer covers the party, as before the run
+    return errands
+
+
 def shop_supply_gaps(members) -> tuple[str, ...]:
     """Return member/resource pairs that need a vendor to reach one stack.
 
@@ -905,6 +978,23 @@ def errand_step(at_counter: bool, rows_outstanding: int, work_unasked: bool) -> 
 NPC_FLAG_VENDOR = 0x80
 NPC_FLAG_REPAIR = 0x1000
 NPC_FLAG_BANKER = 0x20000
+
+# A VENDOR SPAWN THE WORLD NEVER PUTS IN PLAY IS NOT A COUNTER (#2220). Two
+# kinds sit in `acore_world.creature` carrying the vendor bit: the 752 "[DND]
+# TAR Pedestal" dummies (the Dungeon Finder menu's anchors; the module's travel
+# index skips them for the same reason) and any spawn a positive game_event
+# entry holds out of the world until its event runs, which the pedestals' own
+# event (31, Arena Tournament) never does here. The core spawns neither, so a
+# sale beside one is refused "vendor not in range" while the bridge, reading the
+# spawn table, called the member "at a counter" and wrote the rows there. One
+# fragment for every query that asks where a counter is; `cr` is the creature
+# spawn and `ct` its template. No percent sign: it rides inside parameterised
+# queries.
+REAL_SPAWN_SQL = (
+    "NOT EXISTS (SELECT 1 FROM acore_world.game_event_creature ge "
+    "WHERE ge.guid = cr.guid AND ge.eventEntry > 0) "
+    "AND LEFT(ct.name, 18) <> '[DND] TAR Pedestal'"
+)
 
 
 def _int(value, default=0):

@@ -32,7 +32,11 @@ overseer_death rows: deathloop.MIN_DEATHS deaths in one zone within an hour at
 one level, with no level gained since and a death in the last two hours. It
 is read for a dead or released member too, since a member in that loop is
 dead half the time, and it comes before the other two: the deaths are the
-cause. Its first-seen time is the window's first death.
+cause. Its first-seen time is the window's first death. It stands only
+while the member is still in that zone: once its fresh snapshot places it
+in another zone, the plan has changed and the record clears, rather than
+lingering on the death history until the two hours run out (standing_loop,
+#2152).
 
 A MEMBER THAT ONLY FOLLOWS has neither record of its own. Near its leader it
 is stuck when the leader is, since the leader's hold began, and its blocker
@@ -56,6 +60,7 @@ import re
 
 import agenda
 import deathloop
+import guildrun
 import nowstatus
 import raidteams
 import situation
@@ -83,6 +88,7 @@ HOLD_STUCK_SECONDS = 30 * 60
 # Doings that are not a hold: out of play, or a walk that is still walking.
 NOT_HOLDS = frozenset(
     {"Logged out", "Dead", "Fighting", "Idle", "Buying a bank bag slot"}
+    | nowstatus.READ_DOINGS
 )
 WALKING = "to get there"
 CHARS_SQL = (
@@ -106,6 +112,13 @@ JOBS_SQL = (
     "AND created_at > NOW() - INTERVAL %s MINUTE ORDER BY id DESC"
 )
 JOB_MINUTES = 30
+# Each member's newest level gained (#2178).
+LEVELED_SQL = (
+    "SELECT character_name AS name, UNIX_TIMESTAMP(MAX(created_at)) AS at "
+    "FROM overseer_level WHERE character_name IN ({holes}) "
+    "AND created_at > NOW() - INTERVAL %s DAY GROUP BY character_name"
+)
+LEVEL_DAYS = 30
 # When each family member last made progress: the Now page's STALLED reading
 # (agenda.MOVEMENT_KINDS, a quest, level or gear change; deaths are not).
 MOVED_SQL = (
@@ -139,9 +152,9 @@ ASKS_SQL = (
 
 BASIS = (
     "Stuck means one of three records the bridge keeps: five or more deaths "
-    "in one zone within an hour with no level gained, until it gains a level "
-    "or goes two hours without dying (first seen at the first of those "
-    "deaths), a class quest it has "
+    "in one zone within an hour with no level gained, until it gains a level, "
+    "leaves the zone, or goes two hours without dying there (first seen at "
+    "the first of those deaths), a class quest it has "
     "asked the guild for help with in the last two hours (first seen at the "
     "first ask of that run), or a reason to wait it has logged for 30 minutes "
     "or more (first seen when the reason was first logged). A family's leader "
@@ -230,6 +243,9 @@ def _read(ctx, names: list) -> dict:
         (*everyone, deathloop.READ_SECONDS),
         what="overseer_death",
     )
+    leveled = rd.rows(
+        LEVELED_SQL.format(holes=h), (*everyone, LEVEL_DAYS), what="overseer_level"
+    )
     clock = rd.must("SELECT UNIX_TIMESTAMP() AS now_at")
     now_at = int(clock[0]["now_at"]) if clock else 0
     return {
@@ -246,6 +262,8 @@ def _read(ctx, names: list) -> dict:
             if r.get("at")
         },
         "deaths": deaths or [],
+        "in_run": guildrun.active_names(rd),
+        "leveled": {r["name"]: int(r["at"]) for r in leveled or () if r.get("at")},
         "now_at": now_at,
     }
 
@@ -532,10 +550,49 @@ def _member(name, row, ctx_rows) -> dict:
         ctx_rows["facts"].get(name),
         ctx_rows["now_at"] or None,
     )
+    if not ctx_rows["jobs"].get(name):
+        now = nowstatus.idle_reading(
+            now,
+            name in ctx_rows["in_run"],
+            _either(char, row, "level"),
+            ctx_rows["leveled"].get(name),
+            ctx_rows["now_at"],
+        )
     out = _identity(name, row, char, ctx_rows["family"])
     out.update(zone=zone_of(snap, char), online=reading["online"], life=reading["life"])
     out.update(_doing(now, ctx_rows["jobs"].get(name)))
+    out["stalled_s"] = now.get("stalled_s")
     return out
+
+
+# A LOOP THE MEMBER HAS WALKED AWAY FROM IS HISTORY, NOT A STUCK RECORD
+# (#2152). deathloop.loops judges the death record alone, so a loop stands
+# for up to two hours after the last death in its zone, wherever the member
+# has gone since: a member that hearthed out, walked on to another hub, or
+# went into a dungeon on a different plan altogether is still listed as
+# dying in the zone it left, for as long as the record takes to age out.
+# The stuck record is about where a member is stuck now, so
+# the loop is listed only while the member is still in its zone: once its
+# fresh snapshot places it in another zone, the plan has changed and the
+# record clears, because the dying there stopped, not because the window
+# moved. The snapshot is the one the member's own zone is read from; with
+# none (an offline member, an unread snapshot) the loop stands, since
+# nothing shows the member left. guildjobs keeps the full loop map: the
+# escape's walk on and the level walk's avoidance still need the loop after
+# the member has left the zone.
+def standing_loop(name: str, loops: dict, rows: dict):
+    """The member's death loop while it still stands in that zone, else None."""
+    loop = (loops or {}).get(name)
+    if loop is None:
+        return None
+    reading = rows["readings"].get(name) or {}
+    snap = rows["snaps"].get(name) if reading.get("online") else None
+    if not snap:
+        return loop
+    zone_id = snap.get("zone_id")
+    if zone_id is None or int(zone_id) == int(loop.zone):
+        return loop
+    return None
 
 
 def loop_blocker(loop, now_at: int) -> dict | None:
@@ -661,7 +718,9 @@ def _order(families: dict, guild_of: dict) -> list:
     return names + sorted(n for n in guild_of if n not in names)
 
 
-def _lookups(families, chars, snaps, facts, now_at, jobs, readings) -> dict:
+def _lookups(
+    families, chars, snaps, facts, now_at, jobs, readings, in_run=None, leveled=None
+) -> dict:
     """The rows build() reads, keyed by name."""
     return {
         "jobs": _newest(jobs),
@@ -671,6 +730,8 @@ def _lookups(families, chars, snaps, facts, now_at, jobs, readings) -> dict:
         "family": _family_of(families),
         "facts": facts or {},
         "now_at": int(now_at or 0),
+        "in_run": in_run or set(),
+        "leveled": leveled or {},
     }
 
 
@@ -695,6 +756,8 @@ def build(
     moved=None,
     credits=None,
     deaths=None,
+    in_run=None,
+    leveled=None,
 ) -> dict:
     """The roster: one row per member, family first, with its stuck reading.
 
@@ -705,7 +768,9 @@ def build(
     `deaths` is deathloop.SQL's rows, judged against each member's level
     (deathloop.loops)."""
     families = families or {}
-    rows = _lookups(families, chars, snaps, facts, now_at, jobs, readings)
+    rows = _lookups(
+        families, chars, snaps, facts, now_at, jobs, readings, in_run, leveled
+    )
     guild_of = {r["name"]: r for r in guild or ()}
     streaks = ask_streaks(asks)
     members, found, follows = [], {}, {}
@@ -715,7 +780,7 @@ def build(
             continue
         m = _member(name, guild_of.get(name, {}), rows)
         found[name] = _stuck_entry(
-            m, streaks.get(name, []), rows["now_at"], loops.get(name)
+            m, streaks.get(name, []), rows["now_at"], standing_loop(name, loops, rows)
         )
         followed = nowstatus.followed(rows["facts"].get(name), m)
         if followed and not _asking(found[name]):
@@ -862,6 +927,8 @@ def _build_roster(ctx) -> dict:
         f.get("moved"),
         f.get("credits"),
         f.get("deaths"),
+        f.get("in_run"),
+        f.get("leveled"),
     )
 
 

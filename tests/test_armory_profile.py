@@ -1156,9 +1156,11 @@ class TheTwoFamiliesTest(unittest.TestCase):
         )
         self.assertEqual(groups[0][1][0]["role"], "tank")
 
-    def test_the_role_is_the_class_not_the_tree_being_levelled(self):
-        """A warrior levelling Fury still holds the tank seat in a five:
-        raidlineup's packing spends the pure tanks first."""
+    def test_with_no_tree_read_the_class_rule_fills_in(self):
+        """Members whose cards carry no spec (no talent rows behind them)
+        fall back to raidlineup's packing over just those members, the
+        fallback raidroles takes as well: the warrior tanks, and the
+        paladin, the first healer class in the pool, heals."""
         members = [
             {"name": "A", "present": True, "class_id": 2},
             {"name": "B", "present": True, "class_id": 1},
@@ -1184,6 +1186,142 @@ class TheTwoFamiliesTest(unittest.TestCase):
         p = build()
         self.assertEqual(len(p["sides"]), 1)
         self.assertEqual(p["pairs"][0]["left"], FIRST)
+
+
+class TheRoleComesFromTheTreeTest(unittest.TestCase):
+    """#2126: the role on the card is the role the member's own tree plays.
+
+    The scorers (equipscore, the loot council) judge a member by
+    statweights.role_for over the tree they play. The label used to come
+    from the class packing instead, which called a Holy paladin a tank
+    and an Enhancement shaman a healer: true of the class, false of the
+    character, and backwards against every decision made about them.
+    """
+
+    def test_a_holy_paladin_reads_healer_not_tank(self):
+        members = [
+            {"name": "P", "present": True, "class_id": 2, "spec": {"primary": "Holy"}},
+            {
+                "name": "S",
+                "present": True,
+                "class_id": 5,
+                "spec": {"primary": "Shadow"},
+            },
+            {"name": "M", "present": True, "class_id": 8, "spec": {"primary": None}},
+        ]
+        roles = armory.party_roles(members)
+        self.assertEqual(roles["P"], "healer")
+        self.assertEqual(roles["S"], "caster")
+
+    def test_an_enhancement_shaman_reads_melee_not_healer(self):
+        members = [
+            {
+                "name": "W",
+                "present": True,
+                "class_id": 1,
+                "spec": {"primary": "Protection"},
+            },
+            {
+                "name": "S",
+                "present": True,
+                "class_id": 7,
+                "spec": {"primary": "Enhancement"},
+            },
+            {"name": "M", "present": True, "class_id": 8, "spec": {"primary": None}},
+        ]
+        roles = armory.party_roles(members)
+        self.assertEqual(roles["S"], "melee")
+        self.assertEqual(roles["W"], "tank")
+
+    def test_a_build_tied_between_two_trees_plays_neither(self):
+        """The scorers refuse a tie (raidroles.tree_of returns no tree),
+        so a paladin split evenly between Holy and Protection is not
+        labelled by either: the class rule fills in, and in this pool
+        that seats him as the tank rather than calling him a healer."""
+        tied = {
+            "primary": "Holy",
+            "trees": [
+                {"name": "Holy", "points": 5},
+                {"name": "Protection", "points": 5},
+                {"name": "Retribution", "points": 0},
+            ],
+        }
+        members = [
+            {"name": "P", "present": True, "class_id": 2, "spec": tied},
+            {
+                "name": "S",
+                "present": True,
+                "class_id": 5,
+                "spec": {"primary": "Holy"},
+            },
+            {
+                "name": "W",
+                "present": True,
+                "class_id": 1,
+                "spec": {"primary": "Protection"},
+            },
+        ]
+        roles = armory.party_roles(members)
+        self.assertEqual(roles["S"], "healer")
+        self.assertEqual(roles["W"], "tank")
+        self.assertEqual(roles["P"], "tank")
+
+    def test_the_payload_carries_the_tree_role(self):
+        """End to end: talent rows in, the card's party_role out."""
+        rows = [
+            char(name="Pally", level=52, race=3, guild="Cave", **{"class": 2}),
+            char(name="Sham", level=51, race=2, guild="Cave", **{"class": 7}),
+            char(name="Warr", level=57, race=1, guild="Cave", **{"class": 1}),
+            char(name="Rest", level=49, race=2, guild="Bonkers", **{"class": 7}),
+        ]
+        talents = [
+            # Holy: Spiritual Focus 3, Healing Light 3, Divine Intellect 3.
+            {"name": "Pally", "spell": 20207, "specMask": 1},
+            {"name": "Pally", "spell": 20239, "specMask": 1},
+            {"name": "Pally", "spell": 20259, "specMask": 1},
+            # Enhancement: Enhancing Totems 3, Ancestral Knowledge 3,
+            # Guardian Totems 2.
+            {"name": "Sham", "spell": 52456, "specMask": 1},
+            {"name": "Sham", "spell": 17487, "specMask": 1},
+            {"name": "Sham", "spell": 16293, "specMask": 1},
+            # Protection: Improved Bloodrage 2, Shield Specialization 3,
+            # Improved Thunder Clap 3.
+            {"name": "Warr", "spell": 12818, "specMask": 1},
+            {"name": "Warr", "spell": 12725, "specMask": 1},
+            {"name": "Warr", "spell": 12666, "specMask": 1},
+            # Restoration: Improved Healing Wave 3, Totemic Focus 3,
+            # Improved Reincarnation 2.
+            {"name": "Rest", "spell": 16227, "specMask": 1},
+            {"name": "Rest", "spell": 16223, "specMask": 1},
+            {"name": "Rest", "spell": 16209, "specMask": 1},
+        ]
+        p = armory.build_armory(
+            rows,
+            [],
+            talents,
+            BOOK,
+            ITEMS,
+            families=[
+                ("Warbands", ["Sham", "Pally", "Warr"]),
+                ("Others", ["Rest"]),
+            ],
+        )
+        self.assertEqual(member(p, "Pally")["party_role"], "healer")
+        self.assertEqual(member(p, "Sham")["party_role"], "melee")
+        self.assertEqual(member(p, "Warr")["party_role"], "tank")
+        # A second family in the other guild derives the same way.
+        self.assertEqual(member(p, "Rest")["party_role"], "healer")
+
+    def test_the_damage_row_keeps_the_damage_words(self):
+        """pair_by_role groups the comparison by the label, so a member
+        whose role is one of the damage words (melee, ranged, caster)
+        still lands in the damage row instead of dropping off the tab."""
+        left = [{"name": "A", "party_role": "melee", "class_id": 4}]
+        right = [{"name": "B", "party_role": "caster", "class_id": 8}]
+        self.assertEqual(
+            armory.pair_by_role(left, right),
+            [{"role": "damage", "left": "A", "right": "B"}],
+        )
 
 
 class TheGuildSectionsTest(unittest.TestCase):

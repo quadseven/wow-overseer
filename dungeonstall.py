@@ -12,7 +12,8 @@ not a wipe, nobody died, and nothing else in the bridge read it.
 WHAT COUNTS (`stall_of`, `stuck_doors`). Per Run keyword (campaignplan.RUNS,
 an alternate door counting toward its wing), the two latest runs that met the
 dungeon (dungeonpace.FOUGHT; a staging or reset failure never reached an
-encounter and is skipped). The door is STUCK when both stalled and the later
+encounter and is skipped, and so is a run that ended within
+dungeonpace.NON_ENTRY_SECONDS of opening, #2092). The door is STUCK when both stalled and the later
 got no further than the earlier: every encounter it credited the earlier had
 credited too. "The same boss" is the common case; a later stall at an EARLIER
 boss is the same wall reached on a worse day (the family alternated between
@@ -24,7 +25,8 @@ progress, which earns the door another run.
   word). How far it got is the mask on its last `boss` row, 0 for none.
 
 WHAT HAPPENS (`leave`, carried out by the bridge). When the family's queue head
-is a stuck door, every pending entry for that door is cancelled, the family is
+is a stuck door, every pending entry for that door is cancelled (except an
+operator's order, which is held for ORDER_BACKOFF and then runs again, #2216), the family is
 put on the default job at once (mod-overseer stands its run coordinator down
 on a job that leaves `dungeon`, and walks the party out if it is inside), and
 a closed overseer_dungeon_pace row (decision DECISION) records why. The next
@@ -47,6 +49,13 @@ before a run row exists) had no clock at all. It also read `portal_keyword`,
 which a realm before the worldserver roll cannot answer, and that read as no
 silence. The head of the queue is what puts a family on the job, so the clock
 is the head's and the family's, like the stuck read's own.
+
+THE WEDGE AT THE DOOR (#2151) is the third shape, judged below (`door_unreachable`,
+`party_held`, `member_dead`): a run that never ends at all, because the leader
+cannot get through the door to finish or fail it. It is judged from the watch's
+restart fold and the module's member states, never from presence inside, and
+its leave is the same leave: stand the family down and the coordinator lets
+the party go.
 
 WHAT CAUSED THAT READING is not fully measured: no run or event rows from those
 hours were read for it. Two parts are known from code and later measurements.
@@ -73,12 +82,20 @@ import jobs
 # The pace table's decision for a door left after two stalls. Recorded closed:
 # it opens no stretch for the ladder to close later.
 DECISION = "stall_out"
+# The pace row for an operator's order the breaker held instead of leaving
+# (#2216). It bars no door for the planner: only the order's own backoff reads it.
+ORDER_DECISION = "order_held"
+# How long a held operator order waits before it runs again. One named
+# constant, far shorter than WINDOW_HOURS: the order is the operator's, so the
+# door is not barred for two days, only given a short rest.
+ORDER_BACKOFF = timedelta(minutes=15)
 STALLED = "stalled"
 WINDOW_HOURS = dungeonpace.WINDOW_HOURS
 NO_PROGRESS_AFTER = timedelta(hours=2)
 
 RUNS_SQL = (
-    "SELECT id, map_id, portal_keyword, outcome, started_at FROM overseer_dungeon_run "
+    "SELECT id, map_id, portal_keyword, outcome, started_at, ended_at "
+    "FROM overseer_dungeon_run "
     "WHERE state = 'ended' AND leader_name IN ({holes}) "
     "AND started_at >= NOW() - INTERVAL %s HOUR ORDER BY id"
 )
@@ -96,7 +113,7 @@ RUNS_SQL_TIMELINE = (
     "SELECT r.id, r.map_id, (SELECT e.portal FROM overseer_dungeon_run_event e "
     "WHERE e.run_id = r.id AND e.portal <> _utf8mb4'' COLLATE utf8mb4_unicode_ci "
     "ORDER BY e.id LIMIT 1) "
-    "AS portal_keyword, r.outcome, r.started_at FROM overseer_dungeon_run r "
+    "AS portal_keyword, r.outcome, r.started_at, r.ended_at FROM overseer_dungeon_run r "
     "WHERE r.state = 'ended' AND r.leader_name IN ({holes}) "
     "AND r.started_at >= NOW() - INTERVAL %s HOUR ORDER BY r.id"
 )
@@ -187,7 +204,11 @@ def _fought_by_door(runs: list) -> dict:
     out: dict = {}
     for row in sorted(runs or (), key=lambda r: int(r.get("id") or 0)):
         door = door_of(row)
-        if door and str(row.get("outcome") or "") in dungeonpace.FOUGHT:
+        if (
+            door
+            and str(row.get("outcome") or "") in dungeonpace.FOUGHT
+            and not dungeonpace.never_fought(row)
+        ):
             out.setdefault(door, []).append(row)
     return out
 
@@ -241,6 +262,96 @@ def silent_run(keyword: str, seconds) -> Stuck | None:
     return Stuck(door, stall, stall)
 
 
+# --- the wedge at the door (#2151) ---------------------------------------------
+#
+# The two verdicts above judge a family from runs that ENDED, or from nothing
+# happening at all. Neither sees a run that stays open with the party split
+# across its door: the leader outside, his walk to the door ending and
+# restarting; members inside, held on errands that cannot finish while he
+# never arrives; one member dead at the door with the party stalled around
+# it. Such a run stays open indefinitely and reads as under way the whole
+# time, because somebody is standing inside. The three verdicts below judge
+# that shape from the evidence the bridge already keeps, and presence inside
+# is never one of the inputs: a member standing in the instance is not the
+# run progressing.
+
+# The leader's walk to the same door, ended and restarted this many times
+# inside the watch's quarter-hour fold (nowstatus.restart_count), is not
+# staging any more. Staging re-arms a handful of times on a bad approach;
+# past this the world is refusing the walk, and reissuing it identically
+# is not a plan.
+RESTART_BOUND = 10
+# A member held on an errand of its own, or held still, this long while its
+# family waits at a door. The errand's own backstops release an aim that
+# cannot land in the open world; inside a split run the aim is renewed by
+# the run that cannot start, so the bound here is what ends it, by ending
+# the run it waits on.
+HOLD_SECONDS = 30 * 60
+# A member dead this long at the family's door with no recovery under way.
+# Shorter than the hold bound: a fresh death is the module's to recover
+# (a resurrection, a corpse run), and this speaks only once the run has
+# plainly failed to recover the member itself.
+DEAD_SECONDS = 15 * 60
+
+
+def _wedged(keyword: str, reason: str) -> Stuck | None:
+    """The Stuck for `reason` at the queue keyword's door, or None when the
+    keyword names no door the campaign runs."""
+    door = campaignplan.wing_of(keyword)
+    if not door:
+        return None
+    stall = Stall(0, 0, reason)
+    return Stuck(door, stall, stall)
+
+
+def door_unreachable(keyword: str, restarts) -> Stuck | None:
+    """The leader's walk to this door keeps ending without arriving.
+
+    `restarts` is the watch's fold over the leader's steps (nowstatus): how
+    many times his present walk ended and restarted inside its window. The
+    verdict is the count, nothing else: not the family's progress events,
+    which a member questing on another map can keep warm forever, and not
+    anybody's presence inside, which is how a wedged run reads as under
+    way while it goes nowhere.
+    """
+    if restarts is None or int(restarts) < RESTART_BOUND:
+        return None
+    return _wedged(
+        keyword,
+        "the leader's walk to the door ended and restarted %d times without "
+        "arriving; the run is stood down and the door left" % int(restarts),
+    )
+
+
+def party_held(keyword: str, member: str, state: str, seconds) -> Stuck | None:
+    """A member held on an errand (or held still) past its bound while the
+    family waits at this door: the hold releases by standing the run down,
+    which walks the party out to the leader instead of waiting for a leader
+    who is not coming."""
+    if seconds is None or float(seconds) < HOLD_SECONDS:
+        return None
+    return _wedged(
+        keyword,
+        "%s has been %s for over %d minutes while the family waits at this "
+        "door; the run is stood down so the party regroups"
+        % (member, state, HOLD_SECONDS // 60),
+    )
+
+
+def member_dead(keyword: str, member: str, seconds) -> Stuck | None:
+    """A member dead at this door past the bound, unrecovered: the run
+    stands down so the recovery the run was outranking (a resurrection, a
+    guided corpse run, a regroup) can happen without it."""
+    if seconds is None or float(seconds) < DEAD_SECONDS:
+        return None
+    return _wedged(
+        keyword,
+        "%s has been dead for over %d minutes at this door and the run has "
+        "not recovered them; the run is stood down so the party can"
+        % (member, DEAD_SECONDS // 60),
+    )
+
+
 def stuck_doors(runs: list, events: list) -> dict:
     """Run keyword -> Stuck, for every door the family should not run again."""
     out = {}
@@ -253,7 +364,7 @@ def stuck_doors(runs: list, events: list) -> dict:
     return out
 
 
-def since_order(runs: list, head: dict | None) -> list:
+def since_order(runs: list, head: dict | None, parked_at=None) -> list:
     """The runs the stall breaker may judge for queue entry `head`.
 
     AN ORDER IS NOT CANCELLED BY STALLS THAT PREDATE IT (#2058). On wow-dev
@@ -265,9 +376,18 @@ def since_order(runs: list, head: dict | None) -> list:
     of the window. An operator's order is judged on the runs that began at or
     after it was queued; the overseer's own entries keep the whole window. A
     run with no start time is kept: it is not known to predate the order.
+
+    A HELD ORDER IS JUDGED ON RUNS AFTER ITS HOLD (#2216). `parked_at` is when
+    the breaker last held this order (`order_hold`): the stalls that earned
+    the hold are not read again when the order runs after its backoff, or it
+    would be held again at once and never run.
     """
     since = (head or {}).get("created_at")
-    if since is None or not dungeonpace.operator_ordered(head):
+    if not dungeonpace.operator_ordered(head):
+        return list(runs or [])
+    if parked_at is not None and (since is None or parked_at > since):
+        since = parked_at
+    if since is None:
         return list(runs or [])
     return [
         r for r in runs or () if r.get("started_at") is None or r["started_at"] >= since
@@ -334,11 +454,31 @@ def order_outlives(head: dict, held: dict | None) -> bool:
 
 @dataclass(frozen=True)
 class Leave:
-    """The queue entries to cancel for a stuck door, and the sentence for it."""
+    """The queue entries to cancel for a stuck door, the operator's orders to
+    hold instead (`park`, #2216), and the sentence for it."""
 
     door: str
     drop: tuple
     why: str
+    park: tuple = ()
+
+    @property
+    def decision(self) -> str:
+        """The pace row's decision: a door left, or an order held."""
+        return ORDER_DECISION if self.park else DECISION
+
+
+# THE BREAKER NEVER CANCELS AN OPERATOR'S ORDER (#2216). Once, an operator's
+# dungeon order was cancelled seconds after a run that never really got in: it
+# opened right after a long run ended split_failed, had one member inside and
+# the rest outside, and stalled just over the non-entry bound (#2092). It read
+# as the second stall running, because the real run between the two stalls
+# ended split_failed, which the stall read does not see. The door was then
+# barred for 48 hours and the operator had to order it again. An order the
+# operator gave is held, never cancelled: the overseer's own entries for the
+# door are still dropped, the operator's rows stay pending, the family steps
+# past them for ORDER_BACKOFF, and then the order runs again, judged on the
+# runs after the hold.
 
 
 def leave(rows: list, stuck: dict) -> Leave | None:
@@ -349,15 +489,69 @@ def leave(rows: list, stuck: dict) -> Leave | None:
     door = campaignplan.wing_of(str(rows[0].get("keyword") or ""))
     if door not in stuck:
         return None
-    drop = tuple(
-        int(r["id"])
-        for r in rows
-        if campaignplan.wing_of(str(r.get("keyword") or "")) == door
-    )
-    rest = [r for r in rows if int(r["id"]) not in drop]
+    ours = [
+        r for r in rows if campaignplan.wing_of(str(r.get("keyword") or "")) == door
+    ]
+    park = tuple(int(r["id"]) for r in ours if dungeonpace.operator_ordered(r))
+    drop = tuple(int(r["id"]) for r in ours if int(r["id"]) not in park)
+    rest = [r for r in rows if int(r["id"]) not in drop and int(r["id"]) not in park]
     after = (
         "%s runs next" % council.keyword_place(str(rest[0]["keyword"]))
         if rest
         else "back to %s until the planner finds another door" % jobs.DEFAULT
     )
+    if park:
+        minutes = int(ORDER_BACKOFF.total_seconds() // 60)
+        return Leave(
+            door,
+            drop,
+            "%s; the order is held, not left, and runs again in %d minutes; "
+            "meanwhile %s" % (stuck[door].why, minutes, after),
+            park,
+        )
     return Leave(door, drop, "%s; left, %s" % (stuck[door].why, after))
+
+
+# The newest hold of an operator's order for this door: the seconds its
+# backoff has left (negative once over) and when it was written.
+PARKED_SQL = (
+    "SELECT id, created_at, TIMESTAMPDIFF(SECOND, NOW(), created_at + INTERVAL %s "
+    "SECOND) AS left_s, COALESCE((SELECT q.created_at FROM overseer_dungeon_queue q "
+    "WHERE q.id = %s) > created_at, 0) AS ordered_after "
+    "FROM overseer_dungeon_pace WHERE family = %s "
+    "AND decision = %s AND door = %s ORDER BY created_at DESC, id DESC LIMIT 1"
+)
+
+
+def parked_args(key: str, door: str, head_id: int) -> tuple:
+    """PARKED_SQL's arguments for the family `key`, run keyword `door` and
+    queue row `head_id`."""
+    return (
+        int(ORDER_BACKOFF.total_seconds()),
+        int(head_id or 0),
+        key,
+        ORDER_DECISION,
+        door,
+    )
+
+
+def order_hold(head: dict, row: dict | None) -> dict | None:
+    """The hold on operator order `head` from PARKED_SQL's `row`, or None.
+
+    Returns the row (id, created_at, left_s) when the order is held: the head
+    is an operator's order and the hold was written after the order was
+    queued (`ordered_after` is false), so an older order's hold never rests a
+    newer one. `left_s` may be zero or negative: the backoff is over and the
+    order runs, judged on the runs after `created_at` (since_order).
+    """
+    if not row or not dungeonpace.operator_ordered(head):
+        return None
+    if row.get("ordered_after"):
+        return None
+    return dict(row)
+
+
+def held_until_said(left_s) -> str:
+    """The sentence for the order's hold: how long until it runs again."""
+    minutes = max(1, int(-(-max(0, int(left_s or 0)) // 60)))
+    return "runs again in about %d minute(s)" % minutes

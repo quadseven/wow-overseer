@@ -544,7 +544,23 @@ NO_LIVING_REASON = "no living creature of the entry within reach"
 SLOW_SPAWNS = 2
 RESPAWN_MIN_MINUTES = 5
 RESPAWN_CAP_MINUTES = 30
+# A SPAWN WALK ACROSS THE ISLAND'S SHORE (#2182). Teldrassil is an island on map
+# 1; the module refuses a walk from it to a spawn on the mainland (or back) in
+# these words (overseer_decisions.h, AcrossTheWater) and calls it retryable,
+# because a ride row takes the boat. The bridge plans that ride (ISLAND_BOAT_STOP,
+# guildjobs.class_boat_step); this refusal reaches it only for a member whose
+# place it could not read, and asking again at once is the same answer, so it is
+# left alone for ACROSS_WATER_BACKOFF_MINUTES, two hours like a refused spawn.
+ACROSS_WATER_REASON = (
+    "the destination is across the water from Teldrassil; the walk holds for the "
+    "Rut'theran boat rather than swim"
+)
+ACROSS_WATER_BACKOFF_MINUTES = 120
+# The Auberdine stop, as a point of it on map 1: the stop the module itself rides
+# first for a member on the island (overseer_decisions.h, AUBERDINE_STOP_X/Y).
+ISLAND_BOAT_STOP = (6341.38, 557.68)
 BACKOFF_MINUTES = {
+    ACROSS_WATER_REASON: ACROSS_WATER_BACKOFF_MINUTES,
     NO_RESPAWN_REASON: NO_RESPAWN_BACKOFF_MINUTES,
     REALM_FULL_REASON: REALM_FULL_BACKOFF_MINUTES,
     BOT_BUDGET_REASON: BOT_BUDGET_BACKOFF_MINUTES,

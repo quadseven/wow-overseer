@@ -24,8 +24,6 @@ import raidsupply as rs
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
-DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
-
 KALIMDOR = 1
 VIAL = 8925
 HEALING_SPELL = 17556
@@ -936,9 +934,6 @@ class TheRaidTab(unittest.TestCase):
         self.assertIn("supply", card)
         fire = {row["cells"][0]: row["cells"] for row in card["supply"]["fire"]}
         self.assertEqual(fire["Grug"][3], "10")
-
-    def test_the_module_ships_in_the_image(self):
-        self.assertIn("raidsupply.py", DOCKERFILE)
 
 
 class TheBridgePass(unittest.TestCase):

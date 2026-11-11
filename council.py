@@ -37,7 +37,6 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import achievements
 import bonds
@@ -46,6 +45,8 @@ import crossing
 import dungeonprogression
 import goals
 import jobs
+
+from world_data import DATA_ROOT
 
 log = logging.getLogger(__name__)
 
@@ -922,7 +923,7 @@ CONTINENT_NAMES = {
 @functools.lru_cache(maxsize=1)
 def _entrances() -> dict:
     """entrances.json, the committed instance doors: map id -> {map, x, y}."""
-    with open(Path(__file__).resolve().parent / "entrances.json") as f:
+    with open(DATA_ROOT / "entrances.json") as f:
         return json.load(f)
 
 

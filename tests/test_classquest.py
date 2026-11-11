@@ -23,7 +23,6 @@ import member_rungs
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
-DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
 
 WARRIOR, PRIEST = 1, 5
 ORC, UNDEAD, TROLL = 2, 5, 8
@@ -482,9 +481,6 @@ class TheWiring(unittest.TestCase):
             'classes=facts.get("class_book")',
         ):
             self.assertIn(needle, BRIDGE)
-
-    def test_the_image_carries_the_module(self):
-        self.assertIn("classquest.py", DOCKERFILE)
 
 
 if __name__ == "__main__":

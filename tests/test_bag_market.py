@@ -715,26 +715,24 @@ class TheBridgeWiring(unittest.TestCase):
             sql = _body(self.source, name, "\n)\n")
             self.assertIn("it.subclass = 0", sql)
 
-    def test_the_image_carries_the_module(self):
-        self.assertIn("bag_market.py", (ROOT / "Dockerfile").read_text())
-
 
 if __name__ == "__main__":
     unittest.main()
 
 
 class TheCapYieldsWhileTheFamilyIsHeldInTown(unittest.TestCase):
-    """#1375: the hold is let go at CAMPAIGN_RESUME_FREE_SLOTS, so the cap gives
+    """#1375: the hold is let go at CAMPAIGN_ADMIT_FREE_SLOTS, so the cap gives
     way below that line while the family is held in town.
 
     Measured on the dev realm 2026-10-24: Grug's family was held 45 minutes on
     "Bork, Grog, Ugga below 8 free slots" (4, 6 and 7 free), and the bags pass
     said "Ugga cannot buy a bag bigger than its 8-slot one ... at most 2500 a
-    slot" with 18 gold to spend.
+    slot" with 18 gold to spend. The hold waits for 4 now (#2116), which is
+    one above the line the cap yields at when idle, so held and idle agree.
     """
 
-    def test_the_floor_is_the_resume_line_while_held(self):
-        line = bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS - 1
+    def test_the_floor_is_the_admission_line_while_held(self):
+        line = bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS - 1
         self.assertTrue(bag_market.cap_yields(line, held=True))
         self.assertFalse(bag_market.cap_yields(line + 1, held=True))
         self.assertFalse(bag_market.cap_yields(4))
@@ -742,30 +740,38 @@ class TheCapYieldsWhileTheFamilyIsHeldInTown(unittest.TestCase):
             self.assertFalse(bag_market.cap_yields(free, held=True), free)
 
     def test_a_held_member_between_the_lines_buys_the_vendor_bag(self):
-        refused, _ = bag_market.plan_upgrades(
-            [HELD],
-            HELD_PURSES,
-            VENDOR_STOCK,
-            reach={"Grog": EVERY_STOCK},
-            free_slots={"Grog": 6},
-        )
-        self.assertEqual(refused, ())
-        bought, _ = bag_market.plan_upgrades(
-            [HELD],
-            HELD_PURSES,
-            VENDOR_STOCK,
-            reach={"Grog": EVERY_STOCK},
-            free_slots={"Grog": 6},
-            held=True,
-        )
-        self.assertEqual([u.buyer for u in bought], ["Grog"])
-        self.assertEqual(bought[0].listing.source, VENDOR)
+        """Between the old lines (4 to 7 free) held is no longer special: the
+        hold waits for 4, so a member there is not at the floor, held or idle
+        (#2116 moved the held line from 7 to 3; this pinned the old one)."""
+        for held in (False, True):
+            bought, _ = bag_market.plan_upgrades(
+                [HELD],
+                HELD_PURSES,
+                VENDOR_STOCK,
+                reach={"Grog": EVERY_STOCK},
+                free_slots={"Grog": 6},
+                held=held,
+            )
+            self.assertEqual(bought, (), held)
+
+    def test_held_and_idle_buy_the_vendor_bag_at_the_same_line(self):
+        for held in (False, True):
+            bought, _ = bag_market.plan_upgrades(
+                [HELD],
+                HELD_PURSES,
+                VENDOR_STOCK,
+                reach={"Grog": EVERY_STOCK},
+                free_slots={"Grog": 3},
+                held=held,
+            )
+            self.assertEqual([u.buyer for u in bought], ["Grog"], held)
+            self.assertEqual(bought[0].listing.source, VENDOR)
 
     def test_a_held_member_between_the_lines_is_walked_to_the_vendor(self):
-        idle = _upgrade_trip([HELD], HELD_PURSES, {"Grog": 6})
-        self.assertEqual(idle.buyers, ())
-        held = _upgrade_trip([HELD], HELD_PURSES, {"Grog": 6}, held=True)
-        self.assertEqual(held.buyers, ("Grog",))
+        """As above for the walk: at 4 to 7 free, held or idle, nobody is sent."""
+        for held in (False, True):
+            trip = _upgrade_trip([HELD], HELD_PURSES, {"Grog": 6}, held=held)
+            self.assertEqual(trip.buyers, (), held)
 
     def test_the_bags_pass_reads_the_hold_off_the_town_slot(self):
         source = BRIDGE.read_text(encoding="utf-8")

@@ -141,6 +141,8 @@ import standstill
 import vendorsale
 import weaponskill
 
+from world_data import DATA_ROOT
+
 log = logging.getLogger(__name__)
 
 HERBALISM = guildcorps.HERBALISM
@@ -573,6 +575,10 @@ class Carried:
     # item_instance.flags & 1: soulbound, so no guildmate, mail or bank can
     # take it (vendorsale.py judges a bound rare piece as the member's own).
     bound: bool = False
+    # A class-12 stack that an open quest still names, or that starts a quest
+    # the holder has not been rewarded (bag_pressure.QUEST_NEEDED_SQL). A row
+    # that does not say is kept: only an explicit False lets the stack go.
+    quest_needed: bool = True
 
     @property
     def material(self) -> str:
@@ -622,6 +628,9 @@ class Member:
     zone_id: int | None = None
     money: int = 0
     skills: dict = field(default_factory=dict)  # skill -> (value, max)
+    # True when `skills` was read from the realm, so an empty one means "no
+    # trade" and not "unread" (vendor_judge: a material no trade uses sells).
+    skills_read: bool = False
     known: frozenset = frozenset()
     carried: tuple = ()  # Carried
     eligible: bool = False
@@ -677,6 +686,10 @@ class Member:
     # The member's purchase order (purse.Order), None when unread: gear and
     # food then spend as they did before it existed.
     purse: object = None
+    # Somebody else leads the group it is in (the snapshot's group leader is
+    # not its own guid): it stands where its leader stands, so its standing
+    # still says nothing of it (stood_still_step).
+    follows: bool = False
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -1976,6 +1989,11 @@ def vendor_judge(member, protected=frozenset()) -> vendorsale.Judge:
         worn=member.worn,
         reserved=member.reserved,
         protected=frozenset(guard) | frozenset(protected),
+        trades=(
+            frozenset(int(s) for s in member.skills if member.holds(s))
+            if member.skills_read
+            else None
+        ),
     )
 
 
@@ -1983,11 +2001,13 @@ def vendor_stacks(member, kept, protected=frozenset()) -> list:
     """The stacks this member sells at the counter, priciest first, at most
     MAX_SALES: every one vendorsale lets go that overseer_keep does not hold."""
     judge = vendor_judge(member, protected)
+    second_best = vendorsale.redundant_upgrades(member.carried, judge)
     return sorted(
         (
             c
             for c in (member.carried or ())
-            if vendorsale.sells(c, judge) and not _kept(member.name, c, kept)
+            if (vendorsale.sells(c, judge) or int(c.guid) in second_best)
+            and not _kept(member.name, c, kept)
         ),
         key=lambda c: (-int(c.sell_price) * int(c.count), int(c.guid)),
     )[:MAX_SALES]
@@ -3172,8 +3192,7 @@ def _spot_step(member, spot, action, cap, said):
 @functools.lru_cache(maxsize=1)
 def entrances() -> dict:
     """entrances.json, the committed dungeon doors: map id -> {map, x, y}."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    with open(os.path.join(here, "entrances.json"), encoding="utf-8") as f:
+    with open(DATA_ROOT / "entrances.json", encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -4565,6 +4584,59 @@ def death_loop_onward(m, loop, world, recent, cap):
     return row, choice.place or master.name
 
 
+# THE WALK ON IS TRIED AGAIN ONCE THE HEARTH HAS LANDED (#1882, #2014). The walk
+# row of death_loop_hearth is written in the same instant as the hearth row,
+# and the hearth holds the member until it lands: read on the dev realm on
+# 2026-11-08, of 39 level walks written within five minutes of a hearth row,
+# 33 were refused "character is held by another verb" and 6 started. A refused
+# walk starts no cooldown that matters (a passing refusal waits five minutes),
+# but nothing asked again: the member stood at its home, out of the loop's zone,
+# so the loop's rung returned None, no level step applied (nothing there is
+# outgrown), and its own wandering took it back to the zone it had just left.
+# Dustwallow Marsh that day: 87 deaths in the 8 hours after the 10:27 mark
+# among members the loop reader listed. So a member that hearthed out of the
+# loop lately, stands out of its zone, and has no walk on running, is walked to
+# the hub of another zone now.
+RESUME_MINUTES = 90
+
+
+def death_loop_resume(m, loop, recent, world, cap):
+    """The walk on to a hub of another zone, for a member that hearthed out of
+    its death loop and was not walked on, or None.
+
+    Only a member out of the loop's zone, online, alive and out of combat, in
+    the open world, whose newest hearth row applied (it landed) within
+    RESUME_MINUTES, with no level walk running or cooling (`_cooling` counts a
+    passing refusal as five minutes). The walk is death_loop_onward's: from the
+    home, never the loop's zone, written as a level walk."""
+    if loop is None or world is None or _in_loop_zone(m, loop):
+        return None
+    if not (m.online and m.alive and not m.in_combat) or not _in_the_open(m):
+        return None
+    hearths = [
+        r
+        for r in recent or ()
+        if r.name == m.name and r.action == "hearth" and r.status == "applied"
+    ]
+    if not hearths or min(int(r.age_minutes) for r in hearths) > RESUME_MINUTES:
+        return None
+    if _cooling(m, guildlevel.ACTION, recent):
+        return None
+    onward = death_loop_onward(m, loop, world, recent, cap)
+    if onward is None:
+        return None
+    walk, place = onward
+    said = (
+        "%s hearthed out of %s and was not walked on, so it walks on to the "
+        "flight master at %s" % (m.name, loop.place, place)
+    )
+    found = _WALK_SPAWN.search(walk.command)
+    key = int(found.group(2)) if found else 0
+    return guildcorps.Step(
+        m.name, guildlevel.ACTION, key, said, rows=(walk,), goal=place
+    )
+
+
 # A HEARTH BOUND IN THE LOOP'S ZONE IS NO WAY OUT (#1882). inn_step binds a
 # member's hearthstone at the inn of the zone it levels in, so the zone a member
 # keeps dying in is often the zone its hearth is bound in. Measured on the dev
@@ -4587,24 +4659,75 @@ def home_in_loop_zone(m, loop) -> bool:
     return home is not None and int(home) == int(loop.zone)
 
 
+def _death_loop_reason(m, loop, leveling, recent, campaign="", level_note=""):
+    """Why the death loop's escape issued no step for `m`, as one phrase.
+
+    Every branch that can return nothing on the escape path is named, in
+    the order a reader checks them: the member's own state first (in
+    combat, offline, dead, out of the open world), then the holds that
+    keep a roster or campaign member on the family route, then the
+    hearth's own blocks (its cooldown, a hearthstone bound in the loop's
+    zone), then the level walk's cooldown, and last the hub choice
+    itself: no reachable hub (#2152)."""
+    if m.in_combat:
+        return "in combat"
+    if not m.online:
+        return "not online"
+    if not m.alive:
+        return "dead"
+    if not _in_the_open(m):
+        return "not in the open world"
+    if leveling is not None and m.name in leveling.roster:
+        if campaign:
+            return "campaign member"
+        if not _in_loop_zone(m, loop):
+            return "roster member"
+    if "hub fits" in level_note or "cannot be read off" in level_note:
+        return "no reachable hub"
+    if _cooling(m, "hearth", recent):
+        return "hearth cooling"
+    if home_in_loop_zone(m, loop):
+        return "hearthstone bound in the loop zone"
+    if _cooling(m, guildlevel.ACTION, recent):
+        return "level walk cooling"
+    return "no reachable hub"
+
+
+def _death_loop_no_escape_line(m, loop, leveling, recent, campaign="", level_note=""):
+    """The one line a pass logs when the escape issues nothing (#2152)."""
+    return "%s gets no death-loop escape from %s: %s" % (
+        m.name,
+        loop.place,
+        _death_loop_reason(m, loop, leveling, recent, campaign, level_note),
+    )
+
+
 def death_loop_first(
     m, loop, leveling, recent, cap, campaign="", supply=None, kept=None, book=None
 ):
     """(the member's step as _member_step returns it), or None: the way out of
     the zone a member keeps dying in (deathloop.Loop), ahead of every quest.
 
-    In the loop's zone: the hearth to its town first (death_loop_hearth), unless
-    the hearthstone is bound in that zone (home_in_loop_zone, #1882), then
-    the level walk to a hub of another zone (level_step), and while neither can
-    start, no step at all, so no quest or grind of that zone is planned for it.
+    In the loop's zone: the escape first on every pass (#2152): the hearth
+    to its town (death_loop_hearth), unless the hearthstone is bound in
+    that zone (home_in_loop_zone, #1882), then the level walk to a hub of
+    another zone (level_step), ahead of the food, quest, trade and gear
+    rungs. While neither can start, no step at all from those rungs, so no
+    quest or grind of that zone is planned for it, and the pass logs one
+    line naming why the escape issued nothing (_death_loop_no_escape_line).
     Out of the zone, None: the pass plans as usual, and its level walk never
-    chooses the loop's zone (level_step). The loop clears by itself
-    (deathloop.loops), and the planning with it.
+    chooses the loop's zone (level_step, with the loop as its avoid), so no
+    rung sends the member back into that zone while the loop is listed,
+    which is until its quiet window has passed (deathloop.loops). The loop
+    clears by itself (deathloop.loops), and the planning with it.
 
-    FOOD FIRST, IN THE ZONE OR OUT OF IT (test_death_loop_food_first). While
-    the loop is listed, a member short of food or drink with a vendor in
-    reach (`supply`, the bridge's read) buys some before the hearth, and in
-    town after it before every other rung: a member with none never rests.
+    FOOD AFTER THE ESCAPE, IN THE ZONE; FOOD FIRST OUT OF IT (#2152, was
+    food first everywhere, test_death_loop_food_first). While the loop is
+    listed, a member short of food or drink with a vendor in reach
+    (`supply`, the bridge's read) still buys some: in the loop's zone only
+    once the escape itself has issued nothing in that pass (the reason is
+    logged on that step's note), and in town after the hearth before every
+    other rung: a member with none never rests.
 
     A HELD FOOD WALK GIVES WAY (#1911). When the guild jobs walk wall
     (job_walk_held) would refuse the supply step, the rungs go on without it:
@@ -4614,9 +4737,29 @@ def death_loop_first(
         return None
     step, doing, _why = _supply_first(m, supply, recent, cap, kept, book)
     held = job_walk_held(m, step, recent) if step is not None else ""
-    if step is not None and not held:
-        return step, doing, "", ""
+    food = (step, doing) if step is not None and not held else None
     if not _in_loop_zone(m, loop):
+        if food is not None:
+            return food[0], food[1], "", ""
+        step = death_loop_resume(m, loop, recent, leveling, cap)
+        if step is not None:
+            return step, step.said, held, ""
+        # A member that hearthed out within the resume window is mid-escape:
+        # when the walk on issues nothing, this pass plans no other rung
+        # for it (one could send it back into the loop's zone, #2152) and
+        # logs the one reason line instead.
+        hearthed = any(
+            r.name == m.name
+            and r.action == "hearth"
+            and r.status == "applied"
+            and int(r.age_minutes) <= RESUME_MINUTES
+            for r in recent or ()
+        )
+        if hearthed:
+            reason = _death_loop_reason(m, loop, leveling, recent, campaign)
+            if reason in ("roster member", "campaign member"):
+                line = _death_loop_no_escape_line(m, loop, leveling, recent, campaign)
+                return None, line, line, ""
         return None
     step = death_loop_hearth(m, loop, recent, leveling, cap)
     if step is not None:
@@ -4630,8 +4773,11 @@ def death_loop_first(
         )
     if step is not None:
         return step, doing, note, ""
+    line = _death_loop_no_escape_line(m, loop, leveling, recent, campaign, note)
+    if food is not None:
+        return food[0], food[1], line, ""
     held = "%s plans no quest in %s: %s" % (m.name, loop.place, loop.reason())
-    return None, held, _join(note, held), ""
+    return None, held, _join(note, held, line), ""
 
 
 def inn_step(m, world, recent, cap):
@@ -5006,7 +5152,12 @@ def class_walk_backoff(name, recent) -> int:
     class quest walk for a far walk wall (classquest.BACKOFF_MINUTES), 0 when
     the newest class row was anything else, or the wall has had its time."""
     rows = sorted(
-        (r for r in recent or () if r.name == name and r.action == classquest.ACTION),
+        (
+            r
+            for r in recent or ()
+            if r.name == name
+            and r.action in (classquest.ACTION, classquest.CROSS_ACTION)
+        ),
         key=lambda r: int(r.age_minutes),
     )
     if not rows:
@@ -6293,6 +6444,10 @@ def _class_move_step(
     if move.kind == classquest.ABANDON:
         return _abandon_step(m, move, recent, note)
     spot = _class_spot(move)
+    boat = class_boat_step(m, move, spot, recent, hunts, now)
+    if boat is not None:
+        step, said, why = boat
+        return step, said, _join(note, why)
     # A pack tried without progress is left, so a member is "at" the next one
     # only within a pack's width, not the whole field's.
     tried = class_avoid(m, book, recent, hunts, now)[0].get(move.quest)
@@ -6336,6 +6491,87 @@ def _class_move_step(
         goal=spot.name,
     )
     return step, move.said, note
+
+
+# A SPAWN ACROSS THE ISLAND'S SHORE IS REACHED BY THE BOAT (#2182). Teldrassil
+# and the mainland are one map, so a member on the island whose class quest
+# spot is on the mainland was planned the walk the module refuses as across the
+# water, and asked again each class cool-down. The module's own island leg is a
+# same-map ride to the Auberdine stop (classquest.ISLAND_BOAT_STOP); the member
+# is planned that ride, on the crossing clock and walls it shares with every
+# other crossing. A boat the module refused for good holds the walk, named, for
+# classquest.CROSS_WALL_MINUTES. A member on the mainland is walked as before.
+ISLAND_MAP = 1
+
+
+def across_the_water(m, spot) -> bool:
+    """Whether the member stands on the island and the spot on the mainland of
+    the same map (weaponskill.ground_of); False when a place cannot be read."""
+    if m.map_id is None or int(m.map_id) != ISLAND_MAP:
+        return False
+    if int(spot.map_id) != ISLAND_MAP:
+        return False
+    here = weaponskill.ground_of(m.map_id, m.x, m.y)
+    there = weaponskill.ground_of(spot.map_id, spot.x, spot.y)
+    return here != weaponskill.MAINLAND and there == weaponskill.MAINLAND
+
+
+def class_boat_step(m, move, spot, recent, hunts=None, now=0.0):
+    """(step or None, what it does, note) for a class move whose spot is across
+    the island's shore from the member, None when it is not."""
+    return island_boat_step(
+        m,
+        move,
+        spot,
+        recent,
+        classquest.ACTION,
+        classquest.CROSS_ACTION,
+        class_crossing_cooling,
+        hunts,
+        now,
+    )
+
+
+def island_boat_step(
+    m, move, spot, recent, action, cross_action, cooling, hunts=None, now=0.0
+):
+    """class_boat_step for any caller: the ride row is sourced as `cross_action`
+    and held by that caller's crossing clock `cooling`. The class quest and the
+    quester (#2194) share this one step and this one hold."""
+    if not across_the_water(m, spot):
+        return None
+    if not m.alive:
+        return None, move.said, _held_note(m, 0)
+    wall = class_walls(m.name, recent).get(ISLAND_MAP)
+    if wall:
+        if hunts:
+            hunts.pause(m.name, move.quest, now)
+        return (
+            None,
+            move.said,
+            "%s: across the water; no boat step available (the module refused it: %s)"
+            % (m.name, wall),
+        )
+    if cooling(m.name, recent):
+        if hunts:
+            hunts.pause(m.name, move.quest, now)
+        return None, move.said, ""
+    step = guildcorps.Step(
+        m.name,
+        action,
+        int(move.quest),
+        move.said,
+        rows=(
+            guildcorps.Row(
+                "job",
+                classquest.ride_command(ISLAND_MAP, *classquest.ISLAND_BOAT_STOP),
+                "",
+                source_for(cross_action, m.name),
+            ),
+        ),
+        goal="the Rut'theran boat",
+    )
+    return step, move.said, ""
 
 
 def _class_held(m, move, spot, cap, recent, hunts, now, far, book=None):
@@ -7064,6 +7300,12 @@ def stood_still_step(m, still_for, recent, leveling=None):
         return None
     if m.name in getattr(leveling, "roster", ()):
         return None
+    # A grouped follower stands where its leader stands. Hearthing it home
+    # undid its level crossing: Eggrok followed a bot outside the guild on
+    # Kalimdor, stood 71 minutes, was hearthed back to the Azuremyst isle,
+    # crossed again, and did so five times in a day.
+    if getattr(m, "follows", False):
+        return None
     if not _in_the_open(m):
         return None
     # Its own hearth is held by the hearthstone's cooldown, not by the stand: a
@@ -7472,6 +7714,7 @@ def carried_from_rows(rows) -> dict:
                 inventory_type=_int(row.get("inventory_type")),
                 allowable_class=_int(row.get("allowable_class"), -1),
                 bound=bool(_int(row.get("bound"))),
+                quest_needed=bool(_int(row.get("quest_needed"), 1)),
             )
         )
     return {k: tuple(v) for k, v in out.items()}

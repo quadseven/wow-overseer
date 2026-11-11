@@ -31,6 +31,8 @@ build here reads any of them (`.dockerignore` drops the directory):
   realm patch tree, kept because a few tests assert content against them.
 - `0017` to `0021`: the Majordomo series (#1650, #1651, #1652, #1659). They
   were written here, and the tests apply them to the pinned fork in order.
+- `0022`: Sulfuron priests first, two assigned Dark Mending interrupters and
+  one healer on the Living Bomb carrier (#2108). Not yet in the realm tree.
 
 Realm patches are applied only from the infrastructure repo's tree,
 `production/docker/azerothcore-playerbots/patches/`. The Majordomo series

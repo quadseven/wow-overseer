@@ -17,6 +17,7 @@ import guildjobs
 import keep
 import member_rungs
 import restsupply
+import source_utils
 
 FEMUR = dict(
     name="Femur",
@@ -299,9 +300,7 @@ class InThePass(unittest.TestCase):
     def test_the_class_quest_still_comes_first(self):
         source = member_rungs.names()
         self.assertLess(source.index("class_step"), source.index("_supply_first"))
-        import inspect
-
-        upkeep = inspect.getsource(guildjobs._upkeep_first)
+        upkeep = source_utils.function_source(guildjobs._upkeep_first)
         gear = upkeep.index("step, doing, gear_note = _gear_first")
         ordinary_supply = upkeep.index(
             "step, doing, supply_note = _supply_first", upkeep.index("if not hungry:")

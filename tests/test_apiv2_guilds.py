@@ -749,6 +749,7 @@ class TheChronicle(unittest.TestCase):
             guildrun._RUN_SQL: [],
             chronicle._MEMBERS_SQL: [{"name": "Bonk", "guild_id": 23}],
             chronicle._DEATHS_SQL: [],
+            chronicle._KILLS_SQL: [],
         }
         code, body = chronicle.chronicle({}, Ctx(answers, Server))
         self.assertEqual(

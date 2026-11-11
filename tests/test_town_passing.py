@@ -364,6 +364,8 @@ class TheCampaignDoesNotHandBackALiveStop(unittest.TestCase):
         ns.update(
             {
                 "log": log,
+                "townslot": townslot,
+                "_release_weapon_training_aim": lambda leader, aim: False,
                 "time": types.SimpleNamespace(monotonic=lambda: 60.0),
                 "_current_travel_npc": lambda leader: column,
                 "learnaim": types.SimpleNamespace(TRAINER_ROLE="trainer"),

@@ -59,6 +59,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 import chat
+import guildcover
 import professions
 
 # What a product word most likely means, matched as a whole word. Grounded in
@@ -256,3 +257,44 @@ def answer(ask: Ask, *, held: Mapping) -> str:
             f"{ask.skill} yet. {ask.crafter} learning it."
         )
     return ""
+
+
+def parse_guild_ask(speaker: str, text: str) -> Ask | None:
+    """A gem or glyph ask: a trade the family leaves to its guild (#1989).
+
+    Same bar as parse_ask. The Ask comes back with `crafter` empty, because
+    naming the guildmate needs live skills and the asker's guild, both read
+    later by the caller and handed to `guild_answer`.
+    """
+    speaker = (speaker or "").strip()
+    line = (text or "").strip()
+    if not speaker or not line or _NEGATIVE_RE.search(line):
+        return None
+    handing = _GIVING_RE.match(line)
+    if handing and handing.group("who").casefold() == speaker.casefold():
+        return None
+    if not _NEED_RE.search(line):
+        return None
+    product = _find_product(line)
+    if not product:
+        return None
+    skill = PRODUCTS[product]
+    if skill not in professions.UNASSIGNED or professions.crafter_for(skill):
+        return None
+    return Ask(asker=speaker, product=product, skill=skill, crafter="")
+
+
+def guild_answer(ask: Ask, members, guild: str) -> tuple:
+    """(Ask naming the guildmate, plain line), or (ask, "") for silence.
+
+    Only `guild`, the asker's own, is searched, and only an ONLINE holder at
+    guildcover.MIN_SKILL or more answers, highest skill first.
+    """
+    holder = guildcover.online_holder(members, guild, ask.skill)
+    if holder is None:
+        return ask, ""
+    named = Ask(ask.asker, ask.product, ask.skill, holder.name)
+    return named, (
+        f"{ask.asker} need {ask.product}? Guild {holder.name} know "
+        f"{ask.skill}. Ask {holder.name}."
+    )

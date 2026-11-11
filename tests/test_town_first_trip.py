@@ -13,6 +13,19 @@ class TownFirstTripWorth(unittest.TestCase):
         free = {"Oz": 7, "Uzza": 8, "Zork": 5, "Zrog": 10, "Zug": 4}
         sellable = {"Oz": 17, "Uzza": 18, "Zork": 14, "Zrog": 16, "Zug": 17}
         self.assertFalse(bag_pressure.family_town_run_needed(free, sellable=sellable))
+        # Measured against the 8-slot band this family was held on then. The
+        # wait is for CAMPAIGN_ADMIT_FREE_SLOTS now (#2116), so the family
+        # needs no trip: Zug at 4 is let in.
+        self.assertTrue(
+            bag_pressure.town_first_trip_worth(
+                free, sellable, resume=bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS
+            )
+        )
+        self.assertFalse(bag_pressure.town_first_trip_worth(free, sellable))
+
+    def test_the_trip_is_worth_taking_for_a_member_below_the_admission_floor(self):
+        free = {"Oz": 7, "Uzza": 8, "Zork": 5, "Zrog": 10, "Zug": 3}
+        sellable = {"Oz": 17, "Uzza": 18, "Zork": 14, "Zrog": 16, "Zug": 17}
         self.assertTrue(bag_pressure.town_first_trip_worth(free, sellable))
 
     def test_nobody_short_of_the_floor_takes_no_trip(self):

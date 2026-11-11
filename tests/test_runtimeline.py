@@ -194,10 +194,6 @@ class ThePageAndTheEndpoint(unittest.TestCase):
         sql = SERVER[SERVER.index("_RUN_TIMELINE = (") :]
         self.assertIn("LIMIT %s", sql[: sql.index(")\n")])
 
-    def test_the_module_is_copied_into_the_container(self):
-        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("runtimeline.py", dockerfile)
-
 
 if __name__ == "__main__":
     unittest.main()

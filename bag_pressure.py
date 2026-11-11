@@ -64,8 +64,11 @@ _INSTANCE_SOULBOUND = 0x1
 # used to be `it.startquest > 0` alone, so a starter stayed protected for
 # ever after its quest was turned in. It now asks the holder's own
 # character_queststatus_rewarded for the quest it starts.
-QUEST_NEEDED_SQL = (
-    "(it.class = 12 AND ((it.startquest > 0 AND NOT EXISTS ("
+# The same test for a stack of any class: does an open quest name it, or does
+# it start a quest not yet rewarded? QUEST_NEEDED_SQL gates it to class 12;
+# the guild sale also asks it of a consumable (#1592), which a quest may name.
+STACK_QUEST_NEEDED_SQL = (
+    "((it.startquest > 0 AND NOT EXISTS ("
     "SELECT 1 FROM character_queststatus_rewarded qr "
     "WHERE qr.guid = ci.guid AND qr.quest = it.startquest)) OR EXISTS ("
     "SELECT 1 FROM character_queststatus qs "
@@ -73,8 +76,9 @@ QUEST_NEEDED_SQL = (
     "WHERE qs.guid = ci.guid AND qs.status <> 0 AND ii.itemEntry IN ("
     "qt.RequiredItemId1, qt.RequiredItemId2, qt.RequiredItemId3, "
     "qt.RequiredItemId4, qt.RequiredItemId5, qt.RequiredItemId6, "
-    "qt.ItemDrop1, qt.ItemDrop2, qt.ItemDrop3, qt.ItemDrop4, qt.StartItem))))"
+    "qt.ItemDrop1, qt.ItemDrop2, qt.ItemDrop3, qt.ItemDrop4, qt.StartItem)))"
 )
+QUEST_NEEDED_SQL = "(it.class = 12 AND " + STACK_QUEST_NEEDED_SQL + ")"
 
 
 def owner_keeps(name: str, keep_names) -> bool:
@@ -380,10 +384,17 @@ def vendor_holders_to_queue(
 ) -> tuple:
     """Which candidate holders may receive sell rows this pass.
 
-    The leader's arrival owns the family's vendor trip. Once the leader is at
-    the counter, queueing the already-judged rows for followers is safe: the
-    world executor will retry a follower until that character catches up. If
-    the leader is not there yet, retain the old per-holder range gate.
+    The leader's arrival owns the family's vendor trip, but a sale is judged on
+    the SELLER's own range, so the leader standing at the counter does not make
+    a follower's rows work. The world refuses a sale from a seller out of reach
+    at once and does not hold the row until the seller catches up
+    (mod-overseer#230 stopped that). Measured on wow-dev 2026-11-08: the
+    leader of one family sold at a counter in a city while four followers
+    1,600 to 4,300 yards away were written the same pass and all four answered
+    `vendor not in range`, again every few minutes (wow-overseer#1962: 133
+    refused sell rows in the day before the ship, 509 after). So the leader
+    stands as its own holder and every other holder queues only when it is at
+    a counter itself.
 
     A LEADER NOT AT A COUNTER GETS ROWS ONLY WHILE IT WALKS TO ONE (#297).
     `leader_walking` is whether the leader carries this pass's vendor aim. The
@@ -400,12 +411,11 @@ def vendor_holders_to_queue(
             if getattr(candidate, "holder", "")
         }
     )
-    if leader_at_counter:
-        return tuple(holders)
     return tuple(
         name
         for name in holders
-        if (name == leader and leader_walking) or holder_at_counter(name)
+        if (name == leader and (leader_at_counter or leader_walking))
+        or holder_at_counter(name)
     )
 
 
@@ -618,13 +628,31 @@ def vendor_trip_makes_room(free_slots: dict, sellable: dict) -> bool:
 
 
 # TOWN FIRST, THEN THE DUNGEON (#265). A campaign that was withheld at
-# TOWN_RUN_FREE_SLOTS and let go again at TOWN_RUN_FREE_SLOTS + 1 flaps: one
-# sale lifts a member to four, the run opens, the first loot puts him back at
-# three, and the module walks the family out. Measured on wow-dev 2026-09-23 as
+# TOWN_RUN_FREE_SLOTS and let go again at TOWN_RUN_FREE_SLOTS + 1 flapped: one
+# sale lifted a member to four, the run opened, the first loot put him back at
+# three, and the module walked the family out. Measured on wow-dev 2026-09-23 as
 # an evacuation every ten seconds while every counter sat on another map. So the
-# campaign is let go at three and taken back only when every member has room
-# for a run's worth of loot: this many free slots each.
+# campaign was let go at three and taken back only when every member had room
+# for a run's worth of loot: eight free slots each.
+#
+# THE WAIT'S BAND IS ONE SLOT WIDE NOW (#2116). mod-overseer#1443 (live since roll 103,
+# 2026-11-08) ended the walk-out: a member with no bag room leaves the drop and
+# the run keeps clearing, so loot taking a member back to three costs a drop,
+# not the run. The module still refuses to open a run while any member has three
+# or fewer free slots, which is the one thing left for the bridge to wait for.
+# Measured on wow-dev 2026-11-08: a five-member family with 12, 12, 11, 7 and 4
+# free slots waited the whole 45 minute ceiling on "below 8" and then cleared
+# Blackrock Depths with no evacuation; a run that started with a member at no
+# free slots cleared it too. Eight free slots each cost 46 to 53
+# minutes between runs, every run, for no run saved. The wait therefore reads
+# CAMPAIGN_ADMIT_FREE_SLOTS, below.
 CAMPAIGN_RESUME_FREE_SLOTS = 8
+
+# What the ADMISSION gate asks of a family held in town (#2116): the module's
+# own start floor plus one. CAMPAIGN_RESUME_FREE_SLOTS above stays the room
+# other passes keep for a run's loot (a material hand-out, a bank withdrawal);
+# only the wait, and the trips and caps that serve the wait, read this one.
+CAMPAIGN_ADMIT_FREE_SLOTS = TOWN_RUN_FREE_SLOTS + 1
 
 # The resume floor is a hysteresis band, not a new wall. A member the town
 # passes cannot lift to it (everything it carries is protected, say) would hold
@@ -636,7 +664,7 @@ CAMPAIGN_RESUME_CEILING_SECONDS = 45 * 60
 def campaign_resume_short(
     free_slots: dict,
     held_seconds: float = 0.0,
-    resume: int = CAMPAIGN_RESUME_FREE_SLOTS,
+    resume: int = CAMPAIGN_ADMIT_FREE_SLOTS,
     ceiling: float = CAMPAIGN_RESUME_CEILING_SECONDS,
 ) -> tuple:
     """Members still short of the resume floor, sorted; () when the run may go.
@@ -659,6 +687,21 @@ def campaign_resume_short(
     )
 
 
+def bag_room_made(free_slots: dict) -> bool:
+    """Whether the family has the bag room a waiting campaign asks for (#2116).
+
+    The two questions the admission gate asks, at once: nobody at or below
+    TOWN_RUN_FREE_SLOTS (the module's own start floor) and nobody short of the
+    resume floor. A reading nobody took is no room made: an errand must not end
+    on a read that failed.
+    """
+    return (
+        bool(free_slots)
+        and not family_town_run_needed(free_slots)
+        and not campaign_resume_short(free_slots)
+    )
+
+
 # WHAT THE ECONOMY PASS DOES THIS CYCLE (#225). Three answers, not a bool,
 # because the middle one is new. "trip" takes the travel column and writes
 # sales; "counter" writes sales only for holders already at a vendor and takes
@@ -666,7 +709,7 @@ def campaign_resume_short(
 def town_first_trip_worth(
     free_slots: dict,
     sellable: dict | None,
-    resume: int = CAMPAIGN_RESUME_FREE_SLOTS,
+    resume: int = CAMPAIGN_ADMIT_FREE_SLOTS,
 ) -> bool:
     """Whether a family held in town for bag room should walk to a vendor.
 
@@ -940,6 +983,34 @@ def _position_map(position: dict | None) -> int | None:
         return None
 
 
+# How far from the leader, on the leader's own map, a member may stand and still
+# be left to the family's trip. townerrand.WALK_YARDS is the same number: it is
+# how far the errand will send a family on foot, so a member further than that
+# is not reached by the trip it is waiting for. A member thousands of yards off
+# on the same map held its whole family out of its next dungeon run for most of
+# a three hour gap (wow-overseer#2117); any distance between a walk and such a
+# spread catches it, and a member inside a walk was never the problem.
+SAME_MAP_FAR_YARDS = 600.0
+
+
+def stranded_distance(leader_pos: dict | None, member_pos: dict | None) -> float | None:
+    """Planar yards between two settled rows on one map, else None.
+
+    None means the two cannot be compared (a different map, a missing row, or
+    a coordinate that is not a number); the caller never guesses a distance.
+    """
+    if not leader_pos or not member_pos:
+        return None
+    try:
+        if int(leader_pos.get("map_id")) != int(member_pos.get("map_id")):
+            return None
+        dx = float(leader_pos.get("pos_x")) - float(member_pos.get("pos_x"))
+        dy = float(leader_pos.get("pos_y")) - float(member_pos.get("pos_y"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return (dx * dx + dy * dy) ** 0.5
+
+
 def _stranded_vendor_candidate(
     name: str,
     leader: str,
@@ -948,14 +1019,25 @@ def _stranded_vendor_candidate(
     free_slots: dict,
     resume: int,
 ) -> bool:
-    """Whether one member is away from the leader and short on bag room."""
+    """Whether one member is away from the leader and short on bag room.
+
+    Away means another map, or the leader's map but further than
+    SAME_MAP_FAR_YARDS (wow-overseer#2117): the family's town trip sells only
+    for the members who stand at the vendor with the leader.
+    """
     if name == leader:
         return False
     free = (free_slots or {}).get(name)
     if type(free) is not int or not 0 <= free < resume:
         return False
-    member_map = _position_map((positions or {}).get(name))
-    return member_map is not None and member_map != leader_map
+    member_pos = (positions or {}).get(name)
+    member_map = _position_map(member_pos)
+    if member_map is None:
+        return False
+    if member_map != leader_map:
+        return True
+    far = stranded_distance((positions or {}).get(leader), member_pos)
+    return far is not None and far > SAME_MAP_FAR_YARDS
 
 
 def stranded_vendor_aims(
@@ -965,9 +1047,18 @@ def stranded_vendor_aims(
     free_slots: dict,
     pressure: bool,
     in_run: bool,
-    resume: int = CAMPAIGN_RESUME_FREE_SLOTS,
+    resume: int = CAMPAIGN_ADMIT_FREE_SLOTS,
+    at_counter: frozenset = frozenset(),
 ) -> tuple[str, ...]:
-    """Names of cut-off members that need their own local vendor errand."""
+    """Names of cut-off members that need their own local vendor errand.
+
+    A MEMBER ALREADY STANDING AT A COUNTER IS NOT AIMED (#2215). It has done
+    what the aim is for, and the module holds it there for a few minutes so the
+    sell rows find it in range; a fresh aim ends that hold at once ("sent
+    somewhere else"). Seen on the dev realm: a member reached a counter and
+    was re-aimed under a minute later, and what it carried never sold.
+    `at_counter` is the set of names the caller read at a counter.
+    """
     if not pressure or in_run or not leader:
         return ()
     leader_map = _position_map((positions or {}).get(leader))
@@ -977,11 +1068,25 @@ def stranded_vendor_aims(
         sorted(
             str(name)
             for name in names or ()
-            if _stranded_vendor_candidate(
+            if name not in at_counter
+            and _stranded_vendor_candidate(
                 name, leader, leader_map, positions, free_slots, resume
             )
         )
     )
+
+
+def step_after_yield(step: str) -> str:
+    """The vendor step the pass goes on with once the leader's visit yielded.
+
+    A vendor yield ends the LEADER's idle visit and hands its aim back. It does
+    not end the pass: the pass is also the only writer of sell rows for members
+    standing at a counter, and returning on a yield skipped them (#2215: a
+    member stood at a counter for its whole five minute hold with sellable
+    stacks and the pass yielded before it queued one). The pass carries on
+    holding, so it takes no aim and still writes rows for those at a counter.
+    """
+    return VENDOR_ERRAND_HOLD if step == "yield" else step
 
 
 def stranded_errand_step(
@@ -2256,6 +2361,11 @@ def has_slot_bucket(item) -> bool:
     """Whether gear.py weighs this piece against a worn slot at all (a ring, a
     neck, a trinket, a shirt or a tabard is not)."""
     return bool(gear.bucket_of(own_piece(item)))
+
+
+def slot_bucket(item) -> str:
+    """The gear.py slot bucket a carried piece fills ('' for one it cannot weigh)."""
+    return gear.bucket_of(own_piece(item)) or ""
 
 
 def holder_would_wear(item, character, level) -> tuple:

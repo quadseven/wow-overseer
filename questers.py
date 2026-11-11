@@ -243,7 +243,16 @@ FORGOTTEN_HEIRLOOM = (
 FARGODEEP_EXPLORATION = (
     "requires exploring Fargodeep Mine; questers cannot earn exploration credit"
 )
+SELLING_FISH = "Selling Fish (quest 127) requires fishing; questers cannot fish"
 UNDERBELLY_SCALES = "Underbelly Scales (quest 122) requires Black Dragonspawn with no spawns in Redridge Mountains"
+DEFIAS_BROTHERHOOD = (
+    "The Defias Brotherhood (quest 132) requires Wiley's Note (item 1327), "
+    "which no spawned creature drops"
+)
+GHOST_HAIR_THREAD = (
+    "Ghost Hair Thread (quest 149) requires Spectral Comb (item 1453), "
+    "which no spawned creature drops"
+)
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
 NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
@@ -308,6 +317,9 @@ _ITEMS = "".join(
 )
 _PROVIDED = "q.StartItem AS provided0, " + "".join(
     "q.ItemDrop%d AS source%d, " % (i, i) for i in range(1, 5)
+)
+_ITEM_OBJECTIVES = "".join(
+    "q.RequiredItemId%d AS item%d, s.itemcount%d, " % (i, i, i) for i in range(1, 7)
 )
 
 # Every quest with a zone, of the classic level range, that a five may reach.
@@ -411,7 +423,8 @@ LOG_SQL = (
     "itemcount3 + itemcount4 + itemcount5 + itemcount6) AS progress, "
     "q.RequiredNpcOrGo1 AS npc1, q.RequiredNpcOrGo2 AS npc2, "
     "q.RequiredNpcOrGo3 AS npc3, q.RequiredNpcOrGo4 AS npc4, "
-    "s.mobcount1, s.mobcount2, s.mobcount3, s.mobcount4 "
+    + _ITEM_OBJECTIVES
+    + "s.mobcount1, s.mobcount2, s.mobcount3, s.mobcount4 "
     "FROM character_queststatus s JOIN acore_world.quest_template q ON q.ID = s.quest "
     "WHERE s.guid IN ({guids}) AND s.status IN (1, 3, 5)"
 )
@@ -483,7 +496,9 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
 
     `reputation_rows` are REPUTATION_SQL's; None (not read) leaves each
     member's reputation unknown, and a reputation gate is then not judged."""
-    log_by, progress_by, objectives_by, done_by = _logs_by_guid(log_rows, rewarded_rows)
+    log_by, progress_by, objectives_by, item_objectives_by, done_by = _logs_by_guid(
+        log_rows, rewarded_rows
+    )
     rep_by = None
     if reputation_rows is not None:
         rep_by = {}
@@ -500,6 +515,7 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
             frozenset(done_by.get(guid, ())),
             progress_by.get(guid, {}),
             objectives_by.get(guid, {}),
+            item_objectives_by.get(guid, {}),
         )
         if rep_by is not None:
             member = replace(member, reputation=rep_by.get(guid, {}))
@@ -508,8 +524,8 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
 
 
 def _logs_by_guid(log_rows, rewarded_rows) -> tuple:
-    """Status, total and per-creature objective progress, and rewards by guid."""
-    log_by, progress_by, objectives_by, done_by = {}, {}, {}, {}
+    """Status, total, creature and item objective progress, and rewards by guid."""
+    log_by, progress_by, objectives_by, item_objectives_by, done_by = {}, {}, {}, {}, {}
     for r in log_rows or ():
         guid, qid = _int(r.get("guid")), _int(r.get("quest"))
         log_by.setdefault(guid, {})[qid] = _int(r.get("status"))
@@ -520,9 +536,15 @@ def _logs_by_guid(log_rows, rewarded_rows) -> tuple:
             if _int(r.get("npc%d" % i)) > 0
         }
         objectives_by.setdefault(guid, {})[qid] = objectives
+        item_objectives = {
+            _int(r.get("item%d" % i)): _int(r.get("itemcount%d" % i))
+            for i in range(1, 7)
+            if _int(r.get("item%d" % i)) > 0
+        }
+        item_objectives_by.setdefault(guid, {})[qid] = item_objectives
     for r in rewarded_rows or ():
         done_by.setdefault(_int(r.get("guid")), set()).add(_int(r.get("quest")))
-    return log_by, progress_by, objectives_by, done_by
+    return log_by, progress_by, objectives_by, item_objectives_by, done_by
 
 
 def _alive(row) -> bool:
@@ -533,7 +555,14 @@ def _alive(row) -> bool:
     return _int(health) > 1 or (_int(health) == 1 and not row.get("has_corpse"))
 
 
-def _member_from_row(r, quest_log, quests_done, quest_progress, quest_objectives):
+def _member_from_row(
+    r,
+    quest_log,
+    quests_done,
+    quest_progress,
+    quest_objectives,
+    quest_item_objectives,
+):
     fresh = r.get("pos_x") is not None and r.get("pos_y") is not None
     map_id = r.get("map_id")
     return Member(
@@ -551,6 +580,7 @@ def _member_from_row(r, quest_log, quests_done, quest_progress, quest_objectives
         quests_done=quests_done,
         quest_progress=quest_progress,
         quest_objectives=quest_objectives,
+        quest_item_objectives=quest_item_objectives,
     )
 
 
@@ -862,6 +892,8 @@ class Member:
     free_slots: int | None = None
     # faction id -> stored standing (REPUTATION_SQL); None when not read.
     reputation: dict | None = None
+    # quest id -> required item id -> its objective counter
+    quest_item_objectives: dict = field(default_factory=dict)
 
     @property
     def zone(self) -> int:
@@ -998,11 +1030,17 @@ def left_spawns(name, tried, kind="creature") -> frozenset:
 # (classquest.BACKOFF_MINUTES) instead of asking the same walk every pass:
 # from 2026-10-18 to 2026-10-20 the twenty questers' walks were refused 2,276
 # times for the budget and 2,453 times as held, about every two minutes.
+#
+# A walk refused as across the water (classquest.ACROSS_WATER_REASON, #2194) is
+# a wall too, at any distance: asking it again unchanged gets the same answer.
 WALK_WALLS = (
     classquest.REALM_FULL_REASON,
     classquest.BOT_BUDGET_REASON,
     classquest.HELD_REASON,
+    classquest.ACROSS_WATER_REASON,
 )
+# The walls that hold a near walk as well as a far one.
+NEAR_WALLS = (classquest.HELD_REASON, classquest.ACROSS_WATER_REASON)
 
 
 def walk_wall(name, tried) -> tuple:
@@ -1151,6 +1189,10 @@ class Clock:
         keep = {int(q) for q in keep}
         for key in [k for k in self._by if k[0] == name and k[1] not in keep]:
             del self._by[key]
+
+    def reset(self, name, quest) -> None:
+        """Start a fresh no-progress interval for one quest."""
+        self._by.pop((str(name), int(quest)), None)
 
     def dump(self) -> dict:
         return {"%s:%d" % k: v for k, v in self._by.items()}
@@ -1310,12 +1352,18 @@ def _working(cat: Catalogue, member, last_quest=0, left=frozenset()) -> set:
 def _unhuntable(cat: Catalogue, member, qid, left=frozenset()) -> bool:
     """True when the quester has no objective spawn of this quest to hunt
     (`_hunt`'s own choice: a solo field within its level, on its map, not one
-    it leaves for now)."""
+    it leaves for now, or on the other classic continent, which `_hunt`
+    crosses to)."""
     quest = cat.quest(qid)
     if quest is None:
         return True
     fields = classquest.within_level(member, classquest.solo_fields(quest))
-    return _nearest(member, fields, left) is None
+    if _nearest(member, fields, left) is not None:
+        return False
+    if member.placed:
+        routable = tuple(s for s in fields if s.guid not in left)
+        return classquest.far_map(member, routable) < 0
+    return True
 
 
 def _fields_gone(quest, gone) -> bool:
@@ -1400,8 +1448,24 @@ def _broken_reason(
         return FORGOTTEN_HEIRLOOM
     if quest.id == 62 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return FARGODEEP_EXPLORATION
+    if quest.id == 127 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
+        return SELLING_FISH
     if quest.id == 122 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return UNDERBELLY_SCALES
+    if (
+        quest.id == 132
+        and status == STATUS_INCOMPLETE
+        and (1327, 1) in quest.items
+        and played >= STALL_SECONDS
+    ):
+        return DEFIAS_BROTHERHOOD
+    if (
+        quest.id == 149
+        and status == STATUS_INCOMPLETE
+        and (1453, 1) in quest.items
+        and played >= STALL_SECONDS
+    ):
+        return GHOST_HAIR_THREAD
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that
@@ -1452,6 +1516,9 @@ class Plan:
     move: classquest.Move | None = None
     broken: tuple = ()
     line: str = ""
+    # The island boat step that takes the place of the move's walk when its
+    # spot is across the island's shore (guildjobs.island_boat_step, #2194).
+    boat: object = None
 
 
 def _move(kind, member, quest, spot, said, to_map=-1) -> classquest.Move:
@@ -1657,6 +1724,11 @@ def next_move(
         return _move(classquest.TAKE, member, quest, spot, said), "", never_held
     # 4. A quest it holds: the nearest objective spawn within its level.
     move = _hunt(cat, member, skip, left)
+    crossing_wait = ""
+    if move is not None and move.kind == classquest.CROSS:
+        crossing_wait = crossing_held(member.name, move, crossings)
+        if crossing_wait:
+            move = None
     if move is not None:
         return move, "", never_held
     if takes:
@@ -1669,6 +1741,8 @@ def next_move(
     # 5. Nothing left in reach here: the next zone.
     unsailed = failed_crossings(member.name, crossings)
     move, why = _travel(cat, member, skip, left, unsailed)
+    if move is None and crossing_wait:
+        why = crossing_wait
     return move, why, never_held
 
 
@@ -1765,39 +1839,39 @@ def _takes(cat: Catalogue, member, skip, left, tried) -> tuple:
 
 def _hunt(cat: Catalogue, member, skip, left):
     """The hunt at the nearest objective spawn within the quester's level of
-    an incomplete quest it holds, or None."""
+    an incomplete quest it holds, or a crossing to one on the other classic
+    continent. A nearby hunt always takes priority over a crossing."""
     hunts = []
+    crossings = []
     for qid, quest in _held(cat, member, STATUS_INCOMPLETE, skip):
         if _quest_complete(quest, STATUS_INCOMPLETE, member.quest_progress.get(qid, 0)):
             continue
-        progress = member.quest_objectives.get(qid)
-        kills = dict(quest.kills)
-        if progress:
-            kills = {
-                entry: count
-                for entry, count in kills.items()
-                if int(progress.get(entry, 0)) < count
-            }
-        # The per-creature counters name only kill objectives, so a quest
-        # that asks for an item (Pie for Billy, 86: four of an item a boar
-        # drops, and no creature to kill) has no kill entry to hunt by, and
-        # filtering its fields to kill entries left it with nowhere to hunt
-        # at all: its objectives never moved and it stalled as broken. A
-        # required item's droppers are hunt targets too, met or not by any
-        # counter the log names.
-        targets = set(kills) | {entry for _item, entry in quest.drops}
-        spot = _nearest(
-            member,
-            classquest.within_level(
-                member,
-                tuple(s for s in classquest.solo_fields(quest) if s.entry in targets),
-            ),
-            left,
+        fields = tuple(
+            spot
+            for spot in _held_objective_fields(member, qid, quest)
+            if spot.guid not in left
         )
+        spot = _nearest(member, fields, left)
         if spot is not None:
             hunts.append((_yards(member, spot), qid, quest, spot))
+            continue
+        # A held quest can outlive the trip that took it. If its eligible
+        # objectives are only on the other continent, cross to them before
+        # choosing a new zone. Otherwise an incomplete Redridge quest held in
+        # Darnassus is invisible to both the local hunt and next-zone search.
+        to_map = classquest.far_map(member, fields)
+        if to_map >= 0:
+            crossings.append((qid, quest, to_map))
     if not hunts:
-        return None
+        if not crossings:
+            return None
+        _qid, quest, to_map = min(crossings, key=lambda option: option[0])
+        said = "%s crosses to %s for %s" % (
+            member.name,
+            classquest.CONTINENTS[to_map],
+            quest.title,
+        )
+        return _move(classquest.CROSS, member, quest, None, said, to_map=to_map)
     _d, _q, quest, spot = min(hunts, key=_by_yards)
     said = "%s works %s at %s" % (
         member.name,
@@ -1805,6 +1879,72 @@ def _hunt(cat: Catalogue, member, skip, left):
         spot.name or "its objective",
     )
     return _move(classquest.HUNT, member, quest, spot, said)
+
+
+def stalled_holds_with_actionable_objectives(
+    cat, member, held, tried=(), crossings=()
+) -> frozenset:
+    """Stalled memo entries whose incomplete objectives can now be pursued.
+
+    World-fact holds remain durable. A stall is only retried when this pass can
+    route to an eligible local objective or across a known classic continent.
+    """
+    if not member.placed:
+        return frozenset()
+    left = left_spawns(member.name, tried)
+    retry = set()
+    for qid, reason in held.items():
+        if not str(reason).startswith(STALLED):
+            continue
+        if member.quest_log.get(qid) != STATUS_INCOMPLETE:
+            continue
+        quest = cat.quest(qid)
+        if quest is None or _quest_complete(
+            quest, STATUS_INCOMPLETE, member.quest_progress.get(qid, 0)
+        ):
+            continue
+        fields = tuple(
+            spot
+            for spot in _held_objective_fields(member, qid, quest)
+            if spot.guid not in left
+        )
+        if _nearest(member, fields, left) is not None:
+            retry.add(qid)
+            continue
+        to_map = classquest.far_map(member, fields)
+        if to_map < 0:
+            continue
+        crossing = _move(classquest.CROSS, member, quest, None, "", to_map=to_map)
+        if not crossing_held(member.name, crossing, crossings):
+            retry.add(qid)
+    return frozenset(retry)
+
+
+def _held_objective_fields(member, qid: int, quest: classquest.Quest) -> tuple:
+    """Eligible kill and item-drop fields for one incomplete held quest."""
+    progress = member.quest_objectives.get(qid)
+    item_progress = member.quest_item_objectives.get(qid, {})
+    kills = dict(quest.kills)
+    if progress:
+        kills = {
+            entry: count
+            for entry, count in kills.items()
+            if int(progress.get(entry, 0)) < count
+        }
+    # Item-only objectives have no creature counter. Keep only droppers for
+    # item objectives whose own counters are still short; the aggregate quest
+    # counter cannot distinguish which ingredient a shared collection quest
+    # still needs.
+    items = dict(quest.items)
+    targets = set(kills) | {
+        entry
+        for item, entry in quest.drops
+        if int(item_progress.get(item, 0)) < items.get(item, 0)
+    }
+    return classquest.within_level(
+        member,
+        tuple(s for s in classquest.solo_fields(quest) if s.entry in targets),
+    )
 
 
 # The module's verb for each move that is one quest row.
@@ -1830,8 +1970,14 @@ def step_for(member, move, cap, quest=None, hunt=True, item_form=True):
     source = guildjobs.source_for(ACTION, member.name)
     walk = _walk_row(member, move, cap)
     if move.kind == classquest.HUNT:
+        item_progress = member.quest_item_objectives.get(int(move.quest), {})
         row = (
-            classhunt.command(quest, move.spot.entry, None, item_form)
+            classhunt.command(
+                quest,
+                move.spot.entry,
+                lambda item: item_progress.get(int(item), 0),
+                item_form,
+            )
             if (hunt and quest is not None)
             else ""
         )
@@ -2046,14 +2192,32 @@ def plan(
         held = crossing_held(member.name, move, crossings)
         if held:
             move, why = None, held
+    boat = None
     if move is not None and move.spot is not None:
+        # A spot across the island's shore is reached by the boat, or held with
+        # a named reason (#2194), as a class quest's is (#2182).
+        island = guildjobs.island_boat_step(
+            member,
+            move,
+            move.spot,
+            crossings,
+            ACTION,
+            CROSS_ACTION,
+            guildjobs.crossing_cooling,
+        )
+        if island is not None:
+            boat, _said, note = island
+            if boat is None:
+                move, why = None, note or "%s waits on its last crossing" % member.name
+    if boat is None and move is not None and move.spot is not None:
         # A drop does not walk. Only a far walk waits out the far walk
         # ceiling and budget, but another verb's hold is on the character, so
         # a near walk waits it out too (#1295: a 170-yard hunt walk was refused
-        # as held every pass, about every two minutes).
+        # as held every pass, about every two minutes). A walk refused as across
+        # the water waits too, at any distance (#2194).
         wall, wait = walk_wall(member.name, tried)
         far = _yards(member, move.spot) > guildroute.TRAINER_WALK_YARDS
-        if wall and (far or wall == classquest.HELD_REASON):
+        if wall and (far or wall in NEAR_WALLS):
             move, why = (
                 None,
                 "%s waits %d more minute%s to walk: %s"
@@ -2065,7 +2229,11 @@ def plan(
                 ),
             )
     return Plan(
-        member.name, move, tuple(found) + tuple(never_held), move.said if move else why
+        member.name,
+        move,
+        tuple(found) + tuple(never_held),
+        move.said if move else why,
+        boat,
     )
 
 

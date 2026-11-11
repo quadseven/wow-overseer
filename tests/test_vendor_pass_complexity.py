@@ -202,6 +202,10 @@ class _Candidate(types.SimpleNamespace):
     pass
 
 
+async def _no_reading(holder, standing, refused_age):
+    return None
+
+
 def _queue(vendor_at, queue_holders):
     log = _Log()
     written = []
@@ -216,8 +220,14 @@ def _queue(vendor_at, queue_holders):
             "asyncio": types.SimpleNamespace(to_thread=_thread),
             "_fetch_town": lambda name: types.SimpleNamespace(vendor=name in vendor_at),
             "_insert_sell": lambda c: written.append(c.item_guid) or 1,
+            "_recent_range_refusals": lambda seconds: {},
+            "_fetch_vendor_position": lambda name: None,
+            "_log_sale_reading": _no_reading,
+            "_SALE_WRITE_SPOT": {},
             "item_plan": types.SimpleNamespace(
                 plan=plan,
+                RANGE_BACKOFF_SECONDS=600,
+                range_backoff=lambda *a: "",
                 reasons=lambda skipped: "nothing",
                 all_answered=lambda candidates, attempts: False,
             ),

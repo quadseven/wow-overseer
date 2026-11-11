@@ -25,6 +25,7 @@ from test_jev_items import FakeJev
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
+FACTS = (HERE / "guildfacts.py").read_text(encoding="utf-8")
 
 WARRIOR, PALADIN, ROGUE, PRIEST, MAGE, WARLOCK, DRUID = 1, 2, 4, 5, 8, 9, 11
 PROTECTION_TALENT = "12301"
@@ -485,7 +486,7 @@ class OnlyAMemberWhoCanGoIsPicked(unittest.TestCase):
         self.assertTrue(guildrun.rests_members(timeout))
 
     def test_the_bridge_reads_online_and_the_corpse(self):
-        sql = BRIDGE[BRIDGE.index("_GUILD_RUN_MEMBERS_SQL = (") :]
+        sql = FACTS[FACTS.index("MEMBERS_SQL = (") :]
         sql = sql[: sql.index("\n)\n")]
         self.assertNotIn("c.online", sql)
         self.assertIn("(s.updated_at > NOW() - INTERVAL 60 SECOND) AS online", sql)
@@ -589,6 +590,42 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
         self.assertLessEqual(horde, guildrun.GUILD_DOORS["Horde"])
         self.assertIn("ragefire", horde)
 
+    def test_a_seated_raider_is_refused_and_the_run_picks_another(self):
+        """#2105: a character that holds a seat in an ordered raid is not
+        picked by a finder run; the run forms around the others."""
+        mage = member("Seated", 17, MAGE)
+        self.assertEqual(
+            guildrun.why_not(mage, set(), set(), set(), seated={"Seated"}),
+            guildrun.SEATED_IN_RAID,
+        )
+        self.assertEqual(
+            guildrun.why_not(mage, set(), set(), set(), seated={"Other"}), ""
+        )
+        rows = [row("Member%d" % i, 17, WARRIOR) for i in range(6)]
+        free, skipped = guildrun.free_members(
+            rows, set(), set(), set(), seated=frozenset({"Member0"})
+        )
+        self.assertNotIn("Member0", [m.name for m in free])
+        self.assertEqual(len(free), 5)
+        self.assertEqual(skipped, {guildrun.SEATED_IN_RAID: 1})
+
+    def test_the_hold_follows_the_seat_rows(self):
+        """The hold is the overseer_raid_seat rows themselves: they are read
+        on every pass, so deleting them (order ended, cancelled, stood down)
+        frees the character with no state of its own to clear."""
+        free, _ = guildrun.free_members(
+            [row("A", 17, MAGE)], set(), set(), set(), seated=frozenset()
+        )
+        self.assertEqual([m.name for m in free], ["A"])
+        self.assertIn("overseer_raid_seat", guildrun.SEATED_SQL)
+        start = BRIDGE.index("    async def _guild_run_once(self)")
+        end = BRIDGE.index("\n    async def ", start + 1)
+        self.assertIn('seated=frozenset(facts.get("seated", ()))', BRIDGE[start:end])
+        fetch = BRIDGE[BRIDGE.index("def _fetch_guild_run_facts(") :]
+        self.assertIn("_raid_seated_names(cur)", fetch[: fetch.index("\ndef ")])
+        helper = BRIDGE[BRIDGE.index("def _raid_seated_names(") :]
+        self.assertIn("guildrun.SEATED_SQL", helper[: helper.index("\ndef ")])
+
     def test_no_item_level_gate_below_sixty(self):
         """#532: the item-level gate held 117 of 132 members out of the
         dungeons that gear them. Low item level alone never holds a member."""
@@ -659,7 +696,7 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
         self.assertNotIn("forming without it", coordinator)
 
     def test_the_bridge_reads_worn_item_level(self):
-        sql = BRIDGE[BRIDGE.index("_GUILD_RUN_MEMBERS_SQL = (") :]
+        sql = FACTS[FACTS.index("MEMBERS_SQL = (") :]
         sql = sql[: sql.index("\n)\n")]
         self.assertIn("AVG(it.ItemLevel)", sql)
         self.assertIn("AS gear_ilvl", sql)
@@ -671,7 +708,7 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
     def test_the_gate_skips_the_shirt_and_tabard(self):
         """wow-dev 2026-10-04: an item level 1 shirt pulled members under the
         gate; the gear step's own stale test already leaves both slots out."""
-        sql = BRIDGE[BRIDGE.index("_GUILD_RUN_MEMBERS_SQL = (") :]
+        sql = FACTS[FACTS.index("MEMBERS_SQL = (") :]
         sql = sql[: sql.index("\n)\n")]
         self.assertIn("ci.slot NOT IN (3, 18)", sql)
 

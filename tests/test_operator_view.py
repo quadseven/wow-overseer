@@ -7,7 +7,6 @@ handlers' own source here, so a renamed field on either side fails a test
 rather than a live order.
 """
 
-import inspect
 import json
 import pathlib
 import re
@@ -18,6 +17,7 @@ import tempfile
 import unittest
 
 from _stub_modules import PYMYSQL, stub_modules
+import source_utils
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
@@ -169,7 +169,7 @@ FORM_PARTS = ("<form", "<input", "<select", "<textarea", "data-op=")
 
 
 def handler_source(path):
-    return inspect.getsource(map_server.Handler.POST_ROUTES[path])
+    return source_utils.function_source(map_server.Handler.POST_ROUTES[path])
 
 
 @unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
@@ -223,7 +223,9 @@ class FormsPostWhereTheHandlersRead(unittest.TestCase):
         used = {a["path"] for a in self.actions.values()}
         # Frame uploads come from the stream agent, and watch lifecycle calls
         # remain available to clients outside this operator page.
-        self.assertEqual(used, routes - {"/api/frame", "/api/watch"})
+        # The cutter routes are called by the capture host, never by a form.
+        cutter = {r for r in routes if r.startswith("/api/clips/")}
+        self.assertEqual(used, routes - {"/api/frame", "/api/watch"} - cutter)
         self.assertIn("/api/frame", self.html)
 
     def test_each_form_posts_its_own_path_with_its_own_names(self):
@@ -237,7 +239,7 @@ class FormsPostWhereTheHandlersRead(unittest.TestCase):
             self.assertEqual(chunk.count('type="submit"'), 1, aid)
 
     def test_body_names_are_the_ones_the_handler_reads(self):
-        decree_src = inspect.getsource(decree)
+        decree_src = source_utils.function_source(decree)
         for aid, action in self.actions.items():
             src = handler_source(action["path"])
             if action["path"] == "/api/decree":
@@ -262,6 +264,7 @@ class FormsPostWhereTheHandlersRead(unittest.TestCase):
             decree.QUEUE,
             decree.TRAVEL,
             decree.PRIORITIES,
+            decree.GUILDRUN,
         }
         for aid, action in self.actions.items():
             fixed = action.get("fixed", {})
