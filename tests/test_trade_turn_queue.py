@@ -387,7 +387,7 @@ class ASavedTurnKeepsItsCounts(unittest.TestCase):
                 if sql.startswith("INSERT"):
                     head = sql.split("(", 1)[1].split(")", 1)[0]
                     cols = [c.strip() for c in head.split(",")]
-                    row = dict(zip(cols, params))
+                    row = dict(zip(cols, params, strict=True))
                     rows[row["family"]] = row
 
             def fetchall(self):
