@@ -22,6 +22,9 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
+
+from test_check_locally import printed
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 SCRIPT = HERE / ".github" / "scripts" / "unittest_parallel.py"
@@ -218,7 +221,12 @@ class LaneCheckTest(unittest.TestCase):
         lines = LANE_CONF.read_text(encoding="utf-8").splitlines()
         checks = [line for line in lines if line.startswith("check:")]
         self.assertEqual(len(checks), 1, "validation.conf needs one check: line")
-        return checks[0].removeprefix("check:").strip()
+        command = checks[0].removeprefix("check:").strip()
+        if command == "bash scripts/check-locally.sh all":
+            # Follow the canonical wrapper's public command report, not a
+            # second copy of the CI command. The parity assertions stay below.
+            return printed()["unittest"]
+        return command
 
     def ci_check(self):
         text = CHECK_YML.read_text(encoding="utf-8")
@@ -240,6 +248,13 @@ class LaneCheckTest(unittest.TestCase):
             runner_call("ruff check . && python3 -B -m unittest discover -s tests"),
             runner_call(self.ci_check()),
         )
+        with mock.patch(
+            f"{__name__}.printed",
+            return_value={"unittest": "python3 -B -m unittest discover -s tests"},
+        ):
+            self.assertNotEqual(
+                runner_call(self.lane_check()), runner_call(self.ci_check())
+            )
 
 
 # Runs unittest on the named modules with pymysql unimportable, as on a lane
