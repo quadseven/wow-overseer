@@ -102,14 +102,14 @@ class EyeTiles(unittest.TestCase):
         tile = self.tiles()["Corvin"]
         self.assertEqual(12, tile["frame_age_seconds"])
         self.assertEqual("fresh", tile["frame_state"])
-        self.assertEqual("buffer_report", tile["frame_source"])
+        self.assertEqual("recorder_report", tile["frame_source"])
 
     def test_the_newer_of_the_two_clocks_wins(self):
         map_server._FRAMES["Corvin"] = {"frame_at": CLOCK - 200, "at": CLOCK - 1}
         map_server._VIEW_SEEN[family.broadcast_path("Corvin")] = CLOCK - 5
         tile = self.tiles()["Corvin"]
         self.assertEqual(5, tile["frame_age_seconds"])
-        self.assertEqual("buffer_report", tile["frame_source"])
+        self.assertEqual("recorder_report", tile["frame_source"])
 
     def test_the_stale_threshold_is_one_named_constant(self):
         edge = eye.STALE_AFTER_SECONDS

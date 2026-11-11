@@ -4859,8 +4859,10 @@ _FRAMES_LOCK = threading.Lock()
 # streams that can run at once is more than any watch wall shows.
 MAX_FRAMES = 4 * stream.MAX_CHANNELS
 # The last time the cutter's poll named each stream path, epoch seconds: the
-# only per-view clock a streamed view has. Empty after a restart, so a streamed
-# view reads no_frame until the next poll.
+# only per-view clock a streamed view has. The poll names the views whose
+# recorder is running, so this proves a running recorder, not a moving
+# picture. Empty after a restart, so a streamed view reads no_frame until the
+# next poll.
 _VIEW_SEEN: dict = {}
 _VIEW_SEEN_LOCK = threading.Lock()
 
@@ -6235,11 +6237,11 @@ class Handler(BaseHTTPRequestHandler):
             frame_at = {n: r.get("frame_at") for n, r in _FRAMES.items()}
         with _VIEW_SEEN_LOCK:
             seen = dict(_VIEW_SEEN)
-        buffer_at = {t["name"]: seen[family.broadcast_path(t["name"])]
+        recorder_at = {t["name"]: seen[family.broadcast_path(t["name"])]
                      for t in wall["tiles"]
                      if family.broadcast_path(t["name"]) in seen}
         payload["tiles"] = eye.build_tiles(
-            wall["tiles"], frame_at, buffer_at, time.time())
+            wall["tiles"], frame_at, recorder_at, time.time())
         return 200, payload
 
     @_get_route("wealth query failed")

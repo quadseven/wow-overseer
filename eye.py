@@ -65,23 +65,30 @@ FRESH = "fresh"
 STALE = "stale"
 NO_FRAME = "no_frame"
 
+# Which clock an age came from. A recorder report is weaker than a frame.
+FRAME = "frame"
+RECORDER_REPORT = "recorder_report"
+
 
 def build_tiles(
-    tiles: list[dict], frame_at: dict, buffer_at: dict, now: float
+    tiles: list[dict], frame_at: dict, recorder_at: dict, now: float
 ) -> list[dict]:
     """One entry per watched tile: its name, whether it is presented as live,
     and the age of the newest frame behind it.
 
     `tiles` are the watch wall's own tiles (name, playable). `frame_at` is the
-    frame-ingest clock by name and `buffer_at` the capture side's last report
-    of that view's buffer by name, both epoch seconds; `now` is the same clock.
-    The newer of the two wins. A tile with neither clock is `no_frame` with a
-    null age, never left out and never given an invented age.
+    frame-ingest clock by name and `recorder_at` the last time the capture
+    side reported that view's recorder running, by name, both epoch seconds;
+    `now` is the same clock. The newer of the two wins, and `frame_source`
+    says which. A `recorder_report` age proves the recorder for that view was
+    running, not that its picture was moving: it is not a frame time. A tile
+    with neither clock is `no_frame` with a null age, never left out and never
+    given an invented age.
     """
     out = []
     for tile in tiles:
         name = tile["name"]
-        clocks = [(frame_at.get(name), "frame"), (buffer_at.get(name), "buffer_report")]
+        clocks = [(frame_at.get(name), FRAME), (recorder_at.get(name), RECORDER_REPORT)]
         known = [(at, source) for at, source in clocks if at is not None]
         if known:
             at, source = max(known, key=lambda pair: pair[0])
