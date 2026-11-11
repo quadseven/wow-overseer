@@ -46,7 +46,7 @@ COPY core.py bridge.py voice.py transform.py world_data.py \
      item_plan.py itemplan.py itemplan_shadow.py itemplan_data.py itemplan_reads.py itemplan_vendor.py \
      jev.py jev_items.py jev_choices.py jev_recovery.py jev_activity.py jev_keep.py jevview.py \
      lootcouncil.py statweights.py \
-     bank.py bankpolicy.py bankforecast.py housedemand.py \
+     bank.py bankpolicy.py setswap.py bankforecast.py housedemand.py \
      mailrun.py mountbuy.py holdings.py hunterpet.py \
      realm.py realmread.py basepath.py appbuild.py deployinfo.py watchwall.py nowstatus.py realmnav.py classic.py \
      needs.py partystatus.py partyvoice.py lootcard.py lootstory.py towntrip.py \
