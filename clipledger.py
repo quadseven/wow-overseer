@@ -52,6 +52,9 @@ LOOT_QUALITY_KEY = "subject_quality"
 FLUSH_INTERVAL = timedelta(seconds=5)
 # How much recent video the stream agent keeps; older events cannot be cut.
 AGENT_BUFFER = timedelta(minutes=10)
+# How old a late event may be and still get a failed row. The site reads its
+# recent candidates over the same span; anything older is history.
+LATE_HORIZON = timedelta(minutes=20)
 
 # The Chronicle's own "earliest qualifying row" rule, so a first here is the
 # same first the Chronicle shows.
@@ -387,12 +390,20 @@ def plan_requests(
     for row in rows:
         if row["event_key"] in seen:
             continue
-        # Footage older than the agent's buffer no longer exists to be cut.
         if row["window_start"] < now - AGENT_BUFFER:
-            continue
-        seen.add(row["event_key"])
-        if not row["stream_path"]:
-            row["state"] = "no_view"
+            # Footage older than the agent's buffer no longer exists to be
+            # cut. A recent event is recorded as failed, so no cutter is
+            # offered it; an event older than LATE_HORIZON is history that
+            # only decides what is a first, and is not recorded.
+            if row["event_at"] < now - LATE_HORIZON:
+                continue
+            seen.add(row["event_key"])
+            row["state"] = "failed"
+            row["detail"] = "; ".join(p for p in (row["detail"], LATE_DETAIL) if p)
+        else:
+            seen.add(row["event_key"])
+            if not row["stream_path"]:
+                row["state"] = "no_view"
         out.append(row)
     return out
 
@@ -400,8 +411,10 @@ def plan_requests(
 # --- timing out rows the agent never finished ----------------------------
 
 # The agent keeps AGENT_BUFFER of video; a pending row this long past its window
-# end can no longer be cut, so it is declared no_view (buffer plus 5 minutes).
+# end can no longer be cut, so it is declared failed (buffer plus 5 minutes).
 PENDING_TIMEOUT = timedelta(minutes=15)
+PENDING_FAILED_DETAIL = "no cutter picked this up before the footage aged out"
+LATE_DETAIL = "seen after the footage left the buffer"
 # A cutting row nobody has touched for this long lost its cutter mid-cut.
 CUTTING_TIMEOUT = timedelta(minutes=10)
 CUTTING_FAILED_DETAIL = "cutter went silent"
@@ -411,22 +424,29 @@ _STALE_SELECT = (
     " WHERE state IN ('pending', 'cutting')"
 )
 # Each update names the state it replaces, so a row the agent moved on since
-# the read (ready, failed, ...) matches nothing and is left alone.
-_TO_NO_VIEW = "UPDATE overseer_clip SET state = %s WHERE id = %s AND state = %s"
+# the read (ready, failed, ...) matches nothing and is left alone. The reason
+# is appended to the detail, so the planner's view text stays in front of it.
 _TO_FAILED = (
-    "UPDATE overseer_clip SET state = %s, detail = %s WHERE id = %s AND state = %s"
+    "UPDATE overseer_clip SET state = %s, detail = "
+    "CONCAT_WS('; ', NULLIF(detail, ''), NULLIF(%s, ''))"
+    " WHERE id = %s AND state = %s"
 )
 
 
 def stale_changes(rows: Iterable[Mapping], *, now: datetime) -> list[dict]:
     """The state changes owed to rows that sat too long: pending past its
-    window end by more than PENDING_TIMEOUT becomes no_view; cutting not
-    updated for more than CUTTING_TIMEOUT becomes failed, with a detail."""
+    window end by more than PENDING_TIMEOUT and cutting not updated for more
+    than CUTTING_TIMEOUT both become failed, each with its own detail."""
     out = []
     for r in rows:
         if r.get("state") == "pending" and r["window_end"] < now - PENDING_TIMEOUT:
             out.append(
-                {"id": r["id"], "from": "pending", "to": "no_view", "detail": None}
+                {
+                    "id": r["id"],
+                    "from": "pending",
+                    "to": "failed",
+                    "detail": PENDING_FAILED_DETAIL,
+                }
             )
         elif r.get("state") == "cutting" and r["updated_at"] < now - CUTTING_TIMEOUT:
             out.append(
@@ -448,13 +468,10 @@ def time_out(cur, *, now: datetime) -> dict:
     cur.execute(_STALE_SELECT)
     counts = {"no_view": 0, "failed": 0}
     for change in stale_changes(cur.fetchall(), now=now):
-        if change["detail"] is None:
-            cur.execute(_TO_NO_VIEW, (change["to"], change["id"], change["from"]))
-        else:
-            cur.execute(
-                _TO_FAILED,
-                (change["to"], change["detail"], change["id"], change["from"]),
-            )
+        cur.execute(
+            _TO_FAILED,
+            (change["to"], change["detail"], change["id"], change["from"]),
+        )
         counts[change["to"]] += 1 if cur.rowcount else 0
     return counts
 
@@ -504,6 +521,7 @@ def delete_expired(cur, root: str) -> int:
 
 CLIPS_PATH = "/clips/"
 NO_VIEW_LINE = "No live view was up, so no clip was saved."
+FAILED_LINE = "No clip was saved."
 SHELF_EMPTY = "No clips have been saved yet."
 SHELF_LIMIT = 100
 
@@ -532,6 +550,19 @@ def view_owner(row: Mapping) -> str:
     return row["character"]
 
 
+def failed_line(row: Mapping) -> str:
+    """The note for a failed row: its recorded reason, without the planner's
+    view text (the "view:" parts of the detail)."""
+    parts = [
+        p
+        for p in (row.get("detail") or "").split("; ")
+        if p.strip() and not _VIEW_NOTE.match(p)
+    ]
+    if not parts:
+        return FAILED_LINE
+    return "%s: %s." % (FAILED_LINE[:-1], "; ".join(parts).rstrip(". "))
+
+
 def shelf(rows: Iterable[Mapping]) -> dict:
     """The /api/clips payload: ready rows with a file, newest event first."""
     ready = [r for r in rows if r.get("state") == "ready" and r.get("file_name")]
@@ -558,8 +589,9 @@ def link(row: Mapping | None) -> dict:
     """What a story or timeline entry adds for its event's ledger row.
 
     A ready row with a file adds `clip` (url and kind). A no_view row adds
-    `clip_note`, saying no live view was up. Any other state, or no row at
-    all, adds nothing: the entry says nothing about clips.
+    `clip_note`, saying no live view was up. A failed row adds `clip_note`
+    with its recorded reason. Any other state, or no row at all, adds
+    nothing: the entry says nothing about clips.
     """
     if not row:
         return {}
@@ -567,4 +599,6 @@ def link(row: Mapping | None) -> dict:
         return {"clip": {"url": clip_url(row["file_name"]), "kind": row["kind"]}}
     if row.get("state") == "no_view":
         return {"clip_note": NO_VIEW_LINE}
+    if row.get("state") == "failed":
+        return {"clip_note": failed_line(row)}
     return {}

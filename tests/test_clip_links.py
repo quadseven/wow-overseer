@@ -1,7 +1,8 @@
 """Clip links on Chronicle loot stories and run timeline entries.
 
 A ready ledger row gives the entry a link. A no_view row gives it the line
-that no live view was up. No row, or any other state, gives it nothing.
+that no live view was up. A failed row gives the line that no clip was saved,
+with its reason. No row, or any other state, gives it nothing.
 """
 
 import json
@@ -88,8 +89,47 @@ class LootStories(unittest.TestCase):
         story = self.story(ledger(event_key="loot:999"))
         self.assertNotIn("clip", story)
 
-    def test_a_row_that_is_not_ready_or_no_view_says_nothing(self):
-        for state in ("pending", "cutting", "failed", "expired", "deleted"):
+    def test_a_timed_out_row_gives_its_reason_not_the_no_view_line(self):
+        story = self.story(
+            ledger(
+                state="failed",
+                file_name=None,
+                detail="view: Testchar (leader); " + clipledger.PENDING_FAILED_DETAIL,
+            )
+        )
+        self.assertEqual(
+            story["clip_note"],
+            "No clip was saved: %s." % clipledger.PENDING_FAILED_DETAIL,
+        )
+        self.assertNotIn("live view was up", story["clip_note"])
+
+    def test_a_late_row_gives_its_reason(self):
+        story = self.story(
+            ledger(state="failed", file_name=None, detail=clipledger.LATE_DETAIL)
+        )
+        self.assertEqual(
+            story["clip_note"], "No clip was saved: %s." % clipledger.LATE_DETAIL
+        )
+
+    def test_a_cutter_failure_gives_its_reason_in_the_same_form(self):
+        story = self.story(
+            ledger(
+                state="failed", file_name=None, detail=clipledger.CUTTING_FAILED_DETAIL
+            )
+        )
+        self.assertEqual(
+            story["clip_note"],
+            "No clip was saved: %s." % clipledger.CUTTING_FAILED_DETAIL,
+        )
+
+    def test_a_failed_row_with_only_view_text_still_says_no_clip(self):
+        story = self.story(
+            ledger(state="failed", file_name=None, detail="view: Testchar (leader)")
+        )
+        self.assertEqual(story["clip_note"], "No clip was saved.")
+
+    def test_a_row_that_is_not_ready_failed_or_no_view_says_nothing(self):
+        for state in ("pending", "cutting", "expired", "deleted"):
             story = self.story(ledger(state=state))
             self.assertNotIn("clip", story, state)
             self.assertNotIn("clip_note", story, state)
@@ -178,6 +218,21 @@ class TimelineEntries(unittest.TestCase):
         card = self.card([clear_row(state="no_view", file_name=None)])
         self.assertEqual(card["clip_note"], clipledger.NO_VIEW_LINE)
         self.assertNotIn("clip", card)
+
+    def test_a_failed_clear_gives_its_reason(self):
+        card = self.card(
+            [
+                clear_row(
+                    state="failed",
+                    file_name=None,
+                    detail=clipledger.PENDING_FAILED_DETAIL,
+                )
+            ]
+        )
+        self.assertEqual(
+            card["clip_note"],
+            "No clip was saved: %s." % clipledger.PENDING_FAILED_DETAIL,
+        )
 
     def test_no_row_says_nothing(self):
         for clips in (None, []):
