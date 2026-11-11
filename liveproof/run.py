@@ -100,58 +100,95 @@ def _tokens(sql: str) -> list[tuple[str, str]]:
     and on a MySQL executable comment, whose text the server would run.
     """
     out: list[tuple[str, str]] = []
-    i, n = 0, len(sql)
-    while i < n:
+    i = 0
+    while i < len(sql):
         c = sql[i]
         if c.isspace():
             i += 1
-        elif (
-            sql.startswith("--", i) and (i + 2 == n or sql[i + 2].isspace())
-        ) or c == "#":
-            end = sql.find("\n", i)
-            i = n if end < 0 else end + 1
-        elif sql.startswith("/*", i):
-            if sql.startswith("/*!", i):
-                raise UnsafeStatement("executable comments are not a plain SELECT")
-            end = sql.find("*/", i + 2)
-            if end < 0:
-                raise UnsafeStatement("unterminated comment")
-            i = end + 2
+        elif _is_comment_start(sql, i):
+            i = _skip_comment(sql, i)
         elif c in "'\"":
-            i += 1
-            while i < n:
-                if sql[i] == "\\" or (sql[i] == c and sql[i + 1 : i + 2] == c):
-                    i += 2
-                elif sql[i] == c:
-                    break
-                else:
-                    i += 1
-            if i >= n:
-                raise UnsafeStatement("unterminated string literal")
-            i += 1
-            out.append(("literal", ""))
+            i = _string_token(sql, i, out)
         elif c == "`":
-            end = sql.find("`", i + 1)
-            if end < 0:
-                raise UnsafeStatement("unterminated quoted name")
-            out.append(("name", sql[i + 1 : end].upper()))
-            i = end + 1
+            i = _quoted_name_token(sql, i, out)
         elif c.isalpha() or c in "_$":
-            j = i + 1
-            while j < n and (sql[j].isalnum() or sql[j] in "_$"):
-                j += 1
-            out.append(("word", sql[i:j].upper()))
-            i = j
+            i = _word_token(sql, i, out)
         elif c.isdigit():
-            j = i + 1
-            while j < n and (sql[j].isalnum() or sql[j] in "._"):
-                j += 1
-            out.append(("literal", ""))
-            i = j
+            i = _number_token(sql, i, out)
         else:
             out.append(("punct", c))
             i += 1
     return out
+
+
+def _is_comment_start(sql: str, index: int) -> bool:
+    return (
+        _is_hash_comment(sql, index)
+        or _is_dash_comment(sql, index)
+        or sql.startswith("/*", index)
+    )
+
+
+def _is_hash_comment(sql: str, index: int) -> bool:
+    return sql[index] == "#"
+
+
+def _is_dash_comment(sql: str, index: int) -> bool:
+    return sql.startswith("--", index) and (
+        index + 2 == len(sql) or sql[index + 2].isspace()
+    )
+
+
+def _skip_comment(sql: str, index: int) -> int:
+    if sql[index] == "#" or sql.startswith("--", index):
+        end = sql.find("\n", index)
+        return len(sql) if end < 0 else end + 1
+    if sql.startswith("/*!", index):
+        raise UnsafeStatement("executable comments are not a plain SELECT")
+    end = sql.find("*/", index + 2)
+    if end < 0:
+        raise UnsafeStatement("unterminated comment")
+    return end + 2
+
+
+def _string_token(sql: str, index: int, out: list[tuple[str, str]]) -> int:
+    quote = sql[index]
+    index += 1
+    while index < len(sql):
+        if sql[index] == "\\" or (
+            sql[index] == quote and sql[index + 1 : index + 2] == quote
+        ):
+            index += 2
+        elif sql[index] == quote:
+            out.append(("literal", ""))
+            return index + 1
+        else:
+            index += 1
+    raise UnsafeStatement("unterminated string literal")
+
+
+def _quoted_name_token(sql: str, index: int, out: list[tuple[str, str]]) -> int:
+    end = sql.find("`", index + 1)
+    if end < 0:
+        raise UnsafeStatement("unterminated quoted name")
+    out.append(("name", sql[index + 1 : end].upper()))
+    return end + 1
+
+
+def _word_token(sql: str, index: int, out: list[tuple[str, str]]) -> int:
+    end = index + 1
+    while end < len(sql) and (sql[end].isalnum() or sql[end] in "_$"):
+        end += 1
+    out.append(("word", sql[index:end].upper()))
+    return end
+
+
+def _number_token(sql: str, index: int, out: list[tuple[str, str]]) -> int:
+    end = index + 1
+    while end < len(sql) and (sql[end].isalnum() or sql[end] in "._"):
+        end += 1
+    out.append(("literal", ""))
+    return end
 
 
 def _matching_paren(tokens: list[tuple[str, str]], start: int) -> int:
@@ -173,34 +210,39 @@ def _check_with(tokens: list[tuple[str, str]]) -> None:
     if pos < len(tokens) and tokens[pos] == ("word", "RECURSIVE"):
         pos += 1
     while True:
-        if pos >= len(tokens) or tokens[pos][0] not in ("word", "name"):
-            raise UnsafeStatement("WITH clause has no table name")
-        pos += 1
-        if pos < len(tokens) and tokens[pos] == ("punct", "("):
-            close = _matching_paren(tokens, pos)
-            if close < 0:
-                raise UnsafeStatement("unbalanced parentheses")
-            pos = close + 1
-        if pos >= len(tokens) or tokens[pos] != ("word", "AS"):
-            raise UnsafeStatement("WITH clause has no AS")
-        pos += 1
-        if pos >= len(tokens) or tokens[pos] != ("punct", "("):
-            raise UnsafeStatement("WITH clause has no definition")
-        if pos + 1 >= len(tokens) or tokens[pos + 1] not in (
-            ("word", "SELECT"),
-            ("word", "WITH"),
-        ):
-            raise UnsafeStatement("a WITH definition is not a SELECT")
-        close = _matching_paren(tokens, pos)
-        if close < 0:
-            raise UnsafeStatement("unbalanced parentheses")
-        pos = close + 1
+        pos = _check_cte(tokens, pos)
         if pos < len(tokens) and tokens[pos] == ("punct", ","):
             pos += 1
             continue
         break
     if pos >= len(tokens) or tokens[pos] != ("word", "SELECT"):
         raise UnsafeStatement("WITH clause has no main SELECT")
+
+
+def _check_cte(tokens: list[tuple[str, str]], pos: int) -> int:
+    if pos >= len(tokens) or tokens[pos][0] not in ("word", "name"):
+        raise UnsafeStatement("WITH clause has no table name")
+    pos += 1
+    if pos < len(tokens) and tokens[pos] == ("punct", "("):
+        pos = _after_matching_paren(tokens, pos)
+    if pos >= len(tokens) or tokens[pos] != ("word", "AS"):
+        raise UnsafeStatement("WITH clause has no AS")
+    pos += 1
+    if pos >= len(tokens) or tokens[pos] != ("punct", "("):
+        raise UnsafeStatement("WITH clause has no definition")
+    if pos + 1 >= len(tokens) or tokens[pos + 1] not in (
+        ("word", "SELECT"),
+        ("word", "WITH"),
+    ):
+        raise UnsafeStatement("a WITH definition is not a SELECT")
+    return _after_matching_paren(tokens, pos)
+
+
+def _after_matching_paren(tokens: list[tuple[str, str]], pos: int) -> int:
+    close = _matching_paren(tokens, pos)
+    if close < 0:
+        raise UnsafeStatement("unbalanced parentheses")
+    return close + 1
 
 
 def check_select_only(sql: str) -> None:
