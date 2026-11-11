@@ -10,11 +10,13 @@ and the path is held to all of it.
 from __future__ import annotations
 
 import json
+import sys
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import realmread
-from fidelity import fixture, surfaces
+from fidelity import fixture, surfaces, verify
 
 
 def key_of(sql: str, params) -> str:
@@ -90,3 +92,35 @@ def run(fx: fixture.Fixture) -> Result:
             "%d recorded read(s) were never asked" % reader.unanswered()
         )
     return result
+
+
+SCENARIOS = Path(__file__).resolve().parent / "scenarios"
+
+
+def main(argv=None) -> int:
+    """Verify and replay scenario files (all of fidelity/scenarios by default).
+
+        python3 -m fidelity.replay [scenario.json ...]
+
+    Exits 1 when a fixture is not accepted by the verifier or a replay differs
+    from the record."""
+    paths = [Path(a) for a in argv or ()] or sorted(SCENARIOS.glob("*.json"))
+    failed = 0
+    for path in paths:
+        try:
+            fx = fixture.load(path)
+        except fixture.FixtureError as err:
+            problems = [str(err)]
+            name = path.stem
+        else:
+            name = fx.name
+            problems = verify.problems(fx) or run(fx).problems
+        print("%s %s" % ("FAIL" if problems else "ok  ", name))
+        for problem in problems:
+            print("     %s" % problem)
+        failed += bool(problems)
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

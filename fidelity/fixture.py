@@ -86,47 +86,55 @@ def _need(doc: dict, key: str, kind: type):
     return doc[key]
 
 
+def _read(i: int, read) -> Read:
+    if not isinstance(read, dict) or not isinstance(read.get("sql"), str):
+        raise FixtureError("read %d needs sql text" % i)
+    if not isinstance(read.get("params"), list):
+        raise FixtureError("read %d needs a params list" % i)
+    if not isinstance(read.get("rows"), list):
+        raise FixtureError("read %d needs a rows list" % i)
+    return Read(
+        read["sql"],
+        tuple(decode(read["params"])),
+        decode(read["rows"]),
+        int(read.get("gap") or 0),
+    )
+
+
+def _provenance(doc: dict) -> dict:
+    provenance = _need(doc, "provenance", dict)
+    if provenance.get("kind") not in KINDS:
+        raise FixtureError("provenance kind must be one of %s" % ", ".join(KINDS))
+    if provenance["kind"] == REALM and not str(provenance.get("source") or "").strip():
+        raise FixtureError("a realm fixture must say where and when it was captured")
+    return provenance
+
+
+def _proves(doc: dict, kind: str) -> tuple:
+    proves = doc.get("proves") or []
+    if not isinstance(proves, list) or not all(isinstance(t, int) for t in proves):
+        raise FixtureError("proves must be a list of ticket numbers")
+    if proves and kind != REALM:
+        raise FixtureError("a synthetic fixture cannot prove a ticket")
+    return tuple(proves)
+
+
 def parse(doc: dict) -> Fixture:
     """A Fixture from a decoded document; FixtureError when it is malformed."""
     if not isinstance(doc, dict):
         raise FixtureError("a fixture is a JSON object")
     if doc.get("format") != FORMAT:
         raise FixtureError("format must be %d" % FORMAT)
-    provenance = _need(doc, "provenance", dict)
-    if provenance.get("kind") not in KINDS:
-        raise FixtureError("provenance kind must be one of %s" % ", ".join(KINDS))
-    reads = []
-    for i, read in enumerate(_need(doc, "reads", list)):
-        if not isinstance(read, dict) or not isinstance(read.get("sql"), str):
-            raise FixtureError("read %d needs sql text" % i)
-        if not isinstance(read.get("params"), list):
-            raise FixtureError("read %d needs a params list" % i)
-        if not isinstance(read.get("rows"), list):
-            raise FixtureError("read %d needs a rows list" % i)
-        reads.append(
-            Read(
-                read["sql"],
-                tuple(decode(read["params"])),
-                decode(read["rows"]),
-                int(read.get("gap") or 0),
-            )
-        )
-    proves = doc.get("proves") or []
-    if not isinstance(proves, list) or not all(isinstance(t, int) for t in proves):
-        raise FixtureError("proves must be a list of ticket numbers")
-    if proves and provenance["kind"] != REALM:
-        raise FixtureError("a synthetic fixture cannot prove a ticket")
-    if provenance["kind"] == REALM and not str(provenance.get("source") or "").strip():
-        raise FixtureError("a realm fixture must say where and when it was captured")
+    provenance = _provenance(doc)
     return Fixture(
         name=_need(doc, "name", str),
         kind=provenance["kind"],
         source=str(provenance.get("source") or ""),
         surface=_need(doc, "surface", str),
         args=_need(doc, "args", dict),
-        reads=tuple(reads),
+        reads=tuple(_read(i, r) for i, r in enumerate(_need(doc, "reads", list))),
         expect=_need(doc, "expect", dict),
-        proves=tuple(proves),
+        proves=_proves(doc, provenance["kind"]),
     )
 
 

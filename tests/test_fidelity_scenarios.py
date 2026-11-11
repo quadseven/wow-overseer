@@ -7,10 +7,14 @@ are not realm captures and may not name the tickets they prove. A realm
 capture (provenance kind `realm`) says where and when it was taken.
 """
 
+import contextlib
 import copy
+import io
+import json
 import pathlib
 import socket
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -89,3 +93,26 @@ class Provenance(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Command(unittest.TestCase):
+    def run_main(self, argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = replay.main(argv)
+        return code, out.getvalue()
+
+    def test_it_verifies_and_replays_every_scenario_by_default(self):
+        code, said = self.run_main([])
+        self.assertEqual(code, 0)
+        self.assertIn("synthetic-not-a-full-clear", said)
+
+    def test_it_exits_nonzero_and_names_the_run_when_a_claim_is_wrong(self):
+        doc = copy.deepcopy(NOT_A_FULL_CLEAR)
+        doc["expect"]["runs"][0]["clear"] = True
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "synthetic-wrong.json"
+            path.write_text(json.dumps(doc))
+            code, said = self.run_main([str(path)])
+        self.assertEqual(code, 1)
+        self.assertIn("run 41", said)

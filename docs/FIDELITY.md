@@ -37,6 +37,8 @@ Before the recorder keeps a fixture, `fidelity/verify.py` re-derives the claims 
 
 ## What CI runs
 
+To run the same check by hand: `python3 -m fidelity.replay` (all scenarios) or `python3 -m fidelity.replay <file>`. It exits 1 when a fixture is not accepted by the verifier or a replay differs from the record.
+
 `tests/test_fidelity_scenarios.py` replays every scenario on every pull request, inside the existing check job. Replay needs no realm, database or network: `fidelity/replay.py` answers only the statements the capture holds. A statement the capture lacks fails the replay, and so does a recorded read the code no longer makes. The same file shows the not-a-full-clear scenario going red when a completion-flag shortcut is put back.
 
 A change that alters credited-encounter behavior fails the replay unless the scenario's claims are updated, and a realm scenario's claims change only with a new capture attached to the pull request. Re-capture after a change to a read statement too: replay matches statements exactly.
