@@ -119,10 +119,28 @@ class FirstKillLink(unittest.TestCase):
             self.assertNotIn("clip", item)
             self.assertNotIn("clip_note", item)
 
-    def test_a_row_credited_to_another_character_is_not_this_kills(self):
-        item = self.one(ledger(clipledger.boss_key(5, "Grug"), character="Zug"))
+    def tie(self, clips):
+        # Two members on one first_seen: the feed picks Grug (roster order),
+        # the ledger may have credited the streamed member, Og.
+        (item,) = items([kill("Og", NOW - 100), kill("Grug", NOW - 100)], clips)
+        self.assertEqual(item["who"], ["Grug"])
+        return item
+
+    def test_a_tie_links_the_row_whichever_member_the_ledger_credited(self):
+        item = self.tie(ledger(clipledger.boss_key(5, "Grug"), character="Og"))
+        self.assertEqual(item["clip"]["url"], "/clips/clip-3-boss_kill.mp4")
+
+    def test_a_tie_with_a_failed_row_gives_the_note(self):
+        item = self.tie(
+            ledger(
+                clipledger.boss_key(5, "Grug"),
+                character="Og",
+                state="failed",
+                file_name=None,
+            )
+        )
+        self.assertIn("clip_note", item)
         self.assertNotIn("clip", item)
-        self.assertNotIn("clip_note", item)
 
 
 class FirstKillPerFamilyLink(unittest.TestCase):
