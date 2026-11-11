@@ -9,7 +9,7 @@ import pathlib
 import sys
 import threading
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 from _stub_modules import PYMYSQL, stub_modules
@@ -143,9 +143,15 @@ class Realm:
         }
         self.history_reads = 0
         self.candidate_reads = 0
+        self.minutes = []
+        self.fail_next = False
 
-    def read_candidates(self, roster):
+    def read_candidates(self, roster, minutes=20):
         self.candidate_reads += 1
+        self.minutes.append(minutes)
+        if self.fail_next:
+            self.fail_next = False
+            raise RuntimeError("the realm read failed")
         return self.candidates
 
     def read_history(self, roster):
@@ -166,6 +172,77 @@ def scan(store, realm, roster=("Alder",), path_of=lambda name: "wd" + name):
         mock.patch.object(map_server, "_clip_path", path_of),
     ):
         return map_server.scan_clips()
+
+
+def key_read_minutes(store):
+    reads = [s for s in store.reads() if "created_at >=" in s[0]]
+    return reads[-1][1][0]
+
+
+class TheScanGap(unittest.TestCase):
+    """The late horizon follows the gap since the last completed scan."""
+
+    def setUp(self):
+        last = mock.patch.object(map_server, "_clip_last_scan", None)
+        last.start()
+        self.addCleanup(last.stop)
+        self.clock = [datetime(2026, 11, 9, 12, 0, 0, tzinfo=timezone.utc)]
+        clock = mock.patch.object(map_server, "_clip_now", lambda: self.clock[0])
+        clock.start()
+        self.addCleanup(clock.stop)
+
+    def later(self, **delta):
+        self.clock[0] += timedelta(**delta)
+
+    def test_the_first_scan_after_a_start_reads_a_day_back_on_both_reads(self):
+        store, realm = FakeStore(), Realm()
+        scan(store, realm)
+        self.assertEqual([1440], realm.minutes)
+        self.assertEqual(1440, key_read_minutes(store))
+
+    def test_a_scan_after_a_completed_scan_keeps_the_steady_spans(self):
+        realm = Realm()
+        scan(FakeStore(), realm)
+        self.later(minutes=1)
+        store = FakeStore()
+        scan(store, realm)
+        self.assertEqual([1440, 20], realm.minutes)
+        self.assertEqual(30, key_read_minutes(store))
+
+    def test_a_scan_after_a_long_gap_reads_back_to_the_last_scan_on_both_reads(self):
+        realm = Realm()
+        scan(FakeStore(), realm)
+        self.later(minutes=90)
+        store = FakeStore()
+        scan(store, realm)
+        self.assertEqual([1440, 90], realm.minutes)
+        self.assertEqual(90, key_read_minutes(store))
+
+    def test_a_scan_that_failed_does_not_move_the_last_scan(self):
+        realm = Realm()
+        scan(FakeStore(), realm)
+        self.later(minutes=60)
+        realm.fail_next = True
+        with self.assertRaises(RuntimeError):
+            scan(FakeStore(), realm)
+        self.later(minutes=1)
+        scan(FakeStore(), realm)
+        self.assertEqual([1440, 60, 61], realm.minutes)
+
+    def test_a_late_event_in_the_gap_is_written_once_and_a_second_scan_writes_nothing(
+        self,
+    ):
+        late = dict(loot_row(), first_seen=NOW - timedelta(minutes=60))
+        realm = Realm(loot=[late])
+        first = FakeStore()
+        scan(first, realm)
+        (write,) = first.writes()
+        self.assertEqual("loot:7", write[1][3])
+        self.assertEqual("failed", write[1][7])
+        self.later(minutes=1)
+        second = FakeStore(keys=["loot:7"])
+        scan(second, realm)
+        self.assertEqual([], second.writes())
 
 
 class TheTable(unittest.TestCase):
@@ -414,6 +491,21 @@ class TheSql(unittest.TestCase):
         self.assertIn("boss_kill", sql)
         self.assertIn("level_up", sql)
         self.assertIn("{holes}", sql)
+
+
+class TheRunCardRead(unittest.TestCase):
+    def test_the_run_clips_read_carries_what_the_card_matches_on(self):
+        sql = map_server._RUN_CLIPS_SQL
+        for column in ("event_key", "kind", "`character`", "stream_path", "detail"):
+            self.assertIn(column, sql)
+        for kind in ("'clear'", "'boss_kill'", "'loot'"):
+            self.assertIn(kind, sql)
+        self.assertIn("'failed'", sql)
+        self.assertIn("INTERVAL %s HOUR", sql)
+
+    def test_the_run_clips_read_keeps_the_newest_rows_under_its_cap(self):
+        # A cap that sorts oldest first would drop the latest runs' clips.
+        self.assertIn("ORDER BY event_at DESC LIMIT", map_server._RUN_CLIPS_SQL)
 
 
 class TheTimer(unittest.TestCase):

@@ -295,7 +295,7 @@ function timelines(ctx, tl) {
   if (wait) return wait;
   const fam = (tl.data.families || []).find((f) => f.title === family(ctx));
   if (!fam || !(fam.runs || []).length) return state("empty", "No run of " + family(ctx) + "'s family in the last 14 days.");
-  return html`<p class="muted g-lede">${family(ctx)}'s family. ${fam.line || ""}</p><div class="g-timelines">${fam.runs.map((r) => html`<div class="card g-timeline"><span class="g-name">${r.title}</span><span class="muted">${r.line}</span>${r.cause ? html`<span class="g-tl-cause">${r.cause}</span>` : ""}${runReport(r.report)}${clipLink(r)}<div class="g-steps">${(r.events || []).map((e) => html`<div class="g-step" data-gt="${e.tone || ""}"><span class="g-step-t">${e.at}</span><span>${e.line}</span></div>`)}</div></div>`)}</div>`;
+  return html`<p class="muted g-lede">${family(ctx)}'s family. ${fam.line || ""}</p><div class="g-timelines">${fam.runs.map((r) => html`<div class="card g-timeline"><span class="g-name">${r.title}</span><span class="muted">${r.line}</span>${r.cause ? html`<span class="g-tl-cause">${r.cause}</span>` : ""}${runReport(r.report)}${clipLink(r)}${clipLinks(r)}<div class="g-steps">${(r.events || []).map((e) => html`<div class="g-step" data-gt="${e.tone || ""}"><span class="g-step-t">${e.at}</span><span>${e.line}</span></div>`)}</div></div>`)}</div>`;
 }
 
 // ---- chronicle ----------------------------------------------------------------

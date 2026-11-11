@@ -55,6 +55,21 @@ AGENT_BUFFER = timedelta(minutes=10)
 # How old a late event may be and still get a failed row. The site reads its
 # recent candidates over the same span; anything older is history.
 LATE_HORIZON = timedelta(minutes=20)
+# The longest a scan looks back, however long ago the last one completed.
+MAX_LATE_HORIZON = timedelta(hours=24)
+
+
+def scan_horizon(now: datetime, last_scan: datetime | None) -> timedelta:
+    """How far back this scan looks for events to record.
+
+    LATE_HORIZON in steady state; back to the last completed scan when that is
+    longer; MAX_LATE_HORIZON at most. No last scan (the first scan after a
+    process start) looks back the maximum, so a gap cannot drop events.
+    """
+    if last_scan is None:
+        return MAX_LATE_HORIZON
+    return min(max(LATE_HORIZON, now - last_scan), MAX_LATE_HORIZON)
+
 
 # The Chronicle's own "earliest qualifying row" rule, so a first here is the
 # same first the Chronicle shows.
@@ -379,8 +394,12 @@ def plan_requests(
     path_of: Callable[[str], str],
     runs: Iterable[Mapping] = (),
     families: Mapping[str, Iterable[str]] | None = None,
+    late_horizon: timedelta = LATE_HORIZON,
 ) -> list[dict]:
     """The ledger rows to insert now, oldest event first.
+
+    `late_horizon` is how old an event may be and still get a failed row
+    (see scan_horizon).
 
     `runs` are the dungeon runs, open or ended, that an event may sit in; an
     event row names its map as `map`. `families` maps each family to its
@@ -403,9 +422,9 @@ def plan_requests(
         if row["window_start"] < now - AGENT_BUFFER:
             # Footage older than the agent's buffer no longer exists to be
             # cut. A recent event is recorded as failed, so no cutter is
-            # offered it; an event older than LATE_HORIZON is history that
+            # offered it; an event older than late_horizon is history that
             # only decides what is a first, and is not recorded.
-            if row["event_at"] < now - LATE_HORIZON:
+            if row["event_at"] < now - late_horizon:
                 continue
             seen.add(row["event_key"])
             row["state"] = "failed"

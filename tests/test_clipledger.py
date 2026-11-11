@@ -647,6 +647,44 @@ class RestartAndBackfillTests(unittest.TestCase):
         self.assertEqual(1, len(plan(loot_rows=[loot(7, at=at)])))
 
 
+class LateHorizonTests(unittest.TestCase):
+    def test_a_scan_with_no_last_scan_looks_back_a_day(self):
+        self.assertEqual(timedelta(hours=24), clipledger.scan_horizon(NOW, None))
+
+    def test_a_steady_scan_looks_back_twenty_minutes(self):
+        last = NOW - timedelta(minutes=1)
+        self.assertEqual(timedelta(minutes=20), clipledger.scan_horizon(NOW, last))
+
+    def test_a_longer_gap_looks_back_to_the_last_scan(self):
+        last = NOW - timedelta(minutes=90)
+        self.assertEqual(timedelta(minutes=90), clipledger.scan_horizon(NOW, last))
+
+    def test_a_gap_longer_than_a_day_is_capped_at_a_day(self):
+        last = NOW - timedelta(days=3)
+        self.assertEqual(timedelta(hours=24), clipledger.scan_horizon(NOW, last))
+
+    def test_an_event_inside_the_gap_is_one_failed_row_and_a_rescan_writes_nothing(
+        self,
+    ):
+        horizon = timedelta(hours=3)
+        inside = NOW - timedelta(hours=2)
+        (row,) = plan(loot_rows=[loot(7, at=inside)], late_horizon=horizon)
+        self.assertEqual("failed", row["state"])
+        self.assertEqual("loot:7", row["event_key"])
+        self.assertIn(clipledger.LATE_DETAIL, row["detail"])
+        again = plan(
+            loot_rows=[loot(7, at=inside)],
+            late_horizon=horizon,
+            existing_keys=[row["event_key"]],
+        )
+        self.assertEqual([], again)
+
+    def test_an_event_older_than_the_horizon_gets_no_row(self):
+        old = NOW - timedelta(hours=4)
+        rows = plan(loot_rows=[loot(7, at=old)], late_horizon=timedelta(hours=3))
+        self.assertEqual([], rows)
+
+
 class RetentionTests(unittest.TestCase):
     def ledger_row(self, row_id, age, state="ready"):
         return {"id": row_id, "state": state, "created_at": NOW - age}

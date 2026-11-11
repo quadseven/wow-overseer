@@ -36,11 +36,12 @@ export function clipLink(entry) {
 }
 
 // One link or quiet line per character on an entry that holds several, such as
-// a level 60 feed item: each is the same markup clipLink draws, with the name.
+// a level 60 feed item or the clips inside a run: each is the same markup
+// clipLink draws, with the name (`who` on a feed item, `character` on a run).
 export function clipLinks(entry) {
   const list = (entry && entry.clips) || [];
   if (!list.length) return "";
-  return html`${list.map((c) => html`<span class="clip-named"><span class="muted">${c.who}</span> ${clipLink(c)}</span>`)}`;
+  return html`${list.map((c) => html`<span class="clip-named"><span class="muted">${c.who || c.character}</span> ${clipLink(c)}</span>`)}`;
 }
 
 function card(c) {
