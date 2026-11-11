@@ -7,6 +7,7 @@ proven in BOTH of the last two runs, and nothing runs gh without --apply.
 
 import io
 import json
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -63,6 +64,14 @@ class SelectOnlyGuard(unittest.TestCase):
     def refused(self, sql):
         with self.assertRaises(run.UnsafeStatement):
             run.check_select_only(sql)
+
+    def test_the_guard_needs_no_third_party_parser(self):
+        # The lane check runs plain python3 with nothing installed, so the
+        # guard must still work when a third-party parser cannot be
+        # imported at all (the regression that held every lane ticket).
+        with mock.patch.dict(sys.modules, {"sqlglot": None}):
+            run.check_select_only("SELECT 1")
+            self.refused("DELETE FROM t")
 
     def test_a_plain_select_passes_with_or_without_a_semicolon(self):
         run.check_select_only("SELECT 1")

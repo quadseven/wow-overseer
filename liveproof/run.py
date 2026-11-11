@@ -42,6 +42,34 @@ FORBIDDEN_FUNCTIONS = frozenset(
         "SYS_EVAL",
     }
 )
+# Words that write, lock, combine statements or hand the text to another
+# command: none of them can appear in a plain read-only SELECT, in a string
+# or a comment aside (the tokeniser drops both before this check runs).
+FORBIDDEN_WORDS = frozenset(
+    {
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "DROP",
+        "TRUNCATE",
+        "REPLACE",
+        "ALTER",
+        "CREATE",
+        "GRANT",
+        "REVOKE",
+        "CALL",
+        "SET",
+        "EXECUTE",
+        "HANDLER",
+        "INTO",
+        "OUTFILE",
+        "DUMPFILE",
+        "LOCK",
+        "UNION",
+        "INTERSECT",
+        "EXCEPT",
+    }
+)
 
 _HEADER = re.compile(r"^--\s*(ticket|repo):\s*(\S+)\s*$")
 
@@ -62,29 +90,164 @@ class Probe:
     path: str
 
 
-def check_select_only(sql: str) -> None:
-    """Raise UnsafeStatement unless `sql` parses as exactly one plain SELECT."""
-    import sqlglot
-    from sqlglot import exp
+def _tokens(sql: str) -> list[tuple[str, str]]:
+    """(kind, value) tokens for `sql`, with comments and literals folded away.
 
-    try:
-        statements = [s for s in sqlglot.parse(sql, read="mysql") if s is not None]
-    except sqlglot.errors.SqlglotError as err:
-        raise UnsafeStatement(f"does not parse: {str(err)[:80]}") from err
-    if len(statements) != 1:
-        raise UnsafeStatement(f"expected one statement, found {len(statements)}")
-    tree = statements[0]
-    if not isinstance(tree, exp.Select):
-        raise UnsafeStatement(f"not a SELECT: {type(tree).__name__}")
-    for node in tree.walk():
-        if isinstance(node, (exp.Into, exp.Lock, exp.Command)):
-            raise UnsafeStatement(f"forbidden clause: {type(node).__name__}")
-        if isinstance(node, exp.Func):
-            name = (
-                node.name if isinstance(node, exp.Anonymous) else node.sql_name()
-            ).upper()
-            if name in FORBIDDEN_FUNCTIONS:
-                raise UnsafeStatement(f"forbidden function: {name}")
+    Words are upper-cased; a string literal, a number and a back-quoted name
+    each become one token whose text the guard never reads, so a semicolon,
+    a comment marker or a forbidden word inside one of them counts for
+    nothing. Raises UnsafeStatement on an unterminated literal or comment
+    and on a MySQL executable comment, whose text the server would run.
+    """
+    out: list[tuple[str, str]] = []
+    i, n = 0, len(sql)
+    while i < n:
+        c = sql[i]
+        if c.isspace():
+            i += 1
+        elif (
+            sql.startswith("--", i) and (i + 2 == n or sql[i + 2].isspace())
+        ) or c == "#":
+            end = sql.find("\n", i)
+            i = n if end < 0 else end + 1
+        elif sql.startswith("/*", i):
+            if sql.startswith("/*!", i):
+                raise UnsafeStatement("executable comments are not a plain SELECT")
+            end = sql.find("*/", i + 2)
+            if end < 0:
+                raise UnsafeStatement("unterminated comment")
+            i = end + 2
+        elif c in "'\"":
+            i += 1
+            while i < n:
+                if sql[i] == "\\" or (sql[i] == c and sql[i + 1 : i + 2] == c):
+                    i += 2
+                elif sql[i] == c:
+                    break
+                else:
+                    i += 1
+            if i >= n:
+                raise UnsafeStatement("unterminated string literal")
+            i += 1
+            out.append(("literal", ""))
+        elif c == "`":
+            end = sql.find("`", i + 1)
+            if end < 0:
+                raise UnsafeStatement("unterminated quoted name")
+            out.append(("name", sql[i + 1 : end].upper()))
+            i = end + 1
+        elif c.isalpha() or c in "_$":
+            j = i + 1
+            while j < n and (sql[j].isalnum() or sql[j] in "_$"):
+                j += 1
+            out.append(("word", sql[i:j].upper()))
+            i = j
+        elif c.isdigit():
+            j = i + 1
+            while j < n and (sql[j].isalnum() or sql[j] in "._"):
+                j += 1
+            out.append(("literal", ""))
+            i = j
+        else:
+            out.append(("punct", c))
+            i += 1
+    return out
+
+
+def _matching_paren(tokens: list[tuple[str, str]], start: int) -> int:
+    """The index of the `)` closing the `(` at `start`, or -1 if there is none."""
+    depth = 0
+    for index in range(start, len(tokens)):
+        if tokens[index] == ("punct", "("):
+            depth += 1
+        elif tokens[index] == ("punct", ")"):
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+
+def _check_with(tokens: list[tuple[str, str]]) -> None:
+    """Validate the WITH prefix: CTE definitions, then one main SELECT."""
+    pos = 1
+    if pos < len(tokens) and tokens[pos] == ("word", "RECURSIVE"):
+        pos += 1
+    while True:
+        if pos >= len(tokens) or tokens[pos][0] not in ("word", "name"):
+            raise UnsafeStatement("WITH clause has no table name")
+        pos += 1
+        if pos < len(tokens) and tokens[pos] == ("punct", "("):
+            close = _matching_paren(tokens, pos)
+            if close < 0:
+                raise UnsafeStatement("unbalanced parentheses")
+            pos = close + 1
+        if pos >= len(tokens) or tokens[pos] != ("word", "AS"):
+            raise UnsafeStatement("WITH clause has no AS")
+        pos += 1
+        if pos >= len(tokens) or tokens[pos] != ("punct", "("):
+            raise UnsafeStatement("WITH clause has no definition")
+        if pos + 1 >= len(tokens) or tokens[pos + 1] not in (
+            ("word", "SELECT"),
+            ("word", "WITH"),
+        ):
+            raise UnsafeStatement("a WITH definition is not a SELECT")
+        close = _matching_paren(tokens, pos)
+        if close < 0:
+            raise UnsafeStatement("unbalanced parentheses")
+        pos = close + 1
+        if pos < len(tokens) and tokens[pos] == ("punct", ","):
+            pos += 1
+            continue
+        break
+    if pos >= len(tokens) or tokens[pos] != ("word", "SELECT"):
+        raise UnsafeStatement("WITH clause has no main SELECT")
+
+
+def check_select_only(sql: str) -> None:
+    """Raise UnsafeStatement unless `sql` is exactly one plain SELECT.
+
+    A standard-library token guard, not a full parse (the lane check runs
+    plain python3 with no third-party parser installed): the text must hold
+    one SELECT (or WITH ... SELECT) statement and nothing else, with no
+    forbidden word or function anywhere outside a literal or a comment.
+    The database account is SELECT-only and the connection is read-only,
+    so this guard is the first of three lines, not the only one.
+    """
+    tokens = _tokens(sql)
+    while tokens and tokens[-1] == ("punct", ";"):
+        tokens.pop()
+    if not tokens:
+        raise UnsafeStatement("expected one statement, found 0")
+    if ("punct", ";") in tokens:
+        raise UnsafeStatement("expected one statement, found more than one")
+    depth = 0
+    top_selects = 0
+    for index, token in enumerate(tokens):
+        kind, value = token
+        if token == ("punct", "("):
+            depth += 1
+        elif token == ("punct", ")"):
+            depth -= 1
+            if depth < 0:
+                raise UnsafeStatement("unbalanced parentheses")
+        if kind != "word":
+            continue
+        if value in FORBIDDEN_WORDS:
+            raise UnsafeStatement(f"forbidden clause: {value}")
+        if value in FORBIDDEN_FUNCTIONS and tokens[index + 1 : index + 2] == [
+            ("punct", "(")
+        ]:
+            raise UnsafeStatement(f"forbidden function: {value}")
+        if value == "SELECT" and depth == 0:
+            top_selects += 1
+    if depth != 0:
+        raise UnsafeStatement("unbalanced parentheses")
+    if tokens[0] == ("word", "WITH"):
+        _check_with(tokens)
+    elif tokens[0] != ("word", "SELECT"):
+        raise UnsafeStatement(f"not a SELECT: {tokens[0][1] or tokens[0][0]}")
+    if top_selects != 1:
+        raise UnsafeStatement(f"expected one SELECT, found {top_selects}")
 
 
 def load_probe(path: Path | str) -> Probe:
