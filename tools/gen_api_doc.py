@@ -152,7 +152,8 @@ def render(items: list[dict]) -> str:
         "marker. An upload is refused (404 or 409) before its body is read unless",
         "the row is `cutting` with no file; at most 2 uploads run at once (a third",
         "answers 503); the body must arrive within 600 seconds, and no single read",
-        "may wait over 30 seconds (408). No database connection is held while the",
+        "may wait over 30 seconds (408); a clip folder that cannot be written",
+        "(full, or an I/O error) answers 507. No database connection is held while the",
         "body is read. Keep the port on a network that only trusted hosts can reach.",
         "",
     ]

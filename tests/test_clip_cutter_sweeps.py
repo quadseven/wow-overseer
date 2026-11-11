@@ -1,5 +1,6 @@
 """The pure rules of the cutter API and the two sweeps it adds."""
 
+import errno
 import io
 import os
 import pathlib
@@ -412,6 +413,90 @@ class ConcurrentUploadsAreCapped(UploadCase):
         for _ in range(clipcutter.MAX_UPLOADS + 3):
             code, _p = self.upload(io.BytesIO(b"GIF89a" + b"\x00" * 40), 46)
             self.assertEqual(code, 400)
+
+
+class AFailureIsNamedByItsSide(UploadCase):
+    BODY = b"\x00\x00\x00\x18ftypisom" + b"\x01" * 5000
+
+    def test_a_write_that_fails_is_507_naming_the_folder_and_leaves_nothing(self):
+        real = os.fdopen
+
+        class FullDisk:
+            def __init__(self, f):
+                self.f = f
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self.f.close()
+                return False
+
+            def write(self, data):
+                raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), "/secret/dir")
+
+        with mock.patch.object(
+            clipcutter.os, "fdopen", lambda fd, mode: FullDisk(real(fd, mode))
+        ):
+            code, payload = self.upload(io.BytesIO(self.BODY), len(self.BODY))
+        self.assertEqual(code, 507)
+        self.assertIn("clip folder", payload["error"])
+        self.assertIn(os.strerror(errno.ENOSPC), payload["error"])
+        self.assertNotIn("/secret", payload["error"])
+        self.assertEqual(os.listdir(self.dir), [])
+
+    def test_a_temp_file_that_cannot_be_made_is_507(self):
+        err = OSError(errno.EACCES, os.strerror(errno.EACCES), "/secret/dir")
+        with mock.patch.object(clipcutter.tempfile, "mkstemp", side_effect=err):
+            code, payload = self.upload(io.BytesIO(self.BODY), len(self.BODY))
+        self.assertEqual(code, 507)
+        self.assertIn("clip folder", payload["error"])
+        self.assertNotIn("/secret", payload["error"])
+        self.assertEqual(os.listdir(self.dir), [])
+
+    def test_a_connection_that_breaks_while_reading_is_still_408(self):
+        class Broken(io.BytesIO):
+            def read1(self, n=-1):
+                if self.tell() > 100:
+                    raise ConnectionResetError("reset")
+                return super().read1(min(n, 50))
+
+        code, payload = self.upload(Broken(self.BODY), len(self.BODY))
+        self.assertEqual(code, 408)
+        self.assertNotIn("folder", payload["error"])
+        self.assertEqual(os.listdir(self.dir), [])
+
+
+class OneBadFileDoesNotStarveTheRest(unittest.TestCase):
+    def test_a_file_that_cannot_be_removed_stays_expired_and_the_pass_goes_on(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        rows = []
+        for i in (1, 2, 3):
+            name = "clip-%d-loot.mp4" % i
+            pathlib.Path(tmp.name, name).write_bytes(b"x")
+            rows.append(clip_row(id=i, state="expired", file_name=name))
+        ledger = CutterLedger(rows)
+        real = os.unlink
+
+        def unlink(path):
+            if path.endswith("clip-2-loot.mp4"):
+                raise PermissionError(13, "Permission denied")
+            return real(path)
+
+        with (
+            mock.patch.object(clipledger.os, "unlink", unlink),
+            self.assertLogs("clipledger", level="WARNING") as logs,
+        ):
+            count = clipledger.delete_expired(ledger, tmp.name)
+        self.assertEqual(count, 2)
+        self.assertEqual(
+            [r["state"] for r in ledger.rows], ["deleted", "expired", "deleted"]
+        )
+        self.assertEqual(sorted(os.listdir(tmp.name)), ["clip-2-loot.mp4"])
+        (line,) = logs.output
+        self.assertIn("2", line)
+        self.assertIn("Permission denied", line)
 
 
 class AMarkerInANoteCannotMoveTheView(unittest.TestCase):

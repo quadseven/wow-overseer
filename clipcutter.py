@@ -230,7 +230,12 @@ def stage(rfile, length, root, clock=time.monotonic, bound=_no_bound):
         if left <= 0:
             raise _Late("deadline")
         bound(min(IDLE_SECONDS, left))
-        return pull(n)
+        try:
+            return pull(n)
+        except OSError as exc:
+            # A read that timed out or a connection that broke is the
+            # sender's side; any other OSError below is the folder's.
+            raise _Late("read failed") from exc
 
     short = _err(400, "The body ended before its stated length.")
     tmp = None
@@ -258,10 +263,16 @@ def stage(rfile, length, root, clock=time.monotonic, bound=_no_bound):
     except EOFError:
         _discard(tmp)
         return None, short
-    except OSError:
+    except _Late:
         _discard(tmp)
         return None, _err(
             408, "The body did not arrive in time; send it faster or in one go."
+        )
+    except OSError as exc:
+        _discard(tmp)
+        return None, _err(
+            507,
+            "The clip folder could not be written: %s." % (exc.strerror or "I/O error"),
         )
     except BaseException:
         _discard(tmp)

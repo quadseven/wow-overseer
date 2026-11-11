@@ -8,6 +8,7 @@ in eventclips; this module is the wiring around it.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from datetime import datetime, timedelta
@@ -16,6 +17,8 @@ from urllib.parse import quote
 
 import achievements
 import eventclips
+
+log = logging.getLogger(__name__)
 
 STATES = ("pending", "cutting", "ready", "no_view", "failed", "expired", "deleted")
 
@@ -470,7 +473,9 @@ FILE_MISSING_DETAIL = "file was already missing"
 def delete_expired(cur, root: str) -> int:
     """Remove the file of each expired row from `root`, then mark the row
     deleted. A missing file, or a stored name that is not one plain file name,
-    still ends in deleted, with a note. Returns how many rows the update took.
+    still ends in deleted, with a note. A file that cannot be removed for
+    another reason leaves its row expired, logs one warning, and the pass goes
+    on. Returns how many rows the update took.
     """
     cur.execute(_EXPIRED_SELECT)
     done = 0
@@ -483,6 +488,13 @@ def delete_expired(cur, root: str) -> int:
                 note = ""
             except FileNotFoundError:
                 pass
+            except OSError as exc:
+                log.warning(
+                    "expired clip %s: file not removed, row stays expired: %s",
+                    r["id"],
+                    exc.strerror or exc,
+                )
+                continue
         cur.execute(_TO_DELETED, (note, r["id"]))
         done += 1 if cur.rowcount else 0
     return done
