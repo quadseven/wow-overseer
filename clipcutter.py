@@ -36,10 +36,11 @@ NO_DIR = "The clip folder is not set up on this site, so the cutter API is off."
 _PATH = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 _KIND = re.compile(r"[a-z0-9_]{1,16}")
 _COLUMNS = "id, kind, stream_path, event_at, window_start, window_end, state, file_name"
-_ROW = "SELECT " + _COLUMNS + " FROM overseer_clip WHERE id = %s"
+# S608 below: each statement joins module constants only; values are bound.
+_ROW = "SELECT " + _COLUMNS + " FROM overseer_clip WHERE id = %s"  # noqa: S608
 _NOW = "SELECT NOW() AS now"
 _PENDING = (
-    "SELECT id, kind, stream_path, event_at, window_start, window_end"
+    "SELECT id, kind, stream_path, event_at, window_start, window_end"  # noqa: S608
     " FROM overseer_clip WHERE state = 'pending' AND stream_path IN ({holes})"
     " ORDER BY event_at ASC, id ASC LIMIT %d" % MAX_PENDING
 )
@@ -48,12 +49,12 @@ _CLAIM = (
 )
 _APPEND = "CONCAT_WS('; ', NULLIF(detail, ''), NULLIF(%s, ''))"
 _READY = (
-    "UPDATE overseer_clip SET state = 'ready', file_name = %s, detail = "
+    "UPDATE overseer_clip SET state = 'ready', file_name = %s, detail = "  # noqa: S608
     + _APPEND
     + " WHERE id = %s AND state = 'cutting'"
 )
 _DROP = (
-    "UPDATE overseer_clip SET state = %s, detail = "
+    "UPDATE overseer_clip SET state = %s, detail = "  # noqa: S608
     + _APPEND
     + " WHERE id = %s AND state IN ('pending', 'cutting')"
 )

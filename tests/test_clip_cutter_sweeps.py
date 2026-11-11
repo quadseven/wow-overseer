@@ -46,6 +46,14 @@ class Rules(unittest.TestCase):
         self.assertEqual(len(clipcutter.clean_note("x" * 999)), clipcutter.MAX_NOTE)
         self.assertEqual(clipcutter.clean_note("café"), "caf?")
 
+    def test_an_ordinary_note_comes_back_unchanged(self):
+        for plain in (
+            "no ring segment covered 21:04:10 to 21:05:02",
+            "ffmpeg exit 1; retry | later (2 of 3), 50% done: a-b_c/d?",
+            "x" * clipcutter.MAX_NOTE,
+        ):
+            self.assertEqual(clipcutter.clean_note(plain), plain)
+
 
 class TimeoutIsTenMinutes(unittest.TestCase):
     def test_cutting_over_ten_minutes_is_failed_with_the_reason(self):
