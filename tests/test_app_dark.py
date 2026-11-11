@@ -101,7 +101,10 @@ class HighBrightness(unittest.TestCase):
         self.assertEqual(got, [0, 0, True])
 
     def test_the_threshold_is_twenty_and_the_mean_line_is_gone(self):
-        got = run("dark.js", "[M.DARK_HIGH_THRESHOLD, typeof M.DARK_THRESHOLD, typeof M.meanBrightness]")
+        got = run(
+            "dark.js",
+            "[M.DARK_HIGH_THRESHOLD, typeof M.DARK_THRESHOLD, typeof M.meanBrightness]",
+        )
         self.assertEqual(got, [20, "undefined", "undefined"])
 
 

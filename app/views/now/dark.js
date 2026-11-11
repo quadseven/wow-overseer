@@ -6,7 +6,7 @@
 // video and reports when its brightest tenth stays below a small threshold for
 // a few frames, so the panel can say why instead of "LIVE".
 //
-// The sampler is deliberately cheap: a small canvas, a luma average, and a
+// The sampler is deliberately cheap: a small canvas, a luma percentile, and a
 // short streak. It does not try to guess the exact cause from pixels alone;
 // waking or re-aiming the client is the infra agent's job.
 
