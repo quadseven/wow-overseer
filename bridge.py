@@ -13987,6 +13987,17 @@ class Bridge(discord.Client):
             names, leader, rows, free_slots, gear_rows=gear_rows, worn_rows=worn,
             sales=tuple(gear_sales) + lock_sales + clear_sales,
             keep_names=OWNER_KEEPS, bank_keeps=bank_keeps, clear=clear)
+        # THE ITEM PLAN'S VENDOR ROUTE IS COUNTED FOR THE TRIP, not only
+        # carried out after it: a member whose every sellable stack is one the
+        # sale pass keeps and the plan sells read as "carries nothing a vendor
+        # will buy", so the family at the bag floor was judged to have no trip
+        # worth taking and the route's sales never reached a counter. Off
+        # unless ITEMPLAN_SELL_VENDOR is on, then nothing is added. Looked up:
+        # the economy tests load this pass in isolation.
+        route_sales = await asyncio.to_thread(
+            globals().get("_route_sales_for_trip", lambda *a, **k: ()),
+            names, leader, rows, free_slots, sellable_counts,
+            gear_rows=gear_rows, worn_rows=worn)
         itemplan_give = getattr(self, "_itemplan_give", None)
         async def skip_itemplan_give(*args):
             return None
@@ -14202,10 +14213,6 @@ class Bridge(discord.Client):
         # own switch, off by default, and only the sales its helper
         # returns reach the queue. Looked up: the economy tests load
         # this pass in isolation.
-        route_sales = await asyncio.to_thread(
-            globals().get("_itemplan_vendor_sales", lambda *a, **k: ()),
-            names, leader, rows, free_slots, gear_rows=gear_rows,
-            worn_rows=worn, keep_names=OWNER_KEEPS)
         inserted = await _queue_vendor_sales(
             candidates, leader, aimed, mode, attempts,
             route_sales=route_sales,
@@ -30151,6 +30158,21 @@ def _itemplan_vendor_sales(names, family, rows, free_slots, gear_rows=(),
         log.exception(
             "itemplan vendor: the route failed; the economy pass carries on")
         return ()
+
+
+def _route_sales_for_trip(names, leader, rows, free_slots, sellable_counts,
+                          gear_rows=(), worn_rows=()):
+    """The vendor route's sales, counted into `sellable_counts` for the trip.
+
+    Blocking: the pass runs it in a thread. Empty while the route's switch is
+    off, and empty on a failed read (the route logs it), so the trip is judged
+    exactly as it was before the route existed.
+    """
+    sales = _itemplan_vendor_sales(
+        names, leader, rows, free_slots, gear_rows=gear_rows,
+        worn_rows=worn_rows, keep_names=OWNER_KEEPS)
+    _count_sales(sellable_counts, sales)
+    return sales
 
 
 def _itemplan_reads(names, family, rows, gear_rows, worn_rows):
