@@ -145,14 +145,25 @@ TURN_CREATE_SQL = (
     " PRIMARY KEY (family)"
     ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
 )
+# Added after the first release, so an existing table gains them at start-up:
+# the seconds counted on a trade job, the allowance used off one, and whether
+# a town errand was released already.
+TURN_ADDED_COLUMNS = (
+    ("counted_seconds", "DOUBLE NOT NULL DEFAULT 0"),
+    ("off_seconds", "DOUBLE NOT NULL DEFAULT 0"),
+    ("released", "TINYINT UNSIGNED NOT NULL DEFAULT 0"),
+)
 TURN_SELECT_SQL = (
-    "SELECT family, run_ended, started_at, finished FROM overseer_dungeon_queue_turn"
+    "SELECT family, run_ended, started_at, finished, counted_seconds, "
+    "off_seconds, released FROM overseer_dungeon_queue_turn"
 )
 TURN_UPSERT_SQL = (
-    "INSERT INTO overseer_dungeon_queue_turn (family, run_ended, started_at, finished) "
-    "VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE "
+    "INSERT INTO overseer_dungeon_queue_turn (family, run_ended, started_at, "
+    "finished, counted_seconds, off_seconds, released) "
+    "VALUES (%s, %s, %s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE "
     "run_ended = VALUES(run_ended), started_at = VALUES(started_at), "
-    "finished = VALUES(finished)"
+    "finished = VALUES(finished), counted_seconds = VALUES(counted_seconds), "
+    "off_seconds = VALUES(off_seconds), released = VALUES(released)"
 )
 # The newest finished run of a leader, as epoch seconds; NULL with none.
 LAST_RUN_END_SQL = (

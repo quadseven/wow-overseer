@@ -699,6 +699,38 @@ class TheAdapter(unittest.TestCase):
         self.assertEqual(te.GO, state.phase)
         self.assertEqual([], released)
 
+    def watch_log(self):
+        lines = []
+        self.ns["log"] = types.SimpleNamespace(
+            info=lambda msg, *a, **k: lines.append(msg % a if a else msg)
+        )
+        return lines
+
+    def test_a_family_barred_by_its_trade_turn_starts_no_errand(self):
+        key = ("Bork", "Grug")
+        lines = self.watch_log()
+        self.ns["_TRADE_TURN_NO_TOWN"] = {key: False}
+        self.now += 30
+        asyncio.run(self.ns["_town_errand_once"](self.fam))
+        self.assertFalse(self.ns["_TOWN_ERRANDS"].get(key, te.State()).active)
+        self.assertEqual([], self.jobs)
+        # The wait is said once per turn, however many ticks pass.
+        for _ in range(3):
+            self.now += 30
+            asyncio.run(self.ns["_town_errand_once"](self.fam))
+        said = [ln for ln in lines if "trade turn" in ln]
+        self.assertEqual(1, len(said), lines)
+        self.assertEqual([], self.jobs)
+
+    def test_a_bar_does_not_touch_an_errand_already_under_way(self):
+        key = ("Bork", "Grug")
+        self.assertEqual(te.GO, self.tick().phase)
+        lines = self.watch_log()
+        self.ns["_TRADE_TURN_NO_TOWN"] = {key: False}
+        state = self.tick()
+        self.assertTrue(state.active)
+        self.assertEqual([], [ln for ln in lines if "trade turn" in ln])
+
     def test_a_bag_room_errand_ends_when_the_family_has_room(self):
         """#2116: the vendor step lifted every member to 4 free slots, the
         campaign waits, so the errand is released at once and the remaining
