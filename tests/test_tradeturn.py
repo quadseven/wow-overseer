@@ -8,6 +8,7 @@ ends or is skipped, and why. No database, no clock of its own.
 import unittest
 
 import classic  # noqa: E402
+import townerrand  # noqa: E402
 import tradeturn  # noqa: E402
 
 CAP = classic.MAX_PROFESSION_SKILL
@@ -190,10 +191,27 @@ class TheTurnCountsOnlyTradeTime(unittest.TestCase):
         )
 
     def test_the_allowance_reads_like_the_turn_length(self):
-        self.assertEqual(600, tradeturn.town_seconds(None))
+        self.assertEqual(2400, tradeturn.town_seconds(None))
         self.assertEqual(90, tradeturn.town_seconds("90"))
         self.assertEqual(0, tradeturn.town_seconds("-1"))
-        self.assertEqual(600, tradeturn.town_seconds("soon"))
+        self.assertEqual(2400, tradeturn.town_seconds("soon"))
+
+
+class TheAllowanceOutlastsAnErrandsSale(unittest.TestCase):
+    """A turn that frees a family before its errand sold leaves the bags full."""
+
+    def test_an_errand_that_used_its_whole_walk_and_wait_still_sells(self):
+        through_the_sale = (
+            townerrand.GO_SECONDS
+            + townerrand.GATHER_SECONDS
+            + townerrand.STEP_SECONDS[townerrand.VENDOR]
+        )
+        self.assertGreaterEqual(tradeturn.DEFAULT_TOWN_SECONDS, through_the_sale)
+
+    def test_the_allowance_stays_inside_the_campaign_hold_ceiling(self):
+        self.assertLessEqual(
+            tradeturn.DEFAULT_TOWN_SECONDS, townerrand.HOLD_CEILING_SECONDS
+        )
 
 
 class TheSetting(unittest.TestCase):

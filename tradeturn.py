@@ -20,8 +20,11 @@ import classic
 
 DEFAULT_SECONDS = 1200
 # How long a turn waits out a job the trade passes do not act on (a town
-# errand) before it frees the family; time on such a job is not counted.
-DEFAULT_TOWN_SECONDS = 600
+# errand) before it frees the family; time on such a job is not counted. It
+# outlasts an errand's walk, its wait and its sale (townerrand: 1200 + 300 +
+# 480), or the turn would free a family whose bags are still full, and it stays
+# inside the 45 minutes a campaign may be held. A test pins both bounds.
+DEFAULT_TOWN_SECONDS = 2400
 
 # What the leader's job is, for the turn's clock: one the crafting passes act
 # on, a town errand holding the family, or anything else (a dungeon, a raid).
