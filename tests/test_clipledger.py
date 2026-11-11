@@ -363,6 +363,90 @@ class FamilyViewTests(unittest.TestCase):
         self.assertIn("no streamed family member in the run", row["detail"])
 
 
+TWO_FAMILIES = {"first": ["Alder", "Birch"], "second": ["Cedar", "Dogwood"]}
+
+
+class TwoFamiliesOneDungeonTests(unittest.TestCase):
+    """Two families inside one dungeon at once: each event stays in its own."""
+
+    def two_runs(self):
+        # The first family's run started earlier, so a map-and-time match
+        # alone would pick it for everyone.
+        return [
+            run(leader="Alder", run_id=1, started_min=50),
+            run(leader="Cedar", run_id=2, started_min=40),
+        ]
+
+    def loot_plan(
+        self, path_of, extra=(), runs=None, families=TWO_FAMILIES, who="Dogwood"
+    ):
+        return plan(
+            loot_rows=[in_dungeon(loot(7, who=who))] + list(extra),
+            runs=self.two_runs() if runs is None else runs,
+            roster=FAMILY,
+            families=families,
+            path_of=path_of,
+        )
+
+    def test_a_second_family_member_takes_their_own_leaders_view(self):
+        (row,) = self.loot_plan(only("Alder", "Cedar"))
+        self.assertEqual("wdcedar", row["stream_path"])
+        self.assertIn("view: Cedar (leader)", row["detail"])
+
+    def test_a_second_family_party_member_comes_from_that_family_only(self):
+        extra = [seen_in("Birch", event_id=501), seen_in("Cedar", event_id=502)]
+        (row,) = self.loot_plan(only("Birch", "Alder"), extra=extra)
+        self.assertEqual("no_view", row["state"])
+        self.assertIn("no streamed family member in the run", row["detail"])
+        self.assertNotIn("Birch", row["detail"])
+
+    def test_the_party_member_is_the_one_from_the_subjects_family(self):
+        runs = self.two_runs()
+        extra = [seen_in("Birch", event_id=501), seen_in("Dogwood", event_id=502)]
+        (row,) = self.loot_plan(
+            only("Birch", "Dogwood"), extra=extra, runs=runs, who="Cedar"
+        )
+        self.assertEqual("wddogwood", row["stream_path"])
+        self.assertIn("view: Dogwood (party member)", row["detail"])
+
+    def test_presence_does_not_cross_families(self):
+        extra = [seen_in("Cedar", event_id=501)]
+        (row,) = self.loot_plan(
+            only("Cedar"), extra=extra, runs=[run(leader="Alder")], who="Birch"
+        )
+        self.assertEqual("no_view", row["state"])
+        self.assertEqual("", row["stream_path"])
+
+    def test_an_unknown_family_with_one_matching_run_keeps_the_old_behavior(self):
+        (row,) = self.loot_plan(
+            only("Alder"), runs=[run(leader="Alder")], families={}, who="Cedar"
+        )
+        self.assertEqual("wdalder", row["stream_path"])
+
+    def test_an_unknown_family_with_two_matching_runs_is_ambiguous(self):
+        (row,) = self.loot_plan(only("Alder", "Cedar"), families={}, who="Dogwood")
+        self.assertEqual("no_view", row["state"])
+        self.assertEqual("", row["stream_path"])
+        self.assertIn("run ambiguous", row["detail"])
+
+    def test_a_clear_does_not_borrow_a_view_from_the_other_family(self):
+        clear = {
+            "map_id": MAP,
+            "dungeon": "T",
+            "leader": "Alder",
+            "members": ["Alder", "Birch", "Cedar"],
+            "at": NOW - timedelta(minutes=3),
+        }
+        (row,) = plan(
+            cleared_runs=[clear],
+            roster=FAMILY,
+            families=TWO_FAMILIES,
+            path_of=only("Cedar"),
+        )
+        self.assertEqual("no_view", row["state"])
+        self.assertIn("no streamed family member in the run", row["detail"])
+
+
 class TiedFirstKillTests(unittest.TestCase):
     def kill(self, event_id, who, at):
         return {
@@ -433,6 +517,10 @@ class ShelfViewOwnerTests(unittest.TestCase):
     def test_a_clip_from_a_party_members_view_names_that_member(self):
         clip = self.shelf_of(detail="view: Birch (party member)")
         self.assertEqual("Birch", clip["view_owner"])
+
+    def test_a_trailing_note_after_the_view_does_not_hide_the_owner(self):
+        clip = self.shelf_of(detail="Test Blade; view: Alder (leader) | dark 1 of 5")
+        self.assertEqual("Alder", clip["view_owner"])
 
     def test_a_clip_from_the_subjects_own_view_names_the_subject(self):
         clip = self.shelf_of(detail="Test Blade")

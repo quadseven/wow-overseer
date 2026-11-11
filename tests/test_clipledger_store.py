@@ -159,7 +159,9 @@ def scan(store, realm, roster=("Alder",), path_of=lambda name: "wd" + name):
         mock.patch.object(map_server, "_read_clip_candidates", realm.read_candidates),
         mock.patch.object(map_server, "_read_clip_history", realm.read_history),
         mock.patch.object(
-            map_server, "_clip_who", lambda: (list(roster), ["Lantern Wardens"])
+            map_server,
+            "_clip_who",
+            lambda: (list(roster), ["Lantern Wardens"], {"one": list(roster)}),
         ),
         mock.patch.object(map_server, "_clip_path", path_of),
     ):

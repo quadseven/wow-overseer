@@ -4438,8 +4438,9 @@ def _clip_path(name: str) -> str:
 
 def _clip_who() -> tuple:
     """(roster names across the families, names of the family guilds)."""
-    roster = [n for names in FAMILIES.families().values() for n in names]
-    return roster, [g["name"] for g in FAMILIES.guilds()]
+    families = FAMILIES.families()
+    roster = [n for names in families.values() for n in names]
+    return roster, [g["name"] for g in FAMILIES.guilds()], families
 
 
 def _read_clip_candidates(roster: list) -> dict:
@@ -4543,7 +4544,7 @@ def scan_clips() -> dict:
     failed tick, not a scanner that fails until the process restarts.
     """
     _ensure_clip_store()
-    roster, guilds = _clip_who()
+    roster, guilds, families = _clip_who()
     if not roster:
         return {"written": 0, "expired": 0}  # IN () is not valid SQL
     found = _read_clip_candidates(roster)
@@ -4577,6 +4578,7 @@ def scan_clips() -> dict:
             existing_keys=keys,
             path_of=_clip_path,
             runs=list(found["run_rows"]) + list(found.get("open_run_rows", [])),
+            families=families,
         )
         for row in planned:
             cur.execute(_CLIP_INSERT, (

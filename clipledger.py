@@ -56,6 +56,7 @@ earliest = achievements._earliest
 
 NOT_IN_A_RUN = "subject not streamed and not in a run"
 NO_STREAMED_IN_RUN = "no streamed family member in the run"
+RUN_AMBIGUOUS = "run ambiguous"
 
 
 def _with_view(detail, extra):
@@ -71,37 +72,57 @@ class Views:
     the event time inside the run's window, which runs to `now` for a run still
     in progress. Who was in the run is the Chronicle's presence rule too: the
     leader, plus anyone with an event inside it (achievements._who_was_there).
+
+    Two families can be inside one dungeon at once, so a run belongs to an
+    event only when the run's leader is in the subject's family, and presence
+    is limited to the leader's family. When the subject's family is unknown,
+    one matching run is taken and several are ambiguous: no guess.
     """
 
-    def __init__(self, path_of, roster, runs, rows, now):
+    def __init__(self, path_of, roster, runs, rows, now, families=None):
         self.path_of = path_of
         self.roster = list(roster)
         self.runs = sorted(runs, key=lambda r: (r["started_at"], r["id"]))
         self.rows = [r for r in rows if r.get("map") is not None]
         self.now = now
+        self.families = [frozenset(names) for names in (families or {}).values()]
 
-    def _run_of(self, at, map_id):
-        if map_id is None:
-            return None
-        for run in self.runs:
-            if achievements.in_run(run, at, int(map_id), self.now):
-                return run
+    def _family_of(self, name):
+        for names in self.families:
+            if name in names:
+                return names
         return None
 
+    def _matches(self, who, at, map_id):
+        """The runs holding this event: (runs, ambiguous)."""
+        if map_id is None:
+            return [], False
+        found = [
+            run
+            for run in self.runs
+            if achievements.in_run(run, at, int(map_id), self.now)
+        ]
+        family = self._family_of(who)
+        if family is not None:
+            return [r for r in found if r["leader_name"] in family][:1], False
+        return found, len(found) > 1
+
     def _present(self, run):
+        family = self._family_of(run["leader_name"])
         return {
             r["character_name"]
             for r in self.rows
-            if achievements.in_run(run, r["first_seen"], int(r["map"]), self.now)
+            if (family is None or r["character_name"] in family)
+            and achievements.in_run(run, r["first_seen"], int(r["map"]), self.now)
         }
 
-    def pick(self, who, leader, members, detail):
+    def pick(self, who, leader, members, detail, reason=NOT_IN_A_RUN):
         """(path, detail) for `who`; `leader` is None when no run is known."""
         own = self.path_of(who)
         if own:
             return own, detail
         if leader is None:
-            return "", _with_view(detail, NOT_IN_A_RUN)
+            return "", _with_view(detail, reason)
         if leader != who and self.path_of(leader):
             return self.path_of(leader), _with_view(
                 detail, "view: %s (leader)" % leader
@@ -115,12 +136,20 @@ class Views:
         return "", _with_view(detail, NO_STREAMED_IN_RUN)
 
     def for_event(self, who, at, map_id, detail):
-        run = self._run_of(at, map_id)
-        if run is None:
+        found, ambiguous = self._matches(who, at, map_id)
+        if ambiguous:
+            return self.pick(who, None, (), detail, RUN_AMBIGUOUS)
+        if not found:
             return self.pick(who, None, (), detail)
+        run = found[0]
         return self.pick(who, run["leader_name"], self._present(run), detail)
 
     def for_run(self, who, members, detail):
+        """A cleared run, already resolved. Its card lists everyone the
+        tables place inside, so the members are cut to the leader's family."""
+        family = self._family_of(who)
+        if family is not None:
+            members = [m for m in members if m in family]
         return self.pick(who, who, members, detail)
 
 
@@ -332,17 +361,19 @@ def plan_requests(
     existing_keys: Iterable[str],
     path_of: Callable[[str], str],
     runs: Iterable[Mapping] = (),
+    families: Mapping[str, Iterable[str]] | None = None,
 ) -> list[dict]:
     """The ledger rows to insert now, oldest event first.
 
     `runs` are the dungeon runs, open or ended, that an event may sit in; an
-    event row names its map as `map`.
+    event row names its map as `map`. `families` maps each family to its
+    members; a run is matched to an event within the subject's family only.
     """
     guilds = frozenset(family_guilds)
     order = list(roster)
     names = frozenset(order)
     loot_rows, event_rows = list(loot_rows), list(event_rows)
-    views = Views(path_of, order, list(runs), loot_rows + event_rows, now)
+    views = Views(path_of, order, list(runs), loot_rows + event_rows, now, families)
     rows = _loot_requests(loot_rows, guilds, now, views)
     rows += _event_requests(event_rows, order, views)
     rows += _clear_requests(list(cleared_runs), names, views)
