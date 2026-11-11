@@ -83,6 +83,9 @@ class AFlagIsNotAClear(unittest.TestCase):
             "were not checked against the dungeon's full count.",
         )
 
+    def test_one_credited_encounter_reads_in_the_singular(self):
+        self.assertIn("its 1 credited encounter was not", told(a_run([1]))["cause"])
+
     def test_no_known_total_and_no_credit_names_no_count(self):
         out = told(a_run([]))
         self.assertEqual(out["story"], "Finished Wailing Caverns.")

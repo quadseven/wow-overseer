@@ -973,8 +973,13 @@ def _complete_cause(credited: int, total: int) -> str:
         )
     if credited:
         return (
-            "Finished: the run reported complete; its %d credited encounters "
-            "were not checked against the dungeon's full count." % credited
+            "Finished: the run reported complete; its %d credited encounter%s "
+            "%s not checked against the dungeon's full count."
+            % (
+                credited,
+                "" if credited == 1 else "s",
+                "was" if credited == 1 else "were",
+            )
         )
     return (
         "Finished: the run reported complete, and no credited encounter is on record."
