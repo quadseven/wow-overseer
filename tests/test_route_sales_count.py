@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import pathlib
 import sys
-import types
 import unittest
 from unittest import mock
 
@@ -30,8 +29,13 @@ class RouteSalesCountedForTheTripTest(unittest.TestCase):
             self.bridge, "_itemplan_vendor_sales", return_value=tuple(sales)
         ):
             return self.bridge._route_sales_for_trip(
-                ["Oz", "Zug"], "Zug", [], {"Oz": 0, "Zug": 8}, counts,
-                gear_rows=(), worn_rows=(),
+                ["Oz", "Zug"],
+                "Zug",
+                [],
+                {"Oz": 0, "Zug": 8},
+                counts,
+                gear_rows=(),
+                worn_rows=(),
             )
 
     def test_a_member_whose_only_sales_are_the_routes_is_counted(self):
@@ -52,8 +56,12 @@ class RouteSalesCountedForTheTripTest(unittest.TestCase):
     def test_a_failed_route_never_stops_the_pass(self):
         counts = {"Oz": 0}
         with (
-            mock.patch.object(self.bridge.itemplan_vendor, "enabled", return_value=True),
-            mock.patch.object(self.bridge, "_itemplan_reads", side_effect=RuntimeError("x")),
+            mock.patch.object(
+                self.bridge.itemplan_vendor, "enabled", return_value=True
+            ),
+            mock.patch.object(
+                self.bridge, "_itemplan_reads", side_effect=RuntimeError("x")
+            ),
         ):
             sales = self.bridge._route_sales_for_trip(
                 ["Oz"], "Oz", [], {"Oz": 0}, counts, gear_rows=(), worn_rows=()
