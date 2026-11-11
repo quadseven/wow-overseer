@@ -287,9 +287,15 @@ def _run_card(run: dict, latest: bool, now: datetime, told: dict | None = None) 
     # The post-run report (mod-overseer#152), the one Discord was sent: the
     # same runreport.read, so the two show the same numbers for a run id.
     report = (told.get("reports") or {}).get(run_id(run))
+    clips = told.get("clips") or []
+    cleared = None
     if report and report.get("ended"):
         card["report"] = runreport.card(report)
-        card.update(_clear_clip(run, report, told.get("clips") or []))
+        cleared = _clear_row(run, report, clips)
+        card.update(clipledger.link(cleared))
+    listed = _run_clips(run, clips, told.get("path_of"), cleared)
+    if listed:
+        card["clips"] = listed
     return card
 
 
@@ -299,8 +305,8 @@ def _run_card(run: dict, latest: bool, now: datetime, told: dict | None = None) 
 _CLEAR_SLACK_SECONDS = 300
 
 
-def _clear_clip(run: dict, report: dict, clips: list) -> dict:
-    """The clip link (or the no-live-view line) of the clear this run was.
+def _clear_row(run: dict, report: dict, clips: list) -> dict | None:
+    """The ledger row of the clear this run was, or None.
 
     The ledger keys a clear by dungeon map ("clear:<map id>"), once, for the
     family's first clear, so a run is that clear only when it cleared that
@@ -310,7 +316,7 @@ def _clear_clip(run: dict, report: dict, clips: list) -> dict:
     """
     ended = run["ended"]
     if ended is None or ended.get("age_seconds") is None:
-        return {}
+        return None
     key = "clear:%s" % report.get("map_id")
     for row in clips:
         if (
@@ -320,8 +326,47 @@ def _clear_clip(run: dict, report: dict, clips: list) -> dict:
             and abs(int(row["age_seconds"]) - int(ended["age_seconds"]))
             <= _CLEAR_SLACK_SECONDS
         ):
-            return clipledger.link(row)
-    return {}
+            return row
+    return None
+
+
+# The ledger kinds a run card lists besides its clear: a boss first kill and a
+# major loot drop. Both are read from the same table as the clear.
+_LISTED_KINDS = ("boss_kill", "loot")
+
+
+def _run_clips(run: dict, clips: list, path_of, cleared: dict | None) -> list:
+    """The ledger rows inside this run, as link shapes in event order.
+
+    A row belongs to the run when its stream path equals the leader's and its
+    event lies between the run's first row and its `ended` row, with the
+    clear match's slack. A row with no stream path never attaches, and the
+    clear's own row is left to the card's `clip`. A run with no `ended` row has
+    no end to bound the span and lists nothing.
+    """
+    ended = run["ended"]
+    leader = next((r["leader_name"] for r in run["rows"] if r.get("leader_name")), "")
+    path = path_of(leader) if path_of and leader else ""
+    first = run["rows"][0].get("age_seconds")
+    if not path or ended is None or ended.get("age_seconds") is None or first is None:
+        return []
+    newest = int(ended["age_seconds"]) - _CLEAR_SLACK_SECONDS
+    oldest = int(first) + _CLEAR_SLACK_SECONDS
+    inside = [
+        row
+        for row in clips
+        if row is not cleared
+        and row.get("kind") in _LISTED_KINDS
+        and row.get("stream_path") == path
+        and row.get("age_seconds") is not None
+        and newest <= int(row["age_seconds"]) <= oldest
+    ]
+    inside.sort(key=lambda r: -int(r["age_seconds"]))
+    return [
+        {**shown, "kind": row["kind"], "character": row["character"]}
+        for row in inside
+        if (shown := clipledger.link(row))
+    ]
 
 
 def run_id(run: dict) -> int:
@@ -357,6 +402,7 @@ def build_run_timeline(
     zones: dict | None = None,
     reports: dict | None = None,
     clips: list | None = None,
+    path_of=None,
 ) -> dict:
     """The timeline payload for every family.
 
@@ -367,6 +413,9 @@ def build_run_timeline(
     `age_seconds` column), `bosses` (boss creature entries) and `zones` (area
     id to name) are what runstory tells each ended run's story from.
     `reports` maps a run id to its runreport.read report, drawn on the card.
+    `clips` are ledger rows aged like the run rows; `path_of` maps a
+    character to the stream path their clips are cut from, which a run card
+    uses to list the clips inside the run (see _run_clips).
     """
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
@@ -400,6 +449,7 @@ def build_run_timeline(
                     "zones": zones or {},
                     "reports": reports or {},
                     "clips": clips or [],
+                    "path_of": path_of,
                 },
             )
             for f in names

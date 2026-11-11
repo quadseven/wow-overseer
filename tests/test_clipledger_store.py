@@ -493,6 +493,17 @@ class TheSql(unittest.TestCase):
         self.assertIn("{holes}", sql)
 
 
+class TheRunCardRead(unittest.TestCase):
+    def test_the_run_clips_read_carries_what_the_card_matches_on(self):
+        sql = map_server._RUN_CLIPS_SQL
+        for column in ("event_key", "kind", "`character`", "stream_path", "detail"):
+            self.assertIn(column, sql)
+        for kind in ("'clear'", "'boss_kill'", "'loot'"):
+            self.assertIn(kind, sql)
+        self.assertIn("'failed'", sql)
+        self.assertIn("INTERVAL %s HOUR", sql)
+
+
 class TheTimer(unittest.TestCase):
     def test_the_scanner_thread_runs_the_scan_on_its_timer(self):
         ran = threading.Event()

@@ -3800,10 +3800,12 @@ def _fetch_run_timeline() -> dict:
 # The ledger's clear rows over the timeline's hours, aged by the database the
 # same way the run rows are, so a run and its clear are matched on one clock.
 _RUN_CLIPS_SQL = (
-    "SELECT event_key, kind, `character`, state, file_name,"
+    "SELECT event_key, kind, `character`, state, file_name, stream_path, detail,"
     " TIMESTAMPDIFF(SECOND, event_at, NOW()) AS age_seconds FROM overseer_clip"
-    " WHERE event_key LIKE 'clear:%%' AND state IN ('ready', 'no_view')"
+    " WHERE kind IN ('clear', 'boss_kill', 'loot')"
+    " AND state IN ('ready', 'no_view', 'failed')"
     " AND event_at > NOW() - INTERVAL %s HOUR"
+    " ORDER BY event_at ASC LIMIT 2000"
 )
 
 # The ledger rows of these loot events, for the story links. Only the two
@@ -6128,7 +6130,7 @@ class Handler(BaseHTTPRequestHandler):
             fetched["rows"], fetched["families"], present=fetched["present"],
             deaths=fetched["deaths"], bosses=fetched["bosses"],
             zones=recap.zone_names(GEO.continents), reports=fetched["reports"],
-            clips=fetched.get("clips"))
+            clips=fetched.get("clips"), path_of=_clip_path)
         return 200, payload
 
     @_get_route("recap query failed")

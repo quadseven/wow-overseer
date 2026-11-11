@@ -239,6 +239,36 @@ class TheNamedClipLinks(unittest.TestCase):
         self.assertEqual(self.links({"line": "x"}), "")
         self.assertEqual(self.links({"clips": []}), "")
 
+    def test_a_run_card_clip_is_named_by_its_character(self):
+        m = self.links(
+            {
+                "clips": [
+                    {
+                        "character": "Oz",
+                        "kind": "boss_kill",
+                        "clip": {
+                            "url": "/clips/clip-6-boss_kill.mp4",
+                            "kind": "boss_kill",
+                        },
+                    },
+                    {
+                        "character": "Zug",
+                        "kind": "loot",
+                        "clip_note": "No clip was saved.",
+                    },
+                ]
+            }
+        )
+        self.assertIn('href="/m/clips/clip-6-boss_kill.mp4"', m)
+        self.assertIn("Oz", m)
+        self.assertIn("Zug", m)
+        self.assertIn("No clip was saved.", m)
+        self.assertNotIn("undefined", m)
+
+    def test_the_run_card_draws_its_clips_with_the_shared_helper(self):
+        guild = app_file("views/guild.js")
+        self.assertIn("${clipLink(r)}${clipLinks(r)}", guild)
+
 
 class TheFeedDrawsFirstKillsAndSixtyClips(unittest.TestCase):
     def test_the_feed_row_draws_every_clip_shape_with_the_shared_helpers(self):
