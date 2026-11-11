@@ -2,7 +2,7 @@
 
 The stream agent reads the ledger only while it drives that stream, so a
 request it never saw would stay pending forever. A pending row whose window
-end is over 15 minutes old becomes no_view; a cutting row not touched for over
+end is over 15 minutes old becomes failed, with its reason; a cutting row not touched for over
 10 minutes becomes failed. Each update names the state it replaces, so a row the
 agent finished in the meantime is left alone.
 """
@@ -35,12 +35,13 @@ class WhichRowsAreStale(unittest.TestCase):
     def plan(self, *rows):
         return clipledger.stale_changes(rows, now=NOW)
 
-    def test_pending_past_fifteen_minutes_becomes_no_view(self):
+    def test_pending_past_fifteen_minutes_becomes_failed_with_its_own_reason(self):
         old = NOW - timedelta(minutes=15, seconds=1)
+        (change,) = self.plan(row(1, "pending", old))
         self.assertEqual(
-            [(c["id"], c["from"], c["to"]) for c in self.plan(row(1, "pending", old))],
-            [(1, "pending", "no_view")],
+            (change["id"], change["from"], change["to"]), (1, "pending", "failed")
         )
+        self.assertEqual(change["detail"], clipledger.PENDING_FAILED_DETAIL)
 
     def test_pending_at_exactly_fifteen_minutes_waits(self):
         self.assertEqual(self.plan(row(1, "pending", NOW - timedelta(minutes=15))), [])
@@ -127,11 +128,18 @@ class TimeOutRun(unittest.TestCase):
             ]
         )
         counts = clipledger.time_out(cur, now=NOW)
-        self.assertEqual(counts, {"no_view": 1, "failed": 1})
-        self.assertEqual(cur.rows[1]["state"], "no_view")
+        self.assertEqual(counts, {"no_view": 0, "failed": 2})
+        self.assertEqual(cur.rows[1]["state"], "failed")
+        self.assertEqual(cur.rows[1]["detail"], clipledger.PENDING_FAILED_DETAIL)
         self.assertEqual(cur.rows[2]["state"], "failed")
         self.assertTrue(cur.rows[2]["detail"])
         self.assertEqual(cur.rows[3]["state"], "pending")
+
+    def test_the_reason_is_appended_so_the_view_text_survives(self):
+        cur = FakeCursor([row(1, "pending", NOW - timedelta(minutes=20))])
+        clipledger.time_out(cur, now=NOW)
+        sql = [s for s, _ in cur.statements if s.startswith("UPDATE")][0]
+        self.assertIn("CONCAT_WS('; ', NULLIF(detail, '')", sql)
 
     def test_a_row_the_agent_finished_meanwhile_is_not_overwritten(self):
         cur = FakeCursor(

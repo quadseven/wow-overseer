@@ -4354,8 +4354,9 @@ def start_stream_sweeper(every: float = STREAM_SWEEP_SECONDS, sweep=None,
 # this process. The bridge tick has none of those helpers.
 CLIP_SCAN_SECONDS = 60
 
-# The directory the stream agent's saved clips are mounted in, read-only. Unset
-# or missing means no clips: the shelf is empty and nothing errors.
+# The directory the stream agent's saved clips live in. Uploads write it and
+# expiry deletes from it; it is not mounted read-only. Unset or missing means
+# no clips: the shelf is empty and nothing errors.
 CLIPS_DIR = os.environ.get("CLIPS_DIR", "")
 CLIPS_PREFIX = "/clips/"
 
