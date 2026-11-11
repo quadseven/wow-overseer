@@ -4859,6 +4859,13 @@ _FRAMES_LOCK = threading.Lock()
 # it the record that was last touched longest ago goes. Four times the
 # streams that can run at once is more than any watch wall shows.
 MAX_FRAMES = 4 * stream.MAX_CHANNELS
+# The last time the cutter's poll named each stream path, epoch seconds: the
+# only per-view clock a streamed view has. The poll names the views whose
+# recorder is running, so this proves a running recorder, not a moving
+# picture. Empty after a restart, so a streamed view reads no_frame until the
+# next poll.
+_VIEW_SEEN: dict = {}
+_VIEW_SEEN_LOCK = threading.Lock()
 
 
 # Where the page reaches the model-viewer cache. Also the value of the
@@ -6221,6 +6228,21 @@ class Handler(BaseHTTPRequestHandler):
         # rollup that exists to say what is NOT real, rendering empty,
         # reads as a realm where nothing is real at all.
         payload = eye.build_eye(**_fetch_eye())
+        # The watch wall's own tiles, so the watched set and the live flag are
+        # the page's, built with no snapshot rows (only names and URLs are used).
+        wall = watchwall.build_heads(
+            [(key, family.build_family([], GEO, names, {}))
+             for key, names in FAMILIES.families().items()],
+            family.build_observers([], GEO, (director.WATCHER_NAME,)))["wall"]
+        with _FRAMES_LOCK:
+            frame_at = {n: r.get("frame_at") for n, r in _FRAMES.items()}
+        with _VIEW_SEEN_LOCK:
+            seen = dict(_VIEW_SEEN)
+        recorder_at = {t["name"]: seen[family.broadcast_path(t["name"])]
+                     for t in wall["tiles"]
+                     if family.broadcast_path(t["name"]) in seen}
+        payload["tiles"] = eye.build_tiles(
+            wall["tiles"], frame_at, recorder_at, time.time())
         return 200, payload
 
     @_get_route("wealth query failed")
@@ -7185,7 +7207,16 @@ class Handler(BaseHTTPRequestHandler):
         oldest first, at most 10, with the database clock."""
         if not _clips_root():
             return 503, {"error": clipcutter.NO_DIR}
-        return clipcutter.pending(ctx.read, query.get("paths", [""])[0])
+        raw = query.get("paths", [""])[0]
+        code, payload = clipcutter.pending(ctx.read, raw)
+        if code == 200:
+            now = time.time()
+            with _VIEW_SEEN_LOCK:
+                for path in clipcutter.paths_of(raw):
+                    _VIEW_SEEN[path] = now
+                while len(_VIEW_SEEN) > MAX_FRAMES:
+                    del _VIEW_SEEN[min(_VIEW_SEEN, key=_VIEW_SEEN.get)]
+        return code, payload
 
     def _cutter_call(self, call, late: bool = False) -> None:
         """Answer a cutter POST: call(cur, query, root) -> (status, payload).
