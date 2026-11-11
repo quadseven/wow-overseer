@@ -4437,7 +4437,7 @@ def _clip_path(name: str) -> str:
 
 
 def _clip_who() -> tuple:
-    """(roster names across the families, names of the family guilds)."""
+    """(roster names across the families, family guild names, the families)."""
     families = FAMILIES.families()
     roster = [n for names in families.values() for n in names]
     return roster, [g["name"] for g in FAMILIES.guilds()], families
