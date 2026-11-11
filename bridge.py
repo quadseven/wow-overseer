@@ -205,6 +205,10 @@ POLL_SECONDS = float(os.environ.get("POLL_SECONDS", "3"))
 # How long a family's campaign queue yields its job for trade work after a
 # queued run ends (tradeturn.py, #2262). 0 turns the rule off.
 TRADE_TURN_SECONDS = tradeturn.seconds(os.environ.get("TRADE_TURN_SECONDS"))
+# How long a turn waits out a town errand (or any job the trade passes do not
+# act on) before it releases the errand; that time is not counted.
+TRADE_TURN_TOWN_SECONDS = tradeturn.town_seconds(
+    os.environ.get("TRADE_TURN_TOWN_SECONDS"))
 # The overseer's own channel: unaddressed messages there get answered
 # (roster / help) instead of the shared-channel silence rule.
 OVERSEER_CHANNEL_ID = os.environ.get("OVERSEER_CHANNEL_ID", "")
@@ -4337,6 +4341,16 @@ def _ensure_queue_store() -> None:
     try:
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(campaignqueue.TURN_CREATE_SQL)
+            # Columns a later release added, the way the queue table gains its own.
+            for column, definition in campaignqueue.TURN_ADDED_COLUMNS:
+                cur.execute(
+                    "SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '"
+                    + campaignqueue.TURN_TABLE + "' AND COLUMN_NAME = %s",
+                    (column,))
+                if not (cur.fetchone() or {}).get("n"):
+                    cur.execute("ALTER TABLE " + campaignqueue.TURN_TABLE
+                                + " ADD COLUMN " + column + " " + definition)
     except pymysql.err.MySQLError:
         log.exception("trade turn: the turn store is unavailable, so no family "
                       "takes a trade turn")
@@ -5111,6 +5125,16 @@ def _append_planned(family: str, rows: list, finish: int, option,
 # Families in a trade turn now, rebuilt by every queue pass (_trade_turn_pass).
 # A restart empties it and the next pass refills it from the stored turn.
 _TRADE_TURN: set = set()
+# Per family, in process only: when its last turn pass ran, and the trades
+# below the cap when the turn began (for the end line). A restart empties both,
+# so the first pass after one measures no time and the end line says the start
+# values are unknown.
+_TRADE_TURN_SEEN: dict = {}
+# Families whose live turn has released a town errand: tuple(sorted(names)),
+# the key _TOWN_ERRANDS uses, -> whether the wait was logged yet. Rebuilt from
+# the stored `released` flag by every pass, so a restart restores it.
+_TRADE_TURN_NO_TOWN: dict = {}
+_TRADE_TURN_START: dict = {}
 
 
 def _fetch_trade_turns() -> dict:
@@ -5123,6 +5147,9 @@ def _fetch_trade_turns() -> dict:
                     run_ended=int(row["run_ended"]),
                     started=float(row["started_at"]),
                     over=bool(row["finished"]),
+                    counted=float(row["counted_seconds"]),
+                    off=float(row["off_seconds"]),
+                    released=bool(row["released"]),
                 )
                 for row in cur.fetchall()
             }
@@ -5136,7 +5163,8 @@ def _save_trade_turn(family: str, turn) -> None:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(campaignqueue.TURN_UPSERT_SQL,
                     (family, int(turn.run_ended), float(turn.started),
-                     1 if turn.over else 0))
+                     1 if turn.over else 0, float(turn.counted), float(turn.off),
+                     1 if turn.released else 0))
 
 
 def _fetch_last_run_end(leader: str):
@@ -20398,6 +20426,18 @@ class Bridge(discord.Client):
             elif not state.active:
                 return
         if not state.active:
+            # A TRADE TURN THAT RELEASED THIS FAMILY'S ERRAND (tradeturn.py,
+            # #2262) lets no new one start until the turn ends, or the family
+            # goes back to town and the turn spends its time with no trade
+            # work. Looked up: the adapter tests load this method in
+            # isolation. An errand already under way is not touched here.
+            barred = globals().get("_TRADE_TURN_NO_TOWN")
+            if barred is not None and key in barred:
+                if not barred[key]:
+                    barred[key] = True
+                    log.info("town errand: none starts%s while its trade turn "
+                             "runs; the turn released the last one", label)
+                return
             state = await self._town_errand_start(
                 state, names, leader, in_run, now, label)
             _TOWN_ERRANDS[key] = state
@@ -23015,6 +23055,7 @@ class Bridge(discord.Client):
             log.exception("trade turn: the turns could not be read; the queue "
                           "keeps every family this pass")
             _TRADE_TURN.clear()
+            _TRADE_TURN_NO_TOWN.clear()
             return pending
         kept: dict = {}
         in_turn: set = set()
@@ -23023,7 +23064,8 @@ class Bridge(discord.Client):
             if fam is not None and rows:
                 try:
                     if await self._trade_turn_family(
-                            key, fam, turns.get(key), TRADE_TURN_SECONDS):
+                            key, fam, turns.get(key), TRADE_TURN_SECONDS,
+                            TRADE_TURN_TOWN_SECONDS):
                         in_turn.add(key)
                         continue
                 except Exception:
@@ -23032,14 +23074,43 @@ class Bridge(discord.Client):
             kept[key] = rows
         _TRADE_TURN.clear()
         _TRADE_TURN.update(in_turn)
+        # A bar outlives only a turn that is still live.
+        live = {tuple(sorted(fams[k]["names"])) for k in in_turn}
+        for names in [n for n in _TRADE_TURN_NO_TOWN if n not in live]:
+            del _TRADE_TURN_NO_TOWN[names]
         return kept
 
     async def _trade_turn_family(self, key: str, fam: dict, turn,
-                                 setting: int) -> bool:
-        """One family's turn: True while the queue yields its job."""
+                                 setting: int, town_setting: int) -> bool:
+        """One family's turn: True while the queue yields its job.
+
+        The turn counts the time the leader's job is one the crafting passes
+        act on. A town errand that holds the family past the allowance is
+        released, and a dungeon or raid job the queue wrote back is replaced
+        by the default job, so the turn cannot run out with no trade done.
+        """
         label = campaignqueue._family(key)
         names = list(fam["names"])
+        errand_key = tuple(sorted(names))
         leader = str(fam["leader"].get("name") or "")
+        job = str(fam["leader"].get("job") or "").strip().lower()
+        queue_job = job.startswith("dungeon") or jobs.is_raid_job(job)
+        now = time.time()
+        seen = _TRADE_TURN_SEEN.get(key)
+        elapsed = max(0.0, now - seen) if seen is not None else 0.0
+        _TRADE_TURN_SEEN[key] = now
+        if job in (craft_rhythm.MODE_GATHER, craft_rhythm.MODE_CRAFT):
+            kind = tradeturn.ON_TRADE
+        elif job == jobs.TOWN_RUN or _town_errand_active(names):
+            kind = tradeturn.TOWN
+        else:
+            kind = tradeturn.OTHER
+
+        async def default_job():
+            for name in names:
+                await asyncio.to_thread(_insert_job, name, jobs.DEFAULT,
+                                        campaignqueue.SOURCE)
+
         last = await asyncio.to_thread(_fetch_last_run_end, leader)
         mid_run = False
         trades: dict = {}
@@ -23047,30 +23118,63 @@ class Bridge(discord.Client):
             mid_run = await self._mid_run(names)
             if not mid_run:
                 trades = await asyncio.to_thread(_fetch_trade_skills, names)
-        said = tradeturn.decide(last, turn, time.time(), setting, trades, mid_run)
-        if said.action == tradeturn.HOLD:
+        said = tradeturn.decide(last, turn, now, setting, trades, mid_run,
+                                kind, elapsed, town_setting)
+        if said.action in (tradeturn.HOLD, tradeturn.RELEASE):
+            if said.action == tradeturn.RELEASE:
+                own = await asyncio.to_thread(
+                    _cohort_of, bonds.head_of_family())
+                slot = (self._town_slot if key == own
+                        else self._cohort_town_slot(key))
+                await self._town_errand_release(
+                    names, leader, slot, " for " + label)
+                errand = _TOWN_ERRANDS.get(errand_key)
+                if errand is not None:
+                    # The errand is over in memory too, or its next tick would
+                    # write the town run again.
+                    _TOWN_ERRANDS[errand_key] = townerrand.State(
+                        ended=errand.ended)
+                _TOWN_ERRAND_MARKS.pop(errand_key, None)
+                await default_job()
+                log.info("trade turn: %s releases its town errand - the %d "
+                         "second allowance for time off a trade job is spent",
+                         label, town_setting)
+            elif queue_job:
+                await default_job()
+            if said.turn.released:
+                _TRADE_TURN_NO_TOWN.setdefault(errand_key, False)
+            await asyncio.to_thread(_save_trade_turn, key, said.turn)
             return True
         if said.action == tradeturn.END:
-            await asyncio.to_thread(
-                _save_trade_turn, key,
-                tradeturn.Turn(turn.run_ended, turn.started, True))
-            log.info("trade turn: %s ends - %s; the queue admits its next "
-                     "entry", label, said.reason)
+            await asyncio.to_thread(_save_trade_turn, key, said.turn)
+            _TRADE_TURN_SEEN.pop(key, None)
+            before = _TRADE_TURN_START.pop(key, None)
+            if before is None:
+                moved = "start values are unknown (the bridge restarted)"
+            else:
+                try:
+                    after = await asyncio.to_thread(_fetch_trade_skills, names)
+                    moved = "; ".join(tradeturn.trade_changes(before, after))
+                except Exception:
+                    log.exception("trade turn: the trades could not be read "
+                                  "for the end line of %s", label)
+                    moved = "trades unread"
+            log.info("trade turn: %s ends - %s; %d seconds counted, %d "
+                     "seconds off a trade job; trades: %s; the queue admits "
+                     "its next entry", label, said.reason, said.turn.counted,
+                     said.turn.off, moved or "none below the cap")
             return False
         if said.action == tradeturn.SKIP:
             await asyncio.to_thread(
-                _save_trade_turn, key, tradeturn.Turn(last, time.time(), True))
+                _save_trade_turn, key, tradeturn.Turn(last, now, True))
             log.info("trade turn: %s skips - %s", label, said.reason)
             return False
         if said.action != tradeturn.START:
             return False
-        job = str(fam["leader"].get("job") or "").strip().lower()
-        if job.startswith("dungeon") or jobs.is_raid_job(job):
-            for name in names:
-                await asyncio.to_thread(_insert_job, name, jobs.DEFAULT,
-                                        campaignqueue.SOURCE)
-        await asyncio.to_thread(
-            _save_trade_turn, key, tradeturn.Turn(last, time.time(), False))
+        if queue_job:
+            await default_job()
+        await asyncio.to_thread(_save_trade_turn, key, said.turn)
+        _TRADE_TURN_START[key] = trades
         log.info("trade turn: %s starts for %d seconds - %s", label, setting,
                  said.reason)
         return True
