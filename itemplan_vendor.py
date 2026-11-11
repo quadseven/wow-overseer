@@ -23,6 +23,11 @@ when every one of these holds:
     been released: its decision key is in the caller's `released` set.
     An unreleased confirm sale is shown by the shadow and waits.
 
+NOT A BAG, NOT A TOOL. The plan can route a bag (rule R2, its worn-bag test
+is vacuous in the shadow) or a fishing pole (rule R8, not in
+`disposition.TOOL_TRADES`) to SELL_VENDOR. The route holds both back by
+item class, not by name.
+
 NOT A FALLBACK. `Decision.options` lists the routes the plan weighed, best
 first. When SELL_VENDOR was chosen only because a better route had no
 room (a full guild bank tab), the plan wanted the stack kept and a sale
@@ -52,10 +57,19 @@ import os
 from dataclasses import dataclass, field
 
 import bag_pressure
+import disposition
 import itemplan
 import vendorsale
 
 ENV_SWITCH = "ITEMPLAN_SELL_VENDOR"
+
+# Why a SELL_VENDOR decision is held back instead of carried out.
+HELD_FALLBACK = "a fallback sale: the first choice had no room"
+HELD_BAG = "a bag is never sold by the route"
+HELD_TOOL = "a profession tool is never sold by the route"
+
+# item_template class 2 (weapon) subclasses that are tools, not weapons.
+_TOOL_SUBCLASSES = (14, 20)  # miscellaneous (pick, knife), fishing pole
 PREFIX = "itemplan vendor:"
 
 
@@ -93,6 +107,28 @@ def _int(value, default=0) -> int:
         return default
 
 
+def _held_reason(decision, stack, row) -> str:
+    """Why this SELL_VENDOR decision must not be carried out; '' when it may.
+
+    From item class data (the stack's class and subclass, the row's class
+    when the stack lacks one, `disposition.TOOL_TRADES`), never from names.
+    """
+    item_class = getattr(stack, "item_class", None)
+    if item_class is None:
+        item_class = row.get("item_class")
+    subclass = getattr(stack, "subclass", None)
+    if _int(item_class, -1) == itemplan.C_CONTAINER:
+        return HELD_BAG
+    if decision.entry in disposition.TOOL_TRADES or (
+        _int(item_class, -1) == itemplan.C_WEAPON
+        and _int(subclass, -1) in _TOOL_SUBCLASSES
+    ):
+        return HELD_TOOL
+    if decision.options and decision.options[0] != itemplan.SELL_VENDOR:
+        return HELD_FALLBACK
+    return ""
+
+
 def sales_for(
     plan_, stack_rows, keep_names=(), released=frozenset(), held=None
 ) -> tuple:
@@ -105,6 +141,7 @@ def sales_for(
     sale is not returned; when `held` is a list it is appended there.
     """
     rows_by_key = {stack.key: row for stack, row in stack_rows}
+    stack_of = {stack.key: stack for stack, _row in stack_rows}
     out = []
     for decision in plan_.decisions:
         if decision.route != itemplan.SELL_VENDOR:
@@ -121,9 +158,10 @@ def sales_for(
         # Only where the current protection would keep the stack.
         if not bag_pressure.vendor_refusal(row, keep_names):
             continue
-        if decision.options and decision.options[0] != itemplan.SELL_VENDOR:
+        why = _held_reason(decision, stack_of.get(decision.key), row)
+        if why:
             if held is not None:
-                held.append(decision)
+                held.append((decision, why))
             continue
         guid = _int(row.get("item_guid"))
         count = max(1, _int(row.get("count"), 1))
@@ -152,12 +190,12 @@ def sales_for(
 
 
 def held_lines(held) -> tuple:
-    """One log line per holder for the fallback sales held back."""
+    """One log line per holder for the sales held back, each with its reason."""
     names: dict = {}
-    for decision in held:
-        names.setdefault(decision.holder, []).append(decision.name)
+    for decision, why in held:
+        names.setdefault(decision.holder, []).append("%s (%s)" % (decision.name, why))
     return tuple(
-        "%s %s holds back %d fallback sale(s): %s"
+        "%s %s holds back %d sale(s): %s"
         % (PREFIX, holder, len(found), ", ".join(found))
         for holder, found in sorted(names.items())
     )

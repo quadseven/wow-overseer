@@ -159,14 +159,14 @@ class SalesForTest(unittest.TestCase):
         self.assertEqual(len(sales), len(confirms))
 
 
-def fallback_fixture(options):
+def fallback_fixture(options, item_class=4, subclass=0, name="Plain Green Cloak"):
     """One carried green and a plan whose only decision sells it."""
-    item = row("Ana", 4, 7777, "Plain Green Cloak", quality=2, sell=4000, item_class=4)
+    item = row("Ana", 4, 7777, name, quality=2, sell=4000, item_class=item_class)
     key = ("Ana", 7777, 0)
     decision = itemplan.Decision(
         holder="Ana",
         entry=7777,
-        name="Plain Green Cloak",
+        name=name,
         count=1,
         from_loc=itemplan.CARRIED_BAG,
         route=itemplan.SELL_VENDOR,
@@ -180,7 +180,8 @@ def fallback_fixture(options):
         options=options,
     )
     plan_ = types.SimpleNamespace(decisions=(decision,))
-    return plan_, [(types.SimpleNamespace(key=key), item)], item
+    stack = types.SimpleNamespace(key=key, item_class=item_class, subclass=subclass)
+    return plan_, [(stack, item)], item
 
 
 class FallbackSaleTest(unittest.TestCase):
@@ -188,7 +189,10 @@ class FallbackSaleTest(unittest.TestCase):
         plan_, prs, _ = fallback_fixture((itemplan.GUILD_BANK, itemplan.SELL_VENDOR))
         held = []
         self.assertEqual(vendor.sales_for(plan_, prs, held=held), ())
-        self.assertEqual([d.name for d in held], ["Plain Green Cloak"])
+        self.assertEqual(
+            [(d.name, why) for d, why in held],
+            [("Plain Green Cloak", vendor.HELD_FALLBACK)],
+        )
 
     def test_a_sale_that_was_the_first_choice_still_goes_out(self):
         for options in ((itemplan.SELL_VENDOR, itemplan.BANK_PERSONAL), ()):
@@ -204,7 +208,10 @@ class FallbackSaleTest(unittest.TestCase):
         vendor.sales_for(plan_, prs, held=held)
         self.assertEqual(
             vendor.held_lines(held),
-            ("itemplan vendor: Ana holds back 1 fallback sale(s): Plain Green Cloak",),
+            (
+                "itemplan vendor: Ana holds back 1 sale(s): Plain Green Cloak (%s)"
+                % vendor.HELD_FALLBACK,
+            ),
         )
 
 
@@ -323,22 +330,42 @@ class ProtectedStockTest(unittest.TestCase):
                 plan_, prs = plan_one(item_row, sub)
                 self.assertEqual(vendor.sales_for(plan_, prs), ())
 
-    @unittest.expectedFailure
-    def test_fishing_pole_is_not_a_route_sale(self):
-        # BLOCKING FINDING: the fishing pole is not in `disposition.TOOL_TRADES`,
-        # so rule R5 never sees it and R8 routes it SELL_VENDOR ("nobody in
-        # the family will wear it"). Remove the decorator once the plan keeps it.
+    def test_fishing_pole_is_held_back_as_a_profession_tool(self):
+        # The plan routes the pole SELL_VENDOR (rule R8; it is not in
+        # `disposition.TOOL_TRADES`), so the route holds it back itself, by
+        # item class 2 subclass 20.
         plan_, prs = plan_one(tool_row(14, 6256, "Fishing Pole"), 20)
-        self.assertEqual(vendor.sales_for(plan_, prs), ())
+        self.assertEqual([d.route for d in plan_.decisions], [itemplan.SELL_VENDOR])
+        held = []
+        self.assertEqual(vendor.sales_for(plan_, prs, held=held), ())
+        self.assertEqual(
+            [(d.name, why) for d, why in held],
+            [("Fishing Pole", vendor.HELD_TOOL)],
+        )
+        self.assertEqual(
+            vendor.HELD_TOOL, "a profession tool is never sold by the route"
+        )
 
-    @unittest.expectedFailure
-    def test_a_bag_the_holder_may_wear_is_not_a_route_sale(self):
-        # BLOCKING FINDING: the shadow's plan sees no worn bags, so rule R2's
-        # "no bigger than a worn one" holds for every carried bag and routes
-        # it SELL_VENDOR. The current protection keeps an uncommon bag.
+    def test_a_bag_is_held_back_as_a_bag(self):
+        # The shadow's plan sees no worn bags, so rule R2 routes any carried
+        # bag SELL_VENDOR; the route holds it back by item class 1.
         bag = row("Ana", 19, 4497, "Heavy Brown Bag", quality=2, sell=400, item_class=1)
         plan_, prs = plan_one(bag, 0, container_slots=10)
-        self.assertEqual(vendor.sales_for(plan_, prs), ())
+        self.assertEqual([d.route for d in plan_.decisions], [itemplan.SELL_VENDOR])
+        held = []
+        self.assertEqual(vendor.sales_for(plan_, prs, held=held), ())
+        self.assertEqual(
+            [(d.name, why) for d, why in held],
+            [("Heavy Brown Bag", vendor.HELD_BAG)],
+        )
+        self.assertEqual(vendor.HELD_BAG, "a bag is never sold by the route")
+
+    def test_an_ordinary_first_choice_vendor_sale_still_goes_through(self):
+        rows, gear, worn, free = green_cloak()
+        plan_, prs = plan_and_pairs(rows, gear, worn, free)
+        held = []
+        self.assertEqual(len(vendor.sales_for(plan_, prs, held=held)), 1)
+        self.assertEqual(held, [])
 
 
 def import_bridge():
@@ -497,7 +524,8 @@ class RouteSalesAtTheBridgeTest(unittest.TestCase):
         self.assertEqual(out, ())
         fake_log.info.assert_called_once_with(
             "%s",
-            "itemplan vendor: Ana holds back 1 fallback sale(s): Plain Green Cloak",
+            "itemplan vendor: Ana holds back 1 sale(s): Plain Green Cloak (%s)"
+            % vendor.HELD_FALLBACK,
         )
 
     def test_the_dockerfile_ships_the_route(self):
