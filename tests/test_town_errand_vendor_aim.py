@@ -103,7 +103,53 @@ class TheReleasedAimIsNotRepeated(unittest.TestCase):
         self.assertEqual(CAPITAL, te.choose_aim(CAPITAL, [], HEAD, WHY, released, 10.0))
 
 
+class TheAimAvoidsGroundTheFamilyDiedOn(unittest.TestCase):
+    """#2271: the nearest vendor was chosen by straight-line yards only, and
+    the walk to it crossed ground the family had died on that day."""
+
+    LETHAL = {"map_id": 0, "x": -5800.0, "y": -1300.0, "name": "Lethal Vendor"}
+    SAFE = {"map_id": 0, "x": -8300.0, "y": -2200.0, "name": "Safe Vendor"}
+
+    def deaths_between(self, count=3):
+        # Deaths on the straight line from the head to LETHAL, in the last day.
+        return [{"map_id": 0, "x": -6000.0, "y": -1500.0}] * count
+
+    def test_without_deaths_the_nearest_vendor_is_aimed(self):
+        stops = te.vendor_stops([self.LETHAL, self.SAFE])
+        self.assertEqual(-5800.0, te.choose_aim(CAPITAL, stops, HEAD, WHY)["x"])
+
+    def test_a_vendor_over_ground_the_family_died_on_is_not_aimed(self):
+        stops = te.vendor_stops([self.LETHAL])
+        pick = te.choose_aim(CAPITAL, stops, HEAD, WHY, deaths=self.deaths_between())
+        self.assertEqual(CAPITAL, pick)
+
+    def test_the_next_safe_vendor_is_aimed_instead(self):
+        stops = te.vendor_stops([self.LETHAL, self.SAFE])
+        pick = te.choose_aim(CAPITAL, stops, HEAD, WHY, deaths=self.deaths_between())
+        self.assertEqual(-8300.0, pick["x"])
+
+    def test_one_death_is_not_a_pattern(self):
+        stops = te.vendor_stops([self.LETHAL])
+        pick = te.choose_aim(CAPITAL, stops, HEAD, WHY, deaths=self.deaths_between(1))
+        self.assertEqual(-5800.0, pick["x"])
+
+    def test_deaths_far_from_the_walk_do_not_count(self):
+        far = [{"map_id": 0, "x": -3000.0, "y": 500.0}] * 5
+        stops = te.vendor_stops([self.LETHAL])
+        pick = te.choose_aim(CAPITAL, stops, HEAD, WHY, deaths=far)
+        self.assertEqual(-5800.0, pick["x"])
+
+    def test_deaths_on_another_map_do_not_count(self):
+        elsewhere = [{"map_id": 1, "x": -6000.0, "y": -1500.0}] * 5
+        stops = te.vendor_stops([self.LETHAL])
+        pick = te.choose_aim(CAPITAL, stops, HEAD, WHY, deaths=elsewhere)
+        self.assertEqual(-5800.0, pick["x"])
+
+
 class TheBridgeUsesIt(unittest.TestCase):
+    def test_the_start_reads_the_deaths_and_chooses_the_aim(self):
+        self.assertIn("deaths=", BRIDGE)
+
     def test_the_start_chooses_the_aim_and_the_release_is_remembered(self):
         self.assertIn("townerrand.choose_aim(", BRIDGE)
         self.assertIn("townerrand.unlanded_aim(state, new)", BRIDGE)

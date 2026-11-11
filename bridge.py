@@ -20702,8 +20702,13 @@ class Bridge(discord.Client):
                 await asyncio.to_thread(stops_of, leader, standing),
                 situation.ALLIANCE_MASK if teams.get(leader) == "alliance"
                 else situation.HORDE_MASK if teams.get(leader) == "horde" else 0)
+            # THE GROUND THE FAMILY DIED ON TODAY (#2271): a vendor over it is
+            # not the nearest vendor. Looked up like the stops above.
+            died_of = globals().get("_fetch_family_death_spots")
+            deaths = (await asyncio.to_thread(died_of, list(names))
+                      if died_of else ())
             chosen = townerrand.choose_aim(
-                hub, stops, standing, why, released, now)
+                hub, stops, standing, why, released, now, deaths=deaths)
             if chosen != hub:
                 log.info("town errand: %s%s aims at %s instead of %s (%s)",
                          why, label, chosen.get("place", "a vendor"),
@@ -35632,6 +35637,26 @@ _ERRAND_VENDORS_SQL = (
     "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 AND "
     + towntrip.REAL_SPAWN_SQL + " ORDER BY d2 LIMIT 60"
 )
+
+
+def _fetch_family_death_spots(names: list) -> list:
+    """Where the family died in the last day: [{map_id, x, y}], or [] when
+    unread. The aim choice (townerrand.lethal_stop) reads these."""
+    if not names:
+        return []
+    marks = ", ".join(["%s"] * len(names))
+    sql = (
+        "SELECT map AS map_id, pos_x AS x, pos_y AS y FROM overseer_death "  # noqa: S608 - placeholders from a COUNT, values still bound
+        "WHERE created_at > NOW() - INTERVAL 1 DAY AND character_name IN (%s)"
+        % marks)
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, tuple(names))
+            return [dict(r) for r in cur.fetchall()]
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
 
 
 def _fetch_errand_vendor_stops(leader: str, standing) -> list:
