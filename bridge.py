@@ -5686,6 +5686,48 @@ def _door_run_boss_age(leader: str):
 _ERRAND_RECALLED: dict = {}
 
 
+def _without_recalled(targets):
+    """`targets` less the members recalled from an errand at a door lately: a
+    recalled member is not sent straight back out (#2280), or the next pass
+    would undo the recall. Looked up: adapter tests load callers in isolation."""
+    recalled = globals().get("_ERRAND_RECALLED", {})
+    cooling = getattr(globals().get("dungeonstall"), "recall_cooling", None)
+    if cooling is None or not recalled:
+        return targets
+    now = time.monotonic()
+    return tuple(n for n in targets if not cooling(recalled.get(n), now))
+
+
+def _members_inside_instance(names: list) -> frozenset:
+    """The members whose fresh snapshot reads an instance map (#2280)."""
+    maps = set(dungeonpath.PORTAL_MAPS.values()) | set(raidrun.MAPS.values())
+    return bag_pressure.members_inside_instance(
+        names, _fetch_live_maps(list(names)), maps)
+
+
+def _release_instance_economy_aims(names: list) -> list:
+    """Hand back an economy aim (vendor, bank, repair, ...) held by a member
+    inside an instance (#2280).
+
+    The aim sits inert while the run's hold stands and walks the member OUT of
+    the dungeon when the run stops clearing. Run 1853482 (Blackrock Depths, Nov
+    12): the vendor aim taken at the door at 04:17 stayed on the tank, the
+    between-pulls wait gave up at 04:41:35, the module sent the tank to the
+    vendor at 04:41:41, and it died outside the run at 04:43:04. Only an aim
+    the economy wrote (`_is_economy_aim`) is released. Returns the names."""
+    released = []
+    for name in sorted(_members_inside_instance(names)):
+        aim = _current_travel_npc(name)
+        if aim and _is_economy_aim(aim) and _release_trade_errand(name, aim):
+            released.append(name)
+            log.info(
+                "economy: %s is inside an instance with an errand of its own "
+                "(%s), so the errand is handed back; it belongs between runs",
+                name, aim,
+            )
+    return released
+
+
 def _recall_door_errands(leader: str, ages: dict) -> list:
     """Hand back the errand of every member whose errand of its own has kept
     the family waiting at the door past dungeonstall.RECALL_SECONDS (#2280).
@@ -5764,6 +5806,12 @@ def _door_wedge(head: dict, names: list, leader: str):
     verdict = dungeonstall.door_unreachable(keyword, restarts)
     if verdict is not None:
         return verdict
+    return _door_held_verdict(keyword, ages, errand_of)
+
+
+def _door_held_verdict(keyword: str, ages: dict, errand_of=None):
+    """The first party_held Stuck among the aged members, or None. A member on
+    an errand is named with the aim it carries (#2280)."""
     for name, (state, age) in ages.items():
         errand = ""
         if state == dungeonstall.ERRAND_STATE and errand_of is not None:
@@ -13914,6 +13962,11 @@ class Bridge(discord.Client):
             # comes alive the moment ENTER lifts the stage holds.
             await self._release_stranded_ground_errands(names, leader,
                                                         run_doors=True)
+            # AND NO ECONOMY AIM ON A MEMBER INSIDE THE INSTANCE (#2280).
+            # Looked up: the adapter tests load this method in isolation.
+            drop = globals().get("_release_instance_economy_aims")
+            if drop is not None:
+                await asyncio.to_thread(drop, names)
 
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
 
@@ -20686,19 +20739,21 @@ class Bridge(discord.Client):
                     (await asyncio.to_thread(fetch_town, name)).vendor):
                 standing.add(name)
         at_counter = frozenset(standing)
+        # A MEMBER INSIDE AN INSTANCE IS NEVER AIMED (#2280), run row or not.
+        # Looked up: the adapter tests load this method in isolation.
+        inside_of = globals().get("_members_inside_instance")
+        inside = (
+            await asyncio.to_thread(inside_of, names)
+            if inside_of is not None else frozenset()
+        )
         targets = bag_pressure.stranded_vendor_aims(
             names, leader, positions, free_slots,
             pressure=True, in_run=in_run, at_counter=at_counter,
+            inside=inside,
         )
-        # A MEMBER RECALLED FROM ITS ERRAND AT A DOOR IS NOT SENT STRAIGHT
-        # BACK OUT (#2280): the aim would undo the recall on the next pass.
-        recalled = globals().get("_ERRAND_RECALLED", {})
-        cooling = getattr(globals().get("dungeonstall"), "recall_cooling", None)
-        if cooling is not None and recalled:
-            targets = tuple(
-                name for name in targets
-                if not cooling(recalled.get(name), time.monotonic())
-            )
+        without = globals().get("_without_recalled")
+        if without is not None:
+            targets = without(targets)
         aimed = 0
         for name in targets:
             current = await asyncio.to_thread(_current_travel_npc, name)
