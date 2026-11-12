@@ -4712,8 +4712,12 @@ def loop_mates(m, mates) -> list:
     so no new bridge read is needed. A mate counts when it is another member
     of the looper's guild, online, alive and out of combat, within
     classask.LEVEL_BAND levels of the looper (the band a class quest ask
-    uses). Same zone first, then closest level, then name, so the offer the
-    pass names is the mate most likely to reach the looper."""
+    uses), and in reach in the same sense a class quest ask uses: on the
+    looper's map, at a known position, within classask.HELPER_REACH_YARDS
+    of the looper. A mate on another map, too far away, or at an unknown
+    position is not in reach, however well it fits otherwise. Same zone
+    first, then closest level, then name, so the offer the pass names is
+    the mate most likely to reach the looper."""
     out = []
     for mate in mates or ():
         if mate.name == m.name or mate.guild != m.guild:
@@ -4721,6 +4725,10 @@ def loop_mates(m, mates) -> list:
         if not (mate.online and mate.alive) or mate.in_combat:
             continue
         if abs(int(mate.level) - int(m.level)) > classask.LEVEL_BAND:
+            continue
+        if mate.map_id is None or m.map_id is None or int(mate.map_id) != int(m.map_id):
+            continue
+        if classask._distance(m, mate) > classask.HELPER_REACH_YARDS:
             continue
         out.append(mate)
     out.sort(

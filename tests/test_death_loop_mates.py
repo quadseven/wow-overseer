@@ -52,6 +52,29 @@ class LoopMates(unittest.TestCase):
         ]
         self.assertEqual(guildjobs.loop_mates(m, skipped), [])
 
+    def test_skips_a_mate_on_another_map(self):
+        m = member(NAME)
+        other_map = member("Elsewhere", map_id=1)
+        self.assertEqual(guildjobs.loop_mates(m, [other_map]), [])
+
+    def test_skips_a_mate_too_far_away_on_the_same_map(self):
+        m = member(NAME)
+        distant = member("Distant", x=m.x + 100000.0)
+        self.assertEqual(guildjobs.loop_mates(m, [distant]), [])
+
+    def test_skips_a_mate_whose_position_is_unknown(self):
+        m = member(NAME)
+        unknown = member("Unknown", x=None, y=None)
+        self.assertEqual(guildjobs.loop_mates(m, [unknown]), [])
+
+    def test_no_escape_names_no_mate_when_the_only_mate_is_out_of_reach(self):
+        m = member(NAME, in_combat=True)
+        distant = member("Distant", level=28, x=m.x + 100000.0)
+        found = guildjobs.death_loop_first(m, loop_of(), None, (), CAP, mates=[distant])
+        self.assertIsNone(found[0])
+        self.assertIn("no guildmate in reach", found[2])
+        self.assertNotIn("offered a group-up with Distant", found[2])
+
     def test_same_zone_first_then_closest_level(self):
         m = member(NAME)
         far_zone = member("Farzone", level=26, zone_id=130)
