@@ -51,6 +51,7 @@ quietly addresses the wrong world says nothing at all.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 
 
@@ -149,3 +150,62 @@ def apply(html: bytes, prefix: str) -> bytes:
     if page in html:
         html = html.replace(page, page_version(original).encode())
     return html
+
+
+# ---------------------------------------------------------------------------
+# The site behind an unguessable path.
+#
+# The operator asked that the site not be served at the top level of its
+# hostname but under a random path, the way a private share link works: whoever
+# holds the link can open it, and the bare host and the bare prefix answer
+# nothing. The link is the whole access control, so three things follow.
+#
+# ONE VALUE, TWO READERS. The id is a secret kept outside every repository. The
+# ingress reads it to know what to serve and this process reads it to know what
+# to tell the page, so the two cannot disagree about the mount.
+#
+# A BAD VALUE IS REFUSED WITHOUT BEING PRINTED. `normalize` quotes the value it
+# refuses, which is right for a path and wrong for a secret: the refusal would
+# copy the link into the log stack. The refusals below say what is required and
+# never what was given. A value that is too short is refused for the same
+# reason a guessable one would be: a typo must not become the "secret".
+#
+# EMPTY MEANS NOT CONFIGURED. The Secret that carries the id is committed
+# empty and filled from the secret store, so an unfilled one reaches this
+# process as an empty variable. That is the "off" state, exactly like an absent
+# one, and it leaves the older setting in charge.
+SITE_PATH_ID_VAR = "OVERSEER_SITE_PATH_ID"
+SITE_PATH_PREFIX = "/d/"
+
+# 22 base64url characters is 128 bits of randomness, the least that is not
+# guessable. The upper bound only keeps a pasted blob from being accepted.
+_SITE_ID = re.compile(r"^[A-Za-z0-9_-]{22,128}$")
+
+
+def mount_from_environment(environ=None) -> str:
+    """The mount point this process serves under, from its environment.
+
+    The secret id when one is set (`/d/<id>`), else the older
+    OVERSEER_BASE_PATH through `normalize`. The id wins when both are set,
+    because the pod manifest keeps the older setting while the id is optional.
+    """
+    env = os.environ if environ is None else environ
+    site_id = str(env.get(SITE_PATH_ID_VAR) or "").strip()
+    if not site_id:
+        return normalize(env.get(ENV_VAR))
+    if not _SITE_ID.fullmatch(site_id):
+        raise ValueError(
+            f"{SITE_PATH_ID_VAR} is set but is not usable as a secret path id: "
+            "it must be 22 to 128 characters of letters, digits, '-' and '_'. "
+            "The value is not shown here on purpose."
+        )
+    return SITE_PATH_PREFIX + site_id
+
+
+# Sent on every response. The page's address is the capability when the site is
+# mounted behind a secret path, so a link followed from the page must not carry
+# it as a referrer and a crawler must not record it.
+PRIVACY_HEADERS = (
+    ("Referrer-Policy", "no-referrer"),
+    ("X-Robots-Tag", "noindex, nofollow"),
+)

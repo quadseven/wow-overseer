@@ -128,7 +128,7 @@ PORT = int(os.environ.get("PORT", "8080"))
 # the process rather than quietly become the root. The ingress strips the
 # prefix before proxying, so nothing below this line ever reads it - the
 # only thing it changes is the URLs the page emits.
-BASE_PATH = basepath.normalize(os.environ.get(basepath.ENV_VAR))
+BASE_PATH = basepath.mount_from_environment(os.environ)
 
 # The model-viewer cache (modelviewer.py): an emptyDir on the pod, a temp
 # directory locally, capped in bytes either way. The fetcher is the one
@@ -7222,6 +7222,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("ETag", tag)
         self.end_headers()
         self.wfile.write(body)
+
+    def end_headers(self) -> None:
+        # Every response, however it was built, says not to leak the page's
+        # address and not to be indexed (basepath.PRIVACY_HEADERS): the one
+        # place all of them pass through, so a new response cannot forget.
+        for name, value in basepath.PRIVACY_HEADERS:
+            self.send_header(name, value)
+        super().end_headers()
 
     def log_message(self, fmt, *args):
         log.info("%s " + fmt, self.address_string(), *args)

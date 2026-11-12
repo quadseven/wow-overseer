@@ -73,6 +73,84 @@ class NormalizeTest(unittest.TestCase):
         self.assertIn("leave it unset", message)
 
 
+GOOD_ID = "Q7m2Zk9xLw3TnB8vCd5Rha"  # 22 characters, an invented value
+assert len(GOOD_ID) == 22
+
+
+class SecretMountTest(unittest.TestCase):
+    """The mount can come from one secret id, validated, never echoed."""
+
+    def mount(self, **env):
+        return basepath.mount_from_environment(env)
+
+    def test_a_well_formed_id_is_mounted_under_the_fixed_prefix(self):
+        self.assertEqual(self.mount(OVERSEER_SITE_PATH_ID=GOOD_ID), "/d/" + GOOD_ID)
+        long_id = "A-_" * 40  # 120 characters of the base64url alphabet
+        self.assertEqual(self.mount(OVERSEER_SITE_PATH_ID=long_id), "/d/" + long_id)
+
+    def test_the_id_is_trimmed(self):
+        self.assertEqual(
+            self.mount(OVERSEER_SITE_PATH_ID="  " + GOOD_ID + "\n"), "/d/" + GOOD_ID
+        )
+
+    def test_unset_or_empty_means_the_existing_setting(self):
+        # A Secret committed empty reads as an empty variable, so an empty id
+        # must mean "not configured", exactly like an absent one.
+        for env in ({}, {"OVERSEER_SITE_PATH_ID": ""}, {"OVERSEER_SITE_PATH_ID": "  "}):
+            self.assertEqual(self.mount(**env), "")
+            self.assertEqual(self.mount(OVERSEER_BASE_PATH="/dev", **env), "/dev")
+
+    def test_the_id_wins_over_the_older_setting_when_both_are_set(self):
+        # The pod manifest still carries the older setting while the id is
+        # optional; once the id is set it must be the one that counts.
+        self.assertEqual(
+            self.mount(OVERSEER_BASE_PATH="/dev", OVERSEER_SITE_PATH_ID=GOOD_ID),
+            "/d/" + GOOD_ID,
+        )
+
+    def test_a_short_malformed_or_over_long_id_stops_the_process(self):
+        bad = [
+            "short",
+            GOOD_ID[:-1],
+            GOOD_ID + " x",
+            GOOD_ID + "/",
+            "/" + GOOD_ID,
+            GOOD_ID + '"',
+            "..." + GOOD_ID,
+            GOOD_ID.replace("Z", "%"),
+            "A" * 129,
+        ]
+        for value in bad:
+            with self.subTest(value=len(value)):
+                with self.assertRaises(ValueError):
+                    self.mount(OVERSEER_SITE_PATH_ID=value)
+
+    def test_no_refusal_contains_the_value(self):
+        bad = ["short", GOOD_ID + '"', "x" * 200, GOOD_ID.replace("Z", "%")]
+        for value in bad:
+            with self.assertRaises(ValueError) as caught:
+                self.mount(OVERSEER_SITE_PATH_ID=value)
+            message = str(caught.exception)
+            self.assertNotIn(value, message)
+            self.assertNotIn(value.strip(), message)
+            self.assertNotIn(repr(value), message)
+            self.assertIn(basepath.SITE_PATH_ID_VAR, message)
+
+    def test_the_older_setting_still_raises_as_before(self):
+        with self.assertRaises(ValueError):
+            self.mount(OVERSEER_BASE_PATH='/de"v')
+
+    def test_the_server_reads_its_mount_through_it(self):
+        source = (HERE.parent / "map_server.py").read_text(encoding="utf-8")
+        self.assertIn("BASE_PATH = basepath.mount_from_environment(os.environ)", source)
+
+    def test_the_mount_it_builds_is_a_usable_prefix(self):
+        prefix = self.mount(OVERSEER_SITE_PATH_ID=GOOD_ID)
+        self.assertEqual(basepath.normalize(prefix), prefix)
+        page = basepath.apply(b"[" + basepath.PLACEHOLDER.encode() + b"]", prefix)
+        self.assertEqual(page, ("[" + prefix + "]").encode())
+
+
 class ApplyTest(unittest.TestCase):
     def test_the_prefix_reaches_the_page(self):
         body = b"x = '" + basepath.PLACEHOLDER.encode() + b"';"
