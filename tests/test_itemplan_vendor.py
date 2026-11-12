@@ -928,5 +928,51 @@ class RouteSalesAtTheBridgeTest(unittest.TestCase):
         self.assertIn("itemplan_vendor.py", docker)
 
 
+class PressureReleaseAtExistingBridgeSignatureTest(unittest.TestCase):
+    """The bridge's existing four-argument call releases a fallback sale.
+
+    Only the reads are mocked; both switches are on and the real sale
+    selection runs. Fails on the base before #2305 with no sale returned.
+    """
+
+    def test_pressure_releases_a_fallback_sale_through_the_existing_bridge_signature(
+        self,
+    ):
+        bridge = import_bridge()
+        plan, pairs, item = fallback_fixture(
+            (itemplan.GUILD_BANK, itemplan.SELL_VENDOR)
+        )
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "ITEMPLAN_SELL_VENDOR": "on",
+                    "ITEMPLAN_SELL_RELEASE": "on",
+                },
+            ),
+            mock.patch.object(
+                bridge,
+                "_itemplan_reads",
+                return_value=types.SimpleNamespace(
+                    templates=None,
+                    instance_soulbound=None,
+                ),
+            ),
+            mock.patch.object(
+                bridge.itemplan_shadow,
+                "shadow",
+                return_value=types.SimpleNamespace(plan=plan),
+            ),
+            mock.patch.object(
+                bridge.itemplan_shadow, "build_stacks", return_value=[pairs[0][0]]
+            ),
+            mock.patch.object(bridge, "log", mock.Mock()),
+        ):
+            sales = bridge._itemplan_vendor_sales(["Ana"], "Fam", [item], {"Ana": 0})
+        self.assertEqual(
+            [sale.candidate.item_guid for sale in sales], [item["item_guid"]]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

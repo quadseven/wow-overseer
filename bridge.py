@@ -30228,7 +30228,10 @@ def _itemplan_vendor_sales(names, family, rows, free_slots, gear_rows=(),
     ITEMPLAN_SELL_VENDOR is on, in which case the plan is built the way
     the shadow builds it (#1973's reads, the shadow's stacks) and the
     route picks its released SELL_VENDOR rows from it. No released set
-    exists yet, so a `confirm` row waits, exactly as the design says.
+    exists yet, so a `confirm` row waits, exactly as the design says,
+    except when ITEMPLAN_SELL_RELEASE is on and a member is short of room:
+    then its held sales (`confirm` and fallback) are released, cheapest
+    first, as far as `itemplan_vendor.pressure_for` says (#2305).
     A failure here is logged and the economy pass carries on without
     the route, as it does for the shadow.
     """
@@ -30243,6 +30246,8 @@ def _itemplan_vendor_sales(names, family, rows, free_slots, gear_rows=(),
             rows, gear_rows, extras.templates, extras.instance_soulbound)
         pairs = list(zip(stacks, rows, strict=True))
         held: list = []
+        # AI-REVIEW 2026-11-12 [codex/native-correctness] 2306-D1 (PR #2306):
+        # the docstring above now names this pressure-release exception.
         # A member short of room has its held sales released, cheapest first,
         # when ITEMPLAN_SELL_RELEASE is on (itemplan_vendor says how far).
         pressure = (

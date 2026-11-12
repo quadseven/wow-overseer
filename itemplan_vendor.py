@@ -217,6 +217,9 @@ def _may_release(decision, row) -> bool:
     return max(0, _int(decision.value)) <= RELEASE_CEILING_COPPER
 
 
+# AI-REVIEW 2026-11-12 [Grug Elder/complexity] 2306-C1 (PR #2306): the
+# selection is split into _classify, _eligible and _release so each step
+# stays small (fixed in 179bbcd3).
 def _classify(decision, row, stack, released, keep_names):
     """What the route does with one carried SELL_VENDOR decision.
 
@@ -261,6 +264,8 @@ def _release(pool, ordinary, pressure) -> tuple:
         for holder, need in (pressure or {}).items()
     }
     lifted, still_held = [], []
+    # AI-REVIEW 2026-11-12 [Grug Elder/lint] 2306-L1 (PR #2306): the sort value
+    # is only an ordering key, so it is bound as `_value` (fixed in 179bbcd3).
     for _value, index, decision, row, kind, held_entry in sorted(
         pool, key=lambda entry: (entry[0], entry[1])
     ):
