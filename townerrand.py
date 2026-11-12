@@ -610,6 +610,7 @@ def choose_aim(
     released=(),
     now: float = 0.0,
     deaths=(),
+    hearth_reaches: bool = False,
 ) -> dict:
     """The errand's aim: `hub` (choose_hub), or a nearer vendor stop.
 
@@ -619,6 +620,14 @@ def choose_aim(
     nearest vendor stop on his map (`stops`, vendor_stops) that was not itself
     released. A hub on another map stays (a hearthstone reaches it) unless
     it was released. With nothing fresh left the hub stands, as before.
+
+    A HUB THE HEAD'S OWN STONE REACHES IS NOT A WALK (wow-overseer#2329).
+    `hearth_reaches` is True when the head will cast its hearthstone to a hub
+    by its bind (`to_hearth` returned it). The family then arrives in one cast,
+    members and head together, so a hub far away on the head's map is no
+    journey: on 2026-11-12 the head stood 9,000 yards from the bind hub, the
+    nearest vendor was chosen, and four members walked across the continent
+    to it for an hour while the family's run waited.
     """
     hub = dict(hub or {})
     if why != BAG_PRESSURE_WHY or not leader_at:
@@ -631,6 +640,7 @@ def choose_aim(
     hub_used = bool(hub) and _was_released(hub, released, now)
     hub_far = (
         bool(hub)
+        and not (hearth_reaches and hub.get("bind"))
         and _same_map(hub, leader_at)
         and _planar(hub, here) > VENDOR_FIRST_YARDS
     )

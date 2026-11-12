@@ -20914,6 +20914,11 @@ class Bridge(discord.Client):
         released = globals().get("_TOWN_ERRAND_RELEASED", {}).get(
             tuple(sorted(names)), [])
         stops_of = globals().get("_fetch_errand_vendor_stops")
+        # A BIND HUB THE HEAD'S STONE REACHES IS NOT A LONG WALK (#2329): the
+        # family casts there together, so the aim stays on the hub.
+        reads = await asyncio.to_thread(_movement_reads, list(names))
+        casts = townerrand.to_hearth(hub, positions, names, reads["hearthed"],
+                                     reads["binds"])
         if why == townerrand.BAG_PRESSURE_WHY and standing and stops_of:
             stops = townerrand.vendor_stops(
                 await asyncio.to_thread(stops_of, leader, standing),
@@ -20935,7 +20940,8 @@ class Bridge(discord.Client):
                          "family in the last day lie along the walk to it",
                          why, label, stop.get("place", "a vendor"), count)
             chosen = townerrand.choose_aim(
-                hub, stops, standing, why, released, now, deaths=deaths)
+                hub, stops, standing, why, released, now, deaths=deaths,
+                hearth_reaches=leader in casts)
             if chosen != hub:
                 log.info("town errand: %s%s aims at %s instead of %s (%s)",
                          why, label, chosen.get("place", "a vendor"),
@@ -20951,7 +20957,6 @@ class Bridge(discord.Client):
             return townerrand.State(ended=now)
         # THE HEARTHSTONE IS THE WAY HOME AND THE REGROUP IN ONE CAST, the
         # existing kind='hearth' row the movement choice already writes.
-        reads = await asyncio.to_thread(_movement_reads, list(names))
         far = townerrand.to_hearth(hub, positions, names, reads["hearthed"],
                                    reads["binds"])
         # A HUB THE HEAD CANNOT REACH IS NO ERRAND (wow-dev 2026-09-29). His
