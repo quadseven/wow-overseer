@@ -1400,16 +1400,20 @@ class TheDoorWedgeReads(unittest.TestCase):
         self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
 
     def test_the_boss_read_is_the_open_runs_own_boss_rows(self):
-        sql = next(
-            ast.literal_eval(node.value)
-            for node in ast.parse(BRIDGE).body
-            if isinstance(node, ast.Assign)
-            and any(getattr(t, "id", "") == "_DOOR_BOSS_SQL" for t in node.targets)
-        )
-        self.assertIn("overseer_dungeon_run_event", sql)
-        self.assertIn("e.kind = 'boss'", sql)
-        self.assertIn("ended_at IS NULL", sql)
-        self.assertEqual(1, sql.count("%s"))
+        def sql(name):
+            return next(
+                ast.literal_eval(node.value)
+                for node in ast.parse(BRIDGE).body
+                if isinstance(node, ast.Assign)
+                and any(getattr(t, "id", "") == name for t in node.targets)
+            )
+
+        run, boss = sql("_DOOR_RUN_SQL"), sql("_DOOR_BOSS_SQL")
+        self.assertIn("ended_at IS NULL", run)
+        self.assertIn("overseer_dungeon_run_event", boss)
+        self.assertIn("kind = 'boss'", boss)
+        self.assertIn("run_id = %s", boss)
+        self.assertNotIn("JOIN", run + boss)
 
     def test_no_verdict_without_a_started_dungeon_head(self):
         judge = self.judge((38, ()), [1000.0])

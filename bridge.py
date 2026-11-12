@@ -5650,11 +5650,15 @@ def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
 # run's own rows are the evidence: family-wide progress events are kept warm
 # by a member questing on another map, and the run row's own heartbeat is
 # presence, not progress.
+_DOOR_RUN_SQL = (
+    "SELECT id FROM overseer_dungeon_run WHERE leader_name = %s "
+    "AND ended_at IS NULL ORDER BY id DESC LIMIT 1"
+)
+# Two reads, not a join: the two tables sit in different collation groups
+# (tests/test_collation_split.py), and a run id is a number.
 _DOOR_BOSS_SQL = (
-    "SELECT TIMESTAMPDIFF(SECOND, MAX(e.created_at), NOW()) AS boss_age "
-    "FROM overseer_dungeon_run_event e JOIN overseer_dungeon_run r "
-    "ON r.id = e.run_id WHERE r.leader_name = %s AND r.ended_at IS NULL "
-    "AND e.kind = 'boss'"
+    "SELECT TIMESTAMPDIFF(SECOND, MAX(created_at), NOW()) AS boss_age "
+    "FROM overseer_dungeon_run_event WHERE run_id = %s AND kind = 'boss'"
 )
 
 
@@ -5664,7 +5668,11 @@ def _door_run_boss_age(leader: str):
     answer (1054 or 1146) reads as None, so the clocks run as before."""
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(_DOOR_BOSS_SQL, (leader,))
+            cur.execute(_DOOR_RUN_SQL, (leader,))
+            runs = cur.fetchall()
+            if not runs:
+                return None
+            cur.execute(_DOOR_BOSS_SQL, (int(runs[0]["id"]),))
             rows = cur.fetchall()
         except pymysql.err.MySQLError as exc:
             if not (exc.args and exc.args[0] in (1054, 1146)):
