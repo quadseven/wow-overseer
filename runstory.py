@@ -914,10 +914,23 @@ def _family_outcome(ended) -> tuple:
     return word.strip(), reason
 
 
-def _family_opener(place: str, outcome: str, credited: int, got_in: bool) -> str:
+def _cleared(credited: int, total: int) -> bool:
+    """Is the run shown to have credited every encounter its map has? Only a
+    known full count can show it: the run's own `complete` word is never
+    enough (the Blackrock Depths incident, #2281)."""
+    return total > 0 and credited >= total
+
+
+def _family_opener(
+    place: str, outcome: str, credited: int, got_in: bool, total: int = 0
+) -> str:
     down = "%s boss%s down" % (_num(credited), "" if credited == 1 else "es")
     if outcome == "complete":
-        return "cleared %s, %s" % (place, down) if credited else "cleared %s" % place
+        if _cleared(credited, total):
+            return "cleared %s, %s" % (place, down)
+        if total > 0:
+            return "finished %s short, %d of %d bosses down" % (place, credited, total)
+        return "finished %s, %s" % (place, down) if credited else "finished %s" % place
     if not got_in:
         return "never got inside %s" % place
     return "went into %s and got %s" % (place, down)
@@ -940,13 +953,37 @@ def _family_ending(tale: _Tale, outcome: str, reason: str, ended, inside: list) 
         tale.tag("restart_lost")
 
 
-def _family_cause(tale: _Tale, outcome: str) -> str:
+def _family_cause(tale: _Tale, outcome: str, credited: int, total: int) -> str:
     if outcome == "complete":
-        cause = "Cleared: every encounter the map credits went down."
+        cause = _complete_cause(credited, total)
         return cause + (" " + _cause_line(tale.tags, tale.facts) if tale.tags else "")
     if outcome in ("left", "emptied") and not tale.tags:
         return "Cause: %s." % _FAMILY_ENDS[outcome][0]
     return _cause_line(tale.tags, tale.facts) if tale.tags else ""
+
+
+def _complete_cause(credited: int, total: int) -> str:
+    """What a `complete` run's credited encounters support saying."""
+    if _cleared(credited, total):
+        return "Cleared: every encounter the map credits went down."
+    if total > 0:
+        return (
+            "Finished short: the run reported complete at %d of %d credited "
+            "encounters." % (credited, total)
+        )
+    if credited:
+        return (
+            "Finished: the run reported complete; its %d credited encounter%s "
+            "%s not checked against the dungeon's full count."
+            % (
+                credited,
+                "" if credited == 1 else "s",
+                "was" if credited == 1 else "were",
+            )
+        )
+    return (
+        "Finished: the run reported complete, and no credited encounter is on record."
+    )
 
 
 def family_story(
@@ -956,10 +993,15 @@ def family_story(
     bosses=frozenset(),
     zones=None,
     latest: bool = False,
+    total: int = 0,
 ) -> dict:
     """One family run (a runtimeline.split_runs run) as {story, cause,
     causes}. `deaths` are overseer_death rows with an `age_seconds` column;
-    `names` are the family's members. A run still under way has no story."""
+    `names` are the family's members. A run still under way has no story.
+
+    `total` is the map's full credited-encounter count, 0 when unknown. A run
+    is told as cleared only when its credited encounters meet a known `total`;
+    its own `complete` outcome never says so alone (#2284)."""
     rows = run.get("rows") or []
     ended = run.get("ended")
     if not rows or (ended is None and latest):
@@ -978,6 +1020,7 @@ def family_story(
             outcome,
             credited,
             got_in or bool(inside),
+            total,
         )
     )
     tale.way_in(way, zones or {})
@@ -986,4 +1029,4 @@ def family_story(
     if outcome != "complete" and any(r.get("kind") == "stalled" for r in rows):
         tale.tag("stalled")
     tale.unexplained_if(outcome == "wipe", ("boss_burst", "pack_wipe"))
-    return tale.told(_family_cause(tale, outcome))
+    return tale.told(_family_cause(tale, outcome, credited, total))
