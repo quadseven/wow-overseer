@@ -28,6 +28,15 @@ by more than about WALK_MINUTES, and so a family is never walked off mid-run:
                 refuses a follower's walk, followhold.py), so it is planned
                 only a step it can make where it stands.
 
+  busy          a member on a town errand (its bag-room walk, its slot, its aim) is
+                planned nothing (`errand_free`): the claims table does not carry
+                the errand, so two walks fought over one character (#2338).
+  the level     the giver's ground is read for its highest creature level
+                (`danger_hold`); a member DANGER_MARGIN or more levels below it,
+                or a giver whose ground is not read, does not walk. A giver in
+                reach is taken where the member stands.
+  no boat       an island crossing is not a gap step (`CROSSING_HOLD`).
+
 Danger is the class step's own: a dead member, the walk backoff and the
 deadly-way hold apply to a family member as to any other.
 
@@ -55,6 +64,12 @@ REACH_YARDS = 40.0
 NOT_A_GAP_STEP = (
     "only a take or a hand-in is planned between runs: not a hunt, an item use "
     "or a crossing"
+)
+# A giver whose ground holds a creature this many levels over the member is
+# not walked to alone (levelroute.DANGER_GAP is the same five).
+DANGER_MARGIN = 5
+CROSSING_HOLD = (
+    "%s's giver is across the water: a boat ride is not planned between runs"
 )
 GAP_MOVES = (classquest.TAKE, classquest.TURN_IN)
 
@@ -139,4 +154,28 @@ def _gap_hold(m, recent) -> str:
                 int(r.age_minutes),
                 WALK_GAP_MINUTES,
             )
+    return ""
+
+
+def errand_free(members, errand_names) -> list:
+    """The family members that are not on a town errand. `errand_names` is every
+    name of a family whose errand is active: a member of it is held for the
+    errand's walks, so a lone class walk would fight them (#2338)."""
+    on_errand = set(errand_names or ())
+    return [m for m in members or () if m.name not in on_errand]
+
+
+def danger_hold(m, move, top) -> str:
+    """Why the lone walk to the giver is held for the ground's danger, "" when
+    it may be made. `top` is the highest creature level read near the giver, or
+    None when it was not read: ground not read is not safe ground."""
+    if move.spot is None or _yards(m, move.spot) <= REACH_YARDS:
+        return ""
+    if top is None:
+        return "%s's giver's ground is not read, so its walk is not known safe" % m.name
+    if int(top) >= int(m.level) + DANGER_MARGIN:
+        return (
+            "%s is level %d and its giver's ground holds level %d creatures: "
+            "no lone walk there" % (m.name, int(m.level), int(top))
+        )
     return ""

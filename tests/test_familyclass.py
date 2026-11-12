@@ -236,5 +236,81 @@ class TheBridgeReadsTheFamilyAsMembersOfRoleFamily(unittest.TestCase):
             self.assertEqual(self._idle([]), [])
 
 
+class TheLoneStepIsGuardedAgainstTheErrandAndTheGround(unittest.TestCase):
+    """wow-overseer#2338: the busy guard, the level check and no boat."""
+
+    def far(self, **over):
+        return member(x=-4633.5 + 3000.0, y=-932.0, **over)
+
+    def plan(self, m, danger=None):
+        return guildjobs.plan(
+            [], classes=book(), family_members=[m], now=1000.0, far_slots=None,
+            family_danger=danger,
+        )
+
+    def test_a_far_giver_with_no_danger_read_is_held_not_assumed_safe(self):
+        plan = self.plan(self.far())
+        self.assertEqual(plan.steps, ())
+        self.assertTrue(any("not read" in n for n in plan.notes))
+
+    def test_a_giver_well_above_the_member_is_not_walked_to(self):
+        plan = self.plan(self.far(), {"Dwarf": 59 + familyclass.DANGER_MARGIN})
+        self.assertEqual(plan.steps, ())
+        self.assertTrue(any("no lone walk" in n for n in plan.notes))
+
+    def test_a_giver_in_the_members_band_is_walked_to(self):
+        plan = self.plan(self.far(), {"Dwarf": 59 + familyclass.DANGER_MARGIN - 1})
+        self.assertEqual([s.holder for s in plan.steps], ["Dwarf"])
+
+    def test_a_giver_in_reach_needs_no_ground_read(self):
+        plan = self.plan(member())
+        self.assertEqual([s.holder for s in plan.steps], ["Dwarf"])
+
+    def test_the_claims_busy_set_still_holds_a_member(self):
+        plan = guildjobs.plan(
+            [], classes=book(), family_members=[member()], now=1000.0,
+            far_slots=None, busy={"Dwarf"},
+        )
+        self.assertEqual(plan.steps, ())
+
+    def test_a_boat_crossing_is_not_planned_on_the_lone_path(self):
+        m = self.far()
+        with mock.patch.object(guildjobs, "across_the_water", return_value=True):
+            step, _doing, note = guildjobs.class_step(m, book(), [], CAP)
+        self.assertIsNone(step)
+        self.assertIn("across the water", note)
+
+    def test_errand_free_drops_the_members_on_an_errand(self):
+        a, b = member(name="A"), member(name="B")
+        self.assertEqual(familyclass.errand_free([a, b], {"B"}), [a])
+
+
+class TheBridgeKeepsAnErrandMemberOutOfTheFamilyList(
+        TheBridgeReadsTheFamilyAsMembersOfRoleFamily):
+    def test_a_member_on_a_town_errand_is_not_idle(self):
+        state = mock.Mock(active=True)
+        with mock.patch.dict(bridge._TOWN_ERRANDS, {("Boss", "Dwarf"): state}):
+            self.assertEqual(self._idle([]), [])
+
+    def test_an_ended_errand_does_not_hold_it(self):
+        state = mock.Mock(active=False)
+        with mock.patch.dict(bridge._TOWN_ERRANDS, {("Boss", "Dwarf"): state}):
+            self.assertEqual(self._idle([]), ["Dwarf"])
+
+    def test_family_danger_reads_the_giver_ground_of_a_far_member(self):
+        far = dataclasses.replace(self.facts()["family_members"][0],
+                                  map_id=0, x=-4633.5 + 3000.0, y=-932.0)
+        with mock.patch.object(bridge, "_gather_danger", return_value=64) as g:
+            out = bridge._family_danger([far], book(), [])
+        self.assertEqual(out, {"Dwarf": 64})
+        self.assertEqual(g.call_count, 1)
+
+    def test_an_unread_ground_leaves_the_member_out(self):
+        far = dataclasses.replace(self.facts()["family_members"][0],
+                                  map_id=0, x=-4633.5 + 3000.0, y=-932.0)
+        with mock.patch.object(bridge, "_gather_danger", return_value=None):
+            self.assertEqual(bridge._family_danger([far], book(), []), {})
+
+
 if __name__ == "__main__":
     unittest.main()
