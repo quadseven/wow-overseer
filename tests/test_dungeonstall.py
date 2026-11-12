@@ -1598,3 +1598,142 @@ class AnOperatorOrderIsHeldNotCancelled(unittest.TestCase):
         write = BRIDGE[BRIDGE.index("def _stall_write(") :]
         write = write[: write.index("\n\n\n", 10)]
         self.assertIn("leave.decision", write)
+
+
+class TheErrandARunWaitsOn(unittest.TestCase):
+    """#2280: a member on an errand of its own while the family waits at the
+    door is handed the errand back well inside the stand-down bound, and the
+    stall line names the errand."""
+
+    HEAD = {"id": 7, "keyword": "maraudon-orange", "status": "active"}
+
+    def member(self, name, state):
+        return jev_family_intent.Member(name, state, "0")
+
+    def judge(self, clock, aims, released, *, with_recall=True):
+        """_door_wedge with a family whose one straggler (Oz) is on an errand."""
+        holds = {}
+        recalled = {}
+
+        def current(name):
+            return aims.get(name, "")
+
+        def release(name, aim):
+            released.append((name, aim))
+            aims.pop(name, None)
+            return True
+
+        fakes = {
+            "campaignqueue": campaignqueue,
+            "dungeonstall": stall,
+            "jobs": jobs,
+            "log": types.SimpleNamespace(info=lambda *a, **k: None),
+            "time": types.SimpleNamespace(monotonic=lambda: clock[0]),
+            "_jobs_of": lambda names: {n: "dungeon:maraudon-orange" for n in names},
+            "_door_wedge_evidence": lambda leader, head_id: (
+                0,
+                (self.member("Oz", "on an errand of its own"),)
+                if "Oz" in aims
+                else (self.member("Oz", "following"),),
+            ),
+            "_DOOR_HOLD_SINCE": holds,
+            "_ERRAND_RECALLED": recalled,
+            "_door_run_boss_age": lambda leader: None,
+            "_current_travel_npc": current,
+            "_is_economy_aim": lambda aim: aim in ("vendor", "banker"),
+            "_release_trade_errand": release,
+        }
+        names = ["_door_wedge", "_door_wedge_ages"]
+        if with_recall:
+            names.append("_recall_door_errands")
+        self.recalled = recalled
+        return _load(names, fakes)["_door_wedge"]
+
+    def test_an_errand_is_handed_back_inside_the_stand_down_bound(self):
+        """Fails before the change: the member stayed on the errand until the
+        30 minute stand-down."""
+        clock, released, aims = [1000.0], [], {"Oz": "vendor"}
+        judge = self.judge(clock, aims, released)
+        judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        self.assertEqual([], released)
+        clock[0] += stall.RECALL_SECONDS
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Oz"], "Zug"))
+        self.assertEqual([("Oz", "vendor")], released)
+        self.assertIn("Oz", self.recalled)
+        self.assertLess(stall.RECALL_SECONDS, stall.HOLD_SECONDS)
+
+    def test_a_short_errand_is_left_alone(self):
+        clock, released, aims = [1000.0], [], {"Oz": "vendor"}
+        judge = self.judge(clock, aims, released)
+        judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        clock[0] += stall.RECALL_SECONDS - 1
+        judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        self.assertEqual([], released)
+
+    def test_an_aim_the_economy_did_not_write_is_not_taken_back(self):
+        clock, released, aims = [1000.0], [], {"Oz": "trainer:985"}
+        judge = self.judge(clock, aims, released)
+        judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        clock[0] += stall.RECALL_SECONDS + 1
+        judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        self.assertEqual([], released)
+
+    def test_a_recall_that_cannot_take_leaves_the_stand_down_as_the_backstop(self):
+        clock, released, aims = [1000.0], [], {"Oz": "trainer:985"}
+        judge = self.judge(clock, aims, released)
+        judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        clock[0] += stall.HOLD_SECONDS
+        got = judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertIn("Oz", got.why)
+
+    def test_the_stall_line_names_the_errand_that_held_the_run(self):
+        clock, released, aims = [1000.0], [], {"Oz": "trainer:985"}
+        judge = self.judge(clock, aims, released)
+        judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        clock[0] += stall.HOLD_SECONDS
+        got = judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        self.assertIn("an errand called 'trainer:985'", got.why)
+
+    def test_the_line_names_a_vendor_walk_in_words(self):
+        got = stall.party_held(
+            "shadowfang", "Oz", "on an errand of its own", stall.HOLD_SECONDS,
+            "vendor",
+        )
+        self.assertIn("Oz has been on an errand of its own (a walk to a vendor)", got.why)
+
+    def test_a_line_with_no_known_errand_reads_as_it_did(self):
+        got = stall.party_held(
+            "shadowfang", "Oz", "on an errand of its own", stall.HOLD_SECONDS
+        )
+        self.assertIn("Oz has been on an errand of its own for over 30", got.why)
+        held = stall.party_held("shadowfang", "Oz", "held still",
+                                stall.HOLD_SECONDS, "vendor")
+        self.assertNotIn("(", held.why)
+
+    def test_errand_words_cover_every_economy_aim(self):
+        for aim in ("vendor", "banker", "guild banker", "repair", "auctioneer",
+                    "at:0:1.0,2.0,3.0", "5594"):
+            self.assertTrue(stall.errand_words(aim), aim)
+        self.assertEqual("", stall.errand_words(""))
+
+    def test_only_the_errand_state_is_recalled_and_only_past_the_bound(self):
+        ages = {
+            "Oz": ("on an errand of its own", stall.RECALL_SECONDS),
+            "Uzza": ("on an errand of its own", stall.RECALL_SECONDS - 1),
+            "Zork": ("dead", 99999.0),
+            "Zrog": ("held still", 99999.0),
+        }
+        self.assertEqual(("Oz",), stall.errand_recalls(ages))
+
+    def test_a_recalled_member_is_not_sent_straight_back_out(self):
+        self.assertTrue(stall.recall_cooling(100.0, 100.0 + 60))
+        self.assertFalse(
+            stall.recall_cooling(100.0, 100.0 + stall.RECALL_COOLDOWN_SECONDS)
+        )
+        self.assertFalse(stall.recall_cooling(None, 100.0))
+
+    def test_the_bag_pressure_aim_skips_a_member_in_its_cooldown(self):
+        body = BRIDGE[BRIDGE.index("async def _aim_stranded_bag_pressure_members") :]
+        body = body[: body.index("    async def _town_errand_yield_for_weapon")]
+        self.assertIn("recall_cooling", body)

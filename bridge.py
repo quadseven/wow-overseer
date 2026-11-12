@@ -5682,6 +5682,39 @@ def _door_run_boss_age(leader: str):
     return None if age is None else max(0, int(age))
 
 
+# name -> monotonic time its errand of its own was handed back at a door (#2280).
+_ERRAND_RECALLED: dict = {}
+
+
+def _recall_door_errands(leader: str, ages: dict) -> list:
+    """Hand back the errand of every member whose errand of its own has kept
+    the family waiting at the door past dungeonstall.RECALL_SECONDS (#2280).
+
+    Run 1850975 (Blackrock Depths, Nov 12): one member sat on a walk to a
+    vendor for over an hour while the other four waited, and nothing bounded
+    it short of the 30 minute stand-down. The recall is the bound well inside
+    that: the economy's own aim (`_is_economy_aim`) is released, so the member
+    follows the leader again; an aim the economy did not write is left alone
+    for the stand-down. Returns the names released."""
+    released = []
+    for name in dungeonstall.errand_recalls(ages):
+        aim = _current_travel_npc(name)
+        if not aim or not _is_economy_aim(aim):
+            continue
+        if not _release_trade_errand(name, aim):
+            continue
+        _ERRAND_RECALLED[name] = time.monotonic()
+        released.append(name)
+        log.info(
+            "door recall: %s had been on an errand of its own (%s) for %d "
+            "minutes while %s's family waits at the door, so the errand is "
+            "handed back and it walks back to the party",
+            name, dungeonstall.errand_words(aim) or aim,
+            int(ages[name][1] // 60), leader,
+        )
+    return released
+
+
 def _door_wedge(head: dict, names: list, leader: str):
     """The Stuck for a family wedged at the door `head` holds, or None.
 
@@ -5713,6 +5746,16 @@ def _door_wedge(head: dict, names: list, leader: str):
         ages = {
             name: (state, min(age, boss_age)) for name, (state, age) in ages.items()
         }
+    # THE ERRAND OF A MEMBER THE RUN IS WAITING FOR IS HANDED BACK INSIDE THE
+    # STAND-DOWN BOUND (#2280). Looked up: the verdict harness loads this
+    # function in isolation.
+    recall = globals().get("_recall_door_errands")
+    if recall is not None and ages:
+        for name in recall(leader, ages):
+            ages.pop(name, None)
+            _DOOR_HOLD_SINCE.pop((leader, name, dungeonstall.ERRAND_STATE), None)
+    # The stall line names the errand that held the run (#2280).
+    errand_of = globals().get("_current_travel_npc")
     for name, (state, age) in ages.items():
         if state == "dead":
             verdict = dungeonstall.member_dead(keyword, name, age)
@@ -5722,7 +5765,10 @@ def _door_wedge(head: dict, names: list, leader: str):
     if verdict is not None:
         return verdict
     for name, (state, age) in ages.items():
-        verdict = dungeonstall.party_held(keyword, name, state, age)
+        errand = ""
+        if state == dungeonstall.ERRAND_STATE and errand_of is not None:
+            errand = errand_of(name)
+        verdict = dungeonstall.party_held(keyword, name, state, age, errand)
         if verdict is not None:
             return verdict
     return None
@@ -20644,6 +20690,15 @@ class Bridge(discord.Client):
             names, leader, positions, free_slots,
             pressure=True, in_run=in_run, at_counter=at_counter,
         )
+        # A MEMBER RECALLED FROM ITS ERRAND AT A DOOR IS NOT SENT STRAIGHT
+        # BACK OUT (#2280): the aim would undo the recall on the next pass.
+        recalled = globals().get("_ERRAND_RECALLED", {})
+        cooling = getattr(globals().get("dungeonstall"), "recall_cooling", None)
+        if cooling is not None and recalled:
+            targets = tuple(
+                name for name in targets
+                if not cooling(recalled.get(name), time.monotonic())
+            )
         aimed = 0
         for name in targets:
             current = await asyncio.to_thread(_current_travel_npc, name)
