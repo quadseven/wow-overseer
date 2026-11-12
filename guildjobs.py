@@ -6535,6 +6535,11 @@ def _class_move_step(
     if move.kind == classquest.ABANDON:
         return _abandon_step(m, move, recent, note)
     if move.kind == classquest.TAKE and move.spot is None:
+        # A take with no giver to walk to is held like every other take: a dead
+        # member, the walk backoff and the class cooldown (#2325).
+        held = _class_held(m, move, None, cap, recent, hunts, now, far, book)
+        if held is not None:
+            return None, move.said, _join(note, held)
         return _item_take_step(m, move, note)
     spot = _class_spot(move)
     boat = class_boat_step(m, move, spot, recent, hunts, now)
@@ -6687,6 +6692,9 @@ def _class_held(m, move, spot, cap, recent, hunts, now, far, book=None):
     acted = [r for r in recent or () if not (r.entry in rest and r.name == m.name)]
     if _cooling(m, classquest.ACTION, acted) and not follows_a_take(m, acted):
         return ""
+    if spot is None:
+        # No walk to make (an item-started take), so no far walk slot to hold.
+        return None
     return _slot_note(m, move, spot, cap, hunts, now, far)
 
 
