@@ -17,6 +17,7 @@ empty list means no zone met the routing threshold on the sampled member's map.
 | `router.js` | Hash routes, legacy redirects, and route-to-view resolution. Pure functions, tested under node. |
 | `api.js` | Reads (`load`, `peek`, `watch`), the mount helper `u()`, the data age (`health`), and `post()`, the operator view's one write. |
 | `ui.js` | The `html` builder (escapes every value) and the primitives: `status`, `member`, `item`, `state`, `pendingRead`, `pageHead`, `sectionHead`, `tabs`, `kpi`, `sparkline`, `histogram`, `notMeasured`, `value`, `ago`, `gold`, and `readState` (a read is loading, failed, refused or ready). |
+| `models/spelllookup.js` | Spell names for the views: `spellName(id)` imports the generated 200 KB table (`models/spellnames.js`) on the first lookup and asks the page for one redraw when it arrives, so a page that draws no spell never loads it. Reads "Spell <id>" until then. |
 | `models/time.js` | The one clock: every time the server sends, read as unix seconds (`toSeconds`, `since`, `clock`), and the browser's milliseconds turned into seconds (`fromClock`). |
 | `models/<payload>.js` | One read model per payload the views share: `roster.js` (/api/v2/roster), `guildruns.js` (/api/guildruns), `wall.js` (/api/wall), `guild.js` (/api/v2/guild). Each turns a read into named accessors, and answers null (not measured) until the read is ready. Tested under node in `tests/test_app_models.py`. |
 | `tooltip.js` | The one item tooltip, for any element with `data-item="<entry>"`. It reads `/api/item`. |

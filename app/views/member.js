@@ -26,7 +26,7 @@ import { guildSlug } from "../families.js";
 import { badgesCard, CSS as ACH_CSS } from "./_achievements.js";
 import { pageKey, since, markSeen } from "../models/gearchanges.js";
 import { renderFeed } from "./gearchanges.js";
-import { classSpellName, wowheadSpellUrl } from "../models/spellnames.js";
+import { spellName, wowheadSpellUrl } from "../models/spelllookup.js";
 
 const TABS = [["overview", "Overview"], ["gear", "Gear"], ["quests", "Quests"], ["bags", "Inventory"], ["activity", "Activity"]];
 const TAB_OF = { upgrades: "gear", bank: "bags" };
@@ -145,7 +145,7 @@ function overview(ctx, m, roster) {
 // ---- Gear and Standing --------------------------------------------------------------------
 
 function spellChip(s, tone) {
-  return html`<a class="${"st-spell " + tone}" href="${wowheadSpellUrl(s.spell)}" target="_blank" rel="noopener" title="Spell ${s.spell}"><i class="${tone === "warn" ? "ph ph-coins" : "ph ph-circle"}" aria-hidden="true"></i>${classSpellName(s.spell)} <span class="dim mb-s">L${s.level}${s.cost ? " | " + gold(s.cost) : ""}</span></a>`;
+  return html`<a class="${"st-spell " + tone}" href="${wowheadSpellUrl(s.spell)}" target="_blank" rel="noopener" title="Spell ${s.spell}"><i class="${tone === "warn" ? "ph ph-coins" : "ph ph-circle"}" aria-hidden="true"></i>${spellName(s.spell)} <span class="dim mb-s">L${s.level}${s.cost ? " | " + gold(s.cost) : ""}</span></a>`;
 }
 
 function tradeLine(t) {
