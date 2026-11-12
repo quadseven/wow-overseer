@@ -157,6 +157,81 @@ class DeathLoopAsks(unittest.TestCase):
         self.assertTrue(deathask.enabled({"DEATH_ASK": "on"}))
         self.assertFalse(deathask.enabled({"DEATH_ASK": "off"}))
 
+    def test_a_live_ask_with_a_mate_in_reach_gets_one_yes_from_that_mate(self):
+        looper, helper = looper_and_mate()
+        live = ask(9, "Looper")
+        found = deathask.plan_pass(
+            {"Looper": loop_of()}, [looper, helper], [live], NOW, answers=[]
+        )
+        self.assertEqual(len(found.replies), 1)
+        reply = found.replies[0]
+        self.assertEqual(reply.ask_id, 9)
+        self.assertEqual(reply.member, "Helper")
+        self.assertEqual(reply.role, gs.DPS)
+        self.assertEqual(reply.stance, gs.HELPS)
+        self.assertIn("Hillsbrad", reply.said)
+
+    def test_a_live_ask_with_no_mate_in_reach_gets_no_yes(self):
+        looper, _helper = looper_and_mate()
+        far = mate("Distant", 28, 2, at=(90000.0, 90000.0), zone_id=HILLSBRAD)
+        live = ask(9, "Looper")
+        found = deathask.plan_pass(
+            {"Looper": loop_of()}, [looper, far], [live], NOW, answers=[]
+        )
+        self.assertEqual(found.replies, ())
+
+    def test_an_ask_that_already_has_a_yes_gets_no_second_yes(self):
+        looper, helper = looper_and_mate()
+        live = ask(9, "Looper")
+        yes = gs.answer_from_row(
+            {
+                "id": 1,
+                "ask_id": 9,
+                "member": "Helper",
+                "role": "dps",
+                "stance": "help",
+                "said": "",
+                "state": "yes",
+            }
+        )
+        found = deathask.plan_pass(
+            {"Looper": loop_of()}, [looper, helper], [live], NOW, answers=[yes]
+        )
+        self.assertEqual(found.replies, ())
+
+    def test_a_held_mate_does_not_answer(self):
+        looper, helper = looper_and_mate()
+        live = ask(9, "Looper")
+        found = deathask.plan_pass(
+            {"Looper": loop_of()},
+            [looper, helper],
+            [live],
+            NOW,
+            held={"Helper": "on a guild job"},
+            answers=[],
+        )
+        self.assertEqual(found.replies, ())
+
+    def test_one_mate_answers_only_one_ask_a_pass(self):
+        looper, helper = looper_and_mate()
+        other = mate("Other", 25, 1, at=NEAR, zone_id=HILLSBRAD)
+        asks = [ask(9, "Looper"), ask(10, "Other")]
+        loops = {"Looper": loop_of(), "Other": loop_of("Other", 25)}
+        found = deathask.plan_pass(
+            loops, [looper, other, helper], asks, NOW, answers=[]
+        )
+        self.assertEqual(len(found.replies), 1)
+        self.assertEqual(found.replies[0].member, "Helper")
+
+    def test_an_expiring_ask_gets_no_yes(self):
+        looper, helper = looper_and_mate()
+        stale = ask(9, "Looper", expires_at=NOW - datetime.timedelta(minutes=1))
+        found = deathask.plan_pass(
+            {"Looper": loop_of()}, [looper, helper], [stale], NOW, answers=[]
+        )
+        self.assertEqual(found.expire, ((9, "Looper", ""),))
+        self.assertEqual(found.replies, ())
+
     def test_a_held_looper_is_not_asked_for(self):
         looper, helper = looper_and_mate()
         found = deathask.plan_pass(
