@@ -4726,6 +4726,10 @@ def loop_mates(m, mates) -> list:
             continue
         if abs(int(mate.level) - int(m.level)) > classask.LEVEL_BAND:
             continue
+        # AI-REVIEW 2026-11-12 [gpt-6.1-sol/native correctness] R1 (PR #2296):
+        # the reach check below is what keeps a helper on another map, beyond
+        # reach, or at an unknown position (which the distance helper reads
+        # as unbounded) from being named in reach; such a helper is rejected.
         if mate.map_id is None or m.map_id is None or int(mate.map_id) != int(m.map_id):
             continue
         if classask._distance(m, mate) > classask.HELPER_REACH_YARDS:
