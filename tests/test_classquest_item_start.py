@@ -15,6 +15,8 @@ world's `conditions` rows (SourceTypeOrReferenceId 19, ConditionTypeOrReference
 one ElseGroup each).
 """
 
+import pathlib
+import sqlite3
 import unittest
 
 import classquest
@@ -275,6 +277,119 @@ class TheStepTheBridgeWrites(unittest.TestCase):
         self.assertIsNotNone(step)
         self.assertEqual([r.command for r in step.rows], ["take quest:1646"])
         self.assertIsNone(step.walk)
+
+
+class TheItemTakeObeysTheGuardsOfEveryTake(unittest.TestCase):
+    """wow-overseer#2325: the take with no walk skipped _class_held, so a dead
+    paladin carrying the tome got a refused row every pass."""
+
+    def carrying(self, **over):
+        return paladin(
+            quests_done=frozenset({2997, 1645}),
+            carried=tome_in_bags(TOME_DWARF),
+            **over,
+        )
+
+    def plan(self, m, recent):
+        return guildjobs.class_step(m, book(), recent, None)[0]
+
+    def test_a_dead_member_carrying_the_tome_gets_no_take_row(self):
+        step, _doing, note = guildjobs.class_step(
+            self.carrying(alive=False), book(), [], None
+        )
+        self.assertIsNone(step)
+
+    def test_a_take_the_module_refused_is_not_asked_again_in_the_cooldown(self):
+        refused = guildjobs.Recent(
+            name="Dwarf",
+            action=classquest.ACTION,
+            age_minutes=2,
+            status="refused",
+            refusal="not eligible",
+        )
+        self.assertIsNone(self.plan(self.carrying(), [refused]))
+
+    def test_a_take_is_asked_again_after_the_cooldown(self):
+        old = guildjobs.Recent(
+            name="Dwarf",
+            action=classquest.ACTION,
+            age_minutes=guildjobs.COOLDOWN_MINUTES[classquest.ACTION] + 1,
+            status="refused",
+            refusal="not eligible",
+        )
+        step = self.plan(self.carrying(), [old])
+        self.assertEqual([r.command for r in step.rows], ["take quest:1646"])
+
+    def test_a_take_that_went_through_is_not_taken_twice_in_its_settle_window(self):
+        took = guildjobs.Recent(
+            name="Dwarf",
+            action=classquest.ACTION,
+            age_minutes=3,
+            status="ok",
+            taken=1646,
+        )
+        step = self.plan(self.carrying(), [took])
+        self.assertTrue(
+            step is None or "take quest:1646" not in [r.command for r in step.rows]
+        )
+
+    def test_a_far_walk_slot_is_not_asked_of_a_take_with_no_walk(self):
+        class Far:
+            def take(self, name):
+                raise AssertionError("a take with no walk needs no slot")
+
+        step = guildjobs.class_step(self.carrying(), book(), [], None, far=Far())[0]
+        self.assertIsNotNone(step)
+
+
+class TheConditionsRead(unittest.TestCase):
+    def test_the_sql_runs_against_the_worlds_columns(self):
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("ATTACH ':memory:' AS acore_world")
+        db.execute(
+            "CREATE TABLE acore_world.conditions (SourceTypeOrReferenceId INT, "
+            "SourceEntry INT, ElseGroup INT, ConditionTypeOrReference INT, "
+            "ConditionValue1 INT, ConditionValue2 INT, NegativeCondition INT)"
+        )
+        db.execute(
+            "INSERT INTO acore_world.conditions VALUES (19, 1647, 0, 47, 1646, 64, 0)"
+        )
+        db.execute(
+            "INSERT INTO acore_world.conditions VALUES (9, 1647, 0, 47, 1, 64, 0)"
+        )
+        rows = [
+            dict(r)
+            for r in db.execute(classquest.CONDITIONS_SQL.format(quests="1647, 1643"))
+        ]
+        self.assertEqual(
+            rows,
+            [
+                {
+                    "quest": 1647,
+                    "grp": 0,
+                    "kind": 47,
+                    "value1": 1646,
+                    "value2": 64,
+                    "negative": 0,
+                }
+            ],
+        )
+        self.assertEqual(book(rows).quests[1647].needs, ((1646,),))
+
+    def test_a_book_without_conditions_is_reported_on_every_pass(self):
+        src = (
+            pathlib.Path(__file__)
+            .resolve()
+            .parent.parent.joinpath("bridge.py")
+            .read_text()
+        )
+        body = src[src.index("def _class_book()") :]
+        body = body[: body.index("def _class_member_reads")]
+        cached = body[: body.index("with _connect()")]
+        self.assertIn("_CLASS_BOOK_NO_CONDITIONS", cached)
+        self.assertIn("log.error", cached)
+        self.assertIn("log.error", body[body.index("with _connect()") :])
 
 
 if __name__ == "__main__":
