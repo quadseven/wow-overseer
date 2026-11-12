@@ -22,9 +22,11 @@ UNREAD_SQL_DIR = ROOT / "data" / "sql" / "playerbots"
 
 class NoUnappliedPlayerbotsSql(unittest.TestCase):
     def test_no_playerbots_sql_file_sits_where_nothing_applies_it(self):
-        stray = sorted(
-            str(p.relative_to(ROOT)) for p in UNREAD_SQL_DIR.rglob("*.sql")
-        ) if UNREAD_SQL_DIR.exists() else []
+        stray = (
+            sorted(str(p.relative_to(ROOT)) for p in UNREAD_SQL_DIR.rglob("*.sql"))
+            if UNREAD_SQL_DIR.exists()
+            else []
+        )
         self.assertEqual(
             stray,
             [],
