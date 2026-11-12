@@ -36,6 +36,7 @@ def settle(sellable, outstanding=0, at_counter=True):
         "jev_family_intent": types.SimpleNamespace(parse_members=lambda value: []),
         "_fetch_town": lambda name: types.SimpleNamespace(vendor=at_counter),
         "_outstanding_sales": lambda names: outstanding,
+        "_oldest_outstanding_sale_seconds": lambda names: None,
         "_fetch_free_slots": lambda names: {"Grug": 4, "Bork": 0, "Og": 0},
         "_current_travel_npc": lambda name: "vendor",
         "_fetch_family_intents": lambda: {},

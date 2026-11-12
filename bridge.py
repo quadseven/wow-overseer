@@ -13334,6 +13334,22 @@ class Bridge(discord.Client):
                 bag_wait_seconds=bag_wait_seconds,
                 vendor_wait_seconds=vendor_wait_seconds,
             )
+            # THE QUEUE'S OWN BOUND, OVER THE HOLD ABOVE (#1983). Every
+            # verdict in decide() treats this queue as a reason to hold,
+            # because a draining queue says the trip still has work to
+            # do - but the queue is read here as an age as well as a
+            # count, and a queue whose oldest row has gone unanswered
+            # for the whole bound is not draining, it is stuck: its
+            # holders cannot be served from where they stand, so the
+            # errand, and every member the module holds for the leader,
+            # would wait on it forever. vendor_stall.queue_bound hands
+            # the errand back on that evidence alone, through the same
+            # release and the same log line as every other recovery
+            # this settle applies.
+            decision = vendor_stall.queue_bound(
+                decision, outstanding,
+                await asyncio.to_thread(_oldest_outstanding_sale_seconds, names),
+            )
             recovered = await self._apply_vendor_stall_decision(
                 leader, decision, stall, bag_wait_seconds, free_slots,
             )
@@ -31357,6 +31373,13 @@ _OUTSTANDING_SALES_SQL = (
     "AND target_name IN (%s)"
 )
 
+_OLDEST_OUTSTANDING_SALE_SQL = (
+    "SELECT MAX(TIMESTAMPDIFF(SECOND, created_at, NOW())) AS seconds "
+    "FROM overseer_command "
+    "WHERE kind = 'sell' AND status IN ('pending', 'claimed') "
+    "AND target_name IN (%s)"
+)
+
 
 def _outstanding_sales(names: list) -> int:
     """Sell rows the world still owes an answer on, or -1 if it cannot be read.
@@ -31393,6 +31416,39 @@ def _outstanding_sales(names: list) -> int:
                 return -1
             raise
     return int(row["waiting"] or 0) if row else 0
+
+
+def _oldest_outstanding_sale_seconds(names: list) -> float | None:
+    """Age of the oldest sell row the world still owes an answer on (#1983).
+
+    The queue bound in vendor_stall is judged on the rows themselves, not
+    on a step age: a step age restarts whenever the intent changes, which
+    it does while sellers stay held, so a wait can outlast every bound a
+    step was ever going to reach (the counter yield's own history, #1261).
+    A row's age cannot restart; it ends only when the world answers the
+    row. None when no row is waiting, and None when the queue cannot be
+    read (1054, 1146): an unknown age proves nothing, and the bound never
+    fires on it.
+    """
+    if not names:
+        return None
+    placeholders = ",".join(["%s"] * len(names))
+    sql = _OLDEST_OUTSTANDING_SALE_SQL % placeholders  # noqa: S608 - placeholders from a COUNT, values still bound
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+            row = cur.fetchone()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning(
+                    "economy: cannot read the sell queue's age, so no vendor "
+                    "errand is handed back on its account this pass"
+                )
+                return None
+            raise
+    if not row or row["seconds"] is None:
+        return None
+    return float(row["seconds"])
 
 
 # The town trip's own version of the query above, and the two differences from
