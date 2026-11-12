@@ -323,18 +323,82 @@ def door_unreachable(keyword: str, restarts) -> Stuck | None:
     )
 
 
-def party_held(keyword: str, member: str, state: str, seconds) -> Stuck | None:
+ERRAND_STATE = "on an errand of its own"
+
+# A member on an errand of its own this long while its family waits at a door
+# is handed the errand back (#2280): well inside HOLD_SECONDS, so the party
+# gets its member back and the run goes on, and the stand-down above stays the
+# backstop for a recall that did not take.
+RECALL_SECONDS = 10 * 60
+# After a recall the bridge does not send that member off on a self-contained
+# errand again for this long, or the recall would be undone on the next pass.
+RECALL_COOLDOWN_SECONDS = 30 * 60
+
+_ERRAND_WORDS = {
+    "vendor": "a walk to a vendor",
+    "banker": "a trip to the bank",
+    "guild banker": "a trip to the guild bank",
+    "repair": "a trip to the repair vendor",
+    "auctioneer": "a trip to the auction house",
+}
+
+
+def errand_words(aim) -> str:
+    """The aim a member carries, in the words a stall line prints, or "" when
+    the aim is unknown (a line that cannot name the errand says nothing)."""
+    aim = str(aim or "").strip()
+    if not aim:
+        return ""
+    if aim in _ERRAND_WORDS:
+        return _ERRAND_WORDS[aim]
+    if aim.startswith("at:"):
+        return "a walk to a spot on the ground"
+    if aim.isdigit():
+        return "a walk to one named vendor"
+    return "an errand called '%s'" % aim
+
+
+def errand_recalls(ages) -> tuple:
+    """Members whose errand of their own has outlasted RECALL_SECONDS.
+
+    `ages` maps name -> (state, seconds in it). Only the errand state is
+    recalled: a dead member or a held one has no errand to hand back."""
+    return tuple(
+        sorted(
+            name
+            for name, (state, seconds) in (ages or {}).items()
+            if state == ERRAND_STATE
+            and seconds is not None
+            and float(seconds) >= RECALL_SECONDS
+        )
+    )
+
+
+def recall_cooling(recalled_at, now) -> bool:
+    """Was this member recalled from an errand recently enough that it is not
+    sent off on another of its own yet?"""
+    if recalled_at is None:
+        return False
+    return 0 <= float(now) - float(recalled_at) < RECALL_COOLDOWN_SECONDS
+
+
+def party_held(
+    keyword: str, member: str, state: str, seconds, errand: str = ""
+) -> Stuck | None:
     """A member held on an errand (or held still) past its bound while the
     family waits at this door: the hold releases by standing the run down,
     which walks the party out to the leader instead of waiting for a leader
-    who is not coming."""
+    who is not coming. `errand` is the aim the member carries (#2280); the
+    line names it, because "an errand of its own" says nothing about what
+    held the run."""
     if seconds is None or float(seconds) < HOLD_SECONDS:
         return None
+    what = errand_words(errand) if state == ERRAND_STATE else ""
     return _wedged(
         keyword,
-        "%s has been %s for over %d minutes while the family waits at this "
+        "%s has been %s%s for over %d minutes while the family waits at this "
         "door; the run is stood down so the party regroups"
-        % (member, state, HOLD_SECONDS // 60),
+        % (member, state, " (%s)" % what if what else "", HOLD_SECONDS // 60),
     )
 
 

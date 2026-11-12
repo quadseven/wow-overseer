@@ -23,6 +23,7 @@ from unittest.mock import patch
 from _stub_modules import PYMYSQL
 from test_campaign_queue import FakeWorld, _load, _Log, _q
 
+import bag_pressure  # noqa: E402
 import campaignplan  # noqa: E402
 import campaignqueue  # noqa: E402
 import council  # noqa: E402
@@ -989,6 +990,96 @@ class TheBridgeOrder(unittest.TestCase):
         self.assertIn('avoid={door} | reads["stuck"]', facts)
 
 
+class AMemberInsideAnInstanceIsNeverGivenAnErrand(unittest.TestCase):
+    """#2280: run 1853482 (Blackrock Depths): the vendor aim taken at the door
+    stayed on the tank, the clear stopped, and the module walked the tank out
+    of the dungeon to a vendor; it died on the way and the run was left
+    without its tank. A member on an instance map is not aimed out, and an
+    economy aim it already carries is handed back."""
+
+    NAMES = ("Grug", "Bork", "Grog")
+    POSITIONS = {
+        "Grug": {"map_id": 230, "pos_x": 0.0, "pos_y": 0.0},
+        "Bork": {"map_id": 230, "pos_x": 2000.0, "pos_y": 0.0},
+        "Grog": {"map_id": 230, "pos_x": 1400.0, "pos_y": 0.0},
+    }
+    SLOTS = {"Grug": 13, "Bork": 2, "Grog": 0}
+
+    def aims(self, inside):
+        return bag_pressure.stranded_vendor_aims(
+            self.NAMES,
+            "Grug",
+            self.POSITIONS,
+            self.SLOTS,
+            pressure=True,
+            in_run=False,
+            inside=inside,
+        )
+
+    def test_a_member_inside_the_instance_is_not_aimed_at_a_vendor(self):
+        """Fails before the change: both cut-off members were aimed."""
+        self.assertEqual(("Bork", "Grog"), self.aims(frozenset()))
+        self.assertEqual(("Grog",), self.aims(frozenset({"Bork"})))
+        self.assertEqual((), self.aims(frozenset({"Bork", "Grog"})))
+
+    def test_inside_is_read_from_the_fresh_map_of_each_member(self):
+        maps = {"Grug": 230, "Bork": 0, "Grog": 409}
+        got = bag_pressure.members_inside_instance(self.NAMES, maps, {230, 409})
+        self.assertEqual(frozenset({"Grug", "Grog"}), got)
+        self.assertEqual(
+            frozenset(),
+            bag_pressure.members_inside_instance(self.NAMES, None, {230}),
+        )
+
+    def test_the_bridge_reads_who_is_inside_before_aiming(self):
+        body = BRIDGE[BRIDGE.index("async def _aim_stranded_bag_pressure_members") :]
+        body = body[: body.index("    async def _town_errand_yield_for_weapon")]
+        self.assertIn("inside=inside", body)
+        self.assertIn("_members_inside_instance", body)
+
+    def release(self, aims, maps):
+        released = []
+        fakes = {
+            "bag_pressure": bag_pressure,
+            "dungeonpath": types.SimpleNamespace(PORTAL_MAPS={"brd": 230}),
+            "raidrun": types.SimpleNamespace(MAPS={}),
+            "log": types.SimpleNamespace(info=lambda *a, **k: None),
+            "_fetch_live_maps": lambda names: {n: maps[n] for n in names if n in maps},
+            "_current_travel_npc": lambda name: aims.get(name, ""),
+            "_is_economy_aim": lambda aim: aim in ("vendor", "banker"),
+            "_release_trade_errand": lambda name, aim: (
+                released.append((name, aim)) or aims.pop(name, None) or True
+            ),
+        }
+        ns = _load(
+            [
+                "_members_inside_instance",
+                "_release_instance_economy_aims",
+            ],
+            fakes,
+        )
+        return ns["_release_instance_economy_aims"], released
+
+    def test_a_vendor_aim_carried_inside_the_instance_is_handed_back(self):
+        """Fails before the change: the aim stood and the module walked the
+        tank out once the clear stopped."""
+        aims = {"Grug": "vendor", "Bork": "vendor"}
+        drop, released = self.release(aims, {"Grug": 230, "Bork": 0})
+        self.assertEqual(["Grug"], drop(["Grug", "Bork"]))
+        self.assertEqual([("Grug", "vendor")], released)
+
+    def test_an_aim_the_economy_did_not_write_is_left_inside(self):
+        aims = {"Grug": "trainer:985"}
+        drop, released = self.release(aims, {"Grug": 230})
+        self.assertEqual([], drop(["Grug"]))
+        self.assertEqual([], released)
+
+    def test_the_vendor_pass_hands_back_aims_inside_during_a_run(self):
+        body = BRIDGE[BRIDGE.index("    async def _vendor_once") :]
+        body = body[: body.index("    async def", 10)]
+        self.assertIn("_release_instance_economy_aims", body)
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -1237,7 +1328,7 @@ class TheDoorWedgeReads(unittest.TestCase):
         self.asked = []
         self.holds = {}
         ns = _load(
-            ["_door_wedge", "_door_wedge_ages"],
+            ["_door_wedge", "_door_wedge_ages", "_door_held_verdict"],
             {
                 "campaignqueue": campaignqueue,
                 "dungeonstall": stall,
@@ -1302,7 +1393,7 @@ class TheDoorWedgeReads(unittest.TestCase):
         clock = [1000.0]
         box = [(0, (self.member("Uzza", "on an errand of its own"),))]
         ns = _load(
-            ["_door_wedge", "_door_wedge_ages"],
+            ["_door_wedge", "_door_wedge_ages", "_door_held_verdict"],
             {
                 "campaignqueue": campaignqueue,
                 "dungeonstall": stall,
@@ -1598,3 +1689,156 @@ class AnOperatorOrderIsHeldNotCancelled(unittest.TestCase):
         write = BRIDGE[BRIDGE.index("def _stall_write(") :]
         write = write[: write.index("\n\n\n", 10)]
         self.assertIn("leave.decision", write)
+
+
+class TheErrandARunWaitsOn(unittest.TestCase):
+    """#2280: a member on an errand of its own while the family waits at the
+    door is handed the errand back well inside the stand-down bound, and the
+    stall line names the errand."""
+
+    HEAD = {"id": 7, "keyword": "maraudon-orange", "status": "active"}
+
+    def member(self, name, state):
+        return jev_family_intent.Member(name, state, "0")
+
+    def judge(self, clock, aims, released, *, with_recall=True):
+        """_door_wedge with a family whose one straggler (Oz) is on an errand."""
+        holds = {}
+        recalled = {}
+
+        def current(name):
+            return aims.get(name, "")
+
+        def release(name, aim):
+            released.append((name, aim))
+            aims.pop(name, None)
+            return True
+
+        fakes = {
+            "campaignqueue": campaignqueue,
+            "dungeonstall": stall,
+            "jobs": jobs,
+            "log": types.SimpleNamespace(info=lambda *a, **k: None),
+            "time": types.SimpleNamespace(monotonic=lambda: clock[0]),
+            "_jobs_of": lambda names: {n: "dungeon:maraudon-orange" for n in names},
+            "_door_wedge_evidence": lambda leader, head_id: (
+                0,
+                (self.member("Oz", "on an errand of its own"),)
+                if "Oz" in aims
+                else (self.member("Oz", "following"),),
+            ),
+            "_DOOR_HOLD_SINCE": holds,
+            "_ERRAND_RECALLED": recalled,
+            "_door_run_boss_age": lambda leader: None,
+            "_current_travel_npc": current,
+            "_is_economy_aim": lambda aim: aim in ("vendor", "banker"),
+            "_release_trade_errand": release,
+        }
+        names = ["_door_wedge", "_door_wedge_ages", "_door_held_verdict"]
+        if with_recall:
+            names.append("_recall_door_errands")
+        self.recalled = recalled
+        return _load(names, fakes)["_door_wedge"]
+
+    def test_an_errand_is_handed_back_inside_the_stand_down_bound(self):
+        """Fails before the change: the member stayed on the errand until the
+        30 minute stand-down."""
+        clock, released, aims = [1000.0], [], {"Oz": "vendor"}
+        judge = self.judge(clock, aims, released)
+        judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        self.assertEqual([], released)
+        clock[0] += stall.RECALL_SECONDS
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Oz"], "Zug"))
+        self.assertEqual([("Oz", "vendor")], released)
+        self.assertIn("Oz", self.recalled)
+        self.assertLess(stall.RECALL_SECONDS, stall.HOLD_SECONDS)
+
+    def test_a_short_errand_is_left_alone(self):
+        clock, released, aims = [1000.0], [], {"Oz": "vendor"}
+        judge = self.judge(clock, aims, released)
+        judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        clock[0] += stall.RECALL_SECONDS - 1
+        judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        self.assertEqual([], released)
+
+    def test_an_aim_the_economy_did_not_write_is_not_taken_back(self):
+        clock, released, aims = [1000.0], [], {"Oz": "trainer:985"}
+        judge = self.judge(clock, aims, released)
+        judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        clock[0] += stall.RECALL_SECONDS + 1
+        judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        self.assertEqual([], released)
+
+    def test_a_recall_that_cannot_take_leaves_the_stand_down_as_the_backstop(self):
+        clock, released, aims = [1000.0], [], {"Oz": "trainer:985"}
+        judge = self.judge(clock, aims, released)
+        judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        clock[0] += stall.HOLD_SECONDS
+        got = judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertIn("Oz", got.why)
+
+    def test_the_stall_line_names_the_errand_that_held_the_run(self):
+        clock, released, aims = [1000.0], [], {"Oz": "trainer:985"}
+        judge = self.judge(clock, aims, released)
+        judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        clock[0] += stall.HOLD_SECONDS
+        got = judge(dict(self.HEAD), ["Zug", "Oz"], "Zug")
+        self.assertIn("an errand called 'trainer:985'", got.why)
+
+    def test_the_line_names_a_vendor_walk_in_words(self):
+        got = stall.party_held(
+            "shadowfang",
+            "Oz",
+            "on an errand of its own",
+            stall.HOLD_SECONDS,
+            "vendor",
+        )
+        self.assertIn(
+            "Oz has been on an errand of its own (a walk to a vendor)", got.why
+        )
+
+    def test_a_line_with_no_known_errand_reads_as_it_did(self):
+        got = stall.party_held(
+            "shadowfang", "Oz", "on an errand of its own", stall.HOLD_SECONDS
+        )
+        self.assertIn("Oz has been on an errand of its own for over 30", got.why)
+        held = stall.party_held(
+            "shadowfang", "Oz", "held still", stall.HOLD_SECONDS, "vendor"
+        )
+        self.assertNotIn("(", held.why)
+
+    def test_errand_words_cover_every_economy_aim(self):
+        for aim in (
+            "vendor",
+            "banker",
+            "guild banker",
+            "repair",
+            "auctioneer",
+            "at:0:1.0,2.0,3.0",
+            "5594",
+        ):
+            self.assertTrue(stall.errand_words(aim), aim)
+        self.assertEqual("", stall.errand_words(""))
+
+    def test_only_the_errand_state_is_recalled_and_only_past_the_bound(self):
+        ages = {
+            "Oz": ("on an errand of its own", stall.RECALL_SECONDS),
+            "Uzza": ("on an errand of its own", stall.RECALL_SECONDS - 1),
+            "Zork": ("dead", 99999.0),
+            "Zrog": ("held still", 99999.0),
+        }
+        self.assertEqual(("Oz",), stall.errand_recalls(ages))
+
+    def test_a_recalled_member_is_not_sent_straight_back_out(self):
+        self.assertTrue(stall.recall_cooling(100.0, 100.0 + 60))
+        self.assertFalse(
+            stall.recall_cooling(100.0, 100.0 + stall.RECALL_COOLDOWN_SECONDS)
+        )
+        self.assertFalse(stall.recall_cooling(None, 100.0))
+
+    def test_the_bag_pressure_aim_skips_a_member_in_its_cooldown(self):
+        body = BRIDGE[BRIDGE.index("async def _aim_stranded_bag_pressure_members") :]
+        body = body[: body.index("    async def _town_errand_yield_for_weapon")]
+        self.assertIn("_without_recalled", body)
+        self.assertIn("recall_cooling", BRIDGE)
