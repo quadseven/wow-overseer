@@ -70,6 +70,7 @@ import campaignplan
 import campaignqueue
 import classic
 import classask
+import deathask
 import classtrain
 import taughtspells
 import classparty
@@ -22780,6 +22781,12 @@ class Bridge(discord.Client):
             pug_pass = (_guild_pug_plan(social, facts, mates, held, doors, pug_all, bounds)
                         if pugs_on else None)
             social = _with_class_asks(social, quest_pass)
+            death_pass = _death_ask_pass(facts, mates, held)
+            if death_pass.posts:
+                social = dataclasses.replace(
+                    social,
+                    posts=social.posts + death_pass.posts,
+                    notes=social.notes + death_pass.notes)
             run_id = await asyncio.to_thread(_write_guild_social, social)
         except BaseException:
             self._guild_run_names.difference_update(newly_reserved)
@@ -29353,6 +29360,7 @@ def _fetch_guild_social_facts(bounds) -> dict:
     facts = _fetch_guild_run_facts(bounds)
     names = sorted({str(r["name"]) for r in facts["rows"] if r.get("name")})
     worn, skills, quest_rows, campaigns = [], [], [], []
+    death_loops: dict = {}
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT NOW() AS now")
         now = (cur.fetchone() or {}).get("now")
@@ -29374,6 +29382,16 @@ def _fetch_guild_social_facts(bounds) -> dict:
             cur.execute(guildsocial.QUESTS_SQL.format(  # noqa: S608 - placeholders only
                 holes=holes, zones=",".join(["%s"] * len(zones))), names + zones)
             quest_rows = list(cur.fetchall())
+            # The death loops the planning pass judges (deathloop.loops over
+            # the same deaths read, #2277): the death-loop asks are planned
+            # from this read in the social pass (deathask.plan_pass).
+            death_rows = _job_read(
+                cur, "deaths",
+                deathloop.SQL.format(holes=holes),  # noqa: S608 - placeholders only
+                (*names, deathloop.READ_SECONDS))
+            death_loops = deathloop.loops(
+                death_rows,
+                {str(r["name"]): int(r.get("level") or 0) for r in facts["rows"]})
         try:
             cur.execute(guildsocial.CAMPAIGNS_SQL)
             campaigns = list(cur.fetchall())
@@ -29393,9 +29411,22 @@ def _fetch_guild_social_facts(bounds) -> dict:
         "quests": guildsocial.quests_by_name(quest_rows),
         "gear": guildsocial.gear_by_name(facts["rows"], worn, skills),
         "campaigns": campaigns, "drops": drops, "pug_calls": pug_calls,
-        "lendable": lendable,
+        "lendable": lendable, "death_loops": death_loops,
     })
     return facts
+
+
+def _death_ask_pass(facts: dict, mates: list, held: dict) -> guildsocial.Pass:
+    """The death-loop ask pass for one social pass (deathask, #2277): posts
+    only, merged into the social pass beside the class quest asks and
+    written through the same writer. A looper held for another job is not
+    asked for, and a held mate is not counted in reach."""
+    if not deathask.enabled():
+        return guildsocial.Pass()
+    loops = facts.get("death_loops") or {}
+    if not loops:
+        return guildsocial.Pass()
+    return deathask.plan_pass(loops, mates, facts["asks"], facts["now"], held=held)
 
 
 def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,
