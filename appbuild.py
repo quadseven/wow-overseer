@@ -5,7 +5,7 @@ scripts it loaded. `page` in /api/realm fingerprints index.html alone, but a
 deploy that changes only app/*.js or app/*.css leaves index.html as it was,
 so a page comparing that value never learns its code is old.
 
-The build fingerprint covers the page and every script and stylesheet under
+The build fingerprint covers the page and every script, stylesheet and font under
 app/, by path and content. The page is served with the build it belongs to
 (BUILD_PLACEHOLDER in index.html), /api/realm reports the build the server
 holds now as `app_build`, and app/update.js offers a refresh when the two
@@ -22,13 +22,13 @@ import hashlib
 import os
 
 BUILD_PLACEHOLDER = "__OVERSEER_BUILD__"
-APP_KINDS = (".js", ".css")
+APP_KINDS = (".js", ".css", ".woff2")
 
 _memo: dict[str, tuple[tuple, str]] = {}
 
 
 def _app_files(root: str) -> list[str]:
-    """index.html and every .js and .css file under app/, relative to root, sorted."""
+    """index.html and every .js, .css and .woff2 file under app/, relative to root, sorted."""
     out = ["index.html"]
     app = os.path.join(root, "app")
     for here, dirs, files in os.walk(app):

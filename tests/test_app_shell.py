@@ -108,22 +108,11 @@ def get(path, headers=None):
 class ThePage(unittest.TestCase):
     def test_every_url_on_the_page_starts_at_the_mount(self):
         # A root-anchored URL on a page served under a prefix reads the realm
-        # at the root (basepath.py). Every same-origin URL here is built on
-        # the placeholder; the only other hosts are the font and icon CDNs.
+        # at the root (basepath.py). Every URL here is built on the
+        # placeholder, and no third-party host is named at all (the fonts are
+        # vendored under app/fonts/; test_app_fonts.py).
         for m in re.finditer(r'(?:href|src)="([^"]+)"', PAGE):
             url = m.group(1)
-            if url.startswith("https://"):
-                self.assertTrue(
-                    url.startswith(
-                        (
-                            "https://fonts.googleapis.com",
-                            "https://fonts.gstatic.com",
-                            "https://unpkg.com/@phosphor-icons/web@2.1.1/",
-                        )
-                    ),
-                    url,
-                )
-                continue
             self.assertTrue(url.startswith(basepath.PLACEHOLDER + "/"), url)
 
     def test_the_page_tells_the_app_where_it_is_mounted(self):
@@ -142,13 +131,9 @@ class ThePage(unittest.TestCase):
             self.assertNotRegex(text, r"""fetch\(\s*["'`]/""", path.name)
             self.assertNotRegex(text, r"""import\(\s*["'`]/""", path.name)
 
-    def test_the_icon_styles_are_pinned_by_integrity(self):
-        links = re.findall(r"<link[^>]+unpkg\.com[^>]+>", PAGE)
-        self.assertEqual(len(links), 2)
-        for link in links:
-            self.assertRegex(link, r'integrity="sha384-[A-Za-z0-9+/=]{64}"')
-            self.assertIn('crossorigin="anonymous"', link)
+    def test_the_page_loads_no_script_from_another_host(self):
         self.assertNotIn('<script src="https://', PAGE)
+        self.assertNotIn("unpkg.com", PAGE)
 
     def test_it_opens_full_screen_from_the_home_screen(self):
         for tag in (

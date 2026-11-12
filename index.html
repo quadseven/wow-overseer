@@ -23,9 +23,6 @@
 <link rel="manifest" href="__OVERSEER_BASE__/manifest.webmanifest">
 <link rel="apple-touch-icon" href="__OVERSEER_BASE__/apple-touch-icon.png">
 <link rel="icon" type="image/png" href="__OVERSEER_BASE__/icon-192.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap">
 <script>
   // The theme the operator picked, before the first paint, so a light
   // choice never flashes dark. No choice means the system's.
@@ -38,9 +35,13 @@
 </script>
 <link rel="stylesheet" href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/tokens.css">
 <link rel="stylesheet" href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/app.css">
-<!-- Phosphor icons, regular and fill, pinned with integrity hashes. -->
-<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css" integrity="sha384-6p9AefaqUhEVheRlj1mpAkbngHXy9mbYMrIdcIt4Jlc9lOLIablJq3bBsLOjGwZ7" crossorigin="anonymous">
-<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css" integrity="sha384-pPVoXE8ft+zxKtxIDDI7SfTK6y95NHm4qa+hKEg/hs8VkjW5IP+9/dGOPCbDpUPl" crossorigin="anonymous">
+<!-- The text font and the icon fonts, vendored (app/fonts/, tools/vendor_icons.py):
+     nothing here leaves the app's own mount. The preloads start the font files
+     with the stylesheet instead of after it. -->
+<link rel="stylesheet" href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/fonts/fonts.css">
+<link rel="preload" as="font" type="font/woff2" crossorigin href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/fonts/inter-latin.woff2">
+<link rel="preload" as="font" type="font/woff2" crossorigin href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/fonts/phosphor.woff2">
+<link rel="preload" as="font" type="font/woff2" crossorigin href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/fonts/phosphor-fill.woff2">
 </head>
 <body>
 <button type="button" class="skip" data-action="skip">Skip to the page</button>

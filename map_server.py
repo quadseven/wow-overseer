@@ -4954,7 +4954,11 @@ def _app_file_kind(rel: str) -> str:
         return ""
     return ext
 
-_APP_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; charset=utf-8"}
+_APP_TYPES = {
+    "js": "text/javascript; charset=utf-8",
+    "css": "text/css; charset=utf-8",
+    "woff2": "font/woff2",
+}
 
 # A file of the current build never changes under its name (see _app_file).
 APP_IMMUTABLE = "public, max-age=31536000, immutable"
@@ -5729,7 +5733,7 @@ class Handler(BaseHTTPRequestHandler):
                             basepath.apply(body, BASE_PATH), appbuild.fingerprint(HERE)))
 
     def _app_file(self, rel: str) -> None:
-        """GET /app/[<build>/]<path>.js|.css - one file of the operations app.
+        """GET /app/[<build>/]<path>.js|.css|.woff2 - one file of the operations app.
 
         Only plain lower-case paths ending in .js or .css, inside app/, are
         served: no dot segments, no other kinds of file, nothing outside the
