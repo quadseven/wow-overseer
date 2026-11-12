@@ -28895,6 +28895,17 @@ def _door_boss_levels(cur) -> dict:
     return found
 
 
+# Each member's newest hearth row for the guild run's own source, inside the
+# back-off window: what the module answered to the last ask (#2183).
+_GUILD_HEARTH_NEWEST = (
+    "SELECT c.target_name AS name, c.status, c.detail, "
+    "TIMESTAMPDIFF(SECOND, c.created_at, NOW()) AS age FROM overseer_command c "
+    "JOIN (SELECT target_name, MAX(id) AS id FROM overseer_command "
+    "WHERE kind = 'hearth' AND source = %s AND created_at > NOW() - INTERVAL "
+    + str(guildrun.HEARTH_BACKOFF_SECONDS) + " SECOND "
+    "AND target_name IN (%s) GROUP BY target_name) m ON m.id = c.id")
+
+
 def _hearth_stranded_guild_members() -> int:
     """Send home by hearthstone every guild member stranded on the other
     faction's ground or left alone inside a dungeon (guildrun.stranded), never
@@ -28920,6 +28931,11 @@ def _hearth_stranded_guild_members() -> int:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(_MOVEMENT_HEARTHED % ",".join(["%s"] * len(due)), due)
         recent = {str(r["target_name"]) for r in cur.fetchall()}
+        # A member whose last ask was refused for the stone's cooldown is not
+        # asked again for the back-off; any other answer is asked again now.
+        cur.execute(_GUILD_HEARTH_NEWEST % ("%s", ",".join(["%s"] * len(due))),
+                    (guildrun.SOURCE, *due))
+        recent |= guildrun.hearth_backed_off(list(cur.fetchall()))
     sent = 0
     for name in due:
         if name in recent:
