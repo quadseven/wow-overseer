@@ -40,6 +40,7 @@ import re
 import statistics
 
 import classquest
+import commandwords
 import council
 import guildrun
 import places
@@ -132,26 +133,25 @@ _QUEST_TITLES_SQL = (
 _QUEST_IN_COMMAND = re.compile(r"\bquest:(\d+)")
 # A class quest walk names the creature it walks to, not the quest
 # (`walk-to-spawn creature:39536`), so a blocked walk is named by its creature.
+# The number is a spawn id for a spawn walk and a template entry otherwise;
+# commandwords says which, and owns the query that reads either (#2199).
 _CREATURE_IN_COMMAND = re.compile(r"\bcreature:(\d+)")
-_CREATURE_NAMES_SQL = (
-    "SELECT entry AS id, name FROM acore_world.creature_template "
-    "WHERE entry IN ({holes})"
-)
 
 
 def walk_target(command: str, creatures: dict) -> str:
-    """The creature a blocked class quest walk was walking to, by name; an
-    entry the world database does not hold says so with its number."""
+    """The creature a blocked class quest walk was walking to, by name;
+    `creatures` is table -> id -> name (`_walk_creatures`). A creature the
+    world database does not hold says so with its number."""
     found = _CREATURE_IN_COMMAND.search(command or "")
     if not found:
         return ""
-    entry = int(found.group(1))
-    name = creatures.get(entry)
+    number = int(found.group(1))
+    name = (creatures.get(commandwords.creature_table(command)) or {}).get(number)
     if name:
-        return "walking to " + places.creature_words(entry, name)
+        return "walking to " + places.creature_words(number, name)
     return (
         "walking to an unnamed creature (%d), which the world database does not hold"
-        % entry
+        % number
     )
 
 
@@ -376,21 +376,24 @@ def _ghost(name: str, death, zones: dict, maps: dict) -> dict:
 
 
 def _walk_creatures(rd, blocked: dict) -> dict:
-    """entry -> name for the creatures the blocked walks name."""
-    wanted = sorted(
-        {
-            int(m.group(1))
-            for s in blocked.values()
-            for m in [_CREATURE_IN_COMMAND.search(s.get("command") or "")]
-            if m
-        }
-    )
-    if not wanted:
-        return {}
-    found = rd.must(
-        _CREATURE_NAMES_SQL.format(holes=_holes(len(wanted))), tuple(wanted)
-    )
-    return {int(r["id"]): r["name"] for r in found}
+    """table -> id -> name for the creatures the blocked walks name, read with
+    the query commandwords keeps for each table."""
+    wanted: dict = {}
+    for step in blocked.values():
+        command = step.get("command") or ""
+        found = _CREATURE_IN_COMMAND.search(command)
+        if found:
+            wanted.setdefault(commandwords.creature_table(command), set()).add(
+                int(found.group(1))
+            )
+    names: dict = {}
+    for table, ids in sorted(wanted.items()):
+        ids = sorted(ids)
+        found = rd.must(
+            commandwords.NAMES_SQL[table].format(holes=_holes(len(ids))), tuple(ids)
+        )
+        names[table] = {int(r["id"]): r["name"] for r in found}
+    return names
 
 
 def _class_quests(rd, guild_id: int, names: list, classes: dict) -> dict:

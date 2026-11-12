@@ -348,7 +348,9 @@ class TheActivityLogSaysWhy(unittest.TestCase):
 
     def test_a_blocked_class_quest_walk_names_its_creature(self):
         self.assertEqual(
-            guild.walk_target("walk-to-spawn creature:7 max:3", {7: "Bodley"}),
+            guild.walk_target(
+                "walk-to-spawn creature:7 max:3", {"spawn": {7: "Bodley"}}
+            ),
             "walking to Bodley",
         )
         self.assertIn(
