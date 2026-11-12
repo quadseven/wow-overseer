@@ -15,7 +15,7 @@ empty list means no zone met the routing threshold on the sampled member's map.
 | `app.css` | Base styles, components (buttons, cards, tags, tables), the shell, and the shared primitives. |
 | `main.js` | Boot: theme, shell, router, polling, search, tooltip, gestures, nav badges. |
 | `router.js` | Hash routes, legacy redirects, and route-to-view resolution. Pure functions, tested under node. |
-| `api.js` | Reads (`load`, `peek`, `watch`), the mount helper `u()`, the data age (`health`), and `post()`, the operator view's one write. |
+| `api.js` | Reads (`load`, `peek`, `watch`), the mount helper `u()`, `appUrl()` for the app's own files, the data age (`health`), and `post()`, the operator view's one write. The last good answer to each read is kept on the device (local storage, at most a day old, only for the build that saved it, about 1.5 MB in all) and painted at once on the next launch, marked saved until the world answers. |
 | `ui.js` | The `html` builder (escapes every value) and the primitives: `status`, `member`, `item`, `state`, `pendingRead`, `pageHead`, `sectionHead`, `tabs`, `kpi`, `sparkline`, `histogram`, `notMeasured`, `value`, `ago`, `gold`, and `readState` (a read is loading, failed, refused or ready). |
 | `models/time.js` | The one clock: every time the server sends, read as unix seconds (`toSeconds`, `since`, `clock`), and the browser's milliseconds turned into seconds (`fromClock`). |
 | `models/<payload>.js` | One read model per payload the views share: `roster.js` (/api/v2/roster), `guildruns.js` (/api/guildruns), `wall.js` (/api/wall), `guild.js` (/api/v2/guild). Each turns a read into named accessors, and answers null (not measured) until the read is ready. Tested under node in `tests/test_app_models.py`. |

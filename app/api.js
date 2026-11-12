@@ -4,8 +4,9 @@
 // fetched (stale-while-revalidate); the server's ETag turns an unchanged
 // answer into a 304, which the browser answers from its own cache. Only the reads of the view on screen are polled, and
 // polling stops while the page is hidden. The last good answer to each read is
-// also kept for this tab (sessionStorage), so a reload paints at once from it,
-// marked "saved" until the world answers again (see the end of this file).
+// also kept on this device (local storage, bounded in age, size and build), so a
+// launch paints at once from it, marked "saved" until the world answers again
+// (see the end of this file).
 
 const BASE = (function () {
   const meta = document.querySelector('meta[name="overseer-base"]');
@@ -222,38 +223,106 @@ function justRead(path) {
   return !!(e && e.at && !e.saved && !e.error && Date.now() - e.at < 1000);
 }
 
-// ---- the copy kept for this tab -------------------------------------------------
-// The last good answer to each read, kept in sessionStorage under the page's
-// own mount (another realm on the same origin keeps its own). A reload draws
-// from it at once with its real age, flagged `saved` so health() reports
-// "saved" and the page says so until the world answers. Storage can be off,
-// full or throw: every touch is guarded, and without it the app reads as
-// before. Errors are never kept, and an answer too big to keep drops the old
-// copy rather than leave it to be shown as current.
+// ---- the copy kept on this device ------------------------------------------------
+// The last good answer to each read, kept in local storage under the page's
+// own mount (another realm on the same origin keeps its own), so a launch from
+// the home screen draws from it at once, with its real age, flagged `saved` so
+// health() reports "saved" (the page says so) until the world answers.
+//
+// It is bounded three ways, so a phone's storage never fills with old pages:
+//   - an entry older than SAVE_MAX_AGE_MS is not used and is removed;
+//   - an entry saved by another build is not used and is removed (a deploy
+//     may change a read's shape, and a wrong shape must never be drawn);
+//   - the copies of this mount together stay under SAVE_TOTAL_CHARS: saving
+//     past it drops the oldest copies first. One read over SAVE_MAX_CHARS is
+//     never kept (and drops its old copy rather than leave it as current).
+// Storage can be off, full or throw: every touch is guarded, and without it
+// the app reads as before. Errors are never kept.
+//
+// An entry is one string, "v1|<saved at ms>|<build>|<answer text>", so the
+// housekeeping reads two small numbers and never parses an answer.
 const SAVE_PREFIX = "overseer.read:";
 const SAVE_MAX_CHARS = 1000000;
+const SAVE_TOTAL_CHARS = 1500000;
+const SAVE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const MINE = SAVE_PREFIX + BASE + "/";
+
+function store() { try { return window.localStorage; } catch (err) { return null; } }
 
 function saveKey(path) { return SAVE_PREFIX + u(path); }
 
-function save(path, e) {
+// {at, build, text} for a stored string, or null when it is not an entry.
+function unpack(raw) {
+  if (typeof raw !== "string" || raw.slice(0, 3) !== "v1|") return null;
+  const a = raw.indexOf("|", 3);
+  const b = a < 0 ? -1 : raw.indexOf("|", a + 1);
+  if (b < 0) return null;
+  const at = Number(raw.slice(3, a));
+  if (!at) return null;
+  return { at, build: raw.slice(a + 1, b), text: raw.slice(b + 1) };
+}
+
+// What this mount keeps: key -> {at, size}. Built once, from the headers only.
+const kept = new Map();
+let keptChars = 0;
+
+function forget(st, key) {
+  const k = kept.get(key);
+  if (k) { keptChars -= k.size; kept.delete(key); }
+  try { st.removeItem(key); } catch (err) { /* storage off */ }
+}
+
+(function housekeeping() {
+  const st = store();
+  if (!st) return;
   try {
-    if (e.text.length > SAVE_MAX_CHARS) { window.sessionStorage.removeItem(saveKey(path)); return; }
-    window.sessionStorage.setItem(saveKey(path), JSON.stringify({ at: e.at, text: e.text }));
+    const keys = [];
+    for (let i = 0; i < st.length; i++) { const k = st.key(i); if (k && k.startsWith(SAVE_PREFIX)) keys.push(k); }
+    const now = Date.now();
+    keys.forEach((key) => {
+      const raw = st.getItem(key);
+      const e = unpack(raw);
+      const mine = key.startsWith(MINE);
+      // Another mount's copy is only aged out; its own build is its business.
+      if (!e || now - e.at > SAVE_MAX_AGE_MS || (mine && e.build !== BUILD)) { try { st.removeItem(key); } catch (err) { /* off */ } return; }
+      if (mine) { kept.set(key, { at: e.at, size: raw.length }); keptChars += raw.length; }
+    });
+  } catch (err) { /* storage off or throwing: nothing is restored */ }
+})();
+
+function save(path, e) {
+  const st = store();
+  if (!st) return;
+  const key = saveKey(path);
+  try {
+    if (e.text.length > SAVE_MAX_CHARS) { forget(st, key); return; }
+    const raw = "v1|" + e.at + "|" + BUILD + "|" + e.text;
+    forget(st, key);
+    st.setItem(key, raw);
+    kept.set(key, { at: e.at, size: raw.length });
+    keptChars += raw.length;
+    // Over the total: the oldest copies go first, never the one just saved.
+    if (keptChars > SAVE_TOTAL_CHARS) {
+      [...kept.entries()].filter(([k]) => k !== key).sort((x, y) => x[1].at - y[1].at).forEach(([k]) => {
+        if (keptChars > SAVE_TOTAL_CHARS) forget(st, k);
+      });
+    }
   } catch (err) {
-    try { window.sessionStorage.removeItem(saveKey(path)); } catch (err2) { /* storage off */ }
+    try { forget(st, key); } catch (err2) { /* storage off */ }
   }
 }
 
 function restore(path) {
-  let kept = null;
-  try {
-    const raw = window.sessionStorage.getItem(saveKey(path));
-    kept = raw ? JSON.parse(raw) : null;
-  } catch (err) { kept = null; }
-  if (!kept || typeof kept.text !== "string" || !kept.at) return null;
+  const st = store();
+  if (!st) return null;
+  const key = saveKey(path);
+  let e = null;
+  try { e = unpack(st.getItem(key)); } catch (err) { e = null; }
+  if (!e) return null;
+  if (Date.now() - e.at > SAVE_MAX_AGE_MS || e.build !== BUILD) { forget(st, key); return null; }
   let data;
-  try { data = JSON.parse(kept.text); } catch (err) { return null; }
-  const e = { data, text: kept.text, projection: stableProjection(kept.text), at: kept.at, error: null, failures: 0, inflight: null, saved: true };
-  cache.set(path, e);
-  return e;
+  try { data = JSON.parse(e.text); } catch (err) { return null; }
+  const ent = { data, text: e.text, projection: stableProjection(e.text), at: e.at, error: null, failures: 0, inflight: null, saved: true };
+  cache.set(path, ent);
+  return ent;
 }
