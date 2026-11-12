@@ -150,13 +150,14 @@ LIVE_ASKS = (OPEN, FILLED)
 PASSING = frozenset({"in combat"})
 
 KIND_DUNGEON = "dungeon"
+KIND_DEATHLOOP = "deathloop"
 
 ASK_TABLE_SQL = (
     "CREATE TABLE IF NOT EXISTS overseer_guild_ask ("
     " id INT NOT NULL AUTO_INCREMENT,"
     " guild VARCHAR(32) NOT NULL,"
     " asker VARCHAR(12) NOT NULL,"
-    " kind ENUM('dungeon','quest','battleground') NOT NULL,"
+    " kind ENUM('dungeon','quest','battleground','deathloop') NOT NULL,"
     " target VARCHAR(64) NOT NULL,"
     " target_label VARCHAR(96) NOT NULL DEFAULT '',"
     " roles_needed VARCHAR(32) NOT NULL DEFAULT '',"
@@ -185,6 +186,10 @@ ANSWER_TABLE_SQL = (
     " state ENUM('yes','seated','declined','withdrawn') NOT NULL DEFAULT 'yes',"
     " PRIMARY KEY (id), KEY idx_ask (ask_id), KEY idx_member (member, state)"
     ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+)
+ASK_KIND_SQL = (
+    "ALTER TABLE overseer_guild_ask "
+    "MODIFY COLUMN kind ENUM('dungeon','quest','battleground','deathloop') NOT NULL"
 )
 ANSWER_STANCE_SQL = (
     "ALTER TABLE overseer_guild_answer "

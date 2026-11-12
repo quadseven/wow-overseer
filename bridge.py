@@ -28732,6 +28732,7 @@ def _ensure_guild_run_store() -> None:
     try:
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(guildsocial.ASK_TABLE_SQL)
+            cur.execute(guildsocial.ASK_KIND_SQL)
             cur.execute(guildsocial.ANSWER_TABLE_SQL)
             cur.execute(guildsocial.ANSWER_STANCE_SQL)
             cur.execute(
