@@ -112,6 +112,51 @@ class DeathLoopAsks(unittest.TestCase):
         found = deathask.plan_pass({"Looper": loop_of()}, [looper, helper], [old], NOW)
         self.assertEqual(len(found.posts), 1)
 
+    def test_an_open_ask_past_its_expiry_is_expired(self):
+        looper, helper = looper_and_mate()
+        stale = ask(9, "Looper", expires_at=NOW - datetime.timedelta(minutes=1))
+        found = deathask.plan_pass(
+            {"Looper": loop_of()}, [looper, helper], [stale], NOW
+        )
+        self.assertEqual(found.expire, ((9, "Looper", ""),))
+        self.assertEqual(found.posts, ())
+
+    def test_a_live_ask_not_past_its_expiry_is_not_expired(self):
+        looper, helper = looper_and_mate()
+        live = ask(9, "Looper")
+        found = deathask.plan_pass({"Looper": loop_of()}, [looper, helper], [live], NOW)
+        self.assertEqual(found.expire, ())
+
+    def test_a_recovered_loopers_ask_is_expired(self):
+        looper, helper = looper_and_mate()
+        live = ask(9, "Looper")
+        found = deathask.plan_pass({}, [looper, helper], [live], NOW)
+        self.assertEqual(found.expire, ((9, "Looper", ""),))
+        self.assertEqual(found.posts, ())
+
+    def test_the_empty_pool_expires_every_live_ask(self):
+        rows = [ask(9, "Looper"), ask(10, "Other")]
+        found = deathask.plan_pass({}, [], rows, NOW)
+        self.assertEqual(found.expire, ((9, "Looper", ""), (10, "Other", "")))
+        self.assertEqual(found.posts, ())
+
+    def test_expired_asks_free_the_guild_open_cap(self):
+        looper, helper = looper_and_mate()
+        stale = [
+            ask(i, name, expires_at=NOW - datetime.timedelta(minutes=1))
+            for i, name in enumerate(("Alpha", "Bravo", "Charlie"), start=1)
+        ]
+        loops = {name: loop_of(name) for name in ("Alpha", "Bravo", "Charlie")}
+        loops["Looper"] = loop_of()
+        found = deathask.plan_pass(loops, [looper, helper], stale, NOW)
+        self.assertEqual(len(found.expire), 3)
+        self.assertEqual([p.asker for p in found.posts], ["Looper"])
+
+    def test_the_switch_is_off_until_the_answer_side_exists(self):
+        self.assertFalse(deathask.enabled({}))
+        self.assertTrue(deathask.enabled({"DEATH_ASK": "on"}))
+        self.assertFalse(deathask.enabled({"DEATH_ASK": "off"}))
+
     def test_a_held_looper_is_not_asked_for(self):
         looper, helper = looper_and_mate()
         found = deathask.plan_pass(

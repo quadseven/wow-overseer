@@ -26,7 +26,25 @@ open in a guild, NEW_PER_PASS new a pass, and ASK_COOLDOWN_MINUTES before
 a looper whose last ask came to nothing is asked again (the class asks'
 cooldown read over the deathloop kind, guildsocial.ASK_COOLDOWN_MINUTES).
 
-PURE: rows in, a guildsocial.Pass of posts out.
+CLOSED BY THIS PASS (#2344). A deathloop ask is also closed here: the
+dungeon and quest passes close only their own kinds, so without this a
+deathloop ask stayed open forever, its asker was skipped for good by the
+live-ask check, and three stuck asks filled a guild's MAX_OPEN_PER_GUILD
+for ever. plan_pass emits a silent expire (the #1636 shape: the row
+closes, no line is said) for every live deathloop ask past its
+expires_at, and for every live ask whose asker is no longer in the loop
+set (the recovered case). Expired asks stop counting toward the guild's
+open cap in the same pass; an asker whose ask expires this pass is not
+re-asked this pass, and the ordinary cooldown governs the next one.
+
+THE SWITCH IS OFF UNTIL THE ANSWER SIDE EXISTS (#2344). Nothing yet
+seats a party from a deathloop yes, so the guild chat line may not speak
+yet: DEATH_ASK defaults off, and only an explicit on value enables new
+posts. Expiry is not gated by the switch: asks already open keep closing
+while the switch is off (the bridge's death-ask pass runs the expiry
+half either way).
+
+PURE: rows in, a guildsocial.Pass of posts and expires out.
 """
 
 from __future__ import annotations
@@ -54,10 +72,11 @@ _ASK_LINE = (
 
 
 def enabled(environ=None) -> bool:
-    """On unless DEATH_ASK says off."""
+    """Off unless DEATH_ASK says on: no new deathloop ask is posted until
+    the answer side exists (#2344). Expiry never consults this switch."""
     env = os.environ if environ is None else environ
     raw = str(env.get(ENV_SWITCH, "") or "").strip().lower()
-    return raw not in ("off", "0", "false", "no")
+    return raw in ("on", "1", "true", "yes")
 
 
 def target_of(loop) -> str:
@@ -110,8 +129,32 @@ def _as_job_member(mate) -> guildjobs.Member:
     )
 
 
+def _past(when, now) -> bool:
+    return when is not None and now is not None and when <= now
+
+
+def expires(asks, looping, now) -> tuple:
+    """The expire half of a pass: (ask id, asker, "") for every live
+    deathloop ask past its expires_at, and for every live ask whose asker
+    is no longer in the loop set. Silent, in ask-id order."""
+    looping = set(looping or ())
+    ending = [
+        a
+        for a in death_asks(asks)
+        if a.state in LIVE_ASKS and (_past(a.expires_at, now) or a.asker not in looping)
+    ]
+    return tuple((a.id, a.asker, "") for a in sorted(ending, key=lambda a: a.id))
+
+
+def expire_pass(asks, loops, now) -> guildsocial.Pass:
+    """A Pass holding only expires: the half that runs while the switch
+    is off, so asks already open keep closing (#2344)."""
+    return guildsocial.Pass(expire=expires(asks, set(loops or ()), now))
+
+
 def plan_pass(loops, mates, asks, now, held=frozenset()) -> guildsocial.Pass:
-    """One pass of the death-loop asks: a Pass holding only posts.
+    """One pass of the death-loop asks: posts for loopers with a mate in
+    reach, and expires for the live asks that end now.
 
     loops  name -> deathloop.Loop, the planning pass's death-loop read
     mates  guildsocial.Mate for every member read
@@ -124,11 +167,13 @@ def plan_pass(loops, mates, asks, now, held=frozenset()) -> guildsocial.Pass:
     for mate in mates or ():
         jobs.setdefault(mate.name, _as_job_member(mate))
     looping = set(loops or ())
+    expire = expires(asks, looping, now)
+    ending_ids = {ask_id for ask_id, _asker, _line in expire}
     live = {a.asker for a in death_asks(asks) if a.state in LIVE_ASKS}
     recent = _recent_askers(asks, now)
     open_in: dict = {}
     for a in death_asks(asks):
-        if a.state in LIVE_ASKS:
+        if a.state in LIVE_ASKS and a.id not in ending_ids:
             open_in[a.guild] = open_in.get(a.guild, 0) + 1
     free_mates = [m for name, m in jobs.items() if name not in held]
     posts = []
@@ -162,4 +207,4 @@ def plan_pass(loops, mates, asks, now, held=frozenset()) -> guildsocial.Pass:
             )
         )
         open_in[member.guild] = open_in.get(member.guild, 0) + 1
-    return guildsocial.Pass(posts=tuple(posts))
+    return guildsocial.Pass(posts=tuple(posts), expire=expire)
