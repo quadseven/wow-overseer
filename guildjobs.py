@@ -6534,6 +6534,8 @@ def _class_move_step(
         return step, doing, _join(note, why)
     if move.kind == classquest.ABANDON:
         return _abandon_step(m, move, recent, note)
+    if move.kind == classquest.TAKE and move.spot is None:
+        return _item_take_step(m, move, note)
     spot = _class_spot(move)
     boat = class_boat_step(m, move, spot, recent, hunts, now)
     if boat is not None:
@@ -6909,6 +6911,29 @@ def _abandon_step(m, move, recent, note):
             guildcorps.Row(
                 "quest",
                 "abandon quest:%d" % int(move.quest),
+                "",
+                source_for(classquest.ACTION, m.name),
+            ),
+        ),
+        goal=m.name,
+    )
+    return step, move.said, note
+
+
+def _item_take_step(m, move, note):
+    """The one quest row that takes a quest an item starts (wow-overseer#2297):
+    the member carries the item, so there is no giver to walk to. The module
+    takes it when the member carries the item whose StartQuest it is
+    (mod-overseer take quest: for an item-started quest)."""
+    step = guildcorps.Step(
+        m.name,
+        classquest.ACTION,
+        int(move.quest),
+        move.said,
+        rows=(
+            guildcorps.Row(
+                "quest",
+                "take quest:%d" % int(move.quest),
                 "",
                 source_for(classquest.ACTION, m.name),
             ),

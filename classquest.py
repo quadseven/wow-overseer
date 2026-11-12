@@ -198,6 +198,9 @@ ACTION = "classquest"
 MARK = "class quest"
 
 # Move kinds. USE writes a use-item-on or use-gameobject row at a target.
+# The state a quest-available condition names for "rewarded" (acore_world.conditions,
+# ConditionTypeOrReference 47, a bit mask of QuestStatus-like states).
+QUEST_STATE_REWARDED = 64
 TAKE, HUNT, TURN_IN, USE, BLOCKED = "take", "hunt", "turnin", "use", "blocked"
 # A quest dropped to be taken again, so the core hands the member the StartItem
 # it lost (a quest item cannot be bought). Only a StartItem comes back so: the
@@ -623,6 +626,10 @@ _PROVIDED = "q.StartItem AS provided0, " + "".join(
     "q.ItemDrop%d AS source%d, " % (i, i) for i in range(1, 5)
 )
 
+# The items a quest hands over when it is rewarded (RewardItem1-4): an item that
+# starts a later quest of the chain is found here (wow-overseer#2297).
+_REWARD_ITEMS = "".join("q.RewardItem%d AS ritem%d, " % (i, i) for i in range(1, 5))
+
 # Every class quest of the classic range, one row each.
 # Built from this module's own integer constants only (S608 does not apply).
 QUESTS_SQL = (  # noqa: S608
@@ -636,6 +643,7 @@ QUESTS_SQL = (  # noqa: S608
     + _NPCS
     + _ITEMS
     + _PROVIDED
+    + _REWARD_ITEMS
     + "0 AS pad FROM acore_world.quest_template q "
     "LEFT JOIN acore_world.quest_template_addon a ON a.ID = q.ID "
     "WHERE (a.AllowableClasses IN ("
@@ -685,6 +693,18 @@ STARTERS_SQL = (
     "UNION ALL "
     "SELECT it.startquest, 'item', it.entry FROM acore_world.item_template it "
     "WHERE it.startquest IN ({quests})"
+)
+
+# What the world says a quest needs before it is offered: acore_world.conditions
+# rows of SourceTypeOrReferenceId 19 (quest available), one ElseGroup per way in.
+# The book models the rows that ask for a quest REWARDED (ConditionTypeOrReference
+# 8, or 47 with state 64); see Quest.needs (wow-overseer#2297).
+CONDITIONS_SQL = (
+    "SELECT c.SourceEntry AS quest, c.ElseGroup AS grp, "
+    "c.ConditionTypeOrReference AS kind, c.ConditionValue1 AS value1, "
+    "c.ConditionValue2 AS value2, c.NegativeCondition AS negative "
+    "FROM acore_world.conditions c "
+    "WHERE c.SourceTypeOrReferenceId = 19 AND c.SourceEntry IN ({quests})"
 )
 
 # The reward spells a trainer teaches for coin: not a class quest's to give.
@@ -918,6 +938,17 @@ class Quest:
     # it is offered only once one of them is rewarded (THE CORE READS
     # NextQuestID TOO).
     after: tuple = ()
+    # What the world's quest-available conditions need: a tuple of ways in, each
+    # a tuple of quest ids that must all be rewarded; any one way opens it. The
+    # quest 1647 needs 1646 rewarded, whatever other quests name it as their
+    # NextQuestID. Empty when the world gives no rule the book can read (a quest
+    # with any other kind of condition keeps the old reading).
+    needs: tuple = ()
+    # The items RewardItem1-4 hand over (the book's own reading of the reward).
+    reward_items: tuple = ()
+    # (item, quest id) for each item that starts this quest and is the reward of
+    # a quest of the book: 1646 is started by item 6916, the reward of 1645.
+    item_from: tuple = ()
 
     @property
     def spells(self) -> frozenset:
@@ -965,6 +996,9 @@ class Book:
         items a use quest hands over and the items it requires."""
         out = set()
         for q in self.quests.values():
+            # The item that starts a quest is read too: a member carrying it
+            # takes the quest with no giver (wow-overseer#2297).
+            out.update(i for i, _from in q.item_from)
             # A dropped item is read too: the hunt asks for what is still missing.
             out.update(i for i, _n in q.items if i in q.droppable)
             if q.uses:
@@ -1302,6 +1336,9 @@ def _quest(
         max(0, _int(r.get("exclusive"))),
         _sources(r),
         inside,
+        reward_items=tuple(
+            i for i in (_int(r.get("ritem%d" % n)) for n in range(1, 5)) if i > 0
+        ),
     )
 
 
@@ -1339,6 +1376,7 @@ def build(
     every=False,
     summon_rows=(),
     held_rows=(),
+    condition_rows=(),
 ) -> Book:
     """The Book from the world's rows.
 
@@ -1350,7 +1388,8 @@ def build(
     read before the verbs existed. `start_rows` are STARTERS_SQL's: the quests a
     gameobject or an item starts. `summon_rows` are SUMMONERS_SQL's over the
     objective creatures, and `held_rows` HELD_SQL's over the items the takes
-    hand over.
+    hand over. `condition_rows` are CONDITIONS_SQL's: what each quest needs
+    rewarded before it is offered (Quest.needs).
     """
     starts, ends = _givers(giver_rows)
     others = _other_starts(start_rows)
@@ -1378,6 +1417,7 @@ def build(
                 continue
             quests[_int(r.get("id"))] = quest
     quests = _with_openers(quests, quest_rows)
+    quests = _with_conditions(quests, condition_rows)
     groups = {}
     for q in quests.values():
         if q.rewards:
@@ -1398,6 +1438,58 @@ def _with_openers(quests, quest_rows) -> dict:
         i: replace(q, after=tuple(sorted(after[i]))) if i in after else q
         for i, q in quests.items()
     }
+
+
+def _needs(rows) -> dict:
+    """quest -> ways in, each a sorted tuple of quest ids that must be rewarded,
+    from CONDITIONS_SQL's rows. A quest with any row the book cannot read (a
+    quest that must NOT be taken, a negated rule, another kind of condition)
+    gets no entry: it keeps the NextQuestID reading, never a guess."""
+    by_quest: dict = {}
+    for r in rows or ():
+        by_quest.setdefault(_int(r.get("quest")), []).append(r)
+    out: dict = {}
+    for qid, quest_rows in by_quest.items():
+        ways: dict = {}
+        readable = True
+        for r in quest_rows:
+            kind, state = _int(r.get("kind")), _int(r.get("value2"))
+            rewarded = kind == 8 or (kind == 47 and state == QUEST_STATE_REWARDED)
+            if not rewarded or _int(r.get("negative")) or not _int(r.get("value1")):
+                readable = False
+                break
+            ways.setdefault(_int(r.get("grp")), set()).add(_int(r.get("value1")))
+        if readable and ways:
+            out[qid] = tuple(tuple(sorted(w)) for _g, w in sorted(ways.items()))
+    return out
+
+
+def _with_conditions(quests, rows) -> dict:
+    """`quests` with each one's Quest.needs, and Quest.item_from: the items that
+    start it which the reward of a quest of the book hands over."""
+    needs = _needs(rows)
+    given: dict = {}
+    for q in quests.values():
+        for item in q.reward_items:
+            given.setdefault(item, set()).add(q.id)
+    out = {}
+    for i, q in quests.items():
+        fix = {}
+        if i in needs:
+            fix["needs"] = needs[i]
+        from_ = tuple(
+            sorted(
+                (item, src)
+                for kind, item in q.other_starts
+                if kind == "item"
+                for src in given.get(item, ())
+                if src != i
+            )
+        )
+        if from_:
+            fix["item_from"] = from_
+        out[i] = replace(q, **fix) if fix else q
+    return out
 
 
 def chain(book: Book, quest_id: int) -> list:
@@ -1817,13 +1909,59 @@ def _variant_move(book: Book, member, reward_id: int, seen=frozenset()):
         return HUNT, quest, None, reward_id
     if status == STATUS_FAILED:
         return ABANDON, quest, None, reward_id
+    if not quest.starters and _item_start(quest):
+        return _item_take(book, member, quest, reward_id, seen)
     return TAKE, quest, _nearest(member, quest.starters), reward_id
 
 
+def _item_start(quest: Quest) -> tuple:
+    """The items that start `quest` when used, which no creature gives."""
+    return tuple(e for k, e in quest.other_starts if k == "item")
+
+
+def _start_item_carried(quest: Quest, member) -> int:
+    """The entry of an item that starts `quest` the member carries, else 0."""
+    return next((e for e in _item_start(quest) if member.carries(e)), 0)
+
+
+def _item_take(book: Book, member, quest: Quest, reward_id: int, seen):
+    """The move toward a quest an item starts (wow-overseer#2297): taking it
+    with the item in the bags (no giver to walk to), else the move of the quest
+    whose reward hands the item over. With neither it is the plain TAKE with no
+    spot, which _move_of names as a blocker."""
+    if _start_item_carried(quest, member) or quest.id in seen:
+        return TAKE, quest, None, reward_id
+    seen = seen | {quest.id}
+    options = [
+        o
+        for o in (
+            _variant_move(book, member, src, seen) for _item, src in quest.item_from
+        )
+        if o
+    ]
+    if not options:
+        return TAKE, quest, None, reward_id
+    kind, source, spot, _reward = min(
+        options,
+        key=lambda o: (
+            _status(member, o[1].id) == 0,
+            o[2] is None,
+            _yards(member, o[2]) if o[2] else 1e12,
+            o[1].id,
+        ),
+    )
+    return kind, source, spot, reward_id
+
+
 def _unopened(quest: Quest, done) -> bool:
-    """True when the core does not offer `quest` yet: it has no PrevQuestID,
-    other quests' NextQuestID open it (Quest.after), and the member has
-    rewarded none of them."""
+    """True when the core does not offer `quest` yet. With the world's own
+    conditions read (Quest.needs) it is those: no way in has all its quests
+    rewarded. Otherwise it has no PrevQuestID, other quests' NextQuestID open it
+    (Quest.after), and the member has rewarded none of them. The conditions win:
+    2997 names 1647 as its next quest and a member who rewarded it still cannot
+    take 1647 until 1646 is rewarded (wow-overseer#2297)."""
+    if quest.needs:
+        return not any(all(n in done for n in way) for way in quest.needs)
     return not quest.prev and bool(quest.after) and not done.intersection(quest.after)
 
 
@@ -1836,9 +1974,10 @@ def _opener_move(book: Book, member, quest: Quest, reward_id: int, seen):
     if quest.id in seen:
         return None
     seen = seen | {quest.id}
-    options = [
-        o for o in (_variant_move(book, member, q, seen) for q in quest.after) if o
-    ]
+    openers = (
+        sorted({n for way in quest.needs for n in way}) if quest.needs else quest.after
+    )
+    options = [o for o in (_variant_move(book, member, q, seen) for q in openers) if o]
     if not options:
         return None
     kind, opener, spot, _reward = min(
@@ -2005,6 +2144,25 @@ def _move_of(member, option, key, avoid=None, held_off=frozenset()) -> Move:
             quest.title,
         )
         return Move(ABANDON, quest.id, quest.klass, None, said, "", why)
+    if spot is None and kind == TAKE and _start_item_carried(quest, member):
+        said = "%s takes %s by using the item that starts it, %s" % (
+            member.name,
+            quest.title,
+            why,
+        )
+        return Move(TAKE, quest.id, quest.klass, None, said, "", why)
+    if spot is None and kind == TAKE and _item_start(quest) and not quest.starters:
+        items = ", ".join(str(e) for e in _item_start(quest))
+        return Move(
+            BLOCKED,
+            quest.id,
+            quest.klass,
+            None,
+            "%s is started by item %s, which the member does not carry (%s)"
+            % (quest.title, items, why),
+            ITEM,
+            why,
+        )
     if spot is None:
         ends = quest.enders if kind == TURN_IN else quest.starters
         word = "ender" if kind == TURN_IN else "giver"

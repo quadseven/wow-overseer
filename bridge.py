@@ -33207,7 +33207,9 @@ def _class_book_reads(cur) -> tuple:
     spawns = _class_rows(cur, "class quest spawns", classquest.SPAWNS_SQL, "entries", entries)
     started = _job_read(cur, "class quest other starters", classquest.STARTERS_SQL.format(
         quests=ids(r["id"] for r in quests)))
-    return quests, givers, spawns, loot, trained, use_rows, chest_rows, object_rows, focus_rows, started, summon_rows, held_rows
+    conditions = _job_read(cur, "class quest conditions", classquest.CONDITIONS_SQL.format(
+        quests=ids(r["id"] for r in quests)))
+    return quests, givers, spawns, loot, trained, use_rows, chest_rows, object_rows, focus_rows, started, summon_rows, held_rows, conditions
 
 
 def _class_use_reads(cur, quests, items, objectives=()) -> tuple:
@@ -33260,8 +33262,8 @@ def _class_book():
         reads = _class_book_reads(cur)
     if reads is None:
         return None
-    *world, summon_rows, held_rows = reads
-    _CLASS_BOOK = classquest.build(*world, summon_rows=summon_rows, held_rows=held_rows)
+    *world, summon_rows, held_rows, condition_rows = reads
+    _CLASS_BOOK = classquest.build(*world, summon_rows=summon_rows, held_rows=held_rows, condition_rows=condition_rows)
     log.info("class quests: read %d quest(s) in %d reward group(s) from the world database",
              len(_CLASS_BOOK.quests), len(_CLASS_BOOK.groups))
     return _CLASS_BOOK
