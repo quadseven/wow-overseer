@@ -158,9 +158,10 @@ class TheInRunDrinkPassIsWired(unittest.TestCase):
     def test_the_loop_is_registered(self):
         self.assertIn('    _Pass("_run_drink_loop"),\n', _source())
 
-    def test_it_runs_only_inside_a_run(self):
+    def test_it_runs_only_inside_a_run_or_while_one_is_staging(self):
         code = _code("    async def _run_drink_once(self")
-        self.assertIn("not await self._mid_run(names)", code)
+        # The staging branch is driven in tests/test_run_drink_staging.py.
+        self.assertIn("await self._mid_run(names)", code)
 
     def test_it_asks_the_planner_with_positions_and_writes_only_towntrip_rows(self):
         code = _code("    async def _run_drink_once(self")
