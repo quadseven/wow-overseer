@@ -46,6 +46,19 @@ reports what the queued rows are worth per member: the copper of the
 sales actually written, summed by holder, with one log line per member
 in `vendorsale.money` words.
 
+THE PRESSURE RELEASE (ITEMPLAN_SELL_RELEASE). The two holds above are each
+right alone and wrong together: a member whose personal bank and guild bank
+tab are both full has nowhere to put what the plan wanted kept, so its
+fallback sales are held, and its confirm sales wait for a release nothing
+supplies. Its bags then stay full for good. When the caller passes a
+`pressure` (slots a member still has to free), the held sales of THAT member
+are released, cheapest stack first, one slot per stack, only as many as the
+pressure asks for, and never past `RELEASE_CEILING_COPPER` for one stack,
+never epic quality, never a bag and never a profession tool. A member with
+room has no pressure and releases nothing, and without a pressure the
+function answers exactly as before. Each released sale carries which hold it
+lifted, so the log can say what was sold and why.
+
 PURE. Decisions and rows in, sales and a report out. No MySQL, no clock.
 The bridge supplies the plan (through `itemplan_shadow.shadow`), the
 rows, the released keys and the insert.
@@ -62,6 +75,20 @@ import itemplan
 import vendorsale
 
 ENV_SWITCH = "ITEMPLAN_SELL_VENDOR"
+ENV_RELEASE = "ITEMPLAN_SELL_RELEASE"
+
+# Which hold a released sale lifted.
+RELEASED_CONFIRM = "confirm"
+RELEASED_FALLBACK = "fallback"
+
+# The most one stack may be worth and still be released by pressure alone
+# (5 gold, in copper). Above it a sale is a person's call, as it always was.
+RELEASE_CEILING_COPPER = 50000
+# An epic or better stack is never sold by the route, released or not.
+RELEASE_MAX_QUALITY = 3
+# A member is under pressure below the plan's trigger and is relieved up to
+# this many free slots, the plan's own hysteresis band.
+RELEASE_TARGET_FREE = itemplan.TRIGGER_FREE + 2
 
 # Why a SELL_VENDOR decision is held back instead of carried out.
 HELD_FALLBACK = "a fallback sale: the first choice had no room"
@@ -80,6 +107,32 @@ def enabled(environ=None) -> bool:
     return raw in ("on", "1", "true", "yes")
 
 
+def release_enabled(environ=None) -> bool:
+    """On only when the route is on and ITEMPLAN_SELL_RELEASE says so."""
+    env = os.environ if environ is None else environ
+    raw = str(env.get(ENV_RELEASE, "") or "").strip().lower()
+    return enabled(env) and raw in ("on", "1", "true", "yes")
+
+
+def pressure_for(names, free_slots, sellable_counts) -> dict:
+    """holder -> slots still to free, for members under the plan's trigger.
+
+    A member that is not under the trigger, or whose free slots were not
+    read, has no entry. The ordinary sale pass's own count comes off first,
+    because those stacks go out anyway and must not be made up for twice.
+    """
+    out = {}
+    for name in names:
+        free = (free_slots or {}).get(name)
+        if free is None or free >= itemplan.TRIGGER_FREE:
+            continue
+        sellable = max(0, _int((sellable_counts or {}).get(name)))
+        need = RELEASE_TARGET_FREE - max(0, _int(free)) - sellable
+        if need > 0:
+            out[name] = need
+    return out
+
+
 @dataclass(frozen=True)
 class Sale:
     """One released SELL_VENDOR decision, ready for the sell insert."""
@@ -90,6 +143,7 @@ class Sale:
     copper: int  # the plan's value for the stack: sell price times count
     key: tuple
     candidate: bag_pressure.SellCandidate
+    released: str = ""  # which hold pressure lifted, or "" for an ordinary sale
 
 
 @dataclass(frozen=True)
@@ -129,8 +183,47 @@ def _held_reason(decision, stack, row) -> str:
     return ""
 
 
+def _sale_of(decision, row, released=""):
+    """The Sale for a decision and its carried row, or None when the row
+    names no item to sell."""
+    guid = _int(row.get("item_guid"))
+    count = max(1, _int(row.get("count"), 1))
+    if guid <= 0:
+        return None
+    candidate = bag_pressure.SellCandidate(
+        holder=str(row["holder"]),
+        item_guid=guid,
+        count=count,
+        item=bag_pressure.ItemForSale(
+            quality=_int(row.get("quality")),
+            sell_price=max(0, _int(row.get("sell_price"))),
+        ),
+    )
+    return Sale(
+        holder=decision.holder,
+        name=decision.name,
+        count=count,
+        copper=max(0, _int(decision.value)),
+        key=decision.key,
+        candidate=candidate,
+        released=released,
+    )
+
+
+def _may_release(decision, row) -> bool:
+    """May pressure alone lift the hold on this stack?"""
+    if _int(row.get("quality")) > RELEASE_MAX_QUALITY:
+        return False
+    return max(0, _int(decision.value)) <= RELEASE_CEILING_COPPER
+
+
 def sales_for(
-    plan_, stack_rows, keep_names=(), released=frozenset(), held=None
+    plan_,
+    stack_rows,
+    keep_names=(),
+    released=frozenset(),
+    held=None,
+    pressure=None,
 ) -> tuple:
     """The route's sales from a plan, in plan order.
 
@@ -139,19 +232,25 @@ def sales_for(
     the stack supplies the decision key, the row supplies the guid the
     sell insert names and the current protection's reading. A fallback
     sale is not returned; when `held` is a list it is appended there.
+
+    `pressure` maps a holder to the slots it still has to free (see
+    `pressure_for`). For such a holder the held sales, confirm and fallback,
+    are released cheapest first up to the pressure, after the ordinary
+    sales have been counted against it. No pressure, or none for a holder,
+    changes nothing.
     """
     rows_by_key = {stack.key: row for stack, row in stack_rows}
     stack_of = {stack.key: stack for stack, _row in stack_rows}
-    out = []
-    for decision in plan_.decisions:
+    ordinary = []  # (plan index, Sale)
+    pool = []  # (value, plan index, decision, row, kind, held entry or None)
+    for index, decision in enumerate(plan_.decisions):
         if decision.route != itemplan.SELL_VENDOR:
             continue
         if decision.from_loc not in itemplan.CARRIED or decision.stuck:
             continue
         if decision.reason.startswith(itemplan.NO_ROOM):
             continue
-        if decision.confirm and decision.key not in released:
-            continue
+        waiting = decision.confirm and decision.key not in released
         row = rows_by_key.get(decision.key)
         if row is None:
             continue
@@ -159,34 +258,80 @@ def sales_for(
         if not bag_pressure.vendor_refusal(row, keep_names):
             continue
         why = _held_reason(decision, stack_of.get(decision.key), row)
+        if waiting:
+            # Waits for a release, as it always did; a bag or a tool is
+            # never released and says nothing.
+            if not why or why == HELD_FALLBACK:
+                pool.append(
+                    (
+                        max(0, _int(decision.value)),
+                        index,
+                        decision,
+                        row,
+                        RELEASED_CONFIRM,
+                        None,
+                    )
+                )
+            continue
+        if why == HELD_FALLBACK:
+            pool.append(
+                (
+                    max(0, _int(decision.value)),
+                    index,
+                    decision,
+                    row,
+                    RELEASED_FALLBACK,
+                    (decision, why),
+                )
+            )
+            continue
         if why:
             if held is not None:
                 held.append((decision, why))
             continue
-        guid = _int(row.get("item_guid"))
-        count = max(1, _int(row.get("count"), 1))
-        if guid <= 0:
-            continue
-        candidate = bag_pressure.SellCandidate(
-            holder=str(row["holder"]),
-            item_guid=guid,
-            count=count,
-            item=bag_pressure.ItemForSale(
-                quality=_int(row.get("quality")),
-                sell_price=max(0, _int(row.get("sell_price"))),
-            ),
+        sale = _sale_of(decision, row)
+        if sale is not None:
+            ordinary.append((index, sale))
+    chosen = list(ordinary)
+    remaining = {
+        holder: _int(need) - sum(1 for _i, sale in ordinary if sale.holder == holder)
+        for holder, need in (pressure or {}).items()
+    }
+    still_held = []
+    for value, index, decision, row, kind, held_entry in sorted(
+        pool, key=lambda entry: (entry[0], entry[1])
+    ):
+        if remaining.get(decision.holder, 0) > 0 and _may_release(decision, row):
+            sale = _sale_of(decision, row, released=kind)
+            if sale is not None:
+                chosen.append((index, sale))
+                remaining[decision.holder] -= 1
+                continue
+        if held_entry is not None:
+            still_held.append((index, held_entry))
+    if held is not None:
+        # Plan order, as the held lines have always read.
+        held.extend(entry for _i, entry in sorted(still_held, key=lambda e: e[0]))
+    return tuple(sale for _i, sale in sorted(chosen, key=lambda e: e[0]))
+
+
+def release_lines(sales) -> tuple:
+    """One log line per holder for the held sales pressure released."""
+    by_holder: dict = {}
+    for sale in sales:
+        if sale.released:
+            by_holder.setdefault(sale.holder, []).append(sale)
+    return tuple(
+        "%s %s releases %d held sale(s) under bag pressure, worth %s: %s"
+        % (
+            PREFIX,
+            holder,
+            len(found),
+            vendorsale.money(sum(s.copper for s in found)),
+            ", ".join(s.name for s in found),
         )
-        out.append(
-            Sale(
-                holder=decision.holder,
-                name=decision.name,
-                count=count,
-                copper=max(0, _int(decision.value)),
-                key=decision.key,
-                candidate=candidate,
-            )
-        )
-    return tuple(out)
+        for holder, found in sorted(by_holder.items())
+    )
 
 
 def held_lines(held) -> tuple:

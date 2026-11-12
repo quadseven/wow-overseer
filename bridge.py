@@ -30221,7 +30221,7 @@ def _shadow_itemplan(*args, **facts) -> None:
 
 
 def _itemplan_vendor_sales(names, family, rows, free_slots, gear_rows=(),
-                           worn_rows=(), keep_names=()):
+                           worn_rows=(), keep_names=(), sellable_counts=None):
     """The item plan vendor route's sales for this pass (#1977).
 
     Blocking: the pass runs it in a thread. Off unless
@@ -30243,9 +30243,17 @@ def _itemplan_vendor_sales(names, family, rows, free_slots, gear_rows=(),
             rows, gear_rows, extras.templates, extras.instance_soulbound)
         pairs = list(zip(stacks, rows, strict=True))
         held: list = []
+        # A member short of room has its held sales released, cheapest first,
+        # when ITEMPLAN_SELL_RELEASE is on (itemplan_vendor says how far).
+        pressure = (
+            itemplan_vendor.pressure_for(names, free_slots, sellable_counts)
+            if itemplan_vendor.release_enabled() else None)
         sales = itemplan_vendor.sales_for(
-            report.plan, pairs, keep_names=keep_names, held=held)
+            report.plan, pairs, keep_names=keep_names, held=held,
+            pressure=pressure)
         for line in itemplan_vendor.held_lines(held):
+            log.info("%s", line)
+        for line in itemplan_vendor.release_lines(sales):
             log.info("%s", line)
         return sales
     except Exception:
@@ -30264,7 +30272,8 @@ def _route_sales_for_trip(names, leader, rows, free_slots, sellable_counts,
     """
     sales = _itemplan_vendor_sales(
         names, leader, rows, free_slots, gear_rows=gear_rows,
-        worn_rows=worn_rows, keep_names=OWNER_KEEPS)
+        worn_rows=worn_rows, keep_names=OWNER_KEEPS,
+        sellable_counts=sellable_counts)
     _count_sales(sellable_counts, sales)
     return sales
 

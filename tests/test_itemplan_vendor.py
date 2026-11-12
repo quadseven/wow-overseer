@@ -232,6 +232,275 @@ class FallbackSaleTest(unittest.TestCase):
         )
 
 
+def held_fixture(*specs):
+    """Several carried stacks the plan sells but the route holds back.
+
+    Each spec is a dict: entry, value, and optionally holder, quality, confirm,
+    options, item_class and subclass. A confirm stack is a first choice that
+    needs a release; the default options make it a fallback sale instead.
+    """
+    decisions, pairs_ = [], []
+    for spec in specs:
+        holder = spec.get("holder", "Ana")
+        entry = spec["entry"]
+        quality = spec.get("quality", 2)
+        item_class = spec.get("item_class", 4)
+        key = (holder, entry, 0)
+        options = spec.get("options", (itemplan.GUILD_BANK, itemplan.SELL_VENDOR))
+        decisions.append(
+            itemplan.Decision(
+                holder=holder,
+                entry=entry,
+                name="Stack %d" % entry,
+                count=1,
+                from_loc=itemplan.CARRIED_BAG,
+                route=itemplan.SELL_VENDOR,
+                goal=itemplan.ROOM,
+                reason="sold",
+                rule="R8",
+                value=spec["value"],
+                irreversible=True,
+                refusable=True,
+                confirm=spec.get("confirm", False),
+                key=key,
+                options=options,
+            )
+        )
+        stack = types.SimpleNamespace(
+            key=key, item_class=item_class, subclass=spec.get("subclass", 0)
+        )
+        item = row(
+            holder,
+            entry,
+            entry,
+            "Stack %d" % entry,
+            quality=quality,
+            sell=spec["value"],
+            item_class=item_class,
+        )
+        pairs_.append((stack, item))
+    return types.SimpleNamespace(decisions=tuple(decisions)), pairs_
+
+
+FIRST = (itemplan.SELL_VENDOR, itemplan.BANK_PERSONAL)
+
+
+class PressureReleaseTest(unittest.TestCase):
+    """A member short of room gets a bounded release of held sales."""
+
+    def entries(self, sales):
+        return sorted(s.candidate.item_guid for s in sales)
+
+    def test_without_pressure_held_sales_stay_held(self):
+        plan_, prs = held_fixture(
+            dict(entry=1, value=3000, confirm=True, options=FIRST),
+            dict(entry=2, value=1000),
+        )
+        held = []
+        self.assertEqual(vendor.sales_for(plan_, prs, held=held), ())
+        self.assertEqual(vendor.sales_for(plan_, prs, pressure={}), ())
+        self.assertEqual(vendor.sales_for(plan_, prs, pressure={"Ana": 0}), ())
+
+    def test_pressure_releases_the_cheapest_stacks_and_no_more_than_needed(self):
+        plan_, prs = held_fixture(
+            dict(entry=1, value=3000, confirm=True, options=FIRST),
+            dict(entry=2, value=1000, confirm=True, options=FIRST),
+            dict(entry=3, value=2000),
+        )
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 2})
+        self.assertEqual(self.entries(sales), [2, 3])
+        one = vendor.sales_for(plan_, prs, pressure={"Ana": 1})
+        self.assertEqual(self.entries(one), [2])
+
+    def test_a_released_fallback_sale_leaves_the_held_list(self):
+        plan_, prs = held_fixture(dict(entry=1, value=1500), dict(entry=2, value=9000))
+        held = []
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 1}, held=held)
+        self.assertEqual(self.entries(sales), [1])
+        self.assertEqual([d.entry for d, _why in held], [2])
+
+    def test_released_sales_are_marked_for_the_log(self):
+        plan_, prs = held_fixture(
+            dict(entry=1, value=1000, confirm=True, options=FIRST),
+            dict(entry=2, value=2000),
+        )
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 2})
+        kinds = {s.candidate.item_guid: s.released for s in sales}
+        self.assertEqual(
+            kinds, {1: vendor.RELEASED_CONFIRM, 2: vendor.RELEASED_FALLBACK}
+        )
+
+    def test_a_stack_above_the_value_ceiling_stays_held(self):
+        over = vendor.RELEASE_CEILING_COPPER + 1
+        plan_, prs = held_fixture(
+            dict(entry=1, value=over, confirm=True, options=FIRST),
+            dict(entry=2, value=over),
+        )
+        held = []
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 5}, held=held)
+        self.assertEqual(sales, ())
+        self.assertEqual([d.entry for d, _why in held], [2])
+
+    def test_a_stack_at_the_ceiling_is_still_released(self):
+        plan_, prs = held_fixture(
+            dict(
+                entry=1,
+                value=vendor.RELEASE_CEILING_COPPER,
+                confirm=True,
+                options=FIRST,
+            )
+        )
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 1})
+        self.assertEqual(self.entries(sales), [1])
+
+    def test_epic_quality_is_never_released(self):
+        plan_, prs = held_fixture(
+            dict(entry=1, value=100, quality=4, confirm=True, options=FIRST),
+            dict(entry=2, value=100, quality=5),
+        )
+        self.assertEqual(vendor.sales_for(plan_, prs, pressure={"Ana": 5}), ())
+
+    def test_a_bag_and_a_tool_are_never_released(self):
+        for confirm in (False, True):
+            with self.subTest(confirm=confirm):
+                plan_, prs = held_fixture(
+                    dict(
+                        entry=1,
+                        value=100,
+                        item_class=itemplan.C_CONTAINER,
+                        confirm=confirm,
+                        options=FIRST,
+                    ),
+                    dict(
+                        entry=2,
+                        value=100,
+                        item_class=itemplan.C_WEAPON,
+                        subclass=20,
+                        confirm=confirm,
+                        options=FIRST,
+                    ),
+                )
+                held = []
+                sales = vendor.sales_for(plan_, prs, pressure={"Ana": 5}, held=held)
+                self.assertEqual(sales, ())
+                if not confirm:
+                    self.assertEqual(
+                        sorted(why for _d, why in held),
+                        sorted([vendor.HELD_BAG, vendor.HELD_TOOL]),
+                    )
+
+    def test_only_the_holder_under_pressure_releases(self):
+        plan_, prs = held_fixture(
+            dict(holder="Ana", entry=1, value=100, confirm=True, options=FIRST),
+            dict(holder="Bob", entry=2, value=100, confirm=True, options=FIRST),
+        )
+        sales = vendor.sales_for(plan_, prs, pressure={"Bob": 1})
+        self.assertEqual([s.holder for s in sales], ["Bob"])
+
+    def test_each_holder_has_its_own_pressure(self):
+        plan_, prs = held_fixture(
+            dict(holder="Ana", entry=1, value=100, confirm=True, options=FIRST),
+            dict(holder="Ana", entry=2, value=200, confirm=True, options=FIRST),
+            dict(holder="Bob", entry=3, value=100, confirm=True, options=FIRST),
+            dict(holder="Bob", entry=4, value=200, confirm=True, options=FIRST),
+        )
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 1, "Bob": 2})
+        self.assertEqual(self.entries(sales), [1, 3, 4])
+
+    def test_ordinary_route_sales_count_against_the_pressure(self):
+        plan_, prs = held_fixture(
+            dict(entry=1, value=500, options=FIRST),
+            dict(entry=2, value=1000, confirm=True, options=FIRST),
+            dict(entry=3, value=2000),
+        )
+        # Entry 1 is a plain first-choice sale and already frees one slot.
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 1})
+        self.assertEqual(self.entries(sales), [1])
+        more = vendor.sales_for(plan_, prs, pressure={"Ana": 2})
+        self.assertEqual(self.entries(more), [1, 2])
+
+    def test_a_released_confirm_key_still_sells_without_pressure(self):
+        plan_, prs = held_fixture(
+            dict(entry=1, value=3000, confirm=True, options=FIRST)
+        )
+        sales = vendor.sales_for(plan_, prs, released=frozenset([prs[0][0].key]))
+        self.assertEqual(self.entries(sales), [1])
+        self.assertEqual(sales[0].released, "")
+
+    def test_a_stack_the_current_pass_sells_is_not_released_twice(self):
+        # The ordinary pass would sell a white stack: it is not the route's.
+        plan_, prs = held_fixture(
+            dict(entry=1, value=100, quality=1, confirm=True, options=FIRST)
+        )
+        self.assertEqual(vendor.sales_for(plan_, prs, pressure={"Ana": 3}), ())
+
+    def test_the_release_line_names_the_holder_count_worth_and_stacks(self):
+        plan_, prs = held_fixture(
+            dict(entry=1, value=1000, confirm=True, options=FIRST),
+            dict(entry=2, value=2500),
+        )
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 2})
+        self.assertEqual(
+            vendor.release_lines(sales),
+            (
+                "itemplan vendor: Ana releases 2 held sale(s) under bag pressure,"
+                " worth %s: Stack 1, Stack 2" % vendor_money(3500),
+            ),
+        )
+
+    def test_no_release_line_without_a_release(self):
+        plan_, prs = held_fixture(dict(entry=1, value=1000, options=FIRST))
+        self.assertEqual(vendor.release_lines(vendor.sales_for(plan_, prs)), ())
+
+
+def vendor_money(copper):
+    import vendorsale
+
+    return vendorsale.money(copper)
+
+
+class PressureTest(unittest.TestCase):
+    """How much room a member still has to make."""
+
+    def test_a_member_under_the_trigger_needs_slots_up_to_the_target(self):
+        need = vendor.pressure_for(["Ana"], {"Ana": 0}, {})
+        self.assertEqual(need, {"Ana": vendor.RELEASE_TARGET_FREE})
+        need = vendor.pressure_for(["Ana"], {"Ana": itemplan.TRIGGER_FREE - 1}, {})
+        self.assertEqual(
+            need, {"Ana": vendor.RELEASE_TARGET_FREE - itemplan.TRIGGER_FREE + 1}
+        )
+
+    def test_a_member_at_or_over_the_trigger_needs_nothing(self):
+        for free in (itemplan.TRIGGER_FREE, itemplan.TRIGGER_FREE + 5):
+            self.assertEqual(vendor.pressure_for(["Ana"], {"Ana": free}, {}), {})
+
+    def test_the_ordinary_sellable_count_is_taken_off(self):
+        need = vendor.pressure_for(["Ana"], {"Ana": 0}, {"Ana": 4})
+        self.assertEqual(need, {"Ana": vendor.RELEASE_TARGET_FREE - 4})
+        full = vendor.pressure_for(["Ana"], {"Ana": 0}, {"Ana": 99})
+        self.assertEqual(full, {})
+
+    def test_an_unread_member_is_not_under_pressure(self):
+        self.assertEqual(vendor.pressure_for(["Ana"], {}, {}), {})
+        self.assertEqual(vendor.pressure_for(["Ana"], {"Ana": None}, {}), {})
+
+    def test_the_target_sits_above_the_trigger(self):
+        self.assertGreater(vendor.RELEASE_TARGET_FREE, itemplan.TRIGGER_FREE)
+
+
+class ReleaseSwitchTest(unittest.TestCase):
+    def test_the_release_is_off_by_default(self):
+        self.assertFalse(vendor.release_enabled({}))
+        self.assertFalse(vendor.release_enabled({**ON, "ITEMPLAN_SELL_RELEASE": "off"}))
+        for word in ("on", "1", "true", "yes"):
+            self.assertTrue(
+                vendor.release_enabled({**ON, "ITEMPLAN_SELL_RELEASE": word})
+            )
+
+    def test_the_release_needs_the_route_switch_too(self):
+        self.assertFalse(vendor.release_enabled({"ITEMPLAN_SELL_RELEASE": "on"}))
+
+
 class CarryOutTest(unittest.TestCase):
     def _sales(self):
         rows, gear, worn, free = green_cloak()
@@ -579,6 +848,79 @@ class RouteSalesAtTheBridgeTest(unittest.TestCase):
             "itemplan vendor: Ana holds back 1 sale(s): Plain Green Cloak (%s)"
             % vendor.HELD_FALLBACK,
         )
+
+    def seam(self, free, env, counts=None, value=4000):
+        """`_itemplan_vendor_sales` over a one-stack plan whose sale is held."""
+        bridge = self.bridge
+        plan_, prs, item = fallback_fixture(
+            (itemplan.GUILD_BANK, itemplan.SELL_VENDOR), value=value
+        )
+        fake_log = mock.Mock()
+        with (
+            mock.patch.dict(os.environ, env),
+            mock.patch.object(
+                bridge,
+                "_itemplan_reads",
+                return_value=types.SimpleNamespace(
+                    templates=None, instance_soulbound=None
+                ),
+            ),
+            mock.patch.object(
+                bridge.itemplan_shadow,
+                "shadow",
+                return_value=types.SimpleNamespace(plan=plan_),
+            ),
+            mock.patch.object(
+                bridge.itemplan_shadow, "build_stacks", return_value=[prs[0][0]]
+            ),
+            mock.patch.object(bridge, "log", fake_log),
+        ):
+            out = bridge._itemplan_vendor_sales(
+                ["Ana"], "Fam", [item], free, sellable_counts=counts
+            )
+        return out, fake_log
+
+    def test_release_on_sells_a_held_stack_for_a_member_at_the_floor(self):
+        env = {**ON, "ITEMPLAN_SELL_RELEASE": "on"}
+        out, fake_log = self.seam({"Ana": 0}, env, counts={})
+        self.assertEqual([s.name for s in out], ["Plain Green Cloak"])
+        self.assertEqual(out[0].released, vendor.RELEASED_FALLBACK)
+        lines = [c.args[1] for c in fake_log.info.call_args_list]
+        self.assertIn(
+            "itemplan vendor: Ana releases 1 held sale(s) under bag pressure, "
+            "worth %s: Plain Green Cloak" % vendor_money(4000),
+            lines,
+        )
+
+    def test_release_on_sells_nothing_for_a_member_with_room(self):
+        env = {**ON, "ITEMPLAN_SELL_RELEASE": "on"}
+        out, _ = self.seam({"Ana": 20}, env, counts={})
+        self.assertEqual(out, ())
+
+    def test_release_off_keeps_the_stack_held_at_the_floor(self):
+        out, _ = self.seam({"Ana": 0}, ON, counts={})
+        self.assertEqual(out, ())
+
+    def test_release_on_leaves_a_valuable_stack_held(self):
+        env = {**ON, "ITEMPLAN_SELL_RELEASE": "on"}
+        out, _ = self.seam(
+            {"Ana": 0}, env, counts={}, value=vendor.RELEASE_CEILING_COPPER + 1
+        )
+        self.assertEqual(out, ())
+
+    def test_the_ordinary_sellable_count_lowers_the_pressure(self):
+        env = {**ON, "ITEMPLAN_SELL_RELEASE": "on"}
+        out, _ = self.seam({"Ana": 0}, env, counts={"Ana": 99})
+        self.assertEqual(out, ())
+
+    def test_the_trip_seam_hands_the_sellable_counts_to_the_release(self):
+        bridge = self.bridge
+        counts = {"Ana": 99}
+        with mock.patch.object(
+            bridge, "_itemplan_vendor_sales", return_value=()
+        ) as sales:
+            bridge._route_sales_for_trip(["Ana"], "Lead", [], {"Ana": 0}, counts)
+        self.assertEqual(sales.call_args.kwargs["sellable_counts"], {"Ana": 99})
 
     def test_the_dockerfile_ships_the_route(self):
         root = pathlib.Path(__file__).resolve().parents[1]
