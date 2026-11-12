@@ -33181,6 +33181,11 @@ _JOB_QUEST_FACTS: list = []
 # its givers and its objective's spawns, read from acore_world once per process.
 # A read the realm cannot answer is None and asked again next pass.
 _CLASS_BOOK: "classquest.Book | None" = None
+# Set when the book was built with no `conditions` rows (a schema without the
+# table or column, or a realm with none): the cached book then reads each
+# quest's NextQuestID as before, which sends a paladin to a Redemption step the
+# world refuses (#2325). It is reported on every pass, not once.
+_CLASS_BOOK_NO_CONDITIONS = False
 
 
 def _class_book_reads(cur) -> tuple:
@@ -33207,7 +33212,9 @@ def _class_book_reads(cur) -> tuple:
     spawns = _class_rows(cur, "class quest spawns", classquest.SPAWNS_SQL, "entries", entries)
     started = _job_read(cur, "class quest other starters", classquest.STARTERS_SQL.format(
         quests=ids(r["id"] for r in quests)))
-    return quests, givers, spawns, loot, trained, use_rows, chest_rows, object_rows, focus_rows, started, summon_rows, held_rows
+    conditions = _job_read(cur, "class quest conditions", classquest.CONDITIONS_SQL.format(
+        quests=ids(r["id"] for r in quests)))
+    return quests, givers, spawns, loot, trained, use_rows, chest_rows, object_rows, focus_rows, started, summon_rows, held_rows, conditions
 
 
 def _class_use_reads(cur, quests, items, objectives=()) -> tuple:
@@ -33253,15 +33260,23 @@ def _class_rows(cur, what: str, sql: str, key: str, values) -> list:
 
 
 def _class_book():
-    global _CLASS_BOOK
+    global _CLASS_BOOK, _CLASS_BOOK_NO_CONDITIONS
     if _CLASS_BOOK is not None:
+        if _CLASS_BOOK_NO_CONDITIONS:
+            log.error("class quests: the book has no quest conditions rows; it reads "
+                      "NextQuestID alone until the bridge restarts with them readable")
         return _CLASS_BOOK
     with _connect() as conn, conn.cursor() as cur:
         reads = _class_book_reads(cur)
     if reads is None:
         return None
-    *world, summon_rows, held_rows = reads
-    _CLASS_BOOK = classquest.build(*world, summon_rows=summon_rows, held_rows=held_rows)
+    *world, summon_rows, held_rows, condition_rows = reads
+    _CLASS_BOOK = classquest.build(*world, summon_rows=summon_rows, held_rows=held_rows, condition_rows=condition_rows)
+    _CLASS_BOOK_NO_CONDITIONS = not condition_rows
+    if _CLASS_BOOK_NO_CONDITIONS:
+        log.error("class quests: the quest conditions read returned no rows; the book "
+                  "reads NextQuestID alone, so chains opened by a condition are planned "
+                  "to steps the world refuses, for the life of this process")
     log.info("class quests: read %d quest(s) in %d reward group(s) from the world database",
              len(_CLASS_BOOK.quests), len(_CLASS_BOOK.groups))
     return _CLASS_BOOK

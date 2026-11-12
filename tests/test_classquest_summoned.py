@@ -294,7 +294,7 @@ class TheSummonerRead(unittest.TestCase):
         self.assertIn("classquest.HELD_SQL", body)
         self.assertIn('{int(r["entry"]) for r in summon_rows}', body)
         self.assertIn(
-            "classquest.build(*world, summon_rows=summon_rows, held_rows=held_rows)",
+            "classquest.build(*world, summon_rows=summon_rows, held_rows=held_rows, condition_rows=condition_rows)",
             BRIDGE,
         )
 
