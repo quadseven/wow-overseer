@@ -75,6 +75,16 @@ class LoopMates(unittest.TestCase):
         self.assertIn("no guildmate in reach", found[2])
         self.assertNotIn("offered a group-up with Distant", found[2])
 
+    def test_skips_a_mate_flagged_in_a_death_loop(self):
+        m = member(NAME)
+        fellow = member("Fellow", level=27)
+        helper = member("Helper", level=28)
+        looping = {NAME, "Fellow"}
+        self.assertEqual(guildjobs.loop_mates(m, [fellow], looping=looping), [])
+        self.assertEqual(
+            guildjobs.loop_mates(m, [fellow, helper], looping=looping), [helper]
+        )
+
     def test_same_zone_first_then_closest_level(self):
         m = member(NAME)
         far_zone = member("Farzone", level=26, zone_id=130)
@@ -98,6 +108,21 @@ class TheHelpOfferLine(unittest.TestCase):
         found = guildjobs.death_loop_first(m, loop_of(), None, (), CAP, mates=[])
         self.assertIsNone(found[0])
         self.assertIn("no guildmate in reach", found[2])
+
+    def test_two_flagged_members_in_one_zone_are_not_paired(self):
+        m = member(NAME, in_combat=True)
+        fellow = member("Looper2", level=28)
+        result = guildjobs.plan(
+            [m, fellow],
+            masters={"Cave": "Grug", "Bonkers": "Zug"},
+            leveling=None,
+            cap=CAP,
+            loops={NAME: loop_of(), "Looper2": loop_of(name="Looper2", level=28)},
+        )
+        paired = [n for n in result.notes if "offered a group-up with Looper2" in n]
+        self.assertEqual(paired, [])
+        named = [n for n in result.notes if "no guildmate in reach" in n]
+        self.assertTrue(named)
 
     def test_the_offer_reaches_the_plan_notes(self):
         m = member(NAME, in_combat=True)
