@@ -15,6 +15,19 @@ const BASE = (function () {
 
 export function u(path) { return BASE + path; }
 
+// The build this page was served with (index.html stamps it). The app's own
+// files are addressed by it, /app/<build>/<file>, so the browser keeps a file
+// for good and relative imports stay inside one build. Without a stamped
+// build (a test, an old page) the plain path is used.
+const BUILD = (function () {
+  const meta = document.querySelector('meta[name="overseer-build"]');
+  const raw = meta ? meta.getAttribute("content") || "" : "";
+  return /^[0-9a-f]{12}$/.test(raw) ? raw : "";
+})();
+
+// A file under app/, e.g. appUrl("views/now.css").
+export function appUrl(path) { return u("/app/" + (BUILD ? BUILD + "/" : "") + path); }
+
 // Some reads (the decree console) take over ten seconds on a busy realm.
 const TIMEOUT_MS = 30000;
 const cache = new Map(); // path -> entry

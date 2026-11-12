@@ -86,7 +86,7 @@ const isPhone = () => window.matchMedia(NARROW).matches;
 
 // A view's own stylesheet (paths under app/), linked once.
 function useCss(path) {
-  const href = api.u("/app/" + path);
+  const href = api.appUrl(path);
   if (document.querySelector('link[data-view-css="' + CSS.escape(path) + '"]')) return;
   const link = document.createElement("link");
   link.rel = "stylesheet"; link.href = href; link.setAttribute("data-view-css", path);

@@ -5,6 +5,7 @@ out, bytes over HTTP. No logic here that tests would want to reach.
 """
 from __future__ import annotations
 
+import collections
 import contextlib
 import functools
 import gzip
@@ -4955,6 +4956,22 @@ def _app_file_kind(rel: str) -> str:
 
 _APP_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; charset=utf-8"}
 
+# A file of the current build never changes under its name (see _app_file).
+APP_IMMUTABLE = "public, max-age=31536000, immutable"
+_APP_BUILD_SEGMENT = re.compile(r"[0-9a-f]{12}")
+
+
+def _split_app_build(rel: str) -> tuple[str, str]:
+    """("<build>", "views/now.js") for "<build>/views/now.js", else ("", rel).
+
+    Only twelve lower-case hex characters count as a build segment, and only
+    when a path follows; everything after it is checked as any app path is.
+    """
+    head, slash, tail = rel.partition("/")
+    if slash and _APP_BUILD_SEGMENT.fullmatch(head):
+        return head, tail
+    return "", rel
+
 # THE SHARED READS. These GETs are the expensive ones a cold page load asks
 # for together (the nav badges and the view on screen) and every open page
 # polls, so callers inside a few seconds of each other share one build
@@ -5044,10 +5061,22 @@ def _get_route(what: str, **dumps):
 GZIP_MIN_BYTES = 4096
 
 
-def _gzipped(handler, ctype: str, body: bytes) -> bytes | None:
-    """The body gzipped, or None when it should go out as it is."""
-    if ctype.split(";")[0].strip() != "application/json" or len(body) < GZIP_MIN_BYTES:
-        return None
+# What is compressed. JSON answers are built per request, so each is compressed
+# on the way out. The app's scripts and styles are the same bytes until the next
+# deploy, so theirs are compressed once (at the best level) and kept, bounded.
+_GZIP_JSON = "application/json"
+_GZIP_STATIC = ("text/javascript", "text/css")
+GZIP_KEPT_MAX = 128
+_GZIP_KEPT: "collections.OrderedDict" = collections.OrderedDict()
+_GZIP_KEPT_LOCK = threading.Lock()
+
+
+def _compressible(ctype: str) -> bool:
+    kind = ctype.split(";")[0].strip()
+    return kind == _GZIP_JSON or kind in _GZIP_STATIC
+
+
+def _accepts_gzip(handler) -> bool:
     headers = getattr(handler, "headers", None)
     asked = headers.get("Accept-Encoding", "") if headers else ""
     for part in asked.split(","):
@@ -5061,9 +5090,31 @@ def _gzipped(handler, ctype: str, body: bytes) -> bytes | None:
                     # A malformed weight is the caller's mistake, not a 500.
                     refused = False
                 if refused:
-                    return None
-            return gzip.compress(body, 5, mtime=0)
-    return None
+                    return False
+            return True
+    return False
+
+
+def _gzipped(handler, ctype: str, body: bytes) -> bytes | None:
+    """The body gzipped, or None when it should go out as it is."""
+    if not _compressible(ctype) or len(body) < GZIP_MIN_BYTES:
+        return None
+    if not _accepts_gzip(handler):
+        return None
+    if ctype.split(";")[0].strip() == _GZIP_JSON:
+        return gzip.compress(body, 5, mtime=0)
+    key = (ctype, len(body), hashlib.sha256(body).digest())
+    with _GZIP_KEPT_LOCK:
+        kept = _GZIP_KEPT.get(key)
+        if kept is not None:
+            _GZIP_KEPT.move_to_end(key)
+            return kept
+    packed = gzip.compress(body, 9, mtime=0)
+    with _GZIP_KEPT_LOCK:
+        _GZIP_KEPT[key] = packed
+        while len(_GZIP_KEPT) > GZIP_KEPT_MAX:
+            _GZIP_KEPT.popitem(last=False)
+    return packed
 
 
 def _etag(body: bytes) -> str:
@@ -5678,19 +5729,28 @@ class Handler(BaseHTTPRequestHandler):
                             basepath.apply(body, BASE_PATH), appbuild.fingerprint(HERE)))
 
     def _app_file(self, rel: str) -> None:
-        """GET /app/<path>.js|.css - one file of the operations app.
+        """GET /app/[<build>/]<path>.js|.css - one file of the operations app.
 
         Only plain lower-case paths ending in .js or .css, inside app/, are
         served: no dot segments, no other kinds of file, nothing outside the
         directory. Anything else is a 404, never a read.
+
+        The page names its files as /app/<build>/<path> (appbuild.py), so a
+        browser can keep a file of the current build for good: the bytes under
+        that name never change. A build segment that is not the current one
+        (a tab from before a deploy) gets the current bytes, revalidated and
+        never kept as immutable. The path without a build segment answers as
+        it always has.
         """
+        build, rel = _split_app_build(rel)
         kind = _app_file_kind(rel)
         full = os.path.realpath(os.path.join(HERE, "app", rel)) if kind else ""
         if not kind or not full.startswith(_APP_DIR + os.sep) or not os.path.isfile(full):
             self._send(404, "text/plain", b"not found")
             return
         # Open the path that was checked, not one rebuilt from `rel`.
-        self._send_file("app file", _APP_TYPES[kind], path=full)
+        keep = APP_IMMUTABLE if build and build == appbuild.fingerprint(HERE) else "no-store"
+        self._send_file("app file", _APP_TYPES[kind], path=full, cache_control=keep)
 
     def _clip_file(self, name: str) -> None:
         """GET /clips/<file> - a saved clip, streamed, with Range support.
@@ -7157,7 +7217,8 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return body
 
-    def _send_file(self, name: str, ctype: str, transform=None, path: str = "") -> None:
+    def _send_file(self, name: str, ctype: str, transform=None, path: str = "",
+                   cache_control: str = "no-store") -> None:
         # A file missing from the image must be a readable 500, not a bare
         # connection reset - the page keys its error banner off r.ok.
         #
@@ -7178,7 +7239,7 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("static file %s cannot be served", name)
             self._send(500, "text/plain", b"static file missing from image")
             return
-        self._send(200, ctype, body)
+        self._send(200, ctype, body, cache_control)
 
     def _send(self, code: int, ctype: str, body: bytes,
               cache_control: str = "no-store") -> None:
@@ -7214,7 +7275,7 @@ class Handler(BaseHTTPRequestHandler):
         if packed is not None:
             body = packed
             self.send_header("Content-Encoding", "gzip")
-        if ctype.split(";")[0].strip() == "application/json":
+        if _compressible(ctype):
             self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", cache_control)

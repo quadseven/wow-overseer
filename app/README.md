@@ -31,6 +31,18 @@ empty list means no zone met the routing threshold on the sampled member's map.
 | `views/<name>.js` | One view per route kind. |
 | `views/<name>.css` | That view's own styles, listed in its `css`. |
 
+## How the files are delivered
+
+The page names its styles and its entry script as `/app/<build>/<file>`, where
+the build is the app fingerprint (`appbuild.py`, also in the page's
+`overseer-build` tag). Relative imports and `import()` stay inside one build,
+so nothing in a module builds a URL by hand; a view stylesheet goes through
+`api.appUrl(path)`. A file under the current build is served `immutable` for a
+year; a file under any other build is the current bytes, revalidated, so a tab
+from before a deploy never fills a cache with the wrong build. The path with no
+build segment still works and is revalidated. Scripts and styles are gzipped
+for clients that accept it. The page itself is never kept.
+
 ## A view
 
 ```js
