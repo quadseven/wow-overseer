@@ -217,6 +217,64 @@ def _may_release(decision, row) -> bool:
     return max(0, _int(decision.value)) <= RELEASE_CEILING_COPPER
 
 
+def _classify(decision, row, stack, released, keep_names):
+    """What the route does with one carried SELL_VENDOR decision.
+
+    Returns None to leave it alone, else (kind, why, release_kind):
+    kind is "sell" for an ordinary sale, "held" for a hold that stays, and
+    "pool" for a hold pressure may lift, in which case release_kind says
+    which hold it is. `why` is the held reason, or ''.
+    """
+    # Only where the current protection would keep the stack.
+    if not bag_pressure.vendor_refusal(row, keep_names):
+        return None
+    why = _held_reason(decision, stack, row)
+    if decision.confirm and decision.key not in released:
+        # Waits for a release, as it always did; a bag or a tool is never
+        # released and says nothing.
+        if not why or why == HELD_FALLBACK:
+            return ("pool", why, RELEASED_CONFIRM)
+        return None
+    if why == HELD_FALLBACK:
+        return ("pool", why, RELEASED_FALLBACK)
+    return ("held", why, "") if why else ("sell", "", "")
+
+
+def _eligible(decision):
+    """The decisions the route looks at: carried, placed, sold to a vendor."""
+    return (
+        decision.route == itemplan.SELL_VENDOR
+        and decision.from_loc in itemplan.CARRIED
+        and not decision.stuck
+        and not decision.reason.startswith(itemplan.NO_ROOM)
+    )
+
+
+def _release(pool, ordinary, pressure) -> tuple:
+    """(sales released, fallback holds still held), both with plan index.
+
+    Cheapest stack first, one slot per stack, after the holder's ordinary
+    sales are counted against its pressure.
+    """
+    remaining = {
+        holder: _int(need) - sum(1 for _i, sale in ordinary if sale.holder == holder)
+        for holder, need in (pressure or {}).items()
+    }
+    lifted, still_held = [], []
+    for _value, index, decision, row, kind, held_entry in sorted(
+        pool, key=lambda entry: (entry[0], entry[1])
+    ):
+        sale = None
+        if remaining.get(decision.holder, 0) > 0 and _may_release(decision, row):
+            sale = _sale_of(decision, row, released=kind)
+        if sale is not None:
+            lifted.append((index, sale))
+            remaining[decision.holder] -= 1
+        elif held_entry is not None:
+            still_held.append((index, held_entry))
+    return lifted, still_held
+
+
 def sales_for(
     plan_,
     stack_rows,
@@ -242,76 +300,41 @@ def sales_for(
     rows_by_key = {stack.key: row for stack, row in stack_rows}
     stack_of = {stack.key: stack for stack, _row in stack_rows}
     ordinary = []  # (plan index, Sale)
-    pool = []  # (value, plan index, decision, row, kind, held entry or None)
+    pool = []  # (value, plan index, decision, row, release kind, held entry)
     for index, decision in enumerate(plan_.decisions):
-        if decision.route != itemplan.SELL_VENDOR:
-            continue
-        if decision.from_loc not in itemplan.CARRIED or decision.stuck:
-            continue
-        if decision.reason.startswith(itemplan.NO_ROOM):
-            continue
-        waiting = decision.confirm and decision.key not in released
         row = rows_by_key.get(decision.key)
-        if row is None:
+        if row is None or not _eligible(decision):
             continue
-        # Only where the current protection would keep the stack.
-        if not bag_pressure.vendor_refusal(row, keep_names):
+        verdict = _classify(
+            decision, row, stack_of.get(decision.key), released, keep_names
+        )
+        if verdict is None:
             continue
-        why = _held_reason(decision, stack_of.get(decision.key), row)
-        if waiting:
-            # Waits for a release, as it always did; a bag or a tool is
-            # never released and says nothing.
-            if not why or why == HELD_FALLBACK:
-                pool.append(
-                    (
-                        max(0, _int(decision.value)),
-                        index,
-                        decision,
-                        row,
-                        RELEASED_CONFIRM,
-                        None,
-                    )
-                )
-            continue
-        if why == HELD_FALLBACK:
+        kind, why, release_kind = verdict
+        if kind == "sell":
+            sale = _sale_of(decision, row)
+            if sale is not None:
+                ordinary.append((index, sale))
+        elif kind == "held":
+            if held is not None:
+                held.append((decision, why))
+        else:
+            entry = (decision, why) if release_kind == RELEASED_FALLBACK else None
             pool.append(
                 (
                     max(0, _int(decision.value)),
                     index,
                     decision,
                     row,
-                    RELEASED_FALLBACK,
-                    (decision, why),
+                    release_kind,
+                    entry,
                 )
             )
-            continue
-        if why:
-            if held is not None:
-                held.append((decision, why))
-            continue
-        sale = _sale_of(decision, row)
-        if sale is not None:
-            ordinary.append((index, sale))
-    chosen = list(ordinary)
-    remaining = {
-        holder: _int(need) - sum(1 for _i, sale in ordinary if sale.holder == holder)
-        for holder, need in (pressure or {}).items()
-    }
-    still_held = []
-    for value, index, decision, row, kind, held_entry in sorted(
-        pool, key=lambda entry: (entry[0], entry[1])
-    ):
-        if remaining.get(decision.holder, 0) > 0 and _may_release(decision, row):
-            sale = _sale_of(decision, row, released=kind)
-            if sale is not None:
-                chosen.append((index, sale))
-                remaining[decision.holder] -= 1
-                continue
-        if held_entry is not None:
-            still_held.append((index, held_entry))
+    lifted, still_held = _release(pool, ordinary, pressure)
     if held is not None:
         # Plan order, as the held lines have always read.
         held.extend(entry for _i, entry in sorted(still_held, key=lambda e: e[0]))
+    chosen = ordinary + lifted
     return tuple(sale for _i, sale in sorted(chosen, key=lambda e: e[0]))
 
 
