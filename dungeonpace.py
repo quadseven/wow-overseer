@@ -135,6 +135,26 @@ SPLIT_FAILED = "split_failed"
 NON_ENTRY_SECONDS = 180
 NON_ENTRY_OUTCOMES = frozenset({EMPTIED, STALLED, SPLIT_FAILED})
 
+# A RUN THE PACE ITSELF STOOD DOWN IS NOT THE DOOR'S FAILURE (#2334). The pace
+# ends a run in progress when something other than the door asks for it: its
+# `order_held` row (a member dead over 15 minutes, a member on an errand of its
+# own over 30) takes the family off the door for a hold, and the module walks
+# the party out, which the ledger books as `left`. That `left` counted as an
+# attempt without a clear. On wow-dev 2026-11-12 it was the third of three,
+# and the record "3 fought, 0 cleared" stepped Grug's family off Blackrock
+# Depths for 2 h 20 min (run 1861100, 15 encounters credited, walked out four
+# minutes after the 07:46Z row). On 2026-11-11 the same happened to Zug's
+# family (run 1790357, opened 40 seconds before its row). A restart already
+# leaves a run out of the record (#1369) and so does a run that never had time
+# to fight (#2035): a run the family's own stand-down ended says nothing about
+# the door either. Only a `left` run counts as ended by it: a wipe or a stall
+# is what the door did, and the row is written about it, not in place of it.
+STAND_DOWN_DECISION = "order_held"
+# How long after the row a `left` run is read as the one it ended: the hold
+# runs 15 minutes and the walk out takes a few.
+STAND_DOWN_SECONDS = 900
+LEFT = "left"
+
 
 def never_fought(run: dict) -> bool:
     """A run that ended `emptied`, `stalled` or `split_failed` inside
@@ -287,6 +307,13 @@ WORLD_START_SQL = (
     "SELECT MAX(starttime) AS started, UNIX_TIMESTAMP() AS now_unix, "
     "NOW() AS now_at FROM acore_auth.uptime"
 )
+# The family's own stand-downs: the pace rows that end a run in progress. Read
+# over the same window as the run ledger, so every run in it can be matched.
+STAND_DOWN_SQL = (
+    "SELECT door, created_at FROM overseer_dungeon_pace "
+    "WHERE family = %s AND decision = 'order_held' "
+    "AND created_at >= NOW() - INTERVAL %s HOUR ORDER BY id"
+)
 MAIN_HAND_SQL = (
     "SELECT c.name FROM character_inventory ci JOIN characters c "
     "ON c.guid = ci.guid WHERE ci.bag = 0 AND ci.slot = 15 AND c.name IN ({holes})"
@@ -424,11 +451,48 @@ def _ended_by_restart(run: dict, world_started_at) -> bool:
     return crossed_restart or settled_close
 
 
-def viability(runs, map_id: int, since=None, world_started_at=None) -> Viability:
+def stand_downs(rows, map_id: int) -> tuple:
+    """The times of the family's `order_held` rows on the door of `map_id`, from
+    STAND_DOWN_SQL's rows. A row with no time, or on a door that names no map
+    (or another one), is left out."""
+    if not map_id:
+        return ()
+    out = []
+    for row in rows or ():
+        if str(row.get("decision") or STAND_DOWN_DECISION) != STAND_DOWN_DECISION:
+            continue
+        run = campaignplan.BY_KEYWORD.get(str(row.get("door") or ""))
+        if run is None or int(run.map_id) != int(map_id):
+            continue
+        if row.get("created_at") is not None:
+            out.append(row["created_at"])
+    return tuple(out)
+
+
+def _ended_by_stand_down(run: dict, stood_down) -> bool:
+    """Whether the pace's own `order_held` row ended this run: it closed `left`
+    inside STAND_DOWN_SECONDS after one of the rows."""
+    if not stood_down or str(run.get("outcome") or "") != LEFT:
+        return False
+    ended = run.get("ended_at")
+    if ended is None:
+        return False
+    window = timedelta(seconds=STAND_DOWN_SECONDS)
+    try:
+        return any(timedelta(0) <= ended - at <= window for at in stood_down)
+    except TypeError:
+        return False
+
+
+def viability(
+    runs, map_id: int, since=None, world_started_at=None, stood_down=()
+) -> Viability:
     """The door's record from ledger rows, oldest first.
 
     `since` drops rows that started before the queue entry did, compared as
-    the database gave them (both are its own timestamps).
+    the database gave them (both are its own timestamps). `stood_down` is the
+    times of the family's `order_held` rows on this door (stand_downs): a
+    `left` run one of them ended is not the door's (#2334).
     """
     fought = [
         str(r.get("outcome") or "")
@@ -437,6 +501,7 @@ def viability(runs, map_id: int, since=None, world_started_at=None) -> Viability
         and str(r.get("outcome") or "") in FOUGHT
         and not _never_fought(r)
         and not _ended_by_restart(r, world_started_at)
+        and not _ended_by_stand_down(r, stood_down)
         and (since is None or r.get("started_at") is None or r["started_at"] >= since)
     ]
     streak = 0
@@ -452,6 +517,7 @@ def viability(runs, map_id: int, since=None, world_started_at=None) -> Viability
         and str(r.get("outcome") or "") in ATTEMPTED
         and not _never_fought(r)
         and not _ended_by_restart(r, world_started_at)
+        and not _ended_by_stand_down(r, stood_down)
         and (since is None or r.get("started_at") is None or r["started_at"] >= since)
     ]
     uncleared_streak = 0

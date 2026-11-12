@@ -70,6 +70,7 @@ import campaignplan
 import campaignqueue
 import classic
 import classask
+import deathask
 import classtrain
 import taughtspells
 import classparty
@@ -97,6 +98,7 @@ import deathloop
 import guildlevel
 import guildfacts
 import guildrun
+import familyclass
 import familyseat
 import guildpug
 import seatmeter
@@ -5278,6 +5280,9 @@ def _pace_reads(key: str, fam: dict, level_rows: list, ids: list) -> dict:
         back = _planner_rows(cur, dungeonpace.LAST_BACK_SQL, (key,), "the last step back")
         unscored = _planner_rows(cur, dungeonpace.UNSCORED_SQL, (key,),
                                  "the unscored pace rows") or []
+        stood_down = _planner_rows(cur, dungeonpace.STAND_DOWN_SQL,
+                                   (key, dungeonpace.WINDOW_HOURS),
+                                   "the pace's own stand-downs") or []
         stuck = _stuck_doors(cur, names)
     return {
         "members": dungeonpace.members_from_rows(level_rows, gear, armed),
@@ -5288,6 +5293,7 @@ def _pace_reads(key: str, fam: dict, level_rows: list, ids: list) -> dict:
         "open": (opened or [None])[0],
         "back": {str(r["door"]): r.get("at") for r in back or []},
         "unscored": unscored,
+        "stood_down": stood_down,
         "stuck": frozenset(stuck),
     }
 
@@ -18820,6 +18826,10 @@ class Bridge(discord.Client):
         census = guildlevel.census(members, leveling)
         if census:
             log.info("guild jobs: %s", census)
+        # THE ROSTER FAMILY'S CLASS STEP, BETWEEN RUNS (#2336).
+        family_members = await asyncio.to_thread(_idle_family_members, facts)
+        family_danger = await asyncio.to_thread(
+            _family_danger, family_members, facts.get("class_book"), facts["recent"])
         # THE PLAN RUNS ON THE EVENT LOOP (#833): it mutates the hunt clock and
         # the owing clock other tasks read, so it is not sent to a thread.
         # Every awaited input is read above, so this timer measures only the
@@ -18854,6 +18864,8 @@ class Bridge(discord.Client):
             # A family campaign keeps its roster off the loop escape (#1873).
             campaign=campaign_door,
             # Members dying over and over in one zone leave it (#1464).
+            # The family members idle between runs take their class step.
+            family_members=family_members, family_danger=family_danger,
             loops=facts.get("death_loops"))
         log.info("guild jobs: the plan took %.2f s on the event loop for %d "
                  "member(s)%s", time.perf_counter() - plan_started, len(members),
@@ -20914,6 +20926,11 @@ class Bridge(discord.Client):
         released = globals().get("_TOWN_ERRAND_RELEASED", {}).get(
             tuple(sorted(names)), [])
         stops_of = globals().get("_fetch_errand_vendor_stops")
+        # A BIND HUB THE HEAD'S STONE REACHES IS NOT A LONG WALK (#2329): the
+        # family casts there together, so the aim stays on the hub.
+        reads = await asyncio.to_thread(_movement_reads, list(names))
+        casts = townerrand.to_hearth(hub, positions, names, reads["hearthed"],
+                                     reads["binds"])
         if why == townerrand.BAG_PRESSURE_WHY and standing and stops_of:
             stops = townerrand.vendor_stops(
                 await asyncio.to_thread(stops_of, leader, standing),
@@ -20935,7 +20952,8 @@ class Bridge(discord.Client):
                          "family in the last day lie along the walk to it",
                          why, label, stop.get("place", "a vendor"), count)
             chosen = townerrand.choose_aim(
-                hub, stops, standing, why, released, now, deaths=deaths)
+                hub, stops, standing, why, released, now, deaths=deaths,
+                hearth_reaches=leader in casts)
             if chosen != hub:
                 log.info("town errand: %s%s aims at %s instead of %s (%s)",
                          why, label, chosen.get("place", "a vendor"),
@@ -20951,7 +20969,6 @@ class Bridge(discord.Client):
             return townerrand.State(ended=now)
         # THE HEARTHSTONE IS THE WAY HOME AND THE REGROUP IN ONE CAST, the
         # existing kind='hearth' row the movement choice already writes.
-        reads = await asyncio.to_thread(_movement_reads, list(names))
         far = townerrand.to_hearth(hub, positions, names, reads["hearthed"],
                                    reads["binds"])
         # A HUB THE HEAD CANNOT REACH IS NO ERRAND (wow-dev 2026-09-29). His
@@ -22058,20 +22075,38 @@ class Bridge(discord.Client):
             await asyncio.sleep(cycle)
 
     async def _run_drink_once(self, cohort=None) -> None:
-        """Hand a dry healer a drink stack from a party member beside it, mid-run.
+        """Hand a dry healer a drink stack from a party member beside it.
 
         THE OPPOSITE GATE TO `_towntrip_once`: that pass stands down inside an
         open run, and the pre-run hand-over it plans waits for two members to
         stand together, which a family between runs never does (Grug's run
         1665107 reached its fourth boss and stopped on "Waiting on Grog (low
         mana)" with the mage carrying spare drinks in the same party, #2037). Inside
-        the dungeon the party is together, so this pass runs ONLY mid-run and
-        writes only kind='give' rows, which move a stack between two bags in
-        place and send nobody anywhere. Every decision is towntrip.in_run_drink's.
+        the dungeon the party is together, and while a run is staging the
+        party gathers at its door, so this pass runs in those two windows
+        and writes only kind='give' rows, which move a stack between two bags in
+        place and send nobody anywhere. Every decision is the planner's:
+        towntrip.in_run_drink's mid-run, towntrip.entry_drink's while staging.
         """
-        names, _leader = await asyncio.to_thread(_family_of, cohort)
-        if not names or not await self._mid_run(names):
+        names, leader = await asyncio.to_thread(_family_of, cohort)
+        if not names:
             return
+        mid_run = await self._mid_run(names)
+        staging = ""
+        if not mid_run:
+            # BEFORE THE RUN OPENS IS THE OTHER HALF OF THIS PASS (#2060).
+            # The 2026-11-10 live check found the in-run top-up firing about
+            # ten minutes into a run, after the first low-mana stop: the
+            # town trip's hand-over had been logged as waiting while the two
+            # stood apart, and the healer entered with no drink. While the
+            # coordinator is staging (townslot.STAGING_PHASES, read through
+            # _staging_phase) the party gathers at the door, so a dry healer
+            # can be handed a stack before the first pull instead.
+            staging = (
+                await asyncio.to_thread(_staging_phase, leader) if leader else ""
+            )
+            if not staging:
+                return
         members = towntrip.members_from_rows(
             await asyncio.to_thread(_fetch_town_worn, names),
             await asyncio.to_thread(_fetch_town_carried, names),
@@ -22081,13 +22116,24 @@ class Bridge(discord.Client):
         )
         sitting = frozenset(names) & _standin_out()
         where = handover.spots(await asyncio.to_thread(_fetch_positions, names))
-        errands = towntrip.in_run_drink(
-            [m for m in members if m.name not in sitting],
-            apart=lambda giver, taker: handover.verdict(
-                giver, taker, where).verb != handover.GIVE)
+        party = [m for m in members if m.name not in sitting]
+        if mid_run:
+            errands = towntrip.in_run_drink(
+                party,
+                apart=lambda giver, taker: handover.verdict(
+                    giver, taker, where).verb != handover.GIVE)
+        else:
+            errands = towntrip.entry_drink(
+                party,
+                apart=lambda giver, taker: handover.verdict(
+                    giver, taker, where).verb != handover.GIVE)
         if not errands:
             return
         seen = await asyncio.to_thread(_recent_town_keys, RUN_DRINK_RETRY_MINUTES)
+        # No second stack when the town trip got there first (#2060): this pass
+        # and _towntrip_once both write source='towntrip' rows through
+        # _insert_town_errand, keyed (giver, 'guid:N') of the same spare stack,
+        # so a give either one queued is skipped by the other inside its window.
         for errand in errands:
             if (errand.member, errand.command) in seen:
                 continue
@@ -22737,6 +22783,12 @@ class Bridge(discord.Client):
             pug_pass = (_guild_pug_plan(social, facts, mates, held, doors, pug_all, bounds)
                         if pugs_on else None)
             social = _with_class_asks(social, quest_pass)
+            death_pass = _death_ask_pass(facts, mates, held)
+            if death_pass.posts:
+                social = dataclasses.replace(
+                    social,
+                    posts=social.posts + death_pass.posts,
+                    notes=social.notes + death_pass.notes)
             run_id = await asyncio.to_thread(_write_guild_social, social)
         except BaseException:
             self._guild_run_names.difference_update(newly_reserved)
@@ -23623,7 +23675,8 @@ class Bridge(discord.Client):
             family=key, head=head, door=door, door_row=door_row,
             record=dungeonpace.viability(
                 reads["runs"], _pace_map(head_kw), since,
-                world_started_at=reads["world_started_at"]),
+                world_started_at=reads["world_started_at"],
+                stood_down=dungeonpace.stand_downs(reads["stood_down"], _pace_map(head_kw))),
             members=members, gates=gates, notes=notes, open=opened, changed=changed,
             done=fam["leader"].get("dungeon_runs_done"),
             # A door the family stalled at twice running is no rung to step to.
@@ -28698,6 +28751,7 @@ def _ensure_guild_run_store() -> None:
     try:
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(guildsocial.ASK_TABLE_SQL)
+            cur.execute(guildsocial.ASK_KIND_SQL)
             cur.execute(guildsocial.ANSWER_TABLE_SQL)
             cur.execute(guildsocial.ANSWER_STANCE_SQL)
             cur.execute(
@@ -29308,6 +29362,7 @@ def _fetch_guild_social_facts(bounds) -> dict:
     facts = _fetch_guild_run_facts(bounds)
     names = sorted({str(r["name"]) for r in facts["rows"] if r.get("name")})
     worn, skills, quest_rows, campaigns = [], [], [], []
+    death_loops: dict = {}
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT NOW() AS now")
         now = (cur.fetchone() or {}).get("now")
@@ -29329,6 +29384,16 @@ def _fetch_guild_social_facts(bounds) -> dict:
             cur.execute(guildsocial.QUESTS_SQL.format(  # noqa: S608 - placeholders only
                 holes=holes, zones=",".join(["%s"] * len(zones))), names + zones)
             quest_rows = list(cur.fetchall())
+            # The death loops the planning pass judges (deathloop.loops over
+            # the same deaths read, #2277): the death-loop asks are planned
+            # from this read in the social pass (deathask.plan_pass).
+            death_rows = _job_read(
+                cur, "deaths",
+                deathloop.SQL.format(holes=holes),  # noqa: S608 - placeholders only
+                (*names, deathloop.READ_SECONDS))
+            death_loops = deathloop.loops(
+                death_rows,
+                {str(r["name"]): int(r.get("level") or 0) for r in facts["rows"]})
         try:
             cur.execute(guildsocial.CAMPAIGNS_SQL)
             campaigns = list(cur.fetchall())
@@ -29348,9 +29413,22 @@ def _fetch_guild_social_facts(bounds) -> dict:
         "quests": guildsocial.quests_by_name(quest_rows),
         "gear": guildsocial.gear_by_name(facts["rows"], worn, skills),
         "campaigns": campaigns, "drops": drops, "pug_calls": pug_calls,
-        "lendable": lendable,
+        "lendable": lendable, "death_loops": death_loops,
     })
     return facts
+
+
+def _death_ask_pass(facts: dict, mates: list, held: dict) -> guildsocial.Pass:
+    """The death-loop ask pass for one social pass (deathask, #2277): posts
+    only, merged into the social pass beside the class quest asks and
+    written through the same writer. A looper held for another job is not
+    asked for, and a held mate is not counted in reach."""
+    if not deathask.enabled():
+        return guildsocial.Pass()
+    loops = facts.get("death_loops") or {}
+    if not loops:
+        return guildsocial.Pass()
+    return deathask.plan_pass(loops, mates, facts["asks"], facts["now"], held=held)
 
 
 def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,
@@ -30331,14 +30409,17 @@ def _shadow_itemplan(*args, **facts) -> None:
 
 
 def _itemplan_vendor_sales(names, family, rows, free_slots, gear_rows=(),
-                           worn_rows=(), keep_names=()):
+                           worn_rows=(), keep_names=(), sellable_counts=None):
     """The item plan vendor route's sales for this pass (#1977).
 
     Blocking: the pass runs it in a thread. Off unless
     ITEMPLAN_SELL_VENDOR is on, in which case the plan is built the way
     the shadow builds it (#1973's reads, the shadow's stacks) and the
     route picks its released SELL_VENDOR rows from it. No released set
-    exists yet, so a `confirm` row waits, exactly as the design says.
+    exists yet, so a `confirm` row waits, exactly as the design says,
+    except when ITEMPLAN_SELL_RELEASE is on and a member is short of room:
+    then its held sales (`confirm` and fallback) are released, cheapest
+    first, as far as `itemplan_vendor.pressure_for` says (#2305).
     A failure here is logged and the economy pass carries on without
     the route, as it does for the shadow.
     """
@@ -30353,9 +30434,19 @@ def _itemplan_vendor_sales(names, family, rows, free_slots, gear_rows=(),
             rows, gear_rows, extras.templates, extras.instance_soulbound)
         pairs = list(zip(stacks, rows, strict=True))
         held: list = []
+        # AI-REVIEW 2026-11-12 [codex/native-correctness] 2306-D1 (PR #2306):
+        # the docstring above now names this pressure-release exception.
+        # A member short of room has its held sales released, cheapest first,
+        # when ITEMPLAN_SELL_RELEASE is on (itemplan_vendor says how far).
+        pressure = (
+            itemplan_vendor.pressure_for(names, free_slots, sellable_counts)
+            if itemplan_vendor.release_enabled() else None)
         sales = itemplan_vendor.sales_for(
-            report.plan, pairs, keep_names=keep_names, held=held)
+            report.plan, pairs, keep_names=keep_names, held=held,
+            pressure=pressure)
         for line in itemplan_vendor.held_lines(held):
+            log.info("%s", line)
+        for line in itemplan_vendor.release_lines(sales):
             log.info("%s", line)
         return sales
     except Exception:
@@ -30374,7 +30465,8 @@ def _route_sales_for_trip(names, leader, rows, free_slots, sellable_counts,
     """
     sales = _itemplan_vendor_sales(
         names, leader, rows, free_slots, gear_rows=gear_rows,
-        worn_rows=worn_rows, keep_names=OWNER_KEEPS)
+        worn_rows=worn_rows, keep_names=OWNER_KEEPS,
+        sellable_counts=sellable_counts)
     _count_sales(sellable_counts, sales)
     return sales
 
@@ -33181,6 +33273,11 @@ _JOB_QUEST_FACTS: list = []
 # its givers and its objective's spawns, read from acore_world once per process.
 # A read the realm cannot answer is None and asked again next pass.
 _CLASS_BOOK: "classquest.Book | None" = None
+# Set when the book was built with no `conditions` rows (a schema without the
+# table or column, or a realm with none): the cached book then reads each
+# quest's NextQuestID as before, which sends a paladin to a Redemption step the
+# world refuses (#2325). It is reported on every pass, not once.
+_CLASS_BOOK_NO_CONDITIONS = False
 
 
 def _class_book_reads(cur) -> tuple:
@@ -33255,8 +33352,11 @@ def _class_rows(cur, what: str, sql: str, key: str, values) -> list:
 
 
 def _class_book():
-    global _CLASS_BOOK
+    global _CLASS_BOOK, _CLASS_BOOK_NO_CONDITIONS
     if _CLASS_BOOK is not None:
+        if _CLASS_BOOK_NO_CONDITIONS:
+            log.error("class quests: the book has no quest conditions rows; it reads "
+                      "NextQuestID alone until the bridge restarts with them readable")
         return _CLASS_BOOK
     with _connect() as conn, conn.cursor() as cur:
         reads = _class_book_reads(cur)
@@ -33264,6 +33364,11 @@ def _class_book():
         return None
     *world, summon_rows, held_rows, condition_rows = reads
     _CLASS_BOOK = classquest.build(*world, summon_rows=summon_rows, held_rows=held_rows, condition_rows=condition_rows)
+    _CLASS_BOOK_NO_CONDITIONS = not condition_rows
+    if _CLASS_BOOK_NO_CONDITIONS:
+        log.error("class quests: the quest conditions read returned no rows; the book "
+                  "reads NextQuestID alone, so chains opened by a condition are planned "
+                  "to steps the world refuses, for the life of this process")
     log.info("class quests: read %d quest(s) in %d reward group(s) from the world database",
              len(_CLASS_BOOK.quests), len(_CLASS_BOOK.groups))
     return _CLASS_BOOK
@@ -33432,6 +33537,60 @@ def _fetch_job_facts(family_names: list) -> dict:
     return facts
 
 
+_LIVE_RUN_LEADERS_SQL = (
+    "SELECT DISTINCT leader_name FROM overseer_dungeon_run WHERE state <> 'ended'"
+)
+
+
+def _idle_family_members(facts) -> list:
+    """The roster family members whose family is between runs (familyclass.py,
+    #2336): no live run of its leader and no member inside an instance. An
+    unread run table is not idle, so a family is never walked off on a guess."""
+    members = facts.get("family_members") or []
+    if not members or not familyclass.enabled():
+        return []
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_LIVE_RUN_LEADERS_SQL)
+            live = {str(r["leader_name"]) for r in cur.fetchall()}
+        roster = _fetch_queue_roster()
+    except pymysql.err.MySQLError:
+        log.exception("guild jobs: the live runs could not be read; no family "
+                      "member is planned a class step this pass")
+        return []
+    inside = {m.name for m in members
+              if m.map_id is not None and m.map_id not in guildrun.OPEN_WORLD_MAPS}
+    idle = familyclass.idle_names(roster, live, inside)
+    # A member on a town errand is busy though the claims table does not say so
+    # (#2338): its bag-room walks and aims are the errand's.
+    errand = {n for key, st in list(_TOWN_ERRANDS.items()) if st.active for n in key}
+    return familyclass.errand_free([m for m in members if m.name in idle], errand)
+
+
+def _family_danger(members, book, recent) -> dict:
+    """name -> the highest creature level near the giver of each idle family
+    member's next class move (_gather_danger), for members that would walk to a
+    giver out of reach. A name left out was not read (familyclass.danger_hold)."""
+    out: dict = {}
+    if book is None:
+        return out
+    for m in members:
+        try:
+            move, _blocked = classquest.next_move(
+                book, guildjobs.with_recent_takes(m, recent))
+            spot = getattr(move, "spot", None)
+            if spot is None:
+                continue
+            top = _gather_danger(int(spot.map_id), float(spot.x), float(spot.y))
+        except (pymysql.err.MySQLError, TypeError, ValueError):
+            log.exception("guild jobs: the giver's ground of %s could not be read",
+                          m.name)
+            continue
+        if top is not None:
+            out[m.name] = top
+    return out
+
+
 def _guild_campaign_door(cohort=None) -> str:
     """The family's active dungeon or raid job, or its next queued run keyword."""
     head = cohort.leader if cohort is not None else _head_now()
@@ -33530,8 +33689,18 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
     pending = {str(r.get(k) or "") for r in pending_rows
                for k in ("target_name", "target_arg")} - {""}
     map_id_by_name = {m.name: m.map_id for m in members if m.map_id is not None}
+    # THE ROSTER FAMILY, read as members of role FAMILY (familyclass.py, #2336):
+    # not in `members`, so no other pass sees them; the plan takes the idle
+    # ones for their class step alone.
+    family_rows = [r for r in rows if str(r["name"]) in family]
+    family_members = _guild_members_and_crafters(
+        family_rows, set(), {str(r["name"]): guildjobs.FAMILY for r in family_rows},
+        skills, known, carried, eligible,
+        _class_quest_state(log_rows, done_rows), free_slots or {}, supplies,
+        _rewarded_of(rewarded_rows), bag_slots or {}, worn or {})[0] if family_rows else []
     return {
         "members": members, "masters": masters, "crafters": crafters,
+        "family_members": family_members,
         "recent": (guildjobs.recent_from_rows(recent_rows, map_id_by_name)
                    + guildjobs.still_stranded(stranded_rows, map_id_by_name)),
         "pending": pending,

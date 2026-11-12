@@ -176,7 +176,7 @@ class TheTablesKeepTheContract(unittest.TestCase):
             "id INT NOT NULL AUTO_INCREMENT",
             "guild VARCHAR(32)",
             "asker VARCHAR(12)",
-            "kind ENUM('dungeon','quest','battleground')",
+            "kind ENUM('dungeon','quest','battleground','deathloop')",
             "target VARCHAR(64)",
             "target_label VARCHAR(96)",
             "roles_needed VARCHAR(32)",
@@ -222,10 +222,23 @@ class TheTablesKeepTheContract(unittest.TestCase):
         self.assertEqual(stances(gs.ANSWER_TABLE_SQL), stances(gs.ANSWER_STANCE_SQL))
         self.assertIn("pug", stances(gs.ANSWER_TABLE_SQL))
 
+    def test_a_fresh_ask_table_already_knows_every_kind(self):
+        # A fresh CREATE must not lean on the ALTER that follows it to learn
+        # the deathloop kind (#2277): both declare the same kind ENUM.
+        def kinds(sql):
+            m = re.search(r"kind ENUM\(([^)]*)\)", sql)
+            self.assertIsNotNone(m, sql)
+            return [v.strip().strip("'") for v in m.group(1).split(",")]
+
+        self.assertEqual(kinds(gs.ASK_TABLE_SQL), kinds(gs.ASK_KIND_SQL))
+        self.assertIn("deathloop", kinds(gs.ASK_TABLE_SQL))
+        self.assertEqual(gs.KIND_DEATHLOOP, "deathloop")
+
     def test_the_bridge_creates_both_and_credits_the_proposer(self):
         store = BRIDGE[BRIDGE.index("def _ensure_guild_run_store") :]
         store = store[: store.index("_GUILD_RUN_MEMBERS_SQL = ")]
         self.assertIn("guildsocial.ASK_TABLE_SQL", store)
+        self.assertIn("guildsocial.ASK_KIND_SQL", store)
         self.assertIn("guildsocial.ANSWER_TABLE_SQL", store)
         self.assertIn("guildsocial.ANSWER_STANCE_SQL", store)
         self.assertIn("ADD COLUMN proposer VARCHAR(12)", store)
