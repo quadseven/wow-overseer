@@ -38,8 +38,8 @@ the build is the app fingerprint (`appbuild.py`, also in the page's
 `overseer-build` tag). Relative imports and `import()` stay inside one build,
 so nothing in a module builds a URL by hand; a view stylesheet goes through
 `api.appUrl(path)`. A file under the current build is served `immutable` for a
-year; a file under any other build is the current bytes, revalidated, so a tab
-from before a deploy never fills a cache with the wrong build. The path with no
+year; a file under any other build is the current bytes with `no-store` and no
+ETag, so a tab from before a deploy never fills a cache with the wrong build. The path with no
 build segment still works and is revalidated. Scripts and styles are gzipped
 for clients that accept it. The page itself is never kept.
 

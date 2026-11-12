@@ -5738,8 +5738,8 @@ class Handler(BaseHTTPRequestHandler):
         The page names its files as /app/<build>/<path> (appbuild.py), so a
         browser can keep a file of the current build for good: the bytes under
         that name never change. A build segment that is not the current one
-        (a tab from before a deploy) gets the current bytes, revalidated and
-        never kept as immutable. The path without a build segment answers as
+        (a tab from before a deploy) gets the current bytes with `no-store`
+        and no ETag, so no cache keeps them under the old name. The path without a build segment answers as
         it always has.
         """
         build, rel = _split_app_build(rel)
@@ -5749,8 +5749,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, "text/plain", b"not found")
             return
         # Open the path that was checked, not one rebuilt from `rel`.
-        keep = APP_IMMUTABLE if build and build == appbuild.fingerprint(HERE) else "no-store"
-        self._send_file("app file", _APP_TYPES[kind], path=full, cache_control=keep)
+        if build and build == appbuild.fingerprint(HERE):
+            self._send_file("app file", _APP_TYPES[kind], path=full,
+                            cache_control=APP_IMMUTABLE)
+            return
+        if build:
+            # A stale build (#2310): the current bytes, kept by nobody. No
+            # ETag either, so an old tab can never turn this into a 304 for
+            # bytes it holds from another build.
+            self._send_file("app file", _APP_TYPES[kind], path=full,
+                            revalidate=False)
+            return
+        self._send_file("app file", _APP_TYPES[kind], path=full)
 
     def _clip_file(self, name: str) -> None:
         """GET /clips/<file> - a saved clip, streamed, with Range support.
@@ -7218,7 +7228,8 @@ class Handler(BaseHTTPRequestHandler):
         return body
 
     def _send_file(self, name: str, ctype: str, transform=None, path: str = "",
-                   cache_control: str = "no-store") -> None:
+                   cache_control: str = "no-store", *,
+                   revalidate: bool = True) -> None:
         # A file missing from the image must be a readable 500, not a bare
         # connection reset - the page keys its error banner off r.ok.
         #
@@ -7239,15 +7250,19 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("static file %s cannot be served", name)
             self._send(500, "text/plain", b"static file missing from image")
             return
-        self._send(200, ctype, body, cache_control)
+        if revalidate:
+            self._send(200, ctype, body, cache_control)
+        else:
+            self._send(200, ctype, body, cache_control, revalidate=False)
 
     def _send(self, code: int, ctype: str, body: bytes,
-              cache_control: str = "no-store") -> None:
+              cache_control: str = "no-store", *,
+              revalidate: bool = True) -> None:
         # A successful GET is revalidated rather than refetched: it carries
         # an ETag of its bytes and `no-cache`, so the app's poll of an
         # unchanged answer costs a 304 and no body. The model-viewer files
-        # are the one immutable thing here and say so themselves; POSTs and
-        # errors keep no-store.
+        # are the one immutable thing here and say so themselves; POSTs,
+        # errors and a caller passing revalidate=False keep no-store.
         #
         # A JSON body over GZIP_MIN_BYTES goes out gzipped when the caller
         # accepts it (#2051). Compression lives here because the proxy in
@@ -7255,7 +7270,8 @@ class Handler(BaseHTTPRequestHandler):
         # was measured at several MB of plain JSON. The gzipped form gets a
         # "-gz" tag, so the two representations never share a validator.
         tag = ""
-        if code == 200 and cache_control == "no-store" and getattr(self, "command", "") == "GET":
+        if (revalidate and code == 200 and cache_control == "no-store"
+                and getattr(self, "command", "") == "GET"):
             cache_control = "no-cache"
             tag = _etag(body)
         packed = _gzipped(self, ctype, body)

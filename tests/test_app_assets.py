@@ -6,7 +6,7 @@ before the page could draw, and a first visit downloaded the whole app as
 plain text. The page now names its files as /app/<build>/<file>. Relative
 imports stay inside one build, a file of the current build never changes (so
 the browser may keep it for a year), and an old tab asking for an old build
-is answered with the current bytes that are not kept as immutable.
+is answered with the current bytes and `no-store`, so nothing keeps them.
 
 Ticket: #2310 (epic #2309).
 """
@@ -60,8 +60,15 @@ class VersionedFiles(unittest.TestCase):
         r = get("/app/0123456789ab/main.js")
         self.assertEqual(r.status(), 200)
         self.assertEqual(r.body(), MAIN)
-        self.assertNotIn("immutable", r.header("Cache-Control"))
-        self.assertEqual(r.header("Cache-Control"), "no-cache")
+        self.assertEqual(r.header("Cache-Control"), "no-store")
+        self.assertIsNone(r.header("ETag"))
+
+    def test_another_build_is_never_answered_with_a_304(self):
+        first = get("/app/main.js")
+        r = get("/app/0123456789ab/main.js", {"If-None-Match": first.header("ETag")})
+        self.assertEqual(r.status(), 200)
+        self.assertEqual(r.body(), MAIN)
+        self.assertEqual(r.header("Cache-Control"), "no-store")
 
     def test_the_old_path_still_works_and_is_still_revalidated(self):
         r = get("/app/main.js")
