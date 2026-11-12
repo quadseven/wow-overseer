@@ -1049,8 +1049,16 @@ def stranded_vendor_aims(
     in_run: bool,
     resume: int = CAMPAIGN_ADMIT_FREE_SLOTS,
     at_counter: frozenset = frozenset(),
+    inside: frozenset = frozenset(),
 ) -> tuple[str, ...]:
     """Names of cut-off members that need their own local vendor errand.
+
+    A MEMBER INSIDE AN INSTANCE IS NEVER AIMED (#2280). `inside` is the set of
+    names the caller read on an instance map. A vendor aim written there is
+    inert while the run's hold stands, then walks the member out of the
+    dungeon the moment the run stops clearing: on the dev realm 2026-11-12 the
+    tank was sent out of Blackrock Depths that way, died on the walk, and the
+    run was left without its tank. That errand belongs between runs.
 
     A MEMBER ALREADY STANDING AT A COUNTER IS NOT AIMED (#2215). It has done
     what the aim is for, and the module holds it there for a few minutes so the
@@ -1069,10 +1077,28 @@ def stranded_vendor_aims(
             str(name)
             for name in names or ()
             if name not in at_counter
+            and name not in inside
             and _stranded_vendor_candidate(
                 name, leader, leader_map, positions, free_slots, resume
             )
         )
+    )
+
+
+def members_inside_instance(
+    names: Iterable[str], live_maps, instance_maps
+) -> frozenset:
+    """Names read on an instance map, from `live_maps` (name -> map id).
+
+    An unreadable `live_maps` (None) names nobody: a missing read must not
+    stop an errand that is otherwise right, and the run guards that read the
+    same map still hold."""
+    maps = {int(m) for m in instance_maps or ()}
+    return frozenset(
+        str(name)
+        for name in names or ()
+        if (live_maps or {}).get(name) is not None
+        and int((live_maps or {})[name]) in maps
     )
 
 

@@ -128,7 +128,9 @@ class OldLinesReadHonestly(unittest.TestCase):
         )
         self.assertNotRegex(guild.walk_target("walk-to-spawn creature:39536", {}), BARE)
         self.assertEqual(
-            guild.walk_target("walk-to-spawn creature:39536", {39536: "Bodley"}),
+            guild.walk_target(
+                "walk-to-spawn creature:39536", {"spawn": {39536: "Bodley"}}
+            ),
             "walking to Bodley",
         )
 
