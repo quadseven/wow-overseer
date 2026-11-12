@@ -163,39 +163,45 @@ class TheAimAvoidsGroundTheFamilyDiedOn(unittest.TestCase):
 
 
 class AHubTheHeadsStoneReaches(unittest.TestCase):
-    """wow-overseer#2329: the dev realm, 2026-11-12. The head stood in Eastern
-    Plaguelands, the family's stones were bound in the Badlands, and the
-    nearest vendor beat the bind hub, so four members walked 9,000 yards."""
+    """wow-overseer#2329: a head far from a bind hub whose stone will be cast
+    keeps that hub, so no member has to walk to a distant vendor."""
 
-    BIND = {"map_id": 0, "x": -6673.9, "y": -2174.3, "z": 244.2, "bind": True,
-            "place": "Zug's hearthstone point"}
-    PLAGUELANDS = {"map_id": 0, "pos_x": 2151.7, "pos_y": -5264.5}
-    CALEB = {"map_id": 0, "x": 2151.7, "y": -5264.5, "name": "Caretaker Alen"}
+    BIND = {
+        "map_id": 0,
+        "x": -6673.9,
+        "y": -2174.3,
+        "z": 244.2,
+        "bind": True,
+        "place": "Zug's hearthstone point",
+    }
+    FAR_HEAD = {"map_id": 0, "pos_x": 2151.7, "pos_y": -5264.5}
+    FAR_VENDOR = {"map_id": 0, "x": 2151.7, "y": -5264.5, "name": "Far Vendor"}
 
     def test_the_far_bind_hub_stays_when_the_stone_will_be_cast(self):
-        stops = te.vendor_stops([self.CALEB])
-        pick = te.choose_aim(
-            self.BIND, stops, self.PLAGUELANDS, WHY, hearth_reaches=True
-        )
+        stops = te.vendor_stops([self.FAR_VENDOR])
+        pick = te.choose_aim(self.BIND, stops, self.FAR_HEAD, WHY, hearth_reaches=True)
         self.assertEqual(self.BIND, pick)
 
     def test_the_vendor_still_wins_when_the_stone_will_not_be_cast(self):
-        stops = te.vendor_stops([self.CALEB])
-        pick = te.choose_aim(self.BIND, stops, self.PLAGUELANDS, WHY)
+        stops = te.vendor_stops([self.FAR_VENDOR])
+        pick = te.choose_aim(self.BIND, stops, self.FAR_HEAD, WHY)
         self.assertEqual(2151.7, pick["x"])
 
     def test_a_walked_capital_is_not_made_a_hearth_hub(self):
-        stops = te.vendor_stops([self.CALEB])
-        pick = te.choose_aim(
-            CAPITAL, stops, self.PLAGUELANDS, WHY, hearth_reaches=True
-        )
+        stops = te.vendor_stops([self.FAR_VENDOR])
+        pick = te.choose_aim(CAPITAL, stops, self.FAR_HEAD, WHY, hearth_reaches=True)
         self.assertEqual(2151.7, pick["x"])
 
     def test_a_hub_released_unlanded_still_gives_way(self):
         released = te.remember_released([], self.BIND, 100.0)
-        stops = te.vendor_stops([self.CALEB])
+        stops = te.vendor_stops([self.FAR_VENDOR])
         pick = te.choose_aim(
-            self.BIND, stops, self.PLAGUELANDS, WHY, released, 200.0,
+            self.BIND,
+            stops,
+            self.FAR_HEAD,
+            WHY,
+            released,
+            200.0,
             hearth_reaches=True,
         )
         self.assertEqual(2151.7, pick["x"])
