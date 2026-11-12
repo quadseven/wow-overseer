@@ -836,8 +836,7 @@ class TheDryHealerIsHandedADrinkBeforeTheFirstPull(unittest.TestCase):
 
     def _gives(self, members, apart):
         return [
-            (e.member, e.taker, e.command)
-            for e in towntrip.entry_drink(members, apart)
+            (e.member, e.taker, e.command) for e in towntrip.entry_drink(members, apart)
         ]
 
     def test_a_dry_healer_beside_the_mage_is_handed_a_stack(self):

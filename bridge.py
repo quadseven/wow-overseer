@@ -21680,6 +21680,10 @@ class Bridge(discord.Client):
         if not errands:
             return
         seen = await asyncio.to_thread(_recent_town_keys, RUN_DRINK_RETRY_MINUTES)
+        # No second stack when the town trip got there first (#2060): this pass
+        # and _towntrip_once both write source='towntrip' rows through
+        # _insert_town_errand, keyed (giver, 'guid:N') of the same spare stack,
+        # so a give either one queued is skipped by the other inside its window.
         for errand in errands:
             if (errand.member, errand.command) in seen:
                 continue
