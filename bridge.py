@@ -5646,6 +5646,42 @@ def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
     return ages
 
 
+# The seconds since the leader's open run last gained boss credit (#2181). The
+# run's own rows are the evidence: family-wide progress events are kept warm
+# by a member questing on another map, and the run row's own heartbeat is
+# presence, not progress.
+_DOOR_RUN_SQL = (
+    "SELECT id FROM overseer_dungeon_run WHERE leader_name = %s "
+    "AND ended_at IS NULL ORDER BY id DESC LIMIT 1"
+)
+# Two reads, not a join: the two tables sit in different collation groups
+# (tests/test_collation_split.py), and a run id is a number.
+_DOOR_BOSS_SQL = (
+    "SELECT TIMESTAMPDIFF(SECOND, MAX(created_at), NOW()) AS boss_age "
+    "FROM overseer_dungeon_run_event WHERE run_id = %s AND kind = 'boss'"
+)
+
+
+def _door_run_boss_age(leader: str):
+    """Seconds since the leader's open run last credited a boss, or None
+    when it has no open run or no credit yet. A table this realm cannot
+    answer (1054 or 1146) reads as None, so the clocks run as before."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_DOOR_RUN_SQL, (leader,))
+            runs = cur.fetchall()
+            if not runs:
+                return None
+            cur.execute(_DOOR_BOSS_SQL, (int(runs[0]["id"]),))
+            rows = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+            return None
+    age = (rows[0] if rows else {}).get("boss_age")
+    return None if age is None else max(0, int(age))
+
+
 def _door_wedge(head: dict, names: list, leader: str):
     """The Stuck for a family wedged at the door `head` holds, or None.
 
@@ -5655,14 +5691,28 @@ def _door_wedge(head: dict, names: list, leader: str):
     A corpse outranks a walk, and a walk outranks a hold: the recorded
     reason names the worst thing wrong at the door.
     """
-    if head.get("status") != campaignqueue.ACTIVE:
-        return None
-    if not any(jobs.is_dungeon_job(job) for job in _jobs_of(names).values()):
+    if head.get("status") != campaignqueue.ACTIVE or not any(
+        jobs.is_dungeon_job(job) for job in _jobs_of(names).values()
+    ):
+        # Not judged this pass: the leader's hold clocks stop with it, so a
+        # later return to the dungeon job does not count the gap as one hold
+        # (#2181).
+        for key in [k for k in _DOOR_HOLD_SINCE if k[0] == leader]:
+            del _DOOR_HOLD_SINCE[key]
         return None
     keyword = str(head.get("keyword") or "")
     head_id = int(head.get("id") or 0)
     restarts, members = _door_wedge_evidence(leader, head_id)
     ages = _door_wedge_ages(leader, members, head_id)
+    # A run that credits a boss is not wedged (#2181): a party one member
+    # short clears the dungeon while that member's hold ages. The hold and
+    # death clocks start over at the run's newest boss credit, so a run that
+    # then goes a full bound with no credit is still stood down.
+    boss_age = _door_run_boss_age(leader) if ages else None
+    if boss_age is not None:
+        ages = {
+            name: (state, min(age, boss_age)) for name, (state, age) in ages.items()
+        }
     for name, (state, age) in ages.items():
         if state == "dead":
             verdict = dungeonstall.member_dead(keyword, name, age)

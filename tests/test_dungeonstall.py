@@ -1231,9 +1231,11 @@ class TheDoorWedgeReads(unittest.TestCase):
     the verdicts are dungeonstall's own."""
 
     HEAD = {"id": 7, "keyword": "maraudon-orange", "status": "active"}
+    boss_age = None
 
-    def judge(self, evidence, clock):
+    def judge(self, evidence, clock, jobs_of=None):
         self.asked = []
+        self.holds = {}
         ns = _load(
             ["_door_wedge", "_door_wedge_ages"],
             {
@@ -1241,11 +1243,13 @@ class TheDoorWedgeReads(unittest.TestCase):
                 "dungeonstall": stall,
                 "jobs": jobs,
                 "time": types.SimpleNamespace(monotonic=lambda: clock[0]),
-                "_jobs_of": lambda names: {n: "dungeon:maraudon-orange" for n in names},
+                "_jobs_of": jobs_of
+                or (lambda names: {n: "dungeon:maraudon-orange" for n in names}),
                 "_door_wedge_evidence": lambda leader, head_id: (
                     self.asked.append((leader, head_id)) or evidence
                 ),
-                "_DOOR_HOLD_SINCE": {},
+                "_DOOR_HOLD_SINCE": self.holds,
+                "_door_run_boss_age": lambda leader: self.boss_age,
             },
         )
         return ns["_door_wedge"]
@@ -1307,6 +1311,7 @@ class TheDoorWedgeReads(unittest.TestCase):
                 "_jobs_of": lambda names: {n: "dungeon:maraudon-orange" for n in names},
                 "_door_wedge_evidence": lambda leader, head_id: box[0],
                 "_DOOR_HOLD_SINCE": {},
+                "_door_run_boss_age": lambda leader: self.boss_age,
             },
         )
         judge = ns["_door_wedge"]
@@ -1328,6 +1333,87 @@ class TheDoorWedgeReads(unittest.TestCase):
         self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
         clock[0] += stall.HOLD_SECONDS + 1
         self.assertIsNone(judge(dict(self.HEAD, id=8), ["Zug", "Uzza"], "Zug"))
+
+    # --- #2181: a run that credits a boss is not wedged ---------------------
+
+    def test_a_hold_past_its_bound_is_no_verdict_while_the_run_credits_bosses(self):
+        """Run 1850975 (Zug, Blackrock Depths): Oz was on an errand for over
+        30 minutes while the other four cleared nine encounters, the newest
+        13 minutes before the verdict, and the verdict walked the party out."""
+        clock = [1000.0]
+        judge = self.judge(
+            (0, (self.member("Uzza", "on an errand of its own"),)), clock
+        )
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+        clock[0] += stall.HOLD_SECONDS + 60
+        self.boss_age = 13 * 60
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+
+    def test_the_clock_restarts_at_the_newest_credit_and_a_silent_run_is_still_left(
+        self,
+    ):
+        clock = [1000.0]
+        judge = self.judge(
+            (0, (self.member("Uzza", "on an errand of its own"),)), clock
+        )
+        judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
+        clock[0] += stall.HOLD_SECONDS + 60
+        self.boss_age = stall.HOLD_SECONDS - 1
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+        self.boss_age = stall.HOLD_SECONDS
+        got = judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertIn("Uzza", got.why)
+
+    def test_a_dead_member_is_no_verdict_while_the_run_credits_bosses(self):
+        clock = [1000.0]
+        judge = self.judge((0, (self.member("Uzza", "dead"),)), clock)
+        judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
+        clock[0] += stall.DEAD_SECONDS + 60
+        self.boss_age = 5 * 60
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+
+    def test_hold_clocks_are_cleared_on_a_pass_that_does_not_judge_the_family(self):
+        clock = [1000.0]
+        judge = self.judge(
+            (0, (self.member("Uzza", "on an errand of its own"),)), clock
+        )
+        judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
+        self.assertTrue(self.holds)
+        judge(dict(self.HEAD, status="queued"), ["Zug", "Uzza"], "Zug")
+        self.assertEqual({}, self.holds)
+
+    def test_a_stale_clock_is_not_counted_as_one_hold_after_the_job_returns(self):
+        clock = [1000.0]
+        job = ["dungeon:maraudon-orange"]
+        judge = self.judge(
+            (0, (self.member("Uzza", "on an errand of its own"),)),
+            clock,
+            jobs_of=lambda names: {n: job[0] for n in names},
+        )
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+        # The family is off the dungeon job for longer than the bound.
+        job[0] = "quest"
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+        clock[0] += stall.HOLD_SECONDS + 60
+        job[0] = "dungeon:maraudon-orange"
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+
+    def test_the_boss_read_is_the_open_runs_own_boss_rows(self):
+        def sql(name):
+            return next(
+                ast.literal_eval(node.value)
+                for node in ast.parse(BRIDGE).body
+                if isinstance(node, ast.Assign)
+                and any(getattr(t, "id", "") == name for t in node.targets)
+            )
+
+        run, boss = sql("_DOOR_RUN_SQL"), sql("_DOOR_BOSS_SQL")
+        self.assertIn("ended_at IS NULL", run)
+        self.assertIn("overseer_dungeon_run_event", boss)
+        self.assertIn("kind = 'boss'", boss)
+        self.assertIn("run_id = %s", boss)
+        self.assertNotIn("JOIN", run + boss)
 
     def test_no_verdict_without_a_started_dungeon_head(self):
         judge = self.judge((38, ()), [1000.0])
