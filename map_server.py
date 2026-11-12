@@ -5728,9 +5728,12 @@ class Handler(BaseHTTPRequestHandler):
         # does not, and it is not a broken link.
         # The build is stamped in beside the mount (appbuild.py), so an open
         # tab can tell when the server holds newer app code than it runs.
-        self._send_file("index.html", "text/html; charset=utf-8",
-                        transform=lambda body: appbuild.stamp(
-                            basepath.apply(body, BASE_PATH), appbuild.fingerprint(HERE)))
+        def page(body: bytes) -> bytes:
+            build = appbuild.fingerprint(HERE)
+            stamped = appbuild.stamp(basepath.apply(body, BASE_PATH), build)
+            return appbuild.preload(stamped, HERE, BASE_PATH, build)
+
+        self._send_file("index.html", "text/html; charset=utf-8", transform=page)
 
     def _app_file(self, rel: str) -> None:
         """GET /app/[<build>/]<path>.js|.css|.woff2 - one file of the operations app.

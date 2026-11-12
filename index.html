@@ -42,6 +42,9 @@
 <link rel="preload" as="font" type="font/woff2" crossorigin href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/fonts/inter-latin.woff2">
 <link rel="preload" as="font" type="font/woff2" crossorigin href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/fonts/phosphor.woff2">
 <link rel="preload" as="font" type="font/woff2" crossorigin href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/fonts/phosphor-fill.woff2">
+<!-- The boot graph, one hint per module (appbuild.preload), so the browser fetches
+     it in one round instead of one round per level of imports. -->
+<!--__OVERSEER_PRELOAD__-->
 </head>
 <body>
 <button type="button" class="skip" data-action="skip">Skip to the page</button>
