@@ -5278,6 +5278,9 @@ def _pace_reads(key: str, fam: dict, level_rows: list, ids: list) -> dict:
         back = _planner_rows(cur, dungeonpace.LAST_BACK_SQL, (key,), "the last step back")
         unscored = _planner_rows(cur, dungeonpace.UNSCORED_SQL, (key,),
                                  "the unscored pace rows") or []
+        stood_down = _planner_rows(cur, dungeonpace.STAND_DOWN_SQL,
+                                   (key, dungeonpace.WINDOW_HOURS),
+                                   "the pace's own stand-downs") or []
         stuck = _stuck_doors(cur, names)
     return {
         "members": dungeonpace.members_from_rows(level_rows, gear, armed),
@@ -5288,6 +5291,7 @@ def _pace_reads(key: str, fam: dict, level_rows: list, ids: list) -> dict:
         "open": (opened or [None])[0],
         "back": {str(r["door"]): r.get("at") for r in back or []},
         "unscored": unscored,
+        "stood_down": stood_down,
         "stuck": frozenset(stuck),
     }
 
@@ -23657,7 +23661,8 @@ class Bridge(discord.Client):
             family=key, head=head, door=door, door_row=door_row,
             record=dungeonpace.viability(
                 reads["runs"], _pace_map(head_kw), since,
-                world_started_at=reads["world_started_at"]),
+                world_started_at=reads["world_started_at"],
+                stood_down=dungeonpace.stand_downs(reads["stood_down"], _pace_map(head_kw))),
             members=members, gates=gates, notes=notes, open=opened, changed=changed,
             done=fam["leader"].get("dungeon_runs_done"),
             # A door the family stalled at twice running is no rung to step to.
