@@ -162,6 +162,58 @@ class TheAimAvoidsGroundTheFamilyDiedOn(unittest.TestCase):
         self.assertEqual(-5800.0, pick["x"])
 
 
+class AHubTheHeadsStoneReaches(unittest.TestCase):
+    """wow-overseer#2329: a head far from a bind hub whose stone will be cast
+    keeps that hub, so no member has to walk to a distant vendor."""
+
+    BIND = {
+        "map_id": 0,
+        "x": -6673.9,
+        "y": -2174.3,
+        "z": 244.2,
+        "bind": True,
+        "place": "Zug's hearthstone point",
+    }
+    FAR_HEAD = {"map_id": 0, "pos_x": 2151.7, "pos_y": -5264.5}
+    FAR_VENDOR = {"map_id": 0, "x": 2151.7, "y": -5264.5, "name": "Far Vendor"}
+
+    def test_the_far_bind_hub_stays_when_the_stone_will_be_cast(self):
+        stops = te.vendor_stops([self.FAR_VENDOR])
+        pick = te.choose_aim(self.BIND, stops, self.FAR_HEAD, WHY, hearth_reaches=True)
+        self.assertEqual(self.BIND, pick)
+
+    def test_the_vendor_still_wins_when_the_stone_will_not_be_cast(self):
+        stops = te.vendor_stops([self.FAR_VENDOR])
+        pick = te.choose_aim(self.BIND, stops, self.FAR_HEAD, WHY)
+        self.assertEqual(2151.7, pick["x"])
+
+    def test_a_walked_capital_is_not_made_a_hearth_hub(self):
+        stops = te.vendor_stops([self.FAR_VENDOR])
+        pick = te.choose_aim(CAPITAL, stops, self.FAR_HEAD, WHY, hearth_reaches=True)
+        self.assertEqual(2151.7, pick["x"])
+
+    def test_a_hub_released_unlanded_still_gives_way(self):
+        released = te.remember_released([], self.BIND, 100.0)
+        stops = te.vendor_stops([self.FAR_VENDOR])
+        pick = te.choose_aim(
+            self.BIND,
+            stops,
+            self.FAR_HEAD,
+            WHY,
+            released,
+            200.0,
+            hearth_reaches=True,
+        )
+        self.assertEqual(2151.7, pick["x"])
+
+    def test_the_bridge_reads_the_stone_before_it_chooses(self):
+        self.assertIn("hearth_reaches=leader in casts", BRIDGE)
+        self.assertLess(
+            BRIDGE.index("casts = townerrand.to_hearth("),
+            BRIDGE.index("hearth_reaches=leader in casts"),
+        )
+
+
 class TheBridgeUsesIt(unittest.TestCase):
     def test_the_start_reads_the_deaths_and_chooses_the_aim(self):
         self.assertIn("deaths=", BRIDGE)
