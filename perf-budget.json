@@ -1,0 +1,42 @@
+{
+  "limits": {
+    "boot_gzip_bytes": 52000,
+    "boot_modules": 20,
+    "import_depth": 4,
+    "third_party_hosts": 0,
+    "font_bytes": 42500,
+    "boot_requests": 26
+  },
+  "raises": [
+    {
+      "limit": "boot_gzip_bytes",
+      "max": 52000,
+      "why": "Initial budget, set from the boot graph after the immutable-assets, vendored-fonts and preload slices, with about three percent headroom."
+    },
+    {
+      "limit": "boot_modules",
+      "max": 20,
+      "why": "Initial budget, the size of the boot closure when the budget was introduced, with one module of headroom."
+    },
+    {
+      "limit": "import_depth",
+      "max": 4,
+      "why": "Initial budget, the longest static import chain when the budget was introduced; a deeper chain costs a round trip on a cold start without hints."
+    },
+    {
+      "limit": "third_party_hosts",
+      "max": 0,
+      "why": "The app names no host but its own at boot: no outside font or script host, ever. Not a number to raise."
+    },
+    {
+      "limit": "font_bytes",
+      "max": 42500,
+      "why": "Initial budget, the three vendored subset fonts as shipped, with a small margin for a new icon."
+    },
+    {
+      "limit": "boot_requests",
+      "max": 26,
+      "why": "Initial budget, the distinct requests the page names at boot when the budget was introduced, with one of headroom."
+    }
+  ]
+}

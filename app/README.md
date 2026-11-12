@@ -43,6 +43,18 @@ from before a deploy never fills a cache with the wrong build. The path with no
 build segment still works and is revalidated. Scripts and styles are gzipped
 for clients that accept it. The page itself is never kept.
 
+The page also lists the boot graph (the entry script's static imports) as
+`modulepreload` links (`appbuild.preload`), so a cold start fetches the modules
+in one round. A view reached by `import()` is not in it.
+
+## The performance budget
+
+`perf-budget.json` holds limits for the boot path: compressed bytes, modules,
+the longest import chain, third-party hosts (none), font bytes, and requests.
+`tests/test_perf_budget.py` measures the files (`perfbudget.py`, or run
+`python3 perfbudget.py` to see the numbers) and fails a change that crosses a
+limit. To raise one, edit it and add a line to `raises` saying why.
+
 ## A view
 
 ```js
