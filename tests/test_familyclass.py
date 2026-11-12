@@ -244,7 +244,11 @@ class TheLoneStepIsGuardedAgainstTheErrandAndTheGround(unittest.TestCase):
 
     def plan(self, m, danger=None):
         return guildjobs.plan(
-            [], classes=book(), family_members=[m], now=1000.0, far_slots=None,
+            [],
+            classes=book(),
+            family_members=[m],
+            now=1000.0,
+            far_slots=None,
             family_danger=danger,
         )
 
@@ -268,8 +272,12 @@ class TheLoneStepIsGuardedAgainstTheErrandAndTheGround(unittest.TestCase):
 
     def test_the_claims_busy_set_still_holds_a_member(self):
         plan = guildjobs.plan(
-            [], classes=book(), family_members=[member()], now=1000.0,
-            far_slots=None, busy={"Dwarf"},
+            [],
+            classes=book(),
+            family_members=[member()],
+            now=1000.0,
+            far_slots=None,
+            busy={"Dwarf"},
         )
         self.assertEqual(plan.steps, ())
 
@@ -286,7 +294,8 @@ class TheLoneStepIsGuardedAgainstTheErrandAndTheGround(unittest.TestCase):
 
 
 class TheBridgeKeepsAnErrandMemberOutOfTheFamilyList(
-        TheBridgeReadsTheFamilyAsMembersOfRoleFamily):
+    TheBridgeReadsTheFamilyAsMembersOfRoleFamily
+):
     def test_a_member_on_a_town_errand_is_not_idle(self):
         state = mock.Mock(active=True)
         with mock.patch.dict(bridge._TOWN_ERRANDS, {("Boss", "Dwarf"): state}):
@@ -298,16 +307,18 @@ class TheBridgeKeepsAnErrandMemberOutOfTheFamilyList(
             self.assertEqual(self._idle([]), ["Dwarf"])
 
     def test_family_danger_reads_the_giver_ground_of_a_far_member(self):
-        far = dataclasses.replace(self.facts()["family_members"][0],
-                                  map_id=0, x=-4633.5 + 3000.0, y=-932.0)
+        far = dataclasses.replace(
+            self.facts()["family_members"][0], map_id=0, x=-4633.5 + 3000.0, y=-932.0
+        )
         with mock.patch.object(bridge, "_gather_danger", return_value=64) as g:
             out = bridge._family_danger([far], book(), [])
         self.assertEqual(out, {"Dwarf": 64})
         self.assertEqual(g.call_count, 1)
 
     def test_an_unread_ground_leaves_the_member_out(self):
-        far = dataclasses.replace(self.facts()["family_members"][0],
-                                  map_id=0, x=-4633.5 + 3000.0, y=-932.0)
+        far = dataclasses.replace(
+            self.facts()["family_members"][0], map_id=0, x=-4633.5 + 3000.0, y=-932.0
+        )
         with mock.patch.object(bridge, "_gather_danger", return_value=None):
             self.assertEqual(bridge._family_danger([far], book(), []), {})
 
