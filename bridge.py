@@ -18827,6 +18827,8 @@ class Bridge(discord.Client):
             log.info("guild jobs: %s", census)
         # THE ROSTER FAMILY'S CLASS STEP, BETWEEN RUNS (#2336).
         family_members = await asyncio.to_thread(_idle_family_members, facts)
+        family_danger = await asyncio.to_thread(
+            _family_danger, family_members, facts.get("class_book"), facts["recent"])
         # THE PLAN RUNS ON THE EVENT LOOP (#833): it mutates the hunt clock and
         # the owing clock other tasks read, so it is not sent to a thread.
         # Every awaited input is read above, so this timer measures only the
@@ -18862,7 +18864,7 @@ class Bridge(discord.Client):
             campaign=campaign_door,
             # Members dying over and over in one zone leave it (#1464).
             # The family members idle between runs take their class step.
-            family_members=family_members,
+            family_members=family_members, family_danger=family_danger,
             loops=facts.get("death_loops"))
         log.info("guild jobs: the plan took %.2f s on the event loop for %d "
                  "member(s)%s", time.perf_counter() - plan_started, len(members),
@@ -33514,7 +33516,34 @@ def _idle_family_members(facts) -> list:
     inside = {m.name for m in members
               if m.map_id is not None and m.map_id not in guildrun.OPEN_WORLD_MAPS}
     idle = familyclass.idle_names(roster, live, inside)
-    return [m for m in members if m.name in idle]
+    # A member on a town errand is busy though the claims table does not say so
+    # (#2338): its bag-room walks and aims are the errand's.
+    errand = {n for key, st in list(_TOWN_ERRANDS.items()) if st.active for n in key}
+    return familyclass.errand_free([m for m in members if m.name in idle], errand)
+
+
+def _family_danger(members, book, recent) -> dict:
+    """name -> the highest creature level near the giver of each idle family
+    member's next class move (_gather_danger), for members that would walk to a
+    giver out of reach. A name left out was not read (familyclass.danger_hold)."""
+    out: dict = {}
+    if book is None:
+        return out
+    for m in members:
+        try:
+            move, _blocked = classquest.next_move(
+                book, guildjobs.with_recent_takes(m, recent))
+            spot = getattr(move, "spot", None)
+            if spot is None:
+                continue
+            top = _gather_danger(int(spot.map_id), float(spot.x), float(spot.y))
+        except (pymysql.err.MySQLError, TypeError, ValueError):
+            log.exception("guild jobs: the giver's ground of %s could not be read",
+                          m.name)
+            continue
+        if top is not None:
+            out[m.name] = top
+    return out
 
 
 def _guild_campaign_door(cohort=None) -> str:

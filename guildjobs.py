@@ -3670,6 +3670,7 @@ def plan(
     bags=None,
     campaign="",
     family_members=(),
+    family_danger=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -3833,6 +3834,7 @@ def plan(
         (counters, busy, per_guild),
         steps,
         notes,
+        family_danger,
     )
     owed, released = owed_members(
         members, classes, recent, hunts, now, owing or classquest.Owing(), asks=asks
@@ -3854,11 +3856,15 @@ def plan(
     )
 
 
-def _plan_family_class_steps(family_members, reads, limits, steps, notes) -> None:
+def _plan_family_class_steps(
+    family_members, reads, limits, steps, notes, danger=None
+) -> None:
     """THE FAMILY'S CLASS STEPS, after every guild member's (#2336): each is held
     by the guild's class allowance like any class step, and none is counted in
     `owed`, so a family member is never held out of a dungeon by this. Appends
-    to `steps` and `notes`."""
+    to `steps` and `notes`. `danger` is name -> the highest creature level read
+    near that member's giver (None or missing: not read, so a far walk is held,
+    familyclass.danger_hold)."""
     classes, recent, cap, now, far, kept, crafters, masters = reads
     counters, busy, per_guild = limits
     if not familyclass.enabled():
@@ -3883,8 +3889,10 @@ def _plan_family_class_steps(family_members, reads, limits, steps, notes) -> Non
         if step is None:
             continue
         started, allowance = _allowance(step, counters, per_guild)
-        why = _step_refusal(m, busy, started, allowance, step) or job_walk_held(
-            m, step, recent
+        why = (
+            _step_refusal(m, busy, started, allowance, step)
+            or familyclass.danger_hold(m, step.move, (danger or {}).get(m.name))
+            or job_walk_held(m, step, recent)
         )
         if why:
             notes.append(why)
@@ -6572,6 +6580,9 @@ def class_step(
         # A roster family member takes only a class step it can make in the gap
         # between two runs (familyclass.py, #2336).
         held = familyclass.holds(m, move, recent)
+        if not held and move.spot is not None:
+            if across_the_water(m, _class_spot(move)):
+                held = familyclass.CROSSING_HOLD % m.name
         if held:
             return None, "", _join(note, held)
     step, doing, note = _class_move_step(
