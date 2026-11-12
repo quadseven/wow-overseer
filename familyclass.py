@@ -94,12 +94,19 @@ def holds(m, move, recent) -> str:
     """Why this family member is planned no class step now, "" when it may."""
     if move.kind not in GAP_MOVES:
         return NOT_A_GAP_STEP
-    spot = move.spot
-    if spot is None:
+    if move.spot is None:
         # An item-started take: nothing to walk to.
         return ""
+    return _walk_hold(m, move.spot, recent)
+
+
+def _walk_hold(m, spot, recent) -> str:
+    """Why the walk to `spot` is held, "" when it may be made. Ground that is
+    not read is not near ground: the walk is held until the member's place is."""
     if m.map_id is None or m.x is None or m.y is None:
-        return ""
+        return (
+            "%s's place is not read, so its walk to the giver is not bounded" % m.name
+        )
     if int(m.map_id) != int(spot.map_id):
         return "%s's giver is on another map: too far for the gap between runs" % m.name
     yards = _yards(m, spot)
@@ -115,6 +122,11 @@ def holds(m, move, recent) -> str:
             m.name,
             int(yards),
         )
+    return _gap_hold(m, recent)
+
+
+def _gap_hold(m, recent) -> str:
+    """The hold of one class walk per WALK_GAP_MINUTES, "" when none is held."""
     for r in recent or ():
         if (
             r.name == m.name

@@ -3827,11 +3827,44 @@ def plan(
         busy.add(m.name)
         steps.append(step)
         _count_focus(tally, m, step, fields)
-    # THE FAMILY'S CLASS STEPS, after every guild member's (#2336): each is held
-    # by the guild's class allowance like any class step, and none is counted
-    # in `owed`, so a family member is never held out of a dungeon by this.
+    _plan_family_class_steps(
+        family_members,
+        (classes, recent, cap, now, far, kept, crafters, masters),
+        (counters, busy, per_guild),
+        steps,
+        notes,
+    )
+    owed, released = owed_members(
+        members, classes, recent, hunts, now, owing or classquest.Owing(), asks=asks
+    )
+    notes += owed_notes(owed, released)
+    return JobsPlan(
+        steps=tuple(steps),
+        lines=lines,
+        trades=trades,
+        doors=doors,
+        notes=tuple(notes),
+        gear_holds=tuple(gear_holds),
+        focus=tally,
+        helps=tuple(helps),
+        owed=owed,
+        released=released,
+        yields=class_yields(members, classes, recent),
+        ask_yields=tuple(ask_yields),
+    )
+
+
+def _plan_family_class_steps(family_members, reads, limits, steps, notes) -> None:
+    """THE FAMILY'S CLASS STEPS, after every guild member's (#2336): each is held
+    by the guild's class allowance like any class step, and none is counted in
+    `owed`, so a family member is never held out of a dungeon by this. Appends
+    to `steps` and `notes`."""
+    classes, recent, cap, now, far, kept, crafters, masters = reads
+    counters, busy, per_guild = limits
+    if not familyclass.enabled():
+        return
     for m in family_members or ():
-        if m.role != FAMILY or not familyclass.enabled():
+        if m.role != FAMILY:
             continue
         step, _doing, note = class_step(
             m,
@@ -3860,24 +3893,6 @@ def plan(
         started[m.guild] = started.get(m.guild, 0) + 1
         busy.add(m.name)
         steps.append(step)
-    owed, released = owed_members(
-        members, classes, recent, hunts, now, owing or classquest.Owing(), asks=asks
-    )
-    notes += owed_notes(owed, released)
-    return JobsPlan(
-        steps=tuple(steps),
-        lines=lines,
-        trades=trades,
-        doors=doors,
-        notes=tuple(notes),
-        gear_holds=tuple(gear_holds),
-        focus=tally,
-        helps=tuple(helps),
-        owed=owed,
-        released=released,
-        yields=class_yields(members, classes, recent),
-        ask_yields=tuple(ask_yields),
-    )
 
 
 def _offer_for(offers, name):

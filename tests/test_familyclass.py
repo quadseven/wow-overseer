@@ -123,6 +123,11 @@ class TheGapBetweenRunsIsKept(unittest.TestCase):
                 familyclass.NOT_A_GAP_STEP,
             )
 
+    def test_a_walk_from_ground_that_is_not_read_is_held_not_assumed_near(self):
+        move, _blocked = classquest.next_move(book(), member())
+        unread = member(x=None)
+        self.assertIn("not read", familyclass.holds(unread, move, []))
+
     def test_a_take_and_a_hand_in_are_gap_steps(self):
         for kind in (classquest.TAKE, classquest.TURN_IN):
             self.assertEqual(
