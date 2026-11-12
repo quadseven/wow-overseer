@@ -3782,6 +3782,7 @@ def plan(
             _offer_for(loops, m.name),
             _offer_for(bags, m.name),
             campaign,
+            mates=members,
         )
         asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
         helps += asked
@@ -4210,6 +4211,7 @@ def _member_step(
     loop=None,
     bag=None,
     campaign="",
+    mates=(),
 ):
     """A death loop's way out of its zone first (death_loop_first, #1464),
     then a class quest, then a hunter's first pet, then a hearth out of a
@@ -4248,7 +4250,7 @@ def _member_step(
     The death loop's rung buys food first while the loop is listed, in its
     zone or in town after the hearth (death_loop_first)."""
     found = death_loop_first(
-        m, loop, leveling, recent, cap, campaign, supply, kept, classes
+        m, loop, leveling, recent, cap, campaign, supply, kept, classes, mates=mates
     )
     if found is not None:
         return found
@@ -4702,8 +4704,63 @@ def _death_loop_no_escape_line(m, loop, leveling, recent, campaign="", level_not
     )
 
 
+def loop_mates(m, mates) -> list:
+    """The guildmates a death looper could group up with (#2277), best first.
+
+    The mates read is the members the planning pass already holds: a
+    guildjobs.Member carries guild, level, online, alive, map and position,
+    so no new bridge read is needed. A mate counts when it is another member
+    of the looper's guild, online, alive and out of combat, within
+    classask.LEVEL_BAND levels of the looper (the band a class quest ask
+    uses). Same zone first, then closest level, then name, so the offer the
+    pass names is the mate most likely to reach the looper."""
+    out = []
+    for mate in mates or ():
+        if mate.name == m.name or mate.guild != m.guild:
+            continue
+        if not (mate.online and mate.alive) or mate.in_combat:
+            continue
+        if abs(int(mate.level) - int(m.level)) > classask.LEVEL_BAND:
+            continue
+        out.append(mate)
+    out.sort(
+        key=lambda mate: (
+            0 if mate.zone_id is not None and mate.zone_id == m.zone_id else 1,
+            abs(int(mate.level) - int(m.level)),
+            mate.name,
+        )
+    )
+    return out
+
+
+def _death_loop_help_line(m, loop, mates) -> str:
+    """The help offer beside the escape's logged reason (#2277): the group-up
+    with the best mate in reach, or the one reason no mate is in reach."""
+    found = loop_mates(m, mates)
+    if not found:
+        return "%s gets no death-loop help from %s: no guildmate in reach" % (
+            m.name,
+            loop.place,
+        )
+    mate = found[0]
+    return "%s is offered a group-up with %s for the way out of %s" % (
+        m.name,
+        mate.name,
+        loop.place,
+    )
+
+
 def death_loop_first(
-    m, loop, leveling, recent, cap, campaign="", supply=None, kept=None, book=None
+    m,
+    loop,
+    leveling,
+    recent,
+    cap,
+    campaign="",
+    supply=None,
+    kept=None,
+    book=None,
+    mates=(),
 ):
     """(the member's step as _member_step returns it), or None: the way out of
     the zone a member keeps dying in (deathloop.Loop), ahead of every quest.
@@ -4777,7 +4834,8 @@ def death_loop_first(
     if food is not None:
         return food[0], food[1], line, ""
     held = "%s plans no quest in %s: %s" % (m.name, loop.place, loop.reason())
-    return None, held, _join(note, held, line), ""
+    help_line = _death_loop_help_line(m, loop, mates)
+    return None, held, _join(note, held, line, help_line), ""
 
 
 def inn_step(m, world, recent, cap):
