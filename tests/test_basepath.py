@@ -200,6 +200,27 @@ class ServedPageTest(unittest.TestCase):
             self.assertNotIn(basepath.PLACEHOLDER, text)
             self.assertIn('<meta name="overseer-base" content="%s">' % prefix, text)
 
+    def test_under_the_secret_mount_every_page_url_stays_under_it(self):
+        # AI-REVIEW 2026-11-12 [grug-elder/code-review] 2326-E1 (PR #2326):
+        # the mount built from the id is exercised on the served page itself,
+        # not only as a token in a byte string. A root-anchored URL here would
+        # resolve against the origin and read another realm.
+        prefix = basepath.mount_from_environment({"OVERSEER_SITE_PATH_ID": GOOD_ID})
+        code, _ctype, body = self.serve(prefix)
+        self.assertEqual(code, 200)
+        text = body.decode("utf-8")
+        self.assertNotIn(basepath.PLACEHOLDER, text)
+        self.assertIn('<meta name="overseer-base" content="%s">' % prefix, text)
+        urls = re.findall(r'(?:href|src)="([^"]+)"', text)
+        same_origin = [
+            u for u in urls if not urlsplit(u).scheme and not u.startswith("//")
+        ]
+        self.assertTrue(same_origin, "the page links nothing of its own")
+        page_url = "https://example.invalid" + prefix + "/"
+        for url in same_origin:
+            resolved = urlsplit(urljoin(page_url, url)).path
+            self.assertTrue(resolved.startswith(prefix + "/"), url)
+
     def test_the_home_screen_app_opens_its_own_mount(self):
         # Added to the home screen, the app opens at the manifest's start_url.
         # Under a prefix that has to be the prefix's page, or the icon on the
