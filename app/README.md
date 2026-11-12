@@ -15,6 +15,7 @@ empty list means no zone met the routing threshold on the sampled member's map.
 | `app.css` | Base styles, components (buttons, cards, tags, tables), the shell, and the shared primitives. |
 | `main.js` | Boot: theme, shell, router, polling, search, tooltip, gestures, nav badges. |
 | `router.js` | Hash routes, legacy redirects, and route-to-view resolution. Pure functions, tested under node. |
+| `boot.js` | Two start-up decisions, pure and tested under node: `earlyRoute` (which first route can start its view and reads before the realm read answers) and `afterFirstDraw` (the nav badges' reads start once the first view has data, never with the page). |
 | `api.js` | Reads (`load`, `peek`, `watch`), the mount helper `u()`, the data age (`health`), and `post()`, the operator view's one write. |
 | `ui.js` | The `html` builder (escapes every value) and the primitives: `status`, `member`, `item`, `state`, `pendingRead`, `pageHead`, `sectionHead`, `tabs`, `kpi`, `sparkline`, `histogram`, `notMeasured`, `value`, `ago`, `gold`, and `readState` (a read is loading, failed, refused or ready). |
 | `models/time.js` | The one clock: every time the server sends, read as unix seconds (`toSeconds`, `since`, `clock`), and the browser's milliseconds turned into seconds (`fromClock`). |

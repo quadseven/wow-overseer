@@ -15,6 +15,7 @@ import * as tooltip from "./tooltip.js";
 import * as gestures from "./gestures.js";
 import * as update from "./update.js";
 import { legacy, parse, resolve } from "./router.js";
+import { earlyRoute, afterFirstDraw } from "./boot.js";
 import { captureAnchor, resolveAnchor, scrollShift, restoreTarget } from "./scrollanchor.js";
 import { makeHold, makeGate, endOnce } from "./redraw.js";
 import { NARROW, onCross } from "./breakpoint.js";
@@ -188,6 +189,7 @@ function draw(keepPlace) {
   root.setAttribute("data-view", current.view);
   shell.setThumb(root, module.thumb ? module.thumb(ctx) : null);
   drawShell();
+  if (h.state !== "loading") badgesStart.drawn();
 }
 
 // ---- redraws that wait for the reader's finger ---------------------------------
@@ -319,8 +321,13 @@ function refreshBadges() {
     });
   });
 }
-refreshBadges();
-window.setInterval(refreshBadges, 60000);
+// They start once the first view has its data (or after a fallback wait),
+// not with the page: about 26 KB of reads that nothing on screen needs yet
+// would otherwise share the line with the view's own (boot.js).
+const badgesStart = afterFirstDraw(() => {
+  refreshBadges();
+  window.setInterval(refreshBadges, 60000);
+}, { setTimer: (fn, ms) => window.setTimeout(fn, ms), clearTimer: (id) => window.clearTimeout(id), fallbackMs: 4000 });
 
 // ---- easing in -------------------------------------------------------------------
 // A new page, and a page's first data replacing its skeletons, ease in
@@ -351,4 +358,20 @@ api.onChange((path) => {
     if (learnRealm(d) || (d && d.deploy)) drawShell();
   }
 });
-(learnRealm(api.peek("/api/realm").data) ? Promise.resolve() : api.load("/api/realm")).then(() => route());
+const realmKnown = learnRealm(api.peek("/api/realm").data);
+
+// With no saved copy of the realm read, the first route used to wait for it.
+// A route that does not need it starts its view and its reads now, while the
+// realm read is on the wire (boot.js); route() then finds them loaded or in
+// flight, and asks for nothing twice.
+function startEarly() {
+  const e = earlyRoute(location.hash, { learned: realmKnown, last: lastPage() });
+  if (!e) return;
+  loadView(e.view).then((module) => {
+    const ctx = { view: e.view, section: e.section, params: e.params, query: e.query, hash: e.hash, get: api.peek, isPhone: isPhone(), previousVisit: previousVisit() };
+    api.loadAll(module.reads(ctx) || []);
+  }).catch(() => { /* route() draws the error card itself */ });
+}
+startEarly();
+
+(realmKnown ? Promise.resolve() : api.load("/api/realm")).then(() => route());
