@@ -78,6 +78,7 @@ def _settle(wait_seconds):
         ),
         "_fetch_town": lambda name: types.SimpleNamespace(vendor=True),
         "_outstanding_sales": lambda names: 0,
+        "_oldest_outstanding_sale_seconds": lambda names: None,
         "_fetch_free_slots": lambda names: {n: 0 for n in names},
         "_current_travel_npc": lambda name: "vendor",
         "_fetch_family_intents": lambda: {

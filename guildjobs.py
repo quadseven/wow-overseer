@@ -3782,6 +3782,8 @@ def plan(
             _offer_for(loops, m.name),
             _offer_for(bags, m.name),
             campaign,
+            mates=members,
+            looping=tuple((loops or {}).keys()),
         )
         asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
         helps += asked
@@ -4210,6 +4212,8 @@ def _member_step(
     loop=None,
     bag=None,
     campaign="",
+    mates=(),
+    looping=(),
 ):
     """A death loop's way out of its zone first (death_loop_first, #1464),
     then a class quest, then a hunter's first pet, then a hearth out of a
@@ -4248,7 +4252,17 @@ def _member_step(
     The death loop's rung buys food first while the loop is listed, in its
     zone or in town after the hearth (death_loop_first)."""
     found = death_loop_first(
-        m, loop, leveling, recent, cap, campaign, supply, kept, classes
+        m,
+        loop,
+        leveling,
+        recent,
+        cap,
+        campaign,
+        supply,
+        kept,
+        classes,
+        mates=mates,
+        looping=looping,
     )
     if found is not None:
         return found
@@ -4659,24 +4673,151 @@ def home_in_loop_zone(m, loop) -> bool:
     return home is not None and int(home) == int(loop.zone)
 
 
+def _death_loop_reason(m, loop, leveling, recent, campaign="", level_note=""):
+    """Why the death loop's escape issued no step for `m`, as one phrase.
+
+    Every branch that can return nothing on the escape path is named, in
+    the order a reader checks them: the member's own state first (in
+    combat, offline, dead, out of the open world), then the holds that
+    keep a roster or campaign member on the family route, then the
+    hearth's own blocks (its cooldown, a hearthstone bound in the loop's
+    zone), then the level walk's cooldown, and last the hub choice
+    itself: no reachable hub (#2152)."""
+    if m.in_combat:
+        return "in combat"
+    if not m.online:
+        return "not online"
+    if not m.alive:
+        return "dead"
+    if not _in_the_open(m):
+        return "not in the open world"
+    if leveling is not None and m.name in leveling.roster:
+        if campaign:
+            return "campaign member"
+        if not _in_loop_zone(m, loop):
+            return "roster member"
+    if "hub fits" in level_note or "cannot be read off" in level_note:
+        return "no reachable hub"
+    if _cooling(m, "hearth", recent):
+        return "hearth cooling"
+    if home_in_loop_zone(m, loop):
+        return "hearthstone bound in the loop zone"
+    if _cooling(m, guildlevel.ACTION, recent):
+        return "level walk cooling"
+    return "no reachable hub"
+
+
+def _death_loop_no_escape_line(m, loop, leveling, recent, campaign="", level_note=""):
+    """The one line a pass logs when the escape issues nothing (#2152)."""
+    return "%s gets no death-loop escape from %s: %s" % (
+        m.name,
+        loop.place,
+        _death_loop_reason(m, loop, leveling, recent, campaign, level_note),
+    )
+
+
+def loop_mates(m, mates, looping=()) -> list:
+    """The guildmates a death looper could group up with (#2277), best first.
+
+    The mates read is the members the planning pass already holds: a
+    guildjobs.Member carries guild, level, online, alive, map and position,
+    so no new bridge read is needed. A mate counts when it is another member
+    of the looper's guild, online, alive and out of combat, within
+    classask.LEVEL_BAND levels of the looper (the band a class quest ask
+    uses), and in reach in the same sense a class quest ask uses: on the
+    looper's map, at a known position, within classask.HELPER_REACH_YARDS
+    of the looper. A mate on another map, too far away, or at an unknown
+    position is not in reach, however well it fits otherwise. A mate whose
+    name is in `looping` (the pass's death-loop names) never counts: two
+    members dying to the same content cannot be each other's way out. The
+    band is two-sided on purpose: a mate a few levels below still helps,
+    because the offer is a group-up (a second health bar, shared aggro and
+    its damage), not a solo carry. Same zone
+    first, then closest level, then name, so the offer the pass names is
+    the mate most likely to reach the looper."""
+    looping = {str(n) for n in looping or ()}
+    out = []
+    for mate in mates or ():
+        if mate.name == m.name or mate.guild != m.guild:
+            continue
+        if mate.name in looping:
+            continue
+        if not (mate.online and mate.alive) or mate.in_combat:
+            continue
+        if abs(int(mate.level) - int(m.level)) > classask.LEVEL_BAND:
+            continue
+        # AI-REVIEW 2026-11-12 [gpt-6.1-sol/native correctness] R1 (PR #2296):
+        # the reach check below is what keeps a helper on another map, beyond
+        # reach, or at an unknown position (which the distance helper reads
+        # as unbounded) from being named in reach; such a helper is rejected.
+        if mate.map_id is None or m.map_id is None or int(mate.map_id) != int(m.map_id):
+            continue
+        if classask._distance(m, mate) > classask.HELPER_REACH_YARDS:
+            continue
+        out.append(mate)
+    out.sort(
+        key=lambda mate: (
+            0 if mate.zone_id is not None and mate.zone_id == m.zone_id else 1,
+            abs(int(mate.level) - int(m.level)),
+            mate.name,
+        )
+    )
+    return out
+
+
+def _death_loop_help_line(m, loop, mates, looping=()) -> str:
+    """The help offer beside the escape's logged reason (#2277): the group-up
+    with the best mate in reach, or the one reason no mate is in reach."""
+    found = loop_mates(m, mates, looping)
+    if not found:
+        return "%s gets no death-loop help from %s: no guildmate in reach" % (
+            m.name,
+            loop.place,
+        )
+    mate = found[0]
+    return "%s is offered a group-up with %s for the way out of %s" % (
+        m.name,
+        mate.name,
+        loop.place,
+    )
+
+
 def death_loop_first(
-    m, loop, leveling, recent, cap, campaign="", supply=None, kept=None, book=None
+    m,
+    loop,
+    leveling,
+    recent,
+    cap,
+    campaign="",
+    supply=None,
+    kept=None,
+    book=None,
+    mates=(),
+    looping=(),
 ):
     """(the member's step as _member_step returns it), or None: the way out of
     the zone a member keeps dying in (deathloop.Loop), ahead of every quest.
 
-    In the loop's zone: the hearth to its town first (death_loop_hearth), unless
-    the hearthstone is bound in that zone (home_in_loop_zone, #1882), then
-    the level walk to a hub of another zone (level_step), and while neither can
-    start, no step at all, so no quest or grind of that zone is planned for it.
+    In the loop's zone: the escape first on every pass (#2152): the hearth
+    to its town (death_loop_hearth), unless the hearthstone is bound in
+    that zone (home_in_loop_zone, #1882), then the level walk to a hub of
+    another zone (level_step), ahead of the food, quest, trade and gear
+    rungs. While neither can start, no step at all from those rungs, so no
+    quest or grind of that zone is planned for it, and the pass logs one
+    line naming why the escape issued nothing (_death_loop_no_escape_line).
     Out of the zone, None: the pass plans as usual, and its level walk never
-    chooses the loop's zone (level_step). The loop clears by itself
-    (deathloop.loops), and the planning with it.
+    chooses the loop's zone (level_step, with the loop as its avoid), so no
+    rung sends the member back into that zone while the loop is listed,
+    which is until its quiet window has passed (deathloop.loops). The loop
+    clears by itself (deathloop.loops), and the planning with it.
 
-    FOOD FIRST, IN THE ZONE OR OUT OF IT (test_death_loop_food_first). While
-    the loop is listed, a member short of food or drink with a vendor in
-    reach (`supply`, the bridge's read) buys some before the hearth, and in
-    town after it before every other rung: a member with none never rests.
+    FOOD AFTER THE ESCAPE, IN THE ZONE; FOOD FIRST OUT OF IT (#2152, was
+    food first everywhere, test_death_loop_food_first). While the loop is
+    listed, a member short of food or drink with a vendor in reach
+    (`supply`, the bridge's read) still buys some: in the loop's zone only
+    once the escape itself has issued nothing in that pass (the reason is
+    logged on that step's note), and in town after the hearth before every
+    other rung: a member with none never rests.
 
     A HELD FOOD WALK GIVES WAY (#1911). When the guild jobs walk wall
     (job_walk_held) would refuse the supply step, the rungs go on without it:
@@ -4686,13 +4827,30 @@ def death_loop_first(
         return None
     step, doing, _why = _supply_first(m, supply, recent, cap, kept, book)
     held = job_walk_held(m, step, recent) if step is not None else ""
-    if step is not None and not held:
-        return step, doing, "", ""
+    food = (step, doing) if step is not None and not held else None
     if not _in_loop_zone(m, loop):
+        if food is not None:
+            return food[0], food[1], "", ""
         step = death_loop_resume(m, loop, recent, leveling, cap)
-        if step is None:
-            return None
-        return step, step.said, held, ""
+        if step is not None:
+            return step, step.said, held, ""
+        # A member that hearthed out within the resume window is mid-escape:
+        # when the walk on issues nothing, this pass plans no other rung
+        # for it (one could send it back into the loop's zone, #2152) and
+        # logs the one reason line instead.
+        hearthed = any(
+            r.name == m.name
+            and r.action == "hearth"
+            and r.status == "applied"
+            and int(r.age_minutes) <= RESUME_MINUTES
+            for r in recent or ()
+        )
+        if hearthed:
+            reason = _death_loop_reason(m, loop, leveling, recent, campaign)
+            if reason in ("roster member", "campaign member"):
+                line = _death_loop_no_escape_line(m, loop, leveling, recent, campaign)
+                return None, line, line, ""
+        return None
     step = death_loop_hearth(m, loop, recent, leveling, cap)
     if step is not None:
         return step, step.said, held, ""
@@ -4705,8 +4863,12 @@ def death_loop_first(
         )
     if step is not None:
         return step, doing, note, ""
+    line = _death_loop_no_escape_line(m, loop, leveling, recent, campaign, note)
+    if food is not None:
+        return food[0], food[1], line, ""
     held = "%s plans no quest in %s: %s" % (m.name, loop.place, loop.reason())
-    return None, held, _join(note, held), ""
+    help_line = _death_loop_help_line(m, loop, mates, looping)
+    return None, held, _join(note, held, line, help_line), ""
 
 
 def inn_step(m, world, recent, cap):
@@ -6372,6 +6534,13 @@ def _class_move_step(
         return step, doing, _join(note, why)
     if move.kind == classquest.ABANDON:
         return _abandon_step(m, move, recent, note)
+    if move.kind == classquest.TAKE and move.spot is None:
+        # A take with no giver to walk to is held like every other take: a dead
+        # member, the walk backoff and the class cooldown (#2325).
+        held = _class_held(m, move, None, cap, recent, hunts, now, far, book)
+        if held is not None:
+            return None, move.said, _join(note, held)
+        return _item_take_step(m, move, note)
     spot = _class_spot(move)
     boat = class_boat_step(m, move, spot, recent, hunts, now)
     if boat is not None:
@@ -6523,6 +6692,9 @@ def _class_held(m, move, spot, cap, recent, hunts, now, far, book=None):
     acted = [r for r in recent or () if not (r.entry in rest and r.name == m.name)]
     if _cooling(m, classquest.ACTION, acted) and not follows_a_take(m, acted):
         return ""
+    if spot is None:
+        # No walk to make (an item-started take), so no far walk slot to hold.
+        return None
     return _slot_note(m, move, spot, cap, hunts, now, far)
 
 
@@ -6747,6 +6919,29 @@ def _abandon_step(m, move, recent, note):
             guildcorps.Row(
                 "quest",
                 "abandon quest:%d" % int(move.quest),
+                "",
+                source_for(classquest.ACTION, m.name),
+            ),
+        ),
+        goal=m.name,
+    )
+    return step, move.said, note
+
+
+def _item_take_step(m, move, note):
+    """The one quest row that takes a quest an item starts (wow-overseer#2297):
+    the member carries the item, so there is no giver to walk to. The module
+    takes it when the member carries the item whose StartQuest it is
+    (mod-overseer take quest: for an item-started quest)."""
+    step = guildcorps.Step(
+        m.name,
+        classquest.ACTION,
+        int(move.quest),
+        move.said,
+        rows=(
+            guildcorps.Row(
+                "quest",
+                "take quest:%d" % int(move.quest),
                 "",
                 source_for(classquest.ACTION, m.name),
             ),

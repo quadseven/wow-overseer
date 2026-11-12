@@ -40,13 +40,13 @@ COPY core.py bridge.py voice.py transform.py world_data.py \
      achievements.py recap.py agenda.py eye.py decree.py priorities.py meter.py zone_danger.py \
      dungeonplan.py dungeonpath.py raidgoals.py raidcraft.py raidprep.py raidlineup.py mcencounters.py raidgear.py raidfloor.py raidroles.py raidteams.py teamsync.py attunestep.py raidready.py roadtoragnaros.py raidrun.py spirerun.py raidsupply.py readcache.py readtimeout.py \
      dungeonprogression.py dungeonquests.py \
-     guildcraft.py guildcover.py tradespec.py guildbank.py guildshare.py guildroute.py orders.py guildpost.py guildwork.py workorders.py workorderstore.py guildfund.py classtrain.py classcasts.py racespells.py taughtspells.py purse.py vendorsale.py bankbags.py natural.py guildcorps.py guildjobs.py guildlevel.py classquest.py steps.py classask.py classparty.py classuse.py classhunt.py guildrun.py guildfacts.py guildpug.py familyseat.py seatmeter.py guildsocial.py crafters.py recruit.py interview.py \
+     guildcraft.py guildcover.py tradespec.py tradeturn.py guildbank.py guildshare.py guildroute.py orders.py guildpost.py guildwork.py workorders.py workorderstore.py guildfund.py classtrain.py classcasts.py racespells.py taughtspells.py purse.py vendorsale.py bankbags.py natural.py guildcorps.py guildjobs.py guildlevel.py classquest.py steps.py classask.py classparty.py classuse.py classhunt.py guildrun.py guildfacts.py guildpug.py familyseat.py seatmeter.py guildsocial.py crafters.py recruit.py interview.py clipledger.py clipcutter.py clipserve.py eventclips.py \
      bag_pressure.py bag_upgrade.py bag_economy.py bag_market.py guildbags.py disposition.py bagfate.py tidy.py \
      lockbox.py clearance.py \
-     item_plan.py itemplan.py itemplan_shadow.py itemplan_data.py itemplan_reads.py \
+     item_plan.py itemplan.py itemplan_shadow.py itemplan_data.py itemplan_reads.py itemplan_vendor.py \
      jev.py jev_items.py jev_choices.py jev_recovery.py jev_activity.py jev_keep.py jevview.py \
      lootcouncil.py statweights.py \
-     bank.py bankpolicy.py bankforecast.py housedemand.py \
+     bank.py bankpolicy.py setswap.py bankforecast.py housedemand.py \
      mailrun.py mountbuy.py holdings.py hunterpet.py \
      realm.py realmread.py basepath.py appbuild.py deployinfo.py watchwall.py nowstatus.py realmnav.py classic.py \
      needs.py partystatus.py partyvoice.py lootcard.py lootstory.py towntrip.py \

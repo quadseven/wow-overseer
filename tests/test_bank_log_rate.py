@@ -215,6 +215,7 @@ class TwoHoursOfTheMeasuredTrafficStayUnderTheBar(unittest.TestCase):
         ns["bankbags"] = types.SimpleNamespace(
             family_floor=lambda facts: 0,
             step=lambda f, floor: (None, "%s has 1 empty bank bag slot(s)" % f.name),
+            visit_steps=lambda f, floor: [],
         )
         self.ns = _load(
             LOGGERS + ["_say_bank_forecast", "_bank_policy_read", "_bank_bag_slots"], ns

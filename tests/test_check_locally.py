@@ -59,6 +59,13 @@ def printed():
 
 
 class CheckLocallyTest(unittest.TestCase):
+    def test_lane_validation_uses_the_ci_pinned_setup(self):
+        # The script already proves its commands match CI. The lane must
+        # enter through it too, rather than rely on ambient Python packages.
+        contract = (ROOT / ".loom" / "validation.conf").read_text()
+        checks = [line for line in contract.splitlines() if line.startswith("check:")]
+        self.assertEqual(["check: bash scripts/check-locally.sh all"], checks)
+
     def test_script_exists(self):
         self.assertTrue(SCRIPT.is_file(), f"missing {SCRIPT.relative_to(ROOT)}")
 

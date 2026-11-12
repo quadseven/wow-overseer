@@ -68,6 +68,9 @@ COLLATIONS = {
     "overseer_chat": "utf8mb4_0900_ai_ci",
     "overseer_chat_watch": "utf8mb4_0900_ai_ci",
     "overseer_stream": "utf8mb4_0900_ai_ci",
+    # Created by map_server._ensure_clip_store with the same DEFAULT CHARSET
+    # utf8mb4 as overseer_stream above, so the server default applies.
+    "overseer_clip": "utf8mb4_0900_ai_ci",
     "overseer_watch": "utf8mb4_0900_ai_ci",
     "overseer_now_step": "utf8mb4_0900_ai_ci",
     "overseer_dungeon_run": "utf8mb4_0900_ai_ci",
@@ -108,6 +111,8 @@ COLLATIONS = {
     "overseer_guild_pug_call": "utf8mb4_0900_ai_ci",
     # Bridge-owned (mod-overseer#767), named in dungeonpace.CREATE_SQL.
     "overseer_dungeon_pace": "utf8mb4_0900_ai_ci",
+    # Bridge-owned (#2262), named in campaignqueue.TURN_CREATE_SQL.
+    "overseer_dungeon_queue_turn": "utf8mb4_0900_ai_ci",
     # Bridge-owned (mod-overseer#152), named in runreport.CREATE_SQL the same way.
     "overseer_dungeon_run_report": "utf8mb4_0900_ai_ci",
     # A view (mod-overseer#152 reads it): information_schema.TABLES has no
@@ -253,6 +258,17 @@ STRING_COLUMNS = {
     "overseer_build": frozenset({"name", "source", "value"}),
     "overseer_snapshot": frozenset({"name"}),
     "overseer_stream": frozenset({"character", "delivery", "detail", "mode", "state"}),
+    "overseer_clip": frozenset(
+        {
+            "character",
+            "detail",
+            "event_key",
+            "file_name",
+            "kind",
+            "state",
+            "stream_path",
+        }
+    ),
     "overseer_watch": frozenset({"note", "set_by", "spec", "target"}),
     "overseer_now_step": frozenset({"doing", "kind", "subject", "waiting"}),
     "overseer_thought": frozenset({"character_name", "source", "text"}),
@@ -337,6 +353,8 @@ STRING_COLUMNS = {
     # VARCHAR and ENUM column.
     # From its own DDL (questledger.TABLE_SQL): every VARCHAR column.
     "overseer_quest_ledger": frozenset({"character_name", "state", "reason"}),
+    # From its own DDL (campaignqueue.TURN_CREATE_SQL): every VARCHAR column.
+    "overseer_dungeon_queue_turn": frozenset({"family"}),
     # From its own DDL (dungeonpace.CREATE_SQL): every VARCHAR column.
     "overseer_dungeon_pace": frozenset(
         {

@@ -5,6 +5,7 @@ out, bytes over HTTP. No logic here that tests would want to reach.
 """
 from __future__ import annotations
 
+import contextlib
 import functools
 import gzip
 import hashlib
@@ -18,9 +19,9 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import pymysql
 
@@ -40,6 +41,9 @@ import basepath
 import campaignplan
 import campaignqueue
 import chat
+import clipcutter
+import clipledger
+import clipserve
 import council
 import crossing
 import decree
@@ -2059,8 +2063,13 @@ def _fetch_loot() -> dict:
                 tuple(entries),
             )
             items = {int(r["entry"]): r for r in item_rows}
+        keys = lootstory.clip_keys(rows)
+        clip_rows = (rd.rows(
+            _LOOT_CLIPS_SQL.format(holes=", ".join(["%s"] * len(keys))),  # noqa: S608 - placeholders from a COUNT, values bound
+            tuple(keys), what="the loot clips") if keys else [])
     return {"rows": rows, "items": items, "icons": ITEMS.icons, "book": ITEMS,
-            "council_rows": council_rows}
+            "council_rows": council_rows,
+            "clips": {r["event_key"]: r for r in clip_rows}}
 
 
 # THE LOOT COUNCIL'S ROWS (#194), newest first, for the Chronicle and Bags.
@@ -3782,8 +3791,30 @@ def _fetch_run_timeline() -> dict:
                 what="overseer_death")
         bosses = _run_bosses(rd) if deaths else frozenset()
         reports = _run_reports(rd, rows, len(families) * runtimeline.RUNS_PER_FAMILY)
+        clips = (rd.rows(_RUN_CLIPS_SQL, (runtimeline.WINDOW_HOURS,), what="run clips")
+                 if rows else [])
     return {"rows": rows, "families": families, "present": present,
-            "deaths": deaths, "bosses": bosses, "reports": reports}
+            "deaths": deaths, "bosses": bosses, "reports": reports, "clips": clips}
+
+
+# The ledger's clear, boss kill and loot rows over the timeline's hours, aged by
+# the database the same way the run rows are, so a run and its clips are
+# matched on one clock. Newest first, so the cap sheds the oldest rows.
+_RUN_CLIPS_SQL = (
+    "SELECT event_key, kind, `character`, state, file_name, stream_path, detail,"
+    " TIMESTAMPDIFF(SECOND, event_at, NOW()) AS age_seconds FROM overseer_clip"
+    " WHERE kind IN ('clear', 'boss_kill', 'loot')"
+    " AND state IN ('ready', 'no_view', 'failed')"
+    " AND event_at > NOW() - INTERVAL %s HOUR"
+    " ORDER BY event_at DESC LIMIT 2000"
+)
+
+# The ledger rows of these loot events, for the story links. Only the two
+# states a story says something about.
+_LOOT_CLIPS_SQL = (
+    "SELECT event_key, kind, state, file_name FROM overseer_clip"
+    " WHERE event_key IN ({holes}) AND state IN ('ready', 'no_view')"
+)
 
 
 def _run_reports(rd, rows: list, limit: int) -> dict:
@@ -4294,14 +4325,15 @@ def sweep_quiet_streams(clock=time.time) -> list:
     return expired
 
 
-def _sweep_until(stop: threading.Event, every: float, sweep) -> None:
+def _sweep_until(stop: threading.Event, every: float, sweep,
+                 failed: str = "stream sweep failed") -> None:
     while not stop.wait(every):
         try:
             sweep()
         except Exception:
             # Never fatal: the next tick tries again, and a database that is
             # down is already a 503 everywhere else.
-            log.exception("stream sweep failed")
+            log.exception(failed)
 
 
 def start_stream_sweeper(every: float = STREAM_SWEEP_SECONDS, sweep=None,
@@ -4312,6 +4344,359 @@ def start_stream_sweeper(every: float = STREAM_SWEEP_SECONDS, sweep=None,
         target=_sweep_until,
         args=(stop or threading.Event(), every, sweep or sweep_quiet_streams),
         name="stream-sweep", daemon=True)
+    thread.start()
+    return thread
+
+
+# --- the clip ledger (clipledger.py) ------------------------------------
+#
+# WHY THIS LOOP HOSTS THE SCAN. It already runs on a timer, already holds the
+# database, already creates the sibling table the stream agent polls
+# (overseer_stream), and the reads the scan needs (the Chronicle's events and
+# runs, the guild-joined loot rows, the families and their guilds) all live in
+# this process. The bridge tick has none of those helpers.
+CLIP_SCAN_SECONDS = 60
+
+# The directory the stream agent's saved clips live in. Uploads write it and
+# expiry deletes from it; it is not mounted read-only. Unset or missing means
+# no clips: the shelf is empty and nothing errors.
+CLIPS_DIR = os.environ.get("CLIPS_DIR", "")
+CLIPS_PREFIX = "/clips/"
+
+# The ONLY way a request's name reaches a file: as a bound value here. The
+# path that is opened is built from the file_name this row gives back.
+_CLIP_FILE_SQL = (
+    "SELECT file_name FROM overseer_clip"
+    " WHERE file_name = %s AND state = 'ready' LIMIT 1"
+)
+
+# Loot is held until its equip is seen or the wait runs out, and a clip can be
+# cut only inside the agent's buffer, so rows older than this are never needed.
+_CLIP_LOOT_MINUTES = 20
+
+_CLIP_LOOT_SQL = (
+    "SELECT e.id, e.character_name, e.kind, e.subject_id, e.subject_name, "
+    "e.subject_quality, e.item_guid, e.map, e.first_seen, g.name AS guild "
+    "FROM overseer_event e "
+    "LEFT JOIN characters c ON c.name = e.character_name "
+    "LEFT JOIN guild_member gm ON gm.guid = c.guid "
+    "LEFT JOIN guild g ON g.guildid = gm.guildid "
+    "WHERE e.kind IN ('item_loot', 'item_equip') "
+    "AND e.first_seen >= NOW() - INTERVAL %s MINUTE "
+    "ORDER BY e.first_seen ASC LIMIT 2000"
+)
+
+# THE NARROW CANDIDATE READS. What might earn a clip right now is read from the
+# recent window only, never from the Chronicle's history: that fetch keeps the
+# OLDEST 20000 rows, so once history grows it would miss new events. History is
+# read afterwards, and only to decide whether a candidate is a first.
+_CLIP_EVENT_SQL = (
+    "SELECT id, character_name, kind, subject_id, subject_name, level, map, "
+    "first_seen FROM overseer_event "
+    "WHERE (kind = 'boss_kill' OR (kind = 'level_up' AND level = 60)) "
+    "AND character_name IN ({holes}) "
+    "AND first_seen >= NOW() - INTERVAL %s MINUTE "
+    "ORDER BY first_seen ASC LIMIT 500"
+)
+_CLIP_RUN_SQL = (
+    "SELECT id, leader_name, map_id, state, started_at, "
+    "last_progress_at, ended_at, ended_reason "
+    "FROM overseer_dungeon_run WHERE leader_name IN ({holes}) "
+    "AND ended_at >= NOW() - INTERVAL %s MINUTE "
+    "ORDER BY ended_at DESC LIMIT 50"
+)
+# Runs still in progress: an event inside one takes its view from that run.
+_CLIP_OPEN_RUN_SQL = (
+    "SELECT id, leader_name, map_id, state, started_at, "
+    "last_progress_at, ended_at, ended_reason "
+    "FROM overseer_dungeon_run WHERE leader_name IN ({holes}) "
+    "AND ended_at IS NULL ORDER BY started_at DESC LIMIT 50"
+)
+# Ledger keys worth checking for a repeat: an event is skipped once its window
+# starts past the agent's buffer, so older keys cannot matter (INSERT IGNORE
+# still guards the rest).
+_CLIP_KEY_MINUTES = 30
+
+# When the last scan that completed began, on this process's clock. None until
+# one completes, so the first scan after a start looks back the full day. It is
+# kept in memory only: a restart forgets it, which is the safe direction.
+_clip_last_scan = None
+
+
+def _clip_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _cleared_run_cards(f: dict) -> list:
+    """The Chronicle's assembled runs that cleared their dungeon, as the
+    ledger reads them: map, dungeon, leader and when."""
+    events = [e for e in f["event_rows"] if e["kind"] != "death"]
+    first_worn = recap.first_equips(f["event_rows"])
+    cards = []
+    for run in f["run_rows"]:
+        card = achievements.assemble_run(
+            run, events, f["death_rows"], f["items"], f["icons"],
+            f["boss_drops"], f["roster"], f["now"], first_worn, f["book"])
+        if card["cleared"] and card["at"]:
+            cards.append({
+                "map_id": card["map_id"], "dungeon": card["dungeon"],
+                "leader": card["leader"], "members": card["members"],
+                "at": datetime.strptime(card["at"], "%Y-%m-%dT%H:%M:%S"),
+            })
+    return cards
+
+
+def _clip_path(name: str) -> str:
+    """The family broadcast path a clip is cut from, or "" with no view."""
+    return family.broadcast_path(name) if family.is_streamed(name) else ""
+
+
+def _clip_who() -> tuple:
+    """(roster names across the families, family guild names, the families)."""
+    families = FAMILIES.families()
+    roster = [n for names in families.values() for n in names]
+    return roster, [g["name"] for g in FAMILIES.guilds()], families
+
+
+def _read_clip_candidates(roster: list, minutes: int = _CLIP_LOOT_MINUTES) -> dict:
+    """Recent loot and equips, boss kills, level 60s and ended runs: one narrow
+    read each, bounded to the recent window."""
+    holes = ", ".join(["%s"] * len(roster))
+    names = tuple(roster)
+    with realmread.Session(_connect) as rd:
+        loot_rows = rd.rows(_CLIP_LOOT_SQL, (minutes,), what="clip loot")
+        event_rows = rd.rows(
+            _CLIP_EVENT_SQL.format(holes=holes),  # noqa: S608 - placeholders from a COUNT, values bound
+            (*names, minutes),
+            what="clip events",
+        )
+        try:
+            run_rows = rd.must(
+                _CLIP_RUN_SQL.format(holes=holes),  # noqa: S608 - placeholders from a COUNT, values bound
+                (*names, minutes),
+            )
+            open_run_rows = rd.must(
+                _CLIP_OPEN_RUN_SQL.format(holes=holes),  # noqa: S608 - placeholders from a COUNT, values bound
+                names,
+            )
+        except realmread.Gap as gap:
+            if gap.code != realmread.MISSING_TABLE:
+                raise
+            run_rows, open_run_rows = [], []
+        now = rd.db_now()
+    return {
+        "loot_rows": loot_rows,
+        "event_rows": event_rows,
+        "run_rows": run_rows,
+        "open_run_rows": open_run_rows,
+        "now": now,
+    }
+
+
+def _read_clip_history(roster: list) -> dict:
+    """The Chronicle's history, for deciding whether a candidate is a first."""
+    f = _fetch_achievements(roster)
+    return {"event_rows": f["event_rows"], "cleared_runs": _cleared_run_cards(f)}
+
+
+# The rows that decide a boss first: boss kills only, for the roster and the
+# bosses of this scan's candidates, oldest first. A read that fills the cap
+# decides nothing (see scan_clips).
+_CLIP_BOSS_CAP = 5000
+_CLIP_BOSS_SQL = (
+    "SELECT character_name, kind, subject_id, subject_name, map, first_seen "
+    "FROM overseer_event WHERE kind = 'boss_kill' "
+    "AND character_name IN ({names}) AND subject_id IN ({subjects}) "
+    "ORDER BY first_seen ASC LIMIT %s"
+)
+
+
+def _read_boss_kills(roster: list, subjects: list) -> list:
+    """Every boss kill of `roster` on `subjects`, oldest first, up to the cap."""
+    sql = _CLIP_BOSS_SQL.format(  # noqa: S608 - placeholders from a COUNT, values bound
+        names=", ".join(["%s"] * len(roster)),
+        subjects=", ".join(["%s"] * len(subjects)),
+    )
+    with realmread.Session(_connect) as rd:
+        return rd.rows(
+            sql, (*roster, *subjects, _CLIP_BOSS_CAP), what="clip boss kills"
+        )
+
+
+_CLIP_SHELF_SQL = (
+    "SELECT id, kind, `character`, event_at, state, file_name, detail"
+    " FROM overseer_clip"
+    " WHERE state = 'ready' AND file_name IS NOT NULL"
+    " ORDER BY event_at DESC, id DESC LIMIT %s"
+)
+
+_LEDGER_DOWN = object()
+
+
+def _ready_clip_path(name: str):
+    """The path of the ready clip whose ledger file_name is `name`, or "" for
+    anything else (no directory, no ready row, a stored name that is not one
+    plain file name, a file outside the directory). _LEDGER_DOWN when the
+    ledger cannot be read."""
+    root = os.path.realpath(CLIPS_DIR) if CLIPS_DIR else ""
+    if not root or not os.path.isdir(root):
+        return ""
+    try:
+        with realmread.Session(_connect) as rd:
+            rows = rd.rows(_CLIP_FILE_SQL, (name,), what="a clip file")
+    except (pymysql.err.MySQLError, OSError):
+        # What a ledger read raises: the driver's errors (the same class the
+        # rest of this file catches) and a refused or dropped connection. A
+        # programming error is not caught, so it surfaces.
+        log.exception("clip ledger read failed")
+        return _LEDGER_DOWN
+    stored = (rows[0].get("file_name") or "") if rows else ""
+    if not stored or stored != os.path.basename(stored) or stored.startswith("."):
+        return ""
+    full = os.path.realpath(os.path.join(root, stored))
+    return full if full.startswith(root + os.sep) and os.path.isfile(full) else ""
+
+
+def _ensure_clip_store() -> None:
+    """Create overseer_clip if it is missing. Idempotent."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(clipledger.DDL)
+
+
+_CLIP_INSERT = (
+    "INSERT IGNORE INTO overseer_clip"
+    " (kind, `character`, stream_path, event_key, event_at, window_start,"
+    "  window_end, state, detail)"
+    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+)
+_CLIP_EXPIRE = (
+    "UPDATE overseer_clip SET state = 'expired' WHERE id = %s AND state = 'ready'"
+)
+
+
+def scan_clips() -> dict:
+    """One pass: write a row for each new trigger, then mark retention.
+
+    Safe to run any number of times and across restarts: event_key is unique
+    and INSERT IGNORE drops a repeat. Nothing is ever deleted here. The table
+    is created here too, so a database that was down at start-up costs one
+    failed tick, not a scanner that fails until the process restarts.
+    """
+    global _clip_last_scan
+    began = _clip_now()
+    horizon = clipledger.scan_horizon(began, _clip_last_scan)
+    # Whole minutes, rounded up, so the reads never cover less than the horizon.
+    minutes = -(-int(horizon.total_seconds()) // 60)
+    _ensure_clip_store()
+    roster, guilds, families = _clip_who()
+    if not roster:
+        _clip_last_scan = began
+        return {"written": 0, "expired": 0}  # IN () is not valid SQL
+    found = _read_clip_candidates(roster, minutes)
+    events = list(found["event_rows"])
+    cleared = []
+    # History is needed only to decide a boss or dungeon first.
+    if found["run_rows"] or any(e["kind"] == "boss_kill" for e in events):
+        history = _read_clip_history(roster)
+        # The history read selects no id, so rows are matched on what they
+        # say: who, what kind, which subject, and when.
+        def natural(e):
+            return (e["character_name"], e["kind"], e["subject_id"], e["first_seen"])
+
+        have = {natural(e) for e in history["event_rows"]}
+        events = history["event_rows"] + [e for e in events if natural(e) not in have]
+        cleared = history["cleared_runs"]
+        # The capped history never decides a boss first. The narrow read does.
+        subjects = sorted({e["subject_id"] for e in found["event_rows"]
+                           if e["kind"] == "boss_kill"})
+        events = [e for e in events if e["kind"] != "boss_kill"]
+        if subjects:
+            boss = _read_boss_kills(roster, subjects)
+            if len(boss) >= _CLIP_BOSS_CAP:
+                log.error("clip boss kills read hit its cap of %d rows;"
+                          " no boss first is written on this pass",
+                          _CLIP_BOSS_CAP)
+            else:
+                have = {natural(e) for e in boss}
+                events += boss + [e for e in found["event_rows"]
+                                  if e["kind"] == "boss_kill"
+                                  and natural(e) not in have]
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT event_key FROM overseer_clip"
+            " WHERE created_at >= NOW() - INTERVAL %s MINUTE",
+            (max(_CLIP_KEY_MINUTES, minutes),),
+        )
+        keys = [r["event_key"] for r in cur.fetchall()]
+        planned = clipledger.plan_requests(
+            loot_rows=found["loot_rows"],
+            event_rows=events,
+            cleared_runs=cleared,
+            family_guilds=guilds,
+            roster=roster,
+            now=found["now"],
+            existing_keys=keys,
+            path_of=_clip_path,
+            runs=list(found["run_rows"]) + list(found.get("open_run_rows", [])),
+            families=families,
+            late_horizon=horizon,
+        )
+        for row in planned:
+            cur.execute(_CLIP_INSERT, (
+                row["kind"], row["character"], row["stream_path"],
+                row["event_key"], row["event_at"], row["window_start"],
+                row["window_end"], row["state"], row["detail"]))
+        cur.execute(
+            "SELECT id, event_key, state, created_at FROM overseer_clip"
+            " WHERE state = 'ready'")
+        stale = clipledger.expired_ids(cur.fetchall(), now=found["now"])
+        if stale:
+            cur.executemany(_CLIP_EXPIRE, [(i,) for i in stale])
+        timed_out = clipledger.time_out(cur, now=found["now"])
+    _clip_last_scan = began
+    return {"written": len(planned), "expired": len(stale), "timed_out": timed_out}
+
+
+def _clips_root() -> str:
+    """The clip folder as a real path, or "" when it is unset or missing."""
+    root = os.path.realpath(CLIPS_DIR) if CLIPS_DIR else ""
+    return root if root and os.path.isdir(root) else ""
+
+
+@contextlib.contextmanager
+def _clip_cursor():
+    with _connect() as conn, conn.cursor() as cur:
+        yield cur
+
+
+def sweep_clips() -> dict:
+    """The sweeps that hold whether or not any stream is live: a cutting row
+    whose cutter went silent fails, and an expired row loses its file. Without
+    a clip folder nothing is deleted and no row is marked."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT NOW() AS now")
+        timed_out = clipledger.time_out(cur, now=cur.fetchone()["now"])
+        root = _clips_root()
+        return {"timed_out": timed_out,
+                "deleted": clipledger.delete_expired(cur, root) if root else 0}
+
+
+def clip_tick() -> dict:
+    """One timer pass: the scan, then the sweeps, even when the scan fails."""
+    try:
+        return scan_clips()
+    finally:
+        sweep_clips()
+
+
+def start_clip_scanner(every: float = CLIP_SCAN_SECONDS, scan=None,
+                       stop: threading.Event | None = None) -> threading.Thread:
+    """Run `scan` (clip_tick) every `every` seconds on a daemon thread."""
+    thread = threading.Thread(
+        target=_sweep_until,
+        args=(stop or threading.Event(), every, scan or clip_tick,
+              "clip scan failed"),
+        name="clip-scan", daemon=True)
     thread.start()
     return thread
 
@@ -4533,6 +4918,13 @@ _FRAMES_LOCK = threading.Lock()
 # it the record that was last touched longest ago goes. Four times the
 # streams that can run at once is more than any watch wall shows.
 MAX_FRAMES = 4 * stream.MAX_CHANNELS
+# The last time the cutter's poll named each stream path, epoch seconds: the
+# only per-view clock a streamed view has. The poll names the views whose
+# recorder is running, so this proves a running recorder, not a moving
+# picture. Empty after a restart, so a streamed view reads no_frame until the
+# next poll.
+_VIEW_SEEN: dict = {}
+_VIEW_SEEN_LOCK = threading.Lock()
 
 
 # Where the page reaches the model-viewer cache. Also the value of the
@@ -5214,6 +5606,9 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith(APP_PREFIX):
                 self._app_file(path[len(APP_PREFIX):])
                 return
+            if path.startswith(CLIPS_PREFIX):
+                self._clip_file(unquote(path[len(CLIPS_PREFIX):]))
+                return
             if path.startswith(apiv2.PREFIX):
                 with FAMILIES.request():
                     self._v2(path, parse_qs(urlsplit(self.path).query))
@@ -5296,6 +5691,43 @@ class Handler(BaseHTTPRequestHandler):
             return
         # Open the path that was checked, not one rebuilt from `rel`.
         self._send_file("app file", _APP_TYPES[kind], path=full)
+
+    def _clip_file(self, name: str) -> None:
+        """GET /clips/<file> - a saved clip, streamed, with Range support.
+
+        Only a file name the ledger holds in a ready row is served, and the
+        file opened is the one the ROW names, never the request's text. No
+        directory, or no such row or file, is a 404 and no error.
+        """
+        found = _ready_clip_path(name)
+        if found is _LEDGER_DOWN:
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+            return
+        try:
+            f = open(found, "rb") if found else None
+        except OSError:
+            f = None
+        if f is None:
+            self._send(404, "text/plain", b"not found")
+            return
+        with f:
+            size = os.fstat(f.fileno()).st_size
+            span = clipserve.parse_range(self.headers.get("Range"), size)
+            if span == clipserve.UNSATISFIABLE:
+                self.send_response(416)
+                self.send_header("Content-Range", "bytes */%d" % size)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(206 if span else 200)
+            clipserve.headers(size, span, send=self.send_header)
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            first, last = span if span else (0, size - 1)
+            try:
+                clipserve.stream(f, self.wfile, first, last)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the player seeked away or closed; nothing to report
 
     def _v2(self, path: str, query: dict) -> None:
         """GET /api/v2/... - the reads the operations app adds (apiv2/)."""
@@ -5564,7 +5996,8 @@ class Handler(BaseHTTPRequestHandler):
         payload = lootstory.build_loot(
             fetched["rows"], recap.zone_names(GEO.continents),
             items=fetched["items"], icons=fetched["icons"], book=fetched["book"],
-            council=lootcouncil.by_item_guid(council))
+            council=lootcouncil.by_item_guid(council),
+            clips=fetched.get("clips"))
         payload["council"] = lootcouncil.board(council)
         return 200, payload
 
@@ -5736,7 +6169,8 @@ class Handler(BaseHTTPRequestHandler):
         payload = runtimeline.build_run_timeline(
             fetched["rows"], fetched["families"], present=fetched["present"],
             deaths=fetched["deaths"], bosses=fetched["bosses"],
-            zones=recap.zone_names(GEO.continents), reports=fetched["reports"])
+            zones=recap.zone_names(GEO.continents), reports=fetched["reports"],
+            clips=fetched.get("clips"), path_of=_clip_path)
         return 200, payload
 
     @_get_route("recap query failed")
@@ -5853,6 +6287,21 @@ class Handler(BaseHTTPRequestHandler):
         # rollup that exists to say what is NOT real, rendering empty,
         # reads as a realm where nothing is real at all.
         payload = eye.build_eye(**_fetch_eye())
+        # The watch wall's own tiles, so the watched set and the live flag are
+        # the page's, built with no snapshot rows (only names and URLs are used).
+        wall = watchwall.build_heads(
+            [(key, family.build_family([], GEO, names, {}))
+             for key, names in FAMILIES.families().items()],
+            family.build_observers([], GEO, (director.WATCHER_NAME,)))["wall"]
+        with _FRAMES_LOCK:
+            frame_at = {n: r.get("frame_at") for n, r in _FRAMES.items()}
+        with _VIEW_SEEN_LOCK:
+            seen = dict(_VIEW_SEEN)
+        recorder_at = {t["name"]: seen[family.broadcast_path(t["name"])]
+                     for t in wall["tiles"]
+                     if family.broadcast_path(t["name"]) in seen}
+        payload["tiles"] = eye.build_tiles(
+            wall["tiles"], frame_at, recorder_at, time.time())
         return 200, payload
 
     @_get_route("wealth query failed")
@@ -6797,6 +7246,84 @@ class Handler(BaseHTTPRequestHandler):
             return 404, {"error": "no such item"}
         return 200, payload
 
+    @_get_route("clip shelf query failed", default=str)
+    def _clips(_query: dict, ctx) -> tuple[int, dict]:
+        """GET /api/clips - the saved clips, newest first, each naming whose view it shows.
+
+        Only clips in a ready row, each with its kind, character, event time
+        and the URL the file is served at, plus `view_owner`, the member whose
+        live view the clip shows (the subject unless the ledger detail names
+        the leader or a party member). A realm with no ledger yet answers
+        an empty shelf. A failed read answers 503 (_answer).
+        """
+        rows = ctx.read.rows(_CLIP_SHELF_SQL, (clipledger.SHELF_LIMIT,),
+                             what="the clip shelf")
+        return 200, clipledger.shelf(rows)
+
+    @_get_route("pending clips query failed")
+    def _clips_pending(query: dict, ctx) -> tuple[int, dict]:
+        """GET /api/clips/pending?paths=a,b - the pending rows on those stream paths,
+        oldest first, at most 10, with the database clock."""
+        if not _clips_root():
+            return 503, {"error": clipcutter.NO_DIR}
+        raw = query.get("paths", [""])[0]
+        code, payload = clipcutter.pending(ctx.read, raw)
+        if code == 200:
+            now = time.time()
+            with _VIEW_SEEN_LOCK:
+                for path in clipcutter.paths_of(raw):
+                    _VIEW_SEEN[path] = now
+                while len(_VIEW_SEEN) > MAX_FRAMES:
+                    del _VIEW_SEEN[min(_VIEW_SEEN, key=_VIEW_SEEN.get)]
+        return code, payload
+
+    def _cutter_call(self, call, late: bool = False) -> None:
+        """Answer a cutter POST: call(cur, query, root) -> (status, payload).
+        With `late`, call gets a connect() to open itself instead of a cursor.
+        No clip folder is a 503 with a sentence; a failed write is the same 503
+        as every other route's."""
+        query = parse_qs(urlsplit(self.path).query)
+        root = _clips_root()
+        if not root:
+            code, payload = 503, {"error": clipcutter.NO_DIR}
+        else:
+            try:
+                if late:
+                    code, payload = call(_clip_cursor, query, root)
+                else:
+                    with _clip_cursor() as cur:
+                        code, payload = call(cur, query, root)
+            except Exception:
+                log.exception("cutter call failed: %s", self.path.split("?", 1)[0])
+                code, payload = 503, {"error": "world unreachable"}
+        self._send(code, "application/json", json.dumps(payload, default=str).encode())
+
+    def _clips_claim(self) -> None:
+        """POST /api/clips/claim?id=N - takes a pending row, which becomes cutting."""
+        self._cutter_call(lambda cur, q, _root: clipcutter.claim(
+            cur, q.get("id", [""])[0]))
+
+    def _clips_file(self) -> None:
+        """POST /api/clips/file?id=N[&note=...] - the MP4 as the request body, for a
+        cutting row; saved under a name the server derives, 128 MiB at most.
+
+        Streamed to the clip folder, never read whole."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        self._cutter_call(lambda connect, q, root: clipcutter.upload(
+            connect, q.get("id", [""])[0], self.rfile, length, root,
+            q.get("note", [""])[0], bound=self.connection.settimeout),
+            late=True)
+
+    def _clips_result(self) -> None:
+        """POST /api/clips/result?id=N&state=no_view|failed&reason=X - a drop, from a
+        pending or cutting row, with its reason."""
+        self._cutter_call(lambda cur, q, _root: clipcutter.result(
+            cur, q.get("id", [""])[0], q.get("state", [""])[0],
+            q.get("reason", [""])[0]))
+
     GET_ROUTES = {
         # First, because it is the question every other row here answers
         # inside of (quadseven/mod-overseer#184).
@@ -6818,6 +7345,8 @@ class Handler(BaseHTTPRequestHandler):
         "/api/questlog": _questlog,
         "/api/needs": _needs,
         "/api/loot": _loot,
+        "/api/clips": _clips,
+        "/api/clips/pending": _clips_pending,
         "/api/runtimeline": _run_timeline,
         "/api/raidgoals": _raidgoals,
         "/api/guildgear": _guild_gear,
@@ -6855,6 +7384,11 @@ class Handler(BaseHTTPRequestHandler):
         "/api/watch": _watch_post,
         "/api/director": _director_post,
         "/api/frame": _frame_post,
+        # The cutter routes trust what /api/frame trusts: the capture agent's
+        # network path, with no token and no new credential.
+        "/api/clips/claim": _clips_claim,
+        "/api/clips/file": _clips_file,
+        "/api/clips/result": _clips_result,
     }
 
 
@@ -6878,6 +7412,11 @@ def main() -> None:
     # Started whatever the store said: a sweep that fails logs and tries
     # again on the next tick.
     start_stream_sweeper()
+
+    # The clip ledger. The scan creates its own table on every tick, so a
+    # database that is down now costs a logged failed tick, never a scanner
+    # that stays broken until restart; it never stops the map.
+    start_clip_scanner()
 
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     log.info("serving on :%d (threads: %s)", PORT, threading.active_count())

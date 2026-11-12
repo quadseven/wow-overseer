@@ -75,6 +75,13 @@ _JOBS = {
 _BATTLEGROUNDS = {"wsg": 489, "ab": 529, "av": 30, "eots": 566}
 
 
+def creature_table(command: str) -> str:
+    """Which table a command's `creature:` number names: "spawn" for a walk
+    that carries a spawn id, "creature" (a template entry) for any other."""
+    head = str(command or "").split(" ", 1)[0]
+    return "spawn" if head in _SPAWN_ID_HEADS else "creature"
+
+
 def _args(command: str) -> dict:
     return {k: int(v) for k, v in _ARG.findall(command)}
 
@@ -87,8 +94,7 @@ def wanted(rows) -> dict:
         head = command.split(" ", 1)[0]
         args = _args(command)
         if "creature" in args:
-            table = "spawn" if head in _SPAWN_ID_HEADS else "creature"
-            out[table].add(args["creature"])
+            out[creature_table(command)].add(args["creature"])
         if "quest" in args:
             out["quest"].add(args["quest"])
         if "entry" in args:

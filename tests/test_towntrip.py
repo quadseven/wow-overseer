@@ -780,7 +780,9 @@ class TheDryHealerIsToppedUpInsideTheRun(unittest.TestCase):
         mage_dry = Member(
             "Og", "mage", 51, 10**6, 9, (), spells=frozenset({5506}), drink_carried=0
         )
-        self.assertEqual(self._gives((mage_dry, bork), lambda g, t: False), [])
+        # A dry mage is not handed a drink; it conjures its own (#2213).
+        got = towntrip.in_run_drink((mage_dry, bork), lambda g, t: False)
+        self.assertEqual([e for e in got if e.kind == towntrip.GIVE_KIND], [])
 
     def test_only_a_give_is_ever_planned(self):
         errands = towntrip.in_run_drink(self._party(), lambda g, t: False)

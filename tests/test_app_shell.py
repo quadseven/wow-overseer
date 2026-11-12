@@ -415,7 +415,16 @@ class TheServer(unittest.TestCase):
     def test_the_post_routes_are_unchanged(self):
         self.assertEqual(
             sorted(map_server.Handler.POST_ROUTES),
-            ["/api/chat", "/api/decree", "/api/director", "/api/frame", "/api/watch"],
+            [
+                "/api/chat",
+                "/api/clips/claim",
+                "/api/clips/file",
+                "/api/clips/result",
+                "/api/decree",
+                "/api/director",
+                "/api/frame",
+                "/api/watch",
+            ],
         )
 
 
