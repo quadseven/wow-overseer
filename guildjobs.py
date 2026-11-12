@@ -118,6 +118,7 @@ import classask
 import classic
 import classhunt
 import classquest
+import familyclass
 import council
 import craft
 import craft_rhythm
@@ -3668,6 +3669,7 @@ def plan(
     loops=None,
     bags=None,
     campaign="",
+    family_members=(),
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -3707,7 +3709,9 @@ def plan(
     `loops` name -> deathloop.Loop for a member dying over and over in one zone
     (death_loop_first), None or {} for none; `campaign` the family's
     campaign door (the bridge's _guild_campaign_door), "" for none, which
-    keeps a roster member's death loop escape off the level walk (level_step).
+    keeps a roster member's death loop escape off the level walk (level_step);
+    `family_members` the roster family members (role FAMILY) whose family is
+    between runs, each planned its class step alone (familyclass.py, #2336).
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -3823,6 +3827,39 @@ def plan(
         busy.add(m.name)
         steps.append(step)
         _count_focus(tally, m, step, fields)
+    # THE FAMILY'S CLASS STEPS, after every guild member's (#2336): each is held
+    # by the guild's class allowance like any class step, and none is counted
+    # in `owed`, so a family member is never held out of a dungeon by this.
+    for m in family_members or ():
+        if m.role != FAMILY or not familyclass.enabled():
+            continue
+        step, _doing, note = class_step(
+            m,
+            classes,
+            recent,
+            cap,
+            None,
+            now,
+            far,
+            kept,
+            crafters,
+            str(masters.get(m.guild) or ""),
+        )
+        if note:
+            notes.append(note)
+        if step is None:
+            continue
+        started, allowance = _allowance(step, counters, per_guild)
+        why = _step_refusal(m, busy, started, allowance, step) or job_walk_held(
+            m, step, recent
+        )
+        if why:
+            notes.append(why)
+            _release_slots(m.name, far, None)
+            continue
+        started[m.guild] = started.get(m.guild, 0) + 1
+        busy.add(m.name)
+        steps.append(step)
     owed, released = owed_members(
         members, classes, recent, hunts, now, owing or classquest.Owing(), asks=asks
     )
@@ -6490,8 +6527,10 @@ def class_step(
     """(step or None, what it does, a note): the member's next move toward a
     class quest it may do now, from classquest.next_move.
 
-    Never at a roster family member (levelroute walks those), never while
-    offline or fighting, and at most once per COOLDOWN_MINUTES. A hunt holds
+    Never at a roster family member (levelroute walks those) unless the caller
+    names it as one of `plan`'s `family_members`, idle between runs, and then
+    only a bounded take or hand-in (familyclass.holds); never while offline or
+    fighting, and at most once per COOLDOWN_MINUTES. A hunt holds
     the member where it hunts (`doing` is set with no step): the member's own
     grind and loot strategies work the field, and nothing else is asked of it
     until the quest is complete and handed in. A hunt with no progress for
@@ -6514,6 +6553,12 @@ def class_step(
     note = "; ".join(blocked)
     if move is None:
         return None, "", note
+    if m.role == FAMILY:
+        # A roster family member takes only a class step it can make in the gap
+        # between two runs (familyclass.py, #2336).
+        held = familyclass.holds(m, move, recent)
+        if held:
+            return None, "", _join(note, held)
     step, doing, note = _class_move_step(
         m, move, note, book, recent, cap, hunts, now, far, kept, crafters, master
     )

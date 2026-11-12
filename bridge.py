@@ -97,6 +97,7 @@ import deathloop
 import guildlevel
 import guildfacts
 import guildrun
+import familyclass
 import familyseat
 import guildpug
 import seatmeter
@@ -18824,6 +18825,8 @@ class Bridge(discord.Client):
         census = guildlevel.census(members, leveling)
         if census:
             log.info("guild jobs: %s", census)
+        # THE ROSTER FAMILY'S CLASS STEP, BETWEEN RUNS (#2336).
+        family_members = await asyncio.to_thread(_idle_family_members, facts)
         # THE PLAN RUNS ON THE EVENT LOOP (#833): it mutates the hunt clock and
         # the owing clock other tasks read, so it is not sent to a thread.
         # Every awaited input is read above, so this timer measures only the
@@ -18858,6 +18861,8 @@ class Bridge(discord.Client):
             # A family campaign keeps its roster off the loop escape (#1873).
             campaign=campaign_door,
             # Members dying over and over in one zone leave it (#1464).
+            # The family members idle between runs take their class step.
+            family_members=family_members,
             loops=facts.get("death_loops"))
         log.info("guild jobs: the plan took %.2f s on the event loop for %d "
                  "member(s)%s", time.perf_counter() - plan_started, len(members),
@@ -33485,6 +33490,33 @@ def _fetch_job_facts(family_names: list) -> dict:
     return facts
 
 
+_LIVE_RUN_LEADERS_SQL = (
+    "SELECT DISTINCT leader_name FROM overseer_dungeon_run WHERE state <> 'ended'"
+)
+
+
+def _idle_family_members(facts) -> list:
+    """The roster family members whose family is between runs (familyclass.py,
+    #2336): no live run of its leader and no member inside an instance. An
+    unread run table is not idle, so a family is never walked off on a guess."""
+    members = facts.get("family_members") or []
+    if not members or not familyclass.enabled():
+        return []
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_LIVE_RUN_LEADERS_SQL)
+            live = {str(r["leader_name"]) for r in cur.fetchall()}
+        roster = _fetch_queue_roster()
+    except pymysql.err.MySQLError:
+        log.exception("guild jobs: the live runs could not be read; no family "
+                      "member is planned a class step this pass")
+        return []
+    inside = {m.name for m in members
+              if m.map_id is not None and m.map_id not in guildrun.OPEN_WORLD_MAPS}
+    idle = familyclass.idle_names(roster, live, inside)
+    return [m for m in members if m.name in idle]
+
+
 def _guild_campaign_door(cohort=None) -> str:
     """The family's active dungeon or raid job, or its next queued run keyword."""
     head = cohort.leader if cohort is not None else _head_now()
@@ -33583,8 +33615,18 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
     pending = {str(r.get(k) or "") for r in pending_rows
                for k in ("target_name", "target_arg")} - {""}
     map_id_by_name = {m.name: m.map_id for m in members if m.map_id is not None}
+    # THE ROSTER FAMILY, read as members of role FAMILY (familyclass.py, #2336):
+    # not in `members`, so no other pass sees them; the plan takes the idle
+    # ones for their class step alone.
+    family_rows = [r for r in rows if str(r["name"]) in family]
+    family_members = _guild_members_and_crafters(
+        family_rows, set(), {str(r["name"]): guildjobs.FAMILY for r in family_rows},
+        skills, known, carried, eligible,
+        _class_quest_state(log_rows, done_rows), free_slots or {}, supplies,
+        _rewarded_of(rewarded_rows), bag_slots or {}, worn or {})[0] if family_rows else []
     return {
         "members": members, "masters": masters, "crafters": crafters,
+        "family_members": family_members,
         "recent": (guildjobs.recent_from_rows(recent_rows, map_id_by_name)
                    + guildjobs.still_stranded(stranded_rows, map_id_by_name)),
         "pending": pending,
