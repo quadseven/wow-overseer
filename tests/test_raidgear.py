@@ -188,12 +188,16 @@ class SeatsFollowReadinessNotLevel(unittest.TestCase):
 
 class TheBridgeWritesTheSeatsTheTabsShow(unittest.TestCase):
     def test_both_seat_writers_attach_readiness_before_the_lineup(self):
+        """Both the recurring specs and ordered seats use the ready roster."""
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         with open(os.path.join(here, "bridge.py"), encoding="utf-8") as fh:
             text = fh.read()
-        for name in ("def _write_raid_specs(", "def _drive_raid("):
+        for name, lineup_call in (
+            ("def _write_raid_specs(", "lineup = raidlineup.build_lineup(members"),
+            ("def _drive_raid(", "lineup = _raid_lineup_for_order("),
+        ):
             body = text[text.index(name) :]
-            call = body.index("lineup = raidlineup.build_lineup(members")
+            call = body.index(lineup_call)
             self.assertIn("_with_readiness(", body[:call], name)
 
 
