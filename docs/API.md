@@ -125,7 +125,7 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 ## `GET /api/family`
 
 - Query: `family`
-- Answers: a five, with enough to decide whether to look.
+- Answers: a five, with enough to decide whether to look, and its craft phase.
 - Example: `overseer get /api/family family=grug`
 
 ## `GET /api/frame`

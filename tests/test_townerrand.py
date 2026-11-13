@@ -811,6 +811,16 @@ class TheAdapter(unittest.TestCase):
         self.assertEqual(1, len(said), lines)
         self.assertEqual([], self.jobs)
 
+    def test_a_crafter_in_its_craft_window_is_offered_no_errand_then_is_after(self):
+        key = ("Bork", "Grug")
+        window = {"open": True}
+        self.ns["_craft_window_open_for"] = lambda names: window["open"]
+        self.now += 30
+        asyncio.run(self.ns["_town_errand_once"](self.fam))
+        self.assertFalse(self.ns["_TOWN_ERRANDS"].get(key, te.State()).active)
+        window["open"] = False
+        self.assertEqual(te.GO, self.tick().phase)
+
     def test_a_bar_does_not_touch_an_errand_already_under_way(self):
         key = ("Bork", "Grug")
         self.assertEqual(te.GO, self.tick().phase)
