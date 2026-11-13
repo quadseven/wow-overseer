@@ -18776,6 +18776,7 @@ class Bridge(discord.Client):
 
     async def _plan_guild_jobs(self, members, facts, busy, cap, spawn_walks,
                                cohort=None):
+        """Build and log the guild job plan from one planner snapshot."""
         kept = await asyncio.to_thread(_kept_with_bank_policy, cohort)
         # WHAT A MEMBER SELLS AND WHAT IT SAVES FOR (#771): its guild's bank
         # forecast's reserved materials (vendorsale.py) and its purchase order
@@ -19135,6 +19136,7 @@ class Bridge(discord.Client):
                      plan.lines.get(m.name, ""), steps or "none", notes or "none")
 
     def _log_guild_job_plan(self, members, plan):
+        """Write a per-guild summary of placements, trades, and holds."""
         for guild in sorted({m.guild for m in members}):
             crew = [m for m in members if m.guild == guild]
             log.info("guild jobs: %s: %d natural of %d placed; trades %s; doors %s", guild,
@@ -33954,6 +33956,7 @@ def _rewarded_of(rows):
 def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, eligible,
                                 quest_state=({}, {}, {}), free_slots=None, supplies=None,
                                 rewarded=None, bag_slots=None, worn=None):
+    """Convert fetched guild rows into members, crafters, and quest facts."""
     members, crafters = [], {}
     quest_log, quests_done, quest_progress = quest_state
     for r in rows:
