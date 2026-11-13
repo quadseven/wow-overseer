@@ -1452,9 +1452,13 @@ def _recipe_cost_due(
 ) -> int | None:
     """The price of the first unheld rung ahead that this visit can buy, or None."""
     for recipe in _rungs_ahead(skill, value):
-        if craft.holds(recipe.spell_id, known):
+        # craft.holds already answers True for a rung that is no trainer
+        # purchase (auto-learned or plan-taught); the lookup below says so
+        # itself rather than lean on that.
+        bought = craft.TRAINER_RECIPES.get(recipe.spell_id)
+        if bought is None or craft.holds(recipe.spell_id, known):
             continue
-        rank, cost = craft.TRAINER_RECIPES[recipe.spell_id]
+        rank, cost = bought
         if value >= rank and money >= cost + floor:
             return cost
     return None

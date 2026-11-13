@@ -107,6 +107,25 @@ class EveryLadderRungTheTrainerSellsNow(unittest.TestCase):
         )
 
 
+class ARungNoTrainerSellsIsSkipped(unittest.TestCase):
+    def test_every_ladder_at_every_value_with_an_empty_book(self):
+        # The ladder walk now meets auto-learned and plan-taught rungs, which
+        # have no trainer price; each is skipped, never looked up.
+        untaught = [
+            r
+            for rs in craft.RECIPES.values()
+            for r in rs
+            if r.spell_id not in craft.TRAINER_RECIPES
+        ]
+        self.assertTrue(untaught)
+        for skill in craft.RECIPES:
+            for value in range(0, 301, 5):
+                with self.subTest(skill=skill, value=value):
+                    guildjobs.recipes_due(
+                        60, RICH, {skill: (value, 300)}, frozenset(), (skill,)
+                    )
+
+
 class TheRepairReserve(unittest.TestCase):
     def test_the_floor_grows_with_level(self):
         self.assertEqual(guildjobs.RECIPE_PURSE_FLOOR, guildjobs.recipe_purse_floor(1))
