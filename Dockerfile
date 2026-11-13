@@ -32,7 +32,7 @@ COPY core.py bridge.py voice.py transform.py world_data.py \
      skillgoal.py gatheraim.py gatherband.py farmassign.py \
      flightlearn.py \
      followhold.py \
-     learnaim.py recipebook.py \
+     learnaim.py reagentplan.py recipebook.py \
      craftpleas.py materials.py \
      gear.py gearorigin.py itemsource.py handover.py \
      armory.py wealth.py questlog.py modelviewer.py \
