@@ -80,9 +80,7 @@ def campaign_families(campaign_rows) -> set:
     reads exactly those): a campaign the family is working through, even
     between runs or in a fish interlude, where the roster job reads idle."""
     return {
-        str(row.get("family") or "")
-        for row in campaign_rows or ()
-        if row.get("family")
+        str(row.get("family") or "") for row in campaign_rows or () if row.get("family")
     }
 
 

@@ -96,7 +96,9 @@ TWO_HEALERS = {"Grug": {"tank"}, "Ugga": {"healer"}, "Og": {"healer"}}
 
 class TheCampaignGuard(unittest.TestCase):
     def test_a_family_with_an_active_started_row_lends_its_only_healer_never(self):
-        got = fs.lendable(GRUG_FISH, set(), (), campaigns={"Grug"}, seats=UGGA_ONLY_HEALER)
+        got = fs.lendable(
+            GRUG_FISH, set(), (), campaigns={"Grug"}, seats=UGGA_ONLY_HEALER
+        )
         self.assertNotIn("Ugga", got)
 
     def test_an_active_row_with_no_seat_read_lends_nobody(self):
@@ -120,8 +122,14 @@ class TheCampaignGuard(unittest.TestCase):
     def test_the_switch_off_restores_the_old_lend(self):
         self.assertFalse(fs.guard_enabled({fs.ENV_GUARD: "off"}))
         self.assertTrue(fs.guard_enabled({}))
-        got = fs.lendable(GRUG_FISH, set(), (), campaigns={"Grug"},
-                          seats=UGGA_ONLY_HEALER, guard=False)
+        got = fs.lendable(
+            GRUG_FISH,
+            set(),
+            (),
+            campaigns={"Grug"},
+            seats=UGGA_ONLY_HEALER,
+            guard=False,
+        )
         self.assertEqual(got, {"Ugga", "Og"})
 
     def test_the_campaign_families_read_off_the_queue_rows(self):
@@ -129,8 +137,10 @@ class TheCampaignGuard(unittest.TestCase):
         self.assertEqual(fs.campaign_families(rows), {"Grug"})
 
     def test_the_seats_read_off_the_roster_rows(self):
-        rows = [row("Ugga", 40, PRIEST, talent_spells=HOLY),
-                row("Grug", 43, WARRIOR, talent_spells="12301", has_shield=1)]
+        rows = [
+            row("Ugga", 40, PRIEST, talent_spells=HOLY),
+            row("Grug", 43, WARRIOR, talent_spells="12301", has_shield=1),
+        ]
         got = fs.seats_played(rows)
         self.assertEqual(got.get("Ugga"), {"healer"})
 
