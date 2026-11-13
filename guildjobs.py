@@ -3698,10 +3698,11 @@ def plan(
     take no class quest step; `hunts` the classquest.Hunts clock (None keeps no
     clock, so no hunt ever stalls) and `now` its time in seconds; `far_slots`
     the far walks the realm can still take (None when not counted): class
-    quest walks past it wait. With a class book, members without a recent class
-    action come before members whose last class action is older. class_priority
-    and level break ties. The shared loop order also affects ordinary step offers;
-    owing the classquest.Owing clock (None keeps none, so a hold never lapses within one
+    quest walks past it wait. Among seats that owe a class quest, members
+    without a recent class action come before those whose last class action is
+    older; class_priority and level break ties. Settled seats keep their normal
+    role, guild and name order. `owing` the classquest.Owing clock (None keeps
+    none, so a hold never lapses within one
     call); `still` name -> minutes the member has stood on one spot
     (standstill.py), None to read no stand (stood_still_step); `supply` name
     -> the food and drink sold in reach of a member short of them
@@ -3719,7 +3720,8 @@ def plan(
     campaign door (the bridge's _guild_campaign_door), "" for none, which
     keeps a roster member's death loop escape off the level walk (level_step);
     `family_members` the roster family members (role FAMILY) whose family is
-    between runs, each planned its class step alone (familyclass.py, #2336).
+    between runs, planned in the shared fair class-step order but kept to the
+    bounded family path (familyclass.py, #2336).
     `class_candidates` members absent from the lineup: they receive only a
     class quest step, never an ordinary guild job. Their named holds are in
     `JobsPlan.class_holds` for the bridge's roster status log.
@@ -3760,7 +3762,17 @@ def plan(
     }
     far = classquest.FarSlots(far_slots) if far_slots is not None else None
     all_members = list(members) + list(class_candidates or ())
-    for m in _class_ordered(all_members, classes, recent):
+    family_steps = list(family_members or ())
+    planning_members = [m for m in all_members if m.role != FAMILY] + family_steps
+    class_eligible = {
+        m.name
+        for m in planning_members
+        if (m.role != FAMILY or familyclass.enabled())
+        and _planned_class_owed(m, classes, recent, hunts, now, asks) is not None
+    }
+    for m in _class_ordered(
+        planning_members, classes, recent, class_eligible=class_eligible
+    ):
         if m.role == UNASSIGNED and classes is not None:
             why = _plan_class_only_member(
                 m,
@@ -3785,6 +3797,18 @@ def plan(
             )
             if why:
                 class_holds[m.name] = why
+            continue
+        if m.role == FAMILY:
+            _plan_family_class_member(
+                m,
+                (classes, recent, cap, now, far, kept, crafters, masters),
+                (counters, busy, per_guild),
+                steps,
+                lines,
+                notes,
+                class_holds,
+                family_danger,
+            )
             continue
         if m.role not in (MAINTENANCE, SUMMONER, RAIDER):
             continue
@@ -3870,15 +3894,6 @@ def plan(
         busy.add(m.name)
         steps.append(step)
         _count_focus(tally, m, step, fields)
-    _plan_family_class_steps(
-        family_members,
-        (classes, recent, cap, now, far, kept, crafters, masters),
-        (counters, busy, per_guild),
-        steps,
-        notes,
-        class_holds,
-        family_danger,
-    )
     owed, released = owed_members(
         all_members, classes, recent, hunts, now, owing or classquest.Owing(), asks=asks
     )
@@ -3917,59 +3932,59 @@ def plan(
     )
 
 
-def _plan_family_class_steps(
-    family_members, reads, limits, steps, notes, class_holds, danger=None
+def _plan_family_class_member(
+    m, reads, limits, steps, lines, notes, class_holds, danger=None
 ) -> None:
-    """THE FAMILY'S CLASS STEPS, after every guild member's (#2336): each is held
-    by the guild's class allowance like any class step, and none is counted in
-    `owed`, so a family member is never held out of a dungeon by this. Appends
-    to `steps` and `notes`; held offers go in `class_holds`. `danger` is name ->
-    the highest creature level read near that member's giver (None or missing:
-    not read, so a far walk is held, familyclass.danger_hold)."""
+    """Plan an idle family member's class step in the shared fair order.
+
+    Family members use the same per-guild class allowance as other seats, but
+    retain the between-run, safe-ground and nearby-giver gates (#2336).
+    """
     classes, recent, cap, now, far, kept, crafters, masters = reads
     counters, busy, per_guild = limits
-    if not familyclass.enabled():
+    if not familyclass.enabled() or m.role != FAMILY:
         return
-    for m in family_members or ():
-        if m.role != FAMILY:
-            continue
-        step, _doing, note = class_step(
-            m,
-            classes,
-            recent,
-            cap,
-            None,
-            now,
-            far,
-            kept,
-            crafters,
-            str(masters.get(m.guild) or ""),
-        )
-        if note:
-            notes.append(note)
-        if step is None:
-            if class_owed(m, classes, recent, now=now) is not None and note:
-                class_holds[m.name] = _class_hold_reason(m.name, note)
-            continue
-        gap_hold = familyclass.holds(m, step.move, recent)
-        if gap_hold:
-            class_holds[m.name] = _class_hold_reason(m.name, gap_hold)
-            _release_slots(m.name, far, None)
-            continue
-        started, allowance = _allowance(step, counters, per_guild)
-        why = (
-            _step_refusal(m, busy, started, allowance, step)
-            or familyclass.danger_hold(m, step.move, (danger or {}).get(m.name))
-            or job_walk_held(m, step, recent)
-        )
-        if why:
-            notes.append(why)
-            class_holds[m.name] = _class_hold_reason(m.name, why)
-            _release_slots(m.name, far, None)
-            continue
-        started[m.guild] = started.get(m.guild, 0) + 1
-        busy.add(m.name)
-        steps.append(step)
+    step, doing, note = class_step(
+        m,
+        classes,
+        recent,
+        cap,
+        None,
+        now,
+        far,
+        kept,
+        crafters,
+        str(masters.get(m.guild) or ""),
+    )
+    if note:
+        notes.append(note)
+    if step is None:
+        if doing:
+            lines[m.name] = doing
+            if classquest.MARK in doing:
+                return
+        if class_owed(m, classes, recent, now=now) is not None and note:
+            class_holds[m.name] = _class_hold_reason(m.name, note)
+        return
+    gap_hold = familyclass.holds(m, step.move, recent)
+    if gap_hold:
+        class_holds[m.name] = _class_hold_reason(m.name, gap_hold)
+        _release_slots(m.name, far, None)
+        return
+    started, allowance = _allowance(step, counters, per_guild)
+    why = (
+        _step_refusal(m, busy, started, allowance, step)
+        or familyclass.danger_hold(m, step.move, (danger or {}).get(m.name))
+        or job_walk_held(m, step, recent)
+    )
+    if why:
+        notes.append(why)
+        class_holds[m.name] = _class_hold_reason(m.name, why)
+        _release_slots(m.name, far, None)
+        return
+    started[m.guild] = started.get(m.guild, 0) + 1
+    busy.add(m.name)
+    steps.append(step)
 
 
 def _offer_for(offers, name):
@@ -4077,6 +4092,7 @@ def _class_hold_reasons(
         family_candidates,
         family_holds,
         class_steps,
+        lines,
         book,
         recent,
         hunts,
@@ -4109,17 +4125,31 @@ def _member_class_holds(
 
 
 def _family_class_holds(
-    holds, candidates, reasons, class_steps, book, recent, hunts, now, asks
+    holds, candidates, reasons, class_steps, lines, book, recent, hunts, now, asks
 ):
     """Add family holds only for members with an owed class quest."""
-    for name, reason in (reasons or {}).items():
-        member = next((m for m in candidates or () if m.name == name), None)
+    reasons = reasons or {}
+    for member in candidates or ():
+        name = member.name
         if (
-            member is not None
-            and name not in class_steps
-            and class_owed(member, book, recent, hunts, now, asks) is not None
+            name not in class_steps
+            and classquest.MARK not in str(lines.get(name, ""))
+            and _planned_class_owed(member, book, recent, hunts, now, asks) is not None
         ):
-            holds.setdefault(name, str(reason))
+            unavailable = _class_member_unavailable(member)
+            holds.setdefault(
+                name,
+                str(reasons.get(name) or "")
+                or unavailable
+                or "no safe between-run class step is available",
+            )
+
+
+def _planned_class_owed(member, book, recent, hunts, now, asks):
+    """Owed class quest under the member role's planning policy."""
+    if member.role == FAMILY:
+        return class_owed(member, book, recent, None, now, ())
+    return class_owed(member, book, recent, hunts, now, asks)
 
 
 def _class_hold_for_member(member, owed, busy, planned, notes, recent):
@@ -5727,23 +5757,36 @@ def class_priority(m) -> int:
     return 0 if raidroles.fits_seat(cls, m.tree, raidroles.SEAT_HEALER) else 1
 
 
-def _class_ordered(members, classes, recent=()):
-    """The members in the order their steps are planned. Unoffered or least
-    recently offered class steps go first so the per-guild cap cannot starve a
-    seat; class_priority and level settle ties. The one-day recent read bounds
-    the service history while preserving the old order when no class row exists."""
+def _class_ordered(members, classes, recent=(), class_eligible=None):
+    """Order only class-eligible seats fairly, leaving other job order intact.
+
+    Unoffered or least recently offered class steps go first so the per-guild
+    cap cannot starve an owed seat; class_priority and level settle ties. The
+    one-day recent read bounds service history. Replacing only eligible slots
+    keeps settled members in their ordinary role, guild and name order.
+    """
     ordered = _ordered_members(members)
     if classes is None:
         return ordered
     last_offer = _last_class_offer_ages(recent)
-    return sorted(
-        ordered,
-        key=lambda m: (
-            _class_offer_order(m.name, last_offer),
-            class_priority(m),
-            -int(m.level or 0),
-        ),
+    eligible = (
+        [m for m in ordered if m.name in class_eligible]
+        if class_eligible is not None
+        else ordered
     )
+    fair = iter(
+        sorted(
+            eligible,
+            key=lambda m: (
+                _class_offer_order(m.name, last_offer),
+                class_priority(m),
+                -int(m.level or 0),
+            ),
+        )
+    )
+    if class_eligible is None:
+        return list(fair)
+    return [next(fair) if m.name in class_eligible else m for m in ordered]
 
 
 def _last_class_offer_ages(recent):
