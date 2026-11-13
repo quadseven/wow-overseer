@@ -852,6 +852,7 @@ def views(queue_rows: list, roster_rows: list) -> dict:
 
 GATE_ERRAND = "town-errand"
 GATE_GEAR = "gear"
+GATE_CRAFT = "craft-window"
 GATE_BAG_STUCK = "bag-hold-stuck"
 GATE_BAG_FULL = "bags-near-full"
 GATE_TOWN_FIRST = "town-first"
@@ -894,6 +895,7 @@ class Facts:
     armed: bool = False
     town_since: float | None = None
     stall: float = 0.0
+    craft_window: bool = False
 
 
 def _held(since: float | None, now: float, stall: float) -> float:
@@ -904,6 +906,15 @@ def _held(since: float | None, now: float, stall: float) -> float:
 def _errand_gate(facts: Facts):
     if facts.errand_active:
         return Withhold(GATE_ERRAND, "the family is on its town errand (#365)")
+    return None
+
+
+def _craft_gate(facts: Facts):
+    """A family whose crafter is inside an open craft window waits (#2369)."""
+    if facts.craft_window:
+        return Withhold(
+            GATE_CRAFT, "the family's crafter is in its craft window (#2369)"
+        )
     return None
 
 
@@ -981,6 +992,7 @@ def decide_admission(family, keyword: str, facts: Facts, now: float):
     free_slots = facts.free_slots or {}
     for gate in (
         _errand_gate(facts),
+        _craft_gate(facts),
         _gear_gate(facts, now),
         _bag_stuck_gate(facts, now, free_slots),
         _near_full_gate(free_slots),

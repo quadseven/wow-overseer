@@ -125,7 +125,7 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 ## `GET /api/family`
 
 - Query: `family`
-- Answers: a five, with enough to decide whether to look.
+- Answers: a five, with enough to decide whether to look. It also carries `craft_phase`: each scheduled family's current phase (`craft` or `idle`), when the window ends, and the bounded log rows (family, phase, start, end, reason).
 - Example: `overseer get /api/family family=grug`
 
 ## `GET /api/frame`

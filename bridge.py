@@ -100,6 +100,7 @@ import guildfacts
 import guildrun
 import familyclass
 import familyseat
+import craftphase
 import guildpug
 import seatmeter
 import guildsocial
@@ -3685,6 +3686,69 @@ def _town_errand_withholds(names, keyword):
     return reason
 
 
+def _craft_window_states(now: float) -> list:
+    """Tick every scheduled family's craft window and return the states.
+
+    The memo store is the state (craftphase.MEMO_KIND), so every caller sees
+    one window and a bridge restart loses nothing but an expired row. The
+    planner is pure; this reads its facts and writes a changed state back
+    (#2369). Callers check craftphase.enabled() first.
+    """
+    memo = _memo_read(craftphase.MEMO_KIND)
+    roster = _fetch_queue_roster()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_LIVE_RUN_LEADERS_SQL)
+        live = {str(r["leader_name"]) for r in cur.fetchall()}
+    out_in_runs = _guild_run_members_out()
+    states = []
+    for family, crafter in craftphase.SCHEDULE.items():
+        old = craftphase.decode(family, (memo.get(family) or ({}, 0.0))[0])
+        members = {str(r.get("name") or "") for r in roster
+                   if str(r.get("family") or "") == family}
+        facts = craftphase.Facts(
+            roster=frozenset(members),
+            in_run=family in live or crafter in out_in_runs)
+        step = craftphase.plan(old, facts, now)
+        if step.row is not None:
+            _memo_upsert(craftphase.MEMO_KIND, family,
+                         craftphase.encode(step.state), now,
+                         now + craftphase.MEMO_KEEP_SECONDS)
+            log.info("craft phase: %s %s (%s)", family,
+                     "window opens" if craftphase.is_open(step.state, now)
+                     else "window closes", step.row["reason"])
+        states.append(step.state)
+    return states
+
+
+def _craft_window_names() -> frozenset:
+    """The crafters inside an open craft window now; empty with the switch
+    off, and on a failed read (nothing is withheld on a guess)."""
+    if not craftphase.enabled():
+        return frozenset()
+    now = time.time()
+    try:
+        return craftphase.protected(_craft_window_states(now), now)
+    except pymysql.err.MySQLError:
+        log.exception("craft phase: the window could not be read; no crafter "
+                      "is protected this pass")
+        return frozenset()
+
+
+def _craft_window_open_for(names) -> bool:
+    """Whether a crafter among `names` is inside an open craft window."""
+    return craftphase.barred(_craft_window_names(), names)
+
+
+def _craft_window_withholds(names, keyword):
+    """The gate's answer while the family's crafter is in its craft window
+    (#2369), else None."""
+    if not _craft_window_open_for(names):
+        return None
+    reason = "the family's crafter is in its craft window (#2369)"
+    log.info("goal: withholding dungeon:%s - %s", keyword or "(default)", reason)
+    return reason
+
+
 def _gear_gate(names, keyword):
     """Apply GEAR UP BEFORE THE DOOR (#146, #147), BUT NEVER A DEADLOCK.
 
@@ -3695,6 +3759,10 @@ def _gear_gate(names, keyword):
     """
     errand = globals().get("_town_errand_withholds")
     reason = errand(names, keyword) if errand is not None else None
+    if reason:
+        return reason
+    craft_window = globals().get("_craft_window_withholds")
+    reason = craft_window(names, keyword) if craft_window is not None else None
     if reason:
         return reason
     reader = globals().get("_fetch_gearup_facts")
@@ -3804,6 +3872,7 @@ def _admission_facts(names, mode: str) -> campaignqueue.Facts:
         armed=any(job == mode for job in _jobs_of(names).values()),
         town_since=_TOWN_FIRST_SINCE.get(key),
         stall=_queue_stall_floor(names),
+        craft_window=_craft_window_open_for(names),
     )
 
 
@@ -20656,6 +20725,12 @@ class Bridge(discord.Client):
                     log.info("town errand: none starts%s while its trade turn "
                              "runs; the turn released the last one", label)
                 return
+            # A CRAFTER IN ITS CRAFT WINDOW IS NOT OFFERED AN ERRAND (#2369).
+            # Looked up: the adapter tests load this method in isolation. An
+            # errand already under way is not touched here.
+            crafting = globals().get("_craft_window_open_for")
+            if crafting is not None and await asyncio.to_thread(crafting, names):
+                return
             state = await self._town_errand_start(
                 state, names, leader, in_run, now, label)
             _TOWN_ERRANDS[key] = state
@@ -29418,7 +29493,8 @@ def _fetch_guild_social_facts(bounds) -> dict:
                 # member that is not its sole tank or healer (#2353).
                 campaigns=(familyseat.campaign_families(campaigns)
                            if guarded else ()),
-                seats=familyseat.seats_played(facts["rows"]), guard=guarded)
+                seats=familyseat.seats_played(facts["rows"]), guard=guarded,
+                crafting=_craft_window_names())
     facts.update({
         "now": now, "asks": asks, "answers": answers,
         "quests": guildsocial.quests_by_name(quest_rows),

@@ -146,6 +146,7 @@ def lendable(
     campaigns=(),
     seats=None,
     guard: bool = True,
+    crafting=(),
 ) -> set:
     """The family members who may take a guild run's tank or healer seat now:
     every member of an idle family but its head (the family key is the head's
@@ -159,15 +160,19 @@ def lendable(
     quest, so it lends only a member who is not the family's sole holder of a
     tank or healer seat (`seats`, seats_played: the seats each name plays; the
     head counts as a holder). With no `seats` read it lends nobody. `guard`
-    off restores the old lend."""
+    off restores the old lend.
+
+    A CRAFTER IN AN OPEN CRAFT WINDOW (`crafting`, craftphase.protected,
+    #2369) is lent to nobody until the window ends."""
     idle = idle_families(roster, inside_names, in_runs)
     busy_campaign = set(campaigns or ()) if guard else set()
+    crafting_now = set(crafting or ())
     out = set()
     for family, members in _families(roster).items():
         if not family or family not in idle:
             continue
         for name, _job in members:
-            if name == family:
+            if name == family or name in crafting_now:
                 continue
             if family in busy_campaign:
                 if seats is None:

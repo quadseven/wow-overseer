@@ -64,6 +64,7 @@ import guildroute
 import gearrouting
 import gearroutingexec
 import seatmeter
+import craftphase
 import jevview
 import levelroute
 import llmmode
@@ -5068,6 +5069,21 @@ def _answer(sender, handler, query: dict, what: str, **dumps) -> None:
     sender._send(code, "application/json", body)
 
 
+def _craft_phase_rows(ctx) -> list:
+    """Each scheduled family's craft phase and log rows (craftphase.page)."""
+    reader = getattr(ctx, "read", None)
+    if reader is None:
+        return []
+    try:
+        rows = reader.rows(craftphase.READ_SQL, (craftphase.MEMO_KIND,),
+                           what="overseer_bridge_memo")
+    except realmread.Gap as gap:
+        if gap.code != realmread.MISSING_TABLE:
+            raise
+        return []
+    return craftphase.page(rows, time.time())
+
+
 def _get_route(what: str, **dumps):
     """A v1 GET handler(query, ctx) -> (status, payload) as the method
     GET_ROUTES calls, answered by _answer; `what` is its failure's log line."""
@@ -5904,7 +5920,7 @@ class Handler(BaseHTTPRequestHandler):
         return 200, build_payload(_fetch_rows(), GEO)
 
     @_get_route("family query failed")
-    def _family(query: dict, _ctx) -> tuple[int, dict]:
+    def _family(query: dict, ctx) -> tuple[int, dict]:
         """GET /api/family[?family=X] - a five, with enough to decide whether to look.
 
         STILL NO NAME PARAMETER, which was the original rule here and is worth
@@ -5928,6 +5944,10 @@ class Handler(BaseHTTPRequestHandler):
         payload["families"] = known
         payload["observers"] = family.build_observers(
             _fetch_family([director.WATCHER_NAME]), GEO, (director.WATCHER_NAME,))
+        # The craft phase and its log (#2369): the bridge leaves them in the
+        # memo store; a world without the store, or a request with no reader,
+        # reads as no windows rather than a failed page.
+        payload["craft_phase"] = _craft_phase_rows(ctx)
         return 200, payload
 
     @_get_route("wall query failed")

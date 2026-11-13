@@ -279,6 +279,27 @@ class TheGuildReadsAreHandlers(unittest.TestCase):
         self.assertEqual(got, (200, {"p": 1}))
         page.assert_called_once_with(rows)
 
+    def test_the_family_read_carries_the_craft_phase(self):
+        rows = [{"subject": "Grug", "value": "{}", "since": 1}]
+        ctx = types.SimpleNamespace(
+            read=realmread.Memory({map_server.craftphase.READ_SQL: rows})
+        )
+        with mock.patch.object(
+            map_server.craftphase, "page", return_value=[{"phase": "craft"}]
+        ) as page:
+            got = map_server._craft_phase_rows(ctx)
+        self.assertEqual([{"phase": "craft"}], got)
+        self.assertEqual(rows, page.call_args.args[0])
+
+    def test_a_world_without_the_memo_store_has_no_craft_phase(self):
+        ctx = types.SimpleNamespace(
+            read=realmread.Memory(
+                {map_server.craftphase.READ_SQL: realmread.MISSING_TABLE}
+            )
+        )
+        self.assertEqual([], map_server._craft_phase_rows(ctx))
+        self.assertEqual([], map_server._craft_phase_rows(None))
+
     def test_a_database_value_still_encodes_as_text(self):
         when = datetime.datetime(2026, 1, 2, 3, 4, 5)
         with mock.patch.object(map_server.seatmeter, "page", return_value={"at": when}):
