@@ -63,10 +63,10 @@ WHERE MATERIALS GO. Herbs, ore, stone, bars, leather, cloth, meat and elemental
 materials a member carries go by post, one stack a letter, to the family member
 of its guild who holds the craft that uses them (alchemy for herbs, and so on),
 the highest skill first, and a maintenance member posts such a stack before
-its PvP, mail and level steps (crafter_post_first, #2397); with nobody holding it, to the guild master, whose
-guild-bank pass files them into the Materials tab (bankpolicy.py). An item
-reserved on its holder (`overseer_keep`, read through keep.py) is never posted
-or sold.
+its PvP, mail and level steps (crafter_post_first, #2397); with nobody
+holding it, to the guild master, whose guild-bank pass files them into the
+Materials tab (bankpolicy.py). An item reserved on its holder (`overseer_keep`,
+read through keep.py) is never posted or sold.
 
 TRADE SPLIT. Each maintenance member takes two of the three gathering trades,
 as a guild officer would split them: whatever it already holds first, then the
@@ -3097,7 +3097,9 @@ def worth_its_postage(item) -> bool:
     return vendorsale.worth((item,)) >= POST_VALUE_MULT * POSTAGE_COPPER
 
 
-def _post_step(member, crafters, master, kept, cap, crafting=False, bar=None):
+def _post_step(
+    member, crafters, master, kept, cap, crafting=False, bar=None, crafter_first=False
+):
     stacks = postable(member, kept, crafting, bar)
     # Only the role's own bar asks a letter to be worth its postage; a
     # make-room post (bar given) clears the bags whatever the stack is worth.
@@ -3109,6 +3111,12 @@ def _post_step(member, crafters, master, kept, cap, crafting=False, bar=None):
                 "for a full stack" % member.name
             )
         stacks = worth
+    if crafter_first:
+        # The early post (crafter_post_first): stacks a family crafter takes go
+        # ahead of the letter and postage cuts, so bigger bank stacks cannot
+        # crowd them out (review 5898374497 on #2409).
+        mine = crafters.get(member.guild, {})
+        stacks = sorted(stacks, key=lambda c: not recipient_for(c, mine, "")[0])
     stacks = stacks[:MAX_LETTERS]
     if not stacks:
         return None, ""
@@ -3163,11 +3171,22 @@ def crafter_post_first(m, crafters, master, kept, recent, cap, crafting=False):
         return None
     if _cooling(m, "post", recent):
         return None
-    mine = crafters.get(m.guild, {})
-    if not any(recipient_for(c, mine, "")[0] for c in postable(m, kept, crafting)):
+    step, _why = _post_step(
+        m, crafters, master, kept, cap, crafting, crafter_first=True
+    )
+    # Decided on the letters the step writes: it goes early only when one of
+    # them carries a crafter's stack, never on bank stacks alone or on a
+    # crafter stack the postage bar dropped. By item, not by recipient, since
+    # the guild master may hold a craft too.
+    if step is None:
         return None
-    step, _why = _post_step(m, crafters, master, kept, cap, crafting)
-    return step
+    mine = crafters.get(m.guild, {})
+    wanted = {
+        "send item:%d subject:%s" % (int(c.guid), POST_SUBJECT)
+        for c in m.carried
+        if c.material and recipient_for(c, mine, "")[0]
+    }
+    return step if any(r.command in wanted for r in step.rows) else None
 
 
 def loot_room_short(member) -> bool:

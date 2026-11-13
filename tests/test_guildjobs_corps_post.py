@@ -145,5 +145,61 @@ class TheCraftersPostComesFirst(unittest.TestCase):
                 )
 
 
+class TheReviewOfTheEarlyPost(unittest.TestCase):
+    """Review 5898374497 on #2409: the early post fired on a crafter stack, then
+    the letter and postage cuts kept only bigger bank stacks."""
+
+    def test_more_letters_of_bigger_bank_stacks_still_send_the_crafter_stack(self):
+        ore = [stack(10 + i, ORE, 20, subclass=7, name="Copper Ore") for i in range(6)]
+        m = member(carried=ore + [stack(2, SILK, 19, name="Silk Cloth")])
+
+        step = guildjobs.crafter_post_first(m, TAILOR, "Zug", None, (), 600)
+
+        self.assertIn("Oz", [r.target_arg for r in step.rows])
+        self.assertEqual("send item:2 subject:Guild materials", step.rows[0].command)
+        self.assertLessEqual(len(step.rows), guildjobs.MAX_LETTERS)
+
+    def test_a_short_purse_sends_the_crafter_stack_first(self):
+        ore = [stack(10 + i, ORE, 20, subclass=7, name="Copper Ore") for i in range(6)]
+        m = member(
+            money=guildjobs.POSTAGE_COPPER,
+            carried=ore + [stack(2, SILK, 19, name="Silk Cloth")],
+        )
+
+        step = guildjobs.crafter_post_first(m, TAILOR, "Zug", None, (), 600)
+
+        self.assertEqual(["Oz"], [r.target_arg for r in step.rows])
+
+    def test_a_crafter_stack_not_worth_its_postage_does_not_start_it(self):
+        ore = [stack(10 + i, ORE, 20, subclass=7, name="Copper Ore") for i in range(6)]
+        m = member(carried=ore + [stack(2, SILK, 1, price=1, name="Silk Cloth")])
+
+        self.assertIsNone(guildjobs.crafter_post_first(m, TAILOR, "Zug", None, (), 600))
+
+    def test_the_post_comes_before_a_due_level_walk(self):
+        import test_guildlevel as gl
+
+        def keeper(carried):
+            return gl.member(
+                "Keeper",
+                role=guildjobs.MAINTENANCE,
+                money=10**6,
+                carried=tuple(carried),
+                skills={FA: (40, 75), guildjobs.COOKING: (1, 75)},
+            )
+
+        def first(carried):
+            result = guildjobs.plan(
+                [keeper(carried)],
+                masters={"Cave": "Grug"},
+                crafters={"Cave": {TAILORING: [("Og", 155)]}},
+                leveling=gl.world(),
+            )
+            return [s.action for s in result.steps if s.holder == "Keeper"][0]
+
+        self.assertEqual("level", first([]))
+        self.assertEqual("post", first([stack(2, SILK, 20, name="Silk Cloth")]))
+
+
 if __name__ == "__main__":
     unittest.main()
