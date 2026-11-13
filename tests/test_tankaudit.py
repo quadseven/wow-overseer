@@ -77,5 +77,40 @@ class AuditTanks(unittest.TestCase):
         self.assertEqual(out["missing_total"], 2)
 
 
+# Fixture trainer row for the one spell the ticket names explicitly.
+# The id and its trainer level come from the repo's own Spell.dbc-derived
+# trainer facts (data/mc-spells.json: Warrior, level 32).
+WARRIOR_TRAINER = [
+    {"spell": 18499, "level": 32, "cost": 100, "req1": 0, "req2": 0, "req3": 0},
+]
+
+
+class NamedSpells(unittest.TestCase):
+    def test_berserker_rage_is_named_when_missing(self):
+        out = tankaudit.audit_tank(_seat("Tankone", level=40), WARRIOR_TRAINER, set())
+        self.assertFalse(out["complete"])
+        self.assertEqual(
+            out["missing"],
+            [
+                {
+                    "spell": 18499,
+                    "level": 32,
+                    "state": "trainable",
+                    "name": "Berserker Rage",
+                }
+            ],
+        )
+
+    def test_berserker_rage_is_not_missing_when_known(self):
+        out = tankaudit.audit_tank(_seat("Tankone", level=40), WARRIOR_TRAINER, {18499})
+        self.assertTrue(out["complete"])
+        self.assertEqual(out["missing"], [])
+
+    def test_unnamed_spells_carry_no_name(self):
+        out = tankaudit.audit_tank(_seat("Tankone"), TRAINER, {100, 200})
+        self.assertEqual(len(out["missing"]), 1)
+        self.assertNotIn("name", out["missing"][0])
+
+
 if __name__ == "__main__":
     unittest.main()
