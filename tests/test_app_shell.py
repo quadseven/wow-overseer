@@ -175,12 +175,12 @@ class ThePage(unittest.TestCase):
 
     def test_the_theme_is_set_before_the_first_paint(self):
         boot = PAGE.index('localStorage.getItem("overseer.theme")')
-        self.assertLess(boot, PAGE.index("app/tokens.css"))
+        self.assertLess(boot, PAGE.index("/tokens.css"))
 
     def test_the_module_loads_last(self):
         self.assertTrue(
             PAGE.rstrip().endswith(
-                '<script type="module" src="__OVERSEER_BASE__/app/main.js"></script>\n</body>\n</html>'.strip()
+                '<script type="module" src="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/main.js"></script>\n</body>\n</html>'.strip()
             )
         )
 
@@ -320,7 +320,10 @@ class TheServer(unittest.TestCase):
     def test_the_root_serves_the_app_and_the_classic_page_is_gone(self):
         app = get("/")
         self.assertEqual(app.status(), 200)
-        self.assertIn(b'<script type="module" src="/app/main.js">', app.body())
+        self.assertRegex(
+            app.body().decode("utf-8"),
+            r'<script type="module" src="/app/[0-9a-f]{12}/main\.js">',
+        )
         for old in ("/classic", "/classic.html"):
             self.assertNotIn(old, map_server.Handler.GET_ROUTES)
             self.assertEqual(get(old).status(), 404, old)
@@ -334,7 +337,7 @@ class TheServer(unittest.TestCase):
         finally:
             map_server.BASE_PATH = original
         self.assertIn('<meta name="overseer-base" content="/dev">', body)
-        self.assertIn('src="/dev/app/main.js"', body)
+        self.assertRegex(body, r'src="/dev/app/[0-9a-f]{12}/main\.js"')
         self.assertNotIn(basepath.PLACEHOLDER, body)
 
     def test_app_files_are_served_with_their_types(self):
@@ -352,9 +355,13 @@ class TheServer(unittest.TestCase):
         sent = []
         real = map_server.Handler._send_file
 
-        def spy(handler, name, ctype, transform=None, path=""):
+        def spy(
+            handler, name, ctype, transform=None, path="", cache_control="no-store"
+        ):
             sent.append(path)
-            return real(handler, name, ctype, transform, path=path)
+            return real(
+                handler, name, ctype, transform, path=path, cache_control=cache_control
+            )
 
         with mock.patch.object(map_server.Handler, "_send_file", spy):
             self.assertEqual(get("/app/views/now.js").status(), 200)
