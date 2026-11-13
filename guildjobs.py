@@ -172,6 +172,7 @@ MAX_PRIMARY = 2
 
 # The roles, as raidlineup.build_lineup names them.
 MAINTENANCE, SUMMONER, RAIDER, FAMILY = "maintenance", "summoner", "raider", "family"
+UNASSIGNED = "unassigned"
 
 
 @dataclass(frozen=True)
@@ -800,6 +801,8 @@ class JobsPlan:
     notes: tuple = ()
     # One line per member that did not walk for gear this pass, and why.
     gear_holds: tuple = ()
+    # name -> plain reason an owed class quest was not offered this pass.
+    class_holds: dict = field(default_factory=dict)
     # guild -> {"focus", "members", "craft", "farm", "gathering"} (GUILD_FOCUS)
     focus: dict = field(default_factory=dict)
     # classquest.Help: class quests a guildmate could help with (classask.py).
@@ -3668,6 +3671,9 @@ def plan(
     mounts=None,
     loops=None,
     bags=None,
+    class_candidates=(),
+    family_candidates=(),
+    family_holds=None,
     campaign="",
     family_members=(),
     family_danger=None,
@@ -3713,6 +3719,11 @@ def plan(
     keeps a roster member's death loop escape off the level walk (level_step);
     `family_members` the roster family members (role FAMILY) whose family is
     between runs, each planned its class step alone (familyclass.py, #2336).
+    `class_candidates` members absent from the lineup: they receive only a
+    class quest step, never an ordinary guild job. Their named holds are in
+    `JobsPlan.class_holds` for the bridge's roster status log.
+    `family_candidates` and `family_holds` report owed family class quests
+    that their separate between-run planner deliberately leaves waiting.
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -3730,6 +3741,8 @@ def plan(
     tally = _focus_tally(members, focus)
     steps, lines, notes, helps, ask_yields = [], {}, [], [], []
     gear_holds = []
+    class_holds = {}
+    preexisting_busy = set(busy or ())
     # One counter per allowance, each keyed by guild (_allowance).
     counters = {
         "jobs": {},
@@ -3745,7 +3758,47 @@ def plan(
         "pet": {},
     }
     far = classquest.FarSlots(far_slots) if far_slots is not None else None
-    for m in _class_ordered(members, classes):
+    all_members = list(members) + list(class_candidates or ())
+    for m in _class_ordered(all_members, classes):
+        if m.role == UNASSIGNED and classes is not None:
+            # A role is needed for ordinary guild assignments, not for the
+            # member's own class quest. Previously these members were dropped
+            # before the class planner could offer the quest or explain a hold.
+            step, doing, note = class_step(
+                m,
+                classes,
+                recent,
+                cap,
+                hunts,
+                now,
+                far,
+                kept,
+                crafters,
+                str(masters.get(m.guild) or ""),
+            )
+            asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
+            helps += asked
+            ask_yields += yielded
+            if asked:
+                step, doing = None, asking_line(m, asked)
+            lines[m.name] = doing or "Idle"
+            if note:
+                notes.append(note)
+            if step is None:
+                continue
+            started, allowance = _allowance(step, counters, per_guild)
+            why = _step_refusal(m, busy, started, allowance, step) or job_walk_held(
+                m, step, recent
+            )
+            if why:
+                notes.append(why)
+                class_holds[m.name] = _class_hold_reason(m.name, why)
+                _release_slots(m.name, far, hunts)
+                continue
+            started[m.guild] = started.get(m.guild, 0) + 1
+            busy.add(m.name)
+            steps.append(step)
+            continue
         if m.role not in (MAINTENANCE, SUMMONER, RAIDER):
             continue
         master = str(masters.get(m.guild) or "")
@@ -3809,6 +3862,8 @@ def plan(
         )
         if why:
             notes.append(why)
+            if step.action == classquest.ACTION:
+                class_holds[m.name] = _class_hold_reason(m.name, why)
             _release_slots(m.name, far, hunts)
             crossing = isle_crossing_instead(
                 m,
@@ -3834,11 +3889,69 @@ def plan(
         (counters, busy, per_guild),
         steps,
         notes,
+        class_holds,
         family_danger,
     )
     owed, released = owed_members(
-        members, classes, recent, hunts, now, owing or classquest.Owing(), asks=asks
+        all_members, classes, recent, hunts, now, owing or classquest.Owing(), asks=asks
     )
+    class_step_names = {
+        step.holder
+        for step in steps
+        if step.action in (classquest.ACTION, classquest.CROSS_ACTION)
+    }
+    planned_by_name = {step.holder: step for step in steps}
+    for name, row in {**released, **owed}.items():
+        if name in class_step_names or name in class_holds:
+            continue
+        # A member already doing the natural hunt/field portion of its class
+        # quest is not waiting for an offer. Keep that live work line intact.
+        if classquest.MARK in str(lines.get(name, "")):
+            continue
+        member = next((m for m in all_members if m.name == name), None)
+        if member is None:
+            continue
+        if not member.online:
+            why = "the member is offline"
+        elif not member.alive:
+            why = "the member is dead"
+        elif member.in_combat:
+            why = "the member is in combat"
+        elif member.map_id is None or member.x is None or member.y is None:
+            why = "the member's position is unread"
+        elif name in preexisting_busy:
+            why = "the member is already on another guild walk"
+        elif row.blocker:
+            why = row.said or row.blocker
+        elif yielded := class_yield(member, recent):
+            why = _class_hold_reason(name, yielded)
+        elif name in planned_by_name:
+            why = "the member is doing another job: %s" % planned_by_name[name].said
+        else:
+            note = next(
+                (
+                    n
+                    for n in notes
+                    if n.startswith(name + " ") or n.startswith(name + ":")
+                ),
+                "",
+            )
+            if note:
+                why = note[len(name) :].lstrip(": ")
+            elif _cooling(member, classquest.ACTION, recent):
+                why = "the class-quest cooldown is still active"
+            else:
+                why = "the planner found no safe class-quest step this pass"
+        class_holds[name] = why
+    family_by_name = {m.name: m for m in family_candidates or ()}
+    for name, why in (family_holds or {}).items():
+        member = family_by_name.get(name)
+        if (
+            member is not None
+            and name not in class_step_names
+            and class_owed(member, classes, recent, hunts, now, asks) is not None
+        ):
+            class_holds.setdefault(name, str(why))
     notes += owed_notes(owed, released)
     return JobsPlan(
         steps=tuple(steps),
@@ -3847,24 +3960,25 @@ def plan(
         doors=doors,
         notes=tuple(notes),
         gear_holds=tuple(gear_holds),
+        class_holds=class_holds,
         focus=tally,
         helps=tuple(helps),
         owed=owed,
         released=released,
-        yields=class_yields(members, classes, recent),
+        yields=class_yields(all_members, classes, recent),
         ask_yields=tuple(ask_yields),
     )
 
 
 def _plan_family_class_steps(
-    family_members, reads, limits, steps, notes, danger=None
+    family_members, reads, limits, steps, notes, class_holds, danger=None
 ) -> None:
     """THE FAMILY'S CLASS STEPS, after every guild member's (#2336): each is held
     by the guild's class allowance like any class step, and none is counted in
     `owed`, so a family member is never held out of a dungeon by this. Appends
-    to `steps` and `notes`. `danger` is name -> the highest creature level read
-    near that member's giver (None or missing: not read, so a far walk is held,
-    familyclass.danger_hold)."""
+    to `steps` and `notes`; held offers go in `class_holds`. `danger` is name ->
+    the highest creature level read near that member's giver (None or missing:
+    not read, so a far walk is held, familyclass.danger_hold)."""
     classes, recent, cap, now, far, kept, crafters, masters = reads
     counters, busy, per_guild = limits
     if not familyclass.enabled():
@@ -3887,6 +4001,13 @@ def _plan_family_class_steps(
         if note:
             notes.append(note)
         if step is None:
+            if class_owed(m, classes, recent, now=now) is not None and note:
+                class_holds[m.name] = _class_hold_reason(m.name, note)
+            continue
+        gap_hold = familyclass.holds(m, step.move, recent)
+        if gap_hold:
+            class_holds[m.name] = _class_hold_reason(m.name, gap_hold)
+            _release_slots(m.name, far, None)
             continue
         started, allowance = _allowance(step, counters, per_guild)
         why = (
@@ -3896,6 +4017,7 @@ def _plan_family_class_steps(
         )
         if why:
             notes.append(why)
+            class_holds[m.name] = _class_hold_reason(m.name, why)
             _release_slots(m.name, far, None)
             continue
         started[m.guild] = started.get(m.guild, 0) + 1
@@ -3906,6 +4028,14 @@ def _plan_family_class_steps(
 def _offer_for(offers, name):
     """One member's entry of a pass's `name -> offer` map, None when unread."""
     return (offers or {}).get(name)
+
+
+def _class_hold_reason(name, reason):
+    """The reason without the member prefix used by planner diagnostics."""
+    text = str(reason or "").strip()
+    if text.startswith(str(name)):
+        text = text[len(str(name)) :].lstrip(": ")
+    return text or "the planner withheld the class quest this pass"
 
 
 def class_yields(members, classes, recent) -> tuple:

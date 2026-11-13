@@ -398,6 +398,55 @@ class TheStep(unittest.TestCase):
 class ThePriority(unittest.TestCase):
     """The class quest is the first rung: nothing else pre-empts it."""
 
+    def test_a_seat_without_a_lineup_role_still_gets_its_class_quest(self):
+        m = dataclasses.replace(
+            who("Unplaced", quests_done=frozenset({1505}), level=50),
+            role=guildjobs.UNASSIGNED,
+        )
+        result = class_plan([], class_candidates=[m])
+        self.assertEqual([s.holder for s in class_steps(result)], ["Unplaced"])
+
+    def test_an_owed_class_quest_hold_has_a_roster_reason(self):
+        m = dataclasses.replace(
+            who("Held", quests_done=frozenset({1505}), level=50),
+            role=guildjobs.UNASSIGNED,
+        )
+        result = class_plan([], busy={m.name}, class_candidates=[m])
+        self.assertEqual(class_steps(result), [])
+        self.assertIn("already on another guild walk", result.class_holds[m.name])
+
+    def test_a_roleless_member_already_hunting_is_not_reported_as_waiting(self):
+        m = dataclasses.replace(
+            who(
+                "Hunter",
+                quest_log={1498: 3},
+                quests_done=frozenset({1505}),
+                level=50,
+                x=720.0,
+                y=-4100.0,
+            ),
+            role=guildjobs.UNASSIGNED,
+        )
+        result = class_plan([], class_candidates=[m])
+        self.assertEqual(result.steps, ())
+        self.assertIn(classquest.MARK, result.lines[m.name])
+        self.assertNotIn(m.name, result.class_holds)
+
+    def test_a_roleless_member_over_the_class_allowance_gets_the_limit(self):
+        members = [
+            dataclasses.replace(
+                who("Candidate%d" % i, quests_done=frozenset({1505}), level=50),
+                role=guildjobs.UNASSIGNED,
+            )
+            for i in range(guildjobs.CLASSQUEST_STEPS_PER_GUILD + 1)
+        ]
+        result = class_plan([], class_candidates=members)
+        planned = {step.holder for step in class_steps(result)}
+        held = set(m.name for m in members) - planned
+        self.assertEqual(len(planned), guildjobs.CLASSQUEST_STEPS_PER_GUILD)
+        self.assertEqual(len(held), 1)
+        self.assertIn("waits:", result.class_holds[next(iter(held))])
+
     def test_it_comes_before_the_level_walk(self):
         # A level 20 warrior standing in a zone it has outgrown would be walked
         # to a hub; with a class quest to take it goes to the giver instead.

@@ -18827,7 +18827,8 @@ class Bridge(discord.Client):
         if census:
             log.info("guild jobs: %s", census)
         # THE ROSTER FAMILY'S CLASS STEP, BETWEEN RUNS (#2336).
-        family_members = await asyncio.to_thread(_idle_family_members, facts)
+        family_members, family_class_holds = await asyncio.to_thread(
+            _family_class_state, facts)
         family_danger = await asyncio.to_thread(
             _family_danger, family_members, facts.get("class_book"), facts["recent"])
         # THE PLAN RUNS ON THE EVENT LOOP (#833): it mutates the hunt clock and
@@ -18849,6 +18850,7 @@ class Bridge(discord.Client):
             focus=focus,
             # The class quest is a spawn walk and a quest row (classquest.py).
             classes=facts.get("class_book") if spawn_walks else None,
+            class_candidates=facts.get("class_candidates", ()),
             hunts=self._class_hunts, now=time.time(),
             owing=self._class_owing,
             # The class quest walks the realm has room for (guildroute).
@@ -18866,6 +18868,8 @@ class Bridge(discord.Client):
             # Members dying over and over in one zone leave it (#1464).
             # The family members idle between runs take their class step.
             family_members=family_members, family_danger=family_danger,
+            family_candidates=facts.get("family_members", ()),
+            family_holds=family_class_holds,
             loops=facts.get("death_loops"))
         log.info("guild jobs: the plan took %.2f s on the event loop for %d "
                  "member(s)%s", time.perf_counter() - plan_started, len(members),
@@ -19143,6 +19147,8 @@ class Bridge(discord.Client):
         for line in guildjobs.focus_lines(plan):
             log.info("guild jobs: %s", line)
         self._log_stranded_knights(members, plan)
+        for name, reason in sorted(plan.class_holds.items()):
+            log.info("guild class quest: %s held: %s", name, reason)
         # One line per member that did not walk for gear this pass: never silent.
         for line in plan.gear_holds:
             log.info("guild gear: %s", line)
@@ -33579,12 +33585,19 @@ _LIVE_RUN_LEADERS_SQL = (
 
 
 def _idle_family_members(facts) -> list:
+    """The roster family members whose family is between runs (#2336)."""
+    return _family_class_state(facts)[0]
+
+
+def _family_class_state(facts) -> tuple:
     """The roster family members whose family is between runs (familyclass.py,
-    #2336): no live run of its leader and no member inside an instance. An
-    unread run table is not idle, so a family is never walked off on a guess."""
+    #2336): no live run of its leader and no member inside an instance, plus
+    name -> reason for an owed class quest held by one of those gates."""
     members = facts.get("family_members") or []
-    if not members or not familyclass.enabled():
-        return []
+    if not members:
+        return [], {}
+    if not familyclass.enabled():
+        return [], {m.name: "family class steps are disabled" for m in members}
     try:
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(_LIVE_RUN_LEADERS_SQL)
@@ -33593,14 +33606,17 @@ def _idle_family_members(facts) -> list:
     except pymysql.err.MySQLError:
         log.exception("guild jobs: the live runs could not be read; no family "
                       "member is planned a class step this pass")
-        return []
+        return [], {m.name: "live dungeon status could not be read" for m in members}
     inside = {m.name for m in members
               if m.map_id is not None and m.map_id not in guildrun.OPEN_WORLD_MAPS}
+    errand = {n for key, st in list(_TOWN_ERRANDS.items()) if st.active for n in key}
+    holds = familyclass.not_idle_holds(roster, live, inside, errand)
+    if not roster:
+        holds.update({m.name: "family roster could not be read" for m in members})
     idle = familyclass.idle_names(roster, live, inside)
     # A member on a town errand is busy though the claims table does not say so
     # (#2338): its bag-room walks and aims are the errand's.
-    errand = {n for key, st in list(_TOWN_ERRANDS.items()) if st.active for n in key}
-    return familyclass.errand_free([m for m in members if m.name in idle], errand)
+    return familyclass.errand_free([m for m in members if m.name in idle], errand), holds
 
 
 def _family_danger(members, book, recent) -> dict:
@@ -33722,6 +33738,11 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
         rows, family, role_of, skills, known, carried, eligible,
         _class_quest_state(log_rows, done_rows), free_slots or {}, supplies,
         _rewarded_of(rewarded_rows), bag_slots or {}, worn or {})
+    class_candidates, _unused_crafters = _guild_members_and_crafters(
+        rows, family, role_of, skills, known, carried, eligible,
+        _class_quest_state(log_rows, done_rows), free_slots or {}, supplies,
+        _rewarded_of(rewarded_rows), bag_slots or {}, worn or {},
+        unassigned_only=True)
     pending = {str(r.get(k) or "") for r in pending_rows
                for k in ("target_name", "target_arg")} - {""}
     map_id_by_name = {m.name: m.map_id for m in members if m.map_id is not None}
@@ -33735,7 +33756,8 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
         _class_quest_state(log_rows, done_rows), free_slots or {}, supplies,
         _rewarded_of(rewarded_rows), bag_slots or {}, worn or {})[0] if family_rows else []
     return {
-        "members": members, "masters": masters, "crafters": crafters,
+        "members": members, "class_candidates": class_candidates,
+        "masters": masters, "crafters": crafters,
         "family_members": family_members,
         "recent": (guildjobs.recent_from_rows(recent_rows, map_id_by_name)
                    + guildjobs.still_stranded(stranded_rows, map_id_by_name)),
@@ -33800,7 +33822,8 @@ def _rewarded_of(rows):
 
 def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, eligible,
                                 quest_state=({}, {}, {}), free_slots=None, supplies=None,
-                                rewarded=None, bag_slots=None, worn=None):
+                                rewarded=None, bag_slots=None, worn=None,
+                                unassigned_only=False):
     members, crafters = [], {}
     quest_log, quests_done, quest_progress = quest_state
     for r in rows:
@@ -33809,10 +33832,16 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             for skill, (value, _cap) in skills.get(guid, {}).items():
                 crafters.setdefault(guild, {}).setdefault(skill, []).append((name, value))
             continue
-        if name not in role_of:
-            continue
+        if unassigned_only:
+            if name in role_of:
+                continue
+            role = guildjobs.UNASSIGNED
+        else:
+            if name not in role_of:
+                continue
+            role = role_of[name]
         members.append(guildjobs.Member(
-            name=name, guild=guild, role=role_of[name],
+            name=name, guild=guild, role=role,
             level=int(r.get("level") or 0), class_id=int(r.get("class_id") or 0),
             race=int(r.get("race") or 0), online=bool(int(r.get("online") or 0)),
             in_combat=bool(int(r.get("in_combat") or 0)),

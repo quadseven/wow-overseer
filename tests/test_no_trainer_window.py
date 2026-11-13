@@ -73,6 +73,29 @@ class ARefusalOlderThanTheRecentRead(unittest.TestCase):
 
 
 class TheBridgeReadsThem(unittest.TestCase):
+    def test_a_member_without_a_lineup_role_reaches_class_quest_planning(self):
+        rows = [
+            {
+                "name": "Unplaced",
+                "guid": 17,
+                "guild_name": "Cave",
+                "level": 55,
+                "class_id": 1,
+                "race": 2,
+                "online": 1,
+                "map_id": 1,
+                "pos_x": 10.0,
+                "pos_y": 20.0,
+            }
+        ]
+        with mock.patch.object(
+            bridge.guildwork, "members_from_rows", return_value=([], {})
+        ):
+            facts = bridge._job_facts_from_rows(rows, [], set(), [], [], [], [], [])
+        self.assertEqual(facts["members"], [])
+        self.assertEqual(len(facts["class_candidates"]), 1)
+        self.assertEqual(facts["class_candidates"][0].role, guildjobs.UNASSIGNED)
+
     def test_the_read_reaches_past_the_recent_window(self):
         sql = bridge._JOB_NO_TRAINER_SQL
         self.assertIn("created_at <= NOW() - INTERVAL 1 DAY", sql)
