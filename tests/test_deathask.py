@@ -415,9 +415,7 @@ class DeathLoopSeatedNames(unittest.TestCase):
         self.assertIn(
             "seated_names = {name for run in parties for name in run.names()}", body
         )
-        self.assertIn(
-            "seated_names |= set(social.form.composition.names)", body
-        )
+        self.assertIn("seated_names |= set(social.form.composition.names)", body)
 
 
 if __name__ == "__main__":
