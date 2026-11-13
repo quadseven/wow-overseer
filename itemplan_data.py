@@ -332,7 +332,7 @@ _SLOTS_FOR = {
 }
 
 
-def upgrade_verdicts(worn: dict, bag_rows) -> dict:
+def upgrade_verdicts(worn: dict, bag_rows, drive=None) -> dict:
     """`itemplan.Context.gear_verdict`: {(member, entry): "wear"}.
 
     A bag piece is "wear" when its item level beats the worn item in every
@@ -342,7 +342,14 @@ def upgrade_verdicts(worn: dict, bag_rows) -> dict:
     judges a piece as not better, so a doubtful piece gets no verdict and the
     plan's other rules decide. `bag_rows` carry member, entry, inventory_type,
     item_level, req_level and level; a row missing any is skipped.
+
+    `drive` is `equipscore.drive_verdicts`' answer, {member: {entry:
+    verdict}}, for the roster members whose equips the module's gear drive
+    makes (#2381). For a member in it, the drive's rule is the authority: a
+    piece is "wear" only when the drive would put it on, and item level is not
+    asked, so a piece the drive declines is never carried for ever as R4.
     """
+    drive = drive or {}
     out: dict = {}
     for row in bag_rows or ():
         try:
@@ -353,6 +360,10 @@ def upgrade_verdicts(worn: dict, bag_rows) -> dict:
             req = int(row["req_level"])
             level = int(row["level"])
         except (KeyError, TypeError, ValueError):
+            continue
+        if member in drive:
+            if drive[member].get(entry) == "wear":
+                out[(member, entry)] = "wear"
             continue
         slots = _SLOTS_FOR.get(itype)
         if not slots or req > level:

@@ -21,10 +21,13 @@ forced.
 A dry run walks the same decisions and calls nothing: one step per report
 route, in report order, with status WOULD_WRITE where a live run writes.
 
-THE DRY-RUN READ (`world_from_rows`, `dry_run_view`) is the only caller so
-far: it builds the World from rows the site already reads and returns what
-WOULD be written, one line per route. Letters are not considered (no
-mailbox read exists outside the bridge), so a dry run names trades only.
+TWO CALLERS. The bridge's gear routing pass (`bridge._gear_routing_once`)
+runs it live once a cycle, with `_insert_route` as `insert`, a per-pass cap,
+the holders at a mailbox, the writer's retry window (`queued`) and the
+operator's keep reservations (`kept`: a kept piece is never moved). The
+site's dry-run read (`world_from_rows`, `dry_run_view`) builds the World from
+rows it already reads and returns what WOULD be written, one line per route;
+it has no mailbox read, so a dry run names trades only.
 
 PURE: no MySQL, no clock. The caller reads the world and supplies `insert`.
 """
@@ -35,12 +38,18 @@ from dataclasses import dataclass
 
 import bag_pressure
 import gearrouting
+import keep
 
 WRITTEN = "written"
 WOULD_WRITE = "would write"
 STALE = "stale"
 WAITING = "waiting"
 DECLINED = "declined"
+KEPT = "kept"
+
+# The statuses that are a hand-off DECISION, one log line each; a wait or a
+# stale route is counted, not listed (bridge._log_capped says why).
+DECISIONS = (WRITTEN, KEPT, DECLINED)
 
 _BANK_WAIT = (
     "the guild bank is not a character: it cannot trade or post, so a bank "
@@ -57,6 +66,10 @@ class World:
     at_mailbox: tuple = ()  # holders standing at a mailbox
     free_slots: dict | None = None  # name -> free bag slots
     family: frozenset | set = frozenset()  # receivers a letter may go to
+    # The operator's keep reservations (overseer_keep, keep.Reservations).
+    kept: keep.Reservations = keep.Reservations()
+    # (holder, item guid) already written inside the writer's retry window.
+    queued: frozenset | set = frozenset()
 
 
 @dataclass(frozen=True)
@@ -120,14 +133,34 @@ def _wait_reason(route, notes) -> str:
     return "cannot reach %s this pass" % route.wearer
 
 
-def execute(report, world: World, insert, dry_run: bool = False) -> Result:
+def _kept(route, reservations) -> bool:
+    """Does an overseer_keep reservation cover this piece on its holder?
+
+    A keep has no form that lets its piece leave: bankpolicy reads it as
+    "stays with this character" (in their own bank below its level, worn
+    after it), and mod-overseer refuses to trade or mail a kept item. So a
+    kept piece is never handed to `insert`, by guid or by entry.
+    """
+    name = str(route.holder or "").strip().lower()
+    return (name, int(route.guid)) in reservations.guids or (
+        name,
+        int(route.entry),
+    ) in reservations.entries
+
+
+def execute(
+    report, world: World, insert, dry_run: bool = False, per_pass=None
+) -> Result:
     """Decide, and unless `dry_run`, write, every route in `report`.
 
     `insert(gear.Route) -> int` writes one hand-over row and returns how many
     it wrote (0: declined, e.g. already in the retry window or reserved).
+    `per_pass` caps how many routes are written (None: every one that can
+    be); a route past the cap waits, with the machinery's own words.
     """
     family = set(world.family or ())
     carried = set(world.carried or ())
+    queued = set(world.queued or ())
     steps: dict = {}
     live: list = []
     for index, route in enumerate(report.routes):
@@ -140,6 +173,20 @@ def execute(report, world: World, insert, dry_run: bool = False) -> Result:
                 "%s is no longer in %s's bags, so it is not moved"
                 % (route.item, route.holder),
             )
+        elif _kept(route, world.kept):
+            steps[index] = Step(
+                route,
+                KEPT,
+                "%s keeps %s (overseer_keep), so it is not moved"
+                % (route.holder, route.item),
+            )
+        elif (route.holder, route.guid) in queued:
+            steps[index] = Step(
+                route,
+                WAITING,
+                "%s is already queued to leave %s; not asked again this pass"
+                % (route.item, route.holder),
+            )
         else:
             live.append((index, _as_gear_route(route, family)))
     ready = bag_pressure.guild_route_deliverable(
@@ -147,7 +194,7 @@ def execute(report, world: World, insert, dry_run: bool = False) -> Result:
         world.positions,
         world.at_mailbox,
         world.free_slots,
-        per_pass=max(len(live), 1),
+        per_pass=max(len(live), 1) if per_pass is None else max(int(per_pass), 0),
     )
     by_key = {(g.holder, g.guid): g for g in ready.grants}
     for index, planned in live:
@@ -165,6 +212,45 @@ def execute(report, world: World, insert, dry_run: bool = False) -> Result:
             )
     return Result(
         steps=tuple(steps[i] for i in range(len(report.routes))), dry_run=dry_run
+    )
+
+
+def decision_lines(result: Result) -> list:
+    """One plain line per hand-off decision (written, kept, declined), in
+    report order: the status, then who gave, who received, what piece."""
+    return [
+        "%s: %s" % (step.status, step.said)
+        for step in result.steps
+        if step.status in DECISIONS
+    ]
+
+
+def summary(result: Result) -> str:
+    """How many routes ended in each status, as one line."""
+    counts: dict = {}
+    for step in result.steps:
+        counts[step.status] = counts.get(step.status, 0) + 1
+    order = (WRITTEN, WOULD_WRITE, KEPT, DECLINED, WAITING, STALE)
+    said = ", ".join("%d %s" % (counts[s], s) for s in order if counts.get(s))
+    return "%s of %d route(s)" % (said or "nothing", len(result.steps))
+
+
+def queued(seen) -> frozenset:
+    """(holder, item guid) from the writer's retry window, (holder, command)
+    pairs: a trade names `guid:<n>`, a letter `item:<n>` (keep.items_named)."""
+    return frozenset(
+        (str(holder), guid)
+        for holder, command in seen or ()
+        for guid in keep.items_named(command)[0]
+    )
+
+
+def carried(gear_rows) -> frozenset:
+    """(holder, item guid) for every gear row not worn: what is in bags."""
+    return frozenset(
+        (str(r.get("holder") or ""), int(r.get("item_guid") or 0))
+        for r in gear_rows or ()
+        if not gearrouting._is_worn(r)
     )
 
 
@@ -217,18 +303,13 @@ def world_from_rows(gear_rows, position_rows, room_rows, family=()) -> World:
     slot is carried. `position_rows` are fresh snapshot rows; a member
     missing from them is not in the world. `room_rows` are ROOM_SQL's.
     """
-    carried = {
-        (str(r.get("holder") or ""), int(r.get("item_guid") or 0))
-        for r in gear_rows or ()
-        if not gearrouting._is_worn(r)
-    }
     positions = {str(r["name"]): dict(r) for r in position_rows or () if r.get("name")}
     room = {
         name: free
         for name, (free, _total) in bag_pressure.general_bag_room(room_rows).items()
     }
     return World(
-        carried=frozenset(carried),
+        carried=carried(gear_rows),
         positions=positions,
         at_mailbox=(),
         free_slots=room,
