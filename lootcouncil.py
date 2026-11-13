@@ -40,6 +40,17 @@ are all caster stats is never a tank's piece, whatever its armor says.
 With no card to read, or nobody fitting, the gates stay silent and the
 council runs as it always has.
 
+A USER BEFORE A GREED ROLL. Measured on the dev realm on 2026-11-12: Kang
+the Decapitator, an epic two-handed axe, upgraded nobody in a party of five
+level 60s, so the council named nobody and everybody greeded. The priest
+won it over the warrior and the paladin who could swing it, traded it on,
+and the copy was sold to a vendor. A member who can USE a drop outranks a
+greed roll by one who cannot: when the decision lands on nobody while the
+candidates hold both somebody who can use it (the module's `wearable`) and
+somebody who cannot, the piece goes to the best user instead (a fitting
+wearer first, the family first, then the module's score). Where everybody
+can use it, or nobody can, the greed roll stands: no non-user can win it.
+
 WHO ACTS. `loot_council` acts at 0.75, and an answer that agrees with the
 heuristic counts as Jev's at any confidence. 0.75 is guild_recipient's
 threshold, set from the same Choice probe (its clear calls answered 0.84 to
@@ -622,6 +633,9 @@ def decide(
         council, acted, answer if fresh else None, criteria, members, piece, shut
     )
     recipient = "" if pick == NOBODY else pick
+    recipient, reason, moved = _user_over_greed(council, item, recipient, reason)
+    if moved:
+        acted = jev.HEURISTIC
     judgment = replace(base, acted=acted)
     return Decision(council.key, recipient, _fit(reason), acted, judgment)
 
@@ -667,6 +681,53 @@ def _pick_and_reason(
     return fallback, reason
 
 
+def _users(council: Council, piece: _Piece | None) -> tuple:
+    """The candidates who can use the drop, best first, when a candidate who
+    cannot is also present; () when everybody can or nobody can, because a
+    greed roll then cannot hand it to a non-user. Upgrades come first in the
+    order they are offered, then a fitting wearer, the family, the module's
+    score and the name."""
+    users = [c for c in council.candidates if c.wearable]
+    if not users or len(users) == len(council.candidates):
+        return ()
+    upgrades = {c.name: n for n, c in enumerate(offered(council))}
+    return tuple(
+        sorted(
+            users,
+            key=lambda c: (
+                upgrades.get(c.name, len(upgrades)),
+                not (piece is not None and _fits(c, piece)),
+                not c.family,
+                -c.score,
+                c.name,
+            ),
+        )
+    )
+
+
+def _user_over_greed(council: Council, item, recipient: str, reason: str):
+    """(recipient, reason, moved): a nobody turned into the best user while a
+    non-user is present, with why; anything else as it was."""
+    if recipient:
+        return recipient, reason, False
+    users = _users(council, _piece(item))
+    if not users:
+        return recipient, reason, False
+    pick = users[0]
+    cannot = [c.name for c in council.candidates if not c.wearable]
+    named = "nobody was named" if pick.upgrades else "nobody it upgrades"
+    why = (
+        "Heuristic: %s; %s can use it and %s cannot, so it goes to a member "
+        "who can use it rather than a greed roll"
+        % (
+            named,
+            pick.name,
+            ", ".join(cannot[:4]) + (" and others" if len(cannot) > 4 else ""),
+        )
+    )
+    return pick.name, why, True
+
+
 def skipped(council: Council, item=None) -> Decision:
     """The heuristic's decision for a row with nobody to ask about. The
     item card, when the caller has it, arms the fit gates here too: the
@@ -680,6 +741,7 @@ def skipped(council: Council, item=None) -> Decision:
         recipient = pick.name
         why = _fit_reason(piece, replaced, pick)
     reason = "Heuristic: %s" % why
+    recipient, reason, _moved = _user_over_greed(council, item, recipient, reason)
     judgment = Judgment(
         kind=KIND,
         subject=council.heuristic or council.family or "-",
