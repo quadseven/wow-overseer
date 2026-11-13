@@ -97,6 +97,7 @@ import natural
 import nowstatus
 import guildcorps
 import guildjobs
+import guineapig
 import deathloop
 import guildlevel
 import guildfacts
@@ -163,6 +164,7 @@ import questbook
 import questcatalogue
 import questledger
 import questtickets
+import corpstickets
 import questers
 import questshare
 import quests
@@ -4220,6 +4222,12 @@ def _file_quest_tickets(client) -> dict:
         )
 
 
+def _file_corps_tickets(client) -> dict:
+    """One corps blocker filing pass (corpstickets.py) on one connection."""
+    with _connect() as conn, conn.cursor() as cur:
+        return corpstickets.run(corpstickets.SqlStore(cur), client, time.time())
+
+
 def _read_last_quest_tickets_pass() -> float | None:
     """The last time the filing pass ran, from the persistent memo store."""
     with _connect() as conn, conn.cursor() as cur:
@@ -8146,6 +8154,7 @@ PASSES = (
     _Pass("_watch_loop"),
     _Pass("_quest_ledger_loop"),
     _Pass("_quest_tickets_loop"),
+    _Pass("_corps_tickets_loop"),
 )
 
 
@@ -18967,6 +18976,13 @@ class Bridge(discord.Client):
         log.info("guild jobs: the plan took %.2f s on the event loop for %d "
                  "member(s)%s", time.perf_counter() - plan_started, len(members),
                  _family_label(cohort))
+        # THE GUINEA PIGS (guineapig.py, #2398): each guild's test crafter per
+        # trade and the trades nobody in the corps holds, said when they change.
+        pig_lines = guineapig.lines(plan.pigs, members)
+        if pig_lines != getattr(self, "_pig_lines", None):
+            self._pig_lines = pig_lines
+            for line in pig_lines:
+                log.info("guild jobs: %s", line)
         # Members held on a class quest are kept out of every dungeon pass
         # (the guild's asks, its runs): _class_priority_names. The class
         # quests a guildmate could help with are asked in guild chat by the
@@ -25829,6 +25845,33 @@ class Bridge(discord.Client):
                               "link them by hand", done["unlinked"])
             except Exception:
                 log.exception("quest tickets: pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _corps_tickets_loop(self) -> None:
+        """File one issue per blocked guild corps member and blocker kind,
+        daily (corpstickets.py, #2399)."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("CORPS_TICKET_SECONDS", "86400"))
+        client = questtickets.client_from_env(log, epic=corpstickets.EPIC)
+        if client is None:
+            log.info("corps tickets: no GitHub App is configured, so no issue is filed")
+            return
+        # The first pass waits an hour: a bridge restart must not file on rows
+        # the previous process was still answering.
+        await asyncio.sleep(float(os.environ.get("CORPS_TICKET_FIRST_SECONDS", "3600")))
+        while not self.is_closed():
+            try:
+                done = await asyncio.to_thread(_file_corps_tickets, client)
+                log.info("corps tickets: %d blocker(s) found, filed %s",
+                         done["found"], ", ".join(done["filed"]) or "none")
+                if done["stuck"]:
+                    log.error("corps tickets: a filing never finished for %s; "
+                              "check for an issue, then fix its memo row", done["stuck"])
+                if done["unlinked"]:
+                    log.error("corps tickets: issues %s are filed but not under the "
+                              "epic; link them by hand", done["unlinked"])
+            except Exception:
+                log.exception("corps tickets: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _watch_loop(self) -> None:
