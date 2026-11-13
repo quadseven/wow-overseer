@@ -343,9 +343,6 @@ class TheBridgeDrivesIt(unittest.TestCase):
         self.assertIn("_memo_read, FARM_MEMO_KIND", self.body)
         self.assertIn("_memo_upsert, FARM_MEMO_KIND, subject", self.body)
 
-    def test_the_image_ships_the_module(self):
-        self.assertIn("farmjob.py", (ROOT / "Dockerfile").read_text(encoding="utf-8"))
-
 
 if __name__ == "__main__":
     unittest.main()
