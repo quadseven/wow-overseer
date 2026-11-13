@@ -244,17 +244,17 @@ class DeathLoopAsks(unittest.TestCase):
         self.assertEqual(found.posts, ())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class DeathLoopSpokenNames(unittest.TestCase):
     def test_a_mate_who_spoke_a_yes_this_pass_does_not_answer_a_death_ask(self):
         looper, helper = looper_and_mate()
         live = ask(9, "Looper")
         found = deathask.plan_pass(
-            {"Looper": loop_of()}, [looper, helper], [live], NOW,
-            answers=[], spoken={"Helper"},
+            {"Looper": loop_of()},
+            [looper, helper],
+            [live],
+            NOW,
+            answers=[],
+            spoken={"Helper"},
         )
         self.assertEqual(found.replies, ())
 
@@ -263,8 +263,12 @@ class DeathLoopSpokenNames(unittest.TestCase):
         second = mate("Second", 27, 2, at=NEAR, zone_id=HILLSBRAD)
         live = ask(9, "Looper")
         found = deathask.plan_pass(
-            {"Looper": loop_of()}, [looper, helper, second], [live], NOW,
-            answers=[], spoken={"Helper"},
+            {"Looper": loop_of()},
+            [looper, helper, second],
+            [live],
+            NOW,
+            answers=[],
+            spoken={"Helper"},
         )
         self.assertEqual([r.member for r in found.replies], ["Second"])
 
@@ -301,3 +305,29 @@ class DeathLoopSpokenNames(unittest.TestCase):
                 facts, [looper, helper], {}, spoken={"Helper"}
             )
         self.assertEqual(found.replies, ())
+
+    def test_the_social_pass_feeds_its_reply_names_to_the_death_pass(self):
+        import types
+
+        import source_utils
+        from _stub_modules import PYMYSQL, fresh_import, stub_modules
+
+        stub = types.ModuleType("discord")
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+        stub.Client = Client
+        with stub_modules(pymysql=PYMYSQL):
+            bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
+        body = source_utils.function_source(bridge.Bridge._guild_social_once)
+        self.assertIn("spoken={r.member for r in social.replies}", body)
+        self.assertLess(
+            body.index("social = _with_class_asks(social, quest_pass)"),
+            body.index("_death_ask_pass(facts, mates, held,"),
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
