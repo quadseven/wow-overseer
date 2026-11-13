@@ -17,6 +17,7 @@ with stub_modules(pymysql=PYMYSQL):
     import raidteams
     import realmread
     from apiv2 import raidteams as v2
+    from apiv2 import training as v2training
 
 GUILD_ID = 7
 
@@ -50,6 +51,8 @@ def reader(members, attuned=(), worn=(), carried=(), fail=()):
         v2.ATTUNED_SQL: list(attuned),
         v2.WORN_SQL: list(worn),
         v2.CONSUMABLES_SQL: list(carried),
+        v2.KNOWN_SQL: [],
+        v2training.TRAINER_SQL: [],
     }
     for sql in fail:
         answers[sql] = realmread.MISSING_TABLE
@@ -186,7 +189,13 @@ class TheReads(unittest.TestCase):
         code, payload = v2.raidteams_read({"guild": ["cave"]}, _ctx(rd))
         self.assertEqual(code, 200)
         self.assertIs(payload["members"]["Grug"]["attuned"], True)
-        self.assertEqual(len(rd.asked), 4)
+        asked = [sql for sql, _ in rd.asked]
+        for sql in (v2.MEMBERS_SQL, v2.ATTUNED_SQL, v2.WORN_SQL, v2.CONSUMABLES_SQL):
+            self.assertTrue(any(a.startswith(sql[:40]) or a == sql for a in asked), sql)
+        # The spell reads ride along: known spells plus one trainer read
+        # per tank class seated.
+        self.assertTrue(any(a.startswith("SELECT c.name, cs.spell") for a in asked))
+        self.assertTrue(any("trainer_spell" in a for a in asked))
 
     def test_every_value_is_bound(self):
         rd = reader(_rows("Cave"))
@@ -214,3 +223,73 @@ class TheReads(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheTankAudit(unittest.TestCase):
+    """The raid-teams payload carries the seated tanks' spellbook audit:
+    each filled tank seat's due trainer spells it has not learned, from
+    the same trainer rows and known sets the training read uses. A read
+    the realm cannot answer leaves the audit null, never a guess."""
+
+    TRAINER = [
+        {"spell": 900001, "level": 10, "cost": 100, "req1": 0, "req2": 0, "req3": 0},
+        {"spell": 18499, "level": 32, "cost": 100, "req1": 0, "req2": 0, "req3": 0},
+    ]
+
+    def _payload(self, **reads):
+        fetched = {
+            "members": _rows("Cave"),
+            "attuned": [],
+            "worn": [],
+            "consumables": [],
+            "known": [],
+            "trainer": {cid: [] for cid in (1, 2, 3, 4, 5, 6, 7, 8, 9, 11)},
+        }
+        fetched["trainer"][1] = self.TRAINER
+        fetched.update(reads)
+        return v2.build("Cave", fetched)
+
+    def test_a_tank_missing_a_due_spell_is_named_in_the_audit(self):
+        audit = self._payload()["tank_audit"]
+        grug = [t for t in audit["tanks"] if t["name"] == "Grug"][0]
+        self.assertEqual(
+            grug["missing"], [{"spell": 900001, "level": 10, "state": "trainable"}]
+        )
+        self.assertFalse(grug["complete"])
+        # Every filled Warrior tank shares the class trainer list, so each
+        # is missing the same due spell; other classes have empty lists.
+        missing = [t for t in audit["tanks"] if t["missing"]]
+        self.assertTrue(all(t["class"] == "Warrior" for t in missing))
+        self.assertEqual(audit["incomplete"], len(missing))
+        self.assertEqual(audit["missing_total"], len(missing))
+
+    def test_an_above_level_spell_is_not_missing(self):
+        audit = self._payload()["tank_audit"]
+        for tank in audit["tanks"]:
+            self.assertNotIn(18499, [m["spell"] for m in tank["missing"]])
+
+    def test_a_tank_that_knows_the_due_spell_is_complete(self):
+        audit = self._payload(known=[{"name": "Grug", "spell": 900001}])["tank_audit"]
+        grug = [t for t in audit["tanks"] if t["name"] == "Grug"][0]
+        self.assertTrue(grug["complete"])
+        self.assertEqual(grug["missing"], [])
+
+    def test_only_filled_tank_seats_are_audited(self):
+        audit = self._payload()["tank_audit"]
+        payload = self._payload()
+        seated_tanks = [
+            s["name"]
+            for group in payload["seats"]
+            for s in group
+            if s["seat"] == "tank" and s["name"]
+        ]
+        self.assertEqual([t["name"] for t in audit["tanks"]], seated_tanks)
+        self.assertEqual(audit["audited"], len(seated_tanks))
+
+    def test_an_unreadable_spell_read_leaves_the_audit_null(self):
+        self.assertIsNone(self._payload(known=None)["tank_audit"])
+        self.assertIsNone(self._payload(trainer=None)["tank_audit"])
+
+    def test_a_tank_class_without_trainer_rows_leaves_the_audit_null(self):
+        trainer = {cid: [] for cid in (2, 3, 4, 5, 6, 7, 8, 9, 11)}
+        self.assertIsNone(self._payload(trainer=trainer)["tank_audit"])
