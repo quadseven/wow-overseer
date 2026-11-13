@@ -126,6 +126,10 @@ class _Loop:
     def __init__(self):
         self._job_steps = {}
 
+    async def _retry_held(self, prefix, step):
+        # The shared retry gate reads the command log; these steps are fresh.
+        return False
+
 
 for _name in (
     "_follow_up_event",
