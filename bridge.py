@@ -33597,7 +33597,7 @@ def _family_class_state(facts) -> tuple:
     if not members:
         return [], {}
     if not familyclass.enabled():
-        return [], {m.name: "family class steps are disabled" for m in members}
+        return [], familyclass.not_idle_holds((), members=members, enabled=False)
     try:
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(_LIVE_RUN_LEADERS_SQL)
@@ -33606,13 +33606,12 @@ def _family_class_state(facts) -> tuple:
     except pymysql.err.MySQLError:
         log.exception("guild jobs: the live runs could not be read; no family "
                       "member is planned a class step this pass")
-        return [], {m.name: "live dungeon status could not be read" for m in members}
+        return [], familyclass.not_idle_holds((), members=members, status_read=False)
     inside = {m.name for m in members
               if m.map_id is not None and m.map_id not in guildrun.OPEN_WORLD_MAPS}
     errand = {n for key, st in list(_TOWN_ERRANDS.items()) if st.active for n in key}
-    holds = familyclass.not_idle_holds(roster, live, inside, errand)
-    if not roster:
-        holds.update({m.name: "family roster could not be read" for m in members})
+    holds = familyclass.not_idle_holds(
+        roster, live, inside, errand, members=members, roster_read=bool(roster))
     idle = familyclass.idle_names(roster, live, inside)
     # A member on a town errand is busy though the claims table does not say so
     # (#2338): its bag-room walks and aims are the errand's.

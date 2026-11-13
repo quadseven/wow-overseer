@@ -101,8 +101,24 @@ def idle_names(roster, live_leaders=(), inside=()) -> set:
     return out
 
 
-def not_idle_holds(roster, live_leaders=(), inside=(), errands=()) -> dict:
+def not_idle_holds(
+    roster,
+    live_leaders=(),
+    inside=(),
+    errands=(),
+    members=(),
+    enabled=True,
+    status_read=True,
+    roster_read=True,
+) -> dict:
     """name -> why a family cannot take its between-run class step this pass."""
+    names = {m.name for m in members or ()}
+    if not enabled:
+        return {name: "family class steps are disabled" for name in names}
+    if not status_read:
+        return {name: "live dungeon status could not be read" for name in names}
+    if not roster_read:
+        return {name: "family roster could not be read" for name in names}
     families: dict = {}
     for row in roster or ():
         name = str(row.get("name") or "")

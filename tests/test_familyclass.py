@@ -204,6 +204,17 @@ class TheFamilyIsIdleOnlyBetweenRuns(unittest.TestCase):
             },
         )
 
+    def test_unavailable_gates_are_named(self):
+        m = member()
+        self.assertEqual(
+            familyclass.not_idle_holds((), members=[m], enabled=False),
+            {m.name: "family class steps are disabled"},
+        )
+        self.assertEqual(
+            familyclass.not_idle_holds((), members=[m], status_read=False),
+            {m.name: "live dungeon status could not be read"},
+        )
+
 
 class TheBridgeReadsTheFamilyAsMembersOfRoleFamily(unittest.TestCase):
     def facts(self):
