@@ -411,7 +411,13 @@ class DeathLoopSeatedNames(unittest.TestCase):
         with stub_modules(pymysql=PYMYSQL):
             bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
         body = source_utils.function_source(bridge.Bridge._guild_social_once)
-        self.assertIn("seated={name for run in parties for name in run.names()}", body)
+        self.assertIn("seated=seated_names", body)
+        self.assertIn(
+            "seated_names = {name for run in parties for name in run.names()}", body
+        )
+        self.assertIn(
+            "seated_names |= set(social.form.composition.names)", body
+        )
 
 
 if __name__ == "__main__":

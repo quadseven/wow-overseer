@@ -22783,9 +22783,12 @@ class Bridge(discord.Client):
             pug_pass = (_guild_pug_plan(social, facts, mates, held, doors, pug_all, bounds)
                         if pugs_on else None)
             social = _with_class_asks(social, quest_pass)
+            seated_names = {name for run in parties for name in run.names()}
+            if social.form is not None:
+                seated_names |= set(social.form.composition.names)
             death_pass = _death_ask_pass(facts, mates, held,
                                          spoken={r.member for r in social.replies},
-                                         seated={name for run in parties for name in run.names()})
+                                         seated=seated_names)
             if death_pass.posts or death_pass.expire or death_pass.replies:
                 social = dataclasses.replace(
                     social,
