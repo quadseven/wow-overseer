@@ -3698,9 +3698,10 @@ def plan(
     take no class quest step; `hunts` the classquest.Hunts clock (None keeps no
     clock, so no hunt ever stalls) and `now` its time in seconds; `far_slots`
     the far walks the realm can still take (None when not counted): class
-    quest walks past it wait, and the members are planned tank-spec warriors
-    and healers first, then by level (class_priority); `owing` the
-    classquest.Owing clock (None keeps none, so a hold never lapses within one
+    quest walks past it wait. With a class book, members without a recent class
+    action come before members whose last class action is older. class_priority
+    and level break ties. The shared loop order also affects ordinary step offers;
+    owing the classquest.Owing clock (None keeps none, so a hold never lapses within one
     call); `still` name -> minutes the member has stood on one spot
     (standstill.py), None to read no stand (stood_still_step); `supply` name
     -> the food and drink sold in reach of a member short of them

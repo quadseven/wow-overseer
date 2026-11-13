@@ -468,9 +468,18 @@ class ThePriority(unittest.TestCase):
     def test_roleless_seats_over_allowance_get_offers_in_bounded_passes(self):
         members = [
             dataclasses.replace(
-                who("Candidate%d" % i, quests_done=frozenset({1505}), level=50),
+                who(
+                    "%s%d" % (guild, i),
+                    guild=guild,
+                    quests_done=frozenset({1505}),
+                    level=50,
+                    tree="Protection"
+                    if i < guildjobs.CLASSQUEST_STEPS_PER_GUILD
+                    else "Arms",
+                ),
                 role=guildjobs.UNASSIGNED,
             )
+            for guild in ("Bonkers", "Cave")
             for i in range(2 * guildjobs.CLASSQUEST_STEPS_PER_GUILD + 1)
         ]
         never_offered = {member.name for member in members}
@@ -483,7 +492,11 @@ class ThePriority(unittest.TestCase):
             result = class_plan([], class_candidates=members, recent=recent)
             offered = {step.holder for step in class_steps(result)}
             self.assertTrue(offered)
-            self.assertLessEqual(len(offered), guildjobs.CLASSQUEST_STEPS_PER_GUILD)
+            for guild in ("Bonkers", "Cave"):
+                guild_offers = offered & {m.name for m in members if m.guild == guild}
+                self.assertLessEqual(
+                    len(guild_offers), guildjobs.CLASSQUEST_STEPS_PER_GUILD
+                )
             never_offered -= offered
             recent += tuple(
                 guildjobs.Recent(name, classquest.ACTION, 0, status="error")
