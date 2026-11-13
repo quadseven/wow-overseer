@@ -465,6 +465,29 @@ class ThePriority(unittest.TestCase):
         self.assertEqual(len(held), 1)
         self.assertIn("waits:", result.class_holds[next(iter(held))])
 
+    def test_roleless_seats_over_allowance_get_offers_in_bounded_passes(self):
+        members = [
+            dataclasses.replace(
+                who("Candidate%d" % i, quests_done=frozenset({1505}), level=50),
+                role=guildjobs.UNASSIGNED,
+            )
+            for i in range(2 * guildjobs.CLASSQUEST_STEPS_PER_GUILD + 1)
+        ]
+        still_owed = set(member.name for member in members)
+        recent = ()
+        for _pass in range(3):
+            result = class_plan([], class_candidates=members, recent=recent)
+            offered = {step.holder for step in class_steps(result)}
+            self.assertTrue(offered)
+            self.assertLessEqual(len(offered), guildjobs.CLASSQUEST_STEPS_PER_GUILD)
+            self.assertTrue(offered <= still_owed)
+            still_owed -= offered
+            recent += tuple(
+                guildjobs.Recent(name, classquest.ACTION, 1, status="ok")
+                for name in offered
+            )
+        self.assertFalse(still_owed)
+
     def test_it_comes_before_the_level_walk(self):
         # A level 20 warrior standing in a zone it has outgrown would be walked
         # to a hub; with a class quest to take it goes to the giver instead.

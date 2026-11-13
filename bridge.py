@@ -18827,8 +18827,8 @@ class Bridge(discord.Client):
         if census:
             log.info("guild jobs: %s", census)
         # THE ROSTER FAMILY'S CLASS STEP, BETWEEN RUNS (#2336).
-        family_members, family_class_holds = await asyncio.to_thread(
-            _family_class_state, facts)
+        family_state = await asyncio.to_thread(_family_class_state, facts)
+        family_members, family_class_holds = family_state
         family_danger = await asyncio.to_thread(
             _family_danger, family_members, facts.get("class_book"), facts["recent"])
         # THE PLAN RUNS ON THE EVENT LOOP (#833): it mutates the hunt clock and
