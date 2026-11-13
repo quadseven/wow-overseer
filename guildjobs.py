@@ -129,6 +129,7 @@ import gearup
 import guildcorps
 import guildlevel
 import guildroute
+import guineapig
 import hunterpet
 import keep
 import mountbuy
@@ -465,6 +466,8 @@ COOLDOWN_MINUTES = {
     "farm": 45,
     "door": 45,
     "craft": 15,
+    # A walk to a vendor for a recipe's vendor half (reagent_buy_step).
+    "reagent": 60,
     # A walk, a take or a hand-in toward a class quest (classquest.py).
     classquest.ACTION: 10,
     # A walk out of an outgrown zone to a quest hub (guildlevel.py).
@@ -652,6 +655,10 @@ class Member:
     # them yet; the planner trusts the take for it, and for nothing else
     # (classquest._missing_item_blocker).
     recently_taken: frozenset = frozenset()
+    # The crafting trades this member is its guild's guinea pig for
+    # (guineapig.py, #2398), set by `plan`: a new craft path staged CORPS
+    # reaches only these.
+    pig_skills: frozenset = frozenset()
     # Bag slots free in the backpack and the worn bags; None when unread, which
     # keeps no quest waiting on room (class_room_needed).
     free_slots: int | None = None
@@ -817,6 +824,8 @@ class JobsPlan:
     # yields to levelling (class_asking); the bridge logs a line when its key
     # changes.
     ask_yields: tuple = ()
+    # guild -> {skill: name} of each trade's guinea pig (guineapig.pick).
+    pigs: dict = field(default_factory=dict)
 
 
 def _yards(ax, ay, bx, by) -> float:
@@ -1782,6 +1791,89 @@ def _kept_for_casts(stacks, keep) -> frozenset:
             held[int(c.entry)] = have + int(c.count)
             out.add(int(c.guid))
     return frozenset(out)
+
+
+def _vendor_offers(spell_id) -> tuple:
+    """(entry, name, copper each, per cast) of the vendor half of a recipe."""
+    out = [
+        (int(e), str(name), int(price), int(n))
+        for e, name, price, n in craft_supply.REAGENTS.get(int(spell_id), ())
+    ]
+    single = craft_supply.REAGENT.get(int(spell_id))
+    if single is not None and all(e != int(single[0]) for e, *_rest in out):
+        out.append((int(single[0]), str(single[1]), int(single[2]), 1))
+    return tuple(out)
+
+
+def reagent_buy_step(member, cap, stages=None):
+    """Walk to a vendor that sells the vendor half of the member's next recipe
+    and buy one batch of it, or None (#2398).
+
+    Asked when the member carries the gathered half for a cast and not the
+    vendor half: on the dev realm on 2026-11-13 every corps alchemist held
+    100+ Peacebloom and Silverleaf at Alchemy 1 with no Empty Vial, and
+    nothing bought one. A new craft path, so it reaches the trade's guinea pig
+    first (guineapig.VENDOR_REAGENTS); `stages` overrides guineapig.FEATURES.
+    """
+    for skill in CRAFT_SKILLS:
+        if not guineapig.allows(
+            guineapig.VENDOR_REAGENTS, skill, member.pig_skills, stages
+        ):
+            continue
+        for recipe in _open_recipes(member, skill):
+            gathered = craft_rhythm.GATHERED.get(recipe.spell_id, ())
+            if not gathered:
+                continue
+            casts = min(
+                CRAFT_BATCH,
+                *(
+                    member.count(int(r.entry)) // max(1, int(r.per_cast))
+                    for r in gathered
+                ),
+            )
+            if casts <= 0:
+                continue
+            for entry, name, price, per in _vendor_offers(recipe.spell_id):
+                if member.count(entry) >= per:
+                    continue
+                count = casts * per - member.count(entry)
+                if price > 0:
+                    count = min(count, int(member.money) // price)
+                if count <= 0:
+                    continue
+                return guildcorps.Step(
+                    member.name,
+                    "reagent",
+                    entry,
+                    "%s walks to a vendor to buy %d %s for %s, its %s guinea "
+                    "pig trial"
+                    % (
+                        member.name,
+                        count,
+                        name,
+                        recipe.name,
+                        SKILL_NAMES.get(skill, skill),
+                    )
+                    if skill in member.pig_skills
+                    else "%s walks to a vendor to buy %d %s for %s"
+                    % (member.name, count, name, recipe.name),
+                    rows=(
+                        guildcorps.Row(
+                            "buy",
+                            "entry:%d count:%d max:%d"
+                            % (entry, count, guildcorps._ceiling(price * count)),
+                            "",
+                            source_for("reagent", member.name),
+                        ),
+                    ),
+                    walk=guildcorps.Row(
+                        "buy",
+                        "walk-to-vendor item:%d%s" % (entry, _cap_word(cap)),
+                        "",
+                        source_for("reagent-walk", member.name),
+                    ),
+                )
+    return None
 
 
 def _craft_step(member):
@@ -3597,6 +3689,10 @@ def _maintenance_step(
             return step, step.said, ""
         if why:
             notes.append(why)
+    if not _cooling(m, "reagent", recent):
+        step = reagent_buy_step(m, cap)
+        if step:
+            return step, step.said, ""
     if not _cooling(m, "craft", recent):
         step = _craft_step(m)
         if step:
@@ -3804,6 +3900,13 @@ def plan(
     doors = doors or {}
     busy = {str(n) for n in busy or ()}
     pending = {str(n) for n in pending or ()}
+    # THE GUINEA PIGS (#2398): one test crafter per trade and guild, marked on
+    # the member so a new craft path staged CORPS reaches only them.
+    pigs = guineapig.pick(members)
+    members = [
+        replace(m, pig_skills=guineapig.skills_of(pigs, m.guild, m.name))
+        for m in members
+    ]
     tailors = choose_tailors(members)
     alchemists = choose_alchemists(members, tailors, recent)
     cooks = choose_cooks(members, recent, tailors, alchemists)
@@ -3937,6 +4040,7 @@ def plan(
         released=released,
         yields=class_yields(members, classes, recent),
         ask_yields=tuple(ask_yields),
+        pigs=pigs,
     )
 
 
