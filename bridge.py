@@ -155,6 +155,7 @@ import materials
 import mountbuy
 import tidy
 import overhear
+import operatorhold
 import persona
 import preraid
 import priorities
@@ -4382,6 +4383,29 @@ def _ensure_queue_store() -> None:
     except pymysql.err.MySQLError:
         log.exception("priorities: the family priorities store is unavailable, "
                       "so every pass uses the default order")
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(operatorhold.CREATE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("operator hold: the hold store is unavailable, so no "
+                      "family can be held without a restart")
+
+
+def _fetch_operator_holds() -> list:
+    """SELECT_SQL's rows (operatorhold.py, #2403).
+
+    No table yet (1146) is a realm that has never held a family: no rows. Any
+    other error is raised, so the caller keeps the holds it last read rather
+    than letting a database hiccup release a family the operator is driving.
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(operatorhold.SELECT_SQL)
+            return [dict(row) for row in cur.fetchall()]
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return []
+        raise
 
 
 def _fetch_priority_order() -> tuple:
@@ -8475,6 +8499,10 @@ class Bridge(discord.Client):
         # Refreshed by `_priority_order` before every Jev Choice ask and on
         # every goal pass; the default until the first read lands.
         self._priorities: tuple = priorities.DEFAULT_ORDER
+        # The operator hold (operatorhold.py, #2403): the holds last read, and
+        # when each held writer last said so.
+        self._operator_holds: dict = {}
+        self._operator_hold_notice = operatorhold.Notice()
         # dungeonpace: the last "nothing to do" line said per family (#767).
         self._pace_said: dict = {}
         # The attunement step (attunestep.py): the line last said per family,
@@ -9502,6 +9530,14 @@ class Bridge(discord.Client):
             await asyncio.sleep(cycle)
 
     async def _council_once(self) -> None:
+        # THE OPERATOR HOLD (operatorhold.py, #2403): a held family sits no
+        # council and is given no goal, including the one a restart used to
+        # bring two minutes after the start.
+        operator_held = getattr(self, "_operator_held", None)
+        if operator_held is not None:
+            own = await asyncio.to_thread(_cohort_of, bonds.head_of_family())
+            if await operator_held({own or ""}, "council"):
+                return
         names = sorted((await asyncio.to_thread(_protected_guids)).values())
         members = await asyncio.to_thread(_fetch_council_members, names)
         history = bonds.history_from_thoughts(
@@ -23406,6 +23442,16 @@ class Bridge(discord.Client):
             await asyncio.to_thread(_fetch_queue_rows))
         fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
         _prune_bag_hold_stuck(fams)
+        # THE OPERATOR HOLD BEFORE ANYTHING BELOW (operatorhold.py, #2403): a
+        # held family is absent from this pass, so no planner, attunement,
+        # spire, trade turn, dungeon quest, town first or step writes for it,
+        # and its town errands get the traveller back as for an empty queue.
+        stood: set = set()
+        operator_held = getattr(self, "_operator_held", None)
+        if operator_held is not None:
+            stood = await operator_held(set(fams) | set(pending), "queue")
+            pending = {k: v for k, v in pending.items() if k not in stood}
+            fams = {k: v for k, v in fams.items() if k not in stood}
         # THE STAND-IN BEFORE ANYTHING DRIVES THE FAMILY (standin.py): a member
         # sitting out to craft leaves every family's names here, so no hold,
         # gate or job write below reaches it.
@@ -23418,12 +23464,14 @@ class Bridge(discord.Client):
         if await self._plan_campaigns(pending, fams):
             pending = campaignqueue.pending_by_family(
                 await asyncio.to_thread(_fetch_queue_rows))
+            pending = {k: v for k, v in pending.items() if k not in stood}
         # THE UPPER SPIRE RUN ORDERS AND ENDS ITSELF (spirerun.py). After the
         # planner, so the order sits among the entries it just wrote.
         spire_pass = getattr(self, "_spire_pass", None)
         if spire_pass is not None and await spire_pass(pending, fams):
             pending = campaignqueue.pending_by_family(
                 await asyncio.to_thread(_fetch_queue_rows))
+            pending = {k: v for k, v in pending.items() if k not in stood}
         # THE TRADE TURN (tradeturn.py, #2262), after the planner and the spire
         # pass so neither sees a queue it must not extend. A family in a turn
         # is an empty queue to everything below: no step, no travel claim.
@@ -24477,6 +24525,38 @@ class Bridge(discord.Client):
         elif activity == jev_activity.GATHER and own:
             await self._walk_to_gather_field(await self._gather_destination())
 
+    async def _operator_held(self, keys, writer: str) -> set:
+        """The family keys among `keys` an operator hold stands `writer` down
+        for (operatorhold.py, #2403), read now.
+
+        Read on every call, so a hold set or cleared by hand takes effect on the
+        writer's next pass with no restart. A failed read keeps the holds last
+        read: a database hiccup is not the operator letting go. Each held
+        writer says one line per family, at most every
+        operatorhold.SAY_EVERY_SECONDS.
+        """
+        try:
+            self._operator_holds = operatorhold.read(
+                await asyncio.to_thread(_fetch_operator_holds))
+        except Exception:
+            log.exception("operator hold: the holds could not be read; %s keeps "
+                          "the %d last read", writer,
+                          len(getattr(self, "_operator_holds", {}) or {}))
+        holds = getattr(self, "_operator_holds", {}) or {}
+        if not holds:
+            return set()
+        now = time.monotonic()
+        out = set()
+        for key in sorted(keys, key=str):
+            hold = operatorhold.held(holds, key)
+            if hold is None:
+                continue
+            out.add(key)
+            if self._operator_hold_notice.due(writer, key, hold, now):
+                log.info("%s", operatorhold.line(
+                    writer, campaignqueue._family(key), hold))
+        return out
+
     def _activity_holds(self, key=None) -> str:
         """The activity whose interlude holds family `key`'s job, or "".
 
@@ -24946,7 +25026,13 @@ class Bridge(discord.Client):
         fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
         pending = campaignqueue.pending_by_family(
             await asyncio.to_thread(_fetch_queue_rows))
+        # THE OPERATOR HOLD (operatorhold.py, #2403): no choice, no job.
+        operator_held = getattr(self, "_operator_held", None)
+        stood = (await operator_held(set(fams), "activity")
+                 if operator_held is not None else set())
         for key, fam in sorted(fams.items()):
+            if key in stood:
+                continue
             own = key == self._activity_own_key
             try:
                 await self._activity_for(key, fam, pending.get(key, []), own, rule)
@@ -25198,7 +25284,13 @@ class Bridge(discord.Client):
         """One pass: every family on the roster, each guarded on its own."""
         own_key = await asyncio.to_thread(_cohort_of, bonds.head_of_family())
         fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
+        # THE OPERATOR HOLD (operatorhold.py, #2403): no hub walk, no aim.
+        operator_held = getattr(self, "_operator_held", None)
+        stood = (await operator_held(set(fams), "levelroute")
+                 if operator_held is not None else set())
         for key, fam in sorted(fams.items()):
+            if key in stood:
+                continue
             try:
                 await self._level_route_for(key, fam, key == (own_key or ""))
             except Exception:
