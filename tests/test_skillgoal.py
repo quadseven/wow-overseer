@@ -155,9 +155,25 @@ class CraftingPathTest(unittest.TestCase):
         self.assertEqual(got.mode, craft_rhythm.MODE_CRAFT)
 
     def test_no_bracket_is_refused_rather_than_driven(self):
-        """Enchanting has no craft.RECIPES entry at all. Driving it would put
-        Og on job='craft' with craft_spell 0 - employed and casting nothing,
-        which DriveCraft skips with a bare `continue` and no log line."""
+        """A value no craft.RECIPES bracket covers (Blacksmithing past 300).
+        Driving it would put a member on job='craft' with craft_spell 0 -
+        employed and casting nothing, which DriveCraft skips with a bare
+        `continue` and no log line."""
+        got = plan(
+            skill_name="blacksmithing",
+            skill_id=goals.SKILL_IDS["blacksmithing"],
+            observed=301,
+            target=302,
+            cap=310,
+            beneficiary="Grug",
+        )
+        self.assertTrue(got.blocked)
+        self.assertIn("craft.RECIPES", got.blocked)
+        self.assertEqual(got.mode, "")
+
+    def test_enchanting_has_a_ladder_to_drive(self):
+        """Enchanting had no craft.RECIPES entry and was refused here until
+        #2411 gave it a ladder from 1 to 300."""
         got = plan(
             skill_name="enchanting",
             skill_id=goals.SKILL_IDS["enchanting"],
@@ -165,9 +181,8 @@ class CraftingPathTest(unittest.TestCase):
             target=75,
             cap=75,
         )
-        self.assertTrue(got.blocked)
-        self.assertIn("craft.RECIPES", got.blocked)
-        self.assertEqual(got.mode, "")
+        self.assertEqual(got.blocked, "")
+        self.assertEqual(got.mode, craft_rhythm.MODE_CRAFT)
 
     def test_a_blocked_secondary_names_its_own_wall(self):
         """All three secondaries are stuck behind DIFFERENT walls, and

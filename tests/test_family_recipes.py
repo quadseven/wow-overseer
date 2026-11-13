@@ -68,6 +68,22 @@ class AFamilyCrafterIsDueATrainerRecipe(unittest.TestCase):
             guildjobs.recipes_due(38, 358300, OG_SKILLS, OG_KNOWN, OG_WANTED),
         )
 
+    def test_an_enchanter_buys_the_rod_its_next_rung_needs(self):
+        """#2411: at 128 the next rung (Enchant Chest - Health, 130) needs a
+        Runed Silver Rod, and the trainer teaches that rod from 100."""
+        skills = {ENCHANTING: (128, 150)}
+        known = frozenset({7457, 14807, 7857})  # the rung, not its rod
+        self.assertEqual(
+            (ENCHANTING,),
+            guildjobs.recipes_due(59, 10_000_000, skills, known, (ENCHANTING,)),
+        )
+        self.assertEqual(
+            (),
+            guildjobs.recipes_due(
+                59, 10_000_000, skills, known | {7795}, (ENCHANTING,)
+            ),
+        )
+
     def test_holding_the_rung_is_nothing_due(self):
         self.assertEqual(
             (),

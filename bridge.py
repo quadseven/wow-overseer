@@ -60,6 +60,7 @@ import fireplan
 import flightlearn
 import followhold
 import goals
+import individual
 import guildcover
 import leadcmd
 import attunestep
@@ -97,6 +98,7 @@ import natural
 import nowstatus
 import guildcorps
 import guildjobs
+import guineapig
 import deathloop
 import guildlevel
 import guildfacts
@@ -163,6 +165,7 @@ import questbook
 import questcatalogue
 import questledger
 import questtickets
+import corpstickets
 import questers
 import questshare
 import quests
@@ -2341,6 +2344,39 @@ def _guild_bag_floor_for(cohort=None):
     return bag_upgrade.guild_floor(rows, len(bag_upgrade.BAG_POSITIONS))
 
 
+def _individual_walk_waits(needs) -> None:
+    """Individual mode (#2395): craft supply walks nobody. The family's walk
+    is its leader's, and in individual mode the leader may be on its own job
+    while the buyer stands somewhere else, so a buy needs the buyer's own
+    walk to a vendor, which is quadseven/wow-overseer#2406. Rows already
+    queued for a member standing at a vendor still land."""
+    if needs:
+        log.info("craft_supply: individual mode - %d reagent trip(s) wait: the "
+                 "walk to a vendor is the buyer's own errand (#2406), not the "
+                 "leader's", len(needs))
+
+
+def _individual_family(cohort=None) -> str | None:
+    """The family key individual mode is asked about (#2395): another
+    family's own key, else this bridge's own family's, else None. A family
+    that cannot be named is never individual.
+
+    NO QUERY WHILE THE SETTING NAMES NO FAMILY: the answer could not matter,
+    and this runs on every train, rhythm and supply cycle. Callers run it
+    through asyncio.to_thread, because naming this bridge's own family is a
+    database read."""
+    if not individual.families():
+        return None
+    key = getattr(cohort, "key", None)
+    if key:
+        return key
+    try:
+        return _cohort_of(bonds.head_of_family())
+    except Exception:
+        log.exception("individual mode: this bridge's family could not be named")
+        return None
+
+
 def _standing_jobs(family: str | None = None) -> dict:
     """name -> `job` for every enabled roster row (infra#3696).
 
@@ -4218,6 +4254,12 @@ def _file_quest_tickets(client) -> dict:
             questcatalogue.load(read),
             os.environ.get("QUEST_SITE_URL", ""),
         )
+
+
+def _file_corps_tickets(client) -> dict:
+    """One corps blocker filing pass (corpstickets.py) on one connection."""
+    with _connect() as conn, conn.cursor() as cur:
+        return corpstickets.run(corpstickets.SqlStore(cur), client, time.time())
 
 
 def _read_last_quest_tickets_pass() -> float | None:
@@ -8146,6 +8188,7 @@ PASSES = (
     _Pass("_watch_loop"),
     _Pass("_quest_ledger_loop"),
     _Pass("_quest_tickets_loop"),
+    _Pass("_corps_tickets_loop"),
 )
 
 
@@ -10133,10 +10176,9 @@ class Bridge(discord.Client):
 
         await self._dark_iron_once(names, cohort)
 
-        mode = craft_rhythm.standing_mode(
-            await asyncio.to_thread(_standing_jobs, getattr(cohort, "key", None)),
-            exempt=_standin_out(),
-        )
+        job_rows = await asyncio.to_thread(
+            _standing_jobs, getattr(cohort, "key", None))
+        mode = craft_rhythm.standing_mode(job_rows, exempt=_standin_out())
         # ON job='fish' THE ONE THING TO BUY IS A POLE (mod-overseer#530). The
         # fishing drive casts only with a pole in the bags, and upstream buys
         # one for random bots alone, so nobody on the roster ever owned one.
@@ -10148,7 +10190,20 @@ class Bridge(discord.Client):
                 "member(s) still need a trip", mode, queued, trips,
             )
             return
-        if mode not in (craft_rhythm.MODE_CRAFT, craft_rhythm.MODE_GATHER):
+        # INDIVIDUAL MODE (#2395): members that disagree are not a
+        # half-landed order outside a dungeon, so the members on craft or
+        # quest are bought for and the rest are left alone.
+        family = await asyncio.to_thread(_individual_family, cohort)
+        alone = individual.members_on(
+            job_rows, (craft_rhythm.MODE_CRAFT, craft_rhythm.MODE_GATHER),
+            family, exempt=_standin_out(),
+        ) if individual.active(job_rows, family) else ()
+        if alone and mode not in (craft_rhythm.MODE_CRAFT, craft_rhythm.MODE_GATHER):
+            names = [name for name in names if name in alone]
+            log.info("craft_supply: individual mode - buying for %s only",
+                     ", ".join(names))
+            mode = "individual"
+        if mode not in (craft_rhythm.MODE_CRAFT, craft_rhythm.MODE_GATHER) and not alone:
             log.info(
                 "craft_supply: the family is on job=%s rather than %s or %s, "
                 "so no reagent is bought and the traveller is left alone",
@@ -10179,7 +10234,10 @@ class Bridge(discord.Client):
         _tool_rows, tool_needs = await self._buy_gather_tools(names)
         needs = [*needs, *tool_needs]
         if not candidates and not multi_candidates:
-            await self._walk_for_hammers(needs, cohort)
+            if mode == "individual":
+                _individual_walk_waits(needs)
+            else:
+                await self._walk_for_hammers(needs, cohort)
             log.info(
                 "craft_supply: %d craft errand(s) standing on job=%s, none of "
                 "which names a vendor-bought reagent, so there is nothing to "
@@ -10293,7 +10351,9 @@ class Bridge(discord.Client):
                             name, errand.command, errand.why,
                         )
 
-        if needs:
+        if needs and mode == "individual":
+            _individual_walk_waits(needs)
+        elif needs:
             await self._walk_for_reagents(needs, cohort)
 
         # The mode is named here too, so ONE line proves the fix: `on
@@ -11003,10 +11063,9 @@ class Bridge(discord.Client):
         names = await asyncio.to_thread(_names_of, cohort)
         if not names:
             return
-        standing = craft_rhythm.standing_mode(
-            await asyncio.to_thread(_standing_jobs, getattr(cohort, "key", None)),
-            exempt=_standin_out(),
-        )
+        standing_jobs = await asyncio.to_thread(
+            _standing_jobs, getattr(cohort, "key", None))
+        standing = craft_rhythm.standing_mode(standing_jobs, exempt=_standin_out())
         skills = await asyncio.to_thread(_fetch_trade_skills, names)
         primaries = _primaries_for(cohort, names, skills)
         bags_wanted = await asyncio.to_thread(_bags_wanted_for, cohort)
@@ -11063,6 +11122,11 @@ class Bridge(discord.Client):
         # short, which sends the family out for it.
         stands = craft_rhythm.requested_stands(
             stands, await self._material_routes(names))
+        # INDIVIDUAL MODE (#2395): each member alternates on its own reagents.
+        if individual.active(
+                standing_jobs, await asyncio.to_thread(_individual_family, cohort)):
+            await self._individual_rhythm_moves(cohort, stands, standing_jobs)
+            return
         plan = craft_rhythm.rhythm(stands, standing)
         if cohort is not None:
             log.info("craft_rhythm: family %s: %s", cohort.key,
@@ -11249,6 +11313,72 @@ class Bridge(discord.Client):
         if mode == craft.MODE and written:
             await self._craft_once(cohort)
         return written
+
+    async def _individual_rhythm_moves(self, cohort, stands, job_by_name) -> None:
+        """Each member's own craft turn, in individual mode (#2395).
+
+        Outside a dungeon a stocked member sits down to craft while the rest
+        of its family does something else. Only that member's job row is
+        written, and only on a change. A campaign queue that owns the
+        family's job, a run in progress and a member sitting out to craft are
+        all left alone, as on the family-wide path.
+
+        THE GATHER HALF IS HELD. A follower put on job quest gathers only
+        where its leader walks until a member may roam alone
+        (quadseven/mod-overseer#1518), and a leader put on quest walks the
+        crafting members away with it. So a short member's move to gather
+        is logged and not written; it keeps its job until that ships.
+        """
+        key = getattr(cohort, "key", None)
+        label = key or "own"
+        if await asyncio.to_thread(_queue_owns_job, key):
+            log.info("craft_rhythm: family %s is individual, but its campaign "
+                     "queue owns its job, so no member's job is changed", label)
+            return
+        if await self._mid_run(sorted(job_by_name)):
+            log.info("craft_rhythm: family %s is in a dungeon run, so no "
+                     "member's job is changed", label)
+            return
+        sitting = set(_standin_out())
+        crafting = 0
+        said = getattr(self, "_individual_gather_said", None)
+        if said is None:
+            said = set()
+            self._individual_gather_said = said
+        held_now = set()
+        for name, plan in craft_rhythm.member_rhythms(stands, job_by_name):
+            if name in sitting:
+                continue
+            log.info("craft_rhythm (individual): %s: %s", name,
+                     craft_rhythm.report(plan))
+            if not plan.changed:
+                continue
+            if plan.mode != craft_rhythm.MODE_CRAFT:
+                held_now.add(name)
+                if name not in said:
+                    log.warning(
+                        "craft_rhythm (individual): %s is short of its reagents "
+                        "and stays on job=%s - the move to %s is held until a "
+                        "member may gather alone (mod-overseer#1518)",
+                        name, job_by_name.get(name), plan.mode)
+                continue
+            refusal = jobs.why_not(plan.mode)
+            if refusal:
+                log.warning("job: %s not told %s - %s", name, plan.mode, refusal)
+                continue
+            try:
+                await asyncio.to_thread(
+                    _insert_job, name, plan.mode, "overseer:craft_rhythm")
+            except Exception:
+                log.exception("job: insert failed for %s (mode=%s)", name, plan.mode)
+                continue
+            log.info("job: %s told %s by the craft rhythm (individual)", name,
+                     plan.mode)
+            crafting += plan.mode == craft_rhythm.MODE_CRAFT
+        said.intersection_update(held_now)
+        said.update(held_now)
+        if crafting:
+            await self._craft_once(cohort)
 
     async def _settle_auction_errand(self, names: list, leader: str) -> str:
         """Is the auctioneer errand the leader already carries finished?
@@ -18967,6 +19097,13 @@ class Bridge(discord.Client):
         log.info("guild jobs: the plan took %.2f s on the event loop for %d "
                  "member(s)%s", time.perf_counter() - plan_started, len(members),
                  _family_label(cohort))
+        # THE GUINEA PIGS (guineapig.py, #2398): each guild's test crafter per
+        # trade and the trades nobody in the corps holds, said when they change.
+        pig_lines = guineapig.lines(plan.pigs, members)
+        if pig_lines != getattr(self, "_pig_lines", None):
+            self._pig_lines = pig_lines
+            for line in pig_lines:
+                log.info("guild jobs: %s", line)
         # Members held on a class quest are kept out of every dungeon pass
         # (the guild's asks, its runs): _class_priority_names. The class
         # quests a guildmate could help with are asked in guild chat by the
@@ -25831,6 +25968,33 @@ class Bridge(discord.Client):
                 log.exception("quest tickets: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
+    async def _corps_tickets_loop(self) -> None:
+        """File one issue per blocked guild corps member and blocker kind,
+        daily (corpstickets.py, #2399)."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("CORPS_TICKET_SECONDS", "86400"))
+        client = questtickets.client_from_env(log, epic=corpstickets.EPIC)
+        if client is None:
+            log.info("corps tickets: no GitHub App is configured, so no issue is filed")
+            return
+        # The first pass waits an hour: a bridge restart must not file on rows
+        # the previous process was still answering.
+        await asyncio.sleep(float(os.environ.get("CORPS_TICKET_FIRST_SECONDS", "3600")))
+        while not self.is_closed():
+            try:
+                done = await asyncio.to_thread(_file_corps_tickets, client)
+                log.info("corps tickets: %d blocker(s) found, filed %s",
+                         done["found"], ", ".join(done["filed"]) or "none")
+                if done["stuck"]:
+                    log.error("corps tickets: a filing never finished for %s; "
+                              "check for an issue, then fix its memo row", done["stuck"])
+                if done["unlinked"]:
+                    log.error("corps tickets: issues %s are filed but not under the "
+                              "epic; link them by hand", done["unlinked"])
+            except Exception:
+                log.exception("corps tickets: pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
     async def _watch_loop(self) -> None:
         """Keep the Watcher beside whoever the operator's order names."""
         await self.wait_until_ready()
@@ -26047,12 +26211,35 @@ class Bridge(discord.Client):
         """
         try:
             members = await asyncio.to_thread(_train_members)
-            plan = trainjob.plan(members)
-            if not plan.traveller:
-                if trainjob.family_mode(members) == trainjob.MODE:
-                    log.warning("job train drives nothing: %s", plan.why_not)
+            # INDIVIDUAL MODE (#2395): outside a dungeon each member on job
+            # train walks to its own trainer, and nobody else's aim is
+            # cleared. Off, or linked, the one-traveller plan is unchanged.
+            family = await asyncio.to_thread(_individual_family)
+            alone = individual.active({m.name: m.job for m in members}, family)
+            # A run in progress or a campaign queue that owns the job
+            # re-links the family before any per-member aim is written. Said
+            # once per hold, not once per cycle.
+            if alone and (
+                    await asyncio.to_thread(_queue_owns_job, family)
+                    or await self._mid_run([m.name for m in members])):
+                if not getattr(self, "_individual_train_held", False):
+                    self._individual_train_held = True
+                    log.info("job train (individual): the family is on a run "
+                             "or its campaign queue owns its job - no member "
+                             "is aimed until that ends")
                 return
-            await asyncio.to_thread(_aim_train_traveller, trainjob.statements(plan))
+            self._individual_train_held = False
+            plan = trainjob.plan(members, individual=alone)
+            # Individual: also clears a trainer aim nobody needs any more.
+            statements = trainjob.statements(plan)
+            if not plan.traveller:
+                if trainjob.family_mode(members) == trainjob.MODE or (
+                        alone and any(m.job == trainjob.MODE for m in members)):
+                    log.warning("job train drives nothing: %s", plan.why_not)
+                if statements:
+                    await asyncio.to_thread(_aim_train_traveller, statements)
+                return
+            await asyncio.to_thread(_aim_train_traveller, statements)
             log.info("%s", trainjob.report(plan))
         except Exception:
             # LOUD, AND STILL NOT FATAL, for the reason infra#3173 wrote down:
@@ -36842,7 +37029,42 @@ def _fetch_mail(names: list) -> list:
                 log.warning("mail: this world image has no mail tables to read")
                 return []
             raise
-        return [dict(row) for row in cur.fetchall()]
+        rows = [dict(row) for row in cur.fetchall()]
+        # A LETTER THE MAILBOX HAS NOT LOADED IS NOT WAITING (#2402): every
+        # pass plans from this read, so leaving it out here is what stops the
+        # town errand spinning its mail window on it and the gear count
+        # starting an errand for it. mailrun.unloaded_letters has the why.
+        unloaded = _unloaded_mail(cur, names, marks) if rows else frozenset()
+    _log_changed("mail", [mailrun.unloaded_note(unloaded)] if unloaded else [],
+                 key=("unloaded",) + tuple(sorted(names)), capped=False)
+    return mailrun.loaded_rows(rows, unloaded)
+
+
+_UNLOADED_MAIL_SQL = (
+    "SELECT o.target_name AS holder, o.command AS command, "
+    "UNIX_TIMESTAMP(o.created_at) AS refused, c.logout_time AS logout_time "
+    "FROM overseer_command o JOIN characters c ON c.name = o.target_name "
+    "WHERE o.kind = 'mail' AND o.status = 'error' AND o.target_name IN (%s) "
+    "AND o.created_at > NOW() - INTERVAL 30 DAY AND o.result LIKE %%s"
+)
+
+
+def _unloaded_mail(cur, names: list, marks: str) -> frozenset:
+    """(holder, mail id) of each letter its holder's mailbox has not loaded.
+
+    The takes refused `no mail with that id` in the last 30 days (a letter's
+    whole life), with each holder's logout time; mailrun.unloaded_letters
+    judges. A failed read leaves out nothing: the letters stay plannable, as
+    they were before this read existed.
+    """
+    try:
+        cur.execute(_UNLOADED_MAIL_SQL % marks,  # noqa: S608 - placeholders from a COUNT, values still bound
+                    [*names, "%" + mailrun.NOT_LOADED + "%"])
+        return mailrun.unloaded_letters(dict(row) for row in cur.fetchall())
+    except pymysql.err.MySQLError as exc:
+        log.warning("mail: the refused takes could not be read (%s); no "
+                    "letter is left out this pass", exc)
+        return frozenset()
 
 
 # THE FORGE QUERY (infra#3748), AND IT IS `_VAULT_SQL` WITH TWO CHANGES.

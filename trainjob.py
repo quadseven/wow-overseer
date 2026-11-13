@@ -141,6 +141,14 @@ class TrainPlan:
     skill: int = 0
     why_not: str = ""
     waiting: tuple = ()
+    # Individual mode (individual.py, #2395): every member that walks, each
+    # to its own trainer, and the flag that keeps `statements` from clearing
+    # the other members' errands.
+    travellers: tuple = ()
+    individual: bool = False
+    # Individual mode: members not walking to a trainer this pass and with
+    # nothing to learn (`learn_skill` 0), whose trainer aim is stale.
+    stale: tuple = ()
 
 
 def parse_wanted(column):
@@ -247,7 +255,7 @@ def readiness(members: Sequence) -> str:
     return nothing_to_train(members)
 
 
-def plan(members: Sequence) -> TrainPlan:
+def plan(members: Sequence, individual: bool = False) -> TrainPlan:
     """Who to send to a trainer, or why nobody is going.
 
     Deliberately ONE traveller and not a queue. The family has exactly one
@@ -259,6 +267,8 @@ def plan(members: Sequence) -> TrainPlan:
     members = list(members)
     if not members:
         return TrainPlan(why_not="Nobody is on the roster to train.")
+    if individual:
+        return _individual_plan(members)
     mode = family_mode(members)
     if mode != MODE:
         return TrainPlan(
@@ -275,6 +285,60 @@ def plan(members: Sequence) -> TrainPlan:
     )
 
 
+def _individual_plan(members: Sequence) -> TrainPlan:
+    """Every member on job train with a trade to learn walks, each to its own
+    trainer (#2395). The caller asks this only for a family in individual
+    mode, where the module lets a follower walk its own errand."""
+    on_train = [m for m in members if str(m.job or "") == MODE]
+    ready = sorted((m.name, outstanding(m)) for m in on_train if outstanding(m))
+    walking = {n for n, _ in ready}
+    stale = tuple(
+        sorted(
+            m.name
+            for m in members
+            if m.name not in walking and not int(m.learn_skill or 0)
+        )
+    )
+    if not on_train:
+        return TrainPlan(
+            why_not="Nobody in the family is on job %s." % MODE,
+            individual=True,
+            stale=stale,
+        )
+    if not ready:
+        return TrainPlan(
+            why_not=nothing_to_train(on_train), individual=True, stale=stale
+        )
+    name, skill = ready[0]
+    return TrainPlan(
+        traveller=name,
+        skill=skill,
+        travellers=tuple(n for n, _ in ready),
+        individual=True,
+        stale=stale,
+    )
+
+
+def stale_clear_statements(names) -> list:
+    """Clear a trainer aim that is over, compare-and-swap (#2395).
+
+    Only the exact trainer value, and only on a row whose `learn_skill` is 0,
+    so a learn errand the learn aim (learnaim.py) still owns is never taken
+    away, and any other errand in the column is left alone.
+    """
+    chosen = sorted({str(n) for n in (names or [])})
+    if not chosen:
+        return []
+    marks = ", ".join(["%s"] * len(chosen))
+    return [
+        (
+            "UPDATE overseer_roster SET travel_npc = %%s "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "WHERE travel_npc = %%s AND learn_skill = 0 AND name IN (%s)" % marks,
+            (travel.NONE, travel.resolve(TRAINER_ROLE), *chosen),
+        )
+    ]
+
+
 def statements(train_plan) -> list:
     """The writes that aim the traveller and clear everyone else.
 
@@ -283,6 +347,13 @@ def statements(train_plan) -> list:
     bound there and a test already proves it, and a second construction of the
     same UPDATE is a second place for the binding to be got wrong.
     """
+    if train_plan.individual:
+        aims = (
+            travel.aim_only_statements(list(train_plan.travellers), TRAINER_ROLE)
+            if train_plan.travellers
+            else []
+        )
+        return aims + stale_clear_statements(train_plan.stale)
     if not train_plan.traveller:
         return []
     return travel.aim_statements([train_plan.traveller], TRAINER_ROLE)
@@ -292,6 +363,12 @@ def report(train_plan) -> str:
     """One sentence for the log and for Discord."""
     if not train_plan.traveller:
         return train_plan.why_not
+    if train_plan.individual:
+        return (
+            "job train (individual): %s each walk to their own trainer, and "
+            "nobody else's aim is touched. Arriving is not learning - only "
+            "character_skills settles it." % ", ".join(train_plan.travellers)
+        )
     waiting = (
         " %s wait their turn." % ", ".join(train_plan.waiting)
         if train_plan.waiting
