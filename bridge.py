@@ -29401,6 +29401,8 @@ def _fetch_guild_social_facts(bounds) -> dict:
         except pymysql.err.MySQLError as exc:
             if not (exc.args and exc.args[0] in (1054, 1146)):
                 raise
+            log.warning("guild social: the campaign rows could not be read (%s); "
+                        "the family lend guard is not in effect this pass", exc)
         drops = _guild_social_drops(cur)
         pug_calls = _fetch_guild_pug_calls(cur) if guildpug.enabled() else {}
         lendable = set()

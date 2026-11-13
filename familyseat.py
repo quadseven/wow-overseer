@@ -173,7 +173,13 @@ def lendable(
                 if seats is None:
                     continue
                 mine = set(seats.get(name) or ())
-                others = [seats.get(n) or () for n, _j in members if n != name]
+                # A member already out in a guild run holds no seat for the
+                # family: its second healer is gone, so the first stays.
+                others = [
+                    seats.get(n) or ()
+                    for n, _j in members
+                    if n != name and n not in set(in_runs or ())
+                ]
                 if any(not any(seat in o for o in others) for seat in mine):
                     continue
             out.add(name)

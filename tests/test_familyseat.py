@@ -112,6 +112,12 @@ class TheCampaignGuard(unittest.TestCase):
         got = fs.lendable(GRUG_FISH, set(), (), campaigns={"Grug"}, seats=TWO_HEALERS)
         self.assertEqual(got, {"Ugga", "Og"})
 
+    def test_a_second_healer_already_lent_does_not_free_the_first(self):
+        got = fs.lendable(
+            GRUG_FISH, set(), {"Og"}, campaigns={"Grug"}, seats=TWO_HEALERS
+        )
+        self.assertNotIn("Ugga", got)
+
     def test_another_family_is_not_held_by_this_ones_row(self):
         rows = GRUG_FISH + roster(("Zug", "Zug", "fish"), ("Uzza", "Zug", "fish"))
         seats = dict(UGGA_ONLY_HEALER, Zug={"tank"}, Uzza={"healer"})
