@@ -49,7 +49,7 @@ the first mate guildjobs.loop_mates finds in reach for its asker, the
 same selection the post's reason names, answers as a helper in a damage
 seat (the seat the ask wants). One yes per ask (the ask wants one
 helper), one ask answered per member per pass, and at most
-ANSWERS_PER_PASS new yeses a pass, so yeses trickle the way the other
+REPLIES_PER_PASS new yeses a pass, so yeses trickle the way the other
 asks' do. A member already standing as a yes on any ask is not counted
 again, a held mate does not answer, and an ask this pass expires draws
 no yes. Nothing here seats a party: that is piece 2, and the switch
@@ -87,7 +87,8 @@ _ANSWER_LINES = (
     "Sure {asker}, I'll group up for {place}.",
 )
 
-ANSWERS_PER_PASS = guildsocial.ANSWERS_PER_PASS
+REPLIES_PER_PASS = 4
+ANSWERS_PER_PASS = REPLIES_PER_PASS  # legacy alias; the cap below is this module's own
 
 
 def answer_line(member: str, asker: str, place: str) -> str:
@@ -176,7 +177,7 @@ def expire_pass(asks, loops, now) -> guildsocial.Pass:
     return guildsocial.Pass(expire=expires(asks, set(loops or ()), now))
 
 
-def _replies(live_asks, ending_ids, jobs, looping, answers, held) -> tuple:
+def _replies(live_asks, ending_ids, jobs, looping, answers, held, spoken=()) -> tuple:
     """One yes per live deathloop ask that has none: the first mate
     loop_mates finds in reach for the asker, as a helper. A member
     answers at most one ask a pass, a member already standing as a yes
@@ -185,10 +186,10 @@ def _replies(live_asks, ending_ids, jobs, looping, answers, held) -> tuple:
     standing = {a.member for a in answers or () if a.state == YES}
     answered = {a.ask_id for a in answers or () if a.state == YES}
     free_mates = [m for name, m in jobs.items() if name not in held]
-    spoken = set(standing)
+    spoken = set(standing) | set(spoken or ())
     out = []
     for ask in sorted(live_asks, key=lambda a: a.id):
-        if len(out) >= ANSWERS_PER_PASS:
+        if len(out) >= REPLIES_PER_PASS:
             break
         if ask.id in ending_ids or ask.id in answered:
             continue
@@ -213,7 +214,7 @@ def _replies(live_asks, ending_ids, jobs, looping, answers, held) -> tuple:
 
 
 def plan_pass(
-    loops, mates, asks, now, held=frozenset(), answers=()
+    loops, mates, asks, now, held=frozenset(), answers=(), spoken=frozenset()
 ) -> guildsocial.Pass:
     """One pass of the death-loop asks: posts for loopers with a mate in
     reach, expires for the live asks that end now, and one yes per live
@@ -225,6 +226,9 @@ def plan_pass(
     held     name -> why not free (or a set of names): a held looper is not
              asked for, and a held mate is not counted in reach
     answers  the overseer_guild_answer rows; only standing yeses are read
+    spoken   names that already said a yes in this same pass (in the
+             social pass's replies, which this planner cannot see from
+             the recorded rows): such a mate is not counted again
     """
     held = set(held or ())
     jobs = {}
@@ -274,5 +278,5 @@ def plan_pass(
     live_asks = [
         a for a in death_asks(asks) if a.state in LIVE_ASKS and a.id not in ending_ids
     ]
-    replies = _replies(live_asks, ending_ids, jobs, looping, answers, held)
+    replies = _replies(live_asks, ending_ids, jobs, looping, answers, held, spoken)
     return guildsocial.Pass(posts=tuple(posts), expire=expire, replies=replies)
