@@ -1,6 +1,6 @@
 """A seated tank's spellbook, checked against its class trainer list.
 
-Slice 1 of the tank spellbook audit: the pure step only. A seated tank
+The tank spellbook audit: the pure step. A seated tank
 (the raid-teams seat source decides who that is) should know every spell
 its class trainer teaches at or below its level. A due spell it has not
 learned is missing, in one of the two states the shared spell-state rule
@@ -10,7 +10,9 @@ spells are not missing: the tank cannot learn them yet.
 The rule is classtrain.spell_state, the same rule the training surface
 and the guild training pass use, so this audit cannot disagree with
 them about a spell. Spells are given by id: the world's tables carry no
-spell names. Nothing here grants a spell; a missing spell routes
+spell names, so the one spell the audit names explicitly carries its
+name in a small id-to-name table below, sourced from the repo's own
+trainer facts. Nothing here grants a spell; a missing spell routes
 through the normal trainer machinery.
 
 PURE MODULE: rows in, an audit out. No MySQL and no clock.
@@ -24,6 +26,14 @@ import classtrain
 # The states that mean a due spell has not been learned.
 MISSING_STATES = ("trainable", "needs")
 
+# The one spell this audit names explicitly: the Warrior fear break.
+# The id is the Warrior entry in the fear-protection spell table the
+# raid encounter facts use, and the repo's trainer facts (generated
+# from the trainer table and the spell data file) name this id
+# "Berserker Rage" at trainer level 32. Every other spell stays an id:
+# there is no defensible name source for the full trainer list.
+SPELL_NAMES = {18499: "Berserker Rage"}
+
 
 def audit_tank(
     seat: dict, trainer: list, known: set, cap: int = campaignplan.LEVEL_CAP
@@ -36,13 +46,15 @@ def audit_tank(
     ):
         state = classtrain.spell_state(row, known, level, cap)
         if state in MISSING_STATES:
-            missing.append(
-                {
-                    "spell": int(row["spell"]),
-                    "level": int(row.get("level") or 0),
-                    "state": state,
-                }
-            )
+            entry = {
+                "spell": int(row["spell"]),
+                "level": int(row.get("level") or 0),
+                "state": state,
+            }
+            name = SPELL_NAMES.get(int(row["spell"]))
+            if name:
+                entry["name"] = name
+            missing.append(entry)
     return {
         "name": seat.get("name"),
         "class": seat.get("class") or "",
