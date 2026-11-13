@@ -162,7 +162,9 @@ def fetch(rd, guild: str) -> dict:
 def _trainer_by_class(rd, guild: str) -> dict:
     """The trainer rows of every tank class seated for `guild`, read the
     way the training read reads them (cached per class); a class whose
-    read the realm cannot answer maps to None."""
+    read the realm cannot answer maps to None. The rows read answers a
+    missing trainer table with an empty list, not an error, so an empty
+    answer maps to None too: no rows is no basis to judge a tank by."""
     from . import training
 
     out = {}
@@ -171,9 +173,10 @@ def _trainer_by_class(rd, guild: str) -> dict:
     }
     for class_id in sorted(class_ids):
         try:
-            out[class_id] = training._trainer_rows(rd, int(class_id))
+            rows = training._trainer_rows(rd, int(class_id))
         except realmread.Gap:
-            out[class_id] = None
+            rows = None
+        out[class_id] = rows if rows else None
     return out
 
 
@@ -270,7 +273,7 @@ def _tank_audit(seats: list, fetched: dict) -> dict | None:
         if (
             seat["seat"] == "tank"
             and seat["name"]
-            and trainer.get(int(seat["class_id"] or 0)) is None
+            and not trainer.get(int(seat["class_id"] or 0))
         ):
             return None
     known_by_name: dict = {}

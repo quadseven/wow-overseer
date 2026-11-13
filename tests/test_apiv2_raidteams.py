@@ -221,10 +221,6 @@ class TheReads(unittest.TestCase):
         self.assertEqual(len(rd.asked), 1)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TheTankAudit(unittest.TestCase):
     """The raid-teams payload carries the seated tanks' spellbook audit:
     each filled tank seat's due trainer spells it has not learned, from
@@ -237,15 +233,20 @@ class TheTankAudit(unittest.TestCase):
     ]
 
     def _payload(self, **reads):
+        # The trainer map the real read builds: one entry per tank class
+        # actually seated, holding that class's trainer rows.
+        trainer = {}
+        for s in raidteams.seats("Cave"):
+            if s.seat == "tank":
+                trainer[s.class_id] = list(self.TRAINER)
         fetched = {
             "members": _rows("Cave"),
             "attuned": [],
             "worn": [],
             "consumables": [],
             "known": [],
-            "trainer": {cid: [] for cid in (1, 2, 3, 4, 5, 6, 7, 8, 9, 11)},
+            "trainer": trainer,
         }
-        fetched["trainer"][1] = self.TRAINER
         fetched.update(reads)
         return v2.build("Cave", fetched)
 
@@ -256,10 +257,10 @@ class TheTankAudit(unittest.TestCase):
             grug["missing"], [{"spell": 900001, "level": 10, "state": "trainable"}]
         )
         self.assertFalse(grug["complete"])
-        # Every filled Warrior tank shares the class trainer list, so each
-        # is missing the same due spell; other classes have empty lists.
+        # Every filled tank's class trainer list carries the same due
+        # spell, so every filled tank is missing it.
         missing = [t for t in audit["tanks"] if t["missing"]]
-        self.assertTrue(all(t["class"] == "Warrior" for t in missing))
+        self.assertEqual(len(missing), audit["audited"])
         self.assertEqual(audit["incomplete"], len(missing))
         self.assertEqual(audit["missing_total"], len(missing))
 
@@ -291,5 +292,21 @@ class TheTankAudit(unittest.TestCase):
         self.assertIsNone(self._payload(trainer=None)["tank_audit"])
 
     def test_a_tank_class_without_trainer_rows_leaves_the_audit_null(self):
-        trainer = {cid: [] for cid in (2, 3, 4, 5, 6, 7, 8, 9, 11)}
+        trainer = {6: list(self.TRAINER)}
         self.assertIsNone(self._payload(trainer=trainer)["tank_audit"])
+
+    def test_an_empty_trainer_list_for_a_tank_class_leaves_the_audit_null(self):
+        # The shape the real read produces when the trainer table is
+        # missing: the rows read answers an empty list, not an error.
+        trainer = {1: list(self.TRAINER), 6: []}
+        self.assertIsNone(self._payload(trainer=trainer)["tank_audit"])
+
+    def test_a_missing_trainer_table_leaves_the_audit_null(self):
+        rd = reader(_rows("Cave"), fail={v2training.TRAINER_SQL})
+        code, payload = v2.raidteams_read({"guild": ["cave"]}, _ctx(rd))
+        self.assertEqual(code, 200)
+        self.assertIsNone(payload["tank_audit"])
+
+
+if __name__ == "__main__":
+    unittest.main()
