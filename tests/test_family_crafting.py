@@ -331,6 +331,7 @@ class TheCraftErrandIsWrittenForAnotherFamily(unittest.TestCase):
                 "_guild_bag_floor_for": lambda cohort=None: None,
                 "_fetch_item_counts": lambda pairs: {("Oz", BOLT): 3},
                 "_fetch_crafters_known": lambda names: {},
+                "_plan_craft_reagents": lambda names, spells, skills: {},
                 "_write_craft_errand": lambda name, spell: written.append(
                     (name, spell)
                 ),

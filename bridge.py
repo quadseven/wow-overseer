@@ -84,6 +84,9 @@ import guildfund
 import guildshare
 import guildpost
 import guildroute
+import gearrouting
+import gearroutingexec
+import gearroutingread
 import orders
 import orderrecord
 import guildwork
@@ -173,6 +176,7 @@ import restsupply
 import raidrun
 import spirerun
 import raidsupply
+import reagentplan
 import recipebook
 import raidteams
 import readtimeout
@@ -9999,14 +10003,28 @@ class Bridge(discord.Client):
         # learn errand (guildjobs.recipes_due) buys it. An unread book is None
         # for everyone, which craft.holds does not judge.
         known = await asyncio.to_thread(_fetch_crafters_known, names)
+        chosen_by = {}
         for name in names:
             held = {entry: count for (who, entry), count in counts.items()
                     if who == name}
-            chosen = craft_rhythm.errand(name, skills.get(name, {}), held,
-                                         primaries.get(name), bags_wanted, floor,
-                                         known=known.get(name))
+            chosen_by[name] = craft_rhythm.errand(
+                name, skills.get(name, {}), held, primaries.get(name),
+                bags_wanted, floor, known=known.get(name))
+        # THE REAGENTS ARE PLANNED BEFORE THE ERRAND IS CALLED FED (#774).
+        # An errand with nothing in the bags casts nothing; the plan says
+        # where each short reagent comes from, and the bank and guild bank
+        # passes fetch what it names. The errand itself still stands: the
+        # vendor, auction and guildshare passes read it to know what to send.
+        plans = await asyncio.to_thread(
+            _plan_craft_reagents, names,
+            {name: chosen.spell for name, chosen in chosen_by.items()}, skills)
+        for name in names:
+            chosen = chosen_by[name]
             await asyncio.to_thread(_write_craft_errand, name, chosen.spell)
-            if chosen.spell:
+            plan = plans.get(name)
+            if chosen.spell and plan is not None and not plan.fed:
+                log.info("craft: %s", reagentplan.line(plan))
+            elif chosen.spell:
                 log.info("craft: %s aimed at %s spell %s - %s",
                          name, "smelt" if chosen.smelting else "recipe",
                          chosen.spell, chosen.why)
@@ -13227,6 +13245,59 @@ class Bridge(discord.Client):
                     self._guild_mail_runs.pop(route.holder, None)
         return written
 
+    async def _gear_routing_once(self) -> None:
+        """Hand each routed piece to the member who gains most (#2136).
+
+        The routing report decides who (gearrouting.plan over gearroutingread's
+        rows, the read the site's dry run serves), once a cycle for every roster
+        family's guilds at once. gearroutingexec writes it through
+        `_insert_route`, the guild hand-over writer: a trade when holder and
+        wearer stand together, a letter when the holder stands at a mailbox and
+        the wearer is family; otherwise the piece goes by post when its holder
+        next stands at a mailbox. Never a give, nothing granted, never a piece an
+        overseer_keep reservation holds, and at most GEAR_ROUTING_PER_PASS rows.
+        One log line per hand-off decision; the waits are counted.
+        """
+        family = sorted(await asyncio.to_thread(_roster_names))
+        if not family:
+            return
+        wearers, gear_rows, bank_rows = await asyncio.to_thread(_read_gear_routing, family)
+        report = gearrouting.plan(wearers, gear_rows, bank_rows=bank_rows,
+                                  keep_names=gearroutingread.KEEPS)
+        if not report.routes:
+            log.info("gear routing: no routes this pass")
+            return
+        who = gearroutingexec.members_to_read(
+            report, [str(r.get("name") or "") for r in wearers])
+        positions = await asyncio.to_thread(_fetch_positions, who)
+        free_slots = await asyncio.to_thread(_fetch_free_slots, who)
+        holders = list(dict.fromkeys(
+            r.holder for r in report.routes if r.holder in positions))
+        at_mailbox = await asyncio.to_thread(
+            _holders_at_mailbox, holders[:GUILD_ROUTE_MAILBOX_CHECKS], positions)
+        seen = await asyncio.to_thread(_recent_route_keys, GIVE_RETRY_MINUTES)
+        kept = await asyncio.to_thread(_KEEP.now)
+        world = gearroutingexec.World(
+            carried=gearroutingexec.carried(gear_rows),
+            positions=positions,
+            at_mailbox=tuple(sorted(at_mailbox)),
+            free_slots=free_slots,
+            family=frozenset(family),
+            kept=kept,
+            queued=gearroutingexec.queued(seen),
+        )
+        result = await asyncio.to_thread(
+            gearroutingexec.execute, report, world, _insert_route,
+            per_pass=GEAR_ROUTING_PER_PASS,
+        )
+        for line in gearroutingexec.decision_lines(result):
+            log.info("gear routing: %s", line)
+        _log_capped("gear routing", [
+            "%s: %s" % (step.status, step.said) for step in result.steps
+            if step.status not in gearroutingexec.DECISIONS
+        ])
+        log.info("gear routing: %s", gearroutingexec.summary(result))
+
     async def _walk_route_holders(self, waiting: list, family_names: list,
                                   escort=None, family_only: bool = True) -> None:
         """Walk a waiting route's holder to the nearest mailbox (#185).
@@ -13490,6 +13561,10 @@ class Bridge(discord.Client):
                 log.exception("guild equip pass failed; retrying next cycle")
             await self._for_other_families("guild equip", self._guild_equip_once)
             await self._for_other_families("guild share", self._guild_share_once)
+            try:
+                await self._gear_routing_once()
+            except Exception:
+                log.exception("gear routing pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _settle_vendor_errand(self, names: list, leader: str) -> str:
@@ -14713,10 +14788,31 @@ class Bridge(discord.Client):
                          if equip.holder in roster_names]
         wanted = tuple(equip for equip in wanted
                        if equip.holder not in roster_names)
+        # ONLY WHAT THE DRIVE WILL WEAR IS LEFT TO IT (#2381). The spec score
+        # and the drive's GearScore disagree (Grug's Emperor's Seal); a pick
+        # the drive declines is named, not counted as left to it.
+        try:
+            drive = await asyncio.to_thread(
+                _drive_verdicts, sorted({e.holder for e in left_to_drive}))
+        except (OSError, pymysql.err.MySQLError) as exc:
+            log.warning("equip: could not read the gear drive's verdicts: %s", exc)
+            drive = None
+        declined = [] if drive is None else [
+            equip for equip in left_to_drive
+            if equip.holder in drive
+            and drive[equip.holder].get(equip.entry) != equipscore.DRIVE_WEAR]
+        left_to_drive = [e for e in left_to_drive if e not in declined]
         log.info(
             "equip: left %d piece(s) to the module's gear drive for %d roster member(s)",
             len(left_to_drive), len(roster_names),
         )
+        if declined:
+            log.info(
+                "equip: the module's gear drive declines %d spec-score pick(s), so "
+                "they are not left to it: %s", len(declined),
+                "; ".join("%s %s (%s)" % (e.holder, e.name,
+                                          drive[e.holder].get(e.entry, "not judged"))
+                          for e in declined[:8]) + ("; ..." if len(declined) > 8 else ""))
         # NEVER AN EQUIP FOR A MEMBER WHO IS NOT IN THE WORLD (#869). The
         # family's names are every protected character, logged in or not, and
         # a command for one who is offline sits unanswered and piles up tries.
@@ -17253,7 +17349,8 @@ class Bridge(discord.Client):
                 walking.add(withdrawal.character)
                 continue
             if await asyncio.to_thread(
-                    _insert_guild, withdrawal.character, command, "guildbank-withdraw"):
+                    _insert_guild, withdrawal.character, command,
+                    getattr(withdrawal, "source", "guildbank-withdraw")):
                 fresh.append(withdrawal)
         if walking:
             log.info(
@@ -30604,11 +30701,33 @@ def _route_sales_for_trip(names, leader, rows, free_slots, sellable_counts,
 
 
 def _itemplan_reads(names, family, rows, gear_rows, worn_rows):
-    """The item plan shadow's inputs, read with the passes' own reads (#1973)."""
-    return itemplan_reads.read(
+    """The item plan shadow's inputs, read with the passes' own reads (#1973).
+
+    A roster member's equips are the module's gear drive's, so the plan's
+    gear verdict for one is the drive's rule (#2381): a piece the drive
+    declines is not carried for ever as an upgrade. A failed read leaves the
+    item-level verdict, as before."""
+    extras = itemplan_reads.read(
         names, family, rows, gear_rows, worn_rows, connect=_connect,
         bank_rows=_fetch_bank_items, guild_setup=_fetch_guild_bank_setup,
         roster=_fetch_guild_roster)
+    try:
+        roster = set(_fetch_enabled_roster_names())
+        drive = _drive_verdicts([n for n in names if n in roster])
+    except (OSError, pymysql.err.MySQLError) as exc:
+        log.warning("itemplan: could not read the gear drive's verdicts: %s", exc)
+        return extras
+    return dataclasses.replace(extras, drive_verdict=drive)
+
+
+def _drive_verdicts(names) -> dict:
+    """{member: {entry: verdict}} by the module's gear drive rule (#2381) for
+    the named roster members, read with the equip pass's own reads."""
+    names = list(names)
+    if not names:
+        return {}
+    return equipscore.drive_verdicts(
+        _fetch_wearers(names), _fetch_scored_gear(names), names, _jev_item_book())
 
 
 def _count_sales(counts: dict, sales) -> None:
@@ -31119,7 +31238,13 @@ def _plan_guild_withdrawals(names: list) -> tuple:
     nothing, which leaves the vault as it was.
     """
     forecast = _bank_forecast(names)
-    if not any(d.action == bankforecast.SELL for d in forecast.decisions()):
+    selling = any(d.action == bankforecast.SELL for d in forecast.decisions())
+    # AND THE STACKS A CRAFTER'S OWN ERRAND IS SHORT OF (#774), taken by the
+    # crafter under its own source, so the house never lists them.
+    plans = _craft_plans_of(names)
+    crafting = any(s.source == reagentplan.GUILD_BANK
+                   for p in plans for s in p.shorts)
+    if not selling and not crafting:
         return ()
     try:
         free = _fetch_free_slots(names)
@@ -31129,8 +31254,18 @@ def _plan_guild_withdrawals(names: list) -> tuple:
         log.exception("guild bank: the withdraw rights could not be read; no "
                       "vault stack is taken out this pass")
         return ()
+    for_craft = ()
+    if crafting:
+        entries = sorted({s.reagent.entry for p in plans for s in p.shorts
+                          if s.source == reagentplan.GUILD_BANK})
+        for_craft, notes = reagentplan.vault_withdrawals(
+            plans, _fetch_vault_stacks(names, entries), takers)
+        for note in notes:
+            log.info("guild bank: %s", note)
+    if not selling:
+        return for_craft
     pending = frozenset(int(row["entry"]) for row in _fetch_withdrawn_for_sale(names))
-    return bankforecast.plan_withdrawals(forecast, takers, pending=pending)
+    return for_craft + bankforecast.plan_withdrawals(forecast, takers, pending=pending)
 
 
 def _clearance_sales(routes) -> tuple:
@@ -32464,6 +32599,9 @@ FAR_WALKS_AT_ONCE = int(os.environ.get("FAR_WALKS_AT_ONCE", guildroute.FAR_WALKS
 # The realm's hunt ceiling (the module's Overseer.Hunt.AtOnce).
 HUNTS_AT_ONCE = int(os.environ.get("HUNTS_AT_ONCE", classhunt.HUNTS_AT_ONCE))
 GUILD_ROUTE_MAILBOX_CHECKS = int(os.environ.get("GUILD_ROUTE_MAILBOX_CHECKS", "20"))
+# The most hand-over rows the gear routing pass writes in one cycle (#2136);
+# 0 writes none, and every route is still decided and logged.
+GEAR_ROUTING_PER_PASS = int(os.environ.get("GEAR_ROUTING_PER_PASS", "10"))
 # How many notes one pass logs line by line before it summarises the rest.
 GUILD_ROUTE_NOTE_LINES = 5
 
@@ -34301,6 +34439,13 @@ def _raid_supply_bank(cur, guilds: list, out: dict) -> None:
 
 
 
+def _read_gear_routing(names: list) -> tuple:
+    """(wearers, gear, bank) rows for the guilds `names` belong to: the
+    routing report's read, shared with the site (gearroutingread.py)."""
+    with realmread.Session(_connect) as rd:
+        return gearroutingread.read(rd, names)
+
+
 def _recent_route_keys(minutes: int) -> set:
     """(holder, command) pairs this pass already wrote inside the window.
 
@@ -35666,6 +35811,8 @@ def _plan_bank(names: list) -> "bank.Plan":
         # WHAT THE GUILD ALREADY HOLDS PAST ITS TARGET NEVER GOES TO THE
         # GUILD VAULT (bankforecast); the holder's own bank takes it as before.
         over_target=_bank_forecast(names).over_target,
+        # A REAGENT THE CRAFTER'S OWN ERRAND IS SHORT OF COMES OUT (#774).
+        craft_wants=reagentplan.bank_wants(_craft_plans_of(names)),
     )
     # WHILE A CAMPAIGN WAITS, BAGS ARE KEPT AT RUN ROOM: a member short of
     # the resume floor puts its trade goods down, and nothing is fetched back
@@ -38363,6 +38510,113 @@ def _fetch_material_requests(names: list, *, tools=False) -> list:
 def _fetch_tool_requests(names: list) -> list:
     """Tool events use the same bounded event reader, never reagent routing."""
     return _fetch_material_requests(names, tools=True)
+
+
+# THE LAST REAGENT PLAN PER CRAFTER (#774), written by `_craft_once` and read
+# by the bank and guild bank passes, which fetch what it names. A restarted
+# bridge holds none until the next craft pass, which fetches nothing early.
+_CRAFT_PLANS: dict = {}
+
+
+def _craft_plans_of(names) -> list:
+    """The standing reagent plans of `names` (reagentplan.Plan)."""
+    return [_CRAFT_PLANS[n] for n in sorted(names or ()) if n in _CRAFT_PLANS]
+
+
+def _fetch_reagent_stock(pairs: list) -> dict:
+    """(name, entry) -> (bags, bank, mail) counts; one round trip per entry.
+
+    `_fetch_item_counts` sums every place an item can be, and DriveCraft
+    casts from the bags only, so a craft judged on that sum is judged fed
+    while its vials sit in the bank (#774). Slot geography is bank.py's.
+    """
+    if not pairs:
+        return {}
+    by_entry: dict = {}
+    for name, entry in pairs:
+        by_entry.setdefault(int(entry), []).append(name)
+    out: dict = {}
+    with _connect() as conn, conn.cursor() as cur:
+        for entry, names in by_entry.items():
+            marks = ",".join(["%s"] * len(names))
+            cur.execute(
+                "SELECT c.name AS name, COALESCE(SUM(CASE WHEN "  # noqa: S608 - placeholders from a COUNT, values still bound
+                "(ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) OR ci.bag IN "
+                "(SELECT bag.item FROM character_inventory bag WHERE bag.guid = ci.guid "
+                "AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22) "
+                "THEN ii.count ELSE 0 END), 0) AS bags, COALESCE(SUM(CASE WHEN "
+                "(ci.bag = 0 AND ci.slot BETWEEN 39 AND 66) OR ci.bag IN "
+                "(SELECT bag.item FROM character_inventory bag WHERE bag.guid = ci.guid "
+                "AND bag.bag = 0 AND bag.slot BETWEEN 67 AND 73) "
+                "THEN ii.count ELSE 0 END), 0) AS bank, COALESCE(SUM(CASE WHEN "
+                "mi.item_guid IS NOT NULL THEN ii.count ELSE 0 END), 0) AS mail "
+                "FROM characters c LEFT JOIN item_instance ii "
+                "ON ii.owner_guid = c.guid AND ii.itemEntry = %s "
+                "LEFT JOIN character_inventory ci ON ci.item = ii.guid "
+                "LEFT JOIN mail_items mi ON mi.item_guid = ii.guid "
+                f"WHERE c.name IN ({marks}) GROUP BY c.name",
+                (entry, *names),
+            )
+            for row in cur.fetchall():
+                out[(row["name"], entry)] = (
+                    int(row["bags"] or 0), int(row["bank"] or 0), int(row["mail"] or 0))
+    return out
+
+
+def _fetch_vault_stacks(names: list, entries: list) -> dict:
+    """name -> the stacks of `entries` in that member's guild vault."""
+    if not names or not entries:
+        return {}
+    out: dict = {}
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT c.name AS name, ii.guid AS guid, ii.itemEntry AS entry, "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "ii.count AS count, gbi.TabId AS tab FROM characters c "
+            "JOIN guild_member gm ON gm.guid = c.guid "
+            "JOIN guild_bank_item gbi ON gbi.guildid = gm.guildid "
+            "JOIN item_instance ii ON ii.guid = gbi.item_guid "
+            "WHERE c.name IN (%s) AND ii.itemEntry IN (%s)" % (
+                ",".join(["%s"] * len(names)), ",".join(["%s"] * len(entries))),
+            [*names, *[int(e) for e in entries]],
+        )
+        for row in cur.fetchall():
+            out.setdefault(row["name"], []).append(bankforecast.Stack(
+                guid=int(row["guid"]), entry=int(row["entry"]),
+                count=int(row["count"] or 0), tab=int(row["tab"] or 0)))
+    return out
+
+
+def _plan_craft_reagents(names: list, spells: dict, skills: dict) -> dict:
+    """name -> reagentplan.Plan for each errand in `spells`; blocking.
+
+    A read that fails plans nothing, which leaves every errand as it was
+    before the plan existed; it is logged, never passed off as an answer.
+    """
+    wanted = {name: reagentplan.reagents(spell) for name, spell in spells.items()
+              if spell}
+    pairs = sorted({(name, r.entry) for name, eaten in wanted.items() for r in eaten})
+    if not pairs:
+        return {}
+    entries = sorted({entry for _name, entry in pairs})
+    try:
+        places = _fetch_reagent_stock(pairs)
+        vault = _fetch_vault_stacks(sorted(wanted), entries)
+        kinds = _fetch_item_kinds(entries)
+    except pymysql.err.MySQLError:
+        log.exception("craft: the reagents could not be read; no errand is planned")
+        return {}
+    plans = {}
+    for name, eaten in wanted.items():
+        stock = {}
+        for r in eaten:
+            bags, banked, mail = places.get((name, r.entry), (0, 0, 0))
+            in_vault = sum(st.count for st in vault.get(name, ()) if st.entry == r.entry)
+            stock[r.entry] = reagentplan.Stock(bags, banked, mail, in_vault)
+        plans[name] = reagentplan.plan(name, spells[name], stock, kinds, skills)
+    for name in names:
+        _CRAFT_PLANS.pop(name, None)
+    _CRAFT_PLANS.update(plans)
+    return plans
 
 
 def _fetch_item_kinds(entries: list) -> dict:
