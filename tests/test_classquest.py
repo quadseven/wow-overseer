@@ -414,6 +414,24 @@ class ThePriority(unittest.TestCase):
         result = class_plan([], busy={m.name}, class_candidates=[m])
         self.assertEqual(class_steps(result), [])
         self.assertIn("already on another guild walk", result.class_holds[m.name])
+        reasons = guildjobs._class_hold_reasons(
+            [m],
+            (),
+            {},
+            result.steps,
+            {},
+            result.notes,
+            result.owed,
+            result.released,
+            {m.name},
+            book(),
+            (),
+            None,
+            0,
+            (),
+        )
+        self.assertIn("another guild walk", reasons[m.name])
+        self.assertIn("another guild walk", result.class_holds[m.name])
 
     def test_a_roleless_member_already_hunting_is_not_reported_as_waiting(self):
         m = dataclasses.replace(

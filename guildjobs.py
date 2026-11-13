@@ -3881,7 +3881,7 @@ def plan(
     owed, released = owed_members(
         all_members, classes, recent, hunts, now, owing or classquest.Owing(), asks=asks
     )
-    class_holds = class_hold_reasons(
+    class_holds = _class_hold_reasons(
         all_members,
         family_candidates,
         family_holds,
@@ -4033,7 +4033,7 @@ def _plan_class_only_member(
     return ""
 
 
-def class_hold_reasons(
+def _class_hold_reasons(
     members,
     family_candidates,
     family_holds,
@@ -4059,6 +4059,45 @@ def class_hold_reasons(
     }
     planned = {step.holder: step for step in steps}
     members_by_name = {member.name: member for member in members}
+    _member_class_holds(
+        holds,
+        members_by_name,
+        class_steps,
+        planned,
+        lines,
+        notes,
+        owed,
+        released,
+        busy,
+        recent,
+    )
+    _family_class_holds(
+        holds,
+        family_candidates,
+        family_holds,
+        class_steps,
+        book,
+        recent,
+        hunts,
+        now,
+        asks,
+    )
+    return holds
+
+
+def _member_class_holds(
+    holds,
+    members_by_name,
+    class_steps,
+    planned,
+    lines,
+    notes,
+    owed,
+    released,
+    busy,
+    recent,
+):
+    """Record reasons for guild seats whose owed class step did not run."""
     for name, row in {**released, **owed}.items():
         if name not in class_steps and name not in holds:
             member = members_by_name.get(name)
@@ -4066,19 +4105,36 @@ def class_hold_reasons(
                 holds[name] = _class_hold_for_member(
                     member, row, name in busy, planned.get(name), notes, recent
                 )
-    for name, reason in (family_holds or {}).items():
-        member = next((m for m in family_candidates or () if m.name == name), None)
+
+
+def _family_class_holds(
+    holds, candidates, reasons, class_steps, book, recent, hunts, now, asks
+):
+    """Add family holds only for members with an owed class quest."""
+    for name, reason in (reasons or {}).items():
+        member = next((m for m in candidates or () if m.name == name), None)
         if (
             member is not None
             and name not in class_steps
             and class_owed(member, book, recent, hunts, now, asks) is not None
         ):
             holds.setdefault(name, str(reason))
-    return holds
 
 
 def _class_hold_for_member(member, owed, busy, planned, notes, recent):
     """The most specific reason its class quest did not get a step this pass."""
+    unavailable = _class_member_unavailable(member)
+    if unavailable:
+        return unavailable
+    if busy:
+        return "the member is already on another guild walk"
+    if owed.blocker:
+        return owed.said or owed.blocker
+    return _class_hold_context(member, planned, notes, recent)
+
+
+def _class_member_unavailable(member):
+    """The member readiness gate that prevents its class quest from starting."""
     if not member.online:
         return "the member is offline"
     if not member.alive:
@@ -4087,10 +4143,10 @@ def _class_hold_for_member(member, owed, busy, planned, notes, recent):
         return "the member is in combat"
     if member.map_id is None or member.x is None or member.y is None:
         return "the member's position is unread"
-    if busy:
-        return "the member is already on another guild walk"
-    if owed.blocker:
-        return owed.said or owed.blocker
+
+
+def _class_hold_context(member, planned, notes, recent):
+    """The planner hold after readiness, busy, and owing blockers were cleared."""
     yielded = class_yield(member, recent)
     if yielded:
         return _class_hold_reason(member.name, yielded)
