@@ -44,6 +44,15 @@ posts. Expiry is not gated by the switch: asks already open keep closing
 while the switch is off (the bridge's death-ask pass runs the expiry
 half either way).
 
+SEATED THIS PASS (#2277, piece 2 seating step). A member seated in a run
+formed this same pass (a class quest party the bridge just planned) is
+not free to this pass either, though it neither said a yes in the social
+replies nor stands as a yes on any ask: the asker of such a run could
+otherwise be counted in reach, named in a new post's reason, or drawn as
+the yes for a deathloop ask in the very pass its own run forms. The
+bridge passes those names in as `seated`; they are read exactly like the
+names that already spoke.
+
 THE ANSWER SIDE, PIECE 1 (#2277). A live deathloop ask draws one yes:
 the first mate guildjobs.loop_mates finds in reach for its asker, the
 same selection the post's reason names, answers as a helper in a damage
@@ -214,7 +223,14 @@ def _replies(live_asks, ending_ids, jobs, looping, answers, held, spoken=()) -> 
 
 
 def plan_pass(
-    loops, mates, asks, now, held=frozenset(), answers=(), spoken=frozenset()
+    loops,
+    mates,
+    asks,
+    now,
+    held=frozenset(),
+    answers=(),
+    spoken=frozenset(),
+    seated=frozenset(),
 ) -> guildsocial.Pass:
     """One pass of the death-loop asks: posts for loopers with a mate in
     reach, expires for the live asks that end now, and one yes per live
@@ -229,8 +245,11 @@ def plan_pass(
     spoken   names that already said a yes in this same pass (in the
              social pass's replies, which this planner cannot see from
              the recorded rows): such a mate is not counted again
+    seated   names seated in a run formed this same pass (the class
+             quest parties the bridge just planned): such a mate is not
+             counted in reach, named in a post, or drawn as a yes
     """
-    held = set(held or ())
+    held = set(held or ()) | set(seated or ())
     jobs = {}
     for mate in mates or ():
         jobs.setdefault(mate.name, _as_job_member(mate))

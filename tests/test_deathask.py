@@ -329,5 +329,90 @@ class DeathLoopSpokenNames(unittest.TestCase):
         )
 
 
+class DeathLoopSeatedNames(unittest.TestCase):
+    def test_a_member_seated_in_a_run_formed_this_pass_does_not_answer(self):
+        looper, helper = looper_and_mate()
+        live = ask(9, "Looper")
+        found = deathask.plan_pass(
+            {"Looper": loop_of()},
+            [looper, helper],
+            [live],
+            NOW,
+            answers=[],
+            seated={"Helper"},
+        )
+        self.assertEqual(found.replies, ())
+
+    def test_the_next_mate_answers_when_the_first_is_seated_this_pass(self):
+        looper, helper = looper_and_mate()
+        second = mate("Second", 27, 2, at=NEAR, zone_id=HILLSBRAD)
+        live = ask(9, "Looper")
+        found = deathask.plan_pass(
+            {"Looper": loop_of()},
+            [looper, helper, second],
+            [live],
+            NOW,
+            answers=[],
+            seated={"Helper"},
+        )
+        self.assertEqual([r.member for r in found.replies], ["Second"])
+
+    def test_a_seated_member_is_not_named_in_reach_for_a_new_post(self):
+        looper, helper = looper_and_mate()
+        found = deathask.plan_pass(
+            {"Looper": loop_of()}, [looper, helper], [], NOW, seated={"Helper"}
+        )
+        self.assertEqual(found.posts, ())
+
+    def test_the_bridge_pass_carries_seated_names_into_the_death_pass(self):
+        import os
+        import types
+        from unittest import mock
+
+        from _stub_modules import PYMYSQL, fresh_import, stub_modules
+
+        stub = types.ModuleType("discord")
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+        stub.Client = Client
+        with stub_modules(pymysql=PYMYSQL):
+            bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
+
+        looper, helper = looper_and_mate()
+        live = ask(9, "Looper")
+        facts = {
+            "death_loops": {"Looper": loop_of()},
+            "asks": [live],
+            "answers": [],
+            "now": NOW,
+        }
+        with mock.patch.dict(os.environ, {"DEATH_ASK": "on"}):
+            found = bridge._death_ask_pass(
+                facts, [looper, helper], {}, seated={"Helper"}
+            )
+        self.assertEqual(found.replies, ())
+
+    def test_the_social_pass_feeds_its_party_names_to_the_death_pass(self):
+        import types
+
+        import source_utils
+        from _stub_modules import PYMYSQL, fresh_import, stub_modules
+
+        stub = types.ModuleType("discord")
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+        stub.Client = Client
+        with stub_modules(pymysql=PYMYSQL):
+            bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
+        body = source_utils.function_source(bridge.Bridge._guild_social_once)
+        self.assertIn("seated={name for run in parties for name in run.names()}", body)
+
+
 if __name__ == "__main__":
     unittest.main()
