@@ -129,6 +129,19 @@ class Execute(unittest.TestCase):
         self.assertEqual(result.steps, ())
 
 
+class TheAdapterBuildsTheRoute(unittest.TestCase):
+    def test_guild_route_builds_the_shape_the_writer_takes(self):
+        import bag_pressure
+
+        built = bag_pressure.guild_route(
+            "Oz", "Grug", 501, 7001, "Hauberk", 40, True, "why"
+        )
+        self.assertEqual((built.holder, built.taker, built.guid), ("Oz", "Grug", 501))
+        self.assertEqual(built.command if not built.verb else "", "guid:501")
+        self.assertEqual(guildroute.source_for(built.gain), "guildroute:40")
+        self.assertTrue(built.family)
+
+
 class FromTheRealReport(unittest.TestCase):
     """The executor fed the real routing pass, not a hand-built report."""
 

@@ -3,7 +3,7 @@
 `gearrouting.plan` decides which bind-on-equip piece should move to which
 member and moves nothing. This module is the executor that report was left
 waiting for. It adds NO judge: the routes are taken unchanged, in the
-report's order, and turned into the same `gear.Route` the guild hand-over
+report's order, and turned into the same `gear.Route` (via bag_pressure) the guild hand-over
 machinery already writes (`gear.route_deliverable` picks trade or post;
 `guildroute.source_for` keys the audit trail; the caller's `insert` is the
 bridge's `_insert_route`, which refuses any kind but a trade or a letter).
@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import gear
+import bag_pressure
 import gearrouting
 
 WRITTEN = "written"
@@ -94,8 +94,8 @@ def _percent(gain) -> int:
     return 0 if gain is None else max(0, round(gain * 100))
 
 
-def _as_gear_route(route: gearrouting.Route, family) -> gear.Route:
-    return gear.Route(
+def _as_gear_route(route: gearrouting.Route, family) -> object:
+    return bag_pressure.guild_route(
         holder=route.holder,
         taker=route.wearer,
         guid=route.guid,
@@ -103,7 +103,6 @@ def _as_gear_route(route: gearrouting.Route, family) -> gear.Route:
         name=route.item,
         gain=_percent(route.gain),
         family=route.wearer in family,
-        fills_weakest=False,
         reason=route.reason,
     )
 
@@ -138,7 +137,7 @@ def execute(report, world: World, insert, dry_run: bool = False) -> Result:
             )
         else:
             live.append((index, _as_gear_route(route, family)))
-    ready = gear.route_deliverable(
+    ready = bag_pressure.guild_route_deliverable(
         [g for _i, g in live],
         world.positions,
         world.at_mailbox,
