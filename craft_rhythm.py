@@ -862,6 +862,136 @@ def _crew_reagents_first(name: str, spend: int, held: dict):
     )
 
 
+# WHAT AN ENCHANTING RUNG EATS THAT NO VENDOR SELLS (#2411): the dust,
+# essences and shards disenchanting yields, and for a rod the smith's rod, the
+# lower Runed Rod and the pearl. Spell.dbc (543b9fe6...) counts, read with the
+# same anchors as craft.py. The vendor half (Copper Rod, Simple Wood) is
+# craft_supply.REAGENTS'. Not GATHERED: no gathering trip returns with dust,
+# so a short enchanter must not send the family out; it keeps its other
+# trade (`_enchant_first`) until the disenchant route fills its bags.
+STRANGE_DUST, LESSER_MAGIC, GREATER_MAGIC = 10940, 10938, 10939
+LESSER_ASTRAL, GREATER_ASTRAL, SOUL_DUST = 10998, 11082, 11083
+LESSER_MYSTIC, GREATER_MYSTIC, VISION_DUST = 11134, 11135, 11137
+LESSER_NETHER, GREATER_NETHER, DREAM_DUST = 11174, 11175, 11176
+LESSER_ETERNAL, ILLUSION_DUST = 16202, 16204
+DISENCHANT_FED: dict[int, tuple[Reagent, ...]] = {
+    7418: (Reagent(STRANGE_DUST, "Strange Dust", 1),),
+    7457: (Reagent(STRANGE_DUST, "Strange Dust", 3),),
+    14807: (Reagent(GREATER_MAGIC, "Greater Magic Essence", 1),),
+    7857: (
+        Reagent(STRANGE_DUST, "Strange Dust", 4),
+        Reagent(LESSER_ASTRAL, "Lesser Astral Essence", 1),
+    ),
+    13501: (Reagent(SOUL_DUST, "Soul Dust", 2),),
+    13642: (Reagent(LESSER_MYSTIC, "Lesser Mystic Essence", 1),),
+    13661: (Reagent(VISION_DUST, "Vision Dust", 1),),
+    13746: (Reagent(VISION_DUST, "Vision Dust", 3),),
+    13822: (Reagent(LESSER_NETHER, "Lesser Nether Essence", 2),),
+    13939: (
+        Reagent(DREAM_DUST, "Dream Dust", 2),
+        Reagent(GREATER_NETHER, "Greater Nether Essence", 1),
+    ),
+    20008: (Reagent(LESSER_ETERNAL, "Lesser Eternal Essence", 3),),
+    20028: (Reagent(ILLUSION_DUST, "Illusion Dust", 8),),
+    # The rods (craft.ROD_RECIPES).
+    7421: (
+        Reagent(STRANGE_DUST, "Strange Dust", 1),
+        Reagent(LESSER_MAGIC, "Lesser Magic Essence", 1),
+    ),
+    7795: (
+        Reagent(6338, "Silver Rod", 1),
+        Reagent(STRANGE_DUST, "Strange Dust", 6),
+        Reagent(GREATER_MAGIC, "Greater Magic Essence", 3),
+        Reagent(craft.RUNED_COPPER_ROD, "Runed Copper Rod", 1),
+    ),
+    13628: (
+        Reagent(11128, "Golden Rod", 1),
+        Reagent(5500, "Iridescent Pearl", 1),
+        Reagent(GREATER_ASTRAL, "Greater Astral Essence", 2),
+        Reagent(SOUL_DUST, "Soul Dust", 2),
+        Reagent(craft.RUNED_SILVER_ROD, "Runed Silver Rod", 1),
+    ),
+    13702: (
+        Reagent(11144, "Truesilver Rod", 1),
+        Reagent(7971, "Black Pearl", 1),
+        Reagent(GREATER_MYSTIC, "Greater Mystic Essence", 2),
+        Reagent(VISION_DUST, "Vision Dust", 2),
+        Reagent(craft.RUNED_GOLDEN_ROD, "Runed Golden Rod", 1),
+    ),
+}
+ENCHANTING = "enchanting"
+
+
+def enchanting_rung(name: str, skills: dict, primaries=None) -> int:
+    """The Enchanting rung this character's skill reaches, or 0.
+
+    Asked apart from `craft.craft_errand`'s trade order on purpose: an
+    enchanter whose bags hold disenchanted reagents enchants FIRST, whatever
+    its other trade (`_enchant_first`). The dust exists only for this, and the
+    other trade's greens are what disenchanting eats (#2411).
+    """
+    trades = professions.assigned(name) if primaries is None else primaries
+    value = int(skills.get(ENCHANTING, 0) or 0)
+    if ENCHANTING not in trades or not value:
+        return 0
+    recipe = craft.recipe_for(craft.SKILL_IDS[ENCHANTING], value)
+    return recipe.spell_id if recipe is not None else 0
+
+
+def _enchant_first(name: str, rung: int, held: dict, other: int, known=None):
+    """(spell, why) for an Enchanting rung: its rod while none of its tier is
+    held, the rung while its disenchanted reagents are, else `other`, the
+    character's next trade's rung (`craft.craft_errand` with Enchanting
+    skipped). A rung or rod not yet bought (`craft.holds`) also yields to
+    `other`; the learn errand buys it. `why` is '' when the rung stands.
+    """
+    if int(rung or 0) not in DISENCHANT_FED:
+        return rung, ""
+    rod = craft.rod_for(rung, held)
+    cast = rod.spell_id if rod is not None else int(rung)
+    if not craft.holds(cast, known):
+        return other, (
+            "%s does not hold its Enchanting %s (spell %d) yet, so it keeps "
+            "its other trade (spell %d) until its learn errand buys it"
+            % (name, "rod" if rod is not None else "rung", cast, int(other or 0))
+        )
+    for reagent in DISENCHANT_FED[cast]:
+        have = int(held.get(reagent.entry, 0) or 0)
+        if have < reagent.per_cast:
+            return other, (
+                "%s holds %d %s of the %d its Enchanting %s (spell %d) eats, "
+                "so it keeps its other trade (spell %d) until disenchanting "
+                "fills its bags"
+                % (
+                    name,
+                    have,
+                    reagent.label,
+                    reagent.per_cast,
+                    "rod" if rod is not None else "rung",
+                    cast,
+                    int(other or 0),
+                )
+            )
+    if rod is None:
+        return rung, ""
+    return cast, (
+        "%s makes its %s (spell %d) first: its Enchanting rung (spell %d) "
+        "needs that rod and it holds none of that tier" % (name, rod.name, cast, rung)
+    )
+
+
+def _enchant_entries(rung) -> set:
+    """Every entry `_enchant_first` reads for this rung: its reagents, every
+    Runed Rod, and each rod recipe's reagents. Empty for any other rung."""
+    if int(rung or 0) not in DISENCHANT_FED:
+        return set()
+    out = {r.entry for r in DISENCHANT_FED[int(rung)]}
+    out.update(craft.ROD_TIERS)
+    for rod in craft.ROD_MADE_BY.values():
+        out.update(r.entry for r in DISENCHANT_FED[rod])
+    return out
+
+
 def _crew_entries(spend) -> set:
     """The thread and dye entries of a crew-supplied rung, else none."""
     spell = int(spend or 0)
@@ -871,9 +1001,10 @@ def _crew_entries(spend) -> set:
 
 
 def feeds(craft_spell: int) -> tuple:
-    """The reagents a stand on this recipe counts: GATHERED, then BAG_FEED."""
+    """The reagents a stand on this recipe counts: GATHERED, then BAG_FEED,
+    then an Enchanting rung's or rod's DISENCHANT_FED (#2411)."""
     spell = int(craft_spell or 0)
-    return GATHERED.get(spell) or BAG_FEED.get(spell, ())
+    return GATHERED.get(spell) or BAG_FEED.get(spell) or DISENCHANT_FED.get(spell, ())
 
 
 def reagents_to_count(
@@ -894,6 +1025,11 @@ def reagents_to_count(
     """
     wanted = set()
     spend = craft.craft_errand(name, skills, primaries)
+    enchant = enchanting_rung(name, skills, primaries)
+    if enchant:
+        # The rung, its rods and the trade an unfed enchanter keeps (#2411).
+        wanted |= _enchant_entries(enchant)
+        spend = craft.craft_errand(name, skills, primaries, skip=(ENCHANTING,))
     bandage = _bandage_recipe(skills)
     if bandage is not None:
         wanted.update(r.entry for r in GATHERED.get(bandage.spell_id, ()))
@@ -1073,10 +1209,16 @@ def _spend_or_smelt(
     `primaries` serves another family (#215): its members' trades are the
     ones they hold.
     """
-    rung = craft.craft_errand(name, skills, primaries)
+    enchant = enchanting_rung(name, skills, primaries)
+    if enchant:
+        other = craft.craft_errand(name, skills, primaries, skip=(ENCHANTING,))
+        rung, enchanting = _enchant_first(name, enchant, held, other, known)
+    else:
+        rung, enchanting = craft.craft_errand(name, skills, primaries), ""
     spend, weaving = _bolt_first(name, rung, held)
     if not weaving:
         spend, weaving = _crew_reagents_first(name, spend, held)
+    weaving = weaving or enchanting
     for spell in (rung, spend):
         if not craft.holds(spell, known):
             spend, weaving = 0, _unheld_why(name, spell)
@@ -1157,6 +1299,37 @@ def stand(name: str, craft_spell: int, held: dict) -> Stand:
             thinnest=bag[0].label,
             why="%s holds %d %s, enough for %d bag(s) for the guild (spell %d)"
             % (name, bolts, bag[0].label, casts, spell),
+        )
+
+    fed = DISENCHANT_FED.get(spell)
+    if fed:
+        # AN ENCHANTER IS SAT DOWN, NEVER SENT OUT (#2411). Its errand is an
+        # Enchanting rung or rod only while a cast of dust is in hand
+        # (`_enchant_first`), and no gathering trip returns with dust, so a
+        # short enchanter argues for nothing; a stocked one sits the family
+        # down to craft like any stocked crafter.
+        thin = min(fed, key=lambda r: int(held.get(r.entry, 0)) // r.per_cast)
+        casts = int(held.get(thin.entry, 0)) // thin.per_cast
+        stocked = casts >= STOCK_CASTS
+        return Stand(
+            name=name,
+            craft_spell=spell,
+            verdict=STOCKED if stocked else UNJUDGED,
+            casts=casts,
+            thinnest=thin.label,
+            why="%s holds %d %s, enough for %d casts of Enchanting spell %d - "
+            "%s"
+            % (
+                name,
+                int(held.get(thin.entry, 0)),
+                thin.label,
+                casts,
+                spell,
+                "enough to sit down for"
+                if stocked
+                else "disenchanting, not a gathering trip, fills it, so this "
+                "argues for neither",
+            ),
         )
 
     reagents = GATHERED.get(spell)
