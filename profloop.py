@@ -299,113 +299,109 @@ def _town_ask(why: str) -> str:
     return LOOP_WHY + why
 
 
+def _join(state: State, facts: Facts) -> Step:
+    """A family seen for the first time joins at the phase its jobs say."""
+    phase = _joined(facts)
+    if phase == TOWN:
+        return Step(
+            State(phase=TOWN, since=facts.now, town_seen=facts.errand_active),
+            line="joined -> town: the family is in town (%s)"
+            % (facts.errand_why or "job town run"),
+            moved=True,
+        )
+    step = _move(state, facts, phase, "joined the loop on its current job")
+    if facts.jobs and all(_held(phase, j) for j in facts.jobs.values()):
+        step = replace(step, job="", state=replace(step.state, asserted=0.0))
+    return step
+
+
+def _gather(state: State, facts: Facts, elapsed: float) -> Step:
+    low = _low(facts)
+    if low:
+        why = "%s below %d free bag slots" % (", ".join(low), TOWN_FREE_SLOTS)
+        return _move(state, facts, TOWN, why, _town_ask(why))
+    if elapsed >= GATHER_SECONDS:
+        why = "%d hours gathered; the haul goes to the bank" % (GATHER_SECONDS // 3600)
+        return _move(state, facts, TOWN, why, _town_ask(why))
+    if elapsed < GATHER_MIN_SECONDS or not _stocked(facts):
+        return _stay(state, facts)
+    ready = "every crafter holds reagents for %d casts" % READY_CASTS
+    errands = sorted(set(facts.mail_waiting) | set(facts.fetch))
+    if not errands:
+        return _move(state, facts, CRAFT, ready)
+    why = "%s, and %s have more in the mail or a bank" % (ready, ", ".join(errands))
+    return _move(state, facts, TOWN, why, _town_ask(why))
+
+
+def _town(state: State, facts: Facts, elapsed: float) -> Step:
+    if facts.errand_active:
+        return Step(replace(state, town_seen=True))
+    if state.town_seen or facts.errand_ended >= state.since > 0:
+        to, why = _after_town(facts)
+        return _move(state, facts, to, "the town errand ended; " + why)
+    if elapsed >= TOWN_START_SECONDS:
+        to, why = _after_town(facts)
+        late = "the town errand did not start in %d minutes; " % (
+            TOWN_START_SECONDS // 60
+        )
+        return _move(state, facts, to, late + why)
+    return Step(state, ask_town=_town_ask("the loop is in its town phase"))
+
+
+def _craft_done(facts: Facts, elapsed: float) -> str:
+    """Why the craft phase is over, or ''."""
+    if elapsed >= CRAFT_MIN_SECONDS and not facts.casts:
+        return "no crafter has a recipe whose reagents can be planned"
+    if elapsed >= CRAFT_MIN_SECONDS and not _casting(facts):
+        return "the reagents in the bags are spent"
+    if elapsed >= CRAFT_SECONDS:
+        return "%d minutes crafted" % (CRAFT_SECONDS // 60)
+    return ""
+
+
+def _craft(state: State, facts: Facts, elapsed: float) -> Step:
+    done = _craft_done(facts, elapsed)
+    if not done:
+        return _stay(state, facts)
+    to, why = _after_craft(facts)
+    return _move(state, facts, to, "%s; %s" % (done, why))
+
+
+def _train(state: State, facts: Facts, elapsed: float) -> Step:
+    due = _due(facts)
+    if not due:
+        return _move(state, facts, GATHER, "nothing left to buy at a trainer")
+    if elapsed >= TRAIN_SECONDS:
+        why = "%d minutes at the trainers; %s still due, tried again next loop" % (
+            TRAIN_SECONDS // 60,
+            ", ".join(due),
+        )
+        return _move(state, facts, GATHER, why)
+    return _stay(state, facts)
+
+
+_PHASE_STEP = {GATHER: _gather, TOWN: _town, CRAFT: _craft, TRAIN: _train}
+
+
 def decide(state: State, facts: Facts) -> Step:
     """The loop's next step for one family (or, later, one member)."""
     if facts.in_run:
         return Step(state, line="waits: a dungeon run is under way")
     if facts.queue_owns:
         return Step(state, line="waits: the campaign queue owns the job")
-
     if not state.phase:
-        phase = _joined(facts)
-        if phase == TOWN:
-            return Step(
-                State(phase=TOWN, since=facts.now, town_seen=facts.errand_active),
-                line="joined -> town: the family is in town (%s)"
-                % (facts.errand_why or "job town run"),
-                moved=True,
-            )
-        step = _move(state, facts, phase, "joined the loop on its current job")
-        if all(_held(phase, j) for j in facts.jobs.values()) and facts.jobs:
-            step = replace(step, job="", state=replace(step.state, asserted=0.0))
-        return step
-
-    elapsed = facts.now - state.since
-
+        return _join(state, facts)
     if facts.errand_active and state.phase != TOWN:
-        new = State(phase=TOWN, since=facts.now, town_seen=True)
         return Step(
-            new,
+            State(phase=TOWN, since=facts.now, town_seen=True),
             line="%s -> town: the town errand started on its own (%s)"
             % (state.phase, facts.errand_why or "no reason given"),
             moved=True,
         )
-
-    if state.phase == GATHER:
-        low = _low(facts)
-        if low:
-            why = "%s below %d free bag slots" % (", ".join(low), TOWN_FREE_SLOTS)
-            return _move(state, facts, TOWN, why, _town_ask(why))
-        if elapsed >= GATHER_SECONDS:
-            why = "%d hours gathered; the haul goes to the bank" % (
-                GATHER_SECONDS // 3600
-            )
-            return _move(state, facts, TOWN, why, _town_ask(why))
-        if elapsed >= GATHER_MIN_SECONDS and _stocked(facts):
-            ready = "every crafter holds reagents for %d casts" % READY_CASTS
-            errands = sorted(set(facts.mail_waiting) | set(facts.fetch))
-            if errands:
-                why = "%s, and %s have more in the mail or a bank" % (
-                    ready,
-                    ", ".join(errands),
-                )
-                return _move(state, facts, TOWN, why, _town_ask(why))
-            return _move(state, facts, CRAFT, ready)
-        return _stay(state, facts)
-
-    if state.phase == TOWN:
-        if facts.errand_active:
-            if not state.town_seen:
-                return Step(replace(state, town_seen=True))
-            return Step(state)
-        if state.town_seen or facts.errand_ended >= state.since > 0:
-            to, why = _after_town(facts)
-            return _move(state, facts, to, "the town errand ended; " + why)
-        if elapsed >= TOWN_START_SECONDS:
-            to, why = _after_town(facts)
-            return _move(
-                state,
-                facts,
-                to,
-                "the town errand did not start in "
-                "%d minutes; %s" % (TOWN_START_SECONDS // 60, why),
-            )
-        return Step(state, ask_town=_town_ask("the loop is in its town phase"))
-
-    if state.phase == CRAFT:
-        if not facts.casts and elapsed >= CRAFT_MIN_SECONDS:
-            to, why = _after_craft(facts)
-            return _move(
-                state,
-                facts,
-                to,
-                "no crafter has a recipe whose reagents can be planned; " + why,
-            )
-        if facts.casts and not _casting(facts) and elapsed >= CRAFT_MIN_SECONDS:
-            to, why = _after_craft(facts)
-            return _move(state, facts, to, "the reagents in the bags are spent; " + why)
-        if elapsed >= CRAFT_SECONDS:
-            to, why = _after_craft(facts)
-            return _move(
-                state, facts, to, "%d minutes crafted; %s" % (CRAFT_SECONDS // 60, why)
-            )
-        return _stay(state, facts)
-
-    if state.phase == TRAIN:
-        if not _due(facts):
-            return _move(state, facts, GATHER, "nothing left to buy at a trainer")
-        if elapsed >= TRAIN_SECONDS:
-            return _move(
-                state,
-                facts,
-                GATHER,
-                "%d minutes at the trainers; %s "
-                "still due, tried again next loop"
-                % (TRAIN_SECONDS // 60, ", ".join(_due(facts))),
-            )
-        return _stay(state, facts)
-
-    return _move(state, facts, GATHER, "unknown phase %r" % state.phase)
+    step = _PHASE_STEP.get(state.phase)
+    if step is None:
+        return _move(state, facts, GATHER, "unknown phase %r" % state.phase)
+    return step(state, facts, facts.now - state.since)
 
 
 def line(family: str, step: Step) -> str:

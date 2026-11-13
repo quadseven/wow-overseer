@@ -11278,22 +11278,36 @@ class Bridge(discord.Client):
 
     async def _prof_loop_for(self, key: str, names: list) -> None:
         """Read one family, ask profloop.decide, write its job, say why."""
-        now = time.monotonic()
-        running = set(_standin_running(names))
+        running = sorted(_standin_running(names))
         on_job = {n: j for n, j in (await asyncio.to_thread(_jobs_of, names)).items()
                   if n in running}
         skills = await asyncio.to_thread(_fetch_trade_skills, names)
+        gather, gather_why = profloop.gather_job(skills)
+        errand = _TOWN_ERRANDS.get(tuple(sorted(names)), townerrand.State())
+        facts = await self._prof_loop_facts(key, names, skills, errand)
+        facts = dataclasses.replace(facts, jobs=on_job, gather_job=gather)
+        step = profloop.decide(_PROF_LOOPS.get(key, profloop.State()), facts)
+        _PROF_LOOPS[key] = step.state
+        town_key = tuple(sorted(names))
+        if step.ask_town:
+            _PROF_LOOP_TOWN[town_key] = step.ask_town
+        elif step.state.phase != profloop.TOWN or errand.active:
+            _PROF_LOOP_TOWN.pop(town_key, None)
+        await self._prof_loop_say(key, step, on_job, gather_why)
+        if step.job:
+            await self._prof_loop_write(key, running, step.job)
+
+    async def _prof_loop_facts(self, key: str, names: list, skills: dict,
+                               errand) -> profloop.Facts:
+        """Everything profloop.decide reads but the jobs; no judgement here."""
         spells = {n: _RHYTHM_SPELLS.get(n, 0) for n in names}
         plans = await asyncio.to_thread(
             _plan_craft_reagents, names,
             {n: spell for n, spell in spells.items() if spell}, skills)
         judged = {n: p for n, p in plans.items() if p.judged}
-        errand = _TOWN_ERRANDS.get(tuple(sorted(names)), townerrand.State())
-        gather, gather_why = profloop.gather_job(skills)
         mail = await asyncio.to_thread(_mail_gear_holders, names)
-        facts = profloop.Facts(
-            now=now,
-            jobs=on_job,
+        return profloop.Facts(
+            now=time.monotonic(),
             free_slots=await asyncio.to_thread(_fetch_free_slots, names),
             mail_waiting=tuple(sorted(n for n, count in mail.items() if count)),
             casts={n: p.casts for n, p in judged.items()},
@@ -11306,32 +11320,26 @@ class Bridge(discord.Client):
             errand_why=errand.why,
             in_run=await self._mid_run(names),
             queue_owns=await asyncio.to_thread(_queue_owns_job, key),
-            gather_job=gather,
         )
-        step = profloop.decide(_PROF_LOOPS.get(key, profloop.State()), facts)
-        _PROF_LOOPS[key] = step.state
-        town_key = tuple(sorted(names))
-        if step.ask_town:
-            _PROF_LOOP_TOWN[town_key] = step.ask_town
-        elif step.state.phase != profloop.TOWN or errand.active:
-            _PROF_LOOP_TOWN.pop(town_key, None)
+
+    async def _prof_loop_say(self, key: str, step, on_job: dict,
+                             gather_why: str) -> None:
+        """The step's line: a move or a write always, a wait once."""
         said = profloop.line(key, step)
+        if not (step.moved or step.job):
+            if said:
+                _prof_loop_quiet("loop", key, step.line)
+            return
         if step.job and step.state.phase == profloop.GATHER:
             said += " (%s)" % gather_why
         if step.job and not step.moved:
             wrong = sorted(n for n, j in on_job.items() if j != step.job)
-            sources = {}
-            for name in wrong:
-                sources[name] = await asyncio.to_thread(_last_job_source, name)
+            sources = [(n, await asyncio.to_thread(_last_job_source, n))
+                       for n in wrong]
             said += "; last written by %s" % ", ".join(
-                "%s=%s" % (n, sources[n] or "unknown") for n in wrong)
-        if step.moved or step.job:
-            log.info("%s", said)
-            _PROF_LOOP_SAID[("loop", key)] = step.line
-        elif said:
-            _prof_loop_quiet("loop", key, step.line)
-        if step.job:
-            await self._prof_loop_write(key, sorted(running), step.job)
+                "%s=%s" % (n, source or "unknown") for n, source in sources)
+        log.info("%s", said)
+        _PROF_LOOP_SAID[("loop", key)] = step.line
 
     async def _prof_loop_write(self, key: str, names: list, mode: str) -> int:
         """The loop's job on every member not sitting out; `jobs.why_not`
