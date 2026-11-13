@@ -119,16 +119,19 @@ def not_idle_holds(
         return {name: "live dungeon status could not be read" for name in names}
     if not roster_read:
         return {name: "family roster could not be read" for name in names}
+    holds = _run_holds(roster, live_leaders, inside)
+    holds.update(_errand_holds(errands))
+    return holds
+
+
+def _run_holds(roster, live_leaders, inside) -> dict:
+    """The run or instance keeping each family between-run step closed."""
     families: dict = {}
     for row in roster or ():
         name = str(row.get("name") or "")
         if name:
             families.setdefault(str(row.get("family") or ""), []).append(name)
-    live, within, on_errand = (
-        set(live_leaders or ()),
-        set(inside or ()),
-        set(errands or ()),
-    )
+    live, within = set(live_leaders or ()), set(inside or ())
     holds = {}
     for leader, names in families.items():
         if leader in live:
@@ -138,8 +141,12 @@ def not_idle_holds(
         else:
             continue
         holds.update({name: reason for name in names})
-    holds.update({name: "the member is on a town errand" for name in on_errand})
     return holds
+
+
+def _errand_holds(errands) -> dict:
+    """The members held by a town errand outside the family run state."""
+    return {name: "the member is on a town errand" for name in set(errands or ())}
 
 
 def _yards(m, spot) -> float:

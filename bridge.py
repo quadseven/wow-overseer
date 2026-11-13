@@ -33733,15 +33733,15 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
     role_of = {m.name: m.role for m in guild_members}
     skills, known = _guild_skills_and_spells(skill_rows, spell_rows)
     carried = guildjobs.carried_from_rows(item_rows)
+    quest_state = _class_quest_state(log_rows, done_rows)
     members, crafters = _guild_members_and_crafters(
         rows, family, role_of, skills, known, carried, eligible,
-        _class_quest_state(log_rows, done_rows), free_slots or {}, supplies,
+        quest_state, free_slots or {}, supplies,
         _rewarded_of(rewarded_rows), bag_slots or {}, worn or {})
-    class_candidates, _unused_crafters = _guild_members_and_crafters(
-        rows, family, role_of, skills, known, carried, eligible,
-        _class_quest_state(log_rows, done_rows), free_slots or {}, supplies,
-        _rewarded_of(rewarded_rows), bag_slots or {}, worn or {},
-        unassigned_only=True)
+    class_candidates = _unassigned_class_candidates(
+        rows, family, role_of, skills, known, carried, eligible, quest_state,
+        free_slots or {}, supplies, _rewarded_of(rewarded_rows), bag_slots or {},
+        worn or {})
     pending = {str(r.get(k) or "") for r in pending_rows
                for k in ("target_name", "target_arg")} - {""}
     map_id_by_name = {m.name: m.map_id for m in members if m.map_id is not None}
@@ -33821,8 +33821,7 @@ def _rewarded_of(rows):
 
 def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, eligible,
                                 quest_state=({}, {}, {}), free_slots=None, supplies=None,
-                                rewarded=None, bag_slots=None, worn=None,
-                                unassigned_only=False):
+                                rewarded=None, bag_slots=None, worn=None):
     members, crafters = [], {}
     quest_log, quests_done, quest_progress = quest_state
     for r in rows:
@@ -33831,14 +33830,9 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             for skill, (value, _cap) in skills.get(guid, {}).items():
                 crafters.setdefault(guild, {}).setdefault(skill, []).append((name, value))
             continue
-        if unassigned_only:
-            if name in role_of:
-                continue
-            role = guildjobs.UNASSIGNED
-        else:
-            if name not in role_of:
-                continue
-            role = role_of[name]
+        if name not in role_of:
+            continue
+        role = role_of[name]
         members.append(guildjobs.Member(
             name=name, guild=guild, role=role,
             level=int(r.get("level") or 0), class_id=int(r.get("class_id") or 0),
@@ -33874,6 +33868,21 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             follows=bool(int(r.get("group_leader") or 0))
             and int(r.get("group_leader") or 0) != guid))
     return members, crafters
+
+
+def _unassigned_class_candidates(rows, family, role_of, skills, known, carried,
+                                 eligible, quest_state, free_slots, supplies,
+                                 rewarded, bag_slots, worn):
+    """The guild seats outside the lineup that may receive class work only."""
+    candidates = [
+        row for row in rows
+        if str(row["name"]) not in family and str(row["name"]) not in role_of
+    ]
+    roles = {str(row["name"]): guildjobs.UNASSIGNED for row in candidates}
+    members, _crafters = _guild_members_and_crafters(
+        candidates, set(), roles, skills, known, carried, eligible, quest_state,
+        free_slots, supplies, rewarded, bag_slots, worn)
+    return members
 
 
 _JOB_NODE_SQL = (
