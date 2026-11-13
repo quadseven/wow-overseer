@@ -18,6 +18,11 @@ THE RULE, one family member at a time (`lendable`):
                 (InAFamilyCampaign) and asks it again when the finder row
                 names a family member, so a campaign armed in between refuses
                 the run rather than losing its member.
+  campaign row  a family with an active started queue row is working through
+                a campaign even in an interlude (fish) or a bag hold, so it
+                lends only a member that is not its sole tank or healer
+                (`lendable`, #2353; FAMILY_LEND_CAMPAIGN_GUARD off restores
+                the old lend).
   not the head  the family's head leads the party its family follows, so it
                 stays with them (the module refuses it too).
   its seats     the tank or healer seat only, the one its spent talents play,
@@ -49,6 +54,8 @@ import guildrun
 import jobs
 
 ENV_SWITCH = "GUILD_FAMILY_SEATS"
+# The campaign guard (#2353): on unless this says off.
+ENV_GUARD = "FAMILY_LEND_CAMPAIGN_GUARD"
 
 # The roster as this reads it: who belongs to which family, and its job.
 ROSTER_SQL = "SELECT name, family, job FROM overseer_roster WHERE enabled = 1"
@@ -59,6 +66,38 @@ def enabled(environ=None) -> bool:
     env = os.environ if environ is None else environ
     raw = str(env.get(ENV_SWITCH, "") or "").strip().lower()
     return raw not in ("off", "0", "false", "no")
+
+
+def guard_enabled(environ=None) -> bool:
+    """On unless FAMILY_LEND_CAMPAIGN_GUARD says off (#2353)."""
+    env = os.environ if environ is None else environ
+    raw = str(env.get(ENV_GUARD, "") or "").strip().lower()
+    return raw not in ("off", "0", "false", "no")
+
+
+def campaign_families(campaign_rows) -> set:
+    """The families with an active, started queue row (guildsocial.CAMPAIGNS_SQL
+    reads exactly those): a campaign the family is working through, even
+    between runs or in a fish interlude, where the roster job reads idle."""
+    return {
+        str(row.get("family") or "")
+        for row in campaign_rows or ()
+        if row.get("family")
+    }
+
+
+def seats_played(member_rows) -> dict:
+    """name -> {"tank", "healer"} the member's spent talents play, off the
+    guild member rows (guildrun.Member.plays)."""
+    out: dict = {}
+    for row in member_rows or ():
+        member = guildrun.member_from_row(row)
+        if member is None:
+            continue
+        out[member.name] = {
+            seat for seat in (guildrun.TANK, guildrun.HEALER) if member.plays(seat)
+        }
+    return out
 
 
 def campaign_job(job) -> bool:
@@ -102,20 +141,45 @@ def idle_families(roster: list, inside_names, in_runs=()) -> set:
     }
 
 
-def lendable(roster: list, inside_names, in_runs=()) -> set:
+def lendable(
+    roster: list,
+    inside_names,
+    in_runs=(),
+    campaigns=(),
+    seats=None,
+    guard: bool = True,
+) -> set:
     """The family members who may take a guild run's tank or healer seat now:
     every member of an idle family but its head (the family key is the head's
     name; a roster with no family names no head, so lends nobody). Which seat,
     if any, is the social layer's to say (guildsocial.can_take); one already
-    in a guild run is busy there."""
+    in a guild run is busy there.
+
+    THE CAMPAIGN GUARD (#2353, the operator's Blackrock Depths priority): a
+    family with an active started queue row (`campaigns`, campaign_families)
+    is working through a campaign even while its roster job reads fish or
+    quest, so it lends only a member who is not the family's sole holder of a
+    tank or healer seat (`seats`, seats_played: the seats each name plays; the
+    head counts as a holder). With no `seats` read it lends nobody. `guard`
+    off restores the old lend."""
     idle = idle_families(roster, inside_names, in_runs)
-    return {
-        name
-        for family, members in _families(roster).items()
-        if family and family in idle
-        for name, _job in members
-        if name != family
-    }
+    busy_campaign = set(campaigns or ()) if guard else set()
+    out = set()
+    for family, members in _families(roster).items():
+        if not family or family not in idle:
+            continue
+        for name, _job in members:
+            if name == family:
+                continue
+            if family in busy_campaign:
+                if seats is None:
+                    continue
+                mine = set(seats.get(name) or ())
+                others = [seats.get(n) or () for n, _j in members if n != name]
+                if any(not any(seat in o for o in others) for seat in mine):
+                    continue
+            out.add(name)
+    return out
 
 
 def waiting_for(names, in_runs) -> list:

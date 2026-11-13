@@ -85,6 +85,61 @@ class WhoIsLendable(unittest.TestCase):
         self.assertTrue(fs.enabled({}))
 
 
+# Grug's roster on 2026-11-12: one healer (Ugga), the job "fish" (an interlude,
+# not a campaign job), and an active started queue row (campaign 240).
+GRUG_FISH = roster(
+    ("Grug", "Grug", "fish"), ("Ugga", "Grug", "fish"), ("Og", "Grug", "fish")
+)
+UGGA_ONLY_HEALER = {"Grug": {"tank"}, "Ugga": {"healer"}, "Og": set()}
+TWO_HEALERS = {"Grug": {"tank"}, "Ugga": {"healer"}, "Og": {"healer"}}
+
+
+class TheCampaignGuard(unittest.TestCase):
+    def test_a_family_with_an_active_started_row_lends_its_only_healer_never(self):
+        got = fs.lendable(GRUG_FISH, set(), (), campaigns={"Grug"}, seats=UGGA_ONLY_HEALER)
+        self.assertNotIn("Ugga", got)
+
+    def test_an_active_row_with_no_seat_read_lends_nobody(self):
+        self.assertEqual(fs.lendable(GRUG_FISH, set(), (), campaigns={"Grug"}), set())
+
+    def test_a_family_with_no_active_row_still_lends_its_only_healer(self):
+        got = fs.lendable(GRUG_FISH, set(), (), campaigns=set(), seats=UGGA_ONLY_HEALER)
+        self.assertEqual(got, {"Ugga", "Og"})
+
+    def test_a_second_healer_keeps_the_lend_under_an_active_row(self):
+        got = fs.lendable(GRUG_FISH, set(), (), campaigns={"Grug"}, seats=TWO_HEALERS)
+        self.assertEqual(got, {"Ugga", "Og"})
+
+    def test_another_family_is_not_held_by_this_ones_row(self):
+        rows = GRUG_FISH + roster(("Zug", "Zug", "fish"), ("Uzza", "Zug", "fish"))
+        seats = dict(UGGA_ONLY_HEALER, Zug={"tank"}, Uzza={"healer"})
+        got = fs.lendable(rows, set(), (), campaigns={"Grug"}, seats=seats)
+        # Og plays no seat; Ugga stays
+        self.assertEqual(got, {"Og", "Uzza"})
+
+    def test_the_switch_off_restores_the_old_lend(self):
+        self.assertFalse(fs.guard_enabled({fs.ENV_GUARD: "off"}))
+        self.assertTrue(fs.guard_enabled({}))
+        got = fs.lendable(GRUG_FISH, set(), (), campaigns={"Grug"},
+                          seats=UGGA_ONLY_HEALER, guard=False)
+        self.assertEqual(got, {"Ugga", "Og"})
+
+    def test_the_campaign_families_read_off_the_queue_rows(self):
+        rows = [{"family": "Grug", "keyword": "blackrock-depths"}, {"family": ""}]
+        self.assertEqual(fs.campaign_families(rows), {"Grug"})
+
+    def test_the_seats_read_off_the_roster_rows(self):
+        rows = [row("Ugga", 40, PRIEST, talent_spells=HOLY),
+                row("Grug", 43, WARRIOR, talent_spells="12301", has_shield=1)]
+        got = fs.seats_played(rows)
+        self.assertEqual(got.get("Ugga"), {"healer"})
+
+    def test_the_bridge_reads_the_rows_into_the_guard(self):
+        body = source_utils.function_source(bridge._fetch_guild_social_facts)
+        self.assertIn("familyseat.campaign_families(campaigns)", body)
+        self.assertIn("familyseat.seats_played(", body)
+
+
 def ugga(level=24, **kw):
     """A family's Holy priest, in its family's group."""
     kw.setdefault("talent_spells", HOLY)

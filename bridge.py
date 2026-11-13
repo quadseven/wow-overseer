@@ -29406,9 +29406,15 @@ def _fetch_guild_social_facts(bounds) -> dict:
         lendable = set()
         if familyseat.enabled():
             cur.execute(familyseat.ROSTER_SQL)
-            lendable = familyseat.lendable(list(cur.fetchall()),
-                                           familyseat.inside(facts["rows"]),
-                                           facts["in_runs"])
+            guarded = familyseat.guard_enabled()
+            lendable = familyseat.lendable(
+                list(cur.fetchall()), familyseat.inside(facts["rows"]),
+                facts["in_runs"],
+                # A family with an active started campaign row lends only a
+                # member that is not its sole tank or healer (#2353).
+                campaigns=(familyseat.campaign_families(campaigns)
+                           if guarded else ()),
+                seats=familyseat.seats_played(facts["rows"]), guard=guarded)
     facts.update({
         "now": now, "asks": asks, "answers": answers,
         "quests": guildsocial.quests_by_name(quest_rows),
