@@ -14703,10 +14703,31 @@ class Bridge(discord.Client):
                          if equip.holder in roster_names]
         wanted = tuple(equip for equip in wanted
                        if equip.holder not in roster_names)
+        # ONLY WHAT THE DRIVE WILL WEAR IS LEFT TO IT (#2381). The spec score
+        # and the drive's GearScore disagree (Grug's Emperor's Seal); a pick
+        # the drive declines is named, not counted as left to it.
+        try:
+            drive = await asyncio.to_thread(
+                _drive_verdicts, sorted({e.holder for e in left_to_drive}))
+        except (OSError, pymysql.err.MySQLError) as exc:
+            log.warning("equip: could not read the gear drive's verdicts: %s", exc)
+            drive = None
+        declined = [] if drive is None else [
+            equip for equip in left_to_drive
+            if equip.holder in drive
+            and drive[equip.holder].get(equip.entry) != equipscore.DRIVE_WEAR]
+        left_to_drive = [e for e in left_to_drive if e not in declined]
         log.info(
             "equip: left %d piece(s) to the module's gear drive for %d roster member(s)",
             len(left_to_drive), len(roster_names),
         )
+        if declined:
+            log.info(
+                "equip: the module's gear drive declines %d spec-score pick(s), so "
+                "they are not left to it: %s", len(declined),
+                "; ".join("%s %s (%s)" % (e.holder, e.name,
+                                          drive[e.holder].get(e.entry, "not judged"))
+                          for e in declined[:8]) + ("; ..." if len(declined) > 8 else ""))
         # NEVER AN EQUIP FOR A MEMBER WHO IS NOT IN THE WORLD (#869). The
         # family's names are every protected character, logged in or not, and
         # a command for one who is offline sits unanswered and piles up tries.
@@ -30581,11 +30602,33 @@ def _route_sales_for_trip(names, leader, rows, free_slots, sellable_counts,
 
 
 def _itemplan_reads(names, family, rows, gear_rows, worn_rows):
-    """The item plan shadow's inputs, read with the passes' own reads (#1973)."""
-    return itemplan_reads.read(
+    """The item plan shadow's inputs, read with the passes' own reads (#1973).
+
+    A roster member's equips are the module's gear drive's, so the plan's
+    gear verdict for one is the drive's rule (#2381): a piece the drive
+    declines is not carried for ever as an upgrade. A failed read leaves the
+    item-level verdict, as before."""
+    extras = itemplan_reads.read(
         names, family, rows, gear_rows, worn_rows, connect=_connect,
         bank_rows=_fetch_bank_items, guild_setup=_fetch_guild_bank_setup,
         roster=_fetch_guild_roster)
+    try:
+        roster = set(_fetch_enabled_roster_names())
+        drive = _drive_verdicts([n for n in names if n in roster])
+    except (OSError, pymysql.err.MySQLError) as exc:
+        log.warning("itemplan: could not read the gear drive's verdicts: %s", exc)
+        return extras
+    return dataclasses.replace(extras, drive_verdict=drive)
+
+
+def _drive_verdicts(names) -> dict:
+    """{member: {entry: verdict}} by the module's gear drive rule (#2381) for
+    the named roster members, read with the equip pass's own reads."""
+    names = list(names)
+    if not names:
+        return {}
+    return equipscore.drive_verdicts(
+        _fetch_wearers(names), _fetch_scored_gear(names), names, _jev_item_book())
 
 
 def _count_sales(counts: dict, sales) -> None:
