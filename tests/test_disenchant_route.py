@@ -121,6 +121,12 @@ class TheSaleAsksTheRouteLast(unittest.TestCase):
             'DISENCHANT_ROUTE = os.environ.get("DISENCHANT_ROUTE", "0") == "1"', BRIDGE
         )
 
+    def test_a_standing_row_holds_the_item_at_any_age(self):
+        self.assertIn(
+            "status IN ('pending', 'claimed')",
+            BRIDGE[BRIDGE.index("_DISENCHANT_ROUTED_SQL = (") :][:400],
+        )
+
     def test_a_routed_item_is_not_written_twice(self):
         body = function_text("_disenchant_instead")
         self.assertLess(body.index("_DISENCHANT_ROUTED_SQL"), body.index("INSERT INTO"))

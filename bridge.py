@@ -31941,9 +31941,10 @@ def _epic_blocks(holder: str, command: str) -> bool:
 # holds it standing, which would block that enchanter's queue, so the switch
 # is turned on only once the worldserver runs the named disenchant. Off, every
 # sale stands as before. A row this route wrote in the last
-# DISENCHANT_ROUTE_HOURS for the same item is the answer for that item, so a
-# standing disenchant (the module waits for a safe idle moment) is not sold
-# under it, and is neither rewritten every pass.
+# DISENCHANT_ROUTE_HOURS for the same item, or one still standing at any age,
+# is the answer for that item: a standing disenchant (the module waits for a
+# safe idle moment, or for skill) is not sold under it, nor rewritten every
+# pass.
 DISENCHANT_ROUTE = os.environ.get("DISENCHANT_ROUTE", "0") == "1"
 DISENCHANT_ROUTE_HOURS = 24
 DISENCHANT_ROUTE_SOURCE = "disenchant-route"
@@ -31966,7 +31967,8 @@ _DISENCHANT_ROUTED_SQL = (
     "SELECT COUNT(*) AS n FROM overseer_command "
     "WHERE kind IN ('disenchant', 'give') AND source = %s "
     "AND target_name = %s AND command = %s "
-    "AND created_at > NOW() - INTERVAL %s HOUR"
+    "AND (status IN ('pending', 'claimed') "
+    "OR created_at > NOW() - INTERVAL %s HOUR)"
 )
 
 
