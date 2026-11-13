@@ -5563,23 +5563,30 @@ def productive_entries(name, recent, minutes) -> dict:
     return out
 
 
-# A member's hunt rows in a row that killed, looted nothing and moved no counter
-# before the kills stop restarting the stall clock (wow-overseer#2188). One or two
-# are the ground being worked (a full bag, a slow drop); a run of them is a pack
-# that does not give the item.
+# A member's hunts in a row at one pack that killed and left the stall clock
+# running unmoved stop restarting it (wow-overseer#2188). One or two are the
+# ground being worked (a full bag, a slow drop); a run of them is a pack that
+# does not give the quest what it asks. Loot is no evidence: the module counts
+# every item looted, grey and vendor trash included, and lists only notable
+# entries, so a pack that drops greys but not the quest item looted something
+# every time. The quest's own counters are the evidence, and Hunts.observe already
+# restarts the clock when they move.
 BARREN_HUNT_ROWS = 3
 
 
 def barren_hunt_rows(name, recent) -> int:
-    """How many of the member's newest hunts that made a kill looted nothing,
-    in a row, newest first: the count stops at the first hunt that looted."""
+    """How many of the member's newest hunts that made a kill were at one
+    creature, in a row, newest first: the count stops at the first kill row of
+    another creature (a rerolled pack starts its own count)."""
     kills = sorted(
         (r for r in recent or () if r.name == name and r.entry and r.kills > 0),
         key=lambda r: r.age_minutes,
     )
+    if not kills:
+        return 0
     count = 0
     for r in kills:
-        if r.loot > 0:
+        if r.entry != kills[0].entry:
             break
         count += 1
     return count
@@ -6238,9 +6245,9 @@ def _class_move(m, book, recent, hunts, now):
     that has stalled sent to another pack, or given up (HUNT_STALL_MINUTES).
 
     A hunt that killed restarts the stall clock, except after BARREN_HUNT_ROWS
-    of them in a row that looted nothing: then the clock runs, and the pack is
-    rerolled or the quest given up (Hunts.observe, which restarts the clock by
-    itself when the quest's counters move)."""
+    of them in a row at one pack: then the clock runs, and the pack is rerolled
+    or the quest given up (Hunts.observe, which restarts the clock by itself
+    when the quest's counters move)."""
     if (
         hunts
         and productive_entries(m.name, recent, classquest.HUNT_STALL_MINUTES)
