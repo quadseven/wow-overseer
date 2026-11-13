@@ -33341,6 +33341,9 @@ def _class_use_reads(cur, quests, items, objectives=()) -> tuple:
     chest_rows = _class_rows(cur, "class quest chests", classquest.CHEST_SQL,
                              "items", items | sources | set(classquest.FOCUS_ITEMS))
     foci = {focus for item, focus in classquest.FOCUS_ITEMS.items() if item in used}
+    # A cast quest on the list needs its forge read too (classquest.MAINHAND_CASTS).
+    foci |= {focus for qid, (_spell, focus) in classquest.MAINHAND_CASTS.items()
+             if any(int(r["id"]) == qid for r in quests)}
     focus_rows = _class_rows(cur, "class quest focus objects",
                              classquest.FOCUS_OBJECTS_SQL, "focus", foci)
     summon_rows = _class_rows(cur, "class quest summoners",

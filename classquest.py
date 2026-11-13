@@ -248,6 +248,16 @@ USE_HERE = "use-item-here"
 # hunter's Tame Beast at the beast it tames (hunterpet.py). No class quest step
 # writes it.
 USE_SPELL = "use-spell-on"
+# A known spell cast on the member's main-hand weapon beside a spell focus (the
+# mod-overseer verb `cast-spell-on-mainhand spell:<id>`, the packet a client
+# sends from the runeforging window).
+CAST_MAINHAND = "cast-spell-on-mainhand"
+# The quests a cast completes, no objective row says so (SpecialFlags 2):
+# quest -> (spell, spell focus). 12842 Runeforging: Preparation For Battle
+# completes on a rune cast on the weapon at a Runeforge (focus 1552): Rune of
+# Razorice (53343) casts Runeforging Credit (54586); the knight knows it from
+# its start. The Rune of Cinderglacier (53341) does the same.
+MAINHAND_CASTS = {12842: (53343, 1552)}
 # The items whose on-use spell works only near a spell-focus gameobject, and
 # the focus. The world data does not say it (the spell is in the client DBC, not
 # the database), so each is written down: 38607 Battle-worn Sword (spell 51769,
@@ -894,6 +904,8 @@ class Use:
     fetch: Use | None = None
     summons: tuple = ()
     elite: bool = False
+    # CAST_MAINHAND: the spell cast on the weapon.
+    spell: int = 0
 
 
 @dataclass(frozen=True)
@@ -1143,11 +1155,16 @@ def _focus_targets(rows) -> dict:
     by_focus: dict = {}
     for r in rows or ():
         by_focus.setdefault(_int(r.get("focus")), set()).add(_int(r.get("entry")))
-    return {
+    out = {
         item: tuple(sorted(by_focus.get(focus, set()) - {0}))
         for item, focus in FOCUS_ITEMS.items()
         if by_focus.get(focus)
     }
+    # A cast quest is keyed (CAST_MAINHAND, quest): no item entry collides.
+    for qid, (_spell, focus) in MAINHAND_CASTS.items():
+        if by_focus.get(focus):
+            out[(CAST_MAINHAND, qid)] = tuple(sorted(by_focus[focus] - {0}))
+    return out
 
 
 def _summoners(rows) -> dict:
@@ -1284,7 +1301,24 @@ def _uses(r, items, provided, droppers, aims) -> tuple:
     for entry, count in _pairs(r, "npc", "npc_count", 4, False):
         spots = tuple(object_spawns.get(entry, ()))
         out.append(Use(USE_OBJECT, 0, count, (entry,), spots))
+    cast = _mainhand_cast(_int(r.get("id")), aims)
+    if cast is not None:
+        out.append(cast)
     return tuple(out)
+
+
+def _mainhand_cast(qid, aims):
+    """The CAST_MAINHAND Use of a quest in MAINHAND_CASTS, None when it is not
+    one or the forge's gameobject rows were not read."""
+    if qid not in MAINHAND_CASTS:
+        return None
+    focus = aims[4] if len(aims) > 4 else {}
+    foci = focus.get((CAST_MAINHAND, qid), ())
+    if not foci:
+        return None
+    object_spawns = aims[3]
+    spots = tuple(s for g in foci for s in object_spawns.get(g, ()))
+    return Use(CAST_MAINHAND, 0, 1, foci, spots, spell=MAINHAND_CASTS[qid][0])
 
 
 def _quest(
@@ -1787,7 +1821,11 @@ def _use_blocker(quest: Quest, member) -> tuple:
             )
         return "", ""
     if not use.spots:
-        what = "gameobject" if use.verb in (USE_OBJECT, USE_HERE) else "creature"
+        what = (
+            "gameobject"
+            if use.verb in (USE_OBJECT, USE_HERE, CAST_MAINHAND)
+            else "creature"
+        )
         return (
             OBJECT,
             "%s needs a %s used (entry %s has no spawn row in the world data)"
@@ -2464,6 +2502,8 @@ def _use_move(member, quest: Quest, use: Use, why: str, tried) -> Move:
         )
     if use.verb == USE_HERE:
         what = "uses item %d beside" % use.item
+    elif use.verb == CAST_MAINHAND:
+        what = "casts spell %d on its weapon beside" % use.spell
     else:
         what = "uses item %d on" % use.item if use.verb == USE_ITEM else "uses"
     said = "%s %s %s for %s" % (member.name, what, spot.name or "its target", why)
@@ -2474,6 +2514,8 @@ def use_command(use: Use, spot: Spawn) -> str:
     """The kind='quest' command row that does this use at `spot`."""
     if use.verb == USE_HERE:
         return "%s item:%d" % (USE_HERE, int(use.item))
+    if use.verb == CAST_MAINHAND:
+        return "%s spell:%d" % (CAST_MAINHAND, int(use.spell))
     if use.verb == USE_ITEM:
         return "%s creature:%d item:%d" % (USE_ITEM, int(spot.entry), int(use.item))
     return "%s %d" % (USE_OBJECT, int(spot.entry))
