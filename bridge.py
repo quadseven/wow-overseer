@@ -38596,7 +38596,7 @@ def _fetch_auction_listings(entries: list, house: int) -> list:
 _GEARUP_EQUIPPED_SQL = (
     "SELECT c.name, c.class AS class_id, c.level, c.money AS purse, "
     "ci.slot, it.ItemLevel AS item_level, it.class AS item_class, "
-    "it.subclass AS item_subclass FROM characters c "
+    "it.subclass AS item_subclass, it.Quality AS item_quality FROM characters c "
     "LEFT JOIN character_inventory ci ON ci.guid=c.guid AND ci.bag=0 AND ci.slot<19 "
     "LEFT JOIN item_instance ii ON ii.guid=ci.item "
     "LEFT JOIN acore_world.item_template it ON it.entry=ii.itemEntry WHERE c.name IN (%s)"
@@ -38672,6 +38672,11 @@ def _fetch_gearup_facts(names: list) -> dict:
                     "item_subclass": (
                         int(row["item_subclass"])
                         if row["item_subclass"] is not None
+                        else None
+                    ),
+                    "quality": (
+                        int(row["item_quality"])
+                        if row.get("item_quality") is not None
                         else None
                     ),
                 }

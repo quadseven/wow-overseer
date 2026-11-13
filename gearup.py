@@ -588,6 +588,26 @@ def _armor_rank(item):
         return 0
 
 
+# A GREY OR WHITE PIECE IS A FLOOR, NOT A KEEPER (#2372). The item-level gain
+# rule below keeps a worn white weapon unless an offer beats it by
+# AUCTION_MIN_UPGRADE_LEVELS, so a white held within that gap is never
+# replaced. A usable green or better with more item level replaces it. A
+# trinket is the exception: a white one (the Argent Dawn Commission) carries an
+# effect an item level cannot price.
+QUALITY_FLOOR_KEEP_SLOTS = frozenset({"trinket1", "trinket2", "shirt", "tabard"})
+
+
+def _below_quality_floor(slot, worn, item):
+    """A worn grey or white piece that a green-or-better offer outclasses."""
+    if slot in QUALITY_FLOOR_KEEP_SLOTS or not isinstance(worn, dict):
+        return False
+    worn_quality = worn.get("quality")
+    offer_quality = _get(item, "Quality", "quality", default=None)
+    if worn_quality is None or offer_quality is None:
+        return False
+    return int(worn_quality) <= 1 and int(offer_quality) >= 2
+
+
 def _worn_is_better(slot, equipped, item, level, tank=False, equipped_types=None):
     """Keep worn gear unless the auction item is meaningfully better."""
     if slot not in equipped:
@@ -605,6 +625,8 @@ def _worn_is_better(slot, equipped, item, level, tank=False, equipped_types=None
     worn_level = int(worn_level)
     if item_level <= worn_level:
         return True
+    if _below_quality_floor(slot, worn, item):
+        return False
     stale = worn_level <= level - AUCTION_STALE_GEAR_LEVEL_GAP
     return not stale and item_level < worn_level + AUCTION_MIN_UPGRADE_LEVELS
 
