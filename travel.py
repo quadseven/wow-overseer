@@ -481,6 +481,35 @@ def aim_statements(names, target):
     ]
 
 
+def aim_only_statements(names, target):
+    """The write that aims `names` at `target` and touches nobody else.
+
+    For a family in individual mode (individual.py, #2395): each member may
+    hold an errand of its own, so clearing everyone else, which is what
+    `aim_statements` does for a family with one traveller, would undo the
+    other members' errands. A target is required; naming nobody writes
+    nothing.
+    """
+    if not target:
+        raise ValueError("an aim needs a target")
+    resolved = resolve(target)
+    if resolved is None:
+        raise ValueError("not a travel target: %r" % (target,))
+    if len(resolved) > COLUMN_WIDTH:
+        raise ValueError("travel target too long for the column: %r" % (resolved,))
+    chosen = sorted({str(n) for n in (names or [])})
+    if not chosen:
+        return []
+    marks = ", ".join(["%s"] * len(chosen))
+    return [
+        (
+            "UPDATE overseer_roster SET travel_npc = %%s "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "WHERE name IN (%s)" % marks,
+            (resolved, *chosen),
+        )
+    ]
+
+
 def is_ground_aim(value):
     """Whether `value` is an `at:<map>:<x>,<y>,<z>` aim rather than a keyword.
 
