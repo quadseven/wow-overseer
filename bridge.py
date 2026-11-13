@@ -4098,6 +4098,18 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
                         "could be placed, so no seat and no job is written",
                         campaignqueue._family(family), keyword)
             return _withheld(withheld, "nobody could be placed in the raid")[0]
+        current_names = [seat[2] for seat in seats]
+        current_holes = ", ".join(["%s"] * len(current_names))
+        cur.execute(
+            raidrun.ELIGIBILITY_SQL.format(holes=current_holes),  # noqa: S608
+            tuple(current_names),
+        )
+        eligibility_refusal = raidrun.seat_eligibility_refusal(
+            keyword, lineup, [dict(row) for row in cur.fetchall()]
+        )
+        if eligibility_refusal:
+            log.info("raid: %s", eligibility_refusal)
+            return _withheld(withheld, eligibility_refusal)[0]
         # ONE STATEMENT FOR ALL FORTY: pymysql's executemany folds an INSERT
         # ... VALUES into a single multi-row insert, so a failure leaves the
         # family's seats deleted rather than half written, and no job follows

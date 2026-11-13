@@ -217,6 +217,49 @@ class TheSeatsAreTheLineup(unittest.TestCase):
         self.assertIn(("Grug", "moltencore", "T0", 0, "tank", "main tank"), with_duty)
 
 
+class TheSeatsNeedCurrentEligibility(unittest.TestCase):
+    def test_every_selected_member_must_be_online_and_at_least_level_fifty(self):
+        lineup = raidlineup.build_lineup(GUILD, guaranteed=["Grug"])
+        rows = [dict(member, online=1) for member in GUILD]
+        self.assertEqual("", raidrun.seat_eligibility_refusal(
+            "moltencore", lineup, rows
+        ))
+
+    def test_offline_seat_refuses_with_count_and_name(self):
+        lineup = raidlineup.build_lineup(GUILD, guaranteed=["Grug"])
+        rows = [dict(member, online=1) for member in GUILD]
+        rows[0]["online"] = 0
+        refusal = raidrun.seat_eligibility_refusal("moltencore", lineup, rows)
+        self.assertIn("1 of 40", refusal)
+        self.assertIn("Grug (offline)", refusal)
+
+    def test_under_level_seat_refuses_with_count_and_level(self):
+        lineup = raidlineup.build_lineup(GUILD, guaranteed=["Grug"])
+        rows = [dict(member, online=1) for member in GUILD]
+        rows[0]["level"] = 49
+        refusal = raidrun.seat_eligibility_refusal("moltencore", lineup, rows)
+        self.assertIn("1 of 40", refusal)
+        self.assertIn("Grug (level 49; needs 50)", refusal)
+
+    def test_missing_current_row_refuses_with_count_and_name(self):
+        lineup = raidlineup.build_lineup(GUILD, guaranteed=["Grug"])
+        rows = [
+            dict(member, online=1) for member in GUILD
+            if member["name"] != "Grug"
+        ]
+        refusal = raidrun.seat_eligibility_refusal("moltencore", lineup, rows)
+        self.assertIn("Grug (no current character row)", refusal)
+        self.assertIn("1 of 40", refusal)
+
+    def test_unselected_guild_member_does_not_block_the_approved_lineup(self):
+        lineup = raidlineup.build_lineup(GUILD, guaranteed=["Grug"])
+        extra = {"name": "Reserve", "level": 1, "online": 0}
+        rows = [dict(member, online=1) for member in GUILD] + [extra]
+        self.assertEqual("", raidrun.seat_eligibility_refusal(
+            "moltencore", lineup, rows
+        ))
+
+
 def _function(name):
     tree = ast.parse(BRIDGE)
     for node in ast.walk(tree):
@@ -228,7 +271,8 @@ def _function(name):
 DOOR = {"map": 0, "x": -7510.87, "y": -1035.87}
 
 
-def _load_drive_raid(events, members, missing_table=False, missing_duty=False):
+def _load_drive_raid(events, members, missing_table=False, missing_duty=False,
+                     current_rows=None):
     """bridge._drive_raid, run for real against fakes that record order."""
     source = "\n\n".join(
         ast.get_source_segment(BRIDGE, _function(name))
@@ -244,6 +288,8 @@ def _load_drive_raid(events, members, missing_table=False, missing_duty=False):
                 if missing_table:
                     raise MissingTable(1146, "Table doesn't exist")
                 events.append(("seat", sql.split()[0], args))
+            elif sql.startswith("SELECT c.name, c.level, c.online FROM characters c WHERE"):
+                events.append(("eligibility", args))
             else:
                 events.append(("read", args))
 
@@ -255,6 +301,8 @@ def _load_drive_raid(events, members, missing_table=False, missing_duty=False):
             events.append(("seat", sql.split()[0], list(rows)))
 
         def fetchall(self):
+            if events and events[-1][0] == "eligibility":
+                return list(members if current_rows is None else current_rows)
             return list(members)
 
     class Conn:
@@ -288,7 +336,7 @@ def _load_drive_raid(events, members, missing_table=False, missing_duty=False):
 
 
 GUILD = [
-    {"name": n, "level": 60, "class_id": c, "race": 1}
+    {"name": n, "level": 60, "class_id": c, "race": 1, "online": 1}
     for n, c in (
         [("Grug", raidlineup.WARRIOR)]
         + [("W%d" % i, raidlineup.WARRIOR) for i in range(8)]
@@ -308,12 +356,43 @@ class TheBridgeWritesSeatsThenTheJob(unittest.TestCase):
         self.assertEqual([], withheld)
         kinds = [e[0] for e in events]
         self.assertEqual("read", kinds[0])
-        self.assertEqual(("seat", "DELETE", ("Grug", "moltencore")), events[1])
+        self.assertEqual("eligibility", kinds[1])
+        delete_index = kinds.index("seat")
+        self.assertEqual(("seat", "DELETE", ("Grug", "moltencore")), events[delete_index])
         inserts = [e for e in events if e[0] == "seat" and e[1] == "INSERT"]
         self.assertEqual(1, len(inserts), "the forty seats are one statement")
         self.assertEqual(40, len(inserts[0][2]))
         self.assertEqual(("job", "Grug", "raid:moltencore"), events[-1])
         self.assertLess(kinds.index("seat"), kinds.index("job"))
+
+    def test_offline_approved_member_refuses_before_any_write(self):
+        rows = [dict(member) for member in GUILD]
+        rows[0]["online"] = 0
+        events = []
+        withheld = []
+        drive = _load_drive_raid(events, GUILD, current_rows=rows)
+        self.assertEqual(0, drive("moltencore", "Grug", ["Grug"], "q", withheld))
+        self.assertIn("Grug (offline)", withheld[0])
+        self.assertFalse(any(event[0] in {"seat", "job"} for event in events))
+
+    def test_under_level_approved_member_refuses_before_any_write(self):
+        rows = [dict(member) for member in GUILD]
+        rows[0]["level"] = 49
+        events = []
+        withheld = []
+        drive = _load_drive_raid(events, GUILD, current_rows=rows)
+        self.assertEqual(0, drive("moltencore", "Grug", ["Grug"], "q", withheld))
+        self.assertIn("Grug (level 49; needs 50)", withheld[0])
+        self.assertFalse(any(event[0] in {"seat", "job"} for event in events))
+
+    def test_missing_current_row_refuses_before_any_write(self):
+        rows = [member for member in GUILD if member["name"] != "Grug"]
+        events = []
+        withheld = []
+        drive = _load_drive_raid(events, GUILD, current_rows=rows)
+        self.assertEqual(0, drive("moltencore", "Grug", ["Grug"], "q", withheld))
+        self.assertIn("Grug (no current character row)", withheld[0])
+        self.assertFalse(any(event[0] in {"seat", "job"} for event in events))
 
     def test_each_seat_carries_its_duty(self):
         events = []

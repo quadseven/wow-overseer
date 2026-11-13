@@ -191,6 +191,14 @@ GUILD_MEMBERS_SQL = (
     "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes}))"
 )
 
+# Re-read only the chosen seats immediately before replacing them. The guild
+# lineup read plans the order; this current-character read makes a logout,
+# level change, or vanished row between planning and writing fail closed.
+ELIGIBILITY_SQL = (
+    "SELECT c.name, c.level, c.online FROM characters c "
+    "WHERE c.name IN ({holes})"
+)
+
 
 # --- the seat targets ------------------------------------------------------------
 #
@@ -316,6 +324,43 @@ def seat_rows(family: str, keyword: str, lineup: dict, *, duty: bool = False) ->
                 + ((str(member.get("duty") or ""),) if duty else ())
             )
     return rows
+
+
+def seat_eligibility_refusal(keyword: str, lineup: dict, current_rows: list) -> str:
+    """Explain why a selected raid lineup cannot be persisted right now.
+
+    The lineup is the approved selection. Every selected seat needs a current
+    character row, the raid's minimum level, and online presence. Extra guild
+    members do not affect this decision and are never substituted here.
+    """
+    floor = MIN_LEVEL.get(keyword, 0)
+    selected = seat_rows("", keyword, lineup)
+    by_name = {
+        str(row.get("name") or "").casefold(): row for row in current_rows or []
+    }
+    unavailable = []
+    for seat in selected:
+        name = seat[2]
+        row = by_name.get(name.casefold())
+        if row is None:
+            unavailable.append("%s (no current character row)" % name)
+            continue
+        reasons = []
+        level = int(row.get("level") or 0)
+        if level < floor:
+            reasons.append("level %d; needs %d" % (level, floor))
+        if int(row.get("online") or 0) != 1:
+            reasons.append("offline")
+        if reasons:
+            unavailable.append("%s (%s)" % (name, ", ".join(reasons)))
+    if not unavailable:
+        return ""
+    return "%s refused: %d of %d approved members unavailable: %s" % (
+        place(keyword),
+        len(unavailable),
+        len(selected),
+        "; ".join(unavailable),
+    )
 
 
 # --- the attunement ------------------------------------------------------------
