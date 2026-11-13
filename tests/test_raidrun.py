@@ -221,9 +221,9 @@ class TheSeatsNeedCurrentEligibility(unittest.TestCase):
     def test_every_selected_member_must_be_online_and_at_least_level_fifty(self):
         lineup = raidlineup.build_lineup(GUILD, guaranteed=["Grug"])
         rows = [dict(member, online=1) for member in GUILD]
-        self.assertEqual("", raidrun.seat_eligibility_refusal(
-            "moltencore", lineup, rows
-        ))
+        self.assertEqual(
+            "", raidrun.seat_eligibility_refusal("moltencore", lineup, rows)
+        )
 
     def test_offline_seat_refuses_with_count_and_name(self):
         lineup = raidlineup.build_lineup(GUILD, guaranteed=["Grug"])
@@ -243,10 +243,7 @@ class TheSeatsNeedCurrentEligibility(unittest.TestCase):
 
     def test_missing_current_row_refuses_with_count_and_name(self):
         lineup = raidlineup.build_lineup(GUILD, guaranteed=["Grug"])
-        rows = [
-            dict(member, online=1) for member in GUILD
-            if member["name"] != "Grug"
-        ]
+        rows = [dict(member, online=1) for member in GUILD if member["name"] != "Grug"]
         refusal = raidrun.seat_eligibility_refusal("moltencore", lineup, rows)
         self.assertIn("Grug (no current character row)", refusal)
         self.assertIn("1 of 40", refusal)
@@ -255,9 +252,9 @@ class TheSeatsNeedCurrentEligibility(unittest.TestCase):
         lineup = raidlineup.build_lineup(GUILD, guaranteed=["Grug"])
         extra = {"name": "Reserve", "level": 1, "online": 0}
         rows = [dict(member, online=1) for member in GUILD] + [extra]
-        self.assertEqual("", raidrun.seat_eligibility_refusal(
-            "moltencore", lineup, rows
-        ))
+        self.assertEqual(
+            "", raidrun.seat_eligibility_refusal("moltencore", lineup, rows)
+        )
 
 
 def _function(name):
@@ -271,8 +268,9 @@ def _function(name):
 DOOR = {"map": 0, "x": -7510.87, "y": -1035.87}
 
 
-def _load_drive_raid(events, members, missing_table=False, missing_duty=False,
-                     current_rows=None):
+def _load_drive_raid(
+    events, members, missing_table=False, missing_duty=False, current_rows=None
+):
     """bridge._drive_raid, run for real against fakes that record order."""
     source = "\n\n".join(
         ast.get_source_segment(BRIDGE, _function(name))
@@ -288,7 +286,9 @@ def _load_drive_raid(events, members, missing_table=False, missing_duty=False,
                 if missing_table:
                     raise MissingTable(1146, "Table doesn't exist")
                 events.append(("seat", sql.split()[0], args))
-            elif sql.startswith("SELECT c.name, c.level, c.online FROM characters c WHERE"):
+            elif sql.startswith(
+                "SELECT c.name, c.level, c.online FROM characters c WHERE"
+            ):
                 events.append(("eligibility", args))
             else:
                 events.append(("read", args))
@@ -358,7 +358,9 @@ class TheBridgeWritesSeatsThenTheJob(unittest.TestCase):
         self.assertEqual("read", kinds[0])
         self.assertEqual("eligibility", kinds[1])
         delete_index = kinds.index("seat")
-        self.assertEqual(("seat", "DELETE", ("Grug", "moltencore")), events[delete_index])
+        self.assertEqual(
+            ("seat", "DELETE", ("Grug", "moltencore")), events[delete_index]
+        )
         inserts = [e for e in events if e[0] == "seat" and e[1] == "INSERT"]
         self.assertEqual(1, len(inserts), "the forty seats are one statement")
         self.assertEqual(40, len(inserts[0][2]))

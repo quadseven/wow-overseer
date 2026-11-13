@@ -195,8 +195,7 @@ GUILD_MEMBERS_SQL = (
 # lineup read plans the order; this current-character read makes a logout,
 # level change, or vanished row between planning and writing fail closed.
 ELIGIBILITY_SQL = (
-    "SELECT c.name, c.level, c.online FROM characters c "
-    "WHERE c.name IN ({holes})"
+    "SELECT c.name, c.level, c.online FROM characters c WHERE c.name IN ({holes})"
 )
 
 
@@ -335,9 +334,7 @@ def seat_eligibility_refusal(keyword: str, lineup: dict, current_rows: list) -> 
     """
     floor = MIN_LEVEL.get(keyword, 0)
     selected = seat_rows("", keyword, lineup)
-    by_name = {
-        str(row.get("name") or "").casefold(): row for row in current_rows or []
-    }
+    by_name = {str(row.get("name") or "").casefold(): row for row in current_rows or []}
     unavailable = []
     for seat in selected:
         name = seat[2]
