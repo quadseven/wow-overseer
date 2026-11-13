@@ -1239,6 +1239,22 @@ def standing_mode(job_by_name: dict, exempt=()) -> str:
     return modes.pop()
 
 
+def member_rhythms(stands, job_by_name: dict) -> list:
+    """(name, Rhythm) for each member, judged on its own (#2395).
+
+    For a family in individual mode (individual.py): each member alternates
+    between gathering and crafting on its own reagents and its own job, so
+    one short member no longer pulls the rest off their crafting. A member
+    whose own job is neither mode, or that has no row, gets the same no-op
+    `rhythm` gives a family on another job.
+    """
+    out = []
+    for one in tuple(stands or ()):
+        own = str((job_by_name or {}).get(one.name, "") or "").strip()
+        out.append((one.name, rhythm((one,), own)))
+    return out
+
+
 def rhythm(stands, standing: str) -> Rhythm:
     """The mode the family should be in, given where everyone stands.
 
