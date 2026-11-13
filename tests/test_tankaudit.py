@@ -52,8 +52,10 @@ class AuditTank(unittest.TestCase):
         self.assertEqual(states[200], "needs")
 
     def test_above_level_spell_is_not_missing(self):
-        out = tankaudit.audit_tank(_seat("Tankone"), TRAINER, {100, 200, 300})
-        self.assertNotIn(400, [m["spell"] for m in out["missing"]])
+        out = tankaudit.audit_tank(_seat("Tankone", level=10), TRAINER, set())
+        spells = [m["spell"] for m in out["missing"]]
+        self.assertIn(100, spells)
+        self.assertNotIn(400, spells)
 
 
 class AuditTanks(unittest.TestCase):
