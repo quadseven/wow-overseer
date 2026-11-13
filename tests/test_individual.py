@@ -177,7 +177,8 @@ class TrainingPerMember(unittest.TestCase):
         statements = trainjob.statements(plan)
         self.assertEqual(
             statements,
-            travel.aim_only_statements(["Bork", "Og"], trainjob.TRAINER_ROLE),
+            travel.aim_only_statements(["Bork", "Og"], trainjob.TRAINER_ROLE)
+            + trainjob.stale_clear_statements(["Grug"]),
         )
 
     def test_individual_with_nobody_on_train_says_why(self):
@@ -242,7 +243,8 @@ class TheRhythmPerMember(unittest.TestCase):
 
 
 class TheBridgeIsWired(unittest.TestCase):
-    """Source-shape pins: the drives ask `individual` before standing down."""
+    """Source-shape pins that the drives are wired at all. What they do, and
+    in which order, is tested on fakes in test_individual_drives.py."""
 
     SOURCE = BRIDGE.read_text(encoding="utf-8")
 
@@ -259,28 +261,10 @@ class TheBridgeIsWired(unittest.TestCase):
         self.assertIn("individual.active(", body)
         self.assertIn("trainjob.plan(members, individual=", body)
 
-    def test_the_train_drive_respects_a_run_and_the_queue(self):
-        body = self.body("    async def _drive_train(self)")
-        self.assertLess(body.index("_queue_owns_job"), body.index("trainjob.plan("))
-        self.assertLess(body.index("self._mid_run("), body.index("trainjob.plan("))
-
-    def test_the_gather_half_is_held(self):
-        body = self.body("    async def _individual_rhythm_moves(self")
-        self.assertIn("if plan.mode != craft_rhythm.MODE_CRAFT:", body)
-        self.assertLess(
-            body.index("if plan.mode != craft_rhythm.MODE_CRAFT:"),
-            body.index("_insert_job"),
-        )
-
     def test_the_craft_rhythm_acts_per_member(self):
         body = self.body("    async def _craft_rhythm_once(self")
         self.assertIn("individual.active(", body)
         self.assertIn("self._individual_rhythm_moves(", body)
-
-    def test_per_member_moves_respect_the_campaign_queue(self):
-        body = self.body("    async def _individual_rhythm_moves(self")
-        self.assertIn("_queue_owns_job", body)
-        self.assertIn("_insert_job", body)
 
     def test_craft_supply_acts_per_member(self):
         body = self.body("    async def _craft_supply_once(self")
