@@ -29402,14 +29402,22 @@ def _fetch_guild_social_facts(bounds) -> dict:
         except pymysql.err.MySQLError as exc:
             if not (exc.args and exc.args[0] in (1054, 1146)):
                 raise
+            log.warning("guild social: the campaign rows could not be read (%s); "
+                        "the family lend guard is not in effect this pass", exc)
         drops = _guild_social_drops(cur)
         pug_calls = _fetch_guild_pug_calls(cur) if guildpug.enabled() else {}
         lendable = set()
         if familyseat.enabled():
             cur.execute(familyseat.ROSTER_SQL)
-            lendable = familyseat.lendable(list(cur.fetchall()),
-                                           familyseat.inside(facts["rows"]),
-                                           facts["in_runs"])
+            guarded = familyseat.guard_enabled()
+            lendable = familyseat.lendable(
+                list(cur.fetchall()), familyseat.inside(facts["rows"]),
+                facts["in_runs"],
+                # A family with an active started campaign row lends only a
+                # member that is not its sole tank or healer (#2353).
+                campaigns=(familyseat.campaign_families(campaigns)
+                           if guarded else ()),
+                seats=familyseat.seats_played(facts["rows"]), guard=guarded)
     facts.update({
         "now": now, "asks": asks, "answers": answers,
         "quests": guildsocial.quests_by_name(quest_rows),
