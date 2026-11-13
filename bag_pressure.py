@@ -2144,10 +2144,17 @@ def epic_kept(row: dict, guild_classes) -> bool:
     return any(_class_could_ever_wear(holding, c) for c in classes)
 
 
-def epic_kept_line(row: dict) -> str:
-    """The one log line a refused sale of a kept epic writes."""
-    return "kept %s: an epic a guild member can wear; routing will place it" % (
-        row.get("name") or "item %s" % row.get("item_guid"),
+def epic_kept_line(row: dict, holder: str) -> str:
+    """The one log line a refused sale of a kept epic writes.
+
+    It says only what is true today: the gear routing executor
+    (gearroutingexec.py) runs as a dry run, so a kept epic stays where it is
+    until a hand-off pass moves it.
+    """
+    return (
+        "kept %s: an epic a guild member can wear; it stays in %s's bags "
+        "until gear routing places it"
+        % (row.get("name") or "item %s" % row.get("item_guid"), holder)
     )
 
 

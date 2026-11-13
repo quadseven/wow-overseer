@@ -31743,7 +31743,7 @@ def _epic_blocks(holder: str, command: str) -> bool:
     classes = _guild_classes() if rows else frozenset()
     for row in rows:
         if bag_pressure.epic_kept(row, classes):
-            log.info("%s", bag_pressure.epic_kept_line(row))
+            log.info("%s", bag_pressure.epic_kept_line(row, holder))
             return True
     return False
 

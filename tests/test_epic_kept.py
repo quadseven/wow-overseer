@@ -153,9 +153,9 @@ class EpicKeptTest(unittest.TestCase):
 
     def test_the_kept_line(self):
         self.assertEqual(
-            bag_pressure.epic_kept_line(epic()),
+            bag_pressure.epic_kept_line(epic(), "Zork"),
             "kept Taran Icebreaker: an epic a guild member can wear; "
-            "routing will place it",
+            "it stays in Zork's bags until gear routing places it",
         )
 
 
@@ -257,7 +257,7 @@ class WriterGateTest(unittest.TestCase):
         self.assertEqual(self.inserts(), [])
         self.assertIn(
             "kept Taran Icebreaker: an epic a guild member can wear; "
-            "routing will place it",
+            "it stays in Zork's bags until gear routing places it",
             self.lines,
         )
 
