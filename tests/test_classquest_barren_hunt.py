@@ -54,6 +54,17 @@ class BarrenHunt(unittest.TestCase):
         hunts = hunts_after_a_stall(looted(1, 20), looted(2, 12), looted(3, 4))
         self.assertEqual(len(hunts.get("Aa").tried), 1)
 
+    def test_a_moved_quest_counter_restarts_the_clock_whatever_the_rows_say(self):
+        # The criterion's progress half: Hunts.observe sees the counter move and
+        # starts the clock over, so three kill rows at one pack are not a stall.
+        hunts = classquest.Hunts()
+        book = two_packs()
+        rows = recent(barren(1, 20), barren(2, 12), barren(3, 4))
+        guildjobs._class_move(who("Aa", **HUNTER), book, recent(), hunts, 0.0)
+        moved = who("Aa", quest_progress={1498: 2}, **HUNTER)
+        guildjobs._class_move(moved, book, rows, hunts, float(STALL_SECONDS + 60))
+        self.assertEqual(hunts.get("Aa").tried, ())
+
     def test_a_kill_row_at_another_pack_starts_its_own_count(self):
         other = hunt(5, "Aa", "applied", 4, "timeout", "the clock ran out", 4, 0)
         other = dict(other, command=other["command"].replace("3130", "3131"))
