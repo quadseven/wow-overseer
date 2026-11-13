@@ -2856,6 +2856,27 @@ guild_route_deliverable = gear.route_deliverable
 rank_receivers = gear.rank_receivers
 
 
+def guild_route(holder, taker, guid, entry, name, gain, family, reason):
+    """One hand-over as gear.Route, for callers that decided it elsewhere.
+
+    The gear routing executor (gearroutingexec.py) takes its routes from the
+    routing report, not from `gear.route_plan`; this builds the same shape
+    `guild_route_deliverable` and the bridge's writer take, so gear keeps its
+    single importer. It decides nothing.
+    """
+    return gear.Route(
+        holder=holder,
+        taker=taker,
+        guid=int(guid),
+        entry=int(entry),
+        name=name,
+        gain=int(gain),
+        family=bool(family),
+        fills_weakest=False,
+        reason=reason,
+    )
+
+
 def recipe_gifts(
     gear_rows, holders_by_skill, keep_names=(), position_rows=None, free_slots=None
 ):
