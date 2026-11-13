@@ -7677,6 +7677,51 @@ _RECIPES_KNOWN_SQL = (
     + ") WHERE c.name IN (%s)"
 )
 
+# The same recipes as the worldserver itself has seen them held, which
+# character_spell is not (#2432): a bought recipe lags there by the save
+# interval, and a recipe a playerbot was granted at creation never lands
+# there at all. mod-overseer records a bought recipe ('learn', the spell), a
+# cast ('craft', the spell) and, at each trainer visit, every recipe of the
+# trade the member holds by HasSpell ('recipe-known', the spell). Read by
+# name and not joined: overseer_event sits across the collation split from
+# `characters`.
+_RECIPES_SEEN_SQL = (
+    "SELECT character_name AS name, subject_id AS spell FROM overseer_event "
+    "WHERE kind IN ('learn', 'craft', 'recipe-known') AND subject_id IN ("
+    + ",".join(str(int(s)) for s in sorted(craft.TRAINER_RECIPES))
+    + ") AND character_name IN (%s)"
+)
+
+# The trades a member visited its trainer for lately ('trainer-visit', the
+# trade's skill), so a visit that could not buy a due recipe is not repeated
+# every cycle (guildjobs.RECIPE_VISIT_RETRY_HOURS).
+_TRAINER_VISITS_SQL = (
+    "SELECT character_name AS name, subject_id AS skill FROM overseer_event "
+    "WHERE kind = 'trainer-visit' AND last_seen >= NOW() - INTERVAL "
+    + str(int(guildjobs.RECIPE_VISIT_RETRY_HOURS))
+    + " HOUR AND character_name IN (%s)"
+)
+
+
+def _recipe_events(cur, names, marks) -> tuple:
+    """(name -> recipes seen held, name -> trades visited lately) from
+    overseer_event. A realm without the table answers two empty maps, which is
+    character_spell alone and no visit window: the behaviour before it."""
+    seen: dict = {}
+    visits: dict = {}
+    try:
+        cur.execute(_RECIPES_SEEN_SQL % marks, names)
+        for row in cur.fetchall():
+            seen.setdefault(row["name"], set()).add(int(row["spell"]))
+        cur.execute(_TRAINER_VISITS_SQL % marks, names)
+        for row in cur.fetchall():
+            visits.setdefault(row["name"], set()).add(int(row["skill"]))
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return {}, {}
+        raise
+    return seen, visits
+
 
 def _rank_facts(rows) -> dict:
     """name -> (level, money, {skill: (value, max)}) from _RANK_FACTS_SQL rows."""
@@ -7712,7 +7757,7 @@ def _ranks_due(cur, roster) -> dict:
             return {}
         raise
     facts = _rank_facts(rows)
-    known: dict = {}
+    known, visits = _recipe_events(cur, names, marks)
     for row in spells:
         known.setdefault(row["name"], set()).add(int(row["spell"]))
     wanted = {str(row["name"]): trainjob.parse_wanted(row.get("professions"))
@@ -7721,7 +7766,8 @@ def _ranks_due(cur, roster) -> dict:
     for name, (level, money, skills) in facts.items():
         ranks = guildjobs.ranks_due(level, money, skills, wanted.get(name, ()))
         recipes = guildjobs.recipes_due(
-            level, money, skills, known.get(name, ()), wanted.get(name, ()))
+            level, money, skills, known.get(name, ()), wanted.get(name, ()),
+            visited=visits.get(name, ()))
         due[name] = ranks + tuple(s for s in recipes if s not in ranks)
     return due
 
