@@ -61,6 +61,7 @@ import places
 import guildgear
 import guildroute
 import gearrouting
+import gearroutingexec
 import seatmeter
 import jevview
 import levelroute
@@ -1522,6 +1523,26 @@ def _fetch_guild_routing() -> dict:
     payload = gearrouting.build(report)
     payload["headline"] = gearrouting.headline(report)
     payload["lines"] = gearrouting.lines(report)
+    # What an executor WOULD write for these routes: read-only, nothing is
+    # inserted anywhere (gearroutingexec.py).
+    who = sorted({str(r.get("name") or "") for r in wearers} - {""})
+    if who and report.routes:
+        marks = ", ".join(["%s"] * len(who))
+        with realmread.Session(_connect) as rd:
+            where = rd.rows(
+                gearroutingexec.POSITIONS_SQL.format(holes=marks),  # noqa: S608 - holes is a generated placeholder list; names are bound
+                tuple(who),
+                what="routing positions",
+            )
+            room = rd.rows(
+                gearroutingexec.ROOM_SQL.format(holes=marks),  # noqa: S608 - holes is a generated placeholder list; names are bound
+                tuple(who) * 2,
+                what="routing bag room",
+            )
+        world = gearroutingexec.world_from_rows(gear, where, room, family=names)
+        payload["execution"] = gearroutingexec.dry_run_view(report, world)
+    else:
+        payload["execution"] = gearroutingexec.dry_run_view(report, gearroutingexec.World())
     return payload
 
 
@@ -6878,7 +6899,8 @@ class Handler(BaseHTTPRequestHandler):
         No parameters: every member of the families' guilds, the
         bind-on-equip pieces sitting in the wrong bags and the guild
         banks, and who each should go to, judged by the equip pass's own
-        scorer (gearrouting.py has the rules). It moves nothing."""
+        scorer (gearrouting.py has the rules), plus an `execution` block
+        saying what an executor would write for them. It moves nothing."""
         # A failed read answers 503 (_answer).
         payload = _fetch_guild_routing()
         return 200, payload
