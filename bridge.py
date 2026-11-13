@@ -83,6 +83,9 @@ import guildfund
 import guildshare
 import guildpost
 import guildroute
+import gearrouting
+import gearroutingexec
+import gearroutingread
 import orders
 import orderrecord
 import guildwork
@@ -13142,6 +13145,59 @@ class Bridge(discord.Client):
                     self._guild_mail_runs.pop(route.holder, None)
         return written
 
+    async def _gear_routing_once(self) -> None:
+        """Hand each routed piece to the member who gains most (#2136).
+
+        The routing report decides who (gearrouting.plan over gearroutingread's
+        rows, the read the site's dry run serves), once a cycle for every roster
+        family's guilds at once. gearroutingexec writes it through
+        `_insert_route`, the guild hand-over writer: a trade when holder and
+        wearer stand together, a letter when the holder stands at a mailbox and
+        the wearer is family; otherwise the piece goes by post when its holder
+        next stands at a mailbox. Never a give, nothing granted, never a piece an
+        overseer_keep reservation holds, and at most GEAR_ROUTING_PER_PASS rows.
+        One log line per hand-off decision; the waits are counted.
+        """
+        family = sorted(await asyncio.to_thread(_roster_names))
+        if not family:
+            return
+        wearers, gear_rows, bank_rows = await asyncio.to_thread(_read_gear_routing, family)
+        report = gearrouting.plan(wearers, gear_rows, bank_rows=bank_rows,
+                                  keep_names=gearroutingread.KEEPS)
+        if not report.routes:
+            log.info("gear routing: no routes this pass")
+            return
+        who = gearroutingexec.members_to_read(
+            report, [str(r.get("name") or "") for r in wearers])
+        positions = await asyncio.to_thread(_fetch_positions, who)
+        free_slots = await asyncio.to_thread(_fetch_free_slots, who)
+        holders = list(dict.fromkeys(
+            r.holder for r in report.routes if r.holder in positions))
+        at_mailbox = await asyncio.to_thread(
+            _holders_at_mailbox, holders[:GUILD_ROUTE_MAILBOX_CHECKS], positions)
+        seen = await asyncio.to_thread(_recent_route_keys, GIVE_RETRY_MINUTES)
+        kept = await asyncio.to_thread(_KEEP.now)
+        world = gearroutingexec.World(
+            carried=gearroutingexec.carried(gear_rows),
+            positions=positions,
+            at_mailbox=tuple(sorted(at_mailbox)),
+            free_slots=free_slots,
+            family=frozenset(family),
+            kept=kept,
+            queued=gearroutingexec.queued(seen),
+        )
+        result = await asyncio.to_thread(
+            gearroutingexec.execute, report, world, _insert_route,
+            per_pass=GEAR_ROUTING_PER_PASS,
+        )
+        for line in gearroutingexec.decision_lines(result):
+            log.info("gear routing: %s", line)
+        _log_capped("gear routing", [
+            "%s: %s" % (step.status, step.said) for step in result.steps
+            if step.status not in gearroutingexec.DECISIONS
+        ])
+        log.info("gear routing: %s", gearroutingexec.summary(result))
+
     async def _walk_route_holders(self, waiting: list, family_names: list,
                                   escort=None, family_only: bool = True) -> None:
         """Walk a waiting route's holder to the nearest mailbox (#185).
@@ -13405,6 +13461,10 @@ class Bridge(discord.Client):
                 log.exception("guild equip pass failed; retrying next cycle")
             await self._for_other_families("guild equip", self._guild_equip_once)
             await self._for_other_families("guild share", self._guild_share_once)
+            try:
+                await self._gear_routing_once()
+            except Exception:
+                log.exception("gear routing pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _settle_vendor_errand(self, names: list, leader: str) -> str:
@@ -32189,6 +32249,9 @@ FAR_WALKS_AT_ONCE = int(os.environ.get("FAR_WALKS_AT_ONCE", guildroute.FAR_WALKS
 # The realm's hunt ceiling (the module's Overseer.Hunt.AtOnce).
 HUNTS_AT_ONCE = int(os.environ.get("HUNTS_AT_ONCE", classhunt.HUNTS_AT_ONCE))
 GUILD_ROUTE_MAILBOX_CHECKS = int(os.environ.get("GUILD_ROUTE_MAILBOX_CHECKS", "20"))
+# The most hand-over rows the gear routing pass writes in one cycle (#2136);
+# 0 writes none, and every route is still decided and logged.
+GEAR_ROUTING_PER_PASS = int(os.environ.get("GEAR_ROUTING_PER_PASS", "10"))
 # How many notes one pass logs line by line before it summarises the rest.
 GUILD_ROUTE_NOTE_LINES = 5
 
@@ -34022,6 +34085,13 @@ def _raid_supply_bank(cur, guilds: list, out: dict) -> None:
         out["masters"][guild] = master
         out["purses"][master] = int(row.get("money") or 0)
 
+
+
+def _read_gear_routing(names: list) -> tuple:
+    """(wearers, gear, bank) rows for the guilds `names` belong to: the
+    routing report's read, shared with the site (gearroutingread.py)."""
+    with realmread.Session(_connect) as rd:
+        return gearroutingread.read(rd, names)
 
 
 def _recent_route_keys(minutes: int) -> set:
