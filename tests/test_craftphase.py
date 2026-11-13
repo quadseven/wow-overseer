@@ -1,8 +1,13 @@
 """The craft window (#2369): the planner, the switch, the skip predicate, the
 read, and the seams that honour an open window."""
 
+import ast
 import json
+import os
+import pathlib
+import types
 import unittest
+from unittest import mock
 
 import campaignqueue as cq
 import craftphase as cp
@@ -156,6 +161,124 @@ class TheDungeonSeams(unittest.TestCase):
             names, "rfc", cq.Facts(free_slots={"Grug": 30, "Og": 30}), 1.0
         )
         self.assertIsInstance(free, cq.Admit)
+
+
+BRIDGE = pathlib.Path(__file__).resolve().parent.parent / "bridge.py"
+
+
+def _bridge_function(name):
+    for node in ast.walk(ast.parse(BRIDGE.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError("%s not found in bridge.py" % name)
+
+
+class Broken(Exception):
+    pass
+
+
+class TheBridgeHelpers(unittest.TestCase):
+    def helpers(self, memo_read, now=NOW):
+        self.lines = []
+        ns = {
+            "craftphase": cp,
+            "pymysql": types.SimpleNamespace(
+                err=types.SimpleNamespace(MySQLError=Broken)
+            ),
+            "log": types.SimpleNamespace(
+                exception=lambda msg, *a: self.lines.append(msg),
+                info=lambda msg, *a: self.lines.append(msg % a if a else msg),
+            ),
+            "time": types.SimpleNamespace(time=lambda: now),
+            "_memo_read": memo_read,
+            "_fetch_queue_roster": lambda: [
+                {"name": "Grug", "family": "Grug"},
+                {"name": "Og", "family": "Grug"},
+            ],
+            "_LIVE_RUN_LEADERS_SQL": "x",
+            "_connect": lambda: self.fail("no connection expected"),
+            "_guild_run_members_out": lambda: set(),
+            "_memo_upsert": lambda *a: None,
+        }
+        names = (
+            "_craft_window_states",
+            "_craft_window_tick",
+            "_craft_window_names",
+            "_craft_window_open_for",
+            "_craft_window_withholds",
+        )
+        module = ast.Module(body=[_bridge_function(n) for n in names], type_ignores=[])
+        exec(compile(module, "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+        return ns
+
+    def test_a_failed_state_read_protects_nobody_and_does_not_raise(self):
+        def memo_read(kind):
+            raise Broken("down")
+
+        ns = self.helpers(memo_read)
+        self.assertEqual([], ns["_craft_window_states"](NOW))
+        with mock.patch.dict(os.environ, {"CRAFT_PHASE": "on"}):
+            self.assertEqual(frozenset(), ns["_craft_window_names"]())
+            self.assertFalse(ns["_craft_window_open_for"](["Grug", "Og"]))
+            self.assertIsNone(ns["_craft_window_withholds"](["Grug"], "rfc"))
+        self.assertTrue(self.lines)
+
+    def test_the_withhold_helper_feeds_the_gate_while_the_window_stands(self):
+        opened = cp.plan(fresh(), HOME, NOW).state
+        memo = {"Grug": (cp.encode(opened), NOW)}
+        ns = self.helpers(lambda kind: memo)
+        # The live-run read is a connection; give the tick one that reads none.
+        ns["_connect"] = _NoRuns
+        with mock.patch.dict(os.environ, {"CRAFT_PHASE": "on"}):
+            reason = ns["_craft_window_withholds"](["Grug", "Og"], "rfc")
+            self.assertIn("craft window", reason)
+            self.assertIsNone(ns["_craft_window_withholds"](["Zug"], "rfc"))
+        with mock.patch.dict(os.environ, {"CRAFT_PHASE": "off"}):
+            self.assertIsNone(ns["_craft_window_withholds"](["Grug", "Og"], "rfc"))
+
+
+class TheAdmissionChain(unittest.TestCase):
+    def test_the_craft_gate_names_itself_and_lifts_with_the_window(self):
+        names = ("Grug", "Og")
+        slots = {"Grug": 30, "Og": 30}
+        shut = cq.decide_admission(
+            names, "rfc", cq.Facts(free_slots=slots, craft_window=True), 1.0
+        )
+        self.assertIsInstance(shut, cq.Withhold)
+        self.assertEqual(cq.GATE_CRAFT, shut.gate)
+        self.assertIn("craft window", shut.reason)
+        self.assertIsInstance(
+            cq.decide_admission(names, "rfc", cq.Facts(free_slots=slots), 1.0),
+            cq.Admit,
+        )
+
+    def test_the_bridge_chain_stops_at_the_craft_withhold(self):
+        body = BRIDGE.read_text(encoding="utf-8")
+        seen = []
+        ns = {"_craft_window_withholds": lambda n, k: seen.append((n, k)) or "held"}
+        gate = ast.Module(body=[_bridge_function("_gear_gate")], type_ignores=[])
+        exec(compile(gate, "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+        ns["_town_errand_withholds"] = lambda n, k: None
+        self.assertEqual("held", ns["_gear_gate"](["Grug"], "rfc"))
+        self.assertEqual([(["Grug"], "rfc")], seen)
+        self.assertIn("craft_window=_craft_window_open_for(names)", body)
+
+
+class _NoRuns:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def cursor(self):
+        return self
+
+    def execute(self, sql):
+        pass
+
+    def fetchall(self):
+        return []
 
 
 if __name__ == "__main__":

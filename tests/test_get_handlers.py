@@ -279,6 +279,29 @@ class TheGuildReadsAreHandlers(unittest.TestCase):
         self.assertEqual(got, (200, {"p": 1}))
         page.assert_called_once_with(rows)
 
+    def test_the_family_handler_carries_the_craft_phase(self):
+        rows = [{"subject": "Grug", "value": "{}", "since": 1}]
+        ctx = types.SimpleNamespace(
+            read=realmread.Memory({map_server.craftphase.READ_SQL: rows})
+        )
+        with (
+            mock.patch.object(map_server, "FAMILIES") as families,
+            mock.patch.object(
+                map_server, "_family_scope", return_value=(["Grug"], "a", ["a"])
+            ),
+            mock.patch.object(map_server, "_fetch_family", return_value=[]),
+            mock.patch.object(map_server, "_fetch_profiles", return_value={}),
+            mock.patch.object(map_server.family, "build_family", return_value={}),
+            mock.patch.object(map_server.family, "build_observers", return_value=[]),
+            mock.patch.object(
+                map_server.craftphase, "page", return_value=[{"phase": "craft"}]
+            ),
+        ):
+            families.families.return_value = {"a": ["Grug"]}
+            status, payload = map_server.Handler._family.__wrapped__({}, ctx)
+        self.assertEqual(200, status)
+        self.assertEqual([{"phase": "craft"}], payload["craft_phase"])
+
     def test_the_family_read_carries_the_craft_phase(self):
         rows = [{"subject": "Grug", "value": "{}", "since": 1}]
         ctx = types.SimpleNamespace(

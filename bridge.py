@@ -3687,6 +3687,18 @@ def _town_errand_withholds(names, keyword):
 
 
 def _craft_window_states(now: float) -> list:
+    """The craft window states at `now`, or none when a read fails: a MySQL
+    fault logs and protects no crafter, and never reaches the town-errand or
+    queue pass that asked (#2369)."""
+    try:
+        return _craft_window_tick(now)
+    except pymysql.err.MySQLError:
+        log.exception("craft phase: the window state could not be read or "
+                      "written; no crafter is protected this pass")
+        return []
+
+
+def _craft_window_tick(now: float) -> list:
     """Tick every scheduled family's craft window and return the states.
 
     The memo store is the state (craftphase.MEMO_KIND), so every caller sees
