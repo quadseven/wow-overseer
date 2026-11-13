@@ -5563,6 +5563,28 @@ def productive_entries(name, recent, minutes) -> dict:
     return out
 
 
+# A member's hunt rows in a row that killed, looted nothing and moved no counter
+# before the kills stop restarting the stall clock (wow-overseer#2188). One or two
+# are the ground being worked (a full bag, a slow drop); a run of them is a pack
+# that does not give the item.
+BARREN_HUNT_ROWS = 3
+
+
+def barren_hunt_rows(name, recent) -> int:
+    """How many of the member's newest hunts that made a kill looted nothing,
+    in a row, newest first: the count stops at the first hunt that looted."""
+    kills = sorted(
+        (r for r in recent or () if r.name == name and r.entry and r.kills > 0),
+        key=lambda r: r.age_minutes,
+    )
+    count = 0
+    for r in kills:
+        if r.loot > 0:
+            break
+        count += 1
+    return count
+
+
 def class_avoid(m, book, recent, hunts=None, now=0.0) -> tuple:
     """(avoid, held_off) for classquest.moves: the packs the member's hunt
     tried without progress (the hunt clock) and the packs of the spawns the
@@ -6213,8 +6235,17 @@ def _no_walk_step(m, move, book, recent, cap, kept, crafters, master):
 
 def _class_move(m, book, recent, hunts, now):
     """(move or None, blocked sentences): classquest.next_move, with a hunt
-    that has stalled sent to another pack, or given up (HUNT_STALL_MINUTES)."""
-    if hunts and productive_entries(m.name, recent, classquest.HUNT_STALL_MINUTES):
+    that has stalled sent to another pack, or given up (HUNT_STALL_MINUTES).
+
+    A hunt that killed restarts the stall clock, except after BARREN_HUNT_ROWS
+    of them in a row that looted nothing: then the clock runs, and the pack is
+    rerolled or the quest given up (Hunts.observe, which restarts the clock by
+    itself when the quest's counters move)."""
+    if (
+        hunts
+        and productive_entries(m.name, recent, classquest.HUNT_STALL_MINUTES)
+        and barren_hunt_rows(m.name, recent) < BARREN_HUNT_ROWS
+    ):
         hunts.productive(m.name, now)
     m = with_walls(m, recent)
     avoid, off = class_avoid(m, book, recent, hunts, now)
