@@ -22784,11 +22784,12 @@ class Bridge(discord.Client):
                         if pugs_on else None)
             social = _with_class_asks(social, quest_pass)
             death_pass = _death_ask_pass(facts, mates, held)
-            if death_pass.posts or death_pass.expire:
+            if death_pass.posts or death_pass.expire or death_pass.replies:
                 social = dataclasses.replace(
                     social,
                     posts=social.posts + death_pass.posts,
                     expire=social.expire + death_pass.expire,
+                    replies=social.replies + death_pass.replies,
                     notes=social.notes + death_pass.notes)
             run_id = await asyncio.to_thread(_write_guild_social, social)
         except BaseException:
@@ -29421,15 +29422,17 @@ def _fetch_guild_social_facts(bounds) -> dict:
 
 def _death_ask_pass(facts: dict, mates: list, held: dict) -> guildsocial.Pass:
     """The death-loop ask pass for one social pass (deathask, #2277):
-    posts and expires, merged into the social pass beside the class quest
-    asks and written through the same writer. A looper held for another
+    posts, replies and expires, merged into the social pass beside the
+    class quest asks and written through the same writer. A looper held for another
     job is not asked for, and a held mate is not counted in reach. The
     expiry half runs even while the DEATH_ASK switch is off and when the
     loop pool is empty, so an ask already open always closes (#2344)."""
     loops = facts.get("death_loops") or {}
     if not deathask.enabled():
         return deathask.expire_pass(facts["asks"], loops, facts["now"])
-    return deathask.plan_pass(loops, mates, facts["asks"], facts["now"], held=held)
+    return deathask.plan_pass(
+        loops, mates, facts["asks"], facts["now"], held=held,
+        answers=facts.get("answers") or ())
 
 
 def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,

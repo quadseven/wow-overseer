@@ -44,7 +44,18 @@ posts. Expiry is not gated by the switch: asks already open keep closing
 while the switch is off (the bridge's death-ask pass runs the expiry
 half either way).
 
-PURE: rows in, a guildsocial.Pass of posts and expires out.
+THE ANSWER SIDE, PIECE 1 (#2277). A live deathloop ask draws one yes:
+the first mate guildjobs.loop_mates finds in reach for its asker, the
+same selection the post's reason names, answers as a helper in a damage
+seat (the seat the ask wants). One yes per ask (the ask wants one
+helper), one ask answered per member per pass, and at most
+ANSWERS_PER_PASS new yeses a pass, so yeses trickle the way the other
+asks' do. A member already standing as a yes on any ask is not counted
+again, a held mate does not answer, and an ask this pass expires draws
+no yes. Nothing here seats a party: that is piece 2, and the switch
+stays off until it lands.
+
+PURE: rows in, a guildsocial.Pass of posts, replies and expires out.
 """
 
 from __future__ import annotations
@@ -53,7 +64,7 @@ import os
 
 import guildjobs
 import guildsocial
-from guildsocial import DPS, LIVE_ASKS, Post
+from guildsocial import DPS, HELPS, LIVE_ASKS, YES, Post, Reply
 
 ENV_SWITCH = "DEATH_ASK"
 KIND = guildsocial.KIND_DEATHLOOP
@@ -69,6 +80,19 @@ _ASK_LINE = (
     "Keep dying in {place}, {deaths} times in an hour. "
     "Anyone free to group up and help me out of here?"
 )
+
+_ANSWER_LINES = (
+    "Count me in, {asker}. On my way to {place}.",
+    "I'll come help you out of {place}, {asker}.",
+    "Sure {asker}, I'll group up for {place}.",
+)
+
+ANSWERS_PER_PASS = guildsocial.ANSWERS_PER_PASS
+
+
+def answer_line(member: str, asker: str, place: str) -> str:
+    template = guildsocial._pick(_ANSWER_LINES, member, asker, place)
+    return template.format(asker=asker, place=place)
 
 
 def enabled(environ=None) -> bool:
@@ -152,15 +176,55 @@ def expire_pass(asks, loops, now) -> guildsocial.Pass:
     return guildsocial.Pass(expire=expires(asks, set(loops or ()), now))
 
 
-def plan_pass(loops, mates, asks, now, held=frozenset()) -> guildsocial.Pass:
-    """One pass of the death-loop asks: posts for loopers with a mate in
-    reach, and expires for the live asks that end now.
+def _replies(live_asks, ending_ids, jobs, looping, answers, held) -> tuple:
+    """One yes per live deathloop ask that has none: the first mate
+    loop_mates finds in reach for the asker, as a helper. A member
+    answers at most one ask a pass, a member already standing as a yes
+    on any ask is not counted again, and an ask ending this pass draws
+    no yes."""
+    standing = {a.member for a in answers or () if a.state == YES}
+    answered = {a.ask_id for a in answers or () if a.state == YES}
+    free_mates = [m for name, m in jobs.items() if name not in held]
+    spoken = set(standing)
+    out = []
+    for ask in sorted(live_asks, key=lambda a: a.id):
+        if len(out) >= ANSWERS_PER_PASS:
+            break
+        if ask.id in ending_ids or ask.id in answered:
+            continue
+        asker = jobs.get(ask.asker)
+        if asker is None or ask.asker in held:
+            continue
+        found = guildjobs.loop_mates(asker, free_mates, looping=looping)
+        mate = next((m for m in found if m.name not in spoken), None)
+        if mate is None:
+            continue
+        out.append(
+            Reply(
+                ask_id=ask.id,
+                member=mate.name,
+                role=DPS,
+                stance=HELPS,
+                said=answer_line(mate.name, ask.asker, ask.target_label),
+            )
+        )
+        spoken.add(mate.name)
+    return tuple(out)
 
-    loops  name -> deathloop.Loop, the planning pass's death-loop read
-    mates  guildsocial.Mate for every member read
-    asks   every overseer_guild_ask row; only the deathloop kind is read
-    held   name -> why not free (or a set of names): a held looper is not
-           asked for, and a held mate is not counted in reach
+
+def plan_pass(
+    loops, mates, asks, now, held=frozenset(), answers=()
+) -> guildsocial.Pass:
+    """One pass of the death-loop asks: posts for loopers with a mate in
+    reach, expires for the live asks that end now, and one yes per live
+    ask that has none yet.
+
+    loops    name -> deathloop.Loop, the planning pass's death-loop read
+    mates    guildsocial.Mate for every member read
+    asks     every overseer_guild_ask row; only the deathloop kind is read
+    held     name -> why not free (or a set of names): a held looper is not
+             asked for, and a held mate is not counted in reach
+    answers  the overseer_guild_answer rows; only standing yeses are read
     """
     held = set(held or ())
     jobs = {}
@@ -207,4 +271,8 @@ def plan_pass(loops, mates, asks, now, held=frozenset()) -> guildsocial.Pass:
             )
         )
         open_in[member.guild] = open_in.get(member.guild, 0) + 1
-    return guildsocial.Pass(posts=tuple(posts), expire=expire)
+    live_asks = [
+        a for a in death_asks(asks) if a.state in LIVE_ASKS and a.id not in ending_ids
+    ]
+    replies = _replies(live_asks, ending_ids, jobs, looping, answers, held)
+    return guildsocial.Pass(posts=tuple(posts), expire=expire, replies=replies)
