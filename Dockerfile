@@ -58,7 +58,7 @@ COPY core.py bridge.py voice.py transform.py world_data.py \
      campaignhandoff.py campaignplan.py dungeonladder.py director.py levelroute.py \
      preraid.py fireplan.py gearscore.py gearupgrades.py pvpgear.py equipscore.py \
      runtimeline.py runreport.py runstory.py places.py commandwords.py orderrecord.py \
-     vclient.py guildgear.py gearrouting.py gearroutingexec.py \
+     vclient.py guildgear.py gearrouting.py gearroutingexec.py gearroutingread.py \
      situation.py standstill.py deathloop.py restsupply.py vision.py llmmode.py llmpool.py jev_movement.py jev_family_intent.py jev_outcomes.py leadcmd.py strategybook.py \
      realmroller.py realmroller_world.py realmroller_plan.py realmroller_act.py \
      zones.json entrances.json shapes.json \
