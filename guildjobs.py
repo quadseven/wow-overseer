@@ -62,7 +62,8 @@ own tables named by its id.
 WHERE MATERIALS GO. Herbs, ore, stone, bars, leather, cloth, meat and elemental
 materials a member carries go by post, one stack a letter, to the family member
 of its guild who holds the craft that uses them (alchemy for herbs, and so on),
-the highest skill first; with nobody holding it, to the guild master, whose
+the highest skill first, and a maintenance member posts such a stack before
+its PvP, mail and level steps (crafter_post_first, #2397); with nobody holding it, to the guild master, whose
 guild-bank pass files them into the Materials tab (bankpolicy.py). An item
 reserved on its holder (`overseer_keep`, read through keep.py) is never posted
 or sold.
@@ -90,8 +91,8 @@ its skill value. Any other crafting trade craft.py covers is cast the same
 way from what the member carries (2026-10-05). One member in five, never a
 tailor, takes Alchemy beside Herbalism (`choose_alchemists`): those are the
 alchemists guildcorps posts for the raid's potions, and before them nobody
-outside the family ever started the trade. It keeps the materials its
-next casts eat instead of posting them, and posts the rest as before. The
+outside the family ever started the trade. It keeps one batch of the
+materials its next casts eat (craft_keep, #2397) and posts the rest. The
 trainer rows are `walk-to-trainer skill:` and the casts are `cast` rows:
 what a player does, paid for at a trainer.
 
@@ -1744,6 +1745,45 @@ def craft_entries(member) -> frozenset:
     return frozenset(out)
 
 
+def craft_keep(member) -> dict:
+    """entry -> how many of it this member keeps for one batch of its own casts.
+
+    One batch is CRAFT_BATCH casts of each open recipe (#2397): on the dev realm
+    on 2026-11-13 a First Aid member kept 26 stacks of Linen Cloth for Linen
+    Bandage while the family's crafters sat short of cloth. The rest posts.
+    """
+    out: dict = {}
+
+    def keep(entry, per_cast):
+        units = int(per_cast) * CRAFT_BATCH
+        out[int(entry)] = max(out.get(int(entry), 0), units)
+
+    for skill in CRAFT_SKILLS:
+        for recipe in _open_recipes(member, skill):
+            for r in craft_rhythm.GATHERED[recipe.spell_id]:
+                keep(r.entry, r.per_cast)
+            fed = craft_rhythm.BOLT_FED.get(recipe.spell_id)
+            if fed is not None:
+                keep(fed[1].entry, fed[1].per_cast)
+                for r in craft_rhythm.GATHERED.get(fed[0], ()):
+                    keep(r.entry, r.per_cast)
+    return out
+
+
+def _kept_for_casts(stacks, keep) -> frozenset:
+    """The guids of the stacks kept back for one batch: for each entry in
+    `keep`, the biggest stacks until they hold the batch."""
+    held: dict = {}
+    out = set()
+    for c in sorted(stacks, key=lambda c: (-int(c.count), int(c.guid))):
+        need = keep.get(int(c.entry), 0)
+        have = held.get(int(c.entry), 0)
+        if need and have < need:
+            held[int(c.entry)] = have + int(c.count)
+            out.add(int(c.guid))
+    return frozenset(out)
+
+
 def _craft_step(member):
     """Cast what its bags allow, to raise one of its crafting trades (#421).
 
@@ -3019,10 +3059,12 @@ def postable(member: Member, kept, crafting=False, bar=None) -> list:
     """
     if bar is None:
         bar = POST_MIN.get(member.role, POST_MIN[RAIDER])
-    # Materials its own next casts eat stay in the bags: a member that can
-    # still raise a crafting trade does not post away what it would cast.
-    eaten = (
-        craft_entries(member) if member.role == MAINTENANCE or crafting else frozenset()
+    # Materials its own next casts eat stay in the bags, one batch of them
+    # (craft_keep, #2397): a member that can still raise a crafting trade does
+    # not post away what it would cast, and posts the rest.
+    keep_for = craft_keep(member) if member.role == MAINTENANCE or crafting else {}
+    held = _kept_for_casts(
+        [c for c in member.carried if c.material and not c.junk], keep_for
     )
     out = [
         c
@@ -3030,7 +3072,7 @@ def postable(member: Member, kept, crafting=False, bar=None) -> list:
         if c.material
         and not c.junk
         and int(c.count) >= bar
-        and int(c.entry) not in eaten
+        and int(c.guid) not in held
         and not _kept(member.name, c, kept)
     ]
     out.sort(key=lambda c: (-int(c.count), int(c.entry), int(c.guid)))
@@ -3103,6 +3145,29 @@ def _post_step(member, crafters, master, kept, cap, crafting=False, bar=None):
         ),
     )
     return step, ""
+
+
+def crafter_post_first(m, crafters, master, kept, recent, cap, crafting=False):
+    """The post of what a family crafter of its guild can use now, for a
+    maintenance member (or a craft-focus member), ahead of PvP, the mail
+    collection and the level walk (#2397), or None.
+
+    On the dev realm on 2026-11-13 the family's crafters sat short of Linen,
+    Wool and Silk Cloth while the corps carried 1,500 linen and 270 silk: the
+    post was the last rung of a member's turn and was rarely reached. Stacks
+    only the guild bank takes do not start the early post, but ride along in
+    the same stand once it goes."""
+    if m.role != MAINTENANCE and not crafting:
+        return None
+    if not m.online or not m.alive or m.in_combat or not m.eligible:
+        return None
+    if _cooling(m, "post", recent):
+        return None
+    mine = crafters.get(m.guild, {})
+    if not any(recipient_for(c, mine, "")[0] for c in postable(m, kept, crafting)):
+        return None
+    step, _why = _post_step(m, crafters, master, kept, cap, crafting)
+    return step
 
 
 def loot_room_short(member) -> bool:
@@ -4383,6 +4448,9 @@ def _member_step(
     )
     if found is not None:
         return found
+    step = crafter_post_first(m, crafters, master, kept, recent, cap, crafting)
+    if step is not None:
+        return step, step.said, supply_note, gear_note
     step, cap_note = _tier_cap_first(m, pvp, pending, recent, cap)
     if step is not None:
         return step, step.said, supply_note, gear_note
