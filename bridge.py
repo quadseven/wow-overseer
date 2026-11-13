@@ -18630,7 +18630,7 @@ class Bridge(discord.Client):
         carriers = [
             m for m in members
             if m.online and not m.family and m.carried and m.name not in busy
-            and not classic.is_expansion_map(m.map_id)
+            and not classic.stands_outside(m)
         ]
         carriers.sort(key=lambda m: (-sum(int(h.count) for h in m.carried), m.name))
         chosen = [m.name for m in carriers[:CORPS_NEAR_READS]]
@@ -33189,7 +33189,7 @@ def _insert_fund_letter_row(letter) -> int:
 _CORPS_MEMBERS_SQL = (
     "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.race, "
     "c.level, c.money, (presence.name IS NOT NULL) AS online, c.map AS map_id, "
-    "lc.name AS master, "
+    "c.zone AS zone_id, lc.name AS master, "
     + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
