@@ -1,10 +1,10 @@
 """The shared retry gate (retrygate.py): a refused step is not asked at full rate.
 
-The rows below are shaped like the dev realm's command log on 2026-11-13: a
-quester refused a spawn walk every two minutes as standing outside the classic
-world, a maintenance member refused a shop walk 73 times in a row "in combat",
-a member refused a vendor walk for the other side's ground 46 times, and craft
-casts that came back "character is moving" or `unchanged`.
+The rows below are synthetic, shaped like the command log's own: a walk
+refused every two minutes as standing outside the classic world, a shop walk
+refused in combat many times in a row, a vendor walk refused for the other
+side's ground, and craft casts that came back "character is moving" or
+`unchanged`.
 """
 
 import json
@@ -53,8 +53,8 @@ class ReadingARow(unittest.TestCase):
         self.assertTrue(retrygate.permanent(retrygate.tried(crossing)))
 
     def test_the_classic_gate_is_permanent_though_the_module_says_retryable(self):
-        saelis = row("error", 1, OUTSIDE, retryable=True, transient=False)
-        self.assertTrue(retrygate.permanent(retrygate.tried(saelis)))
+        outside = row("error", 1, OUTSIDE, retryable=True, transient=False)
+        self.assertTrue(retrygate.permanent(retrygate.tried(outside)))
 
     def test_later_and_unknown_are_transient(self):
         moving = row("error", 1, "character is moving", retry="later")
@@ -105,7 +105,7 @@ class TransientRefusalsBackOff(unittest.TestCase):
         )
 
     def test_it_gives_up_after_n_and_holds_the_long_wait(self):
-        """Grunty's shop walk: refused "in combat" 73 times in a row."""
+        """A shop walk refused "in combat" 73 times in a row."""
         rows = [combat(1 + 3 * i) for i in range(73)]
         hold = retrygate.hold(rows)
         self.assertEqual(hold.kind, retrygate.GAVE_UP)
@@ -135,7 +135,7 @@ class TransientRefusalsBackOff(unittest.TestCase):
 
 
 class PermanentRefusalsStop(unittest.TestCase):
-    def test_saelis_is_asked_a_few_times_a_day_not_675(self):
+    def test_an_outside_walk_is_asked_a_few_times_a_day_not_hundreds(self):
         """#2400: one walk asked every two minutes for a day, all refused."""
         rows = [
             row("error", 2 * i, OUTSIDE, retryable=True, transient=False)
@@ -197,16 +197,16 @@ class TheWalkCap(unittest.TestCase):
 class TheLine(unittest.TestCase):
     def test_the_line_names_the_member_the_step_and_why(self):
         hold = retrygate.hold([other_side(4)])
-        line = hold.line("Mok", "guildjobs:room-walk:Mok")
-        self.assertIn("Mok", line)
-        self.assertIn("guildjobs:room-walk:Mok", line)
+        line = hold.line("Walker", "guildjobs:room-walk:Walker")
+        self.assertIn("Walker", line)
+        self.assertIn("guildjobs:room-walk:Walker", line)
         self.assertIn("other side's ground", line)
         self.assertIn("stops", line)
         self.assertEqual(
-            hold.key("Mok", "guildjobs:room-walk:Mok"),
+            hold.key("Walker", "guildjobs:room-walk:Walker"),
             (
-                "Mok",
-                "guildjobs:room-walk:Mok",
+                "Walker",
+                "guildjobs:room-walk:Walker",
                 retrygate.PERMANENT,
                 "the way to the nearest vendor crosses the other side's ground",
             ),
@@ -214,7 +214,7 @@ class TheLine(unittest.TestCase):
 
     def test_a_backoff_line_says_how_many_and_how_long(self):
         line = retrygate.hold([combat(1), combat(6)]).line(
-            "Grunty", "guildcorps:shop-walk:6260"
+            "Shopper", "guildcorps:shop-walk:6260"
         )
         self.assertIn("2 refusal(s) in a row", line)
         self.assertIn("in combat", line)

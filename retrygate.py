@@ -1,13 +1,11 @@
 """THE SHARED RETRY GATE: a refused step is not asked again at full rate.
 
-Measured on the dev realm in the 24 hours to 2026-11-13: a quester was refused
-the same spawn walk 667 times as standing outside the classic world, a
-maintenance member was refused a shop walk 73 times in a row "in combat",
-another a vendor walk 46 times for the other side's ground, and two members
-57 to 87 crossings each. Every planner had its own cooldown, and none of them
-read why the last ask failed, so a refusal that would come back the same was
-asked again every cycle. The repeats also spent the member's hourly far walk
-budget, so a walk that might have worked was refused at the cap.
+Every planner had its own cooldown, and none of them read why the last ask
+failed, so a refusal that would come back the same (a walk refused as outside
+the classic world, a shop walk refused in combat, a vendor walk across the
+other side's ground) was asked again every cycle, hundreds of times a day. The
+repeats also spent the member's hourly far walk budget, so a walk that might
+have worked was refused at the cap.
 
 Both step runners in the bridge (the guild jobs', which also runs the
 questers' steps, and the corps', which also runs the raid supply's) ask this
