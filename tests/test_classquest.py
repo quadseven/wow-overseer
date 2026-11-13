@@ -473,20 +473,23 @@ class ThePriority(unittest.TestCase):
             )
             for i in range(2 * guildjobs.CLASSQUEST_STEPS_PER_GUILD + 1)
         ]
-        still_owed = set(member.name for member in members)
+        never_offered = {member.name for member in members}
         recent = ()
         for _pass in range(3):
+            recent = tuple(
+                dataclasses.replace(row, age_minutes=row.age_minutes + 15)
+                for row in recent
+            )
             result = class_plan([], class_candidates=members, recent=recent)
             offered = {step.holder for step in class_steps(result)}
             self.assertTrue(offered)
             self.assertLessEqual(len(offered), guildjobs.CLASSQUEST_STEPS_PER_GUILD)
-            self.assertTrue(offered <= still_owed)
-            still_owed -= offered
+            never_offered -= offered
             recent += tuple(
-                guildjobs.Recent(name, classquest.ACTION, 1, status="ok")
+                guildjobs.Recent(name, classquest.ACTION, 0, status="error")
                 for name in offered
             )
-        self.assertFalse(still_owed)
+        self.assertFalse(never_offered)
 
     def test_it_comes_before_the_level_walk(self):
         # A level 20 warrior standing in a zone it has outgrown would be walked

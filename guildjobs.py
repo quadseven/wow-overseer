@@ -3759,7 +3759,7 @@ def plan(
     }
     far = classquest.FarSlots(far_slots) if far_slots is not None else None
     all_members = list(members) + list(class_candidates or ())
-    for m in _class_ordered(all_members, classes):
+    for m in _class_ordered(all_members, classes, recent):
         if m.role == UNASSIGNED and classes is not None:
             why = _plan_class_only_member(
                 m,
@@ -5726,15 +5726,41 @@ def class_priority(m) -> int:
     return 0 if raidroles.fits_seat(cls, m.tree, raidroles.SEAT_HEALER) else 1
 
 
-def _class_ordered(members, classes):
-    """The members in the order their steps are planned. With a class quest
-    book, the scarce far walk slots go first to class_priority 0, then by level,
-    highest first (the member nearest its next reward spell and the dungeons
-    that want it); the old order (role, guild, name) breaks every tie."""
+def _class_ordered(members, classes, recent=()):
+    """The members in the order their steps are planned. Unoffered or least
+    recently offered class steps go first so the per-guild cap cannot starve a
+    seat; class_priority and level settle ties. The one-day recent read bounds
+    the service history while preserving the old order when no class row exists."""
     ordered = _ordered_members(members)
     if classes is None:
         return ordered
-    return sorted(ordered, key=lambda m: (class_priority(m), -int(m.level or 0)))
+    last_offer = _last_class_offer_ages(recent)
+    return sorted(
+        ordered,
+        key=lambda m: (
+            _class_offer_order(m.name, last_offer),
+            class_priority(m),
+            -int(m.level or 0),
+        ),
+    )
+
+
+def _last_class_offer_ages(recent):
+    """The newest class action age per member from the bounded recent read."""
+    last_offer = {}
+    for row in recent or ():
+        if row.action not in (classquest.ACTION, classquest.CROSS_ACTION):
+            continue
+        age = max(0, int(row.age_minutes))
+        last_offer[row.name] = min(age, last_offer.get(row.name, age))
+    return last_offer
+
+
+def _class_offer_order(name, last_offer):
+    """Never offered seats first, then the seat whose last offer is oldest."""
+    if name not in last_offer:
+        return (0, 0)
+    return (1, -last_offer[name])
 
 
 def _far_class_walk(m, spot, cap) -> bool:
