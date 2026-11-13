@@ -172,6 +172,7 @@ import restsupply
 import raidrun
 import spirerun
 import raidsupply
+import reagentplan
 import recipebook
 import raidteams
 import readtimeout
@@ -9984,14 +9985,28 @@ class Bridge(discord.Client):
         # learn errand (guildjobs.recipes_due) buys it. An unread book is None
         # for everyone, which craft.holds does not judge.
         known = await asyncio.to_thread(_fetch_crafters_known, names)
+        chosen_by = {}
         for name in names:
             held = {entry: count for (who, entry), count in counts.items()
                     if who == name}
-            chosen = craft_rhythm.errand(name, skills.get(name, {}), held,
-                                         primaries.get(name), bags_wanted, floor,
-                                         known=known.get(name))
+            chosen_by[name] = craft_rhythm.errand(
+                name, skills.get(name, {}), held, primaries.get(name),
+                bags_wanted, floor, known=known.get(name))
+        # THE REAGENTS ARE PLANNED BEFORE THE ERRAND IS CALLED FED (#774).
+        # An errand with nothing in the bags casts nothing; the plan says
+        # where each short reagent comes from, and the bank and guild bank
+        # passes fetch what it names. The errand itself still stands: the
+        # vendor, auction and guildshare passes read it to know what to send.
+        plans = await asyncio.to_thread(
+            _plan_craft_reagents, names,
+            {name: chosen.spell for name, chosen in chosen_by.items()}, skills)
+        for name in names:
+            chosen = chosen_by[name]
             await asyncio.to_thread(_write_craft_errand, name, chosen.spell)
-            if chosen.spell:
+            plan = plans.get(name)
+            if chosen.spell and plan is not None and not plan.fed:
+                log.info("craft: %s", reagentplan.line(plan))
+            elif chosen.spell:
                 log.info("craft: %s aimed at %s spell %s - %s",
                          name, "smelt" if chosen.smelting else "recipe",
                          chosen.spell, chosen.why)
@@ -17168,7 +17183,8 @@ class Bridge(discord.Client):
                 walking.add(withdrawal.character)
                 continue
             if await asyncio.to_thread(
-                    _insert_guild, withdrawal.character, command, "guildbank-withdraw"):
+                    _insert_guild, withdrawal.character, command,
+                    getattr(withdrawal, "source", "guildbank-withdraw")):
                 fresh.append(withdrawal)
         if walking:
             log.info(
@@ -31020,7 +31036,13 @@ def _plan_guild_withdrawals(names: list) -> tuple:
     nothing, which leaves the vault as it was.
     """
     forecast = _bank_forecast(names)
-    if not any(d.action == bankforecast.SELL for d in forecast.decisions()):
+    selling = any(d.action == bankforecast.SELL for d in forecast.decisions())
+    # AND THE STACKS A CRAFTER'S OWN ERRAND IS SHORT OF (#774), taken by the
+    # crafter under its own source, so the house never lists them.
+    plans = _craft_plans_of(names)
+    crafting = any(s.source == reagentplan.GUILD_BANK
+                   for p in plans for s in p.shorts)
+    if not selling and not crafting:
         return ()
     try:
         free = _fetch_free_slots(names)
@@ -31030,8 +31052,18 @@ def _plan_guild_withdrawals(names: list) -> tuple:
         log.exception("guild bank: the withdraw rights could not be read; no "
                       "vault stack is taken out this pass")
         return ()
+    for_craft = ()
+    if crafting:
+        entries = sorted({s.reagent.entry for p in plans for s in p.shorts
+                          if s.source == reagentplan.GUILD_BANK})
+        for_craft, notes = reagentplan.vault_withdrawals(
+            plans, _fetch_vault_stacks(names, entries), takers)
+        for note in notes:
+            log.info("guild bank: %s", note)
+    if not selling:
+        return for_craft
     pending = frozenset(int(row["entry"]) for row in _fetch_withdrawn_for_sale(names))
-    return bankforecast.plan_withdrawals(forecast, takers, pending=pending)
+    return for_craft + bankforecast.plan_withdrawals(forecast, takers, pending=pending)
 
 
 def _clearance_sales(routes) -> tuple:
@@ -35567,6 +35599,8 @@ def _plan_bank(names: list) -> "bank.Plan":
         # WHAT THE GUILD ALREADY HOLDS PAST ITS TARGET NEVER GOES TO THE
         # GUILD VAULT (bankforecast); the holder's own bank takes it as before.
         over_target=_bank_forecast(names).over_target,
+        # A REAGENT THE CRAFTER'S OWN ERRAND IS SHORT OF COMES OUT (#774).
+        craft_wants=reagentplan.bank_wants(_craft_plans_of(names)),
     )
     # WHILE A CAMPAIGN WAITS, BAGS ARE KEPT AT RUN ROOM: a member short of
     # the resume floor puts its trade goods down, and nothing is fetched back
@@ -38264,6 +38298,113 @@ def _fetch_material_requests(names: list, *, tools=False) -> list:
 def _fetch_tool_requests(names: list) -> list:
     """Tool events use the same bounded event reader, never reagent routing."""
     return _fetch_material_requests(names, tools=True)
+
+
+# THE LAST REAGENT PLAN PER CRAFTER (#774), written by `_craft_once` and read
+# by the bank and guild bank passes, which fetch what it names. A restarted
+# bridge holds none until the next craft pass, which fetches nothing early.
+_CRAFT_PLANS: dict = {}
+
+
+def _craft_plans_of(names) -> list:
+    """The standing reagent plans of `names` (reagentplan.Plan)."""
+    return [_CRAFT_PLANS[n] for n in sorted(names or ()) if n in _CRAFT_PLANS]
+
+
+def _fetch_reagent_stock(pairs: list) -> dict:
+    """(name, entry) -> (bags, bank, mail) counts; one round trip per entry.
+
+    `_fetch_item_counts` sums every place an item can be, and DriveCraft
+    casts from the bags only, so a craft judged on that sum is judged fed
+    while its vials sit in the bank (#774). Slot geography is bank.py's.
+    """
+    if not pairs:
+        return {}
+    by_entry: dict = {}
+    for name, entry in pairs:
+        by_entry.setdefault(int(entry), []).append(name)
+    out: dict = {}
+    with _connect() as conn, conn.cursor() as cur:
+        for entry, names in by_entry.items():
+            marks = ",".join(["%s"] * len(names))
+            cur.execute(
+                "SELECT c.name AS name, COALESCE(SUM(CASE WHEN "  # noqa: S608 - placeholders from a COUNT, values still bound
+                "(ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) OR ci.bag IN "
+                "(SELECT bag.item FROM character_inventory bag WHERE bag.guid = ci.guid "
+                "AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22) "
+                "THEN ii.count ELSE 0 END), 0) AS bags, COALESCE(SUM(CASE WHEN "
+                "(ci.bag = 0 AND ci.slot BETWEEN 39 AND 66) OR ci.bag IN "
+                "(SELECT bag.item FROM character_inventory bag WHERE bag.guid = ci.guid "
+                "AND bag.bag = 0 AND bag.slot BETWEEN 67 AND 73) "
+                "THEN ii.count ELSE 0 END), 0) AS bank, COALESCE(SUM(CASE WHEN "
+                "mi.item_guid IS NOT NULL THEN ii.count ELSE 0 END), 0) AS mail "
+                "FROM characters c LEFT JOIN item_instance ii "
+                "ON ii.owner_guid = c.guid AND ii.itemEntry = %s "
+                "LEFT JOIN character_inventory ci ON ci.item = ii.guid "
+                "LEFT JOIN mail_items mi ON mi.item_guid = ii.guid "
+                f"WHERE c.name IN ({marks}) GROUP BY c.name",
+                (entry, *names),
+            )
+            for row in cur.fetchall():
+                out[(row["name"], entry)] = (
+                    int(row["bags"] or 0), int(row["bank"] or 0), int(row["mail"] or 0))
+    return out
+
+
+def _fetch_vault_stacks(names: list, entries: list) -> dict:
+    """name -> the stacks of `entries` in that member's guild vault."""
+    if not names or not entries:
+        return {}
+    out: dict = {}
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT c.name AS name, ii.guid AS guid, ii.itemEntry AS entry, "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "ii.count AS count, gbi.TabId AS tab FROM characters c "
+            "JOIN guild_member gm ON gm.guid = c.guid "
+            "JOIN guild_bank_item gbi ON gbi.guildid = gm.guildid "
+            "JOIN item_instance ii ON ii.guid = gbi.item_guid "
+            "WHERE c.name IN (%s) AND ii.itemEntry IN (%s)" % (
+                ",".join(["%s"] * len(names)), ",".join(["%s"] * len(entries))),
+            [*names, *[int(e) for e in entries]],
+        )
+        for row in cur.fetchall():
+            out.setdefault(row["name"], []).append(bankforecast.Stack(
+                guid=int(row["guid"]), entry=int(row["entry"]),
+                count=int(row["count"] or 0), tab=int(row["tab"] or 0)))
+    return out
+
+
+def _plan_craft_reagents(names: list, spells: dict, skills: dict) -> dict:
+    """name -> reagentplan.Plan for each errand in `spells`; blocking.
+
+    A read that fails plans nothing, which leaves every errand as it was
+    before the plan existed; it is logged, never passed off as an answer.
+    """
+    wanted = {name: reagentplan.reagents(spell) for name, spell in spells.items()
+              if spell}
+    pairs = sorted({(name, r.entry) for name, eaten in wanted.items() for r in eaten})
+    if not pairs:
+        return {}
+    entries = sorted({entry for _name, entry in pairs})
+    try:
+        places = _fetch_reagent_stock(pairs)
+        vault = _fetch_vault_stacks(sorted(wanted), entries)
+        kinds = _fetch_item_kinds(entries)
+    except pymysql.err.MySQLError:
+        log.exception("craft: the reagents could not be read; no errand is planned")
+        return {}
+    plans = {}
+    for name, eaten in wanted.items():
+        stock = {}
+        for r in eaten:
+            bags, banked, mail = places.get((name, r.entry), (0, 0, 0))
+            in_vault = sum(st.count for st in vault.get(name, ()) if st.entry == r.entry)
+            stock[r.entry] = reagentplan.Stock(bags, banked, mail, in_vault)
+        plans[name] = reagentplan.plan(name, spells[name], stock, kinds, skills)
+    for name in names:
+        _CRAFT_PLANS.pop(name, None)
+    _CRAFT_PLANS.update(plans)
+    return plans
 
 
 def _fetch_item_kinds(entries: list) -> dict:

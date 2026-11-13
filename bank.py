@@ -594,6 +594,17 @@ class Storage:
     # target (bankforecast.Forecast.over_target). The guild bank takes no
     # more of it: the vault keeps what the guild will eat, not the overflow.
     over_target: dict = field(default_factory=dict)
+    # holder -> item entries that holder's own craft errand is short of in the
+    # bags and its bank holds (reagentplan.bank_wants, #774). A banked stack
+    # of one comes out; a carried one is never put down by the keeper rule.
+    craft_wants: dict = field(default_factory=dict)
+
+
+def _craft_wanted(holding, storage):
+    """Whether the holder's craft errand eats this stack (reagentplan)."""
+    if storage is None:
+        return False
+    return holding.template_id in storage.craft_wants.get(holding.holder, ())
 
 
 def _trades_and_skills(held, worked_by):
@@ -662,6 +673,7 @@ def storage_from(
     policy=None,
     spare=frozenset(),
     over_target=None,
+    craft_wants=None,
 ):
     """The Storage this family is today, from what the bridge already reads.
 
@@ -692,6 +704,10 @@ def storage_from(
         guild_tab_free=tabs,
         spare=frozenset(spare or ()),
         over_target=dict(over_target or {}),
+        craft_wants={
+            str(name): frozenset(int(e) for e in entries)
+            for name, entries in (craft_wants or {}).items()
+        },
     )
 
 
@@ -799,6 +815,9 @@ def storage_reason(holding, storage, surplus=frozenset()):
     if holding.guid in storage.routed and not disposition.recipe(item):
         # On its way to another member (the tidy pass): never put back down.
         return ""
+    if _craft_wanted(holding, storage):
+        # The holder's own craft errand is short of it (#774).
+        return ""
     settled = _class_reason(holding, storage)
     if settled is not None:
         return settled
@@ -876,6 +895,8 @@ def _deposit_candidates(member, family, totals, storage):
     routed = storage.routed if storage else {}
     for holding in member.carried:
         if holding.guid in routed and not disposition.recipe(holding.item):
+            continue
+        if _craft_wanted(holding, storage):
             continue
         if holding.guid in chosen or holding.container_slots > 0:
             # An empty spare bag belongs in somebody's empty bag position
@@ -1053,6 +1074,10 @@ def _wanted_back(holding, member, family, totals, storage):
         return "%s is for %s" % (holding.item.name, storage.routed[holding.guid])
     if holding.guid in storage.spare:
         return "%s is a spare copy, sold from the bags" % holding.item.name
+    if _craft_wanted(holding, storage):
+        return "%s's craft errand is short of it in the bags (reagentplan)" % (
+            member.name
+        )
     if storage_reason(holding, storage):
         return ""
     if disposition.recipe(holding.item) and _learnable(holding, storage):
