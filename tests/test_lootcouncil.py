@@ -515,7 +515,11 @@ class TheDecision(unittest.TestCase):
         self.assertTrue(d.reason.startswith("Jev agreed (0.30)"))
 
     def test_a_confident_nobody_names_nobody(self):
-        d = lootcouncil.decide(council(), outcome(lootcouncil.NOBODY, 0.95), rule())
+        # Everybody offered can use it, so nobody is a greed roll among users.
+        users = json.dumps([CANDIDATES[0], CANDIDATES[3]])
+        d = lootcouncil.decide(
+            council(candidates=users), outcome(lootcouncil.NOBODY, 0.95), rule()
+        )
         self.assertEqual((d.recipient, d.decided_by), ("", jev.JEV))
 
     def test_shadow_never_acts(self):
@@ -834,6 +838,131 @@ class WhatThePagesShow(unittest.TestCase):
         line = payload["stories"][0]["line"]
         self.assertIn("from Lucifron by the loot council.", line)
         self.assertIn("Loot council: Jev (0.88)", line)
+
+
+# Kang the Decapitator, a two-handed axe, from Twilight Emissary in Blackrock
+# Depths (a synthetic fixture of the case): it upgraded nobody in a party of
+# five level 60s, so everybody greeded and the priest won it. The
+# warrior and the paladin could swing it; the priest, the rogue and the mage
+# could not. The copy was traded on and sold to a vendor.
+KANG = [
+    dict(
+        CANDIDATES[0],
+        comparison="not_better",
+        gain=-40.0,
+        score=120.0,
+        upgrade_percent=0,
+        item_level_gain=-8,
+    ),
+    dict(
+        CANDIDATES[3],
+        name="Grog",
+        comparison="not_better",
+        gain=-30.0,
+        score=140.0,
+        upgrade_percent=0,
+        item_level_gain=-6,
+    ),
+    dict(CANDIDATES[2], why="no two-handed axe proficiency"),
+    dict(
+        CANDIDATES[2],
+        name="Bork",
+        role="melee",
+        spec="Combat",
+        **{"class": "Rogue"},
+        why="no two-handed axe proficiency",
+    ),
+    dict(
+        CANDIDATES[2],
+        name="Og",
+        role="caster",
+        spec="Frost",
+        **{"class": "Mage"},
+        why="no two-handed axe proficiency",
+    ),
+]
+
+
+LEATHER = {
+    "name": "Fixture Leather Jerkin",
+    "kind": "Leather",
+    "armor": 180,
+    "stats": ["+15 Agility", "+10 Stamina"],
+}
+
+
+def kang(candidates=KANG, kind="roll", **kw):
+    return council(
+        kind=kind,
+        source="Twilight Emissary",
+        item_entry=2291,
+        item_name="Kang the Decapitator",
+        candidates=json.dumps(candidates),
+        heuristic="",
+        heuristic_why="nobody it upgrades",
+        **kw,
+    )
+
+
+class UsersBeforeGreed(unittest.TestCase):
+    """A member who can use a drop outranks a greed roll by one who cannot:
+    a non-user never takes an item a user is present for."""
+
+    def test_the_unasked_decision_gives_it_to_a_user(self):
+        d = lootcouncil.skipped(kang())
+        self.assertEqual(d.recipient, "Grog")
+        self.assertEqual(d.decided_by, jev.HEURISTIC)
+        self.assertIn("nobody it upgrades", d.reason)
+        self.assertIn("Grog can use it", d.reason)
+        self.assertIn("rather than a greed roll", d.reason)
+
+    def test_a_confident_nobody_still_goes_to_a_user(self):
+        d = lootcouncil.decide(kang(), outcome(lootcouncil.NOBODY, 0.95), rule())
+        self.assertEqual(d.recipient, "Grog")
+        self.assertEqual(d.decided_by, jev.HEURISTIC)
+        self.assertEqual(d.judgment.acted, jev.HEURISTIC)
+
+    def test_answer_with_nobody_to_ask_still_names_a_user(self):
+        client = FakeClient("Grug", 0.99)
+        d = asyncio.run(lootcouncil.answer(client, kang(), lambda e: None, rule()))
+        self.assertEqual(client.asked, [])
+        self.assertEqual(d.recipient, "Grog")
+
+    def test_the_family_comes_before_a_guild_raider(self):
+        raider = dict(KANG[1], name="Raider", family=False, score=500.0)
+        d = lootcouncil.skipped(kang(candidates=[*KANG, raider]))
+        self.assertEqual(d.recipient, "Grog")
+
+    def test_when_everybody_can_use_it_the_greed_roll_stands(self):
+        d = lootcouncil.skipped(kang(candidates=KANG[:2]))
+        self.assertEqual(d.recipient, "")
+
+    def test_when_nobody_can_use_it_the_greed_roll_stands(self):
+        d = lootcouncil.skipped(kang(candidates=KANG[2:]))
+        self.assertEqual(d.recipient, "")
+
+    def test_a_master_loot_drop_goes_to_a_user_not_the_master_looter(self):
+        d = lootcouncil.skipped(kang(kind="master"))
+        self.assertEqual(d.recipient, "Grog")
+
+    def test_an_upgrade_pick_is_untouched(self):
+        d = lootcouncil.skipped(council())
+        self.assertEqual(d.recipient, "Grug")
+
+    def test_armor_nobody_fits_keeps_the_greed_roll(self):
+        # A leather piece with a warrior, a priest and a mage: the warrior can
+        # equip it, but it is armor below his class, so no rule hands it over.
+        d = lootcouncil.skipped(kang(candidates=[KANG[0], KANG[2], KANG[4]]), LEATHER)
+        self.assertEqual(d.recipient, "")
+
+    def test_armor_goes_to_a_user_it_fits(self):
+        rogue = dict(KANG[3], wearable=True, score=50.0, why="leather")
+        d = lootcouncil.skipped(kang(candidates=[KANG[0], KANG[2], rogue]), LEATHER)
+        self.assertEqual(d.recipient, "Bork")
+
+    def test_a_weapon_has_no_armor_fit_to_gate_on(self):
+        d = lootcouncil.skipped(kang(), {"name": "Kang the Decapitator", "kind": "Axe"})
+        self.assertEqual(d.recipient, "Grog")
 
 
 class TheBridgeWiring(unittest.TestCase):

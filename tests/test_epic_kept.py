@@ -26,6 +26,7 @@ from _stub_modules import PYMYSQL, fresh_import
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import bag_pressure  # noqa: E402
+import equipscore  # noqa: E402
 import guildcorps  # noqa: E402
 import itemplan_vendor as vendor  # noqa: E402
 
@@ -159,6 +160,203 @@ class EpicKeptTest(unittest.TestCase):
         )
 
 
+FLEETFOOT_GUID = 91300001
+
+
+def boe_rare(**kw):
+    """Fleetfoot Greaves, a bind-on-equip mail rare the families sold, in the
+    shape the bridge's facts read returns."""
+    base = epic(
+        name="Fleetfoot Greaves",
+        item_guid=FLEETFOOT_GUID,
+        entry=9476,
+        quality=3,
+        required_level=43,
+        item_class=4,
+        subclass=3,  # mail
+        inventory_type=8,  # feet
+        bonding=2,
+        holder_class=PRIEST,
+    )
+    base.update(kw)
+    return base
+
+
+def judge(answer):
+    """An upgrade judge that answers `answer` and records what it was asked."""
+    asked = []
+
+    def ask(row):
+        asked.append(row["item_guid"])
+        return answer
+
+    ask.asked = asked
+    return ask
+
+
+class RareKeptTest(unittest.TestCase):
+    """A bind-on-equip rare a guild member can wear and would wear over what
+    they wear now is kept for routing (#2389); the judge is the caller's."""
+
+    def test_a_boe_rare_that_is_an_upgrade_is_kept(self):
+        self.assertTrue(
+            bag_pressure.epic_kept(boe_rare(), EVERY_CLASS, upgrade=judge(("Zrog",)))
+        )
+
+    def test_a_boe_rare_nobody_would_wear_is_not_kept(self):
+        self.assertFalse(
+            bag_pressure.epic_kept(boe_rare(), EVERY_CLASS, upgrade=judge(()))
+        )
+
+    def test_an_unread_judge_keeps_it(self):
+        self.assertTrue(
+            bag_pressure.epic_kept(boe_rare(), EVERY_CLASS, upgrade=judge(None))
+        )
+
+    def test_a_soulbound_rare_keeps_todays_behaviour(self):
+        for row in (boe_rare(bonding=1), boe_rare(instance_flags=1)):
+            with self.subTest(bonding=row["bonding"], flags=row["instance_flags"]):
+                ask = judge(("Zrog",))
+                self.assertFalse(bag_pressure.epic_kept(row, EVERY_CLASS, upgrade=ask))
+                self.assertEqual(ask.asked, [])
+
+    def test_a_rare_no_guild_class_can_wear_is_not_asked_about(self):
+        ask = judge(("Zrog",))
+        self.assertFalse(
+            bag_pressure.epic_kept(boe_rare(), {MAGE, PRIEST, ROGUE}, upgrade=ask)
+        )
+        self.assertEqual(ask.asked, [])
+
+    def test_a_rare_above_the_cap_or_not_gear_is_not_kept(self):
+        for row in (boe_rare(required_level=61), boe_rare(item_class=7)):
+            self.assertFalse(
+                bag_pressure.epic_kept(row, EVERY_CLASS, upgrade=judge(("Zrog",)))
+            )
+
+    def test_without_a_judge_a_rare_is_not_this_rule(self):
+        self.assertFalse(bag_pressure.epic_kept(boe_rare(), EVERY_CLASS))
+
+    def test_below_rare_is_never_asked(self):
+        ask = judge(("Zrog",))
+        self.assertFalse(
+            bag_pressure.epic_kept(boe_rare(quality=2), EVERY_CLASS, upgrade=ask)
+        )
+        self.assertEqual(ask.asked, [])
+
+    def test_an_epic_is_kept_without_asking_the_judge(self):
+        ask = judge(())
+        self.assertTrue(bag_pressure.epic_kept(epic(), EVERY_CLASS, upgrade=ask))
+        self.assertEqual(ask.asked, [])
+
+    def test_the_rare_kept_line_names_who_would_wear_it(self):
+        self.assertEqual(
+            bag_pressure.epic_kept_line(boe_rare(), "Ugga", ("Zrog", "Oz")),
+            "kept Fleetfoot Greaves: a bind-on-equip rare that is an upgrade for "
+            "Zrog, Oz; it stays in Ugga's bags until gear routing places it",
+        )
+
+
+# equipscore's row shapes, as the bridge's scored-gear and wearer reads return
+# them (tests/test_gearrouting.py builds the same).
+HUMAN = 1
+SHAMAN_SKILLS = "54,413,414,415,433"
+AGI, STA = 3, 7
+
+
+def scored(name, inv, *, holder, slot=None, level=40, req=35, stats=(), **kw):
+    row = dict(
+        holder=holder,
+        equipment_slot=slot,
+        item_guid=kw.pop("item_guid", 1),
+        entry=kw.pop("entry", 1),
+        name=name,
+        quality=3,
+        item_level=level,
+        required_level=req,
+        item_class=4,
+        item_subclass=3,
+        inventory_type=inv,
+        allowable_class=-1,
+        allowable_race=-1,
+        required_skill=0,
+        required_skill_rank=0,
+        required_spell=0,
+        required_reputation=0,
+        max_count=0,
+        item_flags=0,
+        armor=kw.pop("armor", 0),
+        block=0,
+        dmg_min1=0,
+        dmg_max1=0,
+        delay=0,
+        random_property_id=0,
+        enchantments="",
+    )
+    for n, (kind, amount) in enumerate(stats, start=1):
+        row["stat_type%d" % n] = kind
+        row["stat_value%d" % n] = amount
+    row.update(kw)
+    return row
+
+
+def shaman(name, level=45):
+    return dict(
+        name=name,
+        class_id=SHAMAN,
+        level=level,
+        race=HUMAN,
+        talent_spells="",
+        target_tree="Enhancement",
+        skills=SHAMAN_SKILLS,
+    )
+
+
+GREAVES = scored(
+    "Fleetfoot Greaves",
+    8,
+    holder="Ugga",
+    item_guid=FLEETFOOT_GUID,
+    entry=9476,
+    level=48,
+    req=43,
+    stats=((AGI, 12), (STA, 8)),
+    armor=180,
+)
+BETTER = dict(level=60, req=55, stats=((AGI, 30), (STA, 20)), armor=300)
+ANTIQUE = dict(level=20, req=15, stats=((STA, 2),), armor=60)
+
+
+def worn_boots(holder, **kw):
+    return scored("Worn Boots", 8, holder=holder, slot=7, item_guid=5, **kw)
+
+
+class WantedByTest(unittest.TestCase):
+    """`equipscore.wanted_by`: who the equip judge would put a piece on."""
+
+    def test_a_member_in_antique_boots_wants_it(self):
+        wearers = [shaman("Zrog"), shaman("Oz")]
+        worn = [worn_boots("Zrog", **ANTIQUE), worn_boots("Oz", **BETTER)]
+        self.assertEqual(equipscore.wanted_by(GREAVES, wearers, worn), ("Zrog",))
+
+    def test_nobody_wants_it_when_everybody_wears_better(self):
+        wearers = [shaman("Oz")]
+        worn = [worn_boots("Oz", **BETTER)]
+        self.assertEqual(equipscore.wanted_by(GREAVES, wearers, worn), ())
+
+    def test_a_member_below_its_level_does_not_want_it_yet(self):
+        wearers = [shaman("Zrog", level=30)]
+        worn = [worn_boots("Zrog", **ANTIQUE)]
+        self.assertEqual(equipscore.wanted_by(GREAVES, wearers, worn), ())
+
+    def test_carried_rows_are_not_worn(self):
+        wearers = [shaman("Zrog")]
+        rows = [
+            worn_boots("Zrog", **ANTIQUE),
+            dict(GREAVES, holder="Zrog", item_guid=9),
+        ]
+        self.assertEqual(equipscore.wanted_by(GREAVES, wearers, rows), ("Zrog",))
+
+
 def import_bridge():
     discord = types.ModuleType("discord")
     discord.Client = object
@@ -210,6 +408,7 @@ class WriterGateTest(unittest.TestCase):
         self.sql: list = []
         self.lines: list = []
         self.facts: dict = {}
+        self.wanted: dict = {}
         bridge = self.bridge
         fake_log = types.SimpleNamespace(
             info=lambda msg, *a: self.lines.append(msg % a if a else msg),
@@ -228,6 +427,11 @@ class WriterGateTest(unittest.TestCase):
                 ],
             ),
             mock.patch.object(bridge, "_guild_classes", return_value=EVERY_CLASS),
+            mock.patch.object(
+                bridge,
+                "_rare_wanted_by",
+                side_effect=lambda holder, row: self.wanted.get(row["item_guid"], ()),
+            ),
             mock.patch.object(bridge, "_held_as_follower", return_value=False),
             mock.patch.object(
                 bridge, "_KEEP", types.SimpleNamespace(blocks=lambda h, c: False)
@@ -260,6 +464,36 @@ class WriterGateTest(unittest.TestCase):
             "it stays in Zork's bags until gear routing places it",
             self.lines,
         )
+
+    def test_the_sale_pass_refuses_a_boe_rare_a_guild_member_would_wear(self):
+        self.facts[FLEETFOOT_GUID] = boe_rare()
+        self.wanted[FLEETFOOT_GUID] = ("Zrog",)
+        wrote = self.bridge._insert_sell(self.candidate("Ugga", FLEETFOOT_GUID, 3))
+        self.assertFalse(wrote)
+        self.assertEqual(self.inserts(), [])
+        self.assertIn(
+            "kept Fleetfoot Greaves: a bind-on-equip rare that is an upgrade for "
+            "Zrog; it stays in Ugga's bags until gear routing places it",
+            self.lines,
+        )
+
+    def test_the_sale_pass_sells_a_boe_rare_nobody_would_wear(self):
+        self.facts[FLEETFOOT_GUID] = boe_rare()
+        wrote = self.bridge._insert_sell(self.candidate("Ugga", FLEETFOOT_GUID, 3))
+        self.assertTrue(wrote)
+        self.assertEqual(len(self.inserts()), 1)
+
+    def test_the_sale_pass_sells_a_soulbound_rare_as_today(self):
+        self.facts[FLEETFOOT_GUID] = boe_rare(instance_flags=1)
+        self.wanted[FLEETFOOT_GUID] = ("Zrog",)
+        wrote = self.bridge._insert_sell(self.candidate("Ugga", FLEETFOOT_GUID, 3))
+        self.assertTrue(wrote)
+
+    def test_a_failed_upgrade_read_keeps_the_rare(self):
+        self.facts[FLEETFOOT_GUID] = boe_rare()
+        self.wanted[FLEETFOOT_GUID] = None
+        wrote = self.bridge._insert_sell(self.candidate("Ugga", FLEETFOOT_GUID, 3))
+        self.assertFalse(wrote)
 
     def test_the_sale_pass_still_sells_shriveled_heart(self):
         self.facts[HEART_GUID] = shriveled_heart()
