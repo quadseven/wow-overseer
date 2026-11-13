@@ -80,7 +80,8 @@ REVISIT_SECONDS = 15 * 60
 
 # A node counts as a source when the material drops from it at least this
 # often. Herbs and ores drop their own material at 100; a chest that sometimes
-# holds a herb (lock 57, no gathering skill at all) is not a field.
+# holds a herb (lock 57, no gathering skill at all) is not a field. Applied in
+# the bridge's survey (`bridge._FARM_ITEM_NODE_SQL`), where the loot table is.
 MIN_DROP_CHANCE = 50.0
 
 # A node gives skill until the gatherer is this far past its band (grey).
@@ -316,9 +317,8 @@ def _next_hop(rows, origin, visited, now):
     )
 
 
-def decide(order, reads) -> Step:
-    """The one thing to do this pass for a family on `order`."""
-    what = _what(order)
+def _ending(order, reads, what):
+    """The END step for a met count, a spent time box or too many deaths."""
     elapsed = max(0.0, float(reads.now) - float(order.started))
     if elapsed >= float(order.time_box):
         return Step(
@@ -338,74 +338,39 @@ def decide(order, reads) -> Step:
             "%d deaths since the farm began, at or past %d, so the "
             "family stops farming %s" % (len(reads.deaths), TOTAL_DEATHS, what),
         )
+    return None
 
-    full = gatheraim.bags_block_gathering(reads.free_slots)
-    if full:
-        return Step(TOWN, full)
 
-    open_, refused = usable(order, reads.spawns, reads.skills)
-    if refused:
-        return Step(END, refused)
-    if not reads.leader_at or reads.leader_at.get("map_id") is None:
-        return Step(
-            WAIT,
-            "the leader has no fresh snapshot row, so nobody "
-            "can say where the family stands",
-        )
+def _judge(zone, top, struck, ceiling):
+    """Why a field may not be farmed, or ""."""
+    if zone in struck:
+        return "zone %d struck off after %d deaths" % (zone, struck[zone])
+    if top is None:
+        return "zone %d not measured" % zone
+    if ceiling and int(top) > ceiling:
+        return "zone %d tops out at %d" % (zone, int(top))
+    return ""
 
+
+def safe_fields(candidates, reads):
+    """([(yards, zone, nodes, nearest spawn, top level)], [reasons refused])."""
     struck = struck_zones(reads.deaths)
-    here = int(reads.leader_at["map_id"])
-    candidates = fields(open_, reads.leader_at)
-    if not candidates:
-        maps = sorted({int(s.map_id) for s in open_})
-        return Step(
-            END,
-            "every %s node the family can open is on map %s and the "
-            "family stands on map %d; a farm walk never leaves its map"
-            % (what, ", ".join(str(m) for m in maps), here),
-        )
-
     lowest = min((int(v) for v in (reads.levels or {}).values()), default=0)
     ceiling = lowest + LEVEL_MARGIN if lowest else 0
     safe, said = [], []
     for far, zone, nodes, near in candidates:
         top = (reads.zone_levels or {}).get(zone)
-        if zone in struck:
-            said.append("zone %d struck off after %d deaths" % (zone, struck[zone]))
-        elif top is None:
-            said.append("zone %d not measured" % zone)
-        elif ceiling and int(top) > ceiling:
-            said.append("zone %d tops out at %d" % (zone, int(top)))
+        why = _judge(zone, top, struck, ceiling)
+        if why:
+            said.append(why)
         else:
             safe.append((far, zone, nodes, near, int(top)))
-    if not safe:
-        return Step(
-            END,
-            "no field of %s on map %d is safe for a family whose "
-            "weakest member is %d (%s)" % (what, here, lowest, "; ".join(said)),
-        )
+    return safe, said
 
-    standing = int(reads.leader_at.get("zone_id") or 0)
-    in_field = next((row for row in safe if row[1] == standing), None)
-    walking = reads.walking
-    if walking is not None and any(int(walking.zone_id) == row[1] for row in safe):
-        return Step(
-            WAIT,
-            "the leader is still walking to the %s spawn at "
-            "%.1f,%.1f in zone %d" % (what, walking.x, walking.y, int(walking.zone_id)),
-            zone_id=int(walking.zone_id),
-        )
-    if in_field is None:
-        far, zone, nodes, near, top = safe[0]
-        return Step(
-            WALK,
-            "walking the family %d yards to zone %d, which holds %d "
-            "%s node(s) somebody can open and tops out at level %d"
-            % (int(far), zone, nodes, what, top),
-            spawn=near,
-            zone_id=zone,
-        )
 
+def _hop(open_, reads, what, standing):
+    """The HOP step inside the field, or a WAIT when every node is in reach."""
+    here = int(reads.leader_at["map_id"])
     origin = (
         float(reads.leader_at.get("pos_x") or 0.0),
         float(reads.leader_at.get("pos_y") or 0.0),
@@ -426,3 +391,71 @@ def decide(order, reads) -> Step:
         spawn=hop,
         zone_id=standing,
     )
+
+
+def _where(open_, reads, what):
+    """WALK to the nearest safe field, WAIT on a walk in flight, or HOP."""
+    here = int(reads.leader_at["map_id"])
+    candidates = fields(open_, reads.leader_at)
+    if not candidates:
+        maps = sorted({int(s.map_id) for s in open_})
+        return Step(
+            END,
+            "every %s node the family can open is on map %s and the "
+            "family stands on map %d; a farm walk never leaves its map"
+            % (what, ", ".join(str(m) for m in maps), here),
+        )
+    safe, said = safe_fields(candidates, reads)
+    if not safe:
+        lowest = min((int(v) for v in (reads.levels or {}).values()), default=0)
+        return Step(
+            END,
+            "no field of %s on map %d is safe for a family whose "
+            "weakest member is %d (%s)" % (what, here, lowest, "; ".join(said)),
+        )
+    zones = {row[1] for row in safe}
+    walking = reads.walking
+    if walking is not None and int(walking.zone_id) in zones:
+        return Step(
+            WAIT,
+            "the leader is still walking to the %s spawn at "
+            "%.1f,%.1f in zone %d" % (what, walking.x, walking.y, int(walking.zone_id)),
+            zone_id=int(walking.zone_id),
+        )
+    standing = int(reads.leader_at.get("zone_id") or 0)
+    if standing in zones:
+        return _hop(open_, reads, what, standing)
+    far, zone, nodes, near, top = safe[0]
+    return Step(
+        WALK,
+        "walking the family %d yards to zone %d, which holds %d "
+        "%s node(s) somebody can open and tops out at level %d"
+        % (int(far), zone, nodes, what, top),
+        spawn=near,
+        zone_id=zone,
+    )
+
+
+def decide(order, reads) -> Step:
+    """The one thing to do this pass for a family on `order`.
+
+    In order: the job's own ends, full bags, nobody able to open the
+    material, no snapshot to measure from, then where to stand.
+    """
+    what = _what(order)
+    ended = _ending(order, reads, what)
+    if ended is not None:
+        return ended
+    full = gatheraim.bags_block_gathering(reads.free_slots)
+    if full:
+        return Step(TOWN, full)
+    open_, refused = usable(order, reads.spawns, reads.skills)
+    if refused:
+        return Step(END, refused)
+    if not reads.leader_at or reads.leader_at.get("map_id") is None:
+        return Step(
+            WAIT,
+            "the leader has no fresh snapshot row, so nobody "
+            "can say where the family stands",
+        )
+    return _where(open_, reads, what)

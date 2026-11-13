@@ -286,6 +286,8 @@ class TheBridgeDrivesIt(unittest.TestCase):
         cls.source = (ROOT / "bridge.py").read_text(encoding="utf-8")
         start = cls.source.index("    async def _farm_once(self, cohort=None)")
         cls.body = cls.source[start : cls.source.index("    async def _drive_skill(")]
+        start = cls.source.index("def _farm_order(job: str")
+        cls.body += cls.source[start : cls.source.index("def _farm_reads(names")]
 
     def test_the_loop_is_a_pass(self):
         self.assertEqual(self.source.count('_Pass("_farm_loop"),'), 1)
@@ -336,6 +338,10 @@ class TheBridgeDrivesIt(unittest.TestCase):
         start = self.source.index("    async def _drive_skill(self, row: dict, action)")
         skill = self.source[start : start + 6000]
         self.assertIn("if jobs.is_farm_job(standing):", skill)
+
+    def test_the_starting_count_outlives_a_restart(self):
+        self.assertIn("_memo_read, FARM_MEMO_KIND", self.body)
+        self.assertIn("_memo_upsert, FARM_MEMO_KIND, subject", self.body)
 
     def test_the_image_ships_the_module(self):
         self.assertIn("farmjob.py", (ROOT / "Dockerfile").read_text(encoding="utf-8"))
