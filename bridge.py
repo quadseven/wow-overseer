@@ -22783,7 +22783,8 @@ class Bridge(discord.Client):
             pug_pass = (_guild_pug_plan(social, facts, mates, held, doors, pug_all, bounds)
                         if pugs_on else None)
             social = _with_class_asks(social, quest_pass)
-            death_pass = _death_ask_pass(facts, mates, held)
+            death_pass = _death_ask_pass(facts, mates, held,
+                                         spoken={r.member for r in social.replies})
             if death_pass.posts or death_pass.expire or death_pass.replies:
                 social = dataclasses.replace(
                     social,
@@ -29428,7 +29429,8 @@ def _fetch_guild_social_facts(bounds) -> dict:
     return facts
 
 
-def _death_ask_pass(facts: dict, mates: list, held: dict) -> guildsocial.Pass:
+def _death_ask_pass(facts: dict, mates: list, held: dict,
+                    spoken=frozenset()) -> guildsocial.Pass:
     """The death-loop ask pass for one social pass (deathask, #2277):
     posts, replies and expires, merged into the social pass beside the
     class quest asks and written through the same writer. A looper held for another
@@ -29440,7 +29442,7 @@ def _death_ask_pass(facts: dict, mates: list, held: dict) -> guildsocial.Pass:
         return deathask.expire_pass(facts["asks"], loops, facts["now"])
     return deathask.plan_pass(
         loops, mates, facts["asks"], facts["now"], held=held,
-        answers=facts.get("answers") or ())
+        answers=facts.get("answers") or (), spoken=spoken)
 
 
 def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,
