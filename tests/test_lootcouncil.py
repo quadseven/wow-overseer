@@ -841,8 +841,8 @@ class WhatThePagesShow(unittest.TestCase):
 
 
 # Kang the Decapitator, a two-handed axe, from Twilight Emissary in Blackrock
-# Depths on the dev realm, 2026-11-12: it upgraded nobody in the family's
-# party of five level 60s, so everybody greeded and the priest won it. The
+# Depths (a synthetic fixture of the case): it upgraded nobody in a party of
+# five level 60s, so everybody greeded and the priest won it. The
 # warrior and the paladin could swing it; the priest, the rogue and the mage
 # could not. The copy was traded on and sold to a vendor.
 KANG = [
@@ -881,6 +881,14 @@ KANG = [
         why="no two-handed axe proficiency",
     ),
 ]
+
+
+LEATHER = {
+    "name": "Fixture Leather Jerkin",
+    "kind": "Leather",
+    "armor": 180,
+    "stats": ["+15 Agility", "+10 Stamina"],
+}
 
 
 def kang(candidates=KANG, kind="roll", **kw):
@@ -940,6 +948,21 @@ class UsersBeforeGreed(unittest.TestCase):
     def test_an_upgrade_pick_is_untouched(self):
         d = lootcouncil.skipped(council())
         self.assertEqual(d.recipient, "Grug")
+
+    def test_armor_nobody_fits_keeps_the_greed_roll(self):
+        # A leather piece with a warrior, a priest and a mage: the warrior can
+        # equip it, but it is armor below his class, so no rule hands it over.
+        d = lootcouncil.skipped(kang(candidates=[KANG[0], KANG[2], KANG[4]]), LEATHER)
+        self.assertEqual(d.recipient, "")
+
+    def test_armor_goes_to_a_user_it_fits(self):
+        rogue = dict(KANG[3], wearable=True, score=50.0, why="leather")
+        d = lootcouncil.skipped(kang(candidates=[KANG[0], KANG[2], rogue]), LEATHER)
+        self.assertEqual(d.recipient, "Bork")
+
+    def test_a_weapon_has_no_armor_fit_to_gate_on(self):
+        d = lootcouncil.skipped(kang(), {"name": "Kang the Decapitator", "kind": "Axe"})
+        self.assertEqual(d.recipient, "Grog")
 
 
 class TheBridgeWiring(unittest.TestCase):
