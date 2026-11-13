@@ -31995,8 +31995,9 @@ def _family_enchanters(holder: str) -> dict:
 
 def _disenchant_instead(holder: str, item_guid: int):
     """Row id written instead of a sale, 0 when the item already has its
-    route row (no sale either), or None to let the sale stand. Fail open to
-    the sale: a read that fails changes nothing about today's behaviour."""
+    route row (no sale either), or None to let the sale stand. A database or
+    connection fault falls back to the sale, changing nothing about today's
+    behaviour; a programming error raises rather than hiding as one."""
     if not DISENCHANT_ROUTE:
         return None
     try:
@@ -32036,7 +32037,7 @@ def _disenchant_instead(holder: str, item_guid: int):
                  holder, "disenchants" if kind == bag_pressure.DISENCHANT
                  else "gives", command, enchanter)
         return row_id
-    except Exception:
+    except (pymysql.err.MySQLError, OSError):
         log.exception("disenchant route: cannot route %s's item %d, so it is "
                       "sold as before", holder, int(item_guid))
         return None

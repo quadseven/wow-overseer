@@ -115,7 +115,8 @@ class TheSaleAsksTheRouteLast(unittest.TestCase):
     def test_the_route_has_its_own_switch_and_fails_open_to_the_sale(self):
         body = function_text("_disenchant_instead")
         self.assertIn("if not DISENCHANT_ROUTE:", body)
-        self.assertIn("except Exception:", body)
+        # A database or connection fault falls back to the sale; a bug raises.
+        self.assertIn("except (pymysql.err.MySQLError, OSError):", body)
         self.assertIn(
             'DISENCHANT_ROUTE = os.environ.get("DISENCHANT_ROUTE", "0") == "1"', BRIDGE
         )
