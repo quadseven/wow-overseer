@@ -1,15 +1,15 @@
 """The bridge's gear verdict for a roster member agrees with the module's gear
 drive (#2381).
 
-The case is the dev realm's, read on 2026-11-13: Grug, a level 60 Protection
-warrior on the roster, wears Archaedic Stone of Strength (random property
+The case is a synthetic fixture: Grug (the suite's usual fixture warrior), a
+level 60 Protection warrior on the roster, wears Archaedic Stone of Strength (random property
 219, +13 Strength) and Naglering (+10 Stamina, a defense spell and a thorns
 spell), and carries Emperor's Seal of the Whale (random property 1039, +11
 Spirit and +11 Stamina on top of its +9 Stamina) and a second Naglering. The
 item plan's item-level verdict said wear the Seal, so it was carried for
 ever; the module's drive (GearScore against the worse worn ring) keeps the
-Stone. The rows below are the live rows, in the shape the bridge's
-scored-gear read returns.
+Stone. The rows below are fixture rows in the shape the bridge's scored-gear
+read returns.
 """
 
 from __future__ import annotations

@@ -989,6 +989,43 @@ def _drive_compare(new: tuple, old: tuple) -> str:
     return DRIVE_WEAR if clears else DRIVE_UNDECIDED
 
 
+def _drive_slot_refusal(row: dict, by_slot: dict, off_hand: bool) -> str:
+    """The refusals that turn on what is already worn: an off-hand under a
+    two-hander, and a unique-equipped piece worn already."""
+    main = by_slot.get(MAIN_HAND_SLOT)
+    if off_hand and main is not None and _inv(main) == TWO_HAND:
+        return "a two-hander is held in both hands"
+    if _unique(row) and any(
+        _int(r.get("entry")) == _int(row.get("entry")) for r in by_slot.values()
+    ):
+        return "unique-equipped and already worn"
+    return ""
+
+
+def _drive_incumbent(inv: int, slot: int, by_slot: dict, scored) -> tuple:
+    """The score the piece must beat: the slot's wearer, plus the off-hand for
+    a two-hander, or the worse of the pair for a ring or trinket."""
+    old = scored(by_slot.get(slot))
+    if inv == TWO_HAND:
+        off = scored(by_slot.get(OFF_HAND_SLOT))
+        return (old[0] + off[0], old[1] or off[1])
+    if slot in (EQUIP_SLOT_FINGER, EQUIP_SLOT_TRINKET):
+        other = scored(by_slot.get(slot + 1))
+        if other[0] < old[0]:
+            return other
+    return old
+
+
+def _drive_why(row: dict, new: tuple, old: tuple) -> str:
+    return "%s %.1f%s against %.1f%s" % (
+        row.get("name") or "it",
+        new[0],
+        " (a floor)" if new[1] else "",
+        old[0],
+        " (a floor)" if old[1] else "",
+    )
+
+
 def drive_verdict(row: dict, wearer: Wearer, worn, book=None) -> tuple:
     """(verdict, why) for one carried piece by the module's gear drive rule:
     DRIVE_WEAR, DRIVE_KEEP, DRIVE_UNDECIDED (the numbers cannot settle it) or
@@ -1001,34 +1038,16 @@ def drive_verdict(row: dict, wearer: Wearer, worn, book=None) -> tuple:
     refused = _drive_refusal(row, wearer, off_hand)
     if refused or slot is None:
         return DRIVE_REFUSED, refused or "no slot it can go in"
-    main = by_slot.get(MAIN_HAND_SLOT)
-    if off_hand and main is not None and _inv(main) == TWO_HAND:
-        return DRIVE_REFUSED, "a two-hander is held in both hands"
-    if _unique(row) and any(
-        _int(r.get("entry")) == _int(row.get("entry")) for r in by_slot.values()
-    ):
-        return DRIVE_REFUSED, "unique-equipped and already worn"
+    refused = _drive_slot_refusal(row, by_slot, off_hand)
+    if refused:
+        return DRIVE_REFUSED, refused
 
     def scored(r):
         return drive_score(r, wearer.role, book) if r is not None else (0.0, False)
 
-    old = scored(by_slot.get(slot))
-    if inv == TWO_HAND:
-        off = scored(by_slot.get(OFF_HAND_SLOT))
-        old = (old[0] + off[0], old[1] or off[1])
-    elif slot in (EQUIP_SLOT_FINGER, EQUIP_SLOT_TRINKET):
-        other = scored(by_slot.get(slot + 1))
-        if other[0] < old[0]:
-            old = other
+    old = _drive_incumbent(inv, slot, by_slot, scored)
     new = drive_score(row, wearer.role, book)
-    verdict = _drive_compare(new, old)
-    return verdict, "%s %.1f%s against %.1f%s" % (
-        row.get("name") or "it",
-        new[0],
-        " (a floor)" if new[1] else "",
-        old[0],
-        " (a floor)" if old[1] else "",
-    )
+    return _drive_compare(new, old), _drive_why(row, new, old)
 
 
 def drive_verdicts(wearer_rows, gear_rows, names, book=None) -> dict:
