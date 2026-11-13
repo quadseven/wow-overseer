@@ -21,6 +21,11 @@ forced.
 A dry run walks the same decisions and calls nothing: one step per report
 route, in report order, with status WOULD_WRITE where a live run writes.
 
+THE DRY-RUN READ (`world_from_rows`, `dry_run_view`) is the only caller so
+far: it builds the World from rows the site already reads and returns what
+WOULD be written, one line per route. Letters are not considered (no
+mailbox read exists outside the bridge), so a dry run names trades only.
+
 PURE: no MySQL, no clock. The caller reads the world and supplies `insert`.
 """
 
@@ -161,3 +166,101 @@ def execute(report, world: World, insert, dry_run: bool = False) -> Result:
     return Result(
         steps=tuple(steps[i] for i in range(len(report.routes))), dry_run=dry_run
     )
+
+
+# --- the read-only dry run -------------------------------------------------------
+
+# The fresh snapshot rows a trade is judged on (map, instance, position).
+POSITIONS_SQL = (
+    "SELECT name, map_id, instance_id, zone_id, pos_x, pos_y "
+    "FROM overseer_snapshot "
+    "WHERE name IN ({holes}) AND updated_at > NOW() - INTERVAL 60 SECOND"
+)
+
+# Free bag slots per member, in the shape `gear.general_bag_room` reads: the
+# backpack, then each worn bag with its kind and the items in it.
+ROOM_SQL = (
+    "SELECT c.name AS name, 0 AS bag_slot, 16 AS size, 1 AS bag_class, "
+    "0 AS bag_subclass, "
+    "(SELECT COUNT(*) FROM character_inventory ci WHERE ci.guid = c.guid "
+    "AND ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) AS used "
+    "FROM characters c WHERE c.name IN ({holes}) "
+    "UNION ALL "
+    "SELECT c.name AS name, b.slot AS bag_slot, "
+    "COALESCE(it.ContainerSlots, 0) AS size, it.class AS bag_class, "
+    "it.subclass AS bag_subclass, "
+    "(SELECT COUNT(*) FROM character_inventory ci WHERE ci.guid = c.guid "
+    "AND ci.bag = b.item) AS used "
+    "FROM characters c "
+    "JOIN character_inventory b ON b.guid = c.guid AND b.bag = 0 "
+    "AND b.slot BETWEEN 19 AND 22 "
+    "LEFT JOIN item_instance ii ON ii.guid = b.item "
+    "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN ({holes})"
+)
+
+
+def members_to_read(report, wearer_names) -> list:
+    """Every name the world must know: the wearers AND the holders, whose
+    bags the pieces sit in. The guild bank is a label, not a member."""
+    names = {str(n) for n in wearer_names or () if n}
+    names |= {r.holder for r in report.routes}
+    names.discard(gearrouting.BANK_HOLDER)
+    names.discard("")
+    return sorted(names)
+
+
+def world_from_rows(gear_rows, position_rows, room_rows, family=()) -> World:
+    """The World from rows a read supplies. Pure.
+
+    `gear_rows` are the routing read's scored-gear rows: a row with no worn
+    slot is carried. `position_rows` are fresh snapshot rows; a member
+    missing from them is not in the world. `room_rows` are ROOM_SQL's.
+    """
+    carried = {
+        (str(r.get("holder") or ""), int(r.get("item_guid") or 0))
+        for r in gear_rows or ()
+        if not gearrouting._is_worn(r)
+    }
+    positions = {str(r["name"]): dict(r) for r in position_rows or () if r.get("name")}
+    room = {
+        name: free
+        for name, (free, _total) in bag_pressure.general_bag_room(room_rows).items()
+    }
+    return World(
+        carried=frozenset(carried),
+        positions=positions,
+        at_mailbox=(),
+        free_slots=room,
+        family=frozenset(family or ()),
+    )
+
+
+def dry_run_view(report, world: World) -> dict:
+    """What a live run would do with `report`, as data. Writes nothing."""
+    result = execute(report, world, lambda _row: 0, dry_run=True)
+    steps = []
+    for step in result.steps:
+        r = step.route
+        steps.append(
+            {
+                "holder": r.holder,
+                "wearer": r.wearer,
+                "guid": r.guid,
+                "item": r.item,
+                "status": step.status,
+                "verb": step.row.verb if step.row is not None else "",
+                "why": step.why,
+            }
+        )
+    return {
+        "dry_run": True,
+        "would_write": sum(1 for s in steps if s["status"] == WOULD_WRITE),
+        "steps": steps,
+        "lines": ["%s: %s" % (step.status, step.said) for step in result.steps],
+        "notes": [
+            "dry run: nothing was written",
+            "letters were not considered (no mailbox read here), so only "
+            "trades between members standing together are listed",
+        ],
+    }

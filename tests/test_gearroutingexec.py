@@ -177,5 +177,104 @@ class FromTheRealReport(unittest.TestCase):
         self.assertEqual(rec.rows, [])
 
 
+class TheDryRunRead(unittest.TestCase):
+    """The read-only view the site serves: what WOULD be written."""
+
+    def _rows(self):
+        report = gr.Report(routes=(route(guid=501), route(guid=502)))
+        gear = [
+            {"holder": "Oz", "item_guid": 501, "equipment_slot": None},
+            {"holder": "Oz", "item_guid": 777, "equipment_slot": 4},
+        ]
+        positions = [
+            {"name": "Oz", "map_id": 0, "pos_x": 1.0, "pos_y": 1.0, "instance_id": 0},
+            {"name": "Grug", "map_id": 0, "pos_x": 2.0, "pos_y": 2.0, "instance_id": 0},
+        ]
+        room = [
+            {
+                "name": "Grug",
+                "bag_slot": 0,
+                "size": 16,
+                "bag_class": 1,
+                "bag_subclass": 0,
+                "used": 10,
+            },
+        ]
+        return report, gear, positions, room
+
+    def test_the_world_carries_bag_items_only(self):
+        _report, gear, positions, room = self._rows()
+        w = gx.world_from_rows(gear, positions, room, family=("Grug",))
+        self.assertEqual(set(w.carried), {("Oz", 501)})
+        self.assertEqual(set(w.positions), {"Oz", "Grug"})
+        self.assertGreater(w.free_slots["Grug"], 0)
+        self.assertEqual(w.at_mailbox, ())
+
+    def test_the_view_has_one_line_per_route_with_status_and_why(self):
+        report, gear, positions, room = self._rows()
+        w = gx.world_from_rows(gear, positions, room, family=("Grug",))
+        view = gx.dry_run_view(report, w)
+        self.assertTrue(view["dry_run"])
+        self.assertEqual(len(view["steps"]), 2)
+        first, second = view["steps"]
+        self.assertEqual(first["status"], gx.WOULD_WRITE)
+        self.assertEqual(first["verb"], "trade")
+        self.assertEqual((first["holder"], first["wearer"]), ("Oz", "Grug"))
+        self.assertEqual(second["status"], gx.STALE)
+        self.assertTrue(second["why"])
+        self.assertEqual(len(view["lines"]), 2)
+
+    def test_the_view_never_calls_a_writer(self):
+        report, gear, positions, room = self._rows()
+        w = gx.world_from_rows(gear, positions, room)
+        calls = []
+        orig = gx.execute
+        gx.execute = lambda *a, **k: calls.append(k.get("dry_run")) or orig(*a, **k)
+        try:
+            gx.dry_run_view(report, w)
+        finally:
+            gx.execute = orig
+        self.assertEqual(calls, [True])
+
+
+class TheSiteServesTheDryRun(unittest.TestCase):
+    def test_the_routing_read_carries_the_execution_view(self):
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parents[1] / "map_server.py").read_text(
+            encoding="utf-8"
+        )
+        body = src[src.index("def _fetch_guild_routing") :]
+        body = body[: body.index("\ndef _fetch_armory")]
+        self.assertIn("gearroutingexec.dry_run_view(", body)
+        self.assertNotIn("INSERT INTO", body.upper())
+        self.assertNotIn("overseer_command", body)
+
+
+class TheWorldIsWhole(unittest.TestCase):
+    def test_members_to_read_include_holders_who_are_not_wearers(self):
+        report = gr.Report(
+            routes=(
+                route(holder="Bork", wearer="Grug"),
+                route(holder=gr.BANK_HOLDER, wearer="Zug", guid=502),
+            )
+        )
+        got = gx.members_to_read(report, ["Grug", "Zug"])
+        self.assertEqual(got, ["Bork", "Grug", "Zug"])
+
+    def test_the_bank_is_never_a_member_to_read(self):
+        report = gr.Report(routes=(route(holder=gr.BANK_HOLDER),))
+        self.assertNotIn(gr.BANK_HOLDER, gx.members_to_read(report, []))
+
+    def test_the_site_reads_holders_too(self):
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parents[1] / "map_server.py").read_text(
+            encoding="utf-8"
+        )
+        body = src[src.index("def _fetch_guild_routing") :]
+        self.assertIn("gearroutingexec.members_to_read(", body)
+
+
 if __name__ == "__main__":
     unittest.main()
