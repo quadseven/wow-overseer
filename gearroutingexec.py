@@ -200,6 +200,16 @@ ROOM_SQL = (
 )
 
 
+def members_to_read(report, wearer_names) -> list:
+    """Every name the world must know: the wearers AND the holders, whose
+    bags the pieces sit in. The guild bank is a label, not a member."""
+    names = {str(n) for n in wearer_names or () if n}
+    names |= {r.holder for r in report.routes}
+    names.discard(gearrouting.BANK_HOLDER)
+    names.discard("")
+    return sorted(names)
+
+
 def world_from_rows(gear_rows, position_rows, room_rows, family=()) -> World:
     """The World from rows a read supplies. Pure.
 

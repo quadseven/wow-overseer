@@ -177,10 +177,6 @@ class FromTheRealReport(unittest.TestCase):
         self.assertEqual(rec.rows, [])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TheDryRunRead(unittest.TestCase):
     """The read-only view the site serves: what WOULD be written."""
 
@@ -253,3 +249,32 @@ class TheSiteServesTheDryRun(unittest.TestCase):
         self.assertIn("gearroutingexec.dry_run_view(", body)
         self.assertNotIn("INSERT INTO", body.upper())
         self.assertNotIn("overseer_command", body)
+
+
+class TheWorldIsWhole(unittest.TestCase):
+    def test_members_to_read_include_holders_who_are_not_wearers(self):
+        report = gr.Report(
+            routes=(
+                route(holder="Bork", wearer="Grug"),
+                route(holder=gr.BANK_HOLDER, wearer="Zug", guid=502),
+            )
+        )
+        got = gx.members_to_read(report, ["Grug", "Zug"])
+        self.assertEqual(got, ["Bork", "Grug", "Zug"])
+
+    def test_the_bank_is_never_a_member_to_read(self):
+        report = gr.Report(routes=(route(holder=gr.BANK_HOLDER),))
+        self.assertNotIn(gr.BANK_HOLDER, gx.members_to_read(report, []))
+
+    def test_the_site_reads_holders_too(self):
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parents[1] / "map_server.py").read_text(
+            encoding="utf-8"
+        )
+        body = src[src.index("def _fetch_guild_routing") :]
+        self.assertIn("gearroutingexec.members_to_read(", body)
+
+
+if __name__ == "__main__":
+    unittest.main()

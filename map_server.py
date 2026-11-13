@@ -1525,7 +1525,9 @@ def _fetch_guild_routing() -> dict:
     payload["lines"] = gearrouting.lines(report)
     # What an executor WOULD write for these routes: read-only, nothing is
     # inserted anywhere (gearroutingexec.py).
-    who = sorted({str(r.get("name") or "") for r in wearers} - {""})
+    who = gearroutingexec.members_to_read(
+        report, [str(r.get("name") or "") for r in wearers]
+    )
     if who and report.routes:
         marks = ", ".join(["%s"] * len(who))
         with realmread.Session(_connect) as rd:
