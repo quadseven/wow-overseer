@@ -783,6 +783,31 @@ def _split_gear(gear_rows, wearers, keep_names) -> tuple:
     return worn, carried
 
 
+def wanted_by(row: dict, wearer_rows, worn_rows, book=None) -> tuple:
+    """The members whose own judge (`choose`) would put `row` on over what
+    they wear now, in name order (#2389).
+
+    `wearer_rows` are member rows for `wearer_from_row`; `worn_rows` are the
+    members' gear rows (`holder`, `equipment_slot`), of which only the worn
+    ones count. `row` is judged as the only piece each member carries, so the
+    answer is "an upgrade over what is worn", not "the best piece anywhere".
+    """
+    wearers = _wearers(
+        wearer_rows, [str(r.get("name") or "") for r in wearer_rows or ()], ()
+    )
+    worn: dict = {}
+    for gear_row in worn_rows or ():
+        if _is_worn(gear_row):
+            worn.setdefault(str(gear_row.get("holder") or ""), []).append(gear_row)
+    guid = _int(row.get("item_guid"))
+    out = []
+    for name in sorted(wearers):
+        picks = choose(wearers[name], worn.get(name, ()), [row], book)
+        if any(e.guid == guid for e in picks):
+            out.append(name)
+    return tuple(out)
+
+
 def plan(
     legacy, wearer_rows, gear_rows, names, keep_names=(), tanks=(), book=None
 ) -> Plan:

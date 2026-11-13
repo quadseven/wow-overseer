@@ -31651,6 +31651,9 @@ def _sell_attempts(hours: int) -> list:
 # the sale and the destroy verb (mod-overseer#614), and `disenchant` is gated
 # for when a writer for it exists. `bag_pressure.epic_kept` is the rule; this
 # reads its facts, and every writer of such a row asks `_epic_blocks` first.
+# The same gate keeps a bind-on-equip rare that a member of the guilds would
+# wear over what they wear now (#2389): its facts come back with the epics',
+# and `_rare_wanted_by` is the upgrade judge the rule asks.
 _EPIC_GATED_KINDS = frozenset({"sell", "disenchant"})
 
 _EPIC_FACTS_SQL = (
@@ -31659,7 +31662,7 @@ _EPIC_FACTS_SQL = (
     "it.class AS item_class, it.subclass AS subclass, "
     "it.InventoryType AS inventory_type, it.AllowableClass AS allowable_class, "
     "it.ItemLevel AS item_level, ii.flags AS instance_flags, "
-    "c.class AS holder_class "
+    "it.bonding AS bonding, c.class AS holder_class "
     "FROM item_instance ii "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
     "LEFT JOIN characters c ON c.guid = ii.owner_guid "
@@ -31673,28 +31676,34 @@ _EPIC_ROSTER_SQL = (
     "SELECT name FROM overseer_roster WHERE family IS NOT NULL AND family <> ''"
 )
 _EPIC_GUILD_CLASSES_SQL = (
-    "SELECT DISTINCT c.class AS class_id FROM characters c "
+    "SELECT DISTINCT c.name AS name, c.class AS class_id FROM characters c "
     "WHERE c.name IN ({holes}) OR c.guid IN (SELECT gm.guid FROM guild_member gm "
     "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
     "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes})))"
 )
 _EPIC_CLASSES_SECONDS = 300.0
 _EPIC_CLASSES_READ: dict = {}
+_RARE_WEARERS_READ: dict = {}
 
 
 def _fetch_epic_facts(guids) -> list:
-    """The epic-or-better items among `guids`, with what `epic_kept` reads."""
+    """The rare-or-better items among `guids`, with what `epic_kept` reads."""
     ids = [int(guid) for guid in guids]
     if not ids:
         return []
     sql = _EPIC_FACTS_SQL.format(holes=",".join(["%s"] * len(ids)))
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(sql, (*ids, bag_pressure.EPIC_QUALITY))
+        cur.execute(sql, (*ids, bag_pressure.RARE_QUALITY))
         return [dict(row) for row in cur.fetchall()]
 
 
 def _fetch_guild_classes() -> frozenset:
     """Every class among the roster families and their guilds' members."""
+    return frozenset(int(row["class_id"]) for row in _fetch_guild_members())
+
+
+def _fetch_guild_members() -> list:
+    """(name, class_id) rows for the roster families and their guilds' members."""
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(_EPIC_ROSTER_SQL)
@@ -31705,11 +31714,11 @@ def _fetch_guild_classes() -> frozenset:
             names = set()
         names |= set(_protected_guids().values())
         if not names:
-            return frozenset()
+            return []
         marks = ",".join(["%s"] * len(names))
         ordered = sorted(names)
         cur.execute(_EPIC_GUILD_CLASSES_SQL.format(holes=marks), (*ordered, *ordered))
-        return frozenset(int(row["class_id"]) for row in cur.fetchall())
+        return [dict(row) for row in cur.fetchall()]
 
 
 def _guild_classes() -> frozenset:
@@ -31727,10 +31736,44 @@ def _guild_classes() -> frozenset:
     return _EPIC_CLASSES_READ.get("classes", frozenset())
 
 
+def _guild_wearers() -> tuple:
+    """(wearer rows, worn rows) for every member of the roster families and
+    their guilds, read at most every five minutes. A failed read raises, and
+    the caller keeps the rare."""
+    at = time.monotonic()
+    read_at = _RARE_WEARERS_READ.get("at")
+    if read_at is None or at - read_at >= _EPIC_CLASSES_SECONDS:
+        names = sorted({str(row["name"]) for row in _fetch_guild_members()})
+        worn = [row for row in _fetch_scored_gear(names)
+                if row.get("equipment_slot") is not None]
+        _RARE_WEARERS_READ.update(at=at, wearers=_fetch_wearers(names), worn=worn)
+    return _RARE_WEARERS_READ["wearers"], _RARE_WEARERS_READ["worn"]
+
+
+def _rare_wanted_by(holder: str, row: dict):
+    """The guild members whose equip judge would put this rare on over what
+    they wear now (#2389), or None when that cannot be read, which keeps it."""
+    try:
+        guid = int(row.get("item_guid") or 0)
+        piece = [r for r in _fetch_scored_gear([holder])
+                 if int(r.get("item_guid") or 0) == guid]
+        if not piece:
+            return None
+        wearers, worn = _guild_wearers()
+        if not wearers:
+            return None
+        return equipscore.wanted_by(piece[0], wearers, worn, _jev_item_book())
+    except Exception:
+        log.exception("rare keep: cannot judge %s for the guilds, so it is kept",
+                      row.get("name") or row.get("item_guid"))
+        return None
+
+
 def _epic_blocks(holder: str, command: str) -> bool:
     """Does this sell, destroy or disenchant row name an epic a guild member
-    could wear (#2385)? Logs one line per refusal. Fail closed: a failed read
-    of the item writes nothing."""
+    could wear (#2385), or a bind-on-equip rare a guild member would wear
+    (#2389)? Logs one line per refusal. Fail closed: a failed read of the item
+    writes nothing."""
     guids, _entries = keep.items_named(command)
     if not guids:
         return False
@@ -31742,8 +31785,14 @@ def _epic_blocks(holder: str, command: str) -> bool:
         return True
     classes = _guild_classes() if rows else frozenset()
     for row in rows:
-        if bag_pressure.epic_kept(row, classes):
-            log.info("%s", bag_pressure.epic_kept_line(row, holder))
+        asked: dict = {}
+
+        def judge(item, asked=asked):
+            asked["by"] = _rare_wanted_by(holder, item)
+            return asked["by"]
+
+        if bag_pressure.epic_kept(row, classes, upgrade=judge):
+            log.info("%s", bag_pressure.epic_kept_line(row, holder, asked.get("by")))
             return True
     return False
 
