@@ -7,7 +7,8 @@
 // Reads: /api/v2/guild (header, tiles, class quests, deaths, the path),
 // /api/v2/series (guild XP per hour), /api/guildruns, /api/v2/dungeonups, /api/runtimeline, and for the
 // chronicle /api/v2/chronicle, /api/loot, /api/recap, /api/council and
-// /api/guildchat, and the announcer's /api/v2/achievements. Nothing here writes.
+// /api/guildchat, the announcer's /api/v2/achievements and /api/v2/journeys
+// (epic journeys, ?who= keeps one character's). Nothing here writes.
 
 import {
   html, raw, pageHead, sectionHead, tabs, kpi, sparkline, histogram, notMeasured,
@@ -22,6 +23,7 @@ import { roster as rosterModel } from "../models/roster.js";
 import { items as achItems, notable } from "../models/achievements.js";
 import { feedRow as achRow, CSS as ACH_CSS } from "./_achievements.js";
 import { clipLink, clipLinks, shelf as clipShelf, bindShelf as bindClips, CSS as CLIPS_CSS, READ as CLIPS_READ } from "./_clips.js";
+import { section as journeysSection, bind as bindJourneys, read as journeysRead, CSS as JOURNEYS_CSS } from "./_journeys.js";
 
 const TABS = [["progress", "Progress"], ["runs", "Runs"], ["chronicle", "Chronicle"]];
 const FEED_KINDS = [
@@ -61,12 +63,13 @@ const P = {
   council: () => "/api/council",
   chat: (ctx) => "/api/guildchat?guild=" + encodeURIComponent(gname(ctx)),
   achievements: (ctx) => "/api/v2/achievements?guild=" + slug(ctx),
+  journeys: (ctx) => journeysRead(key(ctx)),
 };
 
 const TAB_READS = {
   progress: ["guild", "series", "roster"],
   runs: ["guild", "runs", "ups", "timeline", "seats"],
-  chronicle: ["guild", "runs", "chronicle", "loot", "clips", "recap", "council", "chat", "achievements"],
+  chronicle: ["guild", "runs", "chronicle", "loot", "clips", "recap", "council", "chat", "achievements", "journeys"],
 };
 
 // Per-device view state that is not worth a URL: the feed's page length and
@@ -491,13 +494,14 @@ function chronicleTab(ctx) {
 </div>
 <section class="section">${sectionHead("05", "The council: last sitting, what it carried, where next")}${sittings(ctx)}</section>
 <section class="section">${sectionHead("06", "Guild chat: asks and answers")}${chat(ctx)}</section>
-<section class="section">${sectionHead("07", "Clips", "Saved moments, newest first")}${clipShelf(peek(P.clips()))}</section>`;
+<section class="section">${sectionHead("07", "Clips", "Saved moments, newest first")}${clipShelf(peek(P.clips()))}</section>
+<section class="section">${sectionHead("08", "Epic journeys", "Each epic copy: drop, roll, council, hand-overs, ending")}${journeysSection(peek(P.journeys(ctx)), ctx.query.who || "")}</section>`;
 }
 
 // ---- the view -------------------------------------------------------------------
 
 export default {
-  css: ["views/guild.css", ACH_CSS, CLIPS_CSS],
+  css: ["views/guild.css", ACH_CSS, CLIPS_CSS, JOURNEYS_CSS],
   every: 30000,
   reads: (ctx) => (TAB_READS[ctx.params.tab] || TAB_READS.progress).map((k) => P[k](ctx)),
   title: (ctx) => gname(ctx) + (ctx.params.tab === "progress" ? "" : " " + ctx.params.tab),
@@ -517,6 +521,7 @@ export default {
   after(main, ctx) {
     bindRunCards(main, () => window.matchMedia("(max-width: 759.98px)").matches);
     bindClips(main);
+    bindJourneys(main);
     main.querySelectorAll("details[data-path]").forEach((d) => {
       d.addEventListener("toggle", () => {
         if (d.open) view.open.add(d.getAttribute("data-path"));

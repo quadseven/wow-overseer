@@ -1,0 +1,20 @@
+/* Epic journeys on a guild's Chronicle tab (views/_journeys.js).
+   Phone first: one column, every line wraps, and nothing is fixed in place,
+   so the guild switch (a sticky slot after the page, app.css) never holds
+   text under it once the reader scrolls to it. */
+.ej-list { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); }
+.ej-card { gap: 8px; min-width: 0; overflow-wrap: anywhere; }
+.ej-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.ej-head .item { min-width: 0; }
+.ej-end { flex: none; }
+.ej-flag { margin: 0; padding: 6px 8px; border-left: 3px solid var(--warn-line); color: var(--warn); }
+.ej-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ej-step { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; }
+.ej-text { min-width: 0; overflow-wrap: anywhere; }
+.ej-when { font-size: var(--fs-1); white-space: nowrap; }
+.ej-ending { margin: 0; font-weight: 500; }
+.ej-cands { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.ej-cand { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.ej-filter { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.ej-who { min-height: 44px; min-width: 0; max-width: 100%; font: inherit; }
+.ej-council summary, .ej-more summary { min-height: 44px; display: flex; align-items: center; }

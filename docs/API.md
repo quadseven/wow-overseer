@@ -338,6 +338,12 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Answers: the open problems, highest impact first.
 - Example: `overseer get /api/v2/health`
 
+## `GET /api/v2/journeys`
+
+- Query: `guild`, `name`
+- Answers: every epic item copy's journey: drop, roll, council, hand-overs, equips, ending.
+- Example: `overseer get /api/v2/journeys guild=cave`
+
 ## `GET /api/v2/operator`
 
 - Query: none
