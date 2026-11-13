@@ -329,6 +329,14 @@ class TheBridgeDrivesIt(unittest.TestCase):
         self.assertIn('if mode == "farm":', body)
         self.assertIn("return jobs.FARM_NAMES_NOTHING", body)
 
+    def test_jev_and_skill_goals_do_not_end_a_farm_early(self):
+        start = self.source.index("    async def _activity_for(self, key: str")
+        activity = self.source[start : start + 3000]
+        self.assertIn("if jobs.is_farm_job(job):", activity)
+        start = self.source.index("    async def _drive_skill(self, row: dict, action)")
+        skill = self.source[start : start + 6000]
+        self.assertIn("if jobs.is_farm_job(standing):", skill)
+
     def test_the_image_ships_the_module(self):
         self.assertIn("farmjob.py", (ROOT / "Dockerfile").read_text(encoding="utf-8"))
 

@@ -24962,6 +24962,13 @@ class Bridge(discord.Client):
             reads["goods"], reads["recipes"])
         can_gather, can_train = await self._activity_can(names, reads["free"], own)
         job = str(leader.get("job") or "").strip().lower()
+        if jobs.is_farm_job(job):
+            # A FARM ORDER ENDS ITSELF (#2417): its count, time box or deaths
+            # put the family back on the default job, and Jev is asked again
+            # from there. Asked mid-farm, an interlude would end it early.
+            log.info("activity: %s is farming on job=%s; it is not asked until "
+                     "the farm ends", campaignqueue._family(key), job)
+            return
         now = time.monotonic()
         if await self._activity_restore_job(key, job, now, names,
                                             str(leader.get("name") or "")):
@@ -25773,6 +25780,12 @@ class Bridge(discord.Client):
             log.info("goal: a skill goal waits - the family's campaign waits "
                      "in town on job=%s, and nobody leaves town for a field "
                      "until it goes in", jobs.TOWN_RUN)
+            return
+        # NOR WHILE IT FARMS (#2417): the farm order ends itself, and a goal
+        # writing its own job or gathering walk over it would end it early.
+        if jobs.is_farm_job(standing):
+            log.info("goal: a skill goal waits - the family is farming on "
+                     "job=%s until that order ends", standing)
             return
         # infra#3789. A GATHERED skill is answerable only with somewhere to
         # stand, and the survey that finds it is a database read - so it
