@@ -5127,6 +5127,7 @@ def _class_spot(move) -> Spot:
     chest = move.kind == classquest.USE and move.use.verb in (
         classquest.USE_OBJECT,
         classquest.USE_HERE,
+        classquest.CAST_MAINHAND,
     )
     # Scripted ground is a creature spawn even for a use beside a focus
     # (classquest.SCRIPTED_FOCI), and its walk ends near it.

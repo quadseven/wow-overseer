@@ -103,6 +103,7 @@ def is_use_row(command) -> bool:
         classquest.USE_OBJECT,
         classquest.USE_HERE,
         classquest.USE_SPELL,
+        classquest.CAST_MAINHAND,
     )
 
 
