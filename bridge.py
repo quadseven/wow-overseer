@@ -97,6 +97,7 @@ import natural
 import nowstatus
 import guildcorps
 import guildjobs
+import guineapig
 import deathloop
 import guildlevel
 import guildfacts
@@ -18967,6 +18968,13 @@ class Bridge(discord.Client):
         log.info("guild jobs: the plan took %.2f s on the event loop for %d "
                  "member(s)%s", time.perf_counter() - plan_started, len(members),
                  _family_label(cohort))
+        # THE GUINEA PIGS (guineapig.py, #2398): each guild's test crafter per
+        # trade and the trades nobody in the corps holds, said when they change.
+        pig_lines = guineapig.lines(plan.pigs, members)
+        if pig_lines != getattr(self, "_pig_lines", None):
+            self._pig_lines = pig_lines
+            for line in pig_lines:
+                log.info("guild jobs: %s", line)
         # Members held on a class quest are kept out of every dungeon pass
         # (the guild's asks, its runs): _class_priority_names. The class
         # quests a guildmate could help with are asked in guild chat by the
