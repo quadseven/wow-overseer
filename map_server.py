@@ -5921,7 +5921,7 @@ class Handler(BaseHTTPRequestHandler):
 
     @_get_route("family query failed")
     def _family(query: dict, ctx) -> tuple[int, dict]:
-        """GET /api/family[?family=X] - a five, with enough to decide whether to look.
+        """GET /api/family[?family=X] - a five, with enough to decide whether to look, and its craft phase (#2369).
 
         STILL NO NAME PARAMETER, which was the original rule here and is worth
         restating because this now takes a parameter at all. `family` is not a
