@@ -360,6 +360,7 @@ GUILD = [
 
 class TheBridgeWritesSeatsThenTheJob(unittest.TestCase):
     def test_seats_are_replaced_before_any_job_is_written(self):
+        """The complete lineup is persisted before the raid job is created."""
         events = []
         drive = _load_drive_raid(events, GUILD)
         withheld = []
