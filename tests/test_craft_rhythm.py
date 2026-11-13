@@ -224,11 +224,11 @@ class TheGatheringModeIsQuestAndNotFarm(unittest.TestCase):
                 self.assertTrue(jobs.can_set(mode))
                 self.assertEqual(jobs.why_not(mode), "")
 
-    def test_farm_would_have_been_refused(self):
-        """The reason this module does not use it, asserted rather than
-        asserted in a comment."""
-        self.assertFalse(jobs.can_set("farm"))
-        self.assertNotEqual(jobs.why_not("farm"), "")
+    def test_farm_is_a_job_of_its_own_and_not_this_rhythm(self):
+        """`farm` is wired now (#2417), but as an order that names its
+        material; a bare `farm` names nothing and the rhythm's gathering half
+        is still the quest job, which gathers on the way."""
+        self.assertIsNone(jobs.farm_order("farm"))
         self.assertNotEqual(craft_rhythm.MODE_GATHER, "farm")
 
     def test_the_craft_mode_is_the_one_craft_py_names(self):
