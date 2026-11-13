@@ -246,7 +246,13 @@ BLACKSMITH_HAMMER = 5956
 # hands a smith the worn recipes, and tests/test_craft.py no longer counts
 # them in the stranded-focus debt. A tool goes in here only once the module
 # walk for it is live, the same rule `FOCUS_AIMS` holds for a focus object.
-TOOL_WALKS: frozenset = frozenset({BLACKSMITH_HAMMER})
+#
+# THE RUNED RODS NEED NO WALK (#2411). An Enchanting rung's rod is a
+# TotemCategory tool with no focus: DriveCraft's tool step reads it in the
+# bags, takes a banked one out at a banker, and asks for a missing one, the
+# same steps the hammer gets minus the Anvil. The rod itself is made by the
+# ladder (`ROD_RECIPES`, `craft_rhythm`), never bought.
+TOOL_WALKS: frozenset = frozenset({BLACKSMITH_HAMMER, 6218, 6339, 11130, 11145})
 
 
 # Every `SpellFocusObject.dbc` id a recipe here needs, id -> its name.
@@ -257,6 +263,10 @@ STATIONS: dict = {1: "Anvil", 3: "Forge", 4: "Cooking Fire"}
 
 # `TotemCategory.dbc` id -> the item that answers it, the same test's table.
 TOOL_ITEMS: dict = {
+    6: 6218,  # Runed Copper Rod
+    7: 6339,  # Runed Silver Rod
+    8: 11130,  # Runed Golden Rod
+    9: 11145,  # Runed Truesilver Rod
     10: 16207,  # Runed Arcanite Rod
     14: 6219,  # Arclight Spanner
     162: BLACKSMITH_HAMMER,
@@ -2413,7 +2423,232 @@ RECIPES: dict = {
             "310, grey 330",
         ),
     ),
+    # ENCHANTING 1-300 AGAINST THE REALM ITSELF (#774, #2411). Both family
+    # enchanters read Enchanting 1/75 on 2026-11-13 because this table had no
+    # Enchanting key at all. Every fact below is the realm's own: Spell.dbc
+    # (543b9fe6...) for reagents, effect and RequiredTotemCategoryID, and
+    # SkillLineAbility.dbc (d8c11abf...) for the yellow and grey values
+    # (tests/test_craft.py MEASURED_BANDS). Every bought rung is sold by the
+    # classic Enchanting trainers (trainer_spell TrainerId 96, one in each
+    # capital); Minor Health is AcquireMethod 1 and comes with Apprentice.
+    #
+    # THE RULE THAT PICKED THE RUNGS: every reagent comes out of
+    # disenchanting (dust, essence, shard) or off a vendor (Simple Wood for
+    # the wand), and the target is a bracer, chest or cloak a Mage wears, so
+    # the module's enchant target never has to be a weapon or a shield. Rungs
+    # that eat a drop (Fire Oil, Elemental Fire, Wildvine, pearls) or a bar are
+    # left out; the cloak fire resistance enchant is cast for the raid, not
+    # for skill (#2423, #481).
+    #
+    # EVERY RUNG NEEDS A RUNED ROD IN THE BAGS (`tool`, TotemCategory 6 to 9).
+    # The rods are not rungs: they are made once, when the crafter holds no
+    # rod of the tier its rung needs (`ROD_RECIPES`, `rod_for`), which is why
+    # this ladder has no single-point rod brackets in it. A rod of a higher
+    # tier answers every lower category, the core's own
+    # IsTotemCategoryCompatibleWith rule.
+    #
+    # DriveCraft casts an enchant on an item, not on the crafter: that target
+    # pick is the module's (quadseven/mod-overseer, the enchant-target change
+    # that pairs with this table). Until a worldserver runs it, these casts
+    # are refused "item not found" and the errand stands, which is why
+    # `craft_rhythm` aims an enchanter at Enchanting only while its bags hold
+    # the rung's disenchanted reagents and otherwise leaves it on its other
+    # trade.
+    SKILL_IDS["enchanting"]: (
+        Recipe(
+            7418,
+            "Enchant Bracer - Minor Health",
+            min_skill=1,
+            max_skill=89,
+            note="1x Strange Dust (10940), Runed Copper Rod -> enchant 41 "
+            "on a bracer. AcquireMethod 1 (comes with Apprentice), yellow "
+            "70, grey 110",
+            tool=6218,
+        ),
+        Recipe(
+            7457,
+            "Enchant Bracer - Minor Stamina",
+            min_skill=90,
+            max_skill=109,
+            note="3x Strange Dust (10940), Runed Copper Rod. trainer rank "
+            "50, yellow 100, grey 140",
+            tool=6218,
+        ),
+        Recipe(
+            14807,
+            "Greater Magic Wand",
+            min_skill=110,
+            max_skill=129,
+            note="1x Simple Wood (4470, vendor-bought), 1x Greater Magic "
+            "Essence (10939), Runed Copper Rod -> item 11288, a wand the "
+            "enchanter can use. trainer rank 70, yellow 110, grey 150",
+            tool=6218,
+        ),
+        Recipe(
+            7857,
+            "Enchant Chest - Health",
+            min_skill=130,
+            max_skill=154,
+            note="4x Strange Dust (10940), 1x Lesser Astral Essence "
+            "(10998), Runed Silver Rod. trainer rank 120, yellow 145, grey 185",
+            tool=6339,
+        ),
+        Recipe(
+            13501,
+            "Enchant Bracer - Lesser Stamina",
+            min_skill=155,
+            max_skill=174,
+            note="2x Soul Dust (11083), Runed Silver Rod. trainer rank 130, "
+            "yellow 155, grey 195",
+            tool=6339,
+        ),
+        Recipe(
+            13642,
+            "Enchant Bracer - Spirit",
+            min_skill=175,
+            max_skill=194,
+            note="1x Lesser Mystic Essence (11134), Runed Golden Rod. "
+            "trainer rank 165, yellow 185, grey 225",
+            tool=11130,
+        ),
+        Recipe(
+            13661,
+            "Enchant Bracer - Strength",
+            min_skill=195,
+            max_skill=219,
+            note="1x Vision Dust (11137), Runed Golden Rod. trainer rank "
+            "180, yellow 200, grey 240",
+            tool=11130,
+        ),
+        Recipe(
+            13746,
+            "Enchant Cloak - Greater Defense",
+            min_skill=220,
+            max_skill=229,
+            note="3x Vision Dust (11137), Runed Truesilver Rod. trainer "
+            "rank 205, yellow 225, grey 265",
+            tool=11145,
+        ),
+        Recipe(
+            13822,
+            "Enchant Bracer - Intellect",
+            min_skill=230,
+            max_skill=249,
+            note="2x Lesser Nether Essence (11174), Runed Truesilver Rod. "
+            "trainer rank 210, yellow 230, grey 270",
+            tool=11145,
+        ),
+        Recipe(
+            13939,
+            "Enchant Bracer - Greater Strength",
+            min_skill=250,
+            max_skill=269,
+            note="2x Dream Dust (11176), 1x Greater Nether Essence (11175), "
+            "Runed Truesilver Rod. trainer rank 240, yellow 260, grey 300",
+            tool=11145,
+        ),
+        Recipe(
+            20008,
+            "Enchant Bracer - Greater Intellect",
+            min_skill=270,
+            max_skill=289,
+            note="3x Lesser Eternal Essence (16202), Runed Truesilver Rod. "
+            "trainer rank 255, yellow 275, grey 315",
+            tool=11145,
+        ),
+        Recipe(
+            20028,
+            "Enchant Chest - Major Mana",
+            min_skill=290,
+            max_skill=300,
+            note="8x Illusion Dust (16204), Runed Truesilver Rod. trainer "
+            "rank 290, yellow 305, grey 340",
+            tool=11145,
+        ),
+    ),
 }
+
+
+# THE RUNED RODS (#774, #2411), kept apart from RECIPES the way BAG_RECIPES
+# is: a rod is a tool made once, not a rung cast for skill. Each is the
+# Enchanting craft that makes the rod item an Enchanting rung's `tool` names.
+# Spell.dbc reagents, trainer_spell TrainerId 96 ranks:
+#
+#   Runed Copper Rod     7421  Copper Rod (6217, vendor), Strange Dust,
+#                              Lesser Magic Essence; AcquireMethod 1
+#   Runed Silver Rod     7795  Silver Rod (6338, a smith's), 6 Strange Dust,
+#                              3 Greater Magic Essence, Runed Copper Rod; 100
+#   Runed Golden Rod     13628 Golden Rod (11128, a smith's), Iridescent Pearl
+#                              (5500, a drop), 2 Greater Astral Essence,
+#                              2 Soul Dust, Runed Silver Rod; 150
+#   Runed Truesilver Rod 13702 Truesilver Rod (11144, a smith's), Black Pearl
+#                              (7971, a drop), 2 Greater Mystic Essence,
+#                              2 Vision Dust, Runed Golden Rod; 200
+#
+# The silver, golden and truesilver rods eat a smith's rod and the last two a
+# pearl, which nothing in this repo supplies yet: an enchanter without them
+# stops at 129, 174 or 219 and `craft_rhythm` keeps it on its other trade.
+# `min_skill` is the trainer rank, `max_skill` the top of the ladder: the rod
+# is aimed at whenever the rung needs it, at any value past the rank.
+RUNED_COPPER_ROD, RUNED_SILVER_ROD = 6218, 6339
+RUNED_GOLDEN_ROD, RUNED_TRUESILVER_ROD = 11130, 11145
+ROD_RECIPES: dict = {
+    SKILL_IDS["enchanting"]: (
+        Recipe(7421, "Runed Copper Rod", min_skill=1, max_skill=300, repeatable=False),
+        Recipe(
+            7795, "Runed Silver Rod", min_skill=100, max_skill=300, repeatable=False
+        ),
+        Recipe(
+            13628, "Runed Golden Rod", min_skill=150, max_skill=300, repeatable=False
+        ),
+        Recipe(
+            13702,
+            "Runed Truesilver Rod",
+            min_skill=200,
+            max_skill=300,
+            repeatable=False,
+        ),
+    ),
+}
+# Rod item -> the recipe that makes it, lowest tier first.
+ROD_MADE_BY: dict = {
+    RUNED_COPPER_ROD: 7421,
+    RUNED_SILVER_ROD: 7795,
+    RUNED_GOLDEN_ROD: 13628,
+    RUNED_TRUESILVER_ROD: 13702,
+}
+# Every Runed Rod by tier, lowest first, with the Runed Arcanite Rod (16207)
+# above them: a higher rod answers every lower rung.
+ROD_TIERS: tuple = (
+    RUNED_COPPER_ROD,
+    RUNED_SILVER_ROD,
+    RUNED_GOLDEN_ROD,
+    RUNED_TRUESILVER_ROD,
+    16207,
+)
+
+
+def rod_for(spell_id: int, held: dict):
+    """The rod recipe this Enchanting rung needs first, or None.
+
+    None when the rung needs no Runed Rod, or `held` ({item entry: count},
+    owned anywhere) already has a rod of its tier or higher. Otherwise the
+    `ROD_RECIPES` entry that makes the rod the rung names.
+    """
+    wanted = int(spell_id or 0)
+    rung = next(
+        (r for r in RECIPES.get(SKILL_IDS["enchanting"], ()) if r.spell_id == wanted),
+        None,
+    )
+    if rung is None or rung.tool not in ROD_TIERS:
+        return None
+    tier = ROD_TIERS.index(rung.tool)
+    if any(int(held.get(rod, 0)) > 0 for rod in ROD_TIERS[tier:]):
+        return None
+    made_by = ROD_MADE_BY[rung.tool]
+    return next(
+        r for r in ROD_RECIPES[SKILL_IDS["enchanting"]] if r.spell_id == made_by
+    )
 
 
 # THE FAMILY'S OWN BAGS (#215), kept apart from RECIPES because a bag is not a
@@ -2484,6 +2719,8 @@ def known_recipes():
     for recipes in RECIPES.values():
         yield from recipes
     for recipes in BAG_RECIPES.values():
+        yield from recipes
+    for recipes in ROD_RECIPES.values():
         yield from recipes
 
 
@@ -2634,7 +2871,23 @@ SECONDARY_AUTO_LEARNED = frozenset({3275})
 # other rung is bought, and a bought recipe persists there. guildjobs, standin
 # and craft_rhythm all read this one set.
 AUTO_LEARNED = frozenset(
-    {3275, 2963, 3918, 2657, 2330, 2660, 2881, 2152, 9058, 2538, 2540}
+    {
+        3275,
+        2963,
+        3918,
+        2657,
+        2330,
+        2660,
+        2881,
+        2152,
+        9058,
+        2538,
+        2540,
+        # Enchanting: Enchant Bracer - Minor Health (#2411). Runed Copper Rod is
+        # AcquireMethod 1 too; it is no RECIPES rung and no trainer purchase, so
+        # `holds` already counts it held.
+        7418,
+    }
 )
 
 # THE TRAINER'S PRICE FOR EVERY BOUGHT RUNG, spell -> (ReqSkillRank, copper).
@@ -2742,6 +2995,22 @@ TRAINER_RECIPES: dict[int, tuple[int, int]] = {
     19788: (250, 4000),  # Dense Blasting Powder
     19791: (260, 5000),  # Thorium Widget
     19795: (275, 10000),  # Thorium Tube
+    # ENCHANTING (#2411): the classic Enchanting trainers, TrainerId 96, read
+    # 2026-11-13. The rods are ROD_RECIPES, bought before the rung needing one.
+    7457: (50, 250),  # Enchant Bracer - Minor Stamina
+    14807: (70, 200),  # Greater Magic Wand
+    7795: (100, 1000),  # Runed Silver Rod
+    7857: (120, 1000),  # Enchant Chest - Health
+    13501: (130, 1500),  # Enchant Bracer - Lesser Stamina
+    13628: (150, 2500),  # Runed Golden Rod
+    13642: (165, 2800),  # Enchant Bracer - Spirit
+    13661: (180, 3600),  # Enchant Bracer - Strength
+    13702: (200, 4000),  # Runed Truesilver Rod
+    13746: (205, 4200),  # Enchant Cloak - Greater Defense
+    13822: (210, 4400),  # Enchant Bracer - Intellect
+    13939: (240, 6200),  # Enchant Bracer - Greater Strength
+    20008: (255, 10000),  # Enchant Bracer - Greater Intellect
+    20028: (290, 15000),  # Enchant Chest - Major Mana
 }
 
 
@@ -2759,7 +3028,7 @@ def holds(spell_id: int, known) -> bool:
     return spell not in TRAINER_RECIPES or spell in known
 
 
-def craft_errand(name: str, skills: dict, primaries=None) -> int:
+def craft_errand(name: str, skills: dict, primaries=None, skip=()) -> int:
     """The `craft_spell` this character's roster row should carry, or 0.
 
     `skills` is one character's profession skills as `professions.plan`'s
@@ -2788,10 +3057,14 @@ def craft_errand(name: str, skills: dict, primaries=None) -> int:
     character does not hold, so a trainer-taught bandage is no errand here.
     The guild's crew climbs those rungs through guildjobs instead, which reads
     what each member knows.
+
+    `skip` names trades (as in `professions.CRAFTING`) not to answer for:
+    `craft_rhythm` passes "enchanting" when the bags hold no cast of the
+    rung's disenchanted reagents, so the enchanter keeps its other trade.
     """
     trades = professions.assigned(name) if primaries is None else primaries
     for skill_name in trades:
-        if skill_name not in professions.CRAFTING:
+        if skill_name not in professions.CRAFTING or skill_name in skip:
             continue
         value = skills.get(skill_name, 0)
         if not value:

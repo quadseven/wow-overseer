@@ -707,7 +707,8 @@ class SpendOrSmelt(unittest.TestCase):
             # one Bolt of Linen Cloth a belt eats, so the rung stands; with
             # none he weaves first (BoltFedRungs below).
             # The belt's Coarse Thread is the crew's post, in the bags here.
-            ("Og", {"tailoring": 50, "enchanting": 1}, {2996: 1, 2320: 1}, 8776),
+            # Enchanting is left out: its own choice is EnchantingFedByDisenchanting's.
+            ("Og", {"tailoring": 50}, {2996: 1, 2320: 1}, 8776),
             ("Ugga", {"alchemy": 14, "herbalism": 132}, {}, 2330),
             ("Bork", {"leatherworking": 1, "skinning": 12}, {}, 2881),
         ):
@@ -912,6 +913,78 @@ class BoltFedRungs(unittest.TestCase):
         self.assertEqual(short.spell, 3818)
         held = craft_rhythm.errand("Bork", skills, {4236: 1}, primaries=primaries)
         self.assertEqual(held.spell, 7151)
+
+
+class EnchantingFedByDisenchanting(unittest.TestCase):
+    """#2411: an enchanter enchants while its bags hold the rung's dust, makes
+    its rod first, and otherwise keeps its other trade rather than standing
+    on a rung DriveCraft refuses for reagents on every poll."""
+
+    SKILLS = {"tailoring": 155, "enchanting": 40}
+    ROD = {craft.RUNED_COPPER_ROD: 1}
+
+    def chosen(self, held, skills=None, known=None):
+        return craft_rhythm.errand(
+            "Og",
+            dict(skills or self.SKILLS),
+            held,
+            primaries=("tailoring", "enchanting"),
+            known=known,
+        )
+
+    def test_a_fed_enchanter_enchants_before_its_other_trade(self):
+        got = self.chosen({**self.ROD, craft_rhythm.STRANGE_DUST: 5})
+        self.assertEqual(got.spell, 7418)  # Enchant Bracer - Minor Health
+
+    def test_the_family_order_does_not_hide_enchanting(self):
+        """Og's roster order is tailoring first; the fed rung still wins."""
+        got = craft_rhythm.errand(
+            "Og", self.SKILLS, {**self.ROD, craft_rhythm.STRANGE_DUST: 5}
+        )
+        self.assertEqual(got.spell, 7418)
+
+    def test_an_unfed_enchanter_keeps_its_other_trade(self):
+        got = self.chosen({**self.ROD})
+        tailoring = craft.recipe_for(goals_skill("tailoring"), 155).spell_id
+        # The tailoring rung, or the bolt it weaves first.
+        self.assertIn(got.spell, (tailoring, craft_rhythm.BOLT_FED[tailoring][0]))
+        _spell, why = craft_rhythm._enchant_first("Og", 7418, self.ROD, tailoring)
+        self.assertIn("disenchanting fills its bags", why)
+
+    def test_without_a_rod_it_makes_the_rod_first(self):
+        held = {craft_rhythm.STRANGE_DUST: 5, craft_rhythm.LESSER_MAGIC: 1}
+        got = self.chosen(held)
+        self.assertEqual(got.spell, 7421)  # Runed Copper Rod
+        self.assertIn("rod", got.why)
+
+    def test_a_higher_rod_answers_a_lower_rung(self):
+        held = {craft.RUNED_GOLDEN_ROD: 1, craft_rhythm.STRANGE_DUST: 5}
+        self.assertEqual(self.chosen(held).spell, 7418)
+
+    def test_a_rung_not_bought_yet_yields_to_the_other_trade(self):
+        held = {craft.RUNED_SILVER_ROD: 1, craft_rhythm.SOUL_DUST: 9}
+        skills = {"tailoring": 155, "enchanting": 160}
+        got = self.chosen(held, skills, known=frozenset())
+        self.assertNotEqual(got.spell, 13501)
+        self.assertIn("learn errand", got.why)
+        bought = self.chosen(held, skills, known=frozenset({13501}))
+        self.assertEqual(bought.spell, 13501)
+
+    def test_the_count_includes_dust_rods_and_the_other_trade(self):
+        wanted = craft_rhythm.reagents_to_count(
+            "Og", self.SKILLS, ("tailoring", "enchanting")
+        )
+        self.assertIn(craft_rhythm.STRANGE_DUST, wanted)
+        self.assertTrue(set(craft.ROD_TIERS) <= wanted)
+
+    def test_every_rung_and_rod_has_its_disenchant_feed(self):
+        rungs = {r.spell_id for r in craft.RECIPES[333]}
+        rods = {r.spell_id for r in craft.ROD_RECIPES[333]}
+        self.assertEqual(set(craft_rhythm.DISENCHANT_FED), rungs | rods)
+
+
+def goals_skill(name: str) -> int:
+    return craft.SKILL_IDS[name]
 
 
 if __name__ == "__main__":
