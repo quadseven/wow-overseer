@@ -33832,6 +33832,30 @@ def _job_worn(rows) -> dict:
     return bag_pressure.member_characters(rows)
 
 
+def _job_pending_names(rows):
+    """Names another pass has waiting on a pending job command."""
+    return {str(row.get(key) or "") for row in rows for key in ("target_name", "target_arg")} - {""}
+
+
+def _job_map_ids(members):
+    """Map each positioned planner member to its current continent."""
+    return {member.name: member.map_id for member in members if member.map_id is not None}
+
+
+def _family_job_members(rows, family, skills, known, carried, eligible,
+                        quest_state, free_slots, supplies, rewarded,
+                        bag_slots, worn):
+    """Build between-run family seats separately from the guild lineup."""
+    family_rows = [row for row in rows if str(row["name"]) in family]
+    if not family_rows:
+        return []
+    return _guild_members_and_crafters(
+        family_rows, set(), {str(row["name"]): guildjobs.FAMILY for row in family_rows},
+        skills, known, carried, eligible, quest_state, free_slots, supplies,
+        rewarded, bag_slots, worn,
+    )[0]
+
+
 def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, item_rows,
                          recent_rows, pending_rows, log_rows=(), done_rows=(),
                          free_slots=None, supplies=None, rewarded_rows=None,
@@ -33852,18 +33876,16 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
         rows, family, role_of, skills, known, carried, eligible, quest_state,
         free_slots or {}, supplies, _rewarded_of(rewarded_rows), bag_slots or {},
         worn or {})
-    pending = {str(r.get(k) or "") for r in pending_rows
-               for k in ("target_name", "target_arg")} - {""}
-    map_id_by_name = {m.name: m.map_id for m in members if m.map_id is not None}
+    pending = _job_pending_names(pending_rows)
+    map_id_by_name = _job_map_ids(members)
     # THE ROSTER FAMILY, read as members of role FAMILY (familyclass.py, #2336):
     # not in `members`, so no other pass sees them; the plan takes the idle
     # ones for their class step alone.
-    family_rows = [r for r in rows if str(r["name"]) in family]
-    family_members = _guild_members_and_crafters(
-        family_rows, set(), {str(r["name"]): guildjobs.FAMILY for r in family_rows},
-        skills, known, carried, eligible,
+    family_members = _family_job_members(
+        rows, family, skills, known, carried, eligible,
         _class_quest_state(log_rows, done_rows), free_slots or {}, supplies,
-        _rewarded_of(rewarded_rows), bag_slots or {}, worn or {})[0] if family_rows else []
+        _rewarded_of(rewarded_rows), bag_slots or {}, worn or {},
+    )
     return {
         "members": members, "class_candidates": class_candidates,
         "masters": masters, "crafters": crafters,

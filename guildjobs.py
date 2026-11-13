@@ -112,6 +112,7 @@ import math
 import os
 import re
 from dataclasses import dataclass, field, replace
+from typing import Any
 
 import campaignplan
 import classask
@@ -3734,6 +3735,133 @@ def plan(
     doors = doors or {}
     busy = {str(n) for n in busy or ()}
     pending = {str(n) for n in pending or ()}
+    inputs = _PlanInputs(
+        members=members,
+        class_candidates=tuple(class_candidates or ()),
+        family_candidates=tuple(family_candidates or ()),
+        family_members=tuple(family_members or ()),
+        family_holds=family_holds,
+        family_danger=family_danger,
+        masters=masters,
+        crafters=crafters,
+        fields=fields,
+        doors=doors,
+        pending=pending,
+        kept=kept,
+        recent=recent,
+        cap=cap,
+        per_guild=per_guild,
+        gear=gear,
+        mail=mail,
+        pvp=pvp,
+        leveling=leveling,
+        focus=focus,
+        classes=classes,
+        hunts=hunts,
+        now=now,
+        far_slots=far_slots,
+        owing=owing,
+        still=still,
+        supply=supply,
+        pets=pets,
+        asks=asks,
+        weapons=weapons,
+        equip_room=equip_room,
+        mounts=mounts,
+        loops=loops,
+        bags=bags,
+        campaign=campaign,
+    )
+    state = _PlannerState(
+        counters=_plan_counters(),
+        far=classquest.FarSlots(far_slots) if far_slots is not None else None,
+        busy=busy,
+        preexisting_busy=set(busy),
+        trades=_plan_trades(members, recent, focus),
+        tally=_focus_tally(members, focus),
+    )
+    _plan_members(inputs, state)
+    return _finish_plan(inputs, state)
+
+
+@dataclass(frozen=True)
+class _PlanInputs:
+    members: Any
+    class_candidates: Any
+    family_candidates: Any
+    family_members: Any
+    family_holds: Any
+    family_danger: Any
+    masters: Any
+    crafters: Any
+    fields: Any
+    doors: Any
+    pending: Any
+    kept: Any
+    recent: Any
+    cap: Any
+    per_guild: Any
+    gear: Any
+    mail: Any
+    pvp: Any
+    leveling: Any
+    focus: Any
+    classes: Any
+    hunts: Any
+    now: Any
+    far_slots: Any
+    owing: Any
+    still: Any
+    supply: Any
+    pets: Any
+    asks: Any
+    weapons: Any
+    equip_room: Any
+    mounts: Any
+    loops: Any
+    bags: Any
+    campaign: Any
+
+
+@dataclass
+class _PlannerState:
+    counters: dict
+    far: Any
+    busy: set
+    preexisting_busy: set
+    trades: dict
+    tally: dict
+    steps: list = field(default_factory=list)
+    lines: dict = field(default_factory=dict)
+    notes: list = field(default_factory=list)
+    helps: list = field(default_factory=list)
+    ask_yields: list = field(default_factory=list)
+    gear_holds: list = field(default_factory=list)
+    class_holds: dict = field(default_factory=dict)
+
+
+def _plan_counters():
+    """Fresh allowance counters for one planner pass."""
+    return {
+        key: {}
+        for key in (
+            "jobs",
+            "gear",
+            "train",
+            "pvp",
+            "level",
+            "cross",
+            "classquest",
+            "room",
+            "supply",
+            "inn",
+            "pet",
+        )
+    }
+
+
+def _plan_trades(members, recent, focus):
+    """Choose gathering trades and apply the guild's focus assignments."""
     tailors = choose_tailors(members)
     alchemists = choose_alchemists(members, tailors, recent)
     cooks = choose_cooks(members, recent, tailors, alchemists)
@@ -3741,194 +3869,249 @@ def plan(
         split_trades(members, tailors, alchemists), tailors, alchemists, cooks
     )
     trades.update(focus_trades(members, focus))
-    tally = _focus_tally(members, focus)
-    steps, lines, notes, helps, ask_yields = [], {}, [], [], []
-    gear_holds = []
-    class_holds = {}
-    preexisting_busy = set(busy or ())
-    # One counter per allowance, each keyed by guild (_allowance).
-    counters = {
-        "jobs": {},
-        "gear": {},
-        "train": {},
-        "pvp": {},
-        "level": {},
-        "cross": {},
-        "classquest": {},
-        "room": {},
-        "supply": {},
-        "inn": {},
-        "pet": {},
-    }
-    far = classquest.FarSlots(far_slots) if far_slots is not None else None
-    all_members = list(members) + list(class_candidates or ())
-    family_steps = list(family_members or ())
-    planning_members = [m for m in all_members if m.role != FAMILY] + family_steps
+    return trades
+
+
+def _all_plan_members(inputs):
+    """Include roster members and candidates omitted from the lineup."""
+    return list(inputs.members) + list(inputs.class_candidates)
+
+
+def _plan_members(inputs, state):
+    """Plan members in the shared fair order, preserving each member's rungs."""
+    all_members = _all_plan_members(inputs)
+    planning_members = [m for m in all_members if m.role != FAMILY] + list(
+        inputs.family_members
+    )
     class_eligible = {
         m.name
         for m in planning_members
         if (m.role != FAMILY or familyclass.enabled())
-        and _planned_class_owed(m, classes, recent, hunts, now, asks) is not None
+        and _planned_class_owed(
+            m, inputs.classes, inputs.recent, inputs.hunts, inputs.now, inputs.asks
+        )
+        is not None
     }
-    for m in _class_ordered(
-        planning_members, classes, recent, class_eligible=class_eligible
-    ):
-        if m.role == UNASSIGNED and classes is not None:
-            why = _plan_class_only_member(
-                m,
-                classes,
-                recent,
-                cap,
-                hunts,
-                now,
-                far,
-                kept,
-                crafters,
-                str(masters.get(m.guild) or ""),
-                asks,
-                counters,
-                per_guild,
-                busy,
-                steps,
-                lines,
-                notes,
-                helps,
-                ask_yields,
-            )
-            if why:
-                class_holds[m.name] = why
-            continue
-        if m.role == FAMILY:
-            _plan_family_class_member(
-                m,
-                (classes, recent, cap, now, far, kept, crafters, masters),
-                (counters, busy, per_guild),
-                steps,
-                lines,
-                notes,
-                class_holds,
-                family_danger,
-            )
-            continue
-        if m.role not in (MAINTENANCE, SUMMONER, RAIDER):
-            continue
-        master = str(masters.get(m.guild) or "")
-        level_room = LevelRoom(
-            walks=counters["level"].get(m.guild, 0) < guildlevel.STEPS_PER_GUILD,
-            crossings=counters["cross"].get(m.guild, 0) < CROSS_STEPS_PER_GUILD,
-        )
-        step, doing, note, gear_why = _member_step(
-            m,
-            (gear or {}).get(m.name),
-            (mail or {}).get(m.name, ()),
-            trades,
-            fields,
-            doors,
-            pending,
-            crafters,
-            master,
-            kept,
-            recent,
-            cap,
-            (pvp or {}).get(m.name),
-            leveling,
-            crafting(m, focus),
-            classes,
-            hunts,
-            now,
-            far,
-            level_room,
-            int((still or {}).get(m.name, 0)),
-            _offer_for(supply, m.name),
-            _offer_for(pets, m.name),
-            _offer_for(weapons, m.name),
-            # A guild whose make-room steps are used up this pass asks none:
-            # its member takes its class quest instead of no step at all.
-            (equip_room or {}).get(m.name)
-            if counters["room"].get(m.guild, 0) < ROOM_STEPS_PER_GUILD
-            else None,
-            _offer_for(mounts, m.name),
-            _offer_for(loops, m.name),
-            _offer_for(bags, m.name),
-            campaign,
-            mates=members,
-            looping=tuple((loops or {}).keys()),
-        )
-        asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
-        helps += asked
-        ask_yields += yielded
-        if asked:
-            step, doing = None, asking_line(m, asked)
-        lines[m.name] = doing
-        if note:
-            notes.append(note)
-        if gear_why:
-            gear_holds.append(gear_why)
-        if step is None:
-            _count_focus(tally, m, None, fields)
-            continue
-        started, allowance = _allowance(step, counters, per_guild)
-        why = _step_refusal(m, busy, started, allowance, step) or job_walk_held(
-            m, step, recent
+    ordered = _class_ordered(
+        planning_members,
+        inputs.classes,
+        inputs.recent,
+        class_eligible=class_eligible,
+    )
+    for member in ordered:
+        _plan_ordered_member(member, inputs, state)
+
+
+def _plan_ordered_member(member, inputs, state):
+    """Dispatch one ordered seat to its class-only or full job planner."""
+    if member.role == UNASSIGNED and inputs.classes is not None:
+        why = _plan_class_only_member(
+            member,
+            inputs.classes,
+            inputs.recent,
+            inputs.cap,
+            inputs.hunts,
+            inputs.now,
+            state.far,
+            inputs.kept,
+            inputs.crafters,
+            str(inputs.masters.get(member.guild) or ""),
+            inputs.asks,
+            state.counters,
+            inputs.per_guild,
+            state.busy,
+            state.steps,
+            state.lines,
+            state.notes,
+            state.helps,
+            state.ask_yields,
         )
         if why:
-            notes.append(why)
-            if step.action == classquest.ACTION:
-                class_holds[m.name] = _class_hold_reason(m.name, why)
-            _release_slots(m.name, far, hunts)
-            crossing = isle_crossing_instead(
-                m,
-                busy,
-                started,
-                allowance,
-                counters,
-                (leveling, recent, cap, _offer_for(loops, m.name), campaign),
-            )
-            if crossing is None:
-                continue
-            step = crossing
-            lines[m.name] = step.said
-            notes.append("%s takes its boat off the isle instead of waiting" % m.name)
-            started, allowance = _allowance(step, counters, per_guild)
-        started[m.guild] = started.get(m.guild, 0) + 1
-        busy.add(m.name)
-        steps.append(step)
-        _count_focus(tally, m, step, fields)
-    owed, released = owed_members(
-        all_members, classes, recent, hunts, now, owing or classquest.Owing(), asks=asks
+            state.class_holds[member.name] = why
+        return
+    if member.role == FAMILY:
+        _plan_family_class_member(
+            member,
+            (
+                inputs.classes,
+                inputs.recent,
+                inputs.cap,
+                inputs.now,
+                state.far,
+                inputs.kept,
+                inputs.crafters,
+                inputs.masters,
+            ),
+            (state.counters, state.busy, inputs.per_guild),
+            state.steps,
+            state.lines,
+            state.notes,
+            state.class_holds,
+            inputs.family_danger,
+        )
+        return
+    if member.role in (MAINTENANCE, SUMMONER, RAIDER):
+        _plan_roster_member(member, inputs, state)
+
+
+def _plan_roster_member(member, inputs, state):
+    """Choose, report, and commit one member's ordinary job."""
+    master = str(inputs.masters.get(member.guild) or "")
+    level_room = LevelRoom(
+        walks=state.counters["level"].get(member.guild, 0) < guildlevel.STEPS_PER_GUILD,
+        crossings=state.counters["cross"].get(member.guild, 0) < CROSS_STEPS_PER_GUILD,
     )
-    class_holds = _class_hold_reasons(
+    step, doing, note, gear_why = _member_step(
+        member,
+        _member_value(inputs.gear, member.name),
+        _member_value(inputs.mail, member.name, ()),
+        state.trades,
+        inputs.fields,
+        inputs.doors,
+        inputs.pending,
+        inputs.crafters,
+        master,
+        inputs.kept,
+        inputs.recent,
+        inputs.cap,
+        _offer_for(inputs.pvp, member.name),
+        inputs.leveling,
+        crafting(member, inputs.focus),
+        inputs.classes,
+        inputs.hunts,
+        inputs.now,
+        state.far,
+        level_room,
+        int(_member_value(inputs.still, member.name, 0)),
+        _offer_for(inputs.supply, member.name),
+        _offer_for(inputs.pets, member.name),
+        _offer_for(inputs.weapons, member.name),
+        _member_room_offer(member, inputs, state),
+        _offer_for(inputs.mounts, member.name),
+        _offer_for(inputs.loops, member.name),
+        _offer_for(inputs.bags, member.name),
+        inputs.campaign,
+        mates=inputs.members,
+        looping=_member_map_keys(inputs.loops),
+    )
+    asked, yielded = class_asking(
+        member, inputs.classes, inputs.hunts, inputs.now, inputs.recent, inputs.asks
+    )
+    state.helps.extend(asked)
+    state.ask_yields.extend(yielded)
+    if asked:
+        step, doing = None, asking_line(member, asked)
+    state.lines[member.name] = doing
+    if note:
+        state.notes.append(note)
+    if gear_why:
+        state.gear_holds.append(gear_why)
+    if step is None:
+        _count_focus(state.tally, member, None, inputs.fields)
+        return
+    _commit_roster_step(member, step, inputs, state)
+
+
+def _member_value(mapping, key, default=None):
+    """Read one member's value from an optional planner map."""
+    return (mapping or {}).get(key, default)
+
+
+def _member_map_keys(mapping):
+    """Return names in an optional member map without changing its order."""
+    return tuple((mapping or {}).keys())
+
+
+def _member_room_offer(member, inputs, state):
+    """Leave the make-room offer unused after its per-guild allowance fills."""
+    if state.counters["room"].get(member.guild, 0) >= ROOM_STEPS_PER_GUILD:
+        return None
+    return _member_value(inputs.equip_room, member.name)
+
+
+def _commit_roster_step(member, step, inputs, state):
+    """Apply walk limits, choose a safe crossing fallback, and record a step."""
+    started, allowance = _allowance(step, state.counters, inputs.per_guild)
+    why = _step_refusal(member, state.busy, started, allowance, step) or job_walk_held(
+        member, step, inputs.recent
+    )
+    if why:
+        state.notes.append(why)
+        if step.action == classquest.ACTION:
+            state.class_holds[member.name] = _class_hold_reason(member.name, why)
+        _release_slots(member.name, state.far, inputs.hunts)
+        crossing = isle_crossing_instead(
+            member,
+            state.busy,
+            started,
+            allowance,
+            state.counters,
+            (
+                inputs.leveling,
+                inputs.recent,
+                inputs.cap,
+                _offer_for(inputs.loops, member.name),
+                inputs.campaign,
+            ),
+        )
+        if crossing is None:
+            return
+        step = crossing
+        state.lines[member.name] = step.said
+        state.notes.append(
+            "%s takes its boat off the isle instead of waiting" % member.name
+        )
+        started, allowance = _allowance(step, state.counters, inputs.per_guild)
+    started[member.guild] = started.get(member.guild, 0) + 1
+    state.busy.add(member.name)
+    state.steps.append(step)
+    _count_focus(state.tally, member, step, inputs.fields)
+
+
+def _finish_plan(inputs, state):
+    """Attach owed-quest holds and return the complete immutable plan."""
+    all_members = _all_plan_members(inputs)
+    owed, released = owed_members(
         all_members,
-        family_candidates,
-        family_holds,
-        steps,
-        lines,
-        notes,
+        inputs.classes,
+        inputs.recent,
+        inputs.hunts,
+        inputs.now,
+        inputs.owing or classquest.Owing(),
+        asks=inputs.asks,
+    )
+    state.class_holds = _class_hold_reasons(
+        all_members,
+        inputs.family_candidates,
+        inputs.family_holds,
+        state.steps,
+        state.lines,
+        state.notes,
         owed,
         released,
-        preexisting_busy,
-        classes,
-        recent,
-        hunts,
-        now,
-        asks,
-        class_holds,
+        state.preexisting_busy,
+        inputs.classes,
+        inputs.recent,
+        inputs.hunts,
+        inputs.now,
+        inputs.asks,
+        state.class_holds,
     )
-    notes += owed_notes(owed, released)
+    state.notes += owed_notes(owed, released)
     return JobsPlan(
-        steps=tuple(steps),
-        lines=lines,
-        trades=trades,
-        doors=doors,
-        notes=tuple(notes),
-        gear_holds=tuple(gear_holds),
-        class_holds=class_holds,
-        focus=tally,
-        helps=tuple(helps),
+        steps=tuple(state.steps),
+        lines=state.lines,
+        trades=state.trades,
+        doors=inputs.doors,
+        notes=tuple(state.notes),
+        gear_holds=tuple(state.gear_holds),
+        class_holds=state.class_holds,
+        focus=state.tally,
+        helps=tuple(state.helps),
         owed=owed,
         released=released,
-        yields=class_yields(all_members, classes, recent),
-        ask_yields=tuple(ask_yields),
+        yields=class_yields(all_members, inputs.classes, inputs.recent),
+        ask_yields=tuple(state.ask_yields),
     )
 
 
