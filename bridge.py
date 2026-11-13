@@ -36913,7 +36913,42 @@ def _fetch_mail(names: list) -> list:
                 log.warning("mail: this world image has no mail tables to read")
                 return []
             raise
-        return [dict(row) for row in cur.fetchall()]
+        rows = [dict(row) for row in cur.fetchall()]
+        # A LETTER THE MAILBOX HAS NOT LOADED IS NOT WAITING (#2402): every
+        # pass plans from this read, so leaving it out here is what stops the
+        # town errand spinning its mail window on it and the gear count
+        # starting an errand for it. mailrun.unloaded_letters has the why.
+        unloaded = _unloaded_mail(cur, names, marks) if rows else frozenset()
+    _log_changed("mail", [mailrun.unloaded_note(unloaded)] if unloaded else [],
+                 key=("unloaded",) + tuple(sorted(names)), capped=False)
+    return mailrun.loaded_rows(rows, unloaded)
+
+
+_UNLOADED_MAIL_SQL = (
+    "SELECT o.target_name AS holder, o.command AS command, "
+    "UNIX_TIMESTAMP(o.created_at) AS refused, c.logout_time AS logout_time "
+    "FROM overseer_command o JOIN characters c ON c.name = o.target_name "
+    "WHERE o.kind = 'mail' AND o.status = 'error' AND o.target_name IN (%s) "
+    "AND o.created_at > NOW() - INTERVAL 30 DAY AND o.result LIKE %%s"
+)
+
+
+def _unloaded_mail(cur, names: list, marks: str) -> frozenset:
+    """(holder, mail id) of each letter its holder's mailbox has not loaded.
+
+    The takes refused `no mail with that id` in the last 30 days (a letter's
+    whole life), with each holder's logout time; mailrun.unloaded_letters
+    judges. A failed read leaves out nothing: the letters stay plannable, as
+    they were before this read existed.
+    """
+    try:
+        cur.execute(_UNLOADED_MAIL_SQL % marks,  # noqa: S608 - placeholders from a COUNT, values still bound
+                    [*names, "%" + mailrun.NOT_LOADED + "%"])
+        return mailrun.unloaded_letters(dict(row) for row in cur.fetchall())
+    except pymysql.err.MySQLError as exc:
+        log.warning("mail: the refused takes could not be read (%s); no "
+                    "letter is left out this pass", exc)
+        return frozenset()
 
 
 # THE FORGE QUERY (infra#3748), AND IT IS `_VAULT_SQL` WITH TWO CHANGES.
