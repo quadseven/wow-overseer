@@ -31408,6 +31408,8 @@ def _insert_crafter_row(holder: str, command: str, kind: str, source: str) -> in
     if kind in _DISPOSAL_KINDS and _KEEP.blocks(holder, command):
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, holder)
         return 0
+    if kind in _EPIC_GATED_KINDS and _epic_blocks(holder, command):
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         if _held_as_follower(cur, holder, command):
             return 0
@@ -31589,6 +31591,8 @@ def _insert_destroy(candidate: bag_pressure.SellCandidate) -> int:
     if _KEEP.blocks(candidate.holder, command):
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, candidate.holder)
         return 0
+    if _epic_blocks(candidate.holder, command):
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -31642,11 +31646,115 @@ def _sell_attempts(hours: int) -> list:
     return [attempt for attempt in attempts if attempt is not None]
 
 
+# AN EPIC A GUILD MEMBER COULD WEAR IS NEVER SOLD OR DESTROYED (#2385). The
+# kinds whose row ends an item at a merchant or destroys it: `sell` carries both
+# the sale and the destroy verb (mod-overseer#614), and `disenchant` is gated
+# for when a writer for it exists. `bag_pressure.epic_kept` is the rule; this
+# reads its facts, and every writer of such a row asks `_epic_blocks` first.
+_EPIC_GATED_KINDS = frozenset({"sell", "disenchant"})
+
+_EPIC_FACTS_SQL = (
+    "SELECT ii.guid AS item_guid, ii.itemEntry AS entry, it.name AS name, "
+    "it.Quality AS quality, it.RequiredLevel AS required_level, "
+    "it.class AS item_class, it.subclass AS subclass, "
+    "it.InventoryType AS inventory_type, it.AllowableClass AS allowable_class, "
+    "it.ItemLevel AS item_level, ii.flags AS instance_flags, "
+    "c.class AS holder_class "
+    "FROM item_instance ii "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "LEFT JOIN characters c ON c.guid = ii.owner_guid "
+    "WHERE ii.guid IN ({holes}) AND it.Quality >= %s"
+)
+
+# The roster families, as families.py reads them, and every class among them
+# and the members of their guilds: the guild members gearrouting.plan routes
+# between (map_server._ROUTING_GUILDS).
+_EPIC_ROSTER_SQL = (
+    "SELECT name FROM overseer_roster WHERE family IS NOT NULL AND family <> ''"
+)
+_EPIC_GUILD_CLASSES_SQL = (
+    "SELECT DISTINCT c.class AS class_id FROM characters c "
+    "WHERE c.name IN ({holes}) OR c.guid IN (SELECT gm.guid FROM guild_member gm "
+    "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes})))"
+)
+_EPIC_CLASSES_SECONDS = 300.0
+_EPIC_CLASSES_READ: dict = {}
+
+
+def _fetch_epic_facts(guids) -> list:
+    """The epic-or-better items among `guids`, with what `epic_kept` reads."""
+    ids = [int(guid) for guid in guids]
+    if not ids:
+        return []
+    sql = _EPIC_FACTS_SQL.format(holes=",".join(["%s"] * len(ids)))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, (*ids, bag_pressure.EPIC_QUALITY))
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _fetch_guild_classes() -> frozenset:
+    """Every class among the roster families and their guilds' members."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_EPIC_ROSTER_SQL)
+            names = {str(row["name"]) for row in cur.fetchall()}
+        except pymysql.err.MySQLError as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+            names = set()
+        names |= set(_protected_guids().values())
+        if not names:
+            return frozenset()
+        marks = ",".join(["%s"] * len(names))
+        ordered = sorted(names)
+        cur.execute(_EPIC_GUILD_CLASSES_SQL.format(holes=marks), (*ordered, *ordered))
+        return frozenset(int(row["class_id"]) for row in cur.fetchall())
+
+
+def _guild_classes() -> frozenset:
+    """The guilds' classes, read at most every five minutes. A failed read
+    keeps the last answer; none at all is empty, which keeps every epic."""
+    at = time.monotonic()
+    read_at = _EPIC_CLASSES_READ.get("at")
+    if read_at is None or at - read_at >= _EPIC_CLASSES_SECONDS:
+        try:
+            _EPIC_CLASSES_READ["classes"] = _fetch_guild_classes()
+        except Exception:
+            log.exception("epic keep: cannot read the guilds' classes; every "
+                          "epic is kept until it can")
+        _EPIC_CLASSES_READ["at"] = at
+    return _EPIC_CLASSES_READ.get("classes", frozenset())
+
+
+def _epic_blocks(holder: str, command: str) -> bool:
+    """Does this sell, destroy or disenchant row name an epic a guild member
+    could wear (#2385)? Logs one line per refusal. Fail closed: a failed read
+    of the item writes nothing."""
+    guids, _entries = keep.items_named(command)
+    if not guids:
+        return False
+    try:
+        rows = _fetch_epic_facts(guids)
+    except Exception:
+        log.exception("epic keep: cannot read the item in %r for %s, so the "
+                      "row is not written", command, holder)
+        return True
+    classes = _guild_classes() if rows else frozenset()
+    for row in rows:
+        if bag_pressure.epic_kept(row, classes):
+            log.info("%s", bag_pressure.epic_kept_line(row))
+            return True
+    return False
+
+
 def _insert_sell(candidate: bag_pressure.SellCandidate) -> int:
     """Queue one explicitly chosen stack for the world-side vendor executor."""
     command = "guid:%d count:%d" % (candidate.item_guid, candidate.count)
     if _KEEP.blocks(candidate.holder, command):
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, candidate.holder)
+        return 0
+    if _epic_blocks(candidate.holder, command):
         return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
@@ -33064,6 +33172,8 @@ def _insert_corps_row(holder: str, row) -> int:
     """
     if row.kind in _DISPOSAL_KINDS and _KEEP.blocks(holder, row.command):
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", row.command, holder)
+        return 0
+    if row.kind in _EPIC_GATED_KINDS and _epic_blocks(holder, row.command):
         return 0
     with _connect() as conn, conn.cursor() as cur:
         if _held_as_follower(cur, holder, row.command, row.source):
