@@ -236,6 +236,7 @@ def _rhythm_self(world, log):
             "_protected_guids": lambda: {1: "Grug"},
             "_queue_owns_job": world.queue_owns_job,
             "individual": individual,
+            "_individual_family": lambda cohort=None: None,
             "_standing_jobs": world.standing_jobs,
             # Nobody sits out to craft (standin.py).
             "_standin_out": frozenset,

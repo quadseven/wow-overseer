@@ -17,21 +17,30 @@ import trainjob  # noqa: E402
 import travel  # noqa: E402
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
-ON = {individual.ENV: "1"}
+FAMILY = "Grug"
+ON = {individual.ENV: "Grug"}
 OFF = {}
 
 
 class TheSetting(unittest.TestCase):
-    def test_unset_is_off(self):
-        self.assertFalse(individual.enabled(OFF))
+    def test_unset_names_no_family(self):
+        self.assertFalse(individual.enabled(FAMILY, OFF))
 
-    def test_truthy_values_turn_it_on(self):
-        for value in ("1", "true", "yes", "on", " ON "):
-            self.assertTrue(individual.enabled({individual.ENV: value}), value)
+    def test_a_named_family_is_on_whatever_its_case(self):
+        for value in ("Grug", "grug", " Zug , GRUG "):
+            self.assertTrue(individual.enabled(FAMILY, {individual.ENV: value}), value)
 
-    def test_other_values_leave_it_off(self):
-        for value in ("", "0", "false", "no", "off", "maybe"):
-            self.assertFalse(individual.enabled({individual.ENV: value}), value)
+    def test_a_family_not_named_stays_off(self):
+        self.assertFalse(individual.enabled("Zug", ON))
+
+    def test_a_true_word_is_not_a_family(self):
+        """The setting is a list of families, never a global switch."""
+        for value in ("1", "true", "yes", "on", "all"):
+            self.assertFalse(individual.enabled(FAMILY, {individual.ENV: value}), value)
+
+    def test_a_family_with_no_key_is_never_individual(self):
+        self.assertFalse(individual.enabled(None, {individual.ENV: "Grug"}))
+        self.assertFalse(individual.enabled("", {individual.ENV: "Grug"}))
 
 
 class WhatLinksAFamily(unittest.TestCase):
@@ -42,25 +51,28 @@ class WhatLinksAFamily(unittest.TestCase):
     def test_a_raid_job_links(self):
         self.assertTrue(individual.links("raid:moltencore"))
 
-    def test_the_campaign_waiting_room_links(self):
-        self.assertTrue(individual.links("town run"))
+    def test_town_run_and_raid_prep_do_not_link(self):
+        """Only a dungeon or a raid links a family."""
+        self.assertFalse(individual.links("town run"))
+        self.assertFalse(individual.links("raid prep"))
 
     def test_trade_and_quest_jobs_do_not_link(self):
-        for job in ("quest", "craft", "train", "fish", "raid prep", "", None):
+        for job in ("quest", "craft", "train", "fish", "", None):
             self.assertFalse(individual.links(job), job)
 
     def test_one_linking_member_links_the_family(self):
         self.assertTrue(individual.linked({"Grug": "craft", "Og": "dungeon:wailing"}))
         self.assertFalse(individual.linked({"Grug": "craft", "Og": "quest"}))
 
-    def test_active_needs_the_setting_and_no_link(self):
+    def test_active_needs_the_family_named_and_no_link(self):
         jobs = {"Grug": "craft", "Og": "quest"}
-        self.assertTrue(individual.active(jobs, ON))
-        self.assertFalse(individual.active(jobs, OFF))
-        self.assertFalse(individual.active({**jobs, "Ugga": "dungeon"}, ON))
+        self.assertTrue(individual.active(jobs, FAMILY, ON))
+        self.assertFalse(individual.active(jobs, FAMILY, OFF))
+        self.assertFalse(individual.active(jobs, "Zug", ON))
+        self.assertFalse(individual.active({**jobs, "Ugga": "dungeon"}, FAMILY, ON))
 
     def test_an_empty_family_is_not_active(self):
-        self.assertFalse(individual.active({}, ON))
+        self.assertFalse(individual.active({}, FAMILY, ON))
 
 
 class WhoADriveActsFor(unittest.TestCase):
@@ -68,36 +80,40 @@ class WhoADriveActsFor(unittest.TestCase):
 
     def test_individual_picks_each_member_on_the_mode(self):
         self.assertEqual(
-            individual.members_on(self.JOBS, ("craft",), ON), ("Og", "Ugga")
+            individual.members_on(self.JOBS, ("craft",), FAMILY, ON), ("Og", "Ugga")
         )
 
     def test_several_modes_may_be_asked_for(self):
         self.assertEqual(
-            individual.members_on(self.JOBS, ("craft", "quest"), ON),
+            individual.members_on(self.JOBS, ("craft", "quest"), FAMILY, ON),
             ("Grug", "Og", "Ugga"),
         )
 
     def test_off_and_disagreeing_acts_for_nobody(self):
         """The old rule: rows that disagree are a half-landed order."""
-        self.assertEqual(individual.members_on(self.JOBS, ("craft",), OFF), ())
+        self.assertEqual(individual.members_on(self.JOBS, ("craft",), FAMILY, OFF), ())
 
     def test_off_and_agreeing_acts_for_everybody(self):
         jobs = {"Grug": "craft", "Og": "craft"}
-        self.assertEqual(individual.members_on(jobs, ("craft",), OFF), ("Grug", "Og"))
+        self.assertEqual(
+            individual.members_on(jobs, ("craft",), FAMILY, OFF), ("Grug", "Og")
+        )
 
     def test_a_linked_family_keeps_the_old_rule_with_the_setting_on(self):
         jobs = {"Grug": "dungeon", "Og": "craft"}
-        self.assertEqual(individual.members_on(jobs, ("craft",), ON), ())
+        self.assertEqual(individual.members_on(jobs, ("craft",), FAMILY, ON), ())
 
     def test_exempt_members_are_left_out(self):
         self.assertEqual(
-            individual.members_on(self.JOBS, ("craft",), ON, exempt=("Og",)), ("Ugga",)
+            individual.members_on(self.JOBS, ("craft",), FAMILY, ON, exempt=("Og",)),
+            ("Ugga",),
         )
 
     def test_exempt_members_do_not_spoil_agreement_when_off(self):
         jobs = {"Grug": "craft", "Og": "quest"}
         self.assertEqual(
-            individual.members_on(jobs, ("craft",), OFF, exempt=("Og",)), ("Grug",)
+            individual.members_on(jobs, ("craft",), FAMILY, OFF, exempt=("Og",)),
+            ("Grug",),
         )
 
 
@@ -107,7 +123,14 @@ class AimingOnlyTheNamed(unittest.TestCase):
         self.assertEqual(len(statements), 1)
         sql, params = statements[0]
         self.assertNotIn("NOT IN", sql)
-        self.assertEqual(params, (travel.resolve("trainer"), "Bork", "Og"))
+        self.assertEqual(params, (travel.resolve("trainer"), travel.NONE, "Bork", "Og"))
+
+    def test_it_never_writes_over_an_aim_already_there(self):
+        """Run, catch-up, trade and learn aims share the column; only an
+        empty one is written."""
+        sql, params = travel.aim_only_statements(["Og"], "trainer")[0]
+        self.assertIn("WHERE travel_npc = %s AND name IN", sql)
+        self.assertEqual(params[1], "")
 
     def test_naming_nobody_writes_nothing(self):
         self.assertEqual(travel.aim_only_statements([], "trainer"), [])
@@ -235,6 +258,19 @@ class TheBridgeIsWired(unittest.TestCase):
         body = self.body("    async def _drive_train(self)")
         self.assertIn("individual.active(", body)
         self.assertIn("trainjob.plan(members, individual=", body)
+
+    def test_the_train_drive_respects_a_run_and_the_queue(self):
+        body = self.body("    async def _drive_train(self)")
+        self.assertLess(body.index("_queue_owns_job"), body.index("trainjob.plan("))
+        self.assertLess(body.index("self._mid_run("), body.index("trainjob.plan("))
+
+    def test_the_gather_half_is_held(self):
+        body = self.body("    async def _individual_rhythm_moves(self")
+        self.assertIn("if plan.mode != craft_rhythm.MODE_CRAFT:", body)
+        self.assertLess(
+            body.index("if plan.mode != craft_rhythm.MODE_CRAFT:"),
+            body.index("_insert_job"),
+        )
 
     def test_the_craft_rhythm_acts_per_member(self):
         body = self.body("    async def _craft_rhythm_once(self")

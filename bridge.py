@@ -2338,6 +2338,20 @@ def _guild_bag_floor_for(cohort=None):
     return bag_upgrade.guild_floor(rows, len(bag_upgrade.BAG_POSITIONS))
 
 
+def _individual_family(cohort=None) -> str | None:
+    """The family key individual mode is asked about (#2395): another
+    family's own key, else this bridge's own family's, else None. A family
+    that cannot be named is never individual."""
+    key = getattr(cohort, "key", None)
+    if key:
+        return key
+    try:
+        return _cohort_of(bonds.head_of_family())
+    except Exception:
+        log.exception("individual mode: this bridge's family could not be named")
+        return None
+
+
 def _standing_jobs(family: str | None = None) -> dict:
     """name -> `job` for every enabled roster row (infra#3696).
 
@@ -10133,10 +10147,11 @@ class Bridge(discord.Client):
         # INDIVIDUAL MODE (#2395): members that disagree are not a
         # half-landed order outside a dungeon, so the members on craft or
         # quest are bought for and the rest are left alone.
+        family = _individual_family(cohort)
         alone = individual.members_on(
             job_rows, (craft_rhythm.MODE_CRAFT, craft_rhythm.MODE_GATHER),
-            exempt=_standin_out(),
-        ) if individual.active(job_rows) else ()
+            family, exempt=_standin_out(),
+        ) if individual.active(job_rows, family) else ()
         if alone and mode not in (craft_rhythm.MODE_CRAFT, craft_rhythm.MODE_GATHER):
             names = [name for name in names if name in alone]
             log.info("craft_supply: individual mode - buying for %s only",
@@ -11057,7 +11072,7 @@ class Bridge(discord.Client):
         stands = craft_rhythm.requested_stands(
             stands, await self._material_routes(names))
         # INDIVIDUAL MODE (#2395): each member alternates on its own reagents.
-        if individual.active(standing_jobs):
+        if individual.active(standing_jobs, _individual_family(cohort)):
             await self._individual_rhythm_moves(cohort, stands, standing_jobs)
             return
         plan = craft_rhythm.rhythm(stands, standing)
@@ -11248,13 +11263,19 @@ class Bridge(discord.Client):
         return written
 
     async def _individual_rhythm_moves(self, cohort, stands, job_by_name) -> None:
-        """Each member's own gather or craft turn, in individual mode (#2395).
+        """Each member's own craft turn, in individual mode (#2395).
 
-        Outside a dungeon a member short of its reagents goes to gather while
-        a stocked member keeps crafting. Only that member's job row is
+        Outside a dungeon a stocked member sits down to craft while the rest
+        of its family does something else. Only that member's job row is
         written, and only on a change. A campaign queue that owns the
         family's job, a run in progress and a member sitting out to craft are
         all left alone, as on the family-wide path.
+
+        THE GATHER HALF IS HELD. A follower put on job quest gathers only
+        where its leader walks until a member may roam alone
+        (quadseven/mod-overseer#1518), and a leader put on quest walks the
+        crafting members away with it. So a short member's move to gather
+        is logged and not written; it keeps its job until that ships.
         """
         key = getattr(cohort, "key", None)
         label = key or "own"
@@ -11274,6 +11295,11 @@ class Bridge(discord.Client):
             log.info("craft_rhythm (individual): %s: %s", name,
                      craft_rhythm.report(plan))
             if not plan.changed:
+                continue
+            if plan.mode != craft_rhythm.MODE_CRAFT:
+                log.info("craft_rhythm (individual): %s would go to %s, held "
+                         "until a member may gather alone (mod-overseer#1518)",
+                         name, plan.mode)
                 continue
             refusal = jobs.why_not(plan.mode)
             if refusal:
@@ -26012,7 +26038,16 @@ class Bridge(discord.Client):
             # INDIVIDUAL MODE (#2395): outside a dungeon each member on job
             # train walks to its own trainer, and nobody else's aim is
             # cleared. Off, or linked, the one-traveller plan is unchanged.
-            alone = individual.active({m.name: m.job for m in members})
+            alone = individual.active(
+                {m.name: m.job for m in members}, _individual_family())
+            # A run in progress or a campaign queue that owns the job
+            # re-links the family before any per-member aim is written.
+            if alone and (
+                    await asyncio.to_thread(_queue_owns_job, _individual_family())
+                    or await self._mid_run([m.name for m in members])):
+                log.info("job train (individual): the family is on a run or "
+                         "its campaign queue owns its job - no member is aimed")
+                return
             plan = trainjob.plan(members, individual=alone)
             if not plan.traveller:
                 if trainjob.family_mode(members) == trainjob.MODE or (

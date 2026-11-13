@@ -489,6 +489,13 @@ def aim_only_statements(names, target):
     `aim_statements` does for a family with one traveller, would undo the
     other members' errands. A target is required; naming nobody writes
     nothing.
+
+    ONLY AN EMPTY COLUMN IS WRITTEN. Several passes already write a member's
+    own `travel_npc` (the trade errand, the learn aim, the site's orders), and
+    the module's catch-up and run claims live in the same column. This write
+    never replaces any of them: a member already walking somewhere keeps that
+    walk, and is aimed again on a later pass once the column is clear. The
+    same guard the learn aim uses (learnaim.py, `travel_npc = ''`).
     """
     if not target:
         raise ValueError("an aim needs a target")
@@ -504,8 +511,8 @@ def aim_only_statements(names, target):
     return [
         (
             "UPDATE overseer_roster SET travel_npc = %%s "  # noqa: S608 - placeholders from a COUNT, values still bound
-            "WHERE name IN (%s)" % marks,
-            (resolved, *chosen),
+            "WHERE travel_npc = %%s AND name IN (%s)" % marks,
+            (resolved, NONE, *chosen),
         )
     ]
 
