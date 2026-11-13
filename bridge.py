@@ -32119,6 +32119,119 @@ def _epic_blocks(holder: str, command: str) -> bool:
     return False
 
 
+# A SALE THE FAMILY ENCHANTER CAN BREAK DOWN INSTEAD (#2411, #1978). Every
+# stack a sale path lets go reaches `_insert_sell`, after the keep marks and
+# the epic gate, so this is the one place a disenchantable item can be routed
+# to the enchanter rather than a vendor: `bag_pressure.disenchant_route`
+# decides, this reads its facts and writes the row. OFF UNTIL DISENCHANT_ROUTE=1:
+# a module older than the named-item disenchant ignores the row's item and
+# holds it standing, which would block that enchanter's queue, so the switch
+# is turned on only once the worldserver runs the named disenchant. Off, every
+# sale stands as before. A row this route wrote in the last
+# DISENCHANT_ROUTE_HOURS for the same item, or one still standing at any age,
+# is the answer for that item: a standing disenchant (the module waits for a
+# safe idle moment, or for skill) is not sold under it, nor rewritten every
+# pass.
+DISENCHANT_ROUTE = os.environ.get("DISENCHANT_ROUTE", "0") == "1"
+DISENCHANT_ROUTE_HOURS = 24
+DISENCHANT_ROUTE_SOURCE = "disenchant-route"
+_DISENCHANT_FACTS_SQL = (
+    "SELECT it.class AS item_class, it.Quality AS quality, "
+    "it.DisenchantID AS disenchant_id, "
+    "it.RequiredDisenchantSkill AS required_skill, "
+    "(ii.flags & 1) AS soulbound FROM item_instance ii "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE ii.guid = %s"
+)
+_FAMILY_ENCHANTERS_SQL = (
+    "SELECT r.name AS name, s.value AS skill FROM overseer_roster r "
+    "JOIN characters c ON c.name = r.name "
+    "JOIN character_skills s ON s.guid = c.guid AND s.skill = 333 "
+    "WHERE r.enabled = 1 AND r.family IS NOT NULL AND r.family <> '' "
+    "AND r.family = (SELECT r2.family FROM overseer_roster r2 WHERE r2.name = %s)"
+)
+_DISENCHANT_ROUTED_SQL = (
+    "SELECT COUNT(*) AS n FROM overseer_command "
+    "WHERE kind IN ('disenchant', 'give') AND source = %s "
+    "AND target_name = %s AND command = %s "
+    "AND (status IN ('pending', 'claimed') "
+    "OR created_at > NOW() - INTERVAL %s HOUR)"
+)
+
+
+def _disenchant_facts(item_guid: int):
+    """The core's disenchant facts for one item instance, or None unread."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_DISENCHANT_FACTS_SQL, (int(item_guid),))
+        row = cur.fetchone()
+    if not row:
+        return None
+    return bag_pressure.DisenchantFacts(
+        item_class=int(row["item_class"]),
+        quality=int(row["quality"]),
+        disenchant_id=int(row["disenchant_id"] or 0),
+        required_skill=int(row["required_skill"]),
+        soulbound=bool(int(row["soulbound"] or 0)),
+    )
+
+
+def _family_enchanters(holder: str) -> dict:
+    """{name: Enchanting skill} for the enabled enchanters of the holder's family."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_FAMILY_ENCHANTERS_SQL, (holder,))
+        return {str(r["name"]): int(r["skill"] or 0) for r in cur.fetchall()}
+
+
+def _disenchant_instead(holder: str, item_guid: int):
+    """Row id written instead of a sale, 0 when the item already has its
+    route row (no sale either), or None to let the sale stand. A database or
+    connection fault falls back to the sale, changing nothing about today's
+    behaviour; a programming error raises rather than hiding as one."""
+    if not DISENCHANT_ROUTE:
+        return None
+    try:
+        route = bag_pressure.disenchant_route(
+            holder, _disenchant_facts(item_guid), _family_enchanters(holder))
+        if route is None:
+            return None
+        kind, enchanter = route
+        command = "guid:%d" % int(item_guid)
+        if kind == bag_pressure.DISENCHANT:
+            command += " count:1"
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_DISENCHANT_ROUTED_SQL, (
+                DISENCHANT_ROUTE_SOURCE, holder, command, DISENCHANT_ROUTE_HOURS))
+            if int((cur.fetchone() or {}).get("n") or 0):
+                return 0
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (holder, command, kind,
+                 enchanter if kind == bag_pressure.GIVE_TO_ENCHANTER else "",
+                 DISENCHANT_ROUTE_SOURCE),
+            )
+            row_id = cur.lastrowid or 0
+            if kind == bag_pressure.GIVE_TO_ENCHANTER and row_id:
+                # The enchanter's half, written now: the module holds a named
+                # disenchant standing ("not owned") until the give lands, and
+                # DoGive moves the same item_instance guid.
+                cur.execute(
+                    "INSERT INTO overseer_command "
+                    "(target_name, command, kind, target_arg, source) "
+                    "VALUES (%s, %s, 'disenchant', '', %s)",
+                    (enchanter, command + " count:1", DISENCHANT_ROUTE_SOURCE),
+                )
+        log.info("economy: %s %s %s instead of selling it (enchanter %s)",
+                 holder, "disenchants" if kind == bag_pressure.DISENCHANT
+                 else "gives", command, enchanter)
+        return row_id
+    except (pymysql.err.MySQLError, OSError):
+        log.exception("disenchant route: cannot route %s's item %d, so it is "
+                      "sold as before", holder, int(item_guid))
+        return None
+
+
 def _insert_sell(candidate: bag_pressure.SellCandidate) -> int:
     """Queue one explicitly chosen stack for the world-side vendor executor."""
     command = "guid:%d count:%d" % (candidate.item_guid, candidate.count)
@@ -32127,6 +32240,9 @@ def _insert_sell(candidate: bag_pressure.SellCandidate) -> int:
         return 0
     if _epic_blocks(candidate.holder, command):
         return 0
+    routed = _disenchant_instead(candidate.holder, candidate.item_guid)
+    if routed is not None:
+        return routed
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
