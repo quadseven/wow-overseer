@@ -130,17 +130,50 @@ HEARTH_COOLDOWN_WORDS = "hearthstone is on cooldown"
 HEARTH_BACKOFF_SECONDS = 900
 
 
-def hearth_backed_off(newest: list) -> set:
-    """The members whose newest hearth row for this source was refused for the
-    stone's cooldown less than HEARTH_BACKOFF_SECONDS ago. `newest` is one row
-    per member: {name, status, detail, age} with the age in seconds."""
+# A CLASS QUEST WALK IS NOT HEARTHED OVER (#2187). The hearth cast holds the
+# character, so a class walk that arrives during it is refused as held and then
+# waits classquest.HELD_BACKOFF_MINUTES, while the next cycle wrote another
+# hearth. A member with a class walk row (guildjobs source `classquest` or
+# `classquest-cross`) inside that window is left alone, and a hearth the world
+# refused as held, or left unchanged, is not written again inside it either.
+# A member still stranded when the window passes is sent home as before.
+CLASS_WALK_WINDOW_SECONDS = 12 * 60
+CLASS_WALK_SOURCE_PREFIXES = ("guildjobs:classquest:", "guildjobs:classquest-cross:")
+HEARTH_HELD_WORDS = "character is held by another verb"
+
+
+def class_walk_busy(rows: list) -> set:
+    """The members with a class quest walk row younger than
+    CLASS_WALK_WINDOW_SECONDS. `rows` is one per member: {name, age} with the
+    age in seconds."""
     return {
         str(row["name"])
-        for row in newest or ()
-        if str(row.get("status") or "") == "error"
-        and HEARTH_COOLDOWN_WORDS in str(row.get("detail") or "")
-        and int(row.get("age") or 0) < HEARTH_BACKOFF_SECONDS
+        for row in rows or ()
+        if int(row.get("age") or 0) < CLASS_WALK_WINDOW_SECONDS
     }
+
+
+def hearth_backed_off(newest: list) -> set:
+    """The members whose newest hearth row for this source was refused for the
+    stone's cooldown less than HEARTH_BACKOFF_SECONDS ago, or was refused as
+    held or left unchanged less than CLASS_WALK_WINDOW_SECONDS ago. `newest` is
+    one row per member: {name, status, detail, age} with the age in seconds."""
+    out = set()
+    for row in newest or ():
+        status = str(row.get("status") or "")
+        detail = str(row.get("detail") or "")
+        age = int(row.get("age") or 0)
+        if status == "error" and HEARTH_COOLDOWN_WORDS in detail:
+            held = age < HEARTH_BACKOFF_SECONDS
+        elif status == "unchanged" or (
+            status == "error" and HEARTH_HELD_WORDS in detail
+        ):
+            held = age < CLASS_WALK_WINDOW_SECONDS
+        else:
+            held = False
+        if held:
+            out.add(str(row["name"]))
+    return out
 
 
 def carry_xp_lines(keyword, carrier, start, end, xp_for_level):
