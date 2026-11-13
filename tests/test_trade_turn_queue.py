@@ -311,6 +311,21 @@ class TheTurnCountsTradeTimeInTheBridge(unittest.TestCase):
         self.assertFalse(w.turns["Zug"].over)
         self.assertEqual({"Zug"}, w.held)
 
+    def test_a_locked_errand_loop_does_not_release_a_dungeon_job_family(self):
+        # Other loops hold the errand lock too (weapon skill, errand ticks); a
+        # family on a dungeon job must not read as on an errand (review of #2384).
+        w = started_world()
+        w.run_pass()
+        w.zug()["job"] = "dungeon:ragefire"
+        w.clock.now += TOWN_SECONDS + 10
+        w.run_pass()
+        # The queue wrote its job back (the turn's pass had sent it to quest).
+        w.zug()["job"] = "dungeon:ragefire"
+        w.lock = types.SimpleNamespace(locked=lambda: True)
+        w.clock.now += 30
+        w.run_pass()
+        self.assertEqual([], w.released, "released an errand that did not exist")
+
     def test_a_town_run_the_errand_did_not_write_keeps_the_old_clock(self):
         w = started_world()
         w.run_pass()

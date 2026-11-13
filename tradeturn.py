@@ -171,6 +171,7 @@ def job_kind(
     last_source: str,
     errand_source: str,
     town_run: str,
+    errand_locked: bool = False,
 ) -> str:
     """The leader's job as the turn's clock reads it.
 
@@ -185,7 +186,11 @@ def job_kind(
     if errand_active:
         return TOWN
     if job == town_run:
-        return ERRAND_DONE if last_source == errand_source else TOWN
+        # The errand lock is held by other loops too, so it only keeps a
+        # `town run` from reading as finished; it never makes another job TOWN.
+        if errand_locked or last_source != errand_source:
+            return TOWN
+        return ERRAND_DONE
     return OTHER
 
 

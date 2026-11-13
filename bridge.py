@@ -23394,12 +23394,14 @@ class Bridge(discord.Client):
         # tradeturn.job_kind.
         kind = tradeturn.job_kind(
             job, (craft_rhythm.MODE_GATHER, craft_rhythm.MODE_CRAFT),
-            # An errand mid start holds its lock before its state is set.
-            _town_errand_active(names)
-            or self._town_errand_lock(names).locked(),
+            _town_errand_active(names),
+            # The source read opens a connection: only on the `town run` branch.
             (await asyncio.to_thread(_last_job_source, leader)
              if job == jobs.TOWN_RUN else ""),
-            TOWN_ERRAND_SOURCE, jobs.TOWN_RUN)
+            TOWN_ERRAND_SOURCE, jobs.TOWN_RUN,
+            # An errand mid start holds its lock before its state is set; the
+            # lock only matters to a `town run` (other loops hold it too).
+            self._town_errand_lock(names).locked())
 
         async def default_job():
             for name in names:

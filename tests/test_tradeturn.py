@@ -156,6 +156,23 @@ class TheTurnCountsOnlyTradeTime(unittest.TestCase):
         self.assertEqual(tradeturn.ON_TRADE, kind("craft", False, "errand"))
         self.assertEqual(tradeturn.OTHER, kind("quest", False, "errand"))
 
+    def test_a_real_errand_still_reads_another_job_as_town(self):
+        trade = ("craft", "gather")
+        kind = tradeturn.job_kind("quest", trade, True, "errand", "errand", "town run")
+        self.assertEqual(tradeturn.TOWN, kind)
+
+    def test_the_errand_lock_never_turns_another_job_into_town(self):
+        trade = ("craft", "gather")
+        for job in ("quest", "dungeon:ragefire"):
+            kind = tradeturn.job_kind(
+                job, trade, False, "errand", "errand", "town run", True
+            )
+            self.assertEqual(tradeturn.OTHER, kind, job)
+        held = tradeturn.job_kind(
+            "town run", trade, False, "errand", "errand", "town run", True
+        )
+        self.assertEqual(tradeturn.TOWN, held)
+
     def test_a_dungeon_job_spending_the_allowance_does_not_release(self):
         said = self.step(self.live(off=590), tradeturn.OTHER, 60)
         self.assertEqual(tradeturn.HOLD, said.action)
