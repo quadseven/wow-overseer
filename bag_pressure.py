@@ -2052,6 +2052,113 @@ def bag_candidates(
 
 
 # ---------------------------------------------------------------------------
+# AN EPIC A GUILD MEMBER COULD WEAR IS NEVER SOLD OR DESTROYED (#2385)
+#
+# Read on the dev realm on 2026-11-13: the families sold 16 bind-on-equip
+# classic epics of required level 36 to 48 to vendors in ten days, because the
+# family-fit gate asks only the five members of a family, all at 60, and a
+# level 44 epic fits none of them. Both family guilds held every class, many
+# members below that level. The operator's rule: an epic or better is kept
+# while any member of either guild could EVER wear it (the class can use the
+# armour or weapon type at the level cap, and the required level is at most
+# the cap), and it is the gear routing's to place. Only an epic nobody in the
+# guilds could ever equip may be disenchanted or sold.
+#
+# A SOULBOUND EPIC CAN ONLY EVER BE ITS HOLDER'S, so for one the holder's
+# class is the question; the guilds' classes answer it when that was not read.
+#
+# FAIL CLOSED: an unread item fact, or no guild classes at all, keeps it.
+EPIC_QUALITY = 4
+GUILD_LEVEL_CAP = 60
+
+
+def _read_int(value):
+    """The integer `value` holds, or None when it holds none."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _epic_wearer_classes(row: dict, guild_classes) -> frozenset:
+    classes = frozenset(
+        c for c in (_read_int(v) for v in (guild_classes or ())) if c and c > 0
+    )
+    flags = _read_int(row.get("instance_flags")) or 0
+    holder_class = _read_int(row.get("holder_class")) or 0
+    if flags & _INSTANCE_SOULBOUND and holder_class > 0:
+        return frozenset({holder_class})
+    return classes
+
+
+def _class_could_ever_wear(holding, class_id: int) -> bool:
+    character = gear.CharacterState("", int(class_id), GUILD_LEVEL_CAP)
+    return bool(
+        gear.usable_by_class(holding, int(class_id))
+        and gear.wearable_armor(holding, character)
+        and gear.class_wields(holding, character)
+    )
+
+
+def epic_kept(row: dict, guild_classes) -> bool:
+    """Is this an epic or better that some guild member could ever wear?
+
+    `row` carries the item's `quality`, `required_level`, `item_class`,
+    `subclass`, `inventory_type` and `allowable_class`, and for the soulbound
+    case `instance_flags` and `holder_class`. `guild_classes` is every class
+    (item_template class id) among the roster families and their guilds'
+    members. True means the item must not be sold, destroyed or disenchanted.
+    """
+    quality = _read_int(row.get("quality"))
+    if quality is None:
+        return True
+    if quality < EPIC_QUALITY:
+        return False
+    item_class = _read_int(row.get("item_class"))
+    inventory_type = _read_int(row.get("inventory_type"))
+    required_level = _read_int(row.get("required_level"))
+    if item_class is None or inventory_type is None or required_level is None:
+        return True
+    if item_class not in EQUIPMENT_CLASSES or inventory_type == 0:
+        return False
+    if required_level > GUILD_LEVEL_CAP:
+        return False
+    classes = _epic_wearer_classes(row, guild_classes)
+    if not classes:
+        return True
+    allowable = _read_int(row.get("allowable_class"))
+    subclass = _read_int(row.get("subclass"))
+    holding = gear.Holding(
+        holder="",
+        guid=0,
+        entry=_read_int(row.get("entry")) or 0,
+        name=str(row.get("name") or ""),
+        quality=quality,
+        item_level=_read_int(row.get("item_level")) or 0,
+        required_level=required_level,
+        allowable_class=-1 if allowable is None else allowable,
+        inventory_type=inventory_type,
+        item_class=item_class,
+        item_subclass=gear.SUBCLASS_UNSTATED if subclass is None else subclass,
+    )
+    return any(_class_could_ever_wear(holding, c) for c in classes)
+
+
+def epic_kept_line(row: dict, holder: str) -> str:
+    """The one log line a refused sale of a kept epic writes.
+
+    It says only what is true today: the gear routing executor
+    (gearroutingexec.py) runs as a dry run, so a kept epic stays where it is
+    until a hand-off pass moves it.
+    """
+    return (
+        "kept %s: an epic a guild member can wear; it stays in %s's bags "
+        "until gear routing places it"
+        % (row.get("name") or "item %s" % row.get("item_guid"), holder)
+    )
+
+
+# ---------------------------------------------------------------------------
 # THE FAMILY-FIT GATE, TRANSLATED (infra#3449)
 #
 # gear.py answers in names because that is what a hand-off needs: WHO should
