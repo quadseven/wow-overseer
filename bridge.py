@@ -23390,12 +23390,16 @@ class Bridge(discord.Client):
         seen = _TRADE_TURN_SEEN.get(key)
         elapsed = max(0.0, now - seen) if seen is not None else 0.0
         _TRADE_TURN_SEEN[key] = now
-        if job in (craft_rhythm.MODE_GATHER, craft_rhythm.MODE_CRAFT):
-            kind = tradeturn.ON_TRADE
-        elif job == jobs.TOWN_RUN or _town_errand_active(names):
-            kind = tradeturn.TOWN
-        else:
-            kind = tradeturn.OTHER
+        # A TOWN RUN THE ERRAND LEFT BEHIND ENDS THE TURN (#2379): see
+        # tradeturn.job_kind.
+        kind = tradeturn.job_kind(
+            job, (craft_rhythm.MODE_GATHER, craft_rhythm.MODE_CRAFT),
+            # An errand mid start holds its lock before its state is set.
+            _town_errand_active(names)
+            or self._town_errand_lock(names).locked(),
+            (await asyncio.to_thread(_last_job_source, leader)
+             if job == jobs.TOWN_RUN else ""),
+            TOWN_ERRAND_SOURCE, jobs.TOWN_RUN)
 
         async def default_job():
             for name in names:
