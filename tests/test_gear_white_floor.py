@@ -85,6 +85,67 @@ class WhiteFloorTests(unittest.TestCase):
         self.assertEqual((), gearup.plan_buys({"Zug": character}, [trinket]))
 
 
+WHITE_THROWN = {"item_level": 45, "item_class": 2, "item_subclass": 16, "quality": 1}
+
+
+def ranged_user(cls, weapons):
+    return {
+        "class": cls,
+        "level": 52,
+        "purse": 100000,
+        "skills": {"weapons": weapons},
+        "equipped": {"ranged": WHITE_THROWN},
+    }
+
+
+class WhiteThrowingWeaponTests(unittest.TestCase):
+    """Criterion 3 of #2372: a white throwing weapon in the ranged slot counts."""
+
+    def test_a_worn_white_throwing_weapon_gives_way_to_a_usable_green_bow_gun_or_crossbow(
+        self,
+    ):
+        greens = {
+            "bow": offer(15, 2, 2, ilvl=46, quality=2),
+            "gun": offer(26, 3, 2, ilvl=46, quality=2),
+            "crossbow": offer(26, 18, 2, ilvl=46, quality=2),
+        }
+        for cls in ("hunter", "warrior", "rogue"):
+            for kind, green in greens.items():
+                with self.subTest(cls=cls, kind=kind):
+                    character = ranged_user(cls, {2, 3, 16, 18})
+
+                    buys = gearup.plan_buys({"Zug": character}, [green])
+
+                    self.assertEqual(
+                        [("ranged", 9)], [(b.slot, b.listing_id) for b in buys]
+                    )
+
+    def test_a_worn_white_throwing_weapon_gives_way_to_a_green_throwing_weapon(self):
+        green = offer(25, 16, 2, ilvl=46, quality=2)
+
+        buys = gearup.plan_buys({"Zug": ranged_user("warrior", {16})}, [green])
+
+        self.assertEqual([("ranged", 9)], [(b.slot, b.listing_id) for b in buys])
+
+    def test_a_green_bow_is_not_bought_for_a_member_without_the_bow_skill(self):
+        green_bow = offer(15, 2, 2, ilvl=46, quality=2)
+
+        buys = gearup.plan_buys({"Zug": ranged_user("rogue", {16})}, [green_bow])
+
+        self.assertEqual((), buys)
+
+    def test_the_guild_vendor_step_also_replaces_a_white_throwing_weapon(self):
+        green_bow = offer(15, 2, 2, ilvl=46, quality=2, entry=700)
+
+        buys = gearup.plan_vendor_buys(
+            {"Zug": ranged_user("hunter", {2, 16})},
+            {"Zug": [green_bow]},
+            replace_stale=True,
+        )
+
+        self.assertEqual([("ranged", 700)], [(b.slot, b.entry) for b in buys])
+
+
 class _Cursor:
     def __init__(self, rows):
         self.rows = rows
