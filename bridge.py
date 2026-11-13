@@ -29123,6 +29123,16 @@ _GUILD_HEARTH_NEWEST = (
     "AND target_name IN (%s) GROUP BY target_name) m ON m.id = c.id")
 
 
+# Members with a class quest walk row inside the class back-off: a hearth over a
+# class walk holds the character and the walk is refused as held (#2187).
+_GUILD_CLASS_WALKS = (
+    "SELECT target_name AS name, MIN(TIMESTAMPDIFF(SECOND, created_at, NOW())) AS age "
+    "FROM overseer_command WHERE (source LIKE %s OR source LIKE %s) "
+    "AND created_at > NOW() - INTERVAL "
+    + str(guildrun.CLASS_WALK_WINDOW_SECONDS) + " SECOND "
+    "AND target_name IN (%s) GROUP BY target_name")
+
+
 def _hearth_stranded_guild_members() -> int:
     """Send home by hearthstone every guild member stranded on the other
     faction's ground or left alone inside a dungeon (guildrun.stranded), never
@@ -29153,6 +29163,11 @@ def _hearth_stranded_guild_members() -> int:
         cur.execute(_GUILD_HEARTH_NEWEST % ("%s", ",".join(["%s"] * len(due))),
                     (guildrun.SOURCE, *due))
         recent |= guildrun.hearth_backed_off(list(cur.fetchall()))
+        # A member whose class quest walk is under way, or was asked inside the
+        # class back-off, is not hearthed over (#2187).
+        cur.execute(_GUILD_CLASS_WALKS % ("%s", "%s", ",".join(["%s"] * len(due))),
+                    (*(p + "%" for p in guildrun.CLASS_WALK_SOURCE_PREFIXES), *due))
+        recent |= guildrun.class_walk_busy(list(cur.fetchall()))
     sent = 0
     for name in due:
         if name in recent:
