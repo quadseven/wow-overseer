@@ -194,7 +194,7 @@ class TheBridgeWritesTheSeatsTheTabsShow(unittest.TestCase):
             text = fh.read()
         for name, lineup_call in (
             ("def _write_raid_specs(", "lineup = raidlineup.build_lineup(members"),
-            ("def _drive_raid(", "lineup = _raid_lineup_for_order("),
+            ("def _drive_raid(", "lineup, short = raidrun.lineup_for_order("),
         ):
             body = text[text.index(name) :]
             call = body.index(lineup_call)

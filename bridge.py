@@ -4064,18 +4064,6 @@ def _log_raid_arrivals(cur, keyword: str, seats: list) -> None:
         log.info("%s", raidrun.arrival_line(keyword, raidrun.arrival_plan(raiders, door)))
 
 
-def _raid_lineup_for_order(keyword: str, members: list, names: list,
-                           family: str) -> dict:
-    """Use the Raid tab's lineup rules for the family's guild and order."""
-    if keyword == raidrun.UPPER_SPIRE:
-        ten = spirerun.lineup(members, list(names))
-        if ten.short:
-            log.info("raid: %s has no ten for %s: %s",
-                     campaignqueue._family(family), keyword, ten.short)
-        return ten.as_dict()
-    return raidlineup.build_lineup(members, guaranteed=list(names))
-
-
 def _raid_seat_eligibility(cur, keyword: str, lineup: dict, seats: list) -> str:
     """Re-read selected characters and refuse seats that cannot assemble."""
     names = [seat[2] for seat in seats]
@@ -4123,10 +4111,11 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
     """Write an ordered raid's seats, then its job. Returns jobs written.
 
     THE SEATS ARE THE LINEUP TAB'S OWN SELECTION: the family's guild is read
-    the way the Raid tab reads it and handed to raidlineup.build_lineup with
-    the family guaranteed a place, and the answer is written to
+    the way the Raid tab reads it and handed to raidrun.lineup_for_order,
+    which guarantees the family a place; its answer is written to
     overseer_raid_seat for mod-overseer's raid run to form from
-    (mod-overseer#634). SEATS FIRST, JOB SECOND: a job with no seats would
+    (mod-overseer#634). raidrun.lineup_for_order applies the pure seat rules.
+    SEATS FIRST, JOB SECOND: a job with no seats would
     park the family on a raid the module cannot form. A realm without the
     table (the module's migration not applied) writes neither.
     """
@@ -4138,7 +4127,10 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
         cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes=holes),  # noqa: S608
                     tuple(names))
         members = _with_readiness(cur, [dict(row) for row in cur.fetchall()])
-        lineup = _raid_lineup_for_order(keyword, members, names, family)
+        lineup, short = raidrun.lineup_for_order(keyword, members, names)
+        if short:
+            log.info("raid: %s has no ten for %s: %s",
+                     campaignqueue._family(family), keyword, short)
         seats = raidrun.seat_rows(family, keyword, lineup)
         if not seats:
             log.warning("raid: %s has no lineup for %s - nobody in its guild "

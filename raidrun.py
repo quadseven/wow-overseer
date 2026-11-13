@@ -199,6 +199,25 @@ ELIGIBILITY_SQL = (
 )
 
 
+def lineup_for_order(keyword: str, members: list, names: list) -> tuple[dict, str]:
+    """Choose the raid's seat shape from its keyword and the guild roster.
+
+    The raid type decides which pure lineup rules apply. Upper Spire is a ten
+    seat run; the other supported raid order is Molten Core's forty seats.
+    Return the lineup plus the Upper Spire shortfall, if any, so the adapter
+    can log it without making a second decision.
+    """
+    if keyword == UPPER_SPIRE:
+        import spirerun
+
+        ten = spirerun.lineup(members, list(names))
+        return ten.as_dict(), ten.short
+
+    import raidlineup
+
+    return raidlineup.build_lineup(members, guaranteed=list(names)), ""
+
+
 # --- the seat targets ------------------------------------------------------------
 #
 # THE TALENT TREE EACH RAIDER'S SEAT NEEDS, in mod-overseer's

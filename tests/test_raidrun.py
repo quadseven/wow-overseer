@@ -43,6 +43,42 @@ class TheKeywordIsAnOrderAndNeverAPlan(unittest.TestCase):
         self.assertTrue(jobs.is_raid_job("raid:moltencore"))
         self.assertFalse(jobs.is_raid_job("raid prep"))
 
+
+class TheOrderUsesItsRaidLineupRules(unittest.TestCase):
+    def test_molten_core_uses_the_forty_seat_lineup(self):
+        lineup, short = raidrun.lineup_for_order("moltencore", GUILD, ["Grug"])
+        self.assertEqual("", short)
+        self.assertEqual(40, sum(len(group["members"]) for group in lineup["groups"]))
+        self.assertIn(
+            "Grug",
+            [
+                member["name"]
+                for group in lineup["groups"]
+                for member in group["members"]
+            ],
+        )
+
+    def test_upper_spire_uses_its_ten_seat_lineup_and_reports_shortfall(self):
+        family = ["Tank", "Heal", "Mage", "Rogue", "Shaman"]
+        guild = [
+            {"name": "Tank", "level": 60, "class_id": 1, "spec": "Protection"},
+            {"name": "Heal", "level": 60, "class_id": 5, "spec": "Holy"},
+            {"name": "Mage", "level": 60, "class_id": 8, "spec": ""},
+            {"name": "Rogue", "level": 60, "class_id": 4, "spec": ""},
+            {"name": "Shaman", "level": 60, "class_id": 7, "spec": "Restoration"},
+            {"name": "Heal2", "level": 60, "class_id": 5, "spec": "Holy"},
+            {"name": "Mage2", "level": 60, "class_id": 8, "spec": ""},
+            {"name": "Lock", "level": 60, "class_id": 9, "spec": ""},
+            {"name": "Hunter", "level": 60, "class_id": 3, "spec": ""},
+            {"name": "Rogue2", "level": 60, "class_id": 4, "spec": ""},
+        ]
+        lineup, short = raidrun.lineup_for_order("ubrs", guild, family)
+        self.assertEqual(10, sum(len(group["members"]) for group in lineup["groups"]))
+        self.assertEqual("", short)
+        too_small, short = raidrun.lineup_for_order("ubrs", guild[:5], family)
+        self.assertEqual(0, sum(len(group["members"]) for group in too_small["groups"]))
+        self.assertTrue(short)
+
     def test_the_job_fits_the_column(self):
         # overseer_roster.job is VARCHAR(32) since mod-overseer's job_width.
         for keyword in jobs.RAID_KEYWORDS:
@@ -281,7 +317,6 @@ def _load_drive_raid(
         ast.get_source_segment(BRIDGE, _function(name))
         for name in (
             "_withheld",
-            "_raid_lineup_for_order",
             "_raid_seat_eligibility",
             "_write_raid_seats",
             "_log_raid_arrivals",
