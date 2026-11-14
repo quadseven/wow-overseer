@@ -201,6 +201,7 @@ import memberloop
 import tabard
 import teamsync
 import towntrip
+import deathcells
 import townerrand
 import townslot
 import claims
@@ -10659,6 +10660,14 @@ class Bridge(discord.Client):
         else:
             leader = await asyncio.to_thread(_cohort_leader, cohort)
         slot = self._cohort_town_slot(cohort)
+        # GROUND THE FAMILY DIED ON TWICE IS NOT A WALK (#2457): a ground aim
+        # whose line from the leader crosses a death disc is not written.
+        if travel.is_ground_aim(aim):
+            refusal = await asyncio.to_thread(_death_disc_refusal, leader, aim)
+            if refusal:
+                log.warning("town slot: %s asked for %s and was refused: %s",
+                            claimant, aim, refusal)
+                return False
         column = await asyncio.to_thread(_current_travel_npc, leader)
         now = time.monotonic()
         trainer_route = (
@@ -41349,6 +41358,69 @@ def _insert_town_errand(errand) -> int:
         return cur.lastrowid or 0
 
 
+def _fetch_death_discs() -> list:
+    """The avoid discs the last week's lava, slime and fall deaths make, or []
+    when unread. ADVISORY: a broken read must not stop a walk (#2457)."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(deathcells.SQL)
+            return deathcells.discs([dict(r) for r in cur.fetchall()])
+    except pymysql.err.MySQLError as exc:
+        log.warning("death discs: the death table could not be read (%s); "
+                    "walks are not checked against it", exc.args[:1])
+        return []
+
+
+def _death_disc_refusal(leader: str, aim: str) -> str:
+    """Why `leader` must not be sent to ground aim `aim`, or ""."""
+    discs = _fetch_death_discs()
+    if not discs:
+        return ""
+    row = _fetch_positions([leader]).get(leader)
+    if not row:
+        return ""
+    here = {"map_id": row.get("map_id"), "x": row.get("pos_x"),
+            "y": row.get("pos_y")}
+    return deathcells.aim_refusal(discs, here, aim)
+
+
+def _fetch_quest_ends(quests: list) -> dict:
+    """{quest: [{map_id, x, y}]} of the creatures that end each; {} unread."""
+    if not quests:
+        return {}
+    sql = deathcells.ENDS_SQL.format(quests=", ".join(["%s"] * len(quests)))
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(sql, tuple(int(q) for q in quests))
+            out: dict = {}
+            for r in cur.fetchall():
+                out.setdefault(int(r["quest"]), []).append(
+                    {"map_id": r["map_id"], "x": r["x"], "y": r["y"]})
+            return out
+    except pymysql.err.MySQLError as exc:
+        log.warning("death discs: quest ends could not be read (%s)",
+                    exc.args[:1])
+        return {}
+
+
+def _pass_over_deadly_quests(leader: str, candidates: tuple, chosen: int) -> int:
+    """`chosen`, or the next candidate whose walk clears the death discs."""
+    discs = _fetch_death_discs()
+    row = _fetch_positions([leader]).get(leader) if discs else None
+    if not discs or not row:
+        return chosen
+    order = [int(q.id) for q in candidates]
+    if chosen and chosen not in order:
+        order.insert(0, chosen)
+    here = {"map_id": row.get("map_id"), "x": row.get("pos_x"),
+            "y": row.get("pos_y")}
+    picked, notes = deathcells.pick_quest(
+        discs, here, order, _fetch_quest_ends(order))
+    for note in notes:
+        log.warning("council: %s", note)
+    return picked
+
+
 def _choose_drive_quest(plan, seen: dict | None = None) -> int:
     """Which quest the family's traveller should actually be aimed at, or 0.
 
@@ -41376,6 +41448,13 @@ def _choose_drive_quest(plan, seen: dict | None = None) -> int:
         wanted=int(plan.quest_id or 0),
         beneficiary=plan.beneficiary,
     )
+    if chosen:
+        chosen = _pass_over_deadly_quests(
+            leader,
+            questbook.drive_candidates(
+                ledger, held_by_traveller=driveable,
+                wanted=int(plan.quest_id or 0), beneficiary=plan.beneficiary),
+            chosen)
     log.info(
         "council: quest choice leader=%s beneficiary=%s wanted=%s chosen=%s "
         "driveable=%d (quests the beneficiary holds, any holder is aimed) "
