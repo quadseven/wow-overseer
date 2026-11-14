@@ -22321,6 +22321,16 @@ class Bridge(discord.Client):
                 ", ".join(sorted(smelters)),
             )
             return
+        # NOT EVERY FORGE IS A WALK (#2538): the nearest on the whole map can
+        # be past a death disc, in hostile ground, or a split family's drag.
+        # Looked up: the adapter tests load this method in isolation.
+        judge = globals().get("_forge_refusal")
+        why = await asyncio.to_thread(
+            judge, names, leader, spawn, forge.aim) if judge else ""
+        if why:
+            log.info("forge: %s wait: leader=%s is not walked to a Forge: %s",
+                     ", ".join(sorted(smelters)), leader, why)
+            return
         aimed = await self._claim_town_slot("forge", leader, forge.aim,
                                              cohort=_cohort_key(cohort))
         if not aimed:
@@ -38681,6 +38691,54 @@ def _nearest_forge(name: str):
             raise
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def _forge_refusal(names: list, leader: str, spawn, aim: str) -> str:
+    """Why the leader must not be walked to the Forge `spawn` (#2538), or "".
+
+    Death discs first (the walk, or the Forge itself, over ground the family
+    died on), then travel.forge_refusal: distance, a split family and hostile
+    spawns beside the Forge, from levelroute's own spawn cells. ADVISORY: an
+    unreadable table refuses nothing.
+    """
+    rows = _fetch_positions(list(names))
+    here = rows.get(leader)
+    if not here:
+        return ""
+    start = {"map_id": here.get("map_id"), "x": here.get("pos_x"),
+             "y": here.get("pos_y")}
+    discs = _fetch_death_discs()
+    if discs:
+        goal = {"map_id": spawn.get("map_id"), "x": spawn.get("x"),
+                "y": spawn.get("y")}
+        hit = deathcells.crossing(discs, start, goal)
+        if hit is None:
+            hit = next((d for d in discs
+                        if d.map_id == goal["map_id"]
+                        and ((d.x - goal["x"]) ** 2 + (d.y - goal["y"]) ** 2)
+                        ** 0.5 <= d.radius), None)
+        if hit is not None:
+            return "the walk to %s crosses ground the family died on: %s" % (
+                aim, hit.said())
+    positions = {n: {"map_id": r.get("map_id"), "x": r.get("pos_x"),
+                     "y": r.get("pos_y")} for n, r in rows.items()}
+    level = 0
+    team = ""
+    hostile = ()
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            members = _planner_rows(
+                cur, levelroute.MEMBERS_SQL.format(
+                    holes=campaignplan.holes(1)), (leader,), "the leader") or []
+        level = int(members[0].get("level") or 0) if members else 0
+        team = levelroute.team_of(members)
+        cells = _level_world()[1]
+        hostile = tuple(c for c in (cells or ())
+                        if levelroute.hostile_to(c, team)) if team else ()
+    except pymysql.err.MySQLError as exc:
+        log.warning("forge: the leader's level could not be read (%s); the "
+                    "ground is not judged", exc.args[:1])
+    return travel.forge_refusal(spawn, leader, positions, hostile, level)
 
 
 def _forge_errands(family: str | None = None) -> dict:
