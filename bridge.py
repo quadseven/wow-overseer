@@ -41093,6 +41093,7 @@ def _fetch_recipe_member_meta(names: list) -> tuple[dict, dict]:
             cur.execute(sql, names)
             rows = cur.fetchall()
         except pymysql.err.MySQLError:
+            log.warning("recipebook: cannot read member classes/levels this pass")
             return {}, {}
     for row in rows or ():
         name = row["name"]
@@ -41152,7 +41153,7 @@ _RECIPE_HELD_SQL = (
     "JOIN characters c ON c.guid = ci.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
-    "WHERE c.name IN (%s) AND it.class = %%s AND it.spellid_2 > 0"
+    "WHERE c.name IN (%s) AND it.class = %%s AND (it.spellid_2 > 0 OR it.subclass = 0)"
 )
 
 
@@ -41179,6 +41180,12 @@ def _fetch_held_recipes(names: list) -> list:
             required_skill=int(row["required_skill"] or 0),
             required_rank=int(row["required_rank"] or 0),
             recipe_spell=int(row["recipe_spell"] or 0),
+            allowable_class=(
+                -1
+                if row.get("allowable_class") is None
+                else int(row["allowable_class"])
+            ),
+            required_level=int(row.get("required_level") or 0),
         )
         for row in rows
     ]

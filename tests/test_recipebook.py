@@ -935,6 +935,69 @@ class TheClassNineTriage(unittest.TestCase):
         self.assertEqual([(x.holder, x.entry) for x in learns], [("Bork", 17682)])
         self.assertEqual(len(skipped), 1)
 
+    def test_fetch_held_recipes_wires_class_level_and_libram_into_plan_learns(self):
+        from unittest import mock
+        import bridge
+
+        rows = [
+            {
+                "holder": "Grug",
+                "item_guid": 1001,
+                "entry": 17682,
+                "label": "Book: Gift of the Wild",
+                "required_skill": 0,
+                "required_rank": 0,
+                "recipe_spell": 21849,
+                "allowable_class": 32256,
+                "required_level": 50,
+            },
+            {
+                "holder": "Bork",
+                "item_guid": 1002,
+                "entry": 17682,
+                "label": "Book: Gift of the Wild",
+                "required_skill": 0,
+                "required_rank": 0,
+                "recipe_spell": 21849,
+                "allowable_class": 32256,
+                "required_level": 50,
+            },
+            {
+                "holder": "Grug",
+                "item_guid": 1003,
+                "entry": 18334,
+                "label": "Libram of Protection",
+                "required_skill": 0,
+                "required_rank": 0,
+                "recipe_spell": 0,
+                "allowable_class": -1,
+                "required_level": 0,
+            },
+        ]
+        cur = mock.MagicMock()
+        cur.fetchall.return_value = rows
+        conn = mock.MagicMock()
+        conn.__enter__.return_value = conn
+        conn.cursor.return_value.__enter__.return_value = cur
+        with mock.patch("bridge._connect", return_value=conn):
+            held = bridge._fetch_held_recipes(["Grug", "Bork"])
+        self.assertEqual(held[0].allowable_class, 32256)
+        self.assertEqual(held[0].required_level, 50)
+        self.assertEqual(held[2].allowable_class, -1)
+        self.assertNotIn('AND it.spellid_2 > 0"', bridge._RECIPE_HELD_SQL)
+        self.assertIn("it.subclass = 0", bridge._RECIPE_HELD_SQL)
+        learns, skipped = recipebook.plan_learns(
+            held,
+            {"Grug": {}, "Bork": {}},
+            member_classes={"Grug": 1, "Bork": 11},
+            member_levels={"Grug": 60, "Bork": 60},
+        )
+        self.assertEqual([(x.holder, x.entry) for x in learns], [("Bork", 17682)])
+        self.assertEqual(
+            [(x.character, x.entry) for x in skipped],
+            [("Grug", 17682), ("Grug", 18334)],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
