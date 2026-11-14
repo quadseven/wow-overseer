@@ -426,18 +426,31 @@ class TheLeaderDwellsAtANode(unittest.TestCase):
 
     def test_the_stand_clock_starts_on_arrival_and_keeps_its_start(self):
         near, far = spawn(0, 10), spawn(300, 0)
-        here = leader_at(0.0, 0.0)
+        here = leader_at(0.0, 0.0, zone=490)
         first = farmjob.stand_update(None, (near, far), here, 100.0)
         self.assertEqual(first[1], 100.0)
         again = farmjob.stand_update(first, (near, far), here, 130.0)
         self.assertEqual(again, first)
 
+    def test_a_spawn_in_another_zone_does_not_start_the_clock(self):
+        across = spawn(0, 10, zone=361)
+        got = farmjob.stand_update(
+            None, (across,), leader_at(0.0, 0.0, zone=490), 100.0
+        )
+        self.assertEqual(got, (None, 0.0))
+
     def test_the_stand_clock_clears_off_a_node_and_restarts_on_another(self):
         near, far = spawn(0, 10), spawn(300, 0)
-        first = farmjob.stand_update(None, (near, far), leader_at(0.0, 0.0), 100.0)
-        gone = farmjob.stand_update(first, (near, far), leader_at(150.0, 0.0), 120.0)
+        first = farmjob.stand_update(
+            None, (near, far), leader_at(0.0, 0.0, zone=490), 100.0
+        )
+        gone = farmjob.stand_update(
+            first, (near, far), leader_at(150.0, 0.0, zone=490), 120.0
+        )
         self.assertEqual(gone, (None, 0.0))
-        moved = farmjob.stand_update(first, (near, far), leader_at(300.0, 0.0), 140.0)
+        moved = farmjob.stand_update(
+            first, (near, far), leader_at(300.0, 0.0, zone=490), 140.0
+        )
         self.assertEqual(moved[1], 140.0)
 
 

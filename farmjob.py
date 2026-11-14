@@ -443,6 +443,8 @@ def stand_update(prev, spawns, leader_at, now):
     for spawn in spawns or ():
         if int(spawn.map_id) != int(leader_at["map_id"]):
             continue
+        if int(spawn.zone_id or 0) != int(leader_at.get("zone_id") or 0):
+            continue
         gap = gatheraim.yards(spawn, origin)
         if gap < HOP_MIN_YARDS and (best is None or gap < best[0]):
             best = (gap, spawn)
