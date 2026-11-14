@@ -743,6 +743,11 @@ class EachRaiderIsReported(unittest.TestCase):
         self.assertIn("Lothos Riftwaker", att["steps"][0])
         self.assertIn("Blackrock Depths", att["steps"][1])
 
+    def test_attunement_and_quintessence_are_not_gates(self):
+        line = self.card["attunement"]["line"].lower()
+        self.assertIn("aqual quintessence", line)
+        self.assertIn("neither attunement nor aqual quintessence is required", line)
+
 
 class TheAttunementIsReadNotAssumed(unittest.TestCase):
     def test_each_state_in_order(self):

@@ -740,6 +740,11 @@ class OneRaidIsModelledAndFourAreNot(unittest.TestCase):
     def test_the_raid_gates_nobody_and_the_page_says_so(self):
         self.assertIn("gates nobody on consumables", payload()["raid_line"])
 
+    def test_the_raid_gates_nobody_on_attunement_or_quintessence(self):
+        line = payload()["raid_line"]
+        self.assertIn("attunement", line.lower())
+        self.assertIn("aqual quintessence", line.lower())
+
 
 class EverySentenceIsReadable(unittest.TestCase):
     def test_nothing_a_reader_sees_is_none_or_empty_where_it_matters(self):

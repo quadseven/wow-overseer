@@ -243,7 +243,10 @@ function supplyCard(card) {
     }
     return html`<span class="num ${i === 3 && r.short ? "warn" : ""}">${text}</span>`;
   };
-  return html`<div class="card raid-block"><span class="card-title">Supply for a night in the Core</span>${s.line ? html`<span class="muted">${s.line}</span>` : ""}${s.budget_line ? html`<span class="small dim">${s.budget_line}</span>` : ""}${(s.pace || []).map((p) => html`<span class="small dim">${p.line}</span>`)}${s.level_60_line ? html`<span class="small dim">${s.level_60_line}</span>` : ""}${(s.unobtainable || []).map((u) => html`<span class="small warn">${u}</span>`)}${table(cols, s.supplies || [], cell)}</div>`;
+  const top = (s.top_recipes || []).length
+    ? html`<details class="fold"><summary>TOP raid recipes (${s.top_recipes.filter((r) => r.acquired).length} of ${s.top_recipes.length} acquired)</summary><div class="raid-lines">${s.top_recipes.map((r) => html`<span class="${r.acquired ? "ok" : "warn"}">${r.line}</span>`)}</div></details>`
+    : "";
+  return html`<div class="card raid-block"><span class="card-title">Supply for a night in the Core</span>${s.line ? html`<span class="muted">${s.line}</span>` : ""}${s.budget_line ? html`<span class="small dim">${s.budget_line}</span>` : ""}${(s.pace || []).map((p) => html`<span class="small dim">${p.line}</span>`)}${s.level_60_line ? html`<span class="small dim">${s.level_60_line}</span>` : ""}${(s.unobtainable || []).map((u) => html`<span class="small warn">${u}</span>`)}${top}${table(cols, s.supplies || [], cell)}</div>`;
 }
 
 function fireCard(card, teams) {
