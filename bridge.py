@@ -114,6 +114,7 @@ import interview
 import itemplan_reads
 import itemplan_shadow
 import itemplan
+import itemplan_disenchant
 import itemplan_vendor
 import itemsource
 import purse
@@ -14765,6 +14766,11 @@ class Bridge(discord.Client):
         await globals().get(
             "_run_itemplan_give", skip_itemplan_give
         )(itemplan_give, names, leader, rows, free_slots, gear_rows, worn)
+        itemplan_disenchant_run = getattr(self, "_itemplan_disenchant", None)
+        await globals().get(
+            "_run_itemplan_disenchant", _skip_itemplan_disenchant
+        )(itemplan_disenchant_run, names, leader, rows, free_slots, gear_rows,
+          worn)
         itemplan_auction = getattr(self, "_itemplan_auction", None)
         async def skip_itemplan_auction(*args):
             return None
@@ -16037,6 +16043,38 @@ class Bridge(discord.Client):
             ))
         if gifts:
             await self._write_guild_gifts(gifts)
+
+    async def _itemplan_disenchant(self, names: list, family: str, rows: list,
+                                   free_slots: dict, gear_rows=(),
+                                   worn_rows=()) -> None:
+        """Break down the plan's DISENCHANT rows when ITEMPLAN_DISENCHANT is on."""
+        if not itemplan_disenchant.enabled():
+            return
+        try:
+            extras = await asyncio.to_thread(
+                _itemplan_reads, names, family, rows, gear_rows, worn_rows)
+            report = await asyncio.to_thread(
+                itemplan_shadow.shadow, names, family, rows, free_slots,
+                gear_rows=gear_rows, worn_rows=worn_rows,
+                keep_names=OWNER_KEEPS, extras=extras)
+            if report is None:
+                return
+            stacks = itemplan_shadow.build_stacks(
+                rows, gear_rows, extras.templates, extras.instance_soulbound)
+            jobs = itemplan_disenchant.jobs_for(
+                report.plan, list(zip(stacks, rows, strict=True)),
+                keep_names=OWNER_KEEPS)
+            if not jobs:
+                return
+            wrote = await asyncio.to_thread(
+                _carry_out_itemplan_disenchant, jobs)
+            for line in itemplan_disenchant.lines(jobs):
+                log.info("%s", line)
+            log.info("%s %d of %d queued", itemplan_disenchant.PREFIX,
+                     wrote, len(jobs))
+        except Exception:
+            log.exception("itemplan disenchant: the route failed; the economy "
+                          "pass carries on")
 
     async def _itemplan_auction(self, names: list, family: str, rows: list,
                                 free_slots: dict, gear_rows=(), worn_rows=()) -> None:
@@ -31464,6 +31502,18 @@ async def _run_itemplan_give(itemplan_give, names, family, rows, free_slots,
         await itemplan_give(names, family, rows, free_slots, gear_rows, worn_rows)
 
 
+async def _skip_itemplan_disenchant(*args) -> None:
+    return None
+
+
+async def _run_itemplan_disenchant(itemplan_disenchant_run, names, family, rows,
+                                   free_slots, gear_rows, worn_rows) -> None:
+    """Call the disenchant route executor when this economy pass exposes it."""
+    if itemplan_disenchant_run is not None:
+        await itemplan_disenchant_run(
+            names, family, rows, free_slots, gear_rows, worn_rows)
+
+
 async def _run_itemplan_auction(itemplan_auction, names, family, rows,
                                free_slots, gear_rows, worn_rows) -> None:
     """Call the auction route executor when this economy pass exposes it."""
@@ -32985,6 +33035,49 @@ def _disenchant_instead(holder: str, item_guid: int):
         log.exception("disenchant route: cannot route %s's item %d, so it is "
                       "sold as before", holder, int(item_guid))
         return None
+
+
+ITEMPLAN_DISENCHANT_SOURCE = "itemplan-disenchant"
+
+
+def _carry_out_itemplan_disenchant(jobs) -> int:
+    """Queue one `disenchant` row per job the plan chose (#1978); the count.
+
+    Blocking. Each job passes the keep marks and the epic gate a sale passes,
+    then the core's own gate (`bag_pressure.disenchant_route`) on facts read
+    from the item: only the holder breaks its own stack down, and a stack the
+    core would refuse, or one whose facts cannot be read, is left alone. A row
+    for the same item standing or written in the last DISENCHANT_ROUTE_HOURS
+    is the answer for it. A database fault skips that job and is logged.
+    """
+    wrote = 0
+    for job in jobs:
+        command = "guid:%d count:1" % int(job.item_guid)
+        if _KEEP.blocks(job.holder, command) or _epic_blocks(job.holder, command):
+            continue
+        try:
+            route = bag_pressure.disenchant_route(
+                job.holder, _disenchant_facts(job.item_guid),
+                {job.holder: _family_enchanters(job.holder).get(job.holder, 0)})
+            if route != (bag_pressure.DISENCHANT, job.holder):
+                continue
+            with _connect() as conn, conn.cursor() as cur:
+                cur.execute(_DISENCHANT_ROUTED_SQL, (
+                    ITEMPLAN_DISENCHANT_SOURCE, job.holder, command,
+                    DISENCHANT_ROUTE_HOURS))
+                if int((cur.fetchone() or {}).get("n") or 0):
+                    continue
+                cur.execute(
+                    "INSERT INTO overseer_command "
+                    "(target_name, command, kind, target_arg, source) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (job.holder, command, "disenchant", "",
+                     ITEMPLAN_DISENCHANT_SOURCE))
+                wrote += 1
+        except (pymysql.err.MySQLError, OSError):
+            log.exception("itemplan disenchant: cannot queue %s's item %d",
+                          job.holder, int(job.item_guid))
+    return wrote
 
 
 def _insert_sell(candidate: bag_pressure.SellCandidate) -> int:
