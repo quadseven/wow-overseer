@@ -534,5 +534,27 @@ class AnEndedOrderThatTheLoopWritesAgain(unittest.TestCase):
         self.assertIn("_farm_order_renewed(state, written)", body)
 
 
+class FamilyWideFarmRespectsOperatorHold(unittest.IsolatedAsyncioTestCase):
+    async def test_held_family_skips_farm_reads_and_act(self):
+        import types
+        from unittest import mock
+        import bridge
+
+        cohort = types.SimpleNamespace(key="family_a", solo=False)
+        fake = types.SimpleNamespace(
+            _farm_individual=mock.AsyncMock(return_value=False),
+            _farm_job_now=mock.AsyncMock(
+                return_value=("farm:4306", ["Mizu"], "family_a")
+            ),
+            _operator_held=mock.AsyncMock(return_value={"family_a"}),
+            _end_farm=mock.AsyncMock(),
+            _farm_state_for=mock.AsyncMock(),
+        )
+        with mock.patch("bridge.individual.families", return_value=()):
+            await bridge.Bridge._farm_once(fake, cohort)
+        fake._operator_held.assert_awaited_once_with({"family_a"}, "farm")
+        fake._farm_state_for.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
