@@ -26267,6 +26267,15 @@ class Bridge(discord.Client):
         key = getattr(cohort, "key", None)
         who = "family %s" % key if key else "this family"
         standing = await asyncio.to_thread(_standing_jobs, key)
+        # THE ORDER COVERS THE MEMBERS IN REACH OF THE LEADER. One scattered
+        # or instanced member must not hold the family's job, bag, death and
+        # skill reads hostage; the others keep whatever they are doing.
+        leader_now = await asyncio.to_thread(_family_leader, cohort)
+        if leader_now:
+            seen = await asyncio.to_thread(_fetch_positions, sorted(standing))
+            covered = farmjob.in_reach(seen, leader_now) if seen else []
+            if covered:
+                standing = {n: j for n, j in standing.items() if n in covered}
         farming = sorted({job for job in standing.values() if jobs.is_farm_job(job)})
         if not farming:
             self._farm_state.pop(key or "", None)

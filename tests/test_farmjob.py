@@ -368,6 +368,40 @@ class TheBridgeDrivesIt(unittest.TestCase):
         self.assertIn("_memo_upsert, FARM_MEMO_KIND, subject", self.body)
 
 
+def where(map_id=0, x=0.0, y=0.0, instance=0):
+    return {"map_id": map_id, "instance_id": instance, "pos_x": x, "pos_y": y}
+
+
+class TheOrderIsTheMembersInReachOfTheLeader(unittest.TestCase):
+    def test_the_leader_and_those_beside_it_are_in(self):
+        pos = {"Grug": where(), "Grog": where(x=40.0, y=30.0)}
+        self.assertEqual(farmjob.in_reach(pos, "Grug"), ["Grog", "Grug"])
+
+    def test_a_member_far_away_or_on_another_map_is_out(self):
+        pos = {
+            "Grug": where(),
+            "Bork": where(x=5000.0),
+            "Og": where(map_id=1),
+        }
+        self.assertEqual(farmjob.in_reach(pos, "Grug"), ["Grug"])
+
+    def test_a_member_inside_an_instance_is_never_in(self):
+        pos = {"Grug": where(), "Ugga": where(map_id=0, instance=7)}
+        self.assertEqual(farmjob.in_reach(pos, "Grug"), ["Grug"])
+        pos = {"Grug": where(), "Ugga": where(map_id=349)}
+        self.assertEqual(farmjob.in_reach(pos, "Grug"), ["Grug"])
+
+    def test_with_no_leader_reading_nobody_is_cut(self):
+        pos = {"Grog": where(x=9000.0)}
+        self.assertEqual(farmjob.in_reach(pos, "Grug"), ["Grog"])
+
+    def test_the_bridge_judges_the_order_on_the_members_in_reach(self):
+        text = (ROOT / "bridge.py").read_text(encoding="utf-8")
+        start = text.index("    async def _farm_job_now(")
+        body = text[start : text.index("    async def _farm_state_for(")]
+        self.assertIn("farmjob.in_reach(", body)
+
+
 class AFarmEndInTheProfessionLoop(unittest.TestCase):
     """The loop owns the job, so an ended order must never leave job=quest."""
 
