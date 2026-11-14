@@ -14483,6 +14483,10 @@ class Bridge(discord.Client):
                     "only %s can walk the family's town errands",
                     aim, name, leader,
                 )
+        if not run_doors:
+            # A STANDING AIM IS RE-JUDGED AFTER A DEATH (#2539), on the same
+            # sweep and outside a dungeon run for the same reason.
+            released += await self._release_deadly_standing_aims(names)
         return released
 
     async def _release_deadly_standing_aims(self, names: list) -> int:
@@ -14702,10 +14706,6 @@ class Bridge(discord.Client):
         if not in_run:
             await self._release_stranded_ground_errands(names, leader)
             # A STANDING AIM IS RE-JUDGED AFTER A DEATH (#2539).
-            # Looked up: the economy tests load this pass with a fake self.
-            rejudge = getattr(self, "_release_deadly_standing_aims", None)
-            if rejudge is not None:
-                await rejudge(names)
         else:
             # ...AND DURING ONE, EVERYTHING FAR FROM THE RUN'S DOOR (#230). A
             # stale mailbox aim on a follower is inert while it follows and

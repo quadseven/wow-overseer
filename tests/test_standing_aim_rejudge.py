@@ -178,12 +178,16 @@ class TheSweepReleases(unittest.TestCase):
 
 
 class TheSweepIsWired(unittest.TestCase):
-    def test_the_economy_pass_runs_it_outside_a_dungeon_run(self):
-        spot = BRIDGE.split(
-            "await self._release_stranded_ground_errands(names, leader)", 1
-        )[1]
-        head = spot.split("else:", 1)[0]
-        self.assertIn("_release_deadly_standing_aims", head)
+    def test_the_stranded_sweep_runs_it_outside_a_dungeon_run(self):
+        body = BRIDGE.split("async def _release_stranded_ground_errands", 1)[1]
+        body = body.split("async def _vendor_pass_mode", 1)[0]
+        tail = body.split("if not run_doors:", 1)[1]
+        self.assertIn("_release_deadly_standing_aims", tail)
+
+    def test_the_economy_pass_still_runs_that_sweep_outside_a_run(self):
+        self.assertIn(
+            "await self._release_stranded_ground_errands(names, leader)", BRIDGE
+        )
 
     def test_the_helper_reads_discs_deaths_and_fails_open(self):
         top = {
