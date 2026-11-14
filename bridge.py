@@ -30462,6 +30462,9 @@ def _fetch_guild_social_facts(bounds) -> dict:
         lendable = set()
         if familyseat.enabled():
             cur.execute(familyseat.ROSTER_SQL)
+            # One cursor holds one result set: take the roster before the
+            # hold read below reuses the cursor.
+            roster_rows = list(cur.fetchall())
             guarded = familyseat.guard_enabled()
             # A held family, or any family while the campaign planner is off,
             # lends nobody: a loan is a dungeon the operator did not send it to.
@@ -30474,7 +30477,7 @@ def _fetch_guild_social_facts(bounds) -> dict:
                 lend_held = {}
             lend_held = familyseat.lend_holds(lend_held)
             lendable = familyseat.lendable(
-                list(cur.fetchall()), familyseat.inside(facts["rows"]),
+                roster_rows, familyseat.inside(facts["rows"]),
                 facts["in_runs"],
                 # A family with an active started campaign row lends only a
                 # member that is not its sole tank or healer (#2353).

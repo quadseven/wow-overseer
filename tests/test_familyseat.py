@@ -185,6 +185,54 @@ class TheCampaignGuard(unittest.TestCase):
         self.assertIn("familyseat.lend_holds(", body)
         self.assertIn("holds=", body)
 
+    def test_the_lend_reads_the_roster_before_the_hold_query_reuses_the_cursor(self):
+        """One cursor holds one result set: the hold read must not eat the roster."""
+        sql_seen = []
+
+        class OneResultCursor:
+            def __init__(self):
+                self.result = []
+
+            def execute(self, sql, params=None):
+                sql_seen.append(sql)
+                if sql == fs.ROSTER_SQL:
+                    self.result = list(GRUG_IDLE)
+                else:
+                    self.result = []
+
+            def fetchall(self):
+                out, self.result = self.result, []
+                return out
+
+            def fetchone(self):
+                return None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        cur = OneResultCursor()
+
+        class Conn(OneResultCursor):
+            def cursor(self):
+                return cur
+
+        quiet = {"rows": [], "in_runs": set()}
+        with (
+            mock.patch.object(
+                bridge, "_fetch_guild_run_facts", return_value=dict(quiet)
+            ),
+            mock.patch.object(bridge, "_connect", return_value=Conn()),
+            mock.patch.object(bridge, "_guild_social_drops", return_value={}),
+            mock.patch.object(bridge.guildpug, "enabled", return_value=False),
+            mock.patch.object(bridge.familyseat, "enabled", return_value=True),
+        ):
+            got = bridge._fetch_guild_social_facts(None)
+        self.assertIn(operatorhold.SELECT_SQL, sql_seen)
+        self.assertEqual(got["lendable"], {"Ugga", "Og"})
+
     def test_the_bridge_reads_the_rows_into_the_guard(self):
         body = source_utils.function_source(bridge._fetch_guild_social_facts)
         self.assertIn("familyseat.campaign_families(campaigns)", body)
