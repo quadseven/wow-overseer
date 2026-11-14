@@ -103,11 +103,19 @@ FLOOR_SALE_COOLDOWN_SECONDS = 1800.0
 # constant so this pure module imports nothing, and pinned equal by a test.
 HOLD_CEILING_SECONDS = 45 * 60.0
 BAG_PRESSURE_WHY = "campaign held at the dungeon door for bag room"
+# The reason profloop.py hands an errand starts with this (#2419). Spelled here
+# rather than imported, as TWO_HAND_SUBCLASSES is: this module imports nothing,
+# and test_profloop pins the two spellings equal.
+LOOP_WHY = "profession loop: "
 
 
 def steps_for(why: str) -> tuple:
-    """The step order for an errand started for `why`."""
-    return ROOM_STEP_ORDER if why == BAG_PRESSURE_WHY else STEP_ORDER
+    """The step order for an errand started for `why`: bag room first for the
+    bag-pressure errand and for the profession loop's, which go to town to
+    empty the bags."""
+    if why == BAG_PRESSURE_WHY or str(why or "").startswith(LOOP_WHY):
+        return ROOM_STEP_ORDER
+    return STEP_ORDER
 
 
 # THE WAY THERE (wow-dev 2026-09-27). The Alliance family is bound in Ratchet,
@@ -197,8 +205,14 @@ def should_start(
     stalled: float = 0.0,
     bag_pressure_needed: bool = False,
     floor_sale: bool = False,
+    loop_why: str = "",
 ) -> str:
     """Why this family should go to town now, or '' when it should not.
+
+    `loop_why` is the profession loop's reason (profloop.py, #2419): a family
+    an operator put in the loop goes when the loop says, cooldown or not. The
+    loop's own phases bound how often that is; the cooldown was holding a
+    family in its gathering phase with full bags for two hours.
 
     `mail_gear` is `mailrun.gear_waiting` (name -> letters of wearable gear in
     the post). `facts` is the gear facts per member (`equipped` slot names and
@@ -225,6 +239,8 @@ def should_start(
     """
     if state.active or in_run:
         return ""
+    if loop_why:
+        return loop_why
     cooldown = FLOOR_SALE_COOLDOWN_SECONDS if floor_sale else COOLDOWN_SECONDS
     if state.unlanded:
         # AN ERRAND THAT NEVER REACHED A COUNTER DID NOTHING TO REST ON (#2116).

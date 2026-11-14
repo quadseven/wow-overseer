@@ -162,6 +162,7 @@ import persona
 import preraid
 import priorities
 import professions
+import profloop
 import protect
 import questbook
 import questcatalogue
@@ -8240,6 +8241,7 @@ PASSES = (
     _Pass("_raid_spec_loop"),
     _Pass("_craft_supply_loop"),
     _Pass("_craft_rhythm_loop"),
+    _Pass("_prof_loop_loop"),
     _Pass("_farm_loop"),
     _Pass("_forge_loop"),
     _Pass("_auction_loop"),
@@ -11202,6 +11204,10 @@ class Bridge(discord.Client):
             for name in names
         }
 
+        # THE PROFESSION LOOP READS THE RECIPE CHOSEN HERE (#2419): its craft
+        # phase asks reagentplan about the same spell this pass judges.
+        globals().get("_RHYTHM_SPELLS", {}).update(spells)
+
         stands = [
             craft_rhythm.stand(
                 name, spells[name],
@@ -11220,6 +11226,19 @@ class Bridge(discord.Client):
             await self._individual_rhythm_moves(cohort, stands, standing_jobs)
             return
         plan = craft_rhythm.rhythm(stands, standing)
+        # A FAMILY IN THE PROFESSION LOOP (#2419): the loop owns its job, so
+        # this pass writes none; its gathering walk still runs, but only
+        # while the loop has the family gathering.
+        # Looked up: the adapter tests load this method in isolation.
+        looped_by = globals().get("_prof_loop_family")
+        loop_key = (await asyncio.to_thread(looped_by, getattr(cohort, "key", None))
+                    if looped_by is not None else "")
+        if loop_key:
+            log.info("craft_rhythm: family %s is in the profession loop, which "
+                     "owns its job; %s", loop_key, craft_rhythm.report(plan))
+            if _PROF_LOOPS.get(loop_key, profloop.State()).phase != profloop.GATHER:
+                return
+            plan = dataclasses.replace(plan, changed=False)
         if cohort is not None:
             log.info("craft_rhythm: family %s: %s", cohort.key,
                      craft_rhythm.report(plan))
@@ -11372,6 +11391,121 @@ class Bridge(discord.Client):
                 await self._idle_town_slot("craft_rhythm", cohort)
         if plan.changed:
             await self._set_family_job(cohort, plan.mode, "overseer:craft_rhythm")
+
+    # --- the profession loop (profloop.py, #2419) ------------------------------
+
+    async def _prof_loop_loop(self) -> None:
+        """Step each family named in PROFESSION_LOOP through its loop."""
+        await self.wait_until_ready()
+        await asyncio.sleep(min(PROF_LOOP_CYCLE_SECONDS, 150.0))
+        while not self.is_closed():
+            try:
+                await self._prof_loop_once()
+            except Exception:
+                log.exception("profession loop: pass failed; retrying next cycle")
+            await asyncio.sleep(PROF_LOOP_CYCLE_SECONDS)
+
+    async def _prof_loop_once(self) -> None:
+        """One pass: every family the switch names, each guarded on its own."""
+        named = profloop.families()
+        if not named:
+            return
+        fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
+        for key in sorted(named):
+            fam = fams.get(key)
+            if not fam or not fam["names"]:
+                _prof_loop_quiet("loop", key, "%s names no family on the "
+                                 "roster, so nothing loops" % profloop.ENV_SWITCH)
+                continue
+            try:
+                await self._prof_loop_for(key, list(fam["names"]))
+            except Exception:
+                log.exception("profession loop: the pass for %s failed; "
+                              "retrying next cycle", key)
+
+    async def _prof_loop_for(self, key: str, names: list) -> None:
+        """Read one family, ask profloop.decide, write its job, say why."""
+        running = sorted(_standin_running(names))
+        on_job = {n: j for n, j in (await asyncio.to_thread(_jobs_of, names)).items()
+                  if n in running}
+        skills = await asyncio.to_thread(_fetch_trade_skills, names)
+        gather, gather_why = profloop.gather_job(skills)
+        errand = _TOWN_ERRANDS.get(tuple(sorted(names)), townerrand.State())
+        facts = await self._prof_loop_facts(key, names, skills, errand)
+        facts = dataclasses.replace(facts, jobs=on_job, gather_job=gather)
+        step = profloop.decide(_PROF_LOOPS.get(key, profloop.State()), facts)
+        _PROF_LOOPS[key] = step.state
+        town_key = tuple(sorted(names))
+        if step.ask_town:
+            _PROF_LOOP_TOWN[town_key] = step.ask_town
+        elif step.state.phase != profloop.TOWN or errand.active:
+            _PROF_LOOP_TOWN.pop(town_key, None)
+        await self._prof_loop_say(key, step, on_job, gather_why)
+        if step.job:
+            await self._prof_loop_write(key, running, step.job)
+
+    async def _prof_loop_facts(self, key: str, names: list, skills: dict,
+                               errand) -> profloop.Facts:
+        """Everything profloop.decide reads but the jobs; no judgement here."""
+        spells = {n: _RHYTHM_SPELLS.get(n, 0) for n in names}
+        plans = await asyncio.to_thread(
+            _plan_craft_reagents, names,
+            {n: spell for n, spell in spells.items() if spell}, skills)
+        judged = {n: p for n, p in plans.items() if p.judged}
+        mail = await asyncio.to_thread(_mail_gear_holders, names)
+        return profloop.Facts(
+            now=time.monotonic(),
+            free_slots=await asyncio.to_thread(_fetch_free_slots, names),
+            mail_waiting=tuple(sorted(n for n, count in mail.items() if count)),
+            casts={n: p.casts for n, p in judged.items()},
+            fetch=tuple(sorted(
+                n for n, p in judged.items() if p.shorts and all(
+                    s.source in _PROF_LOOP_TOWN_SOURCES for s in p.shorts))),
+            train_due=await asyncio.to_thread(_prof_loop_train_due, names),
+            errand_active=errand.active,
+            errand_ended=errand.ended,
+            errand_why=errand.why,
+            in_run=await self._mid_run(names),
+            queue_owns=await asyncio.to_thread(_queue_owns_job, key),
+        )
+
+    async def _prof_loop_say(self, key: str, step, on_job: dict,
+                             gather_why: str) -> None:
+        """The step's line: a move or a write always, a wait once."""
+        said = profloop.line(key, step)
+        if not (step.moved or step.job):
+            if said:
+                _prof_loop_quiet("loop", key, step.line)
+            return
+        if step.job and step.state.phase == profloop.GATHER:
+            said += " (%s)" % gather_why
+        if step.job and not step.moved:
+            wrong = sorted(n for n, j in on_job.items() if j != step.job)
+            sources = [(n, await asyncio.to_thread(_last_job_source, n))
+                       for n in wrong]
+            said += "; last written by %s" % ", ".join(
+                "%s=%s" % (n, source or "unknown") for n, source in sources)
+        log.info("%s", said)
+        _PROF_LOOP_SAID[("loop", key)] = step.line
+
+    async def _prof_loop_write(self, key: str, names: list, mode: str) -> int:
+        """The loop's job on every member not sitting out; `jobs.why_not`
+        first, as every job writer asks."""
+        refusal = jobs.why_not(mode)
+        if refusal:
+            log.warning("profession loop: %s: job %s not written - %s", key,
+                        mode, refusal)
+            return 0
+        written = 0
+        for name in names:
+            try:
+                await asyncio.to_thread(_insert_job, name, mode, profloop.SOURCE)
+                written += 1
+            except Exception:
+                log.exception("profession loop: job insert failed for %s", name)
+        log.info("job: family %s told %s by %s (%d/%d)", key, mode,
+                 profloop.SOURCE, written, len(names))
+        return written
 
     async def _set_family_job(self, cohort, mode: str, source: str) -> int:
         """Write another family's job on every member, and say so (#215).
@@ -21198,10 +21332,14 @@ class Bridge(discord.Client):
         # Looked up: the adapter tests load this method in isolation.
         released = globals().get("_released_floor_members", lambda names: ())
         floor_sale = bag_pressure_needed and bool(released(names))
+        # THE PROFESSION LOOP'S TOWN PHASE (#2419). Looked up: the adapter
+        # tests load this method in isolation.
+        loop_why = globals().get("_PROF_LOOP_TOWN", {}).get(
+            tuple(sorted(names)), "")
         why = townerrand.should_start(
             state, now=now, in_run=in_run, mail_gear=mail_gear, facts=facts,
             stalled=stalled, bag_pressure_needed=bag_pressure_needed,
-            floor_sale=floor_sale)
+            floor_sale=floor_sale, loop_why=loop_why)
         if (not why and not in_run
                 and stalled < townerrand.HOLD_CEILING_SECONDS
                 and not (state.ended and now - state.ended
@@ -24245,6 +24383,11 @@ class Bridge(discord.Client):
         who = campaignqueue._family(key)
         names = list(fam["names"])
         leader = str(fam["leader"].get("name") or "")
+        looped_by = globals().get("_prof_loop_family")
+        if looped_by is not None and looped_by(key):
+            _prof_loop_quiet("attunement", key, "no attunement walk: the "
+                             "family is in the profession loop")
+            return False
         if not names or not leader:
             return False
         level_rows = await asyncio.to_thread(_queue_level_rows, fam)
@@ -25227,6 +25370,11 @@ class Bridge(discord.Client):
         """Read one family, decide whether to ask, ask, record, carry out."""
         names = list(fam["names"])
         leader = fam["leader"]
+        looped_by = globals().get("_prof_loop_family")
+        if looped_by is not None and looped_by(key):
+            _prof_loop_quiet("activity", key, "no activity is chosen: the "
+                             "family is in the profession loop, which owns its job")
+            return
         if not names or await self._mid_run(names):
             return
         reads = await asyncio.to_thread(
@@ -25496,6 +25644,13 @@ class Bridge(discord.Client):
         """Read one family, choose its hub (Jev past its floor), carry it out."""
         names = list(fam["names"])
         if not names:
+            return
+        looped_by = globals().get("_prof_loop_family")
+        if looped_by is not None and looped_by(key):
+            # THE LOOP KEEPS THE FAMILY WHERE ITS TRADES ARE (#2419): a hub
+            # chosen for levelling walked a level 59 member away from it.
+            self._level_quiet(key, "no leveling hub: the family is in the "
+                              "profession loop")
             return
         facts = await asyncio.to_thread(_level_facts, key, fam)
         who, level = facts.weakest
@@ -26125,6 +26280,12 @@ class Bridge(discord.Client):
         )
         log.info("goal: %s", skillgoal.report(plan))
 
+        looped_by = globals().get("_prof_loop_family")
+        if plan.mode and looped_by is not None and await asyncio.to_thread(
+                looped_by, None):
+            _prof_loop_quiet("goal", None, "a skill goal writes no job: the "
+                             "family is in the profession loop, which owns it")
+            return
         if plan.mode:
             # `_rhythm_channel` and not `_goal_channel`: this is an automatic
             # job order and its reply belongs where every other automatic one
@@ -37095,6 +37256,59 @@ TOWN_ERRAND_SETTLE_SECONDS = 60.0
 TOWN_ERRAND_VENDOR_YARDS = 250.0
 # family key -> townerrand.State, and family key -> {step: first run}.
 _TOWN_ERRANDS: dict = {}
+
+# --- the profession loop (profloop.py, #2419) ---------------------------------
+# Family key -> profloop.State. In memory: a restart joins each family at the
+# phase its jobs say it is in.
+_PROF_LOOPS: dict = {}
+# The town errand's family key (sorted names) -> the loop's reason to go, read
+# by _town_errand_start.
+_PROF_LOOP_TOWN: dict = {}
+# (what, family key) -> the last "stands down" or "waits" line, said once.
+_PROF_LOOP_SAID: dict = {}
+# name -> the recipe craft_rhythm last chose for it, which the loop plans.
+_RHYTHM_SPELLS: dict = {}
+PROF_LOOP_CYCLE_SECONDS = float(os.environ.get("PROFESSION_LOOP_CYCLE_SECONDS", "120"))
+# A short reagent from one of these is fetched by the town errand's steps.
+_PROF_LOOP_TOWN_SOURCES = frozenset({
+    reagentplan.BANK, reagentplan.MAIL, reagentplan.GUILD_BANK,
+    reagentplan.VENDOR})
+
+
+def _prof_loop_quiet(what: str, key, line: str) -> None:
+    """Log a profession loop line once, until it changes."""
+    if _PROF_LOOP_SAID.get((what, key)) != line:
+        log.info("profession loop: %s: %s", key or "this family", line)
+    _PROF_LOOP_SAID[(what, key)] = line
+
+
+def _prof_loop_family(key=None) -> str:
+    """The family key when that family (this bridge's own for None or '') is
+    in the profession loop, else ''. The other job writers ask this and stand
+    down; it reads nothing while PROFESSION_LOOP names no family."""
+    if not profloop.families():
+        return ""
+    if not key:
+        key = _cohort_of(bonds.head_of_family())
+    return str(key) if profloop.enabled_for(key) else ""
+
+
+def _prof_loop_train_due(names: list) -> dict:
+    """name -> the ranks and trainer recipes due and paid for (_ranks_due)."""
+    if not names:
+        return {}
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT name, professions FROM overseer_roster "  # noqa: S608 - placeholders only
+                "WHERE name IN (%s)" % marks, list(names))
+            roster = list(cur.fetchall())
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return {}
+            raise
+        return _ranks_due(cur, roster)
 _TOWN_ERRAND_MARKS: dict = {}
 # family key -> {name: copper} the fund step moved this errand, and family key
 # -> {name: slots bought}. The character table trails the world by up to
