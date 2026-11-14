@@ -262,6 +262,25 @@ def is_starting_land(map_id, zone_id) -> bool:
     )
 
 
+def outside_at(map_id, zone_id) -> bool:
+    """THE QUESTION ABOUT WHERE A CHARACTER STANDS: Outland or Northrend, except
+    the starting lands. A member levelling in Eversong Woods or on Azuremyst
+    Isle stands on map 530 and is inside; an unread zone on map 530 is
+    outside, as the module's Classic::IsOutsideClassic reads it. An unknown map
+    is not judged. Ask this, not is_expansion_map, of a member's position."""
+    return is_expansion_map(map_id) and not is_starting_land(map_id, zone_id)
+
+
+def stands_outside(member) -> bool:
+    """outside_at for anything with a `map_id` and, optionally, a `zone_id`."""
+    return outside_at(getattr(member, "map_id", None), getattr(member, "zone_id", None))
+
+
+def outside_note_for(who, member) -> str:
+    """outside_note for a member stands_outside has judged outside."""
+    return outside_note(who, getattr(member, "map_id", None))
+
+
 def is_classic_map(map_id) -> bool:
     """Eastern Kingdoms, Kalimdor or a classic instance."""
     return map_id is not None and int(map_id) in CLASSIC_MAPS

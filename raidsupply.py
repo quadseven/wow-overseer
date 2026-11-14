@@ -1232,7 +1232,7 @@ def letters_for(crafter, make, want, members, busy, room, recent, cap) -> list:
                 and not m.family
                 and m.online
                 and m.name not in busy
-                and not classic.is_expansion_map(m.map_id)
+                and not classic.stands_outside(m)
                 and m.count(entry) > 0
             ),
             key=lambda m: (-m.count(entry), m.name),
@@ -1468,7 +1468,7 @@ def _crafters(role, members, posts, busy):
         if n in by
         and by[n].online
         and n not in busy
-        and not classic.is_expansion_map(by[n].map_id)
+        and not classic.stands_outside(by[n])
     ]
 
 
@@ -1627,7 +1627,7 @@ def handout_steps(
                 and not m.family
                 and m.online
                 and m.name not in busy
-                and not classic.is_expansion_map(m.map_id)
+                and not classic.stands_outside(m)
                 and m.count(entry) > 0
             ),
             key=lambda m: (-m.count(entry), m.name),
@@ -1695,7 +1695,7 @@ def plan_guild(
         member = by_name.get(raider.name)
         if member is None or raider.family or not member.online or raider.name in busy:
             continue
-        if classic.is_expansion_map(member.map_id):
+        if classic.stands_outside(member):
             continue
         step = None
         for gear in FIRE_GEAR:
