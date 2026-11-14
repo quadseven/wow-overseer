@@ -70,11 +70,14 @@ _TEMPLATE_FIELDS = (
     "inventory_type",
     "item_level",
     "req_level",
-    "required_skill",
     "required_skill_rank",
-    "allowable_class",
     "container_slots",
     "fire_res",
+)
+
+_OPTIONAL_TEMPLATE_FIELDS = (
+    "required_skill",
+    "allowable_class",
 )
 
 ITEM_INSTANCE_SQL = (
@@ -130,6 +133,15 @@ def item_templates(rows) -> dict:
         except (KeyError, TypeError, AttributeError):
             continue
         if entry is None or entry <= 0 or any(v is None for v in item.values()):
+            continue
+        for k in _OPTIONAL_TEMPLATE_FIELDS:
+            if k in row:
+                v = _int(row[k])
+                if v is None:
+                    item = None
+                    break
+                item[k] = v
+        if item is None:
             continue
         item["stats"] = gearscore.stats_from_row(row)
         out[entry] = item
