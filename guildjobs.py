@@ -1396,12 +1396,19 @@ def _rungs_ahead(skill: int, value: int) -> tuple:
     from 205), and the visit that is made anyway buys it then rather than a
     second walk later. A rung the crafter is past (`max_skill` below `value`)
     is never asked, so nobody is sent back for one it has outgrown.
+
+    An Enchanting rung brings the Runed Rod recipe of its tier (#2411):
+    craft_rhythm makes the rod before the rung, so it is bought first.
     """
     out = []
     for recipe in craft.RECIPES.get(skill, ()):
         if recipe.tool and recipe.tool not in craft.TOOL_WALKS:
             continue
         if recipe.max_skill >= value and recipe not in out:
+            rod = craft.ROD_MADE_BY.get(recipe.tool)
+            for made in craft.ROD_RECIPES.get(skill, ()):
+                if made.spell_id == rod and made not in out:
+                    out.append(made)
             out.append(recipe)
     for bag in craft.BAG_RECIPES.get(skill, ())[:1]:
         if value >= bag.min_skill:

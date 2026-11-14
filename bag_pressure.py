@@ -3180,3 +3180,79 @@ def wear_reason(holding, character) -> tuple:
     if character.name == holding.holder:
         return gear.would_wear(holding, character)
     return gear.is_upgrade_for(holding, character)
+
+
+# ---------------------------------------------------------------------------
+# A SALE THE ENCHANTER CAN BREAK DOWN INSTEAD (#2411, #1978). Both family
+# enchanters stood at Enchanting 1 on 2026-11-13 with no dust at all, while
+# the sale paths walked disenchantable greens to vendors every day. Every
+# Enchanting rung (craft.RECIPES) eats dust, essence or shards, and only
+# disenchanting makes them. So a stack a sale path has already chosen to let go
+# is offered to the enchanter first:
+#
+#   the holder IS an enchanter whose skill reaches the item  -> disenchant it
+#   a bind-on-equip item another family member can break down -> give it to
+#     that enchanter (the next pass, its holder, disenchants it)
+#   anything else (soulbound off the enchanter, skill too low,
+#     not gear, wrong quality, no DisenchantID)               -> the sale stands
+#
+# It runs AFTER `_epic_blocks` and the keep marks in the bridge, so it never
+# widens what may leave the guild: it only changes where a stack that is
+# already leaving goes. The core's own CheckCast gate is copied exactly
+# (Spell::CheckItems, SPELL_EFFECT_DISENCHANT): weapon or armour, quality
+# uncommon to epic, a DisenchantID, and RequiredDisenchantSkill at or below the
+# caster's Enchanting, where -1 means it can never be broken down.
+DISENCHANT = "disenchant"
+GIVE_TO_ENCHANTER = "give"
+DISENCHANT_CLASSES = frozenset({2, 4})  # weapon, armour
+DISENCHANT_QUALITIES = frozenset({2, 3, 4})  # uncommon, rare, epic
+
+
+@dataclass(frozen=True)
+class DisenchantFacts:
+    """What the core reads about one item before it lets anyone disenchant it.
+
+    `soulbound` is item_instance.flags bit 1. Every field is required: an
+    unread item is not routed and its sale stands.
+    """
+
+    item_class: int
+    quality: int
+    disenchant_id: int
+    required_skill: int
+    soulbound: bool
+
+
+def disenchantable(facts: DisenchantFacts, skill: int) -> bool:
+    """Would the core let a caster at Enchanting `skill` break this down?"""
+    return (
+        facts.item_class in DISENCHANT_CLASSES
+        and facts.quality in DISENCHANT_QUALITIES
+        and facts.disenchant_id > 0
+        and 0 <= facts.required_skill <= int(skill or 0)
+    )
+
+
+def disenchant_route(holder: str, facts, enchanters: dict):
+    """(kind, enchanter) for a stack a sale path chose, or None to sell it.
+
+    `enchanters` is {name: Enchanting skill} for the enchanters in the
+    holder's own family; the holder is one of them when it is an enchanter.
+    `facts` None (unread) keeps the sale. The highest skill wins a give, and a
+    name breaks a tie, so the answer never depends on dict order.
+    """
+    if facts is None:
+        return None
+    if disenchantable(facts, enchanters.get(holder, 0)):
+        return DISENCHANT, holder
+    if facts.soulbound:
+        return None
+    able = sorted(
+        (
+            name
+            for name, skill in enchanters.items()
+            if name != holder and disenchantable(facts, skill)
+        ),
+        key=lambda name: (-int(enchanters[name]), name),
+    )
+    return (GIVE_TO_ENCHANTER, able[0]) if able else None
