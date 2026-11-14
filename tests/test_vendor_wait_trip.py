@@ -9,7 +9,6 @@ import unittest
 import bag_pressure
 import jev_activity
 import jev_family_intent
-import jobs
 import vendor_stall
 
 
@@ -82,8 +81,6 @@ def _vendor_pass_mode(namespace_extra=None):
         "_town_first_hold": lambda names: False,
         "_campaign_waiting": lambda names: False,
         "_fetch_vendor_wait_seconds": lambda names: 30 * 60,
-        "_standing_jobs": lambda: {},
-        "jobs": jobs,
         "log": types.SimpleNamespace(info=lambda *args: None),
     }
     namespace.update(namespace_extra or {})
@@ -128,24 +125,13 @@ class VendorWaitTrip(unittest.TestCase):
         )
 
     def test_the_pass_takes_no_wait_trip_for_a_farming_family(self):
-        namespace = _vendor_pass_mode(
-            {
-                "_standing_jobs": lambda: {
-                    "Leader": "farm:mining",
-                    "Seller": "farm:mining",
-                }
-            }
-        )
+        namespace = _vendor_pass_mode({"_family_farming": lambda names: True})
         mode = asyncio.run(
             namespace["_vendor_pass_mode"](
-                None,
-                ["Leader", "Seller"],
-                {"Leader": 20, "Seller": 20},
-                {"Seller": 2},
-                False,
+                None, ["Leader"], {"Leader": 12}, {"Leader": 2}, False
             )
         )
-        self.assertEqual(mode, bag_pressure.VENDOR_MODE_COUNTER)
+        self.assertEqual(bag_pressure.VENDOR_MODE_COUNTER, mode)
 
     def test_the_pass_passes_the_farming_flag(self):
         self.assertIn(

@@ -14409,9 +14409,11 @@ class Bridge(discord.Client):
                      "(sellable %s), so the trip goes", freed, sellable_counts)
         if not trip_worth and not in_run and any(sellable_counts.values()):
             waited = await asyncio.to_thread(_fetch_vendor_wait_seconds, names)
-            standing_now = await asyncio.to_thread(_standing_jobs)
-            farming = any(
-                jobs.is_farm_job(standing_now.get(n)) for n in names)
+            # Looked up: the economy tests load this pass in isolation.
+            family_farming = globals().get("_family_farming")
+            farming = bool(
+                family_farming
+                and await asyncio.to_thread(family_farming, names))
             if bag_pressure.vendor_wait_trip(waited, sellable_counts, in_run,
                                              farming):
                 trip_worth = True
@@ -37979,6 +37981,12 @@ _FARM_DEATHS_SQL = (
 FARM_SOURCE = "overseer:farm"
 # The memo kind that keeps a farm order's starting count across a restart.
 FARM_MEMO_KIND = "farm_baseline"
+
+
+def _family_farming(names) -> bool:
+    """Whether any of `names` is on a farm job right now."""
+    standing = _standing_jobs()
+    return any(jobs.is_farm_job(standing.get(n)) for n in names)
 
 
 def _farm_end_write(job: str, in_loop: bool, renew: bool):
