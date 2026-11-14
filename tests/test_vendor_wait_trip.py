@@ -9,6 +9,7 @@ import unittest
 import bag_pressure
 import jev_activity
 import jev_family_intent
+import jobs
 import vendor_stall
 
 
@@ -81,6 +82,8 @@ def _vendor_pass_mode(namespace_extra=None):
         "_town_first_hold": lambda names: False,
         "_campaign_waiting": lambda names: False,
         "_fetch_vendor_wait_seconds": lambda names: 30 * 60,
+        "_standing_jobs": lambda: {},
+        "jobs": jobs,
         "log": types.SimpleNamespace(info=lambda *args: None),
     }
     namespace.update(namespace_extra or {})
@@ -111,6 +114,43 @@ class VendorWaitTrip(unittest.TestCase):
                 sellable_counts={"Leader": 2},
                 in_run=False,
             )
+        )
+
+    def test_no_wait_trip_while_a_farm_order_holds_the_family(self):
+        """A farming family's own town phase owns its vendor trips; a stuck
+        seller (one held in a dungeon, say) must not take the leader's column
+        and split the family off its node."""
+        self.assertFalse(
+            bag_pressure.vendor_wait_trip(30 * 60, {"Leader": 2}, False, farming=True)
+        )
+        self.assertTrue(
+            bag_pressure.vendor_wait_trip(30 * 60, {"Leader": 2}, False, farming=False)
+        )
+
+    def test_the_pass_takes_no_wait_trip_for_a_farming_family(self):
+        namespace = _vendor_pass_mode(
+            {
+                "_standing_jobs": lambda: {
+                    "Leader": "farm:mining",
+                    "Seller": "farm:mining",
+                }
+            }
+        )
+        mode = asyncio.run(
+            namespace["_vendor_pass_mode"](
+                None,
+                ["Leader", "Seller"],
+                {"Leader": 20, "Seller": 20},
+                {"Seller": 2},
+                False,
+            )
+        )
+        self.assertEqual(mode, bag_pressure.VENDOR_MODE_COUNTER)
+
+    def test_the_pass_passes_the_farming_flag(self):
+        self.assertIn(
+            "bag_pressure.vendor_wait_trip(waited, sellable_counts, in_run,",
+            BRIDGE,
         )
 
     def test_no_trip_without_a_sustained_wait_or_goods(self):

@@ -14409,7 +14409,11 @@ class Bridge(discord.Client):
                      "(sellable %s), so the trip goes", freed, sellable_counts)
         if not trip_worth and not in_run and any(sellable_counts.values()):
             waited = await asyncio.to_thread(_fetch_vendor_wait_seconds, names)
-            if bag_pressure.vendor_wait_trip(waited, sellable_counts, in_run):
+            standing_now = await asyncio.to_thread(_standing_jobs)
+            farming = any(
+                jobs.is_farm_job(standing_now.get(n)) for n in names)
+            if bag_pressure.vendor_wait_trip(waited, sellable_counts, in_run,
+                                             farming):
                 trip_worth = True
                 log.info(
                     "economy: a seller has waited %ds for a vendor; the "
