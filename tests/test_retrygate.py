@@ -105,7 +105,7 @@ class TransientRefusalsBackOff(unittest.TestCase):
         )
 
     def test_it_gives_up_after_n_and_holds_the_long_wait(self):
-        """A shop walk refused "in combat" 73 times in a row."""
+        """A shop walk refused "in combat" many times in a row."""
         rows = [combat(1 + 3 * i) for i in range(73)]
         hold = retrygate.hold(rows)
         self.assertEqual(hold.kind, retrygate.GAVE_UP)
@@ -119,7 +119,7 @@ class TransientRefusalsBackOff(unittest.TestCase):
         )
 
     def test_the_moving_cast_backs_off_and_unchanged_casts_give_up(self):
-        """#2401: casts refused "moving" are not asked again at once, and a
+        """Casts refused "moving" are not asked again at once, and a
         craft whose rows keep coming back `unchanged` stops after a few."""
         moving = [row("error", 1, "character is moving", retry="later")]
         self.assertEqual(retrygate.hold(moving).kind, retrygate.BACKOFF)
@@ -134,9 +134,19 @@ class TransientRefusalsBackOff(unittest.TestCase):
         self.assertEqual(retrygate.hold(nothing).kind, retrygate.GAVE_UP)
 
 
+class AMisShapedAgeIsNotACrash(unittest.TestCase):
+    def test_a_non_numeric_age_reads_as_just_now(self):
+        for age in ("2024-01-01 00:00:00", object(), None, ""):
+            t = retrygate.tried({"status": "error", "age": age})
+            self.assertEqual(t.age_minutes, 0)
+        self.assertEqual(
+            retrygate.hold([{"status": "error", "age": "x"}]).kind, retrygate.BACKOFF
+        )
+
+
 class PermanentRefusalsStop(unittest.TestCase):
     def test_an_outside_walk_is_asked_a_few_times_a_day_not_hundreds(self):
-        """#2400: one walk asked every two minutes for a day, all refused."""
+        """A walk asked every cycle and always refused outside the classic world."""
         rows = [
             row("error", 2 * i, OUTSIDE, retryable=True, transient=False)
             for i in range(1, 700)

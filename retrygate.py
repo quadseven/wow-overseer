@@ -43,7 +43,8 @@ PERMANENT = "permanent"
 FAILED = frozenset({"error", "unchanged"})
 
 # Refusals the module calls retryable that do not pass while the member stays
-# where it is. The classic gate's sentence (mod-overseer's
+# where it is. Matched on the module's literal text, so a reworded refusal
+# upstream stops matching and must be updated here. The classic gate's sentence (mod-overseer's
 # WalkRefusal::ExpansionContinent): the module marks it retryable and not
 # transient, and a member standing there is refused the same way every ask.
 LASTING_REASONS = frozenset(
@@ -71,9 +72,13 @@ def tried(row) -> Tried:
         result = {}
     if not isinstance(result, dict):
         result = {}
+    try:
+        age = int(row.get("age") or 0)
+    except (TypeError, ValueError):
+        age = 0
     return Tried(
         failed=status in FAILED,
-        age_minutes=int(row.get("age") or 0),
+        age_minutes=age,
         reason=str(result.get("reason") or ""),
         retryable=result.get("retryable"),
         retry=result.get("retry"),
