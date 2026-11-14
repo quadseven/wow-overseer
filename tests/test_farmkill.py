@@ -88,6 +88,26 @@ class ACreatureDropIsAField(unittest.TestCase):
         )
         self.assertEqual(33, step.zone_id)
 
+    def test_all_cloth_tiers_resolve_to_creature_fields(self):
+        tiers = (
+            (2589, "Linen Cloth", 12),
+            (2592, "Wool Cloth", 22),
+            (4306, "Silk Cloth", 35),
+            (4338, "Mageweave Cloth", 45),
+            (14047, "Runecloth", 55),
+        )
+        for item, label, mob_level in tiers:
+            with self.subTest(item=item, label=label):
+                step = farmjob.decide(
+                    farmjob.Order(job="farm:%d" % item, item=item, name=label),
+                    reads(
+                        creatures=(creature(1000, 0, level=mob_level),),
+                        zone_levels={33: mob_level},
+                    ),
+                )
+                self.assertEqual(farmjob.WALK, step.action)
+                self.assertIsInstance(step.spawn, farmjob.Creature)
+
 
 class TheLevelBandIsTheWeakestMembers(unittest.TestCase):
     def test_a_creature_above_the_ceiling_is_never_chosen(self):
@@ -140,6 +160,10 @@ class TheSurveyIsTheWorldsOwnLootTable(unittest.TestCase):
         ):
             self.assertIn(part, text)
         self.assertIn("Reference = 0", text)
+
+    def test_the_sql_also_follows_reference_loot_template(self):
+        text = self.SQL.group(1)
+        self.assertIn("reference_loot_template", text)
 
     def test_the_read_is_bounded_and_near_the_leader(self):
         text = self.SQL.group(1)
