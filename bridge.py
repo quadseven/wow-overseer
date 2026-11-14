@@ -13693,8 +13693,11 @@ class Bridge(discord.Client):
             report, [str(r.get("name") or "") for r in wearers])
         positions = await asyncio.to_thread(_fetch_positions, who)
         free_slots = await asyncio.to_thread(_fetch_free_slots, who)
+        # A holder on a mail run is asked first, so the cycle it arrives is the
+        # cycle its letter is written (#185, #2503).
         holders = list(dict.fromkeys(
-            r.holder for r in report.routes if r.holder in positions))
+            [h for h in self._guild_mail_runs if h in positions]
+            + [r.holder for r in report.routes if r.holder in positions]))
         at_mailbox = await asyncio.to_thread(
             _holders_at_mailbox, holders[:GUILD_ROUTE_MAILBOX_CHECKS], positions)
         seen = await asyncio.to_thread(_recent_route_keys, GIVE_RETRY_MINUTES)
@@ -13707,6 +13710,10 @@ class Bridge(discord.Client):
             family=frozenset(family),
             kept=kept,
             queued=gearroutingexec.queued(seen),
+            # Every wearer the report names is a guild member, and the guild
+            # post pass collects a member's letters (guildpost.py, #625).
+            postable=frozenset(family) | frozenset(
+                str(r.get("name") or "") for r in wearers),
         )
         result = await asyncio.to_thread(
             gearroutingexec.execute, report, world, _insert_route,
@@ -13719,9 +13726,48 @@ class Bridge(discord.Client):
             if step.status not in gearroutingexec.DECISIONS
         ])
         log.info("gear routing: %s", gearroutingexec.summary(result))
+        if GEAR_ROUTING_WALKS:
+            await self._gear_routing_walks(result, world)
+
+    async def _gear_routing_walks(self, result, world) -> None:
+        """Walk the holders of waiting routes to a mailbox (#2503).
+
+        Nothing new walks anybody: the routes that wait only for their holder
+        to reach a mailbox go to `_walk_route_holders`, the guild mail run
+        every other hand-over uses. A roster leader goes through the town
+        slot's lease (and its death disc check), a bot off the roster by the
+        module's walk row. A holder another pass has on a walk, or whose family
+        an operator hold stands down, is left alone. The letter is written when
+        the holder stands at the box, by the next routing pass or by the walk's
+        own follow task. No travel aim is written here.
+        """
+        waiting = gearroutingexec.fetchable(result, world.postable)
+        if not waiting:
+            return
+        busy = claims.busy_members(
+            getattr(self, "_guild_run_names", ()), getattr(self, "_job_steps", ()),
+            getattr(self, "_corps_steps", ()), getattr(self, "_dues_walks", ()),
+            getattr(self, "_crafter_walks", ()), getattr(self, "_post_walks", ()),
+            getattr(self, "_train_walks", ()))
+        rows = await asyncio.to_thread(_roster_cohort_rows)
+        family_of = {str(r.get("name") or ""): str(r.get("family") or "")
+                     for r in rows}
+        stood = await self._operator_held(
+            {family_of[w.holder] for w in waiting if family_of.get(w.holder)},
+            "gear routing")
+        held = {w.holder for w in waiting if family_of.get(w.holder) in stood}
+        routes, notes = gearroutingexec.walkable(waiting, busy=busy, held=held)
+        _log_capped("gear routing", notes)
+        own = sorted((await asyncio.to_thread(_protected_guids)).values())
+        await self._walk_route_holders(
+            routes, own, family_only=False,
+            per_day=GEAR_ROUTING_WALKS_PER_DAY,
+            per_pass=GEAR_ROUTING_WALKS_PER_PASS)
 
     async def _walk_route_holders(self, waiting: list, family_names: list,
-                                  escort=None, family_only: bool = True) -> None:
+                                  escort=None, family_only: bool = True,
+                                  per_day: int = guildroute.MAIL_RUNS_PER_DAY,
+                                  per_pass: int | None = None) -> None:
         """Walk a waiting route's holder to the nearest mailbox (#185).
 
         guildroute.plan_mail_runs decides who walks, within its bounds: one
@@ -13755,10 +13801,20 @@ class Bridge(discord.Client):
         plan = guildroute.plan_mail_runs(
             waiting, walkers, self._guild_mail_runs,
             guildroute.runs_today(self._guild_mail_run_starts, now, posted),
-            family_only=family_only,
+            per_day=per_day, family_only=family_only,
         )
         _log_capped("guild route", plan.notes)
-        for run in plan.runs:
+        runs = plan.runs if per_pass is None else plan.runs[:max(int(per_pass), 0)]
+        for run in runs:
+            # A WALK ROW IS NOT A TRAVEL AIM, SO THE TOWN SLOT'S DEATH DISC
+            # CHECK DOES NOT COVER IT (#2503): judge the mailbox the same way.
+            if run.by_row and str(run.aim).startswith("at:"):
+                refused = await asyncio.to_thread(
+                    _member_death_disc_refusals, [run.holder], run.aim)
+                if refused:
+                    log.info("guild route: %s is not walked to %s: %s",
+                             run.holder, run.aim, refused.get(run.holder, ""))
+                    continue
             # Reserved before the await and handed back on a refusal, so the
             # traveller is never read as free while its claim is in flight.
             walker_name = run.walker_name or run.holder
@@ -33561,6 +33617,12 @@ GUILD_ROUTE_MAILBOX_CHECKS = int(os.environ.get("GUILD_ROUTE_MAILBOX_CHECKS", "2
 # The most hand-over rows the gear routing pass writes in one cycle (#2136);
 # 0 writes none, and every route is still decided and logged.
 GEAR_ROUTING_PER_PASS = int(os.environ.get("GEAR_ROUTING_PER_PASS", "10"))
+# THE WALKS A WAITING GEAR ROUTE ASKS FOR (#2503). Its own budget, because the
+# guild route pass spends guildroute.MAIL_RUNS_PER_DAY (6) and a 341-route
+# report would use all of it. Off switch: GEAR_ROUTING_WALKS=0.
+GEAR_ROUTING_WALKS = os.environ.get("GEAR_ROUTING_WALKS", "1") != "0"
+GEAR_ROUTING_WALKS_PER_DAY = int(os.environ.get("GEAR_ROUTING_WALKS_PER_DAY", "30"))
+GEAR_ROUTING_WALKS_PER_PASS = int(os.environ.get("GEAR_ROUTING_WALKS_PER_PASS", "2"))
 # How many notes one pass logs line by line before it summarises the rest.
 GUILD_ROUTE_NOTE_LINES = 5
 
