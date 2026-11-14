@@ -64,6 +64,15 @@ again, a held mate does not answer, and an ask this pass expires draws
 no yes. Nothing here seats a party: that is piece 2, and the switch
 stays off until it lands.
 
+FILLED, NOT SEATED (#2277, piece 2 bridge). A live ask holding a yes
+(a standing yes on the answer rows, or the yes this pass draws in its
+replies) whose asker and helper are both free and not held or seated
+is emitted in the Pass's filled ids, and the bridge merges those ids
+into the social pass, whose writer marks the ask filled through the
+same generic path as the quest asks. Filled is a state, not a party:
+no party is started here, and the switch stays off until a party
+runner lands.
+
 PURE: rows in, a guildsocial.Pass of posts, replies and expires out.
 """
 
@@ -298,4 +307,16 @@ def plan_pass(
         a for a in death_asks(asks) if a.state in LIVE_ASKS and a.id not in ending_ids
     ]
     replies = _replies(live_asks, ending_ids, jobs, looping, answers, held, spoken)
-    return guildsocial.Pass(posts=tuple(posts), expire=expire, replies=replies)
+    yes_by_ask = {a.ask_id: a.member for a in answers or () if a.state == YES}
+    for reply in replies:
+        yes_by_ask[reply.ask_id] = reply.member
+    filled = tuple(
+        a.id
+        for a in sorted(live_asks, key=lambda a: a.id)
+        if a.id in yes_by_ask
+        and a.asker not in held
+        and yes_by_ask[a.id] not in held
+    )
+    return guildsocial.Pass(
+        posts=tuple(posts), expire=expire, replies=replies, filled=filled
+    )
