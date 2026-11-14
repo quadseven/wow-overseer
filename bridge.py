@@ -26282,6 +26282,11 @@ class Bridge(discord.Client):
             covered = farmjob.in_reach(seen, leader_now) if seen else []
             if covered:
                 standing = {n: j for n, j in standing.items() if n in covered}
+        # INDIVIDUAL MODE (#2498): members on different farm jobs are not a
+        # half-landed order, so the pass judges the leader's own farm group.
+        if individual.families():
+            family = await asyncio.to_thread(_individual_family, cohort)
+            standing = individual.farm_cohort(standing, leader_now, family)
         farming = sorted({job for job in standing.values() if jobs.is_farm_job(job)})
         if not farming:
             self._farm_state.pop(key or "", None)

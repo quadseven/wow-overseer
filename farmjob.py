@@ -152,6 +152,27 @@ def skill_locks(skill_name, value) -> list:
     return out
 
 
+def target_for(skills) -> str:
+    """The farm job one member can still advance with its own skills (#2498).
+
+    `skills` is that member's {trade name: value}. Of the aimable trades it
+    holds with a node that still gives skill, the lowest is taken, the same
+    "most starved" rule gatheraim uses. A member with none (skinning, tailoring
+    and the other trades with no node to walk to) has no farm target: "".
+    """
+    best = None
+    for name in SKILLS:
+        try:
+            have = int((skills or {}).get(name))
+        except (TypeError, ValueError):
+            continue
+        if not skill_locks(name, have):
+            continue
+        if best is None or have < best[1]:
+            best = (name, have)
+    return job_for(best[0]) if best else ""
+
+
 @dataclass(frozen=True)
 class Order:
     """One farm order, as the bridge read it."""
