@@ -444,7 +444,7 @@ SUPPLIES = (
         "Greater Arcane Elixir",
         (0, 0, 0, 1),
         Make(
-            17557,
+            17573,
             ALCHEMY,
             ((DREAMFOIL, 3), (MOUNTAIN_SILVERSAGE, 1)),
             (CRYSTAL_VIAL,),
@@ -456,7 +456,7 @@ SUPPLIES = (
         "Elixir of Giants",
         (0, 0, 1, 0),
         Make(
-            11478,
+            11472,
             ALCHEMY,
             ((SUNGRASS, 1), (GROMSBLOOD, 1)),
             (CRYSTAL_VIAL,),
@@ -473,9 +473,9 @@ SUPPLIES = (
             ALCHEMY,
             ((STONESCALE_OIL, 3), (THORIUM_ORE, 1)),
             (CRYSTAL_VIAL,),
-            13493,
+            13490,
         ),
-        "Recipe 13493: world drop or auction house",
+        "Recipe 13490: world drop or auction house",
     ),
     Supply(
         20452,
@@ -542,38 +542,6 @@ SUPPLIES = (
     ),
 )
 SUPPLY_BY_ENTRY = {s.entry: s for s in SUPPLIES}
-
-
-def herb_shortfall(raiders: list, stock: dict | None = None) -> dict:
-    """Per-night herb/reagent need, held count, and shortfall across `SUPPLIES`."""
-    stock = stock or {}
-    totals: dict[int, int] = {}
-    for supply in SUPPLIES:
-        if supply.stands_in or not supply.make:
-            continue
-        want = sum(supply.per_raider(r) for r in raiders)
-        if want <= 0:
-            continue
-        for entry, per in supply.make.reagents:
-            totals[entry] = totals.get(entry, 0) + want * int(per)
-    herbs = []
-    for entry, need in sorted(totals.items()):
-        held = int(stock.get(entry, 0) or 0)
-        herbs.append(
-            {
-                "entry": entry,
-                "need": need,
-                "held": held,
-                "short": max(need - held, 0),
-            }
-        )
-    return {
-        "herbs": herbs,
-        "lotus_note": (
-            "Black Lotus is a rare world spawn at Herbalism 300; if it cannot "
-            "be met, flasks are cut first rather than counting the night short."
-        ),
-    }
 
 
 # The fire potion lines; the night wants one of them, and the fire gear after it.
