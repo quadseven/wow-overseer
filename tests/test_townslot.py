@@ -457,6 +457,27 @@ class AnErrandWithNoOwnerGetsTheWorldsOwnClock(unittest.TestCase):
     def test_lease_for_answers_zero_for_nobody(self):
         self.assertEqual(0.0, townslot.lease_for(None))
 
+    def test_an_orphan_ground_aim_gets_only_a_short_grace(self):
+        """After a restart the old pod's walk to a spot is nobody's errand
+        this process can name; it must not hold the column for 20 minutes."""
+        aim = "at:0:-9672.3,817.4,32.1"
+        self.assertEqual(
+            townslot.ORPHAN_GROUND_GRACE_SECONDS,
+            townslot.lease_for(holder("", aim, 0.0)),
+        )
+        self.assertLessEqual(townslot.ORPHAN_GROUND_GRACE_SECONDS, 180.0)
+
+    def test_an_orphan_keyword_aim_keeps_the_long_lease(self):
+        self.assertEqual(
+            townslot.ORPHAN_LEASE_SECONDS, townslot.lease_for(holder("", "vendor", 0.0))
+        )
+
+    def test_a_named_claimants_ground_aim_is_unchanged(self):
+        aim = "at:0:-9672.3,817.4,32.1"
+        self.assertEqual(
+            townslot.LEASE_SECONDS, townslot.lease_for(holder("economy", aim, 0.0))
+        )
+
     def test_lease_for_separates_the_two_cases(self):
         self.assertEqual(
             townslot.LEASE_SECONDS, townslot.lease_for(holder("economy", "vendor", 0.0))
@@ -1521,7 +1542,7 @@ class AWalkThatLeavesTownGetsALeaseDimensionedForIt(unittest.TestCase):
         self.assertEqual(
             townslot.ORPHAN_LEASE_SECONDS,
             townslot.lease_for(
-                holder("", "at:1:1,2,3", since=0.0),
+                holder("", "vendor", since=0.0),
                 long_leases={"gather": 450.0, "": 10.0},
             ),
         )
@@ -2534,7 +2555,7 @@ class AnEarnedTurnKeepsEveryOtherGate(unittest.TestCase):
 
     def test_waits_behind_an_orphan_holder_inside_its_lease(self):
         slot = self._slot()
-        aim = "at:1:1,2,3"
+        aim = "vendor"
         blocked = self._ask(slot, self.EARNED, aim)
         self.assertEqual(townslot.SLOT_WAIT, blocked.verdict)
         self.assertEqual("", slot.holder.claimant)

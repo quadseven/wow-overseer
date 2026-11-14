@@ -125,6 +125,16 @@ LEASE_SECONDS = 300.0
 # too, and taking the column is not a race with anything.
 ORPHAN_LEASE_SECONDS = 1200.0
 
+# THE GRACE FOR AN ORPHAN GROUND AIM. A restart finds the column still holding
+# the old pod's walk to a spot (`at:<map>:<x>,<y>,<z>`) and cannot name its
+# writer, so it was given the full orphan lease: on wow-dev 2026-11-14 a
+# family stood at one mining spawn for about 18 minutes after a ship because
+# every new aim was refused behind it. A ground aim is a walk that has either
+# landed or is simply being re-asked by its pass within a cycle or two, so a
+# couple of minutes is enough to let the passes re-assert theirs. A keyword
+# aim (a vendor, a mailbox) keeps the long lease.
+ORPHAN_GROUND_GRACE_SECONDS = 120.0
+
 # THE SAME, FOR A WALK THAT LEAVES TOWN (infra#4183).
 #
 # LEASE_SECONDS is dimensioned for a town errand and says so: "121 yards apart
@@ -537,6 +547,8 @@ def lease_for(
     if holder is None:
         return 0.0
     if not holder.claimant:
+        if _ground_point(holder.aim) is not None:
+            return min(orphan_lease, ORPHAN_GROUND_GRACE_SECONDS)
         return orphan_lease
     if long_leases:
         try:
