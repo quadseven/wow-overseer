@@ -135,6 +135,9 @@ class Extras:
 
     open_quest_items: Mapping[str, frozenset] | None = None
     gear_verdict: Mapping[tuple, str] | None = None
+    # {member: {entry: verdict}} by the module's gear drive rule, for the
+    # roster members whose equips the drive makes (#2381).
+    drive_verdict: Mapping[str, Mapping[int, str]] | None = None
     worn: Mapping[str, dict] | None = None
     market: Mapping[int, tuple] | None = None
     guild_free: Mapping[tuple, int] | None = None
@@ -317,7 +320,7 @@ def _verdicts(extras: Extras, stacks, characters):
     if extras.worn is None or extras.templates is None:
         return None
     bag = itemplan_data.verdict_rows(stacks, extras.templates, characters)
-    return itemplan_data.upgrade_verdicts(extras.worn, bag)
+    return itemplan_data.upgrade_verdicts(extras.worn, bag, extras.drive_verdict)
 
 
 def _missing(extras: Extras, verdicts=None) -> tuple:

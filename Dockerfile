@@ -22,25 +22,25 @@ WORKDIR /app
 
 COPY core.py bridge.py voice.py transform.py world_data.py \
      map_core.py map_server.py events.py \
-     panel.py family.py families.py goals.py protect.py fanout.py chat.py \
+     panel.py family.py families.py goals.py individual.py protect.py fanout.py chat.py \
      kin.py keep.py cast.py bonds.py council.py family_value.py persona.py \
      bonkers.py retire.py \
-     quests.py overhear.py questbook.py questcatalogue.py questledger.py questtickets.py \
+     quests.py overhear.py questbook.py questcatalogue.py questledger.py questtickets.py corpstickets.py \
      questshare.py questers.py travel.py stream.py frames.py \
      professions.py craft.py craft_supply.py auction.py gearup.py weaponskill.py jobs.py trainjob.py \
      craft_rhythm.py \
-     skillgoal.py gatheraim.py gatherband.py farmassign.py \
+     skillgoal.py gatheraim.py gatherband.py farmassign.py farmjob.py \
      flightlearn.py \
      followhold.py \
-     learnaim.py recipebook.py \
+     learnaim.py reagentplan.py recipebook.py \
      craftpleas.py materials.py \
      gear.py gearorigin.py itemsource.py handover.py \
      armory.py wealth.py questlog.py modelviewer.py \
      relay.py digest.py \
-     achievements.py recap.py agenda.py eye.py decree.py priorities.py meter.py zone_danger.py \
+     achievements.py recap.py agenda.py eye.py decree.py priorities.py operatorhold.py meter.py zone_danger.py \
      dungeonplan.py dungeonpath.py raidgoals.py raidcraft.py raidprep.py raidlineup.py mcencounters.py raidgear.py raidfloor.py raidroles.py raidteams.py teamsync.py attunestep.py raidready.py roadtoragnaros.py raidrun.py spirerun.py raidsupply.py readcache.py readtimeout.py \
      dungeonprogression.py dungeonquests.py \
-     guildcraft.py guildcover.py tradespec.py tradeturn.py guildbank.py guildshare.py guildroute.py orders.py guildpost.py guildwork.py workorders.py workorderstore.py guildfund.py classtrain.py classcasts.py racespells.py taughtspells.py purse.py vendorsale.py bankbags.py natural.py guildcorps.py guildjobs.py guildlevel.py classquest.py steps.py classask.py classparty.py classuse.py classhunt.py guildrun.py guildfacts.py guildpug.py familyseat.py familyclass.py seatmeter.py guildsocial.py deathask.py crafters.py recruit.py interview.py clipledger.py clipcutter.py clipserve.py eventclips.py \
+     guildcraft.py guildcover.py tradespec.py tradeturn.py guildbank.py guildshare.py guildroute.py orders.py guildpost.py guildwork.py workorders.py workorderstore.py guildfund.py classtrain.py classcasts.py racespells.py taughtspells.py purse.py vendorsale.py bankbags.py natural.py guildcorps.py guildjobs.py guineapig.py guildlevel.py classquest.py steps.py classask.py classparty.py classuse.py classhunt.py guildrun.py guildfacts.py guildpug.py familyseat.py familyclass.py seatmeter.py guildsocial.py deathask.py crafters.py recruit.py interview.py clipledger.py clipcutter.py clipserve.py eventclips.py \
      bag_pressure.py bag_upgrade.py bag_economy.py bag_market.py guildbags.py disposition.py bagfate.py tidy.py \
      lockbox.py clearance.py \
      item_plan.py itemplan.py itemplan_shadow.py itemplan_data.py itemplan_reads.py itemplan_vendor.py \
@@ -58,7 +58,7 @@ COPY core.py bridge.py voice.py transform.py world_data.py \
      campaignhandoff.py campaignplan.py dungeonladder.py director.py levelroute.py \
      preraid.py fireplan.py gearscore.py gearupgrades.py pvpgear.py equipscore.py \
      runtimeline.py runreport.py runstory.py places.py commandwords.py orderrecord.py \
-     vclient.py guildgear.py gearrouting.py gearroutingexec.py \
+     vclient.py guildgear.py gearrouting.py gearroutingexec.py gearroutingread.py \
      situation.py standstill.py deathloop.py restsupply.py vision.py llmmode.py llmpool.py jev_movement.py jev_family_intent.py jev_outcomes.py leadcmd.py strategybook.py \
      realmroller.py realmroller_world.py realmroller_plan.py realmroller_act.py \
      zones.json entrances.json shapes.json \
