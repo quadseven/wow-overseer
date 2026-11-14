@@ -93,3 +93,22 @@ def members_on(job_by_name: dict, modes, family, environ=None, exempt=()) -> tup
     if len(held) == 1 and held <= wanted:
         return tuple(sorted(rows))
     return ()
+
+
+def farm_cohort(job_by_name: dict, leader, family, environ=None) -> dict:
+    """The rows the farm pass judges as one order (#2498).
+
+    Linked or unnamed families, and rows holding no farm job, are returned
+    unchanged: the old split rule applies to them. An individual family keeps
+    only the members on the leader's own farm job, or when the leader is not
+    farming, the members of the first farm job by name, so members holding
+    different farm jobs are not a half-landed order and the rest are left alone.
+    """
+    rows = dict(job_by_name or {})
+    if not active(rows, family, environ):
+        return rows
+    farming = {n: j for n, j in rows.items() if jobs.is_farm_job(j)}
+    if not farming:
+        return rows
+    pick = farming.get(leader) or farming[min(farming)]
+    return {n: j for n, j in farming.items() if j == pick}
