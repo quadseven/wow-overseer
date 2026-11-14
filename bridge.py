@@ -12073,6 +12073,14 @@ class Bridge(discord.Client):
             "and are not craftable until a mailbox pass collects them.",
             queued, spent, len(buyers), leader, aimed, _family_label(cohort),
         )
+        if not queued:
+            # A PASS THAT BOUGHT NOTHING SAYS WHY WHEN THE HOUSE IS BARE (#2523).
+            listed = await asyncio.to_thread(
+                _fetch_listed_counts, sorted({n.entry for n in needs}))
+            for note in reagentplan.house_none_notes(
+                    [(n.shopper, n.label or "item %d" % n.entry, n.entry)
+                     for n in needs], listed):
+                log.info("auction: %s", note)
 
     async def _gearup_facts_and_tanks(self, names):
         facts = await asyncio.to_thread(_fetch_gearup_facts, names)
@@ -40172,6 +40180,9 @@ def _plan_craft_reagents(names: list, spells: dict, skills: dict) -> dict:
         places = _fetch_reagent_stock(pairs)
         vault = _fetch_vault_stacks(sorted(wanted), entries)
         kinds = _fetch_item_kinds(entries)
+        # WHETHER THE HOUSE LISTS ANY (#2523), so a reagent that falls through
+        # to it is said to have nothing to buy rather than "from the auction".
+        listed = _fetch_listed_counts(entries)
     except pymysql.err.MySQLError:
         log.exception("craft: the reagents could not be read; no errand is planned")
         return {}
@@ -40182,11 +40193,36 @@ def _plan_craft_reagents(names: list, spells: dict, skills: dict) -> dict:
             bags, banked, mail = places.get((name, r.entry), (0, 0, 0))
             in_vault = sum(st.count for st in vault.get(name, ()) if st.entry == r.entry)
             stock[r.entry] = reagentplan.Stock(bags, banked, mail, in_vault)
-        plans[name] = reagentplan.plan(name, spells[name], stock, kinds, skills)
+        plans[name] = reagentplan.plan(
+            name, spells[name], stock, kinds, skills, listed=listed)
     for name in names:
         _CRAFT_PLANS.pop(name, None)
     _CRAFT_PLANS.update(plans)
     return plans
+
+
+def _fetch_listed_counts(entries: list):
+    """entry -> live buyout listings in either house, or None when unread.
+
+    None means "not read", never "none listed": a world image with no readable
+    auction house keeps every reagent line as it was.
+    """
+    if not entries:
+        return {}
+    marks = ",".join(["%s"] * len(entries))
+    sql = ("SELECT ii.itemEntry AS entry, COUNT(*) AS n FROM auctionhouse a "  # noqa: S608 - placeholders from a COUNT, values still bound
+           "JOIN item_instance ii ON ii.guid = a.itemguid "
+           "WHERE a.buyoutprice > 0 AND ii.itemEntry IN (%s) GROUP BY ii.itemEntry"
+           % marks)
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, [int(e) for e in entries])
+            found = {int(r["entry"]): int(r["n"]) for r in cur.fetchall()}
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+    return {int(e): found.get(int(e), 0) for e in entries}
 
 
 def _fetch_item_kinds(entries: list) -> dict:

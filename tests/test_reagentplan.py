@@ -11,6 +11,7 @@ look: own bank, mailbox, guild bank, a vendor, a gatherer, the auction house.
 
 from __future__ import annotations
 
+import pathlib
 import unittest
 
 import bankforecast
@@ -264,6 +265,107 @@ class TheBankAndTheVaultAreToldWhatToFetch(unittest.TestCase):
         self.assertIsInstance(taken.line, str)
         self.assertTrue(taken.command.startswith("bank withdraw-item "))
         self.assertEqual(reagentplan.VAULT_SOURCE, taken.source)
+
+
+class TheBridgeReadsTheHouse(unittest.TestCase):
+    SOURCE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
+        encoding="utf-8"
+    )
+
+    def test_the_craft_plan_is_given_the_listings_read(self):
+        body = self.SOURCE.split("def _plan_craft_reagents(", 1)[1].split("\ndef ", 1)[
+            0
+        ]
+        self.assertIn("_fetch_listed_counts(entries)", body)
+        self.assertIn("listed=listed", body)
+
+    def test_an_unreadable_house_is_none_not_empty(self):
+        body = self.SOURCE.split("def _fetch_listed_counts(", 1)[1].split("\ndef ", 1)[
+            0
+        ]
+        self.assertIn("return None", body)
+
+    def test_a_bought_nothing_pass_says_the_house_is_bare(self):
+        self.assertIn("reagentplan.house_none_notes(", self.SOURCE)
+
+
+class TheHouseListsNone(unittest.TestCase):
+    def plan(self, listed, bags=0, guild_bank=0):
+        return reagentplan.plan(
+            "Grug",
+            ROUGH_SHARPENING_STONE,
+            {ROUGH_STONE: stock(bags=bags, guild_bank=guild_bank)},
+            KINDS,
+            {"Grug": {"blacksmithing": 22}},
+            listed=listed,
+        )
+
+    def test_an_empty_listings_read_says_the_house_lists_none(self):
+        line = reagentplan.line(self.plan({ROUGH_STONE: 0}))
+        self.assertIn("the house lists none", line)
+        self.assertIn("Rough Stone", line)
+        self.assertNotIn("from the auction", line)
+
+    def test_it_names_the_next_source_as_nothing_when_nothing_holds_any(self):
+        self.assertIn("nothing", reagentplan.line(self.plan({ROUGH_STONE: 0})))
+
+    def test_it_names_a_short_vault_stack_as_the_next_source(self):
+        # The vault holds one, a cast needs two: it is short, not a source.
+        plan = reagentplan.plan(
+            "Grug",
+            3320,
+            {ROUGH_STONE: stock(guild_bank=1)},
+            KINDS,
+            {"Grug": {"blacksmithing": 40}},
+            listed={ROUGH_STONE: 0},
+        )
+        self.assertIn("vault holds 1", reagentplan.line(plan))
+
+    def test_the_source_chosen_is_still_the_house(self):
+        self.assertEqual(
+            reagentplan.AUCTION, self.plan({ROUGH_STONE: 0}).shorts[0].source
+        )
+
+    def test_a_non_empty_read_keeps_todays_wording(self):
+        read = reagentplan.line(self.plan({ROUGH_STONE: 3}))
+        self.assertNotIn("lists none", read)
+        self.assertIn("from the auction", read)
+
+    def test_an_unread_house_keeps_todays_wording(self):
+        read = reagentplan.line(self.plan(None))
+        self.assertNotIn("lists none", read)
+        self.assertEqual(
+            read,
+            reagentplan.line(
+                reagentplan.plan(
+                    "Grug",
+                    ROUGH_SHARPENING_STONE,
+                    {},
+                    KINDS,
+                    {"Grug": {"blacksmithing": 22}},
+                )
+            ),
+        )
+
+    def test_a_reagent_the_house_lists_is_not_called_empty(self):
+        self.assertNotIn("lists none", reagentplan.line(self.plan({ROUGH_STONE: 1})))
+
+    def test_the_note_is_once_per_crafter_and_reagent(self):
+        wants = [
+            ("Og", "Silk Cloth", 4306),
+            ("Og", "Silk Cloth", 4306),
+            ("Zug", "Silk Cloth", 4306),
+            ("Og", "Mageweave Cloth", 4338),
+        ]
+        notes = reagentplan.house_none_notes(wants, {4306: 0, 4338: 2})
+        self.assertEqual(2, len(notes))
+        self.assertTrue(all("the house lists none" in n for n in notes))
+        self.assertIn("Og", notes[0])
+
+    def test_no_note_when_the_listings_were_not_read(self):
+        self.assertEqual(
+            [], reagentplan.house_none_notes([("Og", "Silk Cloth", 4306)], None)
+        )
 
 
 if __name__ == "__main__":
