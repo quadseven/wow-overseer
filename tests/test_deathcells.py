@@ -1,11 +1,8 @@
 """Ground the family died on twice is not a walk (wow-overseer#2457).
 
-The dev realm, 2026-11-13 and 14: whole families died together in lava on
-one stretch of the Burning Steppes while the quest drive walked them across
-the continent, and the same lead character fell under the world three times
-over one stretch of Elwynn Forest. Both are in the death table. These tests
-pin the fixtures taken from those rows: what becomes an avoid disc, what does
-not, and that a line over a disc is refused with a reason.
+Synthetic fixtures: rows shaped like the death table's lava and under-world
+fall rows. These tests pin what becomes an avoid disc, what does not, and that
+a line over a disc is refused with a reason.
 """
 
 import pathlib
@@ -29,7 +26,7 @@ def row(x, y, z=128.0, liquid="magma", killer="self", fell=0.0, map_id=0):
     }
 
 
-# Recorded lava deaths, one family together, and a fall under the world.
+# Coordinates shaped like recorded lava deaths, and a fall under the world.
 LAVA = [row(-7812, -928), row(-7814, -928), row(-7816, -930), row(-7780, -910)]
 FALLS = [
     row(-8216, -562, z=-511, liquid="none", fell=30),

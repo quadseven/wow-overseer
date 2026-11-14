@@ -1,11 +1,9 @@
 """Ground the family died on twice is not a walk (#2457).
 
 WHY THIS EXISTS. The town errand already passes over a vendor whose walk lies
-along the family's deaths of the last day (townerrand.lethal_stop). Nothing
-did the same for a ground aim or for the quest drive, so on the dev realm the
-family walked the same lines again: whole families died together in lava on
-one stretch of the Burning Steppes, and one character fell under the world
-over one stretch of Elwynn Forest three times in a night.
+along the family's recent deaths (townerrand.lethal_stop). Nothing did the
+same for a ground aim or for the quest drive, so ground that had killed more
+than once could be walked again.
 
 WHAT IT DOES. It reads no database. Given `overseer_death` rows it finds
 places where two or more deaths of kind lava, slime or fall (killer type
@@ -45,7 +43,7 @@ DEATH_DAYS = 7
 SQL = (
     "SELECT map AS map_id, pos_x AS x, pos_y AS y, pos_z AS z, killer_type, "
     "liquid_type, yards_fallen FROM overseer_death "
-    "WHERE created_at > NOW() - INTERVAL %d DAY AND killer_type = 'self'" % DEATH_DAYS
+    "WHERE created_at > NOW() - INTERVAL %s DAY AND killer_type = 'self'"
 )
 
 ENDS_SQL = (

@@ -41363,7 +41363,7 @@ def _fetch_death_discs() -> list:
     when unread. ADVISORY: a broken read must not stop a walk (#2457)."""
     try:
         with _connect() as conn, conn.cursor() as cur:
-            cur.execute(deathcells.SQL)
+            cur.execute(deathcells.SQL, (deathcells.DEATH_DAYS,))
             return deathcells.discs([dict(r) for r in cur.fetchall()])
     except pymysql.err.MySQLError as exc:
         log.warning("death discs: the death table could not be read (%s); "
@@ -41404,7 +41404,7 @@ def _fetch_quest_ends(quests: list) -> dict:
 
 
 def _pass_over_deadly_quests(leader: str, candidates: tuple, chosen: int) -> int:
-    """`chosen`, or the next candidate whose walk clears the death discs."""
+    """`chosen`, or the next candidate whose walk clears the death discs, or 0."""
     discs = _fetch_death_discs()
     row = _fetch_positions([leader]).get(leader) if discs else None
     if not discs or not row:
