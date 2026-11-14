@@ -52,6 +52,8 @@ class TurnWorld(FakeWorld):
         self.errands = {}
         self.no_town = {}
         self.marks = {}
+        self.last_source = ""
+        self.lock = asyncio.Lock()
 
     def fetch_turns(self):
         return dict(self.turns)
@@ -93,6 +95,8 @@ class TurnWorld(FakeWorld):
                 "_TOWN_ERRAND_MARKS": self.marks,
                 "_TRADE_TURN_NO_TOWN": self.no_town,
                 "_town_errand_active": lambda names: self.errand,
+                "_last_job_source": lambda name: self.last_source,
+                "TOWN_ERRAND_SOURCE": "overseer:town-errand",
                 "_cohort_of": lambda name: "Zug",
                 "bonds": types.SimpleNamespace(head_of_family=lambda: "Zug"),
             },
@@ -109,6 +113,7 @@ class TurnWorld(FakeWorld):
             _town_errand_release=release,
             _town_slot="own slot",
             _cohort_town_slot=lambda key: "slot of " + key,
+            _town_errand_lock=lambda names: world.lock,
         )
 
         async def turn_pass(pending, fams):
@@ -275,6 +280,62 @@ class TheTurnCountsTradeTimeInTheBridge(unittest.TestCase):
         self.assertFalse(w.errands[w.names()].active)
         self.assertEqual(7.0, w.errands[w.names()].ended)
         self.assertNotIn(w.names(), w.marks)
+
+    def test_a_finished_errands_town_run_ends_the_turn_and_the_queue_takes_over(self):
+        # Wow-dev 2026-11-13 (#2379): the errand released at 16:59 and left the
+        # town run; the live turn made the queue yield, so the family idled for
+        # the whole allowance and the turn after it.
+        w = started_world()
+        w.run_pass()  # the turn starts, job quest
+        w.zug()["job"] = jobs.TOWN_RUN
+        w.last_source = "overseer:town-errand"
+        w.errand = False
+        w.clock.now += 30
+        lines = w.run_pass()
+        self.assertTrue(w.turns["Zug"].over, "the turn outlived its errand")
+        self.assertEqual(set(), w.held)
+        self.assertEqual(
+            "dungeon:ragefire", w.zug()["job"], "the queue did not take the family back"
+        )
+        self.assertTrue([ln for ln in lines if "errand that held" in ln], lines)
+
+    def test_an_errand_mid_start_holds_the_turn_with_its_lock(self):
+        w = started_world()
+        w.run_pass()
+        w.zug()["job"] = jobs.TOWN_RUN
+        w.last_source = "overseer:town-errand"
+        w.errand = False
+        w.lock = types.SimpleNamespace(locked=lambda: True)
+        w.clock.now += 30
+        w.run_pass()
+        self.assertFalse(w.turns["Zug"].over)
+        self.assertEqual({"Zug"}, w.held)
+
+    def test_a_locked_errand_loop_does_not_release_a_dungeon_job_family(self):
+        # Other loops hold the errand lock too (weapon skill, errand ticks); a
+        # family on a dungeon job must not read as on an errand (review of #2384).
+        w = started_world()
+        w.run_pass()
+        w.zug()["job"] = "dungeon:ragefire"
+        w.clock.now += TOWN_SECONDS + 10
+        w.run_pass()
+        # The queue wrote its job back (the turn's pass had sent it to quest).
+        w.zug()["job"] = "dungeon:ragefire"
+        w.lock = types.SimpleNamespace(locked=lambda: True)
+        w.clock.now += 30
+        w.run_pass()
+        self.assertEqual([], w.released, "released an errand that did not exist")
+
+    def test_a_town_run_the_errand_did_not_write_keeps_the_old_clock(self):
+        w = started_world()
+        w.run_pass()
+        w.zug()["job"] = jobs.TOWN_RUN
+        w.last_source = "overseer:town-first"
+        w.errand = False
+        w.clock.now += 30
+        w.run_pass()
+        self.assertFalse(w.turns["Zug"].over)
+        self.assertEqual({"Zug"}, w.held)
 
     def test_a_release_with_no_errand_in_memory_still_writes_the_default(self):
         # After a restart the errand is forgotten but the job is still town run.
