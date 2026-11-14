@@ -313,9 +313,7 @@ def plan_pass(
     filled = tuple(
         a.id
         for a in sorted(live_asks, key=lambda a: a.id)
-        if a.id in yes_by_ask
-        and a.asker not in held
-        and yes_by_ask[a.id] not in held
+        if a.id in yes_by_ask and a.asker not in held and yes_by_ask[a.id] not in held
     )
     return guildsocial.Pass(
         posts=tuple(posts), expire=expire, replies=replies, filled=filled
