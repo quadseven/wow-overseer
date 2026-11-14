@@ -4,6 +4,7 @@ now carry, the guild bank's share of a BoE extra, and what the Chronicle and
 Bags show."""
 
 import asyncio
+import dataclasses
 import json
 import os
 import sys
@@ -963,6 +964,57 @@ class UsersBeforeGreed(unittest.TestCase):
     def test_a_weapon_has_no_armor_fit_to_gate_on(self):
         d = lootcouncil.skipped(kang(), {"name": "Kang the Decapitator", "kind": "Axe"})
         self.assertEqual(d.recipient, "Grog")
+
+
+class NoItemCard(unittest.TestCase):
+    """A roll row with no item card: the fit gates have nothing to read, so
+    only a drop the row itself shows to be a weapon moves to a user. Armor,
+    or a drop the row does not name, keeps the greed roll (fail closed)."""
+
+    def armor(self):
+        # A leather piece read from the module's reasons alone: the warrior
+        # and the paladin can equip it, the others cannot.
+        rows = [dict(c, why="leather, 120 armour") for c in KANG[:2]]
+        rows += [dict(c, why="no leather proficiency") for c in KANG[2:]]
+        return dataclasses.replace(
+            kang(candidates=rows), item_name="Fixture Leather Jerkin"
+        )
+
+    def test_armor_with_no_card_keeps_the_greed_roll(self):
+        d = lootcouncil.skipped(self.armor())
+        self.assertEqual(d.recipient, "")
+
+    def test_an_unnamed_drop_with_no_card_keeps_the_greed_roll(self):
+        rows = [dict(c, why="") for c in KANG]
+        d = lootcouncil.skipped(kang(candidates=rows))
+        self.assertEqual(d.recipient, "")
+
+    def test_a_known_weapon_with_no_card_still_moves_to_a_user(self):
+        rows = [dict(c, why="no proficiency with this weapon") for c in KANG[2:]]
+        d = lootcouncil.skipped(kang(candidates=[*KANG[:2], *rows]))
+        self.assertEqual(d.recipient, "Grog")
+
+    def test_the_kang_case_still_moves_with_no_card(self):
+        self.assertEqual(lootcouncil.skipped(kang()).recipient, "Grog")
+
+    def test_a_card_still_decides_when_there_is_one(self):
+        d = lootcouncil.skipped(self.armor(), {"name": "Fixture Axe", "kind": "Axe"})
+        self.assertEqual(d.recipient, "Grog")
+
+    def test_the_missing_card_is_named_once(self):
+        said = lootcouncil.card_missing(self.armor(), None)
+        self.assertIn("Fixture Leather Jerkin", said)
+        self.assertIn("no item card", said)
+        self.assertIn("greed roll", said)
+
+    def test_nothing_is_said_when_the_card_is_there(self):
+        self.assertIsNone(lootcouncil.card_missing(kang(), LEATHER))
+
+    def test_the_bridge_logs_the_missing_card(self):
+        root = os.path.join(os.path.dirname(__file__), "..")
+        with open(os.path.join(root, "bridge.py"), encoding="utf-8") as f:
+            bridge = f.read()
+        self.assertIn("lootcouncil.card_missing(", bridge)
 
 
 class TheBridgeWiring(unittest.TestCase):
