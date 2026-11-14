@@ -12,7 +12,7 @@
 .b { font-weight: 500; }
 .grow { flex: 1; min-width: 0; }
 .nowrap { white-space: nowrap; }
-.back { display: inline-flex; gap: 6px; align-items: center; align-self: flex-start; min-height: 44px; text-decoration: none; color: var(--color-neutral-400); }
+.back { display: inline-flex; gap: 6px; align-items: center; align-self: flex-start; min-width: 44px; min-height: 44px; text-decoration: none; color: var(--color-neutral-400); }
 .back:hover { color: var(--color-text); }
 .head-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .head-row .seg { margin-left: auto; }
