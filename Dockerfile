@@ -43,7 +43,7 @@ COPY core.py bridge.py voice.py transform.py world_data.py \
      guildcraft.py guildcover.py tradespec.py tradeturn.py guildbank.py guildshare.py guildroute.py orders.py guildpost.py guildwork.py workorders.py workorderstore.py guildfund.py classtrain.py classcasts.py racespells.py taughtspells.py purse.py vendorsale.py bankbags.py natural.py guildcorps.py guildjobs.py guineapig.py guildlevel.py classquest.py steps.py classask.py classparty.py classuse.py classhunt.py guildrun.py guildfacts.py guildpug.py familyseat.py familyclass.py seatmeter.py guildsocial.py deathask.py crafters.py recruit.py interview.py clipledger.py clipcutter.py clipserve.py eventclips.py \
      bag_pressure.py bag_upgrade.py bag_economy.py bag_market.py guildbags.py disposition.py bagfate.py tidy.py \
      lockbox.py clearance.py \
-     item_plan.py itemplan.py itemplan_shadow.py itemplan_data.py itemplan_reads.py itemplan_vendor.py \
+     item_plan.py itemplan.py itemplan_shadow.py itemplan_data.py itemplan_reads.py itemplan_vendor.py itemplan_disenchant.py \
      jev.py jev_items.py jev_choices.py jev_recovery.py jev_activity.py jev_keep.py jevview.py \
      lootcouncil.py statweights.py \
      bank.py bankpolicy.py setswap.py bankforecast.py housedemand.py \
