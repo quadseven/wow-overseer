@@ -418,5 +418,101 @@ class DeathLoopSeatedNames(unittest.TestCase):
         self.assertIn("seated_names |= set(social.form.composition.names)", body)
 
 
+def yes_for(ask_id, member):
+    return gs.answer_from_row(
+        {
+            "id": 1,
+            "ask_id": ask_id,
+            "member": member,
+            "role": "dps",
+            "stance": "help",
+            "said": "",
+            "state": "yes",
+        }
+    )
+
+
+class DeathLoopFilled(unittest.TestCase):
+    def test_a_live_ask_holding_a_standing_yes_is_filled(self):
+        looper, helper = looper_and_mate()
+        live = ask(9, "Looper")
+        found = deathask.plan_pass(
+            {"Looper": loop_of()},
+            [looper, helper],
+            [live],
+            NOW,
+            answers=[yes_for(9, "Helper")],
+        )
+        self.assertEqual(found.filled, (9,))
+        self.assertEqual(found.replies, ())
+
+    def test_a_yes_drawn_this_pass_fills_the_ask_in_the_same_pass(self):
+        looper, helper = looper_and_mate()
+        live = ask(9, "Looper")
+        found = deathask.plan_pass(
+            {"Looper": loop_of()}, [looper, helper], [live], NOW, answers=[]
+        )
+        self.assertEqual([r.member for r in found.replies], ["Helper"])
+        self.assertEqual(found.filled, (9,))
+
+    def test_a_standing_yes_from_a_held_helper_does_not_fill(self):
+        looper, helper = looper_and_mate()
+        live = ask(9, "Looper")
+        found = deathask.plan_pass(
+            {"Looper": loop_of()},
+            [looper, helper],
+            [live],
+            NOW,
+            held={"Helper": "on a guild job"},
+            answers=[yes_for(9, "Helper")],
+        )
+        self.assertEqual(found.filled, ())
+
+    def test_a_standing_yes_for_a_held_asker_does_not_fill(self):
+        looper, helper = looper_and_mate()
+        live = ask(9, "Looper")
+        found = deathask.plan_pass(
+            {"Looper": loop_of()},
+            [looper, helper],
+            [live],
+            NOW,
+            held={"Looper": "on a guild job"},
+            answers=[yes_for(9, "Helper")],
+        )
+        self.assertEqual(found.filled, ())
+
+    def test_a_standing_yes_from_a_seated_helper_does_not_fill(self):
+        looper, helper = looper_and_mate()
+        live = ask(9, "Looper")
+        found = deathask.plan_pass(
+            {"Looper": loop_of()},
+            [looper, helper],
+            [live],
+            NOW,
+            answers=[yes_for(9, "Helper")],
+            seated={"Helper"},
+        )
+        self.assertEqual(found.filled, ())
+
+    def test_the_social_pass_carries_the_death_pass_filled_ids(self):
+        import types
+
+        import source_utils
+        from _stub_modules import PYMYSQL, fresh_import, stub_modules
+
+        stub = types.ModuleType("discord")
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+        stub.Client = Client
+        with stub_modules(pymysql=PYMYSQL):
+            bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
+        body = source_utils.function_source(bridge.Bridge._guild_social_once)
+        self.assertIn("filled=social.filled + death_pass.filled", body)
+        self.assertIn("or death_pass.filled", body)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -23426,12 +23426,13 @@ class Bridge(discord.Client):
             death_pass = _death_ask_pass(facts, mates, held,
                                          spoken={r.member for r in social.replies},
                                          seated=seated_names)
-            if death_pass.posts or death_pass.expire or death_pass.replies:
+            if death_pass.posts or death_pass.expire or death_pass.replies or death_pass.filled:
                 social = dataclasses.replace(
                     social,
                     posts=social.posts + death_pass.posts,
                     expire=social.expire + death_pass.expire,
                     replies=social.replies + death_pass.replies,
+                    filled=social.filled + death_pass.filled,
                     notes=social.notes + death_pass.notes)
             run_id = await asyncio.to_thread(_write_guild_social, social)
         except BaseException:
