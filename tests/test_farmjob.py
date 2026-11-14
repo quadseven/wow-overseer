@@ -344,5 +344,39 @@ class TheBridgeDrivesIt(unittest.TestCase):
         self.assertIn("_memo_upsert, FARM_MEMO_KIND, subject", self.body)
 
 
+class AnEndedOrderThatTheLoopWritesAgain(unittest.TestCase):
+    """The loop re-writes farm:mining after the time box ends the first order."""
+
+    @classmethod
+    def setUpClass(cls):
+        import ast
+
+        text = (ROOT / "bridge.py").read_text(encoding="utf-8")
+        node = next(
+            n
+            for n in ast.parse(text).body
+            if isinstance(n, ast.FunctionDef) and n.name == "_farm_order_renewed"
+        )
+        ns = {}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+        cls.renewed = staticmethod(ns["_farm_order_renewed"])
+
+    def test_a_newer_job_write_is_a_new_order(self):
+        self.assertTrue(self.renewed({"ended": True, "started": 100.0}, 200.0))
+
+    def test_the_same_write_is_still_the_ended_order(self):
+        self.assertFalse(self.renewed({"ended": True, "started": 100.0}, 100.0))
+        self.assertFalse(self.renewed({"ended": True, "started": 100.0}, 0.0))
+
+    def test_a_live_order_is_never_renewed(self):
+        self.assertFalse(self.renewed({"started": 100.0}, 200.0))
+
+    def test_the_pass_drops_the_ended_state_on_a_renewed_order(self):
+        text = (ROOT / "bridge.py").read_text(encoding="utf-8")
+        start = text.index("    async def _farm_job_now(")
+        body = text[start : text.index("    async def _farm_state_for(")]
+        self.assertIn("_farm_order_renewed(state, written)", body)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -26278,9 +26278,16 @@ class Bridge(discord.Client):
             return None
         state = self._farm_state.get(key or "")
         if state is not None and state.get("job") == farming[0] and state.get("ended"):
-            log.info("farm: %s still reads job=%s after it was ended; waiting for "
-                     "the job write to land", who, farming[0])
-            return None
+            leader = await asyncio.to_thread(_family_leader, cohort)
+            written = (await asyncio.to_thread(_farm_started, leader, farming[0])
+                       if leader else 0.0)
+            if not _farm_order_renewed(state, written):
+                log.info("farm: %s still reads job=%s after it was ended; waiting "
+                         "for the job write to land", who, farming[0])
+                return None
+            log.info("farm: %s was told job=%s again after its last order ended, "
+                     "so this is a new order", who, farming[0])
+            self._farm_state.pop(key or "", None)
         return farming[0], sorted(standing), who
 
     async def _farm_state_for(self, cohort, job: str, leader: str) -> dict:
@@ -37939,6 +37946,16 @@ _FARM_DEATHS_SQL = (
 FARM_SOURCE = "overseer:farm"
 # The memo kind that keeps a farm order's starting count across a restart.
 FARM_MEMO_KIND = "farm_baseline"
+
+
+def _farm_order_renewed(state: dict, written: float) -> bool:
+    """Whether an ended farm order has been written again since it began.
+
+    The time box ends an order and the profession loop then writes the same
+    job string again for its next gather phase. Without this the ended flag
+    kept the family waiting for ever on a job write that had already landed.
+    """
+    return bool(state.get("ended")) and float(written) > float(state.get("started") or 0)
 
 
 def _farm_started(leader: str, job: str) -> float:
