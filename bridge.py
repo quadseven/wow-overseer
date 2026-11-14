@@ -4104,71 +4104,84 @@ def _log_raid_arrivals(cur, keyword: str, seats: list) -> None:
         log.info("%s", raidrun.arrival_line(keyword, raidrun.arrival_plan(raiders, door)))
 
 
-def _drive_raid(keyword: str, family: str, names: list, source: str,
-                withheld: list | None = None) -> int:
-    """Write an ordered raid's seats, then its job. Returns jobs written.
-
-    THE SEATS ARE THE LINEUP TAB'S OWN SELECTION: the family's guild is read
-    the way the Raid tab reads it and handed to raidlineup.build_lineup with
-    the family guaranteed a place, and the answer is written to
-    overseer_raid_seat for mod-overseer's raid run to form from
-    (mod-overseer#634). SEATS FIRST, JOB SECOND: a job with no seats would
-    park the family on a raid the module cannot form. A realm without the
-    table (the module's migration not applied) writes neither.
-    """
-    mode = jobs.raid_job(keyword)
-    if mode is None or not names:
-        return _withheld(withheld, "no raid door answers to %s" % keyword)[0]
+def _raid_seat_eligibility(cur, keyword: str, lineup: dict, seats: list) -> str:
+    """Re-read selected characters and refuse seats that cannot assemble."""
+    names = [seat[2] for seat in seats]
     holes = ", ".join(["%s"] * len(names))
-    with _connect() as conn, conn.cursor() as cur:
-        cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes=holes),  # noqa: S608
-                    tuple(names))
-        members = _with_readiness(cur, [dict(row) for row in cur.fetchall()])
-        if keyword == raidrun.UPPER_SPIRE:
-            ten = spirerun.lineup(members, list(names))
-            if ten.short:
-                log.info("raid: %s has no ten for %s: %s",
-                         campaignqueue._family(family), keyword, ten.short)
-            lineup = ten.as_dict()
-        else:
-            lineup = raidlineup.build_lineup(members, guaranteed=list(names))
-        seats = raidrun.seat_rows(family, keyword, lineup)
-        if not seats:
-            log.warning("raid: %s has no lineup for %s - nobody in its guild "
-                        "could be placed, so no seat and no job is written",
-                        campaignqueue._family(family), keyword)
-            return _withheld(withheld, "nobody could be placed in the raid")[0]
-        # ONE STATEMENT FOR ALL FORTY: pymysql's executemany folds an INSERT
-        # ... VALUES into a single multi-row insert, so a failure leaves the
-        # family's seats deleted rather than half written, and no job follows
-        # (the exception leaves before the job loop). The next queue pass
-        # writes them again.
+    cur.execute(raidrun.ELIGIBILITY_SQL.format(holes=holes), tuple(names))  # noqa: S608
+    return raidrun.seat_eligibility_refusal(
+        keyword, lineup, [dict(row) for row in cur.fetchall()]
+    )
+
+
+def _write_raid_seats(cur, family: str, keyword: str, seats: list,
+                      lineup: dict, withheld: list | None) -> bool:
+    """Replace all seats together, falling back for realms without duties."""
+    try:
+        cur.execute(raidrun.DELETE_SEATS_SQL, (family, keyword))
         try:
-            cur.execute(raidrun.DELETE_SEATS_SQL, (family, keyword))
-            try:
-                cur.executemany(
-                    raidrun.INSERT_SEAT_DUTY_SQL,
-                    raidrun.seat_rows(family, keyword, lineup, duty=True))
-            except pymysql.err.MySQLError as exc:
-                if not (exc.args and exc.args[0] == 1054):
-                    raise
-                # The module's duty column is not applied yet: the seats
-                # without it still form the raid (raidrun.INSERT_SEAT_DUTY_SQL).
-                log.warning("raid: overseer_raid_seat has no duty column yet - "
-                            "mod-overseer's 2026_09_24_02_overseer_raid_seat_duty"
-                            ".sql is not applied, so %s's seats are written "
-                            "without their duties", campaignqueue._family(family))
-                cur.executemany(raidrun.INSERT_SEAT_SQL, seats)
+            cur.executemany(
+                raidrun.INSERT_SEAT_DUTY_SQL,
+                raidrun.seat_rows(family, keyword, lineup, duty=True))
         except pymysql.err.MySQLError as exc:
-            if exc.args and exc.args[0] == 1146:
-                log.warning(
-                    "raid: overseer_raid_seat is missing - mod-overseer's "
-                    "2026_09_23_01_overseer_raid_seat.sql is not applied, so "
-                    "%s is not ordered into %s", campaignqueue._family(family),
-                    keyword)
-                return _withheld(withheld, "the raid seat table is not deployed")[0]
-            raise
-        _log_raid_arrivals(cur, keyword, seats)
+            if not (exc.args and exc.args[0] == 1054):
+                raise
+            # The module's duty column is not applied yet: the seats
+            # without it still form the raid.
+            log.warning("raid: overseer_raid_seat has no duty column yet - "
+                        "mod-overseer's 2026_09_24_02_overseer_raid_seat_duty"
+                        ".sql is not applied, so %s's seats are written "
+                        "without their duties", campaignqueue._family(family))
+            cur.executemany(raidrun.INSERT_SEAT_SQL, seats)
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] == 1146:
+            log.warning(
+                "raid: overseer_raid_seat is missing - mod-overseer's "
+                "2026_09_23_01_overseer_raid_seat.sql is not applied, so "
+                "%s is not ordered into %s", campaignqueue._family(family),
+                keyword)
+            _withheld(withheld, "the raid seat table is not deployed")
+            return False
+        raise
+    return True
+
+
+def _plan_raid_seats(cur, keyword: str, family: str, names: list,
+                     withheld: list | None) -> tuple | None:
+    """Read the guild lineup and refuse a raid whose selected seats cannot form."""
+    holes = ", ".join(["%s"] * len(names))
+    cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes=holes), tuple(names))  # noqa: S608
+    members = _with_readiness(cur, [dict(row) for row in cur.fetchall()])
+    lineup, short = raidrun.lineup_for_order(keyword, members, names)
+    if short:
+        log.info("raid: %s has no ten for %s: %s",
+                 campaignqueue._family(family), keyword, short)
+    seats = raidrun.seat_rows(family, keyword, lineup)
+    if not seats:
+        log.warning("raid: %s has no lineup for %s - nobody in its guild "
+                    "could be placed, so no seat and no job is written",
+                    campaignqueue._family(family), keyword)
+        _withheld(withheld, "nobody could be placed in the raid")
+        return None
+    refusal = _raid_seat_eligibility(cur, keyword, lineup, seats)
+    if refusal:
+        log.info("raid: %s", refusal)
+        _withheld(withheld, refusal)
+        return None
+    return lineup, seats
+
+
+def _persist_raid_lineup(cur, family: str, keyword: str, lineup: dict,
+                         seats: list, withheld: list | None) -> bool:
+    """Write all selected seats before reporting their planned arrivals."""
+    if not _write_raid_seats(cur, family, keyword, seats, lineup, withheld):
+        return False
+    _log_raid_arrivals(cur, keyword, seats)
+    return True
+
+
+def _insert_raid_jobs(names: list, mode: str, source: str) -> int:
+    """Write each ordered member's job and isolate individual insert failures."""
     written = 0
     for name in names:
         try:
@@ -4176,6 +4189,35 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
             written += 1
         except Exception:
             log.exception("raid job insert failed for %s (mode=%s)", name, mode)
+    return written
+
+
+def _drive_raid(keyword: str, family: str, names: list, source: str,
+                withheld: list | None = None) -> int:
+    """Write an ordered raid's seats, then its job. Returns jobs written.
+
+    THE SEATS ARE THE LINEUP TAB'S OWN SELECTION: the family's guild is read
+    the way the Raid tab reads it and handed to raidrun.lineup_for_order,
+    which guarantees the family a place; its answer is written to
+    overseer_raid_seat for mod-overseer's raid run to form from
+    (mod-overseer#634). raidrun.lineup_for_order applies the pure seat rules.
+    SEATS FIRST, JOB SECOND: a job with no seats would
+    park the family on a raid the module cannot form. A realm without the
+    table (the module's migration not applied) writes neither.
+    """
+    mode = jobs.raid_job(keyword)
+    if mode is None or not names:
+        return _withheld(withheld, "no raid door answers to %s" % keyword)[0]
+    with _connect() as conn, conn.cursor() as cur:
+        planned = _plan_raid_seats(cur, keyword, family, names, withheld)
+        if planned is None:
+            return 0
+        lineup, seats = planned
+        # ONE STATEMENT FOR ALL FORTY: if insertion fails, no partial seat set
+        # is written, and the job loop below does not run.
+        if not _persist_raid_lineup(cur, family, keyword, lineup, seats, withheld):
+            return 0
+    written = _insert_raid_jobs(names, mode, source)
     log.info("raid: %s ordered into %s - %d seats written in %d groups, %d "
              "job row(s) of %d. %s", campaignqueue._family(family), keyword,
              len(seats), len({s[3] for s in seats}), written, len(names),
