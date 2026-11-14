@@ -10715,7 +10715,9 @@ class Bridge(discord.Client):
         # whose line from the leader crosses a death disc is not written.
         # Looked up like _fetch_family_death_spots above: the check is advisory.
         refuse = globals().get("_death_disc_refusal")
-        if refuse and str(aim).startswith("at:"):
+        # A ROLE KEYWORD IS JUDGED TOO: the helper looks up the nearest holder
+        # and answers "" for anything it cannot place (a flight node, an entry).
+        if refuse:
             refusal = await asyncio.to_thread(refuse, leader, aim)
             if refusal:
                 log.warning("town slot: %s asked for %s and was refused: %s",
@@ -41851,8 +41853,43 @@ def _fetch_death_discs() -> list:
         return []
 
 
+_KEYWORD_SPAWN_SQL = (
+    "SELECT s.map_id AS map_id, cr.position_x AS x, cr.position_y AS y "
+    "FROM overseer_snapshot s "
+    "JOIN acore_world.creature cr ON cr.map = s.map_id "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "AND (ct.npcflag & %s) = %s AND " + towntrip.REAL_SPAWN_SQL + " "
+    "ORDER BY POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2) "
+    "LIMIT 1"
+)
+
+
+def _nearest_keyword_spawn(name: str, aim: str):
+    """{map_id, x, y} of the nearest holder of the role keyword `aim` names on
+    `name`'s own map, or None. ADVISORY, like the discs it is judged against:
+    an unreadable table, an unplaced character or an aim that is not a role
+    keyword all answer None, and None refuses nothing (#2457)."""
+    mask = deathcells.keyword_mask(aim)
+    if not mask:
+        return None
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_KEYWORD_SPAWN_SQL, (name, mask, mask))
+            row = cur.fetchone()
+    except pymysql.err.MySQLError as exc:
+        log.warning("death discs: the %r holder could not be read (%s); the "
+                    "walk is not checked against it", aim, exc.args[:1])
+        return None
+    return dict(row) if row else None
+
+
 def _death_disc_refusal(leader: str, aim: str) -> str:
-    """Why `leader` must not be sent to ground aim `aim`, or ""."""
+    """Why `leader` must not be sent to `aim` (a ground aim or a role
+    keyword), or ""."""
+    ground = places.parse_ground_aim(aim)
+    if not (ground or deathcells.keyword_mask(aim)):
+        return ""
     discs = _fetch_death_discs()
     if not discs:
         return ""
@@ -41861,22 +41898,32 @@ def _death_disc_refusal(leader: str, aim: str) -> str:
         return ""
     here = {"map_id": row.get("map_id"), "x": row.get("pos_x"),
             "y": row.get("pos_y")}
-    return deathcells.aim_refusal(discs, here, aim)
+    spawn = None if ground else _nearest_keyword_spawn(leader, aim)
+    return deathcells.aim_refusal(discs, here, aim, spawn=spawn)
 
 
 def _member_death_disc_refusals(names: list, aim: str) -> dict:
-    """{member: why} for the members whose own walk to ground aim `aim` crosses
-    a death disc, each judged from its own position (individual mode). {} when
-    nothing is read: the check is advisory."""
+    """{member: why} for the members whose own walk to `aim` (a ground aim or
+    a role keyword) crosses a death disc, each judged from its own position
+    (individual mode). {} when nothing is read: the check is advisory."""
+    ground = places.parse_ground_aim(aim)
+    if not names or not (ground or deathcells.keyword_mask(aim)):
+        return {}
     discs = _fetch_death_discs()
-    if not discs or not names:
+    if not discs:
         return {}
     rows = _fetch_positions(list(names))
     here = {
         n: {"map_id": r.get("map_id"), "x": r.get("pos_x"), "y": r.get("pos_y")}
         for n, r in rows.items()
     }
-    return deathcells.member_aim_refusals(discs, here, names, aim)
+    spawns = {}
+    if not ground:
+        for n in here:
+            spawn = _nearest_keyword_spawn(n, aim)
+            if spawn:
+                spawns[n] = spawn
+    return deathcells.member_aim_refusals(discs, here, names, aim, spawns=spawns)
 
 
 def _fetch_quest_ends(quests: list) -> dict:
