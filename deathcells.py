@@ -195,6 +195,26 @@ def aim_refusal(all_discs, here, aim) -> str:
     return "the walk to %s crosses ground the family died on: %s" % (aim, hit.said())
 
 
+def member_aim_refusals(all_discs, positions, names, aim) -> dict:
+    """{member: why} for each of `names` whose own walk to `aim` crosses a disc.
+
+    Individual mode (wow-overseer#2395): a member walks from where IT stands,
+    so each is judged from its own position in `positions` ({name: {map_id, x,
+    y}}). A member with no known position is not refused here: the check is
+    advisory and the module's errand death breaker still counts its deaths.
+    A keyword aim names no ground, so it is never refused by a line.
+    """
+    out = {}
+    for name in names or ():
+        here = (positions or {}).get(name)
+        if not here:
+            continue
+        why = aim_refusal(all_discs, here, aim)
+        if why:
+            out[name] = why
+    return out
+
+
 def pick_quest(all_discs, here, order, ends) -> tuple:
     """(quest id or 0, one note per quest passed over).
 

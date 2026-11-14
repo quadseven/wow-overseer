@@ -276,3 +276,46 @@ class TheDoorRuns(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EveryMemberIsCheckedFromItsOwnPlace(unittest.TestCase):
+    """Individual mode (wow-overseer#2395): a member walks from where it
+    stands, not from where its leader stands."""
+
+    AIM = "at:0:-7000,-1100,100"
+
+    def test_each_member_is_judged_from_its_own_position(self):
+        discs = dc.discs(LAVA)
+        here = {
+            "Og": {"map_id": 0, "x": -8200.0, "y": -700.0},  # line crosses the disc
+            "Ugga": {"map_id": 0, "x": -6900.0, "y": -1000.0},  # a short walk past it
+        }
+        refused = dc.member_aim_refusals(
+            discs, here, ["Og", "Ugga"], "at:0:-7400,-1100,100"
+        )
+        self.assertIn("Og", refused)
+        self.assertNotIn("Ugga", refused)
+        self.assertIn("died on", refused["Og"])
+
+    def test_a_member_with_no_known_position_is_left_to_the_module(self):
+        discs = dc.discs(LAVA)
+        self.assertEqual(
+            {}, dc.member_aim_refusals(discs, {}, ["Og"], "at:0:-7400,-1100,100")
+        )
+
+    def test_a_keyword_aim_names_no_ground_and_is_not_refused(self):
+        discs = dc.discs(LAVA)
+        here = {"Og": {"map_id": 0, "x": -8200.0, "y": -700.0}}
+        self.assertEqual({}, dc.member_aim_refusals(discs, here, ["Og"], "trainer"))
+
+    def test_the_individual_train_aim_asks_the_member_check(self):
+        text = (ROOT / "bridge.py").read_text(encoding="utf-8")
+        start = text.index(
+            "            plan = trainjob.plan(members, individual=alone)"
+        )
+        body = text[start : start + 2500]
+        self.assertIn("_member_death_disc_refusals", body)
+        self.assertLess(
+            body.index("_member_death_disc_refusals"),
+            body.index("trainjob.statements(plan)"),
+        )

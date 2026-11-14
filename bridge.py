@@ -26965,6 +26965,20 @@ class Bridge(discord.Client):
                 return
             self._individual_train_held = False
             plan = trainjob.plan(members, individual=alone)
+            # Looked up: the adapter tests load this method in isolation.
+            member_check = globals().get("_member_death_disc_refusals")
+            if plan.individual and plan.travellers and member_check:
+                # EACH MEMBER'S WALK IS CHECKED FROM ITS OWN PLACE (#2457).
+                refused = await asyncio.to_thread(
+                    member_check, list(plan.travellers),
+                    travel.resolve(trainjob.TRAINER_ROLE))
+                if refused:
+                    for who, why in sorted(refused.items()):
+                        log.warning("job train (individual): %s is not sent: %s",
+                                    who, why)
+                    kept = tuple(n for n in plan.travellers if n not in refused)
+                    plan = dataclasses.replace(
+                        plan, travellers=kept, traveller=kept[0] if kept else "")
             # Individual: also clears a trainer aim nobody needs any more.
             statements = trainjob.statements(plan)
             if not plan.traveller:
@@ -41439,6 +41453,21 @@ def _death_disc_refusal(leader: str, aim: str) -> str:
     here = {"map_id": row.get("map_id"), "x": row.get("pos_x"),
             "y": row.get("pos_y")}
     return deathcells.aim_refusal(discs, here, aim)
+
+
+def _member_death_disc_refusals(names: list, aim: str) -> dict:
+    """{member: why} for the members whose own walk to ground aim `aim` crosses
+    a death disc, each judged from its own position (individual mode). {} when
+    nothing is read: the check is advisory."""
+    discs = _fetch_death_discs()
+    if not discs or not names:
+        return {}
+    rows = _fetch_positions(list(names))
+    here = {
+        n: {"map_id": r.get("map_id"), "x": r.get("pos_x"), "y": r.get("pos_y")}
+        for n, r in rows.items()
+    }
+    return deathcells.member_aim_refusals(discs, here, names, aim)
 
 
 def _fetch_quest_ends(quests: list) -> dict:
