@@ -26334,7 +26334,7 @@ class Bridge(discord.Client):
         """Carry out one farm step through the shared gathering paths."""
         if step.action == farmjob.END:
             await self._yield_gather_aim("the farm job ended", cohort)
-            await self._end_farm(cohort, job)
+            await self._end_farm(cohort, job, renew=step.renew)
         elif step.action == farmjob.TOWN:
             await self._yield_gather_aim(step.line, cohort)
         elif step.action in (farmjob.WALK, farmjob.HOP):
@@ -26365,16 +26365,22 @@ class Bridge(discord.Client):
                                        cohort=getattr(cohort, "key", None)):
             state["aim"], state["walking"] = aim, spawn
 
-    async def _end_farm(self, cohort, job: str) -> None:
-        """Put a family off its farm job, onto the default, once."""
+    async def _end_farm(self, cohort, job: str, renew: bool = False) -> None:
+        """Put a family off its farm job, once: onto the default, or for a
+        family in the profession loop, nowhere the loop did not choose."""
         slot = getattr(cohort, "key", None) or ""
         state = self._farm_state.setdefault(slot, {"job": job})
         state["job"], state["ended"] = job, True
-        if cohort is None:
-            await self._set_job(core.JobDirective(mode=jobs.DEFAULT, source=FARM_SOURCE),
+        key = slot or await asyncio.to_thread(_cohort_of, bonds.head_of_family())
+        write = _farm_end_write(job, profloop.enabled_for(key), renew)
+        if write is None:
+            log.info("farm: family %s is in the profession loop, which owns its "
+                     "job, so the job stays %s", key, job)
+        elif cohort is None:
+            await self._set_job(core.JobDirective(mode=write, source=FARM_SOURCE),
                                 self._rhythm_channel())
         else:
-            await self._set_family_job(cohort, jobs.DEFAULT, FARM_SOURCE)
+            await self._set_family_job(cohort, write, FARM_SOURCE)
 
     async def _drive_skill(self, row: dict, action) -> None:
         """Turn a skill goal into a profession order, or into the sentence
@@ -37946,6 +37952,19 @@ _FARM_DEATHS_SQL = (
 FARM_SOURCE = "overseer:farm"
 # The memo kind that keeps a farm order's starting count across a restart.
 FARM_MEMO_KIND = "farm_baseline"
+
+
+def _farm_end_write(job: str, in_loop: bool, renew: bool):
+    """The job to write when a farm order ends, or None to write nothing.
+
+    A family in the profession loop never falls back to the default job: the
+    default is `quest`, which turns the rpg wander back on for a family the
+    operator holds. A spent time box or a met target writes the same order
+    again (a fresh order); any other end leaves the job to the loop.
+    """
+    if not in_loop:
+        return jobs.DEFAULT
+    return job if renew else None
 
 
 def _farm_order_renewed(state: dict, written: float) -> bool:

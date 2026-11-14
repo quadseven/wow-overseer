@@ -341,12 +341,9 @@ class TheBridgeDrivesIt(unittest.TestCase):
         self.assertIn('"farm: %s picked %d %s (%d gathered, %d held)"', self.body)
 
     def test_the_end_writes_the_default_job(self):
-        self.assertIn(
-            "core.JobDirective(mode=jobs.DEFAULT, source=FARM_SOURCE)", self.body
-        )
-        self.assertIn(
-            "self._set_family_job(cohort, jobs.DEFAULT, FARM_SOURCE)", self.body
-        )
+        self.assertIn("core.JobDirective(mode=write, source=FARM_SOURCE)", self.body)
+        self.assertIn("self._set_family_job(cohort, write, FARM_SOURCE)", self.body)
+        self.assertIn("return jobs.DEFAULT", self.source)
 
     def test_deaths_are_read_from_the_death_table_since_the_order(self):
         self.assertIn("FROM overseer_death WHERE character_name IN", self.source)
@@ -369,6 +366,49 @@ class TheBridgeDrivesIt(unittest.TestCase):
     def test_the_starting_count_outlives_a_restart(self):
         self.assertIn("_memo_read, FARM_MEMO_KIND", self.body)
         self.assertIn("_memo_upsert, FARM_MEMO_KIND, subject", self.body)
+
+
+class AFarmEndInTheProfessionLoop(unittest.TestCase):
+    """The loop owns the job, so an ended order must never leave job=quest."""
+
+    @classmethod
+    def setUpClass(cls):
+        import ast
+
+        text = (ROOT / "bridge.py").read_text(encoding="utf-8")
+        node = next(
+            n
+            for n in ast.parse(text).body
+            if isinstance(n, ast.FunctionDef) and n.name == "_farm_end_write"
+        )
+        ns = {"jobs": farmjob.jobs}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+        cls.write = staticmethod(ns["_farm_end_write"])
+
+    def test_outside_the_loop_the_default_job_is_written(self):
+        self.assertEqual(self.write("farm:mining", False, True), farmjob.jobs.DEFAULT)
+
+    def test_in_the_loop_a_spent_box_renews_the_same_order(self):
+        self.assertEqual(self.write("farm:mining", True, True), "farm:mining")
+
+    def test_in_the_loop_any_other_end_writes_nothing(self):
+        self.assertIsNone(self.write("farm:mining", True, False))
+
+    def test_a_spent_time_box_or_met_target_asks_for_a_renewal(self):
+        box = farmjob.decide(order(started=0.0), reads(now=99999.0))
+        self.assertTrue(box.renew)
+        met = farmjob.decide(order(), reads(gathered=99))
+        self.assertTrue(met.renew)
+
+    def test_deaths_and_no_field_do_not(self):
+        deaths = ((490, 1),) * 12
+        step = farmjob.decide(order(), reads(deaths=deaths))
+        self.assertEqual(step.action, farmjob.END)
+        self.assertFalse(step.renew)
+
+    def test_the_bridge_passes_the_renewal_flag_to_the_end(self):
+        text = (ROOT / "bridge.py").read_text(encoding="utf-8")
+        self.assertIn("await self._end_farm(cohort, job, renew=step.renew)", text)
 
 
 class AnEndedOrderThatTheLoopWritesAgain(unittest.TestCase):
