@@ -289,8 +289,8 @@ def walk_refusal(walker, name) -> str:
     if walker.in_combat:
         return "%s is in combat" % name
     starting = classic.is_starting_land(walker.map_id, getattr(walker, "zone_id", None))
-    if classic.is_expansion_map(walker.map_id) and not starting:
-        return classic.outside_note(name, walker.map_id)
+    if classic.stands_outside(walker):
+        return classic.outside_note_for(name, walker)
     if walker.map_id not in dungeonplan.CONTINENT_MAPS and not starting:
         return "%s is inside an instance" % name
     if not walker.by_row:

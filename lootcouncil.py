@@ -70,6 +70,7 @@ client the caller hands in.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, replace
 
 import jev
@@ -712,14 +713,55 @@ def _users(council: Council, piece: _Piece | None) -> tuple:
     )
 
 
+# The words the module's candidate reasons use for a weapon: its refusal
+# ("no proficiency with this weapon"), the off-hand refusals, and the
+# weapon kinds it names (GearWeaponKindName). Read only when there is no
+# item card, as the one sign left that the drop is a weapon.
+_WEAPON_WORDS = re.compile(
+    r"\b(weapon|axe|mace|sword|polearm|staff|bow|gun|crossbow|dagger|fist|"
+    r"thrown|wand)\b",
+    re.IGNORECASE,
+)
+
+
+def _known_weapon(council: Council) -> bool:
+    """Does the row itself show the drop is a weapon: a candidate's reason
+    names one. Armor, or a row whose reasons name nothing, is not known."""
+    return any(_WEAPON_WORDS.search(c.why or "") for c in council.candidates)
+
+
+def card_missing(council: Council, item) -> str | None:
+    """One line naming a drop decided without its item card, or None when
+    the card is there. With no card a drop not known to be a weapon keeps
+    the greed roll, and the line says which way this one went."""
+    if isinstance(item, dict):
+        return None
+    if _known_weapon(council):
+        went = "the row names a weapon, so a member who can use it still comes first"
+    else:
+        went = "armor or unknown, so the greed roll stands"
+    return "loot council: %s (%s) has no item card - %s" % (
+        council.item_name or "item %d" % council.item_entry,
+        council.key,
+        went,
+    )
+
+
 def _user_over_greed(council: Council, item, recipient: str, reason: str):
     """(recipient, reason, moved): a nobody turned into the best user while a
     non-user is present, with why; anything else as it was.
 
     The fit gates in `decide` read only the offered candidates, the ones the
     drop upgrades; on this path nobody upgrades, so that set is empty and
-    the gates cannot have shut a user out before this runs."""
+    the gates cannot have shut a user out before this runs.
+
+    WITH NO ITEM CARD the armor fit cannot be read, so `wearable` alone
+    would hand a leather drop to a warrior over the greed roll. Without a
+    card only a drop the row shows to be a weapon moves; armor, or a drop
+    the row does not name, keeps the greed roll (fail closed)."""
     if recipient:
+        return recipient, reason, False
+    if not isinstance(item, dict) and not _known_weapon(council):
         return recipient, reason, False
     users = _users(council, _piece(item))
     if not users:

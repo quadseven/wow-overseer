@@ -47,7 +47,7 @@ def eligible(member: guildjobs.Member, recent=()) -> bool:
         and member.alive
         and not member.in_combat
         and member.map_id is not None
-        and not classic.is_expansion_map(member.map_id)
+        and not classic.stands_outside(member)
         and member.x is not None
         and member.y is not None
         and member.free_slots is not None
@@ -73,7 +73,7 @@ def equip_eligible(member: guildjobs.Member, recent=()) -> bool:
         and member.alive
         and not member.in_combat
         and member.map_id is not None
-        and not classic.is_expansion_map(member.map_id)
+        and not classic.stands_outside(member)
         and member.x is not None
         and member.y is not None
         and not guildjobs._cooling(member, guildjobs.BAG_ACTION, recent)
