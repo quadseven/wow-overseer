@@ -197,6 +197,7 @@ import places
 import standstill
 import strategybook
 import strayfollow
+import memberloop
 import tabard
 import teamsync
 import towntrip
@@ -4307,6 +4308,98 @@ def _fetch_stray_followers() -> tuple:
     return followers, recent
 
 
+# THE RARE NODES AND THE RIDERS' READS (memberloop.py). The world does not
+# change under a running bridge, so the nodes are read once per door set.
+_RARE_NODES: dict = {}
+_INSTANCE_NODE_SQL = (
+    "SELECT DISTINCT g.map AS map_id, gt.Data0 AS lock_id, gt.name AS name "
+    "FROM acore_world.gameobject g "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "WHERE gt.type = %s AND g.map IN ({maps}) AND gt.Data0 > 0"
+)
+_OPEN_NODE_SQL = (
+    "SELECT DISTINCT gt.Data0 AS lock_id FROM acore_world.gameobject g "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "WHERE gt.type = %s AND g.map NOT IN ({maps}) AND gt.Data0 > 0"
+)
+_RIDE_STATE_SQL = (
+    "SELECT s.name, s.map_id, s.in_combat, s.group_leader "
+    "FROM overseer_snapshot s WHERE s.name IN ({names}) "
+    "AND s.updated_at > NOW() - INTERVAL 120 SECOND"
+)
+
+
+_RIDERS: dict = {}
+
+
+async def _member_loop_needs(mates, held, needs, doors) -> dict:
+    """Each free member of a MEMBER_PROFESSION_LOOP guild that can use a
+    rare node behind a door gets that door as a need (memberloop.py), so
+    the social layer seats it as a passenger like any other yes. Nothing
+    changes while the switch names no guild."""
+    if not memberloop.guilds():
+        return needs
+    names = [m.name for m in mates
+             if m.name not in held and memberloop.enabled_for(m.member.guild)]
+    if not names:
+        return needs
+    try:
+        nodes = await asyncio.to_thread(_fetch_rare_nodes, [d.map_id for d in doors])
+        skills = await asyncio.to_thread(_fetch_trade_skills, names)
+        slots = await asyncio.to_thread(_fetch_free_slots, names)
+    except Exception:
+        log.exception("member loop: the rare node read failed; no ride this pass")
+        return needs
+    out = dict(needs)
+    for name in names:
+        extra = memberloop.rare_needs(name, skills.get(name, {}), slots.get(name),
+                                      nodes, doors)
+        if extra:
+            out[name] = memberloop.merge_needs(out.get(name, ()), extra)
+    return out
+
+
+def _note_riders(form, needs) -> None:
+    """Remember each member seated in a formed run for a rare node."""
+    riders = _RIDERS
+    for name in form.composition.names:
+        for need in needs.get(name, ()):
+            if need.node and need.keyword == form.door.keyword:
+                riders[name] = (need.keyword, time.monotonic())
+                log.info("member loop: %s rides to %s for %s", name,
+                         need.keyword, need.item)
+                break
+
+
+def _fetch_rare_nodes(map_ids: list) -> tuple:
+    """memberloop.Node rows for the instance maps of `map_ids`, cached."""
+    maps = tuple(sorted({int(m) for m in map_ids}))
+    if not maps:
+        return ()
+    if maps not in _RARE_NODES:
+        marks = ",".join(["%s"] * len(maps))
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_INSTANCE_NODE_SQL.format(maps=marks), (travel.CHEST_GO_TYPE, *maps))
+            inside = list(cur.fetchall())
+            cur.execute(_OPEN_NODE_SQL.format(maps=marks), (travel.CHEST_GO_TYPE, *maps))
+            open_locks = {int(r["lock_id"]) for r in cur.fetchall()}
+        _RARE_NODES[maps] = memberloop.rare_nodes(inside, open_locks,
+                                                  memberloop.extra_locks())
+    return _RARE_NODES[maps]
+
+
+def _fetch_ride_state(names: list) -> tuple:
+    """(name -> snapshot row, name -> minutes since its last leave row)."""
+    if not names:
+        return {}, {}
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_RIDE_STATE_SQL.format(names=",".join(["%s"] * len(names))), names)
+        state = {str(r["name"]): r for r in cur.fetchall()}
+        cur.execute(_STRAY_RECENT_SQL, (memberloop.SOURCE + ":%",))
+        recent = {str(r["target_name"]): int(r["age"]) for r in cur.fetchall()}
+    return state, recent
+
+
 def _file_corps_tickets(client) -> dict:
     """One corps blocker filing pass (corpstickets.py) on one connection."""
     with _connect() as conn, conn.cursor() as cur:
@@ -8312,6 +8405,7 @@ PASSES = (
     _Pass("_quest_tickets_loop"),
     _Pass("_corps_tickets_loop"),
     _Pass("_stray_follow_loop"),
+    _Pass("_member_ride_loop"),
 )
 
 
@@ -23274,6 +23368,7 @@ class Bridge(discord.Client):
         # ROOM TO LOOT BEFORE THE DOOR (#1568): a member short of bag room is
         # held, within a bound, while the guild jobs pass sends it to sell.
         held, lent, needs = _hold_bag_room(held, lent, needs, _bag_room_short(self, facts))
+        needs = await _member_loop_needs(mates, held, needs, doors)
         log.info("guild social: %s", guildsocial.census(mates, held))
         # PICK-UP GROUPS (guildpug, #591): a pug who said yes counts as free.
         pugs_on = guildpug.enabled()
@@ -23322,6 +23417,7 @@ class Bridge(discord.Client):
         if run_id:
             self._guild_run_formed_at = now
             self._guild_run_names |= set(social.form.composition.names)
+            _note_riders(social.form, needs)
         self._guild_social_names = await asyncio.to_thread(_guild_social_names)
         # A keyed wing's run names the member who carries the key (#785).
         key_said = (guildrun.key_words(social.form.composition.members, social.form.door)
@@ -26529,6 +26625,39 @@ class Bridge(discord.Client):
             except Exception:
                 log.exception("corps tickets: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
+
+    async def _member_ride_loop(self) -> None:
+        """A rider whose run is over, and who stands outside, leaves its group
+        (memberloop.plan_leaves): `leave-group` on kind='guild'."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("MEMBER_RIDE_SECONDS", "300"))
+        while not self.is_closed():
+            try:
+                if memberloop.guilds() and _RIDERS:
+                    await self._member_ride_once()
+            except Exception:
+                log.exception("member loop: leave pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _member_ride_once(self) -> None:
+        names = sorted(_RIDERS)
+        state, recent = await asyncio.to_thread(_fetch_ride_state, names)
+        live = await asyncio.to_thread(_guild_run_members_out)
+        instances = {int(k) for k in guildjobs.entrances()}
+        riders = [memberloop.Rider(
+            name=n, keyword=_RIDERS[n][0], grouped=bool(s.get("group_leader")),
+            in_instance=int(s.get("map_id") or -1) in instances,
+            in_combat=bool(s.get("in_combat")), run_live=n in live)
+            for n, s in state.items()]
+        kept = memberloop.forget(
+            _RIDERS, time.monotonic(),
+            {r.name for r in riders if r.grouped})
+        _RIDERS.clear()
+        _RIDERS.update(kept)
+        rows, lines = memberloop.plan_leaves(riders, recent)
+        for r, line in zip(rows, lines):
+            row_id = await asyncio.to_thread(_insert_guild, r.name, r.command, r.source)
+            log.info("member loop: %s (row %s)", line, row_id or "not written")
 
     async def _stray_follow_loop(self) -> None:
         """A guild member led off by a stranger's bot leaves that group
