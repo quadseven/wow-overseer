@@ -125,6 +125,15 @@ LEASE_SECONDS = 300.0
 # too, and taking the column is not a race with anything.
 ORPHAN_LEASE_SECONDS = 1200.0
 
+# THE GRACE FOR AN ORPHAN AIM. A restart finds the column still holding the old
+# pod's aim and cannot name its writer, so it was given the full orphan lease:
+# on wow-dev 2026-11-14 a family stood at one mining spawn for about 18
+# minutes after a ship, and again behind an old `vendor` aim, because every
+# new aim was refused behind it. Whichever pass still wants an aim re-asserts
+# it within a cycle or two (and re-adopts it as its own), so a couple of
+# minutes is enough; an aim nobody re-asserts is stale and is handed back.
+ORPHAN_GROUND_GRACE_SECONDS = 120.0
+
 # THE SAME, FOR A WALK THAT LEAVES TOWN (infra#4183).
 #
 # LEASE_SECONDS is dimensioned for a town errand and says so: "121 yards apart
@@ -537,7 +546,7 @@ def lease_for(
     if holder is None:
         return 0.0
     if not holder.claimant:
-        return orphan_lease
+        return min(orphan_lease, ORPHAN_GROUND_GRACE_SECONDS)
     if long_leases:
         try:
             return float(long_leases.get(holder.claimant, lease))
