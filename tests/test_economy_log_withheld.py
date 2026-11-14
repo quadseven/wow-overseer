@@ -26,6 +26,7 @@ def _run(withheld: bool):
         mock.patch.object(bridge, "_campaign_waiting", lambda names: True),
         mock.patch.object(bridge, "_town_first_hold", lambda names: False),
         mock.patch.object(bridge, "_fetch_vendor_wait_seconds", lambda names: 0),
+        mock.patch.object(bridge, "_family_farming", lambda names: False),
         mock.patch.object(bridge.jev_activity, "withheld", lambda q, f: withheld),
         mock.patch.object(
             bag_pressure, "family_town_run_needed", lambda *a, **k: False
