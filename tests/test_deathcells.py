@@ -5,7 +5,11 @@ fall rows. These tests pin what becomes an avoid disc, what does not, and that
 a line over a disc is refused with a reason.
 """
 
+import ast
+import asyncio
+import logging
 import pathlib
+import types
 import unittest
 
 import deathcells as dc
@@ -206,6 +210,68 @@ class TheBridgeUsesIt(unittest.TestCase):
         reader = BRIDGE.split("def _fetch_death_discs", 1)[1].split("\ndef ", 1)[0]
         self.assertIn("MySQLError", reader)
         self.assertIn("log.warning", reader)
+
+
+class _Reached(Exception):
+    """Raised by the stub the door calls once the death check has passed."""
+
+
+def _door(refusal):
+    """The real `_claim_town_slot`, run with stubs, returning (fn, calls)."""
+    tree = ast.parse(BRIDGE)
+    node = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.AsyncFunctionDef) and n.name == "_claim_town_slot"
+    )
+    module = ast.Module(body=[node], type_ignores=[])
+    calls = []
+
+    async def to_thread(fn, *args):
+        return fn(*args)
+
+    def reached(_leader):
+        raise _Reached
+
+    ns = {
+        "asyncio": types.SimpleNamespace(to_thread=to_thread),
+        "log": logging.getLogger("test_deathcells"),
+        "_head_now": lambda: "Lead",
+        "_cohort_leader": lambda key: "Lead",
+        "_current_travel_npc": reached,
+        "_write_trade_errand": lambda *_a: calls.append("write"),
+    }
+    if refusal is not None:
+        ns["_death_disc_refusal"] = lambda leader, aim: refusal
+    me = types.SimpleNamespace(_cohort_town_slot=lambda cohort: None)
+    exec(compile(ast.fix_missing_locations(module), "bridge", "exec"), ns)
+    return ns["_claim_town_slot"], me, calls
+
+
+class TheDoorRuns(unittest.TestCase):
+    def test_the_helper_the_door_looks_up_is_a_module_level_function(self):
+        top = {n.name for n in ast.parse(BRIDGE).body if isinstance(n, ast.FunctionDef)}
+        self.assertIn("_death_disc_refusal", top)
+
+    def go(self, refusal, aim):
+        fn, me, calls = _door(refusal)
+        try:
+            return asyncio.run(fn(me, "gather", "Lead", aim)), calls
+        except _Reached:
+            return "reached", calls
+
+    def test_a_refused_ground_aim_is_not_written(self):
+        got, calls = self.go("crosses lava", "at:0:1.0,2.0,3.0")
+        self.assertIs(got, False)
+        self.assertEqual(calls, [])
+
+    def test_a_clear_ground_aim_goes_on_to_the_slot(self):
+        got, _calls = self.go("", "at:0:1.0,2.0,3.0")
+        self.assertEqual(got, "reached")
+
+    def test_a_keyword_aim_is_never_judged(self):
+        got, _calls = self.go("crosses lava", "vendor")
+        self.assertEqual(got, "reached")
 
 
 if __name__ == "__main__":
