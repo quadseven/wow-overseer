@@ -241,6 +241,8 @@ ICECAP = "Icecap"
 MOUNTAIN_SILVERSAGE = "Mountain Silversage"
 GOLDEN_SANSAM = "Golden Sansam"
 GROMSBLOOD = "Gromsblood"
+SUNGRASS = "Sungrass"
+THORIUM_ORE = "Thorium Ore"
 STONESCALE_OIL = "Stonescale Oil"
 STONESCALE_EEL = "Stonescale Eel"
 ELEMENTAL_FIRE = "Elemental Fire"
@@ -251,6 +253,9 @@ FLASK_OF_THE_TITANS = "Flask of the Titans"
 GREATER_FIRE_PROTECTION = "Greater Fire Protection Potion"
 MAJOR_HEALING_POTION = "Major Healing Potion"
 MAJOR_MANA_POTION = "Major Mana Potion"
+GREATER_ARCANE_ELIXIR = "Greater Arcane Elixir"
+ELIXIR_OF_GIANTS = "Elixir of Giants"
+GREATER_STONESHIELD_POTION = "Greater Stoneshield Potion"
 FIELD_REPAIR_BOT = "Field Repair Bot 74A"
 
 RECIPES = (
@@ -308,6 +313,32 @@ RECIPES = (
         MAJOR_MANA_POTION,
         ALCHEMY,
         (Reagent(DREAMFOIL, 3), Reagent(ICECAP, 2), Reagent(CRYSTAL_VIAL)),
+    ),
+    Recipe(
+        17573,
+        GREATER_ARCANE_ELIXIR,
+        ALCHEMY,
+        (
+            Reagent(DREAMFOIL, 3),
+            Reagent(MOUNTAIN_SILVERSAGE),
+            Reagent(CRYSTAL_VIAL),
+        ),
+    ),
+    Recipe(
+        11472,
+        ELIXIR_OF_GIANTS,
+        ALCHEMY,
+        (Reagent(SUNGRASS), Reagent(GROMSBLOOD), Reagent(CRYSTAL_VIAL)),
+    ),
+    Recipe(
+        17570,
+        GREATER_STONESHIELD_POTION,
+        ALCHEMY,
+        (
+            Reagent(STONESCALE_OIL, 2),
+            Reagent(THORIUM_ORE),
+            Reagent(CRYSTAL_VIAL),
+        ),
     ),
     # THE ONE REAGENT HERE THAT IS ITSELF A CRAFT. Every other reagent above
     # is picked, fished, bought or killed for; this one is an alchemy cast in
@@ -1535,6 +1566,48 @@ def _others_line() -> str:
     )
 
 
+def _herb_shortfall(goals: list, items: dict) -> dict:
+    """Aggregate per-night herb/reagent need, held count, and shortfall across goals."""
+    by_name: dict[str, dict] = {}
+    for g in goals:
+        if g.get("kind") != "supply" or not g.get("recipes"):
+            continue
+        rc = g["recipes"][0]
+        for r in rc.get("reagents") or ():
+            name = r["name"]
+            if name == CRYSTAL_VIAL:
+                continue
+            row = by_name.setdefault(
+                name,
+                {
+                    "name": name,
+                    "entry": r.get("entry") or items.get(name, {}).get("entry", 0),
+                    "need": 0,
+                    "held": int(r.get("held") or 0),
+                    "short": 0,
+                },
+            )
+            row["need"] += int(r.get("need") or 0)
+    herbs = []
+    for name in sorted(by_name):
+        row = by_name[name]
+        row["short"] = max(row["need"] - row["held"], 0)
+        row["line"] = "%s: %d needed, %d held, %d short" % (
+            row["name"],
+            row["need"],
+            row["held"],
+            row["short"],
+        )
+        herbs.append(row)
+    return {
+        "herbs": herbs,
+        "lotus_note": (
+            "Black Lotus is a rare world spawn at Herbalism 300; if it cannot "
+            "be met, flasks are cut first rather than counting the night short."
+        ),
+    }
+
+
 def _order(goals: list) -> None:
     """Worst first, then by name so the list does not move on its own.
 
@@ -1664,6 +1737,51 @@ def build_raidgoals(
             sources,
             skills_read,
         ),
+        _supply_goal(
+            "arcane",
+            "Greater Arcane Elixirs",
+            (GREATER_ARCANE_ELIXIR,),
+            PER_MEMBER_PER_NIGHT,
+            members,
+            items,
+            held,
+            banked,
+            skills,
+            known,
+            ranks,
+            sources,
+            skills_read,
+        ),
+        _supply_goal(
+            "giants",
+            "Elixirs of Giants",
+            (ELIXIR_OF_GIANTS,),
+            PER_MEMBER_PER_NIGHT,
+            members,
+            items,
+            held,
+            banked,
+            skills,
+            known,
+            ranks,
+            sources,
+            skills_read,
+        ),
+        _supply_goal(
+            "stoneshield",
+            "Greater Stoneshield Potions",
+            (GREATER_STONESHIELD_POTION,),
+            PER_MEMBER_PER_NIGHT,
+            members,
+            items,
+            held,
+            banked,
+            skills,
+            known,
+            ranks,
+            sources,
+            skills_read,
+        ),
         _repair_goal(
             members, items, held, banked, skills, known, ranks, sources, skills_read
         ),
@@ -1690,6 +1808,7 @@ def build_raidgoals(
             "and by name inside each so the list does not move on its own."
         ),
         "goals": goals,
+        "herb_shortfall": _herb_shortfall(goals, items),
         "others": _others(),
         "others_line": _others_line(),
         "basis": _basis(),

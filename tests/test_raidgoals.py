@@ -805,5 +805,36 @@ class EverySentenceIsReadable(unittest.TestCase):
             self.assertNotIn("\u2014", said, said)
 
 
+class HerbShortfallSection(unittest.TestCase):
+    def test_herb_shortfall_is_computed_and_rendered_on_raid_page(self):
+        p = payload(holdings=[holding("Ugga", raidgoals.DREAMFOIL, 5)])
+        self.assertIn("herb_shortfall", p)
+        hs = p["herb_shortfall"]
+        rows = {r["name"]: r for r in hs["herbs"]}
+        self.assertIn(raidgoals.DREAMFOIL, rows)
+        self.assertEqual(rows[raidgoals.DREAMFOIL]["held"], 5)
+        self.assertGreater(rows[raidgoals.DREAMFOIL]["need"], 5)
+        self.assertIn("Black Lotus", hs["lotus_note"])
+        import pathlib
+
+        raid_js = (
+            pathlib.Path(__file__).resolve().parent.parent / "app" / "views" / "raid.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("herb_shortfall", raid_js)
+
+    def test_herb_shortfall_includes_mc_elixirs_and_stoneshield(self):
+        p = payload(
+            holdings=[
+                holding("Ugga", raidgoals.SUNGRASS, 1),
+                holding("Ugga", raidgoals.THORIUM_ORE, 1),
+            ]
+        )
+        rows = {r["name"]: r for r in p["herb_shortfall"]["herbs"]}
+        self.assertIn(raidgoals.SUNGRASS, rows)
+        self.assertIn(raidgoals.THORIUM_ORE, rows)
+        self.assertGreater(rows[raidgoals.SUNGRASS]["need"], 0)
+        self.assertGreater(rows[raidgoals.THORIUM_ORE]["need"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
