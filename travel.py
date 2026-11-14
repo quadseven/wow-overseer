@@ -869,6 +869,63 @@ def _yards(a, b) -> float:
     ) ** 0.5
 
 
+def _split_refusal(leader, positions, here, name) -> str:
+    """The sentence for a family that is not with its leader, or ""."""
+    others = [p for n, p in positions.items() if n != leader and p]
+    if not others:
+        return ""
+    near = sum(
+        1
+        for p in others
+        if p.get("map_id") == here.get("map_id")
+        and _yards(p, here) <= FAMILY_SPLIT_YARDS
+    )
+    if near * 2 >= len(others):
+        return ""
+    return (
+        "the family is split (%d of %d members within %d yards of "
+        "the leader), so the walk to %s would leave it behind"
+        % (near, len(others), int(FAMILY_SPLIT_YARDS), name)
+    )
+
+
+def _danger_tally(spawn, hostile, level) -> tuple:
+    """(hostile spawns, red ones, elites at `level` or above) beside `spawn`."""
+    point = {"x": spawn["x"], "y": spawn["y"]}
+    total = red = elites = 0
+    for c in hostile or ():
+        if int(c.map_id) != int(spawn["map_id"]):
+            continue
+        if _yards({"x": c.x, "y": c.y}, point) > FORGE_DANGER_YARDS:
+            continue
+        total += c.n
+        if c.level >= level + FORGE_DANGER_GAP:
+            red += c.n
+        if c.elite and c.level >= level:
+            elites += c.n
+    return total, red, elites
+
+
+def _danger_refusal(spawn, hostile, level, name) -> str:
+    """The sentence for hostile ground beside the Forge, or ""."""
+    if not (level and level > 0):
+        return ""
+    total, red, elites = _danger_tally(spawn, hostile, level)
+    if elites:
+        return (
+            "%d hostile elite spawn%s at level %d or above stand within "
+            "%d yards of %s"
+            % (elites, "" if elites == 1 else "s", level, int(FORGE_DANGER_YARDS), name)
+        )
+    if total and red / total >= FORGE_DANGER_SHARE:
+        return (
+            "%d of %d hostile spawns within %d yards of %s stand %d or "
+            "more levels above the leader (level %d)"
+            % (red, total, int(FORGE_DANGER_YARDS), name, FORGE_DANGER_GAP, level)
+        )
+    return ""
+
+
 def forge_refusal(spawn, leader, positions, hostile, level) -> str:
     """Why the leader must not be walked to the Forge `spawn` (a `_FORGE_SQL`
     row with its squared `d2`), or "".
@@ -878,10 +935,8 @@ def forge_refusal(spawn, leader, positions, hostile, level) -> str:
     leader's. ADVISORY like the death discs: whatever cannot be read refuses
     nothing, and the other half of the judgement (death discs) is the bridge's.
     """
-    if not spawn:
-        return ""
     here = (positions or {}).get(leader)
-    if not here:
+    if not spawn or not here:
         return ""
     name = "the nearest Forge (%s, %s)" % (
         int(float(spawn["x"])),
@@ -894,53 +949,9 @@ def forge_refusal(spawn, leader, positions, hostile, level) -> str:
             round(yards),
             int(FORGE_WALK_YARDS),
         )
-    others = [p for n, p in positions.items() if n != leader and p]
-    if others:
-        near = sum(
-            1
-            for p in others
-            if p.get("map_id") == here.get("map_id")
-            and _yards(p, here) <= FAMILY_SPLIT_YARDS
-        )
-        if near * 2 < len(others):
-            return (
-                "the family is split (%d of %d members within %d yards of "
-                "the leader), so the walk to %s would leave it behind"
-                % (near, len(others), int(FAMILY_SPLIT_YARDS), name)
-            )
-    if level and level > 0:
-        point = {"x": spawn["x"], "y": spawn["y"]}
-        total = red = elites = 0
-        for c in hostile or ():
-            if (
-                int(c.map_id) != int(spawn["map_id"])
-                or _yards({"x": c.x, "y": c.y}, point) > FORGE_DANGER_YARDS
-            ):
-                continue
-            total += c.n
-            if c.level >= level + FORGE_DANGER_GAP:
-                red += c.n
-            if c.elite and c.level >= level:
-                elites += c.n
-        if elites:
-            return (
-                "%d hostile elite spawn%s at level %d or above stand within "
-                "%d yards of %s"
-                % (
-                    elites,
-                    "" if elites == 1 else "s",
-                    level,
-                    int(FORGE_DANGER_YARDS),
-                    name,
-                )
-            )
-        if total and red / total >= FORGE_DANGER_SHARE:
-            return (
-                "%d of %d hostile spawns within %d yards of %s stand %d or "
-                "more levels above the leader (level %d)"
-                % (red, total, int(FORGE_DANGER_YARDS), name, FORGE_DANGER_GAP, level)
-            )
-    return ""
+    return _split_refusal(leader, positions, here, name) or _danger_refusal(
+        spawn, hostile, level, name
+    )
 
 
 def within_focus(spawn) -> bool:
