@@ -1162,19 +1162,20 @@ class Broken(unittest.TestCase):
         )
 
     def test_quest_64_the_forgotten_heirloom_has_specific_stall_reason(self):
-        # Quest 64 "The Forgotten Heirloom" in Westfall (level 12) requires an
-        # item that no spawned creature drops. The quest has items but no
-        # fields (no spawns of creatures that drop the required item), so it
-        # would be STALLED_UNSOURCED. We add a specific reason explaining why.
+        # Quest 64 "The Forgotten Heirloom" in Westfall (level 12) requires
+        # item 1449 (Furlbrow's Deed), which only gameobject loot 270
+        # (Furlbrow's Wardrobe) holds, not a creature. The quest has items
+        # but no fields (no spawns of creatures that drop the required item),
+        # so it would be STALLED_UNSOURCED. We add a specific reason explaining why.
         heirloom = quest(64, WESTFALL, 12, title="The Forgotten Heirloom")
-        heirloom.update(item1=1234, item_count1=1)  # requires item 1234
+        heirloom.update(item1=1449, item_count1=1)  # requires item 1449
         cat = world(
             extra_quests=[heirloom],
             extra_givers=[
                 giver(64, "start", 1064, 164, 0, 0),
                 giver(64, "end", 1064, 164, 0, 0),
             ],
-            # No spawns that drop item 1234 -> no fields for this quest
+            # No spawns that drop item 1449 -> no fields for this quest
         )
         member = mirra(
             level=12,
@@ -1182,7 +1183,7 @@ class Broken(unittest.TestCase):
             quest_log={64: questers.STATUS_INCOMPLETE},
             quests_done=frozenset({20, 21}),
             quest_progress={64: 0},
-            quest_objectives={64: {1234: 0}},
+            quest_objectives={64: {1449: 0}},
         )
         clock = questers.Clock()
         # First pass - quest is not yet stalled
@@ -1199,6 +1200,7 @@ class Broken(unittest.TestCase):
         # Should have a specific reason, not just STALLED_UNSOURCED
         self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
         self.assertIn("Forgotten Heirloom", p.broken[0].reason)
+        self.assertEqual(questers.FORGOTTEN_HEIRLOOM, p.broken[0].reason)
 
     def test_quest_91_solomons_law_stall_names_no_invented_cause(self):
         # Quest 91 (Solomon's Law) once carried a hard-coded reason that the
