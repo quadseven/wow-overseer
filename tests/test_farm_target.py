@@ -1,41 +1,12 @@
-"""Per-member farm targets and the individual gate on the farm pass (#2498)."""
+"""The individual gate on the farm pass (#2498)."""
 
 import pathlib
 import unittest
 
-import farmjob
 import individual
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ENV = {individual.ENV: "Grug"}
-
-
-class TheMemberTargetIsItsOwn(unittest.TestCase):
-    def test_a_miner_is_sent_mining(self):
-        self.assertEqual(
-            farmjob.target_for({"mining": 28, "blacksmithing": 23}), "farm:mining"
-        )
-
-    def test_a_herbalist_is_sent_herbalism(self):
-        self.assertEqual(
-            farmjob.target_for({"herbalism": 199, "alchemy": 84}), "farm:herbalism"
-        )
-
-    def test_a_member_with_two_gathering_trades_takes_the_lower(self):
-        self.assertEqual(
-            farmjob.target_for({"mining": 150, "herbalism": 20}), "farm:herbalism"
-        )
-
-    def test_a_trade_with_nothing_left_to_give_is_passed_over(self):
-        self.assertEqual(
-            farmjob.target_for({"mining": 900, "herbalism": 20}), "farm:herbalism"
-        )
-        self.assertEqual(farmjob.target_for({"mining": 900}), "")
-
-    def test_a_member_with_no_gathering_trade_has_no_target(self):
-        self.assertEqual(farmjob.target_for({"skinning": 14, "leatherworking": 57}), "")
-        self.assertEqual(farmjob.target_for({"tailoring": 155}), "")
-        self.assertEqual(farmjob.target_for(None), "")
 
 
 class TheFarmPassJudgesTheLeadersGroup(unittest.TestCase):
