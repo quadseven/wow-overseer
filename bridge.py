@@ -14767,8 +14767,11 @@ class Bridge(discord.Client):
             "_run_itemplan_give", skip_itemplan_give
         )(itemplan_give, names, leader, rows, free_slots, gear_rows, worn)
         itemplan_disenchant_run = getattr(self, "_itemplan_disenchant", None)
+        async def skip_itemplan_disenchant(*args):
+            return None
+
         await globals().get(
-            "_run_itemplan_disenchant", _skip_itemplan_disenchant
+            "_run_itemplan_disenchant", skip_itemplan_disenchant
         )(itemplan_disenchant_run, names, leader, rows, free_slots, gear_rows,
           worn)
         itemplan_auction = getattr(self, "_itemplan_auction", None)
@@ -31500,10 +31503,6 @@ async def _run_itemplan_give(itemplan_give, names, family, rows, free_slots,
     """Call the plan executor when this economy pass exposes it."""
     if itemplan_give is not None:
         await itemplan_give(names, family, rows, free_slots, gear_rows, worn_rows)
-
-
-async def _skip_itemplan_disenchant(*args) -> None:
-    return None
 
 
 async def _run_itemplan_disenchant(itemplan_disenchant_run, names, family, rows,
