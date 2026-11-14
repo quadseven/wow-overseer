@@ -41153,7 +41153,7 @@ _RECIPE_HELD_SQL = (
     "JOIN characters c ON c.guid = ci.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
-    "WHERE c.name IN (%s) AND it.class = %%s AND (it.spellid_2 > 0 OR it.subclass = 0)"
+    "WHERE c.name IN (%s) AND it.class = %%s AND (it.spellid_2 > 0 OR it.name LIKE %%s)"
 )
 
 
@@ -41164,7 +41164,7 @@ def _fetch_held_recipes(names: list) -> list:
     sql = _RECIPE_HELD_SQL % ",".join(["%s"] * len(names))  # noqa: S608 - placeholders from a COUNT, values still bound
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(sql, (*names, recipebook.RECIPE_ITEM_CLASS))
+            cur.execute(sql, (*names, recipebook.RECIPE_ITEM_CLASS, "Libram of %"))
             rows = cur.fetchall()
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):

@@ -936,9 +936,25 @@ class TheClassNineTriage(unittest.TestCase):
         self.assertEqual(len(skipped), 1)
 
     def test_fetch_held_recipes_wires_class_level_and_libram_into_plan_learns(self):
+        import ast
         from unittest import mock
-        import bridge
 
+        source = (
+            pathlib.Path(__file__).resolve().parent.parent / "bridge.py"
+        ).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        nodes = [
+            n
+            for n in tree.body
+            if (
+                isinstance(n, ast.Assign)
+                and any(
+                    isinstance(t, ast.Name) and t.id == "_RECIPE_HELD_SQL"
+                    for t in n.targets
+                )
+            )
+            or (isinstance(n, ast.FunctionDef) and n.name == "_fetch_held_recipes")
+        ]
         rows = [
             {
                 "holder": "Grug",
@@ -979,13 +995,25 @@ class TheClassNineTriage(unittest.TestCase):
         conn = mock.MagicMock()
         conn.__enter__.return_value = conn
         conn.cursor.return_value.__enter__.return_value = cur
-        with mock.patch("bridge._connect", return_value=conn):
-            held = bridge._fetch_held_recipes(["Grug", "Bork"])
+        ns = {
+            "recipebook": recipebook,
+            "pymysql": mock.MagicMock(err=mock.MagicMock(MySQLError=Exception)),
+            "log": mock.MagicMock(),
+            "_connect": mock.MagicMock(return_value=conn),
+        }
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+        held = ns["_fetch_held_recipes"](["Grug", "Bork"])
         self.assertEqual(held[0].allowable_class, 32256)
         self.assertEqual(held[0].required_level, 50)
         self.assertEqual(held[2].allowable_class, -1)
-        self.assertNotIn('AND it.spellid_2 > 0"', bridge._RECIPE_HELD_SQL)
-        self.assertIn("it.subclass = 0", bridge._RECIPE_HELD_SQL)
+        self.assertNotIn("it.subclass = 0", ns["_RECIPE_HELD_SQL"])
+        self.assertIn("it.name LIKE %%s", ns["_RECIPE_HELD_SQL"])
+        cur.execute.assert_called_once()
+        sql_sent, params = cur.execute.call_args[0]
+        self.assertIn("it.name LIKE %s", sql_sent)
+        self.assertEqual(
+            params, ("Grug", "Bork", recipebook.RECIPE_ITEM_CLASS, "Libram of %")
+        )
         learns, skipped = recipebook.plan_learns(
             held,
             {"Grug": {}, "Bork": {}},
