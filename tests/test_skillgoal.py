@@ -223,7 +223,9 @@ class RankCapTest(unittest.TestCase):
     def test_a_primary_at_its_cap_is_refused_and_names_the_blocker(self):
         got = plan(observed=75, cap=75, target=225)
         self.assertTrue(got.blocked)
-        self.assertIn("mod-overseer#196", got.blocked)
+        self.assertNotIn("196", got.blocked)
+        self.assertIn("ranks_due", got.blocked)
+        self.assertIn("learn errand", got.blocked)
         self.assertEqual(got.mode, "")
 
     def test_a_secondary_at_its_cap_cites_the_measured_refusal(self):

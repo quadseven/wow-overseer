@@ -41,9 +41,10 @@ failure this epic is named after:
      them, all at 1/75. A held skill is not a learn, it is a CAP, and the
      trainer resolve narrows on `TrainerStartedSkills` - the set of trades a
      spawn can START somebody in - so a capped character aimed at a trainer
-     resolves to a trainer that cannot help. quadseven/mod-overseer#196 is the
-     fix for that half and it is not merged; until it is, this module will not
-     send anybody on that errand.
+     resolves to a trainer that cannot help. The module has since learned to
+     resolve one, and a held trade's next rank is bought by the rank errand
+     (guildjobs.ranks_due, learnaim.rank_errand), so this mode still sends
+     nobody for it and does not need to.
   3. A SKILL THE ROSTER NEVER ASKED FOR. `TrainOnArrival` refuses a learn that
      is not in `plan.wanted` and drops the errand. Refusing here too means the
      family does not make the journey to be turned away at the end of it.
@@ -219,8 +220,9 @@ def nothing_to_train(members: Sequence) -> str:
     if capped:
         said.append(
             "%s already hold the trade the roster asked them to learn - that "
-            "is a CAP, not a learn, and the trainer resolve cannot find a "
-            "trainer for it until quadseven/mod-overseer#196 lands." % ", ".join(capped)
+            "is a CAP, not a learn, so this mode writes nothing for it: the "
+            "next rank is bought by the rank errand (guildjobs.ranks_due) "
+            "once the trade is within its margin of the cap." % ", ".join(capped)
         )
     if not held:
         said.append(
