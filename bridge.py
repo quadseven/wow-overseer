@@ -1610,7 +1610,7 @@ def _give_them_a_life(names: list) -> int:
     standing = _standing_jobs()
     gathering = {
         name for name, mode in standing.items()
-        if mode == craft_rhythm.MODE_GATHER
+        if craft_rhythm.is_gathering(mode)
     }
     # WHO WAITS IN TOWN FOR A CAMPAIGN TRAVELS ONLY ON AN ERRAND
     # (mod-overseer#659). Per row, like `gathering`: the module reads the job
