@@ -46,7 +46,9 @@ ITEM_TEMPLATE_SQL = (
     "SELECT it.entry AS entry, it.class AS item_class, it.subclass AS subclass, "
     "it.bonding AS bonding, it.InventoryType AS inventory_type, "
     "it.ItemLevel AS item_level, it.RequiredLevel AS req_level, "
+    "it.RequiredSkill AS required_skill, "
     "it.RequiredSkillRank AS required_skill_rank, "
+    "it.AllowableClass AS allowable_class, "
     "it.ContainerSlots AS container_slots, "
     "it.armor AS armor, it.block AS block, it.dmg_min1 AS dmg_min1, "
     "it.dmg_max1 AS dmg_max1, it.delay AS delay, "
@@ -68,7 +70,9 @@ _TEMPLATE_FIELDS = (
     "inventory_type",
     "item_level",
     "req_level",
+    "required_skill",
     "required_skill_rank",
+    "allowable_class",
     "container_slots",
     "fire_res",
 )
@@ -241,7 +245,9 @@ EQUIPPED_SQL = (  # noqa: S608 - the bound is an int from armory, names stay pla
     "it.name AS name, it.class AS item_class, it.subclass AS subclass, "
     "it.Quality AS quality, it.ItemLevel AS item_level, "
     "it.InventoryType AS inventory_type, it.RequiredLevel AS req_level, "
+    "it.RequiredSkill AS required_skill, "
     "it.RequiredSkillRank AS required_skill_rank, "
+    "it.AllowableClass AS allowable_class, "
     "it.ContainerSlots AS container_slots, it.fire_res AS fire_res, "
     "it.armor AS armor, it.block AS block, it.dmg_min1 AS dmg_min1, "
     "it.dmg_max1 AS dmg_max1, it.delay AS delay, "

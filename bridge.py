@@ -12867,6 +12867,7 @@ class Bridge(discord.Client):
         seen = await asyncio.to_thread(_recent_recipe_keys, GIVE_RETRY_MINUTES)
 
         held = await asyncio.to_thread(_fetch_held_recipes, names)
+        log.info("%s", recipebook.class9_report(recipebook.classify_class9(held, skills)))
         learns, skipped = recipebook.plan_learns(held, skills, settled, seen)
 
         queued = 0
@@ -41118,7 +41119,8 @@ def _fetch_recipe_skills(names: list) -> dict:
 _RECIPE_HELD_SQL = (
     "SELECT c.name AS holder, ci.item AS item_guid, ii.itemEntry AS entry, "
     "it.name AS label, it.RequiredSkill AS required_skill, "
-    "it.RequiredSkillRank AS required_rank, it.spellid_2 AS recipe_spell "
+    "it.RequiredSkillRank AS required_rank, it.spellid_2 AS recipe_spell, "
+    "it.AllowableClass AS allowable_class, it.RequiredLevel AS required_level "
     "FROM character_inventory ci "
     "JOIN characters c ON c.guid = ci.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
@@ -41150,6 +41152,8 @@ def _fetch_held_recipes(names: list) -> list:
             required_skill=int(row["required_skill"] or 0),
             required_rank=int(row["required_rank"] or 0),
             recipe_spell=int(row["recipe_spell"] or 0),
+            allowable_class=int(row["allowable_class"] if row.get("allowable_class") is not None else -1),
+            required_level=int(row["required_level"] or 0),
         )
         for row in rows
     ]
@@ -41208,6 +41212,8 @@ def _fetch_recipe_listings(houses: list) -> list:
             required_skill=int(row["required_skill"] or 0),
             required_rank=int(row["required_rank"] or 0),
             recipe_spell=int(row["recipe_spell"] or 0),
+            allowable_class=int(row["allowable_class"] if row.get("allowable_class") is not None else -1),
+            required_level=int(row["required_level"] or 0),
         )
         for row in rows
     ]

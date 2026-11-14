@@ -231,6 +231,8 @@ def build_stacks(rows, gear_rows=(), templates=None, instance_soulbound=None) ->
                 container_slots=t.get("container_slots"),
                 fire_res=t.get("fire_res"),
                 soulbound=soulbound,
+                required_skill=_int(t.get("required_skill"), 0),
+                allowable_class=_int(t.get("allowable_class"), -1),
             )
         )
     return out

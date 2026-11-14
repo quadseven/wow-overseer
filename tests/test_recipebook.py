@@ -866,5 +866,77 @@ class TheExecutorContractThisPassDependsOn(unittest.TestCase):
         self.assertNotIn('status = "delivered";', body)
 
 
+class TheClassNineTriage(unittest.TestCase):
+    def test_classify_class9_and_report_lists_three_groups_per_member(self):
+        held = [
+            recipebook.Held(
+                "Ugga", 1, 13492, "Recipe: Greater Arcane Elixir", 171, 250, 17573
+            ),
+            recipebook.Held(
+                "Ugga", 2, 17059, "Plans: Dark Iron Plate", 164, 300, 20890
+            ),
+            recipebook.Held(
+                "Grug",
+                3,
+                17682,
+                "Book: Gift of the Wild",
+                0,
+                0,
+                21849,
+                allowable_class=1024,
+                required_level=50,
+            ),
+            recipebook.Held("Grug", 4, 18334, "Libram of Protection", 0, 0, 0),
+        ]
+        skills = {"Ugga": {171: 150}, "Grug": {164: 200}}
+        summary = recipebook.classify_class9(held, skills)
+        self.assertEqual(
+            summary["Ugga"], {"own_trade": 1, "other_trade": 1, "book_or_libram": 0}
+        )
+        self.assertEqual(
+            summary["Grug"], {"own_trade": 0, "other_trade": 0, "book_or_libram": 2}
+        )
+        line = recipebook.class9_report(summary)
+        self.assertIn("Ugga", line)
+        self.assertIn("own=1", line)
+        self.assertIn("other=1", line)
+        self.assertIn("Grug", line)
+        self.assertIn("book=2", line)
+
+    def test_plan_learns_uses_class_book_for_matching_class_and_level(self):
+        held = [
+            recipebook.Held(
+                "Bork",
+                10,
+                17682,
+                "Book: Gift of the Wild",
+                0,
+                0,
+                21849,
+                allowable_class=1024,
+                required_level=50,
+            ),
+            recipebook.Held(
+                "Grug",
+                11,
+                17682,
+                "Book: Gift of the Wild",
+                0,
+                0,
+                21849,
+                allowable_class=1024,
+                required_level=50,
+            ),
+        ]
+        learns, skipped = recipebook.plan_learns(
+            held,
+            {"Bork": {}, "Grug": {}},
+            member_classes={"Bork": 11, "Grug": 1},
+            member_levels={"Bork": 60, "Grug": 60},
+        )
+        self.assertEqual([(x.holder, x.entry) for x in learns], [("Bork", 17682)])
+        self.assertEqual(len(skipped), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
