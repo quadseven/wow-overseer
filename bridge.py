@@ -157,6 +157,7 @@ import materials
 import mountbuy
 import tidy
 import overhear
+import operatorhold
 import persona
 import preraid
 import priorities
@@ -195,6 +196,7 @@ import standin
 import places
 import standstill
 import strategybook
+import strayfollow
 import tabard
 import teamsync
 import towntrip
@@ -4258,6 +4260,53 @@ def _file_quest_tickets(client) -> dict:
         )
 
 
+# THE STRAY FOLLOWERS' READ (strayfollow.py): every guild member, off the
+# roster, grouped as somebody else's follower, with its leader's guild, roster
+# standing and fresh position. Names are cast to one collation, as the corps
+# tickets' read does: the roster table's differs from the characters table's.
+_STRAY_FOLLOWERS_SQL = (
+    "SELECT s.name, g.name AS guild, s.map_id, s.pos_x, s.pos_y, s.in_combat, "
+    "lc.name AS leader, lg.name AS leader_guild, "
+    "(lc.name COLLATE utf8mb4_0900_ai_ci IN (SELECT r.name COLLATE utf8mb4_0900_ai_ci "
+    "FROM overseer_roster r)) AS leader_roster, "
+    "(ls.name IS NOT NULL) AS leader_online, ls.map_id AS leader_map, "
+    "ls.pos_x AS leader_x, ls.pos_y AS leader_y "
+    "FROM overseer_snapshot s "
+    "JOIN guild_member gm ON gm.guid = s.guid "
+    "JOIN guild g ON g.guildid = gm.guildid "
+    "JOIN characters lc ON lc.guid = s.group_leader "
+    "LEFT JOIN guild_member lgm ON lgm.guid = lc.guid "
+    "LEFT JOIN guild lg ON lg.guildid = lgm.guildid "
+    "LEFT JOIN overseer_snapshot ls ON ls.guid = lc.guid "
+    "AND ls.updated_at > NOW() - INTERVAL 120 SECOND "
+    "WHERE s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "AND s.group_leader <> 0 AND s.group_leader <> s.guid "
+    "AND g.name IN ({guilds}) "
+    "AND s.name COLLATE utf8mb4_0900_ai_ci NOT IN (SELECT r2.name COLLATE utf8mb4_0900_ai_ci "
+    "FROM overseer_roster r2) "
+    "LIMIT 500"
+)
+_STRAY_RECENT_SQL = (
+    "SELECT target_name, MIN(TIMESTAMPDIFF(MINUTE, created_at, NOW())) AS age "
+    "FROM overseer_command WHERE source LIKE %s "
+    "AND created_at > NOW() - INTERVAL 1 DAY GROUP BY target_name"
+)
+
+
+def _fetch_stray_followers() -> tuple:
+    """(followers, name -> minutes since its last leave row) for strayfollow."""
+    guilds = sorted(raidteams.GROUPS)
+    if not guilds:
+        return (), {}
+    sql = _STRAY_FOLLOWERS_SQL.format(guilds=",".join(["%s"] * len(guilds)))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, guilds)
+        followers = strayfollow.followers_from_rows(cur.fetchall())
+        cur.execute(_STRAY_RECENT_SQL, (strayfollow.SOURCE + ":%",))
+        recent = {str(r["target_name"]): int(r["age"]) for r in cur.fetchall()}
+    return followers, recent
+
+
 def _file_corps_tickets(client) -> dict:
     """One corps blocker filing pass (corpstickets.py) on one connection."""
     with _connect() as conn, conn.cursor() as cur:
@@ -4418,6 +4467,29 @@ def _ensure_queue_store() -> None:
     except pymysql.err.MySQLError:
         log.exception("priorities: the family priorities store is unavailable, "
                       "so every pass uses the default order")
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(operatorhold.CREATE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("operator hold: the hold store is unavailable, so no "
+                      "family can be held without a restart")
+
+
+def _fetch_operator_holds() -> list:
+    """SELECT_SQL's rows (operatorhold.py, #2403).
+
+    No table yet (1146) is a realm that has never held a family: no rows. Any
+    other error is raised, so the caller keeps the holds it last read rather
+    than letting a database hiccup release a family the operator is driving.
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(operatorhold.SELECT_SQL)
+            return [dict(row) for row in cur.fetchall()]
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return []
+        raise
 
 
 def _fetch_priority_order() -> tuple:
@@ -8193,6 +8265,7 @@ PASSES = (
     _Pass("_quest_ledger_loop"),
     _Pass("_quest_tickets_loop"),
     _Pass("_corps_tickets_loop"),
+    _Pass("_stray_follow_loop"),
 )
 
 
@@ -8518,6 +8591,10 @@ class Bridge(discord.Client):
         # Refreshed by `_priority_order` before every Jev Choice ask and on
         # every goal pass; the default until the first read lands.
         self._priorities: tuple = priorities.DEFAULT_ORDER
+        # The operator hold (operatorhold.py, #2403): the holds last read, and
+        # when each held writer last said so.
+        self._operator_holds: dict = {}
+        self._operator_hold_notice = operatorhold.Notice()
         # dungeonpace: the last "nothing to do" line said per family (#767).
         self._pace_said: dict = {}
         # The attunement step (attunestep.py): the line last said per family,
@@ -9545,6 +9622,14 @@ class Bridge(discord.Client):
             await asyncio.sleep(cycle)
 
     async def _council_once(self) -> None:
+        # THE OPERATOR HOLD (operatorhold.py, #2403): a held family sits no
+        # council and is given no goal, including the one a restart used to
+        # bring two minutes after the start.
+        operator_held = getattr(self, "_operator_held", None)
+        if operator_held is not None:
+            own = await asyncio.to_thread(_cohort_of, bonds.head_of_family())
+            if await operator_held({own or ""}, "council"):
+                return
         names = sorted((await asyncio.to_thread(_protected_guids)).values())
         members = await asyncio.to_thread(_fetch_council_members, names)
         history = bonds.history_from_thoughts(
@@ -23672,6 +23757,16 @@ class Bridge(discord.Client):
             await asyncio.to_thread(_fetch_queue_rows))
         fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
         _prune_bag_hold_stuck(fams)
+        # THE OPERATOR HOLD BEFORE ANYTHING BELOW (operatorhold.py, #2403): a
+        # held family is absent from this pass, so no planner, attunement,
+        # spire, trade turn, dungeon quest, town first or step writes for it,
+        # and its town errands get the traveller back as for an empty queue.
+        stood: set = set()
+        operator_held = getattr(self, "_operator_held", None)
+        if operator_held is not None:
+            stood = await operator_held(set(fams) | set(pending), "queue")
+            pending = {k: v for k, v in pending.items() if k not in stood}
+            fams = {k: v for k, v in fams.items() if k not in stood}
         # THE STAND-IN BEFORE ANYTHING DRIVES THE FAMILY (standin.py): a member
         # sitting out to craft leaves every family's names here, so no hold,
         # gate or job write below reaches it.
@@ -23684,12 +23779,14 @@ class Bridge(discord.Client):
         if await self._plan_campaigns(pending, fams):
             pending = campaignqueue.pending_by_family(
                 await asyncio.to_thread(_fetch_queue_rows))
+            pending = {k: v for k, v in pending.items() if k not in stood}
         # THE UPPER SPIRE RUN ORDERS AND ENDS ITSELF (spirerun.py). After the
         # planner, so the order sits among the entries it just wrote.
         spire_pass = getattr(self, "_spire_pass", None)
         if spire_pass is not None and await spire_pass(pending, fams):
             pending = campaignqueue.pending_by_family(
                 await asyncio.to_thread(_fetch_queue_rows))
+            pending = {k: v for k, v in pending.items() if k not in stood}
         # THE TRADE TURN (tradeturn.py, #2262), after the planner and the spire
         # pass so neither sees a queue it must not extend. A family in a turn
         # is an empty queue to everything below: no step, no travel claim.
@@ -24748,6 +24845,38 @@ class Bridge(discord.Client):
         elif activity == jev_activity.GATHER and own:
             await self._walk_to_gather_field(await self._gather_destination())
 
+    async def _operator_held(self, keys, writer: str) -> set:
+        """The family keys among `keys` an operator hold stands `writer` down
+        for (operatorhold.py, #2403), read now.
+
+        Read on every call, so a hold set or cleared by hand takes effect on the
+        writer's next pass with no restart. A failed read keeps the holds last
+        read: a database hiccup is not the operator letting go. Each held
+        writer says one line per family, at most every
+        operatorhold.SAY_EVERY_SECONDS.
+        """
+        try:
+            self._operator_holds = operatorhold.read(
+                await asyncio.to_thread(_fetch_operator_holds))
+        except Exception:
+            log.exception("operator hold: the holds could not be read; %s keeps "
+                          "the %d last read", writer,
+                          len(getattr(self, "_operator_holds", {}) or {}))
+        holds = getattr(self, "_operator_holds", {}) or {}
+        if not holds:
+            return set()
+        now = time.monotonic()
+        out = set()
+        for key in sorted(keys, key=str):
+            hold = operatorhold.held(holds, key)
+            if hold is None:
+                continue
+            out.add(key)
+            if self._operator_hold_notice.due(writer, key, hold, now):
+                log.info("%s", operatorhold.line(
+                    writer, campaignqueue._family(key), hold))
+        return out
+
     def _activity_holds(self, key=None) -> str:
         """The activity whose interlude holds family `key`'s job, or "".
 
@@ -25217,7 +25346,13 @@ class Bridge(discord.Client):
         fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
         pending = campaignqueue.pending_by_family(
             await asyncio.to_thread(_fetch_queue_rows))
+        # THE OPERATOR HOLD (operatorhold.py, #2403): no choice, no job.
+        operator_held = getattr(self, "_operator_held", None)
+        stood = (await operator_held(set(fams), "activity")
+                 if operator_held is not None else set())
         for key, fam in sorted(fams.items()):
+            if key in stood:
+                continue
             own = key == self._activity_own_key
             try:
                 await self._activity_for(key, fam, pending.get(key, []), own, rule)
@@ -25481,7 +25616,13 @@ class Bridge(discord.Client):
         """One pass: every family on the roster, each guarded on its own."""
         own_key = await asyncio.to_thread(_cohort_of, bonds.head_of_family())
         fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
+        # THE OPERATOR HOLD (operatorhold.py, #2403): no hub walk, no aim.
+        operator_held = getattr(self, "_operator_held", None)
+        stood = (await operator_held(set(fams), "levelroute")
+                 if operator_held is not None else set())
         for key, fam in sorted(fams.items()):
+            if key in stood:
+                continue
             try:
                 await self._level_route_for(key, fam, key == (own_key or ""))
             except Exception:
@@ -26336,6 +26477,30 @@ class Bridge(discord.Client):
                               "epic; link them by hand", done["unlinked"])
             except Exception:
                 log.exception("corps tickets: pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _stray_follow_loop(self) -> None:
+        """A guild member led off by a stranger's bot leaves that group
+        (strayfollow.py): `leave-group` on kind='guild', one line a leave."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("STRAY_FOLLOW_SECONDS", "300"))
+        since: dict = {}
+        while not self.is_closed():
+            try:
+                followers, recent = await asyncio.to_thread(_fetch_stray_followers)
+                now = time.monotonic()
+                since = strayfollow.track(since, followers, now)
+                rows, lines = strayfollow.plan(
+                    followers, since, now, recent, frozenset(raidteams.GROUPS))
+                for r, line in zip(rows, lines):
+                    row_id = await asyncio.to_thread(
+                        _insert_guild, r.name, r.command, r.source)
+                    if row_id:
+                        log.info("stray followers: %s (row %d)", line, row_id)
+                    else:
+                        log.info("stray followers: %s: the row was not written", line)
+            except Exception:
+                log.exception("stray followers: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _watch_loop(self) -> None:
