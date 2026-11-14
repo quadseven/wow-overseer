@@ -152,6 +152,16 @@ def skill_locks(skill_name, value) -> list:
     return out
 
 
+def advances(job, skills) -> bool:
+    """Whether the member's own skills still advance the farm SKILL order `job`."""
+    skill = order_of(job)[1]
+    try:
+        have = int((skills or {}).get(skill))
+    except (TypeError, ValueError):
+        return False
+    return bool(skill and skill_locks(skill, have))
+
+
 def target_for(skills) -> str:
     """The farm job one member can still advance with its own skills (#2498).
 

@@ -26305,7 +26305,7 @@ class Bridge(discord.Client):
         looped_by = globals().get("_prof_loop_family")
         if looped_by is not None and await asyncio.to_thread(looped_by, key):
             return False
-        farmers = individual.farm_members(rows, family)
+        farmers = individual.farm_members(rows, family, exempt=_standin_out())
         for name in sorted(rows):
             if name not in farmers:
                 self._farm_state.pop("solo:" + name, None)

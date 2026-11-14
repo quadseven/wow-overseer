@@ -73,6 +73,22 @@ class EachMemberIsMovedToItsOwnOrder(unittest.TestCase):
         self.assertNotIn("Bork", got)
         self.assertNotIn("Og", got)
 
+    def test_a_member_whose_order_still_advances_it_is_not_flipped(self):
+        # Mining 100 and herbalism 99: the lower trade changes with every
+        # node, but a member already mining keeps mining.
+        skills = {"Grug": {"mining": 100, "herbalism": 99}}
+        got = individual.farm_retargets(
+            {"Grug": "farm:mining"}, skills, "Grug", environ=ENV
+        )
+        self.assertEqual(got, {})
+
+    def test_a_member_whose_order_is_spent_is_moved(self):
+        skills = {"Grug": {"mining": 900, "herbalism": 99}}
+        got = individual.farm_retargets(
+            {"Grug": "farm:mining"}, skills, "Grug", environ=ENV
+        )
+        self.assertEqual(got, {"Grug": "farm:herbalism"})
+
     def test_an_item_order_is_never_rewritten(self):
         rows = dict(self.ALL_MINING, Ugga="farm:13463")
         self.assertEqual(self.moves(rows), {})

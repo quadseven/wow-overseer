@@ -166,7 +166,12 @@ def farm_retargets(
         job = str(job_by_name[name]).strip().lower()
         if not farmjob.order_of(job)[1]:
             continue
-        want = farmjob.target_for((skills_by_name or {}).get(name))
+        mine = (skills_by_name or {}).get(name)
+        # A member whose own order still advances it keeps it: the lower
+        # trade changes with every node and would flip the order each time.
+        if farmjob.advances(job, mine):
+            continue
+        want = farmjob.target_for(mine)
         if want and want != job:
             out[name] = want
     return out
