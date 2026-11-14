@@ -441,17 +441,17 @@ class AnErrandWithNoOwnerGetsTheWorldsOwnClock(unittest.TestCase):
         self.assertEqual("repair", slot.holder.aim)
         self.assertEqual("", slot.holder.claimant)
 
-    def test_an_orphan_is_not_preempted_on_the_short_lease(self):
-        d = decide(column="repair", holder=holder("", "repair", 0.0), now=600.0)
+    def test_an_orphan_is_not_preempted_inside_its_grace(self):
+        d = decide(column="repair", holder=holder("", "repair", 0.0), now=60.0)
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
-        self.assertIn("1200s lease", d.reason)
+        self.assertIn("120s lease", d.reason)
 
-    def test_an_orphan_is_preempted_once_the_world_has_given_up_too(self):
-        d = decide(column="repair", holder=holder("", "repair", 0.0), now=1201.0)
+    def test_an_orphan_is_preempted_once_the_grace_is_spent(self):
+        d = decide(column="repair", holder=holder("", "repair", 0.0), now=121.0)
         self.assertEqual(townslot.SLOT_PREEMPT, d.verdict)
 
     def test_an_orphan_is_named_as_one(self):
-        d = decide(column="repair", holder=holder("", "repair", 0.0), now=1201.0)
+        d = decide(column="repair", holder=holder("", "repair", 0.0), now=121.0)
         self.assertIn("an unknown writer", d.reason)
 
     def test_lease_for_answers_zero_for_nobody(self):
@@ -467,9 +467,13 @@ class AnErrandWithNoOwnerGetsTheWorldsOwnClock(unittest.TestCase):
         )
         self.assertLessEqual(townslot.ORPHAN_GROUND_GRACE_SECONDS, 180.0)
 
-    def test_an_orphan_keyword_aim_keeps_the_long_lease(self):
+    def test_an_orphan_keyword_aim_gets_the_same_grace(self):
+        """A restart cannot say whether a vendor or mailbox errand is still
+        live; the pass that wants it re-asserts it, so the column is not held
+        for 20 minutes on the strength of an aim nobody can name."""
         self.assertEqual(
-            townslot.ORPHAN_LEASE_SECONDS, townslot.lease_for(holder("", "vendor", 0.0))
+            townslot.ORPHAN_GROUND_GRACE_SECONDS,
+            townslot.lease_for(holder("", "vendor", 0.0)),
         )
 
     def test_a_named_claimants_ground_aim_is_unchanged(self):
@@ -483,7 +487,8 @@ class AnErrandWithNoOwnerGetsTheWorldsOwnClock(unittest.TestCase):
             townslot.LEASE_SECONDS, townslot.lease_for(holder("economy", "vendor", 0.0))
         )
         self.assertEqual(
-            townslot.ORPHAN_LEASE_SECONDS, townslot.lease_for(holder("", "vendor", 0.0))
+            townslot.ORPHAN_GROUND_GRACE_SECONDS,
+            townslot.lease_for(holder("", "vendor", 0.0)),
         )
 
     def test_the_orphan_lease_matches_the_worlds_own_backstop(self):
@@ -1540,7 +1545,7 @@ class AWalkThatLeavesTownGetsALeaseDimensionedForIt(unittest.TestCase):
         """A holder this process cannot name has no claimant to look up, so the
         world's own backstop outranks the mapping rather than the reverse."""
         self.assertEqual(
-            townslot.ORPHAN_LEASE_SECONDS,
+            townslot.ORPHAN_GROUND_GRACE_SECONDS,
             townslot.lease_for(
                 holder("", "vendor", since=0.0),
                 long_leases={"gather": 450.0, "": 10.0},
@@ -2560,9 +2565,9 @@ class AnEarnedTurnKeepsEveryOtherGate(unittest.TestCase):
         self.assertEqual(townslot.SLOT_WAIT, blocked.verdict)
         self.assertEqual("", slot.holder.claimant)
         self.assertEqual(
-            townslot.SLOT_WAIT, self._ask(slot, self.EARNED + 600.0, aim).verdict
+            townslot.SLOT_WAIT, self._ask(slot, self.EARNED + 60.0, aim).verdict
         )
-        late = self._ask(slot, self.EARNED + townslot.ORPHAN_LEASE_SECONDS, aim)
+        late = self._ask(slot, self.EARNED + townslot.ORPHAN_GROUND_GRACE_SECONDS, aim)
         self.assertTrue(late.granted)
 
     def _starved(self, slot, now):
