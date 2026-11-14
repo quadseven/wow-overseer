@@ -190,6 +190,7 @@ import realmread
 import relay
 import runreport
 import retire
+import retrygate
 import situation
 import skillgoal
 import standin
@@ -19041,9 +19042,12 @@ class Bridge(discord.Client):
     async def _run_corps_step(self, step, cap: float = guildroute.MAIL_RUN_YARDS) -> None:
         """Write one step's rows in order, each after the last has answered.
 
-        A walk a fight ended is written once more (#633).
+        A walk a fight ended is written once more (#633). A step whose last
+        asks were refused waits out the shared retry gate (retrygate.py).
         """
         try:
+            if await self._retry_held("guild corps", step):
+                return
             if step.walk is not None:
                 walk_id = await asyncio.to_thread(_insert_corps_row, step.holder, step.walk)
                 if not walk_id:
@@ -19068,6 +19072,29 @@ class Bridge(discord.Client):
             log.exception("guild corps: step for %s failed", step.holder)
         finally:
             self._corps_steps.pop(step.holder, None)
+
+    async def _retry_held(self, prefix: str, step) -> bool:
+        """True when the shared retry gate (retrygate.py) holds this step: its
+        member's newest rows of the step's first source were refused. Logged
+        once when the hold starts or changes kind, at DEBUG while it holds."""
+        source = retrygate.first_source(step)
+        if not source:
+            return False
+        rows = await asyncio.to_thread(_retry_rows, step.holder, source)
+        hold = retrygate.hold(rows)
+        said = getattr(self, "_retry_said", None)
+        if said is None:
+            said = self._retry_said = {}
+        if hold is None:
+            said.pop((step.holder, source), None)
+            return False
+        key = hold.key(step.holder, source)
+        if said.get((step.holder, source)) != key:
+            said[(step.holder, source)] = key
+            log.info("%s: %s", prefix, hold.line(step.holder, source))
+        else:
+            log.debug("%s: %s", prefix, hold.line(step.holder, source))
+        return True
 
     async def _corps_row(self, step, row, cap: float = guildroute.MAIL_RUN_YARDS) -> bool:
         """Write one row and wait for its answer; True when it worked.
@@ -19780,9 +19807,12 @@ class Bridge(discord.Client):
         prefix and busy map, and one more reading: a worldserver older than
         quadseven/mod-overseer#707 answers a spawn walk `unknown job mode` and
         a sale walk `malformed walk-to-vendor command`, and that walk is not
-        asked again for guildroute.WALK_UNSUPPORTED_SECONDS.
+        asked again for guildroute.WALK_UNSUPPORTED_SECONDS. A step whose last
+        asks were refused waits out the shared retry gate (retrygate.py).
         """
         try:
+            if await self._retry_held("guild jobs", step):
+                return
             if step.walk is not None:
                 walk_id = await asyncio.to_thread(_insert_corps_row, step.holder, step.walk)
                 if not walk_id:
@@ -34214,6 +34244,24 @@ def _end_hunt_row(row_id: int, detail: str = _HUNT_DONE) -> None:
             "WHERE id = %s AND status = 'verifying'",
             (detail, int(row_id)),
         )
+
+
+# THE SHARED RETRY GATE'S READ (retrygate.py): one member's newest rows of one
+# source, a day at most, served by idx_source_id.
+_RETRY_ROWS_SQL = (
+    "SELECT status, result, TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age "
+    "FROM overseer_command "
+    "WHERE source = %s AND target_name = %s "
+    "AND created_at > NOW() - INTERVAL 1 DAY "
+    "ORDER BY id DESC LIMIT %s"
+)
+
+
+def _retry_rows(holder: str, source: str) -> list:
+    """`holder`'s newest retrygate.ROWS_READ rows of `source`, newest first."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_RETRY_ROWS_SQL, (source, holder, retrygate.ROWS_READ))
+        return list(cur.fetchall())
 
 
 def _insert_corps_row(holder: str, row) -> int:
