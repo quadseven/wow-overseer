@@ -515,6 +515,45 @@ DROP_RECIPES = {
     if s.make and s.make.recipe_item and not s.make.recipe_price
 }
 
+# The four rare TOP drop recipes (#2420): Greater Fire Protection Potion
+# (LBRS), Flask of the Titans (UBRS), Flask of Supreme Power (Scholomance),
+# and Flask of Distilled Wisdom (Stratholme live).
+TOP_RECIPES = (
+    (13494, "Recipe: Greater Fire Protection Potion", 17574),
+    (13519, "Recipe: Flask of the Titans", 17635),
+    (13521, "Recipe: Flask of Supreme Power", 17637),
+    (13520, "Recipe: Flask of Distilled Wisdom", 17636),
+)
+
+
+def top_recipes(knowers: dict, carriers=None) -> list:
+    """Per-family acquisition status for the four TOP Molten Core recipes."""
+    carriers = carriers or {}
+    rows = []
+    for entry, name, spell in TOP_RECIPES:
+        who_knows = sorted(set(knowers.get(spell, ())))
+        who_holds = sorted(set(carriers.get(entry, ())))
+        acquired = bool(who_knows or who_holds)
+        parts = []
+        if who_knows:
+            parts.append("known by %s" % ", ".join(who_knows))
+        if who_holds:
+            parts.append("held by %s" % ", ".join(who_holds))
+        detail = "; ".join(parts) if parts else "not acquired"
+        rows.append(
+            {
+                "entry": entry,
+                "name": name,
+                "spell": spell,
+                "acquired": acquired,
+                "knowers": who_knows,
+                "carriers": who_holds,
+                "line": "%s: %s" % (name, detail),
+            }
+        )
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # FIRE RESISTANCE, PER ROLE. The Ragnaros tank first, as classic guilds asked
 # (raidgoals' own range tops out at the same 200); other tanks next, because
@@ -2115,6 +2154,7 @@ def card(
         "pace": pace_lines(crafters, snapshots),
         "level_60_line": level_60_line(snapshots),
         "unobtainable": list(unobtainable),
+        "top_recipes": top_recipes(knowers, carriers),
         "supply_columns": list(SUPPLY_COLUMNS),
         "supplies": [
             {

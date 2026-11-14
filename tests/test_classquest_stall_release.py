@@ -19,6 +19,7 @@ aside altogether (test_classquest_yield.py), so a member with no level walk to
 make goes about its other jobs instead.
 """
 
+import dataclasses
 import json
 import unittest
 
@@ -233,6 +234,11 @@ class TheHold(unittest.TestCase):
 
 
 class TheLevelWalkFirst(unittest.TestCase):
+    def test_a_roleless_candidate_gets_the_class_yield_reason(self):
+        member = dataclasses.replace(stuck(level=50), role=guildjobs.UNASSIGNED)
+        result = plan([], failing(10, 40, 70), class_candidates=[member])
+        self.assertIn("steps aside", result.class_holds[member.name])
+
     def test_a_member_whose_class_step_keeps_failing_walks_to_level(self):
         result = plan([stuck()], failing(10, 40, 70))
         step = step_of(result)

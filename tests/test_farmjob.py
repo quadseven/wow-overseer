@@ -326,7 +326,10 @@ class TheBridgeDrivesIt(unittest.TestCase):
         self.assertIn(
             "travel.ground_aim(spawn.map_id, spawn.x, spawn.y, spawn.z)", self.body
         )
-        self.assertIn("self._claim_town_slot(GATHER_CLAIMANT, leader, aim", self.body)
+        self.assertIn(
+            "self._claim_town_slot(\n                GATHER_CLAIMANT, leader, aim",
+            self.body,
+        )
 
     def test_full_bags_and_the_end_hand_the_column_back(self):
         self.assertIn("await self._yield_gather_aim(step.line, cohort)", self.body)

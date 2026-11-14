@@ -69,10 +69,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import bankpolicy
+import craft
 import disposition
 import goals
 import guildbank
 import materials
+import reagentplan
 import recipebook
 
 # The two verbs this module emits. `buy slot` is the third the executor takes
@@ -598,6 +600,11 @@ class Storage:
     # bags and its bank holds (reagentplan.bank_wants, #774). A banked stack
     # of one comes out; a carried one is never put down by the keeper rule.
     craft_wants: dict = field(default_factory=dict)
+    # THE VAULT'S RESERVE FOR THE NEXT RUNG (vault_reagents). The entries the
+    # guild's crafters are short of on their current recipes, and the Materials
+    # slots held back for them: a stack that is not one of these may not take
+    # the tab below `len(guild_reagents)` free slots.
+    guild_reagents: frozenset = frozenset()
 
 
 def _craft_wanted(holding, storage):
@@ -663,6 +670,30 @@ def _guild_tabs(guild):
     return depositors, free
 
 
+def vault_reagents(skills, guild):
+    """Item entries the guild's crafters need for the rung they stand on.
+
+    Read from the recipe each member's skill value selects (`craft.recipe_for`)
+    and the reagents that recipe eats (`reagentplan.reagents`), never a fixed
+    list, so the reserve moves as the crafters climb. A vendor-sold reagent
+    (thread, dye) needs no vault slot and is left out. Only members of this
+    guild count.
+    """
+    members = set(dict(guild or {}).get("member_ranks") or ())
+    entries = set()
+    for name, by_skill in (skills or {}).items():
+        if name not in members:
+            continue
+        for skill_id, value in by_skill.items():
+            recipe = craft.recipe_for(skill_id, value)
+            if recipe is None:
+                continue
+            entries.update(
+                r.entry for r in reagentplan.reagents(recipe.spell_id) if not r.vendor
+            )
+    return frozenset(entries)
+
+
 def storage_from(
     held,
     worked_by=None,
@@ -708,6 +739,7 @@ def storage_from(
             str(name): frozenset(int(e) for e in entries)
             for name, entries in (craft_wants or {}).items()
         },
+        guild_reagents=vault_reagents(skills, guild) if depositors else frozenset(),
     )
 
 
@@ -984,9 +1016,22 @@ def _guild_tab_for(holding, storage, guild_room):
     else:
         wanted = bankpolicy.MATERIALS_TAB
     for tab in (wanted, bankpolicy.MATERIALS_TAB):
-        if guild_room.get(tab, 0) > 0:
+        if guild_room.get(tab, 0) > _reserved_slots(holding, storage, tab):
             return tab
     return None
+
+
+def _reserved_slots(holding, storage, tab):
+    """Free slots of `tab` this stack may not take.
+
+    The Materials tab keeps one free slot per next-rung reagent
+    (`Storage.guild_reagents`) for those reagents alone: a stack that is not
+    one of them is refused once the tab is down to that many, so the vault
+    cannot fill with other goods and leave a crafter nowhere to be fed from.
+    """
+    if tab != bankpolicy.MATERIALS_TAB or holding.template_id in storage.guild_reagents:
+        return 0
+    return len(storage.guild_reagents)
 
 
 def _no_room_note(name, item, room):

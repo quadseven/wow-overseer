@@ -92,6 +92,10 @@ TOWN_START_SECONDS = 10 * 60.0
 CRAFT_SECONDS = 90 * 60.0
 CRAFT_MIN_SECONDS = 5 * 60.0
 TRAIN_SECONDS = 45 * 60.0
+# A rank or recipe that falls due mid-gather pulls the family to the trainers
+# once this much gathering has passed, so a due item that keeps coming back
+# does not cut every gathering stretch short (#2501).
+GATHER_TRAIN_SECONDS = 60 * 60.0
 REASSERT_SECONDS = 10 * 60.0
 # "Reagents for the next crafts in hand" is the craft rhythm's own stocked bar.
 READY_CASTS = craft_rhythm.STOCK_CASTS
@@ -109,6 +113,50 @@ def families(env=None) -> frozenset:
 def enabled_for(key, env=None) -> bool:
     """Whether the family `key` is in the loop."""
     return bool(key) and str(key) in families(env)
+
+
+@dataclass(frozen=True)
+class CrafterPlan:
+    """What the loop read for one crafter: the recipe chosen for it (0 for
+    none), whether reagentplan judged that recipe, and the casts in the bags."""
+
+    spell: int = 0
+    judged: bool = False
+    casts: int = 0
+
+
+def choose_spells(names, rhythm: dict, standing: dict) -> dict:
+    """name -> the recipe the loop plans for it.
+
+    The craft rhythm's choice first; when it left none (the rhythm has not run
+    for that member, or chose nothing) the roster's standing craft errand
+    stands in, so a crafter is never read as having no recipe while its row
+    names one (#2501)."""
+    out = {}
+    for name in names:
+        spell = int((rhythm or {}).get(name) or 0) or int(
+            (standing or {}).get(name) or 0
+        )
+        if spell:
+            out[name] = spell
+    return out
+
+
+def crafters_line(plans: dict) -> str:
+    """One clause per crafter: the recipe, whether it was judged, its casts."""
+    parts = []
+    for name, plan in sorted((plans or {}).items()):
+        if not plan.spell:
+            parts.append("%s has no recipe chosen" % name)
+        elif not plan.judged:
+            parts.append(
+                "%s spell %d is not judged (no reagent table)" % (name, plan.spell)
+            )
+        else:
+            parts.append(
+                "%s spell %d judged %d cast(s)" % (name, plan.spell, plan.casts)
+            )
+    return "; ".join(parts)
 
 
 @dataclass(frozen=True)
@@ -141,6 +189,7 @@ class Facts:
     casts: dict = field(default_factory=dict)
     fetch: tuple = ()
     train_due: dict = field(default_factory=dict)
+    plans: dict = field(default_factory=dict)
     errand_active: bool = False
     errand_ended: float = 0.0
     errand_why: str = ""
@@ -250,16 +299,28 @@ def _casting(facts: Facts) -> list:
     return sorted(n for n, c in (facts.casts or {}).items() if int(c or 0) > 0)
 
 
-def _stocked(facts: Facts) -> bool:
-    """Every judged crafter holds READY_CASTS casts, and there is one."""
-    casts = facts.casts or {}
-    return bool(casts) and all(int(c or 0) >= READY_CASTS for c in casts.values())
+def _stocked_names(facts: Facts) -> list:
+    """The crafters holding READY_CASTS casts. One is enough to sit down: an
+    unfed crafter must not hold the others in gather for ever (#2501); its
+    reagents are what the gathering and the next town visit are for."""
+    return sorted(
+        n for n, c in (facts.casts or {}).items() if int(c or 0) >= READY_CASTS
+    )
 
 
 def _after_town(facts: Facts) -> tuple:
     casting = _casting(facts)
     if casting:
         return CRAFT, "%s can cast from the bags" % ", ".join(casting)
+    # The saved bags trail the world, so what the errand just bought or took
+    # out of a bank is not in them yet: a crafter whose every short reagent is
+    # one the errand fetches is sent to craft, and the phase ends by itself
+    # after CRAFT_MIN_SECONDS if the bags really are empty (#2501).
+    fetched = sorted(facts.fetch or ())
+    if fetched:
+        return CRAFT, "%s had reagents fetched in town (the saved bags may lag)" % (
+            ", ".join(fetched)
+        )
     due = _due(facts)
     if due:
         return TRAIN, "a rank or recipe is due for %s" % ", ".join(due)
@@ -331,9 +392,14 @@ def _gather(state: State, facts: Facts, elapsed: float) -> Step:
     if elapsed >= GATHER_SECONDS:
         why = "%d hours gathered; the haul goes to the bank" % (GATHER_SECONDS // 3600)
         return _move(state, facts, TOWN, why, _town_ask(why))
-    if elapsed < GATHER_MIN_SECONDS or not _stocked(facts):
+    due = _due(facts)
+    if due and elapsed >= GATHER_TRAIN_SECONDS:
+        why = "a rank or recipe is due for %s" % ", ".join(due)
+        return _move(state, facts, TRAIN, why)
+    stocked = _stocked_names(facts)
+    if elapsed < GATHER_MIN_SECONDS or not stocked:
         return _stay(state, facts)
-    ready = "every crafter holds reagents for %d casts" % READY_CASTS
+    ready = "%s hold reagents for %d casts" % (", ".join(stocked), READY_CASTS)
     errands = sorted(set(facts.mail_waiting) | set(facts.fetch))
     if not errands:
         return _move(state, facts, CRAFT, ready)
@@ -346,7 +412,11 @@ def _town(state: State, facts: Facts, elapsed: float) -> Step:
         return Step(replace(state, town_seen=True))
     if state.town_seen or facts.errand_ended >= state.since > 0:
         to, why = _after_town(facts)
-        return _move(state, facts, to, "the town errand ended; " + why)
+        said = "the town errand ended; " + why
+        report = crafters_line(facts.plans)
+        if report:
+            said += " (crafters: %s)" % report
+        return _move(state, facts, to, said)
     if elapsed >= TOWN_START_SECONDS:
         to, why = _after_town(facts)
         late = "the town errand did not start in %d minutes; " % (

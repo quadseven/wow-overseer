@@ -10,7 +10,7 @@
 // /api/guildchat, and the announcer's /api/v2/achievements. Nothing here writes.
 
 import {
-  html, raw, pageHead, sectionHead, tabs, kpi, sparkline, histogram, notMeasured,
+  html, raw, pageHead, sectionHead, tabs, kpi, sparkline, histogram, bindHistogram, notMeasured,
   state, pendingRead, item, member, memberHref, plural, duration, classVar,
 } from "../ui.js";
 import { peek } from "../api.js";
@@ -517,6 +517,7 @@ export default {
   after(main, ctx) {
     bindRunCards(main, () => window.matchMedia("(max-width: 759.98px)").matches);
     bindClips(main);
+    bindHistogram(main);
     main.querySelectorAll("details[data-path]").forEach((d) => {
       d.addEventListener("toggle", () => {
         if (d.open) view.open.add(d.getAttribute("data-path"));

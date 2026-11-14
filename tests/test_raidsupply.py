@@ -1337,5 +1337,28 @@ class TheAlchemistsPace(unittest.TestCase):
         self.assertIn("s.level_60_line", raid)
 
 
+class TopRecipesTracking(unittest.TestCase):
+    def test_card_tracks_top_recipes_as_acquired_or_not_per_family(self):
+        card = rs.card(
+            [],
+            {},
+            {17574: ["Ugga"]},
+            carriers={13519: ["Grug"]},
+        )
+        top = {r["entry"]: r for r in card["top_recipes"]}
+        self.assertEqual(set(top), {13494, 13519, 13521, 13520})
+        self.assertTrue(top[13494]["acquired"])
+        self.assertIn("Ugga", top[13494]["line"])
+        self.assertTrue(top[13519]["acquired"])
+        self.assertIn("Grug", top[13519]["line"])
+        self.assertFalse(top[13521]["acquired"])
+        self.assertIn("not acquired", top[13521]["line"])
+        self.assertFalse(top[13520]["acquired"])
+
+    def test_the_page_draws_top_recipes(self):
+        raid = (HERE / "app" / "views" / "raid.js").read_text(encoding="utf-8")
+        self.assertIn("s.top_recipes", raid)
+
+
 if __name__ == "__main__":
     unittest.main()

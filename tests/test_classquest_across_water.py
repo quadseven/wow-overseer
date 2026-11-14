@@ -89,6 +89,7 @@ class TheBoatStep(unittest.TestCase):
         self.assertEqual(walks(result), [])
         steps = rides(result)
         self.assertEqual(len(steps), 1)
+        self.assertNotIn("Isle", result.class_holds)
         step = steps[0]
         self.assertIsNone(step.walk)
         self.assertEqual(step.rows[0].kind, "job")
