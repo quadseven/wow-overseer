@@ -60,6 +60,7 @@ import fireplan
 import flightlearn
 import followhold
 import goals
+import individual
 import guildcover
 import leadcmd
 import attunestep
@@ -124,6 +125,7 @@ import craft_rhythm
 import gatheraim
 import gatherband
 import farmassign
+import farmjob
 import craft_supply
 import dungeonpace
 import dungeonprogression
@@ -2342,6 +2344,39 @@ def _guild_bag_floor_for(cohort=None):
                       "tailor sews for the family alone this pass")
         return None
     return bag_upgrade.guild_floor(rows, len(bag_upgrade.BAG_POSITIONS))
+
+
+def _individual_walk_waits(needs) -> None:
+    """Individual mode (#2395): craft supply walks nobody. The family's walk
+    is its leader's, and in individual mode the leader may be on its own job
+    while the buyer stands somewhere else, so a buy needs the buyer's own
+    walk to a vendor, which is quadseven/wow-overseer#2406. Rows already
+    queued for a member standing at a vendor still land."""
+    if needs:
+        log.info("craft_supply: individual mode - %d reagent trip(s) wait: the "
+                 "walk to a vendor is the buyer's own errand (#2406), not the "
+                 "leader's", len(needs))
+
+
+def _individual_family(cohort=None) -> str | None:
+    """The family key individual mode is asked about (#2395): another
+    family's own key, else this bridge's own family's, else None. A family
+    that cannot be named is never individual.
+
+    NO QUERY WHILE THE SETTING NAMES NO FAMILY: the answer could not matter,
+    and this runs on every train, rhythm and supply cycle. Callers run it
+    through asyncio.to_thread, because naming this bridge's own family is a
+    database read."""
+    if not individual.families():
+        return None
+    key = getattr(cohort, "key", None)
+    if key:
+        return key
+    try:
+        return _cohort_of(bonds.head_of_family())
+    except Exception:
+        log.exception("individual mode: this bridge's family could not be named")
+        return None
 
 
 def _standing_jobs(family: str | None = None) -> dict:
@@ -8135,6 +8170,7 @@ PASSES = (
     _Pass("_craft_supply_loop"),
     _Pass("_craft_rhythm_loop"),
     _Pass("_prof_loop_loop"),
+    _Pass("_farm_loop"),
     _Pass("_forge_loop"),
     _Pass("_auction_loop"),
     _Pass("_recipebook_loop"),
@@ -8461,6 +8497,11 @@ class Bridge(discord.Client):
         # rules simply resume.
         self._activity_seen: dict = {}
         self._activity_interludes: dict = {}
+        # THE FARM JOB (#2417). Per family key ("" for this bridge's own): the
+        # order it is on, when it began, the held count it began from, the
+        # spawns already hopped to and the aim it last wrote. In memory: a
+        # restart re-reads the start from the job row and counts from there.
+        self._farm_state: dict = {}
         # Per family key, the monotonic time before which Jev is not asked
         # again: the rest after an interlude ended (ACTIVITY_REST_SECONDS).
         self._activity_rest: dict = {}
@@ -10144,10 +10185,9 @@ class Bridge(discord.Client):
 
         await self._dark_iron_once(names, cohort)
 
-        mode = craft_rhythm.standing_mode(
-            await asyncio.to_thread(_standing_jobs, getattr(cohort, "key", None)),
-            exempt=_standin_out(),
-        )
+        job_rows = await asyncio.to_thread(
+            _standing_jobs, getattr(cohort, "key", None))
+        mode = craft_rhythm.standing_mode(job_rows, exempt=_standin_out())
         # ON job='fish' THE ONE THING TO BUY IS A POLE (mod-overseer#530). The
         # fishing drive casts only with a pole in the bags, and upstream buys
         # one for random bots alone, so nobody on the roster ever owned one.
@@ -10159,7 +10199,20 @@ class Bridge(discord.Client):
                 "member(s) still need a trip", mode, queued, trips,
             )
             return
-        if mode not in (craft_rhythm.MODE_CRAFT, craft_rhythm.MODE_GATHER):
+        # INDIVIDUAL MODE (#2395): members that disagree are not a
+        # half-landed order outside a dungeon, so the members on craft or
+        # quest are bought for and the rest are left alone.
+        family = await asyncio.to_thread(_individual_family, cohort)
+        alone = individual.members_on(
+            job_rows, (craft_rhythm.MODE_CRAFT, craft_rhythm.MODE_GATHER),
+            family, exempt=_standin_out(),
+        ) if individual.active(job_rows, family) else ()
+        if alone and mode not in (craft_rhythm.MODE_CRAFT, craft_rhythm.MODE_GATHER):
+            names = [name for name in names if name in alone]
+            log.info("craft_supply: individual mode - buying for %s only",
+                     ", ".join(names))
+            mode = "individual"
+        if mode not in (craft_rhythm.MODE_CRAFT, craft_rhythm.MODE_GATHER) and not alone:
             log.info(
                 "craft_supply: the family is on job=%s rather than %s or %s, "
                 "so no reagent is bought and the traveller is left alone",
@@ -10190,7 +10243,10 @@ class Bridge(discord.Client):
         _tool_rows, tool_needs = await self._buy_gather_tools(names)
         needs = [*needs, *tool_needs]
         if not candidates and not multi_candidates:
-            await self._walk_for_hammers(needs, cohort)
+            if mode == "individual":
+                _individual_walk_waits(needs)
+            else:
+                await self._walk_for_hammers(needs, cohort)
             log.info(
                 "craft_supply: %d craft errand(s) standing on job=%s, none of "
                 "which names a vendor-bought reagent, so there is nothing to "
@@ -10304,7 +10360,9 @@ class Bridge(discord.Client):
                             name, errand.command, errand.why,
                         )
 
-        if needs:
+        if needs and mode == "individual":
+            _individual_walk_waits(needs)
+        elif needs:
             await self._walk_for_reagents(needs, cohort)
 
         # The mode is named here too, so ONE line proves the fix: `on
@@ -11014,10 +11072,9 @@ class Bridge(discord.Client):
         names = await asyncio.to_thread(_names_of, cohort)
         if not names:
             return
-        standing = craft_rhythm.standing_mode(
-            await asyncio.to_thread(_standing_jobs, getattr(cohort, "key", None)),
-            exempt=_standin_out(),
-        )
+        standing_jobs = await asyncio.to_thread(
+            _standing_jobs, getattr(cohort, "key", None))
+        standing = craft_rhythm.standing_mode(standing_jobs, exempt=_standin_out())
         skills = await asyncio.to_thread(_fetch_trade_skills, names)
         primaries = _primaries_for(cohort, names, skills)
         bags_wanted = await asyncio.to_thread(_bags_wanted_for, cohort)
@@ -11078,6 +11135,11 @@ class Bridge(discord.Client):
         # short, which sends the family out for it.
         stands = craft_rhythm.requested_stands(
             stands, await self._material_routes(names))
+        # INDIVIDUAL MODE (#2395): each member alternates on its own reagents.
+        if individual.active(
+                standing_jobs, await asyncio.to_thread(_individual_family, cohort)):
+            await self._individual_rhythm_moves(cohort, stands, standing_jobs)
+            return
         plan = craft_rhythm.rhythm(stands, standing)
         # A FAMILY IN THE PROFESSION LOOP (#2419): the loop owns its job, so
         # this pass writes none; its gathering walk still runs, but only
@@ -11392,6 +11454,72 @@ class Bridge(discord.Client):
         if mode == craft.MODE and written:
             await self._craft_once(cohort)
         return written
+
+    async def _individual_rhythm_moves(self, cohort, stands, job_by_name) -> None:
+        """Each member's own craft turn, in individual mode (#2395).
+
+        Outside a dungeon a stocked member sits down to craft while the rest
+        of its family does something else. Only that member's job row is
+        written, and only on a change. A campaign queue that owns the
+        family's job, a run in progress and a member sitting out to craft are
+        all left alone, as on the family-wide path.
+
+        THE GATHER HALF IS HELD. A follower put on job quest gathers only
+        where its leader walks until a member may roam alone
+        (quadseven/mod-overseer#1518), and a leader put on quest walks the
+        crafting members away with it. So a short member's move to gather
+        is logged and not written; it keeps its job until that ships.
+        """
+        key = getattr(cohort, "key", None)
+        label = key or "own"
+        if await asyncio.to_thread(_queue_owns_job, key):
+            log.info("craft_rhythm: family %s is individual, but its campaign "
+                     "queue owns its job, so no member's job is changed", label)
+            return
+        if await self._mid_run(sorted(job_by_name)):
+            log.info("craft_rhythm: family %s is in a dungeon run, so no "
+                     "member's job is changed", label)
+            return
+        sitting = set(_standin_out())
+        crafting = 0
+        said = getattr(self, "_individual_gather_said", None)
+        if said is None:
+            said = set()
+            self._individual_gather_said = said
+        held_now = set()
+        for name, plan in craft_rhythm.member_rhythms(stands, job_by_name):
+            if name in sitting:
+                continue
+            log.info("craft_rhythm (individual): %s: %s", name,
+                     craft_rhythm.report(plan))
+            if not plan.changed:
+                continue
+            if plan.mode != craft_rhythm.MODE_CRAFT:
+                held_now.add(name)
+                if name not in said:
+                    log.warning(
+                        "craft_rhythm (individual): %s is short of its reagents "
+                        "and stays on job=%s - the move to %s is held until a "
+                        "member may gather alone (mod-overseer#1518)",
+                        name, job_by_name.get(name), plan.mode)
+                continue
+            refusal = jobs.why_not(plan.mode)
+            if refusal:
+                log.warning("job: %s not told %s - %s", name, plan.mode, refusal)
+                continue
+            try:
+                await asyncio.to_thread(
+                    _insert_job, name, plan.mode, "overseer:craft_rhythm")
+            except Exception:
+                log.exception("job: insert failed for %s (mode=%s)", name, plan.mode)
+                continue
+            log.info("job: %s told %s by the craft rhythm (individual)", name,
+                     plan.mode)
+            crafting += plan.mode == craft_rhythm.MODE_CRAFT
+        said.intersection_update(held_now)
+        said.update(held_now)
+        if crafting:
+            await self._craft_once(cohort)
 
     async def _settle_auction_errand(self, names: list, leader: str) -> str:
         """Is the auctioneer errand the leader already carries finished?
@@ -25119,6 +25247,13 @@ class Bridge(discord.Client):
             reads["goods"], reads["recipes"])
         can_gather, can_train = await self._activity_can(names, reads["free"], own)
         job = str(leader.get("job") or "").strip().lower()
+        if jobs.is_farm_job(job):
+            # A FARM ORDER ENDS ITSELF (#2417): its count, time box or deaths
+            # put the family back on the default job, and Jev is asked again
+            # from there. Asked mid-farm, an interlude would end it early.
+            log.info("activity: %s is farming on job=%s; it is not asked until "
+                     "the farm ends", campaignqueue._family(key), job)
+            return
         now = time.monotonic()
         if await self._activity_restore_job(key, job, now, names,
                                             str(leader.get("name") or "")):
@@ -25763,6 +25898,168 @@ class Bridge(discord.Client):
             leader, aim, got.zone_id, got.map_id, got.nodes, got.skill_name,
         )
 
+    async def _farm_loop(self) -> None:
+        """The farm job's own clock (#2417).
+
+        Faster than the craft rhythm's five minutes on purpose: a hop ends on
+        arrival and the leader is idle until the next one is written, so the
+        cycle is the gap between two nodes.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("FARM_CYCLE_SECONDS", "45"))
+        while not self.is_closed():
+            try:
+                await self._farm_once()
+            except Exception:
+                log.exception("farm: pass failed; retrying next cycle")
+            await self._for_other_families("farm", self._farm_once)
+            await asyncio.sleep(cycle)
+
+    async def _farm_once(self, cohort=None) -> None:
+        """One farm decision for one family, and the one line that says it.
+
+        farmjob.decide chooses; this reads (`_farm_reads`, in one thread) and
+        acts through the paths every gathering walk already uses: the aim is
+        `travel.ground_aim` of a surveyed spawn, the column is asked for under
+        GATHER_CLAIMANT through `_claim_town_slot`, full bags hand it back with
+        `_yield_gather_aim`, and the job is ended through the family's own job
+        writer. `cohort` is another roster family (#215).
+        """
+        found = await self._farm_job_now(cohort)
+        if found is None:
+            return
+        job, names, who = found
+        item, skill = farmjob.order_of(job)
+        if not (item or skill):
+            log.info("farm: %s end: job=%s names no material", who, job)
+            await self._end_farm(cohort, job)
+            return
+        leader = await asyncio.to_thread(_family_leader, cohort)
+        if not leader:
+            log.info("farm: %s has no leader marked on the roster, so nobody is "
+                     "aimed", who)
+            return
+        state = await self._farm_state_for(cohort, job, leader)
+        got = await asyncio.to_thread(_farm_reads, names, leader, item, skill,
+                                      state["started"])
+        gathered = await self._farm_count(cohort, state, got, who)
+        step = farmjob.decide(_farm_order(job, item, skill, got["name"], state),
+                              _farm_reads_for(state, got, gathered))
+        log.info("farm: %s %s: %s", who, step.action, step.line)
+        await self._farm_act(cohort, leader, state, step, got["levels"], job)
+
+    async def _farm_job_now(self, cohort):
+        """(job, names, who) for a family on one farm order, or None.
+
+        None for a family not farming (its state is dropped), split across
+        jobs (said), or whose farm was already ended and is waiting for the
+        default job to land (said).
+        """
+        key = getattr(cohort, "key", None)
+        who = "family %s" % key if key else "this family"
+        standing = await asyncio.to_thread(_standing_jobs, key)
+        farming = sorted({job for job in standing.values() if jobs.is_farm_job(job)})
+        if not farming:
+            self._farm_state.pop(key or "", None)
+            return None
+        if len(set(standing.values())) > 1:
+            log.info("farm: %s is split across jobs %s, so no farm walk is taken "
+                     "until every member holds the same order", who,
+                     ", ".join(sorted(set(standing.values()))))
+            return None
+        state = self._farm_state.get(key or "")
+        if state is not None and state.get("job") == farming[0] and state.get("ended"):
+            log.info("farm: %s still reads job=%s after it was ended; waiting for "
+                     "the job write to land", who, farming[0])
+            return None
+        return farming[0], sorted(standing), who
+
+    async def _farm_state_for(self, cohort, job: str, leader: str) -> dict:
+        """This family's farm state for `job`, begun from the job row if new."""
+        slot = getattr(cohort, "key", None) or ""
+        state = self._farm_state.get(slot)
+        if state is None or state.get("job") != job:
+            started = await asyncio.to_thread(_farm_started, leader, job)
+            state = {"job": job, "started": started or time.time(), "baseline": None,
+                     "held": None, "visited": {}, "aim": "", "walking": None}
+            self._farm_state[slot] = state
+        return state
+
+    async def _farm_count(self, cohort, state: dict, got: dict, who: str) -> int:
+        """How many of the material the family gathered since the order began.
+
+        THE STARTING COUNT OUTLIVES A RESTART. It is kept in the bridge memo
+        store under the family, the job and the order's start, so a bridge that
+        restarts mid-farm counts from the order's start rather than from its
+        own, and a family past its target is not kept farming until the time
+        box. Logs one line per pick.
+        """
+        held = int(got["held"])
+        if state["baseline"] is None:
+            subject = "%s|%s|%d" % (getattr(cohort, "key", None) or "",
+                                     state["job"], int(state["started"]))
+            memo = (await asyncio.to_thread(_memo_read, FARM_MEMO_KIND)).get(subject)
+            if memo is not None and isinstance(memo[0], dict) and "baseline" in memo[0]:
+                state["baseline"] = int(memo[0]["baseline"])
+            else:
+                state["baseline"] = held
+                await asyncio.to_thread(
+                    _memo_upsert, FARM_MEMO_KIND, subject, {"baseline": held},
+                    state["started"], state["started"] + 2 * farmjob.TIME_BOX_SECONDS + 3600)
+        gathered = max(0, held - state["baseline"])
+        if state["held"] is not None and held > state["held"]:
+            log.info("farm: %s picked %d %s (%d gathered, %d held)", who,
+                     held - state["held"], got["name"], gathered, held)
+        state["held"] = held
+        return gathered
+
+    async def _farm_act(self, cohort, leader: str, state: dict, step, levels,
+                        job: str) -> None:
+        """Carry out one farm step through the shared gathering paths."""
+        if step.action == farmjob.END:
+            await self._yield_gather_aim("the farm job ended", cohort)
+            await self._end_farm(cohort, job)
+        elif step.action == farmjob.TOWN:
+            await self._yield_gather_aim(step.line, cohort)
+        elif step.action in (farmjob.WALK, farmjob.HOP):
+            await self._farm_walk(cohort, leader, state, step, levels)
+
+    async def _farm_walk(self, cohort, leader: str, state: dict, step, levels) -> None:
+        """Aim the leader at the spawn `step` chose, if its own ground is safe.
+
+        The field was measured as a whole; each spawn is measured again here,
+        because the elite that kills a family stands on one vein, not on the
+        zone's average. A spawn that fails is passed over for REVISIT_SECONDS.
+        """
+        spawn = step.spawn
+        state["visited"][farmjob.spawn_key(spawn)] = time.time()
+        top = await asyncio.to_thread(_gather_danger, spawn.map_id, spawn.x, spawn.y)
+        unsafe = farmjob.spawn_unsafe(top, levels)
+        if unsafe:
+            log.info("farm: spawn at %.1f,%.1f in zone %d passed over - %s",
+                     spawn.x, spawn.y, int(spawn.zone_id), unsafe)
+            return
+        aim = travel.ground_aim(spawn.map_id, spawn.x, spawn.y, spawn.z)
+        if not aim:
+            log.info("farm: the spawn at %.1f,%.1f does not make an aim that "
+                     "fits overseer_roster.travel_npc, so nobody is sent",
+                     spawn.x, spawn.y)
+            return
+        if await self._claim_town_slot(GATHER_CLAIMANT, leader, aim,
+                                       cohort=getattr(cohort, "key", None)):
+            state["aim"], state["walking"] = aim, spawn
+
+    async def _end_farm(self, cohort, job: str) -> None:
+        """Put a family off its farm job, onto the default, once."""
+        slot = getattr(cohort, "key", None) or ""
+        state = self._farm_state.setdefault(slot, {"job": job})
+        state["job"], state["ended"] = job, True
+        if cohort is None:
+            await self._set_job(core.JobDirective(mode=jobs.DEFAULT, source=FARM_SOURCE),
+                                self._rhythm_channel())
+        else:
+            await self._set_family_job(cohort, jobs.DEFAULT, FARM_SOURCE)
+
     async def _drive_skill(self, row: dict, action) -> None:
         """Turn a skill goal into a profession order, or into the sentence
         saying why there is no order to give (infra#3731).
@@ -25808,6 +26105,12 @@ class Bridge(discord.Client):
             log.info("goal: a skill goal waits - the family's campaign waits "
                      "in town on job=%s, and nobody leaves town for a field "
                      "until it goes in", jobs.TOWN_RUN)
+            return
+        # NOR WHILE IT FARMS (#2417): the farm order ends itself, and a goal
+        # writing its own job or gathering walk over it would end it early.
+        if jobs.is_farm_job(standing):
+            log.info("goal: a skill goal waits - the family is farming on "
+                     "job=%s until that order ends", standing)
             return
         # infra#3789. A GATHERED skill is answerable only with somewhere to
         # stand, and the survey that finds it is a database read - so it
@@ -26222,6 +26525,10 @@ class Bridge(discord.Client):
         if mode == raidprep.MODE:
             blocked = raidprep.readiness(await asyncio.to_thread(_raidprep_members))
             return ("Refusing to set job=raid prep. " + blocked) if blocked else ""
+        if mode == "farm":
+            # A bare farm names nothing, and farmjob would end it on its first
+            # pass: refused here so the order is not written at all (#2417).
+            return jobs.FARM_NAMES_NOTHING
         return ""
 
     async def _drive_train(self) -> None:
@@ -26251,12 +26558,35 @@ class Bridge(discord.Client):
         """
         try:
             members = await asyncio.to_thread(_train_members)
-            plan = trainjob.plan(members)
-            if not plan.traveller:
-                if trainjob.family_mode(members) == trainjob.MODE:
-                    log.warning("job train drives nothing: %s", plan.why_not)
+            # INDIVIDUAL MODE (#2395): outside a dungeon each member on job
+            # train walks to its own trainer, and nobody else's aim is
+            # cleared. Off, or linked, the one-traveller plan is unchanged.
+            family = await asyncio.to_thread(_individual_family)
+            alone = individual.active({m.name: m.job for m in members}, family)
+            # A run in progress or a campaign queue that owns the job
+            # re-links the family before any per-member aim is written. Said
+            # once per hold, not once per cycle.
+            if alone and (
+                    await asyncio.to_thread(_queue_owns_job, family)
+                    or await self._mid_run([m.name for m in members])):
+                if not getattr(self, "_individual_train_held", False):
+                    self._individual_train_held = True
+                    log.info("job train (individual): the family is on a run "
+                             "or its campaign queue owns its job - no member "
+                             "is aimed until that ends")
                 return
-            await asyncio.to_thread(_aim_train_traveller, trainjob.statements(plan))
+            self._individual_train_held = False
+            plan = trainjob.plan(members, individual=alone)
+            # Individual: also clears a trainer aim nobody needs any more.
+            statements = trainjob.statements(plan)
+            if not plan.traveller:
+                if trainjob.family_mode(members) == trainjob.MODE or (
+                        alone and any(m.job == trainjob.MODE for m in members)):
+                    log.warning("job train drives nothing: %s", plan.why_not)
+                if statements:
+                    await asyncio.to_thread(_aim_train_traveller, statements)
+                return
+            await asyncio.to_thread(_aim_train_traveller, statements)
             log.info("%s", trainjob.report(plan))
         except Exception:
             # LOUD, AND STILL NOT FATAL, for the reason infra#3173 wrote down:
@@ -32136,6 +32466,119 @@ def _epic_blocks(holder: str, command: str) -> bool:
     return False
 
 
+# A SALE THE FAMILY ENCHANTER CAN BREAK DOWN INSTEAD (#2411, #1978). Every
+# stack a sale path lets go reaches `_insert_sell`, after the keep marks and
+# the epic gate, so this is the one place a disenchantable item can be routed
+# to the enchanter rather than a vendor: `bag_pressure.disenchant_route`
+# decides, this reads its facts and writes the row. OFF UNTIL DISENCHANT_ROUTE=1:
+# a module older than the named-item disenchant ignores the row's item and
+# holds it standing, which would block that enchanter's queue, so the switch
+# is turned on only once the worldserver runs the named disenchant. Off, every
+# sale stands as before. A row this route wrote in the last
+# DISENCHANT_ROUTE_HOURS for the same item, or one still standing at any age,
+# is the answer for that item: a standing disenchant (the module waits for a
+# safe idle moment, or for skill) is not sold under it, nor rewritten every
+# pass.
+DISENCHANT_ROUTE = os.environ.get("DISENCHANT_ROUTE", "0") == "1"
+DISENCHANT_ROUTE_HOURS = 24
+DISENCHANT_ROUTE_SOURCE = "disenchant-route"
+_DISENCHANT_FACTS_SQL = (
+    "SELECT it.class AS item_class, it.Quality AS quality, "
+    "it.DisenchantID AS disenchant_id, "
+    "it.RequiredDisenchantSkill AS required_skill, "
+    "(ii.flags & 1) AS soulbound FROM item_instance ii "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE ii.guid = %s"
+)
+_FAMILY_ENCHANTERS_SQL = (
+    "SELECT r.name AS name, s.value AS skill FROM overseer_roster r "
+    "JOIN characters c ON c.name = r.name "
+    "JOIN character_skills s ON s.guid = c.guid AND s.skill = 333 "
+    "WHERE r.enabled = 1 AND r.family IS NOT NULL AND r.family <> '' "
+    "AND r.family = (SELECT r2.family FROM overseer_roster r2 WHERE r2.name = %s)"
+)
+_DISENCHANT_ROUTED_SQL = (
+    "SELECT COUNT(*) AS n FROM overseer_command "
+    "WHERE kind IN ('disenchant', 'give') AND source = %s "
+    "AND target_name = %s AND command = %s "
+    "AND (status IN ('pending', 'claimed') "
+    "OR created_at > NOW() - INTERVAL %s HOUR)"
+)
+
+
+def _disenchant_facts(item_guid: int):
+    """The core's disenchant facts for one item instance, or None unread."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_DISENCHANT_FACTS_SQL, (int(item_guid),))
+        row = cur.fetchone()
+    if not row:
+        return None
+    return bag_pressure.DisenchantFacts(
+        item_class=int(row["item_class"]),
+        quality=int(row["quality"]),
+        disenchant_id=int(row["disenchant_id"] or 0),
+        required_skill=int(row["required_skill"]),
+        soulbound=bool(int(row["soulbound"] or 0)),
+    )
+
+
+def _family_enchanters(holder: str) -> dict:
+    """{name: Enchanting skill} for the enabled enchanters of the holder's family."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_FAMILY_ENCHANTERS_SQL, (holder,))
+        return {str(r["name"]): int(r["skill"] or 0) for r in cur.fetchall()}
+
+
+def _disenchant_instead(holder: str, item_guid: int):
+    """Row id written instead of a sale, 0 when the item already has its
+    route row (no sale either), or None to let the sale stand. A database or
+    connection fault falls back to the sale, changing nothing about today's
+    behaviour; a programming error raises rather than hiding as one."""
+    if not DISENCHANT_ROUTE:
+        return None
+    try:
+        route = bag_pressure.disenchant_route(
+            holder, _disenchant_facts(item_guid), _family_enchanters(holder))
+        if route is None:
+            return None
+        kind, enchanter = route
+        command = "guid:%d" % int(item_guid)
+        if kind == bag_pressure.DISENCHANT:
+            command += " count:1"
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_DISENCHANT_ROUTED_SQL, (
+                DISENCHANT_ROUTE_SOURCE, holder, command, DISENCHANT_ROUTE_HOURS))
+            if int((cur.fetchone() or {}).get("n") or 0):
+                return 0
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (holder, command, kind,
+                 enchanter if kind == bag_pressure.GIVE_TO_ENCHANTER else "",
+                 DISENCHANT_ROUTE_SOURCE),
+            )
+            row_id = cur.lastrowid or 0
+            if kind == bag_pressure.GIVE_TO_ENCHANTER and row_id:
+                # The enchanter's half, written now: the module holds a named
+                # disenchant standing ("not owned") until the give lands, and
+                # DoGive moves the same item_instance guid.
+                cur.execute(
+                    "INSERT INTO overseer_command "
+                    "(target_name, command, kind, target_arg, source) "
+                    "VALUES (%s, %s, 'disenchant', '', %s)",
+                    (enchanter, command + " count:1", DISENCHANT_ROUTE_SOURCE),
+                )
+        log.info("economy: %s %s %s instead of selling it (enchanter %s)",
+                 holder, "disenchants" if kind == bag_pressure.DISENCHANT
+                 else "gives", command, enchanter)
+        return row_id
+    except (pymysql.err.MySQLError, OSError):
+        log.exception("disenchant route: cannot route %s's item %d, so it is "
+                      "sold as before", holder, int(item_guid))
+        return None
+
+
 def _insert_sell(candidate: bag_pressure.SellCandidate) -> int:
     """Queue one explicitly chosen stack for the world-side vendor executor."""
     command = "guid:%d count:%d" % (candidate.item_guid, candidate.count)
@@ -32144,6 +32587,9 @@ def _insert_sell(candidate: bag_pressure.SellCandidate) -> int:
         return 0
     if _epic_blocks(candidate.holder, command):
         return 0
+    routed = _disenchant_instead(candidate.holder, candidate.item_guid)
+    if routed is not None:
+        return routed
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -36983,7 +37429,42 @@ def _fetch_mail(names: list) -> list:
                 log.warning("mail: this world image has no mail tables to read")
                 return []
             raise
-        return [dict(row) for row in cur.fetchall()]
+        rows = [dict(row) for row in cur.fetchall()]
+        # A LETTER THE MAILBOX HAS NOT LOADED IS NOT WAITING (#2402): every
+        # pass plans from this read, so leaving it out here is what stops the
+        # town errand spinning its mail window on it and the gear count
+        # starting an errand for it. mailrun.unloaded_letters has the why.
+        unloaded = _unloaded_mail(cur, names, marks) if rows else frozenset()
+    _log_changed("mail", [mailrun.unloaded_note(unloaded)] if unloaded else [],
+                 key=("unloaded",) + tuple(sorted(names)), capped=False)
+    return mailrun.loaded_rows(rows, unloaded)
+
+
+_UNLOADED_MAIL_SQL = (
+    "SELECT o.target_name AS holder, o.command AS command, "
+    "UNIX_TIMESTAMP(o.created_at) AS refused, c.logout_time AS logout_time "
+    "FROM overseer_command o JOIN characters c ON c.name = o.target_name "
+    "WHERE o.kind = 'mail' AND o.status = 'error' AND o.target_name IN (%s) "
+    "AND o.created_at > NOW() - INTERVAL 30 DAY AND o.result LIKE %%s"
+)
+
+
+def _unloaded_mail(cur, names: list, marks: str) -> frozenset:
+    """(holder, mail id) of each letter its holder's mailbox has not loaded.
+
+    The takes refused `no mail with that id` in the last 30 days (a letter's
+    whole life), with each holder's logout time; mailrun.unloaded_letters
+    judges. A failed read leaves out nothing: the letters stay plannable, as
+    they were before this read existed.
+    """
+    try:
+        cur.execute(_UNLOADED_MAIL_SQL % marks,  # noqa: S608 - placeholders from a COUNT, values still bound
+                    [*names, "%" + mailrun.NOT_LOADED + "%"])
+        return mailrun.unloaded_letters(dict(row) for row in cur.fetchall())
+    except pymysql.err.MySQLError as exc:
+        log.warning("mail: the refused takes could not be read (%s); no "
+                    "letter is left out this pass", exc)
+        return frozenset()
 
 
 # THE FORGE QUERY (infra#3748), AND IT IS `_VAULT_SQL` WITH TWO CHANGES.
@@ -37070,6 +37551,139 @@ GATHER_DANGER_YARDS = 400
 # family is sent to the densest field that passes, so measuring the twentieth
 # is work about a zone nothing will choose.
 GATHER_DANGER_CANDIDATES = 5
+
+
+# THE FARM JOB'S READS (#2417). Which node spawns drop a material is the
+# world's own loot table, joined exactly: gameobject_template.Data1 is a chest's
+# loot id. Only a drop at farmjob.MIN_DROP_CHANCE or better counts, which keeps
+# the chests that sometimes hold a herb out; farmjob keeps only gathering locks.
+_FARM_ITEM_NODE_SQL = (
+    "SELECT DISTINCT g.guid AS guid, g.map AS map_id, g.zoneId AS zone_id, "
+    "g.position_x AS x, g.position_y AS y, g.position_z AS z, "
+    "gt.Data0 AS lock_id, gt.name AS name "
+    "FROM acore_world.gameobject_loot_template glt "
+    "JOIN acore_world.gameobject_template gt ON gt.Data1 = glt.Entry AND gt.type = %s "
+    "JOIN acore_world.gameobject g ON g.id = gt.entry "
+    "WHERE glt.Item = %s AND glt.Reference = 0 AND glt.Chance >= %s AND g.zoneId <> 0"
+)
+_FARM_DEATHS_SQL = (
+    "SELECT zone, map FROM overseer_death WHERE character_name IN ({marks}) "
+    "AND created_at >= FROM_UNIXTIME(%s)"
+)
+FARM_SOURCE = "overseer:farm"
+# The memo kind that keeps a farm order's starting count across a restart.
+FARM_MEMO_KIND = "farm_baseline"
+
+
+def _farm_started(leader: str, job: str) -> float:
+    """When the leader's last order for `job` was written, or 0.0."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT UNIX_TIMESTAMP(created_at) AS at FROM overseer_command "
+            "WHERE target_name = %s AND kind = 'job' AND command = %s "
+            "ORDER BY id DESC LIMIT 1",
+            (leader, job),
+        )
+        row = cur.fetchone()
+    return float(row["at"]) if row and row.get("at") is not None else 0.0
+
+
+def _farm_item_spawns(item: int) -> list:
+    """Every zoned spawn of a node that drops `item`, on every map."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_FARM_ITEM_NODE_SQL,
+                    (travel.CHEST_GO_TYPE, int(item), farmjob.MIN_DROP_CHANCE))
+        return [gatheraim.Spawn(
+            map_id=int(row["map_id"]), zone_id=int(row["zone_id"]),
+            x=float(row["x"]), y=float(row["y"]), z=float(row["z"]),
+            lock_id=int(row["lock_id"]), name=str(row["name"] or ""),
+            guid=int(row["guid"]))
+            for row in cur.fetchall()]
+
+
+def _farm_item_name(item: int) -> str:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT name FROM acore_world.item_template WHERE entry = %s",
+                    (int(item),))
+        row = cur.fetchone()
+    return str(row["name"]) if row and row.get("name") else "item %d" % int(item)
+
+
+def _farm_deaths(names: list, since: float) -> list:
+    """[(zone, map)] for every death in the family since `since`."""
+    if not names:
+        return []
+    sql = _FARM_DEATHS_SQL.format(marks=",".join(["%s"] * len(names)))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, (*names, float(since)))
+        return [(int(r["zone"] or 0), int(r["map"] or 0)) for r in cur.fetchall()]
+
+
+def _farm_order(job: str, item: int, skill: str, name: str, state: dict):
+    """The farm order, with its count and time box from the environment."""
+    return farmjob.Order(
+        job=job, item=item, skill=skill, name=name, started=state["started"],
+        target=int(os.environ.get("FARM_TARGET_COUNT", farmjob.TARGET_COUNT)),
+        time_box=60.0 * float(os.environ.get("FARM_TIME_BOX_MINUTES",
+                                             farmjob.TIME_BOX_SECONDS / 60)))
+
+
+def _farm_reads_for(state: dict, got: dict, gathered: int):
+    """farmjob.Reads from one pass's reads and this family's farm state.
+
+    The spawn this job last aimed at counts as a walk in flight only while
+    the leader's column still holds that exact aim.
+    """
+    walking = state["walking"] if state["aim"] and got["column"] == state["aim"] else None
+    return farmjob.Reads(
+        skills=got["skills"], levels=got["levels"], leader_at=got["leader_at"],
+        spawns=tuple(got["spawns"]), zone_levels=got["zone_levels"],
+        deaths=tuple(got["deaths"]), free_slots=got["free"], gathered=gathered,
+        walking=walking, visited=state["visited"], now=time.time())
+
+
+def _farm_reads(names: list, leader: str, item: int, skill: str, since: float) -> dict:
+    """Everything farmjob.decide needs for one family, in one thread.
+
+    The danger reading is the slow one (a creature scan per point), so only
+    the nearest GATHER_DANGER_CANDIDATES fields and the field the leader
+    stands in are measured; an unmeasured field is never chosen.
+    """
+    skills = _fetch_trade_skills(names)
+    leader_at = _fetch_positions([leader]).get(leader)
+    if item:
+        spawns = _farm_item_spawns(item)
+        name = _farm_item_name(item)
+        held = sum(_fetch_item_counts([(n, item) for n in names]).values())
+    else:
+        name, held = "%s skill" % skill, 0
+        best = farmjob.best_skills(skills).get(skill)
+        spawns = []
+        if best is not None and leader_at and leader_at.get("map_id") is not None:
+            spawns = _survey_job_nodes(int(leader_at["map_id"]),
+                                       farmjob.skill_locks(skill, best))
+    zone_levels = {}
+    open_, _refused = farmjob.usable(
+        farmjob.Order(job="", item=item, skill=skill), spawns, skills)
+    here = int((leader_at or {}).get("zone_id") or 0)
+    for rank, (_far, zone, _nodes, near) in enumerate(farmjob.fields(open_, leader_at)):
+        if rank >= GATHER_DANGER_CANDIDATES and zone != here:
+            continue
+        top = _gather_danger(near.map_id, near.x, near.y)
+        if top is not None:
+            zone_levels[zone] = top
+    return {
+        "skills": skills,
+        "levels": _fetch_family_levels(names),
+        "leader_at": leader_at,
+        "spawns": spawns,
+        "zone_levels": zone_levels,
+        "deaths": _farm_deaths(names, since),
+        "free": _fetch_free_slots(names),
+        "held": int(held),
+        "name": name,
+        "column": _current_travel_npc(leader),
+    }
 
 
 def _survey_gather_nodes(leader: str, lock_ids):

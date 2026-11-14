@@ -88,16 +88,16 @@ class AnUnwiredJobStandsTheQuestDriveDown(unittest.TestCase):
     def test_wiring_a_mode_moves_the_console_with_no_edit_here(self):
         """The guard that proves the line above. Widening IMPLEMENTED must
         flip the chip, the dot and the sentence together."""
-        widened = frozenset(jobs.IMPLEMENTED | {"farm"})
+        widened = frozenset(jobs.IMPLEMENTED | {"grind"})
         with mock.patch.object(jobs, "IMPLEMENTED", widened):
-            farm = next(c for c in decree.job_chips() if c["mode"] == "farm")
-            self.assertTrue(farm["wired"])
-            self.assertEqual(farm["state"], decree.WIRED)
-            self.assertNotIn("NOT BUILT YET", farm["says"])
-            self.assertFalse(decree.job_choice("farm")["stands_down"])
+            grind = next(c for c in decree.job_chips() if c["mode"] == "grind")
+            self.assertTrue(grind["wired"])
+            self.assertEqual(grind["state"], decree.WIRED)
+            self.assertNotIn("NOT BUILT YET", grind["says"])
+            self.assertFalse(decree.job_choice("grind")["stands_down"])
 
     def test_an_unwired_mode_says_it_stands_the_drive_down(self):
-        choice = decree.job_choice("farm")
+        choice = decree.job_choice("grind")
         self.assertTrue(choice["stands_down"])
         self.assertIn("only stops questing", choice["says"])
         self.assertIn("nothing in its place", choice["says"])
@@ -489,7 +489,7 @@ class WhatIsStoppingThem(unittest.TestCase):
         mode wired in mod-overseer changes the backlog without anybody
         remembering to edit prose."""
         before = decree.backlog()[-1]["what"]
-        widened = frozenset(jobs.IMPLEMENTED | {"farm"})
+        widened = frozenset(jobs.IMPLEMENTED | {"grind"})
         with mock.patch.object(jobs, "IMPLEMENTED", widened):
             after = decree.backlog()[-1]["what"]
         self.assertNotEqual(before, after)

@@ -134,6 +134,7 @@ class WhichCardGivesTheOrder(unittest.TestCase):
             {"section": "unknown"},
             {"section": decree.WILL},
             {"section": decree.JOB, "mode": "not a mode"},
+            {"section": decree.JOB, "mode": "grind"},
             {"section": decree.JOB, "mode": "farm"},
             {"section": decree.CAMPAIGN},
             {"section": decree.CAMPAIGN, "wanted": -1},
@@ -271,6 +272,11 @@ class TheStandingJob(unittest.TestCase):
         mode in mod-overseer opens this console in the same commit."""
         for mode in jobs.MODES:
             order = decree.plan_order({"section": decree.JOB, "mode": mode}, roster())
+            if mode == "farm":
+                # Wired, but a bare farm names no material (#2417).
+                self.assertEqual(order.refusal, jobs.FARM_NAMES_NOTHING)
+                self.assertEqual(order.rows, ())
+                continue
             if mode in jobs.IMPLEMENTED:
                 self.assertEqual(order.refusal, "", mode)
                 self.assertEqual(len(order.rows), 5, mode)
@@ -278,11 +284,18 @@ class TheStandingJob(unittest.TestCase):
                 self.assertEqual(order.refusal, decree.unwired_refusal(mode), mode)
                 self.assertEqual(order.rows, (), mode)
 
+    def test_a_farm_order_that_names_its_material_is_written(self):
+        for mode in ("farm:13463", "farm:mining"):
+            order = decree.plan_order({"section": decree.JOB, "mode": mode}, roster())
+            self.assertEqual(order.refusal, "", mode)
+            self.assertEqual({row.command for row in order.rows}, {mode})
+            self.assertEqual(len(order.rows), 5, mode)
+
     def test_the_refusal_opens_with_the_modules_own_sentence(self):
         """jobs.say has one author. A second copy here would be free to
         soften the stand-down warning it carries."""
-        why = decree.unwired_refusal("farm")
-        self.assertTrue(why.startswith(jobs.say("farm")))
+        why = decree.unwired_refusal("grind")
+        self.assertTrue(why.startswith(jobs.say("grind")))
         self.assertIn("not built yet", why)
 
     def test_the_refusal_no_longer_points_at_discord(self):
@@ -1022,9 +1035,9 @@ class TheEndpointFromTheOutside(unittest.TestCase):
         self.assertEqual(handler.payload["says"], jobs.say("dungeon"))
 
     def test_a_refused_order_is_a_400_and_never_reaches_a_write(self):
-        handler = order(section=decree.JOB, mode="farm")
+        handler = order(section=decree.JOB, mode="grind")
         self.assertEqual(handler.code, 400)
-        self.assertEqual(handler.payload["error"], decree.unwired_refusal("farm"))
+        self.assertEqual(handler.payload["error"], decree.unwired_refusal("grind"))
         self.mocks["_apply_order"].assert_not_called()
 
     def test_an_unknown_section_is_refused_before_the_roster_is_even_read(self):
