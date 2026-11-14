@@ -113,6 +113,14 @@ def reagents(spell: int) -> tuple:
     """Every reagent `spell` eats per cast, gathered half first."""
     spell = int(spell or 0)
     out: dict = {}
+    fed = craft_rhythm.BOLT_FED.get(spell)
+    if fed is not None:
+        weave, bolt = fed
+        out[int(bolt.entry)] = Reagent(int(bolt.entry), bolt.label, int(bolt.per_cast))
+        for r in craft_rhythm.feeds(weave):
+            out[int(r.entry)] = Reagent(
+                int(r.entry), r.label, int(r.per_cast) * int(bolt.per_cast)
+            )
     for r in craft_rhythm.feeds(spell):
         out[int(r.entry)] = Reagent(int(r.entry), r.label, int(r.per_cast))
     single = craft_supply.REAGENT.get(spell)
@@ -213,13 +221,37 @@ def plan(
     eaten = reagents(spell)
     if not eaten:
         return Plan(name, int(spell or 0))
+    fed = craft_rhythm.BOLT_FED.get(int(spell or 0))
+    bolt_entry = int(fed[1].entry) if fed is not None else 0
+    bolt_need = max(1, int(fed[1].per_cast)) if fed is not None else 0
+    bolt_have = (stock.get(bolt_entry) or Stock()) if fed is not None else Stock()
+    short_bolts = max(0, bolt_need - bolt_have.bags)
+    bolt_stored = short_bolts > 0 and (
+        bolt_have.bank >= short_bolts
+        or bolt_have.mail >= short_bolts
+        or bolt_have.guild_bank >= short_bolts
+    )
+    weave_feeds = (
+        {int(r.entry): max(1, int(r.per_cast)) for r in craft_rhythm.feeds(fed[0])}
+        if fed is not None
+        else {}
+    )
     casts = None
     shorts = []
     for reagent in eaten:
+        if reagent.entry in weave_feeds:
+            if short_bolts == 0 or bolt_stored:
+                continue
+            per = short_bolts * weave_feeds[reagent.entry]
+            reagent = Reagent(reagent.entry, reagent.label, per, reagent.vendor)
+        else:
+            per = max(1, reagent.per_cast)
         have = stock.get(reagent.entry) or Stock()
-        per = max(1, reagent.per_cast)
-        casts = have.bags // per if casts is None else min(casts, have.bags // per)
+        if reagent.entry not in weave_feeds:
+            casts = have.bags // per if casts is None else min(casts, have.bags // per)
         if have.bags >= per:
+            continue
+        if reagent.entry == bolt_entry and not bolt_stored and weave_feeds:
             continue
         source, who, why = _source(
             name, spell, reagent, have, per - have.bags, kinds, skills
