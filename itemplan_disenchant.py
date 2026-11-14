@@ -114,7 +114,7 @@ def jobs_for(
 def _skill_in(reason: str) -> int:
     """The Enchanting skill the plan's reason names ('enchanting 60 ...')."""
     words = str(reason).split()
-    for before, word in zip(words, words[1:]):
+    for before, word in zip(words, words[1:], strict=False):
         if before == "enchanting":
             return _int(word)
     return 0
