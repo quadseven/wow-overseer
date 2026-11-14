@@ -11649,17 +11649,28 @@ class Bridge(discord.Client):
     async def _prof_loop_facts(self, key: str, names: list, skills: dict,
                                errand) -> profloop.Facts:
         """Everything profloop.decide reads but the jobs; no judgement here."""
-        spells = {n: _RHYTHM_SPELLS.get(n, 0) for n in names}
+        # The rhythm's recipe first, the roster's standing craft where it chose
+        # none, so no crafter reads as recipe-less while its row names one.
+        standing = await asyncio.to_thread(_fetch_standing_crafts, names)
+        spells = profloop.choose_spells(
+            names, _RHYTHM_SPELLS, {n: v[0] for n, v in standing.items()})
         plans = await asyncio.to_thread(
-            _plan_craft_reagents, names,
-            {n: spell for n, spell in spells.items() if spell}, skills)
+            _plan_craft_reagents, names, spells, skills)
         judged = {n: p for n, p in plans.items() if p.judged}
+        seen = {
+            n: profloop.CrafterPlan(
+                spell=int(spells.get(n, 0)),
+                judged=bool(plans[n].judged) if n in plans else False,
+                casts=int(plans[n].casts) if n in plans else 0)
+            for n in names
+        }
         mail = await asyncio.to_thread(_mail_gear_holders, names)
         return profloop.Facts(
             now=time.monotonic(),
             free_slots=await asyncio.to_thread(_fetch_free_slots, names),
             mail_waiting=tuple(sorted(n for n, count in mail.items() if count)),
             casts={n: p.casts for n, p in judged.items()},
+            plans=seen,
             fetch=tuple(sorted(
                 n for n, p in judged.items() if p.shorts and all(
                     s.source in _PROF_LOOP_TOWN_SOURCES for s in p.shorts))),

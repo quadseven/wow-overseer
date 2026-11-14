@@ -336,5 +336,88 @@ class TheBridgeWiresIt(unittest.TestCase):
         )
 
 
+class CraftAndTrainReach(unittest.TestCase):
+    """#2501: the loop reached neither craft nor train on the dev realm."""
+
+    def test_one_unfed_crafter_does_not_hold_the_family_in_gather(self):
+        casts = {"Ugga": profloop.READY_CASTS, "Bork": 0, "Og": 0}
+        step = profloop.decide(
+            at(profloop.GATHER), facts(profloop.GATHER_MIN_SECONDS, casts=casts)
+        )
+        self.assertEqual(step.state.phase, profloop.CRAFT)
+        self.assertIn("Ugga", step.line)
+
+    def test_nobody_stocked_still_gathers(self):
+        casts = {"Ugga": 1, "Bork": 0}
+        step = profloop.decide(
+            at(profloop.GATHER), facts(profloop.GATHER_MIN_SECONDS, casts=casts)
+        )
+        self.assertFalse(step.moved)
+
+    def test_a_due_rank_pulls_gather_to_train_without_a_town_visit(self):
+        due = {"Uzza": (2280,)}
+        early = profloop.decide(
+            at(profloop.GATHER), facts(profloop.GATHER_TRAIN_SECONDS - 1, train_due=due)
+        )
+        self.assertFalse(early.moved)
+        step = profloop.decide(
+            at(profloop.GATHER), facts(profloop.GATHER_TRAIN_SECONDS, train_due=due)
+        )
+        self.assertEqual(step.state.phase, profloop.TRAIN)
+        self.assertEqual(step.job, "train")
+        self.assertIn("Uzza", step.line)
+
+    def test_a_full_bag_still_goes_to_town_before_a_due_rank(self):
+        slots = {n: 15 for n in FAMILY}
+        slots["Og"] = 2
+        step = profloop.decide(
+            at(profloop.GATHER),
+            facts(
+                profloop.GATHER_TRAIN_SECONDS,
+                free_slots=slots,
+                train_due={"Uzza": (2280,)},
+            ),
+        )
+        self.assertEqual(step.state.phase, profloop.TOWN)
+
+    def test_town_end_crafts_when_the_errand_just_fetched_a_crafters_reagents(self):
+        # The saved bags trail the world: vials bought and a bank withdrawal
+        # made in town are not in the database yet, so casts reads 0 for a
+        # crafter whose every short reagent is one the errand fetches.
+        step = profloop.decide(
+            at(profloop.TOWN, since=100, town_seen=True),
+            facts(1500, errand_ended=1400, casts={"Uzza": 0}, fetch=("Uzza",)),
+        )
+        self.assertEqual(step.state.phase, profloop.CRAFT)
+        self.assertIn("Uzza", step.line)
+
+    def test_town_end_without_casts_or_fetch_still_gathers(self):
+        step = profloop.decide(
+            at(profloop.TOWN, since=100, town_seen=True),
+            facts(1500, errand_ended=1400, casts={"Uzza": 0}),
+        )
+        self.assertEqual(step.state.phase, profloop.GATHER)
+
+    def test_town_end_says_why_each_crafter_was_not_counted(self):
+        plans = {
+            "Uzza": profloop.CrafterPlan(spell=2330, judged=True, casts=0),
+            "Og": profloop.CrafterPlan(spell=0, judged=False, casts=0),
+        }
+        step = profloop.decide(
+            at(profloop.TOWN, since=100, town_seen=True),
+            facts(1500, errand_ended=1400, plans=plans),
+        )
+        self.assertIn("Uzza spell 2330 judged 0 cast(s)", step.line)
+        self.assertIn("Og has no recipe chosen", step.line)
+
+    def test_a_missing_rhythm_recipe_falls_back_to_the_standing_craft(self):
+        chosen = profloop.choose_spells(
+            ["Uzza", "Og", "Bork"],
+            {"Uzza": 0, "Og": 2964},
+            {"Uzza": 2330, "Bork": 3275},
+        )
+        self.assertEqual(chosen, {"Uzza": 2330, "Og": 2964, "Bork": 3275})
+
+
 if __name__ == "__main__":
     unittest.main()
