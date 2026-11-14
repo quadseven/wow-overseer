@@ -38046,11 +38046,14 @@ def _farm_reads_for(state: dict, got: dict, gathered: int):
     the leader's column still holds that exact aim.
     """
     walking = state["walking"] if state["aim"] and got["column"] == state["aim"] else None
+    state["stand"] = farmjob.stand_update(
+        state.get("stand"), got["spawns"], got["leader_at"], time.time())
     return farmjob.Reads(
         skills=got["skills"], levels=got["levels"], leader_at=got["leader_at"],
         spawns=tuple(got["spawns"]), zone_levels=got["zone_levels"],
         deaths=tuple(got["deaths"]), free_slots=got["free"], gathered=gathered,
-        walking=walking, visited=state["visited"], now=time.time())
+        walking=walking, visited=state["visited"], now=time.time(),
+        stood_since=state["stand"][1])
 
 
 def _farm_reads(names: list, leader: str, item: int, skill: str, since: float) -> dict:
