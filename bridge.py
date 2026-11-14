@@ -10604,7 +10604,8 @@ class Bridge(discord.Client):
                                aim: str, urgent: bool = False,
                                cohort: str | None = None,
                                distance: float | None = None,
-                               priority_after: float | None = None) -> bool:
+                               priority_after: float | None = None,
+                               traveller: str | None = None) -> bool:
         """Ask for the family's one traveller, and act on the answer (infra#3703).
 
         THE ONE DOOR EVERY TOWN ERRAND NOW GOES THROUGH. Seven passes write
@@ -10654,8 +10655,16 @@ class Bridge(discord.Client):
         `distance` is how far the leader stands from a ground aim (#227). A
         held walk that stops closing is handed back here, by its owner, and
         this returns False so the pass can choose another target.
+
+        `traveller` NAMES THE ONE MEMBER AN INDIVIDUAL FAMILY WALKS ON ITS OWN
+        (#2498), read as the leader for this call: its column, its position
+        for the death discs and its aim are the member's, and `cohort` names
+        the slot that holds its lease. Everything else about the door is
+        unchanged, so the member's farm walk takes its turn like any errand.
         """
-        if cohort is None:
+        if traveller:
+            leader = traveller
+        elif cohort is None:
             leader = await asyncio.to_thread(_head_now)
         else:
             leader = await asyncio.to_thread(_cohort_leader, cohort)
@@ -10759,7 +10768,7 @@ class Bridge(discord.Client):
         `cohort` is None, a `townslot.Cohort`, or its key. Each other family
         gets its own ledger with the same leases, created on first use.
         """
-        key = getattr(cohort, "key", cohort)
+        key = getattr(cohort, "slot_key", getattr(cohort, "key", cohort))
         if not key:
             return self._town_slot
         slot = self._cohort_town_slots.get(key)
@@ -26240,6 +26249,10 @@ class Bridge(discord.Client):
         `_yield_gather_aim`, and the job is ended through the family's own job
         writer. `cohort` is another roster family (#215).
         """
+        # INDIVIDUAL MODE (#2498): each member farms for itself.
+        if not getattr(cohort, "solo", False) and individual.families():
+            if await self._farm_individual(cohort):
+                return
         found = await self._farm_job_now(cohort)
         if found is None:
             return
@@ -26263,6 +26276,83 @@ class Bridge(discord.Client):
         log.info("farm: %s %s: %s", who, step.action, step.line)
         await self._farm_act(cohort, leader, state, step, got["levels"], job)
 
+    async def _farm_individual(self, cohort) -> bool:
+        """Farm per member for an individual family; True when it did (#2498).
+
+        False hands the family back to the family-wide pass: the family is not
+        named in the setting, is linked by a dungeon or raid, or is in the
+        profession loop, which owns its job.
+
+        Each member on a farm job is run through the ordinary farm pass as a
+        family of one (individual.Solo): it reads its own skills, is walked to
+        a zone its own skill has nodes in, and ends its own order. A member on
+        a farm SKILL order is first moved to the order its own skills advance
+        (`farm:mining` for a miner, `farm:herbalism` for an herbalist), and
+        waits one pass for that job to land. The aim goes through the town slot
+        like every errand (the family's slot for the leader, who is its one
+        traveller, a slot of its own for the rest), so there is still one
+        writer for a member's travel aim.
+
+        STANDS DOWN, WRITING NOTHING, for an operator hold, a campaign queue
+        that owns the family's job and a family inside a dungeon run: the same
+        three the other per-member drives stand down for.
+        """
+        key = getattr(cohort, "key", None)
+        family = await asyncio.to_thread(_individual_family, cohort)
+        rows = await asyncio.to_thread(_standing_jobs, key)
+        if not individual.active(rows, family):
+            return False
+        looped_by = globals().get("_prof_loop_family")
+        if looped_by is not None and await asyncio.to_thread(looped_by, key):
+            return False
+        farmers = individual.farm_members(rows, family)
+        for name in sorted(rows):
+            if name not in farmers:
+                self._farm_state.pop("solo:" + name, None)
+        if not farmers:
+            return True
+        if await self._operator_held({family}, "farm"):
+            return True
+        if await asyncio.to_thread(_queue_owns_job, family) or await self._mid_run(
+                sorted(rows)):
+            log.info("farm: family %s is individual, but its campaign queue "
+                     "owns its job or it is in a dungeon run, so no member "
+                     "is farmed", family)
+            return True
+        skills = await asyncio.to_thread(_fetch_trade_skills, list(farmers))
+        moves = individual.farm_retargets(
+            rows, skills, family, exempt=_standin_out())
+        # A job write lands on the worldserver's next poll; the same order is
+        # not queued again for FARM_RETELL_SECONDS while it is on its way.
+        told = self.__dict__.setdefault("_farm_retold", {})
+        now = time.monotonic()
+        for name, mode in sorted(moves.items()):
+            if now - told.get((name, mode), -FARM_RETELL_SECONDS) < FARM_RETELL_SECONDS:
+                continue
+            refusal = jobs.why_not(mode)
+            if refusal:
+                log.warning("job: %s not told %s - %s", name, mode, refusal)
+                continue
+            try:
+                await asyncio.to_thread(_insert_job, name, mode, FARM_SOURCE)
+            except Exception:
+                log.exception("job: insert failed for %s (mode=%s)", name, mode)
+                continue
+            told[(name, mode)] = now
+            log.info("farm: %s told %s by its own skills (was %s)", name, mode,
+                     rows[name])
+        leader = await asyncio.to_thread(_family_leader, cohort)
+        for name in farmers:
+            if name in moves:
+                continue
+            solo = individual.solo_of(name, family, leader, key)
+            try:
+                await self._farm_once(solo)
+            except Exception:
+                log.exception("farm: %s's own pass failed; retrying next "
+                              "cycle", name)
+        return True
+
     async def _farm_job_now(self, cohort):
         """(job, names, who) for a family on one farm order, or None.
 
@@ -26271,22 +26361,26 @@ class Bridge(discord.Client):
         default job to land (said).
         """
         key = getattr(cohort, "key", None)
-        who = "family %s" % key if key else "this family"
-        standing = await asyncio.to_thread(_standing_jobs, key)
-        # THE ORDER COVERS THE MEMBERS IN REACH OF THE LEADER. One scattered
-        # or instanced member must not hold the family's job, bag, death and
-        # skill reads hostage; the others keep whatever they are doing.
-        leader_now = await asyncio.to_thread(_family_leader, cohort)
-        if leader_now:
-            seen = await asyncio.to_thread(_fetch_positions, sorted(standing))
-            covered = farmjob.in_reach(seen, leader_now) if seen else []
-            if covered:
-                standing = {n: j for n, j in standing.items() if n in covered}
-        # INDIVIDUAL MODE (#2498): members on different farm jobs are not a
-        # half-landed order, so the pass judges the leader's own farm group.
-        if individual.families():
-            family = await asyncio.to_thread(_individual_family, cohort)
-            standing = individual.farm_cohort(standing, leader_now, family)
+        solo = getattr(cohort, "solo", False)
+        who = ("member %s" % cohort.leader if solo
+               else "family %s" % key if key else "this family")
+        if solo:
+            # ONE MEMBER'S OWN ORDER (#2498): only its row is read, and the
+            # reach and split rules, which are about a family, do not apply.
+            rows = await asyncio.to_thread(_standing_jobs, cohort.family)
+            standing = {n: j for n, j in rows.items() if n == cohort.leader}
+        else:
+            standing = await asyncio.to_thread(_standing_jobs, key)
+            # THE ORDER COVERS THE MEMBERS IN REACH OF THE LEADER. One
+            # scattered or instanced member must not hold the family's job,
+            # bag, death and skill reads hostage; the others keep whatever
+            # they are doing.
+            leader_now = await asyncio.to_thread(_family_leader, cohort)
+            if leader_now:
+                seen = await asyncio.to_thread(_fetch_positions, sorted(standing))
+                covered = farmjob.in_reach(seen, leader_now) if seen else []
+                if covered:
+                    standing = {n: j for n, j in standing.items() if n in covered}
         farming = sorted({job for job in standing.values() if jobs.is_farm_job(job)})
         if not farming:
             self._farm_state.pop(key or "", None)
@@ -26381,8 +26475,11 @@ class Bridge(discord.Client):
                      "fits overseer_roster.travel_npc, so nobody is sent",
                      spawn.x, spawn.y)
             return
-        if await self._claim_town_slot(GATHER_CLAIMANT, leader, aim,
-                                       cohort=getattr(cohort, "key", None)):
+        solo = getattr(cohort, "solo", False)
+        if await self._claim_town_slot(
+                GATHER_CLAIMANT, leader, aim,
+                cohort=getattr(cohort, "slot_key", getattr(cohort, "key", None)),
+                traveller=leader if solo else None):
             state["aim"], state["walking"] = aim, spawn
 
     async def _end_farm(self, cohort, job: str, renew: bool = False) -> None:
@@ -35989,7 +36086,11 @@ def _other_cohorts(own_names: list) -> tuple:
 
 
 def _family_leader(cohort=None) -> str:
-    """This bridge's leader for None, or another family's, read now."""
+    """This bridge's leader for None, or another family's, read now.
+
+    An individual family's member run on its own (individual.Solo) leads itself."""
+    if getattr(cohort, "solo", False):
+        return cohort.leader
     if cohort is None:
         return _head_now()
     return _cohort_leader(cohort.key)
@@ -37984,6 +38085,7 @@ _FARM_DEATHS_SQL = (
     "AND created_at >= FROM_UNIXTIME(%s)"
 )
 FARM_SOURCE = "overseer:farm"
+FARM_RETELL_SECONDS = 300.0
 # The memo kind that keeps a farm order's starting count across a restart.
 FARM_MEMO_KIND = "farm_baseline"
 

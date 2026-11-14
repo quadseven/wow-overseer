@@ -33,7 +33,9 @@ PURE: a job map, a family key and the environment in, an answer out.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
+import farmjob
 import jobs
 
 ENV = "FAMILY_INDIVIDUAL"
@@ -95,20 +97,76 @@ def members_on(job_by_name: dict, modes, family, environ=None, exempt=()) -> tup
     return ()
 
 
-def farm_cohort(job_by_name: dict, leader, family, environ=None) -> dict:
-    """The rows the farm pass judges as one order (#2498).
+@dataclass(frozen=True)
+class Solo:
+    """One member of an individual family, run as a family of one (#2498).
 
-    Linked or unnamed families, and rows holding no farm job, are returned
-    unchanged: the old split rule applies to them. An individual family keeps
-    only the members on the leader's own farm job, or when the leader is not
-    farming, the members of the first farm job by name, so members holding
-    different farm jobs are not a half-landed order and the rest are left alone.
+    The farm pass is written for a family: a leader, its names, a town slot.
+    Handed a Solo it runs for the one member, with the member as its own
+    leader, its own state (`key`), and its own farm count. `slot_key` names
+    the town slot that arbitrates its travel column: the family's own slot for
+    the leader, who is the family's one traveller everywhere else, and a slot
+    of its own for any other member. `solo` is what the pass tests for.
     """
-    rows = dict(job_by_name or {})
-    if not active(rows, family, environ):
-        return rows
-    farming = {n: j for n, j in rows.items() if jobs.is_farm_job(j)}
-    if not farming:
-        return rows
-    pick = farming.get(leader) or farming[min(farming)]
-    return {n: j for n, j in farming.items() if j == pick}
+
+    key: str
+    leader: str
+    names: tuple
+    family: str
+    slot_key: object = None
+    solo: bool = True
+
+
+def solo_of(name, family, leader, slot_key=None) -> Solo:
+    """The family-of-one `name` is farmed as. The leader shares the family's
+    town slot (`slot_key`, None for this bridge's own family); the rest each
+    hold a slot named for themselves."""
+    who = str(name)
+    return Solo(
+        key="solo:" + who,
+        leader=who,
+        names=(who,),
+        family=str(family or ""),
+        slot_key=slot_key if who == leader else "solo:" + who,
+    )
+
+
+def farm_members(job_by_name: dict, family, environ=None, exempt=()) -> tuple:
+    """The members the farm pass drives on their own, sorted by name.
+
+    Only in an individual, unlinked family, and only members holding a farm
+    job. Anything else, including a linked or unnamed family, drives nobody
+    here: the family-wide farm pass keeps those.
+    """
+    if not active(job_by_name, family, environ):
+        return ()
+    skip = set(exempt or ())
+    return tuple(
+        sorted(
+            n
+            for n, job in job_by_name.items()
+            if n not in skip and jobs.is_farm_job(job)
+        )
+    )
+
+
+def farm_retargets(
+    job_by_name: dict, skills_by_name: dict, family, environ=None, exempt=()
+) -> dict:
+    """{member: farm job} each member on a farm SKILL order should hold.
+
+    A member told `farm:mining` whose own best node trade is herbalism is
+    moved to `farm:herbalism`. A member whose target is already its job, or
+    who has no node trade at all, is left as it is (the latter ends its own
+    order, saying why). An order for one ITEM (`farm:<entry>`) is the
+    operator's choice of material and is never rewritten.
+    """
+    out = {}
+    for name in farm_members(job_by_name, family, environ, exempt):
+        job = str(job_by_name[name]).strip().lower()
+        if not farmjob.order_of(job)[1]:
+            continue
+        want = farmjob.target_for((skills_by_name or {}).get(name))
+        if want and want != job:
+            out[name] = want
+    return out
