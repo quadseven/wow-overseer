@@ -62,10 +62,11 @@ own tables named by its id.
 WHERE MATERIALS GO. Herbs, ore, stone, bars, leather, cloth, meat and elemental
 materials a member carries go by post, one stack a letter, to the family member
 of its guild who holds the craft that uses them (alchemy for herbs, and so on),
-the highest skill first; with nobody holding it, to the guild master, whose
-guild-bank pass files them into the Materials tab (bankpolicy.py). An item
-reserved on its holder (`overseer_keep`, read through keep.py) is never posted
-or sold.
+the highest skill first, and a maintenance member posts such a stack before
+its PvP, mail and level steps (crafter_post_first, #2397); with nobody
+holding it, to the guild master, whose guild-bank pass files them into the
+Materials tab (bankpolicy.py). An item reserved on its holder (`overseer_keep`,
+read through keep.py) is never posted or sold.
 
 TRADE SPLIT. Each maintenance member takes two of the three gathering trades,
 as a guild officer would split them: whatever it already holds first, then the
@@ -90,8 +91,8 @@ its skill value. Any other crafting trade craft.py covers is cast the same
 way from what the member carries (2026-10-05). One member in five, never a
 tailor, takes Alchemy beside Herbalism (`choose_alchemists`): those are the
 alchemists guildcorps posts for the raid's potions, and before them nobody
-outside the family ever started the trade. It keeps the materials its
-next casts eat instead of posting them, and posts the rest as before. The
+outside the family ever started the trade. It keeps one batch of the
+materials its next casts eat (craft_keep, #2397) and posts the rest. The
 trainer rows are `walk-to-trainer skill:` and the casts are `cast` rows:
 what a player does, paid for at a trainer.
 
@@ -128,6 +129,7 @@ import gearup
 import guildcorps
 import guildlevel
 import guildroute
+import guineapig
 import hunterpet
 import keep
 import mountbuy
@@ -464,6 +466,8 @@ COOLDOWN_MINUTES = {
     "farm": 45,
     "door": 45,
     "craft": 15,
+    # A walk to a vendor for a recipe's vendor half (reagent_buy_step).
+    "reagent": 60,
     # A walk, a take or a hand-in toward a class quest (classquest.py).
     classquest.ACTION: 10,
     # A walk out of an outgrown zone to a quest hub (guildlevel.py).
@@ -651,6 +655,10 @@ class Member:
     # them yet; the planner trusts the take for it, and for nothing else
     # (classquest._missing_item_blocker).
     recently_taken: frozenset = frozenset()
+    # The crafting trades this member is its guild's guinea pig for
+    # (guineapig.py, #2398), set by `plan`: a new craft path staged CORPS
+    # reaches only these.
+    pig_skills: frozenset = frozenset()
     # Bag slots free in the backpack and the worn bags; None when unread, which
     # keeps no quest waiting on room (class_room_needed).
     free_slots: int | None = None
@@ -816,6 +824,8 @@ class JobsPlan:
     # yields to levelling (class_asking); the bridge logs a line when its key
     # changes.
     ask_yields: tuple = ()
+    # guild -> {skill: name} of each trade's guinea pig (guineapig.pick).
+    pigs: dict = field(default_factory=dict)
 
 
 def _yards(ax, ay, bx, by) -> float:
@@ -1350,17 +1360,55 @@ def ranks_due(level: int, money: int, skills, wanted=()) -> tuple:
 
 # The purse a recipe purchase never spends below, in copper: mod-overseer's
 # RECIPE_PURSE_FLOOR_COPPER, so an errand written here is one the trainer
-# visit can complete.
+# visit can complete. It is the floor at level 1; `recipe_purse_floor` grows
+# it with level, as mod-overseer's RecipePurseFloor does.
 RECIPE_PURSE_FLOOR = 100
+
+# THE REPAIR RESERVE, in copper per level squared: 40 silver at 20 and 3g 60s
+# at 60. A repair bill grows with the item level of what is worn, and one
+# silver (the floor alone) does not pay for a level 60 member's repair after a
+# death. mod-overseer's RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ, the same number.
+RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ = 10
+
+# A trainer visit for a trade that bought no due recipe is not repeated inside
+# this window. mod-overseer records each visit ('trainer-visit', the trade's
+# skill) and reads the recipes the member holds there with HasSpell
+# ('recipe-known'), so a held recipe stops being due after one visit. What is
+# left is a recipe the nearest trainer will not sell this member (a chain
+# whose first link is missing, a level it lacks): one visit in this window,
+# not one every bridge cycle.
+RECIPE_VISIT_RETRY_HOURS = 6
+
+
+def recipe_purse_floor(level: int) -> int:
+    """The copper a recipe purchase leaves in the purse at `level`."""
+    level = max(0, int(level or 0))
+    return max(RECIPE_PURSE_FLOOR, RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ * level * level)
 
 
 def _rungs_ahead(skill: int, value: int) -> tuple:
-    """The rungs a crafter at `value` casts now or within RANK_UP_MARGIN, and
-    for a tailor the Linen Bag its bag errand sews (craft_rhythm.bag_errand)."""
+    """Every ladder rung a crafter at `value` has not yet outgrown, lowest
+    first, and for a tailor the Linen Bag its bag errand sews
+    (craft_rhythm.bag_errand).
+
+    Not only the rung it casts now: a trainer often sells a rung below the
+    bracket it is cast in (Crimson Silk Pantaloons is sold at 195 and cast
+    from 205), and the visit that is made anyway buys it then rather than a
+    second walk later. A rung the crafter is past (`max_skill` below `value`)
+    is never asked, so nobody is sent back for one it has outgrown.
+
+    An Enchanting rung brings the Runed Rod recipe of its tier (#2411):
+    craft_rhythm makes the rod before the rung, so it is bought first.
+    """
     out = []
-    for at in (value, value + RANK_UP_MARGIN):
-        recipe = craft.recipe_for(skill, at)
-        if recipe is not None and recipe not in out:
+    for recipe in craft.RECIPES.get(skill, ()):
+        if recipe.tool and recipe.tool not in craft.TOOL_WALKS:
+            continue
+        if recipe.max_skill >= value and recipe not in out:
+            rod = craft.ROD_MADE_BY.get(recipe.tool)
+            for made in craft.ROD_RECIPES.get(skill, ()):
+                if made.spell_id == rod and made not in out:
+                    out.append(made)
             out.append(recipe)
     for bag in craft.BAG_RECIPES.get(skill, ())[:1]:
         if value >= bag.min_skill:
@@ -1368,7 +1416,7 @@ def _rungs_ahead(skill: int, value: int) -> tuple:
     return tuple(out)
 
 
-def recipes_due(level: int, money: int, skills, known, wanted=()) -> tuple:
+def recipes_due(level: int, money: int, skills, known, wanted=(), visited=()) -> tuple:
     """The held trades whose next trainer recipe this character may buy now.
 
     The recipe sibling of `ranks_due`, for a roster family member, whose
@@ -1378,33 +1426,47 @@ def recipes_due(level: int, money: int, skills, known, wanted=()) -> tuple:
     (mod-overseer#862). Without this the column was written only for a rank,
     and every family crafter stopped at its first bought rung (#769).
 
-    A trade is due when a rung it casts now or within RANK_UP_MARGIN
-    (`_rungs_ahead`) is a trainer recipe (craft.TRAINER_RECIPES) absent from
-    `known` (character_spell, where a bought recipe persists), the trainer
+    A trade is due when a ladder rung it has not outgrown (`_rungs_ahead`) is
+    a trainer recipe (craft.TRAINER_RECIPES) absent from `known`, the trainer
     teaches it at the trade's value, and the purse covers its price above
-    RECIPE_PURSE_FLOOR. `skills` is {skill id: (value, max)}; only a held
-    primary the roster names in `wanted` is asked, cheapest first.
+    `recipe_purse_floor(level)`. `known` is every recipe the bridge can show
+    the member holds: character_spell, and the worldserver's own 'learn',
+    'craft' and 'recipe-known' events. `skills` is {skill id: (value, max)};
+    a held primary the roster names in `wanted` is asked, and First Aid
+    always, as `ranks_due` asks it, since it takes no primary slot. A trade in
+    `visited` (a trainer visit for it inside RECIPE_VISIT_RETRY_HOURS) is not
+    due again yet. Cheapest first.
     """
     known = frozenset(int(s) for s in known or ())
     wanted = tuple(int(s) for s in wanted or ())
+    visited = frozenset(int(s) for s in visited or ())
+    floor = recipe_purse_floor(level)
     due = []
     for skill, (value, ceiling) in sorted((skills or {}).items()):
         skill, value, ceiling = int(skill), int(value or 0), int(ceiling or 0)
-        if ceiling <= 0 or skill not in wanted:
+        if ceiling <= 0 or skill in visited:
             continue
-        cost = _recipe_cost_due(skill, value, int(money or 0), known)
+        if skill != FIRST_AID and skill not in wanted:
+            continue
+        cost = _recipe_cost_due(skill, value, int(money or 0), known, floor)
         if cost is not None:
             due.append((cost, skill))
     return tuple(skill for _cost, skill in sorted(due))
 
 
-def _recipe_cost_due(skill: int, value: int, money: int, known) -> int | None:
+def _recipe_cost_due(
+    skill: int, value: int, money: int, known, floor: int = RECIPE_PURSE_FLOOR
+) -> int | None:
     """The price of the first unheld rung ahead that this visit can buy, or None."""
     for recipe in _rungs_ahead(skill, value):
-        if craft.holds(recipe.spell_id, known):
+        # craft.holds already answers True for a rung that is no trainer
+        # purchase (auto-learned or plan-taught); the lookup below says so
+        # itself rather than lean on that.
+        bought = craft.TRAINER_RECIPES.get(recipe.spell_id)
+        if bought is None or craft.holds(recipe.spell_id, known):
             continue
-        rank, cost = craft.TRAINER_RECIPES[recipe.spell_id]
-        if value >= rank and money >= cost + RECIPE_PURSE_FLOOR:
+        rank, cost = bought
+        if value >= rank and money >= cost + floor:
             return cost
     return None
 
@@ -1742,6 +1804,128 @@ def craft_entries(member) -> frozenset:
                 out.add(int(fed[1].entry))
                 out.update(int(r.entry) for r in craft_rhythm.GATHERED.get(fed[0], ()))
     return frozenset(out)
+
+
+def craft_keep(member) -> dict:
+    """entry -> how many of it this member keeps for one batch of its own casts.
+
+    One batch is CRAFT_BATCH casts of each open recipe (#2397): on the dev realm
+    on 2026-11-13 a First Aid member kept 26 stacks of Linen Cloth for Linen
+    Bandage while the family's crafters sat short of cloth. The rest posts.
+    """
+    out: dict = {}
+
+    def keep(entry, per_cast):
+        units = int(per_cast) * CRAFT_BATCH
+        out[int(entry)] = max(out.get(int(entry), 0), units)
+
+    for skill in CRAFT_SKILLS:
+        for recipe in _open_recipes(member, skill):
+            for r in craft_rhythm.GATHERED[recipe.spell_id]:
+                keep(r.entry, r.per_cast)
+            fed = craft_rhythm.BOLT_FED.get(recipe.spell_id)
+            if fed is not None:
+                keep(fed[1].entry, fed[1].per_cast)
+                for r in craft_rhythm.GATHERED.get(fed[0], ()):
+                    keep(r.entry, r.per_cast)
+    return out
+
+
+def _kept_for_casts(stacks, keep) -> frozenset:
+    """The guids of the stacks kept back for one batch: for each entry in
+    `keep`, the biggest stacks until they hold the batch."""
+    held: dict = {}
+    out = set()
+    for c in sorted(stacks, key=lambda c: (-int(c.count), int(c.guid))):
+        need = keep.get(int(c.entry), 0)
+        have = held.get(int(c.entry), 0)
+        if need and have < need:
+            held[int(c.entry)] = have + int(c.count)
+            out.add(int(c.guid))
+    return frozenset(out)
+
+
+def _vendor_offers(spell_id) -> tuple:
+    """(entry, name, copper each, per cast) of the vendor half of a recipe."""
+    out = [
+        (int(e), str(name), int(price), int(n))
+        for e, name, price, n in craft_supply.REAGENTS.get(int(spell_id), ())
+    ]
+    single = craft_supply.REAGENT.get(int(spell_id))
+    if single is not None and all(e != int(single[0]) for e, *_rest in out):
+        out.append((int(single[0]), str(single[1]), int(single[2]), 1))
+    return tuple(out)
+
+
+def reagent_buy_step(member, cap, stages=None):
+    """Walk to a vendor that sells the vendor half of the member's next recipe
+    and buy one batch of it, or None (#2398).
+
+    Asked when the member carries the gathered half for a cast and not the
+    vendor half: on the dev realm on 2026-11-13 every corps alchemist held
+    100+ Peacebloom and Silverleaf at Alchemy 1 with no Empty Vial, and
+    nothing bought one. A new craft path, so it reaches the trade's guinea pig
+    first (guineapig.VENDOR_REAGENTS); `stages` overrides guineapig.FEATURES.
+    """
+    for skill in CRAFT_SKILLS:
+        if not guineapig.allows(
+            guineapig.VENDOR_REAGENTS, skill, member.pig_skills, stages
+        ):
+            continue
+        for recipe in _open_recipes(member, skill):
+            gathered = craft_rhythm.GATHERED.get(recipe.spell_id, ())
+            if not gathered:
+                continue
+            casts = min(
+                CRAFT_BATCH,
+                *(
+                    member.count(int(r.entry)) // max(1, int(r.per_cast))
+                    for r in gathered
+                ),
+            )
+            if casts <= 0:
+                continue
+            for entry, name, price, per in _vendor_offers(recipe.spell_id):
+                if member.count(entry) >= per:
+                    continue
+                count = casts * per - member.count(entry)
+                if price > 0:
+                    count = min(count, int(member.money) // price)
+                if count <= 0:
+                    continue
+                return guildcorps.Step(
+                    member.name,
+                    "reagent",
+                    entry,
+                    "%s walks to a vendor to buy %d %s for %s, its %s guinea "
+                    "pig trial"
+                    % (
+                        member.name,
+                        count,
+                        name,
+                        recipe.name,
+                        SKILL_NAMES.get(skill, skill),
+                    )
+                    if skill in member.pig_skills
+                    else "%s walks to a vendor to buy %d %s for %s"
+                    % (member.name, count, name, recipe.name),
+                    rows=(
+                        guildcorps.Row(
+                            "buy",
+                            "entry:%d count:%d max:%d"
+                            % (entry, count, guildcorps._ceiling(price * count)),
+                            "",
+                            source_for("reagent", member.name),
+                        ),
+                    ),
+                    walk=guildcorps.Row(
+                        "buy",
+                        "walk-to-vendor item:%d%s" % (entry, _cap_word(cap)),
+                        "",
+                        source_for("reagent-walk", member.name),
+                    ),
+                )
+    return None
 
 
 def _craft_step(member):
@@ -3019,10 +3203,12 @@ def postable(member: Member, kept, crafting=False, bar=None) -> list:
     """
     if bar is None:
         bar = POST_MIN.get(member.role, POST_MIN[RAIDER])
-    # Materials its own next casts eat stay in the bags: a member that can
-    # still raise a crafting trade does not post away what it would cast.
-    eaten = (
-        craft_entries(member) if member.role == MAINTENANCE or crafting else frozenset()
+    # Materials its own next casts eat stay in the bags, one batch of them
+    # (craft_keep, #2397): a member that can still raise a crafting trade does
+    # not post away what it would cast, and posts the rest.
+    keep_for = craft_keep(member) if member.role == MAINTENANCE or crafting else {}
+    held = _kept_for_casts(
+        [c for c in member.carried if c.material and not c.junk], keep_for
     )
     out = [
         c
@@ -3030,7 +3216,7 @@ def postable(member: Member, kept, crafting=False, bar=None) -> list:
         if c.material
         and not c.junk
         and int(c.count) >= bar
-        and int(c.entry) not in eaten
+        and int(c.guid) not in held
         and not _kept(member.name, c, kept)
     ]
     out.sort(key=lambda c: (-int(c.count), int(c.entry), int(c.guid)))
@@ -3055,7 +3241,9 @@ def worth_its_postage(item) -> bool:
     return vendorsale.worth((item,)) >= POST_VALUE_MULT * POSTAGE_COPPER
 
 
-def _post_step(member, crafters, master, kept, cap, crafting=False, bar=None):
+def _post_step(
+    member, crafters, master, kept, cap, crafting=False, bar=None, crafter_first=False
+):
     stacks = postable(member, kept, crafting, bar)
     # Only the role's own bar asks a letter to be worth its postage; a
     # make-room post (bar given) clears the bags whatever the stack is worth.
@@ -3067,6 +3255,12 @@ def _post_step(member, crafters, master, kept, cap, crafting=False, bar=None):
                 "for a full stack" % member.name
             )
         stacks = worth
+    if crafter_first:
+        # The early post (crafter_post_first): stacks a family crafter takes go
+        # ahead of the letter and postage cuts, so bigger bank stacks cannot
+        # crowd them out (review 5898374497 on #2409).
+        mine = crafters.get(member.guild, {})
+        stacks = sorted(stacks, key=lambda c: not recipient_for(c, mine, "")[0])
     stacks = stacks[:MAX_LETTERS]
     if not stacks:
         return None, ""
@@ -3103,6 +3297,40 @@ def _post_step(member, crafters, master, kept, cap, crafting=False, bar=None):
         ),
     )
     return step, ""
+
+
+def crafter_post_first(m, crafters, master, kept, recent, cap, crafting=False):
+    """The post of what a family crafter of its guild can use now, for a
+    maintenance member (or a craft-focus member), ahead of PvP, the mail
+    collection and the level walk (#2397), or None.
+
+    On the dev realm on 2026-11-13 the family's crafters sat short of Linen,
+    Wool and Silk Cloth while the corps carried 1,500 linen and 270 silk: the
+    post was the last rung of a member's turn and was rarely reached. Stacks
+    only the guild bank takes do not start the early post, but ride along in
+    the same stand once it goes."""
+    if m.role != MAINTENANCE and not crafting:
+        return None
+    if not m.online or not m.alive or m.in_combat or not m.eligible:
+        return None
+    if _cooling(m, "post", recent):
+        return None
+    step, _why = _post_step(
+        m, crafters, master, kept, cap, crafting, crafter_first=True
+    )
+    # Decided on the letters the step writes: it goes early only when one of
+    # them carries a crafter's stack, never on bank stacks alone or on a
+    # crafter stack the postage bar dropped. By item, not by recipient, since
+    # the guild master may hold a craft too.
+    if step is None:
+        return None
+    mine = crafters.get(m.guild, {})
+    wanted = {
+        "send item:%d subject:%s" % (int(c.guid), POST_SUBJECT)
+        for c in m.carried
+        if c.material and recipient_for(c, mine, "")[0]
+    }
+    return step if any(r.command in wanted for r in step.rows) else None
 
 
 def loot_room_short(member) -> bool:
@@ -3513,6 +3741,10 @@ def _maintenance_step(
             return step, step.said, ""
         if why:
             notes.append(why)
+    if not _cooling(m, "reagent", recent):
+        step = reagent_buy_step(m, cap)
+        if step:
+            return step, step.said, ""
     if not _cooling(m, "craft", recent):
         step = _craft_step(m)
         if step:
@@ -3720,6 +3952,13 @@ def plan(
     doors = doors or {}
     busy = {str(n) for n in busy or ()}
     pending = {str(n) for n in pending or ()}
+    # THE GUINEA PIGS (#2398): one test crafter per trade and guild, marked on
+    # the member so a new craft path staged CORPS reaches only them.
+    pigs = guineapig.pick(members)
+    members = [
+        replace(m, pig_skills=guineapig.skills_of(pigs, m.guild, m.name))
+        for m in members
+    ]
     tailors = choose_tailors(members)
     alchemists = choose_alchemists(members, tailors, recent)
     cooks = choose_cooks(members, recent, tailors, alchemists)
@@ -3853,6 +4092,7 @@ def plan(
         released=released,
         yields=class_yields(members, classes, recent),
         ask_yields=tuple(ask_yields),
+        pigs=pigs,
     )
 
 
@@ -4383,6 +4623,9 @@ def _member_step(
     )
     if found is not None:
         return found
+    step = crafter_post_first(m, crafters, master, kept, recent, cap, crafting)
+    if step is not None:
+        return step, step.said, supply_note, gear_note
     step, cap_note = _tier_cap_first(m, pvp, pending, recent, cap)
     if step is not None:
         return step, step.said, supply_note, gear_note

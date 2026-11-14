@@ -2052,6 +2052,160 @@ def bag_candidates(
 
 
 # ---------------------------------------------------------------------------
+# AN EPIC A GUILD MEMBER COULD WEAR IS NEVER SOLD OR DESTROYED (#2385)
+#
+# Read on the dev realm on 2026-11-13: the families sold 16 bind-on-equip
+# classic epics of required level 36 to 48 to vendors in ten days, because the
+# family-fit gate asks only the five members of a family, all at 60, and a
+# level 44 epic fits none of them. Both family guilds held every class, many
+# members below that level. The operator's rule: an epic or better is kept
+# while any member of either guild could EVER wear it (the class can use the
+# armour or weapon type at the level cap, and the required level is at most
+# the cap), and it is the gear routing's to place. Only an epic nobody in the
+# guilds could ever equip may be disenchanted or sold.
+#
+# A SOULBOUND EPIC CAN ONLY EVER BE ITS HOLDER'S, so for one the holder's
+# class is the question; the guilds' classes answer it when that was not read.
+#
+# FAIL CLOSED: an unread item fact, or no guild classes at all, keeps it.
+#
+# A BIND-ON-EQUIP RARE THAT IS SOMEBODY'S UPGRADE IS KEPT TOO (#2389). Read on
+# the dev realm on 2026-11-13: since 2026-10-30 the families sold 183
+# bind-on-equip rares of required level 60 or below, for the same reason the
+# epics went. The operator's rule: a quality 3 piece is kept when its copy is
+# still bind-on-equip (a soulbound rare keeps today's behaviour), a class in
+# either guild could wear it, AND some guild member would wear it over what
+# they wear now. That last question is the equip judge's (equipscore.choose,
+# which imports this module), so the caller hands it in as `upgrade`: a
+# callable from the row to the members who would wear it, () for nobody, or
+# None when it could not read, which keeps the rare. Without a judge a rare is
+# not this rule, as before.
+EPIC_QUALITY = 4
+RARE_QUALITY = 3
+GUILD_LEVEL_CAP = 60
+
+
+def _read_int(value):
+    """The integer `value` holds, or None when it holds none."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _epic_wearer_classes(row: dict, guild_classes) -> frozenset:
+    classes = frozenset(
+        c for c in (_read_int(v) for v in (guild_classes or ())) if c and c > 0
+    )
+    flags = _read_int(row.get("instance_flags")) or 0
+    holder_class = _read_int(row.get("holder_class")) or 0
+    if flags & _INSTANCE_SOULBOUND and holder_class > 0:
+        return frozenset({holder_class})
+    return classes
+
+
+def _class_could_ever_wear(holding, class_id: int) -> bool:
+    character = gear.CharacterState("", int(class_id), GUILD_LEVEL_CAP)
+    return bool(
+        gear.usable_by_class(holding, int(class_id))
+        and gear.wearable_armor(holding, character)
+        and gear.class_wields(holding, character)
+    )
+
+
+def _rare_in_question(row: dict, quality: int, upgrade) -> bool:
+    """Is this a quality 3 copy the rare rule asks about: a judge was given,
+    and the copy is still bind-on-equip? An unread binding is asked about."""
+    if quality != RARE_QUALITY or upgrade is None:
+        return False
+    flags = _read_int(row.get("instance_flags")) or 0
+    if flags & _INSTANCE_SOULBOUND:
+        return False
+    bonding = _read_int(row.get("bonding"))
+    return bonding is None or _BONDING.get(bonding) == disposition.BIND_ON_EQUIP
+
+
+def epic_kept(row: dict, guild_classes, upgrade=None) -> bool:
+    """Is this an epic or better that some guild member could ever wear, or
+    a bind-on-equip rare a guild member would wear over what they wear now?
+
+    `row` carries the item's `quality`, `required_level`, `item_class`,
+    `subclass`, `inventory_type` and `allowable_class`, and for the soulbound
+    case `instance_flags` and `holder_class`; a rare also `bonding`.
+    `guild_classes` is every class (item_template class id) among the roster
+    families and their guilds' members. `upgrade(row)` names the members who
+    would wear a rare (None when unread); it is asked only after every other
+    gate passes. True means the item must not be sold, destroyed or
+    disenchanted.
+    """
+    quality = _read_int(row.get("quality"))
+    if quality is None:
+        return True
+    rare = _rare_in_question(row, quality, upgrade)
+    if quality < EPIC_QUALITY and not rare:
+        return False
+    item_class = _read_int(row.get("item_class"))
+    inventory_type = _read_int(row.get("inventory_type"))
+    required_level = _read_int(row.get("required_level"))
+    if item_class is None or inventory_type is None or required_level is None:
+        return True
+    if item_class not in EQUIPMENT_CLASSES or inventory_type == 0:
+        return False
+    if required_level > GUILD_LEVEL_CAP:
+        return False
+    classes = _epic_wearer_classes(row, guild_classes)
+    if not classes:
+        return True
+    if not _could_be_worn(row, quality, item_class, inventory_type, classes):
+        return False
+    if rare:
+        wanted = upgrade(row)
+        return wanted is None or bool(wanted)
+    return True
+
+
+def _could_be_worn(row, quality, item_class, inventory_type, classes) -> bool:
+    """Could some class among `classes` ever wear this piece at the cap?"""
+    required_level = _read_int(row.get("required_level")) or 0
+    allowable = _read_int(row.get("allowable_class"))
+    subclass = _read_int(row.get("subclass"))
+    holding = gear.Holding(
+        holder="",
+        guid=0,
+        entry=_read_int(row.get("entry")) or 0,
+        name=str(row.get("name") or ""),
+        quality=quality,
+        item_level=_read_int(row.get("item_level")) or 0,
+        required_level=required_level,
+        allowable_class=-1 if allowable is None else allowable,
+        inventory_type=inventory_type,
+        item_class=item_class,
+        item_subclass=gear.SUBCLASS_UNSTATED if subclass is None else subclass,
+    )
+    return any(_class_could_ever_wear(holding, c) for c in classes)
+
+
+def epic_kept_line(row: dict, holder: str, wanted_by=None) -> str:
+    """The one log line a refused sale of a kept epic or rare writes.
+    `wanted_by` names who would wear a kept rare, when the judge said.
+
+    It says only what is true today: the gear routing executor
+    (gearroutingexec.py) runs as a dry run, so a kept piece stays where it is
+    until a hand-off pass moves it.
+    """
+    what = "an epic a guild member can wear"
+    if (_read_int(row.get("quality")) or 0) < EPIC_QUALITY:
+        what = "a bind-on-equip rare that is an upgrade for %s" % (
+            ", ".join(wanted_by) if wanted_by else "a guild member"
+        )
+    return "kept %s: %s; it stays in %s's bags until gear routing places it" % (
+        row.get("name") or "item %s" % row.get("item_guid"),
+        what,
+        holder,
+    )
+
+
+# ---------------------------------------------------------------------------
 # THE FAMILY-FIT GATE, TRANSLATED (infra#3449)
 #
 # gear.py answers in names because that is what a hand-off needs: WHO should
@@ -3026,3 +3180,79 @@ def wear_reason(holding, character) -> tuple:
     if character.name == holding.holder:
         return gear.would_wear(holding, character)
     return gear.is_upgrade_for(holding, character)
+
+
+# ---------------------------------------------------------------------------
+# A SALE THE ENCHANTER CAN BREAK DOWN INSTEAD (#2411, #1978). Both family
+# enchanters stood at Enchanting 1 on 2026-11-13 with no dust at all, while
+# the sale paths walked disenchantable greens to vendors every day. Every
+# Enchanting rung (craft.RECIPES) eats dust, essence or shards, and only
+# disenchanting makes them. So a stack a sale path has already chosen to let go
+# is offered to the enchanter first:
+#
+#   the holder IS an enchanter whose skill reaches the item  -> disenchant it
+#   a bind-on-equip item another family member can break down -> give it to
+#     that enchanter (the next pass, its holder, disenchants it)
+#   anything else (soulbound off the enchanter, skill too low,
+#     not gear, wrong quality, no DisenchantID)               -> the sale stands
+#
+# It runs AFTER `_epic_blocks` and the keep marks in the bridge, so it never
+# widens what may leave the guild: it only changes where a stack that is
+# already leaving goes. The core's own CheckCast gate is copied exactly
+# (Spell::CheckItems, SPELL_EFFECT_DISENCHANT): weapon or armour, quality
+# uncommon to epic, a DisenchantID, and RequiredDisenchantSkill at or below the
+# caster's Enchanting, where -1 means it can never be broken down.
+DISENCHANT = "disenchant"
+GIVE_TO_ENCHANTER = "give"
+DISENCHANT_CLASSES = frozenset({2, 4})  # weapon, armour
+DISENCHANT_QUALITIES = frozenset({2, 3, 4})  # uncommon, rare, epic
+
+
+@dataclass(frozen=True)
+class DisenchantFacts:
+    """What the core reads about one item before it lets anyone disenchant it.
+
+    `soulbound` is item_instance.flags bit 1. Every field is required: an
+    unread item is not routed and its sale stands.
+    """
+
+    item_class: int
+    quality: int
+    disenchant_id: int
+    required_skill: int
+    soulbound: bool
+
+
+def disenchantable(facts: DisenchantFacts, skill: int) -> bool:
+    """Would the core let a caster at Enchanting `skill` break this down?"""
+    return (
+        facts.item_class in DISENCHANT_CLASSES
+        and facts.quality in DISENCHANT_QUALITIES
+        and facts.disenchant_id > 0
+        and 0 <= facts.required_skill <= int(skill or 0)
+    )
+
+
+def disenchant_route(holder: str, facts, enchanters: dict):
+    """(kind, enchanter) for a stack a sale path chose, or None to sell it.
+
+    `enchanters` is {name: Enchanting skill} for the enchanters in the
+    holder's own family; the holder is one of them when it is an enchanter.
+    `facts` None (unread) keeps the sale. The highest skill wins a give, and a
+    name breaks a tie, so the answer never depends on dict order.
+    """
+    if facts is None:
+        return None
+    if disenchantable(facts, enchanters.get(holder, 0)):
+        return DISENCHANT, holder
+    if facts.soulbound:
+        return None
+    able = sorted(
+        (
+            name
+            for name, skill in enchanters.items()
+            if name != holder and disenchantable(facts, skill)
+        ),
+        key=lambda name: (-int(enchanters[name]), name),
+    )
+    return (GIVE_TO_ENCHANTER, able[0]) if able else None

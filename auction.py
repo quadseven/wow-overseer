@@ -393,14 +393,18 @@ def reachable_house(team: str, auctioneer_faction: int) -> int:
 
 
 def auctioneer_map_available(
-    map_id: int | None, available_maps: set[int] | frozenset[int]
+    map_id: int | None,
+    available_maps: set[int] | frozenset[int],
+    zone_id: int | None = None,
 ) -> bool:
     """Whether an auctioneer trip can resolve on the leader's current map.
 
     Never on Outland or Northrend: the classic ruleset sends nobody to an
-    auctioneer there, whatever the caller read as available.
+    auctioneer there, whatever the caller read as available. A leader in a
+    starting land (`zone_id`, classic.outside_at) is not in Outland; with no
+    zone read, map 530 is.
     """
-    if map_id is None or classic.is_expansion_map(map_id):
+    if map_id is None or classic.outside_at(map_id, zone_id):
         return False
     return int(map_id) in {int(value) for value in available_maps}
 
@@ -478,6 +482,7 @@ def house_trip(
     far: bool = True,
     town_yards: float = TOWN_COUNTER_WALK_YARDS,
     max_yards: float = HOUSE_TRIP_MAX_YARDS,
+    zone_id=None,
 ) -> HouseTrip:
     """The auction house of `team`'s side to walk the family to. Pure.
 
@@ -489,7 +494,7 @@ def house_trip(
     town-service walk, so the module walks it, and still refuses a counter
     that will not deal with the character.
     """
-    if map_id is None or classic.is_expansion_map(map_id):
+    if map_id is None or classic.outside_at(map_id, zone_id):
         return HouseTrip(
             why_not="the classic ruleset sends nobody to an auctioneer here"
         )

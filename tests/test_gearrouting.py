@@ -14,6 +14,7 @@ import unittest
 import gearrouting as gr
 
 MAP_SERVER = pathlib.Path(__file__).resolve().parents[1] / "map_server.py"
+READ = pathlib.Path(__file__).resolve().parents[1] / "gearroutingread.py"
 
 WARRIOR, ROGUE = 1, 4
 HUMAN = 1
@@ -457,20 +458,12 @@ class TheSiteServesIt(unittest.TestCase):
         """A routing read without the template's bonding and the
         instance's flags cannot tell a movable copy from a bound one,
         which is the whole safety of the pass."""
-        block = self.src[
-            self.src.index("_ROUTING_WEARERS = (") : self.src.index(
-                "def _fetch_guild_routing"
-            )
-        ]
+        block = READ.read_text(encoding="utf-8")
         self.assertIn("it.bonding AS bonding", block)
         self.assertIn("ii.flags AS instance_flags", block)
 
     def test_the_read_covers_every_guild_member_not_only_the_families(self):
-        block = self.src[
-            self.src.index("_ROUTING_WEARERS = (") : self.src.index(
-                "def _fetch_guild_routing"
-            )
-        ]
+        block = READ.read_text(encoding="utf-8")
         self.assertIn("guild_member", block)
 
 

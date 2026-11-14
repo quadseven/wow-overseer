@@ -19,6 +19,7 @@ import bag_pressure  # noqa: E402
 import craft  # noqa: E402
 import craft_rhythm  # noqa: E402
 import craft_supply  # noqa: E402
+import individual  # noqa: E402
 import jobs  # noqa: E402
 import materials  # noqa: E402
 import townslot  # noqa: E402
@@ -234,6 +235,8 @@ def _rhythm_self(world, log):
             "log": log,
             "_protected_guids": lambda: {1: "Grug"},
             "_queue_owns_job": world.queue_owns_job,
+            "individual": individual,
+            "_individual_family": lambda cohort=None: None,
             "_standing_jobs": world.standing_jobs,
             # Nobody sits out to craft (standin.py).
             "_standin_out": frozenset,
@@ -328,6 +331,7 @@ class TheCraftErrandIsWrittenForAnotherFamily(unittest.TestCase):
                 "_guild_bag_floor_for": lambda cohort=None: None,
                 "_fetch_item_counts": lambda pairs: {("Oz", BOLT): 3},
                 "_fetch_crafters_known": lambda names: {},
+                "_plan_craft_reagents": lambda names, spells, skills: {},
                 "_write_craft_errand": lambda name, spell: written.append(
                     (name, spell)
                 ),
