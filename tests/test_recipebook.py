@@ -870,11 +870,9 @@ class TheClassNineTriage(unittest.TestCase):
     def test_classify_class9_and_report_lists_three_groups_per_member(self):
         held = [
             recipebook.Held(
-                "Ugga", 1, 13492, "Recipe: Greater Arcane Elixir", 171, 250, 17573
+                "Ugga", 1, 13493, "Recipe: Greater Arcane Elixir", 171, 285, 17573
             ),
-            recipebook.Held(
-                "Ugga", 2, 17059, "Plans: Dark Iron Plate", 164, 300, 20890
-            ),
+            recipebook.Held("Ugga", 2, 12835, "Plans: Annihilator", 164, 300, 16991),
             recipebook.Held(
                 "Grug",
                 3,

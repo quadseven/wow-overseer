@@ -12867,8 +12867,12 @@ class Bridge(discord.Client):
         seen = await asyncio.to_thread(_recent_recipe_keys, GIVE_RETRY_MINUTES)
 
         held = await asyncio.to_thread(_fetch_held_recipes, names)
+        member_classes, member_levels = await asyncio.to_thread(_fetch_recipe_member_meta, names)
         log.info("%s", recipebook.class9_report(recipebook.classify_class9(held, skills)))
-        learns, skipped = recipebook.plan_learns(held, skills, settled, seen)
+        learns, skipped = recipebook.plan_learns(
+            held, skills, settled, seen,
+            member_classes=member_classes, member_levels=member_levels,
+        )
 
         queued = 0
         for learn in learns:
@@ -41074,6 +41078,29 @@ _RECIPE_SKILL_SQL = (
 )
 
 
+_RECIPE_MEMBER_META_SQL = "SELECT name, class, level FROM characters WHERE name IN (%s)"
+
+
+def _fetch_recipe_member_meta(names: list) -> tuple[dict, dict]:
+    """Return `(member_classes, member_levels)` from `characters` for `names`."""
+    if not names:
+        return {}, {}
+    sql = _RECIPE_MEMBER_META_SQL % ",".join(["%s"] * len(names))  # noqa: S608 - placeholders from a COUNT, values still bound
+    classes: dict = {}
+    levels: dict = {}
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+            rows = cur.fetchall()
+        except pymysql.err.MySQLError:
+            return {}, {}
+    for row in rows or ():
+        name = row["name"]
+        classes[name] = int(row["class"] or 0)
+        levels[name] = int(row["level"] or 0)
+    return classes, levels
+
+
 def _fetch_recipe_skills(names: list) -> dict:
     """`{name: {skill_id: value}}` for the whole of `character_skills`.
 
@@ -41152,8 +41179,6 @@ def _fetch_held_recipes(names: list) -> list:
             required_skill=int(row["required_skill"] or 0),
             required_rank=int(row["required_rank"] or 0),
             recipe_spell=int(row["recipe_spell"] or 0),
-            allowable_class=int(row["allowable_class"] if row.get("allowable_class") is not None else -1),
-            required_level=int(row["required_level"] or 0),
         )
         for row in rows
     ]
@@ -41212,8 +41237,6 @@ def _fetch_recipe_listings(houses: list) -> list:
             required_skill=int(row["required_skill"] or 0),
             required_rank=int(row["required_rank"] or 0),
             recipe_spell=int(row["recipe_spell"] or 0),
-            allowable_class=int(row["allowable_class"] if row.get("allowable_class") is not None else -1),
-            required_level=int(row["required_level"] or 0),
         )
         for row in rows
     ]
