@@ -307,6 +307,14 @@ class TheTankAudit(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertIsNone(payload["tank_audit"])
 
+    def test_an_unreadable_known_spell_row_leaves_the_audit_null(self):
+        # One row whose spell cannot be read must not sink the raid read
+        # (a 503), and a partial spellbook must not be judged complete.
+        grug = _rows("Cave")[0]["name"]
+        for bad in (None, "x"):
+            known = [{"name": grug, "spell": bad}]
+            self.assertIsNone(self._payload(known=known)["tank_audit"])
+
 
 if __name__ == "__main__":
     unittest.main()

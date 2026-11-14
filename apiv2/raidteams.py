@@ -278,7 +278,11 @@ def _tank_audit(seats: list, fetched: dict) -> dict | None:
             return None
     known_by_name: dict = {}
     for row in known_rows:
-        known_by_name.setdefault(row.get("name"), set()).add(int(row["spell"]))
+        try:
+            spell = int(row["spell"])
+        except (KeyError, TypeError, ValueError):
+            return None  # a spellbook that cannot be read is not judged
+        known_by_name.setdefault(row.get("name"), set()).add(spell)
     return tankaudit.audit_tanks(flat, trainer, known_by_name)
 
 
