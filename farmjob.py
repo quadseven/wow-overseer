@@ -265,9 +265,13 @@ def usable(order, spawns, skills) -> tuple:
     )
 
 
-def fields(spawns, leader_at) -> list:
+def fields(spawns, leader_at, visited=None, now=0.0) -> list:
     """[(yards to the nearest spawn, zone id, nodes, nearest spawn)] on the
-    leader's map, nearest field first and the densest breaking a tie."""
+    leader's map, nearest field first and the densest breaking a tie.
+
+    The spawn named for a field is the nearest one not tried within
+    REVISIT_SECONDS (`visited`), so a spawn the travel column refused is not
+    asked for again every pass; when every spawn was tried, the nearest."""
     if not leader_at or leader_at.get("map_id") is None:
         return []
     here = int(leader_at["map_id"])
@@ -282,7 +286,13 @@ def fields(spawns, leader_at) -> list:
         per_zone.setdefault(int(spawn.zone_id), []).append(spawn)
     out = []
     for zone, rows in per_zone.items():
-        near = min(rows, key=lambda s: gatheraim.yards(s, origin))
+        fresh = [
+            r
+            for r in rows
+            if now - (visited or {}).get(spawn_key(r), -REVISIT_SECONDS)
+            >= REVISIT_SECONDS
+        ]
+        near = min(fresh or rows, key=lambda s: gatheraim.yards(s, origin))
         out.append((gatheraim.yards(near, origin), zone, len(rows), near))
     out.sort(key=lambda r: (r[0], -r[2], r[1]))
     return out
@@ -396,7 +406,7 @@ def _hop(open_, reads, what, standing):
 def _where(open_, reads, what):
     """WALK to the nearest safe field, WAIT on a walk in flight, or HOP."""
     here = int(reads.leader_at["map_id"])
-    candidates = fields(open_, reads.leader_at)
+    candidates = fields(open_, reads.leader_at, reads.visited or {}, float(reads.now))
     if not candidates:
         maps = sorted({int(s.map_id) for s in open_})
         return Step(
