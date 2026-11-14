@@ -171,6 +171,10 @@ class State:
     # The errand was released because its walk never landed (#2116): the next
     # one may start after UNLANDED_RETRY_SECONDS, not the whole cooldown.
     unlanded: bool = False
+    # The nearest the leader has stood to the hub on this walk, and when (the
+    # GO stall bound). Negative `go_best` means no reading yet.
+    go_best: float = -1.0
+    go_best_at: float = 0.0
 
     @property
     def active(self) -> bool:
@@ -240,6 +244,18 @@ def should_start(
     if state.active or in_run:
         return ""
     if loop_why:
+        # A WALK THAT NEVER LANDED IS NOT ASKED FOR AGAIN AT ONCE. The loop
+        # re-asks on every cycle while a member sits under its bag target, and
+        # this branch used to skip the unlanded backoff below, so the next
+        # errand re-took the family's one travel column the cycle after the
+        # last one gave it up, and the ordinary sale trip was refused it for
+        # hours (wow-dev 2026-11-14, 1200s walks back to back).
+        if (
+            state.unlanded
+            and state.ended
+            and now - state.ended < LOOP_UNLANDED_RETRY_SECONDS
+        ):
+            return ""
         return loop_why
     cooldown = FLOOR_SALE_COOLDOWN_SECONDS if floor_sale else COOLDOWN_SECONDS
     if state.unlanded:
@@ -491,6 +507,17 @@ def _bound_at(hub: dict, bind) -> bool:
 DID_NOT_LAND = "did not land"
 # How soon an errand whose walk never landed may be tried again, at another aim.
 UNLANDED_RETRY_SECONDS = 300.0
+# The profession loop's errand, after a walk that never landed, waits this
+# long: several cycles of the ordinary sale pass (300s each), which then has
+# the traveller to itself.
+LOOP_UNLANDED_RETRY_SECONDS = 1800.0
+# A walk whose leader gained less than GO_PROGRESS_YARDS toward the hub in
+# GO_STALL_SECONDS is not walking: the module is holding him still (a regroup
+# for a straggler, a hold of its own) and waiting out the whole GO_SECONDS
+# keeps the column from every other pass. The module's own regroup hold yields
+# to an errand after 300s, so this is longer than that.
+GO_STALL_SECONDS = 600.0
+GO_PROGRESS_YARDS = 20.0
 AIM_MEMORY_SECONDS = 4 * 3600.0
 # Two aims this close on one map are the same aim (a town square's counters).
 AIM_SAME_YARDS = 120.0
@@ -716,6 +743,7 @@ def advance(
     stalled: float = 0.0,
     bag_pressure_needed: bool = False,
     bag_room_made: bool = False,
+    hub_yards: float | None = None,
 ) -> tuple:
     """The next state and one sentence about what changed ('' when nothing).
 
@@ -764,6 +792,22 @@ def advance(
                 now,
                 "the walk to the capital %s in %ds" % (DID_NOT_LAND, int(GO_SECONDS)),
             )
+        if hub_yards is not None and now >= state.hearth_until:
+            if state.go_best < 0 or hub_yards <= state.go_best - GO_PROGRESS_YARDS:
+                state = replace(state, go_best=hub_yards, go_best_at=now)
+            elif now - state.go_best_at >= GO_STALL_SECONDS:
+                return end(
+                    state,
+                    now,
+                    "the walk to the capital %s: the leader, %d yards out, "
+                    "gained no %d yards in %ds"
+                    % (
+                        DID_NOT_LAND,
+                        int(hub_yards),
+                        int(GO_PROGRESS_YARDS),
+                        int(now - state.go_best_at),
+                    ),
+                )
         return state, ""
     if state.phase == GATHER:
         if gathered:
@@ -805,3 +849,18 @@ def in_range(spot, standing, yards: float) -> bool:
     except (TypeError, ValueError):
         return False
     return dx * dx + dy * dy <= float(yards) ** 2
+
+
+def yards_to(spot, standing):
+    """Planar yards from a settled reading to the spot, or None on another map
+    or an unreadable position."""
+    if not spot or not standing:
+        return None
+    try:
+        if int(spot.get("map_id")) != int(standing.get("map_id")):
+            return None
+        dx = float(spot.get("x")) - float(standing.get("pos_x"))
+        dy = float(spot.get("y")) - float(standing.get("pos_y"))
+    except (TypeError, ValueError):
+        return None
+    return (dx * dx + dy * dy) ** 0.5
