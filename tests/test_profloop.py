@@ -216,6 +216,29 @@ class OneOwner(unittest.TestCase):
         self.assertEqual(step.job, "")
         self.assertIn("joined -> craft", step.line)
 
+    def test_joining_on_quest_writes_the_farm_job(self):
+        step = profloop.decide(profloop.State(), facts(10, gather_job="farm:mining"))
+        self.assertEqual(step.state.phase, profloop.GATHER)
+        self.assertEqual(step.job, "farm:mining")
+        self.assertGreater(step.state.asserted, 0)
+
+    def test_a_family_on_quest_is_set_to_the_farm_job_while_gathering(self):
+        state = at(profloop.GATHER, since=0.0)
+        step = profloop.decide(state, facts(11 * 60, gather_job="farm:mining"))
+        self.assertEqual(step.job, "farm:mining")
+        self.assertIn("quest", step.line)
+
+    def test_a_family_already_on_the_farm_job_is_left_alone(self):
+        step = profloop.decide(
+            at(profloop.GATHER),
+            facts(
+                11 * 60,
+                gather_job="farm:mining",
+                jobs={n: "farm:mining" for n in FAMILY},
+            ),
+        )
+        self.assertEqual(step.job, "")
+
     def test_joining_on_another_job_gathers(self):
         step = profloop.decide(
             profloop.State(), facts(10, jobs={n: "raid prep" for n in FAMILY})

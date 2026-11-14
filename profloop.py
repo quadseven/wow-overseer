@@ -201,11 +201,17 @@ def phase_job(phase: str, facts: Facts) -> str:
     return ""
 
 
-def _held(phase: str, job: str) -> bool:
-    """Whether `job` on a member is what `phase` expects there."""
+def _held(phase: str, job: str, gather: str = "quest") -> bool:
+    """Whether `job` on a member is what `phase` expects there.
+
+    GATHER wants a farm job when the loop has one to name: a member left on
+    `quest` is on the council and leveling drives, which walk to quest givers
+    and never to a node, so it is not gathering."""
     job = str(job or "").strip().lower()
     if phase == GATHER:
-        return job == "quest" or job.startswith("farm:")
+        if job.startswith("farm:"):
+            return True
+        return job == "quest" and not str(gather or "").startswith("farm:")
     if phase == TOWN:
         return job in ("quest", jobs.TOWN_RUN)
     if phase == CRAFT:
@@ -282,7 +288,7 @@ def _stay(state: State, facts: Facts) -> Step:
     wrong = sorted(
         "%s=%s" % (name, job or "nothing")
         for name, job in (facts.jobs or {}).items()
-        if not _held(state.phase, job)
+        if not _held(state.phase, job, facts.gather_job)
     )
     job = phase_job(state.phase, facts)
     if not wrong or not job or facts.now - state.asserted < REASSERT_SECONDS:
@@ -310,7 +316,9 @@ def _join(state: State, facts: Facts) -> Step:
             moved=True,
         )
     step = _move(state, facts, phase, "joined the loop on its current job")
-    if facts.jobs and all(_held(phase, j) for j in facts.jobs.values()):
+    if facts.jobs and all(
+        str(j or "").strip().lower() == step.job for j in facts.jobs.values()
+    ):
         step = replace(step, job="", state=replace(step.state, asserted=0.0))
     return step
 
