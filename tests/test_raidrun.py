@@ -43,6 +43,42 @@ class TheKeywordIsAnOrderAndNeverAPlan(unittest.TestCase):
         self.assertTrue(jobs.is_raid_job("raid:moltencore"))
         self.assertFalse(jobs.is_raid_job("raid prep"))
 
+
+class TheOrderUsesItsRaidLineupRules(unittest.TestCase):
+    def test_molten_core_uses_the_forty_seat_lineup(self):
+        lineup, short = raidrun.lineup_for_order("moltencore", GUILD, ["Grug"])
+        self.assertEqual("", short)
+        self.assertEqual(40, sum(len(group["members"]) for group in lineup["groups"]))
+        self.assertIn(
+            "Grug",
+            [
+                member["name"]
+                for group in lineup["groups"]
+                for member in group["members"]
+            ],
+        )
+
+    def test_upper_spire_uses_its_ten_seat_lineup_and_reports_shortfall(self):
+        family = ["Tank", "Heal", "Mage", "Rogue", "Shaman"]
+        guild = [
+            {"name": "Tank", "level": 60, "class_id": 1, "spec": "Protection"},
+            {"name": "Heal", "level": 60, "class_id": 5, "spec": "Holy"},
+            {"name": "Mage", "level": 60, "class_id": 8, "spec": ""},
+            {"name": "Rogue", "level": 60, "class_id": 4, "spec": ""},
+            {"name": "Shaman", "level": 60, "class_id": 7, "spec": "Restoration"},
+            {"name": "Heal2", "level": 60, "class_id": 5, "spec": "Holy"},
+            {"name": "Mage2", "level": 60, "class_id": 8, "spec": ""},
+            {"name": "Lock", "level": 60, "class_id": 9, "spec": ""},
+            {"name": "Hunter", "level": 60, "class_id": 3, "spec": ""},
+            {"name": "Rogue2", "level": 60, "class_id": 4, "spec": ""},
+        ]
+        lineup, short = raidrun.lineup_for_order("ubrs", guild, family)
+        self.assertEqual(10, sum(len(group["members"]) for group in lineup["groups"]))
+        self.assertEqual("", short)
+        too_small, short = raidrun.lineup_for_order("ubrs", guild[:5], family)
+        self.assertEqual(0, sum(len(group["members"]) for group in too_small["groups"]))
+        self.assertTrue(short)
+
     def test_the_job_fits_the_column(self):
         # overseer_roster.job is VARCHAR(32) since mod-overseer's job_width.
         for keyword in jobs.RAID_KEYWORDS:
@@ -217,6 +253,51 @@ class TheSeatsAreTheLineup(unittest.TestCase):
         self.assertIn(("Grug", "moltencore", "T0", 0, "tank", "main tank"), with_duty)
 
 
+class TheSeatsNeedCurrentEligibility(unittest.TestCase):
+    def test_every_selected_member_must_be_online_and_at_least_level_fifty(self):
+        """An all-ready selected lineup produces no refusal."""
+        lineup = raidlineup.build_lineup(GUILD, guaranteed=["Grug"])
+        rows = [dict(member, online=1) for member in GUILD]
+        self.assertEqual(
+            "", raidrun.seat_eligibility_refusal("moltencore", lineup, rows)
+        )
+
+    def test_offline_seat_refuses_with_count_and_name(self):
+        """The refusal identifies an offline selected raider."""
+        lineup = raidlineup.build_lineup(GUILD, guaranteed=["Grug"])
+        rows = [dict(member, online=1) for member in GUILD]
+        rows[0]["online"] = 0
+        refusal = raidrun.seat_eligibility_refusal("moltencore", lineup, rows)
+        self.assertIn("1 of 40", refusal)
+        self.assertIn("Grug (offline)", refusal)
+
+    def test_under_level_seat_refuses_with_count_and_level(self):
+        """The refusal names the level floor for an ineligible raider."""
+        lineup = raidlineup.build_lineup(GUILD, guaranteed=["Grug"])
+        rows = [dict(member, online=1) for member in GUILD]
+        rows[0]["level"] = 49
+        refusal = raidrun.seat_eligibility_refusal("moltencore", lineup, rows)
+        self.assertIn("1 of 40", refusal)
+        self.assertIn("Grug (level 49; needs 50)", refusal)
+
+    def test_missing_current_row_refuses_with_count_and_name(self):
+        """A selected name without a fresh character row is unavailable."""
+        lineup = raidlineup.build_lineup(GUILD, guaranteed=["Grug"])
+        rows = [dict(member, online=1) for member in GUILD if member["name"] != "Grug"]
+        refusal = raidrun.seat_eligibility_refusal("moltencore", lineup, rows)
+        self.assertIn("Grug (no current character row)", refusal)
+        self.assertIn("1 of 40", refusal)
+
+    def test_unselected_guild_member_does_not_block_the_approved_lineup(self):
+        """Eligibility applies to selected seats, not the guild reserve pool."""
+        lineup = raidlineup.build_lineup(GUILD, guaranteed=["Grug"])
+        extra = {"name": "Reserve", "level": 1, "online": 0}
+        rows = [dict(member, online=1) for member in GUILD] + [extra]
+        self.assertEqual(
+            "", raidrun.seat_eligibility_refusal("moltencore", lineup, rows)
+        )
+
+
 def _function(name):
     tree = ast.parse(BRIDGE)
     for node in ast.walk(tree):
@@ -228,11 +309,19 @@ def _function(name):
 DOOR = {"map": 0, "x": -7510.87, "y": -1035.87}
 
 
-def _load_drive_raid(events, members, missing_table=False, missing_duty=False):
+def _load_drive_raid(
+    events, members, missing_table=False, missing_duty=False, current_rows=None
+):
     """bridge._drive_raid, run for real against fakes that record order."""
     source = "\n\n".join(
         ast.get_source_segment(BRIDGE, _function(name))
-        for name in ("_withheld", "_log_raid_arrivals", "_drive_raid")
+        for name in (
+            "_withheld",
+            "_raid_seat_eligibility",
+            "_write_raid_seats",
+            "_log_raid_arrivals",
+            "_drive_raid",
+        )
     )
 
     class MissingTable(Exception):
@@ -244,6 +333,10 @@ def _load_drive_raid(events, members, missing_table=False, missing_duty=False):
                 if missing_table:
                     raise MissingTable(1146, "Table doesn't exist")
                 events.append(("seat", sql.split()[0], args))
+            elif sql.startswith(
+                "SELECT c.name, c.level, c.online FROM characters c WHERE"
+            ):
+                events.append(("eligibility", args))
             else:
                 events.append(("read", args))
 
@@ -255,6 +348,8 @@ def _load_drive_raid(events, members, missing_table=False, missing_duty=False):
             events.append(("seat", sql.split()[0], list(rows)))
 
         def fetchall(self):
+            if events and events[-1][0] == "eligibility":
+                return list(members if current_rows is None else current_rows)
             return list(members)
 
     class Conn:
@@ -288,7 +383,7 @@ def _load_drive_raid(events, members, missing_table=False, missing_duty=False):
 
 
 GUILD = [
-    {"name": n, "level": 60, "class_id": c, "race": 1}
+    {"name": n, "level": 60, "class_id": c, "race": 1, "online": 1}
     for n, c in (
         [("Grug", raidlineup.WARRIOR)]
         + [("W%d" % i, raidlineup.WARRIOR) for i in range(8)]
@@ -300,6 +395,7 @@ GUILD = [
 
 class TheBridgeWritesSeatsThenTheJob(unittest.TestCase):
     def test_seats_are_replaced_before_any_job_is_written(self):
+        """The complete lineup is persisted before the raid job is created."""
         events = []
         drive = _load_drive_raid(events, GUILD)
         withheld = []
@@ -308,12 +404,48 @@ class TheBridgeWritesSeatsThenTheJob(unittest.TestCase):
         self.assertEqual([], withheld)
         kinds = [e[0] for e in events]
         self.assertEqual("read", kinds[0])
-        self.assertEqual(("seat", "DELETE", ("Grug", "moltencore")), events[1])
+        self.assertEqual("eligibility", kinds[1])
+        delete_index = kinds.index("seat")
+        self.assertEqual(
+            ("seat", "DELETE", ("Grug", "moltencore")), events[delete_index]
+        )
         inserts = [e for e in events if e[0] == "seat" and e[1] == "INSERT"]
         self.assertEqual(1, len(inserts), "the forty seats are one statement")
         self.assertEqual(40, len(inserts[0][2]))
         self.assertEqual(("job", "Grug", "raid:moltencore"), events[-1])
         self.assertLess(kinds.index("seat"), kinds.index("job"))
+
+    def test_offline_approved_member_refuses_before_any_write(self):
+        """The bridge does not delete or insert seats for an offline member."""
+        rows = [dict(member) for member in GUILD]
+        rows[0]["online"] = 0
+        events = []
+        withheld = []
+        drive = _load_drive_raid(events, GUILD, current_rows=rows)
+        self.assertEqual(0, drive("moltencore", "Grug", ["Grug"], "q", withheld))
+        self.assertIn("Grug (offline)", withheld[0])
+        self.assertFalse(any(event[0] in {"seat", "job"} for event in events))
+
+    def test_under_level_approved_member_refuses_before_any_write(self):
+        """The bridge does not write a lineup below the raid level floor."""
+        rows = [dict(member) for member in GUILD]
+        rows[0]["level"] = 49
+        events = []
+        withheld = []
+        drive = _load_drive_raid(events, GUILD, current_rows=rows)
+        self.assertEqual(0, drive("moltencore", "Grug", ["Grug"], "q", withheld))
+        self.assertIn("Grug (level 49; needs 50)", withheld[0])
+        self.assertFalse(any(event[0] in {"seat", "job"} for event in events))
+
+    def test_missing_current_row_refuses_before_any_write(self):
+        """The bridge fails closed if a selected character row disappears."""
+        rows = [member for member in GUILD if member["name"] != "Grug"]
+        events = []
+        withheld = []
+        drive = _load_drive_raid(events, GUILD, current_rows=rows)
+        self.assertEqual(0, drive("moltencore", "Grug", ["Grug"], "q", withheld))
+        self.assertIn("Grug (no current character row)", withheld[0])
+        self.assertFalse(any(event[0] in {"seat", "job"} for event in events))
 
     def test_each_seat_carries_its_duty(self):
         events = []
@@ -564,13 +696,17 @@ class TheArrivalOrderNamesHowEachRaiderComes(unittest.TestCase):
         self.assertIn("Lock walks", line)
 
     def test_the_drive_logs_the_order_after_the_seats(self):
+        """Arrival reporting runs only after the selected seats are written."""
         drive = BRIDGE[BRIDGE.index("def _drive_raid(") :]
         drive = drive[: drive.index("\ndef ")]
+        writer = BRIDGE[BRIDGE.index("def _write_raid_seats(") :]
+        writer = writer[: writer.index("\ndef ")]
         self.assertIn("_log_raid_arrivals(cur, keyword, seats)", drive)
         self.assertLess(
-            drive.index("raidrun.INSERT_SEAT_SQL"),
+            drive.index("_write_raid_seats(cur"),
             drive.index("_log_raid_arrivals(cur"),
         )
+        self.assertIn("raidrun.INSERT_SEAT_SQL", writer)
         self.assertIn("raidrun.arrival_line(", BRIDGE)
 
     def test_the_run_line_says_the_order_is_logged_not_yet_carried_out(self):

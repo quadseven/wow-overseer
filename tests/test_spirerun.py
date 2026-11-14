@@ -317,8 +317,9 @@ class TheBridgeWiring(unittest.TestCase):
         self.assertLess(spire, step)
 
     def test_the_raid_writer_seats_the_ten_and_not_forty(self):
+        """The shared writer delegates its raid shape to the pure module."""
         source = (HERE / "bridge.py").read_text(encoding="utf-8")
-        self.assertIn("spirerun.lineup(members, list(names))", source)
+        self.assertIn("raidrun.lineup_for_order(keyword, members, names)", source)
 
     def test_the_family_at_the_floor_is_written_once_with_the_modules_source(self):
         source = (HERE / "bridge.py").read_text(encoding="utf-8")
