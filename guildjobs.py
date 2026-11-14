@@ -1364,7 +1364,7 @@ def ranks_due(level: int, money: int, skills, wanted=()) -> tuple:
 # it with level, as mod-overseer's RecipePurseFloor does.
 RECIPE_PURSE_FLOOR = 100
 
-# THE REPAIR RESERVE, in copper per level squared: 36 silver at 20 and 3g 60s
+# THE REPAIR RESERVE, in copper per level squared: 40 silver at 20 and 3g 60s
 # at 60. A repair bill grows with the item level of what is worn, and one
 # silver (the floor alone) does not pay for a level 60 member's repair after a
 # death. mod-overseer's RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ, the same number.
