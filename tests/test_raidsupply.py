@@ -1337,6 +1337,38 @@ class TheAlchemistsPace(unittest.TestCase):
         self.assertIn("s.level_60_line", raid)
 
 
+class StockpileTargetsAndHerbs(unittest.TestCase):
+    def test_new_mc_consumables_in_supplies_with_sources(self):
+        by_entry = rs.SUPPLY_BY_ENTRY
+        arcane = by_entry[13454]
+        self.assertEqual(arcane.name, "Greater Arcane Elixir")
+        self.assertEqual(arcane.per_role, (0, 0, 0, 1))
+        self.assertIsNotNone(arcane.make)
+        self.assertEqual(arcane.make.spell, 17573)
+        self.assertEqual(
+            arcane.make.reagents, ((rs.DREAMFOIL, 3), (rs.MOUNTAIN_SILVERSAGE, 1))
+        )
+        self.assertIn("285", arcane.source)
+
+        giants = by_entry[9206]
+        self.assertEqual(giants.name, "Elixir of Giants")
+        self.assertEqual(giants.per_role, (0, 0, 1, 0))
+        self.assertEqual(giants.make.spell, 11472)
+        self.assertEqual(giants.make.reagents, ((rs.SUNGRASS, 1), (rs.GROMSBLOOD, 1)))
+        self.assertEqual(giants.make.recipe_item, 9298)
+        self.assertIn("9298", giants.source)
+
+        stone = by_entry[13455]
+        self.assertEqual(stone.name, "Greater Stoneshield Potion")
+        self.assertEqual(stone.per_role, (1, 0, 0, 0))
+        self.assertEqual(stone.make.spell, 17570)
+        self.assertEqual(
+            stone.make.reagents, ((rs.STONESCALE_OIL, 2), (rs.THORIUM_ORE, 1))
+        )
+        self.assertEqual(stone.make.recipe_item, 13490)
+        self.assertIn("13490", stone.source)
+
+
 class TopRecipesTracking(unittest.TestCase):
     def test_card_tracks_top_recipes_as_acquired_or_not_per_family(self):
         card = rs.card(
