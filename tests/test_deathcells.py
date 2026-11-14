@@ -16,6 +16,7 @@ import deathcells as dc
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (ROOT / "bridge.py").read_text(encoding="utf-8")
+NEXT_DEF = chr(10) + "def "
 
 
 def row(x, y, z=128.0, liquid="magma", killer="self", fell=0.0, map_id=0):
@@ -143,7 +144,7 @@ class RefusingAnAim(unittest.TestCase):
             dc.aim_refusal(discs, STORMWIND, "at:0:-8700.0,700.0,96.0"), ""
         )
 
-    def test_a_keyword_aim_is_not_judged_here(self):
+    def test_a_keyword_aim_with_no_known_spawn_is_not_judged(self):
         discs = dc.discs(LAVA)
         self.assertEqual(dc.aim_refusal(discs, STORMWIND, "vendor"), "")
 
@@ -269,9 +270,104 @@ class TheDoorRuns(unittest.TestCase):
         got, _calls = self.go("", "at:0:1.0,2.0,3.0")
         self.assertEqual(got, "reached")
 
-    def test_a_keyword_aim_is_never_judged(self):
-        got, _calls = self.go("crosses lava", "vendor")
-        self.assertEqual(got, "reached")
+    def test_a_keyword_aim_is_judged_like_a_ground_aim(self):
+        got, calls = self.go("crosses lava", "vendor")
+        self.assertIs(got, False)
+        self.assertEqual(calls, [])
+
+
+class KeywordAimsAreJudgedToo(unittest.TestCase):
+    """A keyword aim (forge, vendor, trainer, banker, innkeeper...) names a
+    role, not ground, and the worldserver walks to the nearest holder. The
+    bridge looks that holder up, and the same line check judges the walk."""
+
+    BEHIND_THE_LAVA = {"map_id": 0, "x": -6800.0, "y": -2450.0}
+    ON_THE_SAME_SIDE = {"map_id": 0, "x": -8700.0, "y": 700.0}
+
+    def setUp(self):
+        self.discs = dc.discs(LAVA)
+
+    def test_every_role_the_module_resolves_has_a_flag_but_the_dead_one(self):
+        import travel
+
+        missing = set(travel.ROLES) - set(dc.KEYWORD_FLAGS) - {"guild banker"}
+        self.assertEqual(missing, set())
+
+    def test_the_flags_are_the_worlds_npc_flags(self):
+        self.assertEqual(dc.keyword_mask("vendor"), 128)
+        self.assertEqual(dc.keyword_mask("bank"), 131072)  # an alias
+        self.assertEqual(dc.keyword_mask("trainer"), 16)
+        self.assertEqual(dc.keyword_mask("guild master"), 262144 | 524288)
+
+    def test_a_ground_aim_a_node_aim_and_nonsense_have_no_mask(self):
+        self.assertEqual(dc.keyword_mask("at:0:1,2,3"), 0)
+        self.assertEqual(dc.keyword_mask("flight master:123"), 0)
+        self.assertEqual(dc.keyword_mask("nowhere"), 0)
+        self.assertEqual(dc.keyword_mask(""), 0)
+
+    def test_a_vendor_past_the_lava_is_refused_and_says_so(self):
+        why = dc.aim_refusal(
+            self.discs, STORMWIND, "vendor", spawn=self.BEHIND_THE_LAVA
+        )
+        self.assertIn("vendor", why)
+        self.assertIn("4 lava deaths", why)
+
+    def test_a_vendor_on_the_same_side_is_clear(self):
+        self.assertEqual(
+            dc.aim_refusal(
+                self.discs, STORMWIND, "vendor", spawn=self.ON_THE_SAME_SIDE
+            ),
+            "",
+        )
+
+    def test_a_trainer_banker_and_innkeeper_are_judged_alike(self):
+        for aim in (
+            "trainer",
+            "banker",
+            "innkeeper",
+            "profession trainer",
+            "auctioneer",
+        ):
+            with self.subTest(aim=aim):
+                got = dc.aim_refusal(
+                    self.discs, STORMWIND, aim, spawn=self.BEHIND_THE_LAVA
+                )
+                self.assertIn("died on", got)
+
+    def test_a_member_is_judged_by_the_spawn_its_own_walk_ends_at(self):
+        here = {
+            "Og": {"map_id": 0, "x": -8200.0, "y": -700.0},
+            "Ugga": {"map_id": 0, "x": -8700.0, "y": 700.0},
+        }
+        spawns = {
+            "Og": {"map_id": 0, "x": -7400.0, "y": -1100.0},
+            "Ugga": {"map_id": 0, "x": -8650.0, "y": 650.0},
+        }
+        refused = dc.member_aim_refusals(
+            self.discs, here, ["Og", "Ugga"], "trainer", spawns=spawns
+        )
+        self.assertIn("Og", refused)
+        self.assertNotIn("Ugga", refused)
+
+    def test_the_bridge_looks_the_holder_up_for_a_keyword_aim(self):
+        body = BRIDGE.split("def _death_disc_refusal", 1)[1].split(NEXT_DEF, 1)[0]
+        self.assertIn("_nearest_keyword_spawn", body)
+        members = BRIDGE.split("def _member_death_disc_refusals", 1)[1].split(
+            NEXT_DEF, 1
+        )[0]
+        self.assertIn("_nearest_keyword_spawn", members)
+
+    def test_the_door_no_longer_gates_the_check_on_a_ground_prefix(self):
+        door = BRIDGE.split("async def _claim_town_slot", 1)[1].split(
+            "def _cohort_town_slot", 1
+        )[0]
+        gate = door.split("refuse = globals().get", 1)[1].split("column =", 1)[0]
+        self.assertNotIn('startswith("at:")', gate)
+
+    def test_the_holder_read_fails_open_and_says_so(self):
+        reader = BRIDGE.split("def _nearest_keyword_spawn", 1)[1].split(NEXT_DEF, 1)[0]
+        self.assertIn("MySQLError", reader)
+        self.assertIn("log.warning", reader)
 
 
 if __name__ == "__main__":
@@ -303,7 +399,7 @@ class EveryMemberIsCheckedFromItsOwnPlace(unittest.TestCase):
             {}, dc.member_aim_refusals(discs, {}, ["Og"], "at:0:-7400,-1100,100")
         )
 
-    def test_a_keyword_aim_names_no_ground_and_is_not_refused(self):
+    def test_a_keyword_aim_with_no_known_spawn_is_not_refused(self):
         discs = dc.discs(LAVA)
         here = {"Og": {"map_id": 0, "x": -8200.0, "y": -700.0}}
         self.assertEqual({}, dc.member_aim_refusals(discs, here, ["Og"], "trainer"))
