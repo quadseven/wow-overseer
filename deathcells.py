@@ -257,6 +257,78 @@ def member_aim_refusals(all_discs, positions, names, aim, spawns=None) -> dict:
     return out
 
 
+# A STANDING AIM IS RE-JUDGED AFTER A DEATH (#2539). Two deaths of the family
+# this close to the line of a walk, or to where it ends, in this many minutes,
+# close the aim whoever killed them: a hostile that sits on the road is as
+# final as lava, and the discs above only ever hear of lava and falls.
+REPEAT_DEATHS = 2
+REPEAT_MINUTES = 30
+WALK_MARGIN_YARDS = 250.0
+GOAL_MARGIN_YARDS = 400.0
+
+RECENT_SQL = (
+    "SELECT character_name AS name, map AS map_id, pos_x AS x, pos_y AS y, "
+    "killer_type, killer_name FROM overseer_death "
+    "WHERE created_at > NOW() - INTERVAL %s MINUTE "
+    "AND character_name IN ({marks})"
+)
+
+
+def deaths_on_walk(deaths, here, goal) -> list:
+    """The death rows on the line `here` -> `goal`, or within GOAL_MARGIN_YARDS
+    of `goal`, on the walk's own map."""
+    a, b = _point(here), _point(goal)
+    if a is None or b is None or a[0] != b[0]:
+        return []
+    out = []
+    for d in deaths or ():
+        p = _point(d)
+        if p is None or p[0] != a[0]:
+            continue
+        spot = Disc(p[0], p[1], p[2], 0.0, "", 1)
+        if (
+            math.hypot(p[1] - b[1], p[2] - b[2]) <= GOAL_MARGIN_YARDS
+            or _to_segment(spot, a, b) <= WALK_MARGIN_YARDS
+        ):
+            out.append(d)
+    return out
+
+
+def standing_aim_refusal(all_discs, deaths, here, aim, spawn=None) -> str:
+    """Why an aim already standing must be released, or "".
+
+    The discs judge it as they would a new aim, and so do the recent deaths of
+    the family: REPEAT_DEATHS of them on the walk close it. `deaths` None is an
+    unreadable table and releases nothing.
+    """
+    why = aim_refusal(all_discs, here, aim, spawn=spawn)
+    if why:
+        return why
+    if deaths is None:
+        return ""
+    ground = places.parse_ground_aim(aim)
+    if ground:
+        goal = {"map_id": ground[0], "x": ground[1], "y": ground[2]}
+        what = aim
+    elif spawn and keyword_mask(aim):
+        goal = spawn
+        what = "the nearest %s" % travel.resolve(aim)
+    else:
+        return ""
+    hits = deaths_on_walk(deaths, here, goal)
+    if len(hits) < REPEAT_DEATHS:
+        return ""
+    killers = sorted(
+        {str(d.get("killer_name") or d.get("killer_type") or "?") for d in hits}
+    )
+    return "%d deaths of the family on the walk to %s in the last %d minutes (%s)" % (
+        len(hits),
+        what,
+        REPEAT_MINUTES,
+        ", ".join(killers),
+    )
+
+
 def pick_quest(all_discs, here, order, ends) -> tuple:
     """(quest id or 0, one note per quest passed over).
 
