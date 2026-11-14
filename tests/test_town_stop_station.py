@@ -106,6 +106,7 @@ class ThePass(unittest.TestCase):
             "_family_of": lambda *_: (["Lead", "Kin"], "Lead"),
             "_fetch_positions": lambda names: {"Lead": {"map_id": 0}},
             "_nearest_forge": lambda name: spawn,
+            "_forge_refusal": lambda *_: "",
             "_cohort_key": lambda cohort: None,
         }
         with mock.patch.multiple(bridge, **reads):
