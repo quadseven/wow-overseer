@@ -471,7 +471,7 @@ SUPPLIES = (
         Make(
             17570,
             ALCHEMY,
-            ((STONESCALE_OIL, 3), (THORIUM_ORE, 1)),
+            ((STONESCALE_OIL, 2), (THORIUM_ORE, 1)),
             (CRYSTAL_VIAL,),
             13490,
         ),

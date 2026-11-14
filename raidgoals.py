@@ -241,6 +241,8 @@ ICECAP = "Icecap"
 MOUNTAIN_SILVERSAGE = "Mountain Silversage"
 GOLDEN_SANSAM = "Golden Sansam"
 GROMSBLOOD = "Gromsblood"
+SUNGRASS = "Sungrass"
+THORIUM_ORE = "Thorium Ore"
 STONESCALE_OIL = "Stonescale Oil"
 STONESCALE_EEL = "Stonescale Eel"
 ELEMENTAL_FIRE = "Elemental Fire"
@@ -251,6 +253,9 @@ FLASK_OF_THE_TITANS = "Flask of the Titans"
 GREATER_FIRE_PROTECTION = "Greater Fire Protection Potion"
 MAJOR_HEALING_POTION = "Major Healing Potion"
 MAJOR_MANA_POTION = "Major Mana Potion"
+GREATER_ARCANE_ELIXIR = "Greater Arcane Elixir"
+ELIXIR_OF_GIANTS = "Elixir of Giants"
+GREATER_STONESHIELD_POTION = "Greater Stoneshield Potion"
 FIELD_REPAIR_BOT = "Field Repair Bot 74A"
 
 RECIPES = (
@@ -308,6 +313,32 @@ RECIPES = (
         MAJOR_MANA_POTION,
         ALCHEMY,
         (Reagent(DREAMFOIL, 3), Reagent(ICECAP, 2), Reagent(CRYSTAL_VIAL)),
+    ),
+    Recipe(
+        17573,
+        GREATER_ARCANE_ELIXIR,
+        ALCHEMY,
+        (
+            Reagent(DREAMFOIL, 3),
+            Reagent(MOUNTAIN_SILVERSAGE),
+            Reagent(CRYSTAL_VIAL),
+        ),
+    ),
+    Recipe(
+        11472,
+        ELIXIR_OF_GIANTS,
+        ALCHEMY,
+        (Reagent(SUNGRASS), Reagent(GROMSBLOOD), Reagent(CRYSTAL_VIAL)),
+    ),
+    Recipe(
+        17570,
+        GREATER_STONESHIELD_POTION,
+        ALCHEMY,
+        (
+            Reagent(STONESCALE_OIL, 2),
+            Reagent(THORIUM_ORE),
+            Reagent(CRYSTAL_VIAL),
+        ),
     ),
     # THE ONE REAGENT HERE THAT IS ITSELF A CRAFT. Every other reagent above
     # is picked, fished, bought or killed for; this one is an alchemy cast in
@@ -1696,6 +1727,51 @@ def build_raidgoals(
             "Mana potions",
             (MAJOR_MANA_POTION,),
             MANA_POTIONS_PER_MEMBER,
+            members,
+            items,
+            held,
+            banked,
+            skills,
+            known,
+            ranks,
+            sources,
+            skills_read,
+        ),
+        _supply_goal(
+            "arcane",
+            "Greater Arcane Elixirs",
+            (GREATER_ARCANE_ELIXIR,),
+            PER_MEMBER_PER_NIGHT,
+            members,
+            items,
+            held,
+            banked,
+            skills,
+            known,
+            ranks,
+            sources,
+            skills_read,
+        ),
+        _supply_goal(
+            "giants",
+            "Elixirs of Giants",
+            (ELIXIR_OF_GIANTS,),
+            PER_MEMBER_PER_NIGHT,
+            members,
+            items,
+            held,
+            banked,
+            skills,
+            known,
+            ranks,
+            sources,
+            skills_read,
+        ),
+        _supply_goal(
+            "stoneshield",
+            "Greater Stoneshield Potions",
+            (GREATER_STONESHIELD_POTION,),
+            PER_MEMBER_PER_NIGHT,
             members,
             items,
             held,

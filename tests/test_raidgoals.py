@@ -822,6 +822,19 @@ class HerbShortfallSection(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("herb_shortfall", raid_js)
 
+    def test_herb_shortfall_includes_mc_elixirs_and_stoneshield(self):
+        p = payload(
+            holdings=[
+                holding("Ugga", raidgoals.SUNGRASS, 1),
+                holding("Ugga", raidgoals.THORIUM_ORE, 1),
+            ]
+        )
+        rows = {r["name"]: r for r in p["herb_shortfall"]["herbs"]}
+        self.assertIn(raidgoals.SUNGRASS, rows)
+        self.assertIn(raidgoals.THORIUM_ORE, rows)
+        self.assertGreater(rows[raidgoals.SUNGRASS]["need"], 0)
+        self.assertGreater(rows[raidgoals.THORIUM_ORE]["need"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
