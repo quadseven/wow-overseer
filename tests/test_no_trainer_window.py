@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 
 import guildjobs
+from test_classquest import book as class_quest_book
 from test_guildjobs import member
 from test_guildsocial_bridge import bridge
 
@@ -74,12 +75,14 @@ class ARefusalOlderThanTheRecentRead(unittest.TestCase):
 
 class TheBridgeReadsThem(unittest.TestCase):
     def test_a_member_without_a_lineup_role_reaches_class_quest_planning(self):
+        # Keep assigned members in the real lineup so the surplus seat below
+        # follows the same roster path as production instead of a mock.
         rows = [
             {
-                "name": "Unplaced",
-                "guid": 17,
-                "guild_name": "Cave",
-                "level": 55,
+                "name": "Filler%02d" % index,
+                "guid": index + 1,
+                "guild_name": "Research Guild",
+                "level": 10 if index >= 40 else 55,
                 "class_id": 1,
                 "race": 2,
                 "online": 1,
@@ -87,14 +90,60 @@ class TheBridgeReadsThem(unittest.TestCase):
                 "pos_x": 10.0,
                 "pos_y": 20.0,
             }
+            for index in range(50)
         ]
-        with mock.patch.object(
-            bridge.guildwork, "members_from_rows", return_value=([], {})
-        ):
-            facts = bridge._job_facts_from_rows(rows, [], set(), [], [], [], [], [])
-        self.assertEqual(facts["members"], [])
-        self.assertEqual(len(facts["class_candidates"]), 1)
-        self.assertEqual(facts["class_candidates"][0].role, guildjobs.UNASSIGNED)
+        rows.extend(
+            {
+                "name": "Summoner%02d" % index,
+                "guid": 100 + index,
+                "guild_name": "Research Guild",
+                "level": 55,
+                "class_id": 9,
+                "race": 2,
+                "online": 1,
+                "map_id": 1,
+                "pos_x": 10.0,
+                "pos_y": 20.0,
+            }
+            for index in range(21)
+        )
+        rows.append(
+            {
+                "name": "Unplaced",
+                "guid": 999,
+                "guild_name": "Research Guild",
+                "level": 55,
+                "class_id": 1,
+                "race": 2,
+                "online": 1,
+                "map_id": 1,
+                "pos_x": 186.0,
+                "pos_y": -3597.0,
+            }
+        )
+        facts = bridge._job_facts_from_rows(
+            rows,
+            [],
+            set(),
+            [],
+            [],
+            [],
+            [],
+            [],
+            done_rows=[{"guid": 999, "quest": 1505}],
+        )
+        assigned = {member.name for member in facts["members"]}
+        candidates = {member.name: member for member in facts["class_candidates"]}
+        self.assertIn("Filler00", assigned)
+        self.assertNotIn("Unplaced", assigned)
+        self.assertEqual(candidates["Unplaced"].role, guildjobs.UNASSIGNED)
+        plan = guildjobs.plan(
+            [],
+            classes=class_quest_book(),
+            class_candidates=facts["class_candidates"],
+            masters={"Research Guild": "Unplaced"},
+        )
+        self.assertIn("Unplaced", {step.holder for step in plan.steps})
 
     def test_the_read_reaches_past_the_recent_window(self):
         sql = bridge._JOB_NO_TRAINER_SQL

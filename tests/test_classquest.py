@@ -484,8 +484,10 @@ class ThePriority(unittest.TestCase):
             for i in range(2 * guildjobs.CLASSQUEST_STEPS_PER_GUILD + 1)
         ]
         never_offered = {member.name for member in members}
-        recent = ()
-        for _pass in range(3):
+        recent = (
+            guildjobs.Recent(members[0].name, classquest.ACTION, 5, status="error"),
+        )
+        for pass_number in range(3):
             recent = tuple(
                 dataclasses.replace(row, age_minutes=row.age_minutes + 15)
                 for row in recent
@@ -493,6 +495,9 @@ class ThePriority(unittest.TestCase):
             result = class_plan([], class_candidates=members, recent=recent)
             offered = {step.holder for step in class_steps(result)}
             self.assertTrue(offered)
+            if pass_number == 0:
+                self.assertNotIn(members[0].name, offered)
+                self.assertIn(members[1].name, offered)
             for guild in ("Bonkers", "Cave"):
                 guild_offers = offered & {m.name for m in members if m.guild == guild}
                 self.assertLessEqual(
@@ -581,19 +586,22 @@ class ThePriority(unittest.TestCase):
 
     def test_family_hold_synthesis_does_not_hide_an_active_class_step(self):
         family = dataclasses.replace(
-            who("WorkingFamily", quests_done=frozenset({1505})),
+            who(
+                "WorkingFamily",
+                quests_done=frozenset({1505}),
+                x=186.0,
+                y=-3597.0,
+            ),
             role=guildjobs.FAMILY,
         )
-        doing = "%s: WorkingFamily hunts its class quest" % classquest.MARK
+        result = class_plan(
+            [],
+            family_members=[family],
+            family_candidates=[family],
+            family_danger={family.name: 0},
+        )
 
-        with mock.patch.object(guildjobs, "class_step", return_value=(None, doing, "")):
-            result = class_plan(
-                [],
-                family_members=[family],
-                family_candidates=[family],
-            )
-
-        self.assertEqual(result.lines[family.name], doing)
+        self.assertEqual([step.holder for step in class_steps(result)], [family.name])
         self.assertNotIn(family.name, result.class_holds)
 
     def test_family_owed_check_uses_its_between_run_planning_policy(self):
