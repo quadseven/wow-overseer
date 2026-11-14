@@ -116,6 +116,26 @@ class CapRefusalRetryClock(unittest.TestCase):
         self.assertTrue(any(cooling_at_mid.values()))
         self.assertFalse(all(cooling_at_mid.values()))
 
+    def test_cap_refusal_retry_spread_pins_four_to_nine_minute_bounds(self):
+        seats = [f"Seat{i}" for i in range(64)]
+        self.assertTrue(
+            all(guildjobs.crossing_cooling(s, (_cap_row(s, 3),)) for s in seats)
+        )
+        self.assertFalse(
+            any(guildjobs.crossing_cooling(s, (_cap_row(s, 9),)) for s in seats)
+        )
+        first_ready = {
+            s: next(
+                age
+                for age in range(4, 10)
+                if not guildjobs.crossing_cooling(s, (_cap_row(s, age),))
+            )
+            for s in seats
+        }
+        self.assertEqual(min(first_ready.values()), 4)
+        self.assertEqual(max(first_ready.values()), 9)
+        self.assertEqual(set(first_ready.values()), set(range(4, 10)))
+
     def test_berth_give_up_hold_and_walls_keep_meaning(self):
         berth_rows = (
             guildjobs.Recent(
