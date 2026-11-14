@@ -542,6 +542,7 @@ class FamilyWideFarmRespectsOperatorHold(unittest.IsolatedAsyncioTestCase):
 
         cohort = types.SimpleNamespace(key="family_a", solo=False)
         fake = types.SimpleNamespace(
+            _operator_hold_notice=bridge.operatorhold.Notice(),
             _farm_individual=mock.AsyncMock(return_value=False),
             _farm_job_now=mock.AsyncMock(
                 return_value=("farm:4306", ["Mizu"], "family_a")
@@ -554,6 +555,46 @@ class FamilyWideFarmRespectsOperatorHold(unittest.IsolatedAsyncioTestCase):
             await bridge.Bridge._farm_once(fake, cohort)
         fake._operator_held.assert_awaited_once_with({"family_a"}, "farm")
         fake._farm_state_for.assert_not_called()
+
+    async def test_no_cohort_own_family_honors_real_operator_hold_row(self):
+        import types
+        from unittest import mock
+        import bridge
+
+        fake = types.SimpleNamespace(
+            _operator_hold_notice=bridge.operatorhold.Notice(),
+            _farm_individual=mock.AsyncMock(return_value=False),
+            _farm_job_now=mock.AsyncMock(
+                return_value=("farm:4306", ["Grug"], "this family")
+            ),
+            _end_farm=mock.AsyncMock(),
+            _farm_state_for=mock.AsyncMock(),
+            _farm_act=mock.AsyncMock(),
+        )
+        fake._operator_held = types.MethodType(bridge.Bridge._operator_held, fake)
+        hold_rows = [
+            {
+                "family": "grug_clan",
+                "reason": "burning steppes",
+                "source": "operator",
+                "expires_at": None,
+            }
+        ]
+        with (
+            mock.patch("bridge.individual.families", return_value=()),
+            mock.patch("bridge.bonds.head_of_family", return_value="Grug"),
+            mock.patch("bridge._cohort_of", return_value="grug_clan"),
+            mock.patch("bridge._fetch_operator_holds", return_value=hold_rows),
+            mock.patch("bridge._family_leader", return_value="Grug"),
+            mock.patch(
+                "bridge._farm_reads",
+                return_value={"name": "Silk Cloth", "levels": {"Grug": 60}},
+            ),
+            mock.patch("bridge._farm_reads_for", return_value=mock.MagicMock()),
+        ):
+            await bridge.Bridge._farm_once(fake, None)
+        fake._farm_state_for.assert_not_called()
+        fake._farm_act.assert_not_called()
 
 
 if __name__ == "__main__":

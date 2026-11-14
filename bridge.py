@@ -26383,7 +26383,11 @@ class Bridge(discord.Client):
         if found is None:
             return
         job, names, who = found
-        key = getattr(cohort, "key", None) or who
+        key = getattr(cohort, "key", None)
+        if not key:
+            key = await asyncio.to_thread(
+                lambda: _cohort_of(bonds.head_of_family())
+            ) or who
         operator_held = getattr(self, "_operator_held", None)
         if operator_held is not None and await operator_held({key}, "farm"):
             return
