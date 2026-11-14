@@ -340,6 +340,10 @@ class Member:
     level: int = 0
     online: bool = False
     map_id: int | None = None
+    # characters.zone: the Blood Elf and Draenei starting lands share map 530
+    # with Outland, so where a member stands is asked with the zone
+    # (classic.stands_outside).
+    zone_id: int | None = None
     maintenance: bool = False
     family: bool = False
     skills: dict = field(default_factory=dict)  # skill -> (value, max)
@@ -1085,7 +1089,7 @@ def supply_steps(
             and not m.family
             and m.online
             and m.name not in busy
-            and not classic.is_expansion_map(m.map_id)
+            and not classic.stands_outside(m)
             and m.count(entry) > 0
         ]
         senders.sort(key=lambda m: _near_key(m, entry, mailbox_yards))
@@ -1151,7 +1155,7 @@ def _shopper(crew, entry, vendors_by_map, busy):
             and not m.family
             and m.online
             and m.name not in busy
-            and not classic.is_expansion_map(m.map_id)
+            and not classic.stands_outside(m)
             and int(entry) in (vendors_by_map or {}).get(m.map_id, ())
         ),
         key=lambda m: m.name,
@@ -1344,7 +1348,7 @@ def _may_fetch(member, pattern, vendors_by_map) -> bool:
         and member.online
         and int(member.level or 0) >= FETCH_MIN_LEVEL
         and member.map_id is not None
-        and not classic.is_expansion_map(member.map_id)
+        and not classic.stands_outside(member)
         and int(pattern) in (vendors_by_map or {}).get(member.map_id, ())
     )
 
@@ -1363,9 +1367,7 @@ def patterns_by_post(tailor, crew, vendors_by_map) -> frozenset:
         carried = any(
             m.count(pattern)
             for m in crew
-            if m.name != tailor.name
-            and not m.family
-            and not classic.is_expansion_map(m.map_id)
+            if m.name != tailor.name and not m.family and not classic.stands_outside(m)
         )
         buyable = pattern in PATTERN_PRICE and any(
             _may_fetch(m, pattern, vendors_by_map)
@@ -1488,8 +1490,8 @@ def _working_tailor(post, named, busy, notes):
         notes.append("%s holds a post and is missing from the crew" % post.name)
     elif tailor.name in busy:
         notes.append("%s is already on a corps errand" % tailor.name)
-    elif classic.is_expansion_map(tailor.map_id):
-        notes.append(classic.outside_note(tailor.name, tailor.map_id))
+    elif classic.stands_outside(tailor):
+        notes.append(classic.outside_note_for(tailor.name, tailor))
     else:
         return tailor
     return None
@@ -1761,6 +1763,9 @@ def members_from_rows(
                 level=_int(row.get("level")),
                 online=bool(_int(row.get("online"))),
                 map_id=None if map_id is None else _int(map_id),
+                zone_id=None
+                if row.get("zone_id") is None
+                else _int(row.get("zone_id")),
                 maintenance=name in maintenance,
                 family=name in family,
                 skills=dict(skills.get(guid, ())),
@@ -1783,7 +1788,7 @@ def places_from_rows(rows, column) -> dict:
     """
     out = {}
     for row in rows or ():
-        if classic.is_expansion_map(row.get("map_id")):
+        if classic.outside_at(row.get("map_id"), row.get("zone_id")):
             continue
         out.setdefault(_int(row.get("map_id")), set()).add(_int(row.get(column)))
     return {k: frozenset(v) for k, v in out.items()}

@@ -675,7 +675,7 @@ def outgrown(level, race, map_id, zone_id, bands, opens=None) -> str:
     if map_id is None:
         return ""
     starting = classic.is_starting_land(map_id, zone_id)
-    if classic.is_expansion_map(map_id) and not starting:
+    if classic.outside_at(map_id, zone_id):
         return classic.outside_note("it", map_id)
     if int(map_id) not in classic.CLASSIC_CONTINENTS and not starting:
         return ""

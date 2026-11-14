@@ -591,7 +591,7 @@ class TheBridgePass(unittest.TestCase):
         self.assertIn("self._run_corps_step(step, cap)", once)
         self.assertIn("guildroute.GUILD_STEP_SECONDS", once)
         near = self.body("_corps_mailbox_yards")
-        self.assertIn("classic.is_expansion_map(m.map_id)", near)
+        self.assertIn("classic.stands_outside(m)", near)
         self.assertIn("CORPS_NEAR_READS", near)
 
     def test_a_walk_a_fight_ended_is_walked_again_once(self):
