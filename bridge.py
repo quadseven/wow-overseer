@@ -38293,11 +38293,9 @@ _FARM_ITEM_CREATURE_SQL = (
     "c.position_x AS x, c.position_y AS y, c.position_z AS z, "
     "ct.name AS name, ct.maxlevel AS level, lt.Chance AS chance "
     "FROM acore_world.creature_loot_template lt "
-    "LEFT JOIN acore_world.reference_loot_template rt ON rt.Entry = lt.Reference "
     "JOIN acore_world.creature_template ct ON ct.lootid = lt.Entry "
     "JOIN acore_world.creature c ON c.id = ct.entry "
-    "WHERE ((lt.Reference = 0 AND lt.Item = %s) OR (lt.Reference > 0 AND rt.Item = %s)) "
-    "AND lt.Chance >= %s "
+    "WHERE lt.Item = %s AND lt.Reference = 0 AND lt.Chance >= %s "
     "AND ct.maxlevel BETWEEN %s AND %s AND ct.`rank` = 0 AND ct.npcflag = 0 "
     "AND c.map = %s "
     "ORDER BY POW(c.position_x - %s, 2) + POW(c.position_y - %s, 2) "
@@ -38382,7 +38380,7 @@ def _farm_item_creatures(item: int, leader_at, levels) -> list:
     here = int(leader_at["map_id"])
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(_FARM_ITEM_CREATURE_SQL,
-                    (int(item), int(item), farmjob.KILL_MIN_CHANCE, low, high, here,
+                    (int(item), farmjob.KILL_MIN_CHANCE, low, high, here,
                      float(leader_at.get("pos_x") or 0.0),
                      float(leader_at.get("pos_y") or 0.0)))
         rows = cur.fetchall()
