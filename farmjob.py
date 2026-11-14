@@ -188,6 +188,9 @@ class Reads:
     walking: object = None
     visited: dict = dataclasses.field(default_factory=dict)
     now: float = 0.0
+    # When the leader began standing within HOP_MIN_YARDS of a node spawn, or
+    # 0.0 when it is not standing at one (or nobody has read it).
+    stood_since: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -418,6 +421,41 @@ def safe_fields(candidates, reads):
     return safe, said
 
 
+# How long the family stands at a node before hopping on. The bots gather what
+# is within reach of where they stand, a node can be mid-respawn, and a hop the
+# moment the leader arrives gave them no time at all.
+DWELL_SECONDS = 120.0
+
+
+def stand_update(prev, spawns, leader_at, now):
+    """(spawn key the leader stands at, since when) after this pass.
+
+    `prev` is the last answer. The start is kept while the leader stays at the
+    same spawn and restarts at another; (None, 0.0) when it stands at none.
+    """
+    if not leader_at or leader_at.get("map_id") is None:
+        return (None, 0.0)
+    origin = (
+        float(leader_at.get("pos_x") or 0.0),
+        float(leader_at.get("pos_y") or 0.0),
+    )
+    best = None
+    for spawn in spawns or ():
+        if int(spawn.map_id) != int(leader_at["map_id"]):
+            continue
+        if int(spawn.zone_id or 0) != int(leader_at.get("zone_id") or 0):
+            continue
+        gap = gatheraim.yards(spawn, origin)
+        if gap < HOP_MIN_YARDS and (best is None or gap < best[0]):
+            best = (gap, spawn)
+    if best is None:
+        return (None, 0.0)
+    key = spawn_key(best[1])
+    if prev and prev[0] == key and prev[1]:
+        return prev
+    return (key, float(now))
+
+
 def _hop(open_, reads, what, standing):
     """The HOP step inside the field, or a WAIT when every node is in reach."""
     here = int(reads.leader_at["map_id"])
@@ -426,6 +464,15 @@ def _hop(open_, reads, what, standing):
         float(reads.leader_at.get("pos_y") or 0.0),
     )
     rows = [s for s in open_ if int(s.map_id) == here and int(s.zone_id) == standing]
+    since = float(reads.stood_since or 0.0)
+    at_node = any(gatheraim.yards(s, origin) < HOP_MIN_YARDS for s in rows)
+    if at_node and since and float(reads.now) - since < DWELL_SECONDS:
+        return Step(
+            WAIT,
+            "dwelling at a %s spawn for %d of %d seconds so the bots gather it"
+            % (what, int(float(reads.now) - since), int(DWELL_SECONDS)),
+            zone_id=standing,
+        )
     hop = _next_hop(rows, origin, reads.visited or {}, float(reads.now))
     if hop is None:
         return Step(
