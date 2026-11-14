@@ -463,6 +463,9 @@ MODULE_GUILD_VERBS = frozenset(
         "bg-queue",
         "party-up",
         "party-disband",
+        # A guild bot leaves a group a stranger's bot led it into
+        # (strayfollow.py; mod-overseer's DoLeaveGroup).
+        "leave-group",
         "finder-run",
         "view",
         "invite",

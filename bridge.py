@@ -195,6 +195,7 @@ import standin
 import places
 import standstill
 import strategybook
+import strayfollow
 import tabard
 import teamsync
 import towntrip
@@ -4258,6 +4259,53 @@ def _file_quest_tickets(client) -> dict:
         )
 
 
+# THE STRAY FOLLOWERS' READ (strayfollow.py): every guild member, off the
+# roster, grouped as somebody else's follower, with its leader's guild, roster
+# standing and fresh position. Names are cast to one collation, as the corps
+# tickets' read does: the roster table's differs from the characters table's.
+_STRAY_FOLLOWERS_SQL = (
+    "SELECT s.name, g.name AS guild, s.map_id, s.pos_x, s.pos_y, s.in_combat, "
+    "lc.name AS leader, lg.name AS leader_guild, "
+    "(lc.name COLLATE utf8mb4_0900_ai_ci IN (SELECT r.name COLLATE utf8mb4_0900_ai_ci "
+    "FROM overseer_roster r)) AS leader_roster, "
+    "(ls.name IS NOT NULL) AS leader_online, ls.map_id AS leader_map, "
+    "ls.pos_x AS leader_x, ls.pos_y AS leader_y "
+    "FROM overseer_snapshot s "
+    "JOIN guild_member gm ON gm.guid = s.guid "
+    "JOIN guild g ON g.guildid = gm.guildid "
+    "JOIN characters lc ON lc.guid = s.group_leader "
+    "LEFT JOIN guild_member lgm ON lgm.guid = lc.guid "
+    "LEFT JOIN guild lg ON lg.guildid = lgm.guildid "
+    "LEFT JOIN overseer_snapshot ls ON ls.guid = lc.guid "
+    "AND ls.updated_at > NOW() - INTERVAL 120 SECOND "
+    "WHERE s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "AND s.group_leader <> 0 AND s.group_leader <> s.guid "
+    "AND g.name IN ({guilds}) "
+    "AND s.name COLLATE utf8mb4_0900_ai_ci NOT IN (SELECT r2.name COLLATE utf8mb4_0900_ai_ci "
+    "FROM overseer_roster r2) "
+    "LIMIT 500"
+)
+_STRAY_RECENT_SQL = (
+    "SELECT target_name, MIN(TIMESTAMPDIFF(MINUTE, created_at, NOW())) AS age "
+    "FROM overseer_command WHERE source LIKE %s "
+    "AND created_at > NOW() - INTERVAL 1 DAY GROUP BY target_name"
+)
+
+
+def _fetch_stray_followers() -> tuple:
+    """(followers, name -> minutes since its last leave row) for strayfollow."""
+    guilds = sorted(raidteams.GROUPS)
+    if not guilds:
+        return (), {}
+    sql = _STRAY_FOLLOWERS_SQL.format(guilds=",".join(["%s"] * len(guilds)))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, guilds)
+        followers = strayfollow.followers_from_rows(cur.fetchall())
+        cur.execute(_STRAY_RECENT_SQL, (strayfollow.SOURCE + ":%",))
+        recent = {str(r["target_name"]): int(r["age"]) for r in cur.fetchall()}
+    return followers, recent
+
+
 def _file_corps_tickets(client) -> dict:
     """One corps blocker filing pass (corpstickets.py) on one connection."""
     with _connect() as conn, conn.cursor() as cur:
@@ -8215,6 +8263,7 @@ PASSES = (
     _Pass("_quest_ledger_loop"),
     _Pass("_quest_tickets_loop"),
     _Pass("_corps_tickets_loop"),
+    _Pass("_stray_follow_loop"),
 )
 
 
@@ -26267,6 +26316,30 @@ class Bridge(discord.Client):
                               "epic; link them by hand", done["unlinked"])
             except Exception:
                 log.exception("corps tickets: pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _stray_follow_loop(self) -> None:
+        """A guild member led off by a stranger's bot leaves that group
+        (strayfollow.py): `leave-group` on kind='guild', one line a leave."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("STRAY_FOLLOW_SECONDS", "300"))
+        since: dict = {}
+        while not self.is_closed():
+            try:
+                followers, recent = await asyncio.to_thread(_fetch_stray_followers)
+                now = time.monotonic()
+                since = strayfollow.track(since, followers, now)
+                rows, lines = strayfollow.plan(
+                    followers, since, now, recent, frozenset(raidteams.GROUPS))
+                for r, line in zip(rows, lines):
+                    row_id = await asyncio.to_thread(
+                        _insert_guild, r.name, r.command, r.source)
+                    if row_id:
+                        log.info("stray followers: %s (row %d)", line, row_id)
+                    else:
+                        log.info("stray followers: %s: the row was not written", line)
+            except Exception:
+                log.exception("stray followers: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _watch_loop(self) -> None:
