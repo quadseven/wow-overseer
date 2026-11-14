@@ -198,6 +198,33 @@ class DeathsAndDangerChooseTheField(unittest.TestCase):
         self.assertEqual(step.zone_id, 490)
 
 
+class AWalkToARefusedSpawnMovesOn(unittest.TestCase):
+    """A spawn the column refused is marked visited; the next pass must not ask
+    for the very same spawn again."""
+
+    def test_a_spawn_just_tried_is_not_the_next_walk_target(self):
+        near, next_ = spawn(900, 0), spawn(1000, 0)
+        tried = {farmjob.spawn_key(near): 50.0}
+        step = farmjob.decide(order(), reads(spawns=(near, next_), visited=tried))
+        self.assertEqual(step.action, farmjob.WALK)
+        self.assertEqual(step.spawn, next_)
+
+    def test_a_spawn_tried_long_ago_is_walkable_again(self):
+        near, next_ = spawn(900, 0), spawn(1000, 0)
+        tried = {farmjob.spawn_key(near): 50.0}
+        late = 50.0 + farmjob.REVISIT_SECONDS + 1
+        step = farmjob.decide(
+            order(), reads(spawns=(near, next_), visited=tried, now=late)
+        )
+        self.assertEqual(step.spawn, near)
+
+    def test_when_every_spawn_was_tried_the_nearest_is_asked_again(self):
+        near, next_ = spawn(900, 0), spawn(1000, 0)
+        tried = {farmjob.spawn_key(near): 50.0, farmjob.spawn_key(next_): 55.0}
+        step = farmjob.decide(order(), reads(spawns=(near, next_), visited=tried))
+        self.assertEqual(step.spawn, near)
+
+
 class InTheFieldItHops(unittest.TestCase):
     def standing(self, x=1000.0, y=0.0):
         return leader_at(x, y, zone=490)
