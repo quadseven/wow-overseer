@@ -583,6 +583,7 @@ class EachRaiderIsReadyOrSaysWhyNot(unittest.TestCase):
     def _tank_night(self, extra=0):
         wants = {
             "Greater Fire Protection Potion": 4 + extra,
+            "Greater Stoneshield Potion": 1,
             "Major Healing Potion": 5 + extra,
             "Flask of the Titans": 1,
             "Elixir of the Mongoose": 1,
@@ -602,7 +603,7 @@ class EachRaiderIsReadyOrSaysWhyNot(unittest.TestCase):
         self.assertTrue(head["ready"], head["short"])
         self.assertEqual("yes", head["cells"][-1])
         self.assertEqual("200 of 200", head["cells"][6])
-        self.assertEqual("14 of 14", head["cells"][9])
+        self.assertEqual("15 of 15", head["cells"][9])
         self.assertEqual("100%", head["cells"][5])
         self.assertIn("1 ready for the core", card["raiders_line"])
 
@@ -616,8 +617,8 @@ class EachRaiderIsReadyOrSaysWhyNot(unittest.TestCase):
         head = next(
             r for r in self._card_for(worn, held)["raiders"] if r["name"] == self.head
         )
-        self.assertEqual((9, 14), (head["supplies_carried"], head["supplies_wanted"]))
-        self.assertEqual(["supplies 9 of 14"], head["short"])
+        self.assertEqual((9, 15), (head["supplies_carried"], head["supplies_wanted"]))
+        self.assertEqual(["supplies 9 of 15"], head["short"])
 
     def test_targets_follow_the_role(self):
         card = self._card_for([], [])
@@ -695,10 +696,10 @@ class EachRaiderIsReported(unittest.TestCase):
                 "17 of 200",
                 "yes",
                 "0",
-                "0 of 14",
+                "0 of 15",
                 "Eastern Kingdoms",
                 "no: pre-raid gear 22%, needs 50%; fire resistance 17 of 200; "
-                "supplies 0 of 14",
+                "supplies 0 of 15",
             ],
             head["cells"],
         )
