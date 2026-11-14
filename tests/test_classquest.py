@@ -613,7 +613,7 @@ class ThePriority(unittest.TestCase):
 
         with mock.patch.object(guildjobs, "class_owed", return_value=sentinel) as owed:
             result = guildjobs._planned_class_owed(
-                family, book(), (), {family.name}, 42.0, (object(),)
+                family, book(), (), classquest.Hunts(), 42.0, (object(),)
             )
 
         self.assertIs(result, sentinel)
