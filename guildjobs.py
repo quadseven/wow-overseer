@@ -1973,6 +1973,46 @@ def _craft_step(member):
     return None
 
 
+def _craft_or_room(m, kept, recent, cap, crafters, master):
+    """(the craft step, or a make-room step, or None; a note or "") (#2401).
+
+    The core refuses a create-item cast whose product it cannot store
+    (Spell::CheckItems answers SPELL_FAILED_DONT_REPORT and tells only a
+    client). Read on the dev realm 2026-11-13: every corps crafter whose casts
+    came back `the cast did not start and every wall this row can read was
+    clear` had no free bag slot, most of them full of the bandages they had
+    made. So a member read with no free slot makes room first, through the
+    ladder a class quest uses, and the craft comes the pass after. Bags not
+    read (free_slots None) keep the old behaviour.
+    """
+    step = _craft_step(m)
+    if step is None or m.free_slots is None or int(m.free_slots) >= 1:
+        return step, ""
+    said = "%s makes room in its bags (0 free, 1 needed) to craft %s" % (
+        m.name,
+        _craft_name(step),
+    )
+    if _cooling(m, ROOM_ACTION, recent):
+        return None, ""
+    room = _room_ladder(m, said, 1, kept, None, cap, crafters, master)
+    if room is None:
+        return (
+            None,
+            "%s has no free bag slot for its %s and nothing it may sell, mail "
+            "or destroy" % (m.name, _craft_name(step)),
+        )
+    return room, ""
+
+
+def _craft_name(step) -> str:
+    """The recipe a craft step casts, by name, for a sentence."""
+    for skill in CRAFT_SKILLS:
+        for recipe in craft.RECIPES.get(skill, ()):
+            if int(recipe.spell_id) == int(step.key):
+                return recipe.name
+    return "spell %d" % int(step.key)
+
+
 def _tool_step(member, cap):
     """Buy the tool a held trade cannot work without."""
     for skill in (MINING, SKINNING):
@@ -3697,7 +3737,7 @@ def _own_trade_step(m, spot, recent, cap):
     """A craft-focus member short of its natural restart: it casts what it
     carries, else walks to its field. Nothing it does is counted as given."""
     if not _cooling(m, "craft", recent):
-        step = _craft_step(m)
+        step, _note = _craft_or_room(m, None, recent, cap, {}, "")
         if step:
             return step, step.said, ""
     step, doing = _gathering_step(m, spot, recent, cap)
@@ -3746,9 +3786,11 @@ def _maintenance_step(
         if step:
             return step, step.said, ""
     if not _cooling(m, "craft", recent):
-        step = _craft_step(m)
+        step, why = _craft_or_room(m, kept, recent, cap, crafters, master)
         if step:
             return step, step.said, ""
+        if why:
+            notes.append(why)
     shared = _shared_step(m, crafters, master, kept, recent, cap, crafting)
     if shared[0]:
         return shared
