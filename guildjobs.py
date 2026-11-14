@@ -1360,20 +1360,51 @@ def ranks_due(level: int, money: int, skills, wanted=()) -> tuple:
 
 # The purse a recipe purchase never spends below, in copper: mod-overseer's
 # RECIPE_PURSE_FLOOR_COPPER, so an errand written here is one the trainer
-# visit can complete.
+# visit can complete. It is the floor at level 1; `recipe_purse_floor` grows
+# it with level, as mod-overseer's RecipePurseFloor does.
 RECIPE_PURSE_FLOOR = 100
+
+# THE REPAIR RESERVE, in copper per level squared: 40 silver at 20 and 3g 60s
+# at 60. A repair bill grows with the item level of what is worn, and one
+# silver (the floor alone) does not pay for a level 60 member's repair after a
+# death. mod-overseer's RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ, the same number.
+RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ = 10
+
+# A trainer visit for a trade that bought no due recipe is not repeated inside
+# this window. mod-overseer records each visit ('trainer-visit', the trade's
+# skill) and reads the recipes the member holds there with HasSpell
+# ('recipe-known'), so a held recipe stops being due after one visit. What is
+# left is a recipe the nearest trainer will not sell this member (a chain
+# whose first link is missing, a level it lacks): one visit in this window,
+# not one every bridge cycle.
+RECIPE_VISIT_RETRY_HOURS = 6
+
+
+def recipe_purse_floor(level: int) -> int:
+    """The copper a recipe purchase leaves in the purse at `level`."""
+    level = max(0, int(level or 0))
+    return max(RECIPE_PURSE_FLOOR, RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ * level * level)
 
 
 def _rungs_ahead(skill: int, value: int) -> tuple:
-    """The rungs a crafter at `value` casts now or within RANK_UP_MARGIN, and
-    for a tailor the Linen Bag its bag errand sews (craft_rhythm.bag_errand).
+    """Every ladder rung a crafter at `value` has not yet outgrown, lowest
+    first, and for a tailor the Linen Bag its bag errand sews
+    (craft_rhythm.bag_errand).
+
+    Not only the rung it casts now: a trainer often sells a rung below the
+    bracket it is cast in (Crimson Silk Pantaloons is sold at 195 and cast
+    from 205), and the visit that is made anyway buys it then rather than a
+    second walk later. A rung the crafter is past (`max_skill` below `value`)
+    is never asked, so nobody is sent back for one it has outgrown.
 
     An Enchanting rung brings the Runed Rod recipe of its tier (#2411):
-    craft_rhythm makes the rod before the rung, so it is bought first."""
+    craft_rhythm makes the rod before the rung, so it is bought first.
+    """
     out = []
-    for at in (value, value + RANK_UP_MARGIN):
-        recipe = craft.recipe_for(skill, at)
-        if recipe is not None and recipe not in out:
+    for recipe in craft.RECIPES.get(skill, ()):
+        if recipe.tool and recipe.tool not in craft.TOOL_WALKS:
+            continue
+        if recipe.max_skill >= value and recipe not in out:
             rod = craft.ROD_MADE_BY.get(recipe.tool)
             for made in craft.ROD_RECIPES.get(skill, ()):
                 if made.spell_id == rod and made not in out:
@@ -1385,7 +1416,7 @@ def _rungs_ahead(skill: int, value: int) -> tuple:
     return tuple(out)
 
 
-def recipes_due(level: int, money: int, skills, known, wanted=()) -> tuple:
+def recipes_due(level: int, money: int, skills, known, wanted=(), visited=()) -> tuple:
     """The held trades whose next trainer recipe this character may buy now.
 
     The recipe sibling of `ranks_due`, for a roster family member, whose
@@ -1395,33 +1426,47 @@ def recipes_due(level: int, money: int, skills, known, wanted=()) -> tuple:
     (mod-overseer#862). Without this the column was written only for a rank,
     and every family crafter stopped at its first bought rung (#769).
 
-    A trade is due when a rung it casts now or within RANK_UP_MARGIN
-    (`_rungs_ahead`) is a trainer recipe (craft.TRAINER_RECIPES) absent from
-    `known` (character_spell, where a bought recipe persists), the trainer
+    A trade is due when a ladder rung it has not outgrown (`_rungs_ahead`) is
+    a trainer recipe (craft.TRAINER_RECIPES) absent from `known`, the trainer
     teaches it at the trade's value, and the purse covers its price above
-    RECIPE_PURSE_FLOOR. `skills` is {skill id: (value, max)}; only a held
-    primary the roster names in `wanted` is asked, cheapest first.
+    `recipe_purse_floor(level)`. `known` is every recipe the bridge can show
+    the member holds: character_spell, and the worldserver's own 'learn',
+    'craft' and 'recipe-known' events. `skills` is {skill id: (value, max)};
+    a held primary the roster names in `wanted` is asked, and First Aid
+    always, as `ranks_due` asks it, since it takes no primary slot. A trade in
+    `visited` (a trainer visit for it inside RECIPE_VISIT_RETRY_HOURS) is not
+    due again yet. Cheapest first.
     """
     known = frozenset(int(s) for s in known or ())
     wanted = tuple(int(s) for s in wanted or ())
+    visited = frozenset(int(s) for s in visited or ())
+    floor = recipe_purse_floor(level)
     due = []
     for skill, (value, ceiling) in sorted((skills or {}).items()):
         skill, value, ceiling = int(skill), int(value or 0), int(ceiling or 0)
-        if ceiling <= 0 or skill not in wanted:
+        if ceiling <= 0 or skill in visited:
             continue
-        cost = _recipe_cost_due(skill, value, int(money or 0), known)
+        if skill != FIRST_AID and skill not in wanted:
+            continue
+        cost = _recipe_cost_due(skill, value, int(money or 0), known, floor)
         if cost is not None:
             due.append((cost, skill))
     return tuple(skill for _cost, skill in sorted(due))
 
 
-def _recipe_cost_due(skill: int, value: int, money: int, known) -> int | None:
+def _recipe_cost_due(
+    skill: int, value: int, money: int, known, floor: int = RECIPE_PURSE_FLOOR
+) -> int | None:
     """The price of the first unheld rung ahead that this visit can buy, or None."""
     for recipe in _rungs_ahead(skill, value):
-        if craft.holds(recipe.spell_id, known):
+        # craft.holds already answers True for a rung that is no trainer
+        # purchase (auto-learned or plan-taught); the lookup below says so
+        # itself rather than lean on that.
+        bought = craft.TRAINER_RECIPES.get(recipe.spell_id)
+        if bought is None or craft.holds(recipe.spell_id, known):
             continue
-        rank, cost = craft.TRAINER_RECIPES[recipe.spell_id]
-        if value >= rank and money >= cost + RECIPE_PURSE_FLOOR:
+        rank, cost = bought
+        if value >= rank and money >= cost + floor:
             return cost
     return None
 
