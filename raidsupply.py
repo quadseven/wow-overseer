@@ -301,8 +301,10 @@ RAW_NIGHTFIN_SNAPPER = 13759
 ELEMENTAL_FIRE, DREAMFOIL, GOLDEN_SANSAM = 7068, 13463, 13464
 MOUNTAIN_SILVERSAGE, PLAGUEBLOOM, ICECAP = 13465, 13466, 13467
 BLACK_LOTUS, GROMSBLOOD, STONESCALE_OIL = 13468, 8846, 13423
+SUNGRASS, THORIUM_ORE = 8838, 10620
 SANDWORM_MEAT, BOLT_OF_RUNECLOTH, DREAM_DUST, RUNE_THREAD = 20424, 14048, 11176, 14341
 GREATER_FIRE_PROTECTION, MAJOR_HEALING, MAJOR_MANA = 13457, 13446, 13444
+GREATER_ARCANE_ELIXIR, ELIXIR_OF_GIANTS, GREATER_STONESHIELD_POTION = 13454, 9206, 13455
 FIRE_PROTECTION = 6049
 FIRE_PROTECTION_RECIPE = 6055
 # Either fire potion is the night's fire protection (raidready.FIRE_PROTECTION).
@@ -438,6 +440,44 @@ SUPPLIES = (
         "Recipe 13491 drops from Legashi and Jadefire Rogues (about 4 percent)",
     ),
     Supply(
+        GREATER_ARCANE_ELIXIR,
+        "Greater Arcane Elixir",
+        (0, 0, 0, 1),
+        Make(
+            17557,
+            ALCHEMY,
+            ((DREAMFOIL, 3), (MOUNTAIN_SILVERSAGE, 1)),
+            (CRYSTAL_VIAL,),
+        ),
+        "trainer teaches it at Alchemy 285",
+    ),
+    Supply(
+        ELIXIR_OF_GIANTS,
+        "Elixir of Giants",
+        (0, 0, 1, 0),
+        Make(
+            11478,
+            ALCHEMY,
+            ((SUNGRASS, 1), (GROMSBLOOD, 1)),
+            (CRYSTAL_VIAL,),
+            9298,
+        ),
+        "Recipe 9298: world drop or auction house",
+    ),
+    Supply(
+        GREATER_STONESHIELD_POTION,
+        "Greater Stoneshield Potion",
+        (1, 0, 0, 0),
+        Make(
+            17570,
+            ALCHEMY,
+            ((STONESCALE_OIL, 3), (THORIUM_ORE, 1)),
+            (CRYSTAL_VIAL,),
+            13493,
+        ),
+        "Recipe 13493: world drop or auction house",
+    ),
+    Supply(
         20452,
         "Smoked Desert Dumplings",
         (2, 0, 2, 0),
@@ -502,6 +542,40 @@ SUPPLIES = (
     ),
 )
 SUPPLY_BY_ENTRY = {s.entry: s for s in SUPPLIES}
+
+
+def herb_shortfall(raiders: list, stock: dict | None = None) -> dict:
+    """Per-night herb/reagent need, held count, and shortfall across `SUPPLIES`."""
+    stock = stock or {}
+    totals: dict[int, int] = {}
+    for supply in SUPPLIES:
+        if supply.stands_in or not supply.make:
+            continue
+        want = sum(supply.per_raider(r) for r in raiders)
+        if want <= 0:
+            continue
+        for entry, per in supply.make.reagents:
+            totals[entry] = totals.get(entry, 0) + want * int(per)
+    herbs = []
+    for entry, need in sorted(totals.items()):
+        held = int(stock.get(entry, 0) or 0)
+        herbs.append(
+            {
+                "entry": entry,
+                "need": need,
+                "held": held,
+                "short": max(need - held, 0),
+            }
+        )
+    return {
+        "herbs": herbs,
+        "lotus_note": (
+            "Black Lotus is a rare world spawn at Herbalism 300; if it cannot "
+            "be met, flasks are cut first rather than counting the night short."
+        ),
+    }
+
+
 # The fire potion lines; the night wants one of them, and the fire gear after it.
 FIRE_POTIONS = frozenset({GREATER_FIRE_PROTECTION, FIRE_PROTECTION})
 

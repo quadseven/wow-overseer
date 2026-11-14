@@ -1337,5 +1337,43 @@ class TheAlchemistsPace(unittest.TestCase):
         self.assertIn("s.level_60_line", raid)
 
 
+class StockpileTargetsAndHerbs(unittest.TestCase):
+    def test_new_mc_consumables_in_supplies_with_sources(self):
+        by_entry = rs.SUPPLY_BY_ENTRY
+        arcane = by_entry[13454]
+        self.assertEqual(arcane.name, "Greater Arcane Elixir")
+        self.assertEqual(arcane.per_role, (0, 0, 0, 1))
+        self.assertIsNotNone(arcane.make)
+        self.assertIn("285", arcane.source)
+
+        giants = by_entry[9206]
+        self.assertEqual(giants.name, "Elixir of Giants")
+        self.assertEqual(giants.per_role, (0, 0, 1, 0))
+        self.assertEqual(giants.make.recipe_item, 9298)
+        self.assertIn("9298", giants.source)
+
+        stone = by_entry[13455]
+        self.assertEqual(stone.name, "Greater Stoneshield Potion")
+        self.assertEqual(stone.per_role, (1, 0, 0, 0))
+        self.assertEqual(stone.make.recipe_item, 13493)
+        self.assertIn("13493", stone.source)
+
+    def test_herb_shortfall_sums_night_reagents_and_flags_black_lotus(self):
+        raiders = [
+            rs.Raider("Grug", rs.TANK, 1, True),
+            rs.Raider("Ana", rs.CASTER, 8),
+        ]
+        summary = rs.herb_shortfall(raiders, {rs.DREAMFOIL: 2})
+        herbs = {r["entry"]: r for r in summary["herbs"]}
+        self.assertIn(rs.DREAMFOIL, herbs)
+        self.assertGreater(herbs[rs.DREAMFOIL]["need"], 2)
+        self.assertEqual(herbs[rs.DREAMFOIL]["held"], 2)
+        self.assertEqual(
+            herbs[rs.DREAMFOIL]["short"],
+            herbs[rs.DREAMFOIL]["need"] - 2,
+        )
+        self.assertIn("Black Lotus", summary["lotus_note"])
+
+
 if __name__ == "__main__":
     unittest.main()
