@@ -187,13 +187,20 @@ def rare_needs(name, skills, free_slots, nodes, doors, now=0.0) -> tuple:
     can use, best band first; () when it should not ride at all."""
     if not bags_have_room(name, free_slots, now):
         return ()
+    # A member rides for the trade it is working: the one it is furthest behind
+    # in. Skinning has no nodes, so a skinner's pick rides for nothing.
+    worked, _why = pick_trade(skills)
+    if worked not in NODE_TRADES:
+        return ()
     out = []
     for door in doors or ():
         best = None
         for node in nodes or ():
             if int(node.map_id) != int(door.map_id) or not usable(node, skills):
                 continue
-            _trade, band = node_trade(node.lock_id)
+            trade, band = node_trade(node.lock_id)
+            if trade != worked:
+                continue
             if best is None or band > best[0]:
                 best = (band, node)
         if best is not None:

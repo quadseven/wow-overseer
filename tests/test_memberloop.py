@@ -93,6 +93,14 @@ class RareNeeds(unittest.TestCase):
     def test_a_grey_node_needs_nothing(self):
         self.assertEqual((), self.need({"mining": 205 + 100}))
 
+    def test_a_member_rides_only_for_the_trade_it_is_working(self):
+        # Herbalism 100 is its furthest-behind trade, so it is not mining.
+        self.assertEqual((), self.need({"mining": 220, "herbalism": 100}))
+        self.assertTrue(self.need({"mining": 220, "herbalism": 300}))
+
+    def test_a_skinner_rides_for_nothing(self):
+        self.assertEqual((), self.need({"mining": 220, "skinning": 10}))
+
     def test_the_wrong_trade_needs_nothing(self):
         self.assertEqual((), self.need({"herbalism": 220}))
 
