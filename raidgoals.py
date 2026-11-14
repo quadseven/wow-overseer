@@ -1676,9 +1676,11 @@ def build_raidgoals(
         "roster_line": _roster_line(chosen, members),
         "raid_line": (
             "Molten Core, map %d, is the level 60 tier's first raid and the "
-            "one this page models. It gates nobody on consumables and nobody "
-            "on resistance: everything counted below is what a group brings "
-            "so the night goes better, not what the instance demands." % MOLTEN_CORE
+            "one this page models. It gates nobody on consumables, "
+            "resistance, attunement, or Aqual Quintessence: neither attunement "
+            "nor quintessence is required on this core, so no plan waits on "
+            "them, and everything counted below is what a group brings so the "
+            "night goes better." % MOLTEN_CORE
         ),
         "strip": _strip(goals, members),
         "order": (

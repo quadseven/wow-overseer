@@ -472,8 +472,9 @@ def attunement(names: list, rewarded: set, in_log: set, fragments: dict) -> dict
     done = len([m for m in members if m["status"] == ATTUNED])
     return {
         "line": "%d of %d attuned to the Core. It opens Lothos Riftwaker's "
-        "teleport; the Molten Core window beside him admits a raid without it."
-        % (done, len(members)),
+        "teleport; neither attunement nor Aqual Quintessence is required on "
+        "this core, so the Molten Core window beside him admits a raid without "
+        "them and no plan waits on them." % (done, len(members)),
         "members": members,
         "steps": list(STEPS),
         "unproven": STEPS_UNPROVEN,
