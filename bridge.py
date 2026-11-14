@@ -21329,7 +21329,8 @@ class Bridge(discord.Client):
             gathered=gathered, step_done=step_done,
             bag_pressure_needed=bag_pressure_needed,
             bag_room_made=bag_room_made,
-            stalled=_queue_stall_floor(names))
+            stalled=_queue_stall_floor(names),
+            hub_yards=townerrand.yards_to(hub, positions.get(leader)))
         failed = townerrand.unlanded_aim(state, new)
         if failed:
             memory = globals().get("_TOWN_ERRAND_RELEASED")
