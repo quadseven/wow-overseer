@@ -30463,6 +30463,16 @@ def _fetch_guild_social_facts(bounds) -> dict:
         if familyseat.enabled():
             cur.execute(familyseat.ROSTER_SQL)
             guarded = familyseat.guard_enabled()
+            # A held family, or any family while the campaign planner is off,
+            # lends nobody: a loan is a dungeon the operator did not send it to.
+            try:
+                cur.execute(operatorhold.SELECT_SQL)
+                lend_held = operatorhold.read(list(cur.fetchall()))
+            except pymysql.err.MySQLError as exc:
+                if not (exc.args and exc.args[0] in (1054, 1146)):
+                    raise
+                lend_held = {}
+            lend_held = familyseat.lend_holds(lend_held)
             lendable = familyseat.lendable(
                 list(cur.fetchall()), familyseat.inside(facts["rows"]),
                 facts["in_runs"],
@@ -30470,7 +30480,8 @@ def _fetch_guild_social_facts(bounds) -> dict:
                 # member that is not its sole tank or healer (#2353).
                 campaigns=(familyseat.campaign_families(campaigns)
                            if guarded else ()),
-                seats=familyseat.seats_played(facts["rows"]), guard=guarded)
+                seats=familyseat.seats_played(facts["rows"]), guard=guarded,
+                holds=lend_held)
     facts.update({
         "now": now, "asks": asks, "answers": answers,
         "quests": guildsocial.quests_by_name(quest_rows),
