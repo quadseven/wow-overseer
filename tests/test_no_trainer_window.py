@@ -122,14 +122,14 @@ class TheBridgeReadsThem(unittest.TestCase):
             }
         )
         facts = bridge._job_facts_from_rows(
-            rows,
-            [],
-            set(),
-            [],
-            [],
-            [],
-            [],
-            [],
+            rows=rows,
+            family_names=[],
+            eligible=set(),
+            skill_rows=[],
+            spell_rows=[],
+            item_rows=[],
+            recent_rows=[],
+            pending_rows=[],
             done_rows=[{"guid": 999, "quest": 1505}],
         )
         assigned = {member.name for member in facts["members"]}

@@ -448,6 +448,7 @@ class ThePriority(unittest.TestCase):
         )
         result = class_plan([], class_candidates=[m])
         self.assertEqual(result.steps, ())
+        self.assertEqual(class_steps(result), [])
         self.assertIn(classquest.MARK, result.lines[m.name])
         self.assertNotIn(m.name, result.class_holds)
 
@@ -487,14 +488,16 @@ class ThePriority(unittest.TestCase):
         recent = (
             guildjobs.Recent(members[0].name, classquest.ACTION, 5, status="error"),
         )
-        for pass_number in range(3):
+        for pass_number in range(guildjobs.CLASSQUEST_STEPS_PER_GUILD + 2):
             recent = tuple(
                 dataclasses.replace(row, age_minutes=row.age_minutes + 15)
                 for row in recent
             )
             result = class_plan([], class_candidates=members, recent=recent)
             offered = {step.holder for step in class_steps(result)}
-            self.assertTrue(offered)
+            if not offered:
+                self.assertFalse(never_offered)
+                break
             if pass_number == 0:
                 self.assertNotIn(members[0].name, offered)
                 self.assertIn(members[1].name, offered)
@@ -544,7 +547,7 @@ class ThePriority(unittest.TestCase):
 
         never_offered = {m.name for m in candidates} | {family.name}
         recent = ()
-        for _pass in range(3):
+        for _pass in range(guildjobs.CLASSQUEST_STEPS_PER_GUILD + 2):
             recent = tuple(
                 dataclasses.replace(row, age_minutes=row.age_minutes + 15)
                 for row in recent
@@ -610,7 +613,7 @@ class ThePriority(unittest.TestCase):
 
         with mock.patch.object(guildjobs, "class_owed", return_value=sentinel) as owed:
             result = guildjobs._planned_class_owed(
-                family, book(), (), object(), 42.0, (object(),)
+                family, book(), (), {family.name}, 42.0, (object(),)
             )
 
         self.assertIs(result, sentinel)
