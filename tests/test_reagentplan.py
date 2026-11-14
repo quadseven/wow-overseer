@@ -14,23 +14,28 @@ from __future__ import annotations
 import pathlib
 import unittest
 
+import bank
 import bankforecast
 import craft_supply
 import reagentplan
 
 PEACEBLOOM, SILVERLEAF, EMPTY_VIAL = 2447, 765, 3371
 ROUGH_STONE, COPPER_ORE = 2835, 2770
+BOLT_OF_SILK, SILK_CLOTH, FINE_THREAD, BLUE_DYE = 4305, 4306, 2321, 6260
 MINOR_HEALING_POTION = 2330
 ROUGH_SHARPENING_STONE = 2660
 SMELT_COPPER = 2657
+AZURE_SILK_HOOD = 8760
 
-# item_template (class, subclass): herb 7/9, metal and stone 7/7.
+# item_template (class, subclass): herb 7/9, metal and stone 7/7, cloth 7/5.
 KINDS = {
     PEACEBLOOM: (7, 9),
     SILVERLEAF: (7, 9),
     ROUGH_STONE: (7, 7),
     COPPER_ORE: (7, 7),
     EMPTY_VIAL: (7, 11),
+    BOLT_OF_SILK: (7, 5),
+    SILK_CLOTH: (7, 5),
 }
 
 
@@ -58,6 +63,25 @@ class TheRecipeNamesEveryReagent(unittest.TestCase):
         self.assertFalse(plan.judged)
         self.assertTrue(plan.fed)
 
+    def test_a_tailoring_rung_counts_its_bolt_and_cloth(self):
+        got = {r.entry: r for r in reagentplan.reagents(AZURE_SILK_HOOD)}
+        self.assertEqual({BOLT_OF_SILK, SILK_CLOTH, FINE_THREAD, BLUE_DYE}, set(got))
+        self.assertEqual(2, got[BOLT_OF_SILK].per_cast)
+        self.assertFalse(got[BOLT_OF_SILK].vendor)
+        self.assertEqual(8, got[SILK_CLOTH].per_cast)
+        self.assertFalse(got[SILK_CLOTH].vendor)
+        self.assertEqual(1, got[FINE_THREAD].per_cast)
+        self.assertTrue(got[FINE_THREAD].vendor)
+        self.assertEqual(2, got[BLUE_DYE].per_cast)
+        self.assertTrue(got[BLUE_DYE].vendor)
+
+    def test_vault_reagents_reserves_bolt_and_cloth_for_a_tailor(self):
+        reserved = bank.vault_reagents(
+            {"Mizu": {197: 145}}, {"member_ranks": {"Mizu": 0}}
+        )
+        self.assertIn(BOLT_OF_SILK, reserved)
+        self.assertIn(SILK_CLOTH, reserved)
+
 
 class EachShortReagentHasASource(unittest.TestCase):
     def test_reagents_in_the_bags_feed_the_craft(self):
@@ -75,6 +99,60 @@ class EachShortReagentHasASource(unittest.TestCase):
         self.assertTrue(plan.fed)
         self.assertEqual(3, plan.casts)
         self.assertEqual((), plan.shorts)
+
+    def test_bolt_in_bags_satisfies_tailoring_craft_without_raw_cloth(self):
+        plan = reagentplan.plan(
+            "Mizu",
+            AZURE_SILK_HOOD,
+            {
+                BOLT_OF_SILK: stock(bags=2),
+                FINE_THREAD: stock(bags=1),
+                BLUE_DYE: stock(bags=2),
+            },
+            KINDS,
+            {"Mizu": {"tailoring": 160}},
+        )
+        self.assertTrue(plan.fed)
+        self.assertEqual(1, plan.casts)
+        self.assertEqual((), plan.shorts)
+
+    def test_short_bolt_fetches_raw_cloth_from_guild_bank_when_no_bolt_stored(self):
+        plan = reagentplan.plan(
+            "Mizu",
+            AZURE_SILK_HOOD,
+            {
+                SILK_CLOTH: stock(guild_bank=8),
+                FINE_THREAD: stock(bags=1),
+                BLUE_DYE: stock(bags=2),
+            },
+            KINDS,
+            {"Mizu": {"tailoring": 160}},
+        )
+        self.assertFalse(plan.fed)
+        (short,) = plan.shorts
+        self.assertEqual(
+            (SILK_CLOTH, reagentplan.GUILD_BANK, "Mizu"),
+            (short.reagent.entry, short.source, short.who),
+        )
+
+    def test_short_bolt_fetches_bolt_from_bank_without_fetching_cloth(self):
+        plan = reagentplan.plan(
+            "Mizu",
+            AZURE_SILK_HOOD,
+            {
+                BOLT_OF_SILK: stock(bank=2),
+                FINE_THREAD: stock(bags=1),
+                BLUE_DYE: stock(bags=2),
+            },
+            KINDS,
+            {"Mizu": {"tailoring": 160}},
+        )
+        self.assertFalse(plan.fed)
+        (short,) = plan.shorts
+        self.assertEqual(
+            (BOLT_OF_SILK, reagentplan.BANK, "Mizu"),
+            (short.reagent.entry, short.source, short.who),
+        )
 
     def test_a_vial_in_her_own_bank_is_fetched_from_the_bank(self):
         """Uzza, measured: 20 Peacebloom and 20 Silverleaf carried, 34 vials banked."""
