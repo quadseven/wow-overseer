@@ -24,6 +24,13 @@ then hops it from one surveyed spawn to the next inside that zone. Every
 coordinate it hands out is a row of `acore_world.gameobject` - never a point
 it computed, because a guessed Z has no navmesh (gatheraim's header).
 
+KILL DROPS (#2524). An item no node holds (Silk Cloth, Mageweave, Light Leather
+off a creature) is read from `creature_loot_template` as creature spawns
+instead, inside a level band the weakest member sets (`kill_band`). The field,
+the hop, the time box, the death stops and the one travel-aim writer are the
+nodes' own; only the spawn rows differ. Whether the bots then kill what they
+stand among is their own strategies' business, and the bag count says so.
+
 THE FAMILY TRAVELS AS ONE (jobs are family-wide, #2426 makes them per member
 later). So a node counts when SOMEBODY in the family can open it, the walk
 moves all five, and the danger ceiling is the weakest member's level. The per
@@ -89,6 +96,17 @@ GREY_AFTER = 100
 
 # The danger margin, the same three levels gatheraim and the dungeon planner use.
 LEVEL_MARGIN = gatheraim.LEVEL_MARGIN
+
+# KILL DROPS (#2524). Low-level cloth and leather come off creatures, not
+# nodes. A creature counts as a source when the item drops from it at least
+# this often (cloth drops at a few percent, so it is far below
+# MIN_DROP_CHANCE, which keeps only the chests that always hold a herb), and
+# only creatures within this many levels below the weakest member are
+# considered, so the survey is the creatures a family of that level meets and
+# not every spawn on the continent. The ceiling above is the same
+# LEVEL_MARGIN as for nodes.
+KILL_MIN_CHANCE = 5.0
+KILL_LEVELS_BELOW = 30
 
 END = "end"
 TOWN = "town"
@@ -184,6 +202,19 @@ def target_for(skills) -> str:
 
 
 @dataclass(frozen=True)
+class Creature(gatheraim.Spawn):
+    """One surveyed creature spawn that drops the ordered item.
+
+    A row of `acore_world.creature`, never a computed point. `lock_id` is 0:
+    a creature has no gathering lock, which is how a kill field is told from a
+    node. `level` is the creature template's top level.
+    """
+
+    level: int = 0
+    chance: float = 0.0
+
+
+@dataclass(frozen=True)
 class Order:
     """One farm order, as the bridge read it."""
 
@@ -222,6 +253,9 @@ class Reads:
     # When the leader began standing within HOP_MIN_YARDS of a node spawn, or
     # 0.0 when it is not standing at one (or nobody has read it).
     stood_since: float = 0.0
+    # Creature spawns that drop the ordered item (#2524), read only for an
+    # item with no node spawn at all. Empty for every other order.
+    creatures: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -334,6 +368,41 @@ def usable(order, spawns, skills) -> tuple:
     return [], (
         "%s needs %s %d at its lowest node and the family's best is %s, so no "
         "node of it can be opened" % (_what(order), name, band, best.get(name, "none"))
+    )
+
+
+def kill_band(levels) -> tuple:
+    """(lowest creature level, highest) a family may be sent to for a kill drop.
+
+    The weakest member sets the ceiling, as for nodes; (0, 0) when no level
+    was read, which `usable_kills` refuses rather than guesses.
+    """
+    lowest = min((int(v) for v in (levels or {}).values()), default=0)
+    if not lowest:
+        return 0, 0
+    return max(1, lowest - KILL_LEVELS_BELOW), lowest + LEVEL_MARGIN
+
+
+def usable_kills(order, creatures, levels) -> tuple:
+    """(creature spawns inside the level band, the refusal when none is).
+
+    The band is `kill_band`: the weakest member's level sets the danger
+    ceiling, so a creature a member of the family could not stand against is
+    never a field, however much of the item it drops.
+    """
+    low, high = kill_band(levels)
+    if not high:
+        return [], (
+            "no member level was read, so the danger ceiling for %s is unknown"
+            % _what(order)
+        )
+    inside = [c for c in creatures or () if low <= int(c.level) <= high]
+    if inside:
+        return inside, ""
+    seen = sorted({int(c.level) for c in creatures or ()})
+    return [], (
+        "%s drops from creatures of level %s and the family may be sent to "
+        "level %d to %d only" % (_what(order), ", ".join(map(str, seen)), low, high)
     )
 
 
@@ -577,7 +646,10 @@ def decide(order, reads) -> Step:
     full = gatheraim.bags_block_gathering(reads.free_slots)
     if full:
         return Step(TOWN, full)
-    open_, refused = usable(order, reads.spawns, reads.skills)
+    if order.item and not reads.spawns and reads.creatures:
+        open_, refused = usable_kills(order, reads.creatures, reads.levels)
+    else:
+        open_, refused = usable(order, reads.spawns, reads.skills)
     if refused:
         return Step(END, refused)
     if not reads.leader_at or reads.leader_at.get("map_id") is None:

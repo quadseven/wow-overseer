@@ -38272,6 +38272,27 @@ _FARM_ITEM_NODE_SQL = (
     "JOIN acore_world.gameobject g ON g.id = gt.entry "
     "WHERE glt.Item = %s AND glt.Reference = 0 AND glt.Chance >= %s AND g.zoneId <> 0"
 )
+# How many creature spawns one kill-drop survey reads, nearest the leader first.
+FARM_CREATURE_ROWS = 600
+
+# THE KILL-DROP SURVEY (#2524): which creature spawns drop a material, from the
+# world's own loot table. A creature's loot id is `creature_template.lootid`;
+# a drop through a reference group is left out (`Reference = 0`) because its
+# chance is not this row's. The rows nearest the leader come first and the
+# read is capped, because one cloth is dropped by thousands of spawns.
+_FARM_ITEM_CREATURE_SQL = (
+    "SELECT DISTINCT c.guid AS guid, c.map AS map_id, c.zoneId AS zone_id, "
+    "c.position_x AS x, c.position_y AS y, c.position_z AS z, "
+    "ct.name AS name, ct.maxlevel AS level, lt.Chance AS chance "
+    "FROM acore_world.creature_loot_template lt "
+    "JOIN acore_world.creature_template ct ON ct.lootid = lt.Entry "
+    "JOIN acore_world.creature c ON c.id = ct.entry "
+    "WHERE lt.Item = %s AND lt.Reference = 0 AND lt.Chance >= %s "
+    "AND ct.maxlevel BETWEEN %s AND %s AND ct.`rank` = 0 AND ct.npcflag = 0 "
+    "AND c.map = %s "
+    "ORDER BY POW(c.position_x - %s, 2) + POW(c.position_y - %s, 2) "
+    "LIMIT " + str(FARM_CREATURE_ROWS)
+)
 _FARM_DEATHS_SQL = (
     "SELECT zone, map FROM overseer_death WHERE character_name IN ({marks}) "
     "AND created_at >= FROM_UNIXTIME(%s)"
@@ -38337,6 +38358,37 @@ def _farm_item_spawns(item: int) -> list:
             for row in cur.fetchall()]
 
 
+def _farm_item_creatures(item: int, leader_at, levels) -> list:
+    """The creature spawns on the leader's map that drop `item`, as
+    farmjob.Creature rows, inside the level band `levels` allows.
+
+    Read only when the item has no node spawn. Every coordinate is a row of
+    `acore_world.creature`; a spawn whose zone the row does not carry is
+    placed by `places.zone_id_at`, and one that has none is dropped.
+    """
+    low, high = farmjob.kill_band(levels)
+    if not high or not leader_at or leader_at.get("map_id") is None:
+        return []
+    here = int(leader_at["map_id"])
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_FARM_ITEM_CREATURE_SQL,
+                    (int(item), farmjob.KILL_MIN_CHANCE, low, high, here,
+                     float(leader_at.get("pos_x") or 0.0),
+                     float(leader_at.get("pos_y") or 0.0)))
+        rows = cur.fetchall()
+    out = []
+    for row in rows:
+        x, y = float(row["x"]), float(row["y"])
+        zone = int(row["zone_id"] or 0) or places.zone_id_at(here, x, y)
+        if not zone:
+            continue
+        out.append(farmjob.Creature(
+            map_id=int(row["map_id"]), zone_id=zone, x=x, y=y, z=float(row["z"]),
+            lock_id=0, name=str(row["name"] or ""), guid=int(row["guid"]),
+            level=int(row["level"] or 0), chance=float(row["chance"] or 0.0)))
+    return out
+
+
 def _farm_item_name(item: int) -> str:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT name FROM acore_world.item_template WHERE entry = %s",
@@ -38377,6 +38429,7 @@ def _farm_reads_for(state: dict, got: dict, gathered: int):
         skills=got["skills"], levels=got["levels"], leader_at=got["leader_at"],
         spawns=tuple(got["spawns"]), zone_levels=got["zone_levels"],
         deaths=tuple(got["deaths"]), free_slots=got["free"], gathered=gathered,
+        creatures=tuple(got.get("creatures", ())),
         walking=walking, visited=state["visited"], now=time.time(),
         stood_since=state["stand"][1])
 
@@ -38401,9 +38454,14 @@ def _farm_reads(names: list, leader: str, item: int, skill: str, since: float) -
         if best is not None and leader_at and leader_at.get("map_id") is not None:
             spawns = _survey_job_nodes(int(leader_at["map_id"]),
                                        farmjob.skill_locks(skill, best))
+    levels = _fetch_family_levels(names)
+    # A KILL DROP (#2524): an item no node holds is read as creature spawns.
+    creatures = (_farm_item_creatures(item, leader_at, levels)
+                 if item and not spawns else [])
     zone_levels = {}
-    open_, _refused = farmjob.usable(
-        farmjob.Order(job="", item=item, skill=skill), spawns, skills)
+    order = farmjob.Order(job="", item=item, skill=skill, name=name)
+    open_, _refused = (farmjob.usable_kills(order, creatures, levels) if creatures
+                       else farmjob.usable(order, spawns, skills))
     here = int((leader_at or {}).get("zone_id") or 0)
     for rank, (_far, zone, _nodes, near) in enumerate(farmjob.fields(open_, leader_at)):
         if rank >= GATHER_DANGER_CANDIDATES and zone != here:
@@ -38413,9 +38471,10 @@ def _farm_reads(names: list, leader: str, item: int, skill: str, since: float) -
             zone_levels[zone] = top
     return {
         "skills": skills,
-        "levels": _fetch_family_levels(names),
+        "levels": levels,
         "leader_at": leader_at,
         "spawns": spawns,
+        "creatures": creatures,
         "zone_levels": zone_levels,
         "deaths": _farm_deaths(names, since),
         "free": _fetch_free_slots(names),
