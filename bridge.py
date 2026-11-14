@@ -23045,6 +23045,16 @@ class Bridge(discord.Client):
                      "movement and cleared %d stale aim(s)",
                      action.quest_id, cleared)
             return
+        # A FAMILY IN THE PROFESSION LOOP IS WALKED BY ITS OWN AIM. The loop's
+        # gather phase aims the leader at a node; this lease renewing
+        # drive_quest sends it toward the quest instead, and the farm walk then
+        # waits for ever on a leader that never arrives.
+        if family and profloop.enabled_for(family):
+            cleared = await asyncio.to_thread(_aim_family_quest, family, 0, ())
+            log.info("goal: quest %d stands down - the profession loop owns "
+                     "movement and cleared %d stale aim(s)",
+                     action.quest_id, cleared)
+            return
         # AN AIM AT NOBODY WHO IS HERE IS NOT AN AIM (#56). When none of the
         # quest's holders is in the world on this realm (the family moved to
         # another realm and left its rows behind, or is simply logged off),
