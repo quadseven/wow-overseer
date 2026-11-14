@@ -15373,7 +15373,12 @@ class Bridge(discord.Client):
                 describe = await self._jev_describer({council_row.item_entry})
                 decision = lootcouncil.skipped(
                     council_row, describe(council_row.item_entry))
-            wrote = await asyncio.to_thread(_decide_council, decision)
+            # No card means no armor fit to read: said once per row (#2429).
+            missing = lootcouncil.card_missing(
+                council_row, describe(council_row.item_entry))
+            if missing:
+                log.info(missing)
+            wrote =await asyncio.to_thread(_decide_council, decision)
             if wrote:
                 log.info(
                     "loot council: %s goes to %s (%s) - %s",
