@@ -200,13 +200,13 @@ FISHING_REFUSAL = (
 )
 
 PRIMARY_RANK_REFUSAL = (
-    "This is a CAP, not a learn, and nothing in this system can lift one. "
-    "trainjob.outstanding refuses any skill the character already holds "
-    "(`if skill in tuple(member.holds): return 0`), so job='train' produces no "
-    "errand for a rank-up; and mod-overseer's trainer resolve cannot find a "
-    "trainer for a held trade either - quadseven/mod-overseer#196. Setting a "
-    "skill target above the rank cap is therefore a goal that can only park "
-    "where it is."
+    "This is a CAP, not a learn, and a goal does not lift it. The rank is "
+    "bought at a trainer: guildjobs.ranks_due writes a rank learn errand for "
+    "the member once the trade is within RANK_UP_MARGIN of its cap and the "
+    "level, skill and purse the rank asks are met, and TrainOnArrival pays "
+    "the trainer when the member arrives. job='train' stays out of it "
+    "(trainjob.outstanding refuses a held skill), so this goal parks at the "
+    "cap until that learn errand has been bought, and moves on its own after."
 )
 
 

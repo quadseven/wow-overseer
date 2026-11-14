@@ -50,6 +50,8 @@ ITEM_TEMPLATE_SQL = (
     "it.RequiredSkillRank AS required_skill_rank, "
     "it.AllowableClass AS allowable_class, "
     "it.ContainerSlots AS container_slots, "
+    "it.DisenchantID AS disenchant_id, "
+    "it.RequiredDisenchantSkill AS disenchant_skill, "
     "it.armor AS armor, it.block AS block, it.dmg_min1 AS dmg_min1, "
     "it.dmg_max1 AS dmg_max1, it.delay AS delay, "
     "it.holy_res AS holy_res, it.fire_res AS fire_res, "
@@ -62,6 +64,8 @@ ITEM_TEMPLATE_SQL = (
     + " "
     "FROM acore_world.item_template it WHERE it.entry IN (%s)"
 )
+
+_DISENCHANT_FIELDS = ("disenchant_id", "disenchant_skill")
 
 _TEMPLATE_FIELDS = (
     "item_class",
@@ -144,6 +148,12 @@ def item_templates(rows) -> dict:
         if item is None:
             continue
         item["stats"] = gearscore.stats_from_row(row)
+        # The core's own breakdown facts (#1978). Optional: a row without them
+        # is still read, and the plan falls back to its convention.
+        for field in _DISENCHANT_FIELDS:
+            value = _int(row.get(field)) if hasattr(row, "get") else None
+            if value is not None:
+                item[field] = value
         out[entry] = item
     return out
 

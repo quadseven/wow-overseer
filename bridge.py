@@ -114,6 +114,7 @@ import interview
 import itemplan_reads
 import itemplan_shadow
 import itemplan
+import itemplan_disenchant
 import itemplan_vendor
 import itemsource
 import purse
@@ -10715,7 +10716,9 @@ class Bridge(discord.Client):
         # whose line from the leader crosses a death disc is not written.
         # Looked up like _fetch_family_death_spots above: the check is advisory.
         refuse = globals().get("_death_disc_refusal")
-        if refuse and str(aim).startswith("at:"):
+        # A ROLE KEYWORD IS JUDGED TOO: the helper looks up the nearest holder
+        # and answers "" for anything it cannot place (a flight node, an entry).
+        if refuse:
             refusal = await asyncio.to_thread(refuse, leader, aim)
             if refusal:
                 log.warning("town slot: %s asked for %s and was refused: %s",
@@ -12073,6 +12076,14 @@ class Bridge(discord.Client):
             "and are not craftable until a mailbox pass collects them.",
             queued, spent, len(buyers), leader, aimed, _family_label(cohort),
         )
+        if not queued:
+            # A PASS THAT BOUGHT NOTHING SAYS WHY WHEN THE HOUSE IS BARE (#2523).
+            listed = await asyncio.to_thread(
+                _fetch_listed_counts, sorted({n.entry for n in needs}))
+            for note in reagentplan.house_none_notes(
+                    [(n.shopper, n.label or "item %d" % n.entry, n.entry)
+                     for n in needs], listed):
+                log.info("auction: %s", note)
 
     async def _gearup_facts_and_tanks(self, names):
         facts = await asyncio.to_thread(_fetch_gearup_facts, names)
@@ -14478,6 +14489,33 @@ class Bridge(discord.Client):
                     "only %s can walk the family's town errands",
                     aim, name, leader,
                 )
+        if not run_doors:
+            # A STANDING AIM IS RE-JUDGED AFTER A DEATH (#2539), on the same
+            # sweep and outside a dungeon run for the same reason.
+            released += await self._release_deadly_standing_aims(names)
+        return released
+
+    async def _release_deadly_standing_aims(self, names: list) -> int:
+        """Release a standing economy aim whose walk has now killed the family.
+
+        The death discs are judged once, at `_claim_town_slot`; an aim already
+        standing was only ever ended by arrival, its lease or its errand
+        (#2539). Each pass this judges the standing aims again against the
+        discs, which hold the fresh deaths, and against the family's own recent
+        deaths on the walk, so a hostile that sits on the road closes it as
+        lava does. Advisory: an unread table releases nothing.
+        """
+        aims = {name: aim for name, aim
+                in (await asyncio.to_thread(_standing_travel_aims)).items()
+                if name in names}
+        refused = await asyncio.to_thread(_deadly_standing_aims, names, aims)
+        released = 0
+        for name, why in sorted(refused.items()):
+            aim = aims.get(name, "")
+            if await asyncio.to_thread(_release_trade_errand, name, aim):
+                released += 1
+                log.warning("economy: released standing aim %s from %s: %s",
+                            aim, name, why)
         return released
 
     async def _vendor_pass_mode(self, names: list, free_slots: dict,
@@ -14673,6 +14711,7 @@ class Bridge(discord.Client):
         in_run = await self._mid_run(names)
         if not in_run:
             await self._release_stranded_ground_errands(names, leader)
+            # A STANDING AIM IS RE-JUDGED AFTER A DEATH (#2539).
         else:
             # ...AND DURING ONE, EVERYTHING FAR FROM THE RUN'S DOOR (#230). A
             # stale mailbox aim on a follower is inert while it follows and
@@ -14888,6 +14927,14 @@ class Bridge(discord.Client):
         await globals().get(
             "_run_itemplan_give", skip_itemplan_give
         )(itemplan_give, names, leader, rows, free_slots, gear_rows, worn)
+        itemplan_disenchant_run = getattr(self, "_itemplan_disenchant", None)
+        async def skip_itemplan_disenchant(*args):
+            return None
+
+        await globals().get(
+            "_run_itemplan_disenchant", skip_itemplan_disenchant
+        )(itemplan_disenchant_run, names, leader, rows, free_slots, gear_rows,
+          worn)
         itemplan_auction = getattr(self, "_itemplan_auction", None)
         async def skip_itemplan_auction(*args):
             return None
@@ -16160,6 +16207,38 @@ class Bridge(discord.Client):
             ))
         if gifts:
             await self._write_guild_gifts(gifts)
+
+    async def _itemplan_disenchant(self, names: list, family: str, rows: list,
+                                   free_slots: dict, gear_rows=(),
+                                   worn_rows=()) -> None:
+        """Break down the plan's DISENCHANT rows when ITEMPLAN_DISENCHANT is on."""
+        if not itemplan_disenchant.enabled():
+            return
+        try:
+            extras = await asyncio.to_thread(
+                _itemplan_reads, names, family, rows, gear_rows, worn_rows)
+            report = await asyncio.to_thread(
+                itemplan_shadow.shadow, names, family, rows, free_slots,
+                gear_rows=gear_rows, worn_rows=worn_rows,
+                keep_names=OWNER_KEEPS, extras=extras)
+            if report is None:
+                return
+            stacks = itemplan_shadow.build_stacks(
+                rows, gear_rows, extras.templates, extras.instance_soulbound)
+            jobs = itemplan_disenchant.jobs_for(
+                report.plan, list(zip(stacks, rows, strict=True)),
+                keep_names=OWNER_KEEPS)
+            if not jobs:
+                return
+            wrote = await asyncio.to_thread(
+                _carry_out_itemplan_disenchant, jobs)
+            for line in itemplan_disenchant.lines(jobs):
+                log.info("%s", line)
+            log.info("%s %d of %d queued", itemplan_disenchant.PREFIX,
+                     wrote, len(jobs))
+        except Exception:
+            log.exception("itemplan disenchant: the route failed; the economy "
+                          "pass carries on")
 
     async def _itemplan_auction(self, names: list, family: str, rows: list,
                                 free_slots: dict, gear_rows=(), worn_rows=()) -> None:
@@ -22315,6 +22394,16 @@ class Bridge(discord.Client):
                 where.get("map_id") if where else "?",
                 ", ".join(sorted(smelters)),
             )
+            return
+        # NOT EVERY FORGE IS A WALK (#2538): the nearest on the whole map can
+        # be past a death disc, in hostile ground, or a split family's drag.
+        # Looked up: the adapter tests load this method in isolation.
+        judge = globals().get("_forge_refusal")
+        why = await asyncio.to_thread(
+            judge, names, leader, spawn, forge.aim) if judge else ""
+        if why:
+            log.info("forge: %s wait: leader=%s is not walked to a Forge: %s",
+                     ", ".join(sorted(smelters)), leader, why)
             return
         aimed = await self._claim_town_slot("forge", leader, forge.aim,
                                              cohort=_cohort_key(cohort))
@@ -31703,6 +31792,14 @@ async def _run_itemplan_give(itemplan_give, names, family, rows, free_slots,
         await itemplan_give(names, family, rows, free_slots, gear_rows, worn_rows)
 
 
+async def _run_itemplan_disenchant(itemplan_disenchant_run, names, family, rows,
+                                   free_slots, gear_rows, worn_rows) -> None:
+    """Call the disenchant route executor when this economy pass exposes it."""
+    if itemplan_disenchant_run is not None:
+        await itemplan_disenchant_run(
+            names, family, rows, free_slots, gear_rows, worn_rows)
+
+
 async def _run_itemplan_auction(itemplan_auction, names, family, rows,
                                free_slots, gear_rows, worn_rows) -> None:
     """Call the auction route executor when this economy pass exposes it."""
@@ -33224,6 +33321,49 @@ def _disenchant_instead(holder: str, item_guid: int):
         log.exception("disenchant route: cannot route %s's item %d, so it is "
                       "sold as before", holder, int(item_guid))
         return None
+
+
+ITEMPLAN_DISENCHANT_SOURCE = "itemplan-disenchant"
+
+
+def _carry_out_itemplan_disenchant(jobs) -> int:
+    """Queue one `disenchant` row per job the plan chose (#1978); the count.
+
+    Blocking. Each job passes the keep marks and the epic gate a sale passes,
+    then the core's own gate (`bag_pressure.disenchant_route`) on facts read
+    from the item: only the holder breaks its own stack down, and a stack the
+    core would refuse, or one whose facts cannot be read, is left alone. A row
+    for the same item standing or written in the last DISENCHANT_ROUTE_HOURS
+    is the answer for it. A database fault skips that job and is logged.
+    """
+    wrote = 0
+    for job in jobs:
+        command = "guid:%d count:1" % int(job.item_guid)
+        if _KEEP.blocks(job.holder, command) or _epic_blocks(job.holder, command):
+            continue
+        try:
+            route = bag_pressure.disenchant_route(
+                job.holder, _disenchant_facts(job.item_guid),
+                {job.holder: _family_enchanters(job.holder).get(job.holder, 0)})
+            if route != (bag_pressure.DISENCHANT, job.holder):
+                continue
+            with _connect() as conn, conn.cursor() as cur:
+                cur.execute(_DISENCHANT_ROUTED_SQL, (
+                    ITEMPLAN_DISENCHANT_SOURCE, job.holder, command,
+                    DISENCHANT_ROUTE_HOURS))
+                if int((cur.fetchone() or {}).get("n") or 0):
+                    continue
+                cur.execute(
+                    "INSERT INTO overseer_command "
+                    "(target_name, command, kind, target_arg, source) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (job.holder, command, "disenchant", "",
+                     ITEMPLAN_DISENCHANT_SOURCE))
+                wrote += 1
+        except (pymysql.err.MySQLError, OSError):
+            log.exception("itemplan disenchant: cannot queue %s's item %d",
+                          job.holder, int(job.item_guid))
+    return wrote
 
 
 def _insert_sell(candidate: bag_pressure.SellCandidate) -> int:
@@ -38277,6 +38417,27 @@ _FARM_ITEM_NODE_SQL = (
     "JOIN acore_world.gameobject g ON g.id = gt.entry "
     "WHERE glt.Item = %s AND glt.Reference = 0 AND glt.Chance >= %s AND g.zoneId <> 0"
 )
+# How many creature spawns one kill-drop survey reads, nearest the leader first.
+FARM_CREATURE_ROWS = 600
+
+# THE KILL-DROP SURVEY (#2524): which creature spawns drop a material, from the
+# world's own loot table. A creature's loot id is `creature_template.lootid`;
+# a drop through a reference group is left out (`Reference = 0`) because its
+# chance is not this row's. The rows nearest the leader come first and the
+# read is capped, because one cloth is dropped by thousands of spawns.
+_FARM_ITEM_CREATURE_SQL = (
+    "SELECT DISTINCT c.guid AS guid, c.map AS map_id, c.zoneId AS zone_id, "
+    "c.position_x AS x, c.position_y AS y, c.position_z AS z, "
+    "ct.name AS name, ct.maxlevel AS level, lt.Chance AS chance "
+    "FROM acore_world.creature_loot_template lt "
+    "JOIN acore_world.creature_template ct ON ct.lootid = lt.Entry "
+    "JOIN acore_world.creature c ON c.id = ct.entry "
+    "WHERE lt.Item = %s AND lt.Reference = 0 AND lt.Chance >= %s "
+    "AND ct.maxlevel BETWEEN %s AND %s AND ct.`rank` = 0 AND ct.npcflag = 0 "
+    "AND c.map = %s "
+    "ORDER BY POW(c.position_x - %s, 2) + POW(c.position_y - %s, 2) "
+    "LIMIT " + str(FARM_CREATURE_ROWS)
+)
 _FARM_DEATHS_SQL = (
     "SELECT zone, map FROM overseer_death WHERE character_name IN ({marks}) "
     "AND created_at >= FROM_UNIXTIME(%s)"
@@ -38342,6 +38503,37 @@ def _farm_item_spawns(item: int) -> list:
             for row in cur.fetchall()]
 
 
+def _farm_item_creatures(item: int, leader_at, levels) -> list:
+    """The creature spawns on the leader's map that drop `item`, as
+    farmjob.Creature rows, inside the level band `levels` allows.
+
+    Read only when the item has no node spawn. Every coordinate is a row of
+    `acore_world.creature`; a spawn whose zone the row does not carry is
+    placed by `places.zone_id_at`, and one that has none is dropped.
+    """
+    low, high = farmjob.kill_band(levels)
+    if not high or not leader_at or leader_at.get("map_id") is None:
+        return []
+    here = int(leader_at["map_id"])
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_FARM_ITEM_CREATURE_SQL,
+                    (int(item), farmjob.KILL_MIN_CHANCE, low, high, here,
+                     float(leader_at.get("pos_x") or 0.0),
+                     float(leader_at.get("pos_y") or 0.0)))
+        rows = cur.fetchall()
+    out = []
+    for row in rows:
+        x, y = float(row["x"]), float(row["y"])
+        zone = int(row["zone_id"] or 0) or places.zone_id_at(here, x, y)
+        if not zone:
+            continue
+        out.append(farmjob.Creature(
+            map_id=int(row["map_id"]), zone_id=zone, x=x, y=y, z=float(row["z"]),
+            lock_id=0, name=str(row["name"] or ""), guid=int(row["guid"]),
+            level=int(row["level"] or 0), chance=float(row["chance"] or 0.0)))
+    return out
+
+
 def _farm_item_name(item: int) -> str:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT name FROM acore_world.item_template WHERE entry = %s",
@@ -38382,6 +38574,7 @@ def _farm_reads_for(state: dict, got: dict, gathered: int):
         skills=got["skills"], levels=got["levels"], leader_at=got["leader_at"],
         spawns=tuple(got["spawns"]), zone_levels=got["zone_levels"],
         deaths=tuple(got["deaths"]), free_slots=got["free"], gathered=gathered,
+        creatures=tuple(got.get("creatures", ())),
         walking=walking, visited=state["visited"], now=time.time(),
         stood_since=state["stand"][1])
 
@@ -38406,9 +38599,14 @@ def _farm_reads(names: list, leader: str, item: int, skill: str, since: float) -
         if best is not None and leader_at and leader_at.get("map_id") is not None:
             spawns = _survey_job_nodes(int(leader_at["map_id"]),
                                        farmjob.skill_locks(skill, best))
+    levels = _fetch_family_levels(names)
+    # A KILL DROP (#2524): an item no node holds is read as creature spawns.
+    creatures = (_farm_item_creatures(item, leader_at, levels)
+                 if item and not spawns else [])
     zone_levels = {}
-    open_, _refused = farmjob.usable(
-        farmjob.Order(job="", item=item, skill=skill), spawns, skills)
+    order = farmjob.Order(job="", item=item, skill=skill, name=name)
+    open_, _refused = (farmjob.usable_kills(order, creatures, levels) if creatures
+                       else farmjob.usable(order, spawns, skills))
     here = int((leader_at or {}).get("zone_id") or 0)
     for rank, (_far, zone, _nodes, near) in enumerate(farmjob.fields(open_, leader_at)):
         if rank >= GATHER_DANGER_CANDIDATES and zone != here:
@@ -38418,9 +38616,10 @@ def _farm_reads(names: list, leader: str, item: int, skill: str, since: float) -
             zone_levels[zone] = top
     return {
         "skills": skills,
-        "levels": _fetch_family_levels(names),
+        "levels": levels,
         "leader_at": leader_at,
         "spawns": spawns,
+        "creatures": creatures,
         "zone_levels": zone_levels,
         "deaths": _farm_deaths(names, since),
         "free": _fetch_free_slots(names),
@@ -38617,6 +38816,54 @@ def _nearest_forge(name: str):
             raise
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def _forge_refusal(names: list, leader: str, spawn, aim: str) -> str:
+    """Why the leader must not be walked to the Forge `spawn` (#2538), or "".
+
+    Death discs first (the walk, or the Forge itself, over ground the family
+    died on), then travel.forge_refusal: distance, a split family and hostile
+    spawns beside the Forge, from levelroute's own spawn cells. ADVISORY: an
+    unreadable table refuses nothing.
+    """
+    rows = _fetch_positions(list(names))
+    here = rows.get(leader)
+    if not here:
+        return ""
+    start = {"map_id": here.get("map_id"), "x": here.get("pos_x"),
+             "y": here.get("pos_y")}
+    discs = _fetch_death_discs()
+    if discs:
+        goal = {"map_id": spawn.get("map_id"), "x": spawn.get("x"),
+                "y": spawn.get("y")}
+        hit = deathcells.crossing(discs, start, goal)
+        if hit is None:
+            hit = next((d for d in discs
+                        if d.map_id == goal["map_id"]
+                        and ((d.x - goal["x"]) ** 2 + (d.y - goal["y"]) ** 2)
+                        ** 0.5 <= d.radius), None)
+        if hit is not None:
+            return "the walk to %s crosses ground the family died on: %s" % (
+                aim, hit.said())
+    positions = {n: {"map_id": r.get("map_id"), "x": r.get("pos_x"),
+                     "y": r.get("pos_y")} for n, r in rows.items()}
+    level = 0
+    team = ""
+    hostile = ()
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            members = _planner_rows(
+                cur, levelroute.MEMBERS_SQL.format(
+                    holes=campaignplan.holes(1)), (leader,), "the leader") or []
+        level = int(members[0].get("level") or 0) if members else 0
+        team = levelroute.team_of(members)
+        cells = _level_world()[1]
+        hostile = tuple(c for c in (cells or ())
+                        if levelroute.hostile_to(c, team)) if team else ()
+    except pymysql.err.MySQLError as exc:
+        log.warning("forge: the leader's level could not be read (%s); the "
+                    "ground is not judged", exc.args[:1])
+    return travel.forge_refusal(spawn, leader, positions, hostile, level)
 
 
 def _forge_errands(family: str | None = None) -> dict:
@@ -40118,6 +40365,9 @@ def _plan_craft_reagents(names: list, spells: dict, skills: dict) -> dict:
         places = _fetch_reagent_stock(pairs)
         vault = _fetch_vault_stacks(sorted(wanted), entries)
         kinds = _fetch_item_kinds(entries)
+        # WHETHER THE HOUSE LISTS ANY (#2523), so a reagent that falls through
+        # to it is said to have nothing to buy rather than "from the auction".
+        listed = _fetch_listed_counts(entries)
     except pymysql.err.MySQLError:
         log.exception("craft: the reagents could not be read; no errand is planned")
         return {}
@@ -40128,11 +40378,36 @@ def _plan_craft_reagents(names: list, spells: dict, skills: dict) -> dict:
             bags, banked, mail = places.get((name, r.entry), (0, 0, 0))
             in_vault = sum(st.count for st in vault.get(name, ()) if st.entry == r.entry)
             stock[r.entry] = reagentplan.Stock(bags, banked, mail, in_vault)
-        plans[name] = reagentplan.plan(name, spells[name], stock, kinds, skills)
+        plans[name] = reagentplan.plan(
+            name, spells[name], stock, kinds, skills, listed=listed)
     for name in names:
         _CRAFT_PLANS.pop(name, None)
     _CRAFT_PLANS.update(plans)
     return plans
+
+
+def _fetch_listed_counts(entries: list):
+    """entry -> live buyout listings in either house, or None when unread.
+
+    None means "not read", never "none listed": a world image with no readable
+    auction house keeps every reagent line as it was.
+    """
+    if not entries:
+        return {}
+    marks = ",".join(["%s"] * len(entries))
+    sql = ("SELECT ii.itemEntry AS entry, COUNT(*) AS n FROM auctionhouse a "  # noqa: S608 - placeholders from a COUNT, values still bound
+           "JOIN item_instance ii ON ii.guid = a.itemguid "
+           "WHERE a.buyoutprice > 0 AND ii.itemEntry IN (%s) GROUP BY ii.itemEntry"
+           % marks)
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, [int(e) for e in entries])
+            found = {int(r["entry"]): int(r["n"]) for r in cur.fetchall()}
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+    return {int(e): found.get(int(e), 0) for e in entries}
 
 
 def _fetch_item_kinds(entries: list) -> dict:
@@ -41792,8 +42067,43 @@ def _fetch_death_discs() -> list:
         return []
 
 
+_KEYWORD_SPAWN_SQL = (
+    "SELECT s.map_id AS map_id, cr.position_x AS x, cr.position_y AS y "
+    "FROM overseer_snapshot s "
+    "JOIN acore_world.creature cr ON cr.map = s.map_id "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "AND (ct.npcflag & %s) = %s AND " + towntrip.REAL_SPAWN_SQL + " "
+    "ORDER BY POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2) "
+    "LIMIT 1"
+)
+
+
+def _nearest_keyword_spawn(name: str, aim: str):
+    """{map_id, x, y} of the nearest holder of the role keyword `aim` names on
+    `name`'s own map, or None. ADVISORY, like the discs it is judged against:
+    an unreadable table, an unplaced character or an aim that is not a role
+    keyword all answer None, and None refuses nothing (#2457)."""
+    mask = deathcells.keyword_mask(aim)
+    if not mask:
+        return None
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_KEYWORD_SPAWN_SQL, (name, mask, mask))
+            row = cur.fetchone()
+    except pymysql.err.MySQLError as exc:
+        log.warning("death discs: the %r holder could not be read (%s); the "
+                    "walk is not checked against it", aim, exc.args[:1])
+        return None
+    return dict(row) if row else None
+
+
 def _death_disc_refusal(leader: str, aim: str) -> str:
-    """Why `leader` must not be sent to ground aim `aim`, or ""."""
+    """Why `leader` must not be sent to `aim` (a ground aim or a role
+    keyword), or ""."""
+    ground = places.parse_ground_aim(aim)
+    if not (ground or deathcells.keyword_mask(aim)):
+        return ""
     discs = _fetch_death_discs()
     if not discs:
         return ""
@@ -41802,22 +42112,78 @@ def _death_disc_refusal(leader: str, aim: str) -> str:
         return ""
     here = {"map_id": row.get("map_id"), "x": row.get("pos_x"),
             "y": row.get("pos_y")}
-    return deathcells.aim_refusal(discs, here, aim)
+    spawn = None if ground else _nearest_keyword_spawn(leader, aim)
+    return deathcells.aim_refusal(discs, here, aim, spawn=spawn)
+
+
+def _fetch_recent_deaths(names: list):
+    """The family's deaths in the last deathcells.REPEAT_MINUTES as rows, or
+    None when the table could not be read (None releases nothing)."""
+    if not names:
+        return []
+    sql = deathcells.RECENT_SQL.format(marks=", ".join(["%s"] * len(names)))
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(sql, (deathcells.REPEAT_MINUTES, *names))
+            return [dict(r) for r in cur.fetchall()]
+    except pymysql.err.MySQLError as exc:
+        log.warning("standing aims: the recent deaths could not be read (%s); "
+                    "no aim is released on them", exc.args[:1])
+        return None
+
+
+def _deadly_standing_aims(names: list, aims: dict) -> dict:
+    """{name: why} for each standing economy aim (a ground aim or a role
+    keyword) the discs or the family's recent deaths now refuse, each judged
+    from its own holder's position (#2539). {} when nothing is read."""
+    standing = {n: a for n, a in (aims or {}).items()
+                if a and n in names and _is_economy_aim(a)
+                and (places.parse_ground_aim(a) or deathcells.keyword_mask(a))}
+    if not standing:
+        return {}
+    deaths = _fetch_recent_deaths(list(names))
+    if not deaths:
+        return {}
+    discs = _fetch_death_discs()
+    rows = _fetch_positions(list(standing))
+    out = {}
+    for name, aim in standing.items():
+        row = rows.get(name)
+        if not row:
+            continue
+        here = {"map_id": row.get("map_id"), "x": row.get("pos_x"),
+                "y": row.get("pos_y")}
+        spawn = (None if places.parse_ground_aim(aim)
+                 else _nearest_keyword_spawn(name, aim))
+        why = deathcells.standing_aim_refusal(discs, deaths, here, aim,
+                                              spawn=spawn)
+        if why:
+            out[name] = why
+    return out
 
 
 def _member_death_disc_refusals(names: list, aim: str) -> dict:
-    """{member: why} for the members whose own walk to ground aim `aim` crosses
-    a death disc, each judged from its own position (individual mode). {} when
-    nothing is read: the check is advisory."""
+    """{member: why} for the members whose own walk to `aim` (a ground aim or
+    a role keyword) crosses a death disc, each judged from its own position
+    (individual mode). {} when nothing is read: the check is advisory."""
+    ground = places.parse_ground_aim(aim)
+    if not names or not (ground or deathcells.keyword_mask(aim)):
+        return {}
     discs = _fetch_death_discs()
-    if not discs or not names:
+    if not discs:
         return {}
     rows = _fetch_positions(list(names))
     here = {
         n: {"map_id": r.get("map_id"), "x": r.get("pos_x"), "y": r.get("pos_y")}
         for n, r in rows.items()
     }
-    return deathcells.member_aim_refusals(discs, here, names, aim)
+    spawns = {}
+    if not ground:
+        for n in here:
+            spawn = _nearest_keyword_spawn(n, aim)
+            if spawn:
+                spawns[n] = spawn
+    return deathcells.member_aim_refusals(discs, here, names, aim, spawns=spawns)
 
 
 def _fetch_quest_ends(quests: list) -> dict:

@@ -111,7 +111,7 @@ class OutstandingRefusesEveryErrandTheWorldWouldRefuse(unittest.TestCase):
     def test_a_skill_already_held_is_a_cap_and_not_a_learn(self):
         """The trainer resolve narrows on TrainerStartedSkills - what a spawn
         can START somebody in - so a held skill resolves to a trainer that
-        cannot help until quadseven/mod-overseer#196 lands."""
+        cannot help; the rank errand buys the next rank instead."""
         m = member("Og", wanted=(TAILORING,), learn_skill=TAILORING, holds=(TAILORING,))
         self.assertEqual(0, trainjob.outstanding(m))
 
@@ -229,7 +229,8 @@ class ReadinessIsAskedBeforeTheOrderIsWritten(unittest.TestCase):
             ]
         )
         self.assertIn("Og", why)
-        self.assertIn("196", why)
+        self.assertNotIn("196", why)
+        self.assertIn("rank errand", why)
 
     def test_an_empty_roster_is_refused(self):
         self.assertTrue(trainjob.readiness([]))

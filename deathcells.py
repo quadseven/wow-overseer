@@ -26,6 +26,7 @@ import math
 from dataclasses import dataclass
 
 import places
+import travel
 
 # Deaths within this many yards of a member of a cluster join it.
 CLUSTER_YARDS = 150.0
@@ -51,6 +52,33 @@ ENDS_SQL = (
     "c.position_y AS y FROM acore_world.creature_questender e "
     "JOIN acore_world.creature c ON c.id = e.id WHERE e.quest IN ({quests})"
 )
+
+
+# The worldserver's own npcflag bit for each role keyword a travel aim may
+# name (travel.ROLES mirrors the module's table of the same keys). A keyword
+# aim names no ground: the worldserver walks to the nearest holder of the
+# flag, so the bridge looks that holder up and judges the walk to it.
+KEYWORD_FLAGS = {
+    "trainer": 16,
+    "class trainer": 32,
+    "profession trainer": 64,
+    "vendor": 128,
+    "flight master": 8192,
+    "repair": 4096,
+    "innkeeper": 65536,
+    "banker": 131072,
+    "petitioner": 262144,
+    "tabard designer": 524288,
+    "guild petitioner": 262144 | 524288,
+    "stable master": 4194304,
+    "auctioneer": 2097152,
+}
+
+
+def keyword_mask(aim) -> int:
+    """The npcflag mask a role-keyword aim walks to, or 0 for anything else
+    (a ground aim, a flight node, a creature entry, nonsense)."""
+    return KEYWORD_FLAGS.get(travel.resolve(aim) or "", 0)
 
 
 @dataclass(frozen=True)
@@ -183,36 +211,122 @@ def crossing(all_discs, start, goal):
     return None
 
 
-def aim_refusal(all_discs, here, aim) -> str:
-    """Why a ground aim must not be written, or "" when it may be."""
-    ground = places.parse_ground_aim(aim)
-    if not ground or not all_discs:
+def aim_refusal(all_discs, here, aim, spawn=None) -> str:
+    """Why an aim must not be written, or "" when it may be.
+
+    A ground aim is judged by its own ground. A role keyword is judged by
+    `spawn`, the nearest holder of the role as the bridge looked it up
+    ({map_id, x, y}); with no spawn it names no ground and is not refused.
+    """
+    if not all_discs:
         return ""
-    goal = {"map_id": ground[0], "x": ground[1], "y": ground[2]}
+    ground = places.parse_ground_aim(aim)
+    if ground:
+        goal = {"map_id": ground[0], "x": ground[1], "y": ground[2]}
+        what = aim
+    elif spawn and keyword_mask(aim):
+        goal = spawn
+        what = "the nearest %s" % travel.resolve(aim)
+    else:
+        return ""
     hit = crossing(all_discs, here, goal)
     if hit is None:
         return ""
-    return "the walk to %s crosses ground the family died on: %s" % (aim, hit.said())
+    return "the walk to %s crosses ground the family died on: %s" % (what, hit.said())
 
 
-def member_aim_refusals(all_discs, positions, names, aim) -> dict:
+def member_aim_refusals(all_discs, positions, names, aim, spawns=None) -> dict:
     """{member: why} for each of `names` whose own walk to `aim` crosses a disc.
 
     Individual mode (wow-overseer#2395): a member walks from where IT stands,
     so each is judged from its own position in `positions` ({name: {map_id, x,
     y}}). A member with no known position is not refused here: the check is
     advisory and the module's errand death breaker still counts its deaths.
-    A keyword aim names no ground, so it is never refused by a line.
+    A keyword aim is judged by `spawns` ({member: {map_id, x, y}}, the
+    nearest holder of the role from each member's own place); a member with
+    no spawn is not refused.
     """
     out = {}
     for name in names or ():
         here = (positions or {}).get(name)
         if not here:
             continue
-        why = aim_refusal(all_discs, here, aim)
+        why = aim_refusal(all_discs, here, aim, spawn=(spawns or {}).get(name))
         if why:
             out[name] = why
     return out
+
+
+# A STANDING AIM IS RE-JUDGED AFTER A DEATH (#2539). Two deaths of the family
+# this close to the line of a walk, or to where it ends, in this many minutes,
+# close the aim whoever killed them: a hostile that sits on the road is as
+# final as lava, and the discs above only ever hear of lava and falls.
+REPEAT_DEATHS = 2
+REPEAT_MINUTES = 30
+WALK_MARGIN_YARDS = 250.0
+GOAL_MARGIN_YARDS = 400.0
+
+RECENT_SQL = (
+    "SELECT character_name AS name, map AS map_id, pos_x AS x, pos_y AS y, "
+    "killer_type, killer_name FROM overseer_death "
+    "WHERE created_at > NOW() - INTERVAL %s MINUTE "
+    "AND character_name IN ({marks})"
+)
+
+
+def deaths_on_walk(deaths, here, goal) -> list:
+    """The death rows on the line `here` -> `goal`, or within GOAL_MARGIN_YARDS
+    of `goal`, on the walk's own map."""
+    a, b = _point(here), _point(goal)
+    if a is None or b is None or a[0] != b[0]:
+        return []
+    out = []
+    for d in deaths or ():
+        p = _point(d)
+        if p is None or p[0] != a[0]:
+            continue
+        spot = Disc(p[0], p[1], p[2], 0.0, "", 1)
+        if (
+            math.hypot(p[1] - b[1], p[2] - b[2]) <= GOAL_MARGIN_YARDS
+            or _to_segment(spot, a, b) <= WALK_MARGIN_YARDS
+        ):
+            out.append(d)
+    return out
+
+
+def standing_aim_refusal(all_discs, deaths, here, aim, spawn=None) -> str:
+    """Why an aim already standing must be released, or "".
+
+    The discs judge it as they would a new aim, and so do the recent deaths of
+    the family: REPEAT_DEATHS of them on the walk close it. `deaths` None is an
+    unreadable table and releases nothing.
+    """
+    why = aim_refusal(all_discs, here, aim, spawn=spawn)
+    if why:
+        return why
+    if deaths is None:
+        return ""
+    ground = places.parse_ground_aim(aim)
+    if ground:
+        goal = {"map_id": ground[0], "x": ground[1], "y": ground[2]}
+        what = aim
+    elif spawn and keyword_mask(aim):
+        goal = spawn
+        what = "the nearest %s" % travel.resolve(aim)
+    else:
+        return ""
+    hits = deaths_on_walk(deaths, here, goal)
+    if len(hits) < REPEAT_DEATHS:
+        return ""
+    killers = sorted(
+        {str(d.get("killer_name") or d.get("killer_type") or "?") for d in hits}
+    )
+    return "%d deaths of the family on the walk to %s in the last %d minutes (%s)" % (
+        len(hits),
+        what,
+        REPEAT_MINUTES,
+        ", ".join(killers),
+    )
 
 
 def pick_quest(all_discs, here, order, ends) -> tuple:
