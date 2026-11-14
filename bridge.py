@@ -10662,8 +10662,10 @@ class Bridge(discord.Client):
         slot = self._cohort_town_slot(cohort)
         # GROUND THE FAMILY DIED ON TWICE IS NOT A WALK (#2457): a ground aim
         # whose line from the leader crosses a death disc is not written.
-        if travel.is_ground_aim(aim):
-            refusal = await asyncio.to_thread(_death_disc_refusal, leader, aim)
+        # Looked up like _fetch_family_death_spots above: the check is advisory.
+        refuse = globals().get("_death_disc_refusal")
+        if refuse and str(aim).startswith("at:"):
+            refusal = await asyncio.to_thread(refuse, leader, aim)
             if refusal:
                 log.warning("town slot: %s asked for %s and was refused: %s",
                             claimant, aim, refusal)
