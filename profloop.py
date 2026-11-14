@@ -56,6 +56,13 @@ from dataclasses import dataclass, field, replace
 
 import craft_rhythm
 import jobs
+import reagentplan
+
+# Cloth tiers and cooking meats from craft_rhythm.GATHERED that drop directly
+# from creatures rather than herb/ore nodes.
+KILL_DROP_ENTRIES = frozenset(
+    {2589, 2592, 4306, 4338, 14047, 769, 2672, 2675, 3173, 3730, 12184, 20401}
+)
 
 ENV_SWITCH = "PROFESSION_LOOP"
 SOURCE = "overseer:loop"
@@ -196,6 +203,7 @@ class Facts:
     in_run: bool = False
     queue_owns: bool = False
     gather_job: str = "quest"
+    gather_why: str = ""
 
 
 @dataclass(frozen=True)
@@ -211,16 +219,50 @@ class Step:
     moved: bool = False
 
 
-def gather_job(skills: dict) -> tuple:
-    """(job, why) for the GATHER phase, from name -> {trade: value}.
+def _kill_drop_short(plans):
+    """(job, why) for the first non-town kill-drop reagent shortage, or None."""
+    items = plans.values() if isinstance(plans, dict) else (plans or ())
+    best = None
+    for p in items:
+        if not getattr(p, "judged", False):
+            continue
+        for s in getattr(p, "shorts", ()) or ():
+            if s.reagent.vendor:
+                continue
+            if s.source not in (reagentplan.GATHER, reagentplan.AUCTION):
+                continue
+            entry = int(s.reagent.entry)
+            if entry not in KILL_DROP_ENTRIES:
+                continue
+            job = "farm:%d" % entry
+            if not jobs.can_set(job):
+                continue
+            shortage = max(1, int(s.reagent.per_cast) - int(s.have.bags))
+            key = (-shortage, entry, str(p.name))
+            if best is None or key < best[0]:
+                why = "%s is short of %s (need %d, bags %d)" % (
+                    p.name,
+                    s.reagent.label,
+                    int(s.reagent.per_cast),
+                    int(s.have.bags),
+                )
+                best = (key, job, why)
+    if best is None:
+        return None
+    return best[1], best[2]
 
-    The farm job (#2417) aims a family at the nodes its best holder of one
-    trade can open, so the loop names the node trade the family is furthest
-    behind in: the lowest best value among the members who hold it. Until
-    `jobs.can_set` accepts `farm:<trade>` the answer is `quest`, which gathers
-    by roaming. Skinning is not a node trade (the farm job cannot aim at
-    creatures), so it rises on the creatures the family kills on either job.
+
+def gather_job(skills: dict, plans=None) -> tuple:
+    """(job, why) for the GATHER phase, from name -> {trade: value} and plans.
+
+    A crafter's non-town kill-drop shortage (`farm:<entry>`) comes first so a
+    tailor or cook short on cloth or meat farms what it actually lacks. When
+    no kill-drop shortage exists, the loop names the node trade the family is
+    furthest behind in (`farm:mining` / `farm:herbalism`), or `quest`.
     """
+    kill = _kill_drop_short(plans)
+    if kill is not None:
+        return kill
     best: dict = {}
     for trades in (skills or {}).values():
         for trade in FARM_TRADES:

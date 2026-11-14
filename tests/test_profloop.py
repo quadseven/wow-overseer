@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 import profloop
+import reagentplan
 import townerrand
 
 H = 3600.0
@@ -268,6 +269,46 @@ class GatherTarget(unittest.TestCase):
 
     def test_no_node_trade_roams(self):
         self.assertEqual(profloop.gather_job({"Bork": {"skinning": 14}})[0], "quest")
+
+    def test_kill_drop_shortage_chooses_farm_item(self):
+        short = reagentplan.Short(
+            reagentplan.Reagent(4338, "Mageweave Cloth", 8),
+            reagentplan.Stock(),
+            reagentplan.AUCTION,
+            "Mizu",
+            "short",
+        )
+        plan = reagentplan.Plan("Mizu", 12053, True, 0, (short,))
+        with mock.patch("jobs.can_set", return_value=True):
+            job, why = profloop.gather_job(self.SKILLS, {"Mizu": plan})
+        self.assertEqual("farm:4338", job)
+        self.assertIn("Mageweave Cloth", why)
+
+    def test_town_answered_cloth_shortage_does_not_farm(self):
+        short = reagentplan.Short(
+            reagentplan.Reagent(4338, "Mageweave Cloth", 8),
+            reagentplan.Stock(guild_bank=8),
+            reagentplan.GUILD_BANK,
+            "Mizu",
+            "in vault",
+        )
+        plan = reagentplan.Plan("Mizu", 12053, True, 0, (short,))
+        with mock.patch("jobs.can_set", return_value=True):
+            job, _ = profloop.gather_job(self.SKILLS, {"Mizu": plan})
+        self.assertEqual("farm:mining", job)
+
+    def test_node_reagent_shortage_falls_back_to_node_trade(self):
+        short = reagentplan.Short(
+            reagentplan.Reagent(2447, "Peacebloom", 1),
+            reagentplan.Stock(),
+            reagentplan.GATHER,
+            "Ugga",
+            "gather",
+        )
+        plan = reagentplan.Plan("Uzza", 2330, True, 0, (short,))
+        with mock.patch("jobs.can_set", return_value=True):
+            job, _ = profloop.gather_job(self.SKILLS, {"Uzza": plan})
+        self.assertEqual("farm:mining", job)
 
 
 class TheTownErrandTakesTheLoopsReason(unittest.TestCase):

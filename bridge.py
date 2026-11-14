@@ -11631,10 +11631,10 @@ class Bridge(discord.Client):
         on_job = {n: j for n, j in (await asyncio.to_thread(_jobs_of, names)).items()
                   if n in running}
         skills = await asyncio.to_thread(_fetch_trade_skills, names)
-        gather, gather_why = profloop.gather_job(skills)
         errand = _TOWN_ERRANDS.get(tuple(sorted(names)), townerrand.State())
         facts = await self._prof_loop_facts(key, names, skills, errand)
-        facts = dataclasses.replace(facts, jobs=on_job, gather_job=gather)
+        facts = dataclasses.replace(facts, jobs=on_job)
+        gather_why = facts.gather_why
         step = profloop.decide(_PROF_LOOPS.get(key, profloop.State()), facts)
         _PROF_LOOPS[key] = step.state
         town_key = tuple(sorted(names))
@@ -11656,6 +11656,7 @@ class Bridge(discord.Client):
             names, _RHYTHM_SPELLS, {n: v[0] for n, v in standing.items()})
         plans = await asyncio.to_thread(
             _plan_craft_reagents, names, spells, skills)
+        gather, gather_why = profloop.gather_job(skills, plans)
         judged = {n: p for n, p in plans.items() if p.judged}
         seen = {
             n: profloop.CrafterPlan(
@@ -11680,6 +11681,8 @@ class Bridge(discord.Client):
             errand_why=errand.why,
             in_run=await self._mid_run(names),
             queue_owns=await asyncio.to_thread(_queue_owns_job, key),
+            gather_job=gather,
+            gather_why=gather_why,
         )
 
     async def _prof_loop_say(self, key: str, step, on_job: dict,
