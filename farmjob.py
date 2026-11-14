@@ -198,6 +198,9 @@ class Step:
     line: str
     spawn: object = None
     zone_id: int = 0
+    # An END that a family in the profession loop should answer with a fresh
+    # order rather than by leaving the farm: a spent time box or a met target.
+    renew: bool = False
 
 
 def spawn_key(spawn) -> tuple:
@@ -325,12 +328,14 @@ def _ending(order, reads, what):
             END,
             "the %d-minute time box is up with %d %s gathered"
             % (int(order.time_box // 60), reads.gathered, what),
+            renew=True,
         )
     if order.item and reads.gathered >= int(order.target):
         return Step(
             END,
             "the target is met: %d of %d %s gathered"
             % (reads.gathered, int(order.target), what),
+            renew=True,
         )
     if len(reads.deaths or ()) >= TOTAL_DEATHS:
         return Step(
