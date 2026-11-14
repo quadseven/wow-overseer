@@ -6185,17 +6185,55 @@ def class_priority(m) -> int:
     return 0 if raidroles.fits_seat(cls, m.tree, raidroles.SEAT_HEALER) else 1
 
 
-def _class_ordered(members, classes, recent=(), class_eligible=None):
-    """Order only class-eligible seats fairly, leaving other job order intact.
+def _cross_order_state(recent):
+    """Per-member crossing outcome state from `recent`:
+    name -> (cap_refused, streak, newest_age_minutes)."""
+    by_name: dict[str, list] = {}
+    for row in recent or ():
+        if row.action not in CROSS_ACTIONS:
+            continue
+        by_name.setdefault(row.name, []).append(row)
+    state = {}
+    for name, rows in by_name.items():
+        rows.sort(key=lambda r: max(0, int(r.age_minutes)))
+        newest = rows[0]
+        cap_refused = classquest.is_cross_cap_refusal(newest.refusal)
+        streak = 0
+        if cap_refused:
+            for r in rows:
+                if classquest.is_cross_cap_refusal(r.refusal):
+                    streak += 1
+                else:
+                    break
+        state[name] = (cap_refused, streak, max(0, int(newest.age_minutes)))
+    return state
 
-    Unoffered or least recently offered class steps go first so the per-guild
-    cap cannot starve an owed seat; class_priority and level settle ties. The
-    one-day recent read bounds service history. Replacing only eligible slots
-    keeps settled members in their ordinary role, guild and name order.
+
+def _cross_order_key(name, cross_state):
+    """Order cap-refused seats first (highest streak, oldest refusal), then
+    never-crossed seats, then seats that crossed (oldest crossing first)."""
+    if name not in cross_state:
+        return (1, 0, 0)
+    cap_refused, streak, newest_age = cross_state[name]
+    if cap_refused:
+        return (0, -streak, -newest_age)
+    return (1, 1, -newest_age)
+
+
+def _class_ordered(members, classes, recent=(), class_eligible=None):
+    """Order class-eligible and crossing-refused seats fairly, preserving role/guild/name ties.
+
+    Seats refused at the realm crossing cap go ahead of unrefused and recently
+    crossed seats so cap-refused seats are not starved. Within class-eligible
+    seats, unoffered or least recently offered class steps go first, with
+    class_priority and level settling ties.
     """
     ordered = _ordered_members(members)
+    cross_state = _cross_order_state(recent)
     if classes is None:
-        return ordered
+        if not cross_state:
+            return ordered
+        return sorted(ordered, key=lambda m: _cross_order_key(m.name, cross_state))
     last_offer = _last_class_offer_ages(recent)
     eligible = (
         [m for m in ordered if m.name in class_eligible]
@@ -6206,6 +6244,7 @@ def _class_ordered(members, classes, recent=(), class_eligible=None):
         sorted(
             eligible,
             key=lambda m: (
+                _cross_order_key(m.name, cross_state),
                 _class_offer_order(m.name, last_offer),
                 class_priority(m),
                 -int(m.level or 0),
@@ -6214,7 +6253,18 @@ def _class_ordered(members, classes, recent=(), class_eligible=None):
     )
     if class_eligible is None:
         return list(fair)
-    return [next(fair) if m.name in class_eligible else m for m in ordered]
+    other = (
+        [m for m in ordered if m.name not in class_eligible]
+        if not cross_state
+        else sorted(
+            [m for m in ordered if m.name not in class_eligible],
+            key=lambda m: _cross_order_key(m.name, cross_state),
+        )
+    )
+    other_iter = iter(other)
+    return [
+        next(fair) if m.name in class_eligible else next(other_iter) for m in ordered
+    ]
 
 
 def _last_class_offer_ages(recent):
@@ -6925,11 +6975,14 @@ def crossing_cooling(name, recent, skip=frozenset()) -> bool:
     if not rows:
         return False
     newest = min(rows, key=lambda r: int(r.age_minutes))
-    minutes = (
-        classquest.CROSS_RETRY_MINUTES
-        if newest.refusal and newest.retryable
-        else classquest.CROSS_COOLDOWN_MINUTES
-    )
+    if newest.refusal and newest.retryable:
+        minutes = (
+            classquest.cross_cap_retry_minutes(name)
+            if classquest.is_cross_cap_refusal(newest.refusal)
+            else classquest.CROSS_RETRY_MINUTES
+        )
+    else:
+        minutes = classquest.CROSS_COOLDOWN_MINUTES
     if newest.refusal == classquest.CROSS_GROUND_GAVE_UP:
         gave_up = [
             r
