@@ -14,7 +14,8 @@ of the same `source` and answers:
 
 - a run of refusals the next moment may change (a fight, a move, a hold, a
   full bag): wait BASE_MINUTES, doubled for each refusal in the run, and after
-  GIVE_UP_AFTER of them in a row give up for GIVE_UP_MINUTES;
+  GIVE_UP_AFTER of them in a row give up until GIVE_UP_MINUTES have passed
+  since the newest refusal (every wait is counted from the newest row);
 - a refusal the module says will not pass (`retryable` or `retry` false, or
   the classic gate's Outland refusal): stop for PERMANENT_MINUTES.
 
