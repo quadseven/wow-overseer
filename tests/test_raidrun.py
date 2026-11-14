@@ -306,6 +306,43 @@ def _function(name):
     raise AssertionError("no %s in bridge.py" % name)
 
 
+def _cyclomatic(fn):
+    """Count the branch points the Grug review uses for bridge functions."""
+    count = 1
+    todo = list(ast.iter_child_nodes(fn))
+    while todo:
+        node = todo.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        if isinstance(
+            node,
+            (
+                ast.If,
+                ast.IfExp,
+                ast.For,
+                ast.AsyncFor,
+                ast.While,
+                ast.ExceptHandler,
+                ast.With,
+                ast.AsyncWith,
+            ),
+        ):
+            count += 1
+        elif isinstance(node, ast.BoolOp):
+            count += len(node.values) - 1
+        elif isinstance(node, ast.comprehension):
+            count += 1 + len(node.ifs)
+        elif isinstance(node, ast.match_case):
+            count += 1
+        todo.extend(ast.iter_child_nodes(node))
+    return count
+
+
+class TheRaidOrderWriterStaysReadable(unittest.TestCase):
+    def test_drive_raid_is_under_the_review_complexity_cap(self):
+        self.assertLessEqual(_cyclomatic(_function("_drive_raid")), 10)
+
+
 DOOR = {"map": 0, "x": -7510.87, "y": -1035.87}
 
 
@@ -320,6 +357,9 @@ def _load_drive_raid(
             "_raid_seat_eligibility",
             "_write_raid_seats",
             "_log_raid_arrivals",
+            "_plan_raid_seats",
+            "_persist_raid_lineup",
+            "_insert_raid_jobs",
             "_drive_raid",
         )
     )
@@ -699,12 +739,14 @@ class TheArrivalOrderNamesHowEachRaiderComes(unittest.TestCase):
         """Arrival reporting runs only after the selected seats are written."""
         drive = BRIDGE[BRIDGE.index("def _drive_raid(") :]
         drive = drive[: drive.index("\ndef ")]
+        persist = BRIDGE[BRIDGE.index("def _persist_raid_lineup(") :]
+        persist = persist[: persist.index("\ndef ")]
         writer = BRIDGE[BRIDGE.index("def _write_raid_seats(") :]
         writer = writer[: writer.index("\ndef ")]
-        self.assertIn("_log_raid_arrivals(cur, keyword, seats)", drive)
+        self.assertIn("_persist_raid_lineup(cur, family, keyword", drive)
         self.assertLess(
-            drive.index("_write_raid_seats(cur"),
-            drive.index("_log_raid_arrivals(cur"),
+            persist.index("_write_raid_seats(cur"),
+            persist.index("_log_raid_arrivals(cur"),
         )
         self.assertIn("raidrun.INSERT_SEAT_SQL", writer)
         self.assertIn("raidrun.arrival_line(", BRIDGE)

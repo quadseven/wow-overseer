@@ -4106,6 +4106,52 @@ def _write_raid_seats(cur, family: str, keyword: str, seats: list,
     return True
 
 
+def _plan_raid_seats(cur, keyword: str, family: str, names: list,
+                     withheld: list | None) -> tuple | None:
+    """Read the guild lineup and refuse a raid whose selected seats cannot form."""
+    holes = ", ".join(["%s"] * len(names))
+    cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes=holes), tuple(names))  # noqa: S608
+    members = _with_readiness(cur, [dict(row) for row in cur.fetchall()])
+    lineup, short = raidrun.lineup_for_order(keyword, members, names)
+    if short:
+        log.info("raid: %s has no ten for %s: %s",
+                 campaignqueue._family(family), keyword, short)
+    seats = raidrun.seat_rows(family, keyword, lineup)
+    if not seats:
+        log.warning("raid: %s has no lineup for %s - nobody in its guild "
+                    "could be placed, so no seat and no job is written",
+                    campaignqueue._family(family), keyword)
+        _withheld(withheld, "nobody could be placed in the raid")
+        return None
+    refusal = _raid_seat_eligibility(cur, keyword, lineup, seats)
+    if refusal:
+        log.info("raid: %s", refusal)
+        _withheld(withheld, refusal)
+        return None
+    return lineup, seats
+
+
+def _persist_raid_lineup(cur, family: str, keyword: str, lineup: dict,
+                         seats: list, withheld: list | None) -> bool:
+    """Write all selected seats before reporting their planned arrivals."""
+    if not _write_raid_seats(cur, family, keyword, seats, lineup, withheld):
+        return False
+    _log_raid_arrivals(cur, keyword, seats)
+    return True
+
+
+def _insert_raid_jobs(names: list, mode: str, source: str) -> int:
+    """Write each ordered member's job and isolate individual insert failures."""
+    written = 0
+    for name in names:
+        try:
+            _insert_job(name, mode, source)
+            written += 1
+        except Exception:
+            log.exception("raid job insert failed for %s (mode=%s)", name, mode)
+    return written
+
+
 def _drive_raid(keyword: str, family: str, names: list, source: str,
                 withheld: list | None = None) -> int:
     """Write an ordered raid's seats, then its job. Returns jobs written.
@@ -4122,37 +4168,16 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
     mode = jobs.raid_job(keyword)
     if mode is None or not names:
         return _withheld(withheld, "no raid door answers to %s" % keyword)[0]
-    holes = ", ".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes=holes),  # noqa: S608
-                    tuple(names))
-        members = _with_readiness(cur, [dict(row) for row in cur.fetchall()])
-        lineup, short = raidrun.lineup_for_order(keyword, members, names)
-        if short:
-            log.info("raid: %s has no ten for %s: %s",
-                     campaignqueue._family(family), keyword, short)
-        seats = raidrun.seat_rows(family, keyword, lineup)
-        if not seats:
-            log.warning("raid: %s has no lineup for %s - nobody in its guild "
-                        "could be placed, so no seat and no job is written",
-                        campaignqueue._family(family), keyword)
-            return _withheld(withheld, "nobody could be placed in the raid")[0]
-        eligibility_refusal = _raid_seat_eligibility(cur, keyword, lineup, seats)
-        if eligibility_refusal:
-            log.info("raid: %s", eligibility_refusal)
-            return _withheld(withheld, eligibility_refusal)[0]
+        planned = _plan_raid_seats(cur, keyword, family, names, withheld)
+        if planned is None:
+            return 0
+        lineup, seats = planned
         # ONE STATEMENT FOR ALL FORTY: if insertion fails, no partial seat set
         # is written, and the job loop below does not run.
-        if not _write_raid_seats(cur, family, keyword, seats, lineup, withheld):
+        if not _persist_raid_lineup(cur, family, keyword, lineup, seats, withheld):
             return 0
-        _log_raid_arrivals(cur, keyword, seats)
-    written = 0
-    for name in names:
-        try:
-            _insert_job(name, mode, source)
-            written += 1
-        except Exception:
-            log.exception("raid job insert failed for %s (mode=%s)", name, mode)
+    written = _insert_raid_jobs(names, mode, source)
     log.info("raid: %s ordered into %s - %d seats written in %d groups, %d "
              "job row(s) of %d. %s", campaignqueue._family(family), keyword,
              len(seats), len({s[3] for s in seats}), written, len(names),
