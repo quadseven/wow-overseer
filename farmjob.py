@@ -203,6 +203,41 @@ class Step:
     renew: bool = False
 
 
+# How far from the leader a member may stand and still take part in the order.
+# The rest follow on their own strategy; a member further out, on another map
+# or inside an instance is not part of the order (it would only hold the
+# family's bag, death and job reads hostage).
+REACH_YARDS = 300.0
+
+
+def in_reach(positions, leader) -> list:
+    """The sorted names the order covers: the leader and every member on the
+    leader's map, outside any instance, within REACH_YARDS of it.
+
+    `positions` is name -> snapshot row (map_id, instance_id, pos_x, pos_y).
+    With no reading of the leader nobody is cut, which is the old behaviour.
+    """
+    here = (positions or {}).get(leader)
+    if not here or here.get("map_id") is None:
+        return sorted(positions or {})
+    out = []
+    for name, row in positions.items():
+        if name == leader:
+            out.append(name)
+            continue
+        if row.get("map_id") is None or int(row["map_id"]) != int(here["map_id"]):
+            continue
+        if int(row.get("instance_id") or 0) != int(here.get("instance_id") or 0):
+            continue
+        if int(row.get("instance_id") or 0):
+            continue
+        dx = float(row.get("pos_x") or 0.0) - float(here.get("pos_x") or 0.0)
+        dy = float(row.get("pos_y") or 0.0) - float(here.get("pos_y") or 0.0)
+        if (dx * dx + dy * dy) ** 0.5 <= REACH_YARDS:
+            out.append(name)
+    return sorted(out)
+
+
 def spawn_key(spawn) -> tuple:
     return (int(spawn.map_id), round(float(spawn.x), 1), round(float(spawn.y), 1))
 
