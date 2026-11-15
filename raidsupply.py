@@ -1608,6 +1608,9 @@ REAGENT_NAMES = {
     BLACK_LOTUS: "Black Lotus",
     GROMSBLOOD: "Gromsblood",
     STONESCALE_OIL: "Stonescale Oil",
+    SUNGRASS: "Sungrass",
+    THORIUM_ORE: "Thorium Ore",
+    RAW_NIGHTFIN_SNAPPER: "Raw Nightfin Snapper",
     SANDWORM_MEAT: "Sandworm Meat",
     BOLT_OF_RUNECLOTH: "Bolt of Runecloth",
     DREAM_DUST: "Dream Dust",
@@ -2153,6 +2156,65 @@ def pace_lines(crafters, snapshots) -> list:
 
 SUPPLY_COLUMNS = ("supply", "wanted", "held", "short", "how it closes")
 FIRE_COLUMNS = ("raider", "role", "target", "worn", "short", "next piece")
+LOTUS_NOTE = (
+    "Black Lotus is the hard ceiling: a single rare world spawn at Herbalism "
+    "300. When it cannot be met, flasks are the first thing cut."
+)
+
+
+def herb_shortfall(
+    raiders,
+    have=None,
+    guild: str = "",
+) -> dict:
+    """Per-guild herb and reagent shortfall for one night of Molten Core (#2425).
+
+    Computed from the guild's seated `raiders` (`night_wants(raiders)`, where
+    `Greater Fire Protection Potion` is the night's fire potion target) and the
+    guild's `have` counts across bags, bank and the guild bank. Holding a
+    crafted consumable reduces that consumable's craft shortfall before its
+    reagents are summed; holding a raw reagent reduces that reagent's shortfall.
+    """
+    have = have or {}
+    wants = night_wants(raiders)
+    needed: dict[int, int] = {}
+    for supply in SUPPLIES:
+        if supply.make is None:
+            continue
+        want = sum((wants.get(supply.entry) or {}).values())
+        if not want:
+            continue
+        short_casts = max(0, want - int(have.get(supply.entry, 0)))
+        if not short_casts:
+            continue
+        for entry, per in supply.make.reagents:
+            needed[int(entry)] = needed.get(int(entry), 0) + short_casts * int(per)
+    herbs = []
+    for entry, need in sorted(
+        needed.items(), key=lambda kv: REAGENT_NAMES.get(kv[0], "item %d" % kv[0])
+    ):
+        name = REAGENT_NAMES.get(entry, "item %d" % entry)
+        held = int(have.get(entry, 0))
+        short = max(0, need - held)
+        herbs.append(
+            {
+                "entry": entry,
+                "name": name,
+                "need": need,
+                "held": held,
+                "short": short,
+                "line": "%s: %d needed, %d held, %d short" % (name, need, held, short),
+            }
+        )
+    short_kinds = sum(1 for h in herbs if h["short"] > 0)
+    prefix = "%s: " % guild if guild else ""
+    return {
+        "guild": guild,
+        "line": "%s%d of %d herb and reagent kinds short for one night of Molten Core"
+        % (prefix, short_kinds, len(herbs)),
+        "herbs": herbs,
+        "lotus_note": LOTUS_NOTE,
+    }
 
 
 def card(
@@ -2164,6 +2226,7 @@ def card(
     crafters=(),
     snapshots=(),
     unobtainable=(),
+    guild: str = "",
 ) -> dict:
     """The supply section of one guild's readiness card; the page decides nothing.
 
@@ -2197,6 +2260,7 @@ def card(
         "level_60_line": level_60_line(snapshots),
         "unobtainable": list(unobtainable),
         "top_recipes": top_recipes(knowers, carriers),
+        "herb_shortfall": herb_shortfall(raiders, have, guild=guild),
         "supply_columns": list(SUPPLY_COLUMNS),
         "supplies": [
             {

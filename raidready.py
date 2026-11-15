@@ -982,7 +982,9 @@ def build_guild(
         "attunement": raidrun.attunement(
             list(group["family_names"]), attuned, in_log, fragments
         ),
-        "supply": _supply_card(lineup, members, worn_rows, group, supply),
+        "supply": _supply_card(
+            lineup, members, worn_rows, group, supply, holding_rows=holding_rows
+        ),
         "preraid": preraid,
         "gates": _gates(min_level),
     }
@@ -998,22 +1000,41 @@ def _gates(min_level) -> dict:
     }
 
 
-def _supply_card(lineup, members, worn_rows, group, supply) -> dict:
+def _supply_card(
+    lineup, members, worn_rows, group, supply, holding_rows: list = ()
+) -> dict:
     """The Molten Core supply section (#275): raidsupply's card for this guild."""
     classes = {m["name"]: m.get("class_id") for m in members}
     raiders = raidsupply.raiders_from_lineup(
         lineup, classes, worn_rows, group["family_names"]
     )
     read = supply or {}
+    have = dict(read.get("have") or {})
+    if not have and holding_rows:
+        entry_by_name = {
+            **{name: entry for entry, name in raidsupply.REAGENT_NAMES.items()},
+            **{s.name: s.entry for s in raidsupply.SUPPLIES},
+        }
+        by_member = carried_each(
+            holding_rows, [m["name"] for m in members], tuple(entry_by_name)
+        )
+        for counts in by_member.values():
+            for item_name, count in counts.items():
+                entry = entry_by_name[item_name]
+                have[entry] = have.get(entry, 0) + count
+    guild = group.get("guild") or (
+        "%s's family" % group["family"] if group.get("family") else ""
+    )
     return raidsupply.card(
         raiders,
-        read.get("have") or {},
+        have,
         read.get("knowers") or {},
         None,
         read.get("bank"),
         crafters=group["family_names"],
         snapshots=read.get("snapshots") or (),
         unobtainable=raidcraft.unobtainable_lines(),
+        guild=guild,
     )
 
 

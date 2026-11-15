@@ -21,7 +21,13 @@ A read the realm cannot answer (a missing table or column) leaves that field
 null for every member, which the app shows as "not measured". Zero is only
 ever a measured zero.
 
-Read-only, one connection, four reads bound to the seat names.
+THE TANK AUDIT: `tank_audit` is tankaudit's seated-tank spellbook check for
+this guild: each filled tank seat's due trainer spells it has not learned,
+from the training read's trainer rows and the members' known spells. Either
+spell read failing, or a filled tank's class having no trainer rows, leaves
+`tank_audit` null: an audit that could not see every tank is not an audit.
+
+Read-only, one connection, the reads bound to the seat names.
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ import raidroles
 import raidsupply
 import raidteams
 import realmread
+import tankaudit
 from . import presence
 
 GROUPS = 8
@@ -66,6 +73,11 @@ WORN_SQL = (
     "JOIN character_inventory ci ON ci.guid = c.guid AND ci.bag = 0 "
     "AND ci.slot < %s JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN ({holes})"
+)
+KNOWN_SQL = (
+    "SELECT c.name, cs.spell FROM characters c "
+    "JOIN character_spell cs ON cs.guid = c.guid "
     "WHERE c.name IN ({holes})"
 )
 CONSUMABLES_SQL = (
@@ -113,7 +125,14 @@ def fetch(rd, guild: str) -> dict:
     names = seat_names(guild)
     members = _read(rd, MEMBERS_SQL.format(holes=_holes(len(names))), tuple(names))  # noqa: S608
     found = sorted({r["name"] for r in in_guild(members or [])})
-    out = {"members": members, "attuned": [], "worn": [], "consumables": []}
+    out = {
+        "members": members,
+        "attuned": [],
+        "worn": [],
+        "consumables": [],
+        "known": [],
+        "trainer": {},
+    }
     if not found:
         return out
     holes = _holes(len(found))
@@ -135,6 +154,29 @@ def fetch(rd, guild: str) -> dict:
         CONSUMABLES_SQL.format(holes=holes, entries=_holes(len(CONSUMABLES))),  # noqa: S608
         (*found, *CONSUMABLES),
     )
+    out["known"] = _read(rd, KNOWN_SQL.format(holes=holes), tuple(found))  # noqa: S608
+    out["trainer"] = _trainer_by_class(rd, guild)
+    return out
+
+
+def _trainer_by_class(rd, guild: str) -> dict:
+    """The trainer rows of every tank class seated for `guild`, read the
+    way the training read reads them (cached per class); a class whose
+    read the realm cannot answer maps to None. The rows read answers a
+    missing trainer table with an empty list, not an error, so an empty
+    answer maps to None too: no rows is no basis to judge a tank by."""
+    from . import training
+
+    out = {}
+    class_ids = {
+        s.class_id for s in raidteams.seats(guild) if s.seat == raidroles.SEAT_TANK
+    }
+    for class_id in sorted(class_ids):
+        try:
+            rows = training._trainer_rows(rd, int(class_id))
+        except realmread.Gap:
+            rows = None
+        out[class_id] = rows if rows else None
     return out
 
 
@@ -218,6 +260,32 @@ def raid_fields(fetched: dict) -> tuple:
     return attuned, fire, _per_name(fetched.get("consumables"), _consumables)
 
 
+def _tank_audit(seats: list, fetched: dict) -> dict | None:
+    """The seated tanks' spellbook audit, or None when a spell read failed
+    or a filled tank's class has no trainer rows to judge it against."""
+    known_rows = fetched.get("known")
+    trainer = fetched.get("trainer")
+    if known_rows is None or trainer is None:
+        return None
+    trainer = {int(k): v for k, v in trainer.items()}
+    flat = [s for group in seats for s in group]
+    for seat in flat:
+        if (
+            seat["seat"] == "tank"
+            and seat["name"]
+            and not trainer.get(int(seat["class_id"] or 0))
+        ):
+            return None
+    known_by_name: dict = {}
+    for row in known_rows:
+        try:
+            spell = int(row["spell"])
+        except (KeyError, TypeError, ValueError):
+            return None  # a spellbook that cannot be read is not judged
+        known_by_name.setdefault(row.get("name"), set()).add(spell)
+    return tankaudit.audit_tanks(flat, trainer, known_by_name)
+
+
 def build(guild: str, fetched: dict) -> dict:
     """The payload for `guild` from fetch()'s rows. Pure."""
     rows = {r["name"]: r for r in in_guild(fetched.get("members") or [])}
@@ -231,6 +299,7 @@ def build(guild: str, fetched: dict) -> dict:
         "seats": seats,
         "seated": len(seated),
         "members": {n: _member(rows[n], attuned, fire, carried) for n in seated},
+        "tank_audit": _tank_audit(seats, fetched),
         "consumable_items": [{"entry": e, "name": _NAMES[e]} for e in CONSUMABLES],
     }
 
