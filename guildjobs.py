@@ -8971,9 +8971,30 @@ def _recalled_lately(m, recent) -> bool:
     return any(
         r.name == m.name
         and r.action == "hearth"
-        and r.status not in TRAIN_FAILED
-        and int(r.age_minutes) < minutes
+        and (
+            (r.status not in TRAIN_FAILED and int(r.age_minutes) < minutes)
+            or _stoneless_recall_held(r)
+        )
         for r in recent or ()
+    )
+
+
+# A RECALL WITHOUT A STONE IS NOT ASKED AGAIN FOR HOURS. The module refuses a
+# `hearth recall` from a character that carries no hearthstone and says it is
+# retryable, but only an innkeeper hands out a new stone, and nothing in the
+# recall step goes to one. Asking again on every pass was the same refusal: three
+# death knights were refused 99, 53 and 25 times in a day.
+NO_STONE_WORDS = "without the stone"
+NO_STONE_BACKOFF_MINUTES = 6 * 60
+
+
+def _stoneless_recall_held(r) -> bool:
+    """Whether this refused hearth row is a recall refused for the missing stone
+    and still younger than NO_STONE_BACKOFF_MINUTES."""
+    return (
+        r.status in TRAIN_FAILED
+        and NO_STONE_WORDS in (r.reason or r.refusal or "")
+        and int(r.age_minutes) < NO_STONE_BACKOFF_MINUTES
     )
 
 
