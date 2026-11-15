@@ -118,7 +118,10 @@ def eligible(quest: Quest, member: Member, rewarded, statuses) -> bool:
 
 
 def _near(member: Member, entry: int, givers) -> bool:
-    return attunestep.in_reach(member, (givers or {}).get(int(entry)))
+    return any(
+        attunestep.in_reach(member, spawn)
+        for spawn in (givers or {}).get(int(entry), ())
+    )
 
 
 def giver_entries(quest_rows) -> tuple:
@@ -182,15 +185,18 @@ def _states_from_rows(rows, *, with_status: bool = False) -> dict:
 
 
 def _givers_from_rows(rows) -> dict:
-    return {
-        int(row["id"]): (
-            int(row["map_id"]),
-            float(row["x"]),
-            float(row["y"]),
-            float(row["z"]),
+    out = {}
+    for row in rows or ():
+        entry = int(row["id"])
+        out.setdefault(entry, []).append(
+            (
+                int(row["map_id"]),
+                float(row["x"]),
+                float(row["y"]),
+                float(row["z"]),
+            )
         )
-        for row in rows or ()
-    }
+    return {entry: tuple(spawns) for entry, spawns in out.items()}
 
 
 def _recent_from_rows(rows) -> frozenset:

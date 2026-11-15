@@ -37,7 +37,7 @@ def _giver_facts(*, at=None, quest=None, rewarded=None, statuses=None, recent=()
         quests=(quest,),
         rewarded=rewarded or {"MemberA": {6805}},
         statuses=statuses or {},
-        givers={13278: GIVER},
+        givers={13278: (GIVER,)},
         recent=frozenset(recent),
     )
 
@@ -49,6 +49,20 @@ class HydraxianQuestTests(unittest.TestCase):
         self.assertEqual(step.aim, 13278)
         self.assertTrue(step.hold_planner)
         self.assertEqual(step.rows, ())
+
+    def test_member_near_any_live_spawn_can_take_the_quest(self):
+        second_spawn = (1, 2000.0, -7000.0, 20.0)
+        facts = hydraxian.Facts(
+            members=(_member(at=second_spawn[1:]),),
+            quests=(hydraxian.Quest(6821, 55, 0, 6805, 13278, 13278),),
+            rewarded={"MemberA": {6805}},
+            givers={13278: (GIVER, second_spawn)},
+        )
+
+        step = hydraxian.step(facts)
+
+        self.assertEqual(step.rows, (("MemberA", "take quest:6821"),))
+        self.assertIsNone(step.aim)
 
     def test_missing_giver_spawn_is_neither_a_quest_command_nor_a_walk_target(self):
         facts = _giver_facts(at=(-7000.0, 500.0, 30.0))
@@ -75,7 +89,7 @@ class HydraxianQuestTests(unittest.TestCase):
             ),
             rewarded={"MemberA": {6805}, "MemberB": set()},
             statuses={"MemberA": {}, "MemberB": {}},
-            givers={13278: GIVER},
+            givers={13278: (GIVER,)},
         )
 
         step = hydraxian.step(facts)
@@ -91,7 +105,7 @@ class HydraxianQuestTests(unittest.TestCase):
             members=(_member(at=(-7000.0, 500.0, 30.0)),),
             quests=(hydraxian.Quest(6804, 55, 0, 0, 0, 13278),),
             statuses={"MemberA": {6804: hydraxian.STATUS_COMPLETE}},
-            givers={13278: GIVER},
+            givers={13278: (GIVER,)},
         )
 
         step = hydraxian.step(facts, allow_walk=True)
@@ -111,7 +125,7 @@ class HydraxianQuestTests(unittest.TestCase):
                 "MemberA": {6824: hydraxian.STATUS_COMPLETE},
                 "MemberB": {6824: hydraxian.STATUS_COMPLETE},
             },
-            givers={13278: GIVER},
+            givers={13278: (GIVER,)},
         )
 
         self.assertEqual(
@@ -158,7 +172,10 @@ class HydraxianQuestTests(unittest.TestCase):
             ],
             [{"name": "MemberA", "quest": 6805}],
             [{"name": "MemberA", "quest": 6821, "status": 3}],
-            [{"id": 13278, "map_id": 1, "x": 1, "y": 2, "z": 3}],
+            [
+                {"id": 13278, "map_id": 1, "x": 1, "y": 2, "z": 3},
+                {"id": 13278, "map_id": 1, "x": 4, "y": 5, "z": 6},
+            ],
             [{"target_name": "MemberA", "command": "take quest:6821"}],
         )
 
@@ -166,7 +183,10 @@ class HydraxianQuestTests(unittest.TestCase):
         self.assertEqual(facts.quests[0].prev_quest_id, -6805)
         self.assertEqual(facts.rewarded, {"MemberA": {6805}})
         self.assertEqual(facts.statuses, {"MemberA": {6821: 3}})
-        self.assertEqual(facts.givers[13278], GIVER[:1] + (1.0, 2.0, 3.0))
+        self.assertEqual(
+            facts.givers[13278],
+            ((1, 1.0, 2.0, 3.0), (1, 4.0, 5.0, 6.0)),
+        )
         self.assertIn(("MemberA", "take quest:6821"), facts.recent)
 
     def test_hydraxian_uses_the_shared_attunement_quest_primitives(self):
