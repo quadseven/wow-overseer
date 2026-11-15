@@ -34798,13 +34798,19 @@ MAIL_WALK_POLL_SECONDS = 5.0
 
 
 def _route_walks_today() -> int:
-    """Walk rows the command log holds for the last 24 hours (#185)."""
+    """Mailbox walk rows the command log holds for the last 24 hours (#185).
+
+    Only `kind='mail'`: the grounded walker's hearthstone row is written as
+    `guildwalk:ground` (kind 'hearth'), and counting it spent the day's walks
+    on hearthstones, so no waiting route was ever walked to a mailbox (#2136).
+    """
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
                 "SELECT COUNT(*) AS n FROM overseer_command "
-                "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY",
-                (MAIL_WALK_SOURCE + ":%",),
+                "WHERE source LIKE %s AND kind = %s "
+                "AND created_at > NOW() - INTERVAL 1 DAY",
+                (MAIL_WALK_SOURCE + ":%", guildroute.MAIL),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
