@@ -17032,9 +17032,19 @@ class Bridge(discord.Client):
         return False
 
     async def _bank_family_progress(
-        self, names: list, leader: str,
+        self, names: list, leader: str, party: list | None = None,
     ) -> vendor_stall.FamilyProgress:
         """Track whether the family has stayed split across bank polls.
+
+        THE PARTY IS THE TRIP'S OWN, NOT THE WHOLE FAMILY'S. `party` is the
+        leader plus the members that have bank work this pass, leader first so
+        it is the anchor. A straggler with nothing to bank takes no part in the
+        trip, and counted it vetoed the trip for the members that did: Og
+        walked 2190 yards behind for hours while Bork and Ugga stood beside the
+        leader with their reagents in the bank, and the deferral ("remained
+        split for 17184 seconds") could never lift, because the banker aim is
+        what would have brought the family together. A far member WITH bank
+        work still counts, so the rule keeps its original job.
 
         A MEMBER SITTING OUT TO CRAFT IS NOT THE FAMILY SPLITTING (#872). It
         stands wherever it crafts and the banker trip is not for it, so it is
@@ -17042,10 +17052,11 @@ class Bridge(discord.Client):
         read Grug's family as split for 26015 seconds and deferred every
         banker trip for as long as Og crafted.
         """
+        watched = list(party) if party else list(names)
         progress = vendor_stall.family_progress(
             self._bank_family_movement.get(leader),
-            await asyncio.to_thread(_fetch_positions, names),
-            tuple(_standin_running(names)),
+            await asyncio.to_thread(_fetch_positions, watched),
+            tuple(_standin_running(watched)),
             time.monotonic(),
         )
         if progress.current is not None:
@@ -17077,7 +17088,8 @@ class Bridge(discord.Client):
     async def _settle_bank_errand(self, names: list, leader: str,
                                   moves_unasked: bool,
                                   cohort: str | None = None,
-                                  waiting: int = 0) -> str:
+                                  waiting: int = 0,
+                                  party: list | None = None) -> str:
         """Aim, hold or hand back the bank pass's `banker` errand (infra#3728).
 
         THE HALF THAT WAS NEVER BUILT, HERE TOO. `banker` is one of the four
@@ -17126,7 +17138,7 @@ class Bridge(discord.Client):
         """
         leader_town = await asyncio.to_thread(_fetch_town, leader)
         outstanding = await asyncio.to_thread(_outstanding_bank_moves, names)
-        family_stall = await self._bank_family_progress(names, leader)
+        family_stall = await self._bank_family_progress(names, leader, party)
         current_aim = await asyncio.to_thread(_current_travel_npc, leader)
         step = bank.errand_step(
             bool(leader_town.banker), outstanding, moves_unasked,
@@ -17316,7 +17328,10 @@ class Bridge(discord.Client):
                                                          bag_steps),
                                        cohort=_cohort_key(cohort),
                                        waiting=sum(1 for h in holders
-                                                   if not at_the_counter[h]))
+                                                   if not at_the_counter[h]),
+                                       party=[leader] + [
+                                           h for h in dict.fromkeys(holders)
+                                           if h != leader])
         # Below the settling, so the aim still precedes the row, and above the
         # `no moves` return, so a family that walked here for a bag step alone
         # has it written on the cycle it arrives.

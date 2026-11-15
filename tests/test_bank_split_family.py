@@ -133,7 +133,9 @@ class _Run:
 
 class AMemberAtABankerRunsItsOwnMovesWhileTheFamilyIsSplit(unittest.TestCase):
     def test_a_split_family_with_one_member_in_reach_queues_that_members_moves(self):
-        run = _Run(counter=("Ugga",), moves=[deposit("Ugga")]).run()
+        run = _Run(
+            counter=("Ugga",), moves=[deposit("Ugga"), deposit("Bork", 600, "Linen")]
+        ).run()
         self.assertEqual(run.steps, [bank.BANK_ERRAND_DEFER], "the walk is deferred")
         self.assertEqual(run.inserted, [("Ugga", "deposit guid:501")])
 
@@ -217,23 +219,47 @@ class ADeferralSaysHowManyMovesWait(unittest.TestCase):
             deposit("Og", 502, "Linen"),
             deposit("Og", 503, "Cloth"),
             deposit("Ugga"),
+            deposit("Bork", 600, "Linen"),
         ]
         run = _Run(moves=moves).run()
         self.assertEqual(run.steps, [bank.BANK_ERRAND_DEFER])
         (line,) = [w for w in run.warnings if "remained split" in w]
-        self.assertIn("3 planned move(s) waiting", line)
+        self.assertIn("4 planned move(s) waiting", line)
         self.assertEqual(run.inserted, [])
 
     def test_only_moves_out_of_reach_are_counted_as_waiting(self):
-        moves = [deposit("Og", 502, "Linen"), deposit("Ugga")]
+        moves = [
+            deposit("Og", 502, "Linen"),
+            deposit("Ugga"),
+            deposit("Bork", 600, "Linen"),
+        ]
         run = _Run(counter=("Ugga",), moves=moves).run()
         (line,) = [w for w in run.warnings if "remained split" in w]
-        self.assertIn("1 planned move(s) waiting", line)
+        self.assertIn("2 planned move(s) waiting", line)
 
     def test_a_bank_bag_step_out_of_reach_is_counted_too(self):
         facts = [bankbags.Facts(name=n, worn=(10, 10, 10, 10)) for n in NAMES]
         facts[2] = bankbags.Facts(name="Og", money=5000, worn=(10, 10, 10, 10))
-        run = _Run(moves=[deposit("Ugga")], bag_facts=facts).run()
+        run = _Run(
+            moves=[deposit("Ugga"), deposit("Bork", 600, "Linen")], bag_facts=facts
+        ).run()
+        (line,) = [w for w in run.warnings if "remained split" in w]
+        self.assertIn("3 planned move(s) waiting", line)
+
+
+class AStragglerWithNoBankWorkDoesNotVetoTheTrip(unittest.TestCase):
+    """The split rule is judged over the trip's own party (the leader and the
+    members with bank work), so a far member with nothing to bank cannot hold
+    a trip that Ugga and Og, standing beside the leader, need."""
+
+    def test_a_far_member_with_no_bank_work_does_not_defer_the_trip(self):
+        run = _Run(moves=[deposit("Og", 502, "Linen"), deposit("Ugga")]).run()
+        self.assertEqual(run.steps, [bank.BANK_ERRAND_AIM])
+        self.assertEqual(run.warnings, [])
+
+    def test_a_far_member_that_holds_bank_work_still_defers_the_trip(self):
+        run = _Run(moves=[deposit("Bork", 600, "Linen"), deposit("Ugga")]).run()
+        self.assertEqual(run.steps, [bank.BANK_ERRAND_DEFER])
         (line,) = [w for w in run.warnings if "remained split" in w]
         self.assertIn("2 planned move(s) waiting", line)
 
