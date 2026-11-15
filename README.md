@@ -97,8 +97,9 @@ DELETE FROM overseer_operator_hold WHERE family = 'Grug';
 While a family is held, these write nothing for it and log
 `held by operator: <reason>` at most every ten minutes:
 
-- the campaign queue pass: the planner, the attunement step, the Upper Spire
-  pass, the trade turn, dungeon quests, town first and the queue step itself
+- the campaign queue pass: the planner, the attunement and Hydraxian quest
+  steps, the Upper Spire pass, the trade turn, dungeon quests, town first and
+  the queue step itself
   (a queued entry is not stepped);
 - the council (no scene and no goal, including the one after a restart);
 - the activity choice;
@@ -106,9 +107,10 @@ While a family is held, these write nothing for it and log
 
 The farm pass (family-wide and per member), and the bag, bank, mail, vendor and
 craft passes keep working inside the job the family has. A hold undoes nothing already written, so set the job you want
-from the console. `CAMPAIGN_PLANNER=off`, `ATTUNEMENT_STEP=off` and
-`JEV_MODE_ACTIVITY_CHOICE=off` still switch their writer off for every family
-from the next start. Either a switch or a hold is enough to stop a writer.
+from the console. `CAMPAIGN_PLANNER=off`, `ATTUNEMENT_STEP=off`,
+`HYDRAXIAN_STEP=off` and `JEV_MODE_ACTIVITY_CHOICE=off` switch their writer off
+for every family from the next start. Either a switch or a hold is enough to
+stop a writer.
 
 ## Status
 

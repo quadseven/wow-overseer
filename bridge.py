@@ -4854,95 +4854,92 @@ def _attunement_facts(family: str, leader: str, names: list, job: str,
         job=job, mid_run=mid_run, due=due)
 
 
+def _hydraxian_optional_rows(cur, sql: str, args: tuple, what: str) -> list:
+    """A missing snapshot or command ledger costs only that optional fact."""
+    try:
+        cur.execute(sql, args)
+    except pymysql.err.MySQLError as exc:
+        if not (exc.args and exc.args[0] in (1054, 1146)):
+            raise
+        log.debug("Hydraxian quest: %s cannot be read on this realm", what)
+        return []
+    return [dict(row) for row in cur.fetchall()]
+
+
+def _hydraxian_giver_rows(cur, quest_rows: list) -> list:
+    """Read only the live creature spawns named by these quests."""
+    entries = hydraxian.giver_entries(quest_rows)
+    if not entries:
+        return []
+    cur.execute(hydraxian.GIVERS_SQL.format(
+        entries=", ".join(str(entry) for entry in entries)))
+    return [dict(row) for row in cur.fetchall()]
+
+
 def _hydraxian_facts(names: list) -> hydraxian.Facts:
-    """Read only each member's Hydraxian quest state and fresh position."""
+    """Read each family's Hydraxian state, then hand those rows to the plan."""
     if not names:
         return hydraxian.Facts()
     holes = ", ".join(["%s"] * len(names))
     quests = hydraxian.quest_ids()
+    args = tuple(names)
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(hydraxian.MEMBERS_SQL.format(holes=holes), tuple(names))
+        cur.execute(hydraxian.MEMBERS_SQL.format(holes=holes), args)
         member_rows = [dict(row) for row in cur.fetchall()]
-        try:
-            cur.execute(hydraxian.SNAPSHOT_SQL.format(holes=holes), tuple(names))
-            snapshot_rows = [dict(row) for row in cur.fetchall()]
-        except pymysql.err.MySQLError as exc:
-            if not (exc.args and exc.args[0] in (1054, 1146)):
-                raise
-            snapshot_rows = []
+        snapshot_rows = _hydraxian_optional_rows(
+            cur, hydraxian.SNAPSHOT_SQL.format(holes=holes), args, "fresh positions"
+        )
         cur.execute(hydraxian.QUEST_SQL.format(quests=quests))
         quest_rows = [dict(row) for row in cur.fetchall()]
-        cur.execute(
-            hydraxian.REWARDED_SQL.format(holes=holes, quests=quests),
-            tuple(names),
-        )
+        cur.execute(hydraxian.REWARDED_SQL.format(holes=holes, quests=quests), args)
         rewarded_rows = [dict(row) for row in cur.fetchall()]
-        cur.execute(
-            hydraxian.LOG_SQL.format(holes=holes, quests=quests), tuple(names)
-        )
+        cur.execute(hydraxian.LOG_SQL.format(holes=holes, quests=quests), args)
         log_rows = [dict(row) for row in cur.fetchall()]
-        entries = sorted({
-            int(row[key])
-            for row in quest_rows
-            for key in ("starter", "ender")
-            if int(row.get(key) or 0)
-        })
-        if entries:
-            cur.execute(hydraxian.GIVERS_SQL.format(
-                entries=", ".join(str(entry) for entry in entries)))
-            giver_rows = [dict(row) for row in cur.fetchall()]
-        else:
-            giver_rows = []
-        try:
-            cur.execute(
-                hydraxian.RECENT_SQL,
-                (hydraxian.SOURCE, hydraxian.ROW_RETRY_SECONDS),
-            )
-            recent_rows = [dict(row) for row in cur.fetchall()]
-        except pymysql.err.MySQLError as exc:
-            if not (exc.args and exc.args[0] in (1054, 1146)):
-                raise
-            recent_rows = []
+        giver_rows = _hydraxian_giver_rows(cur, quest_rows)
+        recent_rows = _hydraxian_optional_rows(
+            cur,
+            hydraxian.RECENT_SQL,
+            (hydraxian.SOURCE, hydraxian.ROW_RETRY_SECONDS),
+            "recent quest commands",
+        )
     return hydraxian.facts_from_rows(
-        member_rows, snapshot_rows, quest_rows, rewarded_rows,
-        log_rows, giver_rows, recent_rows,
+        member_rows,
+        snapshot_rows,
+        quest_rows,
+        rewarded_rows,
+        log_rows,
+        giver_rows,
+        recent_rows,
     )
 
 
-def _insert_attunement_row(name: str, command: str) -> int:
-    """One kind='quest' row (quadseven/mod-overseer#678). 0 when the realm's
-    overseer_command has no 'quest' kind yet: its 2026_09_24_04 migration is
-    not applied, and strict mode refuses the value with 1265."""
+def _insert_quest_row(name: str, command: str, source: str, feature: str) -> int:
+    """Insert one natural quest verb, shared by the two NPC quest passes."""
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(attunestep.INSERT_SQL, (name, command, attunestep.SOURCE))
+            cur.execute(attunestep.INSERT_SQL, (name, command, source))
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] == 1265:
                 log.warning(
-                    "attunement: overseer_command.kind has no 'quest' value - "
-                    "%s for %s needs mod-overseer's "
-                    "2026_09_24_04_overseer_quest.sql applied", command, name)
-                return 0
-            raise
-        return cur.lastrowid or 0
-
-
-def _insert_hydraxian_row(name: str, command: str) -> int:
-    """Write a natural quest verb for a member already at its giver."""
-    with _connect() as conn, conn.cursor() as cur:
-        try:
-            cur.execute(hydraxian.INSERT_SQL,
-                        (name, command, hydraxian.SOURCE))
-        except pymysql.err.MySQLError as exc:
-            if exc.args and exc.args[0] == 1265:
-                log.warning(
-                    "Hydraxian quest: overseer_command.kind has no 'quest' "
-                    "value - %s for %s needs the quest-kind migration",
-                    command, name,
+                    "%s: overseer_command.kind has no 'quest' value - %s for %s "
+                    "needs mod-overseer's 2026_09_24_04_overseer_quest.sql applied",
+                    feature,
+                    command,
+                    name,
                 )
                 return 0
             raise
         return cur.lastrowid or 0
+
+
+def _insert_attunement_row(name: str, command: str) -> int:
+    """Write a Core attunement quest verb using the shared quest-kind guard."""
+    return _insert_quest_row(name, command, attunestep.SOURCE, "attunement")
+
+
+def _insert_hydraxian_row(name: str, command: str) -> int:
+    """Write a Hydraxian quest verb using the shared quest-kind guard."""
+    return _insert_quest_row(name, command, hydraxian.SOURCE, "Hydraxian quest")
 
 
 def _dungeonquest_facts(family: dict, keyword: str, leader: str,
@@ -8932,6 +8929,7 @@ class Bridge(discord.Client):
         # and when the current stretch of holding its planner began.
         self._attune_said: dict = {}
         self._attune_since: dict = {}
+        self._hydraxian_since: dict = {}
         self._activity_own_key = None
         # THE MOVEMENT PICTURE (situation.py): each roster member's recent
         # positions, sampled by _situation_loop on its own clock because no
@@ -25120,8 +25118,8 @@ class Bridge(discord.Client):
         queue has run out walks to Lothos Riftwaker for Attunement to the Core
         (attunestep.py), and a family on that walk is not planned for.
         """
-        await self._hydraxian_pass(fams)
         held = await self._attunement_pass(pending, fams)
+        held.update(await self._hydraxian_pass(pending, fams, skip=held))
         if not campaignplan.enabled():
             return False
         wrote = False
@@ -25137,19 +25135,72 @@ class Bridge(discord.Client):
                               campaignqueue._family(key))
         return wrote
 
-    async def _hydraxian_pass(self, fams: dict) -> None:
-        """Take or hand in a chain quest only for a member already at its NPC.
+    async def _hydraxian_pass(
+        self, pending: dict, fams: dict, *, skip=frozenset()
+    ) -> set:
+        """Walk a due family to a chain giver and issue ordinary quest verbs.
 
-        This pass has no walk, planner hold or queue dependency. The game owns
-        every objective, drop, reputation check and reward.
+        Attunement's Lothos walk wins when both trips are ready. The pass does
+        not run inside a dungeon or during the profession loop, and the game's
+        own quest state still owns every objective, item, reputation and reward.
         """
+        if not hydraxian.enabled():
+            self._hydraxian_since.clear()
+            return set()
+        own = await asyncio.to_thread(_cohort_of, bonds.head_of_family())
+        held = set()
         for key, fam in sorted(fams.items()):
+            if key in skip:
+                self._hydraxian_since.pop(key, None)
+                continue
             names = list(fam.get("names") or ())
-            if not names:
+            leader_row = fam.get("leader") or {}
+            leader = str(leader_row.get("name") or "")
+            if not names or not leader:
+                continue
+            looped_by = globals().get("_prof_loop_family")
+            if looped_by is not None and looped_by(key):
+                self._hydraxian_since.pop(key, None)
+                log.info("Hydraxian quest: %s waits for the profession loop",
+                         campaignqueue._family(key))
                 continue
             try:
+                if await self._mid_run(names):
+                    self._hydraxian_since.pop(key, None)
+                    log.info("Hydraxian quest: %s waits until it is out of the run",
+                             campaignqueue._family(key))
+                    continue
+                level_rows = await asyncio.to_thread(_queue_level_rows, fam)
+                due = bool(
+                    campaignplan.due(
+                        pending.get(key, []), leader_row, level_rows
+                    ).reason
+                )
+                job = str(leader_row.get("job") or "").strip().lower()
                 facts = await asyncio.to_thread(_hydraxian_facts, names)
-                step = hydraxian.step(facts)
+                step = hydraxian.step(
+                    facts, allow_walk=due and job in ("", "quest")
+                )
+                if step.hold_planner:
+                    since = self._hydraxian_since.setdefault(key, time.monotonic())
+                    if time.monotonic() - since > hydraxian.HOLD_LIMIT_SECONDS:
+                        self._hydraxian_since.pop(key, None)
+                        log.warning(
+                            "Hydraxian quest: %s gave the planner back after the "
+                            "giver walk exceeded %d minutes",
+                            campaignqueue._family(key),
+                            hydraxian.HOLD_LIMIT_SECONDS // 60,
+                        )
+                        await asyncio.to_thread(
+                            _release_trade_errand, leader, str(step.aim)
+                        )
+                        step = dataclasses.replace(
+                            step, aim=None, hold_planner=False, release=None
+                        )
+                    else:
+                        held.add(key)
+                else:
+                    self._hydraxian_since.pop(key, None)
                 for name, command in step.rows:
                     written = await asyncio.to_thread(
                         _insert_hydraxian_row, name, command)
@@ -25158,9 +25209,21 @@ class Bridge(discord.Client):
                             "Hydraxian quest: %s wrote %s for %s (%d)",
                             campaignqueue._family(key), command, name, written,
                         )
+                if step.aim:
+                    await self._claim_town_slot(
+                        ATTUNE_CLAIMANT,
+                        leader,
+                        str(step.aim),
+                        cohort=None if own == key else key,
+                    )
+                if step.release:
+                    await asyncio.to_thread(
+                        _release_trade_errand, leader, str(step.release)
+                    )
             except Exception:
                 log.exception("Hydraxian quest pass failed for %s",
                               campaignqueue._family(key))
+        return held
 
     async def _plan_campaign(self, key: str, fam: dict, rows: list) -> bool:
         """Choose, record and queue one family's next dungeon, when it is due.

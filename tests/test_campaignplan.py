@@ -561,10 +561,10 @@ class TheBridgePass(unittest.TestCase):
         # The attunement step (attunestep.py) holds no family here.
         me._attunement_pass = no_attunement
 
-        async def no_hydraxian(*_args):
-            return None
+        async def no_hydraxian(*_args, **_kwargs):
+            return set()
 
-        # Hydraxian quest commands are optional and never hold this planner.
+        # Hydraxian quest errands are optional and hold only their own walk.
         me._hydraxian_pass = no_hydraxian
         fams = {
             "Zug": {"leader": {"name": "Zug", "dungeon_runs_done": 0}, "names": ["Zug"]}

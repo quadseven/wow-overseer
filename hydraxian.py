@@ -1,22 +1,26 @@
-"""Optional, per-member pickup and turn-in for the Hydraxian quest chain.
+"""Optional Hydraxian quest progress, earned at live quest givers.
 
-This step never walks the family or holds a raid campaign. It emits ordinary
-quest commands only for a member already within interaction range of the
-quest's live starter or ender. Kills, item drops, reputation and rewards stay
-with the game.
+When the family's campaign is due, a member who can take or hand in a quest
+walks the family to its real NPC. The game owns every objective, item drop,
+reputation check and reward.
 """
 
 from __future__ import annotations
 
-import math
+import os
 from dataclasses import dataclass, field
 
-QUEST_IDS = (6804, 6805, 6821, 6822, 6823, 6824, 7486)
-REACH_YARDS = 12.0
-ROW_RETRY_SECONDS = 600
+import attunestep
 
-STATUS_NONE, STATUS_COMPLETE = 0, 1
-TAKE, TURN_IN = "take", "turnin"
+QUEST_IDS = (6804, 6805, 6821, 6822, 6823, 6824, 7486)
+REACH_YARDS = attunestep.REACH_YARDS
+ROW_RETRY_SECONDS = 600
+HOLD_LIMIT_SECONDS = attunestep.HOLD_LIMIT_SECONDS
+
+STATUS_NONE = attunestep.STATUS_NONE
+STATUS_COMPLETE = attunestep.STATUS_COMPLETE
+STATUS_INCOMPLETE = attunestep.STATUS_INCOMPLETE
+TAKE, TURN_IN = attunestep.TAKE, attunestep.TURN_IN
 
 QUEST_SQL = (
     "SELECT q.ID AS quest, q.MinLevel AS min_level, "
@@ -29,34 +33,17 @@ QUEST_SQL = (
     "LEFT JOIN acore_world.quest_template_addon a ON a.ID = q.ID "
     "WHERE q.ID IN ({quests})"
 )
-MEMBERS_SQL = "SELECT name, level, race FROM characters WHERE name IN ({holes})"
-SNAPSHOT_SQL = (
-    "SELECT name, map_id, pos_x, pos_y, pos_z FROM overseer_snapshot "
-    "WHERE updated_at > NOW() - INTERVAL 60 SECOND AND name IN ({holes})"
-)
-REWARDED_SQL = (
-    "SELECT c.name, r.quest FROM character_queststatus_rewarded r "
-    "JOIN characters c ON c.guid = r.guid WHERE c.name IN ({holes}) "
-    "AND r.quest IN ({quests})"
-)
-LOG_SQL = (
-    "SELECT c.name, q.quest, q.status FROM character_queststatus q "
-    "JOIN characters c ON c.guid = q.guid WHERE c.name IN ({holes}) "
-    "AND q.quest IN ({quests})"
-)
+MEMBERS_SQL = attunestep.MEMBERS_SQL
+SNAPSHOT_SQL = attunestep.SNAPSHOT_SQL
+REWARDED_SQL = attunestep.REWARDED_SQL
+LOG_SQL = attunestep.LOG_SQL
 GIVERS_SQL = (
     "SELECT id, map AS map_id, position_x AS x, position_y AS y, "
     "position_z AS z FROM acore_world.creature WHERE id IN ({entries}) "
     "ORDER BY guid"
 )
-RECENT_SQL = (
-    "SELECT target_name, command FROM overseer_command WHERE kind = 'quest' "
-    "AND source = %s AND created_at > NOW() - INTERVAL %s SECOND"
-)
-INSERT_SQL = (
-    "INSERT INTO overseer_command (target_name, command, kind, source) "
-    "VALUES (%s, %s, 'quest', %s)"
-)
+RECENT_SQL = attunestep.RECENT_SQL
+INSERT_SQL = attunestep.INSERT_SQL
 SOURCE = "overseer:hydraxian"
 
 
@@ -70,15 +57,11 @@ class Quest:
     ender: int
 
 
-@dataclass(frozen=True)
-class Member:
-    name: str
-    level: int
-    race: int
-    map_id: int | None = None
-    x: float = 0.0
-    y: float = 0.0
-    z: float = 0.0
+# Both quest passes use the same member shape and the same command, race and
+# range rules. Their domain facts stay separate.
+Member = attunestep.Member
+command = attunestep.command
+race_admitted = attunestep.race_admitted
 
 
 @dataclass(frozen=True)
@@ -96,20 +79,11 @@ class Step:
     rows: tuple = ()
     hold_planner: bool = False
     aim: int | None = None
+    release: int | None = None
 
 
 def quest_ids() -> str:
     return ", ".join(str(int(q)) for q in QUEST_IDS)
-
-
-def command(verb: str, quest_id: int) -> str:
-    return "%s quest:%d" % (verb, int(quest_id))
-
-
-def race_admitted(mask: int, race: int) -> bool:
-    mask = int(mask or 0)
-    race = int(race or 0)
-    return not mask or (race > 0 and bool(mask & (1 << (race - 1))))
 
 
 def _done(rewarded, name: str) -> set:
@@ -135,27 +109,25 @@ def eligible(quest: Quest, member: Member, rewarded, statuses) -> bool:
     )
 
 
-def _distance(member: Member, spawn) -> float | None:
-    if spawn is None or member.map_id is None or int(member.map_id) != int(spawn[0]):
-        return None
-    return math.dist((member.x, member.y, member.z), tuple(spawn[1:4]))
-
-
 def _near(member: Member, entry: int, givers) -> bool:
-    distance = _distance(member, (givers or {}).get(int(entry)))
-    return distance is not None and distance <= REACH_YARDS
+    return attunestep.in_reach(member, (givers or {}).get(int(entry)))
 
 
-def facts_from_rows(
-    member_rows,
-    snapshot_rows,
-    quest_rows,
-    rewarded_rows,
-    log_rows,
-    giver_rows,
-    recent_rows,
-) -> Facts:
-    """Build the pure step's facts from the bridge's bounded reads."""
+def giver_entries(quest_rows) -> tuple:
+    """The creature entries the bounded quest read names as givers."""
+    return tuple(
+        sorted(
+            {
+                int(row.get(key) or 0)
+                for row in quest_rows or ()
+                for key in ("starter", "ender")
+                if int(row.get(key) or 0)
+            }
+        )
+    )
+
+
+def _members_from_rows(member_rows, snapshot_rows) -> tuple:
     snapshots = {str(row["name"]): row for row in snapshot_rows or ()}
     members = []
     for row in member_rows or ():
@@ -172,7 +144,11 @@ def facts_from_rows(
                 z=float(snap.get("pos_z") or 0.0),
             )
         )
-    quests = tuple(
+    return tuple(members)
+
+
+def _quests_from_rows(quest_rows) -> tuple:
+    return tuple(
         Quest(
             quest_id=int(row["quest"]),
             min_level=int(row.get("min_level") or 0),
@@ -183,41 +159,63 @@ def facts_from_rows(
         )
         for row in quest_rows or ()
     )
-    rewarded = {}
-    for row in rewarded_rows or ():
-        rewarded.setdefault(str(row["name"]), set()).add(int(row["quest"]))
-    statuses = {}
-    for row in log_rows or ():
-        statuses.setdefault(str(row["name"]), {})[int(row["quest"])] = int(
-            row.get("status") or STATUS_NONE
-        )
-    givers = {
+
+
+def _states_from_rows(rows, *, with_status: bool = False) -> dict:
+    out = {}
+    for row in rows or ():
+        name = str(row["name"])
+        quest_id = int(row["quest"])
+        if with_status:
+            out.setdefault(name, {})[quest_id] = int(row.get("status") or STATUS_NONE)
+        else:
+            out.setdefault(name, set()).add(quest_id)
+    return out
+
+
+def _givers_from_rows(rows) -> dict:
+    return {
         int(row["id"]): (
             int(row["map_id"]),
             float(row["x"]),
             float(row["y"]),
             float(row["z"]),
         )
-        for row in giver_rows or ()
+        for row in rows or ()
     }
-    recent = frozenset(
-        (str(row["target_name"]), str(row["command"])) for row in recent_rows or ()
+
+
+def _recent_from_rows(rows) -> frozenset:
+    return frozenset(
+        (str(row["target_name"]), str(row["command"])) for row in rows or ()
     )
+
+
+def facts_from_rows(
+    member_rows,
+    snapshot_rows,
+    quest_rows,
+    rewarded_rows,
+    log_rows,
+    giver_rows,
+    recent_rows,
+) -> Facts:
+    """Build the pure step's facts from the bridge's bounded reads."""
     return Facts(
-        members=tuple(members),
-        quests=quests,
-        rewarded=rewarded,
-        statuses=statuses,
-        givers=givers,
-        recent=recent,
+        members=_members_from_rows(member_rows, snapshot_rows),
+        quests=_quests_from_rows(quest_rows),
+        rewarded=_states_from_rows(rewarded_rows),
+        statuses=_states_from_rows(log_rows, with_status=True),
+        givers=_givers_from_rows(giver_rows),
+        recent=_recent_from_rows(recent_rows),
     )
 
 
-def step(facts: Facts) -> Step:
-    """Emit only eligible take/turn-in verbs at a live, nearby quest giver."""
+def step(facts: Facts, *, allow_walk: bool = False) -> Step:
+    """Emit eligible quest verbs, or aim the family at their live giver."""
     rewarded = facts.rewarded or {}
     statuses = facts.statuses or {}
-    actions = []
+    wanted = []
     for quest in sorted(facts.quests, key=lambda row: row.quest_id):
         for member in sorted(facts.members, key=lambda row: row.name):
             if quest.quest_id in _done(rewarded, member.name):
@@ -226,20 +224,40 @@ def step(facts: Facts) -> Step:
             if (
                 status == STATUS_COMPLETE
                 and quest.ender
-                and _near(member, quest.ender, facts.givers)
+                and quest.ender in facts.givers
             ):
-                said = command(TURN_IN, quest.quest_id)
+                wanted.append((quest.quest_id, quest.ender, member, TURN_IN))
             elif (
                 status == STATUS_NONE
                 and quest.starter
+                and quest.starter in facts.givers
                 and eligible(quest, member, rewarded, statuses)
-                and _near(member, quest.starter, facts.givers)
             ):
-                said = command(TAKE, quest.quest_id)
-            else:
-                continue
-            if (member.name, said) not in facts.recent:
-                actions.append((member.name, said))
-    if not actions:
+                wanted.append((quest.quest_id, quest.starter, member, TAKE))
+    if not wanted:
         return Step()
-    return Step(rows=tuple(actions))
+
+    _quest_id, entry, _member, _verb = wanted[0]
+    at_target = [row for row in wanted if row[1] == entry]
+    rows = tuple(
+        (member.name, command(verb, quest_id))
+        for quest_id, giver, member, verb in at_target
+        if _near(member, giver, facts.givers)
+        and (member.name, command(verb, quest_id)) not in facts.recent
+    )
+    missing = any(
+        not _near(member, giver, facts.givers) for _, giver, member, _ in at_target
+    )
+    if missing and allow_walk:
+        return Step(rows=rows, hold_planner=True, aim=entry)
+    return Step(rows=rows, release=entry if not missing else None)
+
+
+ENV_SWITCH = "HYDRAXIAN_STEP"
+
+
+def enabled(environ=None) -> bool:
+    """Run unless HYDRAXIAN_STEP is explicitly switched off."""
+    env = os.environ if environ is None else environ
+    raw = str(env.get(ENV_SWITCH, "") or "").strip().lower()
+    return raw not in ("off", "0", "false", "no")
