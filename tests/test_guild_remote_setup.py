@@ -12,6 +12,7 @@ that the character is the guild master with a session, so it needs no arrival.
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 import unittest
 
@@ -52,18 +53,20 @@ class TheSplit(unittest.TestCase):
 
 
 class TheBridgeWritesThemBeforeTheWalk(unittest.TestCase):
-    def method(self, name):
-        start = BRIDGE.index("    async def %s(" % name)
-        return BRIDGE[start : BRIDGE.index("    async def ", start + 10)]
+    def body(self, header):
+        start = BRIDGE.index(header)
+        end = re.compile(r"\n(?:async )?def ").search(BRIDGE, start + 10).start()
+        inner = BRIDGE.find("\n    async def ", start + 10)
+        return BRIDGE[start : min(end, inner) if inner != -1 else end]
 
     def test_grants_are_queued_before_the_vault_is_claimed(self):
-        body = self.method("_guild_bank_once")
-        wrote = body.index("self._queue_remote_setup(")
+        body = self.body("    async def _guild_bank_once(")
+        wrote = body.index("_queue_remote_setup(")
         claimed = body.index('aimed = await self._claim_town_slot("guild bank"')
         self.assertLess(wrote, claimed)
 
     def test_the_writer_splits_dedupes_and_hands_back_the_vault_ones(self):
-        body = self.method("_queue_remote_setup")
+        body = self.body("async def _queue_remote_setup(")
         self.assertIn("guildbank.split_remote(", body)
         self.assertIn("_recent_guild_setup_keys", body)
         self.assertIn("return at_vault", body)

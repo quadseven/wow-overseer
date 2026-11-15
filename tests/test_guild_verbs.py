@@ -114,6 +114,7 @@ WRITERS = {
         "bank withdraw %d" % 5000
     ],
     ("bridge.py", "_guild_bank_once", "action.command"): _setup,
+    ("bridge.py", "_queue_remote_setup", "action.command"): _setup,
     ("bridge.py", "_guild_bank_once", "command"): lambda: ["bank deposit 5000"],
     ("bridge.py", "_guild_bank_passing_once", "command"): lambda: ["bank deposit 5000"],
     ("bridge.py", "_queue_guild_items", "command"): lambda: [
