@@ -511,7 +511,15 @@ class ProfLoopBridgeWiring(unittest.TestCase):
             and node.name in wanted
         ]
         mod = ast.Module(
-            body=[ast.ClassDef(name="Bridge", bases=[], keywords=[], body=methods, decorator_list=[])],
+            body=[
+                ast.ClassDef(
+                    name="Bridge",
+                    bases=[],
+                    keywords=[],
+                    body=methods,
+                    decorator_list=[],
+                )
+            ],
             type_ignores=[],
         )
         ast.fix_missing_locations(mod)
