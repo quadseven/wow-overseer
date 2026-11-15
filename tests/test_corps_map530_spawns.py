@@ -30,7 +30,7 @@ bridge = _import_bridge()
 with stub_modules(pymysql=PYMYSQL):
     import classic
     import guildcorps
-    import transform
+    import places
 
 
 # Real acore_world.creature spawns on map 530, all carrying zoneId = 0 in DB
@@ -193,7 +193,7 @@ class Map530ZoneResolution(unittest.TestCase):
         for row in (
             STARTING_TRAINERS + OUTLAND_TRAINERS + STARTING_VENDORS + OUTLAND_VENDORS
         ):
-            got = transform.zone_id_at(530, row["x"], row["y"])
+            got = places.zone_id_at(530, row["x"], row["y"])
             self.assertEqual(got, row["expected_zone"], row)
 
     def test_places_keep_starting_land_trainers_with_zero_zone(self):

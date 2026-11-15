@@ -61,7 +61,7 @@ import classic
 import craft
 import craft_supply
 import guildroute
-import transform
+import places
 
 TAILORING = 197
 SKINNING = 393
@@ -1794,12 +1794,12 @@ def _row_zone_id(row, map_id, zone_lookup):
     return zone_lookup(classic.OUTLAND_MAP, float(x), float(y))
 
 
-def places_from_rows(rows, column, *, zone_lookup=transform.zone_id_at) -> dict:
+def places_from_rows(rows, column, *, zone_lookup=places.zone_id_at) -> dict:
     """map id -> frozenset of `column` values, from (map_id, column) rows.
 
     Outland and Northrend rows are dropped: no trainer or vendor there is on
     the classic ruleset's map. Map 530 rows whose world spawn has `zone_id` 0
-    or absent resolve their zone from `(x, y)` via WorldMapArea bounds so the
+    or absent resolve their zone from `(x, y)` via `places.zone_id_at` so the
     Blood Elf and Draenei starting lands are kept while Outland proper drops.
     """
     out = {}

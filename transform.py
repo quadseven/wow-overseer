@@ -107,21 +107,6 @@ class Geometry:
                     return z["name"]
         return None
 
-    def _best_zone(
-        self, map_id: int, x: float, y: float
-    ) -> tuple[dict | None, str | None]:
-        best = None
-        best_area = None
-        fallback = None
-        for _, region in self._regions_for(map_id):
-            fallback = fallback or region["name"]
-            for z in region["zones"]:
-                if _inside(z, x, y):
-                    area = (z["left"] - z["right"]) * (z["top"] - z["bottom"])
-                    if best_area is None or area < best_area:
-                        best, best_area = z, area
-        return best, fallback
-
     def zone_name(self, map_id: int, x: float, y: float) -> str:
         """Smallest zone rectangle containing the point, or the region name.
 
@@ -133,30 +118,14 @@ class Geometry:
         (places.MAP_NAMES), "The Deadmines" for map 36. This said "an unknown
         place" for every one of them, and the event narration printed it.
         """
-        best, fallback = self._best_zone(map_id, x, y)
-        if best:
-            return best["name"]
-        return fallback or places.map_name(map_id)
-
-    def zone_id_at(self, map_id: int, x: float, y: float) -> int | None:
-        """Area ID of the smallest zone rectangle containing `(x, y)`, or None."""
-        best, _ = self._best_zone(map_id, x, y)
-        if not best or best.get("area_id") is None:
-            return None
-        return int(best["area_id"])
-
-
-_DEFAULT_GEOMETRY: Geometry | None = None
-
-
-def default_geometry() -> Geometry:
-    """Cached Geometry loaded from the committed data beside transform.py."""
-    global _DEFAULT_GEOMETRY
-    if _DEFAULT_GEOMETRY is None:
-        _DEFAULT_GEOMETRY = Geometry.load(os.path.dirname(os.path.abspath(__file__)))
-    return _DEFAULT_GEOMETRY
-
-
-def zone_id_at(map_id: int, x: float, y: float) -> int | None:
-    """Area ID of the smallest zone rectangle containing `(x, y)` on `map_id`."""
-    return default_geometry().zone_id_at(map_id, x, y)
+        best = None
+        best_area = None
+        fallback = None
+        for _, region in self._regions_for(map_id):
+            fallback = fallback or region["name"]
+            for z in region["zones"]:
+                if _inside(z, x, y):
+                    area = (z["left"] - z["right"]) * (z["top"] - z["bottom"])
+                    if best_area is None or area < best_area:
+                        best, best_area = z["name"], area
+        return best or fallback or places.map_name(map_id)
