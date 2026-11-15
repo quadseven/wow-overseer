@@ -35,9 +35,11 @@ from __future__ import annotations
 import auction
 import bank
 import bankforecast
+import guildledger
 import itemplan
 import itemplan_data
 import itemplan_shadow as shadow
+import raidteams
 
 
 def _marks(values) -> str:
@@ -167,6 +169,23 @@ def _guild_free(names, family, guild_setup):
     depositors, tabs = bank._guild_tabs(guild)
     may = bool(depositors & set(names))
     return {(family, tab): (free if may else 0) for tab, free in tabs.items()}
+
+
+def _banker_room(names, family, bank_rows, roster):
+    """family -> stacks its guild's bankers can take, or None with no banker.
+
+    A banker counts only once it is in the guild roster: a name with no rows
+    reads as an empty character with a full backpack, which would be phantom
+    room for a character that does not exist yet.
+    """
+    guild = raidteams.guild_of(names)
+    wanted = raidteams.banker_names(guild) if guild else set()
+    present = sorted(wanted & {m.name for m in roster(list(names))})
+    if not present:
+        return None
+    bankers = bank.members_from_rows(bank_rows(present), present)
+    ledger = guildledger.build((), bankers=bankers)
+    return {family: ledger.banker_room()}
 
 
 def _roster_and_crafters(names, roster) -> tuple | None:
@@ -327,6 +346,10 @@ def read(
     bank_free, guild_free, guild_roster, guild_crafters = _side_inputs(
         names, family, bank_rows, guild_setup, roster, reads
     )
+    # No banker in the roster is not a failed read: no route is offered.
+    banker_free = reads.attempt(
+        "banker room", lambda: _banker_room(names, family, bank_rows, roster)
+    )
     return shadow.Extras(
         open_quest_items=quest,
         worn=worn,
@@ -336,6 +359,7 @@ def read(
         guild_roster=guild_roster,
         templates=templates,
         bank_free=bank_free,
+        banker_free=banker_free,
         instance_soulbound=got.get(shadow.INSTANCE_SOULBOUND),
         fire_gear=fire_gear,
         failed_listings=got.get("listings"),
