@@ -198,6 +198,33 @@ class DeathsAndDangerChooseTheField(unittest.TestCase):
         self.assertEqual(step.zone_id, 490)
 
 
+class AWalkToARefusedSpawnMovesOn(unittest.TestCase):
+    """A spawn the column refused is marked visited; the next pass must not ask
+    for the very same spawn again."""
+
+    def test_a_spawn_just_tried_is_not_the_next_walk_target(self):
+        near, next_ = spawn(900, 0), spawn(1000, 0)
+        tried = {farmjob.spawn_key(near): 50.0}
+        step = farmjob.decide(order(), reads(spawns=(near, next_), visited=tried))
+        self.assertEqual(step.action, farmjob.WALK)
+        self.assertEqual(step.spawn, next_)
+
+    def test_a_spawn_tried_long_ago_is_walkable_again(self):
+        near, next_ = spawn(900, 0), spawn(1000, 0)
+        tried = {farmjob.spawn_key(near): 50.0}
+        late = 50.0 + farmjob.REVISIT_SECONDS + 1
+        step = farmjob.decide(
+            order(), reads(spawns=(near, next_), visited=tried, now=late)
+        )
+        self.assertEqual(step.spawn, near)
+
+    def test_when_every_spawn_was_tried_the_nearest_is_asked_again(self):
+        near, next_ = spawn(900, 0), spawn(1000, 0)
+        tried = {farmjob.spawn_key(near): 50.0, farmjob.spawn_key(next_): 55.0}
+        step = farmjob.decide(order(), reads(spawns=(near, next_), visited=tried))
+        self.assertEqual(step.spawn, near)
+
+
 class InTheFieldItHops(unittest.TestCase):
     def standing(self, x=1000.0, y=0.0):
         return leader_at(x, y, zone=490)
@@ -299,7 +326,10 @@ class TheBridgeDrivesIt(unittest.TestCase):
         self.assertIn(
             "travel.ground_aim(spawn.map_id, spawn.x, spawn.y, spawn.z)", self.body
         )
-        self.assertIn("self._claim_town_slot(GATHER_CLAIMANT, leader, aim", self.body)
+        self.assertIn(
+            "self._claim_town_slot(\n                GATHER_CLAIMANT, leader, aim",
+            self.body,
+        )
 
     def test_full_bags_and_the_end_hand_the_column_back(self):
         self.assertIn("await self._yield_gather_aim(step.line, cohort)", self.body)
@@ -314,12 +344,9 @@ class TheBridgeDrivesIt(unittest.TestCase):
         self.assertIn('"farm: %s picked %d %s (%d gathered, %d held)"', self.body)
 
     def test_the_end_writes_the_default_job(self):
-        self.assertIn(
-            "core.JobDirective(mode=jobs.DEFAULT, source=FARM_SOURCE)", self.body
-        )
-        self.assertIn(
-            "self._set_family_job(cohort, jobs.DEFAULT, FARM_SOURCE)", self.body
-        )
+        self.assertIn("core.JobDirective(mode=write, source=FARM_SOURCE)", self.body)
+        self.assertIn("self._set_family_job(cohort, write, FARM_SOURCE)", self.body)
+        self.assertIn("return jobs.DEFAULT", self.source)
 
     def test_deaths_are_read_from_the_death_table_since_the_order(self):
         self.assertIn("FROM overseer_death WHERE character_name IN", self.source)
@@ -342,6 +369,524 @@ class TheBridgeDrivesIt(unittest.TestCase):
     def test_the_starting_count_outlives_a_restart(self):
         self.assertIn("_memo_read, FARM_MEMO_KIND", self.body)
         self.assertIn("_memo_upsert, FARM_MEMO_KIND, subject", self.body)
+
+
+def where(map_id=0, x=0.0, y=0.0, instance=0):
+    return {"map_id": map_id, "instance_id": instance, "pos_x": x, "pos_y": y}
+
+
+class TheOrderIsTheMembersInReachOfTheLeader(unittest.TestCase):
+    def test_the_leader_and_those_beside_it_are_in(self):
+        pos = {"Grug": where(), "Grog": where(x=40.0, y=30.0)}
+        self.assertEqual(farmjob.in_reach(pos, "Grug"), ["Grog", "Grug"])
+
+    def test_a_member_far_away_or_on_another_map_is_out(self):
+        pos = {
+            "Grug": where(),
+            "Bork": where(x=5000.0),
+            "Og": where(map_id=1),
+        }
+        self.assertEqual(farmjob.in_reach(pos, "Grug"), ["Grug"])
+
+    def test_a_member_inside_an_instance_is_never_in(self):
+        pos = {"Grug": where(), "Ugga": where(map_id=0, instance=7)}
+        self.assertEqual(farmjob.in_reach(pos, "Grug"), ["Grug"])
+        pos = {"Grug": where(), "Ugga": where(map_id=349)}
+        self.assertEqual(farmjob.in_reach(pos, "Grug"), ["Grug"])
+
+    def test_with_no_leader_reading_nobody_is_cut(self):
+        pos = {"Grog": where(x=9000.0)}
+        self.assertEqual(farmjob.in_reach(pos, "Grug"), ["Grog"])
+
+    def test_the_bridge_judges_the_order_on_the_members_in_reach(self):
+        text = (ROOT / "bridge.py").read_text(encoding="utf-8")
+        start = text.index("    async def _farm_job_now(")
+        body = text[start : text.index("    async def _farm_state_for(")]
+        self.assertIn("farmjob.in_reach(", body)
+
+
+class TheLeaderDwellsAtANode(unittest.TestCase):
+    """The bots gather what is within reach; hopping on at once gives them none."""
+
+    def at_node(self, **kw):
+        node = spawn(0, 10)
+        far = spawn(300, 0)
+        return reads(spawns=(node, far), leader_at=leader_at(0.0, 0.0, zone=490), **kw)
+
+    def test_just_arrived_it_waits_at_the_node(self):
+        step = farmjob.decide(order(), self.at_node(stood_since=50.0, now=60.0))
+        self.assertEqual(step.action, farmjob.WAIT)
+        self.assertIn("dwell", step.line)
+
+    def test_after_the_dwell_it_hops_on(self):
+        late = 50.0 + farmjob.DWELL_SECONDS + 1
+        step = farmjob.decide(order(), self.at_node(stood_since=50.0, now=late))
+        self.assertEqual(step.action, farmjob.HOP)
+
+    def test_with_no_stand_reading_it_hops_as_before(self):
+        step = farmjob.decide(order(), self.at_node(stood_since=0.0, now=60.0))
+        self.assertEqual(step.action, farmjob.HOP)
+
+    def test_the_stand_clock_starts_on_arrival_and_keeps_its_start(self):
+        near, far = spawn(0, 10), spawn(300, 0)
+        here = leader_at(0.0, 0.0, zone=490)
+        first = farmjob.stand_update(None, (near, far), here, 100.0)
+        self.assertEqual(first[1], 100.0)
+        again = farmjob.stand_update(first, (near, far), here, 130.0)
+        self.assertEqual(again, first)
+
+    def test_a_spawn_in_another_zone_does_not_start_the_clock(self):
+        across = spawn(0, 10, zone=361)
+        got = farmjob.stand_update(
+            None, (across,), leader_at(0.0, 0.0, zone=490), 100.0
+        )
+        self.assertEqual(got, (None, 0.0))
+
+    def test_the_stand_clock_clears_off_a_node_and_restarts_on_another(self):
+        near, far = spawn(0, 10), spawn(300, 0)
+        first = farmjob.stand_update(
+            None, (near, far), leader_at(0.0, 0.0, zone=490), 100.0
+        )
+        gone = farmjob.stand_update(
+            first, (near, far), leader_at(150.0, 0.0, zone=490), 120.0
+        )
+        self.assertEqual(gone, (None, 0.0))
+        moved = farmjob.stand_update(
+            first, (near, far), leader_at(300.0, 0.0, zone=490), 140.0
+        )
+        self.assertEqual(moved[1], 140.0)
+
+
+class AFarmEndInTheProfessionLoop(unittest.TestCase):
+    """The loop owns the job, so an ended order must never leave job=quest."""
+
+    @classmethod
+    def setUpClass(cls):
+        import ast
+
+        text = (ROOT / "bridge.py").read_text(encoding="utf-8")
+        node = next(
+            n
+            for n in ast.parse(text).body
+            if isinstance(n, ast.FunctionDef) and n.name == "_farm_end_write"
+        )
+        ns = {"jobs": farmjob.jobs}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+        cls.write = staticmethod(ns["_farm_end_write"])
+
+    def test_outside_the_loop_the_default_job_is_written(self):
+        self.assertEqual(self.write("farm:mining", False, True), farmjob.jobs.DEFAULT)
+
+    def test_in_the_loop_a_spent_box_renews_the_same_order(self):
+        self.assertEqual(self.write("farm:mining", True, True), "farm:mining")
+
+    def test_in_the_loop_any_other_end_writes_nothing(self):
+        self.assertIsNone(self.write("farm:mining", True, False))
+
+    def test_a_spent_time_box_or_met_target_asks_for_a_renewal(self):
+        box = farmjob.decide(order(started=0.0), reads(now=99999.0))
+        self.assertTrue(box.renew)
+        met = farmjob.decide(order(), reads(gathered=99))
+        self.assertTrue(met.renew)
+
+    def test_deaths_and_no_field_do_not(self):
+        deaths = ((490, 1),) * 12
+        step = farmjob.decide(order(), reads(deaths=deaths))
+        self.assertEqual(step.action, farmjob.END)
+        self.assertFalse(step.renew)
+
+    def test_the_bridge_passes_the_renewal_flag_to_the_end(self):
+        text = (ROOT / "bridge.py").read_text(encoding="utf-8")
+        self.assertIn("await self._end_farm(cohort, job, renew=step.renew)", text)
+
+
+class AnEndedOrderThatTheLoopWritesAgain(unittest.TestCase):
+    """The loop re-writes farm:mining after the time box ends the first order."""
+
+    @classmethod
+    def setUpClass(cls):
+        import ast
+
+        text = (ROOT / "bridge.py").read_text(encoding="utf-8")
+        node = next(
+            n
+            for n in ast.parse(text).body
+            if isinstance(n, ast.FunctionDef) and n.name == "_farm_order_renewed"
+        )
+        ns = {}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+        cls.renewed = staticmethod(ns["_farm_order_renewed"])
+
+    def test_a_newer_job_write_is_a_new_order(self):
+        self.assertTrue(self.renewed({"ended": True, "started": 100.0}, 200.0))
+
+    def test_the_same_write_is_still_the_ended_order(self):
+        self.assertFalse(self.renewed({"ended": True, "started": 100.0}, 100.0))
+        self.assertFalse(self.renewed({"ended": True, "started": 100.0}, 0.0))
+
+    def test_a_live_order_is_never_renewed(self):
+        self.assertFalse(self.renewed({"started": 100.0}, 200.0))
+
+    def test_the_pass_drops_the_ended_state_on_a_renewed_order(self):
+        text = (ROOT / "bridge.py").read_text(encoding="utf-8")
+        start = text.index("    async def _farm_job_now(")
+        body = text[start : text.index("    async def _farm_state_for(")]
+        self.assertIn("_farm_order_renewed(state, written)", body)
+
+
+def _load_bridge_farm_methods(ns: dict, extra_methods=(), extra_funcs=()) -> dict:
+    import ast
+
+    text = (ROOT / "bridge.py").read_text(encoding="utf-8")
+    tree = ast.parse(text)
+    bridge_cls = next(
+        n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Bridge"
+    )
+    want = {"_farm_once", "_operator_held"} | set(extra_methods)
+    nodes = [
+        n
+        for n in bridge_cls.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in want
+    ]
+    if extra_funcs:
+        wanted_funcs = set(extra_funcs)
+        nodes.extend(
+            n
+            for n in tree.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name in wanted_funcs
+        )
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+    return ns
+
+
+class FamilyWideFarmIgnoresOperatorHold(unittest.IsolatedAsyncioTestCase):
+    """An operator hold stops quest drives and dungeon lending, not gathering.
+
+    The hold table has no field that says what a hold forbids, so the farm
+    pass never consults it: a held family still farms.
+    """
+
+    def _ns(self, extra=None):
+        import asyncio
+        from unittest import mock
+
+        base = {
+            "asyncio": asyncio,
+            "individual": mock.MagicMock(families=mock.MagicMock(return_value=())),
+            "bonds": mock.MagicMock(head_of_family=mock.MagicMock(return_value="Grug")),
+            "farmjob": mock.MagicMock(
+                order_of=mock.MagicMock(return_value=(4306, "")),
+                decide=mock.MagicMock(
+                    return_value=mock.MagicMock(action="walk", line="to the node")
+                ),
+            ),
+            "log": mock.MagicMock(),
+            "_cohort_of": mock.MagicMock(return_value="grug_clan"),
+            "_family_leader": mock.MagicMock(return_value="Grug"),
+            "_farm_reads": mock.MagicMock(
+                return_value={"name": "Silk Cloth", "levels": {"Grug": 60}}
+            ),
+            "_farm_reads_for": mock.MagicMock(),
+            "_farm_order": mock.MagicMock(),
+        }
+        base.update(extra or {})
+        return _load_bridge_farm_methods(base)
+
+    async def test_held_family_still_reads_decides_and_acts(self):
+        import types
+        from unittest import mock
+
+        ns = self._ns()
+        cohort = types.SimpleNamespace(key="family_a", solo=False)
+        fake = types.SimpleNamespace(
+            _farm_individual=mock.AsyncMock(return_value=False),
+            _farm_job_now=mock.AsyncMock(
+                return_value=("farm:4306", ["Mizu"], "family_a")
+            ),
+            _operator_held=mock.AsyncMock(return_value={"family_a"}),
+            _end_farm=mock.AsyncMock(),
+            _farm_state_for=mock.AsyncMock(return_value={"started": 1.0}),
+            _farm_count=mock.AsyncMock(return_value=0),
+            _farm_act=mock.AsyncMock(),
+        )
+        await ns["_farm_once"](fake, cohort)
+        fake._operator_held.assert_not_awaited()
+        fake._farm_state_for.assert_awaited_once()
+        fake._farm_act.assert_awaited_once()
+
+    async def test_no_cohort_family_with_a_real_hold_row_still_farms(self):
+        import time
+        import types
+        from unittest import mock
+        import campaignqueue
+        import operatorhold
+
+        hold_rows = [
+            {
+                "family": "grug_clan",
+                "reason": "gather and craft only",
+                "source": "operator",
+                "expires_at": None,
+            }
+        ]
+        ns = self._ns(
+            {
+                "time": time,
+                "campaignqueue": campaignqueue,
+                "operatorhold": operatorhold,
+                "_fetch_operator_holds": mock.MagicMock(return_value=hold_rows),
+            }
+        )
+        fake = types.SimpleNamespace(
+            _operator_hold_notice=operatorhold.Notice(),
+            _farm_individual=mock.AsyncMock(return_value=False),
+            _farm_job_now=mock.AsyncMock(
+                return_value=("farm:4306", ["Grug"], "this family")
+            ),
+            _end_farm=mock.AsyncMock(),
+            _farm_state_for=mock.AsyncMock(return_value={"started": 1.0}),
+            _farm_count=mock.AsyncMock(return_value=0),
+            _farm_act=mock.AsyncMock(),
+        )
+        fake._operator_held = types.MethodType(ns["_operator_held"], fake)
+        await ns["_farm_once"](fake, None)
+        fake._farm_state_for.assert_awaited_once()
+        fake._farm_act.assert_awaited_once()
+
+
+class RenewedOrderKeepsDeathStrikes(unittest.IsolatedAsyncioTestCase):
+    """Renewing a farm order resets its time box and baseline, not its zone strikes."""
+
+    def _build_harness(self, death_rows, started_at, clock, standing_job=None):
+        import asyncio
+        import os
+        import types
+        from unittest import mock
+
+        seen_since = []
+        acted = []
+        spawns = (
+            spawn(1000, 0, zone=490),
+            spawn(2000, 0, zone=400),
+            spawn(3000, 0, zone=361),
+        )
+        job_holder = standing_job or ["farm:8838"]
+
+        def fake_farm_deaths(names, since):
+            seen_since.append(float(since))
+            return [
+                (zone, map_id) for ts, zone, map_id in death_rows if ts >= float(since)
+            ]
+
+        ns = _load_bridge_farm_methods(
+            {
+                "asyncio": asyncio,
+                "os": os,
+                "time": types.SimpleNamespace(time=lambda: clock[0]),
+                "jobs": jobs,
+                "farmjob": farmjob,
+                "individual": mock.MagicMock(families=mock.MagicMock(return_value=())),
+                "log": mock.MagicMock(),
+                "GATHER_DANGER_CANDIDATES": 10,
+                "_standing_jobs": lambda key=None: (
+                    {name: job_holder[0] for name in FAMILY} if job_holder[0] else {}
+                ),
+                "_family_leader": lambda cohort=None: "Grug",
+                "_fetch_positions": lambda names: {
+                    name: {
+                        "map_id": 1,
+                        "zone_id": 440,
+                        "instance_id": 0,
+                        "pos_x": 0.0,
+                        "pos_y": 0.0,
+                    }
+                    for name in names
+                },
+                "_farm_started": lambda leader, job: started_at[0],
+                "_fetch_trade_skills": lambda names: herbalist(240),
+                "_farm_item_spawns": lambda item: list(spawns),
+                "_farm_item_name": lambda item: "Sungrass",
+                "_fetch_item_counts": lambda pairs: {},
+                "_fetch_family_levels": lambda names: dict(LEVELS),
+                "_farm_item_creatures": lambda item, leader_at, levels: [],
+                "_gather_danger": lambda map_id, x, y: 55,
+                "_farm_deaths": fake_farm_deaths,
+                "_fetch_free_slots": lambda names: {name: 20 for name in FAMILY},
+                "_current_travel_npc": lambda leader: "",
+            },
+            extra_methods=("_farm_job_now", "_farm_state_for"),
+            extra_funcs=(
+                "_farm_order_renewed",
+                "_farm_order",
+                "_farm_reads_for",
+                "_farm_reads",
+            ),
+        )
+        fake = types.SimpleNamespace(
+            _farm_state={},
+            _farm_individual=mock.AsyncMock(return_value=False),
+            _end_farm=mock.AsyncMock(),
+            _farm_count=mock.AsyncMock(return_value=0),
+            _farm_act=mock.AsyncMock(
+                side_effect=lambda cohort, leader, state, step, levels, job: (
+                    acted.append(step)
+                )
+            ),
+        )
+        fake._farm_job_now = types.MethodType(ns["_farm_job_now"], fake)
+        fake._farm_state_for = types.MethodType(ns["_farm_state_for"], fake)
+        return ns, fake, seen_since, acted
+
+    async def test_renewed_order_keeps_struck_zone_and_does_not_reenter_it(self):
+        death_rows = [(120.0, 490, 1), (140.0, 490, 1)]
+        started_at = [100.0]
+        clock = [150.0]
+        ns, fake, seen_since, acted = self._build_harness(death_rows, started_at, clock)
+        await ns["_farm_once"](fake, None)
+        self.assertEqual(acted[-1].action, farmjob.WALK)
+        self.assertEqual(acted[-1].zone_id, 400)
+
+        # Simulate the first order ending on its time box or target count, followed
+        # by the renewed job command landing at t=200.0.
+        fake._farm_state[""]["ended"] = True
+        started_at[0] = 200.0
+        clock[0] = 210.0
+        seen_since.clear()
+        await ns["_farm_once"](fake, None)
+
+        self.assertEqual(fake._farm_state[""]["started"], 200.0)
+        self.assertEqual(fake._farm_state[""]["deaths_since"], 100.0)
+        self.assertEqual(seen_since, [200.0, 100.0])
+        self.assertEqual(acted[-1].action, farmjob.WALK)
+        self.assertEqual(acted[-1].zone_id, 400)
+
+    async def test_single_death_before_renewal_counts_toward_strike_after_renewal(self):
+        death_rows = [(120.0, 490, 1)]
+        started_at = [100.0]
+        clock = [150.0]
+        ns, fake, seen_since, acted = self._build_harness(death_rows, started_at, clock)
+        await ns["_farm_once"](fake, None)
+        self.assertEqual(acted[-1].action, farmjob.WALK)
+        self.assertEqual(acted[-1].zone_id, 490)
+
+        fake._farm_state[""]["ended"] = True
+        started_at[0] = 200.0
+        clock[0] = 210.0
+        death_rows.append((205.0, 490, 1))
+        seen_since.clear()
+        await ns["_farm_once"](fake, None)
+
+        self.assertEqual(seen_since, [200.0, 100.0])
+        self.assertEqual(acted[-1].action, farmjob.WALK)
+        self.assertEqual(acted[-1].zone_id, 400)
+
+    async def test_ceiling_counts_only_current_order_deaths_not_carried_renewals(self):
+        death_rows = [(110.0, 490, 1), (120.0, 490, 1), (130.0, 400, 1)]
+        started_at = [100.0]
+        clock = [150.0]
+        ns, fake, _seen_since, acted = self._build_harness(
+            death_rows, started_at, clock
+        )
+        await ns["_farm_once"](fake, None)
+        self.assertEqual(acted[-1].action, farmjob.WALK)
+        self.assertEqual(acted[-1].zone_id, 400)
+
+        # Renew order at t=200.0 and take a 4th cumulative death (2nd in zone 400,
+        # but only the 1st death in the renewed order). Both 490 and 400 are now
+        # struck, while the renewed order's own death count is 1 (< TOTAL_DEATHS=4),
+        # so the family walks to zone 361 instead of ending on TOTAL_DEATHS.
+        fake._farm_state[""]["ended"] = True
+        started_at[0] = 200.0
+        clock[0] = 210.0
+        death_rows.append((205.0, 400, 1))
+        await ns["_farm_once"](fake, None)
+
+        self.assertEqual(acted[-1].action, farmjob.WALK)
+        self.assertEqual(acted[-1].zone_id, 361)
+
+        # Three more deaths inside the renewed order reach TOTAL_DEATHS=4 for
+        # the current order and stop the farm.
+        death_rows.extend([(212.0, 361, 1), (214.0, 361, 1), (216.0, 361, 1)])
+        clock[0] = 220.0
+        await ns["_farm_once"](fake, None)
+        self.assertEqual(acted[-1].action, farmjob.END)
+        self.assertIn("deaths since the farm began", acted[-1].line)
+
+    async def test_different_zone_death_does_not_strike_safe_zone_across_renewal(self):
+        death_rows = [(120.0, 490, 1)]
+        started_at = [100.0]
+        clock = [150.0]
+        ns, fake, _seen_since, acted = self._build_harness(
+            death_rows, started_at, clock
+        )
+        await ns["_farm_once"](fake, None)
+        self.assertEqual(acted[-1].action, farmjob.WALK)
+        self.assertEqual(acted[-1].zone_id, 490)
+
+        fake._farm_state[""]["ended"] = True
+        started_at[0] = 200.0
+        clock[0] = 210.0
+        death_rows.append((205.0, 400, 1))
+        await ns["_farm_once"](fake, None)
+
+        self.assertEqual(acted[-1].action, farmjob.WALK)
+        self.assertEqual(acted[-1].zone_id, 490)
+
+    async def test_cleared_order_resets_death_strikes_on_next_farm(self):
+        death_rows = [(120.0, 490, 1), (140.0, 490, 1)]
+        started_at = [100.0]
+        clock = [150.0]
+        standing_job = ["farm:8838"]
+        ns, fake, seen_since, acted = self._build_harness(
+            death_rows, started_at, clock, standing_job=standing_job
+        )
+        await ns["_farm_once"](fake, None)
+        self.assertEqual(acted[-1].zone_id, 400)
+
+        # Clear the farm order; _farm_job_now pops the family's farm state.
+        standing_job[0] = "quest"
+        clock[0] = 180.0
+        await ns["_farm_once"](fake, None)
+        self.assertNotIn("", fake._farm_state)
+
+        # Starting a new farm order later gets a fresh death window at t=300.0.
+        standing_job[0] = "farm:8838"
+        started_at[0] = 300.0
+        clock[0] = 310.0
+        seen_since.clear()
+        await ns["_farm_once"](fake, None)
+
+        self.assertEqual(fake._farm_state[""]["started"], 300.0)
+        self.assertEqual(fake._farm_state[""]["deaths_since"], 300.0)
+        self.assertEqual(seen_since, [300.0])
+        self.assertEqual(acted[-1].action, farmjob.WALK)
+        self.assertEqual(acted[-1].zone_id, 490)
+
+    async def test_changed_farm_job_resets_death_strikes(self):
+        death_rows = [(120.0, 490, 1), (140.0, 490, 1)]
+        started_at = [100.0]
+        clock = [150.0]
+        standing_job = ["farm:8838"]
+        ns, fake, seen_since, acted = self._build_harness(
+            death_rows, started_at, clock, standing_job=standing_job
+        )
+        await ns["_farm_once"](fake, None)
+        self.assertEqual(acted[-1].zone_id, 400)
+
+        # Switching to a different farm job starts a fresh death window rather
+        # than carrying the previous job's deaths_since.
+        standing_job[0] = "farm:13463"
+        started_at[0] = 200.0
+        clock[0] = 210.0
+        seen_since.clear()
+        await ns["_farm_once"](fake, None)
+
+        self.assertEqual(fake._farm_state[""]["started"], 200.0)
+        self.assertEqual(fake._farm_state[""]["deaths_since"], 200.0)
+        self.assertEqual(seen_since, [200.0])
+        self.assertEqual(acted[-1].action, farmjob.WALK)
+        self.assertEqual(acted[-1].zone_id, 490)
 
 
 if __name__ == "__main__":

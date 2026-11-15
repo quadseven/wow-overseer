@@ -181,6 +181,40 @@ class TheFamilyIsIdleOnlyBetweenRuns(unittest.TestCase):
         idle = familyclass.idle_names(self.ROSTER, live_leaders=(), inside=())
         self.assertEqual(idle, {"Boss", "Dwarf", "Other"})
 
+    def test_a_live_run_names_the_hold_for_each_family_member(self):
+        holds = familyclass.not_idle_holds(self.ROSTER, live_leaders={"Boss"})
+        self.assertEqual(
+            holds,
+            {
+                "Boss": "its family has an active dungeon run",
+                "Dwarf": "its family has an active dungeon run",
+            },
+        )
+
+    def test_an_instance_and_town_errand_name_their_holds(self):
+        holds = familyclass.not_idle_holds(
+            self.ROSTER, inside={"Dwarf"}, errands={"Other"}
+        )
+        self.assertEqual(
+            holds,
+            {
+                "Boss": "a family member is still inside an instance",
+                "Dwarf": "a family member is still inside an instance",
+                "Other": "the member is on a town errand",
+            },
+        )
+
+    def test_unavailable_gates_are_named(self):
+        m = member()
+        self.assertEqual(
+            familyclass.not_idle_holds((), members=[m], enabled=False),
+            {m.name: "family class steps are disabled"},
+        )
+        self.assertEqual(
+            familyclass.not_idle_holds((), members=[m], status_read=False),
+            {m.name: "live dungeon status could not be read"},
+        )
+
 
 class TheBridgeReadsTheFamilyAsMembersOfRoleFamily(unittest.TestCase):
     def facts(self):
@@ -205,6 +239,26 @@ class TheBridgeReadsTheFamilyAsMembersOfRoleFamily(unittest.TestCase):
         self.assertEqual([m.name for m in facts["family_members"]], ["Dwarf"])
         self.assertEqual(facts["family_members"][0].role, guildjobs.FAMILY)
 
+    def test_a_family_hold_is_visible_only_for_an_owed_class_quest(self):
+        m = self.facts()["family_members"][0]
+        result = guildjobs.plan(
+            [],
+            classes=book(),
+            family_candidates=[m],
+            family_holds={m.name: "its family has an active dungeon run"},
+        )
+        self.assertEqual(
+            result.class_holds[m.name], "its family has an active dungeon run"
+        )
+        settled = dataclasses.replace(m, class_id=1)
+        result = guildjobs.plan(
+            [],
+            classes=book(),
+            family_candidates=[settled],
+            family_holds={settled.name: "its family has an active dungeon run"},
+        )
+        self.assertNotIn(settled.name, result.class_holds)
+
     def _idle(self, live, members=None):
         facts = {"family_members": members or self.facts()["family_members"]}
         roster = [
@@ -220,16 +274,38 @@ class TheBridgeReadsTheFamilyAsMembersOfRoleFamily(unittest.TestCase):
         ):
             return [m.name for m in bridge._idle_family_members(facts)]
 
+    def _state(self, live, members=None):
+        facts = {"family_members": members or self.facts()["family_members"]}
+        roster = [
+            {"name": "Dwarf", "family": "Boss"},
+            {"name": "Boss", "family": "Boss"},
+        ]
+        conn = mock.MagicMock()
+        cur = conn.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cur.fetchall.return_value = [{"leader_name": n} for n in live]
+        with (
+            mock.patch.object(bridge, "_connect", return_value=conn),
+            mock.patch.object(bridge, "_fetch_queue_roster", return_value=roster),
+        ):
+            return bridge._family_class_state(facts)
+
     def test_a_family_between_runs_is_idle(self):
         self.assertEqual(self._idle([]), ["Dwarf"])
 
     def test_a_live_run_of_its_leader_holds_it(self):
         self.assertEqual(self._idle(["Boss"]), [])
 
+    def test_a_live_run_carries_a_named_hold_for_its_owed_family_member(self):
+        idle, holds = self._state(["Boss"])
+        self.assertEqual(idle, [])
+        self.assertEqual(holds["Dwarf"], "its family has an active dungeon run")
+
     def test_a_member_standing_in_an_instance_holds_it(self):
         inside = self.facts()["family_members"]
         inside = [dataclasses.replace(inside[0], map_id=230)]
         self.assertEqual(self._idle([], inside), [])
+        _idle, holds = self._state([], inside)
+        self.assertEqual(holds["Dwarf"], "a family member is still inside an instance")
 
     def test_the_switch_off_plans_nobody(self):
         with mock.patch.dict("os.environ", {"FAMILY_CLASS_STEPS": "off"}):

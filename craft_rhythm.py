@@ -86,6 +86,17 @@ import professions
 MODE_GATHER = next(mode for mode in jobs.IMPLEMENTED if mode == "quest")
 MODE_CRAFT = next(mode for mode in jobs.IMPLEMENTED if mode == craft.MODE)
 
+
+def is_gathering(mode) -> bool:
+    """Whether a standing job sends the character out to pick nodes.
+
+    A farm order is a gathering trip too: the bots reach a node only through
+    the `gather` and `loot` strategies, so the life pass must hand them out
+    for it as it does for the quest job.
+    """
+    return mode == MODE_GATHER or jobs.is_farm_job(mode)
+
+
 # What one character's own reagents say about them. Four words rather than a
 # pair of booleans, because the interesting answers are the middle two and a
 # flag pair is exactly how they would collapse into each other: BETWEEN means
@@ -279,7 +290,7 @@ GATHERED: dict[int, tuple[Reagent, ...]] = {
     3397: (Reagent(3730, "Big Bear Meat", 1),),
     15855: (Reagent(12184, "Raptor Flesh", 1),),
     18243: (Reagent(13759, "Raw Nightfin Snapper", 1),),
-    24801: (Reagent(20401, "Sandworm Meat", 1),),
+    24801: (Reagent(20424, "Sandworm Meat", 1),),
     # TAILORING - the bolt family. Cloth is a humanoid kill drop, which is why
     # Og needs no gathering PROFESSION at all to restock: he needs to be out
     # in the world killing things, which is exactly what MODE_GATHER is.

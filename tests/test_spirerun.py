@@ -317,8 +317,9 @@ class TheBridgeWiring(unittest.TestCase):
         self.assertLess(spire, step)
 
     def test_the_raid_writer_seats_the_ten_and_not_forty(self):
+        """The shared writer delegates its raid shape to the pure module."""
         source = (HERE / "bridge.py").read_text(encoding="utf-8")
-        self.assertIn("spirerun.lineup(members, list(names))", source)
+        self.assertIn("raidrun.lineup_for_order(keyword, members, names)", source)
 
     def test_the_family_at_the_floor_is_written_once_with_the_modules_source(self):
         source = (HERE / "bridge.py").read_text(encoding="utf-8")
@@ -334,6 +335,41 @@ class OppositeFactions(unittest.TestCase):
         )
         self.assertIn("opposite factions", plan.refusal)
         self.assertEqual(plan.entries, ())
+
+
+class TheLogSaysWhy(unittest.TestCase):
+    """One line per family says why an order was or was not written (#2571)."""
+
+    def test_a_held_family_says_the_hold_is_why(self):
+        line = spirerun.held_line("gather and craft only")
+        self.assertIn("held by the operator", line)
+        self.assertIn("no Upper Spire order", line)
+        self.assertIn("gather and craft only", line)
+
+    def test_a_person_cancel_says_who_and_how_long_is_left(self):
+        last = spirerun.Last(finished_at=NOW - 86400, cleared=False, cancelled=True)
+        line = spirerun.wait_line(last, NOW)
+        self.assertIn("cancelled by a person", line)
+        self.assertIn("6 days", line)
+
+    def test_a_clear_and_a_failure_each_say_their_own_wait(self):
+        cleared = spirerun.Last(finished_at=NOW - 3600, cleared=True)
+        failed = spirerun.Last(finished_at=NOW - 3600, cleared=False)
+        self.assertIn("cleared", spirerun.wait_line(cleared, NOW))
+        self.assertIn("6 days 23 hours", spirerun.wait_line(cleared, NOW))
+        self.assertIn("did not clear", spirerun.wait_line(failed, NOW))
+        self.assertIn("23 hours", spirerun.wait_line(failed, NOW))
+
+    def test_a_campaign_ahead_is_named_with_its_status(self):
+        rows = [row(1, "uldaman", "active", 2), row(2, "maraudon", "queued", 3)]
+        slot = spirerun.order_slot(rows, None, NOW)
+        line = spirerun.behind_line(rows, slot)
+        self.assertIn("uldaman (active)", line)
+        self.assertNotIn("maraudon", line)
+
+    def test_nothing_ahead_says_nothing(self):
+        slot = spirerun.order_slot([], None, NOW)
+        self.assertEqual(spirerun.behind_line([], slot), "")
 
 
 if __name__ == "__main__":

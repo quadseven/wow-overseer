@@ -25,9 +25,11 @@ every SAY_EVERY_SECONDS, "held by operator: <reason>":
   * the activity choice;
   * the leveling route.
 
-WHAT A HOLD LEAVES RUNNING. The bag, bank, mail, vendor and craft passes that
-act inside the job the family already has, and the craft rhythm, which only
-ever moves between gather and craft. A hold also undoes nothing: a job or aim
+WHAT A HOLD LEAVES RUNNING. The farm pass (family-wide and per member), the
+bag, bank, mail, vendor and craft passes that act inside the job the family
+already has, and the craft rhythm, which only ever moves between gather and
+craft. A hold has no field that says what it forbids, so gathering is never
+stood down by one. A hold also undoes nothing: a job or aim
 already written stays. Set the job the family should hold from the console.
 
 THE ENVIRONMENT SWITCHES STILL WORK. CAMPAIGN_PLANNER, ATTUNEMENT_STEP and

@@ -738,6 +738,11 @@ UNOBTAINABLE_RECIPES = {
         "Field Repair Bot 74A",
         "Schematic 18235 has no trainer, vendor, loot or quest source",
     ),
+    19093: (
+        "Onyxia Scale Cloak",
+        "craft spell 19093 has no trainer, vendor, loot or quest source in the "
+        "2026-11-13 realm database read",
+    ),
 }
 
 

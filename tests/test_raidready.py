@@ -17,6 +17,7 @@ import gearscore  # noqa: E402
 import raidfloor  # noqa: E402
 import raidgoals  # noqa: E402
 import raidready  # noqa: E402
+import raidrun  # noqa: E402
 from raidlineup import (
     DRUID,
     HUNTER,
@@ -487,7 +488,7 @@ def _floor_row(name, slot, **stats):
     return row
 
 
-class ARoleGearFloorIsAHardBlocker(unittest.TestCase):
+class ARoleGearFloorIsASoftPlanningNumber(unittest.TestCase):
     """#2110: a tank under its effective health and a healer under their
     healing power stop the raid, with the stat and the gap in the sentence."""
 
@@ -512,12 +513,15 @@ class ARoleGearFloorIsAHardBlocker(unittest.TestCase):
         text = " ".join(b["text"] for b in self.card["blockers"])
         self.assertNotIn("gear floor", text)
 
-    def test_a_thin_tank_and_healer_are_hard_blockers_naming_stat_and_gap(self):
+    def test_a_thin_tank_and_healer_are_soft_blockers_naming_stat_and_gap(self):
         tank, healer = self._thin("tank"), self._thin("healer")
         card = self._with_thin(tank, healer)
+        soft = [b["text"] for b in card["blockers"] if b["tone"] == raidready.SOFT]
         hard = [b["text"] for b in card["blockers"] if b["tone"] == raidready.HARD]
-        floor = [t for t in hard if "gear floor" in t]
-        self.assertEqual(1, len(floor), hard)
+        self.assertFalse([t for t in hard if "gear floor" in t], hard)
+        floor = [t for t in soft if "gear floor" in t]
+        self.assertEqual(1, len(floor), soft)
+        self.assertIn("Planning number, not enforced", floor[0])
         eh = raidfloor.FLOORS["tank"]["effective health"][0]
         hp = raidfloor.FLOORS["healer"]["healing power"][0]
         self.assertIn(
@@ -527,18 +531,70 @@ class ARoleGearFloorIsAHardBlocker(unittest.TestCase):
         self.assertIn(
             "%s healer healing power 0 of %d (short %d)" % (healer, hp, hp), floor[0]
         )
-        self.assertFalse(card["ready"])
+        self.assertTrue(card["ready"], "a gear shortfall alone stops no order")
 
-    def test_a_thin_damage_seat_is_a_hard_blocker_too(self):
+    def test_a_thin_damage_seat_is_soft_too(self):
         dps = self._thin("dps")
         card = self._with_thin(dps)
-        text = " ".join(b["text"] for b in card["blockers"] if b["tone"] == "hard")
+        text = " ".join(b["text"] for b in card["blockers"] if b["tone"] == "soft")
         self.assertIn("%s dps attack or spell power 0 of" % dps, text)
 
     def test_a_seat_with_no_worn_rows_is_not_read_so_not_blocked(self):
         card = _card(self.rows, [self.rows[0]["name"]], item_rows=ITEM_ROWS)
         text = " ".join(b["text"] for b in card["blockers"])
         self.assertNotIn("gear floor", text)
+
+
+class TheRealBlockerIsLevelAndTheQuorum(unittest.TestCase):
+    """What refuses an order is a seat below level 50 and the door quorum, not
+    gear (#2573). A 30-member guild keeps every member placed, so lowering one
+    level moves no seat."""
+
+    SPEC = [(WARRIOR, 4), (PRIEST, 8), (MAGE, 18)]
+
+    def _card_with(self, low=0):
+        rows = _guild("Cave", 23, self.SPEC)
+        names = [r["name"] for r in rows]
+        lowered = names[len(names) - low :] if low else []
+        for row in rows:
+            if row["name"] in lowered:
+                row["level"] = 30
+        return lowered, _card(rows, [rows[0]["name"]])
+
+    def test_every_seat_at_fifty_but_a_short_guild_is_held_only_by_the_quorum(self):
+        _, card = self._card_with()
+        hard = [b["text"] for b in card["blockers"] if b["tone"] == "hard"]
+        self.assertTrue([t for t in hard if "holds a raid at the door" in t], hard)
+        self.assertFalse([t for t in hard if "gear floor" in t])
+
+    def test_a_seat_below_fifty_is_a_hard_blocker_naming_it(self):
+        lowered, card = self._card_with(low=1)
+        hard = " ".join(b["text"] for b in card["blockers"] if b["tone"] == "hard")
+        self.assertIn(lowered[0], hard)
+        self.assertIn("an order is refused", hard)
+        self.assertFalse(card["ready"])
+
+    def test_a_short_quorum_is_a_hard_blocker_with_live_counts(self):
+        _, card = self._card_with(low=10)
+        hard = [b["text"] for b in card["blockers"] if b["tone"] == "hard"]
+        quorum = [t for t in hard if "holds a raid at the door" in t]
+        self.assertEqual(1, len(quorum), hard)
+        self.assertIn("%d seats" % raidrun.QUORUM_SEATS, quorum[0])
+        self.assertIn("20 seats, ", quorum[0])
+
+    def test_the_quorum_numbers_come_from_raidruns_one_copy(self):
+        self.assertEqual(
+            (36, 3, 8),
+            (raidrun.QUORUM_SEATS, raidrun.QUORUM_TANKS, raidrun.QUORUM_HEALERS),
+        )
+
+    def test_the_card_counts_the_seats_below_fifty_by_role(self):
+        lowered, card = self._card_with(low=10)
+        below = card["seats_below_level"]
+        self.assertEqual(10, below["below"])
+        self.assertEqual(30, below["seats"])
+        self.assertEqual(50, below["gate"])
+        self.assertEqual(10, below["tanks"] + below["healers"] + below["damage"])
 
 
 class SeatsAreChosenByPreRaidReadiness(unittest.TestCase):
@@ -583,6 +639,7 @@ class EachRaiderIsReadyOrSaysWhyNot(unittest.TestCase):
     def _tank_night(self, extra=0):
         wants = {
             "Greater Fire Protection Potion": 4 + extra,
+            "Greater Stoneshield Potion": 1,
             "Major Healing Potion": 5 + extra,
             "Flask of the Titans": 1,
             "Elixir of the Mongoose": 1,
@@ -602,7 +659,7 @@ class EachRaiderIsReadyOrSaysWhyNot(unittest.TestCase):
         self.assertTrue(head["ready"], head["short"])
         self.assertEqual("yes", head["cells"][-1])
         self.assertEqual("200 of 200", head["cells"][6])
-        self.assertEqual("14 of 14", head["cells"][9])
+        self.assertEqual("15 of 15", head["cells"][9])
         self.assertEqual("100%", head["cells"][5])
         self.assertIn("1 ready for the core", card["raiders_line"])
 
@@ -616,8 +673,8 @@ class EachRaiderIsReadyOrSaysWhyNot(unittest.TestCase):
         head = next(
             r for r in self._card_for(worn, held)["raiders"] if r["name"] == self.head
         )
-        self.assertEqual((9, 14), (head["supplies_carried"], head["supplies_wanted"]))
-        self.assertEqual(["supplies 9 of 14"], head["short"])
+        self.assertEqual((9, 15), (head["supplies_carried"], head["supplies_wanted"]))
+        self.assertEqual(["supplies 9 of 15"], head["short"])
 
     def test_targets_follow_the_role(self):
         card = self._card_for([], [])
@@ -695,10 +752,10 @@ class EachRaiderIsReported(unittest.TestCase):
                 "17 of 200",
                 "yes",
                 "0",
-                "0 of 14",
+                "0 of 15",
                 "Eastern Kingdoms",
                 "no: pre-raid gear 22%, needs 50%; fire resistance 17 of 200; "
-                "supplies 0 of 14",
+                "supplies 0 of 15",
             ],
             head["cells"],
         )
@@ -741,6 +798,11 @@ class EachRaiderIsReported(unittest.TestCase):
         self.assertEqual(3, len(att["steps"]))
         self.assertIn("Lothos Riftwaker", att["steps"][0])
         self.assertIn("Blackrock Depths", att["steps"][1])
+
+    def test_attunement_and_quintessence_are_not_gates(self):
+        line = self.card["attunement"]["line"].lower()
+        self.assertIn("aqual quintessence", line)
+        self.assertIn("neither attunement nor aqual quintessence is required", line)
 
 
 class TheAttunementIsReadNotAssumed(unittest.TestCase):

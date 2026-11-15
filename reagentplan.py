@@ -84,6 +84,10 @@ class Short:
     source: str
     who: str
     why: str
+    # The house was read and lists none of this reagent (#2523): the source is
+    # still the auction, because choosing a source is not this flag's job, but
+    # the line says there is nothing to buy.
+    house_empty: bool = False
 
 
 @dataclass(frozen=True)
@@ -109,6 +113,14 @@ def reagents(spell: int) -> tuple:
     """Every reagent `spell` eats per cast, gathered half first."""
     spell = int(spell or 0)
     out: dict = {}
+    fed = craft_rhythm.BOLT_FED.get(spell)
+    if fed is not None:
+        weave, bolt = fed
+        out[int(bolt.entry)] = Reagent(int(bolt.entry), bolt.label, int(bolt.per_cast))
+        for r in craft_rhythm.feeds(weave):
+            out[int(r.entry)] = Reagent(
+                int(r.entry), r.label, int(r.per_cast) * int(bolt.per_cast)
+            )
     for r in craft_rhythm.feeds(spell):
         out[int(r.entry)] = Reagent(int(r.entry), r.label, int(r.per_cast))
     single = craft_supply.REAGENT.get(spell)
@@ -162,36 +174,109 @@ def _source(name, spell, reagent, have, short, kinds, skills):
     return AUCTION, who, why
 
 
-def plan(name: str, spell: int, stock: dict, kinds: dict, skills: dict) -> Plan:
+def _house_none(have: Stock, label: str, short: int) -> str:
+    """Why a reagent that fell through to an empty house has no source yet."""
+    if have.guild_bank > 0:
+        nxt = "the guild vault holds %d, short of the %d it needs" % (
+            have.guild_bank,
+            short,
+        )
+    else:
+        nxt = "no corps mail or guild vault holds any, so nothing feeds it"
+    return "the house lists none of %s; %s" % (label, nxt)
+
+
+def house_none_notes(wants, listed) -> list:
+    """One sentence per (crafter, reagent) the house lists none of.
+
+    `wants` is [(crafter, label, entry)] and `listed` is entry -> live
+    listings (None when the house was not read, which says nothing). Each pair
+    is said once however often it is wanted.
+    """
+    if listed is None:
+        return []
+    out, seen = [], set()
+    for name, label, entry in wants or ():
+        if (name, int(entry)) in seen or listed.get(int(entry), 0) > 0:
+            continue
+        seen.add((name, int(entry)))
+        out.append(
+            "%s is short of %s and the house lists none of it, so a "
+            "purchase has nothing to buy" % (name, label)
+        )
+    return out
+
+
+def plan(
+    name: str, spell: int, stock: dict, kinds: dict, skills: dict, listed=None
+) -> Plan:
     """`name`'s errand `spell` against `stock` (entry -> Stock).
 
     `kinds` is entry -> (item class, subclass), `skills` is the family's
     name -> {trade: value}; both only matter for a reagent no bank, mailbox,
-    vault or vendor answers.
+    vault or vendor answers. `listed` is entry -> live auction listings, or
+    None when the house was not read: a reagent that falls through to the
+    house with none listed says so (`Short.house_empty`).
     """
     eaten = reagents(spell)
     if not eaten:
         return Plan(name, int(spell or 0))
+    fed = craft_rhythm.BOLT_FED.get(int(spell or 0))
+    bolt_entry = int(fed[1].entry) if fed is not None else 0
+    bolt_need = max(1, int(fed[1].per_cast)) if fed is not None else 0
+    bolt_have = (stock.get(bolt_entry) or Stock()) if fed is not None else Stock()
+    short_bolts = max(0, bolt_need - bolt_have.bags)
+    bolt_stored = short_bolts > 0 and (
+        bolt_have.bank >= short_bolts
+        or bolt_have.mail >= short_bolts
+        or bolt_have.guild_bank >= short_bolts
+    )
+    weave_feeds = (
+        {int(r.entry): max(1, int(r.per_cast)) for r in craft_rhythm.feeds(fed[0])}
+        if fed is not None
+        else {}
+    )
     casts = None
     shorts = []
     for reagent in eaten:
+        if reagent.entry in weave_feeds:
+            if short_bolts == 0 or bolt_stored:
+                continue
+            per = short_bolts * weave_feeds[reagent.entry]
+            reagent = Reagent(reagent.entry, reagent.label, per, reagent.vendor)
+        else:
+            per = max(1, reagent.per_cast)
         have = stock.get(reagent.entry) or Stock()
-        per = max(1, reagent.per_cast)
-        casts = have.bags // per if casts is None else min(casts, have.bags // per)
+        if reagent.entry not in weave_feeds:
+            casts = have.bags // per if casts is None else min(casts, have.bags // per)
         if have.bags >= per:
+            continue
+        if reagent.entry == bolt_entry and not bolt_stored and weave_feeds:
             continue
         source, who, why = _source(
             name, spell, reagent, have, per - have.bags, kinds, skills
         )
-        shorts.append(Short(reagent, have, source, who, why))
+        empty = (
+            source == AUCTION
+            and listed is not None
+            and listed.get(reagent.entry, 0) <= 0
+        )
+        if empty:
+            why = _house_none(have, reagent.label, per - have.bags)
+        shorts.append(Short(reagent, have, source, who, why, empty))
     return Plan(name, int(spell), True, casts or 0, tuple(shorts))
 
 
 def line(p: Plan) -> str:
     """One plain sentence: what the craft is missing and where it comes from."""
     parts = [
-        "%s %d of %d in the bags, from the %s: %s"
-        % (s.reagent.label, s.have.bags, s.reagent.per_cast, s.source, s.why)
+        (
+            "%s %d of %d in the bags, %s"
+            % (s.reagent.label, s.have.bags, s.reagent.per_cast, s.why)
+            if s.house_empty
+            else "%s %d of %d in the bags, from the %s: %s"
+            % (s.reagent.label, s.have.bags, s.reagent.per_cast, s.source, s.why)
+        )
         for s in p.shorts
     ]
     return "%s cannot cast spell %d yet - %s" % (p.name, p.spell, "; ".join(parts))

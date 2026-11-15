@@ -104,8 +104,8 @@ While a family is held, these write nothing for it and log
 - the activity choice;
 - the leveling route.
 
-The bag, bank, mail, vendor and craft passes keep working inside the job the
-family has. A hold undoes nothing already written, so set the job you want
+The farm pass (family-wide and per member), and the bag, bank, mail, vendor and
+craft passes keep working inside the job the family has. A hold undoes nothing already written, so set the job you want
 from the console. `CAMPAIGN_PLANNER=off`, `ATTUNEMENT_STEP=off` and
 `JEV_MODE_ACTIVITY_CHOICE=off` still switch their writer off for every family
 from the next start. Either a switch or a hold is enough to stop a writer.

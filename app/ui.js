@@ -230,7 +230,48 @@ export function histogram(bins, opts) {
   });
   const first = bins[0].label, last = bins[bins.length - 1].label;
   const role = bins.some((b) => b.href) ? "group" : "img";
-  return html`<div class="histo" role="${role}" aria-label="${o.label || "Distribution"}">${bars}</div><div class="histo-axis"><span>${first}</span><span>${last}</span></div>`;
+  return html`<div class="histo" role="${role}" aria-label="${o.label || "Distribution"}">${bars}</div><div class="histo-axis"><span>${first}</span><span class="histo-read" data-histo-read aria-live="polite"></span><span>${last}</span></div>`;
+}
+
+// Return the histogram bar whose horizontal center is nearest to `clientX`.
+export function nearestHistoBar(bars, clientX) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const bar of bars || []) {
+    const rect = bar.getBoundingClientRect();
+    const mid = (rect.left + rect.right) / 2;
+    const dist = Math.abs(clientX - mid);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = bar;
+    }
+  }
+  return best;
+}
+
+// On narrow touch charts, show the nearest bar's value on tap without widening
+// strips into neighbors; a second tap on the active bar follows its link.
+export function bindHistogram(root) {
+  if (!root || !root.querySelectorAll) return;
+  const isTouch = () => typeof window !== "undefined" && window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+  root.querySelectorAll(".histo").forEach((el) => {
+    const axis = el.nextElementSibling;
+    const read = axis && axis.querySelector ? axis.querySelector("[data-histo-read]") : null;
+    if (!read) return;
+    el.addEventListener("click", (e) => {
+      const bars = [...el.querySelectorAll("a.hit, span.bar")];
+      const bar = nearestHistoBar(bars, e.clientX);
+      if (!bar) return;
+      const label = bar.getAttribute("aria-label") || "";
+      read.textContent = label;
+      const touch = e.pointerType === "touch" || isTouch();
+      if (touch && bar.tagName === "A" && bar.getAttribute("data-active") !== "true") {
+        e.preventDefault();
+        bars.forEach((b) => b.removeAttribute("data-active"));
+        bar.setAttribute("data-active", "true");
+      }
+    });
+  });
 }
 
 // ---- the state of a read ---------------------------------------------------

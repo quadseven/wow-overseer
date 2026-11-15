@@ -24,6 +24,13 @@ then hops it from one surveyed spawn to the next inside that zone. Every
 coordinate it hands out is a row of `acore_world.gameobject` - never a point
 it computed, because a guessed Z has no navmesh (gatheraim's header).
 
+KILL DROPS (#2524). An item no node holds (Silk Cloth, Mageweave, Light Leather
+off a creature) is read from `creature_loot_template` as creature spawns
+instead, inside a level band the weakest member sets (`kill_band`). The field,
+the hop, the time box, the death stops and the one travel-aim writer are the
+nodes' own; only the spawn rows differ. Whether the bots then kill what they
+stand among is their own strategies' business, and the bag count says so.
+
 THE FAMILY TRAVELS AS ONE (jobs are family-wide, #2426 makes them per member
 later). So a node counts when SOMEBODY in the family can open it, the walk
 moves all five, and the danger ceiling is the weakest member's level. The per
@@ -90,6 +97,20 @@ GREY_AFTER = 100
 # The danger margin, the same three levels gatheraim and the dungeon planner use.
 LEVEL_MARGIN = gatheraim.LEVEL_MARGIN
 
+# KILL DROPS (#2524). Low-level cloth and leather come off creatures, not
+# nodes. A creature counts as a source when the item drops from it at least
+# this often (cloth drops at a few percent, so it is far below
+# MIN_DROP_CHANCE, which keeps only the chests that always hold a herb), and
+# only creatures within this many levels below the weakest member are
+# considered, so the survey is the creatures a family of that level meets and
+# not every spawn on the continent. The ceiling above is the same
+# LEVEL_MARGIN as for nodes.
+KILL_MIN_CHANCE = 5.0
+KILL_LEVELS_BELOW = 30
+# Linen (2589) and Wool (2592) only drop from low-level humanoids, well below
+# a level-60 family's KILL_LEVELS_BELOW floor.
+LOW_CLOTH_TIERS = frozenset({2589, 2592})
+
 END = "end"
 TOWN = "town"
 WALK = "walk"
@@ -152,6 +173,50 @@ def skill_locks(skill_name, value) -> list:
     return out
 
 
+def advances(job, skills) -> bool:
+    """Whether the member's own skills still advance the farm SKILL order `job`."""
+    skill = order_of(job)[1]
+    try:
+        have = int((skills or {}).get(skill))
+    except (TypeError, ValueError):
+        return False
+    return bool(skill and skill_locks(skill, have))
+
+
+def target_for(skills) -> str:
+    """The farm job one member can still advance with its own skills (#2498).
+
+    `skills` is that member's {trade name: value}. Of the aimable trades it
+    holds with a node that still gives skill, the lowest is taken, the same
+    "most starved" rule gatheraim uses. A member with none (skinning, tailoring
+    and the other trades with no node to walk to) has no farm target: "".
+    """
+    best = None
+    for name in SKILLS:
+        try:
+            have = int((skills or {}).get(name))
+        except (TypeError, ValueError):
+            continue
+        if not skill_locks(name, have):
+            continue
+        if best is None or have < best[1]:
+            best = (name, have)
+    return job_for(best[0]) if best else ""
+
+
+@dataclass(frozen=True)
+class Creature(gatheraim.Spawn):
+    """One surveyed creature spawn that drops the ordered item.
+
+    A row of `acore_world.creature`, never a computed point. `lock_id` is 0:
+    a creature has no gathering lock, which is how a kill field is told from a
+    node. `level` is the creature template's top level.
+    """
+
+    level: int = 0
+    chance: float = 0.0
+
+
 @dataclass(frozen=True)
 class Order:
     """One farm order, as the bridge read it."""
@@ -188,6 +253,17 @@ class Reads:
     walking: object = None
     visited: dict = dataclasses.field(default_factory=dict)
     now: float = 0.0
+    # When the leader began standing within HOP_MIN_YARDS of a node spawn, or
+    # 0.0 when it is not standing at one (or nobody has read it).
+    stood_since: float = 0.0
+    # Creature spawns that drop the ordered item (#2524), read only for an
+    # item with no node spawn at all. Empty for every other order.
+    creatures: tuple = ()
+    # Deaths across renewed orders of the same farm job (#2562), read by
+    # `safe_fields` (`struck_zones`) so a zone that killed the family before a
+    # renewal stays struck while `deaths` stays scoped to the current order's
+    # `TOTAL_DEATHS` ceiling. None falls back to `deaths`.
+    zone_deaths: tuple | None = None
 
 
 @dataclass(frozen=True)
@@ -198,6 +274,44 @@ class Step:
     line: str
     spawn: object = None
     zone_id: int = 0
+    # An END that a family in the profession loop should answer with a fresh
+    # order rather than by leaving the farm: a spent time box or a met target.
+    renew: bool = False
+
+
+# How far from the leader a member may stand and still take part in the order.
+# The rest follow on their own strategy; a member further out, on another map
+# or inside an instance is not part of the order (it would only hold the
+# family's bag, death and job reads hostage).
+REACH_YARDS = 300.0
+
+
+def in_reach(positions, leader) -> list:
+    """The sorted names the order covers: the leader and every member on the
+    leader's map, outside any instance, within REACH_YARDS of it.
+
+    `positions` is name -> snapshot row (map_id, instance_id, pos_x, pos_y).
+    With no reading of the leader nobody is cut, which is the old behaviour.
+    """
+    here = (positions or {}).get(leader)
+    if not here or here.get("map_id") is None:
+        return sorted(positions or {})
+    out = []
+    for name, row in positions.items():
+        if name == leader:
+            out.append(name)
+            continue
+        if row.get("map_id") is None or int(row["map_id"]) != int(here["map_id"]):
+            continue
+        if int(row.get("instance_id") or 0) != int(here.get("instance_id") or 0):
+            continue
+        if int(row.get("instance_id") or 0):
+            continue
+        dx = float(row.get("pos_x") or 0.0) - float(here.get("pos_x") or 0.0)
+        dy = float(row.get("pos_y") or 0.0) - float(here.get("pos_y") or 0.0)
+        if (dx * dx + dy * dy) ** 0.5 <= REACH_YARDS:
+            out.append(name)
+    return sorted(out)
 
 
 def spawn_key(spawn) -> tuple:
@@ -265,9 +379,52 @@ def usable(order, spawns, skills) -> tuple:
     )
 
 
-def fields(spawns, leader_at) -> list:
+def kill_band(levels, item: int = 0) -> tuple:
+    """(lowest creature level, highest) a family may be sent to for a kill drop.
+
+    The weakest member sets the ceiling, as for nodes; (0, 0) when no level
+    was read, which `usable_kills` refuses rather than guesses. Low-level
+    cloth tiers (Linen, Wool) drop down to level 1 even for a level-60 family.
+    """
+    lowest = min((int(v) for v in (levels or {}).values()), default=0)
+    if not lowest:
+        return 0, 0
+    floor = (
+        1 if int(item or 0) in LOW_CLOTH_TIERS else max(1, lowest - KILL_LEVELS_BELOW)
+    )
+    return floor, lowest + LEVEL_MARGIN
+
+
+def usable_kills(order, creatures, levels) -> tuple:
+    """(creature spawns inside the level band, the refusal when none is).
+
+    The band is `kill_band`: the weakest member's level sets the danger
+    ceiling, so a creature a member of the family could not stand against is
+    never a field, however much of the item it drops.
+    """
+    low, high = kill_band(levels, getattr(order, "item", 0))
+    if not high:
+        return [], (
+            "no member level was read, so the danger ceiling for %s is unknown"
+            % _what(order)
+        )
+    inside = [c for c in creatures or () if low <= int(c.level) <= high]
+    if inside:
+        return inside, ""
+    seen = sorted({int(c.level) for c in creatures or ()})
+    return [], (
+        "%s drops from creatures of level %s and the family may be sent to "
+        "level %d to %d only" % (_what(order), ", ".join(map(str, seen)), low, high)
+    )
+
+
+def fields(spawns, leader_at, visited=None, now=0.0) -> list:
     """[(yards to the nearest spawn, zone id, nodes, nearest spawn)] on the
-    leader's map, nearest field first and the densest breaking a tie."""
+    leader's map, nearest field first and the densest breaking a tie.
+
+    The spawn named for a field is the nearest one not tried within
+    REVISIT_SECONDS (`visited`), so a spawn the travel column refused is not
+    asked for again every pass; when every spawn was tried, the nearest."""
     if not leader_at or leader_at.get("map_id") is None:
         return []
     here = int(leader_at["map_id"])
@@ -282,7 +439,13 @@ def fields(spawns, leader_at) -> list:
         per_zone.setdefault(int(spawn.zone_id), []).append(spawn)
     out = []
     for zone, rows in per_zone.items():
-        near = min(rows, key=lambda s: gatheraim.yards(s, origin))
+        fresh = [
+            r
+            for r in rows
+            if now - (visited or {}).get(spawn_key(r), -REVISIT_SECONDS)
+            >= REVISIT_SECONDS
+        ]
+        near = min(fresh or rows, key=lambda s: gatheraim.yards(s, origin))
         out.append((gatheraim.yards(near, origin), zone, len(rows), near))
     out.sort(key=lambda r: (r[0], -r[2], r[1]))
     return out
@@ -325,12 +488,14 @@ def _ending(order, reads, what):
             END,
             "the %d-minute time box is up with %d %s gathered"
             % (int(order.time_box // 60), reads.gathered, what),
+            renew=True,
         )
     if order.item and reads.gathered >= int(order.target):
         return Step(
             END,
             "the target is met: %d of %d %s gathered"
             % (reads.gathered, int(order.target), what),
+            renew=True,
         )
     if len(reads.deaths or ()) >= TOTAL_DEATHS:
         return Step(
@@ -354,7 +519,8 @@ def _judge(zone, top, struck, ceiling):
 
 def safe_fields(candidates, reads):
     """([(yards, zone, nodes, nearest spawn, top level)], [reasons refused])."""
-    struck = struck_zones(reads.deaths)
+    deaths = reads.deaths if reads.zone_deaths is None else reads.zone_deaths
+    struck = struck_zones(deaths)
     lowest = min((int(v) for v in (reads.levels or {}).values()), default=0)
     ceiling = lowest + LEVEL_MARGIN if lowest else 0
     safe, said = [], []
@@ -368,6 +534,41 @@ def safe_fields(candidates, reads):
     return safe, said
 
 
+# How long the family stands at a node before hopping on. The bots gather what
+# is within reach of where they stand, a node can be mid-respawn, and a hop the
+# moment the leader arrives gave them no time at all.
+DWELL_SECONDS = 120.0
+
+
+def stand_update(prev, spawns, leader_at, now):
+    """(spawn key the leader stands at, since when) after this pass.
+
+    `prev` is the last answer. The start is kept while the leader stays at the
+    same spawn and restarts at another; (None, 0.0) when it stands at none.
+    """
+    if not leader_at or leader_at.get("map_id") is None:
+        return (None, 0.0)
+    origin = (
+        float(leader_at.get("pos_x") or 0.0),
+        float(leader_at.get("pos_y") or 0.0),
+    )
+    best = None
+    for spawn in spawns or ():
+        if int(spawn.map_id) != int(leader_at["map_id"]):
+            continue
+        if int(spawn.zone_id or 0) != int(leader_at.get("zone_id") or 0):
+            continue
+        gap = gatheraim.yards(spawn, origin)
+        if gap < HOP_MIN_YARDS and (best is None or gap < best[0]):
+            best = (gap, spawn)
+    if best is None:
+        return (None, 0.0)
+    key = spawn_key(best[1])
+    if prev and prev[0] == key and prev[1]:
+        return prev
+    return (key, float(now))
+
+
 def _hop(open_, reads, what, standing):
     """The HOP step inside the field, or a WAIT when every node is in reach."""
     here = int(reads.leader_at["map_id"])
@@ -376,6 +577,15 @@ def _hop(open_, reads, what, standing):
         float(reads.leader_at.get("pos_y") or 0.0),
     )
     rows = [s for s in open_ if int(s.map_id) == here and int(s.zone_id) == standing]
+    since = float(reads.stood_since or 0.0)
+    at_node = any(gatheraim.yards(s, origin) < HOP_MIN_YARDS for s in rows)
+    if at_node and since and float(reads.now) - since < DWELL_SECONDS:
+        return Step(
+            WAIT,
+            "dwelling at a %s spawn for %d of %d seconds so the bots gather it"
+            % (what, int(float(reads.now) - since), int(DWELL_SECONDS)),
+            zone_id=standing,
+        )
     hop = _next_hop(rows, origin, reads.visited or {}, float(reads.now))
     if hop is None:
         return Step(
@@ -396,7 +606,7 @@ def _hop(open_, reads, what, standing):
 def _where(open_, reads, what):
     """WALK to the nearest safe field, WAIT on a walk in flight, or HOP."""
     here = int(reads.leader_at["map_id"])
-    candidates = fields(open_, reads.leader_at)
+    candidates = fields(open_, reads.leader_at, reads.visited or {}, float(reads.now))
     if not candidates:
         maps = sorted({int(s.map_id) for s in open_})
         return Step(
@@ -449,7 +659,10 @@ def decide(order, reads) -> Step:
     full = gatheraim.bags_block_gathering(reads.free_slots)
     if full:
         return Step(TOWN, full)
-    open_, refused = usable(order, reads.spawns, reads.skills)
+    if order.item and not reads.spawns and reads.creatures:
+        open_, refused = usable_kills(order, reads.creatures, reads.levels)
+    else:
+        open_, refused = usable(order, reads.spawns, reads.skills)
     if refused:
         return Step(END, refused)
     if not reads.leader_at or reads.leader_at.get("map_id") is None:

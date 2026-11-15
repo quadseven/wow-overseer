@@ -874,11 +874,20 @@ VENDOR_WAIT_TRIP_SECONDS = 30 * 60
 
 
 def vendor_wait_trip(
-    wait_seconds: int, sellable_counts: dict[str, int], in_run: bool
+    wait_seconds: int,
+    sellable_counts: dict[str, int],
+    in_run: bool,
+    farming: bool = False,
 ) -> bool:
-    """Take a vendor turn after a sustained wait, unless a dungeon owns travel."""
+    """Take a vendor turn after a sustained wait, unless a dungeon owns travel.
+
+    A family on a farm order is left out: its own town phase takes the vendor
+    trip, and a seller that cannot finish (one held in a dungeon) would
+    otherwise take the leader's column again and again and split the family.
+    """
     return (
         not in_run
+        and not farming
         and wait_seconds >= VENDOR_WAIT_TRIP_SECONDS
         and any(count > 0 for count in sellable_counts.values())
     )
