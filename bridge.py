@@ -17875,9 +17875,7 @@ class Bridge(discord.Client):
         if actions:
             seen_setup = await asyncio.to_thread(
                 _recent_guild_setup_keys, GIVE_RETRY_MINUTES)
-            action = next((a for a in actions
-                           if (a.target, a.command) not in seen_setup), None)
-            if action:
+            for action in guildbank.setup_for_arrival(actions, seen_setup):
                 await asyncio.to_thread(_insert_guild, action.target,
                                         action.command, "guildbank-setup")
                 log.info("guild bank setup: queued %s for %s%s",
