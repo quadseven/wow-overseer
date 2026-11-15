@@ -99,6 +99,7 @@ KEEP_CARRY = "KEEP_CARRY"
 BANK_PERSONAL = "BANK_PERSONAL"
 GUILD_BANK = "GUILD_BANK"
 GIVE = "GIVE"
+BANKER = "BANKER"
 AUCTION = "AUCTION"
 SELL_VENDOR = "SELL_VENDOR"
 DISENCHANT = "DISENCHANT"
@@ -108,6 +109,7 @@ ROUTES = (
     BANK_PERSONAL,
     GUILD_BANK,
     GIVE,
+    BANKER,
     AUCTION,
     SELL_VENDOR,
     DISENCHANT,
@@ -443,6 +445,9 @@ class Context:
     # (holder, entry) -> route chosen on the previous pass
     previous: Mapping[tuple, str] = field(default_factory=dict)
     raid_night: bool = False
+    # family -> stacks the guild's bankers can take by mail (guildledger). Absent
+    # or zero means no banker route is offered.
+    banker_free: Mapping[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1565,10 +1570,49 @@ def options_for(w: _World, s: Stack) -> list:
     for rule in _RULES:
         got = rule(w, s, me)
         if got:
-            return _stick(w, s, _banked_stays(s, _terminal(w, s, got)))
+            options = _with_banker(w, s, _terminal(w, s, got))
+            return _stick(w, s, _banked_stays(s, options))
     return [
         _opt(KEEP_CARRY, EQUIPMENT, "no rule claimed it: kept", "R1", carry_forced=True)
     ]
+
+
+# A stack worth less than this (copper) is junk the vendor takes, not a banker.
+BANKER_MIN_COPPER = 1_000
+
+
+def _banker_worthy(s: Stack) -> bool:
+    """A tradable, carried stack worth a banker's slot: not true junk."""
+    if not s.carried or not s.tradable or s.quality < 1:
+        return False
+    return (
+        s.value >= BANKER_MIN_COPPER
+        or s.quality >= 2
+        or s.item_class in (C_RECIPE, C_GEM, C_TRADE)
+    )
+
+
+def _with_banker(w: "_World", s: Stack, options: list) -> list:
+    """Offer the guild's bankers before any irreversible route.
+
+    After keep, bank, vault, give and listing, and ahead of a vendor sale,
+    a disenchant or a destroy, a stack worth keeping goes to a banker when the
+    family's bankers have room. Without a banker nothing changes.
+    """
+    family = w.members[s.holder].family
+    if w.ctx.banker_free.get(family, 0) <= 0 or not _banker_worthy(s):
+        return options
+    offer = _opt(
+        BANKER,
+        ROOM,
+        "no room here and worth keeping: mailed to a banker of the guild",
+        "R13",
+        target="banker",
+    )
+    at = next((i for i, o in enumerate(options) if o.route in IRREVERSIBLE), None)
+    if at is None:
+        return [*options, offer]
+    return [*options[:at], offer, *options[at:]]
 
 
 _TERMINAL = frozenset({KEEP_CARRY, BANK_PERSONAL, SELL_VENDOR, DISENCHANT, DESTROY})
@@ -1811,6 +1855,11 @@ def _feasible(
         if tab_used.get(key, 0) >= free:
             return False, "guild bank tab is full"
         return True, ""
+    if o.route == BANKER:
+        key = ("banker", w.members[m].family)
+        if tab_used.get(key, 0) >= w.ctx.banker_free.get(key[1], 0):
+            return False, "the bankers have no room"
+        return True, ""
     if o.route == GIVE:
         r = w.members.get(o.target)
         if r is None:
@@ -1844,6 +1893,9 @@ def _commit(
             bank_used[m] += 1
     elif o.route == GUILD_BANK:
         key = (w.members[m].family, o.tab)
+        tab_used[key] = tab_used.get(key, 0) + 1
+    elif o.route == BANKER:
+        key = ("banker", w.members[m].family)
         tab_used[key] = tab_used.get(key, 0) + 1
     elif o.route == GIVE and o.target in w.members:
         incoming[o.target] += 1
