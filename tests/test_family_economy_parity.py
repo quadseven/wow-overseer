@@ -565,6 +565,7 @@ class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
         ns = _load(
             [
                 "_guild_bank_once",
+                "_queue_remote_setup",
                 "_plan_guild_setup",
                 "_setup_buyer",
                 "_guild_master",

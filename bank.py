@@ -274,6 +274,8 @@ class Plan:
     # walks to a different place to write them: `moves` are answered by a
     # banker, these by a guild vault.
     guild: tuple = ()
+    # Members whose full personal bank has nothing to withdraw or relocate (#2608).
+    kept_full: frozenset = frozenset()
 
 
 def _int(value, default=0):
@@ -1234,6 +1236,16 @@ def _relocatable(holding, storage) -> bool:
     return holding.item.item_class in (ITEM_CLASS_TRADE_GOODS, ITEM_CLASS_GEM)
 
 
+def _relocatable_tab(holding, storage, guild_room):
+    """(tab, why) if this banked stack may relocate to a guild vault tab."""
+    if not _relocatable(holding, storage):
+        return None, ""
+    why = storage_reason(holding, storage)
+    if not why:
+        return None, ""
+    return _guild_tab_for(holding, storage, guild_room), why
+
+
 def _plan_relocations(member, storage, guild_room, space, budget, notes):
     """Withdrawals that bring banked shared stock out for the guild bank.
 
@@ -1254,12 +1266,7 @@ def _plan_relocations(member, storage, guild_room, space, budget, notes):
     for holding in member.banked:
         if len(out) >= budget:
             break
-        if not _relocatable(holding, storage):
-            continue
-        why = storage_reason(holding, storage)
-        if not why:
-            continue
-        tab = _guild_tab_for(holding, storage, guild_room)
+        tab, why = _relocatable_tab(holding, storage, guild_room)
         if tab is None:
             continue
         if space <= 0:
@@ -1282,6 +1289,21 @@ def _plan_relocations(member, storage, guild_room, space, budget, notes):
             )
         )
     return out
+
+
+def _bank_full_of_kept(member, family, totals, storage, guild_room) -> bool:
+    """Whether a full personal bank has no stack the plan asks to take out."""
+    if member.bank_free > 0 or not member.banked:
+        return False
+    relocates = storage is not None and member.name in storage.guild_depositors
+    for holding in member.banked:
+        if holding.container_slots > 0:
+            continue
+        if _wanted_back(holding, member, family, totals, storage):
+            return False
+        if relocates and _relocatable_tab(holding, storage, guild_room)[0] is not None:
+            return False
+    return True
 
 
 def _room_by_tab(storage):
@@ -1334,9 +1356,11 @@ def plan(
     (`bankbags.room_gain`); a deposit is judged against the grown room.
     """
     totals = reagent_totals(members)
-    moves, notes, guild = [], [], []
+    moves, notes, guild, kept_full = [], [], [], []
     guild_room = _room_by_tab(storage)
     for member in sorted(members, key=lambda m: m.name):
+        if _bank_full_of_kept(member, family, totals, storage, guild_room):
+            kept_full.append(member.name)
         candidates = _deposit_candidates(member, family, totals, storage)
         candidates += _room_candidates(
             member,
@@ -1380,6 +1404,7 @@ def plan(
         moves=tuple(moves),
         notes=tuple(dict.fromkeys(notes)),
         guild=tuple(guild),
+        kept_full=frozenset(kept_full),
     )
 
 

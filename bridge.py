@@ -82,6 +82,7 @@ import classparty
 import classhunt
 import classquest
 import steps as classquest_steps
+import classreagents
 import classuse
 import guildbank
 import guildfund
@@ -12479,7 +12480,7 @@ class Bridge(discord.Client):
             self._cohort_town_slot(_cohort_key(cohort)).productive("auction")
 
     async def _auction_list_walk(self, candidates: list, names: list,
-                                 leader: str, cohort=None) -> None:
+                                 leader: str, cohort=None, sales=None) -> None:
         """Walk the leader to an auctioneer for what nobody is listing yet.
 
         ONLY A WALK THAT CAN LIST SOMETHING (wow-overseer#478). Priced
@@ -12487,7 +12488,11 @@ class Bridge(discord.Client):
         plans before it arrives; `DoAuction` and the per-house plan at the
         counter still decide.
         """
-        sales = await self._auction_listable_at_home(candidates, leader)
+        # `sales` is given when the caller already holds the listings it will
+        # make at the plan's own prices (the item plan's AUCTION route); the
+        # house's live asks would only overwrite those prices.
+        if sales is None:
+            sales = await self._auction_listable_at_home(candidates, leader)
         _log_changed("auction", [] if sales else [
             "leader=%s carries %d surplus item(s) and none of them can be "
             "listed at the house of its team (a rare, or no live listing "
@@ -15028,7 +15033,8 @@ class Bridge(discord.Client):
 
         await globals().get(
             "_run_itemplan_auction", skip_itemplan_auction
-        )(itemplan_auction, names, leader, rows, free_slots, gear_rows, worn)
+        )(itemplan_auction, names, leader, rows, free_slots, gear_rows, worn,
+          cohort)
 
         # A CAMPAIGN WITHHELD FOR BAG SPACE STILL SELLS (#225); see
         # `_vendor_pass_mode`.
@@ -16338,7 +16344,8 @@ class Bridge(discord.Client):
                           "pass carries on")
 
     async def _itemplan_auction(self, names: list, family: str, rows: list,
-                                free_slots: dict, gear_rows=(), worn_rows=()) -> None:
+                                free_slots: dict, gear_rows=(), worn_rows=(),
+                                cohort=None) -> None:
         """List only planned AUCTION rows when ITEMPLAN_AUCTION is enabled."""
         if not itemplan_shadow.auction_enabled():
             return
@@ -16387,19 +16394,43 @@ class Bridge(discord.Client):
                 "count": decision.count,
             })
         holder_house = await self._auction_holder_houses(candidates, names)
+        # A HOLDER AWAY FROM A COUNTER IS WALKED TO ONE (#2605). The rows below
+        # are written only for a holder already standing at an auctioneer, and
+        # nothing else sent one there: a day of AUCTION decisions wrote no row.
+        # The walk is the pass's own, asked only for stacks the plan prices.
+        await self._itemplan_auction_walk(
+            candidates, holder_house, names, family, cohort)
         candidates = [candidate for candidate in candidates
                       if candidate["holder"] in holder_house]
         sales = auction.plan_sales(candidates)
         if not sales:
             return
         seen = await asyncio.to_thread(_recent_auction_keys, GIVE_RETRY_MINUTES)
+        queued = 0
         for sale in sales:
             key = (sale.candidate.holder, sale.command)
             if key in seen:
                 continue
             if await asyncio.to_thread(_insert_auction, *key):
+                queued += 1
                 log.info("itemplan: auction %s - %s", sale.candidate.holder,
                          sale.candidate.label)
+        if queued:
+            await self._keep_at_auctioneer(family, cohort)
+
+    async def _itemplan_auction_walk(self, candidates: list, holder_house: dict,
+                                     names: list, leader: str, cohort) -> None:
+        """Ask the auction pass's walk for the planned stacks nobody can list yet.
+
+        Only stacks `auction.plan_sales` accepts at the plan's own price count,
+        so the walk is never taken for a listing that would be refused.
+        """
+        stranded = [candidate for candidate in candidates
+                    if candidate["holder"] not in holder_house]
+        sales = auction.plan_sales(stranded)
+        if sales:
+            await self._auction_list_walk(
+                stranded, names, leader, cohort, sales=sales)
 
     async def _clearance_plan(self, names: list, leader: str,
                               auction_open: bool = False) -> tuple:
@@ -17408,8 +17439,8 @@ class Bridge(discord.Client):
         # slot or takes a bag, and the quick look never claims the column, so
         # a member that could afford a slot logged "it waits for a banker"
         # every pass and was never walked to one.
-        bag_facts, bag_steps = await self._bank_bag_pending(names, seen,
-                                                            watched)
+        bag_facts, bag_steps = await self._bank_bag_pending(
+            names, seen, watched, kept_full=bank_plan.kept_full)
         # THE SPLIT RULE GOVERNS THE FAMILY'S WALK, NOT A MEMBER'S OWN MOVES:
         # the reach read is per mover, so a deferral counts only the moves
         # whose holder has no banker within reach. The move loop reuses it.
@@ -17497,14 +17528,15 @@ class Bridge(discord.Client):
         return fresh, walking
 
     async def _bank_bag_pending(self, names: list, seen: set,
-                                watched) -> tuple:
+                                watched, kept_full=frozenset()) -> tuple:
         """(facts, steps): the bank bag read, and the steps a banker trip is for.
 
         A step already asked inside the retry window is not, and neither is
         one whose holder the world cannot see: the same two filters
         `_bank_once` puts on the item moves.
         """
-        facts = await asyncio.to_thread(_fetch_bank_bag_facts, names)
+        facts = bankbags.with_kept_full(
+            await asyncio.to_thread(_fetch_bank_bag_facts, names), kept_full)
         steps = [
             s for s in bankbags.pending_steps(facts, bankbags.family_floor(facts))
             if (s.name, s.command) not in seen and s.name in watched
@@ -17779,6 +17811,10 @@ class Bridge(discord.Client):
         members = natural.only_contributors(members, eligible)
         actions = _plan_guild_setup(setup, purchased_tabs, names, leader,
                                     members, cohort, eligible)
+        # THE RANK GRANTS ARE WRITTEN WHEREVER THE MASTER STANDS: the module's
+        # grant has no vault-range check, so they do not wait for an arrival
+        # the town slot may never give (see `guildbank.split_remote`).
+        actions = await _queue_remote_setup(actions, cohort)
         # THE TAB COUNT WAS ALREADY IN HAND AND WAS NEVER PASSED (infra#4198).
         # `plan_deposits` defaults `guild_has_tab` to False - the cautious
         # answer, which reserves `FLOAT_COPPER + TAB0_COST_COPPER` - and this
@@ -19034,9 +19070,23 @@ class Bridge(discord.Client):
         row_walks = now >= self._mail_walk_unsupported_until
         walkers = (await asyncio.to_thread(_route_walkers, candidates, names, row_walks)
                    if candidates else {})
+        stranded = classtrain.stranded(recent)
+        needs_crossing = any(
+            t.name in stranded for t in trainees
+            if t.online and t.due.affords(t.money) and t.name not in busy
+        )
+        trainer_spawns = (
+            await asyncio.to_thread(_class_trainer_spawns)
+            if needs_crossing else None
+        )
+        cross_recent = (
+            await asyncio.to_thread(_guild_cross_rows)
+            if needs_crossing else ()
+        )
         walks, notes = classtrain.plan(
             trainees, walkers, classtrain.recent_walkers(recent), busy,
-            cap=self._guild_walk_cap(), stranded=classtrain.stranded(recent))
+            cap=self._guild_walk_cap(), stranded=stranded,
+            trainer_spawns=trainer_spawns, cross_recent=cross_recent)
         _log_capped("guild training", notes)
         started = 0
         for walk in walks:
@@ -19056,10 +19106,10 @@ class Bridge(discord.Client):
                 getattr(self, "_job_steps", ()))
 
     async def _start_train_walk(self, walk, now: float) -> int:
-        """Write one class trainer walk row; 1 when written."""
+        """Write one class trainer walk or crossing row; 1 when written."""
         self._train_walks[walk.name] = now
         row_id = await asyncio.to_thread(
-            _insert_crafter_row, walk.name, walk.command, classtrain.KIND, walk.source)
+            _insert_crafter_row, walk.name, walk.command, walk.kind, walk.source)
         if not row_id:
             self._train_walks.pop(walk.name, None)
             return 0
@@ -19780,6 +19830,14 @@ class Bridge(discord.Client):
         # A member in a death loop is read first (guildjobs.supply_reads).
         supply = await self._job_supply_offers(
             members, facts["recent"], facts.get("death_loops"))
+        class_reagent_fn = getattr(self, "_job_class_reagent_offers", None)
+        class_reagents = (
+            await class_reagent_fn(
+                members, facts["recent"], facts.get("spell_reagents")
+            )
+            if class_reagent_fn is not None
+            else {}
+        )
         bags = (await self._job_bag_steps(members, facts["recent"], busy, cap)
                 if spawn_walks else {})
         # A hunter's first pet (hunterpet.py): the beasts around each hunter
@@ -19815,7 +19873,10 @@ class Bridge(discord.Client):
             kept=kept,
             recent=facts["recent"], busy=busy, cap=cap,
             unclaimed=facts.get("unclaimed", ()), banks=facts.get("banks"),
-            gear=gear, supply=supply, pets=pets, mail=mail, pvp=pvp,
+            gear=gear, supply=supply,
+            class_reagents=class_reagents,
+            spell_reagents=facts.get("spell_reagents"),
+            pets=pets, mail=mail, pvp=pvp,
             weapons=weapons,
             mounts=mounts,
             bags=bags,
@@ -20036,6 +20097,65 @@ class Bridge(discord.Client):
         for name in chosen:
             offers[name] = await asyncio.to_thread(
                 _fetch_supply_vendors, by_name[name], guildjobs.GUILD_GEAR_VENDOR_YARDS)
+        return offers
+
+    @staticmethod
+    def _class_reagent_needs(members, recent, spell_reagents) -> dict:
+        needs = {}
+        for m in members:
+            ready = m.online and m.alive and not m.in_combat
+            located = m.map_id is not None and m.x is not None and m.y is not None
+            cooling = guildjobs._cooling(m, classreagents.ACTION, recent)
+            if not (ready and located) or cooling:
+                continue
+            need = classreagents.wanted(m, spell_reagents, guildjobs.CRAFT_SPELLS)
+            if need:
+                needs[m.name] = need
+        return needs
+
+    @staticmethod
+    def _partition_reagent_needs(needs: dict, sold) -> tuple[dict, list]:
+        offers = {}
+        vendored_names = []
+        for name, need in needs.items():
+            if sold is not None and not any(e in sold for e in need):
+                offers[name] = classreagents.Offer(rows=(), sold=sold)
+            else:
+                vendored_names.append(name)
+        return offers, vendored_names
+
+    async def _job_class_reagent_offers(
+        self, members, recent, spell_reagents=None
+    ) -> dict:
+        """name -> classreagents.Offer for members short of class reagents for
+        known spells."""
+        if not spell_reagents:
+            return {}
+        needs = self._class_reagent_needs(members, recent, spell_reagents)
+        if not needs:
+            return {}
+        all_entries = sorted({e for need in needs.values() for e in need})
+        sold = await asyncio.to_thread(_fetch_sold_reagent_entries, all_entries)
+        offers, vendored_names = self._partition_reagent_needs(needs, sold)
+        if not vendored_names:
+            return offers
+        chosen, self._class_reagent_read_offset = guildjobs.rotate_reads(
+            vendored_names,
+            getattr(self, "_class_reagent_read_offset", 0),
+            GUILD_SUPPLY_READS_PER_PASS,
+        )
+        by_name = {m.name: m for m in members}
+        for name in chosen:
+            want_entries = sorted(
+                e for e in needs[name] if sold is None or e in sold
+            )
+            rows = await asyncio.to_thread(
+                _fetch_class_reagent_vendors,
+                by_name[name],
+                want_entries,
+                guildjobs.GUILD_GEAR_VENDOR_YARDS,
+            )
+            offers[name] = classreagents.Offer(rows=tuple(rows), sold=sold)
         return offers
 
     async def _job_pet_offers(self, members, recent) -> dict:
@@ -32240,10 +32360,12 @@ async def _run_itemplan_disenchant(itemplan_disenchant_run, names, family, rows,
 
 
 async def _run_itemplan_auction(itemplan_auction, names, family, rows,
-                               free_slots, gear_rows, worn_rows) -> None:
+                               free_slots, gear_rows, worn_rows,
+                               cohort=None) -> None:
     """Call the auction route executor when this economy pass exposes it."""
     if itemplan_auction is not None:
-        await itemplan_auction(names, family, rows, free_slots, gear_rows, worn_rows)
+        await itemplan_auction(names, family, rows, free_slots, gear_rows,
+                               worn_rows, cohort)
 
 
 def _shadow_itemplan(*args, **facts) -> None:
@@ -34749,7 +34871,7 @@ def _command_answer(row_id: int):
 # is in, with the guild master's name, because the pass picks the maintenance
 # members out of the same lineup the page draws and posts to the master.
 _DUES_MEMBERS_SQL = (
-    "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.level, "
+    "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.race, c.level, "
     "c.money, (presence.name IS NOT NULL) AS online, lc.name AS master, " + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
@@ -34941,6 +35063,34 @@ def _class_trainer_rows(cur) -> dict:
     return _CLASS_TRAINER_ROWS
 
 
+NPC_FLAG_TRAINER_CLASS = 0x20
+_CLASS_TRAINER_SPAWNS_SQL = (
+    "SELECT cr.map, t.Requirement AS class_id, ft.EnemyGroup AS enemy_group "
+    "FROM acore_world.creature cr "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "JOIN acore_world.creature_default_trainer cdt ON cdt.CreatureId = ct.entry "
+    "JOIN acore_world.trainer t ON t.Id = cdt.TrainerId "
+    "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
+    "WHERE t.Type = 0 AND t.Requirement > 0 AND (ct.npcflag & %s) <> 0 "
+    "AND " + towntrip.REAL_SPAWN_SQL
+)
+_CLASS_TRAINER_SPAWNS: list = []
+
+
+def _class_trainer_spawns() -> list | None:
+    """Real class trainer spawns by map and side, read once; None on SQL error."""
+    if not _CLASS_TRAINER_SPAWNS:
+        try:
+            with _connect() as conn, conn.cursor() as cur:
+                cur.execute(_CLASS_TRAINER_SPAWNS_SQL, (NPC_FLAG_TRAINER_CLASS,))
+                rows = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            log.warning("class trainer spawns read failed: %s", exc)
+            return None
+        _CLASS_TRAINER_SPAWNS.extend(dict(row) for row in rows)
+    return _CLASS_TRAINER_SPAWNS
+
+
 def _class_training_due(names: list, casts_only: bool = False) -> dict:
     """name -> classtrain.Due for each named member; no judgement here. With
     `casts_only`, only the spells the member's class AI casts or holds
@@ -35125,6 +35275,15 @@ def _guild_train_rows() -> list:
             "AND result LIKE %s))",
             (classtrain.SOURCE + ":%", classtrain.STRANDED_READ_DAYS,
              "%" + classtrain.NO_TRAINER_REASON + "%"))
+
+
+def _guild_cross_rows() -> tuple:
+    """Recent crossing job rows across guildjobs actions, as guildjobs.Recent."""
+    with _connect() as conn, conn.cursor() as cur:
+        rows = _job_read(
+            cur, "guild crossings", _JOB_RECENT_SQL, (QUESTER_CROSSINGS_LIKE,)
+        )
+    return guildjobs.recent_from_rows(rows)
 
 
 # THE GUILD FUND'S LEDGER: every row it ever wrote, which is a handful a day.
@@ -35890,10 +36049,15 @@ def _fetch_job_facts(family_names: list) -> dict:
         skill_rows = _job_read(cur, "skills", _JOB_SKILLS_SQL.format(
             guids=everyone, skills=ids(_JOB_SKILL_IDS)))
         book = _class_book()
+        spell_reagents = _fetch_spell_reagents(cur)
+        reagent_spells = sorted(
+            classreagents.relevant_spells(spell_reagents, guildjobs.CRAFT_SPELLS))
+        reagent_entries = sorted(
+            classreagents.all_reagent_entries(spell_reagents, guildjobs.CRAFT_SPELLS))
         spell_rows = _job_read(cur, "spells", _JOB_SPELLS_SQL.format(
             guids=everyone,
             spells=ids([guildjobs.RITUAL_OF_SUMMONING, *sorted(guildjobs.CRAFT_SPELLS),
-                        *(book.spell_ids() if book else ())])))
+                        *(book.spell_ids() if book else ()), *reagent_spells])))
         log_rows, done_rows = _class_member_reads(cur, book, everyone)
         worn_rows = _job_read(cur, "worn gear", _JOB_WORN_SQL.format(guids=everyone))
         rewarded_rows = _job_read(cur, "rewarded quests",
@@ -35901,7 +36065,8 @@ def _fetch_job_facts(family_names: list) -> dict:
         item_rows = _job_read(cur, "carried items", _JOB_ITEMS_SQL.format(
             guids=everyone, goods=guildjobs.TRADE_GOODS,
             subclasses=ids(sorted(guildjobs.MATERIAL_SUBCLASSES)),
-            entries=ids([*_JOB_ENTRIES, *(book.watch_items() if book else ())])))
+            entries=ids([*_JOB_ENTRIES, *(book.watch_items() if book else ()),
+                         *reagent_entries])))
         supplies = _job_supplies(cur, everyone)
         recent_rows = _job_read(cur, "recent rows", _JOB_RECENT_SQL,
                                 (guildjobs.SOURCE + ":%",))
@@ -35934,6 +36099,7 @@ def _fetch_job_facts(family_names: list) -> dict:
                                  worn=_job_worn(worn_rows),
                                  stranded_rows=stranded_rows)
     facts["class_book"] = book
+    facts["spell_reagents"] = spell_reagents
     facts["quest_asks"] = guildjobs.quest_asks_from_rows(quest_ask_rows)
     facts["death_loops"] = deathloop.loops(
         death_rows, {str(r["name"]): int(r.get("level") or 0) for r in rows})
@@ -37316,6 +37482,101 @@ def _fetch_supply_vendors(here, cap_yards) -> list:
         return [dict(row) for row in cur.fetchall()]
 
 
+_SPELL_DBC_REAGENTS_SQL = (
+    "SELECT ID AS spell_id, Reagent_1, Reagent_2, Reagent_3, Reagent_4, "
+    "Reagent_5, Reagent_6, Reagent_7, Reagent_8, "
+    "ReagentCount_1, ReagentCount_2, ReagentCount_3, ReagentCount_4, "
+    "ReagentCount_5, ReagentCount_6, ReagentCount_7, ReagentCount_8 "
+    "FROM acore_world.spell_dbc "
+    "WHERE Reagent_1 > 0 OR Reagent_2 > 0 OR Reagent_3 > 0 OR Reagent_4 > 0 "
+    "OR Reagent_5 > 0 OR Reagent_6 > 0 OR Reagent_7 > 0 OR Reagent_8 > 0"
+)
+_SPELL_DBC_SQL_ROWS: list | None = None
+
+_CLASS_REAGENT_SOLD_SQL = (
+    "SELECT DISTINCT nv.item AS entry "
+    "FROM acore_world.npc_vendor nv "
+    "JOIN acore_world.item_template it ON it.entry = nv.item "
+    "WHERE nv.item IN ({entries}) AND nv.maxcount = 0 "
+    "AND (it.Flags & 2) = 0 AND it.BuyPrice > 0"
+)
+
+_CLASS_REAGENT_SHOP_SQL = (
+    "SELECT cr.id AS vendor, ct.name AS vendor_name, cr.map AS map_id, "
+    "MIN(SQRT(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2))) AS yards, "
+    "it.entry AS entry, it.name AS item_name, it.BuyPrice AS price, "
+    "it.BuyCount AS buy_count, ft.EnemyGroup AS enemy_group "
+    "FROM acore_world.npc_vendor nv "
+    "JOIN acore_world.creature cr ON cr.id = nv.entry "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "JOIN acore_world.item_template it ON it.entry = nv.item "
+    "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
+    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 AND "
+    + towntrip.REAL_SPAWN_SQL + " AND nv.maxcount = 0 "
+    "AND it.entry IN ({entries}) AND (it.Flags & 2) = 0 AND it.BuyPrice > 0 "
+    "AND ABS(cr.position_x - %s) <= %s AND ABS(cr.position_y - %s) <= %s "
+    "GROUP BY cr.id, ct.name, cr.map, it.entry, it.name, it.BuyPrice, "
+    "it.BuyCount, ft.EnemyGroup "
+    "HAVING yards <= %s ORDER BY yards, vendor"
+)
+
+
+def _fetch_spell_reagents(cur) -> dict:
+    """Spell reagent requirements loaded at run time from Spell.dbc +
+    acore_world.spell_dbc (#2622). Static world data, cached once per process."""
+    global _SPELL_DBC_SQL_ROWS
+    if _SPELL_DBC_SQL_ROWS is None:
+        try:
+            cur.execute(_SPELL_DBC_REAGENTS_SQL)
+            _SPELL_DBC_SQL_ROWS = [dict(row) for row in cur.fetchall()]
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                _SPELL_DBC_SQL_ROWS = []
+            else:
+                raise
+    return classreagents.load_spell_reagents(
+        sql_rows=_SPELL_DBC_SQL_ROWS, excluded=guildjobs.CRAFT_SPELLS)
+
+
+def _fetch_sold_reagent_entries(entries) -> frozenset | None:
+    """Subset of `entries` sold by at least one unlimited vendor on the realm,
+    or None if npc_vendor could not be read."""
+    clean = sorted({int(e) for e in entries if int(e) > 0})
+    if not clean:
+        return frozenset()
+    sql = _CLASS_REAGENT_SOLD_SQL.format(entries=",".join(str(e) for e in clean))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+        return frozenset(int(row["entry"]) for row in cur.fetchall())
+
+
+def _fetch_class_reagent_vendors(here, entries, cap_yards) -> list:
+    """Vendor rows in `cap_yards` of `here` selling items in `entries`."""
+    clean = sorted({int(e) for e in entries if int(e) > 0})
+    if not clean:
+        return []
+    cap = float(cap_yards)
+    x, y = float(here.x), float(here.y)
+    sql = _CLASS_REAGENT_SHOP_SQL.format(entries=",".join(str(e) for e in clean))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                sql,
+                (x, y, int(here.map_id), towntrip.NPC_FLAG_VENDOR,
+                 x, cap, y, cap, cap),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
 def _fetch_unpetted(names) -> set:
     """The hunters among `names` that know Tame Beast and have no pet
     (hunterpet.UNPETTED_SQL). An unread table reads as none, which tames nothing."""
@@ -38387,6 +38648,21 @@ def _dues_fund_tab(names: list) -> bool:
              for m in _fetch_guild_money(names)}.get(master)
     return guildbank.dues_fund_tab(setup.get("purchased_tabs", 0), purse,
                                    setup.get("master_mailed_copper", 0))
+
+
+async def _queue_remote_setup(actions, cohort=None) -> tuple:
+    """Queue the setup commands that need no vault; return the ones that do."""
+    anywhere, at_vault = guildbank.split_remote(actions)
+    if anywhere:
+        seen = await asyncio.to_thread(_recent_guild_setup_keys, GIVE_RETRY_MINUTES)
+        for action in anywhere:
+            if (action.target, action.command) in seen:
+                continue
+            await asyncio.to_thread(
+                _insert_guild, action.target, action.command, "guildbank-setup")
+            log.info("guild bank setup: queued %s for %s, which needs no vault%s",
+                     action.command, action.target, _family_label(cohort))
+    return at_vault
 
 
 def _recent_guild_setup_keys(minutes: int) -> set[tuple[str, str]]:
@@ -40381,7 +40657,8 @@ def _recent_bank_keys(minutes: int) -> set:
 # (`bag` is the holding bag's item guid, 0 for its own slots), and who holds
 # tailoring (bankbags: a crafter's ladder bags are the guild's).
 _BANK_BAG_PEOPLE_SQL = (
-    "SELECT name, money, bankSlots AS bank_slots FROM characters WHERE name IN (%s)"
+    "SELECT name, level, money, bankSlots AS bank_slots "
+    "FROM characters WHERE name IN (%s)"
 )
 _BANK_BAG_ROWS_SQL = (
     "SELECT c.name AS holder, ci.item AS item_guid, ii.itemEntry AS entry, "
@@ -40396,6 +40673,42 @@ _BANK_BAG_CRAFTERS_SQL = (
     "SELECT c.name FROM character_skills cs JOIN characters c ON c.guid = cs.guid "
     "WHERE cs.skill = 197 AND cs.value > 0 AND c.name IN (%s)"
 )
+_BANK_BAG_RIDING_SQL = (
+    "SELECT c.name, cs.max AS riding_max FROM character_skills cs "
+    "JOIN characters c ON c.guid = cs.guid "
+    "WHERE cs.skill = %d AND c.name IN (%%s)" % purse.RIDING_SKILL
+)
+
+
+def _bank_bag_orders(cur, names: list, people) -> dict:
+    """`purse.Order` per member so bank slot buys honor spells, riding, and food."""
+    marks = ",".join(["%s"] * len(names))
+    riding = {}
+    try:
+        cur.execute(_BANK_BAG_RIDING_SQL % marks, list(names))
+        riding = {
+            str(r["name"]): int(r.get("riding_max") or 0) for r in cur.fetchall()
+        }
+    except pymysql.err.MySQLError:
+        log.warning("bankbags: riding skills unread; riding reserve omitted")
+    try:
+        due = _class_training_due(list(names), casts_only=True)
+    except pymysql.err.MySQLError:
+        log.warning("bankbags: class spells unread; spell reserve omitted")
+        due = {}
+    orders = {}
+    for p in people or ():
+        name = str(p["name"])
+        d = due.get(name)
+        orders[name] = purse.order(
+            name,
+            int(p.get("level") or 0),
+            int(p.get("money") or 0),
+            int(getattr(d, "copper", 0) or 0),
+            int(getattr(d, "count", 0) or 0),
+            riding.get(name, 0),
+        )
+    return orders
 
 
 def _fetch_bank_bag_facts(names: list) -> list:
@@ -40410,7 +40723,10 @@ def _fetch_bank_bag_facts(names: list) -> list:
         bags = cur.fetchall()
         cur.execute(_BANK_BAG_CRAFTERS_SQL % marks, list(names))
         crafters = {str(r["name"]) for r in cur.fetchall()}
-    return bankbags.facts_from_rows(people, bags, crafters)
+        orders = _bank_bag_orders(cur, names, people)
+    return bankbags.with_purse_orders(
+        bankbags.facts_from_rows(people, bags, crafters), orders
+    )
 
 
 def _insert_bank(move, command: str) -> int:
