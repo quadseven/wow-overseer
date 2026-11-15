@@ -217,6 +217,7 @@ R_UNRESOLVED = "instance_unresolved"
 R_NO_TARGET = "no_target"
 R_RATE = "rate_limited"
 R_SETTLING = "settling"
+R_AT_REST = "at_rest"
 
 REFUSALS = {
     R_WATCHER_OFFLINE: "the Watcher is not in the world (its client is not logged in)",
@@ -231,6 +232,7 @@ REFUSALS = {
     R_NO_TARGET: "nothing to watch matches that",
     R_RATE: "moves are rate limited",
     R_SETTLING: "the Watcher is still taking up its observer state",
+    R_AT_REST: "the order has ended and the Watcher is out of every instance",
 }
 
 
@@ -400,6 +402,89 @@ def parse_watch(text: str) -> Spec | SpecError:
     return SpecError(f"I do not know how to watch '{text.strip()}'. {USAGE}")
 
 
+# ------------------------------------------------------------ the page's order --
+
+# The dashboard's Watch button sends a run id and nothing else. It never sends
+# a sentence for the grammar above to interpret, and it shares one camera with
+# whoever else is looking: a click on a DIFFERENT group inside this many seconds
+# of the last order is refused with the wait, so two viewers cannot flip the
+# picture back and forth under each other. The same group renews at once.
+SPECTATE_DWELL = 90.0
+_MAX_RUN_ID = 999_999_999  # what _arg_run's nine digits can carry
+
+
+def spectate_spec(run) -> Spec | SpecError:
+    """`run <id>` for an integer id; anything else, a string included, is refused."""
+    if isinstance(run, bool) or not isinstance(run, int) or not 1 <= run <= _MAX_RUN_ID:
+        return SpecError("the run to watch must be a positive whole number")
+    return parse_watch(f"run {run}")
+
+
+def order_run(spec: str) -> int | None:
+    """The run id an order names, or None when it names anything else."""
+    parsed = parse_watch(spec or "")
+    if isinstance(parsed, SpecError) or parsed.kind != "run":
+        return None
+    return int(parsed.arg)
+
+
+@dataclass(frozen=True)
+class Verdict:
+    allowed: bool
+    switch_in: int = 0
+    reason: str = ""
+
+
+def _order_age(row: Mapping) -> float:
+    """Seconds since the order was given. Each order lives MANDATE_TTL seconds
+    from the moment it is written, so the time left says how old it is."""
+    return max(0.0, MANDATE_TTL - float(row.get("ttl") or 0))
+
+
+def spectate_verdict(row: Mapping | None, spec_text: str) -> Verdict:
+    """May this order replace the one the camera is on?"""
+    if not mandate_active(row):
+        return Verdict(True)
+    if str(row.get("spec") or "") == spec_text:
+        return Verdict(True)
+    age = _order_age(row)
+    if age >= SPECTATE_DWELL:
+        return Verdict(True)
+    wait = max(1, math.ceil(SPECTATE_DWELL - age))
+    on = str(row.get("spec") or "something else")
+    return Verdict(
+        False,
+        wait,
+        f"The camera is on {on}, pointed there {int(age)} seconds ago. "
+        f"It can be switched in {wait} seconds.",
+    )
+
+
+def spectate_state(row: Mapping | None) -> dict:
+    """What the page draws its "now watching" state from."""
+    if not mandate_active(row):
+        return {
+            "active": False,
+            "run": None,
+            "spec": "",
+            "target": "",
+            "note": str(row.get("note") or "") if row else "",
+            "expires_in": 0,
+            "switch_in": 0,
+        }
+    spec = str(row.get("spec") or "")
+    wait = max(0, math.ceil(SPECTATE_DWELL - _order_age(row)))
+    return {
+        "active": True,
+        "run": order_run(spec),
+        "spec": spec,
+        "target": str(row.get("target") or ""),
+        "note": str(row.get("note") or ""),
+        "expires_in": int(row.get("ttl") or 0),
+        "switch_in": wait,
+    }
+
+
 def parse_watch_message(text: str):
     """A Discord line that starts with `watch`, or None for anything else."""
     stripped = (text or "").strip()
@@ -567,13 +652,14 @@ def pick_target(
 
 # ----------------------------------------------------------------- the decision --
 
-BOOT, HOLD, FOLLOW, HOP, APPEAR, REFUSE = (
+BOOT, HOLD, FOLLOW, HOP, APPEAR, REFUSE, RETREAT = (
     "boot",
     "hold",
     "follow",
     "hop",
     "appear",
     "refuse",
+    "retreat",
 )
 
 
@@ -686,6 +772,45 @@ def decide(
     return _held(moves, now, new_target) or _route(watcher, target)
 
 
+# How often the loop looks at an idle Watcher, and why it looks at all. The core
+# refuses to reset an instance copy while any player (a GM too) stands in it, and
+# keeps an empty copy loaded for as long as someone does, so an observer left in
+# a dungeon after its order ends blocks the group's next reset.
+REST_CHECK_SECONDS = 30.0
+
+
+def retreat(
+    watcher: Spot | None,
+    *,
+    now: float,
+    moves: Sequence[float] = (),
+    unbound: bool = False,
+) -> Decision:
+    """What an idle Watcher does once its order has ended.
+
+    Inside an instance: hop out (`.instance unbind all` skips the map the GM
+    stands in, so the hop comes first). Outside: drop its instance binds, once.
+    Then nothing, until a new order. A grouped Watcher is still moved out: the
+    hop is the way a stray group stops mattering, so it is not refused here.
+    """
+    if watcher is None:
+        return Decision(
+            HOLD, reason=REFUSALS[R_WATCHER_OFFLINE], code=R_WATCHER_OFFLINE
+        )
+    if _is_instance(watcher):
+        last = max(moves, default=None)
+        if last is not None and now - last < MIN_APPEAR_GAP:
+            return Decision(HOLD, reason=REFUSALS[R_RATE], code=R_RATE)
+        return Decision(
+            RETREAT, (HOP_COMMAND,), "the order ended: leaving the instance"
+        )
+    if not unbound:
+        return Decision(
+            RETREAT, (UNBIND_COMMAND,), "the order ended: dropping instance binds"
+        )
+    return Decision(HOLD, reason=REFUSALS[R_AT_REST], code=R_AT_REST)
+
+
 def commands_ok(commands: Iterable[str]) -> bool:
     return all(observer_allows(c) for c in commands)
 
@@ -736,6 +861,9 @@ class Memory:
     moves: list[float] = field(default_factory=list)
     booted_at: float | None = None
     was_present: bool = False
+    at_rest: bool = False  # the order ended and the retreat is done
+    unbound: bool = False  # the binds were dropped since the order ended
+    rest_at: float = 0.0  # when an idle Watcher was last looked at
 
     def on_presence(self, present: bool) -> None:
         """A fresh login needs the observer lines again: the state is not
@@ -750,6 +878,19 @@ class Memory:
         if changed:
             self.spec, self.target = spec, ""
         return changed
+
+    def order_active(self) -> None:
+        """A live order re-arms the retreat for when it ends."""
+        self.at_rest = False
+        self.unbound = False
+        self.rest_at = 0.0
+
+    def rest_due(self, now: float) -> bool:
+        """Is an idle Watcher worth reading the world for yet?"""
+        return not self.at_rest and now - self.rest_at >= REST_CHECK_SECONDS
+
+    def rest_checked(self, now: float) -> None:
+        self.rest_at = now
 
     def record_move(self, now: float) -> None:
         self.moves = [t for t in self.moves if now - t < APPEAR_BUDGET[1]] + [now]

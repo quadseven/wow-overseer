@@ -207,6 +207,25 @@ when it can, so a pin merged but not yet rolled out still holds the PR. Saying "
 is not enough: on 2026-11-07 a meeting-walk change (#1988) shipped two hours before the roll that carried its
 module half, and the module refused class-party meetings as malformed until the roll landed.
 
+### Taking the worldserver down on purpose (required)
+
+Any time the worldserver is scaled to 0 for a reason other than a rollout the deploy repository applies (a
+one-off database write, a data repair, a hand roll), use the script, never a bare `kubectl scale`:
+
+    export NAMESPACE=<the realm namespace> REALM_MAINTENANCE_WHO=<agent or role label, never a person's name>
+    tools/realm-maintenance down --reason "one-off database writes" --eta 20m
+    ...do the work...
+    tools/realm-maintenance up
+
+`down` writes the maintenance notice (reason, who, started_at, expected_back) as the `realm-maintenance-notice`
+annotation on the worldserver Deployment, then scales it to 0. `up` scales to 1, waits for Ready, and moves the
+notice to the `realm-maintenance-last` annotation. `GET /api/v2/realm-status` and the dashboard banner read
+these: a down realm with a notice is MAINTENANCE, past its ETA it is OVERRUN, and a down realm with no notice
+is DOWN_UNEXPLAINED. Pick an ETA you will keep; if the work runs long, run `down --force` again with a new ETA
+rather than letting the window lapse. If your session dies mid-window, the notice is what tells the next
+agent that `up` is owed. A bare `kubectl scale` of the worldserver is a defect: it leaves the realm
+DOWN_UNEXPLAINED.
+
 ### What blocks a roll
 
 Any of: failing checks or an unanswered bot thread on the infra PRs (`Grug - Chief` and `Grug - Elder` must
@@ -306,6 +325,7 @@ blocked, ghosts, stuck, deaths in 24 hours, next dungeon) before and after a rol
   `/grug improve` and `/grug recheck`.
 - PR bodies use `Refs #N` and never a closing keyword near an issue number, even negated. ASCII only, no em
   dashes. Commits end with the session trailer; PR bodies end with the session link.
+- Never scale the worldserver by hand without `tools/realm-maintenance down` (section 2).
 - No secrets in output, files or logs. No realm writes except by shipped code.
 - Close tickets only after live verification, and tick the boxes first.
 

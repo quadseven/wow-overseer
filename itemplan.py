@@ -83,6 +83,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Iterable, Mapping
 
+import bag_pressure
 import craft
 import craft_rhythm
 import craft_supply
@@ -98,6 +99,7 @@ KEEP_CARRY = "KEEP_CARRY"
 BANK_PERSONAL = "BANK_PERSONAL"
 GUILD_BANK = "GUILD_BANK"
 GIVE = "GIVE"
+BANKER = "BANKER"
 AUCTION = "AUCTION"
 SELL_VENDOR = "SELL_VENDOR"
 DISENCHANT = "DISENCHANT"
@@ -107,6 +109,7 @@ ROUTES = (
     BANK_PERSONAL,
     GUILD_BANK,
     GIVE,
+    BANKER,
     AUCTION,
     SELL_VENDOR,
     DISENCHANT,
@@ -204,6 +207,24 @@ AUCTION_HOLD_FACTOR = 3  # a listing holds down to this multiple of the vendor p
 AUCTION_CUT_PERCENT = 5
 AUCTION_MIN_GAIN = 5_000  # copper a listing must clear over the vendor, net of the cut
 CONFIRM_VALUE = 10_000  # copper (1 gold): a sale this large waits for a release
+# A recipe nobody can learn yet (#2605). The trades the raid seats' profession
+# plan hands out that carry recipes (guildtrades.PRIMARIES less the three
+# gathering trades; tests/test_itemplan_recipe_exit.py holds the two equal): a
+# recipe for one is kept for the seat assigned it, not sold or listed.
+SEAT_TRADES = frozenset(
+    {
+        "alchemy",
+        "blacksmithing",
+        "enchanting",
+        "engineering",
+        "leatherworking",
+        "tailoring",
+    }
+)
+SEAT_RECIPE_CEILING = 12  # stacks of seat recipes one family's vault is asked to hold
+SEAT_RANK_BASE = 10_000_000  # allocation order inside that ceiling: nearest skill first
+LIST_AT_VENDOR_QUOTE = "vendor quote"  # an AUCTION decision's `target` with no market
+FAILED_LISTINGS_BEFORE_VENDOR = 2  # listings that came back unsold before a vendor
 DE_VENDOR_CEILING = 50_000  # copper: dearer gear than this is sold, not broken down
 FOOD_STACKS_KEPT = 3  # carried food and drink stacks kept per member
 GUILD_TAB_MATERIALS = guildbank.TABS[0].tab_id
@@ -338,6 +359,9 @@ class Stack:
     # RequiredDisenchantSkill (-1 means never). None is unread.
     disenchant_id: int | None = None
     disenchant_skill: int | None = None
+    # Whether a quest the holder is on or could still take names the stack
+    # (`bag_pressure.QUEST_NEEDED_SQL`, the row's `quest_item`); None is unread.
+    quest_needed: bool | None = None
 
     @property
     def key(self) -> tuple:
@@ -414,9 +438,16 @@ class Context:
     fire_gear: frozenset | None = None
     # entries an attunement or a key quest needs besides the open quests
     attunement_items: frozenset = frozenset()
+    # The trades a raid seat is assigned (#2605): a recipe for one is kept for it.
+    assigned_trades: frozenset = SEAT_TRADES
+    # (holder, entry) -> listings of that stack that expired and came back (#2605).
+    failed_listings: Mapping[tuple, int] = field(default_factory=dict)
     # (holder, entry) -> route chosen on the previous pass
     previous: Mapping[tuple, str] = field(default_factory=dict)
     raid_night: bool = False
+    # family -> stacks the guild's bankers can take by mail (guildledger). Absent
+    # or zero means no banker route is offered.
+    banker_free: Mapping[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -694,6 +725,13 @@ class _World:
         return None
 
 
+def _certainly_useless(s: Stack) -> bool:
+    """A quest-class stack the quest test read as needed by no quest the holder
+    is on or could take, with no price and common quality (#2607). Never read,
+    never a priced or better stack: those keep their route and its release."""
+    return s.quest_needed is False and s.sell <= 0 and s.quality <= 1
+
+
 def _rule_quest(w: _World, s: Stack, me: Member):
     if s.item_class != C_QUEST:
         if s.entry in w.ctx.attunement_items:
@@ -701,6 +739,16 @@ def _rule_quest(w: _World, s: Stack, me: Member):
                 _opt(KEEP_CARRY, ATTUNEMENT, "attunement item", "R3", carry_forced=True)
             ]
         return None
+    if bag_pressure.is_darkmoon(s.name):
+        return [
+            _opt(
+                BANK_PERSONAL,
+                QUEST,
+                "a Darkmoon deck card: kept for the deck, never sold or destroyed",
+                "R3",
+            ),
+            _opt(KEEP_CARRY, QUEST, "a Darkmoon deck card: kept for the deck", "R3"),
+        ]
     known = w.ctx.open_quest_items
     if known is not None and s.entry in known.get(s.holder, frozenset()):
         return [
@@ -717,10 +765,41 @@ def _rule_quest(w: _World, s: Stack, me: Member):
             ),
             _opt(BANK_PERSONAL, QUEST, "quest item banked, quest log not read", "R3"),
         ]
-    # The log was read and no open quest names it: it is only a leftover.
-    out = [
+    if s.quest_needed is not False:
+        # A QUEST THE HOLDER COULD STILL TAKE NAMES IT (#2607), or the test was
+        # not read: go and finish it. It may go to the bank, and when the bank
+        # is full it stays carried; it is never a sale, a listing or a
+        # destroy, which the pressure release would otherwise reach first
+        # because such a stack is cheap.
+        return [
+            _opt(
+                BANK_PERSONAL,
+                QUEST,
+                "a quest the holder could still take names it",
+                "R3",
+            ),
+            _opt(
+                KEEP_CARRY,
+                QUEST,
+                "a quest the holder could still take names it, no room to bank it",
+                "R3",
+            ),
+        ]
+    # The log was read and no quest names it: it is only a leftover.
+    out = []
+    if _certainly_useless(s):
+        out.append(
+            _opt(
+                DESTROY,
+                ROOM,
+                "no quest the holder is on or could take names it, no vendor "
+                "price, common quality: certainly useless",
+                "R3",
+            )
+        )
+    out.append(
         _opt(BANK_PERSONAL, ROOM, "quest-class leftover, no open quest names it", "R3")
-    ]
+    )
     if s.sell > 0 and s.bind in (BIND_NONE, BIND_USE):
         out.append(_opt(SELL_VENDOR, ROOM, "quest-class leftover with a price", "R3"))
     return out
@@ -1302,18 +1381,78 @@ def _recipe_sibling_option(w: _World, s: Stack, trade: str | None, rank: int):
 
 
 def _recipe_guild_option(w: _World, s: Stack, trade: str | None, rank: int):
+    """A guildmate who can learn it now. One short of the skill does not take
+    a bag slot for it: the recipe waits in the vault or the house (#2605)."""
     if not trade or not s.tradable:
         return None
-    for name, gtrade, _skill in sorted(w.ctx.guild_crafters):
-        if gtrade == trade:
+    for name, gtrade, skill in sorted(w.ctx.guild_crafters):
+        if gtrade == trade and skill >= rank:
             return _opt(
                 GIVE,
                 RECIPE,
-                "guildmate %s works %s" % (name, trade),
+                "guildmate %s works %s at %d and can learn it now (needs %d)"
+                % (name, trade, skill, rank),
                 "R9",
                 target=name,
             )
     return None
+
+
+def _skill_gap(w: _World, trade: str, rank: int) -> int:
+    """Points the best worker of the trade is short of this rank."""
+    best = max(
+        [sk for _n, t, sk in w.ctx.guild_crafters if t == trade]
+        + [m.skill(trade) for m in w.members.values()],
+        default=0,
+    )
+    return max(0, rank - best)
+
+
+def _recipe_seat_option(w: _World, s: Stack, trade: str | None, rank: int):
+    """A recipe for a trade a seat is assigned, kept for it in the vault, to a
+    ceiling, the stacks nearest learnable first (#2605)."""
+    if not trade or trade not in w.ctx.assigned_trades or not s.tradable:
+        return None
+    family = w.members[s.holder].family
+    gap = _skill_gap(w, trade, rank)
+    return _opt(
+        GUILD_BANK,
+        RECIPE,
+        "%s is an assigned seat trade, %d skill points short: kept for it"
+        % (trade, gap),
+        "R9",
+        target="Materials",
+        tab=GUILD_TAB_MATERIALS,
+        cap_group=("seatrecipes", family, SEAT_RECIPE_CEILING),
+        cap_rank=(gap, s.entry, s.index),
+    )
+
+
+def _recipe_exit_options(w: _World, s: Stack, rule: str = "R9") -> list:
+    """Where a recipe goes when nobody can learn it and no seat keeps it: the
+    real auction house, listed by the character holding it (#2605). A recipe
+    that has failed to sell FAILED_LISTINGS_BEFORE_VENDOR times may go to a
+    vendor. Never a bound, rare or priceless one: the house plan lists neither."""
+    if not s.tradable or s.sell <= 0:
+        return []
+    failed = w.ctx.failed_listings.get((s.holder, s.entry), 0)
+    if failed >= FAILED_LISTINGS_BEFORE_VENDOR:
+        return _vendor_options(
+            s, rule, "unsold after %d listings: the vendor may have it" % failed, RECIPE
+        )
+    if s.quality > 2:
+        return []
+    out = _market_options(w, s, "R11")
+    out.append(
+        _opt(
+            AUCTION,
+            SURPLUS,
+            "no seat can learn it: listed on the house by its holder",
+            rule,
+            target=LIST_AT_VENDOR_QUOTE,
+        )
+    )
+    return out
 
 
 def _recipe_raid_options():
@@ -1397,18 +1536,10 @@ def _rule_recipe(w: _World, s: Stack, me: Member):
     guild_option = _recipe_guild_option(w, s, trade, rank)
     if guild_option:
         out.append(guild_option)
-    if s.tradable:
-        out += _market_options(w, s, "R11")
-        out.append(
-            _opt(
-                GUILD_BANK,
-                RECIPE,
-                "recipe nobody here works yet",
-                "R9",
-                target="Materials",
-                tab=GUILD_TAB_MATERIALS,
-            )
-        )
+    seat_option = _recipe_seat_option(w, s, trade, rank)
+    if seat_option:
+        out.append(seat_option)
+    out += _recipe_exit_options(w, s)
     out += _bank_if_worth(s, "R9", RECIPE)
     if not out:
         out.append(_opt(BANK_PERSONAL, RECIPE, "recipe, no taker and no price", "R9"))
@@ -1459,10 +1590,49 @@ def options_for(w: _World, s: Stack) -> list:
     for rule in _RULES:
         got = rule(w, s, me)
         if got:
-            return _stick(w, s, _banked_stays(s, _terminal(w, s, got)))
+            options = _with_banker(w, s, _terminal(w, s, got))
+            return _stick(w, s, _banked_stays(s, options))
     return [
         _opt(KEEP_CARRY, EQUIPMENT, "no rule claimed it: kept", "R1", carry_forced=True)
     ]
+
+
+# A stack worth less than this (copper) is junk the vendor takes, not a banker.
+BANKER_MIN_COPPER = 1_000
+
+
+def _banker_worthy(s: Stack) -> bool:
+    """A tradable, carried stack worth a banker's slot: not true junk."""
+    if not s.carried or not s.tradable or s.quality < 1:
+        return False
+    return (
+        s.value >= BANKER_MIN_COPPER
+        or s.quality >= 2
+        or s.item_class in (C_RECIPE, C_GEM, C_TRADE)
+    )
+
+
+def _with_banker(w: "_World", s: Stack, options: list) -> list:
+    """Offer the guild's bankers before any irreversible route.
+
+    After keep, bank, vault, give and listing, and ahead of a vendor sale,
+    a disenchant or a destroy, a stack worth keeping goes to a banker when the
+    family's bankers have room. Without a banker nothing changes.
+    """
+    family = w.members[s.holder].family
+    if w.ctx.banker_free.get(family, 0) <= 0 or not _banker_worthy(s):
+        return options
+    offer = _opt(
+        BANKER,
+        ROOM,
+        "no room here and worth keeping: mailed to a banker of the guild",
+        "R13",
+        target="banker",
+    )
+    at = next((i for i, o in enumerate(options) if o.route in IRREVERSIBLE), None)
+    if at is None:
+        return [*options, offer]
+    return [*options[:at], offer, *options[at:]]
 
 
 _TERMINAL = frozenset({KEEP_CARRY, BANK_PERSONAL, SELL_VENDOR, DISENCHANT, DESTROY})
@@ -1531,6 +1701,9 @@ def _front(options: list, route: str) -> list:
 
 def _priority(s: Stack, opt: Option) -> tuple:
     per_slot = s.value
+    if opt.cap_group and opt.cap_group[0] == "seatrecipes":
+        # The vault's seat recipes go in nearest-learnable first (#2605).
+        per_slot = SEAT_RANK_BASE - opt.cap_rank[0]
     return (TIER[opt.goal], per_slot)
 
 
@@ -1702,6 +1875,11 @@ def _feasible(
         if tab_used.get(key, 0) >= free:
             return False, "guild bank tab is full"
         return True, ""
+    if o.route == BANKER:
+        key = ("banker", w.members[m].family)
+        if tab_used.get(key, 0) >= w.ctx.banker_free.get(key[1], 0):
+            return False, "the bankers have no room"
+        return True, ""
     if o.route == GIVE:
         r = w.members.get(o.target)
         if r is None:
@@ -1735,6 +1913,9 @@ def _commit(
             bank_used[m] += 1
     elif o.route == GUILD_BANK:
         key = (w.members[m].family, o.tab)
+        tab_used[key] = tab_used.get(key, 0) + 1
+    elif o.route == BANKER:
+        key = ("banker", w.members[m].family)
         tab_used[key] = tab_used.get(key, 0) + 1
     elif o.route == GIVE and o.target in w.members:
         incoming[o.target] += 1

@@ -135,15 +135,15 @@ class ASeatThatHoldsSome(unittest.TestCase):
         m = member(seat, skills={s: (20, 75) for s in pair})
         self.assertEqual([], errands(guildjobs.plan([m], focus=FOCUS_DUNGEON)))
 
-    def test_it_keeps_two_trades_that_are_no_pair_and_is_not_sent(self):
+    def test_it_holding_two_gatherers_that_fit_no_pair_is_not_sent_to_learn_a_third(
+        self,
+    ):
+        # Both slots are full: the plan wants one of them given up first, and
+        # nothing that gives one up is built for a guild character, so it waits.
         seat = SEATS[9]
         m = member(seat, skills={H: (20, 75), guildjobs.SKINNING: (20, 75)})
         result = guildjobs.plan([m], focus=FOCUS_DUNGEON)
         self.assertEqual([], errands(result))
-        self.assertEqual(
-            guildtrades_key((H, guildjobs.SKINNING)),
-            guildtrades_key(result.assigned[seat.name]),
-        )
 
 
 def guildtrades_key(pair):
@@ -236,7 +236,7 @@ class HowManyAtOnce(unittest.TestCase):
     def test_a_guild_starts_no_more_than_its_trainer_allowance_in_a_pass(self):
         members = [member(s) for s in SEATS]
         result = guildjobs.plan(members, focus=FOCUS_DUNGEON)
-        self.assertEqual(guildjobs.TRAIN_STEPS_PER_GUILD, len(errands(result)))
+        self.assertEqual(guildjobs.PROFESSION_STEPS_PER_GUILD, len(errands(result)))
 
     def test_the_planned_trades_are_the_assigned_pairs(self):
         members = [member(s) for s in SEATS]
@@ -286,7 +286,9 @@ class TheLogLine(unittest.TestCase):
         result = guildjobs.plan(members, focus=FOCUS_DUNGEON)
         (line,) = guildjobs.profession_lines(members, result)
         self.assertIn("Bonkers: profession plan: %d raid seat(s)" % len(SEATS), line)
-        self.assertIn("%d sent to a trainer" % guildjobs.TRAIN_STEPS_PER_GUILD, line)
+        self.assertIn(
+            "%d sent to a trainer" % guildjobs.PROFESSION_STEPS_PER_GUILD, line
+        )
 
 
 if __name__ == "__main__":

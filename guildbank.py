@@ -444,6 +444,24 @@ def plan_setup(
     return tuple(actions)
 
 
+def setup_for_arrival(actions, seen) -> tuple:
+    """The setup commands to queue on one arrival at the vault.
+
+    A purchase rides alone: the core grants and names only the tabs that exist,
+    and a tab bought on this arrival starts closed, so the rights are asked for
+    on the next one. Every other command (the deposit grants and the names for
+    tabs already bought) is independent of the rest and rides together. They
+    used to go one per arrival, and on the dev realm the arrivals were days
+    apart: a second tab stood bought and closed to every rank for two days.
+    `seen` is the set of (target, command) pairs asked inside the retry window.
+    """
+    fresh = [a for a in actions if (a.target, a.command) not in seen]
+    for action in fresh:
+        if action.command.startswith("bank buy-tab"):
+            return (action,)
+    return tuple(fresh)
+
+
 def _purchase(leader, purchased_tabs, purse, wanted_tabs) -> tuple:
     """The next tab's purchase, when the buyer's purse pays or was not read."""
     tab = next_tab(purchased_tabs, wanted_tabs)
