@@ -41066,14 +41066,16 @@ def _fetch_reagent_vendors(spot: dict, entries: list) -> dict:
 # wrong house.
 _AUCTIONEER_IN_REACH_SQL = (
     "SELECT ct.entry AS entry, ct.name AS name, ct.faction AS faction, "
-    "SQRT(POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2)) AS yards "
+    "SQRT(POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2) "
+    "+ POW(cr.position_z - s.pos_z, 2)) AS yards "
     "FROM overseer_snapshot s "
     "JOIN acore_world.creature cr ON cr.map = s.map_id "
     "AND ABS(cr.position_x - s.pos_x) <= %s AND ABS(cr.position_y - s.pos_y) <= %s "
+    "AND ABS(cr.position_z - s.pos_z) <= %s "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
-    "AND (ct.npcflag & %s) <> 0 "
-    "ORDER BY yards LIMIT 1"
+    "AND (ct.npcflag & %s) <> 0 AND " + towntrip.REAL_SPAWN_SQL + " "
+    "HAVING yards <= %s ORDER BY yards LIMIT 1"
 )
 
 # UNIT_NPC_FLAG_AUCTIONEER. Named here rather than written as a bare 2097152 in
@@ -41144,12 +41146,12 @@ def _fetch_auctioneer(name: str) -> dict | None:
     is the same "nothing is planned until they have arrived" discipline
     `_towntrip_once` states and the reason this pass needs no state of its own.
     """
+    reach = auction.COUNTER_REACH_YARDS
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
                 _AUCTIONEER_IN_REACH_SQL,
-                (TOWN_COUNTER_YARDS, TOWN_COUNTER_YARDS, name,
-                 NPC_FLAG_AUCTIONEER),
+                (reach, reach, reach, name, NPC_FLAG_AUCTIONEER, reach),
             )
             row = cur.fetchone()
         except pymysql.err.MySQLError as exc:
@@ -41562,8 +41564,9 @@ def _recent_auction_keys(minutes: int) -> set:
             cur.execute(
                 "SELECT target_name, command FROM overseer_command "
                 "WHERE kind = 'auction' AND source = 'auction' "
+                "AND NOT (status = 'error' AND COALESCE(detail, '') = %s) "
                 "AND created_at > NOW() - INTERVAL %s MINUTE",
-                (int(minutes),),
+                (auction.OUT_OF_REACH, int(minutes)),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146, 1265):
@@ -41959,8 +41962,10 @@ def _recent_recipe_keys(minutes: int) -> set:
             cur.execute(
                 "SELECT target_name, command FROM overseer_command "
                 "WHERE kind IN (%s, 'auction') AND source = %s "
+                "AND NOT (status = 'error' AND COALESCE(detail, '') = %s) "
                 "AND created_at > NOW() - INTERVAL %s MINUTE",
-                (recipebook.LEARN_KIND, recipebook.LEARN_SOURCE, int(minutes)),
+                (recipebook.LEARN_KIND, recipebook.LEARN_SOURCE,
+                 auction.OUT_OF_REACH, int(minutes)),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146, 1265):
