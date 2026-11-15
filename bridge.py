@@ -14952,7 +14952,9 @@ class Bridge(discord.Client):
             spare=await asyncio.to_thread(_bank_spare, names, True),
         )
         bank_keeps = await asyncio.to_thread(_bank_policy, names, True)
-        gear_sales = _without_bank_keeps(gear_sales, bank_keeps, "economy")
+        gear_sales = _without_bank_keeps(
+            bag_pressure.without_unkept_rares(gear_sales), bank_keeps, "economy"
+        )
         _count_sales(sellable_counts, gear_sales)
         # THE ITEM PLAN RUNS BESIDE THE PASSES, LOGS, AND CHANGES NOTHING (#1972).
         # Off unless ITEMPLAN_SHADOW is on; a failure inside it is logged there.

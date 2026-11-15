@@ -1127,6 +1127,8 @@ def _wanted_back(holding, member, family, totals, storage):
         return "%s is for %s" % (holding.item.name, storage.routed[holding.guid])
     if holding.guid in storage.spare:
         return "%s is a spare copy, sold from the bags" % holding.item.name
+    if holding.item.item_class in (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR):
+        return ""
     if _craft_wanted(holding, storage):
         return "%s's craft errand is short of it in the bags (reagentplan)" % (
             member.name
@@ -1193,13 +1195,23 @@ def _plan_relocations(member, storage, guild_room, space, budget, notes):
     for holding in member.banked:
         if len(out) >= budget:
             break
+        placed = storage.policy.get(holding.guid)
+        to_gear_tab = (
+            placed is not None
+            and placed.to == bankpolicy.GUILD
+            and placed.tab is not None
+        )
         if (
             holding.container_slots > 0
             or holding.bound
-            or holding.guid in storage.policy
+            or (placed is not None and not to_gear_tab)
             or holding.guid in storage.routed
             or holding.guid in storage.spare
-            or holding.item.item_class not in (ITEM_CLASS_TRADE_GOODS, ITEM_CLASS_GEM)
+            or (
+                not to_gear_tab
+                and holding.item.item_class
+                not in (ITEM_CLASS_TRADE_GOODS, ITEM_CLASS_GEM)
+            )
         ):
             continue
         why = storage_reason(holding, storage)

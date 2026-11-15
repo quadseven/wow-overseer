@@ -14,6 +14,7 @@ import pathlib
 import unittest
 
 import bank
+import bankpolicy
 import disposition
 
 
@@ -495,6 +496,52 @@ class TheCommandIsTheOneTheExecutorParses(unittest.TestCase):
         """A pass logs what it WROTE. Half a plan can be dropped by the retry
         window, and a log that reported the plan would be lying."""
         self.assertEqual(bank.lines([]), [])
+
+
+class BankedPolicyGearRelocatesWhenGuildTabHasRoom(unittest.TestCase):
+    def test_unbound_rare_placed_for_gear_tab_is_withdrawn_from_personal_bank(self):
+        rows = [
+            row(
+                item_guid=101,
+                name="Wildheart Belt",
+                quality=3,
+                item_class=bank.ITEM_CLASS_ARMOR,
+                bonding=2,
+                slot=39,
+                required_level=54,
+            ),
+            row(
+                item_guid=102,
+                name="Bulwark Shield",
+                quality=3,
+                item_class=bank.ITEM_CLASS_ARMOR,
+                bonding=1,
+                slot=40,
+                required_level=55,
+            ),
+        ]
+        members = bank.members_from_rows(rows, ["Grug"])
+        policy = {
+            101: bankpolicy.Placement(
+                guid=101,
+                holder="Grug",
+                item="Wildheart Belt",
+                to=bankpolicy.GUILD,
+                tab=bankpolicy.GEAR_TAB,
+                kind="gear for later",
+                why="rare for Oz later",
+            )
+        }
+        storage = bank.Storage(
+            guild_depositors=frozenset({"Grug"}),
+            guild_tab_free={bankpolicy.MATERIALS_TAB: 0, bankpolicy.GEAR_TAB: 3},
+            policy=policy,
+        )
+        planned = bank.plan(members, NOBODY, storage=storage)
+        self.assertEqual(
+            [101], [m.guid for m in planned.moves if m.verb == bank.WITHDRAW]
+        )
+        self.assertEqual([], [m for m in planned.moves if m.guid == 102])
 
 
 if __name__ == "__main__":
