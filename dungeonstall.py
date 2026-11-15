@@ -196,6 +196,12 @@ def stall_of(row: dict, events: list) -> Stall | None:
         return None
     masks = [mask_of(e.get("detail")) for e in mine if e.get("kind") == "boss"]
     masks = [m for m in masks if m is not None]
+    # THE MODULE FINISHING ITS CLEAR IS NOT A STALL. On map 229 (Lower and
+    # Upper Spire) the row is closed 'stalled' with "All bosses cleared!" once
+    # every reachable boss is down, and two of those barred the one door that
+    # drops the fire protection recipe.
+    if masks and masks[-1] and reasons and campaignplan.CLEARED_REASON in reasons[-1]:
+        return None
     return Stall(rid, masks[-1] if masks else 0, reasons[-1] if reasons else "")
 
 
