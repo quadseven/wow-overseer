@@ -49,6 +49,8 @@ SOURCE = "overseer:hydraxian"
 
 @dataclass(frozen=True)
 class Quest:
+    """Realm metadata needed to check and visit one Hydraxian quest."""
+
     quest_id: int
     min_level: int
     races: int
@@ -66,6 +68,8 @@ race_admitted = attunestep.race_admitted
 
 @dataclass(frozen=True)
 class Facts:
+    """Per-member quest state and live giver positions for one family."""
+
     members: tuple = ()
     quests: tuple = ()
     rewarded: dict = field(default_factory=dict)
@@ -76,6 +80,8 @@ class Facts:
 
 @dataclass(frozen=True)
 class Step:
+    """Natural quest commands and any live-giver travel request."""
+
     rows: tuple = ()
     hold_planner: bool = False
     aim: int | None = None
@@ -83,6 +89,7 @@ class Step:
 
 
 def quest_ids() -> str:
+    """Return the Hydraxian quest IDs for the bounded world-data query."""
     return ", ".join(str(int(q)) for q in QUEST_IDS)
 
 
@@ -93,6 +100,7 @@ def _done(rewarded, name: str) -> set:
 
 
 def eligible(quest: Quest, member: Member, rewarded, statuses) -> bool:
+    """Whether this member meets the level, race, and predecessor rules."""
     prev = int(quest.prev_quest_id or 0)
     done = _done(rewarded, member.name)
     held = (statuses or {}).get(member.name, {})
