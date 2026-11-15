@@ -907,8 +907,15 @@ def build_guild(
     raiders = _placed_raiders(lineup)
     gear = {m["name"]: m.get("readiness") for m in members}
     attuned = {r["name"] for r in attuned_rows if r.get("name")}
+    faction = faction_of(m["race"] for m in members)
     supply_card = _supply_card(
-        lineup, members, worn_rows, group, supply, holding_rows=holding_rows
+        lineup,
+        members,
+        worn_rows,
+        group,
+        supply,
+        faction=faction,
+        holding_rows=holding_rows,
     )
     blockers = _blockers(
         lineup,
@@ -949,7 +956,6 @@ def build_guild(
         holding_rows, list(group["family_names"]), (raidrun.CORE_FRAGMENT,)
     )
     hard = len([b for b in blockers if b["tone"] == HARD])
-    faction = faction_of(m["race"] for m in members)
     name = group["guild"] or "%s's family" % group["family"]
     return {
         "guild": group["guild"],
@@ -1005,7 +1011,13 @@ def _gates(min_level) -> dict:
 
 
 def _supply_card(
-    lineup, members, worn_rows, group, supply, holding_rows: list = ()
+    lineup,
+    members,
+    worn_rows,
+    group,
+    supply,
+    faction: str = "",
+    holding_rows: list = (),
 ) -> dict:
     """The Molten Core supply section (#275): raidsupply's card for this guild."""
     classes = {m["name"]: m.get("class_id") for m in members}
@@ -1013,19 +1025,7 @@ def _supply_card(
         lineup, classes, worn_rows, group["family_names"]
     )
     read = supply or {}
-    have = dict(read.get("have") or {})
-    if not have and holding_rows:
-        entry_by_name = {
-            **{name: entry for entry, name in raidsupply.REAGENT_NAMES.items()},
-            **{s.name: s.entry for s in raidsupply.SUPPLIES},
-        }
-        by_member = carried_each(
-            holding_rows, [m["name"] for m in members], tuple(entry_by_name)
-        )
-        for counts in by_member.values():
-            for item_name, count in counts.items():
-                entry = entry_by_name[item_name]
-                have[entry] = have.get(entry, 0) + count
+    have = _guild_supply_have(read, holding_rows, members)
     guild = group.get("guild") or (
         "%s's family" % group["family"] if group.get("family") else ""
     )
@@ -1039,6 +1039,7 @@ def _supply_card(
         snapshots=read.get("snapshots") or (),
         unobtainable=raidcraft.unobtainable_lines(),
         guild=guild,
+        vendor_recipes=_faction_vendor_recipes(faction),
         seat_reagents=read.get("seat_reagents"),
         seat_drink=read.get("seat_drink"),
         known_spells=read.get("known_spells"),
@@ -1046,6 +1047,37 @@ def _supply_card(
         bank_drink=int(read.get("bank_drink") or 0),
         spell_reagents=read.get("spell_reagents"),
     )
+
+
+def _guild_supply_have(read, holding_rows, members) -> dict:
+    """Combine the guild supply read, or the raid card's bag fallback."""
+    have = dict(read.get("have") or {})
+    if have or not holding_rows:
+        return have
+    entry_by_name = {
+        **{name: entry for entry, name in raidsupply.REAGENT_NAMES.items()},
+        **{s.name: s.entry for s in raidsupply.SUPPLIES},
+    }
+    by_member = carried_each(
+        holding_rows, [m["name"] for m in members], tuple(entry_by_name)
+    )
+    for counts in by_member.values():
+        for item_name, count in counts.items():
+            entry = entry_by_name[item_name]
+            have[entry] = have.get(entry, 0) + count
+    return have
+
+
+def _faction_vendor_recipes(faction: str) -> set:
+    """Recipe entries sold by vendors for this guild's faction."""
+    team = (faction or "").lower()
+    return {
+        make.recipe_item
+        for item in raidsupply.SUPPLIES
+        if (make := item.make)
+        and make.recipe_item
+        and any(vendor.team == team for vendor in make.recipe_vendors)
+    }
 
 
 def build_readiness(groups: list) -> dict:

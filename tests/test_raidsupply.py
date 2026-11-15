@@ -1534,8 +1534,8 @@ class StockpileTargetsAndHerbs(unittest.TestCase):
             ],
         }
         cave_chars = [
-            {"name": "Grug", "level": 60, "class": 1},
-            {"name": "Ugga", "level": 60, "class": 8},
+            {"name": "Grug", "level": 60, "class": 1, "race": 1},
+            {"name": "Ugga", "level": 60, "class": 8, "race": 3},
         ]
         bonkers_group = {
             "guild": "Bonkers",
@@ -1546,7 +1546,7 @@ class StockpileTargetsAndHerbs(unittest.TestCase):
             ],
         }
         bonkers_chars = [
-            {"name": "Zug", "level": 60, "class": 1},
+            {"name": "Zug", "level": 60, "class": 1, "race": 2},
         ]
         cave_card = raidready.build_guild(
             cave_group,
@@ -1566,6 +1566,17 @@ class StockpileTargetsAndHerbs(unittest.TestCase):
             {},
             supply={"have": {rs.ELEMENTAL_FIRE: 2}, "knowers": {}, "bank": 0},
         )
+        self.assertEqual(cave_card["faction"], "Alliance")
+        self.assertEqual(bonkers_card["faction"], "Horde")
+        for guild_card in (cave_card, bonkers_card):
+            fire = {row["entry"]: row for row in guild_card["supply"]["supplies"]}[
+                rs.FIRE_PROTECTION
+            ]
+            self.assertEqual(fire["route"], rs.VENDOR_RECIPE)
+            self.assertEqual(fire["cells"][2], "0")
+            self.assertEqual(fire["cells"][3], fire["cells"][1])
+            self.assertIn("at a vendor first", fire["cells"][4])
+            self.assertNotIn("auction house", fire["cells"][4])
         cave_hs = cave_card["supply"]["herb_shortfall"]
         bonkers_hs = bonkers_card["supply"]["herb_shortfall"]
         self.assertEqual(cave_hs["guild"], "Cave")
