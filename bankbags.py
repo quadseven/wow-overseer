@@ -45,6 +45,9 @@ BANK_BAG_SLOTS = len(SLOT_PRICES)
 # training, repairs and reagents the purse is for are never what pays for it.
 PURSE_SHARE = 4
 SWAP_TARGET_SLOTS = 12
+# Gated off until mod-overseer supports place-bag on an occupied bank position
+# and displaces/re-homes the smaller bag without wasting gold (#2608).
+SWAPS_ENABLED = False
 
 BUY_SLOT = "buy slot"
 
@@ -85,6 +88,7 @@ class Facts:
     placed_bags: tuple = ()  # Bag placed in bank bag positions
     bank_free: int | None = None  # free slots across base bank + bank bags
     bank_full_of_kept: bool = False  # full bank with nothing planned out
+    level: int = 1
 
     @property
     def protected_entries(self) -> frozenset[int]:
@@ -172,6 +176,8 @@ def _swappable_bank_bag(facts: Facts) -> Bag | None:
 
 def _swap_pair(facts: Facts, floor=None):
     """(new 12+ bag, displaced small bank bag) when a safe swap exists, else None."""
+    if not SWAPS_ENABLED:
+        return None
     own = _smallest_worn(facts)
     eff_floor = own if floor is None else min(own, int(floor))
     if eff_floor < SWAP_TARGET_SLOTS:
@@ -206,7 +212,8 @@ def _supply_need_for(facts: Facts, floor: int) -> SupplyNeed | None:
             return None
         return SupplyNeed(facts.name, floor, facts.protected_entries)
     if (
-        floor >= SWAP_TARGET_SLOTS
+        SWAPS_ENABLED
+        and floor >= SWAP_TARGET_SLOTS
         and _swappable_bank_bag(facts) is not None
         and _swap_pair(facts, floor) is None
     ):
@@ -264,6 +271,14 @@ def with_kept_full(family, kept_full) -> list:
     ]
 
 
+def _slot_need(facts: Facts, price: int) -> int:
+    """Copper needed to buy a bank slot while keeping bag_pressure.bag_reserve."""
+    from bag_pressure import bag_reserve
+
+    share = price if facts.bank_full_of_kept else price * PURSE_SHARE
+    return max(share, price + bag_reserve(facts.level))
+
+
 def step(facts: Facts, floor=None):
     """(Step or None, note): this character's one bank bag step this visit."""
     bags = placeable(facts, floor)
@@ -285,7 +300,7 @@ def step(facts: Facts, floor=None):
         ), ""
     if facts.bought < BANK_BAG_SLOTS:
         price = SLOT_PRICES[facts.bought]
-        need = price if facts.bank_full_of_kept else price * PURSE_SHARE
+        need = _slot_need(facts, price)
         if facts.money >= need:
             return Step(
                 facts.name,
@@ -298,7 +313,7 @@ def step(facts: Facts, floor=None):
         return swap, ""
     if facts.bought < BANK_BAG_SLOTS:
         price = SLOT_PRICES[facts.bought]
-        need = price if facts.bank_full_of_kept else price * PURSE_SHARE
+        need = _slot_need(facts, price)
         return (
             None,
             "%s waits to buy bank bag slot %d: %d copper of the %d it wants in hand"
@@ -422,6 +437,7 @@ def _facts_for(person, rows, worn_guids, crafters) -> Facts:
         placed_bags=tuple(sorted(placed_bags, key=lambda b: (b.slots, b.used, b.guid))),
         bank_free=bank_free,
         bank_full_of_kept=bool(person.get("bank_full_of_kept", False)),
+        level=_int(person.get("level"), 1),
     )
 
 

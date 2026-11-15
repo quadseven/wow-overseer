@@ -40143,7 +40143,7 @@ def _recent_bank_keys(minutes: int) -> set:
 # (`bag` is the holding bag's item guid, 0 for its own slots), and who holds
 # tailoring (bankbags: a crafter's ladder bags are the guild's).
 _BANK_BAG_PEOPLE_SQL = (
-    "SELECT c.name, c.money, c.bankSlots AS bank_slots, "
+    "SELECT c.name, c.level, c.money, c.bankSlots AS bank_slots, "
     "COALESCE(base_fill.n, 0) AS bank_base_used "
     "FROM characters c "
     "LEFT JOIN ("

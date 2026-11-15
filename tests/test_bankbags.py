@@ -218,7 +218,33 @@ class SwappingSmallBankBagsAndFullKeptSlots(unittest.TestCase):
         self.assertIsNone(bb.step(grug, 12)[0])
         self.assertIsNone(bb.step(unfull, 12)[0])
 
-    def test_carries_twelve_slot_sack_swaps_smallest_fitting_bank_bag(self):
+    def test_full_bank_of_kept_stacks_keeps_bag_reserve_floor(self):
+        broke_at_25g = bb.Facts(
+            "Zug",
+            money=250_000,
+            bought=3,
+            placed=3,
+            level=60,
+            worn=(12,) * 4,
+            bank_free=0,
+            bank_full_of_kept=True,
+        )
+        above_floor = bb.Facts(
+            "Zug",
+            money=256_000,
+            bought=3,
+            placed=3,
+            level=60,
+            worn=(12,) * 4,
+            bank_free=0,
+            bank_full_of_kept=True,
+        )
+        step, why = bb.step(broke_at_25g, 12)
+        self.assertIsNone(step)
+        self.assertIn("256000", why)
+        self.assertEqual(bb.step(above_floor, 12)[0].command, bb.BUY_SLOT)
+
+    def test_swap_is_gated_off_until_server_supports_occupied_place_bag(self):
         placed = (
             bb.Bag(50, 4496, 6, used=2),
             bb.Bag(51, 4498, 8, used=5),
@@ -229,15 +255,16 @@ class SwappingSmallBankBagsAndFullKeptSlots(unittest.TestCase):
             money=200_000,
             bought=3,
             placed=3,
+            level=60,
             worn=(12,) * 4,
             placed_bags=placed,
             spare=(bb.Bag(201, 4499, 12),),
-            bank_free=9,  # 2 free base + (6-2) + (8-5): rest outside 6-slot = 5 >= 2
+            bank_free=9,
         )
+        self.assertFalse(bb.SWAPS_ENABLED)
         step, _ = bb.step(f, 12)
-        self.assertEqual(step.command, "place-bag guid:201")
-        self.assertEqual(step.slots, 6)
-        self.assertEqual(bb.room_gain([f]), {"Og": 6})
+        self.assertIsNone(step)
+        self.assertEqual(bb.room_gain([f]), {})
 
     def test_swap_is_refused_when_bag_contents_do_not_fit_in_rest_of_bank(self):
         placed = (
@@ -269,7 +296,9 @@ class SwappingSmallBankBagsAndFullKeptSlots(unittest.TestCase):
         self.assertIsNone(bb.step(unread, 12)[0])
 
     def test_facts_from_rows_reads_bank_bag_fill_and_bank_free(self):
-        people = [dict(name="Og", money=200_000, bank_slots=2, bank_base_used=20)]
+        people = [
+            dict(name="Og", level=58, money=200_000, bank_slots=2, bank_base_used=20)
+        ]
         rows = [
             *[
                 dict(
@@ -294,6 +323,7 @@ class SwappingSmallBankBagsAndFullKeptSlots(unittest.TestCase):
         self.assertEqual([b.used for b in f.placed_bags], [2, 6])
         # (28 - 20) + (6 - 2) + (8 - 6) = 8 + 4 + 2 = 14
         self.assertEqual(f.bank_free, 14)
+        self.assertEqual(f.level, 58)
 
 
 if __name__ == "__main__":
