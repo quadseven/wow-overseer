@@ -34292,13 +34292,16 @@ def _carry_out_itemplan_disenchant(jobs) -> int:
 _ENCHANT_FOR_CAPABILITY_SQL = (
     "SELECT value FROM overseer_build WHERE name = '%s'" % enchantfor.CAPABILITY_FACT
 )
-# Everyone online in a guild any of `names` belongs to, with where they stand.
+# Everyone in the world (a fresh snapshot row, never `characters.online`, which
+# reads 0 for bots) in a guild any of `names` belongs to, and where they stand.
 _ENCHANT_FOR_MEMBERS_SQL = (
     "SELECT c.guid AS guid, c.name AS name, g.name AS guild, c.map AS map_id, "
     "c.position_x AS x, c.position_y AS y, c.position_z AS z "
     "FROM guild_member gm JOIN guild g ON g.guildid = gm.guildid "
     "JOIN characters c ON c.guid = gm.guid "
-    "WHERE c.online = 1 AND gm.guildid IN ("
+    "JOIN overseer_snapshot s ON s.name = c.name "
+    "AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+    "WHERE gm.guildid IN ("
     "SELECT gm2.guildid FROM guild_member gm2 "
     "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN (%s))"
 )

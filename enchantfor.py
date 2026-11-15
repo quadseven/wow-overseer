@@ -48,6 +48,7 @@ from typing import NamedTuple
 import equipscore
 import gearscore
 import statweights
+import world_data
 
 ENV_SWITCH = "ENCHANT_FOR"
 PREFIX = "enchant-for:"
@@ -70,9 +71,7 @@ ARMOR_RESIST_ARG = 0
 ROD_CATEGORY_FIRST = 6
 ROD_ITEMS = (6218, 6339, 11130, 11145, 16207)
 
-CATALOGUE_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "data", "enchants.json"
-)
+CATALOGUE_PATH = str(world_data.DATA_ROOT / "data" / "enchants.json")
 
 PRIORITY_SEAT, PRIORITY_ROLE, PRIORITY_REST = 0, 1, 2
 
