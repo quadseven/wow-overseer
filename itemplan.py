@@ -355,6 +355,7 @@ class Stack:
     soulbound: bool | None = None
     required_skill: int = 0
     allowable_class: int = -1
+    spell_id: int = 0
     # The core's own breakdown facts (#1978): item_template.DisenchantID and
     # RequiredDisenchantSkill (-1 means never). None is unread.
     disenchant_id: int | None = None
@@ -434,6 +435,11 @@ class Context:
     guild_free: Mapping[tuple, int] = field(default_factory=dict)
     # guildmates outside the family who work a trade: ((name, trade, skill), ...)
     guild_crafters: tuple = ()
+    # guildmates outside the family: ((name, class_id, level, online), ...);
+    # None means the guild roster was not read.
+    guild_class_members: tuple | None = None
+    # member name -> frozenset of learned spell_ids; None means unread.
+    known_spells: Mapping[str, frozenset] | None = None
     # None means per-item fire resistance was not read.
     fire_gear: frozenset | None = None
     # entries an attunement or a key quest needs besides the open quests
@@ -1352,8 +1358,22 @@ def _rule_gear(w: _World, s: Stack, me: Member):
     return out
 
 
-def _recipe_member_option(s: Stack, me: Member, trade: str | None, rank: int):
-    if not trade or me.skill(trade) <= 0:
+def _member_knows(w: _World, name: str, s: Stack) -> bool:
+    """True when `known_spells` was read and confirms `name` already knows `s.spell_id`."""
+    if s.spell_id <= 0 or w.ctx.known_spells is None:
+        return False
+    spells = w.ctx.known_spells.get(name)
+    return spells is not None and s.spell_id in spells
+
+
+def _matches_class(class_id: int, allowable_class: int) -> bool:
+    return class_id > 0 and (allowable_class & (1 << (class_id - 1))) != 0
+
+
+def _recipe_member_option(
+    w: _World, s: Stack, me: Member, trade: str | None, rank: int
+):
+    if not trade or me.skill(trade) <= 0 or _member_knows(w, me.name, s):
         return None
     skill = me.skill(trade)
     goal = TRADE_NOW if rank <= skill else TRADE_NEXT
@@ -1369,7 +1389,7 @@ def _recipe_sibling_option(w: _World, s: Stack, trade: str | None, rank: int):
     if not trade or not s.tradable:
         return None
     for sib in w.siblings(s.holder):
-        if sib.skill(trade) > 0:
+        if sib.skill(trade) > 0 and not _member_knows(w, sib.name, s):
             return _opt(
                 GIVE,
                 RECIPE,
@@ -1386,7 +1406,7 @@ def _recipe_guild_option(w: _World, s: Stack, trade: str | None, rank: int):
     if not trade or not s.tradable:
         return None
     for name, gtrade, skill in sorted(w.ctx.guild_crafters):
-        if gtrade == trade and skill >= rank:
+        if gtrade == trade and skill >= rank and not _member_knows(w, name, s):
             return _opt(
                 GIVE,
                 RECIPE,
@@ -1469,8 +1489,38 @@ def _recipe_raid_options():
     ]
 
 
+def _outside_class_book_route(w: _World, s: Stack, future_taker: bool):
+    """Route a class book via outside guildmates, banking when roster or spells are unread."""
+    if w.ctx.guild_class_members is None:
+        return [_opt(BANK_PERSONAL, RECIPE, "class book, guild roster unread", "R9")]
+    for name, cls_id, level, _online in sorted(
+        w.ctx.guild_class_members, key=lambda m: (not m[3], m[0])
+    ):
+        if not _matches_class(cls_id, s.allowable_class) or _member_knows(w, name, s):
+            continue
+        if level >= s.req_level:
+            return [
+                _opt(
+                    GIVE,
+                    RECIPE,
+                    "class book for guildmate %s" % name,
+                    "R9",
+                    target=name,
+                )
+            ]
+        future_taker = True
+    if w.ctx.known_spells is None or future_taker:
+        return [_opt(BANK_PERSONAL, RECIPE, "class book, no matching member", "R9")]
+    out = _recipe_exit_options(w, s)
+    out.append(_opt(BANK_PERSONAL, RECIPE, "class book, already known by guild", "R9"))
+    return out
+
+
 def _class_book_options(w: _World, s: Stack, me: Member):
-    if me.class_id > 0 and (s.allowable_class & (1 << (me.class_id - 1))) != 0:
+    """Plan personal learning, sibling/guildmate gifting, or safe exit for a class book."""
+    if _matches_class(me.class_id, s.allowable_class) and not _member_knows(
+        w, me.name, s
+    ):
         if me.level >= s.req_level:
             return [_opt(KEEP_CARRY, RECIPE, "class book for %s" % me.name, "R9")]
         return [
@@ -1481,23 +1531,30 @@ def _class_book_options(w: _World, s: Stack, me: Member):
                 "R9",
             )
         ]
-    if s.tradable:
-        for sib in w.siblings(s.holder):
-            if (
-                sib.class_id > 0
-                and (s.allowable_class & (1 << (sib.class_id - 1))) != 0
-                and sib.level >= s.req_level
-            ):
-                return [
-                    _opt(
-                        GIVE,
-                        RECIPE,
-                        "class book for %s" % sib.name,
-                        "R9",
-                        target=sib.name,
-                    )
-                ]
-    return [_opt(BANK_PERSONAL, RECIPE, "class book, no matching member", "R9")]
+    if not s.tradable:
+        if _member_knows(w, me.name, s) and s.sell > 0:
+            return _vendor_options(
+                s, "R9", "class book already known by %s" % me.name, RECIPE
+            )
+        return [_opt(BANK_PERSONAL, RECIPE, "class book, bound", "R9")]
+    future_taker = False
+    for sib in w.siblings(s.holder):
+        if not _matches_class(sib.class_id, s.allowable_class) or _member_knows(
+            w, sib.name, s
+        ):
+            continue
+        if sib.level >= s.req_level:
+            return [
+                _opt(
+                    GIVE,
+                    RECIPE,
+                    "class book for %s" % sib.name,
+                    "R9",
+                    target=sib.name,
+                )
+            ]
+        future_taker = True
+    return _outside_class_book_route(w, s, future_taker)
 
 
 def _rule_recipe(w: _World, s: Stack, me: Member):
@@ -1523,7 +1580,7 @@ def _rule_recipe(w: _World, s: Stack, me: Member):
     trade = RECIPE_TRADE.get(s.subclass)
     drop = s.entry in raidsupply.DROP_RECIPES
     # Group 1: trade recipes the holder works stay with the holder until learned.
-    member_option = _recipe_member_option(s, me, trade, rank)
+    member_option = _recipe_member_option(w, s, me, trade, rank)
     if member_option:
         return [member_option]
     # Group 2: trade recipes the holder does not work -> crafter, else auction, never vendor.

@@ -251,7 +251,20 @@ function supplyCard(card) {
   const top = (s.top_recipes || []).length
     ? html`<details class="fold"><summary>TOP raid recipes (${s.top_recipes.filter((r) => r.acquired).length} of ${s.top_recipes.length} acquired)</summary><div class="raid-lines">${s.top_recipes.map((r) => html`<span class="${r.acquired ? "ok" : "warn"}">${r.line}</span>`)}</div></details>`
     : "";
-  return html`<div class="card raid-block"><span class="card-title">Supply for a night in the Core</span>${s.line ? html`<span class="muted">${s.line}</span>` : ""}${s.budget_line ? html`<span class="small dim">${s.budget_line}</span>` : ""}${(s.pace || []).map((p) => html`<span class="small dim">${p.line}</span>`)}${s.level_60_line ? html`<span class="small dim">${s.level_60_line}</span>` : ""}${(s.unobtainable || []).map((u) => html`<span class="small warn">${u}</span>`)}${top}${table(cols, s.supplies || [], cell)}${herbShortfall(s.herb_shortfall)}</div>`;
+  const seatCell = (r, i) => {
+    const text = (r.cells || [])[i];
+    if (i === 0) return text;
+    if (i === (r.cells || []).length - 1) return text;
+    if (i === (r.cells || []).length - 2) return html`<span class="num ${r.short ? "warn" : ""}">${text}</span>`;
+    return text;
+  };
+  const reagentsFold = (s.seat_reagents || []).length
+    ? html`<details class="fold"><summary>Group-buff & portal reagents (${s.seat_reagents.filter((r) => r.short).length} short)</summary>${table(s.reagent_columns || [], s.seat_reagents, seatCell)}</details>`
+    : "";
+  const drinkFold = (s.seat_drink || []).length
+    ? html`<details class="fold"><summary>Drink per mana seat (${s.seat_drink.filter((d) => d.short).length} short)</summary>${table(s.drink_columns || [], s.seat_drink, seatCell)}</details>`
+    : "";
+  return html`<div class="card raid-block"><span class="card-title">Supply for a night in the Core</span>${s.line ? html`<span class="muted">${s.line}</span>` : ""}${s.budget_line ? html`<span class="small dim">${s.budget_line}</span>` : ""}${(s.pace || []).map((p) => html`<span class="small dim">${p.line}</span>`)}${s.level_60_line ? html`<span class="small dim">${s.level_60_line}</span>` : ""}${(s.unobtainable || []).map((u) => html`<span class="small warn">${u}</span>`)}${top}${table(cols, s.supplies || [], cell)}${reagentsFold}${drinkFold}${herbShortfall(s.herb_shortfall)}</div>`;
 }
 
 function fireCard(card, teams) {

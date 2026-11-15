@@ -1423,15 +1423,13 @@ def ranks_due(level: int, money: int, skills, wanted=()) -> tuple:
 
 # The purse a recipe purchase never spends below, in copper: mod-overseer's
 # RECIPE_PURSE_FLOOR_COPPER, so an errand written here is one the trainer
-# visit can complete. It is the floor at level 1; `recipe_purse_floor` grows
-# it with level, as mod-overseer's RecipePurseFloor does.
-RECIPE_PURSE_FLOOR = 100
+# visit can complete. Canonical definition lives in purse.py to avoid import
+# cycles with raidsupply.
+RECIPE_PURSE_FLOOR = purse.RECIPE_PURSE_FLOOR
 
 # THE REPAIR RESERVE, in copper per level squared: 40 silver at 20 and 3g 60s
-# at 60. A repair bill grows with the item level of what is worn, and one
-# silver (the floor alone) does not pay for a level 60 member's repair after a
-# death. mod-overseer's RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ, the same number.
-RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ = 10
+# at 60. mod-overseer's RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ, the same number.
+RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ = purse.RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ
 
 # A trainer visit for a trade that bought no due recipe is not repeated inside
 # this window. mod-overseer records each visit ('trainer-visit', the trade's
@@ -1443,10 +1441,7 @@ RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ = 10
 RECIPE_VISIT_RETRY_HOURS = 6
 
 
-def recipe_purse_floor(level: int) -> int:
-    """The copper a recipe purchase leaves in the purse at `level`."""
-    level = max(0, int(level or 0))
-    return max(RECIPE_PURSE_FLOOR, RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ * level * level)
+recipe_purse_floor = purse.recipe_purse_floor
 
 
 def _rungs_ahead(skill: int, value: int) -> tuple:
@@ -8429,6 +8424,18 @@ def class_step(
         # orders beside the rows (steps.py, shadow mode).
         step = replace(step, move=move)
     return step, doing, note
+
+
+def class_move_spot(m, book, recent, now=0.0):
+    """The Spot class_step would walk `m` to, or None: the move chosen with the
+    walls and avoids the walk uses (_class_move), read-only (no hunts clock). A
+    caller that judges the ground of a walk reads this, not the plain next
+    move."""
+    m = with_recent_takes(m, recent)
+    move, _blocked = _class_move(m, book, recent, None, now)
+    if move is None or move.spot is None:
+        return None
+    return _class_spot(move)
 
 
 def _class_move_step(
