@@ -22,6 +22,7 @@ stalls is the bridge's side, which decides whether to write that errand:
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -31,9 +32,17 @@ import guildjobs  # noqa: E402
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 
-FIRST_AID, LEATHERWORKING, SKINNING, TAILORING = 129, 165, 393, 197
+FIRST_AID, COOKING, FISHING, LEATHERWORKING, SKINNING, TAILORING = (
+    129,
+    185,
+    356,
+    165,
+    393,
+    197,
+)
 HEAVY_LINEN_BANDAGE = 3276
 RICH = 4_000_000  # about what each live crafter carries
+COOKING_VENDOR_OR_QUEST = frozenset({8607, 2545, 3397, 15855, 18243, 24801})
 
 
 class FirstAidRecipesAreDue(unittest.TestCase):
@@ -183,6 +192,86 @@ class TheBridgeReadsTheWorldserversOwnBook(unittest.TestCase):
 
     def test_the_retry_window_is_hours(self):
         self.assertGreaterEqual(guildjobs.RECIPE_VISIT_RETRY_HOURS, 2)
+
+
+class SecondaryCookingAndFishingRecipes(unittest.TestCase):
+    """#2264: Cooking shares First Aid's wanted exemption; Fishing stays out."""
+
+    def test_cooking_trainer_rung_is_due_without_a_roster_permission(self):
+        trainer_rung = craft.Recipe(
+            2544, "Dry Pork Ribs", 75, 119, "1x Crag Boar Rib", focus=4
+        )
+        ladder = craft.RECIPES[COOKING] + (trainer_rung,)
+        with (
+            mock.patch.dict(craft.RECIPES, {COOKING: ladder}),
+            mock.patch.dict(craft.TRAINER_RECIPES, {2544: (74, 150)}),
+        ):
+            self.assertEqual(
+                (COOKING,),
+                guildjobs.recipes_due(60, RICH, {COOKING: (74, 75)}, frozenset(), ()),
+            )
+            self.assertEqual(
+                (),
+                guildjobs.recipes_due(
+                    60, RICH, {COOKING: (74, 75)}, frozenset({2544}), ()
+                ),
+            )
+
+    def test_cooking_respects_purse_floor_like_a_primary_trade(self):
+        trainer_rung = craft.Recipe(
+            2544, "Dry Pork Ribs", 75, 119, "1x Crag Boar Rib", focus=4
+        )
+        cost = 150
+        floor = guildjobs.recipe_purse_floor(60)
+        ladder = craft.RECIPES[COOKING] + (trainer_rung,)
+        with (
+            mock.patch.dict(craft.RECIPES, {COOKING: ladder}),
+            mock.patch.dict(craft.TRAINER_RECIPES, {2544: (74, cost)}),
+        ):
+            self.assertEqual(
+                (),
+                guildjobs.recipes_due(
+                    60, floor + cost - 1, {COOKING: (74, 75)}, frozenset(), ()
+                ),
+            )
+            self.assertEqual(
+                (COOKING,),
+                guildjobs.recipes_due(
+                    60, floor + cost, {COOKING: (74, 75)}, frozenset(), ()
+                ),
+            )
+
+    def test_fishing_stays_out_without_roster_permission(self):
+        lure_rung = craft.Recipe(999991, "Fake Fishing Rung", 75, 119, "none")
+        with (
+            mock.patch.dict(craft.RECIPES, {FISHING: (lure_rung,)}),
+            mock.patch.dict(craft.TRAINER_RECIPES, {999991: (74, 100)}),
+        ):
+            self.assertEqual(
+                (),
+                guildjobs.recipes_due(60, RICH, {FISHING: (74, 75)}, frozenset(), ()),
+            )
+
+    def test_primary_trades_keep_existing_wanted_behavior(self):
+        skills = {TAILORING: (81, 150)}
+        self.assertEqual((), guildjobs.recipes_due(38, RICH, skills, frozenset(), ()))
+        self.assertEqual(
+            (TAILORING,),
+            guildjobs.recipes_due(38, RICH, skills, frozenset(), (TAILORING,)),
+        )
+
+    def test_first_aid_and_cooking_ladders_cover_every_trainer_rung(self):
+        for skill in (FIRST_AID, COOKING):
+            exempt = craft.AUTO_LEARNED | (
+                COOKING_VENDOR_OR_QUEST if skill == COOKING else frozenset()
+            )
+            for recipe in craft.RECIPES[skill]:
+                if recipe.spell_id in exempt:
+                    continue
+                with self.subTest(skill=skill, recipe=recipe.name):
+                    self.assertIn(recipe.spell_id, craft.TRAINER_RECIPES)
+        for spell_id in COOKING_VENDOR_OR_QUEST:
+            self.assertNotIn(spell_id, craft.TRAINER_RECIPES)
 
 
 if __name__ == "__main__":

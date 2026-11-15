@@ -1474,6 +1474,12 @@ def _rungs_ahead(skill: int, value: int) -> tuple:
     return tuple(out)
 
 
+# Secondary trades whose craft ladders qualify for trainer recipe visits
+# regardless of the roster's `professions` column (#2264). Fishing has no
+# crafting ladder and stays excluded.
+SECONDARY_RECIPE_SKILLS = frozenset({FIRST_AID, COOKING})
+
+
 def recipes_due(level: int, money: int, skills, known, wanted=(), visited=()) -> tuple:
     """The held trades whose next trainer recipe this character may buy now.
 
@@ -1490,10 +1496,11 @@ def recipes_due(level: int, money: int, skills, known, wanted=(), visited=()) ->
     `recipe_purse_floor(level)`. `known` is every recipe the bridge can show
     the member holds: character_spell, and the worldserver's own 'learn',
     'craft' and 'recipe-known' events. `skills` is {skill id: (value, max)};
-    a held primary the roster names in `wanted` is asked, and First Aid
-    always, as `ranks_due` asks it, since it takes no primary slot. A trade in
-    `visited` (a trainer visit for it inside RECIPE_VISIT_RETRY_HOURS) is not
-    due again yet. Cheapest first.
+    a held primary the roster names in `wanted` is asked, and First Aid and
+    Cooking always (`SECONDARY_RECIPE_SKILLS`, #2264), since secondary trades
+    take no primary slot. Fishing stays out. A trade in `visited` (a trainer
+    visit for it inside RECIPE_VISIT_RETRY_HOURS) is not due again yet.
+    Cheapest first.
     """
     known = frozenset(int(s) for s in known or ())
     wanted = tuple(int(s) for s in wanted or ())
@@ -1504,7 +1511,7 @@ def recipes_due(level: int, money: int, skills, known, wanted=(), visited=()) ->
         skill, value, ceiling = int(skill), int(value or 0), int(ceiling or 0)
         if ceiling <= 0 or skill in visited:
             continue
-        if skill != FIRST_AID and skill not in wanted:
+        if skill not in SECONDARY_RECIPE_SKILLS and skill not in wanted:
             continue
         cost = _recipe_cost_due(skill, value, int(money or 0), known, floor)
         if cost is not None:
