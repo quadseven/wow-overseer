@@ -174,6 +174,16 @@ class BuilderTest(unittest.TestCase):
         with self.assertRaises(SeedError):
             self.b.insert("no_such_table", {"a": 1})
 
+    def test_roster_and_command_tables_are_never_written(self):
+        for table in ("overseer_roster", "overseer_command"):
+            with self.assertRaises(SeedError):
+                self.b.update(table, {"job": "quest"}, {"name": "Grug"})
+            with self.assertRaises(SeedError):
+                verify_statement(
+                    f"UPDATE `acore_characters`.`{table}` SET `job` = 'quest' WHERE `name` = 'Grug'",
+                    SCHEMA,
+                )
+
     def test_no_where_refused(self):
         with self.assertRaises(SeedError):
             self.b.delete("characters", {})
@@ -675,6 +685,13 @@ class CompileTest(unittest.TestCase):
         self.assertEqual(
             [(m.cast_index, m.name) for m in plan.members], [(0, "Uzza"), (1, "Zork")]
         )
+
+    def test_no_shipped_decree_plan_writes_a_roster_or_a_realm_id(self):
+        d = doc()
+        d["act"] = [{"at": "0s", "roster": {"who": "Grug", "job": "quest"}}]
+        for s in sql_of(compile_(d)):
+            self.assertNotIn("overseer_roster", s)
+            self.assertNotIn("realm", s.lower())
 
     def test_render_is_plain_sql(self):
         text = compile_(doc()).render()

@@ -12,6 +12,10 @@ import re
 from dataclasses import dataclass
 
 WRITE_DB = "acore_characters"
+# Tables a seed never writes. A job goes in as an overseer_command row (a direct
+# overseer_roster update was measured to have no effect), and the realm id is
+# the baseline's (the worldserver only accepts 1 to 255).
+NEVER_WRITTEN = {"overseer_roster", "overseer_command", "realmlist", "realmcharacters"}
 _SAFE_STRING = re.compile(r"^[A-Za-z0-9 _.,:\-]*$")
 _STRING = re.compile(r"'(?:[^'\\]|'')*'")
 _BACKTICKED = re.compile(r"`([^`]*)`")
@@ -80,6 +84,8 @@ class Builder:
         self.schema = schema
 
     def _table(self, table):
+        if table in NEVER_WRITTEN:
+            raise SeedError(f"a seed never writes {table}")
         cols = self.schema.columns(table, WRITE_DB)
         if cols is None:
             raise SeedError(f"unknown table {WRITE_DB}.{table}")
@@ -144,8 +150,8 @@ def verify_statement(sql, schema):
     if db != WRITE_DB:
         raise SeedError(f"statement targets database {db!r}, not {WRITE_DB}")
     cols = schema.columns(table, WRITE_DB)
-    if cols is None:
-        raise SeedError(f"unknown table {WRITE_DB}.{table}")
+    if cols is None or table in NEVER_WRITTEN:
+        raise SeedError(f"{WRITE_DB}.{table} is unknown or never written by a seed")
     bare = _without_strings(sql[m.end() :])
     _check_characters(bare)
     bare = _check_columns(bare, table, cols)
