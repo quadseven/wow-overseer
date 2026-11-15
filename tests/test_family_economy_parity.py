@@ -540,7 +540,7 @@ class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
                     for x in n
                 ],
                 "_plan_bank": lambda n: types.SimpleNamespace(guild=[]),
-                "_plan_guild_withdrawals": lambda n: (),
+                "_plan_guild_withdrawals": lambda n, gear=(): (),
                 "natural": natural,
                 "_natural_contributors": lambda candidates, family: frozenset(
                     candidates if natural_names is None else natural_names
