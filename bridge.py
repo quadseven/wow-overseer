@@ -17760,8 +17760,12 @@ class Bridge(discord.Client):
         # WHAT THE GUILD NEEDS, AND WHAT IT CAN LET GO (bankforecast). Read
         # fresh once a cycle, logged when it changes, mid-run or not.
         await self._say_bank_forecast(names, cohort)
-        if await self._mid_run(names):
-            return
+        # A FAMILY MID-RUN STILL OWES ITS RANK GRANTS. They need no vault (see
+        # `guildbank.split_remote`), so only the vault work below waits for the
+        # run to end. Returning here wrote nothing for a family that spent hours
+        # in one dungeon, and the second guild's tab stayed closed to every rank
+        # (wow-dev, 2026-11-15).
+        in_run = await self._mid_run(names)
         setup = await asyncio.to_thread(_fetch_guild_bank_setup, names)
         purchased_tabs = int(setup["purchased_tabs"]) if setup else 0
         # SETUP IS AN ERRAND TO THE SAME PLACE, NOT A GATE IN FRONT OF THE
@@ -17815,6 +17819,8 @@ class Bridge(discord.Client):
         # grant has no vault-range check, so they do not wait for an arrival
         # the town slot may never give (see `guildbank.split_remote`).
         actions = await _queue_remote_setup(actions, cohort)
+        if in_run:
+            return
         # THE TAB COUNT WAS ALREADY IN HAND AND WAS NEVER PASSED (infra#4198).
         # `plan_deposits` defaults `guild_has_tab` to False - the cautious
         # answer, which reserves `FLOAT_COPPER + TAB0_COST_COPPER` - and this
