@@ -306,6 +306,10 @@ class Forecast:
     # Every entry the forecast judged: the vault's, the ladders' and what the
     # guild's members carry (read). Empty when the forecast is unread.
     judged: frozenset = frozenset()
+    # entry -> units the guild holds fewer of than it will eat (a material a
+    # rung eats now, held guild-wide below its target). The vault may hold none
+    # of it, so it has no line; lowrung.py reads it to send a feeder.
+    starved: dict = field(default_factory=dict)
 
     @property
     def reserved(self) -> frozenset | None:
@@ -800,6 +804,7 @@ class _Plan:
     fair: dict = field(default_factory=dict)
     given: dict = field(default_factory=dict)
     release: dict = field(default_factory=dict)
+    starved: dict = field(default_factory=dict)
 
 
 def _release(entry, outside, target, need, carried) -> dict:
@@ -838,6 +843,8 @@ def _plan_item(acc, item, mine, outside, members, need, history, house, carried)
     total = vault + outside
     kind, target, why = judge(item, total, members, need)
     surplus = max(0, total - target)
+    if kind == NOW and target > total:
+        acc.starved[item.entry] = target - total
     price, price_why = fair_price(history, item.entry, house)
     if surplus and kind in (NOW, LATER, SURPLUS, JUNK):
         acc.over[item.entry] = "the guild holds %d %s against a target of %d" % (
@@ -926,6 +933,7 @@ def plan(
         _short(need_of, carried),
         release=acc.release,
         judged=frozenset(e for e in judged if e in items),
+        starved=acc.starved,
     )
 
 
