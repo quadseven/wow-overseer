@@ -597,12 +597,39 @@ BAG_ROOM_FREE_SLOTS = 4
 BAG_ROOM_WAIT_SECONDS = 20 * 60
 
 
+# A RAID SEAT UNDER THIS LEVEL IS THERE TO LEVEL. The hold above exists so a
+# door can be looted; on 2026-11-15 about 38 of 81 members per guild sat in it
+# at once while 5 to 12 were free to a group, the largest single hold. A seat
+# below the cap is never held for room: its group needs five, and a full bag
+# costs it a loot, not a run.
+SEAT_LEVEL_TARGET = 60
+
+
+def levelling_seats(rows) -> frozenset:
+    """The names of the approved raid seats still below SEAT_LEVEL_TARGET.
+
+    `rows` are the guild member rows; an approved seat carries its plan tree
+    (`target_tree`, from overseer_raid_spec). An unread level counts as none."""
+    out = set()
+    for row in rows or ():
+        name = str(row.get("name") or "")
+        level = row.get("level")
+        if not name or not row.get("target_tree"):
+            continue
+        if isinstance(level, bool) or not isinstance(level, int):
+            continue
+        if level < SEAT_LEVEL_TARGET:
+            out.add(name)
+    return frozenset(out)
+
+
 def bag_room_holds(
     free_slots: dict,
     since: dict,
     now: float,
     floor: int = BAG_ROOM_FREE_SLOTS,
     wait: float = BAG_ROOM_WAIT_SECONDS,
+    exempt=frozenset(),
 ) -> tuple:
     """(names held for bag room now, the clock to keep for the next pass).
 
@@ -611,10 +638,13 @@ def bag_room_holds(
     of `floor` is held until it has been short for `wait` seconds; a member
     with room, or one whose bags were not read, is forgotten, so a later
     shortage starts a new wait. An unread or negative reading holds nobody: a
-    broken read must not keep a guild out of its dungeons."""
+    broken read must not keep a guild out of its dungeons. A name in `exempt`
+    (levelling_seats) is neither held nor clocked."""
     clock = {}
     held = set()
     for name, free in (free_slots or {}).items():
+        if name in exempt:
+            continue
         if not isinstance(free, int) or isinstance(free, bool):
             continue
         if free < 0 or free >= floor:
