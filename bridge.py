@@ -19068,9 +19068,23 @@ class Bridge(discord.Client):
         row_walks = now >= self._mail_walk_unsupported_until
         walkers = (await asyncio.to_thread(_route_walkers, candidates, names, row_walks)
                    if candidates else {})
+        stranded = classtrain.stranded(recent)
+        needs_crossing = any(
+            t.name in stranded for t in trainees
+            if t.online and t.due.affords(t.money) and t.name not in busy
+        )
+        trainer_spawns = (
+            await asyncio.to_thread(_class_trainer_spawns)
+            if needs_crossing else None
+        )
+        cross_recent = (
+            await asyncio.to_thread(_guild_cross_rows)
+            if needs_crossing else ()
+        )
         walks, notes = classtrain.plan(
             trainees, walkers, classtrain.recent_walkers(recent), busy,
-            cap=self._guild_walk_cap(), stranded=classtrain.stranded(recent))
+            cap=self._guild_walk_cap(), stranded=stranded,
+            trainer_spawns=trainer_spawns, cross_recent=cross_recent)
         _log_capped("guild training", notes)
         started = 0
         for walk in walks:
@@ -19090,10 +19104,10 @@ class Bridge(discord.Client):
                 getattr(self, "_job_steps", ()))
 
     async def _start_train_walk(self, walk, now: float) -> int:
-        """Write one class trainer walk row; 1 when written."""
+        """Write one class trainer walk or crossing row; 1 when written."""
         self._train_walks[walk.name] = now
         row_id = await asyncio.to_thread(
-            _insert_crafter_row, walk.name, walk.command, classtrain.KIND, walk.source)
+            _insert_crafter_row, walk.name, walk.command, walk.kind, walk.source)
         if not row_id:
             self._train_walks.pop(walk.name, None)
             return 0
@@ -34791,7 +34805,7 @@ def _command_answer(row_id: int):
 # is in, with the guild master's name, because the pass picks the maintenance
 # members out of the same lineup the page draws and posts to the master.
 _DUES_MEMBERS_SQL = (
-    "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.level, "
+    "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.race, c.level, "
     "c.money, (presence.name IS NOT NULL) AS online, lc.name AS master, " + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
@@ -34983,6 +34997,34 @@ def _class_trainer_rows(cur) -> dict:
     return _CLASS_TRAINER_ROWS
 
 
+NPC_FLAG_TRAINER_CLASS = 0x20
+_CLASS_TRAINER_SPAWNS_SQL = (
+    "SELECT cr.map, t.Requirement AS class_id, ft.EnemyGroup AS enemy_group "
+    "FROM acore_world.creature cr "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "JOIN acore_world.creature_default_trainer cdt ON cdt.CreatureId = ct.entry "
+    "JOIN acore_world.trainer t ON t.Id = cdt.TrainerId "
+    "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
+    "WHERE t.Type = 0 AND t.Requirement > 0 AND (ct.npcflag & %s) <> 0 "
+    "AND " + towntrip.REAL_SPAWN_SQL
+)
+_CLASS_TRAINER_SPAWNS: list = []
+
+
+def _class_trainer_spawns() -> list | None:
+    """Real class trainer spawns by map and side, read once; None on SQL error."""
+    if not _CLASS_TRAINER_SPAWNS:
+        try:
+            with _connect() as conn, conn.cursor() as cur:
+                cur.execute(_CLASS_TRAINER_SPAWNS_SQL, (NPC_FLAG_TRAINER_CLASS,))
+                rows = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            log.warning("class trainer spawns read failed: %s", exc)
+            return None
+        _CLASS_TRAINER_SPAWNS.extend(dict(row) for row in rows)
+    return _CLASS_TRAINER_SPAWNS
+
+
 def _class_training_due(names: list, casts_only: bool = False) -> dict:
     """name -> classtrain.Due for each named member; no judgement here. With
     `casts_only`, only the spells the member's class AI casts or holds
@@ -35167,6 +35209,15 @@ def _guild_train_rows() -> list:
             "AND result LIKE %s))",
             (classtrain.SOURCE + ":%", classtrain.STRANDED_READ_DAYS,
              "%" + classtrain.NO_TRAINER_REASON + "%"))
+
+
+def _guild_cross_rows() -> tuple:
+    """Recent crossing job rows across guildjobs actions, as guildjobs.Recent."""
+    with _connect() as conn, conn.cursor() as cur:
+        rows = _job_read(
+            cur, "guild crossings", _JOB_RECENT_SQL, (QUESTER_CROSSINGS_LIKE,)
+        )
+    return guildjobs.recent_from_rows(rows)
 
 
 # THE GUILD FUND'S LEDGER: every row it ever wrote, which is a handful a day.
