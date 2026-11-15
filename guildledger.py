@@ -40,14 +40,6 @@ class Ledger:
     bankers: tuple  # the bankers' names
     room: int  # free stacks across the bankers, reserves taken off
 
-    def total(self, entry: int) -> int:
-        """Every unit of `entry` the guild holds anywhere."""
-        return sum(count for _holder, count in self.held.get(int(entry), ()))
-
-    def where(self, entry: int) -> dict:
-        """holder -> units of `entry`; the vault under `vault`."""
-        return dict(self.held.get(int(entry), ()))
-
     def banker_room(self) -> int:
         """Stacks the bankers can take now: bag and bank slots free, less the
         reserves, summed over the bankers."""

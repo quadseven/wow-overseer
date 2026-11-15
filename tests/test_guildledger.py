@@ -29,18 +29,14 @@ class WhatEveryoneHolds(unittest.TestCase):
             vault=[{"tab": 0, "entry": 2589, "count": 100}],
         )
 
-    def test_total_sums_members_bankers_and_vault(self):
-        self.assertEqual(160, self.ledger.total(2589))
-
-    def test_where_names_each_holder_by_kind(self):
+    def test_held_names_each_holder_by_kind(self):
         self.assertEqual(
             {"Ugga": 20, "Hoarg": 40, "vault": 100},
-            self.ledger.where(2589),
+            dict(self.ledger.held[2589]),
         )
 
-    def test_an_entry_nobody_holds_is_zero(self):
-        self.assertEqual(0, self.ledger.total(9))
-        self.assertEqual({}, self.ledger.where(9))
+    def test_an_entry_nobody_holds_is_absent(self):
+        self.assertNotIn(9, self.ledger.held)
 
 
 class WhatTheBankersCanTake(unittest.TestCase):
