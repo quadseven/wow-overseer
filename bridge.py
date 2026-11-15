@@ -13818,6 +13818,11 @@ class Bridge(discord.Client):
         wearers, gear_rows, bank_rows = await asyncio.to_thread(_read_gear_routing, family)
         report = gearrouting.plan(wearers, gear_rows, bank_rows=bank_rows,
                                   keep_names=gearroutingread.KEEPS)
+        # A PIECE IN THE GUILD BANK IS TAKEN OUT BY A MEMBER (#2504): the guild
+        # bank pass, which owns the walk to the vault and its town slot lease,
+        # reads these on its next turn.
+        self._gear_bank_routes = await self._gear_bank_requests(
+            report, bank_rows, wearers)
         if not report.routes:
             log.info("gear routing: no routes this pass")
             return
@@ -13860,6 +13865,33 @@ class Bridge(discord.Client):
         log.info("gear routing: %s", gearroutingexec.summary(result))
         if GEAR_ROUTING_WALKS:
             await self._gear_routing_walks(result, world)
+
+    async def _gear_bank_requests(self, report, bank_rows, wearers) -> tuple:
+        """(clock, ((route, tab, guild), ...), name -> guild) for the report's
+        vault pieces, less those an operator hold stands the wearer's family
+        down for; the guild bank pass takes them out (#2504)."""
+        routes = gearroutingexec.bank_routes(report, bank_rows)
+        guilds = {str(w.get("name") or ""): str(w.get("guild") or "")
+                  for w in wearers}
+        if routes:
+            rows = await asyncio.to_thread(_roster_cohort_rows)
+            family_of = {str(r.get("name") or ""): str(r.get("family") or "")
+                         for r in rows}
+            stood = await self._operator_held(
+                {family_of[r.wearer] for r, _t, _g in routes
+                 if family_of.get(r.wearer)}, "gear routing")
+            routes = tuple(x for x in routes
+                           if family_of.get(x[0].wearer) not in stood)
+        return (time.monotonic(), routes, guilds)
+
+    def _gear_bank_for(self, names) -> tuple:
+        """The fresh vault routes of the guild `names` belong to: the routing
+        pass's last read, no older than GEAR_BANK_ROUTES_SECONDS."""
+        stamp, routes, guilds = getattr(self, "_gear_bank_routes", (0.0, (), {}))
+        if time.monotonic() - stamp > GEAR_BANK_ROUTES_SECONDS:
+            return ()
+        mine = {guilds.get(str(n)) for n in names} - {None, ""}
+        return tuple(x for x in routes if x[2] in mine)
 
     async def _gear_routing_walks(self, result, world) -> None:
         """Walk the holders of waiting routes to a mailbox (#2503).
@@ -17771,7 +17803,8 @@ class Bridge(discord.Client):
         # stacks of linen the forecast lists; nothing could take them out, so
         # every new keeper went to a personal bank instead. They ride the same
         # walk and the same per-member range gate as the deposits.
-        withdrawals = await asyncio.to_thread(_plan_guild_withdrawals, names)
+        withdrawals = await asyncio.to_thread(
+            _plan_guild_withdrawals, names, self._gear_bank_for(names))
         # THE GUILD FUND NEEDS THE VAULT TOO (guildfund.py): the master walks
         # there to withdraw what it posts to the members.
         fund = sum(getattr(self, "_fund_wants", {}).get(n, 0) for n in names)
@@ -18322,6 +18355,10 @@ class Bridge(discord.Client):
                     m.name,
                     qid,
                 )
+            for qid in questers.retry_take_refusals(m.name, held, tried):
+                held.pop(qid)
+                log.info("questers: %s asks again for quest %d, whose take was "
+                         "refused and has no refusal left on record", m.name, qid)
             known = questers.known_broken(m.name, held, ledger)
             plan = questers.plan(cat, m, self._quester_clock, now, known, tried,
                                  self._quester_last.get(m.name, 0), crossings)
@@ -19740,8 +19777,6 @@ class Bridge(discord.Client):
         pets = await self._job_pet_offers(members, facts["recent"])
         # A carried weapon that waits on a weapon skill (#793).
         weapons = await self._job_weapon_offers(members, facts["recent"])
-        # A mount for a member with riding and none (#779).
-        mounts = await asyncio.to_thread(_fetch_mount_facts, members)
         mail = await asyncio.to_thread(_job_mail_commands, members)
         pvp = await self._job_pvp_moves(members, facts["recent"], busy)
         # The level step is a spawn walk too (guildlevel.py).
@@ -19751,9 +19786,12 @@ class Bridge(discord.Client):
         census = guildlevel.census(members, leveling)
         if census:
             log.info("guild jobs: %s", census)
-        # THE ROSTER FAMILY'S CLASS STEP, BETWEEN RUNS (#2336).
+        # THE ROSTER FAMILY'S CLASS STEP, BETWEEN RUNS (#2336), PLUS RIDING MOUNTS (#2642).
         family_state = await asyncio.to_thread(_family_class_state, facts)
         family_members, family_class_holds = family_state
+        # A mount for a member with riding and none (#779, #2642).
+        mounts = await asyncio.to_thread(
+            _fetch_mount_facts, list(members) + list(family_members))
         family_danger = await asyncio.to_thread(
             _family_danger, family_members, facts.get("class_book"), facts["recent"])
         # THE PLAN RUNS ON THE EVENT LOOP (#833): it mutates the hunt clock and
@@ -32811,7 +32849,7 @@ def _withdrawn_for_sale_routes(names: list) -> dict:
             for row in _fetch_withdrawn_for_sale(names)}
 
 
-def _plan_guild_withdrawals(names: list) -> tuple:
+def _plan_guild_withdrawals(names: list, gear_routes=()) -> tuple:
     """bankforecast.plan_withdrawals over the guild's live facts; blocking.
 
     Who may take what from which tab is the members' ranks' (guild_bank_right
@@ -32826,7 +32864,10 @@ def _plan_guild_withdrawals(names: list) -> tuple:
     plans = _craft_plans_of(names)
     crafting = any(s.source == reagentplan.GUILD_BANK
                    for p in plans for s in p.shorts)
-    if not selling and not crafting:
+    # THE VAULT'S VENDOR AND GIVE DECISIONS ARE CARRIED OUT TOO (#2602).
+    clearing = any(d.action in (bankforecast.VENDOR, bankforecast.GIVE)
+                   for d in forecast.decisions())
+    if not selling and not crafting and not clearing and not gear_routes:
         return ()
     try:
         free = _fetch_free_slots(names)
@@ -32844,10 +32885,21 @@ def _plan_guild_withdrawals(names: list) -> tuple:
             plans, _fetch_vault_stacks(names, entries), takers)
         for note in notes:
             log.info("guild bank: %s", note)
-    if not selling:
-        return for_craft
     pending = frozenset(int(row["entry"]) for row in _fetch_withdrawn_for_sale(names))
-    return for_craft + bankforecast.plan_withdrawals(forecast, takers, pending=pending)
+    placed = for_craft
+    if gear_routes:
+        # A routed gear piece leaves the vault first (#2504): it is somebody's
+        # upgrade, not surplus. A held family is already out of the routes.
+        for_gear, notes = gearroutingexec.bank_withdrawals(
+            gear_routes, takers, kept=_KEEP.now(), planned=placed)
+        for note in notes:
+            log.info("guild bank: %s", note)
+        placed += for_gear
+    if selling:
+        placed += bankforecast.plan_withdrawals(
+            forecast, takers, pending=pending, planned=placed)
+    return placed + bankforecast.plan_surplus_withdrawals(
+        forecast, takers, planned=placed, pending=pending)
 
 
 def _clearance_sales(routes) -> tuple:
@@ -34343,6 +34395,9 @@ GUILD_ROUTE_MAILBOX_CHECKS = int(os.environ.get("GUILD_ROUTE_MAILBOX_CHECKS", "2
 # The most hand-over rows the gear routing pass writes in one cycle (#2136);
 # 0 writes none, and every route is still decided and logged.
 GEAR_ROUTING_PER_PASS = int(os.environ.get("GEAR_ROUTING_PER_PASS", "10"))
+# How old the routing pass's vault routes may be when the guild bank pass
+# reads them (#2504): a few routing cycles, so a piece already gone is not asked for.
+GEAR_BANK_ROUTES_SECONDS = 1800.0
 # THE WALKS A WAITING GEAR ROUTE ASKS FOR (#2503). Its own budget, because the
 # guild route pass spends guildroute.MAIL_RUNS_PER_DAY (6) and a 341-route
 # report would use all of it. Off switch: GEAR_ROUTING_WALKS=0.
@@ -37684,6 +37739,73 @@ def _bank_role_routes(names: list) -> dict:
     )
 
 
+# WHAT THE ITEM PLAN SENDS AWAY IS NOT BANKED (#2604), READ ONCE A MINUTE OR
+# TWO PER FAMILY: two passes ask (the banker's and the vault's), and the plan
+# moves only as bags do.
+BANK_LEAVES_SECONDS = 120.0
+_BANK_LEAVES_CACHE: dict = {}
+
+
+def _banked_rows(names: list) -> list:
+    """The bank-side rows of `_fetch_bank_items`, bags and all; blocking."""
+    rows = _fetch_bank_items(names)
+    held = {h.guid for m in bank.members_from_rows(rows, names)
+            for h in m.banked if h.container_slots <= 0}
+    return [r for r in rows if int(r["item_guid"]) in held]
+
+
+def _bank_plan_leaves(names: list) -> tuple:
+    """(item guid -> why, unread) for the stacks the item plan sends elsewhere.
+
+    The bank pass and the item plan used to answer "does this stack belong in
+    a bank" separately and disagree (306 recipe and book stacks, 29 gem stacks
+    and about 70 gear stacks sat in banks on the keeper rule's word while the
+    plan sold, gave or listed them). The plan is the one answer. Only the
+    routes something carries out count (`itemplan_shadow.carried_out_routes`),
+    so with every executor off this returns ({}, False) and the keeper rule
+    stands as before. A read or plan that fails returns ({}, True): the bank
+    stores nothing new on the keeper rule's word. Blocking.
+    """
+    routes = itemplan_shadow.carried_out_routes()
+    key = tuple(sorted(str(n) for n in names or ()))
+    if not routes or not key:
+        return {}, False
+    now = time.monotonic()
+    hit = _BANK_LEAVES_CACHE.get(key)
+    if hit is not None and now - hit[0] < BANK_LEAVES_SECONDS and hit[1] == routes:
+        return hit[2], hit[3]
+    try:
+        rows = _fetch_vendor_items(list(key))
+        free_slots = _fetch_free_slots(list(key))
+        gear_rows = _fetch_surplus_gear(list(key))
+        worn_rows = _fetch_family_equipped(list(key))
+        family = key[0]
+        banked_rows = (
+            _banked_rows(list(key)) if itemplan.SELL_VENDOR in routes else [])
+        extras = _itemplan_reads(
+            list(key), family, rows + banked_rows, gear_rows, worn_rows)
+        report = itemplan_shadow.shadow(
+            list(key), family, rows, free_slots, gear_rows=gear_rows,
+            worn_rows=worn_rows, extras=extras)
+        stacks = itemplan_shadow.build_stacks(
+            rows, gear_rows, extras.templates, extras.instance_soulbound)
+        leaves = itemplan_shadow.leaving(
+            report.plan, list(zip(stacks, rows, strict=True)), routes, key)
+        if banked_rows:
+            # A BANKED STACK THE PLAN SELLS IS FETCHED OUT TO BE SOLD (#2603).
+            banked, pairs = itemplan_shadow.banked_plan(
+                list(key), family, banked_rows, rows, free_slots, extras,
+                gear_rows=gear_rows, worn_rows=worn_rows)
+            leaves.update(itemplan_shadow.sold_from_bank(banked, pairs))
+        unread = False
+    except Exception:
+        log.exception("bank: the item plan could not be read; nothing new is "
+                      "stored on the keeper rule's word this pass")
+        leaves, unread = {}, True
+    _BANK_LEAVES_CACHE[key] = (now, routes, leaves, unread)
+    return leaves, unread
+
+
 def _plan_bank(names: list) -> "bank.Plan":
     """bank.plan over the family's rows, with the keeper rule switched on.
 
@@ -37695,6 +37817,7 @@ def _plan_bank(names: list) -> "bank.Plan":
     """
     rows = _fetch_bank_items(names)
     held = _fetch_trade_skills(names)
+    plan_leaves, plan_unread = _bank_plan_leaves(names)
     # A recipe the designated crafters route to somebody stays in the bags
     # for the hand-off, and comes back out of the bank for it (#248).
     storage = bank.storage_from(
@@ -37709,6 +37832,9 @@ def _plan_bank(names: list) -> "bank.Plan":
         over_target=_bank_forecast(names).over_target,
         # A REAGENT THE CRAFTER'S OWN ERRAND IS SHORT OF COMES OUT (#774).
         craft_wants=reagentplan.bank_wants(_craft_plans_of(names)),
+        dropped_second_sets=_bank_dropped_second_sets(names),
+        # WHAT THE ITEM PLAN SELLS, GIVES OR LISTS IS NOT BANKED (#2604).
+        plan_leaves=plan_leaves, plan_unread=plan_unread,
     )
     # WHILE A CAMPAIGN WAITS, BAGS ARE KEPT AT RUN ROOM: a member short of
     # the resume floor puts its trade goods down, and nothing is fetched back
@@ -37793,33 +37919,43 @@ def _bank_spare(names: list, fresh: bool = False) -> frozenset:
         return frozenset()
 
 
+def _bank_dropped_second_sets(names: list, fresh: bool = False) -> frozenset:
+    """Guids of dropped second-set gear from seat role locking (#2606); blocking."""
+    try:
+        return _bank_policy_read(names, fresh)[2]
+    except Exception:
+        log.exception("bank policy: dropped second sets unreadable; none are named")
+        return frozenset()
+
+
 def _bank_policy_read(names: list, fresh: bool = False) -> tuple:
-    """(guid -> Placement, spare guids) for this family, cached; blocking."""
+    """(guid -> Placement, spare guids, dropped second-set guids), cached."""
     key = tuple(sorted(str(n) for n in names or ()))
     if not key:
-        return {}, frozenset()
+        return {}, frozenset(), frozenset()
     now = time.monotonic()
     hit = _BANK_POLICY_CACHE.get(key)
     if not fresh and hit is not None and now - hit[0] < BANK_POLICY_SECONDS:
-        return hit[1], hit[2]
+        return hit[1], hit[2], hit[3]
     with _connect() as conn, conn.cursor() as cur:
         try:
             facts = bankpolicy.read(
                 cur, list(key), reservations=_keep_reservations(cur, key))
             placed = bankpolicy.place(facts)
             spare = bankpolicy.redundant(facts)
+            dropped = bankpolicy.dropped_second_sets(facts, placed)
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning("bank policy: the facts it reads are missing on "
                             "this world image; it keeps nothing")
-                placed, spare = {}, frozenset()
+                placed, spare, dropped = {}, frozenset(), frozenset()
             else:
                 raise
-    _BANK_POLICY_CACHE[key] = (now, placed, spare)
+    _BANK_POLICY_CACHE[key] = (now, placed, spare, dropped)
     _log_changed("bank policy", ["%s's %s -> %s: %s" % (p.holder, p.item, p.where, p.why)
                                  for p in placed.values()], key)
     _log_changed("bank policy: spare copy", [str(g) for g in sorted(spare)], key)
-    return placed, spare
+    return placed, spare, dropped
 
 
 def _kept_with_bank_policy(cohort=None):
@@ -38946,7 +39082,9 @@ _FARM_ITEM_CREATURE_SQL = (
     "FROM acore_world.creature_loot_template lt "
     "JOIN acore_world.creature_template ct ON ct.lootid = lt.Entry "
     "JOIN acore_world.creature c ON c.id = ct.entry "
-    "WHERE lt.Item = %s AND lt.Reference = 0 AND lt.Chance >= %s "
+    "LEFT JOIN acore_world.reference_loot_template rt ON rt.Entry = lt.Reference "
+    "WHERE ((lt.Reference = 0 AND lt.Item = %s) "
+    "OR (lt.Reference > 0 AND rt.Item = %s)) AND lt.Chance >= %s "
     "AND ct.maxlevel BETWEEN %s AND %s AND ct.`rank` = 0 AND ct.npcflag = 0 "
     "AND c.map = %s "
     "ORDER BY POW(c.position_x - %s, 2) + POW(c.position_y - %s, 2) "
@@ -39053,7 +39191,7 @@ def _farm_item_creatures(item: int, leader_at, levels) -> list:
     here = int(leader_at["map_id"])
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(_FARM_ITEM_CREATURE_SQL,
-                    (int(item), farmjob.KILL_MIN_CHANCE, low, high, here,
+                    (int(item), int(item), farmjob.KILL_MIN_CHANCE, low, high, here,
                      float(leader_at.get("pos_x") or 0.0),
                      float(leader_at.get("pos_y") or 0.0)))
         rows = cur.fetchall()
@@ -39931,7 +40069,14 @@ def _quester_catalogue():
         starts = _job_read(cur, "quester quest starters", questers.STARTERS_SQL.format(quests=qids))
         ends = _job_read(cur, "quester quest enders", questers.ENDERS_SQL.format(quests=qids))
         links = _job_read(cur, "quester quest links", questers.LINKS_SQL)
-    _QUESTER_CATALOGUE = questers.catalogue(quests, givers, spawns, loot, starts, ends, links)
+        # An item no creature drops may sit in a chest: read the chests that
+        # hold a required item and where they stand, so the questers open them.
+        chests = _class_rows(cur, "quester quest chests", classquest.CHEST_SQL, "items", items)
+        objects = _class_rows(cur, "quester quest chest spawns",
+                              classquest.OBJECT_SPAWNS_SQL, "entries",
+                              {int(r["entry"]) for r in chests})
+    _QUESTER_CATALOGUE = questers.catalogue(quests, givers, spawns, loot, starts, ends,
+                                            links, chests, objects)
     log.info("questers: read %d quest(s) a quester may take from the world database",
              len(_QUESTER_CATALOGUE.facts))
     return _QUESTER_CATALOGUE

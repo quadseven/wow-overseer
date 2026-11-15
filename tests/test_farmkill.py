@@ -163,6 +163,15 @@ class TheSurveyIsTheWorldsOwnLootTable(unittest.TestCase):
             self.assertIn(part, text)
         self.assertIn("Reference = 0", text)
 
+    def test_the_sql_also_reads_one_hop_of_reference_loot(self):
+        text = self.SQL.group(1)
+        self.assertIn("reference_loot_template", text)
+        self.assertIn("lt.Reference > 0 AND rt.Item = %s", text)
+        self.assertIn("lt.Reference = 0 AND lt.Item = %s", text)
+        # Two item marks now: the direct row and the reference row.
+        call = BRIDGE.split("def _farm_item_creatures(", 1)[1][:2500]
+        self.assertIn("(int(item), int(item), farmjob.KILL_MIN_CHANCE", call)
+
     def test_the_read_is_bounded_and_near_the_leader(self):
         text = self.SQL.group(1)
         self.assertIn("LIMIT", text)

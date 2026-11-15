@@ -430,6 +430,7 @@ class TheServer(unittest.TestCase):
                 "/api/decree",
                 "/api/director",
                 "/api/frame",
+                "/api/spectate",
                 "/api/watch",
             ],
         )

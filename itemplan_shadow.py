@@ -43,6 +43,7 @@ from typing import Mapping
 import bag_pressure
 import itemplan
 import itemplan_data
+import itemplan_vendor
 
 log = logging.getLogger("wow-overseer.itemplan")
 
@@ -115,6 +116,23 @@ def auction_enabled(environ=None) -> bool:
     return raw in ("on", "1", "true", "yes")
 
 
+def carried_out_routes(environ=None) -> frozenset:
+    """The plan routes something in this process actually carries out.
+
+    SELL_VENDOR when ITEMPLAN_SELL_VENDOR is on, GIVE when ITEMPLAN_GIVE is,
+    AUCTION when ITEMPLAN_AUCTION is. A route with no executor is only a
+    log line, and the bank pass must not give up a stack on its word.
+    """
+    out = set()
+    if itemplan_vendor.enabled(environ):
+        out.add(itemplan.SELL_VENDOR)
+    if give_enabled(environ):
+        out.add(itemplan.GIVE)
+    if auction_enabled(environ):
+        out.add(itemplan.AUCTION)
+    return frozenset(out)
+
+
 @dataclass(frozen=True)
 class Extras:
     """Facts the plan can use that the economy pass's rows do not hold (#1973).
@@ -183,8 +201,14 @@ def characters_from_worn(worn_rows) -> dict:
     return out
 
 
-def build_stacks(rows, gear_rows=(), templates=None, instance_soulbound=None) -> list:
-    """One itemplan.Stack per carried row, in row order within the holder.
+def build_stacks(
+    rows,
+    gear_rows=(),
+    templates=None,
+    instance_soulbound=None,
+    loc=itemplan.CARRIED_BAG,
+) -> list:
+    """One itemplan.Stack per carried row (`loc` BANK for banked ones), in row order within the holder.
 
     The surplus gear row (by item guid) wins; `templates` (by entry) fills in
     what it lacks, so a bind-on-pickup recipe reads as bound.
@@ -219,7 +243,7 @@ def build_stacks(rows, gear_rows=(), templates=None, instance_soulbound=None) ->
         out.append(
             itemplan.Stack(
                 holder=holder,
-                loc=itemplan.CARRIED_BAG,
+                loc=loc,
                 entry=_int(row.get("entry")),
                 name=str(row.get("name") or ""),
                 item_class=_int(
@@ -244,6 +268,138 @@ def build_stacks(rows, gear_rows=(), templates=None, instance_soulbound=None) ->
                 quest_needed=(bool(row["quest_item"]) if "quest_item" in row else None),
             )
         )
+    return out
+
+
+def _context(extras: Extras, verdicts) -> itemplan.Context:
+    return itemplan.Context(
+        open_quest_items=extras.open_quest_items,
+        gear_verdict=verdicts or {},
+        market=extras.market or {},
+        guild_free=extras.guild_free or {},
+        guild_crafters=extras.guild_crafters or (),
+        fire_gear=extras.fire_gear,
+        failed_listings=extras.failed_listings or {},
+        banker_free=extras.banker_free or {},
+    )
+
+
+def banked_plan(
+    names,
+    family,
+    banked_rows,
+    carried_rows,
+    free_slots,
+    extras,
+    gear_rows=(),
+    worn_rows=(),
+):
+    """(plan, (stack, row) pairs) for the stacks sitting in the banks (#2603).
+
+    Planned on their own, beside the carried plan, so the carried decisions
+    do not move: each member's bank capacity is its free room plus what it
+    holds, so a stack that stays is never refused for lack of the slot it is
+    already in. A banked stack that would be carried stays banked
+    (`itemplan._banked_stays`); only a route out of the bank matters here.
+    """
+    stacks = build_stacks(
+        banked_rows,
+        gear_rows,
+        extras.templates,
+        extras.instance_soulbound,
+        loc=itemplan.BANK,
+    )
+    carried = build_stacks(
+        carried_rows, gear_rows, extras.templates, extras.instance_soulbound
+    )
+    characters = characters_from_worn(worn_rows)
+    held = {}
+    for stack in stacks:
+        held[stack.holder] = held.get(stack.holder, 0) + 1
+    room = {
+        name: _int((extras.bank_free or {}).get(name)) + held.get(name, 0)
+        for name in names
+    }
+    members = build_members(
+        names,
+        family,
+        carried,
+        free_slots,
+        characters,
+        room if extras.bank_free is not None else None,
+    )
+    ctx = _context(extras, _verdicts(extras, stacks, characters))
+    plan_ = itemplan.plan(stacks, members, ctx)
+    return plan_, list(zip(stacks, banked_rows, strict=True))
+
+
+# Classes whose banked stacks the sale fetch leaves to their own passes: gear
+# (the bank policy's spare copies), recipes (their own route) and bags.
+_FETCH_SKIPS = frozenset(
+    {itemplan.C_WEAPON, itemplan.C_ARMOR, itemplan.C_RECIPE, itemplan.C_CONTAINER}
+)
+
+
+def sold_from_bank(plan_, stack_rows) -> dict:
+    """item guid -> why, for banked stacks the plan sells to a vendor now.
+
+    Only a first-choice SELL_VENDOR the vendor route would carry out without
+    a release: placed, not a `confirm` row (1 gold or more, or quality 3 or
+    better), not a bag or tool, not gear and not a recipe.
+    """
+    by_key = {stack.key: (stack, row) for stack, row in stack_rows}
+    out: dict = {}
+    for decision in plan_.decisions:
+        if decision.route != itemplan.SELL_VENDOR or decision.confirm:
+            continue
+        if decision.stuck or decision.reason.startswith(itemplan.NO_ROOM):
+            continue
+        stack, row = by_key.get(decision.key, (None, None))
+        if stack is None or stack.item_class in _FETCH_SKIPS:
+            continue
+        if itemplan_vendor.held_reason(decision, stack, row):
+            continue
+        if not itemplan_vendor.chosen_first(decision):
+            continue
+        guid = _int(row.get("item_guid"))
+        if guid > 0:
+            out[guid] = "the item plan sells %s to a vendor (%s)" % (
+                decision.name,
+                decision.reason,
+            )
+    return out
+
+
+def leaving(plan_, stack_rows, routes, family_names=()) -> dict:
+    """item guid -> why, for every stack the plan sends somewhere but a bank.
+
+    `stack_rows` is (stack, row) pairs in the shape `build_stacks` produces,
+    `routes` the routes something carries out (`carried_out_routes`). A
+    decision counts only when it is the plan's first choice, placed (no
+    `NO_ROOM`, not stuck), and for GIVE when the taker is one of
+    `family_names`, the only gifts the executor writes. The bank pass reads
+    this so a stack the plan sells, gives or lists is not also banked.
+    """
+    rows_by_key = {stack.key: row for stack, row in stack_rows}
+    family = set(family_names or ())
+    out: dict = {}
+    for decision in plan_.decisions:
+        if decision.route not in routes or decision.stuck:
+            continue
+        if decision.reason.startswith(itemplan.NO_ROOM):
+            continue
+        if not itemplan_vendor.chosen_first(decision):
+            continue
+        if decision.route == itemplan.GIVE and decision.target not in family:
+            continue
+        row = rows_by_key.get(decision.key)
+        guid = _int((row or {}).get("item_guid"))
+        if guid > 0:
+            out[guid] = "the item plan routes %s to %s (%s)" % (
+                decision.name,
+                decision.route,
+                decision.reason,
+            )
     return out
 
 
@@ -470,17 +626,7 @@ def shadow(
         names, family, stacks, free_slots, characters, extras.bank_free
     )
     verdicts = _verdicts(extras, stacks, characters)
-    quest = extras.open_quest_items
-    ctx = itemplan.Context(
-        open_quest_items=quest,
-        gear_verdict=verdicts or {},
-        market=extras.market or {},
-        guild_free=extras.guild_free or {},
-        guild_crafters=extras.guild_crafters or (),
-        fire_gear=extras.fire_gear,
-        failed_listings=extras.failed_listings or {},
-        banker_free=extras.banker_free or {},
-    )
+    ctx = _context(extras, verdicts)
     plan_ = itemplan.plan(stacks, members, ctx)
     rows_by_key = {s.key: r for s, r in zip(stacks, rows, strict=True)}
     opinions = _opinions(rows, sales, keep_names, bank_keeps, clear)

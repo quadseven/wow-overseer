@@ -309,6 +309,20 @@ api.load("/api/v2/operator").then((e) => {
   drawShell();
 });
 
+// ---- realm state banner (realmstate.js): whatever is on screen -------------------
+// Read on its own pace, not with the view's reads: a realm that is down is
+// news on every page. A failed read leaves the last answer on screen.
+const REALM_STATE_PATH = "/api/v2/realm-status";
+function refreshRealmState() {
+  if (document.hidden) return;
+  api.load(REALM_STATE_PATH).then((e) => {
+    shell.setRealmState(e.data);
+    shell.updateRealmState(root);
+  });
+}
+refreshRealmState();
+window.setInterval(refreshRealmState, 30000);
+
 // ---- nav badges (badges.js): refreshed every minute, whatever is on screen --
 function refreshBadges() {
   if (document.hidden) return;
