@@ -18975,7 +18975,7 @@ class Bridge(discord.Client):
                    if candidates else {})
         walks, notes = classtrain.plan(
             trainees, walkers, classtrain.recent_walkers(recent), busy,
-            cap=self._guild_walk_cap())
+            cap=self._guild_walk_cap(), stranded=classtrain.stranded(recent))
         _log_capped("guild training", notes)
         started = 0
         for walk in walks:
@@ -34665,8 +34665,11 @@ def _guild_train_rows() -> list:
             cur, "class trainer walks",
             "SELECT target_name, source, status, detail, result, "
             "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
-            "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY",
-            (classtrain.SOURCE + ":%",))
+            "WHERE source LIKE %s AND (created_at > NOW() - INTERVAL 1 DAY "
+            "OR (status = 'error' AND created_at > NOW() - INTERVAL %s DAY "
+            "AND result LIKE %s))",
+            (classtrain.SOURCE + ":%", classtrain.STRANDED_READ_DAYS,
+             "%" + classtrain.NO_TRAINER_REASON + "%"))
 
 
 # THE GUILD FUND'S LEDGER: every row it ever wrote, which is a handful a day.
