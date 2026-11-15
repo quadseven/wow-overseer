@@ -51,7 +51,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
-import bag_pressure
 import disposition
 import gearscore
 import goals
@@ -833,7 +832,13 @@ ITEMS_SQL = (
     "(it.spellid_1 > 0 OR it.spellid_2 > 0) AS has_effect, "
     # An open quest needs it (bag_pressure.QUEST_NEEDED_SQL's own test): the
     # quest rule's, never this policy's.
-    "(ii.itemEntry IN (" + bag_pressure.DARKMOON_ENTRIES_SQL + ") OR "
+    "(ii.itemEntry IN ("
+    "19227, 19228, 19230, 19231, 19232, 19233, 19234, 19235, "
+    "19236, 19257, 19258, 19259, 19260, 19261, 19262, 19263, "
+    "19264, 19265, 19267, 19268, 19269, 19270, 19271, 19272, "
+    "19273, 19274, 19275, 19276, 19277, 19278, 19279, 19280, "
+    "19281, 19282, 19283, 19284"
+    ") OR "
     "EXISTS (SELECT 1 FROM character_queststatus qs "
     "  JOIN acore_world.quest_template qt ON qt.ID = qs.quest "
     "  WHERE qs.guid = ci.guid AND qs.status <> 0 AND ii.itemEntry IN ("

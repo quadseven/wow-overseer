@@ -43,6 +43,12 @@ class TheSql(unittest.TestCase):
             bag_pressure.STACK_QUEST_NEEDED_SQL.count(")"),
         )
 
+    def test_both_sql_lists_are_exactly_the_entry_set(self):
+        for sql in (bag_pressure.STACK_QUEST_NEEDED_SQL, bankpolicy.ITEMS_SQL):
+            body = sql.split("ii.itemEntry IN (", 1)[1].split(")", 1)[0]
+            ids = {int(x) for x in body.replace(" ", "").split(",")}
+            self.assertEqual(ids, set(bag_pressure.DARKMOON_ENTRIES))
+
     def test_the_bank_policy_copy_names_every_entry(self):
         for entry in bag_pressure.DARKMOON_ENTRIES:
             self.assertIn(str(entry), bankpolicy.ITEMS_SQL)

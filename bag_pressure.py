@@ -78,10 +78,14 @@ DARKMOON_ENTRIES = frozenset(
     | set(range(19257, 19266))  # Warlords: deck, Ace, Two to Eight
     | set(range(19267, 19285)) - {19266}  # Elementals and Portals
 )
-DARKMOON_ENTRIES_SQL = ", ".join(str(e) for e in sorted(DARKMOON_ENTRIES))
-
 STACK_QUEST_NEEDED_SQL = (
-    "(ii.itemEntry IN (" + DARKMOON_ENTRIES_SQL + ") OR "  # noqa: S608 - int ids
+    "(ii.itemEntry IN ("
+    "19227, 19228, 19230, 19231, 19232, 19233, 19234, 19235, "
+    "19236, 19257, 19258, 19259, 19260, 19261, 19262, 19263, "
+    "19264, 19265, 19267, 19268, 19269, 19270, 19271, 19272, "
+    "19273, 19274, 19275, 19276, 19277, 19278, 19279, 19280, "
+    "19281, 19282, 19283, 19284"
+    ") OR "
     "(it.startquest > 0 AND NOT EXISTS ("
     "SELECT 1 FROM character_queststatus_rewarded qr "
     "WHERE qr.guid = ci.guid AND qr.quest = it.startquest)) OR EXISTS ("
