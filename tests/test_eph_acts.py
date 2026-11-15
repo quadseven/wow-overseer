@@ -76,6 +76,22 @@ class ActCommandsTest(unittest.TestCase):
             },
         )
 
+    def test_a_missing_or_malformed_decree_is_a_clean_error(self):
+        import contextlib
+        import io
+        import tempfile
+
+        from ephemeral.__main__ import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = pathlib.Path(tmp) / "bad.yaml"
+            bad.write_text("a: 1" + chr(10) + "a: 2" + chr(10), encoding="utf-8")
+            for path in (str(bad), str(pathlib.Path(tmp) / "missing.yaml")):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    self.assertEqual(main(["acts", path]), 2)
+                self.assertIn("error:", out.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

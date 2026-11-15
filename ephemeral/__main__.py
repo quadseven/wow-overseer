@@ -40,8 +40,13 @@ def _lint(args):
 
 
 def _acts(args):
-    decree = loads(pathlib.Path(args.decree).read_text(encoding="utf-8"))
-    print(json.dumps(acts.act_commands(decree), indent=2))
+    try:
+        decree = loads(pathlib.Path(args.decree).read_text(encoding="utf-8"))
+        rows = acts.act_commands(decree)
+    except (OSError, YamlError, KeyError, TypeError) as exc:
+        print(f"error: {args.decree}: {exc}")
+        return 2
+    print(json.dumps(rows, indent=2))
     return 0
 
 
