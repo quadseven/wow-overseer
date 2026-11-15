@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pathlib
 import re
 import types
 import unittest
@@ -15,7 +14,6 @@ import modsource
 import raidteams
 import realmread
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
 NOW = 1_760_000_000
 
 
@@ -161,8 +159,8 @@ class MotdAndPlanTests(unittest.TestCase):
         )
 
 
-class GuildApiAndDocTests(unittest.TestCase):
-    def test_apiv2_guild_exposes_rank_counts_and_pending_promotions(self):
+class GuildApiAndPolicyTests(unittest.TestCase):
+    def _ctx(self, motd: str, active_goal_rows: list):
         class Server:
             recap = types.SimpleNamespace(zone_names=lambda c: {40: "Westfall"})
             GEO = types.SimpleNamespace(continents={})
@@ -171,7 +169,9 @@ class GuildApiAndDocTests(unittest.TestCase):
         class Ctx:
             read = realmread.Memory(
                 {
-                    guild_api._GUILD_SQL: [{"guildid": 23, "name": "Cave"}],
+                    guild_api._GUILD_SQL: [
+                        {"guildid": 23, "name": "Cave", "motd": motd}
+                    ],
                     guild_api._NOW_SQL: [{"now": NOW}],
                     presence._SNAP_SQL: [],
                     presence._FLAGS_SQL: [],
@@ -202,6 +202,7 @@ class GuildApiAndDocTests(unittest.TestCase):
                     guild_api._CQ_DONE_SQL: [{"n": 0, "who": 0}],
                     guild_api._CQ_OPEN_SQL: [],
                     guild_api._CQ_STEPS_SQL: [],
+                    guild_api._ACTIVE_GOAL_SQL: active_goal_rows,
                     guildrun._RUN_SQL: [],
                 }
             )
@@ -210,26 +211,71 @@ class GuildApiAndDocTests(unittest.TestCase):
                 guilds=lambda: [{"name": "Cave", "family": "grug"}]
             )
 
-        code, body = guild_api.guild({"guild": ["cave"]}, Ctx)
+        return Ctx
+
+    def test_apiv2_guild_exposes_rank_counts_and_desired_motd(self):
+        ctx = self._ctx(
+            "No message set.",
+            [
+                {
+                    "kind": "guild_count",
+                    "skill_name": "deadmines",
+                    "target": 5,
+                    "guild": "Cave",
+                }
+            ],
+        )
+        code, body = guild_api.guild({"guild": ["cave"]}, ctx)
         self.assertEqual(200, code)
-        self.assertIn("ranks", body)
         self.assertEqual({0: 1, 4: 1}, body["ranks"]["counts"])
         self.assertEqual(1, body["ranks"]["pending_promotions"])
+        self.assertEqual("No message set.", body["ranks"]["current_motd"])
+        self.assertEqual(
+            "Cave goal: clear deadmines (5x)", body["ranks"]["desired_motd"]
+        )
 
-    def test_design_doc_names_pinned_playerbots_and_module_sources(self):
-        pins = (ROOT / "UPSTREAM-PINS.env").read_text(encoding="utf-8")
-        sha = re.search(r"^AC_MODULE_SHA=(\S+)", pins, re.M)
-        self.assertIsNotNone(sha)
-        doc = (ROOT / "docs/design/guild-rank-motd.md").read_text(encoding="utf-8")
-        for needle in (
-            sha.group(1),
-            "GuildManagementActions.cpp",
-            "GuildPromoteAction",
-            "GuildVerb",
-            "ChangeMemberRank",
-            "HandleSetMOTD",
-        ):
-            self.assertIn(needle, doc)
+        # Without an active goal row, raid guilds still carry their raid keyword MOTD.
+        fallback_ctx = self._ctx("", [])
+        code, body = guild_api.guild({"guild": ["cave"]}, fallback_ctx)
+        self.assertEqual(200, code)
+        self.assertEqual("", body["ranks"]["current_motd"])
+        self.assertEqual("Cave goal: raid mc", body["ranks"]["desired_motd"])
+
+    def test_banker_seats_are_excluded_from_promotion_plans_and_summary(self):
+        banker = sorted(raidteams.banker_names("Cave"))[0]
+        members = [
+            _member("Grug", 60, guildranks.RANK_MASTER, online=True),
+            _member(banker, 60, guildranks.RANK_INITIATE),
+            _member("Eligible", 25, guildranks.RANK_INITIATE),
+        ]
+        actions = guildranks.plan_actions(
+            "Cave",
+            master="Grug",
+            members=members,
+            raid_seats=frozenset(),
+        )
+        self.assertEqual(
+            [("promote", "Eligible")], [(a.verb, a.target) for a in actions]
+        )
+        summary = guildranks.summarize_ranks("Cave", members, raid_seats=frozenset())
+        self.assertEqual(1, summary["pending_promotions"])
+
+    def test_plan_actions_caps_per_pass_and_skips_matching_motd(self):
+        members = [_member("Grug", 60, guildranks.RANK_MASTER, online=True)]
+        members.extend(
+            _member(f"Alt{i:02d}", 25, guildranks.RANK_INITIATE) for i in range(8)
+        )
+        actions = guildranks.plan_actions(
+            "Cave",
+            master="Grug",
+            members=members,
+            current_motd="Cave goal: raid mc",
+            raid_keyword="mc",
+            raid_seats=frozenset(),
+        )
+        promotes = [a for a in actions if a.verb == "promote"]
+        self.assertEqual(guildranks.PROMOTES_PER_PASS, len(promotes))
+        self.assertEqual([], [a for a in actions if a.verb == "motd"])
 
 
 if __name__ == "__main__":

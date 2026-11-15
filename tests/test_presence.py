@@ -314,6 +314,7 @@ class EveryEndpointAsks(unittest.TestCase):
             guild._CQ_DONE_SQL: [{"n": 0, "who": 0}],
             guild._CQ_OPEN_SQL: [],
             guild._CQ_STEPS_SQL: [],
+            guild._ACTIVE_GOAL_SQL: [],
             guildrun._RUN_SQL: [],
         }
         stub, calls = contrary(

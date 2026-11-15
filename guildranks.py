@@ -130,9 +130,11 @@ def motd_for_goal(
 def _goal_label(active_goal: Mapping | None, raid_keyword: str) -> str:
     if isinstance(active_goal, Mapping) and active_goal:
         kind = str(active_goal.get("kind") or "").strip()
-        instance = str(active_goal.get("instance") or "").strip()
+        instance = str(
+            active_goal.get("instance") or active_goal.get("skill_name") or ""
+        ).strip()
         target = active_goal.get("target")
-        if kind == "dungeon" and instance:
+        if kind in ("dungeon", "guild_count") and instance:
             return f"clear {instance} ({target}x)" if target else f"clear {instance}"
         if instance:
             return f"{kind} in {instance}" if kind else instance
@@ -140,6 +142,13 @@ def _goal_label(active_goal: Mapping | None, raid_keyword: str) -> str:
             return f"{kind} {target}" if target is not None else kind
     kw = str(raid_keyword or "").strip()
     return f"raid {kw}" if kw else ""
+
+
+def _excluded_names(guild_name: str, bankers: frozenset[str] | None) -> frozenset[str]:
+    """Guild banker seats keep their existing rank and bank rights."""
+    if bankers is not None:
+        return bankers
+    return frozenset(raidteams.banker_names(guild_name))
 
 
 def _master_online(members, master: str) -> bool:
@@ -153,34 +162,23 @@ def _master_online(members, master: str) -> bool:
     )
 
 
-def plan_actions(
-    guild_name: str,
-    master: str,
+def _promote_actions(
     members,
-    current_motd: str = "",
-    *,
-    active_goal: Mapping | None = None,
-    raid_keyword: str = "",
-    raid_seats: frozenset[str] | None = None,
-    pending: frozenset[str] = frozenset(),
-) -> tuple[Action, ...]:
-    """Plan bounded promotion and MOTD actions for an online guild master."""
-    if not _master_online(members, master):
-        return ()
-    seats = raid_seat_names(guild_name) if raid_seats is None else raid_seats
+    master: str,
+    seats: frozenset[str],
+    excluded: frozenset[str],
+    pending: frozenset[str],
+) -> list[Action]:
     actions: list[Action] = []
     for member in sorted(members, key=lambda m: str(m.get("name") or "")):
         name = str(member.get("name") or "")
-        if not name or name == master or name in pending:
+        if not name or name == master or name in excluded or name in pending:
             continue
-        new_rank = promotion_rank(
-            member.get("rank"),
-            int(member.get("level") or 0),
-            name in seats,
-        )
+        level = int(member.get("level") or 0)
+        new_rank = promotion_rank(member.get("rank"), level, name in seats)
         if new_rank is None:
             continue
-        why = "raid seat" if name in seats else f"level {int(member.get('level') or 0)}"
+        why = "raid seat" if name in seats else f"level {level}"
         actions.append(
             Action(
                 verb="promote",
@@ -191,6 +189,27 @@ def plan_actions(
         )
         if len(actions) >= PROMOTES_PER_PASS:
             break
+    return actions
+
+
+def plan_actions(
+    guild_name: str,
+    master: str,
+    members,
+    current_motd: str = "",
+    *,
+    active_goal: Mapping | None = None,
+    raid_keyword: str = "",
+    raid_seats: frozenset[str] | None = None,
+    bankers: frozenset[str] | None = None,
+    pending: frozenset[str] = frozenset(),
+) -> tuple[Action, ...]:
+    """Plan bounded promotion and MOTD actions for an online guild master."""
+    if not _master_online(members, master):
+        return ()
+    seats = raid_seat_names(guild_name) if raid_seats is None else raid_seats
+    excluded = _excluded_names(guild_name, bankers)
+    actions = _promote_actions(members, master, seats, excluded, pending)
 
     desired_motd = motd_for_goal(
         guild_name, active_goal=active_goal, raid_keyword=raid_keyword
@@ -219,9 +238,11 @@ def summarize_ranks(
     active_goal: Mapping | None = None,
     raid_keyword: str = "",
     raid_seats: frozenset[str] | None = None,
+    bankers: frozenset[str] | None = None,
 ) -> dict:
     """Summarize rank counts and pending promotions for /api/v2/guild."""
     seats = raid_seat_names(guild_name) if raid_seats is None else raid_seats
+    excluded = _excluded_names(guild_name, bankers)
     counts: dict[int, int] = {}
     pending_promotions = 0
     for member in members:
@@ -231,6 +252,8 @@ def summarize_ranks(
         rid = int(raw_rank)
         counts[rid] = counts.get(rid, 0) + 1
         name = str(member.get("name") or "")
+        if name in excluded:
+            continue
         if (
             promotion_rank(rid, int(member.get("level") or 0), name in seats)
             is not None
