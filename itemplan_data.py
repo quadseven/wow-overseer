@@ -48,6 +48,8 @@ ITEM_TEMPLATE_SQL = (
     "it.ItemLevel AS item_level, it.RequiredLevel AS req_level, "
     "it.RequiredSkillRank AS required_skill_rank, "
     "it.ContainerSlots AS container_slots, "
+    "it.DisenchantID AS disenchant_id, "
+    "it.RequiredDisenchantSkill AS disenchant_skill, "
     "it.armor AS armor, it.block AS block, it.dmg_min1 AS dmg_min1, "
     "it.dmg_max1 AS dmg_max1, it.delay AS delay, "
     "it.holy_res AS holy_res, it.fire_res AS fire_res, "
@@ -60,6 +62,8 @@ ITEM_TEMPLATE_SQL = (
     + " "
     "FROM acore_world.item_template it WHERE it.entry IN (%s)"
 )
+
+_DISENCHANT_FIELDS = ("disenchant_id", "disenchant_skill")
 
 _TEMPLATE_FIELDS = (
     "item_class",
@@ -128,6 +132,12 @@ def item_templates(rows) -> dict:
         if entry is None or entry <= 0 or any(v is None for v in item.values()):
             continue
         item["stats"] = gearscore.stats_from_row(row)
+        # The core's own breakdown facts (#1978). Optional: a row without them
+        # is still read, and the plan falls back to its convention.
+        for field in _DISENCHANT_FIELDS:
+            value = _int(row.get(field)) if hasattr(row, "get") else None
+            if value is not None:
+                item[field] = value
         out[entry] = item
     return out
 
@@ -332,7 +342,7 @@ _SLOTS_FOR = {
 }
 
 
-def upgrade_verdicts(worn: dict, bag_rows) -> dict:
+def upgrade_verdicts(worn: dict, bag_rows, drive=None) -> dict:
     """`itemplan.Context.gear_verdict`: {(member, entry): "wear"}.
 
     A bag piece is "wear" when its item level beats the worn item in every
@@ -342,7 +352,14 @@ def upgrade_verdicts(worn: dict, bag_rows) -> dict:
     judges a piece as not better, so a doubtful piece gets no verdict and the
     plan's other rules decide. `bag_rows` carry member, entry, inventory_type,
     item_level, req_level and level; a row missing any is skipped.
+
+    `drive` is `equipscore.drive_verdicts`' answer, {member: {entry:
+    verdict}}, for the roster members whose equips the module's gear drive
+    makes (#2381). For a member in it, the drive's rule is the authority: a
+    piece is "wear" only when the drive would put it on, and item level is not
+    asked, so a piece the drive declines is never carried for ever as R4.
     """
+    drive = drive or {}
     out: dict = {}
     for row in bag_rows or ():
         try:
@@ -353,6 +370,10 @@ def upgrade_verdicts(worn: dict, bag_rows) -> dict:
             req = int(row["req_level"])
             level = int(row["level"])
         except (KeyError, TypeError, ValueError):
+            continue
+        if member in drive:
+            if drive[member].get(entry) == "wear":
+                out[(member, entry)] = "wear"
             continue
         slots = _SLOTS_FOR.get(itype)
         if not slots or req > level:

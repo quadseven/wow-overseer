@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, Mock
 
 import craft_rhythm
 import craft_supply
+import individual
 import guildcorps
 import guildjobs
 from towntrip import Town
@@ -309,6 +310,8 @@ class SupplyPassWiring(unittest.IsolatedAsyncioTestCase):
             craft_supply=craft_supply,
             guildcorps=guildcorps,
             _names_of=lambda cohort: ["Og"],
+            individual=individual,
+            _individual_family=lambda cohort=None: None,
             _standing_jobs=lambda family: {"Og": mode},
             _standin_out=lambda: set(),
             _fetch_standing_crafts=lambda names: {},

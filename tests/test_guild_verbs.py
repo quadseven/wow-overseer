@@ -30,7 +30,9 @@ with stub_modules(pymysql=PYMYSQL):
     import guildfund
     import guildjobs
     import guildrun
+    import memberloop
     import pvpgear
+    import strayfollow
     import tabard
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -126,6 +128,8 @@ WRITERS = {
     ],
     # teamsync's "rename" and "reset" go through other kinds, not here.
     ("bridge.py", "_team_sync_once", "action.kind"): lambda: ["invite", "remove"],
+    ("bridge.py", "_stray_follow_loop", "r.command"): lambda: [strayfollow.VERB],
+    ("bridge.py", "_member_ride_once", "r.command"): lambda: [memberloop.VERB],
     # The writer itself: its callers are the rows above.
     ("bridge.py", "_insert_guild", "command"): lambda: [],
 }

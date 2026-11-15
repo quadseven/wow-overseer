@@ -77,6 +77,39 @@ Settings are environment variables. These are the ones to set first.
 | `LLM_URL`, `LLM_MODEL` | OpenAI-compatible chat endpoint. Set your own: the `LLM_URL` default is private. |
 | `WOW_STREAM_PREFIX` | Broadcast prefix for this realm. Empty means no videos. |
 
+### Holding a family for manual control
+
+To drive a family by hand, hold it with one row in `acore_characters`. The
+bridge reads the row on every pass, so no restart is needed:
+
+```sql
+INSERT INTO overseer_operator_hold (family, reason, expires_at, source)
+VALUES ('Grug', 'driving by hand', UTC_TIMESTAMP() + INTERVAL 4 HOUR, 'sql')
+ON DUPLICATE KEY UPDATE reason = VALUES(reason),
+  expires_at = VALUES(expires_at), source = VALUES(source);
+-- release it
+DELETE FROM overseer_operator_hold WHERE family = 'Grug';
+```
+
+`family` is the roster's `family` value, or `*` for every family.
+`expires_at` is UTC; NULL holds until the row is deleted.
+
+While a family is held, these write nothing for it and log
+`held by operator: <reason>` at most every ten minutes:
+
+- the campaign queue pass: the planner, the attunement step, the Upper Spire
+  pass, the trade turn, dungeon quests, town first and the queue step itself
+  (a queued entry is not stepped);
+- the council (no scene and no goal, including the one after a restart);
+- the activity choice;
+- the leveling route.
+
+The bag, bank, mail, vendor and craft passes keep working inside the job the
+family has. A hold undoes nothing already written, so set the job you want
+from the console. `CAMPAIGN_PLANNER=off`, `ATTUNEMENT_STEP=off` and
+`JEV_MODE_ACTIVITY_CHOICE=off` still switch their writer off for every family
+from the next start. Either a switch or a hold is enough to stop a writer.
+
 ## Status
 
 Last checked 2026-11-07. The bridge and site run as two deployments in the `wow-dev` namespace, the only realm left. The site is reachable only on the operator's private network, through a reverse proxy.

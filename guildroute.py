@@ -526,9 +526,10 @@ def _cannot_walk(walker, holder, max_yards) -> str:
         return "%s is %s" % (holder, walker.unwalkable)
     if walker.in_combat:
         return "%s is in combat" % holder
-    if classic.is_expansion_map(walker.map_id):
-        return classic.outside_note(holder, walker.map_id)
-    if walker.map_id not in dungeonplan.CONTINENT_MAPS:
+    if classic.stands_outside(walker):
+        return classic.outside_note_for(holder, walker)
+    starting = classic.is_starting_land(walker.map_id, getattr(walker, "zone_id", None))
+    if walker.map_id not in dungeonplan.CONTINENT_MAPS and not starting:
         return "%s is inside an instance" % holder
     if not walker.aim or walker.yards is None:
         return "no mailbox can be walked to: %s" % (walker.no_aim or "none on its map")

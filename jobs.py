@@ -234,9 +234,50 @@ def is_dungeon_job(job) -> bool:
 # module keeps a leader with no errand and a cut-off follower with an empty
 # column off `new rpg` for it, so the family stays where it is and only town
 # errands walk the leader.
+#
+# `farm` JOINED THIS SET at #2417, and like `train` its drive is a Python one:
+# farmjob.py decides and bridge._farm_once walks the leader from one surveyed
+# node spawn to the next. The order names its material in the column the way a
+# dungeon job names its portal (`farm:<item entry>`, `farm:mining`,
+# `farm:herbalism`), and mod-overseer holds a farming family where its aims
+# put it between hops and accepts the named form (mod-overseer#1521). A bare
+# `farm` names nothing and the bridge refuses it (`_job_not_ready`).
 IMPLEMENTED = frozenset(
-    {"quest", "dungeon", "train", "craft", "raid prep", "fish", "town run"}
+    {"quest", "dungeon", "train", "craft", "raid prep", "fish", "town run", "farm"}
 )
+
+# The job a farm order writes: `farm:<item entry>` or `farm:<mining|herbalism>`
+# (#2417). The suffix rules are farmjob.order_of's; they are repeated in
+# `farm_order` below because this module imports nothing of the bridge's.
+FARM_PREFIX = "farm:"
+FARM_SKILLS = ("mining", "herbalism")
+
+# What a bare `farm` order is told, by the bridge and by the site alike: it
+# names nothing, and farmjob would end it on its first pass.
+FARM_NAMES_NOTHING = (
+    "Refusing to set job=farm: name what to farm. Use farm:<item entry> "
+    "(farm:13463 is Dreamfoil) or farm:mining / farm:herbalism."
+)
+
+
+def farm_order(text) -> str | None:
+    """`text` as a valid named farm job, or None."""
+    cleaned = str(text or "").strip().lower()
+    if not cleaned.startswith(FARM_PREFIX):
+        return None
+    what = cleaned[len(FARM_PREFIX) :].strip()
+    if what in FARM_SKILLS:
+        return FARM_PREFIX + what
+    if what.isdigit() and not what.startswith("0") and len(what) <= 9:
+        return FARM_PREFIX + what
+    return None
+
+
+def is_farm_job(job) -> bool:
+    """Whether `job` is a farm job, bare or naming its material."""
+    text = str(job or "").strip().lower()
+    return text == "farm" or farm_order(text) is not None
+
 
 # The job a campaign waiting in town puts the family on (#265, mod-overseer#659).
 TOWN_RUN = "town run"
@@ -273,6 +314,14 @@ DRIVES = {
         "mod_overseer.cpp's fishing drive (mod-overseer#448): a row whose job "
         "is 'fish' toggles the bots' own fishing AI, teaches Fishing from a "
         "trainer and records fish/skill events (mod_overseer.cpp, wantsFishing)"
+    ),
+    "farm": (
+        "farmjob.decide picks a field of the named material's node spawns "
+        "that somebody in the family can open and the weakest member can "
+        "survive, and bridge._farm_once walks the leader there and from one "
+        "surveyed spawn to the next; the bots' own gather strategy picks the "
+        "nodes, and the job ends itself on its count, its time box or its "
+        "deaths (mod-overseer#1521 holds the family between hops)"
     ),
     "town run": (
         "the family stays together in town: the quest drive stands down, the "
@@ -326,7 +375,7 @@ def can_set(mode: str) -> bool:
     written, so `job='craft'` was accepted, stood the quest drive down, and
     idled the family with nothing in the log to say why.
     """
-    return mode in IMPLEMENTED
+    return mode in IMPLEMENTED or farm_order(mode) is not None
 
 
 def why_not(mode: str) -> str:
@@ -432,6 +481,10 @@ def resolve(text: str | None) -> str | None:
         return None
     if cleaned in MODES:
         return cleaned
+    if cleaned.startswith(FARM_PREFIX):
+        return farm_order(cleaned)
+    if cleaned.startswith("farm ") and farm_order("farm:" + cleaned[5:]):
+        return farm_order("farm:" + cleaned[5:])
     if cleaned.startswith("dungeon:"):
         keyword = cleaned.split(":", 1)[1].strip()
         return f"dungeon:{keyword}" if keyword in DUNGEONS.values() else None
@@ -506,6 +559,11 @@ SAYS = {
         "The family fishes for food and reagents, learning Fishing from a "
         "trainer first if they need to."
     ),
+    "farm": (
+        "The family walks to a field of the herb or ore it was asked for and "
+        "picks it node by node, going to town when bags fill, until it has "
+        "enough, its time is up or it has lost too many lives there."
+    ),
     "town run": (
         "The family stays together in town to sell, repair, restock and check "
         "the mail. Gathering, flights and the leveling route wait until they "
@@ -521,6 +579,7 @@ DOING = {
     "craft": "The family is crafting.",
     "raid prep": "The family is getting ready to raid.",
     "fish": "The family is fishing.",
+    "farm": "The family is out gathering.",
     "town run": (
         "The family is in town: repairing, restocking and checking the mail "
         "before the next run."
@@ -553,6 +612,8 @@ def say(mode: str, place: str | None = None) -> str:
             "and then clears it. Only the head is walked to the door: a raider "
             "who is not near it is not brought there." % where
         )
+    if farm_order(mode):
+        return SAYS["farm"]
     if is_dungeon_job(mode):
         text = SAYS["dungeon"]
         if place and place != "a dungeon":
@@ -578,6 +639,9 @@ def describe(mode: str) -> str:
             "recovering from a wipe (mod-overseer#640); only the head is "
             "walked to the door."
         )
+    if farm_order(mode):
+        what_ = mode[len(FARM_PREFIX) :]
+        return f"job set to {mode} - farm {what_}. This drives: {DRIVES['farm']}."
     what = MODES.get(mode, "")
     if mode in IMPLEMENTED:
         # `.get` and not `[]`: DRIVES falling behind IMPLEMENTED is a bug, and

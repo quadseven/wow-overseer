@@ -29,6 +29,8 @@ class TheExistingBankPlanFetchesTheUpgrade(unittest.TestCase):
         import types
         from unittest.mock import Mock
 
+        import reagentplan
+
         import bank
         import bankbags
         import bankpolicy
@@ -104,6 +106,9 @@ class TheExistingBankPlanFetchesTheUpgrade(unittest.TestCase):
             _bank_spare=lambda names: frozenset(),
             _bank_forecast=lambda names: types.SimpleNamespace(over_target={}),
             _campaign_waiting=lambda names: False,
+            # No craft errand is short of a banked reagent here (#774).
+            reagentplan=reagentplan,
+            _craft_plans_of=lambda names: [],
             _fetch_bank_bag_facts=lambda names: [],
             _fetch_wearers=lambda names: [healer],
             _fetch_scored_gear=lambda names, banked=False: (

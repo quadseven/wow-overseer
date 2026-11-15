@@ -222,7 +222,7 @@ def _online_gatherers(posts, members, skill, busy) -> list:
         m = by_name.get(p.name)
         if m is None or not m.online or m.name in busy or m.family:
             continue
-        if classic.is_expansion_map(m.map_id):
+        if classic.stands_outside(m):
             continue
         out.append(m)
     out.sort(key=lambda m: (-int(m.skill(skill)[0]), m.name))
@@ -248,7 +248,7 @@ def _crafter_for(material, members, posts) -> object:
         m = by_name.get(p.name)
         if m is None or not m.online or m.family:
             continue
-        if classic.is_expansion_map(m.map_id):
+        if classic.stands_outside(m):
             continue
         return m
     return None

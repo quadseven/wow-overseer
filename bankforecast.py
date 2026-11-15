@@ -1338,6 +1338,8 @@ WITHDRAWERS_SQL = (
 WITHDRAWN_SQL = (
     "SELECT command FROM overseer_command "  # noqa: S608
     "WHERE kind = 'guild' AND status = 'applied' AND command LIKE %%s "
+    # A stack a crafter took out for its own craft (reagentplan) is not for sale.
+    "AND source <> 'guildbank-craft' "
     "AND target_name IN (%s) AND created_at > NOW() - INTERVAL %%s HOUR"
 )
 

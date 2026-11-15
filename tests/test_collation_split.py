@@ -95,6 +95,8 @@ COLLATIONS = {
     "overseer_dungeon_queue": "utf8mb4_0900_ai_ci",
     # Bridge-owned (#1559), named in priorities.CREATE_SQL the same way.
     "overseer_family_priorities": "utf8mb4_0900_ai_ci",
+    # Bridge-owned (#2403), named in operatorhold.CREATE_SQL the same way.
+    "overseer_operator_hold": "utf8mb4_0900_ai_ci",
     # Bridge-owned (#1499), named in orderrecord.CREATE_SQL the same way.
     "overseer_order": "utf8mb4_0900_ai_ci",
     # Bridge-owned (#1487), named in workorderstore.CREATE_SQL the same way.
@@ -300,6 +302,8 @@ STRING_COLUMNS = {
     "overseer_dungeon_queue": frozenset({"family", "keyword", "status", "source"}),
     # From its own DDL (priorities.CREATE_SQL): every VARCHAR column.
     "overseer_family_priorities": frozenset({"ranked", "source"}),
+    # From its own DDL (operatorhold.CREATE_SQL): every VARCHAR column.
+    "overseer_operator_hold": frozenset({"family", "reason", "source"}),
     # From its own DDL (orderrecord.CREATE_SQL): every VARCHAR column.
     "overseer_order": frozenset({"channel_id", "author", "text", "kind"}),
     # From its own DDL (workorderstore.CREATE_SQL): every VARCHAR and ENUM column.

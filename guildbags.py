@@ -1,9 +1,20 @@
-"""Maintenance members recover capacity with owned bags or paid vendor bags.
+"""Guild members recover capacity with owned bags or paid vendor bags.
 
 Any member, whatever its role, wears a better bag it already carries: the
 guild corps posts its ladder bags to the whole guild (#1591), and wearing
-one is not a purchase, so the equip half is not gated on the maintenance
-role or on being short of space. Buying still is."""
+one is not a purchase, so the equip half is not gated on being short of
+space.
+
+BUYING IS FOR EVERY ROLE TOO (#2430). Measured on the dev realm 2026-11-13:
+of the 162 members of the two guilds outside the families, 36 wore no bag at
+all and 52 had an empty bag position, 45 of them carrying a gold or more,
+while only the 10 maintenance members of each guild were ever sent to buy.
+A raider or summoner short of space buys with its own gold, under the same
+reserve.
+
+AND THE BEST BAG THE PURSE ALLOWS, not the cheapest: a member that can spare
+a quarter of what it holds above the reserve buys the largest bag in reach at
+that price (`choose_offers`)."""
 
 from __future__ import annotations
 
@@ -11,6 +22,7 @@ from dataclasses import dataclass
 
 import bag_pressure
 import bag_upgrade
+import bankbags
 import classic
 import guildcorps
 import guildjobs
@@ -28,14 +40,14 @@ class Recovery:
 
 
 def eligible(member: guildjobs.Member, recent=()) -> bool:
+    """Whether a member may be sent to buy a bag: any role, short of space."""
     return (
-        member.role == guildjobs.MAINTENANCE
-        and member.eligible
+        member.eligible
         and member.online
         and member.alive
         and not member.in_combat
         and member.map_id is not None
-        and not classic.is_expansion_map(member.map_id)
+        and not classic.stands_outside(member)
         and member.x is not None
         and member.y is not None
         and member.free_slots is not None
@@ -61,11 +73,31 @@ def equip_eligible(member: guildjobs.Member, recent=()) -> bool:
         and member.alive
         and not member.in_combat
         and member.map_id is not None
-        and not classic.is_expansion_map(member.map_id)
+        and not classic.stands_outside(member)
         and member.x is not None
         and member.y is not None
         and not guildjobs._cooling(member, guildjobs.BAG_ACTION, recent)
     )
+
+
+def choose_offers(member: guildjobs.Member, offers) -> tuple:
+    """The offers the purchase picks from: the best bag a quarter allows.
+
+    `bag_pressure.bag_purchases` buys the cheapest offer it is handed. Handed
+    only the largest bag costing at most `bankbags.PURSE_SHARE`-th of what
+    the member holds above its reserve (the cheapest such on a tie), it buys
+    that one; when no bag is that cheap, every offer is handed on and the
+    cheapest is bought, as before.
+    """
+    spare = int(member.money) - bag_pressure.bag_reserve(member.level)
+    within = [
+        o
+        for o in offers
+        if 0 < o.price and o.slots > 0 and o.price * bankbags.PURSE_SHARE <= spare
+    ]
+    if not within:
+        return tuple(offers)
+    return (min(within, key=lambda o: (-o.slots, o.price, o.entry)),)
 
 
 def plan(members, containers, vendors, cap=guildroute.MAIL_RUN_YARDS):
@@ -118,7 +150,9 @@ def plan(members, containers, vendors, cap=guildroute.MAIL_RUN_YARDS):
             member.free_slots,
             frozenset(o.entry for o in trip.vendor.offers),
         )
-        purchases, refused = bag_pressure.bag_purchases([buyer], trip.vendor.offers)
+        purchases, refused = bag_pressure.bag_purchases(
+            [buyer], choose_offers(member, trip.vendor.offers)
+        )
         notes.extend(refused)
         for purchase in purchases:
             steps[member.name] = Recovery(

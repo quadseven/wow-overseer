@@ -426,7 +426,12 @@ class WhereTheStoredStacksGo(unittest.TestCase):
         self.assertTrue(any("tab is full" in note for note in plan.notes))
 
     def test_the_tab_is_never_offered_more_than_its_free_slots(self):
-        plan = self._plan(guild={**OPEN_GUILD, "tab0_items": bank.GUILD_TAB_SLOTS - 3})
+        # The slots held back for the crafter's own reagents are not offered.
+        held_back = len(_storage(OPEN_GUILD).guild_reagents)
+        free = 3 + held_back
+        plan = self._plan(
+            guild={**OPEN_GUILD, "tab0_items": bank.GUILD_TAB_SLOTS - free}
+        )
         self.assertEqual(3, len(plan.guild))
 
     def test_a_bound_keeper_goes_to_her_own_bank(self):

@@ -416,8 +416,11 @@ class Client:
     apart: the issue exists by then, so a refused link never files twice. It
     goes on unlinked for the pass to report, not silently."""
 
-    def __init__(self, github, log=None):
+    def __init__(self, github, log=None, epic=None):
         self.github, self.log = github, log
+        # The epic each issue is linked under: the quest epic unless a caller
+        # names another (corpstickets.py files under its own).
+        self.epic = EPIC if epic is None else int(epic)
         self.unlinked: list = []
 
     def file(self, heading: str, text: str) -> int:
@@ -430,7 +433,7 @@ class Client:
         try:
             self.github.call(
                 "POST",
-                "/issues/%d/sub_issues" % EPIC,
+                "/issues/%d/sub_issues" % self.epic,
                 {"sub_issue_id": made["id"]},
                 ok=(201,),
             )
@@ -438,12 +441,12 @@ class Client:
             self.unlinked.append(int(made["number"]))
             if self.log:
                 self.log.exception(
-                    "quest tickets: #%d is not linked under #%d", made["number"], EPIC
+                    "tickets: #%d is not linked under #%d", made["number"], self.epic
                 )
         return int(made["number"])
 
 
-def client_from_env(log=None, env=None) -> Client | None:
+def client_from_env(log=None, env=None, epic=None) -> Client | None:
     """The client when the App's settings are all present, else None."""
     env = os.environ if env is None else env
     app_id = env.get("QUEST_TICKET_APP_ID", "").strip()
@@ -456,4 +459,4 @@ def client_from_env(log=None, env=None) -> Client | None:
     token = act.AppToken(
         app_id, installation, key_path, REPO, permissions=TOKEN_PERMISSIONS
     )
-    return Client(act.GitHub(REPO, token), log)
+    return Client(act.GitHub(REPO, token), log, epic)

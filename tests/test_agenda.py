@@ -741,9 +741,9 @@ class DiscordOrders(unittest.TestCase):
 
 class OtherJobs(unittest.TestCase):
     def test_an_unbuilt_mode_says_it_is_unbuilt(self):
-        out = build(roster({n: {"job": "farm"} for n in FAMILY}))
+        out = build(roster({n: {"job": "grind"} for n in FAMILY}))
         self.assertEqual(out["activity"], agenda.JOB)
-        self.assertIn("farm", out["headline"])
+        self.assertIn("grind", out["headline"])
         self.assertIn("not built yet", " ".join(out["detail"]))
 
     def test_dungeon_is_never_described_as_unbuilt(self):

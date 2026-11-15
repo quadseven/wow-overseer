@@ -376,7 +376,9 @@ button.chip { background: transparent; cursor: pointer; border: 0; }
 }
 .histo a:hover { background: var(--color-neutral-600); }
 .histo .median { background: var(--color-accent-500); }
-.histo-axis { display: flex; justify-content: space-between; font-size: var(--fs-0); color: var(--color-neutral-500); }
+.histo-axis { display: flex; justify-content: space-between; gap: 8px; font-size: var(--fs-0); color: var(--color-neutral-500); }
+.histo-read { color: var(--color-neutral-200); font-weight: 500; text-align: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.histo a.hit[data-active="true"] .bar:not(.median) { background: var(--color-neutral-400); }
 
 /* ---- Pending section (until its PR lands) --------------------------------- */
 .pending { max-width: 640px; }

@@ -1302,7 +1302,11 @@ def _plan_job(request: dict, standing: dict) -> Order:
     mode = jobs.resolve(raw if isinstance(raw, str) else None)
     if mode is None:
         return _refuse(JOB, ORDER_REFUSALS["mode"])
+    if mode == "farm":
+        return _refuse(JOB, jobs.FARM_NAMES_NOTHING)
     base_mode = mode.split(":", 1)[0] if mode.startswith("dungeon:") else mode
+    if jobs.farm_order(mode):
+        base_mode = "farm"
     if base_mode not in jobs.IMPLEMENTED:
         return _refuse(JOB, unwired_refusal(mode))
     names = list(standing["roster"])

@@ -269,6 +269,28 @@ def _holder(steps: list) -> str:
     return holder
 
 
+def _repeats_told(row: dict, steps: list) -> bool:
+    """True when this row only repeats what the steps already tell."""
+    kind = row["kind"]
+    if kind == "tidy":
+        if not str(row.get("detail") or "").startswith("moved"):
+            return True
+        last = next((s for s in reversed(steps) if s["kind"] == "handed"), None)
+        # the tidy pass confirming a trade already told
+        return bool(
+            last
+            and last["who"] == row.get("character_name")
+            and last["to"] == row.get("counterpart")
+        )
+    # one equip row an hour while worn: it went on once
+    return bool(
+        kind == EQUIP
+        and steps
+        and steps[-1]["kind"] == "equipped"
+        and steps[-1]["who"] == row.get("character_name")
+    )
+
+
 def _journey(guid: int, rows: list, ctx: dict) -> dict:
     rows.sort(
         key=lambda r: (_int(r.get("at")), ORDER.get(r["kind"], 9), _int(r.get("id")))
@@ -284,26 +306,11 @@ def _journey(guid: int, rows: list, ctx: dict) -> dict:
             _council_step(council, steps[0]["at"] if steps else _int(rows[0].get("at")))
         )
     for row in rows:
-        kind = row["kind"]
-        if kind == "tidy":
-            if not str(row.get("detail") or "").startswith("moved"):
-                continue
-            last = next((s for s in reversed(steps) if s["kind"] == "handed"), None)
-            if (
-                last
-                and last["who"] == row.get("character_name")
-                and last["to"] == row.get("counterpart")
-            ):
-                continue  # the tidy pass confirming a trade already told
-        if kind in HANDED_KINDS:
+        if _repeats_told(row, steps):
+            continue
+        if row["kind"] in HANDED_KINDS:
             steps.append(_handed_step(row, ctx["families"], ctx["member_of"]))
-        elif kind == EQUIP:
-            if (
-                steps
-                and steps[-1]["kind"] == "equipped"
-                and steps[-1]["who"] == row.get("character_name")
-            ):
-                continue  # one row an hour while worn: it went on once
+        elif row["kind"] == EQUIP:
             steps.append(_equip_step(row))
     return {
         "item_guid": guid,
@@ -408,6 +415,24 @@ def _flags(j: dict, item: dict, members: list, member_of: dict, family: set) -> 
     return flags
 
 
+def _finish(j: dict, items: dict, members: list, member_of: dict, kin: set) -> None:
+    """Add the ending, flags, cast and span to one journey."""
+    j["ending"] = _ending(j["steps"])
+    j["flags"] = _flags(j, items.get(j["entry"]) or {}, members, member_of, kin)
+    who = []
+    for s in j["steps"]:
+        who += [s["who"], s.get("to") or ""]
+    j["who"] = list(dict.fromkeys(n for n in who if n))
+    j["guilds"] = sorted(
+        {
+            member_of[n]["guild"]
+            for n in j["who"]
+            if n in member_of and member_of[n].get("guild")
+        }
+    )
+    j["since"], j["at"] = j["steps"][0]["at"], max(s["at"] for s in j["steps"])
+
+
 def build(
     rows: list,
     sales: list = (),
@@ -448,24 +473,9 @@ def build(
     journeys = [_journey(g, rs, ctx) for g, rs in epic.items()]
     journeys = [j for j in journeys if j["steps"]]
     _attach_sales(journeys, list(sales))
+    kin = {n for names in families.values() for n in names}
     for j in journeys:
-        j["ending"] = _ending(j["steps"])
-        kin = {n for names in families.values() for n in names}
-        j["flags"] = _flags(
-            j, items.get(j["entry"]) or {}, list(members), member_of, kin
-        )
-        who = []
-        for s in j["steps"]:
-            who += [s["who"], s.get("to") or ""]
-        j["who"] = list(dict.fromkeys(n for n in who if n))
-        j["guilds"] = sorted(
-            {
-                member_of[n]["guild"]
-                for n in j["who"]
-                if n in member_of and member_of[n].get("guild")
-            }
-        )
-        j["since"], j["at"] = j["steps"][0]["at"], max(s["at"] for s in j["steps"])
+        _finish(j, items, list(members), member_of, kin)
     journeys.sort(key=lambda j: (-j["at"], -j["item_guid"]))
     return journeys
 

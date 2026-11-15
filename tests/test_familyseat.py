@@ -18,6 +18,7 @@ import source_utils
 
 with stub_modules(pymysql=PYMYSQL):
     import familyseat as fs
+    import operatorhold
     import guildrun
     import guildsocial as gs
     from test_campaign_queue import FakeWorld, _q, _queue_pass
@@ -149,6 +150,88 @@ class TheCampaignGuard(unittest.TestCase):
         ]
         got = fs.seats_played(rows)
         self.assertEqual(got.get("Ugga"), {"healer"})
+
+    def test_a_held_family_lends_nobody(self):
+        holds = operatorhold.read([{"family": "Grug", "reason": "by hand", "live": 1}])
+        self.assertEqual(fs.lendable(GRUG_IDLE, set(), holds=holds), set())
+
+    def test_the_hold_matches_the_family_without_case(self):
+        holds = operatorhold.read([{"family": "GRUG", "reason": "by hand", "live": 1}])
+        self.assertEqual(fs.lendable(GRUG_IDLE, set(), holds=holds), set())
+
+    def test_the_every_family_hold_lends_nobody(self):
+        holds = operatorhold.read([{"family": "*", "reason": "all by hand", "live": 1}])
+        self.assertEqual(
+            fs.lendable(GRUG_IDLE + ZUG_RUNNING, set(), holds=holds), set()
+        )
+
+    def test_another_familys_hold_does_not_stop_this_lend(self):
+        holds = operatorhold.read([{"family": "Zug", "reason": "x", "live": 1}])
+        self.assertEqual(fs.lendable(GRUG_IDLE, set(), holds=holds), {"Ugga", "Og"})
+
+    def test_a_lapsed_hold_lends_again(self):
+        holds = operatorhold.read([{"family": "Grug", "reason": "x", "live": 0}])
+        self.assertEqual(fs.lendable(GRUG_IDLE, set(), holds=holds), {"Ugga", "Og"})
+
+    def test_the_planner_switched_off_holds_every_family(self):
+        holds = fs.lend_holds({}, {"CAMPAIGN_PLANNER": "off"})
+        self.assertEqual(fs.lendable(GRUG_IDLE, set(), holds=holds), set())
+
+    def test_the_planner_on_adds_no_hold(self):
+        self.assertEqual(fs.lend_holds({}, {}), {})
+
+    def test_the_bridge_passes_the_holds_into_the_lend(self):
+        body = source_utils.function_source(bridge._fetch_guild_social_facts)
+        self.assertIn("familyseat.lend_holds(", body)
+        self.assertIn("holds=", body)
+
+    def test_the_lend_reads_the_roster_before_the_hold_query_reuses_the_cursor(self):
+        """One cursor holds one result set: the hold read must not eat the roster."""
+        sql_seen = []
+
+        class OneResultCursor:
+            def __init__(self):
+                self.result = []
+
+            def execute(self, sql, params=None):
+                sql_seen.append(sql)
+                if sql == fs.ROSTER_SQL:
+                    self.result = list(GRUG_IDLE)
+                else:
+                    self.result = []
+
+            def fetchall(self):
+                out, self.result = self.result, []
+                return out
+
+            def fetchone(self):
+                return None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        cur = OneResultCursor()
+
+        class Conn(OneResultCursor):
+            def cursor(self):
+                return cur
+
+        quiet = {"rows": [], "in_runs": set()}
+        with (
+            mock.patch.object(
+                bridge, "_fetch_guild_run_facts", return_value=dict(quiet)
+            ),
+            mock.patch.object(bridge, "_connect", return_value=Conn()),
+            mock.patch.object(bridge, "_guild_social_drops", return_value={}),
+            mock.patch.object(bridge.guildpug, "enabled", return_value=False),
+            mock.patch.object(bridge.familyseat, "enabled", return_value=True),
+        ):
+            got = bridge._fetch_guild_social_facts(None)
+        self.assertIn(operatorhold.SELECT_SQL, sql_seen)
+        self.assertEqual(got["lendable"], {"Ugga", "Og"})
 
     def test_the_bridge_reads_the_rows_into_the_guard(self):
         body = source_utils.function_source(bridge._fetch_guild_social_facts)

@@ -245,6 +245,45 @@ class TheRankErrand(unittest.TestCase):
         self.assertEqual((TAILORING,), rows[0].ranks)
 
 
+class ADueRankReachesTheTrainer(unittest.TestCase):
+    """Skill facts in, the roster write out, for one gathering and one crafting
+    trade: the seam a rank buy has to cross to reach a trainer."""
+
+    HERBALISM, ALCHEMY = 182, 171
+
+    def _errand(self, skill, value, ceiling, wanted):
+        ranks = guildjobs.ranks_due(60, 3000000, {skill: (value, ceiling)}, wanted)
+        rows = tradechoice.learn_rows(
+            [
+                {
+                    "name": "Ugga",
+                    "lead": 1,
+                    "professions": ",".join(map(str, wanted)),
+                    "learn_skill": 0,
+                    "travel_npc": "",
+                }
+            ],
+            [],
+            {},
+            {"Ugga": ranks},
+        )
+        return learnaim.plan(rows)
+
+    def test_a_gatherer_within_the_margin_is_sent_for_its_rank(self):
+        plan = self._errand(self.HERBALISM, 220, 225, (self.ALCHEMY, self.HERBALISM))
+        self.assertEqual(("Ugga", self.HERBALISM), plan.learn)
+        sql = learnaim.statements(plan)
+        self.assertEqual((self.HERBALISM, "Ugga"), sql[0][1])
+
+    def test_a_crafter_within_the_margin_is_sent_for_its_rank(self):
+        plan = self._errand(self.ALCHEMY, 70, 75, (self.ALCHEMY, self.HERBALISM))
+        self.assertEqual(("Ugga", self.ALCHEMY), plan.learn)
+
+    def test_a_trade_below_the_margin_is_not(self):
+        plan = self._errand(self.ALCHEMY, 60, 75, (self.ALCHEMY, self.HERBALISM))
+        self.assertEqual((), plan.learn)
+
+
 class TheBridgeReadsTheRanks(unittest.TestCase):
     def test_both_learn_row_builders_carry_ranks(self):
         self.assertIn("ranks = _ranks_due(cur, roster)", BRIDGE)

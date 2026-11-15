@@ -269,6 +269,7 @@ class BridgeItemGoal(unittest.TestCase):
                 ),
                 "dungeonpace": types.SimpleNamespace(CREATE_SQL="pace"),
                 "priorities": types.SimpleNamespace(CREATE_SQL="priorities"),
+                "operatorhold": types.SimpleNamespace(CREATE_SQL="operatorhold"),
             },
         )
         ns["_ensure_queue_store"]()

@@ -569,3 +569,34 @@ class AFightDoesNotCostTheGroup(unittest.TestCase):
             {"outcome": "refused", "why": "'Daidanden' is dead"},
         ]
         self.assertEqual(guildrun.benched(rows), {"Daidanden"})
+
+
+class TheMemberLoopNeeds(unittest.TestCase):
+    """memberloop's rare node needs reach the social pass, and only when on."""
+
+    def _run(self, env):
+        import memberloop
+        from test_guildsocial import mate
+
+        m = mate("Chop", 58, 4, at=(0.0, 0.0))
+        doors = guildrun.doors()
+        node = memberloop.Node(429, 380, "Truesilver Deposit")
+        with (
+            mock.patch.dict("os.environ", env, clear=False),
+            mock.patch.object(bridge, "_fetch_rare_nodes", return_value=(node,)),
+            mock.patch.object(
+                bridge, "_fetch_trade_skills", return_value={"Chop": {"mining": 220}}
+            ),
+            mock.patch.object(bridge, "_fetch_free_slots", return_value={"Chop": 20}),
+        ):
+            return asyncio.run(bridge._member_loop_needs([m], {}, {"Chop": []}, doors))
+
+    def test_off_by_default_changes_nothing(self):
+        self.assertEqual({"Chop": []}, self._run({"MEMBER_PROFESSION_LOOP": ""}))
+
+    def test_a_named_guild_gets_the_door_as_a_need(self):
+        needs = self._run({"MEMBER_PROFESSION_LOOP": "Cave"})["Chop"]
+        self.assertTrue(needs and all(n.node for n in needs))
+
+    def test_another_guild_is_left_alone(self):
+        self.assertEqual({"Chop": []}, self._run({"MEMBER_PROFESSION_LOOP": "Bonkers"}))
