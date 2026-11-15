@@ -27234,11 +27234,14 @@ class Bridge(discord.Client):
         row = await asyncio.to_thread(_read_watch)
         if not director.mandate_active(row):
             memory.spec, memory.target = "", ""
+            await self._watch_rest(memory)
             return
         spec_text = str(row["spec"])
         spec = director.parse_watch(spec_text)
         if isinstance(spec, director.SpecError) or spec.kind == "off":
+            await self._watch_rest(memory)
             return
+        memory.order_active()
         world = await asyncio.to_thread(_fetch_watch_world)
         now = time.time()
         watcher = next((s for s in world["spots"] if director.is_watcher(s.name)), None)
@@ -27271,6 +27274,33 @@ class Bridge(discord.Client):
         if decision.client_hint and decision.action == director.FOLLOW:
             note += f" (client: {decision.client_hint})"
         await asyncio.to_thread(_note_watch, spec_text, picked.name, note)
+
+    async def _watch_rest(self, memory) -> None:
+        """No order: do not leave the Watcher standing in a dungeon.
+
+        An observer inside an instance copy keeps it loaded and makes the core
+        refuse the group's reset, so once an order ends the Watcher hops out
+        and drops its binds (director.retreat). Idle checks are spaced out and
+        stop for good once it is at rest, so an unused Watcher costs no reads.
+        """
+        now = time.time()
+        if not memory.rest_due(now):
+            return
+        memory.rest_checked(now)
+        world = await asyncio.to_thread(_fetch_watch_world)
+        watcher = next((s for s in world["spots"] if director.is_watcher(s.name)), None)
+        decision = director.retreat(
+            watcher, now=now, moves=memory.moves, unbound=memory.unbound
+        )
+        if decision.commands:
+            await asyncio.to_thread(_insert_watcher_lines, decision.commands, "watcher:rest")
+            memory.record_move(now)
+            if director.UNBIND_COMMAND in decision.commands:
+                memory.unbound = True
+            memory.rest_at = 0.0  # look again at once: the hop is followed by the unbind
+            log.info("watcher: retreat (%s)", decision.reason)
+        elif decision.code == director.R_AT_REST:
+            memory.at_rest = True
 
     # --- job schedule (infra#2834) ------------------------------------------
 
