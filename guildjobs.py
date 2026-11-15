@@ -7902,11 +7902,13 @@ def class_ask_held(name, asks) -> frozenset:
 # more; a class quest's crossing does not wait on its clock
 # (class_crossing_cooling, #1921).
 QUESTER_CROSS_ACTION = "quester-cross"
+TRAIN_CROSS_ACTION = "train-cross"
 CROSS_ACTIONS = frozenset(
     {
         classquest.CROSS_ACTION,
         guildlevel.CROSS_ACTION,
         QUESTER_CROSS_ACTION,
+        TRAIN_CROSS_ACTION,
         WEAPON_CROSS_ACTION,
         pvpgear.CROSS_ACTION,
     }
