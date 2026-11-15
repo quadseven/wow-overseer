@@ -53,6 +53,23 @@ SKILLS = {
     "Fishing": 356,
 }
 
+# `guild:<Guild>:<role>` roles a decree may name, to the skill that defines them.
+ROLE_SKILLS = {
+    "alchemist": "Alchemy",
+    "blacksmith": "Blacksmithing",
+    "enchanter": "Enchanting",
+    "engineer": "Engineering",
+    "herbalist": "Herbalism",
+    "scribe": "Inscription",
+    "jeweler": "Jewelcrafting",
+    "leatherworker": "Leatherworking",
+    "miner": "Mining",
+    "skinner": "Skinning",
+    "tailor": "Tailoring",
+    "cook": "Cooking",
+    "fisher": "Fishing",
+}
+
 # overseer_command.kind values (the live ENUM). `gm` is listed so lint can name
 # it in its refusal: bot sessions are SEC_PLAYER, so a gm command does nothing.
 COMMAND_KINDS = (

@@ -276,6 +276,15 @@ def _cast(lint, doc):
             )
         else:
             whos.append(who)
+            if (
+                who.startswith("guild:")
+                and who.rsplit(":", 1)[1] not in gamedata.ROLE_SKILLS
+            ):
+                lint.err(
+                    f"{path}.who",
+                    "schema",
+                    f"unknown guild role; known: {sorted(gamedata.ROLE_SKILLS)}",
+                )
         s = entry.get("set")
         if not lint.keys(f"{path}.set", s, SET_KEYS):
             continue
