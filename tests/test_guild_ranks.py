@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import types
 import unittest
+from unittest import mock
 
 import apiv2.guild as guild_api
 import apiv2.presence as presence
+import guildcorps
 import guildranks
 import guildrun
 import modsource
 import raidteams
 import realmread
+from test_guildsocial_bridge import bridge
 
 NOW = 1_760_000_000
 
@@ -276,6 +280,331 @@ class GuildApiAndPolicyTests(unittest.TestCase):
         promotes = [a for a in actions if a.verb == "promote"]
         self.assertEqual(guildranks.PROMOTES_PER_PASS, len(promotes))
         self.assertEqual([], [a for a in actions if a.verb == "motd"])
+
+
+class _FakeGuildRanksDb:
+    """In-memory MySQL adapter fake answering _guild_rank_state, _rank_pending, and _insert_guild."""
+
+    def __init__(self, guilds, members_by_guild, goals=None):
+        self.guilds = dict(guilds)
+        self.members_by_guild = {
+            g: [dict(m) for m in ms] for g, ms in members_by_guild.items()
+        }
+        self.goals = dict(goals or {})
+        self.commands = []
+        self._next_id = 1
+
+    def connect(self):
+        db = self
+
+        class _Cursor:
+            def __init__(self):
+                self._rows = []
+                self.lastrowid = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, sql, params=()):
+                norm = " ".join(sql.split())
+                if norm.startswith(
+                    "SELECT guildid, name, motd FROM guild WHERE name ="
+                ):
+                    row = db.guilds.get(params[0])
+                    self._rows = [dict(row)] if row else []
+                elif "FROM guild_member gm" in norm and "JOIN characters c" in norm:
+                    gid = params[0]
+                    guild_name = next(
+                        (g["name"] for g in db.guilds.values() if g["guildid"] == gid),
+                        None,
+                    )
+                    self._rows = [
+                        {
+                            "name": m["name"],
+                            "level": m["level"],
+                            "rank": m["rank"],
+                            "online": 1 if m.get("online") else 0,
+                        }
+                        for m in db.members_by_guild.get(guild_name, [])
+                    ]
+                elif "FROM overseer_goal" in norm:
+                    goal = db.goals.get(params[0])
+                    self._rows = [dict(goal)] if goal else []
+                elif "FROM overseer_command" in norm and "target_name = %s" in norm:
+                    target_name = params[0]
+                    self._rows = [
+                        {
+                            "command": c["command"],
+                            "target_arg": c["target_arg"],
+                        }
+                        for c in db.commands
+                        if c["target_name"] == target_name
+                        and c["kind"] == "guild"
+                        and (
+                            c["command"].startswith("promote ")
+                            or c["command"].startswith("motd ")
+                        )
+                    ]
+                elif norm.startswith("INSERT INTO overseer_command"):
+                    target_name, command, target_arg, source = params
+                    row_id = db._next_id
+                    db._next_id += 1
+                    self.lastrowid = row_id
+                    db.commands.append(
+                        {
+                            "id": row_id,
+                            "target_name": target_name,
+                            "command": command,
+                            "kind": "guild",
+                            "target_arg": target_arg,
+                            "source": source,
+                            "status": "pending",
+                        }
+                    )
+                else:
+                    raise AssertionError(f"unexpected SQL in guild ranks test: {norm}")
+
+            def fetchone(self):
+                return self._rows[0] if self._rows else None
+
+            def fetchall(self):
+                return list(self._rows)
+
+        class _Conn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def cursor(self):
+                return _Cursor()
+
+        return _Conn()
+
+
+class BridgeGuildRanksTests(unittest.TestCase):
+    def test_module_guild_verbs_include_promote_and_motd(self):
+        self.assertIn("promote", guildcorps.MODULE_GUILD_VERBS)
+        self.assertIn("motd", guildcorps.MODULE_GUILD_VERBS)
+
+    def test_guild_ranks_loop_is_registered_in_bridge_passes(self):
+        self.assertTrue(
+            any(p.name == "_guild_ranks_loop" for p in bridge.PASSES),
+            "expected _guild_ranks_loop in bridge.PASSES",
+        )
+
+    def test_one_change_per_pass_respects_guards_and_excludes_bankers(self):
+        banker = sorted(raidteams.banker_names("Cave"))[0]
+        raider = next(
+            s.name for s in raidteams.seats("Cave") if s.name not in ("Grug", banker)
+        )
+        db = _FakeGuildRanksDb(
+            guilds={"Cave": {"guildid": 1, "name": "Cave", "motd": ""}},
+            members_by_guild={
+                "Cave": [
+                    _member("Grug", 60, guildranks.RANK_MASTER, online=True),
+                    _member("OfficerOne", 10, guildranks.RANK_OFFICER),
+                    _member("VeteranLow", 5, guildranks.RANK_VETERAN),
+                    _member(banker, 60, guildranks.RANK_INITIATE),
+                    _member("Alice", 25, guildranks.RANK_INITIATE),
+                    _member("Bob", 30, guildranks.RANK_INITIATE),
+                    _member(raider, 60, guildranks.RANK_MEMBER),
+                ]
+            },
+            goals={
+                "Cave": {
+                    "kind": "dungeon",
+                    "skill_name": "deadmines",
+                    "target": 5,
+                    "guild": "Cave",
+                }
+            },
+        )
+        with mock.patch.object(bridge, "_connect", db.connect):
+            asyncio.run(bridge.Bridge._guild_ranks_once(types.SimpleNamespace()))
+
+        self.assertEqual(
+            [
+                (
+                    "Grug",
+                    f"promote rank:{guildranks.RANK_MEMBER}",
+                    "guild",
+                    "Alice",
+                    bridge.GUILD_RANKS_SOURCE,
+                )
+            ],
+            [
+                (
+                    c["target_name"],
+                    c["command"],
+                    c["kind"],
+                    c["target_arg"],
+                    c["source"],
+                )
+                for c in db.commands
+            ],
+        )
+
+    def test_promote_and_motd_are_idempotent_while_pending_and_after_applied(self):
+        db = _FakeGuildRanksDb(
+            guilds={
+                "Cave": {
+                    "guildid": 1,
+                    "name": "Cave",
+                    "motd": "Cave goal: clear deadmines (5x)",
+                }
+            },
+            members_by_guild={
+                "Cave": [
+                    _member("Grug", 60, guildranks.RANK_MASTER, online=True),
+                    _member("Alice", 25, guildranks.RANK_INITIATE),
+                ]
+            },
+            goals={
+                "Cave": {
+                    "kind": "dungeon",
+                    "skill_name": "deadmines",
+                    "target": 5,
+                    "guild": "Cave",
+                }
+            },
+        )
+        with mock.patch.object(bridge, "_connect", db.connect):
+            asyncio.run(bridge.Bridge._guild_ranks_once(types.SimpleNamespace()))
+            # Second pass while Alice's promote row is still pending emits nothing.
+            asyncio.run(bridge.Bridge._guild_ranks_once(types.SimpleNamespace()))
+
+        self.assertEqual(1, len(db.commands))
+        self.assertEqual("Alice", db.commands[0]["target_arg"])
+
+        # Once worldserver applies the rank and clears pending, repeat pass emits nothing.
+        db.commands.clear()
+        db.members_by_guild["Cave"][1]["rank"] = guildranks.RANK_MEMBER
+        with mock.patch.object(bridge, "_connect", db.connect):
+            asyncio.run(bridge.Bridge._guild_ranks_once(types.SimpleNamespace()))
+        self.assertEqual([], db.commands)
+
+    def test_motd_writes_empty_target_arg_and_is_idempotent(self):
+        db = _FakeGuildRanksDb(
+            guilds={"Cave": {"guildid": 1, "name": "Cave", "motd": ""}},
+            members_by_guild={
+                "Cave": [_member("Grug", 60, guildranks.RANK_MASTER, online=True)]
+            },
+            goals={
+                "Cave": {
+                    "kind": "dungeon",
+                    "skill_name": "deadmines",
+                    "target": 5,
+                    "guild": "Cave",
+                }
+            },
+        )
+        with mock.patch.object(bridge, "_connect", db.connect):
+            asyncio.run(bridge.Bridge._guild_ranks_once(types.SimpleNamespace()))
+            asyncio.run(bridge.Bridge._guild_ranks_once(types.SimpleNamespace()))
+
+        self.assertEqual(
+            [
+                (
+                    "Grug",
+                    "motd Cave goal: clear deadmines (5x)",
+                    "guild",
+                    "",
+                    bridge.GUILD_RANKS_SOURCE,
+                )
+            ],
+            [
+                (
+                    c["target_name"],
+                    c["command"],
+                    c["kind"],
+                    c["target_arg"],
+                    c["source"],
+                )
+                for c in db.commands
+            ],
+        )
+
+        db.commands.clear()
+        db.guilds["Cave"]["motd"] = "Cave goal: clear deadmines (5x)"
+        with mock.patch.object(bridge, "_connect", db.connect):
+            asyncio.run(bridge.Bridge._guild_ranks_once(types.SimpleNamespace()))
+        self.assertEqual([], db.commands)
+
+    def test_offline_master_emits_nothing(self):
+        db = _FakeGuildRanksDb(
+            guilds={"Cave": {"guildid": 1, "name": "Cave", "motd": ""}},
+            members_by_guild={
+                "Cave": [
+                    _member("Grug", 60, guildranks.RANK_MASTER, online=False),
+                    _member("Alice", 25, guildranks.RANK_INITIATE),
+                ]
+            },
+        )
+        with mock.patch.object(bridge, "_connect", db.connect):
+            asyncio.run(bridge.Bridge._guild_ranks_once(types.SimpleNamespace()))
+        self.assertEqual([], db.commands)
+
+    def test_rank_pending_queries_bounded_window_and_handles_missing_table(self):
+        seen = []
+
+        class _Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, sql, params):
+                seen.append((sql, params))
+
+            def fetchall(self):
+                return [
+                    {"command": "promote rank:3", "target_arg": "Alice"},
+                    {"command": "motd Cave goal: raid mc", "target_arg": ""},
+                ]
+
+        class _Conn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def cursor(self):
+                return _Cursor()
+
+        with mock.patch.object(bridge, "_connect", return_value=_Conn()):
+            pending = bridge._rank_pending("Grug")
+        self.assertEqual(frozenset({"Alice", "motd"}), pending)
+        sql, params = seen[0]
+        self.assertIn("status IN ('pending', 'claimed')", sql)
+        self.assertIn("created_at > NOW() - INTERVAL %s MINUTE", sql)
+        self.assertEqual(
+            (
+                "Grug",
+                "promote %",
+                "motd %",
+                bridge.GUILD_RANKS_PENDING_MINUTES,
+                bridge.GUILD_RANKS_RECENT_MINUTES,
+            ),
+            params,
+        )
+
+        class _MissingCursor(_Cursor):
+            def execute(self, _sql, _params):
+                raise bridge.pymysql.err.ProgrammingError(1146, "missing")
+
+        class _MissingConn(_Conn):
+            def cursor(self):
+                return _MissingCursor()
+
+        with mock.patch.object(bridge, "_connect", return_value=_MissingConn()):
+            self.assertEqual(frozenset(), bridge._rank_pending("Grug"))
 
 
 if __name__ == "__main__":

@@ -1,9 +1,9 @@
 # Guild rank promotion and MOTD specification (#2616)
 
 Status: pure ranking, command shaping, and rank-drift reporting live in
-`guildranks.py` and `apiv2/guild.py`; C++ verb execution in `mod-overseer` is
-specified below and not yet wired into `bridge.py` (`tests/test_guild_verbs.py`
-gates `kind='guild'` writers on `guildcorps.MODULE_GUILD_VERBS`).
+`guildranks.py` and `apiv2/guild.py`; C++ verb execution in `mod-overseer`
+(`mod-overseer#1568`, roll 73) and `bridge._guild_ranks_once` wiring
+(`guildcorps.MODULE_GUILD_VERBS`) are active.
 
 ## 1. Findings in the pinned playerbots module
 

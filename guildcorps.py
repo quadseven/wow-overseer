@@ -480,6 +480,8 @@ MODULE_GUILD_VERBS = frozenset(
         "shortlist",
         "tabard",
         "bank",
+        "promote",
+        "motd",
     }
 )
 

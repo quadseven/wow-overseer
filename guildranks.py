@@ -8,8 +8,8 @@ Rank IDs match `Guild::_CreateDefaultGuildRanks` in pinned AzerothCore and
 `GUILD_RANK_*` in `mod-overseer/src/overseer_decisions.h`:
   0 Master, 1 Officer, 2 Veteran, 3 Member, 4 Initiate.
 
-Nothing here executes until `mod-overseer` handles `promote` and `motd`
-and lists them in `guildcorps.MODULE_GUILD_VERBS`.
+Mod-overseer (`mod-overseer#1568`) handles `promote` and `motd`, and
+`guildcorps.MODULE_GUILD_VERBS` lists both for `bridge._guild_ranks_once`.
 """
 
 from __future__ import annotations
