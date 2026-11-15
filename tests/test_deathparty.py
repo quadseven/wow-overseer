@@ -148,8 +148,12 @@ class DeathPartyBook(unittest.TestCase):
 
     def start(self):
         return deathparty.PartyStart(
-            ask_id=9, leader="Looper", helpers=("Helper",),
-            place=loop_of().place, answers={"Helper": 31})
+            ask_id=9,
+            leader="Looper",
+            helpers=("Helper",),
+            place=loop_of().place,
+            answers={"Helper": 31},
+        )
 
     def test_a_start_seats_once_per_ask(self):
         book = deathparty.StartBook()
@@ -166,24 +170,34 @@ class DeathPartyBook(unittest.TestCase):
 
     def test_a_start_stays_valid_while_the_asker_stands_in_its_loop(self):
         start = self.start()
-        self.assertTrue(deathparty.start_still_valid(
-            start, {"Looper": loop_of()}, free={"Looper", "Helper"}))
+        self.assertTrue(
+            deathparty.start_still_valid(
+                start, {"Looper": loop_of()}, free={"Looper", "Helper"}
+            )
+        )
 
     def test_a_start_dies_when_the_asker_left_the_loop(self):
-        self.assertFalse(deathparty.start_still_valid(
-            self.start(), {}, free={"Looper", "Helper"}))
+        self.assertFalse(
+            deathparty.start_still_valid(self.start(), {}, free={"Looper", "Helper"})
+        )
 
     def test_a_start_dies_when_a_member_is_no_longer_free(self):
-        self.assertFalse(deathparty.start_still_valid(
-            self.start(), {"Looper": loop_of()}, free={"Looper"}))
+        self.assertFalse(
+            deathparty.start_still_valid(
+                self.start(), {"Looper": loop_of()}, free={"Looper"}
+            )
+        )
 
     def test_a_start_dies_when_the_meeting_place_moved(self):
         import dataclasses
 
         moved = dataclasses.replace(loop_of(), zone=1)
         self.assertNotEqual(moved.place, loop_of().place)
-        self.assertFalse(deathparty.start_still_valid(
-            self.start(), {"Looper": moved}, free={"Looper", "Helper"}))
+        self.assertFalse(
+            deathparty.start_still_valid(
+                self.start(), {"Looper": moved}, free={"Looper", "Helper"}
+            )
+        )
 
 
 if __name__ == "__main__":

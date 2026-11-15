@@ -919,6 +919,8 @@ class TheDungeonPasses(unittest.TestCase):
         this._class_book = None
         this.started = []
         this._begin_class_parties = this.started.extend
+        this.death_started = []
+        this._begin_death_parties = this.death_started.extend
         data = facts()
         data["asks"] = list(data["asks"]) + list(asks)
         data["answers"] = list(data["answers"]) + list(answers)
