@@ -52,6 +52,117 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+def _dump(value: dict) -> str:
+    return json.dumps(value, separators=(",", ":"))
+
+
+class Realm:
+    """One worldserver Deployment, driven through kubectl."""
+
+    def __init__(self, base: list[str], deployment: str, run, now, out):
+        self.base, self.deployment, self.run = base, deployment, run
+        self.now, self.out = now, out
+        self.target = "deploy/" + deployment
+
+    def kube(self, *rest: str) -> subprocess.CompletedProcess:
+        return self.run(self.base + list(rest))
+
+    def open_notice(self) -> dict | None:
+        res = self.kube("get", self.target, "-o", "json")
+        if res.returncode != 0:
+            raise SystemExit("cannot read %s: %s" % (self.target, res.stderr.strip()))
+        meta = json.loads(res.stdout).get("metadata") or {}
+        raw = (meta.get("annotations") or {}).get(realmmaint.NOTICE_KEY)
+        return realmmaint.parse_notice(raw)
+
+    def down(self, reason: str, who: str, eta, force: bool) -> int:
+        held = self.open_notice()
+        if held and not force:
+            self.out(
+                "refusing: a maintenance notice is already open (%s, by %s, back by %s). "
+                "Use --force to replace it."
+                % (held["reason"], held["who"], held["expected_back"])
+            )
+            return 1
+        notice = realmmaint.new_notice(reason, who, self.now(), eta)
+        res = self.kube(
+            "annotate",
+            self.target,
+            "--overwrite",
+            "%s=%s" % (realmmaint.NOTICE_KEY, _dump(notice)),
+        )
+        if res.returncode != 0:
+            self.out("could not write the notice, not scaling: " + res.stderr.strip())
+            return 1
+        res = self.kube("scale", self.target, "--replicas=0")
+        if res.returncode != 0:
+            self.kube("annotate", self.target, realmmaint.NOTICE_KEY + "-")
+            self.out("scale failed, notice cleared: " + res.stderr.strip())
+            return 1
+        self.out(
+            "notice written; %s scaled to 0; back by %s"
+            % (self.target, notice["expected_back"])
+        )
+        res = self.kube(
+            "wait",
+            "--for=delete",
+            "pod",
+            "-l",
+            "app=" + self.deployment,
+            "--timeout=" + DRAIN_TIMEOUT,
+        )
+        if res.returncode != 0:
+            self.out("warning: pods did not finish draining: " + res.stderr.strip())
+        return 0
+
+    def up(self) -> int:
+        held = self.open_notice()
+        res = self.kube("scale", self.target, "--replicas=1")
+        if res.returncode != 0:
+            self.out("scale failed: " + res.stderr.strip())
+            return 1
+        res = self.kube(
+            "rollout", "status", self.target, "--timeout=" + ROLLOUT_TIMEOUT
+        )
+        if res.returncode != 0:
+            self.out(
+                "not Ready within %s; notice left in place: %s"
+                % (ROLLOUT_TIMEOUT, res.stderr.strip())
+            )
+            return 1
+        if held:
+            last = realmmaint.retire(held, self.now())
+            res = self.kube(
+                "annotate",
+                self.target,
+                "--overwrite",
+                "%s=%s" % (realmmaint.LAST_KEY, _dump(last)),
+                realmmaint.NOTICE_KEY + "-",
+            )
+            if res.returncode != 0:
+                self.out(
+                    "Ready, but the notice could not be cleared: " + res.stderr.strip()
+                )
+                return 1
+        self.out("%s is Ready; notice cleared" % self.target)
+        return 0
+
+
+def _down_args(p, args, env):
+    """(reason, who, eta) from the arguments, or a usage error."""
+    try:
+        eta = realmmaint.parse_eta(args.eta)
+    except ValueError as err:
+        p.error(str(err))
+    who = (args.who or env.get("REALM_MAINTENANCE_WHO") or "").strip()
+    if not who:
+        p.error("set REALM_MAINTENANCE_WHO or pass --who (an agent or role label)")
+    reason = args.reason.strip()
+    if not reason:
+        p.error("--reason may not be empty")
+    return reason, who, eta
+
+
 def main(argv=None, run=_kubectl, now=None, env=None, out=print) -> int:
     env = os.environ if env is None else env
     now = now or (lambda: datetime.now(timezone.utc))
@@ -64,97 +175,11 @@ def main(argv=None, run=_kubectl, now=None, env=None, out=print) -> int:
     if args.context:
         base += ["--context", args.context]
     base += ["-n", namespace]
-    target = "deploy/" + args.deployment
-
-    def kube(*rest: str) -> subprocess.CompletedProcess:
-        return run(base + list(rest))
-
-    def open_notice() -> dict | None:
-        res = kube("get", target, "-o", "json")
-        if res.returncode != 0:
-            raise SystemExit("cannot read %s: %s" % (target, res.stderr.strip()))
-        annotations = (json.loads(res.stdout).get("metadata") or {}).get(
-            "annotations"
-        ) or {}
-        return realmmaint.parse_notice(annotations.get(realmmaint.NOTICE_KEY))
-
+    realm = Realm(base, args.deployment, run, now, out)
     if args.command == "down":
-        try:
-            eta = realmmaint.parse_eta(args.eta)
-        except ValueError as err:
-            p.error(str(err))
-        who = (args.who or env.get("REALM_MAINTENANCE_WHO") or "").strip()
-        if not who:
-            p.error("set REALM_MAINTENANCE_WHO or pass --who (an agent or role label)")
-        reason = args.reason.strip()
-        if not reason:
-            p.error("--reason may not be empty")
-        held = open_notice()
-        if held and not args.force:
-            out(
-                "refusing: a maintenance notice is already open (%s, by %s, back by %s). "
-                "Use --force to replace it."
-                % (held["reason"], held["who"], held["expected_back"])
-            )
-            return 1
-        notice = realmmaint.new_notice(reason, who, now(), eta)
-        res = kube(
-            "annotate",
-            target,
-            "--overwrite",
-            "%s=%s"
-            % (realmmaint.NOTICE_KEY, json.dumps(notice, separators=(",", ":"))),
-        )
-        if res.returncode != 0:
-            out("could not write the notice, not scaling: " + res.stderr.strip())
-            return 1
-        res = kube("scale", target, "--replicas=0")
-        if res.returncode != 0:
-            kube("annotate", target, realmmaint.NOTICE_KEY + "-")
-            out("scale failed, notice cleared: " + res.stderr.strip())
-            return 1
-        out(
-            "notice written; %s scaled to 0; back by %s"
-            % (target, notice["expected_back"])
-        )
-        res = kube(
-            "wait",
-            "--for=delete",
-            "pod",
-            "-l",
-            "app=" + args.deployment,
-            "--timeout=" + DRAIN_TIMEOUT,
-        )
-        if res.returncode != 0:
-            out("warning: pods did not finish draining: " + res.stderr.strip())
-        return 0
-
-    held = open_notice()
-    res = kube("scale", target, "--replicas=1")
-    if res.returncode != 0:
-        out("scale failed: " + res.stderr.strip())
-        return 1
-    res = kube("rollout", "status", target, "--timeout=" + ROLLOUT_TIMEOUT)
-    if res.returncode != 0:
-        out(
-            "not Ready within %s; notice left in place: %s"
-            % (ROLLOUT_TIMEOUT, res.stderr.strip())
-        )
-        return 1
-    if held:
-        last = realmmaint.retire(held, now())
-        res = kube(
-            "annotate",
-            target,
-            "--overwrite",
-            "%s=%s" % (realmmaint.LAST_KEY, json.dumps(last, separators=(",", ":"))),
-            realmmaint.NOTICE_KEY + "-",
-        )
-        if res.returncode != 0:
-            out("Ready, but the notice could not be cleared: " + res.stderr.strip())
-            return 1
-    out("%s is Ready; notice cleared" % target)
-    return 0
+        reason, who, eta = _down_args(p, args, env)
+        return realm.down(reason, who, eta, args.force)
+    return realm.up()
 
 
 if __name__ == "__main__":
