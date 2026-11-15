@@ -8695,6 +8695,12 @@ class Bridge(discord.Client):
             "tool_request", "tool request outcome", craft_rhythm.route_memo,
             craft_rhythm.route_from_memo, craft_rhythm.route_clock,
             MATERIAL_REQUEST_MEMO_SECONDS)
+        # When each full-bagged member was first read short (guildrun.
+        # bag_room_holds): kept in the memo store so a restart does not start
+        # the wait over (#2597).
+        self._bag_room_since: dict = _ClockMemo(
+            "bag_room", "bag-room wait", _bag_wait_memo, _bag_wait_from_memo,
+            _bag_wait_clock, BAG_WAIT_MEMO_SECONDS)
         # Equip rows whose outcome has already been logged, by row id, so each
         # answer is said once (#146).
         self._equip_reported: set = set()
@@ -8953,7 +8959,7 @@ class Bridge(discord.Client):
         # The stall and borrow clocks a deploy must not restart (#817).
         for name in ("_vendor_movement", "_vendor_family_movement",
                      "_bank_family_movement", "_family_lead_since",
-                     "_material_requests", "_tool_requests"):
+                     "_material_requests", "_tool_requests", "_bag_room_since"):
             # A _ClockMemo; anything else (a test's plain dict) has nothing
             # to restore.
             restore = getattr(self.__dict__.get(name), "restore", None)
@@ -31181,14 +31187,42 @@ def _hold_owed(held: dict, needs: dict, owed) -> tuple:
 _ON_A_GUILD_JOB = "on a guild job"
 
 
+# The bag-room wait's clock is kept in the memo store, so a restart does not
+# hold every full-bagged member again for BAG_ROOM_WAIT_SECONDS (#2597). The
+# value is the monotonic start; the memo stores wall time.
+BAG_WAIT_MEMO_SECONDS = 6 * 3600
+
+
+def _bag_wait_memo(start, offset) -> float:
+    return float(start) + offset
+
+
+def _bag_wait_from_memo(value, offset) -> float:
+    return float(value) - offset
+
+
+def _bag_wait_clock(start) -> float:
+    return float(start)
+
+
 def _bag_room_short(owner, facts: dict) -> frozenset:
     """The members held this pass to make bag room before a run
     (guildrun.bag_room_holds, #1568), the wait's clock kept on the bridge so
     the hold is bounded across passes."""
+    book = getattr(owner, "_bag_room_since", None)
+    if book is None:
+        book = owner._bag_room_since = {}
+    # A raid seat under 60 is never held for room (guildrun.levelling_seats).
     short, clock = guildrun.bag_room_holds(
-        facts.get("bag_room") or {}, getattr(owner, "_bag_room_since", None) or {},
-        time.monotonic())
-    owner._bag_room_since = clock
+        facts.get("bag_room") or {}, dict(book), time.monotonic(),
+        exempt=guildrun.levelling_seats(facts.get("rows")))
+    # Updated in place: the book is a _ClockMemo that a restart does not start
+    # over (#2597), which stores only the entries that change.
+    for name in [n for n in book if n not in clock]:
+        del book[name]
+    for name, start in clock.items():
+        if name not in book or book[name] != start:
+            book[name] = start
     return short
 
 
