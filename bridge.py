@@ -19739,8 +19739,6 @@ class Bridge(discord.Client):
         pets = await self._job_pet_offers(members, facts["recent"])
         # A carried weapon that waits on a weapon skill (#793).
         weapons = await self._job_weapon_offers(members, facts["recent"])
-        # A mount for a member with riding and none (#779).
-        mounts = await asyncio.to_thread(_fetch_mount_facts, members)
         mail = await asyncio.to_thread(_job_mail_commands, members)
         pvp = await self._job_pvp_moves(members, facts["recent"], busy)
         # The level step is a spawn walk too (guildlevel.py).
@@ -19750,9 +19748,12 @@ class Bridge(discord.Client):
         census = guildlevel.census(members, leveling)
         if census:
             log.info("guild jobs: %s", census)
-        # THE ROSTER FAMILY'S CLASS STEP, BETWEEN RUNS (#2336).
+        # THE ROSTER FAMILY'S CLASS STEP, BETWEEN RUNS (#2336), PLUS RIDING MOUNTS (#2642).
         family_state = await asyncio.to_thread(_family_class_state, facts)
         family_members, family_class_holds = family_state
+        # A mount for a member with riding and none (#779, #2642).
+        mounts = await asyncio.to_thread(
+            _fetch_mount_facts, list(members) + list(family_members))
         family_danger = await asyncio.to_thread(
             _family_danger, family_members, facts.get("class_book"), facts["recent"])
         # THE PLAN RUNS ON THE EVENT LOOP (#833): it mutates the hunt clock and
