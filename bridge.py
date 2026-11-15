@@ -3087,13 +3087,34 @@ def _town_first(mode: str, names: list, free_slots: dict) -> str:
         return ""
     now = time.monotonic()
     since = _TOWN_FIRST_SINCE.setdefault(key, now)
+    # THE LAST SALE READ WIDENS THE WAIT BY ONE BOUNDED VENDOR STOP: a member a
+    # sale would lift to a run's room holds the run for it, because the module
+    # cannot make that room once the party is inside (bag_pressure.stock_up_short).
+    sellable = globals().get("_VENDOR_SELLABLE", {})
     short = bag_pressure.campaign_resume_short(
-        free_slots, held_seconds=max(now - since, _queue_stall_floor(names)))
+        free_slots, held_seconds=max(now - since, _queue_stall_floor(names)),
+        sellable=sellable)
     if not short:
         _TOWN_FIRST_SINCE.pop(key, None)
         return ""
-    return "town first: %s below %d free slots, and the run waits for room" % (
-        ", ".join(short), bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS)
+    return ("town first: %s below %d free slots (or a vendor sale from a run's "
+            "room of %d), and the run waits for room" % (
+                ", ".join(short), bag_pressure.CAMPAIGN_ADMIT_FREE_SLOTS,
+                bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS))
+
+
+def _stock_up_open(names: list) -> bool:
+    """Whether the family's town-first stock-up stop is still inside its bound."""
+    since = _TOWN_FIRST_SINCE.get(tuple(sorted(names)))
+    held = 0.0 if since is None else time.monotonic() - since
+    return held < bag_pressure.STOCK_UP_CEILING_SECONDS
+
+
+def _stock_up_sellable(names: list):
+    """The last sale read while the stop is open, else None (no stop owed)."""
+    if not _stock_up_open(names):
+        return None
+    return {name: _VENDOR_SELLABLE.get(name) for name in names}
 
 
 # THE HOLD AT THE FLOOR, PER FAMILY (bag_pressure.bag_hold_progress), keyed
@@ -14680,7 +14701,9 @@ class Bridge(discord.Client):
         if (not trip_worth and not in_run
                 and await asyncio.to_thread(_town_first_hold, names)
                 and bag_pressure.town_first_trip_worth(
-                    free_slots, sellable_counts)):
+                    free_slots, sellable_counts,
+                    stock_up=bool(globals().get("_stock_up_open",
+                                                lambda _n: False)(names)))):
             log.info("economy: the family's campaign waits in town for %d free "
                      "slots each (free slots %s, sellable %s) - a vendor trip "
                      "goes now rather than at the trigger of %d",
@@ -15068,11 +15091,19 @@ class Bridge(discord.Client):
             # operator ending the run: the family walked out of Ragefire
             # after two bosses, and nothing ever wrote the dungeon job back,
             # so the campaign sat abandoned (the operator's rule is never to
-            # cancel a campaign). mod-overseer#644 makes bag room inside the
-            # run instead; this pass only says so and leaves the job alone.
+            # cancel a campaign). So this pass leaves the job alone.
+            # WHAT THE RUN DOES FOR ROOM IS SMALL, and the line says only
+            # that (mod-overseer#644): it destroys GREY stacks and leaves a
+            # drop it cannot carry on the corpse; it walks out only when a
+            # member stays beside such a drop for ten minutes in a row. It
+            # sells nothing, so a family that went in with its bags full of
+            # sellable stacks stays full until the run ends. The room is made
+            # BEFORE the door (bag_pressure.stock_up_short).
             log.info(
                 "economy: bag pressure is urgent during a dungeon; the job "
-                "stays on the dungeon and the run makes bag room inside "
+                "stays on the dungeon, and the run destroys only grey stacks "
+                "and leaves drops it cannot carry, so nothing is sold or "
+                "banked until the run ends and the town stop that follows "
                 "(free slots %s)",
                 free_slots,
             )
@@ -21757,8 +21788,10 @@ class Bridge(discord.Client):
             # THE ROOM THE ADMISSION GATE ASKS FOR (#2116): the same two
             # questions it asks, so an errand ends exactly when the campaign
             # it was sent for would be let in.
+            # Looked up: the errand tests load this pass in isolation.
+            stock_up = globals().get("_stock_up_sellable")
             bag_room_made = bool(campaign_waiting) and bag_pressure.bag_room_made(
-                free_slots)
+                free_slots, sellable=stock_up(names) if stock_up else None)
             if bag_pressure_needed and not in_run:
                 await self._aim_stranded_bag_pressure_members(
                     names, leader, positions, free_slots, in_run,
@@ -25135,7 +25168,7 @@ class Bridge(discord.Client):
             _bag_hold_reads, list(fam["names"]), leader)
         # NOT WHILE THE FAMILY IS MID-RUN EITHER (#1243). The vendor pass takes
         # no trip then ("bag pressure is urgent during a dungeon; the job stays
-        # on the dungeon and the run makes bag room inside"), so the trip this
+        # on the dungeon ..."), so the trip this
         # hold waits for never comes: on the dev realm Grug's family read
         # "waits for bag room" from 2026-11-04 09:34Z to 12:23Z, and Zug's from
         # 2026-11-06 03:37Z to 04:20Z, each beside that vendor-pass line.
@@ -25288,7 +25321,8 @@ class Bridge(discord.Client):
         since = _TOWN_FIRST_SINCE.get(tuple(sorted(names)))
         held = 0.0 if since is None else time.monotonic() - since
         short = bag_pressure.campaign_resume_short(
-            free, held_seconds=max(held, _queue_stall_floor(names)))
+            free, held_seconds=max(held, _queue_stall_floor(names)),
+            sellable=globals().get("_VENDOR_SELLABLE", {}))
         if not short:
             return False
         if not slot.town_first:
