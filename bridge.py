@@ -37831,6 +37831,7 @@ def _plan_bank(names: list) -> "bank.Plan":
         over_target=_bank_forecast(names).over_target,
         # A REAGENT THE CRAFTER'S OWN ERRAND IS SHORT OF COMES OUT (#774).
         craft_wants=reagentplan.bank_wants(_craft_plans_of(names)),
+        dropped_second_sets=_bank_dropped_second_sets(names),
         # WHAT THE ITEM PLAN SELLS, GIVES OR LISTS IS NOT BANKED (#2604).
         plan_leaves=plan_leaves, plan_unread=plan_unread,
     )
@@ -37917,33 +37918,43 @@ def _bank_spare(names: list, fresh: bool = False) -> frozenset:
         return frozenset()
 
 
+def _bank_dropped_second_sets(names: list, fresh: bool = False) -> frozenset:
+    """Guids of dropped second-set gear from seat role locking (#2606); blocking."""
+    try:
+        return _bank_policy_read(names, fresh)[2]
+    except Exception:
+        log.exception("bank policy: dropped second sets unreadable; none are named")
+        return frozenset()
+
+
 def _bank_policy_read(names: list, fresh: bool = False) -> tuple:
-    """(guid -> Placement, spare guids) for this family, cached; blocking."""
+    """(guid -> Placement, spare guids, dropped second-set guids), cached."""
     key = tuple(sorted(str(n) for n in names or ()))
     if not key:
-        return {}, frozenset()
+        return {}, frozenset(), frozenset()
     now = time.monotonic()
     hit = _BANK_POLICY_CACHE.get(key)
     if not fresh and hit is not None and now - hit[0] < BANK_POLICY_SECONDS:
-        return hit[1], hit[2]
+        return hit[1], hit[2], hit[3]
     with _connect() as conn, conn.cursor() as cur:
         try:
             facts = bankpolicy.read(
                 cur, list(key), reservations=_keep_reservations(cur, key))
             placed = bankpolicy.place(facts)
             spare = bankpolicy.redundant(facts)
+            dropped = bankpolicy.dropped_second_sets(facts, placed)
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning("bank policy: the facts it reads are missing on "
                             "this world image; it keeps nothing")
-                placed, spare = {}, frozenset()
+                placed, spare, dropped = {}, frozenset(), frozenset()
             else:
                 raise
-    _BANK_POLICY_CACHE[key] = (now, placed, spare)
+    _BANK_POLICY_CACHE[key] = (now, placed, spare, dropped)
     _log_changed("bank policy", ["%s's %s -> %s: %s" % (p.holder, p.item, p.where, p.why)
                                  for p in placed.values()], key)
     _log_changed("bank policy: spare copy", [str(g) for g in sorted(spare)], key)
-    return placed, spare
+    return placed, spare, dropped
 
 
 def _kept_with_bank_policy(cohort=None):
