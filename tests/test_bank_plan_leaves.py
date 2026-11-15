@@ -301,7 +301,10 @@ class OnlyARouteSomethingCarriesOutCounts(unittest.TestCase):
         )
         stacks = shadow.build_stacks(rows_, gear, ex.templates, ex.instance_soulbound)
         got = shadow.leaving(
-            report.plan, list(zip(stacks, rows_)), {itemplan.SELL_VENDOR}, ["Ana"]
+            report.plan,
+            list(zip(stacks, rows_, strict=True)),
+            {itemplan.SELL_VENDOR},
+            ["Ana"],
         )
         self.assertEqual([1, 4], sorted(got))
 
