@@ -35,6 +35,7 @@ import armory
 import auction
 import bag_market
 import guildbags
+import guildgather
 import bag_pressure
 import bag_upgrade
 import bank
@@ -72,6 +73,7 @@ import campaignqueue
 import classic
 import classask
 import deathask
+import deathparty
 import classtrain
 import taughtspells
 import classparty
@@ -164,6 +166,7 @@ import preraid
 import priorities
 import professions
 import profloop
+import production
 import protect
 import questbook
 import questcatalogue
@@ -1429,6 +1432,40 @@ _BOT_HELD_SQL = (
     "WHERE is_bot = 1 AND updated_at > NOW() - INTERVAL 60 SECOND "
     "  AND name IN (%s)"
 )
+
+_GATHER_SEATS_SQL = (
+    "SELECT s.name, s.level, s.map_id, s.in_combat, s.health, s.group_leader, "
+    "  MAX(IF(k.skill = 182, k.value, 0)) AS herb, "
+    "  MAX(IF(k.skill = 186, k.value, 0)) AS mining "
+    "FROM overseer_snapshot s "
+    "LEFT JOIN character_skills k ON k.guid = s.guid AND k.skill IN (182, 186) "
+    "WHERE s.is_bot = 1 AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+    "  AND s.name IN (%s) GROUP BY s.guid, s.name, s.level, s.map_id, "
+    "  s.in_combat, s.health, s.group_leader"
+)
+
+
+def _fetch_gather_seats(names: list, instance_maps) -> list:
+    """The raid seats in `names` that are in the world, as guildgather.Seat."""
+    if not names:
+        return []
+    sql = _GATHER_SEATS_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        rows = cur.fetchall()
+    return [
+        guildgather.Seat(
+            name=r["name"],
+            level=int(r["level"]),
+            skills={182: int(r["herb"] or 0), 186: int(r["mining"] or 0)},
+            online=True,
+            alive=int(r["health"] or 0) > 0,
+            grouped=bool(r["group_leader"]),
+            in_instance=int(r["map_id"] or -1) in instance_maps,
+            in_combat=bool(r["in_combat"]),
+        )
+        for r in rows
+    ]
 
 
 def _bot_held_names(names: list) -> list:
@@ -4977,7 +5014,8 @@ def _spire_family(family: str, fam: dict, rows: list) -> bool:
                              done["status"] == "cancelled")
     slot = spirerun.order_slot(rows, last, time.time())
     if slot is None:
-        _spire_say(family, "waits out its last run or a stop")
+        _spire_say(family, spirerun.wait_line(last, time.time())
+                   if last is not None else "waits out its last run or a stop")
         return False
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(spirerun.ORDER_SQL,
@@ -4987,9 +5025,11 @@ def _spire_family(family: str, fam: dict, rows: list) -> bool:
             return False
         for queue_id in slot.shift:
             cur.execute(spirerun.SHIFT_SQL, (queue_id,))
+    ahead = spirerun.behind_line(rows, slot)
     log.warning("spire: %s has ten seats at level %d; the Upper Spire run is "
-                "ordered at position %d", campaignqueue._family(family),
-                spirerun.FLOOR, slot.position)
+                "ordered at position %d%s", campaignqueue._family(family),
+                spirerun.FLOOR, slot.position,
+                " behind " + ahead if ahead else "")
     return True
 
 
@@ -8451,6 +8491,7 @@ PASSES = (
     _Pass("_corps_tickets_loop"),
     _Pass("_stray_follow_loop"),
     _Pass("_member_ride_loop"),
+    _Pass("_guild_gather_loop"),
 )
 
 
@@ -11649,6 +11690,7 @@ class Bridge(discord.Client):
         await self._prof_loop_say(key, step, on_job, gather_why)
         if step.job:
             await self._prof_loop_write(key, running, step.job)
+        await asyncio.to_thread(_record_production, names, skills)
 
     async def _prof_loop_facts(self, key: str, names: list, skills: dict,
                                errand) -> profloop.Facts:
@@ -17027,9 +17069,19 @@ class Bridge(discord.Client):
         return False
 
     async def _bank_family_progress(
-        self, names: list, leader: str,
+        self, names: list, leader: str, party: list | None = None,
     ) -> vendor_stall.FamilyProgress:
         """Track whether the family has stayed split across bank polls.
+
+        THE PARTY IS THE TRIP'S OWN, NOT THE WHOLE FAMILY'S. `party` is the
+        leader plus the members that have bank work this pass, leader first so
+        it is the anchor. A straggler with nothing to bank takes no part in the
+        trip, and counted it vetoed the trip for the members that did: Og
+        walked 2190 yards behind for hours while Bork and Ugga stood beside the
+        leader with their reagents in the bank, and the deferral ("remained
+        split for 17184 seconds") could never lift, because the banker aim is
+        what would have brought the family together. A far member WITH bank
+        work still counts, so the rule keeps its original job.
 
         A MEMBER SITTING OUT TO CRAFT IS NOT THE FAMILY SPLITTING (#872). It
         stands wherever it crafts and the banker trip is not for it, so it is
@@ -17037,10 +17089,11 @@ class Bridge(discord.Client):
         read Grug's family as split for 26015 seconds and deferred every
         banker trip for as long as Og crafted.
         """
+        watched = list(party) if party else list(names)
         progress = vendor_stall.family_progress(
             self._bank_family_movement.get(leader),
-            await asyncio.to_thread(_fetch_positions, names),
-            tuple(_standin_running(names)),
+            await asyncio.to_thread(_fetch_positions, watched),
+            tuple(_standin_running(watched)),
             time.monotonic(),
         )
         if progress.current is not None:
@@ -17072,7 +17125,8 @@ class Bridge(discord.Client):
     async def _settle_bank_errand(self, names: list, leader: str,
                                   moves_unasked: bool,
                                   cohort: str | None = None,
-                                  waiting: int = 0) -> str:
+                                  waiting: int = 0,
+                                  party: list | None = None) -> str:
         """Aim, hold or hand back the bank pass's `banker` errand (infra#3728).
 
         THE HALF THAT WAS NEVER BUILT, HERE TOO. `banker` is one of the four
@@ -17121,7 +17175,7 @@ class Bridge(discord.Client):
         """
         leader_town = await asyncio.to_thread(_fetch_town, leader)
         outstanding = await asyncio.to_thread(_outstanding_bank_moves, names)
-        family_stall = await self._bank_family_progress(names, leader)
+        family_stall = await self._bank_family_progress(names, leader, party)
         current_aim = await asyncio.to_thread(_current_travel_npc, leader)
         step = bank.errand_step(
             bool(leader_town.banker), outstanding, moves_unasked,
@@ -17311,7 +17365,10 @@ class Bridge(discord.Client):
                                                          bag_steps),
                                        cohort=_cohort_key(cohort),
                                        waiting=sum(1 for h in holders
-                                                   if not at_the_counter[h]))
+                                                   if not at_the_counter[h]),
+                                       party=[leader] + [
+                                           h for h in dict.fromkeys(holders)
+                                           if h != leader])
         # Below the settling, so the aim still precedes the row, and above the
         # `no moves` return, so a family that walked here for a bag step alone
         # has it written on the cycle it arrives.
@@ -23694,6 +23751,14 @@ class Bridge(discord.Client):
             raise
         if parties:
             self._begin_class_parties(parties)
+        death_starts = deathparty.plan_starts(
+            facts["asks"], facts.get("answers") or (), facts.get("death_loops") or {},
+            free={m.name for m in mates if m.name not in held},
+            taken=seated_names)
+        for start in death_starts:
+            log.info("death party: ask %d seats a start: %s leads, %s helps, "
+                     "meeting at %s", start.ask_id, start.leader,
+                     ", ".join(start.helpers), start.place)
         await _say_class_escalation(escalation)
         await _say_guild_pugs(pug_pass)
         if run_id:
@@ -24196,6 +24261,9 @@ class Bridge(discord.Client):
             stood = await operator_held(set(fams) | set(pending), "queue")
             pending = {k: v for k, v in pending.items() if k not in stood}
             fams = {k: v for k, v in fams.items() if k not in stood}
+            say_held = getattr(self, "_say_spire_held", None)
+            if say_held is not None:
+                say_held(stood)
         # THE STAND-IN BEFORE ANYTHING DRIVES THE FAMILY (standin.py): a member
         # sitting out to craft leaves every family's names here, so no hold,
         # gate or job write below reaches it.
@@ -24374,6 +24442,14 @@ class Bridge(discord.Client):
         log.info("trade turn: %s starts for %d seconds - %s", label, setting,
                  said.reason)
         return True
+
+    def _say_spire_held(self, stood: set) -> None:
+        """Say once per change why a held family gets no Upper Spire order: the
+        hold removes it before the pass, so the pass could not say it itself."""
+        holds = getattr(self, "_operator_holds", {}) or {}
+        for key in sorted(stood, key=str):
+            hold = holds.get(campaignqueue._family(key).lower()) or holds.get("*")
+            _spire_say(key, spirerun.held_line(str(getattr(hold, "reason", "") or "")))
 
     async def _spire_pass(self, pending: dict, fams: dict) -> bool:
         """Each family's Upper Spire pass; True when any queue moved. A failed
@@ -26517,8 +26593,10 @@ class Bridge(discord.Client):
                      "aimed", who)
             return
         state = await self._farm_state_for(cohort, job, leader)
-        got = await asyncio.to_thread(_farm_reads, names, leader, item, skill,
-                                      state["started"])
+        got = await asyncio.to_thread(
+            _farm_reads, names, leader, item, skill,
+            state["started"], state.get("deaths_since", state["started"]),
+        )
         gathered = await self._farm_count(cohort, state, got, who)
         step = farmjob.decide(_farm_order(job, item, skill, got["name"], state),
                               _farm_reads_for(state, got, gathered))
@@ -26648,17 +26726,27 @@ class Bridge(discord.Client):
                 return None
             log.info("farm: %s was told job=%s again after its last order ended, "
                      "so this is a new order", who, farming[0])
-            self._farm_state.pop(key or "", None)
         return farming[0], sorted(standing), who
 
     async def _farm_state_for(self, cohort, job: str, leader: str) -> dict:
         """This family's farm state for `job`, begun from the job row if new."""
         slot = getattr(cohort, "key", None) or ""
         state = self._farm_state.get(slot)
-        if state is None or state.get("job") != job:
+        if state is None or state.get("job") != job or state.get("ended"):
             started = await asyncio.to_thread(_farm_started, leader, job)
-            state = {"job": job, "started": started or time.time(), "baseline": None,
-                     "held": None, "visited": {}, "aim": "", "walking": None}
+            begun = started or time.time()
+            same_renewed = (
+                state is not None
+                and state.get("job") == job
+                and bool(state.get("ended"))
+            )
+            deaths_since = (
+                (state.get("deaths_since") or state.get("started") or begun)
+                if same_renewed else begun
+            )
+            state = {"job": job, "started": begun, "deaths_since": deaths_since,
+                     "baseline": None, "held": None, "visited": {}, "aim": "",
+                     "walking": None}
             self._farm_state[slot] = state
         return state
 
@@ -27023,6 +27111,35 @@ class Bridge(discord.Client):
             except Exception:
                 log.exception("corps tickets: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
+
+    async def _guild_gather_loop(self) -> None:
+        """Raid seats under level 60 that hold Herbalism or Mining are told to
+        pick up the nodes they pass (guildgather.py): `nc +gather`, `nc +loot`.
+        No walk is written; the grant rides their questing and travelling."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("GUILD_GATHER_SECONDS", "600"))
+        await asyncio.sleep(min(cycle, 300.0))
+        seen: dict = {}
+        while not self.is_closed():
+            try:
+                if guildgather.enabled():
+                    await self._guild_gather_once(seen)
+            except Exception:
+                log.exception("guild gather: pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _guild_gather_once(self, seen: dict) -> None:
+        instances = {int(k) for k in guildjobs.entrances()}
+        seats = await asyncio.to_thread(
+            _fetch_gather_seats, sorted(guildgather.seat_names()), instances)
+        rows = guildgather.plan(seats, seen, time.monotonic())
+        for name, command, source in rows:
+            await asyncio.to_thread(
+                _insert_command, core.InsertCommand(name, command, source))
+        told = sorted({r[0] for r in rows})
+        log.info("guild gather: %d of %d raid seat(s) in the world told to "
+                 "gather%s", len(told), len(seats),
+                 (": " + ", ".join(told)) if told else "")
 
     async def _member_ride_loop(self) -> None:
         """A rider whose run is over, and who stands outside, leaves its group
@@ -37991,6 +38108,26 @@ TOWN_ERRAND_VENDOR_YARDS = 250.0
 # family key -> townerrand.State, and family key -> {step: first run}.
 _TOWN_ERRANDS: dict = {}
 
+def _record_production(names: list, skills: dict) -> None:
+    """Keep, per member, when a trade skill last rose (production.py).
+
+    One memo row per member, written only when the record changed, so a quiet
+    cycle writes nothing. The memo store logs its own failures; a pass that
+    cannot record must not stop the loop that called it.
+    """
+    now = time.time()
+    try:
+        kept = _memo_read(production.MEMO_KIND)
+        for name in names:
+            before = kept.get(name, (None, 0.0))[0]
+            after = production.observe(before, skills.get(name) or {}, now)
+            if after != before:
+                _memo_upsert(production.MEMO_KIND, name, after, now,
+                             now + production.KEEP_SECONDS)
+    except Exception:
+        log.exception("production: could not record the skill record")
+
+
 # --- the profession loop (profloop.py, #2419) ---------------------------------
 # Family key -> profloop.State. In memory: a restart joins each family at the
 # phase its jobs say it is in.
@@ -38626,13 +38763,16 @@ def _farm_reads_for(state: dict, got: dict, gathered: int):
     return farmjob.Reads(
         skills=got["skills"], levels=got["levels"], leader_at=got["leader_at"],
         spawns=tuple(got["spawns"]), zone_levels=got["zone_levels"],
-        deaths=tuple(got["deaths"]), free_slots=got["free"], gathered=gathered,
+        deaths=tuple(got["deaths"]),
+        zone_deaths=tuple(got.get("zone_deaths", got["deaths"])),
+        free_slots=got["free"], gathered=gathered,
         creatures=tuple(got.get("creatures", ())),
         walking=walking, visited=state["visited"], now=time.time(),
         stood_since=state["stand"][1])
 
 
-def _farm_reads(names: list, leader: str, item: int, skill: str, since: float) -> dict:
+def _farm_reads(names: list, leader: str, item: int, skill: str, since: float,
+                zone_since: float | None = None) -> dict:
     """Everything farmjob.decide needs for one family, in one thread.
 
     The danger reading is the slow one (a creature scan per point), so only
@@ -38667,6 +38807,11 @@ def _farm_reads(names: list, leader: str, item: int, skill: str, since: float) -
         top = _gather_danger(near.map_id, near.x, near.y)
         if top is not None:
             zone_levels[zone] = top
+    deaths = _farm_deaths(names, since)
+    zone_deaths = (
+        deaths if zone_since is None or float(zone_since) == float(since)
+        else _farm_deaths(names, zone_since)
+    )
     return {
         "skills": skills,
         "levels": levels,
@@ -38674,7 +38819,8 @@ def _farm_reads(names: list, leader: str, item: int, skill: str, since: float) -
         "spawns": spawns,
         "creatures": creatures,
         "zone_levels": zone_levels,
-        "deaths": _farm_deaths(names, since),
+        "deaths": deaths,
+        "zone_deaths": zone_deaths,
         "free": _fetch_free_slots(names),
         "held": int(held),
         "name": name,

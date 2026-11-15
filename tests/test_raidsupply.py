@@ -1370,6 +1370,22 @@ class TheAlchemistsPace(unittest.TestCase):
 
 
 class StockpileTargetsAndHerbs(unittest.TestCase):
+    @staticmethod
+    def _mc_night_raiders(hunter_count: int = 0) -> list:
+        raiders = []
+        for i in range(8):
+            raiders.append(
+                rs.Raider("Tank%d" % i, rs.TANK, 1, main_tank=(i == 0), family=(i == 0))
+            )
+        for i in range(11):
+            raiders.append(rs.Raider("Heal%d" % i, rs.HEALER, 5, False, False))
+        for i in range(12):
+            cls = 3 if i < hunter_count else 4
+            raiders.append(rs.Raider("Phys%d" % i, rs.PHYSICAL, cls, False, False))
+        for i in range(9):
+            raiders.append(rs.Raider("Cast%d" % i, rs.CASTER, 8, False, False))
+        return raiders
+
     def test_new_mc_consumables_in_supplies_with_sources(self):
         by_entry = rs.SUPPLY_BY_ENTRY
         arcane = by_entry[13454]
@@ -1399,6 +1415,146 @@ class StockpileTargetsAndHerbs(unittest.TestCase):
         )
         self.assertEqual(stone.make.recipe_item, 13490)
         self.assertIn("13490", stone.source)
+
+    def test_reagent_names_cover_every_crafted_supply_reagent(self):
+        for supply in rs.SUPPLIES:
+            if supply.make is None:
+                continue
+            for entry, _ in supply.make.reagents:
+                self.assertIn(entry, rs.REAGENT_NAMES, supply.name)
+
+    def test_per_guild_per_night_target_table_matches_2425(self):
+        raiders = self._mc_night_raiders()
+        wants = {
+            entry: sum(by_raider.values())
+            for entry, by_raider in rs.night_wants(raiders).items()
+        }
+        self.assertEqual(wants[rs.GREATER_FIRE_PROTECTION], 96)
+        self.assertEqual(wants[rs.MAJOR_HEALING], 116)
+        self.assertEqual(wants[rs.MAJOR_MANA], 82)
+        self.assertEqual(wants[13510], 8)
+        self.assertEqual(wants[13511], 11)
+        self.assertEqual(wants[13512], 9)
+        self.assertEqual(wants[13452], 20)
+        self.assertEqual(wants[rs.GREATER_ARCANE_ELIXIR], 9)
+        self.assertEqual(wants[rs.ELIXIR_OF_GIANTS], 12)
+        self.assertEqual(wants[rs.GREATER_STONESHIELD_POTION], 8)
+        self.assertEqual(wants[20452], 40)
+        self.assertEqual(wants[13931], 40)
+
+        with_hunters = rs.night_wants(self._mc_night_raiders(hunter_count=2))
+        self.assertEqual(sum(with_hunters[rs.MAJOR_MANA].values()), 86)
+
+        hs = rs.herb_shortfall(raiders, {}, guild="Cave")
+        self.assertEqual(hs["guild"], "Cave")
+        self.assertIn("Cave:", hs["line"])
+        self.assertIn("Black Lotus", hs["lotus_note"])
+        self.assertIn("flasks", hs["lotus_note"])
+        by_entry = {row["entry"]: row for row in hs["herbs"]}
+        expected_need = {
+            rs.DREAMFOIL: 509,
+            rs.GOLDEN_SANSAM: 232,
+            rs.MOUNTAIN_SILVERSAGE: 192,
+            rs.ICECAP: 197,
+            rs.GROMSBLOOD: 68,
+            rs.PLAGUEBLOOM: 40,
+            rs.ELEMENTAL_FIRE: 96,
+            rs.BLACK_LOTUS: 28,
+            rs.STONESCALE_OIL: 40,
+            rs.SUNGRASS: 12,
+            rs.THORIUM_ORE: 8,
+            rs.SANDWORM_MEAT: 40,
+            rs.RAW_NIGHTFIN_SNAPPER: 40,
+        }
+        self.assertEqual(set(by_entry), set(expected_need))
+        for entry, need in expected_need.items():
+            row = by_entry[entry]
+            self.assertEqual(row["need"], need, row["name"])
+            self.assertEqual(row["held"], 0, row["name"])
+            self.assertEqual(row["short"], need, row["name"])
+            self.assertIn("%d needed, 0 held, %d short" % (need, need), row["line"])
+
+    def test_held_consumables_and_reagents_reduce_per_guild_shortfall(self):
+        raiders = self._mc_night_raiders()
+        hs = rs.herb_shortfall(
+            raiders,
+            {
+                rs.GREATER_ARCANE_ELIXIR: 5,
+                rs.DREAMFOIL: 100,
+                rs.BLACK_LOTUS: 10,
+            },
+            guild="Cave",
+        )
+        by_entry = {row["entry"]: row for row in hs["herbs"]}
+        self.assertEqual(by_entry[rs.DREAMFOIL]["need"], 494)
+        self.assertEqual(by_entry[rs.DREAMFOIL]["held"], 100)
+        self.assertEqual(by_entry[rs.DREAMFOIL]["short"], 394)
+        self.assertEqual(by_entry[rs.MOUNTAIN_SILVERSAGE]["need"], 187)
+        self.assertEqual(by_entry[rs.BLACK_LOTUS]["need"], 28)
+        self.assertEqual(by_entry[rs.BLACK_LOTUS]["held"], 10)
+        self.assertEqual(by_entry[rs.BLACK_LOTUS]["short"], 18)
+
+    def test_each_guild_card_carries_its_own_herb_shortfall_and_page_renders_it(self):
+        cave_group = {
+            "guild": "Cave",
+            "family": "Grug",
+            "family_names": ["Grug"],
+            "rows": [
+                {"name": "Grug", "level": 60, "class_id": 1},
+                {"name": "Ugga", "level": 60, "class_id": 8},
+            ],
+        }
+        cave_chars = [
+            {"name": "Grug", "level": 60, "class": 1},
+            {"name": "Ugga", "level": 60, "class": 8},
+        ]
+        bonkers_group = {
+            "guild": "Bonkers",
+            "family": "Zug",
+            "family_names": ["Zug"],
+            "rows": [
+                {"name": "Zug", "level": 60, "class_id": 1},
+            ],
+        }
+        bonkers_chars = [
+            {"name": "Zug", "level": 60, "class": 1},
+        ]
+        cave_card = raidready.build_guild(
+            cave_group,
+            cave_chars,
+            [],
+            [],
+            55,
+            {},
+            supply={"have": {rs.DREAMFOIL: 3}, "knowers": {}, "bank": 0},
+        )
+        bonkers_card = raidready.build_guild(
+            bonkers_group,
+            bonkers_chars,
+            [],
+            [],
+            55,
+            {},
+            supply={"have": {rs.ELEMENTAL_FIRE: 2}, "knowers": {}, "bank": 0},
+        )
+        cave_hs = cave_card["supply"]["herb_shortfall"]
+        bonkers_hs = bonkers_card["supply"]["herb_shortfall"]
+        self.assertEqual(cave_hs["guild"], "Cave")
+        self.assertEqual(bonkers_hs["guild"], "Bonkers")
+        cave_herbs = {r["entry"]: r for r in cave_hs["herbs"]}
+        bonkers_herbs = {r["entry"]: r for r in bonkers_hs["herbs"]}
+        self.assertEqual(cave_herbs[rs.DREAMFOIL]["held"], 3)
+        self.assertNotIn(rs.SUNGRASS, bonkers_herbs)
+        self.assertEqual(bonkers_herbs[rs.ELEMENTAL_FIRE]["need"], 4)
+        self.assertEqual(bonkers_herbs[rs.ELEMENTAL_FIRE]["held"], 2)
+        self.assertEqual(bonkers_herbs[rs.ELEMENTAL_FIRE]["short"], 2)
+        self.assertGreater(
+            cave_herbs[rs.DREAMFOIL]["need"], bonkers_herbs[rs.DREAMFOIL]["need"]
+        )
+
+        raid_js = (HERE / "app" / "views" / "raid.js").read_text(encoding="utf-8")
+        self.assertIn("herbShortfall(s.herb_shortfall)", raid_js)
+        self.assertNotIn("gl.herb_shortfall", raid_js)
 
 
 class TopRecipesTracking(unittest.TestCase):

@@ -808,35 +808,119 @@ class EverySentenceIsReadable(unittest.TestCase):
             self.assertNotIn("\u2014", said, said)
 
 
-class HerbShortfallSection(unittest.TestCase):
-    def test_herb_shortfall_is_computed_and_rendered_on_raid_page(self):
-        p = payload(holdings=[holding("Ugga", raidgoals.DREAMFOIL, 5)])
-        self.assertIn("herb_shortfall", p)
-        hs = p["herb_shortfall"]
-        rows = {r["name"]: r for r in hs["herbs"]}
-        self.assertIn(raidgoals.DREAMFOIL, rows)
-        self.assertEqual(rows[raidgoals.DREAMFOIL]["held"], 5)
-        self.assertGreater(rows[raidgoals.DREAMFOIL]["need"], 5)
-        self.assertIn("Black Lotus", hs["lotus_note"])
-        import pathlib
+class NewMoltenCoreRecipesInRaidgoals(unittest.TestCase):
+    def test_raidgoals_includes_new_mc_recipes_without_summed_herb_shortfall(self):
+        self.assertIn(raidgoals.GREATER_ARCANE_ELIXIR, raidgoals.RECIPE_BY_PRODUCT)
+        self.assertIn(raidgoals.ELIXIR_OF_GIANTS, raidgoals.RECIPE_BY_PRODUCT)
+        self.assertIn(raidgoals.GREATER_STONESHIELD_POTION, raidgoals.RECIPE_BY_PRODUCT)
+        p = payload()
+        self.assertNotIn("herb_shortfall", p)
+        self.assertFalse(hasattr(raidgoals, "_herb_shortfall"))
 
-        raid_js = (
-            pathlib.Path(__file__).resolve().parent.parent / "app" / "views" / "raid.js"
-        ).read_text(encoding="utf-8")
-        self.assertIn("herb_shortfall", raid_js)
+    def test_per_guild_herb_shortfall_separates_cave_and_bonkers_with_new_consumables(
+        self,
+    ):
+        import raidready
+        import raidsupply as rs
 
-    def test_herb_shortfall_includes_mc_elixirs_and_stoneshield(self):
-        p = payload(
-            holdings=[
-                holding("Ugga", raidgoals.SUNGRASS, 1),
-                holding("Ugga", raidgoals.THORIUM_ORE, 1),
-            ]
-        )
-        rows = {r["name"]: r for r in p["herb_shortfall"]["herbs"]}
-        self.assertIn(raidgoals.SUNGRASS, rows)
-        self.assertIn(raidgoals.THORIUM_ORE, rows)
-        self.assertGreater(rows[raidgoals.SUNGRASS]["need"], 0)
-        self.assertGreater(rows[raidgoals.THORIUM_ORE]["need"], 0)
+        guild_rows = [
+            {
+                "name": "Grug",
+                "level": 60,
+                "class_id": 1,
+                "race": 2,
+                "guild_name": "Cave",
+                "guildid": 1,
+            },
+            {
+                "name": "Ugga",
+                "level": 60,
+                "class_id": 8,
+                "race": 2,
+                "guild_name": "Cave",
+                "guildid": 1,
+            },
+            {
+                "name": "Bork",
+                "level": 60,
+                "class_id": 4,
+                "race": 2,
+                "guild_name": "Cave",
+                "guildid": 1,
+            },
+            {
+                "name": "Zug",
+                "level": 60,
+                "class_id": 1,
+                "race": 1,
+                "guild_name": "Bonkers",
+                "guildid": 2,
+            },
+        ]
+        char_rows = [
+            {
+                "name": r["name"],
+                "level": r["level"],
+                "class": r["class_id"],
+                "race": r["race"],
+            }
+            for r in guild_rows
+        ]
+        holdings = [
+            holding("Ugga", raidgoals.SUNGRASS, 1),
+            holding("Grug", raidgoals.THORIUM_ORE, 1),
+            holding("Zug", raidgoals.ELEMENTAL_FIRE, 2),
+        ]
+        families = {"Grug": ["Grug", "Ugga", "Bork"], "Zug": ["Zug"]}
+        groups = raidready.group_guilds(guild_rows, families)
+        self.assertEqual([g["guild"] for g in groups], ["Cave", "Bonkers"])
+
+        cards = {}
+        for group in groups:
+            goals = payload(
+                guild=group["rows"],
+                roster=group["family_names"],
+                chars=char_rows,
+                holdings=holdings,
+            )
+            self.assertNotIn("herb_shortfall", goals)
+            cards[group["guild"]] = raidready.build_guild(
+                group,
+                char_rows,
+                [],
+                [],
+                55,
+                goals,
+                holding_rows=holdings,
+            )
+
+        cave_hs = cards["Cave"]["supply"]["herb_shortfall"]
+        bonkers_hs = cards["Bonkers"]["supply"]["herb_shortfall"]
+        self.assertEqual(cave_hs["guild"], "Cave")
+        self.assertEqual(bonkers_hs["guild"], "Bonkers")
+        cave_by_entry = {r["entry"]: r for r in cave_hs["herbs"]}
+        bonkers_by_entry = {r["entry"]: r for r in bonkers_hs["herbs"]}
+
+        # Cave has 1 tank (Grug), 1 physical DPS (Bork), 1 caster (Ugga):
+        # - Elixir of Giants (9206, spell 11472) -> 1 Sungrass + 1 Gromsblood
+        # - Greater Stoneshield Potion (13455, spell 17570) -> 2 Stonescale Oil + 1 Thorium Ore
+        # - Greater Arcane Elixir (13454, spell 17573) -> 3 Dreamfoil + 1 Mountain Silversage
+        self.assertEqual(cave_by_entry[rs.SUNGRASS]["need"], 1)
+        self.assertEqual(cave_by_entry[rs.SUNGRASS]["held"], 1)
+        self.assertEqual(cave_by_entry[rs.SUNGRASS]["short"], 0)
+        self.assertEqual(cave_by_entry[rs.THORIUM_ORE]["need"], 1)
+        self.assertEqual(cave_by_entry[rs.THORIUM_ORE]["held"], 1)
+        self.assertEqual(cave_by_entry[rs.THORIUM_ORE]["short"], 0)
+        self.assertEqual(cave_by_entry[rs.ELEMENTAL_FIRE]["held"], 0)
+
+        # Bonkers has only 1 tank (Zug): no Elixir of Giants or Greater Arcane Elixir needed,
+        # and Zug's 2 Elemental Fire count only toward Bonkers, never Cave.
+        self.assertNotIn(rs.SUNGRASS, bonkers_by_entry)
+        self.assertEqual(bonkers_by_entry[rs.THORIUM_ORE]["need"], 1)
+        self.assertEqual(bonkers_by_entry[rs.THORIUM_ORE]["held"], 0)
+        self.assertEqual(bonkers_by_entry[rs.ELEMENTAL_FIRE]["need"], 4)
+        self.assertEqual(bonkers_by_entry[rs.ELEMENTAL_FIRE]["held"], 2)
+        self.assertEqual(bonkers_by_entry[rs.ELEMENTAL_FIRE]["short"], 2)
 
 
 if __name__ == "__main__":

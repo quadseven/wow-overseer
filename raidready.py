@@ -313,7 +313,8 @@ def _level_blockers(raiders: list, min_level) -> tuple:
     hard = (
         [
             "%s below level %d, the lowest the instance's own access row lets "
-            "in: %s."
+            "in, and an order is refused until every approved seat is online "
+            "and at that level: %s."
             % (_count(len(under), "raider is", "raiders are"), gate, _names(under))
         ]
         if under
@@ -328,6 +329,63 @@ def _level_blockers(raiders: list, min_level) -> tuple:
         else []
     )
     return hard, soft
+
+
+# THE GEAR FLOOR IS A PLANNING NUMBER (#2573): raidfloor derives it from assumed
+# boss damage. The order path, the module and the instance's access row (min
+# average item level 0) never read it, so it stops nothing and is drawn SOFT.
+FLOOR_NOT_ENFORCED = (
+    " Planning number, not enforced: nothing refuses an order or holds the door on it."
+)
+
+
+def _floor_soft(sentences: list) -> list:
+    return [t + FLOOR_NOT_ENFORCED for t in sentences]
+
+
+def _eligible_counts(raiders: list, min_level) -> dict:
+    """Placed raiders at the instance's level, by role (online is not known to
+    the card; the order path also needs it)."""
+    gate = int(min_level) if min_level else raidrun.MIN_LEVEL[raidrun.MOLTEN_CORE]
+    ready = [m for m in raiders if int(m.get("level") or 0) >= gate]
+    return {
+        "gate": gate,
+        "seats": len(ready),
+        "tanks": len([m for m in ready if m.get("role") == "tank"]),
+        "healers": len([m for m in ready if m.get("role") == "healer"]),
+        "left_out": [m["name"] for m in raiders if m not in ready],
+    }
+
+
+def _quorum_blockers(raiders: list, min_level) -> list:
+    """HARD: the module holds the raid at the door below its quorum. The
+    numbers are raidrun's copy of the module's defaults."""
+    have = _eligible_counts(raiders, min_level)
+    want = (raidrun.QUORUM_SEATS, raidrun.QUORUM_TANKS, raidrun.QUORUM_HEALERS)
+    got = (have["seats"], have["tanks"], have["healers"])
+    if all(h >= w for h, w in zip(got, want, strict=True)):
+        return []
+    return [
+        "The module holds a raid at the door unless %d seats, %d tanks and %d "
+        "healers stand there (Overseer.Raid.QuorumSeats, QuorumTanks, "
+        "QuorumHealers, at their defaults); %d seats, %d tanks and %d healers "
+        "are at level %d or more."
+        % (*want, have["seats"], have["tanks"], have["healers"], have["gate"])
+    ]
+
+
+def _below_level_card(raiders: list, min_level) -> dict:
+    """How many placed seats are below the instance's level, and in which roles."""
+    have = _eligible_counts(raiders, min_level)
+    below = [m for m in raiders if m["name"] in have["left_out"]]
+    return {
+        "gate": have["gate"],
+        "below": len(below),
+        "seats": len(raiders),
+        "tanks": len([m for m in below if m.get("role") == "tank"]),
+        "healers": len([m for m in below if m.get("role") == "healer"]),
+        "damage": len([m for m in below if m.get("role") not in ("tank", "healer")]),
+    }
 
 
 def _gear_blockers(raiders: list, gear: dict, attuned: set) -> list:
@@ -450,10 +508,11 @@ def _blockers(
     hard = (
         _staffing_blockers(lineup, raiders, runnable, clears, gathers)
         + level_hard
-        + raidfloor.hard_blockers(raiders, worn_rows)
+        + _quorum_blockers(raiders, min_level)
     )
     soft = (
-        level_soft
+        _floor_soft(raidfloor.hard_blockers(raiders, worn_rows))
+        + level_soft
         + _thin_role_blockers(lineup)
         + _gear_blockers(raiders, gear, attuned)
         + _support_blockers(lineup, goals)
@@ -907,6 +966,7 @@ def build_guild(
         "encounter_line": lineup.get("encounter_line", ""),
         "gear_line": _gear_line(raiders, gear),
         "blockers": blockers,
+        "seats_below_level": _below_level_card(raiders, min_level),
         "blockers_line": (
             "Nothing stands between this guild and its first raid."
             if not blockers
@@ -922,7 +982,9 @@ def build_guild(
         "attunement": raidrun.attunement(
             list(group["family_names"]), attuned, in_log, fragments
         ),
-        "supply": _supply_card(lineup, members, worn_rows, group, supply),
+        "supply": _supply_card(
+            lineup, members, worn_rows, group, supply, holding_rows=holding_rows
+        ),
         "preraid": preraid,
         "gates": _gates(min_level),
     }
@@ -938,22 +1000,41 @@ def _gates(min_level) -> dict:
     }
 
 
-def _supply_card(lineup, members, worn_rows, group, supply) -> dict:
+def _supply_card(
+    lineup, members, worn_rows, group, supply, holding_rows: list = ()
+) -> dict:
     """The Molten Core supply section (#275): raidsupply's card for this guild."""
     classes = {m["name"]: m.get("class_id") for m in members}
     raiders = raidsupply.raiders_from_lineup(
         lineup, classes, worn_rows, group["family_names"]
     )
     read = supply or {}
+    have = dict(read.get("have") or {})
+    if not have and holding_rows:
+        entry_by_name = {
+            **{name: entry for entry, name in raidsupply.REAGENT_NAMES.items()},
+            **{s.name: s.entry for s in raidsupply.SUPPLIES},
+        }
+        by_member = carried_each(
+            holding_rows, [m["name"] for m in members], tuple(entry_by_name)
+        )
+        for counts in by_member.values():
+            for item_name, count in counts.items():
+                entry = entry_by_name[item_name]
+                have[entry] = have.get(entry, 0) + count
+    guild = group.get("guild") or (
+        "%s's family" % group["family"] if group.get("family") else ""
+    )
     return raidsupply.card(
         raiders,
-        read.get("have") or {},
+        have,
         read.get("knowers") or {},
         None,
         read.get("bank"),
         crafters=group["family_names"],
         snapshots=read.get("snapshots") or (),
         unobtainable=raidcraft.unobtainable_lines(),
+        guild=guild,
     )
 
 
