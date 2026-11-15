@@ -821,6 +821,35 @@ def key_words(members, door) -> str:
     return "'%s' carries %s" % (holder.name, door.key_name) if holder else ""
 
 
+# A SEAT IS LEVEL-MATCHED, OR IT COSTS THE GROUP ITS EXPERIENCE. The core gives
+# a member nothing when it is above the highest member the victim is not gray
+# to, halves every member's experience when the victim is gray to the highest
+# member, and splits a kill by level share, so a level 54 tank or a lent
+# level 60 healer in a door for levels 35 to 44 takes the largest share of
+# kills that are gray to it and halves the four members who are levelling.
+# `gray_cutoff` is the core's own gray level (a mob at or under it is gray); a
+# door's mobs are taken at its floor, the lowest level the door asks for, which
+# only ever reads them lower than they are, so the rule errs toward refusing.
+def gray_cutoff(level: int) -> int:
+    """The highest mob level that is gray to a character of `level`."""
+    level = int(level)
+    if level <= 5:
+        return 0
+    if level < 40:
+        return level - 5 - level // 10
+    if level < 60:
+        return level - 1 - level // 5
+    return level - 9
+
+
+def kills_gray(level: int, door: Door) -> bool:
+    """Whether a member of `level` in `door` makes the door's mobs gray to it."""
+    floor = getattr(door, "floor", None)
+    if floor is None:
+        return False  # an unread floor holds nobody, as an unread bosses' level does
+    return int(floor) <= gray_cutoff(level)
+
+
 def carries(member: Member, door: Door) -> bool:
     """May this member take the tank or healer seat at this door: at or over
     its carry_floor. An unread bosses' level holds nobody."""
