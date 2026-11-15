@@ -9,11 +9,28 @@ walks themselves numbered none. These tests run the real counting function
 against a fake command log.
 """
 
+import types
 import unittest
 from unittest import mock
 
-import bridge
-import guildroute
+from _stub_modules import PYMYSQL, fresh_import, stub_modules
+
+with stub_modules(pymysql=PYMYSQL):
+    import guildroute
+
+
+def _import_bridge():
+    stub = types.ModuleType("discord")
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    stub.Client = Client
+    return fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
+
+
+bridge = _import_bridge()
 
 
 class _Log:
