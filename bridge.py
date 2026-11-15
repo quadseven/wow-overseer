@@ -107,6 +107,7 @@ import guineapig
 import deathloop
 import guildlevel
 import guildfacts
+import guildranks
 import guildrun
 import familyclass
 import familyseat
@@ -8485,6 +8486,7 @@ PASSES = (
     _Pass("_weapon_skill_loop"),
     _Pass("_recruit_loop"),
     _Pass("_team_sync_loop"),
+    _Pass("_guild_ranks_loop"),
     _Pass("_quester_loop"),
     _Pass("_retire_loop"),
     _Pass("_raid_spec_loop"),
@@ -18366,6 +18368,64 @@ class Bridge(discord.Client):
                     await self._team_sync_once()
                 except Exception:
                     log.exception("team sync pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _guild_ranks_once(self) -> None:
+        """Emit at most one promotion or MOTD update per managed guild per pass."""
+        for guild in sorted(raidteams.GROUPS):
+            state = await asyncio.to_thread(_guild_rank_state, guild)
+            if not state:
+                continue
+            members = state["members"]
+            master = next(
+                (
+                    str(m.get("name") or "")
+                    for m in members
+                    if m.get("rank") is not None
+                    and int(m["rank"]) == guildranks.RANK_MASTER
+                    and m.get("name")
+                ),
+                "",
+            )
+            if not master:
+                continue
+            pending = await asyncio.to_thread(_rank_pending, master)
+            actions = guildranks.plan_actions(
+                guild,
+                master,
+                members,
+                state["motd"],
+                active_goal=state["active_goal"],
+                raid_keyword="mc" if guild in raidteams.GROUPS else "",
+                pending=pending,
+            )
+            if not actions:
+                continue
+            action = actions[0]
+            target_arg = action.target if action.verb == "promote" else ""
+            row = await asyncio.to_thread(
+                _insert_guild, master, action.command, GUILD_RANKS_SOURCE, target_arg
+            )
+            log.info(
+                "guild ranks: %s - %s via %s (%s)%s",
+                guild,
+                action.command,
+                master,
+                action.why,
+                "" if row else "; the row was not written",
+            )
+
+    async def _guild_ranks_loop(self) -> None:
+        """Promote eligible guild members and align guild MOTD, one change per pass."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("GUILD_RANKS_CYCLE_SECONDS", "300"))
+        await asyncio.sleep(min(cycle, 60.0))
+        while not self.is_closed():
+            if os.environ.get("GUILD_RANKS", "on") != "off":
+                try:
+                    await self._guild_ranks_once()
+                except Exception:
+                    log.exception("guild ranks pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _quester_loop(self) -> None:
@@ -40558,6 +40618,98 @@ def _team_actor(guild: str) -> str:
             (head,),
         )
         return head if cur.fetchone() else ""
+
+
+GUILD_RANKS_SOURCE = "guildranks"
+GUILD_RANKS_PENDING_MINUTES = 30
+GUILD_RANKS_RECENT_MINUTES = 10
+
+_GUILD_RANK_GUILD_SQL = "SELECT guildid, name, motd FROM guild WHERE name = %s LIMIT 1"
+_GUILD_RANK_MEMBERS_SQL = (
+    "SELECT c.name AS name, c.level AS level, gm.`rank` AS `rank`, "
+    "(s.name IS NOT NULL) AS online "
+    "FROM guild_member gm "
+    "JOIN characters c ON c.guid = gm.guid "
+    "LEFT JOIN overseer_snapshot s "
+    "ON s.name = c.name AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+    "WHERE gm.guildid = %s"
+)
+_GUILD_RANK_GOAL_SQL = (
+    "SELECT kind, skill_name, target, guild FROM overseer_goal "
+    "WHERE status = 'active' AND (guild = %s OR (guild = '' AND kind = 'dungeon')) "
+    "ORDER BY (guild = %s) DESC, id DESC LIMIT 1"
+)
+_GUILD_RANK_PENDING_SQL = (
+    "SELECT command, target_arg FROM overseer_command "
+    "WHERE kind = 'guild' AND target_name = %s "
+    "AND (command LIKE %s OR command LIKE %s) "
+    "AND ((status IN ('pending', 'claimed') AND created_at > NOW() - INTERVAL %s MINUTE) "
+    "OR created_at > NOW() - INTERVAL %s MINUTE)"
+)
+
+
+def _guild_rank_state(guild: str) -> dict | None:
+    """Current motd, member rank/presence rows, and active goal for `guild`."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_GUILD_RANK_GUILD_SQL, (guild,))
+        guild_row = cur.fetchone()
+        if not guild_row:
+            return None
+        gid = int(guild_row["guildid"])
+        try:
+            cur.execute(_GUILD_RANK_MEMBERS_SQL, (gid,))
+            members = [dict(r) for r in cur.fetchall()]
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+        active_goal = None
+        try:
+            cur.execute(_GUILD_RANK_GOAL_SQL, (guild, guild))
+            goal_row = cur.fetchone()
+            if goal_row:
+                active_goal = {
+                    "kind": goal_row.get("kind") or "",
+                    "instance": goal_row.get("skill_name") or "",
+                    "target": goal_row.get("target"),
+                }
+        except pymysql.err.MySQLError as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+    return {
+        "motd": str(guild_row.get("motd") or ""),
+        "members": members,
+        "active_goal": active_goal,
+    }
+
+
+def _rank_pending(master: str) -> frozenset[str]:
+    """Pending or recently emitted promote targets and MOTD markers for `master`."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                _GUILD_RANK_PENDING_SQL,
+                (
+                    master,
+                    "promote %",
+                    "motd %",
+                    GUILD_RANKS_PENDING_MINUTES,
+                    GUILD_RANKS_RECENT_MINUTES,
+                ),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return frozenset()
+            raise
+        out = set()
+        for r in cur.fetchall():
+            cmd = str(r.get("command") or "")
+            if cmd.startswith("motd "):
+                out.add("motd")
+            arg = str(r.get("target_arg") or "")
+            if arg:
+                out.add(arg)
+    return frozenset(out)
 
 
 # --- the questers' play (questers.py, #924) --------------------------------
