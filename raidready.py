@@ -1021,30 +1021,10 @@ def _supply_card(
         lineup, classes, worn_rows, group["family_names"]
     )
     read = supply or {}
-    have = dict(read.get("have") or {})
-    if not have and holding_rows:
-        entry_by_name = {
-            **{name: entry for entry, name in raidsupply.REAGENT_NAMES.items()},
-            **{s.name: s.entry for s in raidsupply.SUPPLIES},
-        }
-        by_member = carried_each(
-            holding_rows, [m["name"] for m in members], tuple(entry_by_name)
-        )
-        for counts in by_member.values():
-            for item_name, count in counts.items():
-                entry = entry_by_name[item_name]
-                have[entry] = have.get(entry, 0) + count
+    have = _guild_supply_have(read, holding_rows, members)
     guild = group.get("guild") or (
         "%s's family" % group["family"] if group.get("family") else ""
     )
-    team = (faction or "").lower()
-    vendor_recipes = {
-        make.recipe_item
-        for item in raidsupply.SUPPLIES
-        if (make := item.make)
-        and make.recipe_item
-        and any(vendor.team == team for vendor in make.recipe_vendors)
-    }
     return raidsupply.card(
         raiders,
         have,
@@ -1055,8 +1035,39 @@ def _supply_card(
         snapshots=read.get("snapshots") or (),
         unobtainable=raidcraft.unobtainable_lines(),
         guild=guild,
-        vendor_recipes=vendor_recipes,
+        vendor_recipes=_faction_vendor_recipes(faction),
     )
+
+
+def _guild_supply_have(read, holding_rows, members) -> dict:
+    """Combine the guild supply read, or the raid card's bag fallback."""
+    have = dict(read.get("have") or {})
+    if have or not holding_rows:
+        return have
+    entry_by_name = {
+        **{name: entry for entry, name in raidsupply.REAGENT_NAMES.items()},
+        **{s.name: s.entry for s in raidsupply.SUPPLIES},
+    }
+    by_member = carried_each(
+        holding_rows, [m["name"] for m in members], tuple(entry_by_name)
+    )
+    for counts in by_member.values():
+        for item_name, count in counts.items():
+            entry = entry_by_name[item_name]
+            have[entry] = have.get(entry, 0) + count
+    return have
+
+
+def _faction_vendor_recipes(faction: str) -> set:
+    """Recipe entries sold by vendors for this guild's faction."""
+    team = (faction or "").lower()
+    return {
+        make.recipe_item
+        for item in raidsupply.SUPPLIES
+        if (make := item.make)
+        and make.recipe_item
+        and any(vendor.team == team for vendor in make.recipe_vendors)
+    }
 
 
 def build_readiness(groups: list) -> dict:
