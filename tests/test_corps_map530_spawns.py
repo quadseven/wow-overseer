@@ -166,7 +166,7 @@ class _DictCursor:
 
     def fetchall(self):
         cols = [d[0] for d in (self._cur.description or ())]
-        return [dict(zip(cols, row)) for row in self._cur.fetchall()]
+        return [dict(zip(cols, row, strict=True)) for row in self._cur.fetchall()]
 
 
 def _world_db() -> sqlite3.Connection:
