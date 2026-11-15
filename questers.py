@@ -1094,6 +1094,20 @@ def bag_room_refused(name, tried) -> frozenset:
     return frozenset(out)
 
 
+def bags_full_hunt(name, tried) -> bool:
+    """Whether a hunt of this quester was refused for a full bag
+    (classhunt.BAGS_FULL_REASON) inside SELL_COOLDOWN_MINUTES. The module calls
+    that refusal retryable, but nothing in a hunt makes room, so asking again
+    every pass was the same refusal (142 in a day for one member): the quester
+    sells first and the hunt waits out the cooldown."""
+    for a in tried or ():
+        if a.name != name or not a.failed or a.age_minutes >= SELL_COOLDOWN_MINUTES:
+            continue
+        if classhunt.is_hunt_row(a.command) and classhunt.BAGS_FULL_REASON in a.reason:
+            return True
+    return False
+
+
 def cannot_turn_in(name, tried) -> dict:
     """quest id -> the module's words, for each hand-in of this quester the
     module refused as never retryable (CANNOT_TURN_IN), newest words kept.
@@ -1722,6 +1736,14 @@ def next_move(
             quest.title,
         )
         return _move(classquest.TAKE, member, quest, spot, said), "", never_held
+    # A hunt just refused for a full bag waits on the sale.
+    if bags_full_hunt(member.name, tried):
+        return (
+            None,
+            "%s's last hunt was refused for a full bag and waits on a sale"
+            % member.name,
+            never_held,
+        )
     # 4. A quest it holds: the nearest objective spawn within its level.
     move = _hunt(cat, member, skip, left)
     crossing_wait = ""
@@ -2038,7 +2060,7 @@ def needs_sale(member, tried=()) -> bool:
     """Whether the quester's bags are read and at SELL_FLOOR or under, or the
     world just refused one of its takes for bag room (`bag_room_refused`),
     whatever its bags read (#1992)."""
-    if bag_room_refused(member.name, tried):
+    if bag_room_refused(member.name, tried) or bags_full_hunt(member.name, tried):
         return True
     return member.free_slots is not None and int(member.free_slots) <= SELL_FLOOR
 
@@ -2071,6 +2093,8 @@ def sell_step(member, carried, worn, kept, cat: Catalogue, recent, cap, tried=()
     free = member.free_slots
     if bag_room_refused(member.name, tried):
         room = "was refused a quest for %s" % BAG_ROOM_REFUSAL
+    elif bags_full_hunt(member.name, tried):
+        room = "was refused a hunt for a full bag"
     else:
         room = "has %d free bag slot%s" % (int(free), "" if int(free) == 1 else "s")
     return guildcorps.Step(
