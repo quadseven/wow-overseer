@@ -706,11 +706,50 @@ CAMPAIGN_ADMIT_FREE_SLOTS = TOWN_RUN_FREE_SLOTS + 1
 CAMPAIGN_RESUME_CEILING_SECONDS = 45 * 60
 
 
+# ONE BOUNDED VENDOR STOP BEFORE A RUN, WHEN IT WOULD MAKE A RUN'S ROOM. The
+# admission floor above lets a family in at four free slots each, and a run
+# fills that in the first fight: on wow-dev 2026-11-15 two families went into
+# Blackrock Depths at 4 to 5 free slots each carrying 11 to 19 stacks a vendor
+# would buy, reached none free inside, and left every blue drop on the corpse
+# for hours (the module only destroys grey stacks inside a run, and walks out
+# only for a drop that stays stranded for ten minutes). The module cannot make
+# the room once the party is inside, so the bridge makes it before the door: a
+# member below the run's room (CAMPAIGN_RESUME_FREE_SLOTS) who carries at least
+# STOCK_UP_MIN_SELLABLE stacks a vendor will buy holds the run for ONE trip.
+# The wait is bounded by its own short ceiling, not the 45 minute one #2116
+# measured, and it asks nothing of a member nobody can lift.
+STOCK_UP_MIN_SELLABLE = 4
+STOCK_UP_CEILING_SECONDS = 15 * 60
+
+
+def stock_up_short(
+    free_slots: dict,
+    sellable: dict | None,
+    held_seconds: float = 0.0,
+) -> tuple:
+    """Members a sale would lift to a run's room, sorted; () when none or late."""
+    if not sellable or held_seconds >= STOCK_UP_CEILING_SECONDS:
+        return ()
+    short = []
+    for name, free in (free_slots or {}).items():
+        offered = sellable.get(name)
+        if not isinstance(free, int) or not isinstance(offered, int):
+            continue
+        if (
+            free >= 0
+            and free < CAMPAIGN_RESUME_FREE_SLOTS
+            and offered >= STOCK_UP_MIN_SELLABLE
+        ):
+            short.append(str(name))
+    return tuple(sorted(short))
+
+
 def campaign_resume_short(
     free_slots: dict,
     held_seconds: float = 0.0,
     resume: int = CAMPAIGN_ADMIT_FREE_SLOTS,
     ceiling: float = CAMPAIGN_RESUME_CEILING_SECONDS,
+    sellable: dict | None = None,
 ) -> tuple:
     """Members still short of the resume floor, sorted; () when the run may go.
 
@@ -720,19 +759,22 @@ def campaign_resume_short(
     An unknown or negative reading blocks nothing, the same fail-open rule
     `family_town_run_needed` keeps for the same reason: a broken read must not
     hold a campaign in town. Past `ceiling` seconds in town nothing is short.
+
+    With `sellable` (the last vendor read), members a sale would lift to a
+    run's room are short too, for STOCK_UP_CEILING_SECONDS only.
     """
     if held_seconds >= ceiling:
         return ()
-    return tuple(
-        sorted(
-            str(name)
-            for name, free in (free_slots or {}).items()
-            if isinstance(free, int) and 0 <= free < resume
-        )
-    )
+    below = {
+        str(name)
+        for name, free in (free_slots or {}).items()
+        if isinstance(free, int) and 0 <= free < resume
+    }
+    below.update(stock_up_short(free_slots, sellable, held_seconds))
+    return tuple(sorted(below))
 
 
-def bag_room_made(free_slots: dict) -> bool:
+def bag_room_made(free_slots: dict, sellable: dict | None = None) -> bool:
     """Whether the family has the bag room a waiting campaign asks for (#2116).
 
     The two questions the admission gate asks, at once: nobody at or below
@@ -743,7 +785,7 @@ def bag_room_made(free_slots: dict) -> bool:
     return (
         bool(free_slots)
         and not family_town_run_needed(free_slots)
-        and not campaign_resume_short(free_slots)
+        and not campaign_resume_short(free_slots, sellable=sellable)
     )
 
 
@@ -755,6 +797,7 @@ def town_first_trip_worth(
     free_slots: dict,
     sellable: dict | None,
     resume: int = CAMPAIGN_ADMIT_FREE_SLOTS,
+    stock_up: bool = False,
 ) -> bool:
     """Whether a family held in town for bag room should walk to a vendor.
 
@@ -768,10 +811,11 @@ def town_first_trip_worth(
 
     While the hold lasts the trigger is the resume floor: a trip is worth
     taking when selling lifts a member short of it to at least `resume`.
+    `stock_up` adds the stop the run is held for (stock_up_short).
     """
     return family_town_run_needed(
         free_slots, minimum_free=resume - 1, sellable=sellable
-    )
+    ) or (stock_up and bool(stock_up_short(free_slots, sellable)))
 
 
 # THE HOLD AT THE FLOOR HAS A WAY OUT. A member at or below
