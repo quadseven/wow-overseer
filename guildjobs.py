@@ -719,6 +719,9 @@ class Member:
     # The member's purchase order (purse.Order), None when unread: gear and
     # food then spend as they did before it existed.
     purse: object = None
+    # The low rung this member is sent back to farm (lowrung.Feed), None when
+    # its guild is short of none it can work.
+    feed: object = None
     # Somebody else leads the group it is in (the snapshot's group leader is
     # not its own guid): it stands where its leader stands, so its standing
     # still says nothing of it (stood_still_step).
@@ -1138,9 +1141,15 @@ def _densest_field(mobs, origin, low, high, name, noun) -> Spot | None:
     )
 
 
-def skinning_field(beasts, origin, level, value) -> Spot | None:
-    """The beast spawn a skinner is sent to, or None (see `_densest_field`)."""
-    low, high = skin_band(level, value)
+def skinning_field(beasts, origin, level, value, band=None) -> Spot | None:
+    """The beast spawn a skinner is sent to, or None (see `_densest_field`).
+
+    `band` (lowrung.py) replaces the level band with the one a starved
+    material drops in, still capped at what the skill can skin."""
+    if band is None:
+        low, high = skin_band(level, value)
+    else:
+        low, high = _int(band[0]), min(_int(band[1]), skinnable_level(value))
     return _densest_field(
         beasts, origin, low, high, "a pack of beasts", "skinnable beasts"
     )
@@ -1176,13 +1185,13 @@ def farms_cloth(member, has_field) -> bool:
     return member.holds(TAILORING) or not has_field
 
 
-def cloth_field(mobs, origin, level) -> Spot | None:
+def cloth_field(mobs, origin, level, band=None) -> Spot | None:
     """The humanoid spawn a cloth farmer is sent to, or None.
 
     `mobs` are (Spot, level) for the world's creature spawns whose loot holds
     cloth (`CLOTH_ENTRIES`), already limited to the farmer's map.
     """
-    low, high = cloth_band(level)
+    low, high = cloth_band(level) if band is None else band
     return _densest_field(
         mobs, origin, low, high, "a pack of humanoids", "cloth-dropping humanoids"
     )

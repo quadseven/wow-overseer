@@ -765,7 +765,27 @@ def _rule_quest(w: _World, s: Stack, me: Member):
             ),
             _opt(BANK_PERSONAL, QUEST, "quest item banked, quest log not read", "R3"),
         ]
-    # The log was read and no open quest names it: it is only a leftover.
+    if s.quest_needed is not False:
+        # A QUEST THE HOLDER COULD STILL TAKE NAMES IT (#2607), or the test was
+        # not read: go and finish it. It may go to the bank, and when the bank
+        # is full it stays carried; it is never a sale, a listing or a
+        # destroy, which the pressure release would otherwise reach first
+        # because such a stack is cheap.
+        return [
+            _opt(
+                BANK_PERSONAL,
+                QUEST,
+                "a quest the holder could still take names it",
+                "R3",
+            ),
+            _opt(
+                KEEP_CARRY,
+                QUEST,
+                "a quest the holder could still take names it, no room to bank it",
+                "R3",
+            ),
+        ]
+    # The log was read and no quest names it: it is only a leftover.
     out = []
     if _certainly_useless(s):
         out.append(

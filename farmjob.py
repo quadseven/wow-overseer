@@ -204,6 +204,45 @@ def target_for(skills) -> str:
     return job_for(best[0]) if best else ""
 
 
+# GROUPING UP FOR AN INSTANCE (#2498). An individual family farms on its own
+# outdoors. A material whose only source is a dungeon cannot be walked to
+# alone, so the family is queued for that dungeon, a few runs at a time, and
+# is one party again for as long as the run lasts.
+INSTANCE_RUNS = 3
+# A creature drop rarer than this is background noise, not a reason to enter
+# a dungeon (the same floor the outdoor kill survey uses).
+INSTANCE_MIN_CHANCE = KILL_MIN_CHANCE
+# The open-world maps: a drop here is farmable without a party.
+OUTDOOR_MAPS = frozenset({0, 1, 530, 571})
+
+
+def instance_door(item, spawns, creatures, drops, front_door) -> str:
+    """The dungeon keyword a member's `farm:<item>` order needs, or "".
+
+    Only an ITEM order can need one (a skill order is walked to a node), and
+    only when nothing outdoors gives the item: no node spawn on any map, no
+    creature spawn the leader's map offered, and no creature drop at
+    INSTANCE_MIN_CHANCE on an open-world map. `drops` is [(map id, best drop
+    chance)] over every creature that drops it. Of the dungeon maps left, the
+    best chance wins (ties by keyword), through `front_door(map id)`, which
+    answers "" for a map the overseer has no door for. "" means leave the
+    order to end as it did.
+    """
+    if not item or spawns or creatures:
+        return ""
+    rows = [
+        (int(m), float(c)) for m, c in drops or () if float(c) >= INSTANCE_MIN_CHANCE
+    ]
+    if any(m in OUTDOOR_MAPS for m, _chance in rows):
+        return ""
+    doors = []
+    for map_id, chance in rows:
+        keyword = front_door(map_id)
+        if keyword:
+            doors.append((-chance, keyword))
+    return min(doors)[1] if doors else ""
+
+
 @dataclass(frozen=True)
 class Creature(gatheraim.Spawn):
     """One surveyed creature spawn that drops the ordered item.
