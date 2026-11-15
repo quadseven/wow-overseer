@@ -223,8 +223,9 @@ MAX_BODY = 4096
 # a post from anywhere on the network used to be obeyed regardless. Off (the
 # default, and what the deployment sets today), each answers 403 and does
 # nothing; on, the network-only trust model stands. /api/director keeps its
-# own token, and /api/frame is the capture agent's.
-OPERATOR_ROUTES = frozenset({"/api/chat", "/api/decree", "/api/watch"})
+# own token, /api/spectate is the dashboard's Watch order (a run id only), and
+# /api/frame is the capture agent's.
+OPERATOR_ROUTES = frozenset({"/api/chat", "/api/decree", "/api/watch", "/api/spectate"})
 
 # AT MOST THIS MANY /api/chat MODEL CALLS AT ONCE (#1842). Each one holds a
 # request thread on the gateway for up to LLM_TIMEOUT, and ThreadingHTTPServer
@@ -7116,6 +7117,57 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("director order failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    @_get_route("spectate state query failed")
+    def _spectate_state(_query: dict, _ctx) -> tuple[int, dict]:
+        """GET /api/spectate - where the observer camera is, for the Watch buttons.
+
+        Open like every GET here. `run` is the guild run the camera was told to
+        follow (None for any other order), `switch_in` the seconds before a
+        different group may take it, and `stream` the observer's broadcast
+        address, which is empty until the observer character is in the world.
+        """
+        row = _read_watch_order()
+        state = director.spectate_state(row)
+        state["watcher"] = director.WATCHER_NAME
+        state["stream"] = family.broadcast_url(director.WATCHER_NAME) or ""
+        return 200, state
+
+    def _spectate_post(self) -> None:
+        """POST /api/spectate {"run": <id>} - point the camera at a live group.
+
+        Behind the operator switch (OPERATOR_ROUTES), not a token: no secret
+        reaches a browser. The only thing read from the body is an integer, and
+        director.spectate_spec turns it into `run <id>`, so no text from the
+        request reaches the grammar or SQL. A different group inside the dwell
+        is a 409 with the wait. Read-then-write, not a transaction: two clicks
+        in the same instant both pass, and the later write wins, which is the
+        same outcome the dwell gives a click one second later.
+        """
+        request = self._read_json_body()
+        if request is None:
+            return
+        spec = director.spectate_spec(request.get("run"))
+        if isinstance(spec, director.SpecError):
+            self._send(400, "application/json", json.dumps({"error": spec.why}).encode())
+            return
+        try:
+            verdict = director.spectate_verdict(_read_watch_order(), spec.text())
+            if not verdict.allowed:
+                self._send(409, "application/json", json.dumps(
+                    {"error": verdict.reason, "switch_in": verdict.switch_in}).encode())
+                return
+            with _connect() as conn, conn.cursor() as cur:
+                cur.execute(director.SET_SQL,
+                            (spec.text(), "web:spectate", director.MANDATE_TTL))
+            self._send(200, "application/json", json.dumps({
+                "ok": True, "run": int(spec.arg), "spec": spec.text(),
+                "expires_in": director.MANDATE_TTL,
+                "stream": family.broadcast_url(director.WATCHER_NAME) or "",
+            }).encode())
+        except Exception:
+            log.exception("spectate order failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _read_json_body(self) -> dict | None:
         """The POST body as a dict, or None after sending the error itself."""
         try:
@@ -7373,6 +7425,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/chat/party": _chat_party,
         "/api/watch": _watch_state,
         "/api/director": _director_state,
+        "/api/spectate": _spectate_state,
         "/": _index,
         "/index.html": _index,
         "/shapes.json": _shapes_file,
@@ -7389,6 +7442,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/decree": _decree_post,
         "/api/watch": _watch_post,
         "/api/director": _director_post,
+        "/api/spectate": _spectate_post,
         "/api/frame": _frame_post,
         # The cutter routes trust what /api/frame trusts: the capture agent's
         # network path, with no token and no new credential.
