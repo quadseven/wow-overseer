@@ -1613,6 +1613,10 @@ def _tier_cap_first(m, pvp, pending, recent, cap):
     if m.name in (pending or ()):
         return None, ""
     capped = capped_trades(m)
+    if not capped and m.level >= RAID_CEILING and _on_town_stop(m, recent):
+        # A seat at the level cap has no levelling to protect: on a town stop
+        # it buys a rank within the margin of its ceiling ahead of PvP too.
+        capped = due_trades(m)
     if not capped:
         return None, ""
     return _train_step(m, {}, cap, recent, held=capped)
@@ -1640,6 +1644,14 @@ def _tier_cap_first(m, pvp, pending, recent, cap):
 # WHEN: on a town stop the seat already makes (a town action of its own inside
 # TOWN_STOP_MINUTES), else as a short dedicated errand once it has made none
 # for DEDICATED_AFTER_MINUTES; between the two it waits for its next stop.
+# TOWN STOPS (slice 3). The same town stop carries a raid seat's rank-ups and
+# its casts. The order, top to bottom, for a seat under level 60: class quest,
+# room, bags, upkeep, the early post, the at-ceiling rank walk, the profession
+# errand, PvP, the mail walk and the walk out of an outgrown zone, and only then
+# (_town_trades_step) a rank within RANK_UP_MARGIN of the ceiling, a recipe, and
+# a cast from what its bags hold, on a town stop it just made. Levelling is
+# never displaced. A seat at level 60 has none to protect: it ranks within the
+# margin ahead of PvP on a town stop, and crafts without one.
 PROFESSION_GOAL = "a profession trainer"
 TOWN_STOP_ACTIONS = frozenset(
     {
@@ -1745,6 +1757,46 @@ def _lay_assigned_trades(members, crafters, trades) -> dict:
             s for s in trades.get(name, ()) if s not in pair
         )
     return assigned
+
+
+def _on_town_stop(m, recent) -> bool:
+    """Whether this member made a town stop (a town action that did not fail)
+    inside TOWN_STOP_MINUTES: it stands in a town now."""
+    return any(age <= TOWN_STOP_MINUTES for age in _town_stop_ages(m.name, recent))
+
+
+def due_trades(member) -> tuple:
+    """The held trades whose next rank the member's level and skill allow now:
+    at its ceiling or within RANK_UP_MARGIN of it (next_rank). Never starts a
+    trade; the purse is `_train_step`'s to judge."""
+    out = []
+    for skill in sorted(RANKS):
+        value, ceiling = member.skill(skill)
+        if ceiling > 0 and next_rank(skill, value, ceiling, member.level) is not None:
+            out.append(skill)
+    return tuple(out)
+
+
+def _town_trades_step(m, trades, kept, recent, cap, crafters, master):
+    """(the step or None, a note): what a raid seat does with its trades once
+    its levelling has nothing to say (see TOWN STOPS below). On a town stop it
+    already made, or at level 60 with no levelling to protect: the next rank
+    of a trade, a recipe from the trainer, then a cast from what its bags hold,
+    each on its own cooldown."""
+    if m.follows or not m.alive or m.map_id not in guildrun.OPEN_WORLD_MAPS:
+        return None, ""
+    if m.level < RAID_CEILING and not _on_town_stop(m, recent):
+        return None, ""
+    step, note = _train_step(m, trades, cap, recent, held=due_trades(m))
+    if step is not None:
+        return step, ""
+    step = _learn_step(m, cap, recent)
+    if step is not None:
+        return step, note
+    if _cooling(m, "craft", recent):
+        return None, note
+    step, why = _craft_or_room(m, kept, recent, cap, crafters, master)
+    return step, _join(note, why)
 
 
 def _profession_unfit(m, pvp, pending) -> bool:
@@ -3427,7 +3479,8 @@ def postable(member: Member, kept, crafting=False, bar=None) -> list:
     # Materials its own next casts eat stay in the bags, one batch of them
     # (craft_keep, #2397): a member that can still raise a crafting trade does
     # not post away what it would cast, and posts the rest.
-    keep_for = craft_keep(member) if member.role == MAINTENANCE or crafting else {}
+    keeps = member.role in (MAINTENANCE, RAIDER) or crafting
+    keep_for = craft_keep(member) if keeps else {}
     held = _kept_for_casts(
         [c for c in member.carried if c.material and not c.junk], keep_for
     )
@@ -8703,8 +8756,17 @@ def _member_job(m, trades, fields, doors, pending, crafters, master, kept, recen
         return _maintenance_step(m, trades, fields, crafters, master, kept, recent, cap)
     if m.role == SUMMONER:
         return _summoner_step(m, doors, pending, crafters, master, kept, recent, cap)
+    trade, trade_note = _town_trades_step(
+        m, trades, kept, recent, cap, crafters, master
+    )
+    if trade is not None:
+        return trade, trade.said, ""
     step, doing, note = _shared_step(m, crafters, master, kept, recent, cap)
-    return step, doing or "levels toward the raid and raids when the guild does", note
+    return (
+        step,
+        doing or "levels toward the raid and raids when the guild does",
+        _join(trade_note, note),
+    )
 
 
 # A RECALL IS ASKED AGAIN WITHIN ITS STEP (2026-10-08). A stranded knight fights
