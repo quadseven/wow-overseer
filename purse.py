@@ -18,7 +18,8 @@ THE ORDER. What the member buys first is what it saves for first:
      world's riding trainer (RIDING). Bought by the riding walk
      (guildjobs.riding_step).
   3. FOOD AND DRINK (restsupply), from what is left after riding.
-  4. GEAR: vendor gear for empty or weak slots (gearup), from what is left.
+  4. CLASS REAGENTS (classreagents), from what is left after food and drink.
+  5. GEAR: vendor gear for empty or weak slots (gearup), from what is left.
 
 A purchase spends only the purse ABOVE everything ahead of it (`spendable`).
 So a member holding 4 silver and owing 3 gold of spells buys no gear: it saves.
@@ -46,9 +47,10 @@ from dataclasses import dataclass
 
 SPELLS = "class spells"
 RIDING = "riding"
-GEAR = "gear"
 FOOD = "food and drink"
-ORDER = (SPELLS, RIDING, FOOD, GEAR)
+REAGENTS = "class reagents"
+GEAR = "gear"
+ORDER = (SPELLS, RIDING, FOOD, REAGENTS, GEAR)
 
 RIDING_SKILL = 762
 
@@ -217,6 +219,7 @@ def order(
     if rank is not None:
         wants.append(Want(RIDING, rank.cost, rank.name, rank.spell))
     wants.append(Want(FOOD, 0, FOOD))
+    wants.append(Want(REAGENTS, 0, REAGENTS))
     wants.append(Want(GEAR, 0, GEAR))
     return Order(
         str(name), _int(level), max(0, _int(purse)), tuple(wants), bool(hungry)

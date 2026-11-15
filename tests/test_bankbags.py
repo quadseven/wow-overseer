@@ -8,6 +8,7 @@ import pathlib
 import unittest
 
 import bankbags as bb
+import purse
 
 BRIDGE = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
 LINEN = 4238
@@ -181,6 +182,112 @@ class TheRowsReadAsFacts(unittest.TestCase):
         body = body[: body.index("\n    async def ")]
         self.assertIn("town.banker", body)
         self.assertIn("bankbags.visit_steps(f, floor)", body)
+
+
+class FullBankOfKeptSlots(unittest.TestCase):
+    """#2608: full bank of kept stacks drops the 4x purse share under purse.ORDER."""
+
+    def test_full_bank_of_kept_stacks_drops_purse_share_for_next_slot(self):
+        zug = bb.Facts(
+            "Zug",
+            money=100_000,
+            bought=2,
+            placed=2,
+            worn=(12,) * 4,
+            bank_full_of_kept=True,
+        )
+        grug = bb.Facts(
+            "Grug",
+            money=99_000,
+            bought=2,
+            placed=2,
+            worn=(12,) * 4,
+            bank_full_of_kept=True,
+        )
+        unfull = bb.Facts(
+            "Og",
+            money=200_000,
+            bought=2,
+            placed=2,
+            worn=(12,) * 4,
+            bank_full_of_kept=False,
+        )
+        self.assertEqual(bb.step(zug, 12)[0].command, bb.BUY_SLOT)
+        self.assertIsNone(bb.step(grug, 12)[0])
+        self.assertIsNone(bb.step(unfull, 12)[0])
+
+    def test_full_bank_of_kept_uses_purse_order_for_spells_riding_and_food(self):
+        with_debt = bb.Facts(
+            "Zug",
+            money=250_000,
+            bought=4,
+            placed=4,
+            worn=(12,) * 4,
+            bank_full_of_kept=True,
+            purse_order=purse.order(
+                "Zug",
+                40,
+                250_000,
+                spells_copper=20_000,
+                riding_max=75,
+                hungry=False,
+            ),
+        )
+        debt_paid = bb.Facts(
+            "Zug",
+            money=250_000,
+            bought=4,
+            placed=4,
+            worn=(12,) * 4,
+            bank_full_of_kept=True,
+            purse_order=purse.order(
+                "Zug",
+                40,
+                250_000,
+                spells_copper=0,
+                riding_max=150,
+                hungry=False,
+            ),
+        )
+        step, why = bb.step(with_debt, 12)
+        self.assertIsNone(step)
+        self.assertIn("0 copper", why)
+        self.assertEqual(bb.step(debt_paid, 12)[0].command, bb.BUY_SLOT)
+
+    def test_unfull_bank_also_defers_to_purse_order_debt(self):
+        with_spell_debt = bb.Facts(
+            "Zug",
+            money=10_000,
+            bought=0,
+            placed=0,
+            worn=(12,) * 4,
+            bank_full_of_kept=False,
+            purse_order=purse.order(
+                "Zug", 10, 10_000, spells_copper=7_000, riding_max=0, hungry=False
+            ),
+        )
+        debt_cleared = bb.Facts(
+            "Zug",
+            money=10_000,
+            bought=0,
+            placed=0,
+            worn=(12,) * 4,
+            bank_full_of_kept=False,
+            purse_order=purse.order(
+                "Zug", 10, 10_000, spells_copper=0, riding_max=0, hungry=False
+            ),
+        )
+        self.assertIsNone(bb.step(with_spell_debt, 12)[0])
+        self.assertEqual(bb.step(debt_cleared, 12)[0].command, bb.BUY_SLOT)
+
+    def test_with_purse_orders_and_with_kept_full_transform_facts(self):
+        base = [bb.Facts("Zug", money=100_000, bought=4, placed=4)]
+        order = purse.order("Zug", 40, 100_000, riding_max=150)
+        enriched = bb.with_kept_full(
+            bb.with_purse_orders(base, {"Zug": order}), frozenset({"Zug"})
+        )
+        self.assertTrue(enriched[0].bank_full_of_kept)
+        self.assertEqual(enriched[0].purse_order, order)
 
 
 if __name__ == "__main__":
