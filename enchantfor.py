@@ -1,0 +1,436 @@
+"""Which guild member an enchanter should enchant, with which recipe, on which
+worn piece (the caller of the module's `enchant-for` verb).
+
+WHY IT EXISTS. A guild's enchanters disenchant (ITEMPLAN_DISENCHANT) and the
+materials are routed to them, but the module's own enchant craft only ever
+casts on the enchanter's OWN items, so nothing spent those materials on
+anyone else's gear. The module now answers `kind='trade'` rows whose command
+is `enchant-for target:<guid> slot:<n> spell:<id>`: the enchanter opens a
+trade with the member, the member's worn item goes in the "will not be
+traded" slot, the enchanter casts the recipe at it and both accept. The item
+never changes owner and the enchanter pays the reagents from its own bags.
+This module is the decision of what to ask for.
+
+THE RULE, in the order it decides.
+  1. Only an enchanter that KNOWS the recipe (a `character_spell` row: a
+     positive fact only, an absent row is "unknown", never "not known" the
+     other way round), holds the reagents and a Runed Rod of the tier the
+     recipe needs, and is online.
+  2. Only a guild member in the SAME guild, online, on the same map and close
+     enough to trade (TOGETHER_YARDS, inside the core's 11.11 yard trade
+     distance). The module checks the same things again and refuses.
+  3. Only a WORN piece the recipe fits (the core's item class, subclass and
+     inventory type masks, read from the Spell.dbc rows frozen in
+     data/enchants.json by tools/gen_enchants.py), whose current permanent
+     enchant is empty or one of the Enchanting enchants in that file. An
+     enchant from another source (a libram, a kit) is never written over.
+  4. The gain is the member's own judge's: `gearscore.score` for its spec with
+     the new enchant's stats instead of the current one's, or the role weights
+     of `statweights` where the spec has no opinion (the same two rungs
+     `equipscore.value` uses). A gain of nothing, or a loss, is never asked for.
+  5. Who goes first: raid seats (`raidteams.seats`), then tanks and healers,
+     then everybody else; inside a rank the biggest gain first. One job per
+     enchanter and one per member each pass, so a pass never asks two
+     enchants of one pair of hands or two casts at one window.
+
+Nothing is granted: this writes no item, spell, skill or gold, and the recipe
+must already be known. PURE: rows in, jobs out. No MySQL, no clock.
+"""
+
+from __future__ import annotations
+
+import functools
+import json
+import math
+import os
+from typing import NamedTuple
+
+import equipscore
+import gearscore
+import statweights
+
+ENV_SWITCH = "ENCHANT_FOR"
+PREFIX = "enchant-for:"
+SOURCE = "enchant-for"
+# The build fact the module reports (overseer_build.enchant_for) when it
+# answers the verb. A realm that does not report it is never sent a row.
+CAPABILITY_FACT = "enchant_for"
+CAPABILITY = "trade"
+
+# Inside the core's TRADE_DISTANCE (11.11 yards), because the position read is
+# minutes stale.
+TOGETHER_YARDS = 8.0
+
+# Item stat type -> the name gearscore scores, from gearscore itself.
+KIND_RESIST, KIND_DAMAGE, KIND_STAT = 4, 2, 5
+ARMOR_RESIST_ARG = 0
+
+# Runed Rods by tier, lowest first: the item that answers each TotemCategory
+# (6 copper .. 9 truesilver, 10 arcanite). A higher rod answers a lower rung.
+ROD_CATEGORY_FIRST = 6
+ROD_ITEMS = (6218, 6339, 11130, 11145, 16207)
+
+CATALOGUE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "enchants.json"
+)
+
+PRIORITY_SEAT, PRIORITY_ROLE, PRIORITY_REST = 0, 1, 2
+
+
+def enabled(environ=None) -> bool:
+    """On unless ENCHANT_FOR says off/0/false/no; the module's own capability
+    fact is the gate that keeps it inert until the verb exists."""
+    env = os.environ if environ is None else environ
+    raw = str(env.get(ENV_SWITCH, "") or "").strip().lower()
+    return raw not in ("off", "0", "false", "no")
+
+
+class Recipe(NamedTuple):
+    spell: int
+    name: str
+    enchant: int
+    enchant_name: str
+    effects: tuple  # ((kind, amount, arg), ...) of the enchantment
+    reagents: tuple  # ((item entry, count), ...)
+    tools: tuple  # TotemCategory ids
+    item_class: int
+    subclass_mask: int
+    invtype_mask: int
+
+
+@functools.lru_cache(maxsize=None)
+def catalogue(path: str = CATALOGUE_PATH) -> tuple:
+    """Every Enchanting recipe that enchants an item, from the frozen file."""
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    out = []
+    for r in data["recipes"]:
+        if r["item_class"] not in (2, 4):
+            continue
+        out.append(
+            Recipe(
+                spell=int(r["spell"]),
+                name=str(r["name"]),
+                enchant=int(r["enchant"]),
+                enchant_name=str(r["enchant_name"]),
+                effects=tuple(tuple(int(v) for v in e) for e in r["effects"]),
+                reagents=tuple((int(i), int(c)) for i, c in r["reagents"]),
+                tools=tuple(int(t) for t in r["tools"]),
+                item_class=int(r["item_class"]),
+                subclass_mask=int(r["subclass_mask"]),
+                invtype_mask=int(r["invtype_mask"]),
+            )
+        )
+    return tuple(out)
+
+
+def enchant_ids(recipes=None) -> frozenset:
+    """The enchantment ids Enchanting makes: the only ones ever written over."""
+    return frozenset(
+        r.enchant for r in (recipes if recipes is not None else catalogue())
+    )
+
+
+class Enchanter(NamedTuple):
+    name: str
+    guild: str
+    known: frozenset  # spell ids it holds in character_spell
+    bags: dict  # item entry -> count in its bags
+
+
+class Member(NamedTuple):
+    name: str
+    guid: int
+    guild: str
+    online: bool
+    map_id: int
+    x: float
+    y: float
+    z: float
+
+
+class Job(NamedTuple):
+    enchanter: str
+    member: str
+    member_guid: int
+    slot: int
+    spell: int
+    recipe: str
+    enchant: int
+    item_entry: int
+    item_name: str
+    gain: float
+    priority: int
+    reagents: tuple
+
+
+def _int(value, default=0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def together(a: Member, b: Member) -> bool:
+    """Both online, one map, within TOGETHER_YARDS of each other."""
+    if not (a.online and b.online) or a.map_id != b.map_id:
+        return False
+    return math.dist((a.x, a.y, a.z), (b.x, b.y, b.z)) <= TOGETHER_YARDS
+
+
+def fits(recipe: Recipe, row: dict) -> bool:
+    """The core's own item test for an enchant recipe: item class, then the
+    subclass mask, then the inventory type mask (a zero mask is no limit)."""
+    if _int(row.get("item_class")) != recipe.item_class:
+        return False
+    if recipe.subclass_mask and not recipe.subclass_mask & (
+        1 << _int(row.get("item_subclass"))
+    ):
+        return False
+    if recipe.invtype_mask and not recipe.invtype_mask & (
+        1 << _int(row.get("inventory_type"))
+    ):
+        return False
+    return True
+
+
+def has_tools(recipe: Recipe, bags: dict) -> bool:
+    """Every Runed Rod category the recipe names is answered by a rod of that
+    tier or higher in the bags. A tool category that is not a rod is never met."""
+    for category in recipe.tools:
+        tier = category - ROD_CATEGORY_FIRST
+        if not 0 <= tier < len(ROD_ITEMS):
+            return False
+        if not any(_int(bags.get(rod)) > 0 for rod in ROD_ITEMS[tier:]):
+            return False
+    return True
+
+
+def has_reagents(recipe: Recipe, bags: dict) -> bool:
+    return all(_int(bags.get(item)) >= count for item, count in recipe.reagents)
+
+
+def stats_of_effects(effects, row: dict) -> tuple:
+    """The enchantment's worth as ({item stat type: amount}, {name: amount}).
+
+    The first is what `gearscore.add_stats` folds in (stats); the second is
+    what it has no stat type for (armor, weapon damage per second). A proc, an
+    equip spell or a resistance adds nothing here."""
+    typed: dict = {}
+    named: dict = {}
+    delay = _int(row.get("delay"))
+    for kind, amount, arg in effects:
+        if kind == KIND_STAT:
+            typed[arg] = typed.get(arg, 0) + amount
+        elif kind == KIND_RESIST and arg == ARMOR_RESIST_ARG:
+            named["armor"] = named.get("armor", 0) + amount
+        elif kind == KIND_DAMAGE and delay > 0:
+            named["weapon_dps"] = named.get("weapon_dps", 0) + amount * 1000.0 / delay
+    return typed, named
+
+
+def _with(base: dict, effects, row: dict) -> dict:
+    typed, named = stats_of_effects(effects, row)
+    out = gearscore.add_stats(base, typed)
+    for name, amount in named.items():
+        out[name] = out.get(name, 0) + amount
+    return out
+
+
+def _worth(stats: dict, wearer, key: str) -> tuple:
+    gs = gearscore.score(stats, wearer.spec, wearer.level, key) if wearer.spec else 0.0
+    return gs, equipscore.role_score(stats, wearer.role)
+
+
+def gain_of(row: dict, current_effects, recipe: Recipe, wearer) -> float:
+    """What the recipe's enchant adds over the current one, in the member's
+    own judge's units: gear score where the spec has an opinion of either
+    piece, else the role score. Zero or less means not worth a cast."""
+    base = equipscore.stats_of(row, None)
+    key = equipscore._KEY.get(_int(row.get("inventory_type")), "")
+    old = _with(base, current_effects, row)
+    new = _with(base, recipe.effects, row)
+    old_gs, old_role = _worth(old, wearer, key)
+    new_gs, new_role = _worth(new, wearer, key)
+    if max(old_gs, new_gs) >= equipscore.SCORE_FLOOR:
+        return new_gs - old_gs
+    return new_role - old_role
+
+
+def priority_of(wearer, seat_names) -> int:
+    if wearer.name in seat_names:
+        return PRIORITY_SEAT
+    if wearer.role in (statweights.TANK, statweights.HEALER):
+        return PRIORITY_ROLE
+    return PRIORITY_REST
+
+
+def _worn(worn_rows) -> dict:
+    out: dict = {}
+    for row in worn_rows or ():
+        if row.get("equipment_slot") is None:
+            continue
+        out.setdefault(str(row.get("holder") or ""), {})[
+            _int(row["equipment_slot"])
+        ] = row
+    return out
+
+
+def _current_effects(row: dict, book, own_enchants: frozenset):
+    """(effects of the permanent enchant, ok). ok is False for an enchant that
+    Enchanting does not make or that the book cannot describe."""
+    ids = _permanent_id(row)
+    if not ids:
+        return (), True
+    if ids not in own_enchants or book is None:
+        return (), False
+    entry = book.enchants.get(ids)
+    if entry is None:
+        return (), False
+    return tuple(tuple(int(v) for v in e) for e in entry[1]), True
+
+
+def _permanent_id(row: dict) -> int:
+    text = str(row.get("enchantments") or "").split()
+    return _int(text[0]) if text else 0
+
+
+def candidates(
+    enchanters,
+    members,
+    wearer_rows,
+    worn_rows,
+    *,
+    book=None,
+    seat_names=frozenset(),
+    tanks=(),
+    recipes=None,
+) -> list:
+    """Every (job) worth asking for this pass, before one-per-person is applied."""
+    recipes = tuple(recipes if recipes is not None else catalogue())
+    own_enchants = enchant_ids(recipes)
+    wearers = equipscore._wearers(
+        wearer_rows, [str(r.get("name") or "") for r in wearer_rows or ()], tanks
+    )
+    worn = _worn(worn_rows)
+    out = []
+    for enchanter in enchanters:
+        e_member = members.get(enchanter.name)
+        if e_member is None or not e_member.online:
+            continue
+        usable = [
+            r
+            for r in recipes
+            if r.spell in enchanter.known
+            and has_reagents(r, enchanter.bags)
+            and has_tools(r, enchanter.bags)
+        ]
+        if not usable:
+            continue
+        for name, wearer in wearers.items():
+            member = members.get(name)
+            if (
+                member is None
+                or name == enchanter.name
+                or not enchanter.guild
+                or member.guild != enchanter.guild
+                or not together(e_member, member)
+            ):
+                continue
+            for slot, row in worn.get(name, {}).items():
+                effects, ok = _current_effects(row, book, own_enchants)
+                if not ok:
+                    continue
+                for recipe in usable:
+                    if not fits(recipe, row) or recipe.enchant == _permanent_id(row):
+                        continue
+                    gain = gain_of(row, effects, recipe, wearer)
+                    if gain <= equipscore.EPSILON:
+                        continue
+                    out.append(
+                        Job(
+                            enchanter=enchanter.name,
+                            member=name,
+                            member_guid=member.guid,
+                            slot=slot,
+                            spell=recipe.spell,
+                            recipe=recipe.name,
+                            enchant=recipe.enchant,
+                            item_entry=_int(row.get("entry")),
+                            item_name=str(row.get("name") or ""),
+                            gain=gain,
+                            priority=priority_of(wearer, seat_names),
+                            reagents=recipe.reagents,
+                        )
+                    )
+    return out
+
+
+def plan(
+    enchanters,
+    members,
+    wearer_rows,
+    worn_rows,
+    *,
+    book=None,
+    seat_names=frozenset(),
+    tanks=(),
+    recipes=None,
+) -> tuple:
+    """The jobs to write, best first: seats, then tanks and healers, then the
+    rest, the biggest gain first inside a rank, one per enchanter and per
+    member."""
+    pool = candidates(
+        enchanters,
+        members,
+        wearer_rows,
+        worn_rows,
+        book=book,
+        seat_names=seat_names,
+        tanks=tanks,
+        recipes=recipes,
+    )
+    pool.sort(
+        key=lambda j: (j.priority, -j.gain, j.member, j.enchanter, j.slot, j.spell)
+    )
+    busy_enchanters: set = set()
+    busy_members: set = set()
+    chosen = []
+    for job in pool:
+        if job.enchanter in busy_enchanters or job.member in busy_members:
+            continue
+        busy_enchanters.add(job.enchanter)
+        busy_members.add(job.member)
+        chosen.append(job)
+    return tuple(chosen)
+
+
+def command(job: Job) -> str:
+    """The row's command, in the module's grammar."""
+    return "enchant-for target:%d slot:%d spell:%d" % (
+        job.member_guid,
+        job.slot,
+        job.spell,
+    )
+
+
+def lines(jobs) -> tuple:
+    """One log line per job, naming who, what, where and how much it gains."""
+    return tuple(
+        "%s %s puts %s (%d) on %s's %s (entry %d, slot %d), gain %.2f, rank %d, "
+        "reagents %s"
+        % (
+            PREFIX,
+            j.enchanter,
+            j.recipe,
+            j.spell,
+            j.member,
+            j.item_name,
+            j.item_entry,
+            j.slot,
+            j.gain,
+            j.priority,
+            ",".join("%dx%d" % pair for pair in j.reagents) or "none",
+        )
+        for j in jobs
+    )
