@@ -242,6 +242,12 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Answers: each family's recent dungeon runs, step by step.
 - Example: `overseer get /api/runtimeline`
 
+## `GET /api/spectate`
+
+- Query: none
+- Answers: where the observer camera is, for the Watch buttons.
+- Example: `overseer get /api/spectate`
+
 ## `GET /api/thoughts`
 
 - Query: `name`, `before`, `limit`
@@ -385,6 +391,12 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Query: `guild`
 - Answers: the approved Molten Core seats.
 - Example: `overseer get /api/v2/raidteams guild=cave`
+
+## `GET /api/v2/realm-status`
+
+- Query: none
+- Answers: is the worldserver up, and if not, why and until when.
+- Example: `overseer get /api/v2/realm-status`
 
 ## `GET /api/v2/roll`
 

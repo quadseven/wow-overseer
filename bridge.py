@@ -21935,15 +21935,30 @@ class Bridge(discord.Client):
                 log.info("town errand: %s%s passes over %s: %d deaths of the "
                          "family in the last day lie along the walk to it",
                          why, label, stop.get("place", "a vendor"), count)
+            # A COUNTER THE TOWN SLOT WOULD REFUSE IS NOT A COUNTER
+            # (wow-overseer#2619): the same death discs the slot judges every
+            # walk by, read once here, so a hub or a vendor inside one gives
+            # way instead of holding the traveller for the errand's whole
+            # ceiling while every ask is refused.
+            disc_of = globals().get("_fetch_death_discs")
+            discs = (await asyncio.to_thread(disc_of) if disc_of else [])
+
+            def walled(spot, _discs=discs, _here=here):
+                return bool(_discs) and bool(deathcells.crossing(_discs, _here, {
+                    "map_id": spot.get("map_id"), "x": spot.get("x"),
+                    "y": spot.get("y")}))
+
             chosen = townerrand.choose_aim(
                 hub, stops, standing, why, released, now, deaths=deaths,
-                hearth_reaches=leader in casts)
+                hearth_reaches=leader in casts, walled=walled)
             if chosen != hub:
                 log.info("town errand: %s%s aims at %s instead of %s (%s)",
                          why, label, chosen.get("place", "a vendor"),
                          hub.get("place", "no hub") if hub else "no hub",
                          "released unlanded earlier" if hub and
                          townerrand._was_released(hub, released, now)
+                         else "the walk to the hub crosses ground the family "
+                         "died on" if hub and walled(hub)
                          else "the hub is a long walk off")
                 hub = chosen
         if not hub:
