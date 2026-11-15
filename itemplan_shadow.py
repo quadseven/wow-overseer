@@ -141,6 +141,9 @@ class Extras:
     worn: Mapping[str, dict] | None = None
     market: Mapping[int, tuple] | None = None
     guild_free: Mapping[tuple, int] | None = None
+    # family -> stacks its guild's bankers can take (guildledger); None is unread,
+    # which offers no banker route.
+    banker_free: Mapping[str, int] | None = None
     guild_crafters: tuple | None = None
     guild_roster: tuple | None = None
     templates: Mapping[int, dict] | None = None
@@ -476,6 +479,7 @@ def shadow(
         guild_crafters=extras.guild_crafters or (),
         fire_gear=extras.fire_gear,
         failed_listings=extras.failed_listings or {},
+        banker_free=extras.banker_free or {},
     )
     plan_ = itemplan.plan(stacks, members, ctx)
     rows_by_key = {s.key: r for s, r in zip(stacks, rows, strict=True)}
