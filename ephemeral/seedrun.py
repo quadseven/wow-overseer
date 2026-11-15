@@ -9,8 +9,10 @@ decree: the decree cannot name a host, a database or a credential.
     EPH_MYSQL_PASSWORD   the world's own random root password
     EPH_WORLD_LABEL      the namespace's world label value, from the pod spec
     EPH_HARNESS_GRANTS   the harness ConfigMap's grants line
+    EPH_VARS_FILE        optional: where to write the variables and cast the judge reads
 """
 
+import json
 import pathlib
 
 from . import anchors as anchors_mod
@@ -34,6 +36,18 @@ def inputs_from_env(env):
         world_label=env.get("EPH_WORLD_LABEL", ""),
         harness_grants=env.get("EPH_HARNESS_GRANTS", ""),
     )
+
+
+def write_handoff(path, plan):
+    """What the judge needs from the seed: the @variables and who the cast resolved to."""
+    doc = {
+        "variables": plan.variables,
+        "members": [
+            {"cast_index": m.cast_index, "who": m.who, "guid": m.guid, "name": m.name}
+            for m in plan.members
+        ],
+    }
+    pathlib.Path(path).write_text(json.dumps(doc, sort_keys=True), encoding="utf-8")
 
 
 def _default_connect(**kw):
@@ -78,6 +92,8 @@ def run(decree_path, env, dry_run=False, anchors_path=None, connect=None, out=pr
         out(plan.render())
         if not dry_run:
             out(f"applied {guard.apply_plan(plan, g)} statements")
+            if env.get("EPH_VARS_FILE"):
+                write_handoff(env["EPH_VARS_FILE"], plan)
         return 0
     except SeedError as exc:
         out(f"INVALID: {exc}")
