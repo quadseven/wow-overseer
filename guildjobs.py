@@ -447,6 +447,17 @@ LOOT_ROOM_SHARE = (1, 4)
 # HOW OFTEN EACH KIND OF STEP MAY BE ASKED OF ONE MEMBER, in minutes, counted
 # from the command log so a restart forgets nothing.
 BAG_ACTION = "bag"
+# A raid seat's bag loop (#2609): the plan's sale and its bank deposit, each on
+# its own clock, shorter than the ordinary sale's two hours because a seat at
+# the bag floor leaves loot on the corpse every kill until it is relieved.
+SEAT_SELL_ACTION = "seat-sell"
+SEAT_BANK_ACTION = "seat-bank"
+# A seat is relieved while its free carried slots are under this: the item
+# plan's own trigger (itemplan.TRIGGER_FREE), written here because this module
+# does not import the plan; tests/test_guild_seat_bags.py holds the two equal.
+SEAT_LOOP_FREE = 10
+# Deposits one banker visit carries (bank.VISIT_LIMIT's order of size).
+SEAT_BANK_VISIT = 12
 LEVEL_TRANSIENT_RETRY_MINUTES = 5
 COOLDOWN_MINUTES = {
     BAG_ACTION: 20,
@@ -457,6 +468,8 @@ COOLDOWN_MINUTES = {
     "tool": 60,
     "post": 60,
     "sell": 120,
+    SEAT_SELL_ACTION: 20,
+    SEAT_BANK_ACTION: 30,
     # A walk to a riding trainer (riding_step): a rank is bought once.
     "riding": 180,
     # A walk to the race's mount vendor, its buy and the use (mount_step).
@@ -704,6 +717,13 @@ class Member:
     # not its own guid): it stands where its leader stands, so its standing
     # still says nothing of it (stood_still_step).
     follows: bool = False
+    # A raid seat's bag loop (#2609): what the item plan says to sell and to
+    # bank from the stacks it carries, read by seatbags (the guild job read
+    # holds only what a vendor buys, so the plan reads the whole bags), and the
+    # banker nearest it. Empty for any member that is not a seat short of room.
+    plan_sales: tuple = ()  # Carried
+    plan_bank: tuple = ()  # Carried
+    banker: object = None  # a Spot
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -1677,6 +1697,8 @@ TOWN_STOP_ACTIONS = frozenset(
         "tool",
         "reagent",
         "room",
+        SEAT_SELL_ACTION,
+        SEAT_BANK_ACTION,
         "riding",
         "weapon",
         restsupply.ACTION,
@@ -2528,13 +2550,21 @@ def vendor_stacks(member, kept, protected=frozenset()) -> list:
     MAX_SALES: every one vendorsale lets go that overseer_keep does not hold."""
     judge = vendor_judge(member, protected)
     second_best = vendorsale.redundant_upgrades(member.carried, judge)
+    own = [
+        c
+        for c in (member.carried or ())
+        if (vendorsale.sells(c, judge) or int(c.guid) in second_best)
+        and not _kept(member.name, c, kept)
+    ]
+    # A raid seat's item plan sales (#2609) go over the same counter, once.
+    have = {int(c.guid) for c in own}
+    own += [
+        c
+        for c in (member.plan_sales or ())
+        if int(c.guid) not in have and not _kept(member.name, c, kept)
+    ]
     return sorted(
-        (
-            c
-            for c in (member.carried or ())
-            if (vendorsale.sells(c, judge) or int(c.guid) in second_best)
-            and not _kept(member.name, c, kept)
-        ),
+        own,
         key=lambda c: (-int(c.sell_price) * int(c.count), int(c.guid)),
     )[:MAX_SALES]
 
@@ -2705,6 +2735,84 @@ def riding_step(m, recent):
                         purse.RIDING_SKILL,
                         want.spell,
                         _cap_word(guildroute.FAR_WALK_YARDS),
+                    ),
+                    str(m.map_id or 0),
+                    source_for(RIDING_ACTION, m.name),
+                ),
+            ),
+        ),
+        "",
+    )
+
+
+# A FAMILY MEMBER KEEPS A FLOAT BEYOND THE FEE (ticket 2625). Read on the dev
+# realm on 2026-11-15: 9 of the 10 level 60 family members held no Riding though
+# each carried over 4 gold. A roster family member has no purchase order (purse.py
+# is laid on guild members off the roster), so this step reads the rank from its
+# level and Riding ceiling and the fee from purse.RIDING_RANKS (the trainer's own
+# rows, checked against the dev world on that day), and leaves the member this
+# much over the fee for repairs and food.
+FAMILY_RIDING_FLOAT = 10000
+
+
+def family_riding_step(m, recent):
+    """(step or None, a note) for a roster family member short of the riding
+    rank its level allows: the walk to a riding trainer that guild members make
+    (riding_step), planned for a family member only in the gap between runs.
+
+    The caller offers only members whose family is idle (familyclass.py), so no
+    dungeon, town errand or campaign holds them. Never a follower (the module
+    refuses a follower's walk), nor offline, dead or fighting; bounded to a
+    family class walk's distance (familyclass.WALK_YARDS) and asked again no
+    sooner than the riding cooldown. The member's own gold pays: the module buys
+    the rank through the core's trainer and nothing here teaches."""
+    if m.role != FAMILY or not m.eligible:
+        return None, ""
+    rank = purse.riding_due(m.level, m.skill(purse.RIDING_SKILL)[1])
+    if rank is None:
+        return None, ""
+    if int(m.money or 0) < rank.cost + FAMILY_RIDING_FLOAT:
+        return (
+            None,
+            "%s saves for %s (%s and a float of %s; it holds %s)"
+            % (
+                m.name,
+                rank.name,
+                purse.money(rank.cost),
+                purse.money(FAMILY_RIDING_FLOAT),
+                purse.money(m.money),
+            ),
+        )
+    if not m.online or not m.alive or m.in_combat or getattr(m, "follows", False):
+        return None, ""
+    if m.map_id is None or m.x is None or m.y is None:
+        return None, ""
+    if _stranded_by_no_trainer(m.name, purse.RIDING_SKILL, m.map_id, recent):
+        return (
+            None,
+            "%s waits on the map change before walking to a riding trainer" % m.name,
+        )
+    if _cooling(m, RIDING_ACTION, recent):
+        return None, ""
+    said = "%s walks to a riding trainer to buy %s for %s of its own" % (
+        m.name,
+        rank.name,
+        purse.money(rank.cost),
+    )
+    return (
+        guildcorps.Step(
+            m.name,
+            RIDING_ACTION,
+            purse.RIDING_SKILL,
+            said,
+            rows=(
+                guildcorps.Row(
+                    "cast",
+                    "walk-to-trainer skill:%d learn:%d%s"
+                    % (
+                        purse.RIDING_SKILL,
+                        rank.spell,
+                        _cap_word(familyclass.WALK_YARDS),
                     ),
                     str(m.map_id or 0),
                     source_for(RIDING_ACTION, m.name),
@@ -3237,11 +3345,9 @@ def supply_step(member, vendor_rows, cap, kept=None, book=None):
     left = spendable(
         member, purse.FOOD, int(member.money) + junk + vendorsale.worth(spare)
     )
-    buys, why = restsupply.plan(replace(member, money=left), rows, 0)
+    buys, why = restsupply.plan(replace(member, money=left), rows, 0, room)
     if not buys:
         return None, why
-    if room is not None:
-        buys = buys[:room]
     # The walk names the item the chosen vendor is the nearest seller of, so
     # the module's nearest-stockist walk ends at that counter.
     nearest = {}
@@ -3737,6 +3843,108 @@ def _full_bags_first(m, kept, recent, cap):
     if not loot_room_short(m) or _cooling(m, "sell", recent):
         return None
     return _sell_step(m, kept, cap)
+
+
+def _seat_ready(m) -> bool:
+    """A seat that can be sent to town now: in the world, alive, out of a
+    fight, natural, standing somewhere readable and short of room."""
+    return bool(
+        m.eligible
+        and m.online
+        and m.alive
+        and not m.in_combat
+        and m.map_id is not None
+        and m.x is not None
+        and m.y is not None
+        and not classic.stands_outside(m)
+        and m.free_slots is not None
+        and 0 <= int(m.free_slots) < SEAT_LOOP_FREE
+    )
+
+
+def _seat_sell_step(m, kept, cap):
+    """The plan's sale for a seat short of room: only when the item plan named
+    a stack to sell (vendor_stacks also carries the ordinary junk, which the
+    ordinary sale rungs ask on their own clock)."""
+    planned = {int(c.guid) for c in m.plan_sales or ()}
+    stacks = [c for c in vendor_stacks(m, kept) if int(c.guid) in planned]
+    if not stacks:
+        return None
+    rows = tuple(
+        guildcorps.Row(
+            "sell",
+            "guid:%d" % int(c.guid),
+            "",
+            source_for(SEAT_SELL_ACTION, m.name),
+        )
+        for c in stacks
+    )
+    return guildcorps.Step(
+        m.name,
+        SEAT_SELL_ACTION,
+        len(stacks),
+        "%s has %d free bag slot(s) and walks to a vendor to sell %d stack(s) "
+        "the item plan sells, worth %dc"
+        % (m.name, int(m.free_slots), len(stacks), vendorsale.worth(stacks)),
+        rows=rows,
+        walk=guildcorps.Row(
+            "buy",
+            "walk-to-vendor any%s" % _cap_word(cap),
+            "",
+            source_for(SEAT_SELL_ACTION + "-walk", m.name),
+        ),
+        sales=sale_notes(stacks),
+    )
+
+
+def _seat_bank_step(m, cap):
+    """The plan's deposits for a seat short of room: a walk to the banker the
+    seat read nearest it, then one `deposit guid:` row per stack."""
+    stacks = list(m.plan_bank or ())[:SEAT_BANK_VISIT]
+    spot = m.banker
+    if not stacks or spot is None:
+        return None
+    return guildcorps.Step(
+        m.name,
+        SEAT_BANK_ACTION,
+        int(spot.spawn),
+        "%s has %d free bag slot(s) and walks to a banker to bank %d stack(s) "
+        "the item plan keeps" % (m.name, int(m.free_slots), len(stacks)),
+        rows=tuple(
+            guildcorps.Row(
+                "bank",
+                "deposit guid:%d" % int(c.guid),
+                "",
+                source_for(SEAT_BANK_ACTION, m.name),
+            )
+            for c in stacks
+        ),
+        walk=guildcorps.Row(
+            "job",
+            spot.command + _cap_word(cap),
+            "",
+            source_for(SEAT_BANK_ACTION + "-walk", m.name),
+        ),
+        goal=spot.name or "a banker",
+    )
+
+
+def seat_loop_first(m, kept, recent, cap):
+    """A raid seat's bag loop (#2609): at the item plan's trigger it sells what
+    the plan sells, and when that is done or cooling it banks what the plan
+    banks. The seat read nothing of this before: the guild job read held only
+    stacks a vendor buys, the sale rung asked at a quarter of the bags free,
+    and no pass planned a deposit for a seat at all. Never a give, never a
+    grant: the loop only moves what the seat already carries."""
+    if not (m.plan_sales or m.plan_bank) or not _seat_ready(m):
+        return None
+    if not _cooling(m, SEAT_SELL_ACTION, recent):
+        step = _seat_sell_step(m, kept, cap)
+        if step is not None:
+            return step
+    if not _cooling(m, SEAT_BANK_ACTION, recent):
+        return _seat_bank_step(m, cap)
+    return None
 
 
 def _spot_step(member, spot, action, cap, said):
@@ -4735,6 +4943,7 @@ def _plan_family_class_member(
                 return
         if class_owed(m, classes, recent, now=now) is not None and note:
             class_holds[m.name] = _class_hold_reason(m.name, note)
+        _plan_family_riding(m, recent, counters, busy, per_guild, steps, notes)
         return
     gap_hold = familyclass.holds(m, step.move, recent)
     if gap_hold:
@@ -4751,6 +4960,26 @@ def _plan_family_class_member(
         notes.append(why)
         class_holds[m.name] = _class_hold_reason(m.name, why)
         _release_slots(m.name, far, None)
+        return
+    started[m.guild] = started.get(m.guild, 0) + 1
+    busy.add(m.name)
+    steps.append(step)
+
+
+def _plan_family_riding(m, recent, counters, busy, per_guild, steps, notes) -> None:
+    """Plan an idle family member the riding walk when its class step has
+    nothing for it (family_riding_step, ticket 2625), on the shared allowance."""
+    step, note = family_riding_step(m, recent)
+    if note:
+        notes.append(note)
+    if step is None:
+        return
+    started, allowance = _allowance(step, counters, per_guild)
+    why = _step_refusal(m, busy, started, allowance, step) or job_walk_held(
+        m, step, recent
+    )
+    if why:
+        notes.append(why)
         return
     started[m.guild] = started.get(m.guild, 0) + 1
     busy.add(m.name)
@@ -5383,6 +5612,11 @@ def _bag_first(member, recovery, recent, far):
     return recovery.step
 
 
+def _capacity_first(m, bag, kept, recent, cap, far):
+    """A due bag step, else a raid seat's bag loop (#2609)."""
+    return _bag_first(m, bag, recent, far) or seat_loop_first(m, kept, recent, cap)
+
+
 def _member_step(
     m,
     offer,
@@ -5509,7 +5743,7 @@ def _member_step(
     if found is not None:
         return found
     quest_note = _join(quest_note, room_note)
-    step = _bag_first(m, bag, recent, far)
+    step = _capacity_first(m, bag, kept, recent, cap, far)
     if step is not None:
         return step, step.said, quest_note, ""
     found, supply_note, gear_note = _upkeep_first(

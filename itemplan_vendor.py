@@ -237,7 +237,7 @@ def _may_release(decision, row) -> bool:
 # AI-REVIEW 2026-11-12 [Grug Elder/complexity] 2306-C1 (PR #2306): the
 # selection is split into _classify, _eligible and _release so each step
 # stays small (fixed in 179bbcd3).
-def _classify(decision, row, stack, released, keep_names):
+def _classify(decision, row, stack, released, keep_names, only_kept=True):
     """What the route does with one carried SELL_VENDOR decision.
 
     Returns None to leave it alone, else (kind, why, release_kind):
@@ -246,7 +246,7 @@ def _classify(decision, row, stack, released, keep_names):
     which hold it is. `why` is the held reason, or ''.
     """
     # Only where the current protection would keep the stack.
-    if not bag_pressure.vendor_refusal(row, keep_names):
+    if only_kept and not bag_pressure.vendor_refusal(row, keep_names):
         return None
     why = _held_reason(decision, stack, row)
     if decision.confirm and decision.key not in released:
@@ -304,6 +304,7 @@ def sales_for(
     released=frozenset(),
     held=None,
     pressure=None,
+    only_kept=True,
 ) -> tuple:
     """The route's sales from a plan, in plan order.
 
@@ -318,6 +319,12 @@ def sales_for(
     are released cheapest first up to the pressure, after the ordinary
     sales have been counted against it. No pressure, or none for a holder,
     changes nothing.
+
+    `only_kept` is True for the family, whose ordinary sale pass already
+    sells what the current protection lets go, so the route adds only the
+    stacks that protection keeps. A raid seat has no such pass (its sale is
+    the guild job's own, a different rule), so its caller passes False and
+    gets every sale the plan makes (#2609).
     """
     rows_by_key = {stack.key: row for stack, row in stack_rows}
     stack_of = {stack.key: stack for stack, _row in stack_rows}
@@ -328,7 +335,12 @@ def sales_for(
         if row is None or not _eligible(decision):
             continue
         verdict = _classify(
-            decision, row, stack_of.get(decision.key), released, keep_names
+            decision,
+            row,
+            stack_of.get(decision.key),
+            released,
+            keep_names,
+            only_kept,
         )
         if verdict is None:
             continue

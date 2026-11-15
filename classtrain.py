@@ -235,6 +235,25 @@ class Walk:
         )
 
 
+def trainee_rows(rows, roster, seated_tanks) -> list:
+    """The guild rows this pass may walk, out of the rows the bridge read.
+
+    A roster (family) member's row is left out: the families' own passes
+    fund and train them. The one exception is a roster member holding a
+    raid tank seat (#2361): no family pass walks a roster member to a
+    class trainer, so a seated tank joins this pass's rows like any
+    other member. `seated_tanks` carries every name a tank seat may be
+    found under, approved or current.
+    """
+    roster = {str(n) for n in roster or ()}
+    seated = {str(n) for n in seated_tanks or ()}
+    return [
+        r
+        for r in rows or ()
+        if str(r.get("name") or "") not in roster or str(r.get("name") or "") in seated
+    ]
+
+
 def trainees_from_rows(rows, dues) -> list:
     """Trainee rows out of the bridge's guild rows and classtrain.due's map."""
     return [
