@@ -42,6 +42,7 @@ import basepath
 import campaignplan
 import campaignqueue
 import chat
+import classreagents
 import clipcutter
 import clipledger
 import clipserve
@@ -93,6 +94,7 @@ import recap
 import runreport
 import realm
 import realmread
+import restsupply
 import runtimeline
 import stream
 import tradespec
@@ -2792,36 +2794,159 @@ _RAID_SUPPLY_KNOWN = (
 _RAID_SUPPLY_MONEY = (
     "SELECT guildid, BankMoney AS bank FROM guild WHERE guildid IN ({guilds})"
 )
+_RAID_SUPPLY_SPELL_DBC = (
+    "SELECT ID AS spell_id, Reagent_1, Reagent_2, Reagent_3, Reagent_4, "
+    "Reagent_5, Reagent_6, Reagent_7, Reagent_8, "
+    "ReagentCount_1, ReagentCount_2, ReagentCount_3, ReagentCount_4, "
+    "ReagentCount_5, ReagentCount_6, ReagentCount_7, ReagentCount_8 "
+    "FROM acore_world.spell_dbc "
+    "WHERE ID IN ({spells})"
+)
+_RAID_SUPPLY_SEAT_REAGENTS = (
+    "SELECT gm.guildid, c.name, ii.itemEntry AS entry, SUM(ii.count) AS count "
+    "FROM guild_member gm "
+    "JOIN characters c ON c.guid = gm.guid "
+    "JOIN character_inventory ci ON ci.guid = gm.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE gm.guildid IN ({guilds}) AND ii.itemEntry IN ({entries}) "
+    "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "GROUP BY gm.guildid, c.name, ii.itemEntry"
+)
+_RAID_SUPPLY_SEAT_DRINK = (
+    "SELECT gm.guildid, c.name, SUM(ii.count) AS units "
+    "FROM guild_member gm "
+    "JOIN characters c ON c.guid = gm.guid "
+    "JOIN character_inventory ci ON ci.guid = gm.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE gm.guildid IN ({guilds}) "
+    "AND it.class = 0 AND it.subclass = 5 AND it.spellcategory_1 = %s "
+    "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "GROUP BY gm.guildid, c.name"
+)
+_RAID_SUPPLY_GBANK_DRINK = (
+    "SELECT gb.guildid, SUM(ii.count) AS units "
+    "FROM guild_bank_item gb "
+    "JOIN item_instance ii ON ii.guid = gb.item_guid "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE gb.guildid IN ({guilds}) "
+    "AND it.class = 0 AND it.subclass = 5 AND it.spellcategory_1 = %s "
+    "GROUP BY gb.guildid"
+)
+_RAID_SPELL_REAGENTS: dict | None = None
+
+
+def _raid_spell_reagents(rd) -> dict:
+    """Spell.dbc + spell_dbc reagent table for raid buffers, cached per process."""
+    global _RAID_SPELL_REAGENTS
+    if _RAID_SPELL_REAGENTS is None:
+        buf_spells = sorted(raidsupply.ALL_BUFFER_SPELL_IDS)
+        sql_rows = (
+            rd.rows(
+                _RAID_SUPPLY_SPELL_DBC.format(  # noqa: S608
+                    spells=", ".join(["%s"] * len(buf_spells))),
+                tuple(buf_spells), what="spell_dbc reagents")
+            if buf_spells else []
+        )
+        _RAID_SPELL_REAGENTS = classreagents.load_spell_reagents(sql_rows=sql_rows)
+    return _RAID_SPELL_REAGENTS
 
 
 def _fetch_raid_supply(rd, guild_ids: list) -> dict:
-    """guild id -> {have, knowers, bank} for the supply section; guarded."""
-    out = {g: {"have": {}, "knowers": {}, "bank": None} for g in guild_ids}
+    """guild id -> {have, knowers, bank, seat_reagents, seat_drink, ...}; guarded."""
+    spell_reagents = _raid_spell_reagents(rd)
+    reagent_entries = raidsupply.buffer_reagent_entries(spell_reagents)
+    empty = lambda: {  # noqa: E731
+        "have": {},
+        "knowers": {},
+        "bank": None,
+        "seat_reagents": {},
+        "seat_drink": {},
+        "known_spells": {},
+        "bank_reagents": {},
+        "bank_drink": 0,
+        "spell_reagents": spell_reagents,
+    }
+    out = {g: empty() for g in guild_ids}
     if not guild_ids:
         return out
     guilds = ", ".join(["%s"] * len(guild_ids))
     entries = sorted(raidsupply.SUPPLY_ENTRIES)
-    spells = sorted(raidsupply.SUPPLY_SPELLS)
+    gb_entries = sorted(raidsupply.SUPPLY_ENTRIES | reagent_entries)
+    spells = sorted(set(raidsupply.SUPPLY_SPELLS) | set(raidsupply.ALL_BUFFER_SPELL_IDS))
     eholes = ", ".join(["%s"] * len(entries))
+    gbholes = ", ".join(["%s"] * len(gb_entries))
     sholes = ", ".join(["%s"] * len(spells))
+    rlist = sorted(reagent_entries)
+    rholes = ", ".join(["%s"] * len(rlist))
     held = rd.rows(_RAID_SUPPLY_HAVE.format(guilds=guilds, entries=eholes),  # noqa: S608
                    (*guild_ids, *entries), what="character_inventory supply")
-    banked = rd.rows(_RAID_SUPPLY_GBANK.format(guilds=guilds, entries=eholes),  # noqa: S608
-                     (*guild_ids, *entries), what="guild_bank_item")
+    banked = rd.rows(_RAID_SUPPLY_GBANK.format(guilds=guilds, entries=gbholes),  # noqa: S608
+                     (*guild_ids, *gb_entries), what="guild_bank_item")
     known = rd.rows(_RAID_SUPPLY_KNOWN.format(guilds=guilds, spells=sholes),  # noqa: S608
                     (*guild_ids, *spells), what="character_spell supply")
     money = rd.rows(_RAID_SUPPLY_MONEY.format(guilds=guilds),  # noqa: S608
                     tuple(guild_ids), what="guild")
+    seat_reagent_rows = (
+        rd.rows(_RAID_SUPPLY_SEAT_REAGENTS.format(guilds=guilds, entries=rholes),  # noqa: S608
+                (*guild_ids, *rlist), what="character_inventory buffer reagents")
+        if rlist else []
+    )
+    seat_drink_rows = rd.rows(
+        _RAID_SUPPLY_SEAT_DRINK.format(guilds=guilds),  # noqa: S608
+        (*guild_ids, restsupply.DRINK_CATEGORY),
+        what="character_inventory drink",
+    )
+    gbank_drink_rows = rd.rows(
+        _RAID_SUPPLY_GBANK_DRINK.format(guilds=guilds),  # noqa: S608
+        (*guild_ids, restsupply.DRINK_CATEGORY),
+        what="guild_bank_item drink",
+    )
     for row in list(held) + list(banked):
-        have = out.setdefault(row.get("guildid"), {"have": {}, "knowers": {}, "bank": None})["have"]
+        spot = out.setdefault(row.get("guildid"), empty())
         entry = int(row.get("entry") or 0)
-        have[entry] = have.get(entry, 0) + int(row.get("count") or 0)
+        count = int(row.get("count") or 0)
+        if entry in raidsupply.SUPPLY_ENTRIES:
+            spot["have"][entry] = spot["have"].get(entry, 0) + count
+    for row in banked:
+        spot = out.setdefault(row.get("guildid"), empty())
+        entry = int(row.get("entry") or 0)
+        if entry in reagent_entries:
+            spot["bank_reagents"][entry] = (
+                spot["bank_reagents"].get(entry, 0) + int(row.get("count") or 0)
+            )
     for row in known:
-        spot = out.setdefault(row.get("guildid"), {"have": {}, "knowers": {}, "bank": None})
-        spot["knowers"].setdefault(int(row.get("spell") or 0), []).append(str(row.get("name") or ""))
+        spot = out.setdefault(row.get("guildid"), empty())
+        spell = int(row.get("spell") or 0)
+        name = str(row.get("name") or "")
+        if spell in raidsupply.SUPPLY_SPELLS:
+            spot["knowers"].setdefault(spell, []).append(name)
+        if spell in raidsupply.ALL_BUFFER_SPELL_IDS and name:
+            spot["known_spells"].setdefault(name, set()).add(spell)
     for row in money:
-        spot = out.setdefault(row.get("guildid"), {"have": {}, "knowers": {}, "bank": None})
+        spot = out.setdefault(row.get("guildid"), empty())
         spot["bank"] = int(row.get("bank") or 0)
+    for row in seat_reagent_rows:
+        spot = out.setdefault(row.get("guildid"), empty())
+        name = str(row.get("name") or "")
+        entry = int(row.get("entry") or 0)
+        if name and entry > 0:
+            by_entry = spot["seat_reagents"].setdefault(name, {})
+            by_entry[entry] = by_entry.get(entry, 0) + int(row.get("count") or 0)
+    for row in seat_drink_rows:
+        spot = out.setdefault(row.get("guildid"), empty())
+        name = str(row.get("name") or "")
+        if name:
+            spot["seat_drink"][name] = (
+                spot["seat_drink"].get(name, 0) + int(row.get("units") or 0)
+            )
+    for row in gbank_drink_rows:
+        spot = out.setdefault(row.get("guildid"), empty())
+        spot["bank_drink"] += int(row.get("units") or 0)
     return out
 # preraid's catalog of every piece the level 60 dungeons drop or reward. The
 # world's loot tables do not change under a running server, so it is read

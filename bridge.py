@@ -19331,6 +19331,7 @@ class Bridge(discord.Client):
         """One guild's supply steps, started; returns how many. Its plan's
         lines are added to `night` for the fire potion order."""
         guild = guild_facts.guild
+        guild_facts = raidsupply.with_seat_supply(guild_facts, extra)
         master = extra["masters"].get(guild, "")
         withdrawn, spent = raidsupply.ledger(extra["ledger"], master)
         focus = await self._raid_supply_focus(
@@ -36645,14 +36646,68 @@ _RAID_SUPPLY_ROWS_SQL = (
     "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
     "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY"
 )
+_RAID_SUPPLY_SEAT_REAGENTS_SQL = (
+    "SELECT c.name, ii.itemEntry AS entry, SUM(ii.count) AS count "
+    "FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE c.guid IN ({guids}) AND ii.itemEntry IN ({entries}) "
+    "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "GROUP BY c.name, ii.itemEntry"
+)
+_RAID_SUPPLY_SEAT_DRINK_SQL = (
+    "SELECT c.name, SUM(ii.count) AS units "
+    "FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.guid IN ({guids}) "
+    "AND it.class = 0 AND it.subclass = 5 AND it.spellcategory_1 = %s "
+    "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "GROUP BY c.name"
+)
+_RAID_SUPPLY_BUFFER_SPELLS_SQL = (
+    "SELECT c.name, cs.spell FROM character_spell cs "
+    "JOIN characters c ON c.guid = cs.guid "
+    "WHERE cs.guid IN ({guids}) AND cs.spell IN ({spells})"
+)
+_RAID_SUPPLY_GBANK_REAGENTS_SQL = (
+    "SELECT g.name AS guild_name, ii.itemEntry AS entry, SUM(ii.count) AS count "
+    "FROM guild g JOIN guild_bank_item gb ON gb.guildid = g.guildid "
+    "JOIN item_instance ii ON ii.guid = gb.item_guid "
+    "WHERE g.name IN ({names}) AND ii.itemEntry IN ({entries}) "
+    "GROUP BY g.name, ii.itemEntry"
+)
+_RAID_SUPPLY_GBANK_DRINK_SQL = (
+    "SELECT g.name AS guild_name, SUM(ii.count) AS units "
+    "FROM guild g JOIN guild_bank_item gb ON gb.guildid = g.guildid "
+    "JOIN item_instance ii ON ii.guid = gb.item_guid "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE g.name IN ({names}) "
+    "AND it.class = 0 AND it.subclass = 5 AND it.spellcategory_1 = %s "
+    "GROUP BY g.name"
+)
 
 
 def _fetch_raid_supply_facts(members) -> dict:
     """What raidsupply reads beyond the corps' facts; no judgement here."""
     ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
     names = sorted({m.name for m in members})
-    out = {"worn": [], "letters": [], "bank": {}, "masters": {}, "purses": {},
-           "ledger": [], "recent": [], "farm_recent": []}
+    guilds = sorted({m.guild for m in members if m.guild})
+    out = {
+        "worn": [], "letters": [], "bank": {}, "masters": {}, "purses": {},
+        "ledger": [], "recent": [], "farm_recent": [],
+        "seat_reagents": {n: {} for n in names},
+        "seat_drink": {n: 0 for n in names},
+        "known_spells": {},
+        "bank_reagents": {g: {} for g in guilds},
+        "bank_drink": {g: 0 for g in guilds},
+        "spell_reagents": None,
+    }
     if not names:
         return out
     with _connect() as conn, conn.cursor() as cur:
@@ -36661,11 +36716,79 @@ def _fetch_raid_supply_facts(members) -> dict:
         guid_of = {str(r["name"]): int(r["guid"]) for r in cur.fetchall()}
         everyone = ids(guid_of.values())
         entries = ids(sorted(raidsupply.SUPPLY_ENTRIES))
+        spell_reagents = _fetch_spell_reagents(cur)
+        out["spell_reagents"] = spell_reagents
+        reagent_ids = sorted(raidsupply.buffer_reagent_entries(spell_reagents))
         out["worn"] = _corps_read(cur, "worn fire resistance",
                                   _RAID_SUPPLY_WORN_SQL.format(guids=everyone))
         out["letters"] = _corps_read(cur, "raid letters", _CORPS_LETTERS_SQL.format(
             guids=everyone, entries=entries))
-        _raid_supply_bank(cur, sorted({m.guild for m in members if m.guild}), out)
+        if reagent_ids:
+            reagent_rows = _corps_read(
+                cur,
+                "seat buffer reagents",
+                _RAID_SUPPLY_SEAT_REAGENTS_SQL.format(
+                    guids=everyone, entries=ids(reagent_ids)
+                ),
+            )
+            for row in reagent_rows:
+                who = str(row.get("name") or "")
+                entry = int(row.get("entry") or 0)
+                if who and entry > 0:
+                    by_entry = out["seat_reagents"].setdefault(who, {})
+                    by_entry[entry] = by_entry.get(entry, 0) + int(row.get("count") or 0)
+        drink_rows = _corps_read(
+            cur,
+            "seat drink",
+            _RAID_SUPPLY_SEAT_DRINK_SQL.format(guids=everyone),
+            (restsupply.DRINK_CATEGORY,),
+        )
+        for row in drink_rows:
+            who = str(row.get("name") or "")
+            if who:
+                out["seat_drink"][who] = int(row.get("units") or 0)
+        buffer_spell_rows = _corps_read(
+            cur,
+            "buffer spells",
+            _RAID_SUPPLY_BUFFER_SPELLS_SQL.format(
+                guids=everyone, spells=ids(raidsupply.ALL_BUFFER_SPELL_IDS)
+            ),
+        )
+        for row in buffer_spell_rows:
+            who = str(row.get("name") or "")
+            spell = int(row.get("spell") or 0)
+            if who and spell > 0:
+                out["known_spells"].setdefault(who, set()).add(spell)
+        if guilds:
+            g_holes = ",".join(["%s"] * len(guilds))
+            if reagent_ids:
+                gb_reagent_rows = _corps_read(
+                    cur,
+                    "guild bank buffer reagents",
+                    _RAID_SUPPLY_GBANK_REAGENTS_SQL.format(
+                        names=g_holes, entries=ids(reagent_ids)
+                    ),
+                    guilds,
+                )
+                for row in gb_reagent_rows:
+                    gname = str(row.get("guild_name") or "")
+                    entry = int(row.get("entry") or 0)
+                    if gname and entry > 0:
+                        by_entry = out["bank_reagents"].setdefault(gname, {})
+                        by_entry[entry] = (
+                            by_entry.get(entry, 0) + int(row.get("count") or 0)
+                        )
+            gb_drink_rows = _corps_read(
+                cur,
+                "guild bank drink",
+                _RAID_SUPPLY_GBANK_DRINK_SQL.format(names=g_holes),
+                (*guilds, restsupply.DRINK_CATEGORY),
+            )
+            for row in gb_drink_rows:
+                gname = str(row.get("guild_name") or "")
+                if gname:
+                    out["bank_drink"][gname] = int(row.get("units") or 0)
+        _raid_supply_bank(cur, guilds, out)
         rows = _corps_read(cur, "raid supply rows", _RAID_SUPPLY_ROWS_SQL,
                            (raidsupply.SOURCE + ":%",))
         out["farm_recent"] = _corps_read(cur, "farm assign rows", _RAID_SUPPLY_ROWS_SQL,
