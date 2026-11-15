@@ -127,6 +127,11 @@ import guildsocial
 
 ENV_SWITCH = "PVP_FOR_UPGRADES"
 LEVEL_CAP = 60
+# LEVELLING COMES BEFORE PVP. A battleground queue that does not pop held a
+# member under this level for hours, out of every dungeon and quest, while its
+# raid seat stood still (7 of 42 seats below 50 ran no dungeon in a day). Below
+# it a member neither seeks a PvP upgrade nor is drafted as a cohort filler.
+LEVELLING_FIRST_LEVEL = 50
 # Below the cap, a PvP upgrade must add this share of the worn piece's score.
 STRONG_BELOW_CAP = 0.3
 # The PvP cooldown: a queue row this fresh is not asked again (guildjobs).
@@ -567,6 +572,8 @@ def wants(level: int, upgrade: Upgrade | None) -> bool:
     level may enter."""
     if upgrade is None or not upgrade.pvp:
         return False
+    if int(level) < LEVELLING_FIRST_LEVEL:
+        return False
     if battleground_for(upgrade.offer, level) is None:
         return False
     return int(level) >= LEVEL_CAP or upgrade.share >= STRONG_BELOW_CAP
@@ -903,8 +910,8 @@ def _queued_key(name: str, recent):
 # A FILLER IS NEVER A MEMBER STILL LEVELLING (#2178). A filler has no upgrade to
 # win, only a seat to lend, and the queue holds it ahead of its level walk and
 # its supply runs. Under this level the seat is on its class quest and level
-# walk instead; a raid seat needs level 40 for its milestone.
-FILLER_MIN_LEVEL = 40
+# walk instead.
+FILLER_MIN_LEVEL = LEVELLING_FIRST_LEVEL
 
 
 def _filler(s, bg: Battleground, cohort: str = "") -> Aim:
