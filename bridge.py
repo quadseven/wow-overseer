@@ -17875,9 +17875,7 @@ class Bridge(discord.Client):
         if actions:
             seen_setup = await asyncio.to_thread(
                 _recent_guild_setup_keys, GIVE_RETRY_MINUTES)
-            action = next((a for a in actions
-                           if (a.target, a.command) not in seen_setup), None)
-            if action:
+            for action in guildbank.setup_for_arrival(actions, seen_setup):
                 await asyncio.to_thread(_insert_guild, action.target,
                                         action.command, "guildbank-setup")
                 log.info("guild bank setup: queued %s for %s%s",
@@ -30610,6 +30608,11 @@ def _fetch_guild_run_facts(bounds) -> dict:
             (guildrun.QUEUE_BENCH_MINUTES,),
         )
         benched = guildrun.benched(list(cur.fetchall()))
+        queued = guildrun.read_queued_seats(cur)
+        if queued:
+            log.info("guild runs: %d seat(s) sit in a battleground queue and are not "
+                     "proposed: %s", len(queued), ", ".join(sorted(queued)))
+        benched = benched | queued
         cur.execute(
             "SELECT members, outcome, why, bosses_done "
             "FROM overseer_guild_run WHERE state = 'ended' "

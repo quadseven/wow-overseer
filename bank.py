@@ -1015,7 +1015,15 @@ def _guild_tab_for(holding, storage, guild_room):
         wanted = bankpolicy.GEAR_TAB
     else:
         wanted = bankpolicy.MATERIALS_TAB
-    for tab in (wanted, bankpolicy.MATERIALS_TAB):
+    # THE OVERFLOW: a purchased tab with room that is not the raid's. Cave and
+    # Bonkers each stood at 98 of 98 in Materials with a second tab bought and
+    # empty, because only a rare piece for a later wearer ever chose it.
+    overflow = sorted(
+        t
+        for t in guild_room
+        if t not in (wanted, bankpolicy.MATERIALS_TAB, bankpolicy.RAID_TAB)
+    )
+    for tab in (wanted, bankpolicy.MATERIALS_TAB, *overflow):
         if guild_room.get(tab, 0) > _reserved_slots(holding, storage, tab):
             return tab
     return None
