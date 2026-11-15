@@ -54,6 +54,15 @@ SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.I)
 REF_RE = re.compile(r"\b(?:refs?|fixes|closes|resolves)\s+#(\d+)\b", re.I)
 TITLE_REF_RE = re.compile(r"\(#(\d+)\)")
 LIVE_PROOF_RE = re.compile(r"(?:^|\n)\s*(?:[-*]\s*)?live\s+proof\s*:", re.I)
+TRUSTED_PROOF_ASSOCIATIONS = frozenset({"OWNER", "MEMBER"})
+TRUSTED_PROOF_LOGINS = frozenset(
+    {
+        "agent-anthropic-claude-code[bot]",
+        "agent-google-gemini[bot]",
+        "agent-meta-muse[bot]",
+        "agent-openai-codex[bot]",
+    }
+)
 
 
 def _bridge_cm_name() -> str:
@@ -84,26 +93,7 @@ def _short(sha: str) -> str:
     return sha[:12] if sha != UNKNOWN else UNKNOWN
 
 
-def read_bridge(fetch_cm: Callable[[], dict] | None = None) -> dict:
-    """Read bridge follower state (`merge`, `digest`, `deployed_at`) or unknown."""
-    reader = fetch_cm or _default_fetch_cm
-    try:
-        cm = reader()
-    except Exception as err:  # noqa: BLE001 - unreadable ConfigMap returns unknown
-        log.warning("bridge follower ConfigMap unreadable: %s", err)
-        return {
-            "commit": UNKNOWN,
-            "short": UNKNOWN,
-            "digest": UNKNOWN,
-            "deployed_at": UNKNOWN,
-            "deployed_seconds": None,
-            "previous": UNKNOWN,
-            "ship_pr": None,
-            "unmeasured": {"bridge": "The follower ConfigMap read failed: %s" % err},
-        }
-    data = (cm or {}).get("data") if isinstance(cm, dict) else None
-    if not isinstance(data, dict):
-        data = {}
+def _bridge_from_data(data: dict) -> dict:
     unmeasured = {}
     commit = str(data.get("merge") or "").strip().lower() or UNKNOWN
     digest = str(data.get("digest") or "").strip() or UNKNOWN
@@ -128,6 +118,31 @@ def read_bridge(fetch_cm: Callable[[], dict] | None = None) -> dict:
         "ship_pr": ship_pr,
         "unmeasured": unmeasured,
     }
+
+
+def read_bridge(fetch_cm: Callable[[], dict] | None = None) -> dict:
+    """Read bridge follower state (`merge`, `digest`, `deployed_at`) or unknown."""
+    reader = fetch_cm or _default_fetch_cm
+    try:
+        cm = reader()
+    except Exception as err:  # noqa: BLE001 - unreadable ConfigMap returns unknown
+        log.warning("bridge follower ConfigMap unreadable: %s", err)
+        return {
+            "commit": UNKNOWN,
+            "short": UNKNOWN,
+            "digest": UNKNOWN,
+            "deployed_at": UNKNOWN,
+            "deployed_seconds": None,
+            "previous": UNKNOWN,
+            "ship_pr": None,
+            "unmeasured": {"bridge": "The follower ConfigMap read failed: %s" % err},
+        }
+    data = (
+        cm.get("data")
+        if isinstance(cm, dict) and isinstance(cm.get("data"), dict)
+        else {}
+    )
+    return _bridge_from_data(data)
 
 
 def _read_banner(ctx, now: datetime) -> tuple[dict | None, str]:
@@ -279,11 +294,23 @@ def extract_refs(title: str, body: str, pr_number: int) -> list[int]:
     return sorted(found)
 
 
+def is_trusted_proof_comment(item: dict) -> bool:
+    """True when a comment comes from the repo owner/member or a fleet App."""
+    assoc = str(item.get("author_association") or "").strip().upper()
+    if assoc in TRUSTED_PROOF_ASSOCIATIONS:
+        return True
+    user = item.get("user")
+    login = (
+        str(user.get("login") or "").strip().lower() if isinstance(user, dict) else ""
+    )
+    return login in TRUSTED_PROOF_LOGINS
+
+
 def extract_proven_tickets(comments: list) -> set[int]:
-    """Issue numbers whose comments carry a `Live proof:` marker."""
+    """Issue numbers with a `Live proof:` marker from trusted fleet/owner."""
     proven: set[int] = set()
     for item in comments or ():
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or not is_trusted_proof_comment(item):
             continue
         body = str(item.get("body") or "")
         if not LIVE_PROOF_RE.search(body):
@@ -305,34 +332,40 @@ def _gh_get(fetch: Callable, now: float, path: str):
     return body
 
 
+def _collect_page_pulls(
+    items: list, branch: str, cutoff: datetime, out: list[dict]
+) -> bool:
+    stop = False
+    for pr in items:
+        base_ref = ((pr.get("base") or {}).get("ref")) or ""
+        merged_raw = pr.get("merged_at")
+        updated_dt = realmmaint.parse_time(pr.get("updated_at") or "")
+        if updated_dt and updated_dt < cutoff:
+            stop = True
+        if base_ref != branch or not merged_raw:
+            continue
+        merged_dt = realmmaint.parse_time(merged_raw)
+        if merged_dt and merged_dt >= cutoff:
+            out.append(pr)
+            if len(out) >= MAX_PRS_PER_REPO:
+                return True
+    return stop
+
+
 def _fetch_recent_pulls(fetch: Callable, now: float, spec: dict) -> list[dict]:
     cutoff = datetime.fromtimestamp(now, timezone.utc) - timedelta(hours=WINDOW_HOURS)
-    repo = spec["repo"]
-    branch = spec["branch"]
     out: list[dict] = []
     for page in range(1, MAX_PR_PAGES + 1):
         path = (
             "%s/pulls?state=closed&sort=updated&direction=desc&per_page=%d&page=%d"
-            % (repo, PR_PER_PAGE, page)
+            % (spec["repo"], PR_PER_PAGE, page)
         )
         items = _gh_get(fetch, now, path)
         if not isinstance(items, list) or not items:
             break
-        stop = False
-        for pr in items:
-            base_ref = ((pr.get("base") or {}).get("ref")) or ""
-            merged_raw = pr.get("merged_at")
-            updated_dt = realmmaint.parse_time(pr.get("updated_at") or "")
-            if updated_dt and updated_dt < cutoff:
-                stop = True
-            if base_ref != branch or not merged_raw:
-                continue
-            merged_dt = realmmaint.parse_time(merged_raw)
-            if merged_dt and merged_dt >= cutoff:
-                out.append(pr)
-                if len(out) >= MAX_PRS_PER_REPO:
-                    return out
-        if stop or len(items) < PR_PER_PAGE:
+        if _collect_page_pulls(items, spec["branch"], cutoff, out):
+            break
+        if len(items) < PR_PER_PAGE:
             break
     return out
 

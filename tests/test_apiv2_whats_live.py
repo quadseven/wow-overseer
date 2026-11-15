@@ -210,22 +210,61 @@ class CommitGraphAndLiveProof(unittest.TestCase):
         )
         self.assertEqual(refs, [2640])
 
+    def test_live_proof_marker_only_accepted_from_trusted_fleet_or_owner(self):
         comments = [
             {
                 "issue_url": "https://api.github.com/repos/quadseven/wow-overseer/issues/470",
+                "user": {"login": "owner-handle"},
+                "author_association": "OWNER",
                 "body": "Live proof: epic tracking",
             },
             {
                 "issue_url": "https://api.github.com/repos/quadseven/wow-overseer/issues/2640",
+                "user": {"login": "agent-google-gemini[bot]"},
+                "author_association": "NONE",
                 "body": "Live proof: Draenei shamans crossed and trained.",
             },
             {
+                "issue_url": "https://api.github.com/repos/quadseven/wow-overseer/issues/2641",
+                "user": {"login": "agent-anthropic-claude-code[bot]"},
+                "author_association": "CONTRIBUTOR",
+                "body": "Live proof: verified on wow-dev.",
+            },
+            {
+                "issue_url": "https://api.github.com/repos/quadseven/wow-overseer/issues/2642",
+                "user": {"login": "agent-meta-muse[bot]"},
+                "author_association": "NONE",
+                "body": "Live proof: checked.",
+            },
+            {
+                "issue_url": "https://api.github.com/repos/quadseven/wow-overseer/issues/2643",
+                "user": {"login": "org-member"},
+                "author_association": "MEMBER",
+                "body": "Live proof: member confirmed.",
+            },
+            {
+                "issue_url": "https://api.github.com/repos/quadseven/wow-overseer/issues/2699",
+                "user": {"login": "random-stranger"},
+                "author_association": "NONE",
+                "body": "Live proof: spoofed by passerby.",
+            },
+            {
+                "issue_url": "https://api.github.com/repos/quadseven/wow-overseer/issues/2697",
+                "user": {"login": "outside-contributor"},
+                "author_association": "CONTRIBUTOR",
+                "body": "Live proof: spoofed by contributor.",
+            },
+            {
                 "issue_url": "https://api.github.com/repos/quadseven/wow-overseer/issues/2608",
+                "user": {"login": "agent-anthropic-claude-code[bot]"},
+                "author_association": "NONE",
                 "body": "Reviewed and approved.",
             },
         ]
         proven = wl.extract_proven_tickets(comments)
-        self.assertEqual(proven, {470, 2640})
+        self.assertEqual(proven, {470, 2640, 2641, 2642, 2643})
+        self.assertNotIn(2699, proven)
+        self.assertNotIn(2697, proven)
         # Since extract_refs omitted Part of #470, #470 proof never promotes PR #2608.
         self.assertEqual(
             wl.extract_refs("Buy bank slots (#2608)", "Refs #2608\nPart of #470", 2687),
@@ -282,6 +321,8 @@ class BoundedBoardAndRateLimits(unittest.TestCase):
                     [
                         {
                             "issue_url": "https://api.github.com/repos/quadseven/wow-overseer/issues/2640",
+                            "user": {"login": "agent-anthropic-claude-code[bot]"},
+                            "author_association": "NONE",
                             "body": "Live proof: shamans trained on Eastern Kingdoms.",
                         }
                     ],
