@@ -11,17 +11,35 @@ price, with the same idle, ground, follower and cooldown holds.
 from __future__ import annotations
 
 import os
+import types
 import unittest
 from unittest import mock
 
-import bridge
 import classquest
 import familyclass
 import guildjobs
 import mountbuy
+from _stub_modules import PYMYSQL, fresh_import
 from test_family_riding import GOLD, RIDING, ago, seat
 from test_familyclass import book, member as class_member
 from test_mountbuy import PINTO, STOCK
+
+
+def _load_bridge():
+    """Import bridge with a stub discord module because CI runs without discord.py."""
+    stub = types.ModuleType("discord")
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    stub.Client = Client
+    stub.Intents = mock.Mock()
+    stub.Message = object
+    return fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
+
+
+bridge = _load_bridge()
 
 FACTS = mountbuy.Facts(False, STOCK)
 
