@@ -208,6 +208,7 @@ class TwoHoursOfTheMeasuredTrafficStayUnderTheBar(unittest.TestCase):
                 for i in range(6)
             },
             redundant=lambda names: frozenset(range(100, 106)),
+            dropped_second_sets=lambda facts, placed=None: frozenset(),
         )
         ns["_fetch_bank_bag_facts"] = lambda names: [
             types.SimpleNamespace(name=n) for n in names + names[:1]
