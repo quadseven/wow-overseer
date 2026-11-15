@@ -756,6 +756,64 @@ class TheFireProtectionPotionStandsIn(unittest.TestCase):
             ORC, gc.members_from_rows([row], (), (), (), (), (), (), ())[0].race
         )
 
+    def test_major_mana_potion_recipe_requires_295_alchemy(self):
+        plan = self.plan(294, HUMAN, 0, {0: frozenset({13501})})
+        steps = [
+            s
+            for s in plan.steps
+            if s.holder == "Oden" and "13501" in " ".join(r.command for r in s.rows)
+        ]
+        self.assertFalse(steps)
+        supply = next(s for s in rs.SUPPLIES if s.entry == rs.MAJOR_MANA)
+        self.assertEqual(295, supply.make.recipe_skill)
+
+    def test_corps_members_reads_money_and_recipe_buy_keeps_purse_floor(self):
+        row = {
+            "guild_name": "Cave",
+            "guid": 1,
+            "name": "Oden",
+            "race": HUMAN,
+            "level": 60,
+            "money": 40000,
+        }
+        m = gc.members_from_rows([row], (), (), (), (), (), (), ())[0]
+        self.assertEqual(40000, m.money)
+        self.assertIsNone(
+            gc.members_from_rows(
+                [{"guild_name": "Cave", "guid": 2, "name": "B"}],
+                (),
+                (),
+                (),
+                (),
+                (),
+                (),
+                (),
+            )[0].money
+        )
+        # Level 60 purse floor is 36_000c; Fire Protection Potion recipe 6055 is 1500c -> needs 37_500c.
+        poor = member(
+            "Oden", skills={gc.ALCHEMY: (165, 225)}, race=HUMAN, map_id=0, money=37499
+        )
+        plan_poor = rs.plan_guild(
+            facts([poor, *raider_members()], vendors={0: frozenset({6055})}),
+            {},
+            set(),
+        )
+        self.assertFalse([s for s in plan_poor.steps if s.holder == "Oden"])
+        self.assertIn(
+            "Oden is short of gold for the Fire Protection Potion recipe",
+            plan_poor.notes,
+        )
+        enough = member(
+            "Oden", skills={gc.ALCHEMY: (165, 225)}, race=HUMAN, map_id=0, money=37500
+        )
+        plan_ok = rs.plan_guild(
+            facts([enough, *raider_members()], vendors={0: frozenset({6055})}),
+            {},
+            set(),
+        )
+        self.assertTrue([s for s in plan_ok.steps if s.holder == "Oden"])
+
 
 class FakeClient:
     def __init__(self, choice, confidence):
