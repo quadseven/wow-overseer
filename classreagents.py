@@ -120,7 +120,7 @@ def parse_spell_dbc(blob: bytes) -> dict[int, tuple[tuple[int, int], ...]]:
         counts = struct.unpack_from("<8i", blob, offset + F_REAGENT_COUNT * 4)
         pairs = tuple(
             (int(entry), max(1, int(count)))
-            for entry, count in zip(reagents, counts)
+            for entry, count in zip(reagents, counts, strict=True)
             if entry > 0
         )
         if pairs:
@@ -330,6 +330,39 @@ def _pick_at_vendor(member, stock_rows, vendored, room):
     return tuple(buys)
 
 
+def _split_vendored(need: dict[int, int], sold_entries) -> tuple[dict[int, int], str]:
+    """Split ``need`` into realm-vendored items and an unvendored skip note."""
+    if sold_entries is None:
+        return dict(need), ""
+    sold_set = {int(e) for e in sold_entries}
+    unvendored = [e for e in need if e not in sold_set]
+    vendored = {e: gap for e, gap in need.items() if e in sold_set}
+    note = (
+        "item %s has no vendor on the realm (made or dropped, not bought)"
+        % ", ".join(str(e) for e in unvendored)
+        if unvendored
+        else ""
+    )
+    return vendored, note
+
+
+def _pick_best_vendor(member, friendly, vendored: dict[int, int], room):
+    """Choose the nearest vendor offering the fullest affordable buy tuple."""
+    vendors: dict[int, list] = {}
+    for row in friendly:
+        vendors.setdefault(_int(row.get("vendor")), []).append(row)
+    best = None
+    for vendor_id, stock in vendors.items():
+        buys = _pick_at_vendor(member, stock, vendored, room)
+        if not buys:
+            continue
+        yards = min(float(r.get("yards") or 0.0) for r in stock)
+        key = (-len(buys), yards, vendor_id)
+        if best is None or key < best[0]:
+            best = (key, buys)
+    return best[1] if best is not None else ()
+
+
 def plan(
     member,
     spell_reagents,
@@ -343,18 +376,7 @@ def plan(
     need = wanted(member, spell_reagents, craft)
     if not need:
         return (), ""
-    skip_reason = ""
-    if sold_entries is not None:
-        sold_set = {int(e) for e in sold_entries}
-        unvendored = [e for e in need if e not in sold_set]
-        vendored = {e: gap for e, gap in need.items() if e in sold_set}
-        if unvendored:
-            skip_reason = (
-                "item %s has no vendor on the realm (made or dropped, not bought)"
-                % ", ".join(str(e) for e in unvendored)
-            )
-    else:
-        vendored = dict(need)
+    vendored, skip_reason = _split_vendored(need, sold_entries)
     if not vendored:
         return (), skip_reason
     friendly = _friendly_rows(member, vendor_rows, set(vendored))
@@ -378,19 +400,8 @@ def plan(
                 "%s has no bag room for class reagents" % member.name,
             ),
         )
-    vendors: dict[int, list] = {}
-    for row in friendly:
-        vendors.setdefault(_int(row.get("vendor")), []).append(row)
-    best = None
-    for vendor_id, stock in vendors.items():
-        buys = _pick_at_vendor(member, stock, vendored, room)
-        if not buys:
-            continue
-        yards = min(float(r.get("yards") or 0.0) for r in stock)
-        key = (-len(buys), yards, vendor_id)
-        if best is None or key < best[0]:
-            best = (key, buys)
-    if best is None:
+    buys = _pick_best_vendor(member, friendly, vendored, room)
+    if not buys:
         return (
             (),
             _join_reasons(
@@ -399,7 +410,7 @@ def plan(
                 % (member.name, max(0, _int(member.money))),
             ),
         )
-    return best[1], skip_reason
+    return buys, skip_reason
 
 
 def said(member, buys) -> str:
