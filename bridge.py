@@ -8933,6 +8933,7 @@ class Bridge(discord.Client):
         self._attune_said: dict = {}
         self._attune_since: dict = {}
         self._hydraxian_since: dict = {}
+        self._hydraxian_spent: set = set()
         self._activity_own_key = None
         # THE MOVEMENT PICTURE (situation.py): each roster member's recent
         # positions, sampled by _situation_loop on its own clock because no
@@ -25329,6 +25330,7 @@ class Bridge(discord.Client):
         """
         if not hydraxian.enabled():
             self._hydraxian_since.clear()
+            self._hydraxian_spent.clear()
             return set()
         own = await asyncio.to_thread(_cohort_of, bonds.head_of_family())
         held = set()
@@ -25344,23 +25346,23 @@ class Bridge(discord.Client):
     ) -> bool:
         """Plan and carry one family's giver visit, isolating expected I/O faults."""
         if skip:
-            self._hydraxian_since.pop(key, None)
+            self._hydraxian_clear_hold(key)
             return False
         names = list(fam.get("names") or ())
         leader_row = fam.get("leader") or {}
         leader = str(leader_row.get("name") or "")
         if not names or not leader:
-            self._hydraxian_since.pop(key, None)
+            self._hydraxian_clear_hold(key)
             return False
         looped_by = globals().get("_prof_loop_family")
         if looped_by is not None and looped_by(key):
-            self._hydraxian_since.pop(key, None)
+            self._hydraxian_clear_hold(key)
             log.info("Hydraxian quest: %s waits for the profession loop",
                      campaignqueue._family(key))
             return False
         try:
             if await self._mid_run(names):
-                self._hydraxian_since.pop(key, None)
+                self._hydraxian_clear_hold(key)
                 log.info("Hydraxian quest: %s waits until it is out of the run",
                          campaignqueue._family(key))
                 return False
@@ -25372,6 +25374,11 @@ class Bridge(discord.Client):
             log.exception("Hydraxian quest pass failed for %s",
                           campaignqueue._family(key))
             return False
+
+    def _hydraxian_clear_hold(self, key: str) -> None:
+        """Clear the timer and its expiry marker when this hold stretch ends."""
+        self._hydraxian_since.pop(key, None)
+        self._hydraxian_spent.discard(key)
 
     async def _hydraxian_plan_step(
         self, fam: dict, pending: list, leader_row: dict, names: list
@@ -25388,19 +25395,20 @@ class Bridge(discord.Client):
     ) -> hydraxian.Step:
         """Expire an overdue giver walk and return the unheld step."""
         if not step.hold_planner:
-            self._hydraxian_since.pop(key, None)
+            self._hydraxian_clear_hold(key)
             return step
         since = self._hydraxian_since.setdefault(key, time.monotonic())
         if time.monotonic() - since <= hydraxian.HOLD_LIMIT_SECONDS:
             return step
-        self._hydraxian_since.pop(key, None)
-        log.warning(
-            "Hydraxian quest: %s gave the planner back after the giver walk "
-            "exceeded %d minutes",
-            campaignqueue._family(key),
-            hydraxian.HOLD_LIMIT_SECONDS // 60,
-        )
-        await asyncio.to_thread(_release_trade_errand, leader, str(step.aim))
+        if key not in self._hydraxian_spent:
+            log.warning(
+                "Hydraxian quest: %s gave the planner back after the giver walk "
+                "exceeded %d minutes",
+                campaignqueue._family(key),
+                hydraxian.HOLD_LIMIT_SECONDS // 60,
+            )
+            await asyncio.to_thread(_release_trade_errand, leader, str(step.aim))
+            self._hydraxian_spent.add(key)
         return dataclasses.replace(step, aim=None, hold_planner=False, release=None)
 
     async def _hydraxian_carry_out(

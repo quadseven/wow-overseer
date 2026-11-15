@@ -187,6 +187,7 @@ class HydraxianBridgeTests(unittest.TestCase):
     def _host(self, *, mid_run=False):
         host = object.__new__(self.bridge.Bridge)
         host._hydraxian_since = {}
+        host._hydraxian_spent = set()
         host.claims = []
         host.releases = []
         host.written = []
@@ -269,17 +270,25 @@ class HydraxianBridgeTests(unittest.TestCase):
         self.assertEqual(host.written, [])
         self.assertEqual(host.claims[0][0][:3], ("attunement", "MemberA", "13278"))
 
-    def test_an_expired_walk_releases_the_aim_and_gives_the_planner_back(self):
+    def test_an_expired_walk_stays_expired_on_the_next_pass(self):
         host = self._host()
         host._hydraxian_since["grug"] = (
             time.monotonic() - hydraxian.HOLD_LIMIT_SECONDS - 1
         )
 
-        _host, held = self._run_pass(_giver_facts(at=(-7000.0, 500.0, 30.0)), host=host)
+        facts = _giver_facts(at=(-7000.0, 500.0, 30.0))
+        _host, first_held = self._run_pass(facts, host=host)
+        _host, second_held = self._run_pass(facts, host=host)
 
-        self.assertEqual(held, set())
+        self.assertEqual(first_held, set())
+        self.assertEqual(second_held, set())
         self.assertEqual(host.claims, [])
         self.assertEqual(host.releases, [("MemberA", "13278")])
+        self.assertIn("grug", host._hydraxian_spent)
+        self.assertLessEqual(
+            host._hydraxian_since["grug"],
+            time.monotonic() - hydraxian.HOLD_LIMIT_SECONDS,
+        )
 
     def test_pass_writes_a_real_take_and_releases_the_giver_walk(self):
         host, held = self._run_pass(_giver_facts())
