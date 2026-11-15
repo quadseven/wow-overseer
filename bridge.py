@@ -118,6 +118,7 @@ import itemplan_shadow
 import itemplan
 import itemplan_disenchant
 import itemplan_vendor
+import seatbags
 import itemsource
 import purse
 import pvpgear
@@ -19625,6 +19626,12 @@ class Bridge(discord.Client):
             else classhunt.Slots(classhunt.free_slots(
                 facts.get("hunt_open"), HUNTS_AT_ONCE)))
         self._class_hunts.items = now >= self._class_hunt_itemless_until
+        # A RAID SEAT RUNS THE FAMILY'S BAG LOOP (#2609): the item plan over
+        # the seat's whole bags, handed to the plan as what to sell and bank.
+        members, seat_lines = await asyncio.to_thread(
+            _seat_bag_relief, members, cap)
+        for line in seat_lines:
+            log.info("guild jobs: %s", line)
         plan = await self._plan_guild_jobs(
             members, facts, busy, cap, spawn_walks, cohort)
         self._log_guild_job_plan(members, plan)
@@ -32076,6 +32083,70 @@ def _route_sales_for_trip(names, leader, rows, free_slots, sellable_counts,
         sellable_counts=sellable_counts)
     _count_sales(sellable_counts, sales)
     return sales
+
+
+# A RAID SEAT'S BAG LOOP (#2609): the reads the item plan needs for the
+# seats short of room, and the bankers a deposit walks to. The guild job read
+# holds only what a vendor buys, so the seat's whole bags are read here, as the
+# economy pass reads the family's.
+_SEAT_MEMO = seatbags.Memo()
+_BANKER_SPAWNS_SQL = (
+    "SELECT cr.guid AS spawn, cr.map AS map_id, cr.position_x AS x, "
+    "cr.position_y AS y, ct.name AS name "
+    "FROM acore_world.creature cr "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "WHERE cr.map IN ({maps}) AND (ct.npcflag & %s) <> 0 AND "
+    + towntrip.REAL_SPAWN_SQL
+)
+
+
+def _seat_bag_relief(members, cap):
+    """(members with each seat's plan attached, log lines), blocking.
+
+    A failed read or plan is logged and the pass carries on with the members
+    as they were, as the shadow does for the family."""
+    try:
+        return seatbags.relieve(
+            members, _read_seat_bags, _fetch_banker_spots, cap,
+            time.monotonic(), _SEAT_MEMO)
+    except Exception:
+        log.exception("seat bags: the plan failed; the pass carries on without it")
+        return list(members), ()
+
+
+def _read_seat_bags(names):
+    """seatbags.relieve's read for the named seats, None when it failed."""
+    try:
+        rows = _fetch_vendor_items(names)
+        free_slots = _fetch_free_slots(names)
+        gear_rows = _fetch_surplus_gear(names)
+        worn_rows = _fetch_family_equipped(names)
+        extras = _itemplan_reads(names, "seats", rows, gear_rows, worn_rows)
+    except (OSError, pymysql.err.MySQLError) as exc:
+        log.warning("seat bags: could not read the seats' bags: %s", exc)
+        return None
+    return ("seats", rows, free_slots, extras, gear_rows, worn_rows, OWNER_KEEPS)
+
+
+def _fetch_banker_spots(map_ids) -> tuple:
+    """guildjobs.Spot for every banker spawned on these maps, none on a read
+    that failed (a deposit then has no banker and is not written)."""
+    maps = [int(m) for m in map_ids]
+    if not maps:
+        return ()
+    sql = _BANKER_SPAWNS_SQL.format(maps=",".join(["%s"] * len(maps)))
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(sql, (*maps, towntrip.NPC_FLAG_BANKER))
+            found = cur.fetchall()
+    except pymysql.err.MySQLError as exc:
+        log.warning("seat bags: could not read the bankers: %s", exc)
+        return ()
+    return tuple(
+        guildjobs.Spot(
+            kind="creature", spawn=int(r["spawn"]), map_id=int(r["map_id"]),
+            x=float(r["x"]), y=float(r["y"]), name=str(r["name"] or ""))
+        for r in found)
 
 
 def _itemplan_reads(names, family, rows, gear_rows, worn_rows):
