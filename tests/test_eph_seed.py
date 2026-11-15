@@ -316,7 +316,7 @@ class GuardTest(unittest.TestCase):
             "localhost",
             "mysql",
             "mysql.wow-dev.svc",
-            "10.0.0.5",
+            "192.0.2.5",
             "127.0.0.2",
             "0.0.0.0",
             "::1",
@@ -854,7 +854,7 @@ class SeedRunTest(unittest.TestCase):
         self.assertEqual((rc, conn.executed, conn.commits), (0, [], 0))
 
     def test_foreign_host_is_invalid_and_never_connected(self):
-        for host in ("mysql", "localhost", "10.1.2.3"):
+        for host in ("mysql", "localhost", "198.51.100.7"):
             rc, conn, calls, text = self.run_seed({**self.ENV, "EPH_MYSQL_HOST": host})
             self.assertEqual(rc, 3, host)
             self.assertEqual(calls, [], host)
