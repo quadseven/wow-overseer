@@ -21,6 +21,13 @@ MAIL = gear.MAIL
 spots_from_rows = gear.spots_from_rows
 within_trade_range = gear._within_trade_range
 
+# Armor material classification, re-exported for equipscore and gearup so gear keeps its single importer.
+ARMOR_CLOTH = gear.ARMOR_CLOTH
+ITEM_CLASS_ARMOR = gear.ITEM_CLASS_ARMOR
+ARMOR_MATERIAL_INVTYPES = gear.ARMOR_MATERIAL_INVTYPES
+preferred_armor_subclass = gear.preferred_armor_subclass
+armor_material_tier = gear.armor_material_tier
+
 # The two item classes that are worn: weapons and armour. A bag is class 1 and
 # is deliberately not here, because an empty bag is still slots.
 EQUIPMENT_CLASSES = frozenset({2, 4})

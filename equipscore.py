@@ -66,6 +66,9 @@ import weaponskill
 
 # The share of the worn piece's score a carried piece must add to be put on.
 MIN_GAIN = 0.1
+# Bounded per-tier weight inside a score band so equal/near-score heavier class
+# armor breaks ties upward without letting low-scored armor strip stronger wear.
+TIER_BONUS = 0.05
 # A score difference smaller than this is no difference.
 EPSILON = 1e-6
 # Below this gear score on both pieces the spec has no real opinion (a stray
@@ -296,6 +299,19 @@ def role_score(stats: dict, role: str) -> float:
     return total
 
 
+def armor_tier(row: dict | None, wearer: Wearer) -> int:
+    """Material tier (1..4) for body armor slots, else 0 (cloaks, jewelry, weapons)."""
+    if row is None:
+        return 0
+    return bag_pressure.armor_material_tier(
+        _int(row.get("item_class")),
+        _int(row.get("item_subclass")),
+        _int(row.get("inventory_type")),
+        wearer.class_id,
+        wearer.level,
+    )
+
+
 def resistance_only(row: dict, book=None) -> bool:
     """True when `row` gives only resistance(s) (and base armor/shield block)
     so it belongs in a situational set rather than everyday wear."""
@@ -316,24 +332,40 @@ def resistance_only(row: dict, book=None) -> bool:
 
 
 def value(row: dict, wearer: Wearer, key: str = "", book=None) -> tuple:
-    """(gear score, role score) of one piece for this member, in hand `key`."""
+    """(gear score, role score, armor tier) of one piece for this member, in hand `key`."""
     if row is None or resistance_only(row, book):
-        return (0.0, 0.0)
+        return (0.0, 0.0, 0)
     stats = stats_of(row, book)
     gs = gearscore.score(stats, wearer.spec, wearer.level, key) if wearer.spec else 0.0
-    return (gs, role_score(stats, wearer.role))
+    return (gs, role_score(stats, wearer.role), armor_tier(row, wearer))
 
 
 def _add(a: tuple, b: tuple) -> tuple:
-    return (a[0] + b[0], a[1] + b[1])
+    return (a[0] + b[0], a[1] + b[1], 0)
+
+
+def _tier(v: tuple) -> int:
+    return int(v[2]) if len(v) > 2 else 0
+
+
+def _bonused(score: float, tier: int) -> float:
+    return score * (1.0 + TIER_BONUS * tier)
 
 
 def beats(new: tuple, old: tuple) -> bool:
-    """Does `new` beat `old` by MIN_GAIN: by gear score, or by the role score
-    when the spec scores neither."""
-    if _spec_decides(new, old):
-        return new[0] - old[0] > EPSILON and new[0] > old[0] * (1.0 + MIN_GAIN)
-    return new[1] - old[1] > EPSILON and new[1] > old[1] * (1.0 + MIN_GAIN)
+    """Does `new` beat `old` by MIN_GAIN, with armor tier breaking ties and
+    narrowing gains inside a bounded score band."""
+    idx = 0 if _spec_decides(new, old) else 1
+    s_new, s_old = new[idx], old[idx]
+    new_tier, old_tier = _tier(new), _tier(old)
+    if new_tier > 0 and old_tier > 0 and new_tier != old_tier:
+        b_new, b_old = _bonused(s_new, new_tier), _bonused(s_old, old_tier)
+        if new_tier > old_tier:
+            if s_old <= EPSILON and s_new <= EPSILON:
+                return True
+            return b_new - b_old > EPSILON
+        return b_new - b_old > EPSILON and b_new > b_old * (1.0 + MIN_GAIN)
+    return s_new - s_old > EPSILON and s_new > s_old * (1.0 + MIN_GAIN)
 
 
 def _spec_decides(new: tuple, old: tuple) -> bool:
@@ -341,7 +373,13 @@ def _spec_decides(new: tuple, old: tuple) -> bool:
 
 
 def _rank(v: tuple, row: dict | None) -> tuple:
-    return (round(v[0], 6), round(v[1], 6), _int((row or {}).get("item_level")))
+    tier = _tier(v)
+    return (
+        round(_bonused(v[0], tier), 6),
+        round(_bonused(v[1], tier), 6),
+        tier,
+        _int((row or {}).get("item_level")),
+    )
 
 
 # --- can it be put on now ----------------------------------------------------
@@ -492,6 +530,13 @@ def _equip(row: dict, wearer: Wearer, slot: str, worn_level: int, reason: str):
 
 
 def _said(new: tuple, old: tuple, wearer: Wearer) -> str:
+    new_tier, old_tier = _tier(new), _tier(old)
+    if new_tier > old_tier > 0:
+        return "armor tier %d over %d for %s" % (
+            new_tier,
+            old_tier,
+            wearer.spec or "unknown",
+        )
     if _spec_decides(new, old):
         return "gear score %.1f over %.1f for %s" % (new[0], old[0], wearer.spec)
     return "%s role score %.1f over %.1f (the %s spec scores neither)" % (

@@ -212,6 +212,40 @@ _ARMOR_TRAINED_AT = {
 # A shield is not "heavier armour", it is its own proficiency.
 _SHIELD_CLASSES = frozenset({1, 2, 7})
 
+# Inventory types and subclasses for the eight armor material slots (cloaks,
+# shields, rings, necks, trinkets, held items and relics are exempt).
+ARMOR_MATERIAL_INVTYPES = frozenset({1, 3, 5, 6, 7, 8, 9, 10, 20})
+ARMOR_MATERIAL_SUBCLASSES = frozenset(
+    {ARMOR_CLOTH, ARMOR_LEATHER, ARMOR_MAIL, ARMOR_PLATE}
+)
+
+
+def preferred_armor_subclass(class_id: int, level: int) -> int:
+    """Heaviest armor subclass (cloth..plate) `class_id` wears at `level`."""
+    cid = int(class_id or 0)
+    if cid not in _ARMOR_TRAINED_AT:
+        return 0
+    return heaviest_armor(cid, int(level or 0))
+
+
+def armor_material_tier(
+    item_class: int,
+    item_subclass: int,
+    inventory_type: int,
+    class_id: int,
+    level: int,
+) -> int:
+    """Armor material tier (1..4) in a material slot, capped by class target."""
+    if (
+        int(item_class or 0) != ITEM_CLASS_ARMOR
+        or int(inventory_type or 0) not in ARMOR_MATERIAL_INVTYPES
+        or int(item_subclass or 0) not in ARMOR_MATERIAL_SUBCLASSES
+    ):
+        return 0
+    pref = preferred_armor_subclass(class_id, level)
+    return min(int(item_subclass), pref) if pref else 0
+
+
 # A Holding built without the fact. NOT STATED is not the same as "misc", and
 # it means this check abstains rather than guesses - the same shape
 # `bag_pressure.gear_candidates` gives `fits=None`. bridge.py always states
