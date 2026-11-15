@@ -607,6 +607,15 @@ class Storage:
     guild_reagents: frozenset = frozenset()
     # Second-set gear dropped when locking to seat role (#2606): left in personal bank.
     dropped_second_sets: frozenset = frozenset()
+    # THE ITEM PLAN'S WORD ON A STACK THAT LEAVES FOR GOOD (#2604). item guid ->
+    # why, for every stack the plan routes to a vendor, a member or the house
+    # and whose executor is switched on (`itemplan_shadow.leaving`). The keeper
+    # rule stores none of them: one answer per stack, and it is the plan's.
+    plan_leaves: dict = field(default_factory=dict)
+    # True when the plan was to be consulted and could not be read. The keeper
+    # rule then stores nothing new (`_stored`), because a deposit the plan
+    # would have sold is a deposit nobody asked for.
+    plan_unread: bool = False
 
 
 def _craft_wanted(holding, storage):
@@ -708,6 +717,8 @@ def storage_from(
     over_target=None,
     craft_wants=None,
     dropped_second_sets=frozenset(),
+    plan_leaves=None,
+    plan_unread=False,
 ):
     """The Storage this family is today, from what the bridge already reads.
 
@@ -744,6 +755,8 @@ def storage_from(
         },
         guild_reagents=vault_reagents(skills, guild) if depositors else frozenset(),
         dropped_second_sets=frozenset(dropped_second_sets or ()),
+        plan_leaves=dict(plan_leaves or {}),
+        plan_unread=bool(plan_unread),
     )
 
 
@@ -857,6 +870,10 @@ def storage_reason(holding, storage, surplus=frozenset()):
     settled = _class_reason(holding, storage)
     if settled is not None:
         return settled
+    if holding.guid in storage.plan_leaves:
+        # THE ITEM PLAN SELLS, GIVES OR LISTS IT (#2604): not a stack the
+        # keeper rule has any business storing, whatever its kind.
+        return ""
     if holding.start_quest > 0 or item.quest_item:
         return ""
     trades = storage.trades.get(holding.holder, frozenset())
@@ -903,6 +920,10 @@ def _stored(member, storage):
     surplus = stock_surplus(member.carried, storage)
     found = []
     for holding in member.carried:
+        if storage.plan_unread and _class_reason(holding, storage) is None:
+            # The plan could not be read: only what a policy placement or a
+            # kept BoE settled by kind is stored, nothing new on the rule's word.
+            continue
         why = storage_reason(holding, storage, surplus)
         if why:
             found.append((holding.guid in surplus, _stack_order(holding), holding, why))
@@ -929,7 +950,12 @@ def _deposit_candidates(member, family, totals, storage):
     ]
     chosen = {holding.guid for holding, _why, _keeper in candidates}
     routed = storage.routed if storage else {}
+    if storage is not None and storage.plan_unread:
+        return candidates
+    leaves = storage.plan_leaves if storage else {}
     for holding in member.carried:
+        if holding.guid in leaves:
+            continue
         if holding.guid in routed and not disposition.recipe(holding.item):
             continue
         if _craft_wanted(holding, storage):

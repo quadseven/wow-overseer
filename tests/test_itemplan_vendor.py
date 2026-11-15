@@ -515,6 +515,86 @@ class PressureReleaseTest(unittest.TestCase):
         plan_, prs = held_fixture(dict(entry=1, value=1000, options=FIRST))
         self.assertEqual(vendor.release_lines(vendor.sales_for(plan_, prs)), ())
 
+    def test_reason_line_when_all_held_stacks_exceed_ceiling(self):
+        over = vendor.RELEASE_CEILING_COPPER + 1
+        plan_, prs = held_fixture(
+            dict(entry=1, value=over, confirm=True, options=FIRST),
+            dict(entry=2, value=over),
+        )
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 5})
+        lines = vendor.release_reason_lines(["Ana"], {"Ana": 4}, {}, plan_, prs, sales)
+        self.assertEqual(
+            lines,
+            (
+                "itemplan vendor: Ana at 4 free slot(s) releases 0 held sale(s): "
+                "2 held stack(s) above 5g ceiling",
+            ),
+        )
+
+    def test_reason_line_when_held_stacks_are_epic_quality(self):
+        plan_, prs = held_fixture(
+            dict(entry=1, value=100, quality=4, confirm=True, options=FIRST),
+        )
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 5})
+        lines = vendor.release_reason_lines(["Ana"], {"Ana": 3}, {}, plan_, prs, sales)
+        self.assertEqual(
+            lines,
+            (
+                "itemplan vendor: Ana at 3 free slot(s) releases 0 held sale(s): "
+                "1 held stack(s) at epic+ quality",
+            ),
+        )
+
+    def test_reason_line_when_ordinary_sales_already_cover_pressure(self):
+        plan_, prs = held_fixture(
+            dict(entry=1, value=500, options=FIRST),
+            dict(entry=2, value=1000),
+        )
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 1})
+        lines = vendor.release_reason_lines(
+            ["Ana"], {"Ana": 8}, {"Ana": 3}, plan_, prs, sales
+        )
+        self.assertEqual(
+            lines,
+            (
+                "itemplan vendor: Ana at 8 free slot(s) releases 0 held sale(s): "
+                "4 ordinary sale(s) already reach 12 free slots",
+            ),
+        )
+
+    def test_reason_line_when_no_releasable_held_stacks_exist(self):
+        plan_, prs = held_fixture(
+            dict(
+                entry=1,
+                value=100,
+                item_class=itemplan.C_CONTAINER,
+                options=FIRST,
+            ),
+        )
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 5})
+        lines = vendor.release_reason_lines(["Ana"], {"Ana": 5}, {}, plan_, prs, sales)
+        self.assertEqual(
+            lines,
+            (
+                "itemplan vendor: Ana at 5 free slot(s) releases 0 held sale(s): "
+                "no releasable held stacks",
+            ),
+        )
+
+    def test_no_reason_line_at_trigger_or_after_a_release(self):
+        plan_, prs = held_fixture(dict(entry=1, value=1000))
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 1})
+        self.assertEqual(
+            vendor.release_reason_lines(["Ana"], {"Ana": 4}, {}, plan_, prs, sales),
+            (),
+        )
+        self.assertEqual(
+            vendor.release_reason_lines(
+                ["Ana"], {"Ana": itemplan.TRIGGER_FREE}, {}, plan_, prs, ()
+            ),
+            (),
+        )
+
 
 def vendor_money(copper):
     import vendorsale
@@ -966,10 +1046,16 @@ class RouteSalesAtTheBridgeTest(unittest.TestCase):
 
     def test_release_on_leaves_a_valuable_stack_held(self):
         env = {**ON, "ITEMPLAN_SELL_RELEASE": "on"}
-        out, _ = self.seam(
+        out, fake_log = self.seam(
             {"Ana": 0}, env, counts={}, value=vendor.RELEASE_CEILING_COPPER + 1
         )
         self.assertEqual(out, ())
+        lines = [c.args[1] for c in fake_log.info.call_args_list]
+        self.assertIn(
+            "itemplan vendor: Ana at 0 free slot(s) releases 0 held sale(s): "
+            "1 held stack(s) above 5g ceiling",
+            lines,
+        )
 
     def test_the_ordinary_sellable_count_lowers_the_pressure(self):
         env = {**ON, "ITEMPLAN_SELL_RELEASE": "on"}

@@ -107,6 +107,8 @@ class TheExistingBankPlanFetchesTheUpgrade(unittest.TestCase):
             _bank_dropped_second_sets=lambda names: frozenset(),
             _bank_forecast=lambda names: types.SimpleNamespace(over_target={}),
             _campaign_waiting=lambda names: False,
+            # The item plan is not consulted: every executor is off here (#2604).
+            _bank_plan_leaves=lambda names: ({}, False),
             # No craft errand is short of a banked reagent here (#774).
             reagentplan=reagentplan,
             _craft_plans_of=lambda names: [],

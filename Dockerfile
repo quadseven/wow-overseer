@@ -24,7 +24,7 @@ COPY core.py bridge.py voice.py transform.py world_data.py \
      map_core.py map_server.py events.py \
      panel.py family.py families.py goals.py individual.py protect.py fanout.py chat.py \
      kin.py keep.py cast.py bonds.py council.py family_value.py persona.py \
-     bonkers.py retire.py retrygate.py strayfollow.py memberloop.py guildgather.py \
+     bonkers.py retire.py retrygate.py strayfollow.py memberloop.py guildgather.py lowrung.py\
      quests.py overhear.py questbook.py questcatalogue.py questledger.py questtickets.py corpstickets.py \
      questshare.py questers.py travel.py stream.py frames.py \
      professions.py craft.py craft_supply.py auction.py gearup.py weaponskill.py jobs.py trainjob.py \
@@ -48,7 +48,7 @@ COPY core.py bridge.py voice.py transform.py world_data.py \
      lootcouncil.py statweights.py \
      bank.py bankpolicy.py guildledger.py setswap.py bankforecast.py housedemand.py \
      mailrun.py mountbuy.py holdings.py hunterpet.py \
-     realm.py realmread.py basepath.py appbuild.py deployinfo.py watchwall.py nowstatus.py realmnav.py classic.py \
+     realm.py realmread.py basepath.py appbuild.py deployinfo.py realmmaint.py watchwall.py nowstatus.py realmnav.py classic.py \
      needs.py partystatus.py partyvoice.py lootcard.py lootstory.py epicjourney.py towntrip.py \
      townerrand.py deathcells.py profloop.py production.py townslot.py claims.py tradechoice.py \
      enroll.py \

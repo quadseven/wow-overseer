@@ -43,6 +43,7 @@ from typing import Mapping
 import bag_pressure
 import itemplan
 import itemplan_data
+import itemplan_vendor
 
 log = logging.getLogger("wow-overseer.itemplan")
 
@@ -113,6 +114,23 @@ def auction_enabled(environ=None) -> bool:
     env = os.environ if environ is None else environ
     raw = str(env.get(AUCTION_ENV_SWITCH, "") or "").strip().lower()
     return raw in ("on", "1", "true", "yes")
+
+
+def carried_out_routes(environ=None) -> frozenset:
+    """The plan routes something in this process actually carries out.
+
+    SELL_VENDOR when ITEMPLAN_SELL_VENDOR is on, GIVE when ITEMPLAN_GIVE is,
+    AUCTION when ITEMPLAN_AUCTION is. A route with no executor is only a
+    log line, and the bank pass must not give up a stack on its word.
+    """
+    out = set()
+    if itemplan_vendor.enabled(environ):
+        out.add(itemplan.SELL_VENDOR)
+    if give_enabled(environ):
+        out.add(itemplan.GIVE)
+    if auction_enabled(environ):
+        out.add(itemplan.AUCTION)
+    return frozenset(out)
 
 
 @dataclass(frozen=True)
@@ -244,6 +262,39 @@ def build_stacks(rows, gear_rows=(), templates=None, instance_soulbound=None) ->
                 quest_needed=(bool(row["quest_item"]) if "quest_item" in row else None),
             )
         )
+    return out
+
+
+def leaving(plan_, stack_rows, routes, family_names=()) -> dict:
+    """item guid -> why, for every stack the plan sends somewhere but a bank.
+
+    `stack_rows` is (stack, row) pairs in the shape `build_stacks` produces,
+    `routes` the routes something carries out (`carried_out_routes`). A
+    decision counts only when it is the plan's first choice, placed (no
+    `NO_ROOM`, not stuck), and for GIVE when the taker is one of
+    `family_names`, the only gifts the executor writes. The bank pass reads
+    this so a stack the plan sells, gives or lists is not also banked.
+    """
+    rows_by_key = {stack.key: row for stack, row in stack_rows}
+    family = set(family_names or ())
+    out: dict = {}
+    for decision in plan_.decisions:
+        if decision.route not in routes or decision.stuck:
+            continue
+        if decision.reason.startswith(itemplan.NO_ROOM):
+            continue
+        if not itemplan_vendor.chosen_first(decision):
+            continue
+        if decision.route == itemplan.GIVE and decision.target not in family:
+            continue
+        row = rows_by_key.get(decision.key)
+        guid = _int((row or {}).get("item_guid"))
+        if guid > 0:
+            out[guid] = "the item plan routes %s to %s (%s)" % (
+                decision.name,
+                decision.route,
+                decision.reason,
+            )
     return out
 
 

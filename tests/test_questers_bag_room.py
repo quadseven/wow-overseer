@@ -130,5 +130,57 @@ class TheQuesterSellsAfterABagRoomRefusal(unittest.TestCase):
         self.assertEqual(run.recorded, [])
 
 
+def hunt_bags_full(age=2, name="Mirra"):
+    return questers.Attempt(
+        name,
+        "hunt-spawn creature:200 count:8 max:480",
+        "error",
+        reason="the character has no free bag slot",
+        age_minutes=age,
+    )
+
+
+class AHuntRefusedForBagRoomWaitsOnTheSale(unittest.TestCase):
+    """A hunt the world refused for a full bag was asked again every pass: the
+    member's refusals ran to 142 in a day. The hunt is held for the sale's
+    cooldown and the member sells first, as it does after a refused take."""
+
+    HUNTING = dict(x=-400.0, quest_log={1: 3}, quests_done=frozenset({2, 3}))
+
+    def test_the_refusal_is_read_inside_the_cooldown_only(self):
+        self.assertTrue(questers.bags_full_hunt("Mirra", [hunt_bags_full(age=2)]))
+        old = [hunt_bags_full(age=questers.SELL_COOLDOWN_MINUTES)]
+        self.assertFalse(questers.bags_full_hunt("Mirra", old))
+        self.assertFalse(
+            questers.bags_full_hunt("Mirra", [hunt_bags_full(name="Kellan")])
+        )
+
+    def test_it_sends_the_member_to_sell_whatever_its_bags_read(self):
+        self.assertTrue(questers.needs_sale(mirra(free_slots=8), [hunt_bags_full()]))
+
+    def test_the_hunt_is_not_asked_again_until_the_cooldown_is_over(self):
+        member = mirra(**self.HUNTING)
+        asked = questers.plan(world(), member, questers.Clock(), 0.0)
+        self.assertEqual(asked.move.kind, classquest.HUNT)
+        held = questers.plan(
+            world(), member, questers.Clock(), 0.0, tried=[hunt_bags_full()]
+        )
+        self.assertIsNone(held.move)
+        self.assertIn("bag", held.line)
+        later = [hunt_bags_full(age=questers.SELL_COOLDOWN_MINUTES)]
+        again = questers.plan(world(), member, questers.Clock(), 0.0, tried=later)
+        self.assertEqual(again.move.kind, classquest.HUNT)
+
+    def test_a_refusal_of_another_kind_holds_nothing(self):
+        other = questers.Attempt(
+            "Mirra",
+            "hunt-spawn creature:200",
+            "error",
+            reason="in combat",
+            age_minutes=2,
+        )
+        self.assertFalse(questers.bags_full_hunt("Mirra", [other]))
+
+
 if __name__ == "__main__":
     unittest.main()

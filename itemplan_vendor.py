@@ -187,6 +187,19 @@ def _held_reason(decision, stack, row) -> str:
     return ""
 
 
+def chosen_first(decision) -> bool:
+    """Was this decision's route the plan's first choice, not a fallback?
+
+    True when the route heads the options the plan weighed, or when every
+    option ahead of it failed only on a full capped share of stock. The bank
+    pass reads it too (`itemplan_shadow.leaving`): a stack the plan only
+    reached by falling back is not one the bank may give up on.
+    """
+    if not decision.options or decision.options[0] == decision.route:
+        return True
+    return _surplus_past_a_share(decision)
+
+
 def _surplus_past_a_share(decision) -> bool:
     """Did every option ahead of the sale fail only on a full capped share?
 
@@ -297,6 +310,55 @@ def _release(pool, ordinary, pressure) -> tuple:
     return lifted, still_held
 
 
+def _partition_decisions(
+    plan_,
+    stack_rows,
+    keep_names=(),
+    released=frozenset(),
+    only_kept=True,
+) -> tuple[list, list, list]:
+    """Split eligible `SELL_VENDOR` decisions into `(ordinary, held, pool)`."""
+    rows_by_key = {stack.key: row for stack, row in stack_rows}
+    stack_of = {stack.key: stack for stack, _row in stack_rows}
+    ordinary = []
+    held_static = []
+    pool = []
+    for index, decision in enumerate(plan_.decisions):
+        row = rows_by_key.get(decision.key)
+        if row is None or not _eligible(decision):
+            continue
+        verdict = _classify(
+            decision,
+            row,
+            stack_of.get(decision.key),
+            released,
+            keep_names,
+            only_kept,
+        )
+        if verdict is None:
+            continue
+        kind, why, release_kind = verdict
+        if kind == "sell":
+            sale = _sale_of(decision, row)
+            if sale is not None:
+                ordinary.append((index, sale))
+        elif kind == "held":
+            held_static.append((index, (decision, why)))
+        else:
+            entry = (decision, why) if release_kind == RELEASED_FALLBACK else None
+            pool.append(
+                (
+                    max(0, _int(decision.value)),
+                    index,
+                    decision,
+                    row,
+                    release_kind,
+                    entry,
+                )
+            )
+    return ordinary, held_static, pool
+
+
 def sales_for(
     plan_,
     stack_rows,
@@ -326,50 +388,93 @@ def sales_for(
     the guild job's own, a different rule), so its caller passes False and
     gets every sale the plan makes (#2609).
     """
-    rows_by_key = {stack.key: row for stack, row in stack_rows}
-    stack_of = {stack.key: stack for stack, _row in stack_rows}
-    ordinary = []  # (plan index, Sale)
-    pool = []  # (value, plan index, decision, row, release kind, held entry)
-    for index, decision in enumerate(plan_.decisions):
-        row = rows_by_key.get(decision.key)
-        if row is None or not _eligible(decision):
-            continue
-        verdict = _classify(
-            decision,
-            row,
-            stack_of.get(decision.key),
-            released,
-            keep_names,
-            only_kept,
-        )
-        if verdict is None:
-            continue
-        kind, why, release_kind = verdict
-        if kind == "sell":
-            sale = _sale_of(decision, row)
-            if sale is not None:
-                ordinary.append((index, sale))
-        elif kind == "held":
-            if held is not None:
-                held.append((decision, why))
-        else:
-            entry = (decision, why) if release_kind == RELEASED_FALLBACK else None
-            pool.append(
-                (
-                    max(0, _int(decision.value)),
-                    index,
-                    decision,
-                    row,
-                    release_kind,
-                    entry,
-                )
-            )
+    ordinary, held_static, pool = _partition_decisions(
+        plan_, stack_rows, keep_names, released, only_kept
+    )
     lifted, still_held = _release(pool, ordinary, pressure)
     if held is not None:
+        combined = held_static + still_held
         # Plan order, as the held lines have always read.
-        held.extend(entry for _i, entry in sorted(still_held, key=lambda e: e[0]))
+        held.extend(entry for _i, entry in sorted(combined, key=lambda e: e[0]))
     chosen = ordinary + lifted
     return tuple(sale for _i, sale in sorted(chosen, key=lambda e: e[0]))
+
+
+def _blocked_release_reason(
+    pool_items: list,
+    total_ordinary: int,
+    need_total: int,
+) -> str:
+    """One-phrase reason why a pressured member released 0 held sales."""
+    if total_ordinary >= need_total:
+        return "%d ordinary sale(s) already reach %d free slots" % (
+            total_ordinary,
+            RELEASE_TARGET_FREE,
+        )
+    epic_plus = sum(
+        1 for _d, row in pool_items if _int(row.get("quality")) > RELEASE_MAX_QUALITY
+    )
+    over_ceiling = sum(
+        1
+        for decision, row in pool_items
+        if _int(row.get("quality")) <= RELEASE_MAX_QUALITY
+        and max(0, _int(decision.value)) > RELEASE_CEILING_COPPER
+    )
+    parts = []
+    if over_ceiling:
+        parts.append(
+            "%d held stack(s) above %s ceiling"
+            % (over_ceiling, vendorsale.money(RELEASE_CEILING_COPPER))
+        )
+    if epic_plus:
+        parts.append("%d held stack(s) at epic+ quality" % epic_plus)
+    return "; ".join(parts) if parts else "no releasable held stacks"
+
+
+def release_reason_lines(
+    names,
+    free_slots,
+    sellable_counts,
+    plan_,
+    stack_rows,
+    sales,
+    *,
+    keep_names=(),
+    released=frozenset(),
+    only_kept=True,
+) -> tuple:
+    """One log line per member under the trigger that released 0 held sales."""
+    released_holders = {sale.holder for sale in sales if sale.released}
+    ordinary_counts: dict[str, int] = {}
+    for sale in sales:
+        if not sale.released:
+            ordinary_counts[sale.holder] = ordinary_counts.get(sale.holder, 0) + 1
+    _ordinary, _held_static, pool = _partition_decisions(
+        plan_, stack_rows, keep_names, released, only_kept
+    )
+    pool_by_holder: dict[str, list] = {}
+    for _val, _idx, decision, row, _kind, _entry in pool:
+        pool_by_holder.setdefault(decision.holder, []).append((decision, row))
+    lines = []
+    for name in sorted({str(n) for n in names}):
+        raw_free = (free_slots or {}).get(name)
+        if name in released_holders or raw_free is None:
+            continue
+        free = _int(raw_free)
+        if free >= itemplan.TRIGGER_FREE:
+            continue
+        sellable = max(0, _int((sellable_counts or {}).get(name)))
+        total_ordinary = sellable + ordinary_counts.get(name, 0)
+        reason = _blocked_release_reason(
+            pool_by_holder.get(name, []),
+            total_ordinary,
+            RELEASE_TARGET_FREE - max(0, free),
+        )
+        lines.append(
+            "%s %s at %d free slot(s) releases 0 held sale(s): %s"
+            % (PREFIX, name, free, reason)
+        )
+    return tuple(lines)
 
 
 def release_lines(sales) -> tuple:

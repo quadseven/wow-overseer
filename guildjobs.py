@@ -719,6 +719,9 @@ class Member:
     # The member's purchase order (purse.Order), None when unread: gear and
     # food then spend as they did before it existed.
     purse: object = None
+    # The low rung this member is sent back to farm (lowrung.Feed), None when
+    # its guild is short of none it can work.
+    feed: object = None
     # Somebody else leads the group it is in (the snapshot's group leader is
     # not its own guid): it stands where its leader stands, so its standing
     # still says nothing of it (stood_still_step).
@@ -1138,9 +1141,15 @@ def _densest_field(mobs, origin, low, high, name, noun) -> Spot | None:
     )
 
 
-def skinning_field(beasts, origin, level, value) -> Spot | None:
-    """The beast spawn a skinner is sent to, or None (see `_densest_field`)."""
-    low, high = skin_band(level, value)
+def skinning_field(beasts, origin, level, value, band=None) -> Spot | None:
+    """The beast spawn a skinner is sent to, or None (see `_densest_field`).
+
+    `band` (lowrung.py) replaces the level band with the one a starved
+    material drops in, still capped at what the skill can skin."""
+    if band is None:
+        low, high = skin_band(level, value)
+    else:
+        low, high = _int(band[0]), min(_int(band[1]), skinnable_level(value))
     return _densest_field(
         beasts, origin, low, high, "a pack of beasts", "skinnable beasts"
     )
@@ -1176,13 +1185,13 @@ def farms_cloth(member, has_field) -> bool:
     return member.holds(TAILORING) or not has_field
 
 
-def cloth_field(mobs, origin, level) -> Spot | None:
+def cloth_field(mobs, origin, level, band=None) -> Spot | None:
     """The humanoid spawn a cloth farmer is sent to, or None.
 
     `mobs` are (Spot, level) for the world's creature spawns whose loot holds
     cloth (`CLOTH_ENTRIES`), already limited to the farmer's map.
     """
-    low, high = cloth_band(level)
+    low, high = cloth_band(level) if band is None else band
     return _densest_field(
         mobs, origin, low, high, "a pack of humanoids", "cloth-dropping humanoids"
     )
@@ -2861,6 +2870,43 @@ def family_riding_step(m, recent):
         ),
         "",
     )
+
+
+def family_mount_step(m, facts, recent, kept=None, book=None, crafters=None, master=""):
+    """(step or None, a note) for a roster family member with Riding and no
+    mount (#2642), planned only in the gap between runs after Riding is held.
+
+    Keeps `FAMILY_RIDING_FLOAT` over the price in place of a guild member's
+    purchase order, bounds every walk to `familyclass.WALK_YARDS`, and holds a
+    follower's walk or any unread ground the same way `family_riding_step`
+    does."""
+    if m.role != FAMILY or not m.eligible:
+        return None, ""
+    if not m.online or not m.alive or m.in_combat:
+        return None, ""
+    if m.map_id is None or m.x is None or m.y is None:
+        return None, ""
+    if m.purse is None:
+        order = purse.Order(
+            m.name,
+            m.level,
+            int(m.money or 0),
+            (purse.Want(purse.SPELLS, FAMILY_RIDING_FLOAT, "float"),),
+        )
+        m = replace(m, purse=order)
+    step, note = mount_step(
+        m,
+        facts,
+        recent,
+        familyclass.WALK_YARDS,
+        kept=kept,
+        book=book,
+        crafters=crafters,
+        master=master,
+    )
+    if getattr(m, "follows", False) and (step is None or step.walk is not None):
+        return None, ""
+    return step, note
 
 
 def _newest_buy(name, action, recent):
@@ -4816,6 +4862,7 @@ def _plan_ordered_member(member, inputs, state):
             state.notes,
             state.class_holds,
             inputs.family_danger,
+            mounts=inputs.mounts,
         )
         return
     if member.role in (MAINTENANCE, SUMMONER, RAIDER):
@@ -4987,7 +5034,7 @@ def _finish_plan(inputs, state):
 
 
 def _plan_family_class_member(
-    m, reads, limits, steps, lines, notes, class_holds, danger=None
+    m, reads, limits, steps, lines, notes, class_holds, danger=None, mounts=None
 ) -> None:
     """Plan an idle family member's class step in the shared fair order.
 
@@ -4998,6 +5045,7 @@ def _plan_family_class_member(
     counters, busy, per_guild = limits
     if not familyclass.enabled() or m.role != FAMILY:
         return
+    master = str(masters.get(m.guild) or "")
     step, doing, note = class_step(
         m,
         classes,
@@ -5008,7 +5056,7 @@ def _plan_family_class_member(
         far,
         kept,
         crafters,
-        str(masters.get(m.guild) or ""),
+        master,
     )
     if note:
         notes.append(note)
@@ -5019,7 +5067,20 @@ def _plan_family_class_member(
                 return
         if class_owed(m, classes, recent, now=now) is not None and note:
             class_holds[m.name] = _class_hold_reason(m.name, note)
-        _plan_family_riding(m, recent, counters, busy, per_guild, steps, notes)
+        _plan_family_riding(
+            m,
+            recent,
+            counters,
+            busy,
+            per_guild,
+            steps,
+            notes,
+            mounts=mounts,
+            kept=kept,
+            book=classes,
+            crafters=crafters,
+            master=master,
+        )
         return
     gap_hold = familyclass.holds(m, step.move, recent)
     if gap_hold:
@@ -5042,24 +5103,62 @@ def _plan_family_class_member(
     steps.append(step)
 
 
-def _plan_family_riding(m, recent, counters, busy, per_guild, steps, notes) -> None:
-    """Plan an idle family member the riding walk when its class step has
-    nothing for it (family_riding_step, ticket 2625), on the shared allowance."""
-    step, note = family_riding_step(m, recent)
+def _commit_family_step(
+    m, step, note, recent, counters, busy, per_guild, steps, notes
+) -> bool:
+    """Verify allowances and walk holds for one family idle step and commit it."""
     if note:
         notes.append(note)
     if step is None:
-        return
+        return False
     started, allowance = _allowance(step, counters, per_guild)
     why = _step_refusal(m, busy, started, allowance, step) or job_walk_held(
         m, step, recent
     )
     if why:
         notes.append(why)
-        return
+        return False
     started[m.guild] = started.get(m.guild, 0) + 1
     busy.add(m.name)
     steps.append(step)
+    return True
+
+
+def _plan_family_riding(
+    m,
+    recent,
+    counters,
+    busy,
+    per_guild,
+    steps,
+    notes,
+    mounts=None,
+    kept=None,
+    book=None,
+    crafters=None,
+    master="",
+) -> None:
+    """Plan an idle family member the riding walk, or the mount step once
+    riding is held, when its class step has nothing for it (#2625, #2642)."""
+    step, note = family_riding_step(m, recent)
+    if _commit_family_step(
+        m, step, note, recent, counters, busy, per_guild, steps, notes
+    ):
+        return
+    if step is not None and (not m.online or m.in_combat or m.name in busy):
+        return
+    mount_step_row, mount_note = family_mount_step(
+        m,
+        _offer_for(mounts, m.name),
+        recent,
+        kept=kept,
+        book=book,
+        crafters=crafters,
+        master=master,
+    )
+    _commit_family_step(
+        m, mount_step_row, mount_note, recent, counters, busy, per_guild, steps, notes
+    )
 
 
 def _offer_for(offers, name):
@@ -8872,9 +8971,30 @@ def _recalled_lately(m, recent) -> bool:
     return any(
         r.name == m.name
         and r.action == "hearth"
-        and r.status not in TRAIN_FAILED
-        and int(r.age_minutes) < minutes
+        and (
+            (r.status not in TRAIN_FAILED and int(r.age_minutes) < minutes)
+            or _stoneless_recall_held(r)
+        )
         for r in recent or ()
+    )
+
+
+# A RECALL WITHOUT A STONE IS NOT ASKED AGAIN FOR HOURS. The module refuses a
+# `hearth recall` from a character that carries no hearthstone and says it is
+# retryable, but only an innkeeper hands out a new stone, and nothing in the
+# recall step goes to one. Asking again on every pass was the same refusal: three
+# death knights were refused 99, 53 and 25 times in a day.
+NO_STONE_WORDS = "without the stone"
+NO_STONE_BACKOFF_MINUTES = 6 * 60
+
+
+def _stoneless_recall_held(r) -> bool:
+    """Whether this refused hearth row is a recall refused for the missing stone
+    and still younger than NO_STONE_BACKOFF_MINUTES."""
+    return (
+        r.status in TRAIN_FAILED
+        and NO_STONE_WORDS in (r.reason or r.refusal or "")
+        and int(r.age_minutes) < NO_STONE_BACKOFF_MINUTES
     )
 
 
