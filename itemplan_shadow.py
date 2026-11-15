@@ -238,6 +238,7 @@ def build_stacks(rows, gear_rows=(), templates=None, instance_soulbound=None) ->
                 soulbound=soulbound,
                 required_skill=_int(t.get("required_skill"), 0),
                 allowable_class=_int(t.get("allowable_class"), -1),
+                quest_needed=(bool(row["quest_item"]) if "quest_item" in row else None),
             )
         )
     return out

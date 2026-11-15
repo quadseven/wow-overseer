@@ -83,6 +83,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Iterable, Mapping
 
+import bag_pressure
 import craft
 import craft_rhythm
 import craft_supply
@@ -356,6 +357,9 @@ class Stack:
     # RequiredDisenchantSkill (-1 means never). None is unread.
     disenchant_id: int | None = None
     disenchant_skill: int | None = None
+    # Whether a quest the holder is on or could still take names the stack
+    # (`bag_pressure.QUEST_NEEDED_SQL`, the row's `quest_item`); None is unread.
+    quest_needed: bool | None = None
 
     @property
     def key(self) -> tuple:
@@ -716,6 +720,13 @@ class _World:
         return None
 
 
+def _certainly_useless(s: Stack) -> bool:
+    """A quest-class stack the quest test read as needed by no quest the holder
+    is on or could take, with no price and common quality (#2607). Never read,
+    never a priced or better stack: those keep their route and its release."""
+    return s.quest_needed is False and s.sell <= 0 and s.quality <= 1
+
+
 def _rule_quest(w: _World, s: Stack, me: Member):
     if s.item_class != C_QUEST:
         if s.entry in w.ctx.attunement_items:
@@ -723,6 +734,16 @@ def _rule_quest(w: _World, s: Stack, me: Member):
                 _opt(KEEP_CARRY, ATTUNEMENT, "attunement item", "R3", carry_forced=True)
             ]
         return None
+    if bag_pressure.is_darkmoon(s.name):
+        return [
+            _opt(
+                BANK_PERSONAL,
+                QUEST,
+                "a Darkmoon deck card: kept for the deck, never sold or destroyed",
+                "R3",
+            ),
+            _opt(KEEP_CARRY, QUEST, "a Darkmoon deck card: kept for the deck", "R3"),
+        ]
     known = w.ctx.open_quest_items
     if known is not None and s.entry in known.get(s.holder, frozenset()):
         return [
@@ -740,9 +761,20 @@ def _rule_quest(w: _World, s: Stack, me: Member):
             _opt(BANK_PERSONAL, QUEST, "quest item banked, quest log not read", "R3"),
         ]
     # The log was read and no open quest names it: it is only a leftover.
-    out = [
+    out = []
+    if _certainly_useless(s):
+        out.append(
+            _opt(
+                DESTROY,
+                ROOM,
+                "no quest the holder is on or could take names it, no vendor "
+                "price, common quality: certainly useless",
+                "R3",
+            )
+        )
+    out.append(
         _opt(BANK_PERSONAL, ROOM, "quest-class leftover, no open quest names it", "R3")
-    ]
+    )
     if s.sell > 0 and s.bind in (BIND_NONE, BIND_USE):
         out.append(_opt(SELL_VENDOR, ROOM, "quest-class leftover with a price", "R3"))
     return out
