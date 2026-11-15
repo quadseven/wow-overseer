@@ -347,6 +347,7 @@ class TheBridgeReadsThePlanForTheBank(unittest.TestCase):
         with (
             mock.patch.dict("os.environ", {"ITEMPLAN_SELL_VENDOR": "on"}, clear=True),
             mock.patch.object(b, "_fetch_vendor_items", return_value=rows_),
+            mock.patch.object(b, "_banked_rows", return_value=[]),
             mock.patch.object(b, "_fetch_free_slots", return_value=free),
             mock.patch.object(b, "_fetch_surplus_gear", return_value=gear),
             mock.patch.object(b, "_fetch_family_equipped", return_value=worn),
