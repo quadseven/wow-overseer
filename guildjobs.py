@@ -3169,11 +3169,9 @@ def supply_step(member, vendor_rows, cap, kept=None, book=None):
     left = spendable(
         member, purse.FOOD, int(member.money) + junk + vendorsale.worth(spare)
     )
-    buys, why = restsupply.plan(replace(member, money=left), rows, 0)
+    buys, why = restsupply.plan(replace(member, money=left), rows, 0, room)
     if not buys:
         return None, why
-    if room is not None:
-        buys = buys[:room]
     # The walk names the item the chosen vendor is the nearest seller of, so
     # the module's nearest-stockist walk ends at that counter.
     nearest = {}
