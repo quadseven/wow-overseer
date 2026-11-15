@@ -10527,7 +10527,9 @@ class Bridge(discord.Client):
             return
 
         await self._dark_iron_once(names, cohort)
-        await self._recipe_hunt_once(names, cohort)
+        recipe_hunt = getattr(self, "_recipe_hunt_once", None)
+        if recipe_hunt is not None:
+            await recipe_hunt(names, cohort)
 
         job_rows = await asyncio.to_thread(
             _standing_jobs, getattr(cohort, "key", None))
@@ -19384,7 +19386,9 @@ class Bridge(discord.Client):
         # traceback after the corps' own steps have already started.
         busy |= {step.holder for step in plan.steps}
         await self._raid_supply_once(facts, plan.corps, busy, cap)
-        await self._guild_recipe_hunt_once(facts, busy, cap)
+        guild_recipe_hunt = getattr(self, "_guild_recipe_hunt_once", None)
+        if guild_recipe_hunt is not None:
+            await guild_recipe_hunt(facts, busy, cap)
 
     async def _raid_supply_once(self, facts, corps, busy, cap) -> None:
         """One pass of the raid's supply (#275): Molten Core consumables and

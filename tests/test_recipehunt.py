@@ -5,13 +5,29 @@ from __future__ import annotations
 import asyncio
 import json
 import pathlib
+import types
 import unittest
 from unittest import mock
 
-import bridge
+from _stub_modules import PYMYSQL, fresh_import
+
 import guildcorps
 import guildjobs
 import recipehunt
+
+
+def _import_bridge():
+    stub = types.ModuleType("discord")
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    stub.Client = Client
+    return fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
+
+
+bridge = _import_bridge()
 
 
 CRAFTBOOK = json.loads(
