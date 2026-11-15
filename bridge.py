@@ -40619,7 +40619,7 @@ GUILD_RANKS_RECENT_MINUTES = 10
 
 _GUILD_RANK_GUILD_SQL = "SELECT guildid, name, motd FROM guild WHERE name = %s LIMIT 1"
 _GUILD_RANK_MEMBERS_SQL = (
-    "SELECT c.name AS name, c.level AS level, gm.rank AS rank, "
+    "SELECT c.name AS name, c.level AS level, gm.`rank` AS `rank`, "
     "(s.name IS NOT NULL) AS online "
     "FROM guild_member gm "
     "JOIN characters c ON c.guid = gm.guid "
