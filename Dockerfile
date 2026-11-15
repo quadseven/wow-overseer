@@ -49,8 +49,8 @@ COPY core.py bridge.py voice.py transform.py world_data.py \
      bank.py bankpolicy.py setswap.py bankforecast.py housedemand.py \
      mailrun.py mountbuy.py holdings.py hunterpet.py \
      realm.py realmread.py basepath.py appbuild.py deployinfo.py watchwall.py nowstatus.py realmnav.py classic.py \
-     needs.py partystatus.py partyvoice.py lootcard.py lootstory.py epicjourney.py towntrip.py 
-     townerrand.py deathcells.py profloop.py townslot.py claims.py tradechoice.py 
+     needs.py partystatus.py partyvoice.py lootcard.py lootstory.py epicjourney.py towntrip.py \
+     townerrand.py deathcells.py profloop.py townslot.py claims.py tradechoice.py \
      enroll.py \
      tabard.py crossing.py \
      vendor_stall.py \
