@@ -81,7 +81,7 @@ DARKMOON_ENTRIES = frozenset(
 DARKMOON_ENTRIES_SQL = ", ".join(str(e) for e in sorted(DARKMOON_ENTRIES))
 
 STACK_QUEST_NEEDED_SQL = (
-    "(ii.itemEntry IN (" + DARKMOON_ENTRIES_SQL + ") OR "
+    "(ii.itemEntry IN (" + DARKMOON_ENTRIES_SQL + ") OR "  # noqa: S608 - int ids
     "(it.startquest > 0 AND NOT EXISTS ("
     "SELECT 1 FROM character_queststatus_rewarded qr "
     "WHERE qr.guid = ci.guid AND qr.quest = it.startquest)) OR EXISTS ("
