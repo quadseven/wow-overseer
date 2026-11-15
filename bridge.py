@@ -34663,12 +34663,28 @@ def _with_purses_and_reserves(members, masters) -> list:
 
 
 def _fetch_trainees(names: list) -> list:
-    """classtrain.Trainee for each member of the family's guild off the
-    roster; no judgement here."""
+    """classtrain.Trainee for each member of the family's guild the
+    training pass may walk: off the roster, plus a roster member holding
+    a raid tank seat (classtrain.trainee_rows); no judgement here."""
     roster = _roster_names()
-    rows = [r for r in _fetch_dues_rows(names) if str(r.get("name") or "") not in roster]
+    rows = classtrain.trainee_rows(
+        _fetch_dues_rows(names), roster, _seated_tank_names())
     due = _class_training_due([str(r["name"]) for r in rows])
     return classtrain.trainees_from_rows(rows, due)
+
+
+def _seated_tank_names() -> set:
+    """Every name a raid tank seat may be found under, approved or
+    current (raidteams' seat source): a seated tank on the roster is
+    walked by the guild training pass like any member (#2361)."""
+    out = set()
+    for guild in raidteams.GROUPS:
+        for seat in raidteams.seats(guild):
+            if seat.seat == raidroles.SEAT_TANK:
+                out.add(seat.name)
+                if seat.was:
+                    out.add(seat.was)
+    return out
 
 
 def _with_reserves(rows: list) -> list:
