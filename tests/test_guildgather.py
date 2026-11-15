@@ -80,6 +80,13 @@ class Rows(unittest.TestCase):
         names = {r[0] for r in gg.plan(seats, {}, now=0.0)}
         self.assertEqual(gg.PER_PASS, len(names))
 
+    def test_three_passes_inside_the_window_write_the_pair_once(self):
+        seen, written = {}, 0
+        seats = [seat(name="S%d" % i, herb=3) for i in range(30)]
+        for k in range(3):
+            written += len(gg.plan(seats, seen, now=600.0 * k))
+        self.assertEqual(30 * len(goals.GATHER_STRATEGIES), written)
+
     def test_the_grant_is_recorded_for_the_next_pass(self):
         seen = {}
         gg.plan([seat(herb=3)], seen, now=500.0)

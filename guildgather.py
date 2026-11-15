@@ -15,8 +15,8 @@ trade it can still raise, standing in the open world, out of combat, alive and
 in no group. A grouped seat keeps its formation (a pull to a node would scatter
 a party), an instance is a run, and a level 60 seat is left to its own jobs.
 Nothing here walks anybody: the grant rides the questing and travelling the
-seat already does, so it costs no levelling time. The module also stands the
-strategies down for any seat on a travel errand, so a grant never fights one.
+seat already does, so it costs no levelling time. It never stands a strategy
+down; a seat that qualifies again is simply told again.
 
 NORTH STAR. Nothing here grants, teaches, gives or teleports. The only rows are
 `nc +gather` and `nc +loot`, the strategies a player turns on. Skinning has no
