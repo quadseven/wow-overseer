@@ -543,5 +543,120 @@ class Shapes(unittest.TestCase):
         self.assertEqual((carried, bank, empty), (16 + 4 * 14, 28 + 12, 1))
 
 
+class ClassNineTriage(unittest.TestCase):
+    def test_own_trade_recipe_above_reach_stays_with_holder_never_sold(self):
+        # Ugga has Alchemy 150 and holds a 250 Alchemy recipe (beyond 225 reach).
+        rec = stack(
+            holder="Ugga",
+            entry=13492,
+            name="Recipe: Greater Arcane Elixir",
+            item_class=itemplan.C_RECIPE,
+            subclass=6,
+            quality=2,
+            sell=5000,
+            required_skill_rank=250,
+            required_skill=171,
+        )
+        ugga = member("Ugga", skills=[(171, 150, 225)])
+        ctx = itemplan.Context(
+            market={13492: (50_000, 1)},
+            guild_free={
+                ("Fam", itemplan.GUILD_TAB_RAID): 10,
+                ("Fam", itemplan.GUILD_TAB_MATERIALS): 10,
+            },
+        )
+        d = one([rec], [ugga], rec, ctx)
+        self.assertIn(d.route, (KEEP_CARRY, BANK_PERSONAL))
+
+    def test_other_trade_recipe_goes_to_guild_crafter_or_auction_never_vendor(self):
+        # Plans held by Uzza routed to Grug (guild blacksmith, even if skill < rank).
+        plans = stack(
+            holder="Uzza",
+            entry=17059,
+            name="Plans: Dark Iron Plate",
+            item_class=itemplan.C_RECIPE,
+            subclass=4,
+            quality=3,
+            sell=5000,
+            required_skill_rank=300,
+            required_skill=164,
+        )
+        uzza = member("Uzza", skills=[(197, 150, 225)])
+        grug = member("Grug", skills=[(164, 200, 300)])
+        d = one([plans], [uzza, grug], plans)
+        self.assertEqual(d.route, GIVE)
+        self.assertEqual(d.target, "Grug")
+
+        # Design for Jewelcrafting (nobody works it): auction if priced, else bank, never vendor.
+        design = stack(
+            holder="Uzza",
+            entry=20854,
+            name="Design: Amulet of the Moon",
+            item_class=itemplan.C_RECIPE,
+            subclass=10,
+            quality=2,
+            sell=2000,
+            required_skill_rank=200,
+            required_skill=755,
+        )
+        d_no_ah = one([design], [uzza], design)
+        self.assertNotEqual(d_no_ah.route, SELL_VENDOR)
+        ctx_ah = itemplan.Context(market={20854: (40_000, 1)})
+        d_ah = one([design], [uzza], design, ctx_ah)
+        self.assertEqual(d_ah.route, AUCTION)
+
+    def test_class_book_routes_to_matching_class_and_libram_to_raid_bank(self):
+        # Druid bit = 1 << (11 - 1) = 1024
+        book = stack(
+            holder="Grug",
+            entry=17682,
+            name="Book: Gift of the Wild",
+            item_class=itemplan.C_RECIPE,
+            subclass=0,
+            quality=2,
+            sell=2500,
+            req_level=50,
+            required_skill_rank=0,
+            required_skill=0,
+            allowable_class=1024,
+        )
+        grug = member("Grug", cls=itemplan.WARRIOR, level=60)
+        bork = member("Bork", cls=itemplan.DRUID, level=60)
+        d_give = one([book], [grug, bork], book)
+        self.assertEqual(d_give.route, GIVE)
+        self.assertEqual(d_give.target, "Bork")
+
+        book_held = stack(
+            holder="Bork",
+            entry=17682,
+            name="Book: Gift of the Wild",
+            item_class=itemplan.C_RECIPE,
+            subclass=0,
+            quality=2,
+            sell=2500,
+            req_level=50,
+            required_skill_rank=0,
+            required_skill=0,
+            allowable_class=1024,
+        )
+        d_keep = one([book_held], [bork], book_held)
+        self.assertEqual(d_keep.route, KEEP_CARRY)
+
+        libram = stack(
+            holder="Grug",
+            entry=18334,
+            name="Libram of Protection",
+            item_class=itemplan.C_RECIPE,
+            subclass=0,
+            quality=3,
+            sell=5000,
+            required_skill_rank=0,
+            required_skill=0,
+        )
+        ctx = itemplan.Context(guild_free={("Fam", itemplan.GUILD_TAB_RAID): 10})
+        d_lib = one([libram], [grug], libram, ctx)
+        self.assertEqual(d_lib.route, GUILD_BANK)
+
+
 if __name__ == "__main__":
     unittest.main()

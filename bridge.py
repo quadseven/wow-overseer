@@ -114,6 +114,7 @@ import interview
 import itemplan_reads
 import itemplan_shadow
 import itemplan
+import itemplan_disenchant
 import itemplan_vendor
 import itemsource
 import purse
@@ -190,6 +191,7 @@ import realmread
 import relay
 import runreport
 import retire
+import retrygate
 import situation
 import skillgoal
 import standin
@@ -10715,7 +10717,9 @@ class Bridge(discord.Client):
         # whose line from the leader crosses a death disc is not written.
         # Looked up like _fetch_family_death_spots above: the check is advisory.
         refuse = globals().get("_death_disc_refusal")
-        if refuse and str(aim).startswith("at:"):
+        # A ROLE KEYWORD IS JUDGED TOO: the helper looks up the nearest holder
+        # and answers "" for anything it cannot place (a flight node, an entry).
+        if refuse:
             refusal = await asyncio.to_thread(refuse, leader, aim)
             if refusal:
                 log.warning("town slot: %s asked for %s and was refused: %s",
@@ -12878,7 +12882,12 @@ class Bridge(discord.Client):
         seen = await asyncio.to_thread(_recent_recipe_keys, GIVE_RETRY_MINUTES)
 
         held = await asyncio.to_thread(_fetch_held_recipes, names)
-        learns, skipped = recipebook.plan_learns(held, skills, settled, seen)
+        member_classes, member_levels = await asyncio.to_thread(_fetch_recipe_member_meta, names)
+        log.info("%s", recipebook.class9_report(recipebook.classify_class9(held, skills)))
+        learns, skipped = recipebook.plan_learns(
+            held, skills, settled, seen,
+            member_classes=member_classes, member_levels=member_levels,
+        )
 
         queued = 0
         for learn in learns:
@@ -14484,6 +14493,33 @@ class Bridge(discord.Client):
                     "only %s can walk the family's town errands",
                     aim, name, leader,
                 )
+        if not run_doors:
+            # A STANDING AIM IS RE-JUDGED AFTER A DEATH (#2539), on the same
+            # sweep and outside a dungeon run for the same reason.
+            released += await self._release_deadly_standing_aims(names)
+        return released
+
+    async def _release_deadly_standing_aims(self, names: list) -> int:
+        """Release a standing economy aim whose walk has now killed the family.
+
+        The death discs are judged once, at `_claim_town_slot`; an aim already
+        standing was only ever ended by arrival, its lease or its errand
+        (#2539). Each pass this judges the standing aims again against the
+        discs, which hold the fresh deaths, and against the family's own recent
+        deaths on the walk, so a hostile that sits on the road closes it as
+        lava does. Advisory: an unread table releases nothing.
+        """
+        aims = {name: aim for name, aim
+                in (await asyncio.to_thread(_standing_travel_aims)).items()
+                if name in names}
+        refused = await asyncio.to_thread(_deadly_standing_aims, names, aims)
+        released = 0
+        for name, why in sorted(refused.items()):
+            aim = aims.get(name, "")
+            if await asyncio.to_thread(_release_trade_errand, name, aim):
+                released += 1
+                log.warning("economy: released standing aim %s from %s: %s",
+                            aim, name, why)
         return released
 
     async def _vendor_pass_mode(self, names: list, free_slots: dict,
@@ -14679,6 +14715,7 @@ class Bridge(discord.Client):
         in_run = await self._mid_run(names)
         if not in_run:
             await self._release_stranded_ground_errands(names, leader)
+            # A STANDING AIM IS RE-JUDGED AFTER A DEATH (#2539).
         else:
             # ...AND DURING ONE, EVERYTHING FAR FROM THE RUN'S DOOR (#230). A
             # stale mailbox aim on a follower is inert while it follows and
@@ -14894,6 +14931,14 @@ class Bridge(discord.Client):
         await globals().get(
             "_run_itemplan_give", skip_itemplan_give
         )(itemplan_give, names, leader, rows, free_slots, gear_rows, worn)
+        itemplan_disenchant_run = getattr(self, "_itemplan_disenchant", None)
+        async def skip_itemplan_disenchant(*args):
+            return None
+
+        await globals().get(
+            "_run_itemplan_disenchant", skip_itemplan_disenchant
+        )(itemplan_disenchant_run, names, leader, rows, free_slots, gear_rows,
+          worn)
         itemplan_auction = getattr(self, "_itemplan_auction", None)
         async def skip_itemplan_auction(*args):
             return None
@@ -16166,6 +16211,38 @@ class Bridge(discord.Client):
             ))
         if gifts:
             await self._write_guild_gifts(gifts)
+
+    async def _itemplan_disenchant(self, names: list, family: str, rows: list,
+                                   free_slots: dict, gear_rows=(),
+                                   worn_rows=()) -> None:
+        """Break down the plan's DISENCHANT rows when ITEMPLAN_DISENCHANT is on."""
+        if not itemplan_disenchant.enabled():
+            return
+        try:
+            extras = await asyncio.to_thread(
+                _itemplan_reads, names, family, rows, gear_rows, worn_rows)
+            report = await asyncio.to_thread(
+                itemplan_shadow.shadow, names, family, rows, free_slots,
+                gear_rows=gear_rows, worn_rows=worn_rows,
+                keep_names=OWNER_KEEPS, extras=extras)
+            if report is None:
+                return
+            stacks = itemplan_shadow.build_stacks(
+                rows, gear_rows, extras.templates, extras.instance_soulbound)
+            jobs = itemplan_disenchant.jobs_for(
+                report.plan, list(zip(stacks, rows, strict=True)),
+                keep_names=OWNER_KEEPS)
+            if not jobs:
+                return
+            wrote = await asyncio.to_thread(
+                _carry_out_itemplan_disenchant, jobs)
+            for line in itemplan_disenchant.lines(jobs):
+                log.info("%s", line)
+            log.info("%s %d of %d queued", itemplan_disenchant.PREFIX,
+                     wrote, len(jobs))
+        except Exception:
+            log.exception("itemplan disenchant: the route failed; the economy "
+                          "pass carries on")
 
     async def _itemplan_auction(self, names: list, family: str, rows: list,
                                 free_slots: dict, gear_rows=(), worn_rows=()) -> None:
@@ -19281,9 +19358,12 @@ class Bridge(discord.Client):
     async def _run_corps_step(self, step, cap: float = guildroute.MAIL_RUN_YARDS) -> None:
         """Write one step's rows in order, each after the last has answered.
 
-        A walk a fight ended is written once more (#633).
+        A walk a fight ended is written once more (#633). A step whose last
+        asks were refused waits out the shared retry gate (retrygate.py).
         """
         try:
+            if await self._retry_held("guild corps", step):
+                return
             if step.walk is not None:
                 walk_id = await asyncio.to_thread(_insert_corps_row, step.holder, step.walk)
                 if not walk_id:
@@ -19308,6 +19388,29 @@ class Bridge(discord.Client):
             log.exception("guild corps: step for %s failed", step.holder)
         finally:
             self._corps_steps.pop(step.holder, None)
+
+    async def _retry_held(self, prefix: str, step) -> bool:
+        """True when the shared retry gate (retrygate.py) holds this step: its
+        member's newest rows of the step's first source were refused. Logged
+        once when the hold starts or changes kind, at DEBUG while it holds."""
+        source = retrygate.first_source(step)
+        if not source:
+            return False
+        rows = await asyncio.to_thread(_retry_rows, step.holder, source)
+        hold = retrygate.hold(rows)
+        said = getattr(self, "_retry_said", None)
+        if said is None:
+            said = self._retry_said = {}
+        if hold is None:
+            said.pop((step.holder, source), None)
+            return False
+        key = hold.key(step.holder, source)
+        if said.get((step.holder, source)) != key:
+            said[(step.holder, source)] = key
+            log.info("%s: %s", prefix, hold.line(step.holder, source))
+        else:
+            log.debug("%s: %s", prefix, hold.line(step.holder, source))
+        return True
 
     async def _corps_row(self, step, row, cap: float = guildroute.MAIL_RUN_YARDS) -> bool:
         """Write one row and wait for its answer; True when it worked.
@@ -20028,9 +20131,12 @@ class Bridge(discord.Client):
         prefix and busy map, and one more reading: a worldserver older than
         quadseven/mod-overseer#707 answers a spawn walk `unknown job mode` and
         a sale walk `malformed walk-to-vendor command`, and that walk is not
-        asked again for guildroute.WALK_UNSUPPORTED_SECONDS.
+        asked again for guildroute.WALK_UNSUPPORTED_SECONDS. A step whose last
+        asks were refused waits out the shared retry gate (retrygate.py).
         """
         try:
+            if await self._retry_held("guild jobs", step):
+                return
             if step.walk is not None:
                 walk_id = await asyncio.to_thread(_insert_corps_row, step.holder, step.walk)
                 if not walk_id:
@@ -22321,6 +22427,16 @@ class Bridge(discord.Client):
                 where.get("map_id") if where else "?",
                 ", ".join(sorted(smelters)),
             )
+            return
+        # NOT EVERY FORGE IS A WALK (#2538): the nearest on the whole map can
+        # be past a death disc, in hostile ground, or a split family's drag.
+        # Looked up: the adapter tests load this method in isolation.
+        judge = globals().get("_forge_refusal")
+        why = await asyncio.to_thread(
+            judge, names, leader, spawn, forge.aim) if judge else ""
+        if why:
+            log.info("forge: %s wait: leader=%s is not walked to a Forge: %s",
+                     ", ".join(sorted(smelters)), leader, why)
             return
         aimed = await self._claim_town_slot("forge", leader, forge.aim,
                                              cohort=_cohort_key(cohort))
@@ -26386,6 +26502,14 @@ class Bridge(discord.Client):
         if found is None:
             return
         job, names, who = found
+        key = getattr(cohort, "key", None)
+        if not key:
+            key = await asyncio.to_thread(
+                lambda: _cohort_of(bonds.head_of_family())
+            ) or who
+        operator_held = getattr(self, "_operator_held", None)
+        if operator_held is not None and await operator_held({key}, "farm"):
+            return
         item, skill = farmjob.order_of(job)
         if not (item or skill):
             log.info("farm: %s end: job=%s names no material", who, job)
@@ -31709,6 +31833,14 @@ async def _run_itemplan_give(itemplan_give, names, family, rows, free_slots,
         await itemplan_give(names, family, rows, free_slots, gear_rows, worn_rows)
 
 
+async def _run_itemplan_disenchant(itemplan_disenchant_run, names, family, rows,
+                                   free_slots, gear_rows, worn_rows) -> None:
+    """Call the disenchant route executor when this economy pass exposes it."""
+    if itemplan_disenchant_run is not None:
+        await itemplan_disenchant_run(
+            names, family, rows, free_slots, gear_rows, worn_rows)
+
+
 async def _run_itemplan_auction(itemplan_auction, names, family, rows,
                                free_slots, gear_rows, worn_rows) -> None:
     """Call the auction route executor when this economy pass exposes it."""
@@ -33232,6 +33364,49 @@ def _disenchant_instead(holder: str, item_guid: int):
         return None
 
 
+ITEMPLAN_DISENCHANT_SOURCE = "itemplan-disenchant"
+
+
+def _carry_out_itemplan_disenchant(jobs) -> int:
+    """Queue one `disenchant` row per job the plan chose (#1978); the count.
+
+    Blocking. Each job passes the keep marks and the epic gate a sale passes,
+    then the core's own gate (`bag_pressure.disenchant_route`) on facts read
+    from the item: only the holder breaks its own stack down, and a stack the
+    core would refuse, or one whose facts cannot be read, is left alone. A row
+    for the same item standing or written in the last DISENCHANT_ROUTE_HOURS
+    is the answer for it. A database fault skips that job and is logged.
+    """
+    wrote = 0
+    for job in jobs:
+        command = "guid:%d count:1" % int(job.item_guid)
+        if _KEEP.blocks(job.holder, command) or _epic_blocks(job.holder, command):
+            continue
+        try:
+            route = bag_pressure.disenchant_route(
+                job.holder, _disenchant_facts(job.item_guid),
+                {job.holder: _family_enchanters(job.holder).get(job.holder, 0)})
+            if route != (bag_pressure.DISENCHANT, job.holder):
+                continue
+            with _connect() as conn, conn.cursor() as cur:
+                cur.execute(_DISENCHANT_ROUTED_SQL, (
+                    ITEMPLAN_DISENCHANT_SOURCE, job.holder, command,
+                    DISENCHANT_ROUTE_HOURS))
+                if int((cur.fetchone() or {}).get("n") or 0):
+                    continue
+                cur.execute(
+                    "INSERT INTO overseer_command "
+                    "(target_name, command, kind, target_arg, source) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (job.holder, command, "disenchant", "",
+                     ITEMPLAN_DISENCHANT_SOURCE))
+                wrote += 1
+        except (pymysql.err.MySQLError, OSError):
+            log.exception("itemplan disenchant: cannot queue %s's item %d",
+                          job.holder, int(job.item_guid))
+    return wrote
+
+
 def _insert_sell(candidate: bag_pressure.SellCandidate) -> int:
     """Queue one explicitly chosen stack for the world-side vendor executor."""
     command = "guid:%d count:%d" % (candidate.item_guid, candidate.count)
@@ -34657,6 +34832,24 @@ def _end_hunt_row(row_id: int, detail: str = _HUNT_DONE) -> None:
             "WHERE id = %s AND status = 'verifying'",
             (detail, int(row_id)),
         )
+
+
+# THE SHARED RETRY GATE'S READ (retrygate.py): one member's newest rows of one
+# source, a day at most, served by idx_source_id.
+_RETRY_ROWS_SQL = (
+    "SELECT status, result, TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age "
+    "FROM overseer_command "
+    "WHERE source = %s AND target_name = %s "
+    "AND created_at > NOW() - INTERVAL 1 DAY "
+    "ORDER BY id DESC LIMIT %s"
+)
+
+
+def _retry_rows(holder: str, source: str) -> list:
+    """`holder`'s newest retrygate.ROWS_READ rows of `source`, newest first."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_RETRY_ROWS_SQL, (source, holder, retrygate.ROWS_READ))
+        return list(cur.fetchall())
 
 
 def _insert_corps_row(holder: str, row) -> int:
@@ -38377,7 +38570,7 @@ def _farm_item_creatures(item: int, leader_at, levels) -> list:
     `acore_world.creature`; a spawn whose zone the row does not carry is
     placed by `places.zone_id_at`, and one that has none is dropped.
     """
-    low, high = farmjob.kill_band(levels)
+    low, high = farmjob.kill_band(levels, item)
     if not high or not leader_at or leader_at.get("map_id") is None:
         return []
     here = int(leader_at["map_id"])
@@ -38682,6 +38875,54 @@ def _nearest_forge(name: str):
             raise
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def _forge_refusal(names: list, leader: str, spawn, aim: str) -> str:
+    """Why the leader must not be walked to the Forge `spawn` (#2538), or "".
+
+    Death discs first (the walk, or the Forge itself, over ground the family
+    died on), then travel.forge_refusal: distance, a split family and hostile
+    spawns beside the Forge, from levelroute's own spawn cells. ADVISORY: an
+    unreadable table refuses nothing.
+    """
+    rows = _fetch_positions(list(names))
+    here = rows.get(leader)
+    if not here:
+        return ""
+    start = {"map_id": here.get("map_id"), "x": here.get("pos_x"),
+             "y": here.get("pos_y")}
+    discs = _fetch_death_discs()
+    if discs:
+        goal = {"map_id": spawn.get("map_id"), "x": spawn.get("x"),
+                "y": spawn.get("y")}
+        hit = deathcells.crossing(discs, start, goal)
+        if hit is None:
+            hit = next((d for d in discs
+                        if d.map_id == goal["map_id"]
+                        and ((d.x - goal["x"]) ** 2 + (d.y - goal["y"]) ** 2)
+                        ** 0.5 <= d.radius), None)
+        if hit is not None:
+            return "the walk to %s crosses ground the family died on: %s" % (
+                aim, hit.said())
+    positions = {n: {"map_id": r.get("map_id"), "x": r.get("pos_x"),
+                     "y": r.get("pos_y")} for n, r in rows.items()}
+    level = 0
+    team = ""
+    hostile = ()
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            members = _planner_rows(
+                cur, levelroute.MEMBERS_SQL.format(
+                    holes=campaignplan.holes(1)), (leader,), "the leader") or []
+        level = int(members[0].get("level") or 0) if members else 0
+        team = levelroute.team_of(members)
+        cells = _level_world()[1]
+        hostile = tuple(c for c in (cells or ())
+                        if levelroute.hostile_to(c, team)) if team else ()
+    except pymysql.err.MySQLError as exc:
+        log.warning("forge: the leader's level could not be read (%s); the "
+                    "ground is not judged", exc.args[:1])
+    return travel.forge_refusal(spawn, leader, positions, hostile, level)
 
 
 def _forge_errands(family: str | None = None) -> dict:
@@ -41171,6 +41412,30 @@ _RECIPE_SKILL_SQL = (
 )
 
 
+_RECIPE_MEMBER_META_SQL = "SELECT name, class, level FROM characters WHERE name IN (%s)"
+
+
+def _fetch_recipe_member_meta(names: list) -> tuple[dict, dict]:
+    """Return `(member_classes, member_levels)` from `characters` for `names`."""
+    if not names:
+        return {}, {}
+    sql = _RECIPE_MEMBER_META_SQL % ",".join(["%s"] * len(names))  # noqa: S608 - placeholders from a COUNT, values still bound
+    classes: dict = {}
+    levels: dict = {}
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+            rows = cur.fetchall()
+        except pymysql.err.MySQLError:
+            log.warning("recipebook: cannot read member classes/levels this pass")
+            return {}, {}
+    for row in rows or ():
+        name = row["name"]
+        classes[name] = int(row["class"] or 0)
+        levels[name] = int(row["level"] or 0)
+    return classes, levels
+
+
 def _fetch_recipe_skills(names: list) -> dict:
     """`{name: {skill_id: value}}` for the whole of `character_skills`.
 
@@ -41216,12 +41481,13 @@ def _fetch_recipe_skills(names: list) -> dict:
 _RECIPE_HELD_SQL = (
     "SELECT c.name AS holder, ci.item AS item_guid, ii.itemEntry AS entry, "
     "it.name AS label, it.RequiredSkill AS required_skill, "
-    "it.RequiredSkillRank AS required_rank, it.spellid_2 AS recipe_spell "
+    "it.RequiredSkillRank AS required_rank, it.spellid_2 AS recipe_spell, "
+    "it.AllowableClass AS allowable_class, it.RequiredLevel AS required_level "
     "FROM character_inventory ci "
     "JOIN characters c ON c.guid = ci.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
-    "WHERE c.name IN (%s) AND it.class = %%s AND it.spellid_2 > 0"
+    "WHERE c.name IN (%s) AND it.class = %%s AND (it.spellid_2 > 0 OR it.name LIKE %%s)"
 )
 
 
@@ -41232,7 +41498,7 @@ def _fetch_held_recipes(names: list) -> list:
     sql = _RECIPE_HELD_SQL % ",".join(["%s"] * len(names))  # noqa: S608 - placeholders from a COUNT, values still bound
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(sql, (*names, recipebook.RECIPE_ITEM_CLASS))
+            cur.execute(sql, (*names, recipebook.RECIPE_ITEM_CLASS, "Libram of %"))
             rows = cur.fetchall()
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
@@ -41248,6 +41514,12 @@ def _fetch_held_recipes(names: list) -> list:
             required_skill=int(row["required_skill"] or 0),
             required_rank=int(row["required_rank"] or 0),
             recipe_spell=int(row["recipe_spell"] or 0),
+            allowable_class=(
+                -1
+                if row.get("allowable_class") is None
+                else int(row["allowable_class"])
+            ),
+            required_level=int(row.get("required_level") or 0),
         )
         for row in rows
     ]
@@ -41854,8 +42126,43 @@ def _fetch_death_discs() -> list:
         return []
 
 
+_KEYWORD_SPAWN_SQL = (
+    "SELECT s.map_id AS map_id, cr.position_x AS x, cr.position_y AS y "
+    "FROM overseer_snapshot s "
+    "JOIN acore_world.creature cr ON cr.map = s.map_id "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "AND (ct.npcflag & %s) = %s AND " + towntrip.REAL_SPAWN_SQL + " "
+    "ORDER BY POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2) "
+    "LIMIT 1"
+)
+
+
+def _nearest_keyword_spawn(name: str, aim: str):
+    """{map_id, x, y} of the nearest holder of the role keyword `aim` names on
+    `name`'s own map, or None. ADVISORY, like the discs it is judged against:
+    an unreadable table, an unplaced character or an aim that is not a role
+    keyword all answer None, and None refuses nothing (#2457)."""
+    mask = deathcells.keyword_mask(aim)
+    if not mask:
+        return None
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_KEYWORD_SPAWN_SQL, (name, mask, mask))
+            row = cur.fetchone()
+    except pymysql.err.MySQLError as exc:
+        log.warning("death discs: the %r holder could not be read (%s); the "
+                    "walk is not checked against it", aim, exc.args[:1])
+        return None
+    return dict(row) if row else None
+
+
 def _death_disc_refusal(leader: str, aim: str) -> str:
-    """Why `leader` must not be sent to ground aim `aim`, or ""."""
+    """Why `leader` must not be sent to `aim` (a ground aim or a role
+    keyword), or ""."""
+    ground = places.parse_ground_aim(aim)
+    if not (ground or deathcells.keyword_mask(aim)):
+        return ""
     discs = _fetch_death_discs()
     if not discs:
         return ""
@@ -41864,22 +42171,78 @@ def _death_disc_refusal(leader: str, aim: str) -> str:
         return ""
     here = {"map_id": row.get("map_id"), "x": row.get("pos_x"),
             "y": row.get("pos_y")}
-    return deathcells.aim_refusal(discs, here, aim)
+    spawn = None if ground else _nearest_keyword_spawn(leader, aim)
+    return deathcells.aim_refusal(discs, here, aim, spawn=spawn)
+
+
+def _fetch_recent_deaths(names: list):
+    """The family's deaths in the last deathcells.REPEAT_MINUTES as rows, or
+    None when the table could not be read (None releases nothing)."""
+    if not names:
+        return []
+    sql = deathcells.RECENT_SQL.format(marks=", ".join(["%s"] * len(names)))
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(sql, (deathcells.REPEAT_MINUTES, *names))
+            return [dict(r) for r in cur.fetchall()]
+    except pymysql.err.MySQLError as exc:
+        log.warning("standing aims: the recent deaths could not be read (%s); "
+                    "no aim is released on them", exc.args[:1])
+        return None
+
+
+def _deadly_standing_aims(names: list, aims: dict) -> dict:
+    """{name: why} for each standing economy aim (a ground aim or a role
+    keyword) the discs or the family's recent deaths now refuse, each judged
+    from its own holder's position (#2539). {} when nothing is read."""
+    standing = {n: a for n, a in (aims or {}).items()
+                if a and n in names and _is_economy_aim(a)
+                and (places.parse_ground_aim(a) or deathcells.keyword_mask(a))}
+    if not standing:
+        return {}
+    deaths = _fetch_recent_deaths(list(names))
+    if not deaths:
+        return {}
+    discs = _fetch_death_discs()
+    rows = _fetch_positions(list(standing))
+    out = {}
+    for name, aim in standing.items():
+        row = rows.get(name)
+        if not row:
+            continue
+        here = {"map_id": row.get("map_id"), "x": row.get("pos_x"),
+                "y": row.get("pos_y")}
+        spawn = (None if places.parse_ground_aim(aim)
+                 else _nearest_keyword_spawn(name, aim))
+        why = deathcells.standing_aim_refusal(discs, deaths, here, aim,
+                                              spawn=spawn)
+        if why:
+            out[name] = why
+    return out
 
 
 def _member_death_disc_refusals(names: list, aim: str) -> dict:
-    """{member: why} for the members whose own walk to ground aim `aim` crosses
-    a death disc, each judged from its own position (individual mode). {} when
-    nothing is read: the check is advisory."""
+    """{member: why} for the members whose own walk to `aim` (a ground aim or
+    a role keyword) crosses a death disc, each judged from its own position
+    (individual mode). {} when nothing is read: the check is advisory."""
+    ground = places.parse_ground_aim(aim)
+    if not names or not (ground or deathcells.keyword_mask(aim)):
+        return {}
     discs = _fetch_death_discs()
-    if not discs or not names:
+    if not discs:
         return {}
     rows = _fetch_positions(list(names))
     here = {
         n: {"map_id": r.get("map_id"), "x": r.get("pos_x"), "y": r.get("pos_y")}
         for n, r in rows.items()
     }
-    return deathcells.member_aim_refusals(discs, here, names, aim)
+    spawns = {}
+    if not ground:
+        for n in here:
+            spawn = _nearest_keyword_spawn(n, aim)
+            if spawn:
+                spawns[n] = spawn
+    return deathcells.member_aim_refusals(discs, here, names, aim, spawns=spawns)
 
 
 def _fetch_quest_ends(quests: list) -> dict:

@@ -240,6 +240,20 @@ def disenchant_skill(item_level: int) -> int:
     return max(1, 5 * (int(item_level) - 21)) if item_level > 25 else 1
 
 
+def disenchant_need(s) -> int | None:
+    """The Enchanting skill the core asks to break `s` down, None for never.
+
+    The core's own RequiredDisenchantSkill when it was read, no breakdown at
+    all when the item has no DisenchantID or the skill reads -1; the
+    convention above only when the core was not read.
+    """
+    if s.disenchant_id is not None and s.disenchant_id <= 0:
+        return None
+    if s.disenchant_skill is not None:
+        return s.disenchant_skill if s.disenchant_skill >= 0 else None
+    return disenchant_skill(s.item_level)
+
+
 # Armor each class wears, by item level of the member (classic proficiencies).
 CLOTH, LEATHER, MAIL, PLATE, SHIELD = 1, 2, 3, 4, 6
 WARRIOR, PALADIN, HUNTER, ROGUE, PRIEST, SHAMAN, MAGE, WARLOCK, DRUID = (
@@ -318,6 +332,12 @@ class Stack:
     container_slots: int | None = None
     fire_res: int | None = None
     soulbound: bool | None = None
+    required_skill: int = 0
+    allowable_class: int = -1
+    # The core's own breakdown facts (#1978): item_template.DisenchantID and
+    # RequiredDisenchantSkill (-1 means never). None is unread.
+    disenchant_id: int | None = None
+    disenchant_skill: int | None = None
 
     @property
     def key(self) -> tuple:
@@ -1148,7 +1168,9 @@ def _gear_surplus(w: _World, s: Stack, me: Member, why: str) -> list:
 def _disenchant_option(w: _World, s: Stack, me: Member):
     if s.quality < 2 or s.quality > 4 or not s.gear:
         return None
-    need = disenchant_skill(s.item_level)
+    need = disenchant_need(s)
+    if need is None:
+        return None
     if me.skill("enchanting") >= need and s.value < DE_VENDOR_CEILING:
         return _opt(
             DISENCHANT,
@@ -1229,13 +1251,11 @@ def _recipe_member_option(s: Stack, me: Member, trade: str | None, rank: int):
     if not trade or me.skill(trade) <= 0:
         return None
     skill = me.skill(trade)
-    if rank > range_top(skill) + RANGE:
-        return None
     goal = TRADE_NOW if rank <= skill else TRADE_NEXT
     return _opt(
         KEEP_CARRY if goal == TRADE_NOW else BANK_PERSONAL,
         goal,
-        "%s recipe within reach of skill %d" % (trade, skill),
+        "%s recipe for holder skill %d (needs %d)" % (trade, skill, rank),
         "R9",
     )
 
@@ -1244,11 +1264,11 @@ def _recipe_sibling_option(w: _World, s: Stack, trade: str | None, rank: int):
     if not trade or not s.tradable:
         return None
     for sib in w.siblings(s.holder):
-        if sib.skill(trade) > 0 and rank <= range_top(sib.skill(trade)) + RANGE:
+        if sib.skill(trade) > 0:
             return _opt(
                 GIVE,
                 RECIPE,
-                "%s works %s and reaches it" % (sib.name, trade),
+                "%s works %s" % (sib.name, trade),
                 "R9",
                 target=sib.name,
             )
@@ -1258,8 +1278,8 @@ def _recipe_sibling_option(w: _World, s: Stack, trade: str | None, rank: int):
 def _recipe_guild_option(w: _World, s: Stack, trade: str | None, rank: int):
     if not trade or not s.tradable:
         return None
-    for name, gtrade, skill in sorted(w.ctx.guild_crafters):
-        if gtrade == trade and rank <= range_top(skill) + RANGE:
+    for name, gtrade, _skill in sorted(w.ctx.guild_crafters):
+        if gtrade == trade:
             return _opt(
                 GIVE,
                 RECIPE,
@@ -1284,6 +1304,37 @@ def _recipe_raid_options():
     ]
 
 
+def _class_book_options(w: _World, s: Stack, me: Member):
+    if me.class_id > 0 and (s.allowable_class & (1 << (me.class_id - 1))) != 0:
+        if me.level >= s.req_level:
+            return [_opt(KEEP_CARRY, RECIPE, "class book for %s" % me.name, "R9")]
+        return [
+            _opt(
+                BANK_PERSONAL,
+                RECIPE,
+                "class book for %s at level %d" % (me.name, s.req_level),
+                "R9",
+            )
+        ]
+    if s.tradable:
+        for sib in w.siblings(s.holder):
+            if (
+                sib.class_id > 0
+                and (s.allowable_class & (1 << (sib.class_id - 1))) != 0
+                and sib.level >= s.req_level
+            ):
+                return [
+                    _opt(
+                        GIVE,
+                        RECIPE,
+                        "class book for %s" % sib.name,
+                        "R9",
+                        target=sib.name,
+                    )
+                ]
+    return [_opt(BANK_PERSONAL, RECIPE, "class book, no matching member", "R9")]
+
+
 def _rule_recipe(w: _World, s: Stack, me: Member):
     if s.item_class != C_RECIPE:
         return None
@@ -1297,13 +1348,21 @@ def _rule_recipe(w: _World, s: Stack, me: Member):
                 carry_forced=True,
             )
         ]
-    trade = RECIPE_TRADE.get(s.subclass)
     rank = s.required_skill_rank
+    # Group 3: class books and Dire Maul librams (RequiredSkill == 0, subclass 0).
+    if s.required_skill == 0 and rank == 0 and s.subclass == 0:
+        if s.name.startswith("Libram of "):
+            return _recipe_raid_options()
+        if s.allowable_class > 0:
+            return _class_book_options(w, s, me)
+    trade = RECIPE_TRADE.get(s.subclass)
     drop = s.entry in raidsupply.DROP_RECIPES
-    out = []
+    # Group 1: trade recipes the holder works stay with the holder until learned.
     member_option = _recipe_member_option(s, me, trade, rank)
     if member_option:
-        out.append(member_option)
+        return [member_option]
+    # Group 2: trade recipes the holder does not work -> crafter, else auction, never vendor.
+    out = []
     sibling_option = _recipe_sibling_option(w, s, trade, rank)
     if sibling_option:
         out.append(sibling_option)
@@ -1313,19 +1372,18 @@ def _rule_recipe(w: _World, s: Stack, me: Member):
     if guild_option:
         out.append(guild_option)
     if s.tradable:
+        out += _market_options(w, s, "R11")
         out.append(
             _opt(
                 GUILD_BANK,
                 RECIPE,
-                "recipe nobody here can learn yet",
+                "recipe nobody here works yet",
                 "R9",
                 target="Materials",
                 tab=GUILD_TAB_MATERIALS,
             )
         )
-        out += _market_options(w, s, "R11")
     out += _bank_if_worth(s, "R9", RECIPE)
-    out += _vendor_options(s, "R9", "recipe for a trade nobody in reach works", RECIPE)
     if not out:
         out.append(_opt(BANK_PERSONAL, RECIPE, "recipe, no taker and no price", "R9"))
     return out

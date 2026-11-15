@@ -46,8 +46,12 @@ ITEM_TEMPLATE_SQL = (
     "SELECT it.entry AS entry, it.class AS item_class, it.subclass AS subclass, "
     "it.bonding AS bonding, it.InventoryType AS inventory_type, "
     "it.ItemLevel AS item_level, it.RequiredLevel AS req_level, "
+    "it.RequiredSkill AS required_skill, "
     "it.RequiredSkillRank AS required_skill_rank, "
+    "it.AllowableClass AS allowable_class, "
     "it.ContainerSlots AS container_slots, "
+    "it.DisenchantID AS disenchant_id, "
+    "it.RequiredDisenchantSkill AS disenchant_skill, "
     "it.armor AS armor, it.block AS block, it.dmg_min1 AS dmg_min1, "
     "it.dmg_max1 AS dmg_max1, it.delay AS delay, "
     "it.holy_res AS holy_res, it.fire_res AS fire_res, "
@@ -61,6 +65,8 @@ ITEM_TEMPLATE_SQL = (
     "FROM acore_world.item_template it WHERE it.entry IN (%s)"
 )
 
+_DISENCHANT_FIELDS = ("disenchant_id", "disenchant_skill")
+
 _TEMPLATE_FIELDS = (
     "item_class",
     "subclass",
@@ -71,6 +77,11 @@ _TEMPLATE_FIELDS = (
     "required_skill_rank",
     "container_slots",
     "fire_res",
+)
+
+_OPTIONAL_TEMPLATE_FIELDS = (
+    "required_skill",
+    "allowable_class",
 )
 
 ITEM_INSTANCE_SQL = (
@@ -127,7 +138,22 @@ def item_templates(rows) -> dict:
             continue
         if entry is None or entry <= 0 or any(v is None for v in item.values()):
             continue
+        for k in _OPTIONAL_TEMPLATE_FIELDS:
+            if k in row:
+                v = _int(row[k])
+                if v is None:
+                    item = None
+                    break
+                item[k] = v
+        if item is None:
+            continue
         item["stats"] = gearscore.stats_from_row(row)
+        # The core's own breakdown facts (#1978). Optional: a row without them
+        # is still read, and the plan falls back to its convention.
+        for field in _DISENCHANT_FIELDS:
+            value = _int(row.get(field)) if hasattr(row, "get") else None
+            if value is not None:
+                item[field] = value
         out[entry] = item
     return out
 
@@ -241,7 +267,9 @@ EQUIPPED_SQL = (  # noqa: S608 - the bound is an int from armory, names stay pla
     "it.name AS name, it.class AS item_class, it.subclass AS subclass, "
     "it.Quality AS quality, it.ItemLevel AS item_level, "
     "it.InventoryType AS inventory_type, it.RequiredLevel AS req_level, "
+    "it.RequiredSkill AS required_skill, "
     "it.RequiredSkillRank AS required_skill_rank, "
+    "it.AllowableClass AS allowable_class, "
     "it.ContainerSlots AS container_slots, it.fire_res AS fire_res, "
     "it.armor AS armor, it.block AS block, it.dmg_min1 AS dmg_min1, "
     "it.dmg_max1 AS dmg_max1, it.delay AS delay, "

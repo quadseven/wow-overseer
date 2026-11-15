@@ -107,6 +107,9 @@ LEVEL_MARGIN = gatheraim.LEVEL_MARGIN
 # LEVEL_MARGIN as for nodes.
 KILL_MIN_CHANCE = 5.0
 KILL_LEVELS_BELOW = 30
+# Linen (2589) and Wool (2592) only drop from low-level humanoids, well below
+# a level-60 family's KILL_LEVELS_BELOW floor.
+LOW_CLOTH_TIERS = frozenset({2589, 2592})
 
 END = "end"
 TOWN = "town"
@@ -371,16 +374,20 @@ def usable(order, spawns, skills) -> tuple:
     )
 
 
-def kill_band(levels) -> tuple:
+def kill_band(levels, item: int = 0) -> tuple:
     """(lowest creature level, highest) a family may be sent to for a kill drop.
 
     The weakest member sets the ceiling, as for nodes; (0, 0) when no level
-    was read, which `usable_kills` refuses rather than guesses.
+    was read, which `usable_kills` refuses rather than guesses. Low-level
+    cloth tiers (Linen, Wool) drop down to level 1 even for a level-60 family.
     """
     lowest = min((int(v) for v in (levels or {}).values()), default=0)
     if not lowest:
         return 0, 0
-    return max(1, lowest - KILL_LEVELS_BELOW), lowest + LEVEL_MARGIN
+    floor = (
+        1 if int(item or 0) in LOW_CLOTH_TIERS else max(1, lowest - KILL_LEVELS_BELOW)
+    )
+    return floor, lowest + LEVEL_MARGIN
 
 
 def usable_kills(order, creatures, levels) -> tuple:
@@ -390,7 +397,7 @@ def usable_kills(order, creatures, levels) -> tuple:
     ceiling, so a creature a member of the family could not stand against is
     never a field, however much of the item it drops.
     """
-    low, high = kill_band(levels)
+    low, high = kill_band(levels, getattr(order, "item", 0))
     if not high:
         return [], (
             "no member level was read, so the danger ceiling for %s is unknown"
