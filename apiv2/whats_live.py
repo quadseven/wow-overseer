@@ -141,6 +141,52 @@ def _read_banner(ctx, now: datetime) -> tuple[dict | None, str]:
     return realm.build_realm(build_rows, version_rows, [], now=now), ""
 
 
+def _banner_fields(banner: dict | None, banner_err: str) -> tuple[dict, dict]:
+    unmeasured = {"banner": banner_err} if banner_err else {}
+    mod_commit = roll._module_commit(banner) if banner else None
+    if not mod_commit:
+        mod_commit = UNKNOWN
+        stale = bool(banner and banner.get("pins") == realm.PINS_STALE)
+        unmeasured["module_commit"] = (
+            "The worldserver's reported pins are stale."
+            if stale
+            else "The realm banner did not report its mod-overseer commit."
+        )
+    fields = {
+        "build": (roll._build(banner) if banner else None) or UNKNOWN,
+        "core_revision": (banner.get("core_revision") if banner else None) or UNKNOWN,
+        "reported_at": (banner.get("reported_at") if banner else None) or UNKNOWN,
+        "module_commit": mod_commit,
+        "pins": (banner.get("pins") if banner else None) or UNKNOWN,
+    }
+    return fields, unmeasured
+
+
+def _status_fields(rs: dict | None) -> tuple[dict, dict]:
+    ws = rs.get("worldserver") if isinstance(rs, dict) else None
+    if not rs or rs.get("state") == "UNKNOWN" or not isinstance(ws, dict):
+        why = ((rs or {}).get("unmeasured") or {}).get("state")
+        return {
+            "state": "UNKNOWN",
+            "up": None,
+            "image_digest": UNKNOWN,
+            "started_at": UNKNOWN,
+        }, {"realm": why or "Worldserver status is unknown."}
+    digest = str(ws.get("image_digest") or "").strip() or UNKNOWN
+    started = str(ws.get("started_at") or "").strip() or UNKNOWN
+    unmeasured = (
+        {"image_digest": "Worldserver image digest is absent."}
+        if digest == UNKNOWN
+        else {}
+    )
+    return {
+        "state": str(rs.get("state") or "UNKNOWN"),
+        "up": ws.get("up"),
+        "image_digest": digest,
+        "started_at": started,
+    }, unmeasured
+
+
 def read_realm(
     ctx,
     read_status: Callable[..., dict] | None = None,
@@ -148,53 +194,25 @@ def read_realm(
 ) -> dict:
     """Read worldserver roll and mod-overseer commit from banner + realm-status."""
     now = now or datetime.now(timezone.utc)
-    unmeasured = {}
     banner, banner_err = _read_banner(ctx, now)
-    if banner_err:
-        unmeasured["banner"] = banner_err
-    mod_commit = roll._module_commit(banner) if banner else None
-    if not mod_commit:
-        mod_commit = UNKNOWN
-        if banner and banner.get("pins") == realm.PINS_STALE:
-            unmeasured["module_commit"] = "The worldserver's reported pins are stale."
-        else:
-            unmeasured["module_commit"] = (
-                "The realm banner did not report its mod-overseer commit."
-            )
+    b_fields, b_unmeasured = _banner_fields(banner, banner_err)
     rs = (read_status or realm_status.read_state)(now=now)
-    ws = rs.get("worldserver") if isinstance(rs, dict) else None
-    if not rs or rs.get("state") == "UNKNOWN" or not isinstance(ws, dict):
-        why = ((rs or {}).get("unmeasured") or {}).get(
-            "state"
-        ) or "Worldserver status is unknown."
-        unmeasured["realm"] = why
-        state = "UNKNOWN"
-        up = None
-        image_digest = UNKNOWN
-        started_at = UNKNOWN
-    else:
-        state = str(rs.get("state") or "UNKNOWN")
-        up = ws.get("up")
-        image_digest = str(ws.get("image_digest") or "").strip() or UNKNOWN
-        started_at = str(ws.get("started_at") or "").strip() or UNKNOWN
-        if image_digest == UNKNOWN:
-            unmeasured["image_digest"] = "Worldserver image digest is absent."
-    build_label = (roll._build(banner) if banner else None) or UNKNOWN
-    core_revision = (banner.get("core_revision") if banner else None) or UNKNOWN
-    reported_at = (banner.get("reported_at") if banner else None) or UNKNOWN
-    roll_label = build_label if build_label != UNKNOWN else image_digest
+    s_fields, s_unmeasured = _status_fields(rs)
+    unmeasured = {**b_unmeasured, **s_unmeasured}
+    build_label = b_fields["build"]
+    roll_label = build_label if build_label != UNKNOWN else s_fields["image_digest"]
     return {
-        "state": state,
-        "up": up,
+        "state": s_fields["state"],
+        "up": s_fields["up"],
         "roll": roll_label,
         "build": build_label,
-        "image_digest": image_digest,
-        "started_at": started_at,
-        "reported_at": reported_at,
-        "module_commit": mod_commit,
-        "module_short": _short(mod_commit),
-        "core_revision": core_revision,
-        "pins": (banner.get("pins") if banner else None) or UNKNOWN,
+        "image_digest": s_fields["image_digest"],
+        "started_at": s_fields["started_at"],
+        "reported_at": b_fields["reported_at"],
+        "module_commit": b_fields["module_commit"],
+        "module_short": _short(b_fields["module_commit"]),
+        "core_revision": b_fields["core_revision"],
+        "pins": b_fields["pins"],
         "unmeasured": unmeasured,
     }
 
