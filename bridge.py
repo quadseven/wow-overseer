@@ -34795,6 +34795,27 @@ def _with_purses_and_reserves(members, masters) -> list:
     return _with_low_rung_feeds(out, masters)
 
 
+def _low_rung_room(guild, master, crafter_names) -> "lowrung.Room":
+    """The free stacks a low-rung feed's loot can land in for `guild`: the
+    vault's free slots on every purchased tab, its bankers' bags and banks and
+    the short crafters' own; blocking. An unreadable part counts for none."""
+    try:
+        setup = _fetch_guild_bank_setup([master])
+        _depositors, tabs = bank._guild_tabs(setup)
+        vault = sum(tabs.values())
+        bankers = sorted(raidteams.banker_names(guild))
+        who = sorted(set(bankers) | set(crafter_names))
+        members = {m.name: m for m in bank.members_from_rows(
+            _fetch_bank_items(who), who)} if who else {}
+        return lowrung.room_of(
+            vault,
+            [members[n] for n in bankers if n in members],
+            [members[n] for n in crafter_names if n in members])
+    except (pymysql.err.MySQLError, OSError):
+        log.exception("low rung feed: %s's room is unreadable; it is fed nothing", guild)
+        return lowrung.Room()
+
+
 def _with_low_rung_feeds(members, masters) -> list:
     """The members with the low rung each is sent back to farm laid on
     (lowrung.py); blocking.
@@ -34803,19 +34824,28 @@ def _with_low_rung_feeds(members, masters) -> list:
     the members that out-levelled it. Said once per change, with the crafters
     short of it and the source chosen, so a starved ladder shows in the log.
     """
-    starved, crafters = {}, {}
+    starved, crafters, by_guild = {}, {}, {}
     for guild, master in (masters or {}).items():
         if not master:
             continue
         forecast = _bank_forecast([str(master)])
         starved[guild] = dict(forecast.starved)
-        for entry, names in forecast.short.items():
-            crafters[entry] = tuple(sorted(set(crafters.get(entry, ())) | set(names)))
+        names = set()
+        for entry, who in forecast.short.items():
+            crafters[entry] = tuple(sorted(set(crafters.get(entry, ())) | set(who)))
+            names |= set(who)
+        by_guild[guild] = (str(master), sorted(names))
+    # A FEED IS SENT ONLY WHERE ITS LOOT CAN LAND: the vault, a banker or the
+    # crafters must have room (lowrung.Room). A read that fails is no room.
+    room = {}
+    for guild, (master, names) in by_guild.items():
+        if starved.get(guild):
+            room[guild] = _low_rung_room(guild, master, names)
     focus = guildjobs.focus_from_env()
-    feeds = lowrung.plan(members, starved, crafters, focus)
+    feeds = lowrung.plan(members, starved, crafters, focus, room)
     _log_changed("low rung feed",
                  [lowrung.line(f) for f in feeds.values()]
-                 + lowrung.unfed(members, starved, crafters, focus))
+                 + lowrung.unfed(members, starved, crafters, focus, room))
     return [dataclasses.replace(m, feed=feeds.get(m.name)) for m in members]
 
 

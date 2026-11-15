@@ -33,6 +33,13 @@ chooses which field a member's existing farm job walks to: gold and items come
 from what the member kills, skins and mines. It never touches the auction
 house.
 
+WHERE IT LANDS. A feed is sent only when what it loots has somewhere to go: a
+free stack in the guild vault (any purchased tab, so the second tab's overflow
+counts), a guild banker's free stacks, or the crafters' own bags and banks. A
+guild whose vault is full, with no banker room and crafters with full bags, is
+sent nothing: farming would only fill a feeder's bags. `Room` is that count,
+read by the bridge; an unread room feeds nobody.
+
 PURE: members and counts in, feeds and sentences out. The bridge reads the
 forecast, lays each feed on its member and walks it.
 """
@@ -41,15 +48,56 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import bank
 import gatheraim
 import gatherband
 import guildjobs
+import guildledger
 
 SKIN, CLOTH, NODE = "skin", "cloth", "node"
 
 # At most this many members of a guild chase one starved material, so a short
 # stack never empties a guild's other jobs.
 FEEDERS_PER_RUNG = 2
+
+
+# Free stacks a guild needs across its vault, bankers and crafters before a feed
+# is sent: one stack for the loot and one for the stack that follows it.
+MIN_LANDING = 2
+
+
+@dataclass(frozen=True)
+class Room:
+    """Free stacks where a feed's loot can land, by place."""
+
+    vault: int = 0
+    bankers: int = 0
+    crafters: int = 0
+
+    @property
+    def total(self) -> int:
+        return max(0, self.vault) + max(0, self.bankers) + max(0, self.crafters)
+
+    @property
+    def enough(self) -> bool:
+        return self.total >= MIN_LANDING
+
+
+def member_room(m) -> int:
+    """Free stacks a bank.Member can take, the reserves a banker keeps off."""
+    return max(0, m.bag_free - guildledger.BAG_RESERVE) + max(
+        0, m.bank_free - bank.BANK_FREE_RESERVE
+    )
+
+
+def room_of(vault_free, bankers=(), crafters=()) -> Room:
+    """The Room from the vault's free slots and the bankers' and crafters'
+    bank.Member rows. A member with no level was not read and counts for none."""
+    return Room(
+        vault=int(vault_free or 0),
+        bankers=sum(member_room(m) for m in bankers if m.level > 0),
+        crafters=sum(member_room(m) for m in crafters if m.level > 0),
+    )
 
 
 @dataclass(frozen=True)
@@ -131,16 +179,21 @@ def _ordered(short) -> list:
     )
 
 
-def plan(members, starved, crafters=None, focus=None) -> dict:
+def plan(members, starved, crafters=None, focus=None, room=None) -> dict:
     """name -> Feed for the members sent back to a starved rung.
 
     `starved` is guild -> {entry: units short guild-wide}
     (`bankforecast.Forecast.starved`); `crafters` is entry -> the crafters
     short of it. The biggest shortfall is fed first, a member takes one rung,
     and a guild sends at most FEEDERS_PER_RUNG members to each.
+
+    `room` is guild -> Room. A guild with no room read, or without MIN_LANDING
+    free stacks to land the loot in, sends nobody.
     """
     out: dict = {}
     for guild, short in sorted((starved or {}).items()):
+        if not (room or {}).get(guild, Room()).enough:
+            continue
         pool = sorted(
             (
                 m
@@ -171,13 +224,35 @@ def plan(members, starved, crafters=None, focus=None) -> dict:
     return out
 
 
-def unfed(members, starved, crafters=None, focus=None) -> list:
+def unfed(members, starved, crafters=None, focus=None, room=None) -> list:
     """One sentence per starved rung that no member can be sent to."""
-    fed = {(f.guild, f.entry) for f in plan(members, starved, crafters, focus).values()}
+    fed = {
+        (f.guild, f.entry)
+        for f in plan(members, starved, crafters, focus, room).values()
+    }
     notes = []
     for guild, short in sorted((starved or {}).items()):
         for rung, units in _ordered(short):
             if (guild, rung.entry) in fed:
+                continue
+            here = (room or {}).get(guild, Room())
+            if not here.enough:
+                notes.append(
+                    "%s is short %d %s%s but has %d free stack(s) to land it in "
+                    "(vault %d, bankers %d, crafters %d; %d needed), so nothing "
+                    "feeds it"
+                    % (
+                        guild,
+                        units,
+                        rung.label,
+                        _who((crafters or {}).get(rung.entry, ())),
+                        here.total,
+                        here.vault,
+                        here.bankers,
+                        here.crafters,
+                        MIN_LANDING,
+                    )
+                )
                 continue
             notes.append(
                 "%s is short %d %s%s and no member of %s has out-levelled the "
