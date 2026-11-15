@@ -12,6 +12,9 @@ import bag_pressure
 import bag_upgrade
 import bankbags
 import towntrip
+from _stub_modules import PYMYSQL
+from test_guildsocial_bridge import bridge
+from unittest import mock
 
 
 class BankBagsReachThePurchasePath(unittest.TestCase):
@@ -346,32 +349,8 @@ class BankReservationsAreBounded(unittest.TestCase):
         self.assertEqual(bankbags.reserved_guids([f]), frozenset())
 
 
-class BankBagTwelveSlotSwapsGatedAndKeptFullBridge(unittest.TestCase):
-    """#2608: 12-slot swaps are gated off until server placement exists; full-bank slots forward kept_full."""
-
-    def _facts(self, name="Og", money=200_000, used=2, bank_free=8, spare=()):
-        return bankbags.Facts(
-            name,
-            money=money,
-            bought=7,
-            placed=7,
-            level=60,
-            worn=(12,) * 4,
-            spare=spare,
-            placed_bags=(
-                bankbags.Bag(50, 4496, 6, used=used),
-                *(bankbags.Bag(51 + i, 4499, 12, used=12) for i in range(6)),
-            ),
-            bank_free=bank_free,
-        )
-
-    def test_swaps_request_no_supply_and_reserve_no_twelve_slot_sack(self):
-        self.assertFalse(bankbags.SWAPS_ENABLED)
-        self.assertEqual(bankbags.supply_needs([self._facts()]), [])
-        sack = bankbags.Bag(201, 4499, 12)
-        self.assertEqual(
-            bankbags.reserved_guids([self._facts(spare=(sack,))]), frozenset()
-        )
+class FullBankSlotsBridgeRuntime(unittest.TestCase):
+    """#2608: _bank_bag_pending forwards kept_full and _fetch_bank_bag_facts attaches purse.order."""
 
     def test_bank_bag_pending_forwards_kept_full_at_runtime(self):
         base_facts = [
@@ -380,36 +359,21 @@ class BankBagTwelveSlotSwapsGatedAndKeptFullBridge(unittest.TestCase):
                 money=256_000,
                 bought=4,
                 placed=4,
-                level=60,
                 worn=(12,) * 4,
-                bank_free=0,
             )
         ]
-        env = dict(
-            asyncio=asyncio,
-            bankbags=bankbags,
-            _fetch_bank_bag_facts=lambda names: list(base_facts),
-        )
-        source = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
-        tree = ast.parse(source.read_text(encoding="utf-8"))
-        method = next(
-            n
-            for n in ast.walk(tree)
-            if isinstance(n, ast.AsyncFunctionDef) and n.name == "_bank_bag_pending"
-        )
-        exec(
-            compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"),
-            env,
-        )
         bridge_stub = SimpleNamespace()
-        facts_without, steps_without = asyncio.run(
-            env["_bank_bag_pending"](bridge_stub, ["Zug"], set(), {"Zug"})
-        )
-        facts_with, steps_with = asyncio.run(
-            env["_bank_bag_pending"](
-                bridge_stub, ["Zug"], set(), {"Zug"}, kept_full=frozenset({"Zug"})
+        with mock.patch.object(
+            bridge, "_fetch_bank_bag_facts", return_value=list(base_facts)
+        ):
+            facts_without, steps_without = asyncio.run(
+                bridge.Bridge._bank_bag_pending(bridge_stub, ["Zug"], set(), {"Zug"})
             )
-        )
+            facts_with, steps_with = asyncio.run(
+                bridge.Bridge._bank_bag_pending(
+                    bridge_stub, ["Zug"], set(), {"Zug"}, kept_full=frozenset({"Zug"})
+                )
+            )
         self.assertFalse(facts_without[0].bank_full_of_kept)
         self.assertEqual(steps_without, [])
         self.assertTrue(facts_with[0].bank_full_of_kept)
@@ -417,15 +381,174 @@ class BankBagTwelveSlotSwapsGatedAndKeptFullBridge(unittest.TestCase):
             [(s.name, s.command) for s in steps_with], [("Zug", bankbags.BUY_SLOT)]
         )
 
-    def test_buy_bags_once_buys_no_swap_sack_while_swaps_gated(self):
-        helper = BankBagsReachThePurchasePath()
-        sack_offer = bag_pressure.BagOffer(4499, "Huge Brown Sack", 12, 100_000)
-        purchases, _equips, _needy, upgrading = helper.buy(
-            facts=[self._facts(money=200_000, used=2, bank_free=8)],
-            offer=sack_offer,
+    def test_fetch_bank_bag_facts_attaches_purse_order_with_spells_and_riding(self):
+        people = [{"name": "Zug", "level": 40, "money": 250_000, "bank_slots": 4}]
+        skills = [{"name": "Zug", "riding_max": 75}]
+        bag_rows = [
+            *[
+                dict(
+                    holder="Zug",
+                    item_guid=10 + i,
+                    entry=4499,
+                    slots=12,
+                    bag=0,
+                    slot=19 + i,
+                    instance_flags=0,
+                    bonding=0,
+                )
+                for i in range(4)
+            ],
+            *[
+                dict(
+                    holder="Zug",
+                    item_guid=50 + i,
+                    entry=4499,
+                    slots=12,
+                    bag=0,
+                    slot=67 + i,
+                    instance_flags=0,
+                    bonding=0,
+                )
+                for i in range(4)
+            ],
+        ]
+
+        class _FakeCur:
+            def __init__(self):
+                self._res = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def execute(self, sql, params=()):
+                if "bankSlots" in sql:
+                    self._res = people
+                elif "ContainerSlots" in sql:
+                    self._res = bag_rows
+                elif "character_skills" in sql:
+                    self._res = skills
+                else:
+                    self._res = []
+
+            def fetchall(self):
+                return list(self._res)
+
+        class _FakeConn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def cursor(self):
+                return _FakeCur()
+
+        with (
+            mock.patch.object(bridge, "_connect", return_value=_FakeConn()),
+            mock.patch.object(
+                bridge,
+                "_class_training_due",
+                return_value={"Zug": SimpleNamespace(count=2, copper=20_000)},
+            ),
+        ):
+            (fact,) = bridge._fetch_bank_bag_facts(["Zug"])
+
+        self.assertIsNotNone(fact.purse_order)
+        self.assertEqual(fact.placed, 4)
+        kept = bankbags.with_kept_full([fact], frozenset({"Zug"}))
+        self.assertEqual(bankbags.pending_steps(kept, 12), [])
+        skills[0]["riding_max"] = 150
+        with (
+            mock.patch.object(bridge, "_connect", return_value=_FakeConn()),
+            mock.patch.object(bridge, "_class_training_due", return_value={}),
+        ):
+            (cleared,) = bridge._fetch_bank_bag_facts(["Zug"])
+        cleared_kept = bankbags.with_kept_full([cleared], frozenset({"Zug"}))
+        self.assertEqual(
+            [s.command for s in bankbags.pending_steps(cleared_kept, 12)],
+            [bankbags.BUY_SLOT],
         )
-        self.assertEqual(purchases, [])
-        self.assertEqual(upgrading, ["Og"])
+
+    def test_fetch_bank_bag_facts_handles_mysql_error_on_purse_queries(self):
+        people = [{"name": "Zug", "level": 40, "money": 150_000, "bank_slots": 2}]
+        bag_rows = [
+            *[
+                dict(
+                    holder="Zug",
+                    item_guid=10 + i,
+                    entry=4499,
+                    slots=12,
+                    bag=0,
+                    slot=19 + i,
+                    instance_flags=0,
+                    bonding=0,
+                )
+                for i in range(4)
+            ],
+            *[
+                dict(
+                    holder="Zug",
+                    item_guid=50 + i,
+                    entry=4499,
+                    slots=12,
+                    bag=0,
+                    slot=67 + i,
+                    instance_flags=0,
+                    bonding=0,
+                )
+                for i in range(2)
+            ],
+        ]
+
+        class _FakeCur:
+            def __init__(self):
+                self._res = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def execute(self, sql, params=()):
+                if "riding_max" in sql:
+                    raise PYMYSQL.err.MySQLError("skills read unavailable")
+                if "bankSlots" in sql:
+                    self._res = people
+                elif "ContainerSlots" in sql:
+                    self._res = bag_rows
+                else:
+                    self._res = []
+
+            def fetchall(self):
+                return list(self._res)
+
+        class _FakeConn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def cursor(self):
+                return _FakeCur()
+
+        with (
+            mock.patch.object(bridge, "_connect", return_value=_FakeConn()),
+            mock.patch.object(
+                bridge,
+                "_class_training_due",
+                side_effect=PYMYSQL.err.MySQLError("spellbook read unavailable"),
+            ),
+        ):
+            (fact,) = bridge._fetch_bank_bag_facts(["Zug"])
+
+        self.assertIsNotNone(fact.purse_order)
+        kept = bankbags.with_kept_full([fact], frozenset({"Zug"}))
+        self.assertEqual(len(bankbags.pending_steps(kept, 12)), 1)
 
 
 if __name__ == "__main__":

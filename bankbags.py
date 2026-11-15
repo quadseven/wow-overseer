@@ -36,25 +36,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-import guildcorps
 import disposition
+import guildcorps
+import purse
 
 SLOT_PRICES = (1000, 10000, 100000, 250000, 250000, 250000, 250000)
 BANK_BAG_SLOTS = len(SLOT_PRICES)
 # A slot is bought only when it costs at most a quarter of the purse, so the
 # training, repairs and reagents the purse is for are never what pays for it.
 PURSE_SHARE = 4
-SWAP_TARGET_SLOTS = 12
-# Gated off until mod-overseer supports place-bag on an occupied bank position
-# and displaces/re-homes the smaller bag without wasting gold (#2608).
-SWAPS_ENABLED = False
 
 BUY_SLOT = "buy slot"
 
 ITEM_CLASS_CONTAINER = 1
 WORN_POSITIONS = range(19, 23)
 BACKPACK_SLOTS = range(23, 39)
-BANK_BASE_SLOTS = range(39, 67)
 BANK_BAG_POSITIONS = range(67, 74)
 
 
@@ -71,7 +67,6 @@ class Bag:
     entry: int
     slots: int
     bound: bool = False
-    used: int = 0
 
 
 @dataclass(frozen=True)
@@ -85,24 +80,43 @@ class Facts:
     worn: tuple = ()  # slots of each worn bag
     spare: tuple = ()  # Bag, carried and not worn
     crafter: bool = False  # holds tailoring: its ladder bags are the guild's
-    placed_bags: tuple = ()  # Bag placed in bank bag positions
-    bank_free: int | None = None  # free slots across base bank + bank bags
-    bank_full_of_kept: bool = False  # full bank with nothing planned out
-    level: int = 1
+    bank_full_of_kept: bool = False
+    purse_order: purse.Order | None = None
 
     @property
     def protected_entries(self) -> frozenset[int]:
         return frozenset(guildcorps.BAG_ITEMS) if self.crafter else frozenset()
 
 
+def with_kept_full(facts: list, names) -> list:
+    """Mark every member in `names` whose personal bank holds only kept stacks."""
+    if not names:
+        return list(facts)
+    return [replace(f, bank_full_of_kept=f.name in names) for f in facts]
+
+
+def with_purse_orders(facts: list, orders: dict) -> list:
+    """Attach each member's `purse.Order` so slot buys honor spells, riding, and food."""
+    if not orders:
+        return list(facts)
+    return [
+        replace(f, purse_order=orders[f.name]) if f.name in orders else f for f in facts
+    ]
+
+
+def _spendable(facts: Facts) -> int:
+    if facts.purse_order is None:
+        return facts.money
+    return facts.purse_order.spendable(purse.GEAR)
+
+
 @dataclass(frozen=True)
 class SupplyNeed:
-    """A bag that can fill an already bought bank position or swap a small one."""
+    """A bag that can fill an already bought bank position."""
 
     name: str
     max_slots: int
     excluded_entries: frozenset[int]
-    min_slots: int = 0
 
 
 @dataclass(frozen=True)
@@ -145,89 +159,8 @@ def placeable(facts: Facts, floor=None) -> list:
     )
 
 
-def _placed_count(facts: Facts) -> int:
-    return max(facts.placed, len(facts.placed_bags))
-
-
-def _contents_fit(bag: Bag, bank_free: int | None) -> bool:
-    """Whether `bag`'s items fit in the rest of the bank before swapping."""
-    if bag.used <= 0:
-        return True
-    if bank_free is None:
-        return False
-    rest_free = bank_free - max(0, bag.slots - bag.used)
-    return bag.used <= rest_free
-
-
-def _small_bank_bags(facts: Facts) -> list:
-    return sorted(
-        (b for b in facts.placed_bags if 0 < b.slots < SWAP_TARGET_SLOTS),
-        key=lambda b: (b.slots, b.used, b.guid),
-    )
-
-
-def _swappable_bank_bag(facts: Facts) -> Bag | None:
-    """Smallest bank bag under 12 slots whose contents fit elsewhere in the bank."""
-    for bag in _small_bank_bags(facts):
-        if _contents_fit(bag, facts.bank_free):
-            return bag
-    return None
-
-
-def _swap_pair(facts: Facts, floor=None):
-    """(new 12+ bag, displaced small bank bag) when a safe swap exists, else None."""
-    if not SWAPS_ENABLED:
-        return None
-    own = _smallest_worn(facts)
-    eff_floor = own if floor is None else min(own, int(floor))
-    if eff_floor < SWAP_TARGET_SLOTS:
-        return None
-    target = _swappable_bank_bag(facts)
-    if target is None:
-        return None
-    spare = next(
-        (b for b in placeable(facts, eff_floor) if b.slots >= SWAP_TARGET_SLOTS),
-        None,
-    )
-    return (spare, target) if spare is not None else None
-
-
-def _swap_step(facts: Facts, floor=None):
-    pair = _swap_pair(facts, floor)
-    if pair is None:
-        return None
-    spare, old = pair
-    return Step(
-        facts.name,
-        "place-bag guid:%d" % spare.guid,
-        "%s swaps a %d-slot bag for its %d-slot bank bag"
-        % (facts.name, spare.slots, old.slots),
-        spare.slots - old.slots,
-    )
-
-
-def _supply_need_for(facts: Facts, floor: int) -> SupplyNeed | None:
-    if facts.bought > _placed_count(facts):
-        if placeable(facts, floor):
-            return None
-        return SupplyNeed(facts.name, floor, facts.protected_entries)
-    if (
-        SWAPS_ENABLED
-        and floor >= SWAP_TARGET_SLOTS
-        and _swappable_bank_bag(facts) is not None
-        and _swap_pair(facts, floor) is None
-    ):
-        return SupplyNeed(
-            facts.name,
-            floor,
-            facts.protected_entries,
-            min_slots=SWAP_TARGET_SLOTS,
-        )
-    return None
-
-
 def supply_needs(family) -> list[SupplyNeed]:
-    """Buy a placeable bag when an empty bank position or small bank bag has none coming.
+    """Buy a placeable bag when an empty bank position has none coming.
 
     Worn positions and the family's existing spare bags come first. The
     size cap and corps exclusions are the same ones placement will enforce.
@@ -235,55 +168,31 @@ def supply_needs(family) -> list[SupplyNeed]:
     floor = family_floor(family)
     if floor <= 0:
         return []
-    out = []
-    for f in family:
-        need = _supply_need_for(f, floor)
-        if need is not None:
-            out.append(need)
-    return out
-
-
-def _reserved_for_member(facts: Facts, floor: int) -> list:
-    open_slots = max(0, facts.bought - _placed_count(facts))
-    if open_slots > 0:
-        return placeable(facts, floor)[:open_slots]
-    pair = _swap_pair(facts, floor)
-    return [pair[0]] if pair is not None else []
+    return [
+        SupplyNeed(f.name, floor, f.protected_entries)
+        for f in family
+        if f.bought > f.placed and not placeable(f, floor)
+    ]
 
 
 def reserved_guids(family) -> frozenset[int]:
-    """Placeable carried bags promised to bought or swappable bank positions.
+    """Placeable carried bags promised to bought, still-empty bank positions.
 
     Reserve only the number of positions that can take them, largest first.
     Once placed, the bag is no longer carried and the reservation disappears.
     """
     floor = family_floor(family)
-    return frozenset(b.guid for f in family for b in _reserved_for_member(f, floor))
-
-
-def with_kept_full(family, kept_full) -> list:
-    """Return `family` marked with `bank_full_of_kept` for members in `kept_full`."""
-    if not kept_full:
-        return list(family or ())
-    return [
-        replace(f, bank_full_of_kept=True) if f.name in kept_full else f
-        for f in (family or ())
-    ]
-
-
-def _slot_need(facts: Facts, price: int) -> int:
-    """Copper needed to buy a bank slot while keeping bag_pressure.bag_reserve."""
-    from bag_pressure import bag_reserve
-
-    share = price if facts.bank_full_of_kept else price * PURSE_SHARE
-    return max(share, price + bag_reserve(facts.level))
+    return frozenset(
+        b.guid
+        for f in family
+        for b in placeable(f, floor)[: max(0, f.bought - f.placed)]
+    )
 
 
 def step(facts: Facts, floor=None):
     """(Step or None, note): this character's one bank bag step this visit."""
     bags = placeable(facts, floor)
-    placed = _placed_count(facts)
-    open_slots = facts.bought - placed
+    open_slots = facts.bought - facts.placed
     if open_slots > 0:
         if not bags:
             return None, "%s has %d empty bank bag slot(s) and no spare bag" % (
@@ -295,39 +204,26 @@ def step(facts: Facts, floor=None):
             facts.name,
             "place-bag guid:%d" % bag.guid,
             "%s puts a %d-slot bag in its bank bag slot %d"
-            % (facts.name, bag.slots, placed + 1),
+            % (facts.name, bag.slots, facts.placed + 1),
             bag.slots,
         ), ""
-    if facts.bought < BANK_BAG_SLOTS:
-        price = SLOT_PRICES[facts.bought]
-        need = _slot_need(facts, price)
-        if facts.money >= need:
-            return Step(
-                facts.name,
-                BUY_SLOT,
-                "%s buys bank bag slot %d for %d copper of its %d"
-                % (facts.name, facts.bought + 1, price, facts.money),
-            ), ""
-    swap = _swap_step(facts, floor)
-    if swap is not None:
-        return swap, ""
-    if facts.bought < BANK_BAG_SLOTS:
-        price = SLOT_PRICES[facts.bought]
-        need = _slot_need(facts, price)
+    if facts.bought >= BANK_BAG_SLOTS:
+        return None, "%s has bought every bank bag slot" % facts.name
+    price = SLOT_PRICES[facts.bought]
+    available = _spendable(facts)
+    required = price if facts.bank_full_of_kept else price * PURSE_SHARE
+    if available < required:
         return (
             None,
             "%s waits to buy bank bag slot %d: %d copper of the %d it wants in hand"
-            % (facts.name, facts.bought + 1, facts.money, need),
+            % (facts.name, facts.bought + 1, available, required),
         )
-    blocked = _small_bank_bags(facts)
-    if blocked:
-        old = blocked[0]
-        return (
-            None,
-            "%s cannot swap its %d-slot bank bag yet: %d item(s) need room in the rest of the bank"
-            % (facts.name, old.slots, old.used),
-        )
-    return None, "%s has bought every bank bag slot" % facts.name
+    return Step(
+        facts.name,
+        BUY_SLOT,
+        "%s buys bank bag slot %d for %d copper of its %d"
+        % (facts.name, facts.bought + 1, price, available),
+    ), ""
 
 
 def visit_steps(facts: Facts, floor=None) -> list:
@@ -403,7 +299,7 @@ def _facts_for(person, rows, worn_guids, crafters) -> Facts:
     from bag_pressure import item_binding
 
     name = str(person["name"])
-    worn, spare, placed_bags = [], [], []
+    worn, spare, placed = [], [], 0
     for r in rows:
         where = _where(r, worn_guids)
         bag = Bag(
@@ -411,33 +307,21 @@ def _facts_for(person, rows, worn_guids, crafters) -> Facts:
             _int(r.get("entry")),
             _int(r.get("slots")),
             bound=item_binding(r) == disposition.BIND_ON_PICKUP,
-            used=_int(r.get("used")),
         )
         if where == "worn":
             worn.append(bag.slots)
         elif where == "banked":
-            placed_bags.append(bag)
+            placed += 1
         elif where == "carried" and bag.guid > 0:
             spare.append(bag)
-    bank_free = None
-    if person.get("bank_free") is not None:
-        bank_free = max(0, _int(person.get("bank_free")))
-    elif person.get("bank_base_used") is not None:
-        base_free = max(0, len(BANK_BASE_SLOTS) - _int(person.get("bank_base_used")))
-        bag_free = sum(max(0, b.slots - b.used) for b in placed_bags)
-        bank_free = base_free + bag_free
     return Facts(
         name=name,
         money=_int(person.get("money")),
         bought=min(BANK_BAG_SLOTS, _int(person.get("bank_slots"))),
-        placed=len(placed_bags),
+        placed=placed,
         worn=tuple(sorted(worn)),
         spare=tuple(spare),
         crafter=name in crafters,
-        placed_bags=tuple(sorted(placed_bags, key=lambda b: (b.slots, b.used, b.guid))),
-        bank_free=bank_free,
-        bank_full_of_kept=bool(person.get("bank_full_of_kept", False)),
-        level=_int(person.get("level"), 1),
     )
 
 

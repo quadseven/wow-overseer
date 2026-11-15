@@ -16776,8 +16776,7 @@ class Bridge(discord.Client):
         everyone, at_vendor = await asyncio.to_thread(
             _bag_buyers, wanting, open_positions)
         everyone = [dataclasses.replace(
-            b, bank=True, min_slots=bank_needs[b.name].min_slots,
-            max_slots=bank_needs[b.name].max_slots,
+            b, bank=True, max_slots=bank_needs[b.name].max_slots,
             excluded_entries=bank_needs[b.name].excluded_entries)
             if b.name in bank_needs else b for b in everyone]
         buyers = [b for b in everyone if b.name in at_vendor]
@@ -40143,31 +40142,58 @@ def _recent_bank_keys(minutes: int) -> set:
 # (`bag` is the holding bag's item guid, 0 for its own slots), and who holds
 # tailoring (bankbags: a crafter's ladder bags are the guild's).
 _BANK_BAG_PEOPLE_SQL = (
-    "SELECT c.name, c.level, c.money, c.bankSlots AS bank_slots, "
-    "COALESCE(base_fill.n, 0) AS bank_base_used "
-    "FROM characters c "
-    "LEFT JOIN ("
-    "    SELECT guid, COUNT(*) AS n FROM character_inventory "
-    "    WHERE bag = 0 AND slot BETWEEN %d AND %d GROUP BY guid"
-    ") base_fill ON base_fill.guid = c.guid "
-    "WHERE c.name IN (%%s)"
-) % (bankbags.BANK_BASE_SLOTS[0], bankbags.BANK_BASE_SLOTS[-1])
+    "SELECT name, level, money, bankSlots AS bank_slots "
+    "FROM characters WHERE name IN (%s)"
+)
 _BANK_BAG_ROWS_SQL = (
     "SELECT c.name AS holder, ci.item AS item_guid, ii.itemEntry AS entry, "
-    "it.ContainerSlots AS slots, COALESCE(fill.n, 0) AS used, "
-    "ci.bag, ci.slot, "
+    "it.ContainerSlots AS slots, ci.bag, ci.slot, "
     "ii.flags AS instance_flags, it.bonding AS bonding FROM characters c "
     "JOIN character_inventory ci ON ci.guid = c.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
-    "LEFT JOIN (SELECT bag, COUNT(*) AS n FROM character_inventory "
-    "           WHERE bag <> 0 GROUP BY bag) fill ON fill.bag = ii.guid "
     "WHERE c.name IN (%s) AND it.class = 1 AND it.ContainerSlots > 0"
 )
 _BANK_BAG_CRAFTERS_SQL = (
     "SELECT c.name FROM character_skills cs JOIN characters c ON c.guid = cs.guid "
     "WHERE cs.skill = 197 AND cs.value > 0 AND c.name IN (%s)"
 )
+_BANK_BAG_RIDING_SQL = (
+    "SELECT c.name, cs.max AS riding_max FROM character_skills cs "
+    "JOIN characters c ON c.guid = cs.guid "
+    "WHERE cs.skill = %d AND c.name IN (%%s)" % purse.RIDING_SKILL
+)
+
+
+def _bank_bag_orders(cur, names: list, people) -> dict:
+    """`purse.Order` per member so bank slot buys honor spells, riding, and food."""
+    marks = ",".join(["%s"] * len(names))
+    riding = {}
+    try:
+        cur.execute(_BANK_BAG_RIDING_SQL % marks, list(names))
+        riding = {
+            str(r["name"]): int(r.get("riding_max") or 0) for r in cur.fetchall()
+        }
+    except pymysql.err.MySQLError:
+        log.warning("bankbags: riding skills unread; riding reserve omitted")
+    try:
+        due = _class_training_due(list(names), casts_only=True)
+    except pymysql.err.MySQLError:
+        log.warning("bankbags: class spells unread; spell reserve omitted")
+        due = {}
+    orders = {}
+    for p in people or ():
+        name = str(p["name"])
+        d = due.get(name)
+        orders[name] = purse.order(
+            name,
+            int(p.get("level") or 0),
+            int(p.get("money") or 0),
+            int(getattr(d, "copper", 0) or 0),
+            int(getattr(d, "count", 0) or 0),
+            riding.get(name, 0),
+        )
+    return orders
 
 
 def _fetch_bank_bag_facts(names: list) -> list:
@@ -40182,7 +40208,10 @@ def _fetch_bank_bag_facts(names: list) -> list:
         bags = cur.fetchall()
         cur.execute(_BANK_BAG_CRAFTERS_SQL % marks, list(names))
         crafters = {str(r["name"]) for r in cur.fetchall()}
-    return bankbags.facts_from_rows(people, bags, crafters)
+        orders = _bank_bag_orders(cur, names, people)
+    return bankbags.with_purse_orders(
+        bankbags.facts_from_rows(people, bags, crafters), orders
+    )
 
 
 def _insert_bank(move, command: str) -> int:
