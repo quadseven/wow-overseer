@@ -15,6 +15,7 @@ from dataclasses import replace
 import bankforecast as bf
 import guildjobs as gj
 import lowrung
+from test_guildsocial_bridge import bridge
 
 ROUGH_STONE, COARSE_STONE = 2835, 2836
 LIGHT_LEATHER, LINEN, WOOL = 2318, 2589, 2592
@@ -276,8 +277,6 @@ class TheBridgeWalksTheFeed(unittest.IsolatedAsyncioTestCase):
     PACKS = [(10, 100), (28, 200), (40, 300), (48, 400), (59, 900)]
 
     def setUp(self):
-        import bridge
-
         self.bridge = bridge
         survey, self.asked = fake_world(self.PACKS)
         self.keep = (bridge._survey_job_beasts, bridge._survey_job_cloth)
@@ -343,8 +342,6 @@ class TheBridgeLaysTheFeedOnMembers(unittest.TestCase):
     """_with_low_rung_feeds and _low_rung_room, with the reads faked."""
 
     def setUp(self):
-        import bridge
-
         self.bridge = bridge
         self.keep = (
             bridge._bank_forecast,
@@ -392,10 +389,8 @@ class TheBridgeLaysTheFeedOnMembers(unittest.TestCase):
         self.assertIsNotNone(self.lay().feed)
 
     def test_an_unreadable_room_feeds_nobody(self):
-        import pymysql
-
         def broken(names):
-            raise pymysql.err.OperationalError(2003, "down")
+            raise bridge.pymysql.err.MySQLError("down")
 
         self.bridge._fetch_guild_bank_setup = broken
         self.assertIsNone(self.lay().feed)
