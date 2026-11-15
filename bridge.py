@@ -72,6 +72,7 @@ import campaignqueue
 import classic
 import classask
 import deathask
+import deathparty
 import classtrain
 import taughtspells
 import classparty
@@ -164,6 +165,7 @@ import preraid
 import priorities
 import professions
 import profloop
+import production
 import protect
 import questbook
 import questcatalogue
@@ -11652,6 +11654,7 @@ class Bridge(discord.Client):
         await self._prof_loop_say(key, step, on_job, gather_why)
         if step.job:
             await self._prof_loop_write(key, running, step.job)
+        await asyncio.to_thread(_record_production, names, skills)
 
     async def _prof_loop_facts(self, key: str, names: list, skills: dict,
                                errand) -> profloop.Facts:
@@ -17030,9 +17033,19 @@ class Bridge(discord.Client):
         return False
 
     async def _bank_family_progress(
-        self, names: list, leader: str,
+        self, names: list, leader: str, party: list | None = None,
     ) -> vendor_stall.FamilyProgress:
         """Track whether the family has stayed split across bank polls.
+
+        THE PARTY IS THE TRIP'S OWN, NOT THE WHOLE FAMILY'S. `party` is the
+        leader plus the members that have bank work this pass, leader first so
+        it is the anchor. A straggler with nothing to bank takes no part in the
+        trip, and counted it vetoed the trip for the members that did: Og
+        walked 2190 yards behind for hours while Bork and Ugga stood beside the
+        leader with their reagents in the bank, and the deferral ("remained
+        split for 17184 seconds") could never lift, because the banker aim is
+        what would have brought the family together. A far member WITH bank
+        work still counts, so the rule keeps its original job.
 
         A MEMBER SITTING OUT TO CRAFT IS NOT THE FAMILY SPLITTING (#872). It
         stands wherever it crafts and the banker trip is not for it, so it is
@@ -17040,10 +17053,11 @@ class Bridge(discord.Client):
         read Grug's family as split for 26015 seconds and deferred every
         banker trip for as long as Og crafted.
         """
+        watched = list(party) if party else list(names)
         progress = vendor_stall.family_progress(
             self._bank_family_movement.get(leader),
-            await asyncio.to_thread(_fetch_positions, names),
-            tuple(_standin_running(names)),
+            await asyncio.to_thread(_fetch_positions, watched),
+            tuple(_standin_running(watched)),
             time.monotonic(),
         )
         if progress.current is not None:
@@ -17075,7 +17089,8 @@ class Bridge(discord.Client):
     async def _settle_bank_errand(self, names: list, leader: str,
                                   moves_unasked: bool,
                                   cohort: str | None = None,
-                                  waiting: int = 0) -> str:
+                                  waiting: int = 0,
+                                  party: list | None = None) -> str:
         """Aim, hold or hand back the bank pass's `banker` errand (infra#3728).
 
         THE HALF THAT WAS NEVER BUILT, HERE TOO. `banker` is one of the four
@@ -17124,7 +17139,7 @@ class Bridge(discord.Client):
         """
         leader_town = await asyncio.to_thread(_fetch_town, leader)
         outstanding = await asyncio.to_thread(_outstanding_bank_moves, names)
-        family_stall = await self._bank_family_progress(names, leader)
+        family_stall = await self._bank_family_progress(names, leader, party)
         current_aim = await asyncio.to_thread(_current_travel_npc, leader)
         step = bank.errand_step(
             bool(leader_town.banker), outstanding, moves_unasked,
@@ -17314,7 +17329,10 @@ class Bridge(discord.Client):
                                                          bag_steps),
                                        cohort=_cohort_key(cohort),
                                        waiting=sum(1 for h in holders
-                                                   if not at_the_counter[h]))
+                                                   if not at_the_counter[h]),
+                                       party=[leader] + [
+                                           h for h in dict.fromkeys(holders)
+                                           if h != leader])
         # Below the settling, so the aim still precedes the row, and above the
         # `no moves` return, so a family that walked here for a bag step alone
         # has it written on the cycle it arrives.
@@ -23697,6 +23715,14 @@ class Bridge(discord.Client):
             raise
         if parties:
             self._begin_class_parties(parties)
+        death_starts = deathparty.plan_starts(
+            facts["asks"], facts.get("answers") or (), facts.get("death_loops") or {},
+            free={m.name for m in mates if m.name not in held},
+            taken=seated_names)
+        for start in death_starts:
+            log.info("death party: ask %d seats a start: %s leads, %s helps, "
+                     "meeting at %s", start.ask_id, start.leader,
+                     ", ".join(start.helpers), start.place)
         await _say_class_escalation(escalation)
         await _say_guild_pugs(pug_pass)
         if run_id:
@@ -38016,6 +38042,26 @@ TOWN_ERRAND_SETTLE_SECONDS = 60.0
 TOWN_ERRAND_VENDOR_YARDS = 250.0
 # family key -> townerrand.State, and family key -> {step: first run}.
 _TOWN_ERRANDS: dict = {}
+
+def _record_production(names: list, skills: dict) -> None:
+    """Keep, per member, when a trade skill last rose (production.py).
+
+    One memo row per member, written only when the record changed, so a quiet
+    cycle writes nothing. The memo store logs its own failures; a pass that
+    cannot record must not stop the loop that called it.
+    """
+    now = time.time()
+    try:
+        kept = _memo_read(production.MEMO_KIND)
+        for name in names:
+            before = kept.get(name, (None, 0.0))[0]
+            after = production.observe(before, skills.get(name) or {}, now)
+            if after != before:
+                _memo_upsert(production.MEMO_KIND, name, after, now,
+                             now + production.KEEP_SECONDS)
+    except Exception:
+        log.exception("production: could not record the skill record")
+
 
 # --- the profession loop (profloop.py, #2419) ---------------------------------
 # Family key -> profloop.State. In memory: a restart joins each family at the

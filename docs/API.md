@@ -350,6 +350,12 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Answers: whether operator actions are on for this deployment.
 - Example: `overseer get /api/v2/operator`
 
+## `GET /api/v2/production`
+
+- Query: none
+- Answers: per member, job, last craft, skill gain, gather.
+- Example: `overseer get /api/v2/production`
+
 ## `GET /api/v2/questers`
 
 - Query: none
