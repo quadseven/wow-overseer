@@ -185,6 +185,17 @@ class WhatTheRuleKeeps(unittest.TestCase):
             self.guild, live_for(self.guild, held=held, values=values)
         )
 
+    def test_a_seat_keeps_a_trade_it_already_holds(self):
+        name = self.free_seats()[0]
+        got = self.assign({name: {SMITH}})
+        self.assertEqual(key((M, SMITH)), key(got[name]))
+
+    def test_a_trade_outside_the_plan_is_never_assigned(self):
+        name = self.free_seats()[3]
+        got = self.assign({name: {755}})
+        self.assertEqual(2, len(got[name]))
+        self.assertTrue(set(got[name]) <= guildtrades.PRIMARIES)
+
     def test_a_held_pair_is_kept_whole(self):
         name = self.free_seats()[0]
         got = self.assign({name: {M, SMITH}})
@@ -202,7 +213,7 @@ class WhatTheRuleKeeps(unittest.TestCase):
         self.assertIn(ALCH, got[names[0]])
         self.assertIn(LW, got[names[1]])
         self.assertTrue({SMITH, ENG} & set(got[names[2]]))
-        for n, trade in zip(names, (H, S, M)):
+        for n, trade in zip(names, (H, S, M), strict=True):
             self.assertIn(trade, got[n])
         live = live_for(self.guild, held={names[0]: {H}})
         self.assertNotIn(names[0], guildtrades.drops(self.guild, live))
@@ -280,7 +291,6 @@ class WhatTheRuleGivesUp(unittest.TestCase):
         for n in names:
             self.assertEqual(key((S, M)), key(got[n]), n)
         self.assertEqual({}, guildtrades.drops(self.guild, live, got))
-        self.assertEqual({}, guildtrades.guarded(self.guild, live, got))
 
     def test_the_mix_adds_up_around_the_characters_that_keep_both_trades(self):
         names, live = self.crowd({})
@@ -304,10 +314,11 @@ class WhatTheRuleGivesUp(unittest.TestCase):
         got = guildtrades.assign(self.guild, live)
         self.assertEqual(key((ALCH, S)), key(got[n]))
 
-    def test_a_trade_below_the_guard_is_not_listed(self):
+    def test_a_trade_above_the_guard_is_not_in_the_drops(self):
         names, live = self.crowd({})
-        got = guildtrades.assign(self.guild, live)
-        self.assertEqual({}, guildtrades.guarded(self.guild, live, got))
+        for gone in guildtrades.drops(self.guild, live).values():
+            for _skill, value in gone:
+                self.assertLessEqual(value, guildtrades.DROP_GUARD)
 
     def test_only_gathering_trades_are_ever_dropped(self):
         names, live = self.crowd({})

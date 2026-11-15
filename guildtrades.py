@@ -276,6 +276,30 @@ def _cost(m, pair) -> int:
     return cost
 
 
+def _relax(cost, j0, tree) -> int:
+    """One step of the alternating tree grown from column `j0`: tighten the
+    slack of every unused column and return the next column to enter it."""
+    u, v, p, way, minv, used = tree
+    inf = float("inf")
+    used[j0] = True
+    i0, delta, j1 = p[j0], inf, 0
+    for j in range(1, len(v)):
+        if used[j]:
+            continue
+        cur = cost[i0 - 1][j - 1] - u[i0] - v[j]
+        if cur < minv[j]:
+            minv[j], way[j] = cur, j0
+        if minv[j] < delta:
+            delta, j1 = minv[j], j
+    for j in range(len(v)):
+        if used[j]:
+            u[p[j]] += delta
+            v[j] -= delta
+        else:
+            minv[j] -= delta
+    return j1
+
+
 def _hungarian(cost) -> list:
     """The column each row takes at least total cost (rows <= columns)."""
     n, m = len(cost), len(cost[0]) if cost else 0
@@ -285,25 +309,9 @@ def _hungarian(cost) -> list:
     for i in range(1, n + 1):
         p[0] = i
         j0 = 0
-        minv = [inf] * (m + 1)
-        used = [False] * (m + 1)
+        tree = (u, v, p, way, [inf] * (m + 1), [False] * (m + 1))
         while True:
-            used[j0] = True
-            i0, delta, j1 = p[j0], inf, 0
-            for j in range(1, m + 1):
-                if not used[j]:
-                    cur = cost[i0 - 1][j - 1] - u[i0] - v[j]
-                    if cur < minv[j]:
-                        minv[j], way[j] = cur, j0
-                    if minv[j] < delta:
-                        delta, j1 = minv[j], j
-            for j in range(m + 1):
-                if used[j]:
-                    u[p[j]] += delta
-                    v[j] -= delta
-                else:
-                    minv[j] -= delta
-            j0 = j1
+            j0 = _relax(cost, j0, tree)
             if p[j0] == 0:
                 break
         while j0:
@@ -376,7 +384,7 @@ def assign(guild, live: Mapping | None = None) -> dict:
     slots += [(p, _OVERFLOW_COST) for p in PAIRS for _ in rest]
     if rest:
         cost = [[_cost(m, p) + extra for p, extra in slots] for m in rest]
-        for m, col in zip(rest, _hungarian(cost)):
+        for m, col in zip(rest, _hungarian(cost), strict=True):
             out[m.name] = _ordered(m, slots[col][0])
     return out
 
@@ -394,16 +402,6 @@ def drops(guild, live: Mapping | None, assigned: Mapping | None = None) -> dict:
         gone = tuple((s, _value(m, s)) for s in sorted(m.held) if s not in want)
         if gone:
             out[m.name] = gone
-    return out
-
-
-def guarded(guild, live: Mapping | None, assigned: Mapping | None = None) -> dict:
-    """The drops that need a decision first: a trade above DROP_GUARD."""
-    out = {}
-    for name, gone in drops(guild, live, assigned).items():
-        big = tuple((s, v) for s, v in gone if v > DROP_GUARD)
-        if big:
-            out[name] = big
     return out
 
 
