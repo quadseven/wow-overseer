@@ -330,7 +330,7 @@ def _context(extras: Extras, verdicts) -> itemplan.Context:
         market=extras.market or {},
         guild_free=extras.guild_free or {},
         guild_crafters=extras.guild_crafters or (),
-        guild_class_members=extras.guild_class_members or (),
+        guild_class_members=extras.guild_class_members,
         fire_gear=extras.fire_gear,
         failed_listings=extras.failed_listings or {},
         known_spells=extras.known_spells,

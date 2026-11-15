@@ -467,6 +467,61 @@ class GiveExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(written[0].taker, "Glob")
         self.assertEqual(written[0].guid, 21)
 
+    def test_shadow_preserves_none_guild_roster_and_banks_class_book(self):
+        rows = [
+            {
+                "holder": "Bork",
+                "item_guid": 21,
+                "entry": 17682,
+                "name": "Book: Gift of the Wild",
+                "quality": 2,
+                "count": 1,
+                "sell_price": 2500,
+                "item_class": 9,
+                "stackable": 1,
+                "required_level": 50,
+                "required_skill": 0,
+                "required_skill_rank": 0,
+            }
+        ]
+        extras = shadow.Extras(
+            open_quest_items={"Bork": frozenset()},
+            market={17682: (40_000, 1)},
+            templates={
+                17682: {
+                    "item_class": 9,
+                    "subclass": 0,
+                    "bonding": 0,
+                    "inventory_type": 0,
+                    "item_level": 50,
+                    "req_level": 50,
+                    "required_skill": 0,
+                    "required_skill_rank": 0,
+                    "allowable_class": 1024,
+                    "spell_id": 21849,
+                    "container_slots": 0,
+                    "fire_res": 0,
+                    "stats": {},
+                }
+            },
+            instance_soulbound={21: False},
+            fire_gear=frozenset(),
+            guild_free={},
+            guild_class_members=None,
+            known_spells={"Bork": frozenset({21849})},
+        )
+        report = shadow.shadow(
+            ["Bork"],
+            "Cave",
+            rows,
+            {"Bork": 16},
+            gear_rows=[],
+            worn_rows=[{"name": "Bork", "class_id": 11, "level": 60}],
+            extras=extras,
+        )
+        self.assertEqual(1, len(report.plan.decisions))
+        self.assertEqual(shadow.itemplan.BANK_PERSONAL, report.plan.decisions[0].route)
+
 
 class BridgeShapeTest(unittest.TestCase):
     def test_one_guarded_call_after_the_sale_inputs_exist(self):

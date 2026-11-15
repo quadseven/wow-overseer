@@ -816,6 +816,30 @@ class ClassNineTriage(unittest.TestCase):
         d_surplus = one([held], [bork], held, ctx_all)
         self.assertEqual(d_surplus.route, AUCTION)
 
+    def test_unread_guild_roster_banks_class_book_instead_of_selling(self):
+        held = stack(
+            holder="Bork",
+            entry=17682,
+            name="Book: Gift of the Wild",
+            item_class=itemplan.C_RECIPE,
+            subclass=0,
+            quality=2,
+            sell=2500,
+            req_level=50,
+            required_skill_rank=0,
+            required_skill=0,
+            allowable_class=1024,
+            spell_id=21849,
+        )
+        bork = member("Bork", cls=itemplan.DRUID, level=60)
+        ctx_unread = itemplan.Context(
+            guild_class_members=None,
+            known_spells={"Bork": frozenset({21849})},
+            market={17682: (40_000, 1)},
+        )
+        d = one([held], [bork], held, ctx_unread)
+        self.assertEqual(d.route, BANK_PERSONAL)
+
     def test_already_known_trade_recipe_skips_holder_and_known_learners(self):
         recipe = stack(
             holder="Oz",

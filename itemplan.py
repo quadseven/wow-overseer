@@ -435,8 +435,9 @@ class Context:
     guild_free: Mapping[tuple, int] = field(default_factory=dict)
     # guildmates outside the family who work a trade: ((name, trade, skill), ...)
     guild_crafters: tuple = ()
-    # guildmates outside the family: ((name, class_id, level, online), ...)
-    guild_class_members: tuple = ()
+    # guildmates outside the family: ((name, class_id, level, online), ...);
+    # None means the guild roster was not read.
+    guild_class_members: tuple | None = None
     # member name -> frozenset of learned spell_ids; None means unread.
     known_spells: Mapping[str, frozenset] | None = None
     # None means per-item fire resistance was not read.
@@ -1488,7 +1489,35 @@ def _recipe_raid_options():
     ]
 
 
+def _outside_class_book_route(w: _World, s: Stack, future_taker: bool):
+    """Route a class book via outside guildmates, banking when roster or spells are unread."""
+    if w.ctx.guild_class_members is None:
+        return [_opt(BANK_PERSONAL, RECIPE, "class book, guild roster unread", "R9")]
+    for name, cls_id, level, _online in sorted(
+        w.ctx.guild_class_members, key=lambda m: (not m[3], m[0])
+    ):
+        if not _matches_class(cls_id, s.allowable_class) or _member_knows(w, name, s):
+            continue
+        if level >= s.req_level:
+            return [
+                _opt(
+                    GIVE,
+                    RECIPE,
+                    "class book for guildmate %s" % name,
+                    "R9",
+                    target=name,
+                )
+            ]
+        future_taker = True
+    if w.ctx.known_spells is None or future_taker:
+        return [_opt(BANK_PERSONAL, RECIPE, "class book, no matching member", "R9")]
+    out = _recipe_exit_options(w, s)
+    out.append(_opt(BANK_PERSONAL, RECIPE, "class book, already known by guild", "R9"))
+    return out
+
+
 def _class_book_options(w: _World, s: Stack, me: Member):
+    """Plan personal learning, sibling/guildmate gifting, or safe exit for a class book."""
     if _matches_class(me.class_id, s.allowable_class) and not _member_knows(
         w, me.name, s
     ):
@@ -1525,27 +1554,7 @@ def _class_book_options(w: _World, s: Stack, me: Member):
                 )
             ]
         future_taker = True
-    for name, cls_id, level, _online in sorted(
-        w.ctx.guild_class_members, key=lambda m: (not m[3], m[0])
-    ):
-        if not _matches_class(cls_id, s.allowable_class) or _member_knows(w, name, s):
-            continue
-        if level >= s.req_level:
-            return [
-                _opt(
-                    GIVE,
-                    RECIPE,
-                    "class book for guildmate %s" % name,
-                    "R9",
-                    target=name,
-                )
-            ]
-        future_taker = True
-    if w.ctx.known_spells is None or future_taker:
-        return [_opt(BANK_PERSONAL, RECIPE, "class book, no matching member", "R9")]
-    out = _recipe_exit_options(w, s)
-    out.append(_opt(BANK_PERSONAL, RECIPE, "class book, already known by guild", "R9"))
-    return out
+    return _outside_class_book_route(w, s, future_taker)
 
 
 def _rule_recipe(w: _World, s: Stack, me: Member):
