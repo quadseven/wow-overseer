@@ -94,6 +94,8 @@ RELEASE_TARGET_FREE = itemplan.TRIGGER_FREE + 2
 HELD_FALLBACK = "a fallback sale: the first choice had no room"
 HELD_BAG = "a bag is never sold by the route"
 HELD_TOOL = "a profession tool is never sold by the route"
+# The words `itemplan._feasible` uses when a capped share of stock is full.
+SHARE_FULL = "its share of"
 
 # item_template class 2 (weapon) subclasses that are tools, not weapons.
 _TOOL_SUBCLASSES = (14, 20)  # miscellaneous (pick, knife), fishing pole
@@ -179,8 +181,23 @@ def _held_reason(decision, stack, row) -> str:
     ):
         return HELD_TOOL
     if decision.options and decision.options[0] != itemplan.SELL_VENDOR:
+        if _surplus_past_a_share(decision):
+            return ""
         return HELD_FALLBACK
     return ""
+
+
+def _surplus_past_a_share(decision) -> bool:
+    """Did every option ahead of the sale fail only on a full capped share?
+
+    "Its share of food is full" says the plan chose to keep that much and the
+    stack is the surplus past it. It is not a destination with no room, so the
+    sale is the plan's real answer and not a fallback. A full bank, a full
+    guild tab, a recipient with no room or a carry budget is a fallback, and
+    a decision that recorded no reasons is read as one.
+    """
+    skipped = getattr(decision, "skipped", ())
+    return bool(skipped) and all(SHARE_FULL in str(why) for why in skipped)
 
 
 def _sale_of(decision, row, released=""):
