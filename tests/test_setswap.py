@@ -104,6 +104,7 @@ class TheExistingBankPlanFetchesTheUpgrade(unittest.TestCase):
             _withdrawn_for_sale_routes=lambda names: routes.get("sale", {}),
             _bank_policy=lambda names: policy,
             _bank_spare=lambda names: frozenset(),
+            _bank_dropped_second_sets=lambda names: frozenset(),
             _bank_forecast=lambda names: types.SimpleNamespace(over_target={}),
             _campaign_waiting=lambda names: False,
             # The item plan is not consulted: every executor is off here (#2604).

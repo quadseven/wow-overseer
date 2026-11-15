@@ -76,7 +76,7 @@ GEAR = (
 )
 BANK = (
     "SELECT 'guild bank' AS holder, g.name AS guild, "  # noqa: S608 - SQL fragments are constants; values use placeholders
-    "NULL AS equipment_slot, "
+    "NULL AS equipment_slot, gbi.TabId AS tab, "
     + ITEM_COLUMNS
     + " FROM guild g JOIN guild_bank_item gbi ON gbi.guildid = g.guildid "
     "JOIN item_instance ii ON ii.guid = gbi.item_guid "

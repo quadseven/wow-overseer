@@ -4,6 +4,7 @@
 import { html, kpi, state } from "../ui.js";
 import * as D from "./now/data.js";
 import { READ as UPSTREAM, upstreamSection } from "./upstream.js";
+import { READ as WHATS_LIVE, whatsLiveSection } from "./whatslive.js";
 import { nowSeconds } from "../models/time.js";
 
 const HUE = { green: "var(--ok)", amber: "var(--warn)", vermilion: "var(--bad)" };
@@ -17,7 +18,7 @@ function tierRow(t) {
 
 export default {
   css: ["views/now.css", "views/upstream.css"],
-  reads: () => ["/api/eye", UPSTREAM],
+  reads: () => ["/api/eye", UPSTREAM, WHATS_LIVE],
   every: 30000,
   title: () => "Server",
   render(ctx) {
@@ -34,6 +35,6 @@ export default {
     } else {
       body = state("error", "The world did not answer", "The server tiers could not be read, so none of them is shown as up.");
     }
-    return html`<a class="back" href="#/now"><i class="ph ph-caret-left" aria-hidden="true"></i>Now</a><h1>Server</h1>${body}${upstreamSection(ctx.get(UPSTREAM), nowSeconds())}`;
+    return html`<a class="back" href="#/now"><i class="ph ph-caret-left" aria-hidden="true"></i>Now</a><h1>Server</h1>${body}${whatsLiveSection(ctx.get(WHATS_LIVE), nowSeconds())}${upstreamSection(ctx.get(UPSTREAM), nowSeconds())}`;
   },
 };

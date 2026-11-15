@@ -308,7 +308,9 @@ class AuctionExecutorTest(unittest.IsolatedAsyncioTestCase):
         )
         queued = []
         executor = SimpleNamespace(
-            _auction_holder_houses=mock.AsyncMock(return_value={"Ana": 2})
+            _auction_holder_houses=mock.AsyncMock(return_value={"Ana": 2}),
+            _keep_at_auctioneer=mock.AsyncMock(),
+            _itemplan_auction_walk=mock.AsyncMock(),
         )
         bridge = import_bridge()
 

@@ -459,7 +459,13 @@ def ledger_state(state, reason) -> str:
     """The quester pass's reading of one ledger row: LEDGER_STALLED for a
     broken row whose reason is a stall, else the row's own state."""
     state = str(state or "")
-    if state == LEDGER_BROKEN and str(reason or "").startswith(STALLED):
+    reason = str(reason or "")
+    # A stall and a refused take are each one quester's hour, not a fact about
+    # the quest: a full bag or a level too low refuses a take that a later pass
+    # may win, so neither holds the quest broken for good
+    # (quest 298, refused "not eligible" while its start item had no
+    # bag room, stayed broken for weeks).
+    if state == LEDGER_BROKEN and reason.startswith((STALLED, REFUSED_TAKE)):
         return LEDGER_STALLED
     return state
 
@@ -1097,6 +1103,19 @@ def refusals(name, tried) -> dict:
     return out
 
 
+def retry_take_refusals(name, held, tried) -> frozenset:
+    """The held quests whose take the world refused, with no refusal left in the
+    rows this pass reads: the quester asks again (a refusal is judged from the
+    last day's rows, `refusals`)."""
+    now = refusals(name, tried)
+    return frozenset(
+        int(qid)
+        for qid, reason in held.items()
+        if str(reason).startswith(REFUSED_TAKE)
+        and now.get(("take", int(qid)), (0, ""))[0] < FAILS_BEFORE_BROKEN
+    )
+
+
 def bag_room_refused(name, tried) -> frozenset:
     """The quest ids whose take this quester's world refused for bag room
     (BAG_ROOM_REFUSAL) inside SELL_COOLDOWN_MINUTES: the sale goes first, and
@@ -1502,7 +1521,11 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
         left_spawns(member.name, tried),
         left_spawns(member.name, tried, OBJECT_KIND),
     )
-    playing = bool(member.online and member.alive)
+    # A quester whose hunts are refused for bag room is not working a quest:
+    # its clock waits for the sale (`needs_sale`).
+    playing = bool(member.online and member.alive) and not bags_full_hunt(
+        member.name, tried
+    )
     out = []
     for qid in sorted(member.quest_log):
         status = int(member.quest_log[qid])

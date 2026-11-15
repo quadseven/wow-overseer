@@ -187,6 +187,12 @@ def _held_reason(decision, stack, row) -> str:
     return ""
 
 
+def held_reason(decision, stack, row) -> str:
+    """`_held_reason` for callers outside this module: why a SELL_VENDOR
+    decision must not be carried out (a bag, a tool, a fallback), or ''."""
+    return _held_reason(decision, stack, row)
+
+
 def chosen_first(decision) -> bool:
     """Was this decision's route the plan's first choice, not a fallback?
 
