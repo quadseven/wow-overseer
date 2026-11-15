@@ -32,9 +32,12 @@ WHERE EACH INPUT COMES FROM.
 
 from __future__ import annotations
 
+import logging
+
 import auction
 import bank
 import bankforecast
+import guildbank
 import guildledger
 import itemplan
 import itemplan_data
@@ -161,11 +164,25 @@ def _bank_free(names, bank_rows) -> dict:
     return {m.name: m.bank_free for m in members}
 
 
+log = logging.getLogger("wow-overseer.itemplan")
+_TAB_SAID: dict = {}
+
+
+def _say_tabs(family, guild, names) -> None:
+    """Log the guild bank's tab numbers when they change, never when they do not."""
+    lines = guildbank.tab_report(guild, names)
+    if lines and _TAB_SAID.get(family) != lines:
+        _TAB_SAID[family] = lines
+        for line in lines:
+            log.info("itemplan: %s: %s", family, line)
+
+
 def _guild_free(names, family, guild_setup):
     """(family, tab) -> free slots, or None when there is no guild bank setup."""
     guild = guild_setup(list(names))
     if not guild:
         return None
+    _say_tabs(family, guild, names)
     depositors, tabs = bank._guild_tabs(guild)
     may = bool(depositors & set(names))
     return {(family, tab): (free if may else 0) for tab, free in tabs.items()}

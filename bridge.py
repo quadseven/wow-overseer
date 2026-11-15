@@ -21,6 +21,7 @@ import json
 import logging
 import math
 import os
+import re
 import time
 from types import SimpleNamespace
 
@@ -12478,7 +12479,7 @@ class Bridge(discord.Client):
             self._cohort_town_slot(_cohort_key(cohort)).productive("auction")
 
     async def _auction_list_walk(self, candidates: list, names: list,
-                                 leader: str, cohort=None) -> None:
+                                 leader: str, cohort=None, sales=None) -> None:
         """Walk the leader to an auctioneer for what nobody is listing yet.
 
         ONLY A WALK THAT CAN LIST SOMETHING (wow-overseer#478). Priced
@@ -12486,7 +12487,11 @@ class Bridge(discord.Client):
         plans before it arrives; `DoAuction` and the per-house plan at the
         counter still decide.
         """
-        sales = await self._auction_listable_at_home(candidates, leader)
+        # `sales` is given when the caller already holds the listings it will
+        # make at the plan's own prices (the item plan's AUCTION route); the
+        # house's live asks would only overwrite those prices.
+        if sales is None:
+            sales = await self._auction_listable_at_home(candidates, leader)
         _log_changed("auction", [] if sales else [
             "leader=%s carries %d surplus item(s) and none of them can be "
             "listed at the house of its team (a rare, or no live listing "
@@ -15027,7 +15032,8 @@ class Bridge(discord.Client):
 
         await globals().get(
             "_run_itemplan_auction", skip_itemplan_auction
-        )(itemplan_auction, names, leader, rows, free_slots, gear_rows, worn)
+        )(itemplan_auction, names, leader, rows, free_slots, gear_rows, worn,
+          cohort)
 
         # A CAMPAIGN WITHHELD FOR BAG SPACE STILL SELLS (#225); see
         # `_vendor_pass_mode`.
@@ -16292,6 +16298,16 @@ class Bridge(discord.Client):
                 need=decision.reason, reason=decision.reason,
             ))
         if gifts:
+            recent = await asyncio.to_thread(
+                _recently_given_guids, GIVE_REPEAT_HOURS)
+            gifts, held = itemplan_shadow.vet_gifts(
+                gifts, carried=rows, templates=extras.templates,
+                recent=recent, free_slots=free_slots)
+            _log_capped("itemplan", [
+                "give held: %s %s -> %s: %s" % (
+                    gift.item, gift.holder, gift.taker, why)
+                for gift, why in held])
+        if gifts:
             await self._write_guild_gifts(gifts)
 
     async def _itemplan_disenchant(self, names: list, family: str, rows: list,
@@ -16327,7 +16343,8 @@ class Bridge(discord.Client):
                           "pass carries on")
 
     async def _itemplan_auction(self, names: list, family: str, rows: list,
-                                free_slots: dict, gear_rows=(), worn_rows=()) -> None:
+                                free_slots: dict, gear_rows=(), worn_rows=(),
+                                cohort=None) -> None:
         """List only planned AUCTION rows when ITEMPLAN_AUCTION is enabled."""
         if not itemplan_shadow.auction_enabled():
             return
@@ -16376,19 +16393,43 @@ class Bridge(discord.Client):
                 "count": decision.count,
             })
         holder_house = await self._auction_holder_houses(candidates, names)
+        # A HOLDER AWAY FROM A COUNTER IS WALKED TO ONE (#2605). The rows below
+        # are written only for a holder already standing at an auctioneer, and
+        # nothing else sent one there: a day of AUCTION decisions wrote no row.
+        # The walk is the pass's own, asked only for stacks the plan prices.
+        await self._itemplan_auction_walk(
+            candidates, holder_house, names, family, cohort)
         candidates = [candidate for candidate in candidates
                       if candidate["holder"] in holder_house]
         sales = auction.plan_sales(candidates)
         if not sales:
             return
         seen = await asyncio.to_thread(_recent_auction_keys, GIVE_RETRY_MINUTES)
+        queued = 0
         for sale in sales:
             key = (sale.candidate.holder, sale.command)
             if key in seen:
                 continue
             if await asyncio.to_thread(_insert_auction, *key):
+                queued += 1
                 log.info("itemplan: auction %s - %s", sale.candidate.holder,
                          sale.candidate.label)
+        if queued:
+            await self._keep_at_auctioneer(family, cohort)
+
+    async def _itemplan_auction_walk(self, candidates: list, holder_house: dict,
+                                     names: list, leader: str, cohort) -> None:
+        """Ask the auction pass's walk for the planned stacks nobody can list yet.
+
+        Only stacks `auction.plan_sales` accepts at the plan's own price count,
+        so the walk is never taken for a listing that would be refused.
+        """
+        stranded = [candidate for candidate in candidates
+                    if candidate["holder"] not in holder_house]
+        sales = auction.plan_sales(stranded)
+        if sales:
+            await self._auction_list_walk(
+                stranded, names, leader, cohort, sales=sales)
 
     async def _clearance_plan(self, names: list, leader: str,
                               auction_open: bool = False) -> tuple:
@@ -17769,6 +17810,10 @@ class Bridge(discord.Client):
         members = natural.only_contributors(members, eligible)
         actions = _plan_guild_setup(setup, purchased_tabs, names, leader,
                                     members, cohort, eligible)
+        # THE RANK GRANTS ARE WRITTEN WHEREVER THE MASTER STANDS: the module's
+        # grant has no vault-range check, so they do not wait for an arrival
+        # the town slot may never give (see `guildbank.split_remote`).
+        actions = await _queue_remote_setup(actions, cohort)
         # THE TAB COUNT WAS ALREADY IN HAND AND WAS NEVER PASSED (infra#4198).
         # `plan_deposits` defaults `guild_has_tab` to False - the cautious
         # answer, which reserves `FLOAT_COPPER + TAB0_COST_COPPER` - and this
@@ -19024,9 +19069,23 @@ class Bridge(discord.Client):
         row_walks = now >= self._mail_walk_unsupported_until
         walkers = (await asyncio.to_thread(_route_walkers, candidates, names, row_walks)
                    if candidates else {})
+        stranded = classtrain.stranded(recent)
+        needs_crossing = any(
+            t.name in stranded for t in trainees
+            if t.online and t.due.affords(t.money) and t.name not in busy
+        )
+        trainer_spawns = (
+            await asyncio.to_thread(_class_trainer_spawns)
+            if needs_crossing else None
+        )
+        cross_recent = (
+            await asyncio.to_thread(_guild_cross_rows)
+            if needs_crossing else ()
+        )
         walks, notes = classtrain.plan(
             trainees, walkers, classtrain.recent_walkers(recent), busy,
-            cap=self._guild_walk_cap(), stranded=classtrain.stranded(recent))
+            cap=self._guild_walk_cap(), stranded=stranded,
+            trainer_spawns=trainer_spawns, cross_recent=cross_recent)
         _log_capped("guild training", notes)
         started = 0
         for walk in walks:
@@ -19046,10 +19105,10 @@ class Bridge(discord.Client):
                 getattr(self, "_job_steps", ()))
 
     async def _start_train_walk(self, walk, now: float) -> int:
-        """Write one class trainer walk row; 1 when written."""
+        """Write one class trainer walk or crossing row; 1 when written."""
         self._train_walks[walk.name] = now
         row_id = await asyncio.to_thread(
-            _insert_crafter_row, walk.name, walk.command, classtrain.KIND, walk.source)
+            _insert_crafter_row, walk.name, walk.command, walk.kind, walk.source)
         if not row_id:
             self._train_walks.pop(walk.name, None)
             return 0
@@ -29048,6 +29107,9 @@ def _fetch_bag_room(names: list) -> dict:
 # reason: a give the worldserver refuses (receiver offline, bags full since
 # measured) must not fill the queue with an identical doomed row every cycle.
 GIVE_RETRY_MINUTES = int(os.environ.get("GIVE_RETRY_MINUTES", "60"))
+# A piece a guild gift already moved stays where it landed this long (the item
+# plan judges per holder and has no memory of its own moves).
+GIVE_REPEAT_HOURS = int(os.environ.get("GIVE_REPEAT_HOURS", "12"))
 # A mid-run drink give that was queued and did not land is asked again after
 # this many minutes (one that landed is not planned again: the taker has it).
 RUN_DRINK_RETRY_MINUTES = int(os.environ.get("RUN_DRINK_RETRY_MINUTES", "4"))
@@ -29153,6 +29215,25 @@ _VENDOR_ITEMS_SQL = (
 # whether THIS COPY is already soulbound. `ii.flags` is handed over raw so
 # the bit is read in bag_pressure.item_binding rather than in SQL; the same
 # bag-and-backpack scope as _VENDOR_ITEMS_SQL, so nothing worn is offered.
+_GEAR_RESISTANCE_ONLY_TEMPLATE_EXPR = (
+    "((it.holy_res > 0 OR it.fire_res > 0 OR it.nature_res > 0 "
+    "OR it.frost_res > 0 OR it.shadow_res > 0 OR it.arcane_res > 0) "
+    "AND it.dmg_max1 <= 0 "
+    "AND it.RandomProperty = 0 AND it.RandomSuffix = 0 AND "
+    + " AND ".join(f"it.stat_value{n} = 0" for n in range(1, 11))
+    + " AND "
+    + " AND ".join(f"it.spellid_{n} = 0" for n in range(1, 6))
+    + ")"
+)
+_GEAR_RESISTANCE_ONLY_TEMPLATE_COL = (
+    "COALESCE(" + _GEAR_RESISTANCE_ONLY_TEMPLATE_EXPR + ", 0) AS resistance_only"
+)
+_GEAR_RESISTANCE_ONLY_INSTANCE_EXPR = (
+    "COALESCE("
+    + _GEAR_RESISTANCE_ONLY_TEMPLATE_EXPR
+    + " AND COALESCE(ii.randomPropertyId, 0) = 0, 0) AS resistance_only"
+)
+
 _SURPLUS_GEAR_SQL = (
     "SELECT c.name AS holder, c.level AS level, ii.guid AS item_guid, "
     "ii.itemEntry AS entry, "
@@ -29169,7 +29250,16 @@ _SURPLUS_GEAR_SQL = (
     "it.BagFamily AS bag_family, "
     "it.ItemLevel AS item_level, "
     "it.AllowableClass AS allowable_class, "
-    "it.InventoryType AS inventory_type "
+    "it.InventoryType AS inventory_type, "
+    "COALESCE(((it.holy_res > 0 OR it.fire_res > 0 OR it.nature_res > 0 "
+    "OR it.frost_res > 0 OR it.shadow_res > 0 OR it.arcane_res > 0) "
+    "AND it.dmg_max1 <= 0 AND it.RandomProperty = 0 AND it.RandomSuffix = 0 "
+    "AND it.stat_value1 = 0 AND it.stat_value2 = 0 AND it.stat_value3 = 0 "
+    "AND it.stat_value4 = 0 AND it.stat_value5 = 0 AND it.stat_value6 = 0 "
+    "AND it.stat_value7 = 0 AND it.stat_value8 = 0 AND it.stat_value9 = 0 "
+    "AND it.stat_value10 = 0 AND it.spellid_1 = 0 AND it.spellid_2 = 0 "
+    "AND it.spellid_3 = 0 AND it.spellid_4 = 0 AND it.spellid_5 = 0 "
+    "AND COALESCE(ii.randomPropertyId, 0) = 0), 0) AS resistance_only "
     "FROM character_inventory ci "
     "JOIN characters c ON c.guid = ci.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
@@ -29305,7 +29395,16 @@ _EQUIP_CANDIDATE_GEAR_SQL = (
     "it.BagFamily AS bag_family, "
     "it.ItemLevel AS item_level, "
     "it.AllowableClass AS allowable_class, "
-    "it.InventoryType AS inventory_type "
+    "it.InventoryType AS inventory_type, "
+    "COALESCE(((it.holy_res > 0 OR it.fire_res > 0 OR it.nature_res > 0 "
+    "OR it.frost_res > 0 OR it.shadow_res > 0 OR it.arcane_res > 0) "
+    "AND it.dmg_max1 <= 0 AND it.RandomProperty = 0 AND it.RandomSuffix = 0 "
+    "AND it.stat_value1 = 0 AND it.stat_value2 = 0 AND it.stat_value3 = 0 "
+    "AND it.stat_value4 = 0 AND it.stat_value5 = 0 AND it.stat_value6 = 0 "
+    "AND it.stat_value7 = 0 AND it.stat_value8 = 0 AND it.stat_value9 = 0 "
+    "AND it.stat_value10 = 0 AND it.spellid_1 = 0 AND it.spellid_2 = 0 "
+    "AND it.spellid_3 = 0 AND it.spellid_4 = 0 AND it.spellid_5 = 0 "
+    "AND COALESCE(ii.randomPropertyId, 0) = 0), 0) AS resistance_only "
     "FROM character_inventory ci "
     "JOIN characters c ON c.guid = ci.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
@@ -29449,7 +29548,16 @@ def _fetch_wearers(names: list) -> list:
 _FAMILY_EQUIPPED_SQL = (
     "SELECT c.name AS name, c.class AS class_id, c.level AS level, "
     "ci.slot AS equipment_slot, it.InventoryType AS inventory_type, "
-    "it.ItemLevel AS item_level "
+    "it.ItemLevel AS item_level, "
+    "COALESCE(((it.holy_res > 0 OR it.fire_res > 0 OR it.nature_res > 0 "
+    "OR it.frost_res > 0 OR it.shadow_res > 0 OR it.arcane_res > 0) "
+    "AND it.dmg_max1 <= 0 AND it.RandomProperty = 0 AND it.RandomSuffix = 0 "
+    "AND it.stat_value1 = 0 AND it.stat_value2 = 0 AND it.stat_value3 = 0 "
+    "AND it.stat_value4 = 0 AND it.stat_value5 = 0 AND it.stat_value6 = 0 "
+    "AND it.stat_value7 = 0 AND it.stat_value8 = 0 AND it.stat_value9 = 0 "
+    "AND it.stat_value10 = 0 AND it.spellid_1 = 0 AND it.spellid_2 = 0 "
+    "AND it.spellid_3 = 0 AND it.spellid_4 = 0 AND it.spellid_5 = 0 "
+    "AND COALESCE(ii.randomPropertyId, 0) = 0), 0) AS resistance_only "
     "FROM characters c "
     "LEFT JOIN character_inventory ci ON ci.guid = c.guid "
     "AND ci.bag = 0 AND ci.slot < 19 "
@@ -29466,6 +29574,15 @@ _FAMILY_EQUIPPED_ROLES_SQL = (
     "SELECT c.name AS name, c.class AS class_id, c.level AS level, "
     "ci.slot AS equipment_slot, it.InventoryType AS inventory_type, "
     "it.ItemLevel AS item_level, "
+    "COALESCE(((it.holy_res > 0 OR it.fire_res > 0 OR it.nature_res > 0 "
+    "OR it.frost_res > 0 OR it.shadow_res > 0 OR it.arcane_res > 0) "
+    "AND it.dmg_max1 <= 0 AND it.RandomProperty = 0 AND it.RandomSuffix = 0 "
+    "AND it.stat_value1 = 0 AND it.stat_value2 = 0 AND it.stat_value3 = 0 "
+    "AND it.stat_value4 = 0 AND it.stat_value5 = 0 AND it.stat_value6 = 0 "
+    "AND it.stat_value7 = 0 AND it.stat_value8 = 0 AND it.stat_value9 = 0 "
+    "AND it.stat_value10 = 0 AND it.spellid_1 = 0 AND it.spellid_2 = 0 "
+    "AND it.spellid_3 = 0 AND it.spellid_4 = 0 AND it.spellid_5 = 0 "
+    "AND COALESCE(ii.randomPropertyId, 0) = 0), 0) AS resistance_only, "
     "r.spec_tab AS spec_tab, "
     "(SELECT COUNT(*) FROM overseer_raid_seat s "
     "WHERE s.name = c.name AND s.role = 'tank') AS tank_seat "
@@ -32172,10 +32289,12 @@ async def _run_itemplan_disenchant(itemplan_disenchant_run, names, family, rows,
 
 
 async def _run_itemplan_auction(itemplan_auction, names, family, rows,
-                               free_slots, gear_rows, worn_rows) -> None:
+                               free_slots, gear_rows, worn_rows,
+                               cohort=None) -> None:
     """Call the auction route executor when this economy pass exposes it."""
     if itemplan_auction is not None:
-        await itemplan_auction(names, family, rows, free_slots, gear_rows, worn_rows)
+        await itemplan_auction(names, family, rows, free_slots, gear_rows,
+                               worn_rows, cohort)
 
 
 def _shadow_itemplan(*args, **facts) -> None:
@@ -34318,6 +34437,29 @@ def _recent_guild_gift_keys(minutes: int) -> set:
         }
 
 
+def _recently_given_guids(hours: int) -> frozenset:
+    """Item guids a guild gift gave or posted inside `hours` and did not fail.
+
+    An errored row moved nothing, so its piece is free to try again; a pending
+    or delivered one has moved, or is about to. The guid is in the command
+    (`guid:N` for a give, `send item:N subject:...` for a letter).
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT command FROM overseer_command "
+            "WHERE source = 'guildshare' AND kind IN ('give', 'mail') "
+            "  AND status <> 'error' "
+            "  AND created_at > NOW() - INTERVAL %s HOUR",
+            (int(hours),),
+        )
+        out = set()
+        for row in cur.fetchall():
+            found = re.search(r"(?:guid|item):(\d+)", str(row["command"]))
+            if found:
+                out.add(int(found.group(1)))
+        return frozenset(out)
+
+
 def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
     """One overseer_command row handing one stack to a guildmate (infra#3908).
 
@@ -34373,8 +34515,9 @@ _GUILD_HELD_GEAR_SQL = (
     "it.ItemLevel AS item_level, it.AllowableClass AS allowable_class, "
     "it.InventoryType AS inventory_type, "
     "(it.spellid_1 > 0 OR it.spellid_2 > 0 OR it.spellid_3 > 0 "
-    " OR it.spellid_4 > 0 OR it.spellid_5 > 0) AS has_effect "
-    "FROM character_inventory ci "
+    " OR it.spellid_4 > 0 OR it.spellid_5 > 0) AS has_effect, "
+    + _GEAR_RESISTANCE_ONLY_INSTANCE_EXPR
+    + " FROM character_inventory ci "
     "JOIN characters c ON c.guid = ci.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -34657,7 +34800,7 @@ def _command_answer(row_id: int):
 # is in, with the guild master's name, because the pass picks the maintenance
 # members out of the same lineup the page draws and posts to the master.
 _DUES_MEMBERS_SQL = (
-    "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.level, "
+    "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.race, c.level, "
     "c.money, (presence.name IS NOT NULL) AS online, lc.name AS master, " + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
@@ -34849,6 +34992,34 @@ def _class_trainer_rows(cur) -> dict:
     return _CLASS_TRAINER_ROWS
 
 
+NPC_FLAG_TRAINER_CLASS = 0x20
+_CLASS_TRAINER_SPAWNS_SQL = (
+    "SELECT cr.map, t.Requirement AS class_id, ft.EnemyGroup AS enemy_group "
+    "FROM acore_world.creature cr "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "JOIN acore_world.creature_default_trainer cdt ON cdt.CreatureId = ct.entry "
+    "JOIN acore_world.trainer t ON t.Id = cdt.TrainerId "
+    "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
+    "WHERE t.Type = 0 AND t.Requirement > 0 AND (ct.npcflag & %s) <> 0 "
+    "AND " + towntrip.REAL_SPAWN_SQL
+)
+_CLASS_TRAINER_SPAWNS: list = []
+
+
+def _class_trainer_spawns() -> list | None:
+    """Real class trainer spawns by map and side, read once; None on SQL error."""
+    if not _CLASS_TRAINER_SPAWNS:
+        try:
+            with _connect() as conn, conn.cursor() as cur:
+                cur.execute(_CLASS_TRAINER_SPAWNS_SQL, (NPC_FLAG_TRAINER_CLASS,))
+                rows = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            log.warning("class trainer spawns read failed: %s", exc)
+            return None
+        _CLASS_TRAINER_SPAWNS.extend(dict(row) for row in rows)
+    return _CLASS_TRAINER_SPAWNS
+
+
 def _class_training_due(names: list, casts_only: bool = False) -> dict:
     """name -> classtrain.Due for each named member; no judgement here. With
     `casts_only`, only the spells the member's class AI casts or holds
@@ -35033,6 +35204,15 @@ def _guild_train_rows() -> list:
             "AND result LIKE %s))",
             (classtrain.SOURCE + ":%", classtrain.STRANDED_READ_DAYS,
              "%" + classtrain.NO_TRAINER_REASON + "%"))
+
+
+def _guild_cross_rows() -> tuple:
+    """Recent crossing job rows across guildjobs actions, as guildjobs.Recent."""
+    with _connect() as conn, conn.cursor() as cur:
+        rows = _job_read(
+            cur, "guild crossings", _JOB_RECENT_SQL, (QUESTER_CROSSINGS_LIKE,)
+        )
+    return guildjobs.recent_from_rows(rows)
 
 
 # THE GUILD FUND'S LEDGER: every row it ever wrote, which is a handful a day.
@@ -35991,8 +36171,9 @@ def _job_bag_slots(room) -> dict:
 # when it would not be an upgrade, which is gear.would_wear against these.
 _JOB_WORN_SQL = (
     "SELECT c.name, c.class AS class_id, c.level, ci.slot AS equipment_slot, "
-    "it.InventoryType AS inventory_type, it.ItemLevel AS item_level "
-    "FROM characters c "
+    "it.InventoryType AS inventory_type, it.ItemLevel AS item_level, "
+    + _GEAR_RESISTANCE_ONLY_INSTANCE_EXPR
+    + " FROM characters c "
     "LEFT JOIN character_inventory ci ON ci.guid = c.guid AND ci.bag = 0 AND ci.slot < 19 "
     "LEFT JOIN item_instance ii ON ii.guid = ci.item "
     "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -37146,7 +37327,8 @@ _GEAR_VENDOR_SQL = (
     "it.entry AS entry, it.BuyPrice AS buyout, it.InventoryType AS InventoryType, "
     "it.class AS class, it.subclass AS subclass, it.RequiredLevel AS RequiredLevel, "
     "it.AllowableClass AS AllowableClass, it.ItemLevel AS ItemLevel, "
-    "it.Quality AS Quality, " + _GEAR_ITEM_EFFECT_COLUMNS + "ft.EnemyGroup AS enemy_group "
+    "it.Quality AS Quality, " + _GEAR_ITEM_EFFECT_COLUMNS
+    + _GEAR_RESISTANCE_ONLY_TEMPLATE_COL + ", ft.EnemyGroup AS enemy_group "
     "FROM acore_world.npc_vendor nv "
     "JOIN acore_world.creature cr ON cr.id = nv.entry "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
@@ -37159,7 +37341,7 @@ _GEAR_VENDOR_SQL = (
     "AND ABS(cr.position_x - %s) <= %s AND ABS(cr.position_y - %s) <= %s "
     "GROUP BY cr.id, ct.name, cr.map, it.entry, it.BuyPrice, it.InventoryType, "
     "it.class, it.subclass, it.RequiredLevel, it.AllowableClass, it.ItemLevel, "
-    "it.Quality, has_item_effect, ft.EnemyGroup "
+    "it.Quality, has_item_effect, resistance_only, ft.EnemyGroup "
     "HAVING yards <= %s ORDER BY yards, vendor"
 )
 
@@ -38293,6 +38475,21 @@ def _dues_fund_tab(names: list) -> bool:
              for m in _fetch_guild_money(names)}.get(master)
     return guildbank.dues_fund_tab(setup.get("purchased_tabs", 0), purse,
                                    setup.get("master_mailed_copper", 0))
+
+
+async def _queue_remote_setup(actions, cohort=None) -> tuple:
+    """Queue the setup commands that need no vault; return the ones that do."""
+    anywhere, at_vault = guildbank.split_remote(actions)
+    if anywhere:
+        seen = await asyncio.to_thread(_recent_guild_setup_keys, GIVE_RETRY_MINUTES)
+        for action in anywhere:
+            if (action.target, action.command) in seen:
+                continue
+            await asyncio.to_thread(
+                _insert_guild, action.target, action.command, "guildbank-setup")
+            log.info("guild bank setup: queued %s for %s, which needs no vault%s",
+                     action.command, action.target, _family_label(cohort))
+    return at_vault
 
 
 def _recent_guild_setup_keys(minutes: int) -> set[tuple[str, str]]:
@@ -41631,7 +41828,9 @@ def _fetch_auction_listings(entries: list, house: int) -> list:
 _GEARUP_EQUIPPED_SQL = (
     "SELECT c.name, c.class AS class_id, c.level, c.money AS purse, "
     "ci.slot, it.ItemLevel AS item_level, it.class AS item_class, "
-    "it.subclass AS item_subclass, it.Quality AS item_quality FROM characters c "
+    "it.subclass AS item_subclass, it.Quality AS item_quality, "
+    + _GEAR_RESISTANCE_ONLY_INSTANCE_EXPR
+    + " FROM characters c "
     "LEFT JOIN character_inventory ci ON ci.guid=c.guid AND ci.bag=0 AND ci.slot<19 "
     "LEFT JOIN item_instance ii ON ii.guid=ci.item "
     "LEFT JOIN acore_world.item_template it ON it.entry=ii.itemEntry WHERE c.name IN (%s)"
@@ -41714,6 +41913,7 @@ def _fetch_gearup_facts(names: list) -> dict:
                         if row.get("item_quality") is not None
                         else None
                     ),
+                    "resistance_only": bool(row.get("resistance_only")),
                 }
     return result
 
@@ -41731,7 +41931,8 @@ def _fetch_gear_offers(entries: list) -> list:
         cur.execute(
             "SELECT entry, BuyPrice AS buyout, InventoryType, class, subclass, "
             "RequiredLevel, AllowableClass, ItemLevel, Quality, "
-            + _GEAR_ITEM_EFFECT_COLUMNS.rstrip(", ")
+            + _GEAR_ITEM_EFFECT_COLUMNS
+            + _GEAR_RESISTANCE_ONLY_TEMPLATE_COL
             + " FROM acore_world.item_template it WHERE entry IN (%s) "  # noqa: S608 - placeholders from a COUNT
             "AND class IN (2,4) AND InventoryType BETWEEN 1 AND 28 "
             "AND BuyPrice > 0" % marks, [int(e) for e in entries])
@@ -41744,7 +41945,8 @@ def _fetch_gearup_listings(house: int) -> list:
             "SELECT a.id AS listing_id, a.buyoutprice AS buyout, ii.itemEntry AS entry, "
             "it.name, it.InventoryType, it.class, it.subclass, it.RequiredLevel, "
             "it.AllowableClass, it.ItemLevel, it.Quality, "
-            + _GEAR_ITEM_EFFECT_COLUMNS.rstrip(", ")
+            + _GEAR_ITEM_EFFECT_COLUMNS
+            + _GEAR_RESISTANCE_ONLY_INSTANCE_EXPR
             + " FROM auctionhouse a "
             "JOIN item_instance ii ON ii.guid=a.itemguid "
             "JOIN acore_world.item_template it ON it.entry=ii.itemEntry "
