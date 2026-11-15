@@ -818,6 +818,19 @@ def hubs_from(team, map_id, zone_id) -> tuple:
     return hubs
 
 
+def band_below(level, bands) -> int:
+    """The level one band below `level` in `bands` (zone -> (floor, ceiling,
+    ...)): the highest band ceiling under `level`, or `level` itself when no
+    band sits below it. Choosing a hub at this level sends a member to the
+    hardest ground of the band under its own (#2591)."""
+    below = [
+        int(band[1])
+        for band in (bands or {}).values()
+        if band and int(band[1]) < int(level)
+    ]
+    return max(below) if below else int(level)
+
+
 def choose(
     level,
     race,
@@ -829,6 +842,7 @@ def choose(
     opens=None,
     nodes=None,
     avoid=None,
+    avoid_zones=(),
 ) -> Choice:
     """The hub a member of this level and race is walked to from `map_id`.
 
@@ -841,15 +855,19 @@ def choose(
     orbs_from) lands on, and from a continent, on the ground its side's
     zeppelin or boat lands on (`Choice.cross_to`); see the module docstring.
     A hub in zone `avoid` (a zone the member keeps dying in, deathloop.py) is
-    never chosen.
+    never chosen, and neither is a hub in any of `avoid_zones` (the zones a
+    formed loop leaves avoided, deathloop.avoided, #2591).
     """
     team = side_of(race)
     if not team:
         return Choice(refused="its side cannot be read off its race")
     level = int(level)
     fitting = _fitting(team, level, map_id, zone_id, bands, masters, opens, nodes)
+    banned = {int(z) for z in avoid_zones or () if z}
     if avoid:
-        fitting = [f for f in fitting if f.hub.zone_id != int(avoid)]
+        banned.add(int(avoid))
+    if banned:
+        fitting = [f for f in fitting if f.hub.zone_id not in banned]
     if not fitting:
         return Choice(refused="no %s hub fits level %d" % (team, level))
     ground = ground_of(team, map_id, zone_id)

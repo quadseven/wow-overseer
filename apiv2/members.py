@@ -766,7 +766,7 @@ def build(
     seconds), for a stalled family (stall_entry); `credits` is leader -> its
     newest boss credit ({"at", "detail"}), which counts as movement too;
     `deaths` is deathloop.SQL's rows, judged against each member's level
-    (deathloop.loops)."""
+    (deathloop.loops, and deathloop.risk for the `at_risk` names)."""
     families = families or {}
     rows = _lookups(
         families, chars, snaps, facts, now_at, jobs, readings, in_run, leveled
@@ -774,7 +774,14 @@ def build(
     guild_of = {r["name"]: r for r in guild or ()}
     streaks = ask_streaks(asks)
     members, found, follows = [], {}, {}
-    loops = deathloop.loops(deaths, _levels(rows["chars"], guild_of))
+    levels = _levels(rows["chars"], guild_of)
+    loops = deathloop.loops(deaths, levels)
+    # Death-loop prevention (#2591): who is heading into a loop, counted
+    # beside the loops so inflow is visible before it lands in the pool. A
+    # member already in a loop is not at risk; it is in one.
+    at_risk = sorted(
+        name for name in deathloop.risk(deaths, levels) if name not in loops
+    )
     for name in _order(families, guild_of):
         if name not in rows["chars"] and name not in guild_of:
             continue
@@ -795,6 +802,7 @@ def build(
     return {
         "members": members,
         "families": {k: list(v) for k, v in families.items()},
+        "at_risk": at_risk,
         "checked_at": rows["now_at"] or None,
         "basis": BASIS,
     }
@@ -877,7 +885,9 @@ def stuck_digest(rows: list, checked_at: int | None) -> dict:
 
 def stuck_view(roster: dict) -> dict:
     """The /api/v2/stuck shape: the stuck members only, longest first, and
-    their digest (stuck_digest)."""
+    their digest (stuck_digest). `at_risk` is the death-loop inflow count
+    (#2591): members heading into a loop, distinct from the loop count in
+    the digest, with their names in `at_risk_members`."""
     stuck = [m for m in roster["members"] if m["stuck"]]
     stuck.sort(key=lambda m: (m["since"] is None, m["since"] or 0, m["name"]))
     rows = [
@@ -894,6 +904,8 @@ def stuck_view(roster: dict) -> dict:
     return {
         "members": rows,
         "digest": stuck_digest(rows, roster["checked_at"]),
+        "at_risk": len(roster.get("at_risk") or ()),
+        "at_risk_members": list(roster.get("at_risk") or ()),
         "checked_at": roster["checked_at"],
         "basis": roster["basis"],
     }

@@ -19795,6 +19795,7 @@ class Bridge(discord.Client):
             family_members=family_members, family_danger=family_danger,
             family_candidates=facts.get("family_members", ()),
             family_holds=family_class_holds,
+            risks=facts.get("death_risks"), avoid=facts.get("death_avoid"),
             loops=facts.get("death_loops"))
         log.info("guild jobs: the plan took %.2f s on the event loop for %d "
                  "member(s)%s", time.perf_counter() - plan_started, len(members),
@@ -35541,14 +35542,15 @@ _JOB_QUEST_ASKS_SQL = (
 )
 
 
-def _job_deaths(cur, names: list) -> list:
+def _job_deaths(cur, names: list, seconds=deathloop.READ_SECONDS) -> list:
     """The deaths deathloop.loops judges: a member dying over and over in one
-    zone leaves it (#1464)."""
+    zone leaves it (#1464). With `seconds` past READ_SECONDS, the longer
+    history deathloop.avoided judges (#2591)."""
     if not names:
         return []
     return _job_read(
         cur, "deaths", deathloop.SQL.format(holes=",".join(["%s"] * len(names))),
-        (*names, deathloop.READ_SECONDS))
+        (*names, seconds))
 
 
 def _fetch_job_facts(family_names: list) -> dict:
@@ -35594,6 +35596,8 @@ def _fetch_job_facts(family_names: list) -> dict:
         far_open = _far_walks_open(cur)
         hunt_open = _hunts_open(cur)
         death_rows = _job_deaths(cur, sorted(guid_of))
+        death_history = _job_deaths(
+            cur, sorted(guid_of), deathloop.AVOID_READ_SECONDS)
     # THE ONE NATURAL GATE (natural.py, #331): who may act on a guild job and
     # give the guild anything.
     eligible = _natural_contributors(list(guid_of), family_names)
@@ -35608,8 +35612,17 @@ def _fetch_job_facts(family_names: list) -> dict:
                                  stranded_rows=stranded_rows)
     facts["class_book"] = book
     facts["quest_asks"] = guildjobs.quest_asks_from_rows(quest_ask_rows)
-    facts["death_loops"] = deathloop.loops(
-        death_rows, {str(r["name"]): int(r.get("level") or 0) for r in rows})
+    levels = {str(r["name"]): int(r.get("level") or 0) for r in rows}
+    facts["death_loops"] = deathloop.loops(death_rows, levels)
+    # Death-loop prevention (#2591): who is heading into a loop (a member
+    # already in one is on the loop path, not the risk path), and the zones
+    # a formed loop leaves avoided until a level gain.
+    facts["death_risks"] = {
+        name: risk
+        for name, risk in deathloop.risk(death_rows, levels).items()
+        if name not in facts["death_loops"]
+    }
+    facts["death_avoid"] = deathloop.avoided(death_history, levels)
     facts["far_open"] = far_open
     facts["hunt_open"] = hunt_open
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}

@@ -4384,6 +4384,8 @@ def plan(
     equip_room=None,
     mounts=None,
     loops=None,
+    risks=None,
+    avoid=None,
     bags=None,
     class_candidates=(),
     family_candidates=(),
@@ -4430,7 +4432,11 @@ def plan(
     `equip_room` name -> (free slots needed, what for) for members too full to
     put an upgrade on (gear.equip_room, equip_room_step);
     `loops` name -> deathloop.Loop for a member dying over and over in one zone
-    (death_loop_first), None or {} for none; `campaign` the family's
+    (death_loop_first), None or {} for none; `risks` name -> deathloop.Risk
+    for a member heading into one (death_risk_first, #2591), None or {} for
+    none; `avoid` name -> the zone ids a formed loop leaves avoided for that
+    member until a level gain (deathloop.avoided, #2591), None or {} for
+    none; `campaign` the family's
     campaign door (the bridge's _guild_campaign_door), "" for none, which
     keeps a roster member's death loop escape off the level walk (level_step);
     `family_members` the roster family members (role FAMILY) whose family is
@@ -4490,6 +4496,8 @@ def plan(
         equip_room=equip_room,
         mounts=mounts,
         loops=loops,
+        risks=risks,
+        avoid=avoid,
         bags=bags,
         campaign=campaign,
     )
@@ -4542,6 +4550,8 @@ class _PlanInputs:
     equip_room: Any
     mounts: Any
     loops: Any
+    risks: Any
+    avoid: Any
     bags: Any
     campaign: Any
 
@@ -4717,6 +4727,8 @@ def _plan_roster_member(member, inputs, state):
         inputs.campaign,
         mates=inputs.members,
         looping=_member_map_keys(inputs.loops),
+        risk=_offer_for(inputs.risks, member.name),
+        avoid=_offer_for(inputs.avoid, member.name),
         assigned=state.assigned,
     )
     asked, yielded = class_asking(
@@ -5547,6 +5559,66 @@ def _capacity_first(m, bag, kept, recent, cap, far):
     return _bag_first(m, bag, recent, far) or seat_loop_first(m, kept, recent, cap)
 
 
+def _death_first(
+    m,
+    loop,
+    risk,
+    leveling,
+    recent,
+    cap,
+    campaign,
+    supply,
+    kept,
+    classes,
+    mates,
+    looping,
+):
+    """(the member's step as _member_step returns it), or None: the death
+    rungs at the head of the ladder — a formed loop's way out first
+    (death_loop_first, #1464), then the death-risk intervention
+    (death_risk_first, #2591). Its own piece, so the orchestrator stays
+    under its cap (test_member_step_readable)."""
+    found = death_loop_first(
+        m,
+        loop,
+        leveling,
+        recent,
+        cap,
+        campaign,
+        supply,
+        kept,
+        classes,
+        mates=mates,
+        looping=looping,
+    )
+    if found is not None:
+        return found
+    return death_risk_first(
+        m,
+        risk,
+        leveling,
+        recent,
+        cap,
+        campaign,
+        supply,
+        kept,
+        classes,
+    )
+
+
+def _risk_walk_note(m, risk, note):
+    """`note` with the death-risk intervention line joined, when a risk
+    steered the member's level walk (#2591): the walk was planned with the
+    risk's zone among the avoided — issued to another hub, or refused
+    because only the risk's zone fitted — so the line names the
+    intervention wherever it changes the plan, as death_risk_first's
+    returns name it. With no risk, the note is the note."""
+    if risk is None:
+        return note
+    line = "%s death-risk intervention: %s" % (m.name, risk.reason())
+    return _join(note, line)
+
+
 def _member_step(
     m,
     offer,
@@ -5580,9 +5652,12 @@ def _member_step(
     mates=(),
     looping=(),
     assigned=None,
+    risk=None,
+    avoid=(),
 ):
     """A death loop's way out of its zone first (death_loop_first, #1464),
-    then a class quest, then a hunter's first pet, then a hearth out of a
+    then the death-risk intervention (death_risk_first, #2591), then a class
+    quest, then a hunter's first pet, then a hearth out of a
     spot it cannot leave, then the boat off the isle for a member that has
     outgrown it (isle_crossing_first, #2047), then room in the bags for an upgrade the world
     cannot put on without it (_room_first, #1088), then an owned or paid bag
@@ -5621,9 +5696,10 @@ def _member_step(
     A SEAT BELOW THE CAP LEVELS FIRST (levelling_first): of the rungs between
     the class quest and the level walk, only those that block play stay."""
     levelling = levelling_first(m)
-    found = death_loop_first(
+    found = _death_first(
         m,
         loop,
+        risk,
         leveling,
         recent,
         cap,
@@ -5631,8 +5707,8 @@ def _member_step(
         supply,
         kept,
         classes,
-        mates=mates,
-        looping=looping,
+        mates,
+        looping,
     )
     if found is not None:
         return found
@@ -5722,9 +5798,12 @@ def _member_step(
         step = _collect_first(m, mail, recent, cap)
         if step is not None:
             return step, step.said, supply_note, gear_note
-    step, doing, level_note = level_step(m, leveling, recent, cap, loop, campaign)
+    step, doing, level_note = level_step(
+        m, leveling, recent, cap, loop, campaign, avoid=_extra_avoid(risk, avoid)
+    )
     if step is not None or doing:
-        return step, doing, supply_note, gear_note
+        return step, doing, _risk_walk_note(m, risk, supply_note), gear_note
+    level_note = _risk_walk_note(m, risk, level_note)
     if levelling:
         # No level walk to make: the seat is left to its own AI and the
         # guild's dungeon asks, not sent on an ordinary job's walk.
@@ -5766,7 +5845,7 @@ def _join_once(*parts) -> str:
     return "; ".join(said)
 
 
-def level_step(m, world, recent, cap, loop=None, campaign=""):
+def level_step(m, world, recent, cap, loop=None, campaign="", avoid=()):
     """(step or None, what it does, a note): a member that has outgrown
     where it stands (its quests there have run out, or its band) walks to the
     flight master of a quest hub where it has open quests (guildlevel.py).
@@ -5784,7 +5863,8 @@ def level_step(m, world, recent, cap, loop=None, campaign=""):
     orb (level_orb_step) instead.
 
     With `loop` (a deathloop.Loop) the loop's zone is never the hub chosen,
-    and a member standing in it has outgrown it on the deaths alone.
+    and a member standing in it has outgrown it on the deaths alone. Nor is
+    a zone in `avoid` (deathloop.avoided's, or a death risk's, #2591).
 
     NOT WHILE ITS FAMILY HOLDS A CAMPAIGN (#1873). With `campaign` (the
     family's campaign door, "" for none) the escape is off and the roster
@@ -5831,6 +5911,7 @@ def level_step(m, world, recent, cap, loop=None, campaign=""):
         opens=opens,
         nodes=m.taxi_nodes,
         avoid=loop.zone if loop is not None else None,
+        avoid_zones=avoid,
     )
     if choice.refused:
         return None, "", guildlevel.refused_note(m.name, m.level, why, choice)
@@ -5882,7 +5963,7 @@ def _in_loop_zone(m, loop) -> bool:
 # level, and gained no level. Every spirit healer and corpse run put it back
 # where its own AI kept choosing to quest. A player in that loop stops, goes to
 # town to repair, sell and train, and quests somewhere else.
-def death_loop_hearth(m, loop, recent, world=None, cap=None):
+def death_loop_hearth(m, loop, recent, world=None, cap=None, level=None):
     """The hearth home of a member in its death loop's zone, or None.
 
     Only a member online, alive and out of combat, in the open world, that is
@@ -5890,7 +5971,9 @@ def death_loop_hearth(m, loop, recent, world=None, cap=None):
     hearthstone is not bound inside that same zone (`home_in_loop_zone`).
 
     With `world` (guildlevel.World) the step carries a second row, the walk on
-    from the home to a hub of another zone (death_loop_onward, #2014)."""
+    from the home to a hub of another zone (death_loop_onward, #2014), chosen
+    at `level` when one is given (the death-risk intervention's band below,
+    #2591) and at the member's own level otherwise."""
     if not _in_loop_zone(m, loop):
         return None
     if home_in_loop_zone(m, loop):
@@ -5904,7 +5987,7 @@ def death_loop_hearth(m, loop, recent, world=None, cap=None):
         loop.reason(),
     )
     rows = (guildcorps.Row("hearth", "use", "", source_for("hearth", m.name)),)
-    onward = death_loop_onward(m, loop, world, recent, cap)
+    onward = death_loop_onward(m, loop, world, recent, cap, level=level)
     if onward is not None:
         walk, place = onward
         rows += (walk,)
@@ -5923,7 +6006,7 @@ def death_loop_hearth(m, loop, recent, world=None, cap=None):
 # hearth step walks on, in the same step, to the flight master of a hub of
 # another zone that fits the member's level, chosen from the home and never in
 # the loop's zone; the walk holds the member until it gets there.
-def death_loop_onward(m, loop, world, recent, cap):
+def death_loop_onward(m, loop, world, recent, cap, level=None):
     """(walk row, place) from the member's hearth home to a hub flight master
     outside the loop's zone, or None.
 
@@ -5932,7 +6015,10 @@ def death_loop_onward(m, loop, world, recent, cap):
     only by a crossing or an orb, when the member's home is already at the hub,
     or when a level walk to that hub has killed it (deadly_hub_note). The row
     is written as a level walk (guildlevel.ACTION), so the level cooldown and
-    the deadly-way read see it."""
+    the deadly-way read see it. The hub is chosen at `level` when one is
+    given (the death-risk intervention routes one band lower, #2591), at the
+    member's own level otherwise, and its open quests are read at that level
+    too."""
     if world is None or loop is None:
         return None
     if cap is None:
@@ -5948,9 +6034,10 @@ def death_loop_onward(m, loop, world, recent, cap):
         home_map, home_x, home_y, getattr(m, "home_zone", None)
     )
     bands = world.bands.get(guildlevel.side_of(m.race), {})
-    opens = guildlevel.member_opens(world, m.race, m.level, m.rewarded)
+    at = int(m.level if level is None else level)
+    opens = guildlevel.member_opens(world, m.race, at, m.rewarded)
     choice = guildlevel.choose(
-        m.level,
+        at,
         m.race,
         home_map,
         bands,
@@ -6256,6 +6343,68 @@ def death_loop_first(
     held = "%s plans no quest in %s: %s" % (m.name, loop.place, loop.reason())
     help_line = _death_loop_help_line(m, loop, mates, looping)
     return None, held, _join(note, held, line, help_line), ""
+
+
+def _extra_avoid(risk, avoid):
+    """The zones a member's level walk never chooses on top of its loop's:
+    the zones a formed loop leaves avoided (`avoid`, deathloop.avoided) and
+    a live death risk's zone (#2591)."""
+    zones = {int(z) for z in avoid or () if z}
+    if risk is not None and risk.zone:
+        zones.add(int(risk.zone))
+    return tuple(sorted(zones))
+
+
+def death_risk_first(
+    m,
+    risk,
+    leveling,
+    recent,
+    cap,
+    campaign="",
+    supply=None,
+    kept=None,
+    book=None,
+):
+    """(the member's step as _member_step returns it), or None: the
+    intervention for a member heading into a death loop (deathloop.Risk,
+    #2591), beside death_loop_first and ahead of every quest rung.
+
+    In the risk zone, the escape first, on the loop's own steps: the hearth
+    home (death_loop_hearth — the town errand that repairs, sells and
+    trains), its walk on routed one band lower than the member's level
+    (guildlevel.band_below) and never into the risk zone, or the level walk
+    out (level_step, the risk as its avoid). While neither can start, no
+    quest of that zone is planned for it. Out of the zone, the supply rung
+    when the member is short of food or drink (the loop path's own food
+    order), else None: the pass plans as usual, its level walk never chooses
+    the risk zone (_member_step threads it into level_step's avoid), and the
+    risk read itself stands until a level is gained. Every return carries
+    one line naming the intervention and its trigger."""
+    if risk is None:
+        return None
+    line = "%s death-risk intervention: %s" % (m.name, risk.reason())
+    step, doing, _why = _supply_first(m, supply, recent, cap, kept, book)
+    held = job_walk_held(m, step, recent) if step is not None else ""
+    food = (step, doing) if step is not None and not held else None
+    if not _in_loop_zone(m, risk):
+        if food is not None:
+            return food[0], food[1], line, ""
+        return None
+    lower = None
+    if leveling is not None:
+        bands = leveling.bands.get(guildlevel.side_of(m.race), {})
+        lower = guildlevel.band_below(m.level, bands)
+    step = death_loop_hearth(m, risk, recent, leveling, cap, level=lower)
+    if step is not None:
+        return step, step.said, line, ""
+    step, doing, note = level_step(m, leveling, recent, cap, risk, campaign)
+    if step is not None:
+        return step, doing, _join(line, note), ""
+    if food is not None:
+        return food[0], food[1], _join(line, note), ""
+    held_line = "%s plans no quest in %s: %s" % (m.name, risk.place, risk.reason())
+    return None, _join(line, held_line), _join(line, held_line), ""
 
 
 def inn_step(m, world, recent, cap):
