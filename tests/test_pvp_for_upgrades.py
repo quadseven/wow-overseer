@@ -7,6 +7,7 @@ pin the pure decisions in pvpgear.py (who queues, which battleground, when to
 stop and buy), the guild job steps they become, and the bridge wiring as source.
 """
 
+import dataclasses
 import math
 import pathlib
 import unittest
@@ -118,7 +119,7 @@ class WhoQueues(unittest.TestCase):
         self.assertLess(s.upgrade.share, pvpgear.STRONG_BELOW_CAP)
         self.assertIn("Auren", pvpgear.plan_aims([s]))
 
-    def test_below_sixty_only_a_strong_upgrade_queues(self):
+    def test_below_sixty_nobody_queues_even_for_a_strong_upgrade(self):
         weak = offer(agility=15, required=55)
         (s,) = seekers([member_row(level=58)], 12, 8, [weak])
         self.assertTrue(s.upgrade.pvp)
@@ -126,6 +127,9 @@ class WhoQueues(unittest.TestCase):
         strong = offer(agility=30, required=55)
         (s,) = seekers([member_row(level=58)], 12, 8, [strong])
         self.assertGreaterEqual(s.upgrade.share, pvpgear.STRONG_BELOW_CAP)
+        # Levelling comes first: below the cap even a strong upgrade queues nobody.
+        self.assertEqual({}, pvpgear.plan_aims([s]))
+        (s,) = seekers([member_row(level=60)], 12, 8, [weak])
         self.assertIn("Auren", pvpgear.plan_aims([s]))
 
     def test_an_item_above_its_level_is_not_its_upgrade(self):
@@ -143,6 +147,8 @@ class WhoQueues(unittest.TestCase):
         gear = guildsocial.gear_by_name(rows, [], [])
         (s,) = pvpgear.seekers_from_rows(rows, gear, {}, [offer(required=55)])
         self.assertEqual(math.inf, s.upgrade.share)
+        self.assertEqual({}, pvpgear.plan_aims([s]))
+        s = dataclasses.replace(s, level=60)
         self.assertIn("Auren", pvpgear.plan_aims([s]))
 
 
@@ -582,21 +588,21 @@ class OnlyWhatItCanBuy(unittest.TestCase):
 
     def test_a_vendor_on_another_continent_is_not_its_upgrade(self):
         for map_id in (EASTERN_KINGDOMS, OUTLAND):
-            (s,) = seekers([member_row(level=20, map_id=map_id)], 5, 8, [self.wsg()])
+            (s,) = seekers([member_row(level=60, map_id=map_id)], 5, 8, [self.wsg()])
             self.assertFalse(s.upgrade.pvp, map_id)
             self.assertEqual({}, pvpgear.plan_aims([s]))
 
     def test_on_the_vendors_continent_it_is(self):
-        (s,) = seekers([member_row(level=20, map_id=KALIMDOR)], 5, 8, [self.wsg()])
+        (s,) = seekers([member_row(level=60, map_id=KALIMDOR)], 5, 8, [self.wsg()])
         self.assertTrue(s.upgrade.pvp)
         self.assertIn("Auren", pvpgear.plan_aims([s]))
 
     def test_inside_a_battleground_its_aim_holds(self):
-        (s,) = seekers([member_row(level=20, map_id=489)], 5, 8, [self.wsg()])
+        (s,) = seekers([member_row(level=60, map_id=489)], 5, 8, [self.wsg()])
         self.assertTrue(s.upgrade.pvp)
 
     def test_an_unread_map_counts_nothing(self):
-        (s,) = seekers([member_row(level=20, map_id=None)], 5, 8, [self.wsg()])
+        (s,) = seekers([member_row(level=60, map_id=None)], 5, 8, [self.wsg()])
         self.assertFalse(s.upgrade.pvp)
 
     def test_the_stock_reads_where_its_vendor_stands_and_its_name(self):
