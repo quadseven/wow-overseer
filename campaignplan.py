@@ -293,7 +293,7 @@ RUNS: tuple = (
     Run("zulfarrak", 978, 54),
     Run("maraudon-orange", 2100, 55),
     Run("maraudon-purple", 2100, 55),
-    Run("sunken-temple", 1417, LEVEL_CAP),
+    Run("sunken-temple", 1417, 55),
     Run("blackrock-depths", 1584, LEVEL_CAP),
     Run("lower-blackrock-spire", 1583, LEVEL_CAP),
     Run("dire-maul-east-east", 2557, LEVEL_CAP),

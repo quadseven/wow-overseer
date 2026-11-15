@@ -124,12 +124,34 @@ class WhatAFamilyIsOffered(unittest.TestCase):
         self.assertEqual(
             keywords(opts),
             [
-                "sunken-temple",
                 "blackrock-depths",
                 "lower-blackrock-spire",
                 "scholomance",
             ],
         )
+
+    def test_sunken_temple_is_outgrown_once_the_weakest_passes_its_band(self):
+        """A family whose weakest member is 59 has outgrown a dungeon whose
+        bosses top out in the low 50s: it is refused as outgrown and the
+        pick is a level-appropriate run instead (#2715)."""
+        family = (
+            ("Grug", 60, 1),
+            ("Ugga", 60, 1),
+            ("Og", 59, 1),
+            ("Bork", 60, 7),
+            ("Grog", 60, 3),
+        )
+        refused = campaignplan.refusals(facts(family, EASTERN_KINGDOMS))
+        self.assertIn("outgrown", refused["sunken-temple"])
+        opts = campaignplan.options(facts(family, EASTERN_KINGDOMS))
+        self.assertNotIn("sunken-temple", keywords(opts))
+        pick = campaignplan.heuristic(opts)
+        self.assertIsNotNone(pick)
+        self.assertGreaterEqual(pick.ceiling, 59)
+
+    def test_sunken_temple_ceiling_matches_its_boss_band(self):
+        run = campaignplan.BY_KEYWORD["sunken-temple"]
+        self.assertEqual(run.ceiling, 55)
 
     def test_blackrock_depths_is_offered_without_the_shadowforge_key(self):
         """The Shadowforge Key's one source is the quest Dark Iron Legacy,
