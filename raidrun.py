@@ -439,7 +439,9 @@ def first_kill_policy(environ) -> FirstKillPolicy:
     )
     seats, tanks, healers = (
         _minimum(environ.get(key), default)
-        for key, default in zip(_FIRST_KILL_MIN_ENV, FIRST_KILL_DEFAULT_MINIMUMS)
+        for key, default in zip(
+            _FIRST_KILL_MIN_ENV, FIRST_KILL_DEFAULT_MINIMUMS, strict=True
+        )
     )
     return FirstKillPolicy(guilds, seats, tanks, healers)
 
@@ -463,19 +465,10 @@ def _unavailable_why(row, floor: int) -> str:
     return ", ".join(reasons)
 
 
-def first_kill_roster(
-    keyword: str, lineup: dict, current_rows: list, policy: FirstKillPolicy
-) -> FirstKill:
-    """The approved seats that are online and at the raid's level, as a roster.
-
-    `lineup` is the approved selection and is not modified. `current_rows` are
-    ELIGIBILITY_SQL's rows. The roster is refused (`refusal` set) when it has
-    fewer seats, tanks or healers than the policy's minimums.
-    """
-    floor = MIN_LEVEL.get(keyword, 0)
-    by_name = {str(r.get("name") or "").casefold(): r for r in current_rows or []}
+def _split_seats(lineup: dict, by_name: dict, floor: int) -> tuple:
+    """(groups kept, members left out, seats approved) for a first-kill roster."""
     groups, left_out, total = [], [], 0
-    for index, group in enumerate(lineup.get("groups") or []):
+    for group in lineup.get("groups") or []:
         kept = []
         for member in group.get("members") or []:
             total += 1
@@ -492,44 +485,62 @@ def first_kill_roster(
                 kept.append(member)
         if kept:
             groups.append(dict(group, members=kept))
-    placed = [m for g in groups for m in g["members"]]
+    return groups, left_out, total
+
+
+def _short_of(placed: list, policy: FirstKillPolicy) -> tuple:
+    """(tanks, healers, the shortfall sentences) of a roster against the policy."""
     tanks = len([m for m in placed if m.get("role") == "tank"])
     healers = len([m for m in placed if m.get("role") == "healer"])
-    counts = "%d of %d approved seats (%d tanks, %d healers)" % (
-        len(placed),
-        total,
-        tanks,
-        healers,
+    wants = (
+        ("seats", len(placed), policy.seats),
+        ("tanks", tanks, policy.tanks),
+        ("healers", healers, policy.healers),
     )
-    short = []
-    if len(placed) < policy.seats:
-        short.append("%d seats, needs %d" % (len(placed), policy.seats))
-    if tanks < policy.tanks:
-        short.append("%d tanks, needs %d" % (tanks, policy.tanks))
-    if healers < policy.healers:
-        short.append("%d healers, needs %d" % (healers, policy.healers))
-    refusal = (
-        "%s first-kill roster refused: only %s eligible"
-        % (place(keyword), "; ".join(short))
-        if short
-        else ""
+    short = [
+        "%d %s, needs %d" % (have, kind, want)
+        for kind, have, want in wants
+        if have < want
+    ]
+    return tanks, healers, short
+
+
+def first_kill_roster(
+    keyword: str, lineup: dict, current_rows: list, policy: FirstKillPolicy
+) -> FirstKill:
+    """The approved seats that are online and at the raid's level, as a roster.
+
+    `lineup` is the approved selection and is not modified. `current_rows` are
+    ELIGIBILITY_SQL's rows. The roster is refused (`refusal` set) when it has
+    fewer seats, tanks or healers than the policy's minimums.
+    """
+    by_name = {str(r.get("name") or "").casefold(): r for r in current_rows or []}
+    groups, left_out, total = _split_seats(lineup, by_name, MIN_LEVEL.get(keyword, 0))
+    placed = [m for g in groups for m in g["members"]]
+    tanks, healers, short = _short_of(placed, policy)
+    refusal = ""
+    if short:
+        refusal = "%s first-kill roster refused: only %s eligible" % (
+            place(keyword),
+            "; ".join(short),
+        )
+    line = (
+        "%s first-kill roster: %d of %d approved seats (%d tanks, %d healers) "
+        "ordered; left out %d: %s"
+        % (
+            place(keyword),
+            len(placed),
+            total,
+            tanks,
+            healers,
+            len(left_out),
+            "; ".join("%s (%s)" % (e["name"], e["why"]) for e in left_out) or "nobody",
+        )
     )
-    line = "%s first-kill roster: %s ordered; left out %d: %s" % (
-        place(keyword),
-        counts,
-        len(left_out),
-        "; ".join("%s (%s)" % (e["name"], e["why"]) for e in left_out) or "nobody",
+    first_kill = {"ordered": len(placed), "approved": total, "left_out": list(left_out)}
+    return FirstKill(
+        dict(lineup, groups=groups, first_kill=first_kill), left_out, refusal, line
     )
-    subset = dict(
-        lineup,
-        groups=groups,
-        first_kill={
-            "ordered": len(placed),
-            "approved": total,
-            "left_out": list(left_out),
-        },
-    )
-    return FirstKill(subset, left_out, refusal, line)
 
 
 # --- the attunement ------------------------------------------------------------
