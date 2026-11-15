@@ -170,6 +170,132 @@ def _zone_loop(name, deaths, level_now) -> Loop | None:
     return None
 
 
+RISK_WINDOW_SECONDS = 30 * 60
+RISK_DEATHS = 3
+
+
+@dataclass(frozen=True)
+class Risk:
+    """One member heading into a death loop (#2591): where its newest death
+    was, how many deaths the trigger counts, to what, at what level, and the
+    trigger phrase naming the rule that flagged it."""
+
+    name: str
+    zone: int
+    map_id: int
+    deaths: int
+    killer: str
+    level: int
+    first_age: int
+    last_age: int
+    trigger: str
+
+    @property
+    def place(self) -> str:
+        return levelroute.zone_name(self.zone)
+
+    def reason(self) -> str:
+        return "%s, with no level gained" % self.trigger
+
+    def blocker(self) -> str:
+        reason = self.reason()
+        return reason[0].upper() + reason[1:] + "."
+
+
+def _risk_at(name, window, trigger) -> Risk:
+    newest = window[0]
+    return Risk(
+        name=name,
+        zone=newest.zone,
+        map_id=newest.map_id,
+        deaths=len(window),
+        killer=_top_killer(window),
+        level=newest.level,
+        first_age=window[-1].age,
+        last_age=newest.age,
+        trigger=trigger,
+    )
+
+
+def _window_risk(name, deaths, level_now) -> Risk | None:
+    """The risk in the window anchored at deaths[0] (newest first), or None.
+
+    A window counts only when every death in it is at one level and the
+    member's level now is still that level: a level gained since the first
+    of those deaths clears the risk, as it clears a loop."""
+    for span, minimum in ((WINDOW_SECONDS, RISK_DEATHS),):
+        window = [d for d in deaths if d.age - deaths[0].age <= span]
+        if len(window) < minimum:
+            continue
+        if len({d.level for d in window}) != 1:
+            continue
+        if level_now is not None and int(level_now) != window[0].level:
+            continue
+        return _risk_at(name, window, "died %d times within an hour" % len(window))
+    window = [d for d in deaths if d.age - deaths[0].age <= RISK_WINDOW_SECONDS]
+    if len(window) < 2 or len({d.level for d in window}) != 1:
+        return None
+    if level_now is not None and int(level_now) != window[0].level:
+        return None
+    killers = Counter(d.killer for d in window if d.killer)
+    if killers and max(killers.values()) >= 2:
+        group = [d for d in window if d.killer == _top_killer(window)]
+        return _risk_at(
+            name,
+            group,
+            "died %d times to the same killer within 30 minutes" % len(group),
+        )
+    zones = Counter(d.zone for d in window if d.zone)
+    if zones and max(zones.values()) >= 2:
+        zone = max(zones, key=lambda z: zones[z])
+        group = [d for d in window if d.zone == zone]
+        return _risk_at(
+            name, group, "died %d times in the same zone within 30 minutes" % len(group)
+        )
+    return None
+
+
+def risks(rows, levels=None) -> dict:
+    """name -> Risk for every member heading into a death loop (#2591).
+
+    At risk when (a) two or more deaths to the same killer or in the same
+    zone within 30 minutes, or (b) three or more deaths across any zones
+    within an hour, in each case with no level gained since the first of
+    those deaths. Pure, like `loops`: rows in, risk entries out."""
+    levels = levels or {}
+    out = {}
+    for name, deaths in _deaths_of(rows).items():
+        for i in range(len(deaths)):
+            found = _window_risk(name, deaths[i:], levels.get(name))
+            if found is not None:
+                out[name] = found
+                break
+    return out
+
+
+def avoided_zones(rows, levels=None) -> dict:
+    """name -> the zones a formed loop leaves avoided until a level gain.
+
+    `loops` clears on its quiet window alone; a loop's zone stays avoided
+    after that window lapses (#2591), so this read ignores the quiet clock
+    and judges every window the rows hold. A level gained since the loop
+    (the member's level now differs from the loop's) clears the avoidance."""
+    levels = levels or {}
+    out = {}
+    for name, deaths in _deaths_of(rows).items():
+        by_zone: dict = {}
+        for d in deaths:
+            by_zone.setdefault(d.zone, []).append(d)
+        zones = {
+            zone
+            for zone, zone_deaths in by_zone.items()
+            if zone and _zone_loop(name, zone_deaths, levels.get(name)) is not None
+        }
+        if zones:
+            out[name] = zones
+    return out
+
+
 def loops(rows, levels=None) -> dict:
     """name -> Loop for every member of SQL's rows in a death loop.
 

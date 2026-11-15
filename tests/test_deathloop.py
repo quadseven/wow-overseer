@@ -516,5 +516,81 @@ class ThePassLeavesTheZone(unittest.TestCase):
         self.assertIn('loops=facts.get("death_loops"))', bridge)
 
 
+# ---- the pre-loop risk read (#2591) --------------------------------------------
+
+
+class TheRiskRead(unittest.TestCase):
+    def test_two_deaths_to_the_same_killer_within_30_minutes_is_a_risk(self):
+        rows = [death(2, zone=WETLANDS), death(20, zone=ELWYNN)]
+        found = deathloop.risks(rows, {"Clunk": 21})
+        risk = found["Clunk"]
+        self.assertEqual(risk.deaths, 2)
+        self.assertEqual(risk.killer, "Great Goretusk")
+        self.assertIn("same killer", risk.trigger)
+        self.assertIn("no level gained", risk.reason())
+
+    def test_two_deaths_in_the_same_zone_within_30_minutes_is_a_risk(self):
+        rows = [death(2, killer="Redridge Mongrel"), death(25, killer="Tarantula")]
+        found = deathloop.risks(rows, {"Clunk": 21})
+        self.assertEqual(found["Clunk"].zone, REDRIDGE)
+        self.assertIn("same zone", found["Clunk"].trigger)
+
+    def test_three_deaths_across_zones_within_an_hour_is_a_risk(self):
+        rows = [
+            death(2, zone=WETLANDS, killer="Mottled Raptor"),
+            death(25, zone=ELWYNN, killer="Riverpaw Gnoll"),
+            death(50, killer="Tarantula"),
+        ]
+        found = deathloop.risks(rows, {"Clunk": 21})
+        self.assertEqual(found["Clunk"].deaths, 3)
+        self.assertIn("an hour", found["Clunk"].trigger)
+
+    def test_scattered_single_deaths_are_not_a_risk(self):
+        rows = [death(2, zone=WETLANDS, killer="Mottled Raptor"), death(50)]
+        self.assertEqual(deathloop.risks(rows, {"Clunk": 21}), {})
+        apart = [death(2), death(45)]
+        self.assertEqual(deathloop.risks(apart, {"Clunk": 21}), {})
+
+    def test_deaths_followed_by_a_level_gain_are_not_a_risk(self):
+        rows = [death(2), death(20)]
+        self.assertEqual(deathloop.risks(rows, {"Clunk": 22}), {})
+        gained = [death(2, level=22), death(20, level=21)]
+        self.assertEqual(deathloop.risks(gained, {"Clunk": 22}), {})
+
+    def test_a_formed_loop_leaves_its_zone_avoided_until_a_level_gain(self):
+        old = deaths(6, start=150, level=21)
+        self.assertEqual(deathloop.loops(old, {"Clunk": 21}), {})
+        self.assertEqual(
+            deathloop.avoided_zones(old, {"Clunk": 21}), {"Clunk": {REDRIDGE}}
+        )
+        self.assertEqual(deathloop.avoided_zones(old, {"Clunk": 22}), {})
+
+
+class ThePlannerIntervenesAtRisk(unittest.TestCase):
+    def test_an_at_risk_member_in_the_risk_zone_gets_the_intervention_first(self):
+        risk = deathloop.risks(deaths(2, level=17), {"Clunk": 17})
+        result = plan([member()], risks=risk)
+        steps = steps_of(result)
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0].action, "hearth")
+        self.assertIn("town errand", steps[0].said)
+        self.assertIn("prevention", result.lines["Clunk"])
+        self.assertIn("same killer", result.lines["Clunk"])
+
+    def test_a_healthy_member_is_planned_as_before(self):
+        self.assertEqual(steps_of(plan([member()], risks={})), [])
+        self.assertEqual(steps_of(plan([member()])), [])
+
+    def test_a_post_loop_member_is_not_routed_back_into_the_loop_zone(self):
+        here = member(level=21, zone_id=ELWYNN, x=-9000.0, y=100.0)
+        normal = steps_of(plan([here]))
+        self.assertIn("creature:%d " % spawn_of("redridge"), normal[0].rows[0].command)
+        avoided = deathloop.avoided_zones(deaths(6, start=150, level=21), {"Clunk": 21})
+        looped = steps_of(plan([here], avoided=avoided))
+        for step in looped:
+            for row in step.rows:
+                self.assertNotIn("creature:%d " % spawn_of("redridge"), row.command)
+
+
 if __name__ == "__main__":
     unittest.main()

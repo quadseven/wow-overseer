@@ -4527,6 +4527,8 @@ def plan(
     equip_room=None,
     mounts=None,
     loops=None,
+    risks=None,
+    avoided=None,
     bags=None,
     class_candidates=(),
     family_candidates=(),
@@ -4573,7 +4575,11 @@ def plan(
     `equip_room` name -> (free slots needed, what for) for members too full to
     put an upgrade on (gear.equip_room, equip_room_step);
     `loops` name -> deathloop.Loop for a member dying over and over in one zone
-    (death_loop_first), None or {} for none; `campaign` the family's
+    (death_loop_first), None or {} for none; `risks` name -> deathloop.Risk
+    for a member heading into a loop (death_risk_first, #2591), None or {}
+    for none; `avoided` name -> the zones a formed loop leaves avoided for
+    that member until a level gain (deathloop.avoided_zones), None or {} for
+    none; `campaign` the family's
     campaign door (the bridge's _guild_campaign_door), "" for none, which
     keeps a roster member's death loop escape off the level walk (level_step);
     `family_members` the roster family members (role FAMILY) whose family is
@@ -4633,6 +4639,8 @@ def plan(
         equip_room=equip_room,
         mounts=mounts,
         loops=loops,
+        risks=risks,
+        avoided=avoided,
         bags=bags,
         campaign=campaign,
     )
@@ -4685,6 +4693,8 @@ class _PlanInputs:
     equip_room: Any
     mounts: Any
     loops: Any
+    risks: Any
+    avoided: Any
     bags: Any
     campaign: Any
 
@@ -4862,6 +4872,8 @@ def _plan_roster_member(member, inputs, state):
         mates=inputs.members,
         looping=_member_map_keys(inputs.loops),
         assigned=state.assigned,
+        risk=_offer_for(inputs.risks, member.name),
+        avoided_zones=_member_value(inputs.avoided, member.name, ()),
     )
     asked, yielded = class_asking(
         member, inputs.classes, inputs.hunts, inputs.now, inputs.recent, inputs.asks
@@ -5726,6 +5738,8 @@ def _member_step(
     mates=(),
     looping=(),
     assigned=None,
+    risk=None,
+    avoided_zones=(),
 ):
     """A death loop's way out of its zone first (death_loop_first, #1464),
     then a class quest, then a hunter's first pet, then a hearth out of a
@@ -5782,6 +5796,22 @@ def _member_step(
     )
     if found is not None:
         return found
+    if loop is None and risk is not None and _in_loop_zone(m, risk):
+        found = death_risk_first(
+            m,
+            risk,
+            leveling,
+            recent,
+            cap,
+            campaign,
+            supply,
+            kept,
+            classes,
+            mates=mates,
+            looping=looping,
+        )
+        if found is not None:
+            return found
     found, quest_note = _quest_first(
         m,
         classes,
@@ -5868,7 +5898,9 @@ def _member_step(
         step = _collect_first(m, mail, recent, cap)
         if step is not None:
             return step, step.said, supply_note, gear_note
-    step, doing, level_note = level_step(m, leveling, recent, cap, loop, campaign)
+    step, doing, level_note = level_step(
+        m, leveling, recent, cap, loop, campaign, avoid_zones=avoided_zones
+    )
     if step is not None or doing:
         return step, doing, supply_note, gear_note
     if levelling:
@@ -5912,7 +5944,7 @@ def _join_once(*parts) -> str:
     return "; ".join(said)
 
 
-def level_step(m, world, recent, cap, loop=None, campaign=""):
+def level_step(m, world, recent, cap, loop=None, campaign="", avoid_zones=()):
     """(step or None, what it does, a note): a member that has outgrown
     where it stands (its quests there have run out, or its band) walks to the
     flight master of a quest hub where it has open quests (guildlevel.py).
@@ -5976,7 +6008,8 @@ def level_step(m, world, recent, cap, loop=None, campaign=""):
         orbs=getattr(world, "orbs", None),
         opens=opens,
         nodes=m.taxi_nodes,
-        avoid=loop.zone if loop is not None else None,
+        avoid=({loop.zone} if loop is not None else set())
+        | {int(z) for z in avoid_zones or ()},
     )
     if choice.refused:
         return None, "", guildlevel.refused_note(m.name, m.level, why, choice)
@@ -6313,6 +6346,53 @@ def _death_loop_help_line(m, loop, mates, looping=()) -> str:
         mate.name,
         loop.place,
     )
+
+
+def death_risk_first(
+    m,
+    risk,
+    leveling,
+    recent,
+    cap,
+    campaign="",
+    supply=None,
+    kept=None,
+    book=None,
+    mates=(),
+    looping=(),
+):
+    """(the member's step as _member_step returns it), or None: the
+    prevention intervention for a member at risk of a death loop (#2591),
+    ahead of every quest rung.
+
+    The escape is the loop's own (death_loop_first, with the risk read in
+    the loop's place: it carries the same zone, deaths, killer and reason):
+    the hearth to town for its town errand (repair, sell, train), or the
+    level walk out, and no quest of the risk zone while neither can start.
+    The step's line names the intervention and its trigger, so the pass
+    logs one line for it."""
+    if risk is None or not _in_loop_zone(m, risk):
+        return None
+    found = death_loop_first(
+        m,
+        risk,
+        leveling,
+        recent,
+        cap,
+        campaign,
+        supply,
+        kept,
+        book,
+        mates=mates,
+        looping=looping,
+    )
+    if found is None:
+        return None
+    step, doing, note, extra = found
+    line = "death-loop prevention (%s): %s" % (risk.trigger, doing)
+    if step is not None:
+        return step, line, note, extra
+    return None, line, _join(note, line), extra
 
 
 def death_loop_first(
