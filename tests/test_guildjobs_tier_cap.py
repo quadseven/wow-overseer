@@ -50,7 +50,15 @@ def aim(name="Funkymon"):
 
 
 def train_steps(result, name):
-    return [s for s in result.steps if s.holder == name and s.action == "train"]
+    # The profession errand (slice 2) is a seat's walk for a trade it lacks; the
+    # tier cap rung is about a trade it holds, so only that walk is counted here.
+    return [
+        s
+        for s in result.steps
+        if s.holder == name
+        and s.action == "train"
+        and not guildjobs.is_profession_errand(s)
+    ]
 
 
 class AMemberAtATierCap(unittest.TestCase):

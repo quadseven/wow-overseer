@@ -20059,6 +20059,8 @@ class Bridge(discord.Client):
                                if any(m.name == n for m in crew)) or "none")
         for line in guildjobs.focus_lines(plan):
             log.info("guild jobs: %s", line)
+        for line in guildjobs.profession_lines(members, plan):
+            log.info("guild jobs: %s", line)
         self._log_stranded_knights(members, plan)
         for name, reason in sorted(plan.class_holds.items()):
             log.info("guild class quest: %s held: %s", name, reason)
@@ -20194,6 +20196,17 @@ class Bridge(discord.Client):
         try:
             if await self._retry_held("guild jobs", step):
                 return
+            if guildjobs.is_profession_errand(step):
+                # A raid seat's walk to learn a profession is judged against
+                # the death discs like any other walk (#2457): advisory, and
+                # refused only when the nearest profession trainer lies over
+                # ground the family died on. Nothing is written for it.
+                refusal = await asyncio.to_thread(
+                    _death_disc_refusal, step.holder, "profession trainer")
+                if refusal:
+                    log.info("guild jobs: %s waits on its profession errand: %s",
+                             step.holder, refusal)
+                    return
             if step.walk is not None:
                 walk_id = await asyncio.to_thread(_insert_corps_row, step.holder, step.walk)
                 if not walk_id:

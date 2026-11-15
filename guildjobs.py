@@ -130,6 +130,8 @@ import gearup
 import guildcorps
 import guildlevel
 import guildroute
+import guildrun
+import guildtrades
 import guineapig
 import hunterpet
 import keep
@@ -830,6 +832,9 @@ class JobsPlan:
     ask_yields: tuple = ()
     # guild -> {skill: name} of each trade's guinea pig (guineapig.pick).
     pigs: dict = field(default_factory=dict)
+    # name -> the (skill, skill) each approved raid seat should hold
+    # (guildtrades.py), whether or not it holds them yet.
+    assigned: dict = field(default_factory=dict)
 
 
 def _yards(ax, ay, bx, by) -> float:
@@ -1611,6 +1616,178 @@ def _tier_cap_first(m, pvp, pending, recent, cap):
     if not capped:
         return None, ""
     return _train_step(m, {}, cap, recent, held=capped)
+
+
+# ---------------------------------------------------------------------------
+# THE PROFESSION ERRAND (slice 2 of the raid-seat profession plan).
+#
+# MEASURED ON THE DEV REALM, 2026-11-15: 33 of the 80 approved raid seats held
+# no primary profession, 32 of them in Bonkers. A raider's ordinary job is the
+# post and the sale, and a guild on GUILD_FOCUS dungeon keeps every member's
+# ordinary job, so the train step (which only a maintenance member or a
+# craft-focus guild's trades reach) was never asked of a Bonkers seat.
+#
+# THE EXCEPTION IS NARROW. Only an approved raid seat (guildtrades.assign)
+# that holds fewer than two primaries and lacks one it was assigned gets it;
+# one trainer walk per missing trade, never more than the guild's trainer
+# allowance (TRAIN_STEPS_PER_GUILD) in a pass, each trade on its own failure
+# cooldown (_training_cooling). It is never asked of a seat that is offline,
+# dead, in a fight, in a group, inside an instance, a summon waits on, or that
+# a guild run holds (`busy`, refused by _step_refusal). It writes only the
+# module's own `walk-to-trainer skill:` row: no aim, no grant. The bridge asks
+# the death discs before it walks (is_profession_errand).
+#
+# WHEN: on a town stop the seat already makes (a town action of its own inside
+# TOWN_STOP_MINUTES), else as a short dedicated errand once it has made none
+# for DEDICATED_AFTER_MINUTES; between the two it waits for its next stop.
+PROFESSION_GOAL = "a profession trainer"
+TOWN_STOP_ACTIONS = frozenset(
+    {
+        "gear",
+        "sell",
+        "post",
+        "collect",
+        "tool",
+        "reagent",
+        "room",
+        "riding",
+        "weapon",
+        restsupply.ACTION,
+        mountbuy.ACTION,
+        guildlevel.INN_ACTION,
+    }
+)
+TOWN_STOP_MINUTES = 60
+DEDICATED_AFTER_MINUTES = 6 * 60
+
+
+def is_profession_errand(step) -> bool:
+    """Whether a step is a raid seat's walk to learn an assigned profession."""
+    return (
+        getattr(step, "action", "") == "train"
+        and getattr(step, "goal", "") == PROFESSION_GOAL
+    )
+
+
+def _town_stop_ages(name, recent) -> list:
+    """Minutes since each town action of this member that did not fail."""
+    return [
+        int(r.age_minutes)
+        for r in recent or ()
+        if r.name == name
+        and r.action in TOWN_STOP_ACTIONS
+        and r.status not in TRAIN_FAILED
+        and r.status != ""
+    ]
+
+
+def assigned_trades(members, crafters=None) -> dict:
+    """name -> (skill, skill) for each raid seat in `members`, by
+    guildtrades.assign over its guild's approved seats. `crafters` is the
+    families' {guild: {skill: [(name, value)]}}, which says what the family
+    seats of the guild already hold."""
+    out: dict = {}
+    guilds = {m.guild for m in members or () if m.role == RAIDER}
+    for guild in sorted(guilds):
+        live = {}
+        for m in members:
+            if m.guild == guild and m.role in (RAIDER, SUMMONER, MAINTENANCE):
+                live[m.name] = guildtrades.Seen(m.level, frozenset(m.primaries))
+        family: dict = {}
+        for skill, rows in ((crafters or {}).get(guild) or {}).items():
+            if int(skill) in PRIMARY_SKILLS:
+                for name, _value in rows:
+                    family.setdefault(name, set()).add(int(skill))
+        for name, held in family.items():
+            live.setdefault(name, guildtrades.Seen(RAID_CEILING, frozenset(held)))
+        got = guildtrades.assign(guild, live)
+        for m in members:
+            if m.guild == guild and m.role == RAIDER and m.name in got:
+                out[m.name] = got[m.name]
+    return out
+
+
+def profession_lines(members, plan_result) -> list:
+    """One sentence per guild with raid seats: how many hold their assigned
+    pair, how many lack a trade, and how many were sent to a trainer this pass.
+    This is the line to grep for the profession plan on the live realm."""
+    out = []
+    steps = {s.holder for s in plan_result.steps if is_profession_errand(s)}
+    for guild in sorted({m.guild for m in members if m.name in plan_result.assigned}):
+        seats = [
+            m for m in members if m.guild == guild and m.name in plan_result.assigned
+        ]
+        whole = sum(
+            1
+            for m in seats
+            if not guildtrades.missing(m.primaries, plan_result.assigned[m.name])
+        )
+        out.append(
+            "%s: profession plan: %d raid seat(s), %d hold their assigned trades, "
+            "%d lack one, %d sent to a trainer this pass"
+            % (
+                guild,
+                len(seats),
+                whole,
+                len(seats) - whole,
+                sum(1 for m in seats if m.name in steps),
+            )
+        )
+    return out
+
+
+def _lay_assigned_trades(members, crafters, trades) -> dict:
+    """The raid seats' assigned pairs (assigned_trades), laid first in each
+    seat's planned `trades`; returns the pairs."""
+    assigned = assigned_trades(members, crafters)
+    for name, pair in assigned.items():
+        trades[name] = tuple(pair) + tuple(
+            s for s in trades.get(name, ()) if s not in pair
+        )
+    return assigned
+
+
+def _profession_unfit(m, pvp, pending) -> bool:
+    """Whether this seat is in no state to be walked to a trainer now."""
+    if not m.eligible or not m.online or not m.alive:
+        return True
+    if m.in_combat or m.follows or m.name in (pending or ()):
+        return True
+    if m.map_id not in guildrun.OPEN_WORLD_MAPS or _pvp_inside(m, pvp):
+        return True
+    return m.level < TRAIN_MIN_LEVEL
+
+
+def _profession_pace(m, lacks, recent) -> str:
+    """ "" when the errand may go now, else the note saying it waits for the
+    seat's next town stop (see WHEN above)."""
+    ages = _town_stop_ages(m.name, recent)
+    if ages and TOWN_STOP_MINUTES < min(ages) < DEDICATED_AFTER_MINUTES:
+        return "%s waits for its next town stop to learn %s" % (
+            m.name,
+            " and ".join(SKILL_NAMES.get(s, str(s)) for s in lacks),
+        )
+    return ""
+
+
+def _profession_first(m, assigned, pvp, pending, recent, cap):
+    """(the trainer walk or None, a note): a raid seat that lacks a trade it was
+    assigned walks to its trainer. See THE PROFESSION ERRAND above."""
+    want = (assigned or {}).get(m.name)
+    if m.role != RAIDER or not want:
+        return None, ""
+    lacks = guildtrades.missing(m.primaries, want)
+    if not lacks or len(m.primaries) >= MAX_PRIMARY:
+        return None, ""
+    if _profession_unfit(m, pvp, pending):
+        return None, ""
+    waits = _profession_pace(m, lacks, recent)
+    if waits:
+        return None, waits
+    step, why = _train_step(m, {}, cap, recent, held=lacks)
+    if step is None:
+        return None, why
+    return replace(step, goal=PROFESSION_GOAL), ""
 
 
 # The crafting trades whose rungs above the auto-learned first are trainer
@@ -4062,6 +4239,7 @@ def plan(
         trades=_plan_trades(members, recent, focus),
         tally=_focus_tally(members, focus),
     )
+    state.assigned = _lay_assigned_trades(members, crafters, state.trades)
     _plan_members(inputs, state)
     return _finish_plan(inputs, state)
 
@@ -4114,6 +4292,7 @@ class _PlannerState:
     preexisting_busy: set
     trades: dict
     tally: dict
+    assigned: dict = field(default_factory=dict)
     steps: list = field(default_factory=list)
     lines: dict = field(default_factory=dict)
     notes: list = field(default_factory=list)
@@ -4276,6 +4455,7 @@ def _plan_roster_member(member, inputs, state):
         inputs.campaign,
         mates=inputs.members,
         looping=_member_map_keys(inputs.loops),
+        assigned=state.assigned,
     )
     asked, yielded = class_asking(
         member, inputs.classes, inputs.hunts, inputs.now, inputs.recent, inputs.asks
@@ -4396,6 +4576,7 @@ def _finish_plan(inputs, state):
         yields=class_yields(all_members, inputs.classes, inputs.recent),
         ask_yields=tuple(state.ask_yields),
         pigs=inputs.pigs,
+        assigned=state.assigned,
     )
 
 
@@ -5031,6 +5212,7 @@ def _member_step(
     campaign="",
     mates=(),
     looping=(),
+    assigned=None,
 ):
     """A death loop's way out of its zone first (death_loop_first, #1464),
     then a class quest, then a hunter's first pet, then a hearth out of a
@@ -5146,6 +5328,10 @@ def _member_step(
     step, cap_note = _tier_cap_first(m, pvp, pending, recent, cap)
     if step is not None:
         return step, step.said, supply_note, gear_note
+    step, learn_note = _profession_first(m, assigned, pvp, pending, recent, cap)
+    if step is not None:
+        return step, step.said, supply_note, gear_note
+    cap_note = _join(cap_note, learn_note)
     step, doing, held = _pvp_first(
         m,
         pvp,
