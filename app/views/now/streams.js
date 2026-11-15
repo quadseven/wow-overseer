@@ -32,6 +32,7 @@ function el(tag, cls) {
 }
 
 function setState(t, state, text) {
+  const prev = t.state;
   t.state = state;
   t.pic.dataset.state = state;
   t.badge.lastChild.textContent =
@@ -46,6 +47,9 @@ function setState(t, state, text) {
     t.sampler.start();
   } else if (state !== "dark") {
     t.sampler.stop();
+  }
+  if (prev !== state && typeof window !== "undefined" && typeof window.dispatchEvent === "function" && typeof CustomEvent === "function") {
+    window.dispatchEvent(new CustomEvent("overseer:streamstate", { detail: { name: t.name, state } }));
   }
 }
 
@@ -136,6 +140,16 @@ export function disconnect(name) {
 export function stateOf(name) {
   const t = tiles.get(name);
   return t ? t.state : "off";
+}
+
+// Reconnect `name`'s stream immediately (used by the compact stage Retry control).
+export function retry(name) {
+  const t = tiles.get(name);
+  if (!t || !t.url) return false;
+  t.lastAttempt = Date.now();
+  t.player.stop();
+  t.player.start(t.name, t.url);
+  return true;
 }
 
 // True when a connect() now would retry a picture that has been off a while.
