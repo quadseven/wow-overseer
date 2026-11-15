@@ -844,7 +844,10 @@ def gray_cutoff(level: int) -> int:
 
 def kills_gray(level: int, door: Door) -> bool:
     """Whether a member of `level` in `door` makes the door's mobs gray to it."""
-    return int(door.floor) <= gray_cutoff(level)
+    floor = getattr(door, "floor", None)
+    if floor is None:
+        return False  # an unread floor holds nobody, as an unread bosses' level does
+    return int(floor) <= gray_cutoff(level)
 
 
 def carries(member: Member, door: Door) -> bool:

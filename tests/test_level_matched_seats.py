@@ -30,6 +30,10 @@ class GrayCutoff(unittest.TestCase):
         self.assertEqual(43, guildrun.gray_cutoff(54))  # 54 - 1 - 10
         self.assertEqual(51, guildrun.gray_cutoff(60))
 
+    def test_a_door_with_an_unread_floor_holds_nobody(self):
+        unread = guildrun.Door("x", "X", None, 60, 1, 1)
+        self.assertFalse(guildrun.kills_gray(60, unread))
+
     def test_a_door_is_gray_to_a_member_when_its_mobs_sit_at_or_under_the_cutoff(self):
         self.assertTrue(guildrun.kills_gray(54, ARMORY))
         self.assertTrue(guildrun.kills_gray(60, ARMORY))
