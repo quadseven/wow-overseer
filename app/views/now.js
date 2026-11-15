@@ -177,19 +177,25 @@ function stageOptions(ctx) {
 // A phone's family unit: no video slot (the picture is on the stage), the
 // name and Doing line, Hear for the staged family only, then the agenda card,
 // the frame buttons and the map.
-function narrowFam(f, i, agendas, w, staged) {
+function narrowFam(f, i, agendas, w, staged, wallLoading) {
   const m = w.ready ? w.head(f) : null;
   const t = m ? w.tile(m.name) : null;
   const on = f === staged;
-  return html`<div class="fam" data-family="${f}"${on ? raw(" data-staged") : ""}>${m ? streams.captionTop(m, t, on) : ""}${agendaCard(f, agendas[i])}${m ? streams.captionActs(m) : ""}${miniMap(f)}</div>`;
+  const wait = !w.ready && wallLoading;
+  const top = m ? streams.captionTop(m, t, on) : (wait ? html`<div class="st-cap st-cap-top st-cap-wait skeleton" aria-hidden="true"></div>` : "");
+  const acts = m ? streams.captionActs(m) : (wait ? html`<div class="st-cap st-cap-acts st-acts-wait skeleton" aria-hidden="true"></div>` : "");
+  return html`<div class="fam" data-family="${f}"${on ? raw(" data-staged") : ""}>${top}${agendaCard(f, agendas[i])}${acts}${miniMap(f)}</div>`;
 }
 
 function narrowFamilies(ctx, agendas, aloud) {
-  const w = wallModel(ctx.get("/api/wall"));
-  const staged = pickStaged(stageOptions(ctx), savedStage());
+  const wall = ctx.get("/api/wall");
+  const w = wallModel(wall);
   const keys = D.familyKeys();
+  const saved = savedStage();
+  const staged = pickStaged(stageOptions(ctx), saved) || (keys.includes(saved) ? saved : keys[0]);
   const order = keys.map((f, i) => i).sort((a, b) => (keys[b] === staged) - (keys[a] === staged) || a - b);
-  const units = order.map((i) => narrowFam(keys[i], i, agendas, w, staged));
+  const wallLoading = readState(wall) === "loading";
+  const units = order.map((i) => narrowFam(keys[i], i, agendas, w, staged, wallLoading));
   const row = html`<div class="sec-row"><h2 class="kicker" id="fams-title">Families, live</h2>${aloud}</div>`;
   return html`<section class="fams" aria-labelledby="fams-title"><div class="families" data-wall="stacked">${units[0] || ""}${row}${units.slice(1)}</div></section>`;
 }
