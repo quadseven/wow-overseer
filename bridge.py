@@ -32826,7 +32826,10 @@ def _plan_guild_withdrawals(names: list) -> tuple:
     plans = _craft_plans_of(names)
     crafting = any(s.source == reagentplan.GUILD_BANK
                    for p in plans for s in p.shorts)
-    if not selling and not crafting:
+    # THE VAULT'S VENDOR AND GIVE DECISIONS ARE CARRIED OUT TOO (#2602).
+    clearing = any(d.action in (bankforecast.VENDOR, bankforecast.GIVE)
+                   for d in forecast.decisions())
+    if not selling and not crafting and not clearing:
         return ()
     try:
         free = _fetch_free_slots(names)
@@ -32844,10 +32847,12 @@ def _plan_guild_withdrawals(names: list) -> tuple:
             plans, _fetch_vault_stacks(names, entries), takers)
         for note in notes:
             log.info("guild bank: %s", note)
-    if not selling:
-        return for_craft
     pending = frozenset(int(row["entry"]) for row in _fetch_withdrawn_for_sale(names))
-    return for_craft + bankforecast.plan_withdrawals(forecast, takers, pending=pending)
+    placed = for_craft
+    if selling:
+        placed += bankforecast.plan_withdrawals(forecast, takers, pending=pending)
+    return placed + bankforecast.plan_surplus_withdrawals(
+        forecast, takers, planned=placed, pending=pending)
 
 
 def _clearance_sales(routes) -> tuple:
