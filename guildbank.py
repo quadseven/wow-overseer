@@ -444,6 +444,21 @@ def plan_setup(
     return tuple(actions)
 
 
+def split_remote(actions) -> tuple:
+    """`(needs no vault, needs the vault)` for a setup plan.
+
+    THE GRANT NEEDS NO WALK. The module's `bank grant-deposit` checks that the
+    caller is the guild master with a session, and nothing about where it
+    stands; `buy-tab` and `name-tab` both refuse with "no guild bank in reach".
+    The pass queued all three only on an arrival, so a guild whose leader could
+    not be aimed at a vault (the town slot held by another errand, the vault a
+    continent away) had its second tab stand closed to every rank for days
+    (wow-dev, 2026-11-15).
+    """
+    anywhere = tuple(a for a in actions if a.command.startswith("bank grant-deposit"))
+    return anywhere, tuple(a for a in actions if a not in anywhere)
+
+
 def setup_for_arrival(actions, seen) -> tuple:
     """The setup commands to queue on one arrival at the vault.
 

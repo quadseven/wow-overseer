@@ -17572,6 +17572,22 @@ class Bridge(discord.Client):
             len(withdrawals), fund_wants, holder_label,
         )
 
+    async def _queue_remote_setup(self, actions, cohort=None) -> tuple:
+        """Queue the setup commands that need no vault; return the ones that do."""
+        anywhere, at_vault = guildbank.split_remote(actions)
+        if anywhere:
+            seen = await asyncio.to_thread(
+                _recent_guild_setup_keys, GIVE_RETRY_MINUTES)
+            for action in anywhere:
+                if (action.target, action.command) in seen:
+                    continue
+                await asyncio.to_thread(
+                    _insert_guild, action.target, action.command, "guildbank-setup")
+                log.info("guild bank setup: queued %s for %s, which needs no "
+                         "vault%s", action.command, action.target,
+                         _family_label(cohort))
+        return at_vault
+
     async def _guild_bank_once(self, cohort=None) -> None:
         """One pass of the guild bank: park gold above each character's float.
 
@@ -17736,6 +17752,10 @@ class Bridge(discord.Client):
         members = natural.only_contributors(members, eligible)
         actions = _plan_guild_setup(setup, purchased_tabs, names, leader,
                                     members, cohort, eligible)
+        # THE RANK GRANTS ARE WRITTEN WHEREVER THE MASTER STANDS: the module's
+        # grant has no vault-range check, so they do not wait for an arrival
+        # the town slot may never give (see `guildbank.split_remote`).
+        actions = await self._queue_remote_setup(actions, cohort)
         # THE TAB COUNT WAS ALREADY IN HAND AND WAS NEVER PASSED (infra#4198).
         # `plan_deposits` defaults `guild_has_tab` to False - the cautious
         # answer, which reserves `FLOAT_COPPER + TAB0_COST_COPPER` - and this
