@@ -1307,6 +1307,7 @@ def plan_withdrawals(
     pending=frozenset(),
     visit: int = WITHDRAW_VISIT_STACKS,
     keep_free: int = WITHDRAW_KEEP_FREE,
+    planned=(),
 ) -> tuple:
     """The vault stacks the house should have, and who takes each.
 
@@ -1326,8 +1327,7 @@ def plan_withdrawals(
         key=lambda d: (-d.price * d.stack.count, d.stack.guid),
     )
     order = sorted(takers or (), key=lambda w: (w.rank, w.name))
-    room = {w.name: max(0, min(visit, w.free_slots - keep_free)) for w in order}
-    used: dict = {}
+    room, used = room_after(order, planned, visit, keep_free)
     out = []
     for decision in sells:
         tab = int(decision.stack.tab)
@@ -1345,7 +1345,7 @@ def plan_withdrawals(
     return tuple(out)
 
 
-def _room_after(order, planned, visit, keep_free):
+def room_after(order, planned, visit, keep_free):
     """(room, used) per member once `planned` withdrawals are counted."""
     room = {w.name: max(0, min(visit, w.free_slots - keep_free)) for w in order}
     used: dict = {}
@@ -1400,7 +1400,7 @@ def plan_surplus_withdrawals(
     """
     order = sorted(takers or (), key=lambda w: (w.rank, w.name))
     by_name = {w.name: w for w in order}
-    room, used = _room_after(order, planned, visit, keep_free)
+    room, used = room_after(order, planned, visit, keep_free)
     taken = {int(w.stack.guid) for w in planned}
     out = []
 
@@ -1469,7 +1469,7 @@ WITHDRAWN_SQL = (
     "SELECT command FROM overseer_command "  # noqa: S608
     "WHERE kind = 'guild' AND status = 'applied' AND command LIKE %%s "
     # A stack a crafter took out for its own craft (reagentplan) is not for sale.
-    "AND source NOT IN ('guildbank-craft', 'guildbank-give') "
+    "AND source NOT IN ('guildbank-craft', 'guildbank-give', 'guildbank-gear') "
     "AND target_name IN (%s) AND created_at > NOW() - INTERVAL %%s HOUR"
 )
 
