@@ -16318,11 +16318,10 @@ class Bridge(discord.Client):
             indexes[holder] = index + 1
             row_by_key[(holder, 1, int(row["entry"]), index)] = row
         gifts = []
-        family_names = set(names)
         for decision in report.plan.decisions:
             stack = by_key.get(decision.key)
             row = row_by_key.get(decision.key)
-            if (decision.route != itemplan.GIVE or decision.target not in family_names
+            if (decision.route != itemplan.GIVE or not decision.target
                     or stack is None or not stack.tradable or row is None):
                 continue
             gifts.append(guildshare.Gift(
@@ -38366,8 +38365,7 @@ def _bank_plan_leaves(names: list) -> tuple:
         gear_rows = _fetch_surplus_gear(list(key))
         worn_rows = _fetch_family_equipped(list(key))
         family = key[0]
-        banked_rows = (
-            _banked_rows(list(key)) if itemplan.SELL_VENDOR in routes else [])
+        banked_rows = _banked_rows(list(key))
         extras = _itemplan_reads(
             list(key), family, rows + banked_rows, gear_rows, worn_rows)
         report = itemplan_shadow.shadow(
@@ -38375,14 +38373,23 @@ def _bank_plan_leaves(names: list) -> tuple:
             worn_rows=worn_rows, extras=extras)
         stacks = itemplan_shadow.build_stacks(
             rows, gear_rows, extras.templates, extras.instance_soulbound)
+        guild_names = (
+            {m[0] for m in (extras.guild_roster or ())}
+            | {m[0] for m in (extras.guild_crafters or ())}
+            | {m[0] for m in (extras.guild_class_members or ())}
+        )
         leaves = itemplan_shadow.leaving(
-            report.plan, list(zip(stacks, rows, strict=True)), routes, key)
+            report.plan, list(zip(stacks, rows, strict=True)), routes, key,
+            guild_names=guild_names)
         if banked_rows:
-            # A BANKED STACK THE PLAN SELLS IS FETCHED OUT TO BE SOLD (#2603).
+            # A BANKED STACK THE PLAN SELLS OR ROUTES OUT (#2603, #2418).
             banked, pairs = itemplan_shadow.banked_plan(
                 list(key), family, banked_rows, rows, free_slots, extras,
                 gear_rows=gear_rows, worn_rows=worn_rows)
-            leaves.update(itemplan_shadow.sold_from_bank(banked, pairs))
+            if itemplan.SELL_VENDOR in routes:
+                leaves.update(itemplan_shadow.sold_from_bank(banked, pairs))
+            leaves.update(
+                itemplan_shadow.class9_from_bank(banked, pairs, routes))
         unread = False
     except Exception:
         log.exception("bank: the item plan could not be read; nothing new is "
