@@ -459,7 +459,13 @@ def ledger_state(state, reason) -> str:
     """The quester pass's reading of one ledger row: LEDGER_STALLED for a
     broken row whose reason is a stall, else the row's own state."""
     state = str(state or "")
-    if state == LEDGER_BROKEN and str(reason or "").startswith(STALLED):
+    reason = str(reason or "")
+    # A stall and a refused take are each one quester's hour, not a fact about
+    # the quest: a full bag or a level too low refuses a take that a later pass
+    # may win, so neither holds the quest broken for good
+    # (quest 298, refused "not eligible" while its start item had no
+    # bag room, stayed broken for weeks).
+    if state == LEDGER_BROKEN and reason.startswith((STALLED, REFUSED_TAKE)):
         return LEDGER_STALLED
     return state
 
@@ -1078,6 +1084,35 @@ def refusals(name, tried) -> dict:
     return out
 
 
+def bags_full_hunt(name, tried) -> bool:
+    """True when a hunt row of this quester was refused for want of a bag slot
+    (classhunt.BAGS_FULL_REASON) inside SELL_COOLDOWN_MINUTES. An item objective
+    needs a free slot to loot into; the module counts slots the bridge's read
+    can miss, so the quester sells first (`needs_sale`) and its stall clock does
+    not run while it cannot hunt (`failures`)."""
+    return any(
+        a.name == name
+        and a.failed
+        and a.command.startswith(classhunt.VERB)
+        and classhunt.BAGS_FULL_REASON in a.reason
+        and a.age_minutes < SELL_COOLDOWN_MINUTES
+        for a in tried or ()
+    )
+
+
+def retry_take_refusals(name, held, tried) -> frozenset:
+    """The held quests whose take the world refused, with no refusal left in the
+    rows this pass reads: the quester asks again (a refusal is judged from the
+    last day's rows, `refusals`)."""
+    now = refusals(name, tried)
+    return frozenset(
+        int(qid)
+        for qid, reason in held.items()
+        if str(reason).startswith(REFUSED_TAKE)
+        and now.get(("take", int(qid)), (0, ""))[0] < FAILS_BEFORE_BROKEN
+    )
+
+
 def bag_room_refused(name, tried) -> frozenset:
     """The quest ids whose take this quester's world refused for bag room
     (BAG_ROOM_REFUSAL) inside SELL_COOLDOWN_MINUTES: the sale goes first, and
@@ -1405,7 +1440,11 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
     refused = refusals(member.name, tried)
     final = cannot_turn_in(member.name, tried)
     working = _working(cat, member, last_quest, left_spawns(member.name, tried))
-    playing = bool(member.online and member.alive)
+    # A quester whose hunts are refused for bag room is not working a quest:
+    # its clock waits for the sale (`needs_sale`).
+    playing = bool(member.online and member.alive) and not bags_full_hunt(
+        member.name, tried
+    )
     out = []
     for qid in sorted(member.quest_log):
         status = int(member.quest_log[qid])
@@ -2038,7 +2077,7 @@ def needs_sale(member, tried=()) -> bool:
     """Whether the quester's bags are read and at SELL_FLOOR or under, or the
     world just refused one of its takes for bag room (`bag_room_refused`),
     whatever its bags read (#1992)."""
-    if bag_room_refused(member.name, tried):
+    if bag_room_refused(member.name, tried) or bags_full_hunt(member.name, tried):
         return True
     return member.free_slots is not None and int(member.free_slots) <= SELL_FLOOR
 
@@ -2069,7 +2108,9 @@ def sell_step(member, carried, worn, kept, cat: Catalogue, recent, cap, tried=()
         return None
     source = guildjobs.source_for(SELL_ACTION, member.name)
     free = member.free_slots
-    if bag_room_refused(member.name, tried):
+    if bags_full_hunt(member.name, tried):
+        room = "was refused a hunt for %s" % classhunt.BAGS_FULL_REASON
+    elif bag_room_refused(member.name, tried):
         room = "was refused a quest for %s" % BAG_ROOM_REFUSAL
     else:
         room = "has %d free bag slot%s" % (int(free), "" if int(free) == 1 else "s")
