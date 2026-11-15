@@ -35,6 +35,7 @@ import armory
 import auction
 import bag_market
 import guildbags
+import guildgather
 import bag_pressure
 import bag_upgrade
 import bank
@@ -1431,6 +1432,40 @@ _BOT_HELD_SQL = (
     "WHERE is_bot = 1 AND updated_at > NOW() - INTERVAL 60 SECOND "
     "  AND name IN (%s)"
 )
+
+_GATHER_SEATS_SQL = (
+    "SELECT s.name, s.level, s.map_id, s.in_combat, s.health, s.group_leader, "
+    "  MAX(IF(k.skill = 182, k.value, 0)) AS herb, "
+    "  MAX(IF(k.skill = 186, k.value, 0)) AS mining "
+    "FROM overseer_snapshot s "
+    "LEFT JOIN character_skills k ON k.guid = s.guid AND k.skill IN (182, 186) "
+    "WHERE s.is_bot = 1 AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+    "  AND s.name IN (%s) GROUP BY s.guid, s.name, s.level, s.map_id, "
+    "  s.in_combat, s.health, s.group_leader"
+)
+
+
+def _fetch_gather_seats(names: list, instance_maps) -> list:
+    """The raid seats in `names` that are in the world, as guildgather.Seat."""
+    if not names:
+        return []
+    sql = _GATHER_SEATS_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        rows = cur.fetchall()
+    return [
+        guildgather.Seat(
+            name=r["name"],
+            level=int(r["level"]),
+            skills={182: int(r["herb"] or 0), 186: int(r["mining"] or 0)},
+            online=True,
+            alive=int(r["health"] or 0) > 0,
+            grouped=bool(r["group_leader"]),
+            in_instance=int(r["map_id"] or -1) in instance_maps,
+            in_combat=bool(r["in_combat"]),
+        )
+        for r in rows
+    ]
 
 
 def _bot_held_names(names: list) -> list:
@@ -8456,6 +8491,7 @@ PASSES = (
     _Pass("_corps_tickets_loop"),
     _Pass("_stray_follow_loop"),
     _Pass("_member_ride_loop"),
+    _Pass("_guild_gather_loop"),
 )
 
 
@@ -27075,6 +27111,35 @@ class Bridge(discord.Client):
             except Exception:
                 log.exception("corps tickets: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
+
+    async def _guild_gather_loop(self) -> None:
+        """Raid seats under level 60 that hold Herbalism or Mining are told to
+        pick up the nodes they pass (guildgather.py): `nc +gather`, `nc +loot`.
+        No walk is written; the grant rides their questing and travelling."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("GUILD_GATHER_SECONDS", "600"))
+        await asyncio.sleep(min(cycle, 300.0))
+        seen: dict = {}
+        while not self.is_closed():
+            try:
+                if guildgather.enabled():
+                    await self._guild_gather_once(seen)
+            except Exception:
+                log.exception("guild gather: pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _guild_gather_once(self, seen: dict) -> None:
+        instances = {int(k) for k in guildjobs.entrances()}
+        seats = await asyncio.to_thread(
+            _fetch_gather_seats, sorted(guildgather.seat_names()), instances)
+        rows = guildgather.plan(seats, seen, time.monotonic())
+        for name, command, source in rows:
+            await asyncio.to_thread(
+                _insert_command, core.InsertCommand(name, command, source))
+        told = sorted({r[0] for r in rows})
+        log.info("guild gather: %d of %d raid seat(s) in the world told to "
+                 "gather%s", len(told), len(seats),
+                 (": " + ", ".join(told)) if told else "")
 
     async def _member_ride_loop(self) -> None:
         """A rider whose run is over, and who stands outside, leaves its group
