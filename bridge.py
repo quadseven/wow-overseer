@@ -39,6 +39,7 @@ import guildbags
 import guildgather
 import lowrung
 import bag_pressure
+import lootpolicy
 import bag_upgrade
 import bank
 import bankbags
@@ -33689,7 +33690,7 @@ def _insert_crafter_row(holder: str, command: str, kind: str, source: str) -> in
     if kind in _DISPOSAL_KINDS and _KEEP.blocks(holder, command):
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, holder)
         return 0
-    if kind in _EPIC_GATED_KINDS and _epic_blocks(holder, command):
+    if kind in _EPIC_GATED_KINDS and _epic_blocks(holder, command, kind):
         return 0
     with _connect() as conn, conn.cursor() as cur:
         if _held_as_follower(cur, holder, command):
@@ -33943,6 +33944,7 @@ _EPIC_FACTS_SQL = (
     "it.class AS item_class, it.subclass AS subclass, "
     "it.InventoryType AS inventory_type, it.AllowableClass AS allowable_class, "
     "it.ItemLevel AS item_level, ii.flags AS instance_flags, "
+    "it.DisenchantID AS disenchant_id, "
     "it.bonding AS bonding, c.class AS holder_class "
     "FROM item_instance ii "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -33974,7 +33976,7 @@ def _fetch_epic_facts(guids) -> list:
         return []
     sql = _EPIC_FACTS_SQL.format(holes=",".join(["%s"] * len(ids)))
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(sql, (*ids, bag_pressure.RARE_QUALITY))
+        cur.execute(sql, (*ids, lootpolicy.COMMON))
         return [dict(row) for row in cur.fetchall()]
 
 
@@ -34050,32 +34052,38 @@ def _rare_wanted_by(holder: str, row: dict):
         return None
 
 
-def _epic_blocks(holder: str, command: str) -> bool:
-    """Does this sell, destroy or disenchant row name an epic a guild member
-    could wear (#2385), or a bind-on-equip rare a guild member would wear
-    (#2389)? Logs one line per refusal. Fail closed: a failed read of the item
-    writes nothing."""
+def _loot_policy_blocks(holder: str, command: str, kind: str = "sell"):
+    """The `lootpolicy.Verdict` that refuses this row, or None to write it.
+
+    ONE POLICY IN FRONT OF EVERY SELLER. A `sell` or destroy row is written
+    only for gray and junk; a `disenchant` row only for a bound piece nobody
+    can use. Everything else keeps its place and is routed (an upgrade to the
+    guildmate it upgrades, the rest to the guild bank or the auction house).
+    Logs one line per refusal. Fail closed: a failed read writes nothing.
+    """
     guids, _entries = keep.items_named(command)
     if not guids:
-        return False
+        return None
     try:
         rows = _fetch_epic_facts(guids)
     except Exception:
-        log.exception("epic keep: cannot read the item in %r for %s, so the "
+        log.exception("loot policy: cannot read the item in %r for %s, so the "
                       "row is not written", command, holder)
-        return True
+        return lootpolicy.Verdict(lootpolicy.HOLD, "its facts could not be read")
     classes = _guild_classes() if rows else frozenset()
     for row in rows:
-        asked: dict = {}
+        verdict = lootpolicy.decide(
+            row, classes, upgrade=lambda item: _rare_wanted_by(holder, item))
+        if not lootpolicy.allowed(verdict, kind):
+            log.info("%s", lootpolicy.kept_line(row, holder, verdict, kind))
+            return verdict
+    return None
 
-        def judge(item, asked=asked):
-            asked["by"] = _rare_wanted_by(holder, item)
-            return asked["by"]
 
-        if bag_pressure.epic_kept(row, classes, upgrade=judge):
-            log.info("%s", bag_pressure.epic_kept_line(row, holder, asked.get("by")))
-            return True
-    return False
+def _epic_blocks(holder: str, command: str, kind: str = "sell") -> bool:
+    """Does the guild loot policy refuse this sell, destroy or disenchant row
+    (#2385, #2389 and the policy that replaces them)?"""
+    return _loot_policy_blocks(holder, command, kind) is not None
 
 
 # A SALE THE FAMILY ENCHANTER CAN BREAK DOWN INSTEAD (#2411, #1978). Every
@@ -34207,7 +34215,8 @@ def _carry_out_itemplan_disenchant(jobs) -> int:
     wrote = 0
     for job in jobs:
         command = "guid:%d count:1" % int(job.item_guid)
-        if _KEEP.blocks(job.holder, command) or _epic_blocks(job.holder, command):
+        if _KEEP.blocks(job.holder, command) or _epic_blocks(
+                job.holder, command, "disenchant"):
             continue
         try:
             route = bag_pressure.disenchant_route(
@@ -34240,7 +34249,12 @@ def _insert_sell(candidate: bag_pressure.SellCandidate) -> int:
     if _KEEP.blocks(candidate.holder, command):
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, candidate.holder)
         return 0
-    if _epic_blocks(candidate.holder, command):
+    blocked = _loot_policy_blocks(candidate.holder, command)
+    if blocked is not None:
+        # A bound piece nobody can use is broken down, never sold: the
+        # route writes the disenchant row, or nothing while it is off.
+        if blocked.route == lootpolicy.DISENCHANT:
+            return _disenchant_instead(candidate.holder, candidate.item_guid) or 0
         return 0
     routed = _disenchant_instead(candidate.holder, candidate.item_guid)
     if routed is not None:
@@ -35834,7 +35848,7 @@ def _insert_corps_row(holder: str, row) -> int:
     if row.kind in _DISPOSAL_KINDS and _KEEP.blocks(holder, row.command):
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", row.command, holder)
         return 0
-    if row.kind in _EPIC_GATED_KINDS and _epic_blocks(holder, row.command):
+    if row.kind in _EPIC_GATED_KINDS and _epic_blocks(holder, row.command, row.kind):
         return 0
     with _connect() as conn, conn.cursor() as cur:
         if _held_as_follower(cur, holder, row.command, row.source):

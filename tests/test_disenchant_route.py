@@ -105,7 +105,7 @@ class TheSaleAsksTheRouteLast(unittest.TestCase):
 
     def test_after_the_keep_marks_and_the_epic_gate(self):
         keep = self.body.index("_KEEP.blocks(")
-        epic = self.body.index("_epic_blocks(")
+        epic = self.body.index("_loot_policy_blocks(")
         route = self.body.index("_disenchant_instead(")
         insert = self.body.index("INSERT INTO overseer_command")
         self.assertLess(keep, route)
