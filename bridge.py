@@ -26514,8 +26514,10 @@ class Bridge(discord.Client):
                      "aimed", who)
             return
         state = await self._farm_state_for(cohort, job, leader)
-        got = await asyncio.to_thread(_farm_reads, names, leader, item, skill,
-                                      state.get("deaths_since", state["started"]))
+        got = await asyncio.to_thread(
+            _farm_reads, names, leader, item, skill,
+            state["started"], state.get("deaths_since", state["started"]),
+        )
         gathered = await self._farm_count(cohort, state, got, who)
         step = farmjob.decide(_farm_order(job, item, skill, got["name"], state),
                               _farm_reads_for(state, got, gathered))
@@ -26645,9 +26647,6 @@ class Bridge(discord.Client):
                 return None
             log.info("farm: %s was told job=%s again after its last order ended, "
                      "so this is a new order", who, farming[0])
-            self._farm_state[key or ""] = {
-                "deaths_since": state.get("deaths_since") or state.get("started"),
-            }
         return farming[0], sorted(standing), who
 
     async def _farm_state_for(self, cohort, job: str, leader: str) -> dict:
@@ -26657,9 +26656,14 @@ class Bridge(discord.Client):
         if state is None or state.get("job") != job or state.get("ended"):
             started = await asyncio.to_thread(_farm_started, leader, job)
             begun = started or time.time()
+            same_renewed = (
+                state is not None
+                and state.get("job") == job
+                and bool(state.get("ended"))
+            )
             deaths_since = (
                 (state.get("deaths_since") or state.get("started") or begun)
-                if state is not None else begun
+                if same_renewed else begun
             )
             state = {"job": job, "started": begun, "deaths_since": deaths_since,
                      "baseline": None, "held": None, "visited": {}, "aim": "",
@@ -38631,13 +38635,16 @@ def _farm_reads_for(state: dict, got: dict, gathered: int):
     return farmjob.Reads(
         skills=got["skills"], levels=got["levels"], leader_at=got["leader_at"],
         spawns=tuple(got["spawns"]), zone_levels=got["zone_levels"],
-        deaths=tuple(got["deaths"]), free_slots=got["free"], gathered=gathered,
+        deaths=tuple(got["deaths"]),
+        zone_deaths=tuple(got.get("zone_deaths", got["deaths"])),
+        free_slots=got["free"], gathered=gathered,
         creatures=tuple(got.get("creatures", ())),
         walking=walking, visited=state["visited"], now=time.time(),
         stood_since=state["stand"][1])
 
 
-def _farm_reads(names: list, leader: str, item: int, skill: str, since: float) -> dict:
+def _farm_reads(names: list, leader: str, item: int, skill: str, since: float,
+                zone_since: float | None = None) -> dict:
     """Everything farmjob.decide needs for one family, in one thread.
 
     The danger reading is the slow one (a creature scan per point), so only
@@ -38672,6 +38679,11 @@ def _farm_reads(names: list, leader: str, item: int, skill: str, since: float) -
         top = _gather_danger(near.map_id, near.x, near.y)
         if top is not None:
             zone_levels[zone] = top
+    deaths = _farm_deaths(names, since)
+    zone_deaths = (
+        deaths if zone_since is None or float(zone_since) == float(since)
+        else _farm_deaths(names, zone_since)
+    )
     return {
         "skills": skills,
         "levels": levels,
@@ -38679,7 +38691,8 @@ def _farm_reads(names: list, leader: str, item: int, skill: str, since: float) -
         "spawns": spawns,
         "creatures": creatures,
         "zone_levels": zone_levels,
-        "deaths": _farm_deaths(names, since),
+        "deaths": deaths,
+        "zone_deaths": zone_deaths,
         "free": _fetch_free_slots(names),
         "held": int(held),
         "name": name,
