@@ -337,6 +337,47 @@ class Execution(unittest.TestCase):
             build.execute(self.steps(), rec)
         self.assertNotIn("push", rec.calls)
 
+    def test_the_runner_is_closed_even_when_a_step_fails(self) -> None:
+        class Closing(self.Recorder):
+            closed = 0
+
+            def argv(self, step: build.Step) -> int:
+                super().argv(step)
+                return 1 if step.name == "restore" else 0
+
+            def close(self) -> None:
+                self.closed += 1
+
+        rec = Closing()
+        with self.assertRaises(build.StepFailed):
+            build.execute(self.steps(), rec)
+        self.assertEqual(rec.closed, 1)
+
+    def test_close_terminates_a_running_server(self) -> None:
+        class Server:
+            terminated = False
+
+            def poll(self):
+                return None
+
+            def terminate(self) -> None:
+                self.terminated = True
+
+            def wait(self, timeout=None) -> int:
+                return 0
+
+        cfg = build.Config(
+            template_class="full",
+            backup_dir=pathlib.Path("/b"),
+            workdir=pathlib.Path("/w"),
+        )
+        runner = build.SubprocessRunner(cfg)
+        server = Server()
+        runner._server = server
+        runner.close()
+        runner.close()
+        self.assertTrue(server.terminated)
+
     def test_a_lean_trim_that_leaves_nothing_stops_the_build(self) -> None:
         class Empty(self.Recorder):
             def sql(self, step: build.Step) -> list[list[int]]:

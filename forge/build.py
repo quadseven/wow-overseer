@@ -6,6 +6,11 @@ process. Tests drive `execute()` with a recording runner; the CLI drives it with
 `SubprocessRunner`.
 """
 
+# ruff: noqa: S608
+# S608 is a false positive here: every interpolated value is a validated schema or
+# table identifier, a module constant, or a backup stamp matched by a strict regex.
+# Nothing comes from user input.
+
 from __future__ import annotations
 
 import os
@@ -221,8 +226,21 @@ class Runner:
     def sql(self, step: Step) -> list[list[int]]:
         raise NotImplementedError
 
+    def close(self) -> None:
+        """Stop anything the runner started. Safe to call twice."""
+
 
 def execute(steps: Sequence[Step], runner: Runner) -> None:
+    """Run every step; always give the runner a chance to stop what it started."""
+    try:
+        _execute(steps, runner)
+    finally:
+        close = getattr(runner, "close", None)
+        if close is not None:
+            close()
+
+
+def _execute(steps: Sequence[Step], runner: Runner) -> None:
     for step in steps:
         if step.fn is not None:
             try:
@@ -257,6 +275,17 @@ class SubprocessRunner(Runner):
         self._run = run
         self._popen = popen
         self._server: subprocess.Popen | None = None
+
+    def close(self) -> None:
+        server, self._server = self._server, None
+        if server is None or server.poll() is not None:
+            return
+        server.terminate()
+        try:
+            server.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait()
 
     def _mysql(self, statement: str) -> list[str]:
         return [

@@ -6,6 +6,11 @@ attached in-memory databases named like the realm's; the two differ only in the
 `TRUNCATE` and `CONCAT` spellings.
 """
 
+# ruff: noqa: S608
+# S608 is a false positive here: every interpolated value is a validated schema or
+# table identifier, a module constant, or a backup stamp matched by a strict regex.
+# Nothing comes from user input.
+
 from __future__ import annotations
 
 from collections.abc import Callable
