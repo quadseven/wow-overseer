@@ -534,21 +534,28 @@ class AnEndedOrderThatTheLoopWritesAgain(unittest.TestCase):
         self.assertIn("_farm_order_renewed(state, written)", body)
 
 
-def _load_bridge_farm_methods(ns: dict) -> dict:
+def _load_bridge_farm_methods(ns: dict, extra_methods=(), extra_funcs=()) -> dict:
     import ast
 
     text = (ROOT / "bridge.py").read_text(encoding="utf-8")
+    tree = ast.parse(text)
     bridge_cls = next(
-        n
-        for n in ast.parse(text).body
-        if isinstance(n, ast.ClassDef) and n.name == "Bridge"
+        n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Bridge"
     )
-    want = {"_farm_once", "_operator_held"}
+    want = {"_farm_once", "_operator_held"} | set(extra_methods)
     nodes = [
         n
         for n in bridge_cls.body
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in want
     ]
+    if extra_funcs:
+        wanted_funcs = set(extra_funcs)
+        nodes.extend(
+            n
+            for n in tree.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name in wanted_funcs
+        )
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
     return ns
 
@@ -646,6 +653,118 @@ class FamilyWideFarmIgnoresOperatorHold(unittest.IsolatedAsyncioTestCase):
         await ns["_farm_once"](fake, None)
         fake._farm_state_for.assert_awaited_once()
         fake._farm_act.assert_awaited_once()
+
+
+class RenewedOrderKeepsDeathStrikes(unittest.IsolatedAsyncioTestCase):
+    """Renewing a farm order resets its time box and baseline, not its death strikes."""
+
+    def _build_harness(self, death_rows, started_at, clock):
+        import asyncio
+        import os
+        import types
+        from unittest import mock
+
+        seen_since = []
+        acted = []
+        spawns = (spawn(1000, 0, zone=490), spawn(3000, 0, zone=361))
+
+        def fake_farm_reads(names, leader, item, skill, since):
+            seen_since.append(since)
+            deaths = [
+                (zone, map_id) for ts, zone, map_id in death_rows if ts >= float(since)
+            ]
+            return {
+                "skills": herbalist(240),
+                "levels": LEVELS,
+                "leader_at": leader_at(),
+                "spawns": spawns,
+                "creatures": (),
+                "zone_levels": {490: 55, 361: 55},
+                "deaths": deaths,
+                "free": {name: 20 for name in FAMILY},
+                "held": 0,
+                "name": "Sungrass",
+                "column": "",
+            }
+
+        ns = _load_bridge_farm_methods(
+            {
+                "asyncio": asyncio,
+                "os": os,
+                "time": types.SimpleNamespace(time=lambda: clock[0]),
+                "jobs": jobs,
+                "farmjob": farmjob,
+                "individual": mock.MagicMock(families=mock.MagicMock(return_value=())),
+                "log": mock.MagicMock(),
+                "_standing_jobs": lambda key=None: {
+                    name: "farm:8838" for name in FAMILY
+                },
+                "_family_leader": lambda cohort=None: "Grug",
+                "_fetch_positions": lambda names: {
+                    name: {"map_id": 1, "instance_id": 0, "pos_x": 0.0, "pos_y": 0.0}
+                    for name in names
+                },
+                "_farm_started": lambda leader, job: started_at[0],
+                "_farm_reads": fake_farm_reads,
+            },
+            extra_methods=("_farm_job_now", "_farm_state_for"),
+            extra_funcs=("_farm_order_renewed", "_farm_order", "_farm_reads_for"),
+        )
+        fake = types.SimpleNamespace(
+            _farm_state={},
+            _farm_individual=mock.AsyncMock(return_value=False),
+            _end_farm=mock.AsyncMock(),
+            _farm_count=mock.AsyncMock(return_value=0),
+            _farm_act=mock.AsyncMock(
+                side_effect=lambda cohort, leader, state, step, levels, job: (
+                    acted.append(step)
+                )
+            ),
+        )
+        fake._farm_job_now = types.MethodType(ns["_farm_job_now"], fake)
+        fake._farm_state_for = types.MethodType(ns["_farm_state_for"], fake)
+        return ns, fake, seen_since, acted
+
+    async def test_renewed_order_keeps_struck_zone_and_does_not_reenter_it(self):
+        death_rows = [(120.0, 490, 1), (140.0, 490, 1)]
+        started_at = [100.0]
+        clock = [150.0]
+        ns, fake, seen_since, acted = self._build_harness(death_rows, started_at, clock)
+        await ns["_farm_once"](fake, None)
+        self.assertEqual(acted[-1].action, farmjob.WALK)
+        self.assertEqual(acted[-1].zone_id, 361)
+
+        # Simulate the first order ending on its time box or target count, followed
+        # by the renewed job command landing at t=200.0.
+        fake._farm_state[""]["ended"] = True
+        started_at[0] = 200.0
+        clock[0] = 210.0
+        await ns["_farm_once"](fake, None)
+
+        self.assertEqual(fake._farm_state[""]["started"], 200.0)
+        self.assertEqual(fake._farm_state[""]["deaths_since"], 100.0)
+        self.assertEqual(seen_since[-1], 100.0)
+        self.assertEqual(acted[-1].action, farmjob.WALK)
+        self.assertEqual(acted[-1].zone_id, 361)
+
+    async def test_single_death_before_renewal_counts_toward_strike_after_renewal(self):
+        death_rows = [(120.0, 490, 1)]
+        started_at = [100.0]
+        clock = [150.0]
+        ns, fake, seen_since, acted = self._build_harness(death_rows, started_at, clock)
+        await ns["_farm_once"](fake, None)
+        self.assertEqual(acted[-1].action, farmjob.WALK)
+        self.assertEqual(acted[-1].zone_id, 490)
+
+        fake._farm_state[""]["ended"] = True
+        started_at[0] = 200.0
+        clock[0] = 210.0
+        death_rows.append((205.0, 490, 1))
+        await ns["_farm_once"](fake, None)
+
+        self.assertEqual(seen_since[-1], 100.0)
+        self.assertEqual(acted[-1].action, farmjob.WALK)
+        self.assertEqual(acted[-1].zone_id, 361)
 
 
 if __name__ == "__main__":

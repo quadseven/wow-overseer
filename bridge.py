@@ -26515,7 +26515,7 @@ class Bridge(discord.Client):
             return
         state = await self._farm_state_for(cohort, job, leader)
         got = await asyncio.to_thread(_farm_reads, names, leader, item, skill,
-                                      state["started"])
+                                      state.get("deaths_since", state["started"]))
         gathered = await self._farm_count(cohort, state, got, who)
         step = farmjob.decide(_farm_order(job, item, skill, got["name"], state),
                               _farm_reads_for(state, got, gathered))
@@ -26645,17 +26645,25 @@ class Bridge(discord.Client):
                 return None
             log.info("farm: %s was told job=%s again after its last order ended, "
                      "so this is a new order", who, farming[0])
-            self._farm_state.pop(key or "", None)
+            self._farm_state[key or ""] = {
+                "deaths_since": state.get("deaths_since") or state.get("started"),
+            }
         return farming[0], sorted(standing), who
 
     async def _farm_state_for(self, cohort, job: str, leader: str) -> dict:
         """This family's farm state for `job`, begun from the job row if new."""
         slot = getattr(cohort, "key", None) or ""
         state = self._farm_state.get(slot)
-        if state is None or state.get("job") != job:
+        if state is None or state.get("job") != job or state.get("ended"):
             started = await asyncio.to_thread(_farm_started, leader, job)
-            state = {"job": job, "started": started or time.time(), "baseline": None,
-                     "held": None, "visited": {}, "aim": "", "walking": None}
+            begun = started or time.time()
+            deaths_since = (
+                (state.get("deaths_since") or state.get("started") or begun)
+                if state is not None else begun
+            )
+            state = {"job": job, "started": begun, "deaths_since": deaths_since,
+                     "baseline": None, "held": None, "visited": {}, "aim": "",
+                     "walking": None}
             self._farm_state[slot] = state
         return state
 
