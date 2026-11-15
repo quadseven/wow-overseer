@@ -346,5 +346,88 @@ class BankReservationsAreBounded(unittest.TestCase):
         self.assertEqual(bankbags.reserved_guids([f]), frozenset())
 
 
+class BankBagTwelveSlotSwaps(unittest.TestCase):
+    """#2608: a member with gold and a small bank bag swaps for a 12-slot sack."""
+
+    OFFERS = (
+        bag_pressure.BagOffer(4496, "Small Brown Pouch", 6, 500),
+        bag_pressure.BagOffer(4498, "Brown Leather Satchel", 8, 2500),
+        bag_pressure.BagOffer(4497, "Heavy Brown Bag", 10, 20000),
+        bag_pressure.BagOffer(4499, "Huge Brown Sack", 12, 100000),
+    )
+
+    def _facts(self, name="Og", money=200_000, used=2, bank_free=8, spare=()):
+        return bankbags.Facts(
+            name,
+            money=money,
+            bought=7,
+            placed=7,
+            worn=(12,) * 4,
+            spare=spare,
+            placed_bags=(
+                bankbags.Bag(50, 4496, 6, used=used),
+                *(bankbags.Bag(51 + i, 4499, 12, used=12) for i in range(6)),
+            ),
+            bank_free=bank_free,
+        )
+
+    def test_member_with_gold_and_fitting_contents_buys_twelve_slot_sack(self):
+        f = self._facts(money=200_000, used=2, bank_free=8)
+        needs = bankbags.supply_needs([f])
+        self.assertEqual(
+            [(n.name, n.min_slots, n.max_slots) for n in needs], [("Og", 12, 12)]
+        )
+        buyer = bag_pressure.BagBuyer(
+            "Og",
+            60,
+            f.money,
+            1,
+            free_slots=2,
+            stocks=frozenset(o.entry for o in self.OFFERS),
+            bank=True,
+            min_slots=needs[0].min_slots,
+            max_slots=needs[0].max_slots,
+            excluded_entries=needs[0].excluded_entries,
+        )
+        purchases, _ = bag_pressure.bag_purchases([buyer], self.OFFERS)
+        self.assertEqual([(p.entry, p.price) for p in purchases], [(4499, 100000)])
+
+    def test_member_without_gold_plans_nothing(self):
+        f = self._facts(money=99_000, used=2, bank_free=8)  # 9.9g < 10g sack
+        needs = bankbags.supply_needs([f])
+        buyer = bag_pressure.BagBuyer(
+            "Og",
+            60,
+            f.money,
+            1,
+            free_slots=2,
+            stocks=frozenset(o.entry for o in self.OFFERS),
+            bank=True,
+            min_slots=needs[0].min_slots,
+            max_slots=needs[0].max_slots,
+        )
+        purchases, _ = bag_pressure.bag_purchases([buyer], self.OFFERS)
+        self.assertEqual(purchases, ())
+
+    def test_contents_must_fit_in_rest_of_bank_before_swap_is_planned(self):
+        tight = self._facts(money=200_000, used=5, bank_free=3)
+        self.assertEqual(bankbags.supply_needs([tight]), [])
+
+    def test_carried_twelve_slot_swap_sack_is_reserved_not_sold_as_surplus(self):
+        sack = bankbags.Bag(201, 4499, 12)
+        displaced = bankbags.Bag(202, 4496, 6)
+        f = self._facts(spare=(sack, displaced))
+        self.assertEqual(bankbags.reserved_guids([f]), frozenset({201}))
+        self.assertEqual(bankbags.supply_needs([f]), [])
+
+    def test_bridge_passes_swap_min_slots_and_kept_full_to_planners(self):
+        src = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("min_slots=bank_needs[b.name].min_slots", src)
+        self.assertIn("kept_full=bank_plan.kept_full", src)
+        self.assertIn("bankbags.with_kept_full(", src)
+
+
 if __name__ == "__main__":
     unittest.main()

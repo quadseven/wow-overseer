@@ -497,5 +497,57 @@ class TheCommandIsTheOneTheExecutorParses(unittest.TestCase):
         self.assertEqual(bank.lines([]), [])
 
 
+class FullBankOfKeptStacks(unittest.TestCase):
+    """#2608: kept_full names members whose full bank has nothing to pull out."""
+
+    def test_full_kept_bank_is_reported_and_withdraw_or_free_slot_clears_it(self):
+        rows = [
+            *[
+                row(
+                    holder="Zug",
+                    item_guid=10 + i,
+                    entry=11137,
+                    name="Soul Dust",
+                    slot=39 + i,
+                )
+                for i in range(28)
+            ],
+            *[
+                row(
+                    holder="Og",
+                    item_guid=40 + i,
+                    entry=11137,
+                    name="Soul Dust",
+                    slot=39 + i,
+                )
+                for i in range(27)
+            ],
+            *[
+                row(
+                    holder="Grug",
+                    item_guid=70 + i,
+                    entry=11137,
+                    name="Soul Dust",
+                    slot=39 + i,
+                )
+                for i in range(27)
+            ],
+            row(holder="Grug", item_guid=99, entry=2589, name="Linen Cloth", slot=66),
+        ]
+        members = bank.members_from_rows(rows, ["Zug", "Og", "Grug"])
+        storage = bank.Storage(
+            trades={
+                "Zug": frozenset({"enchanting"}),
+                "Grug": frozenset({"enchanting"}),
+            },
+            family_trades=frozenset({"enchanting", "tailoring"}),
+            named={11137: frozenset({"enchanting"}), 2589: frozenset({"tailoring"})},
+            guild_depositors=frozenset({"Grug"}),
+            guild_tab_free={0: 5},
+        )
+        result = bank.plan(members, bank.family_from_skills({}), storage=storage)
+        self.assertEqual(result.kept_full, frozenset({"Zug"}))
+
+
 if __name__ == "__main__":
     unittest.main()

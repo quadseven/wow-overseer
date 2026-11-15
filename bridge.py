@@ -16776,7 +16776,8 @@ class Bridge(discord.Client):
         everyone, at_vendor = await asyncio.to_thread(
             _bag_buyers, wanting, open_positions)
         everyone = [dataclasses.replace(
-            b, bank=True, max_slots=bank_needs[b.name].max_slots,
+            b, bank=True, min_slots=bank_needs[b.name].min_slots,
+            max_slots=bank_needs[b.name].max_slots,
             excluded_entries=bank_needs[b.name].excluded_entries)
             if b.name in bank_needs else b for b in everyone]
         buyers = [b for b in everyone if b.name in at_vendor]
@@ -17365,8 +17366,8 @@ class Bridge(discord.Client):
         # slot or takes a bag, and the quick look never claims the column, so
         # a member that could afford a slot logged "it waits for a banker"
         # every pass and was never walked to one.
-        bag_facts, bag_steps = await self._bank_bag_pending(names, seen,
-                                                            watched)
+        bag_facts, bag_steps = await self._bank_bag_pending(
+            names, seen, watched, kept_full=bank_plan.kept_full)
         # THE SPLIT RULE GOVERNS THE FAMILY'S WALK, NOT A MEMBER'S OWN MOVES:
         # the reach read is per mover, so a deferral counts only the moves
         # whose holder has no banker within reach. The move loop reuses it.
@@ -17454,14 +17455,15 @@ class Bridge(discord.Client):
         return fresh, walking
 
     async def _bank_bag_pending(self, names: list, seen: set,
-                                watched) -> tuple:
+                                watched, kept_full=frozenset()) -> tuple:
         """(facts, steps): the bank bag read, and the steps a banker trip is for.
 
         A step already asked inside the retry window is not, and neither is
         one whose holder the world cannot see: the same two filters
         `_bank_once` puts on the item moves.
         """
-        facts = await asyncio.to_thread(_fetch_bank_bag_facts, names)
+        facts = bankbags.with_kept_full(
+            await asyncio.to_thread(_fetch_bank_bag_facts, names), kept_full)
         steps = [
             s for s in bankbags.pending_steps(facts, bankbags.family_floor(facts))
             if (s.name, s.command) not in seen and s.name in watched
@@ -40141,15 +40143,25 @@ def _recent_bank_keys(minutes: int) -> set:
 # (`bag` is the holding bag's item guid, 0 for its own slots), and who holds
 # tailoring (bankbags: a crafter's ladder bags are the guild's).
 _BANK_BAG_PEOPLE_SQL = (
-    "SELECT name, money, bankSlots AS bank_slots FROM characters WHERE name IN (%s)"
-)
+    "SELECT c.name, c.money, c.bankSlots AS bank_slots, "
+    "COALESCE(base_fill.n, 0) AS bank_base_used "
+    "FROM characters c "
+    "LEFT JOIN ("
+    "    SELECT guid, COUNT(*) AS n FROM character_inventory "
+    "    WHERE bag = 0 AND slot BETWEEN %d AND %d GROUP BY guid"
+    ") base_fill ON base_fill.guid = c.guid "
+    "WHERE c.name IN (%%s)"
+) % (bankbags.BANK_BASE_SLOTS[0], bankbags.BANK_BASE_SLOTS[-1])
 _BANK_BAG_ROWS_SQL = (
     "SELECT c.name AS holder, ci.item AS item_guid, ii.itemEntry AS entry, "
-    "it.ContainerSlots AS slots, ci.bag, ci.slot, "
+    "it.ContainerSlots AS slots, COALESCE(fill.n, 0) AS used, "
+    "ci.bag, ci.slot, "
     "ii.flags AS instance_flags, it.bonding AS bonding FROM characters c "
     "JOIN character_inventory ci ON ci.guid = c.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "LEFT JOIN (SELECT bag, COUNT(*) AS n FROM character_inventory "
+    "           WHERE bag <> 0 GROUP BY bag) fill ON fill.bag = ii.guid "
     "WHERE c.name IN (%s) AND it.class = 1 AND it.ContainerSlots > 0"
 )
 _BANK_BAG_CRAFTERS_SQL = (

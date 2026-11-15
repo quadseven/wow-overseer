@@ -183,5 +183,118 @@ class TheRowsReadAsFacts(unittest.TestCase):
         self.assertIn("bankbags.visit_steps(f, floor)", body)
 
 
+class SwappingSmallBankBagsAndFullKeptSlots(unittest.TestCase):
+    """#2608: 12-slot bank bag swaps and full-bank slot purchases."""
+
+    def test_full_bank_of_kept_stacks_drops_purse_share_for_next_slot(self):
+        zug = bb.Facts(
+            "Zug",
+            money=826_000,
+            bought=4,
+            placed=4,
+            worn=(12,) * 4,
+            bank_free=0,
+            bank_full_of_kept=True,
+        )
+        grug = bb.Facts(
+            "Grug",
+            money=99_000,
+            bought=4,
+            placed=4,
+            worn=(12,) * 4,
+            bank_free=0,
+            bank_full_of_kept=True,
+        )
+        unfull = bb.Facts(
+            "Og",
+            money=826_000,
+            bought=4,
+            placed=4,
+            worn=(12,) * 4,
+            bank_free=4,
+            bank_full_of_kept=False,
+        )
+        self.assertEqual(bb.step(zug, 12)[0].command, bb.BUY_SLOT)
+        self.assertIsNone(bb.step(grug, 12)[0])
+        self.assertIsNone(bb.step(unfull, 12)[0])
+
+    def test_carries_twelve_slot_sack_swaps_smallest_fitting_bank_bag(self):
+        placed = (
+            bb.Bag(50, 4496, 6, used=2),
+            bb.Bag(51, 4498, 8, used=5),
+            bb.Bag(52, 4499, 12, used=12),
+        )
+        f = bb.Facts(
+            "Og",
+            money=200_000,
+            bought=3,
+            placed=3,
+            worn=(12,) * 4,
+            placed_bags=placed,
+            spare=(bb.Bag(201, 4499, 12),),
+            bank_free=9,  # 2 free base + (6-2) + (8-5): rest outside 6-slot = 5 >= 2
+        )
+        step, _ = bb.step(f, 12)
+        self.assertEqual(step.command, "place-bag guid:201")
+        self.assertEqual(step.slots, 6)
+        self.assertEqual(bb.room_gain([f]), {"Og": 6})
+
+    def test_swap_is_refused_when_bag_contents_do_not_fit_in_rest_of_bank(self):
+        placed = (
+            bb.Bag(50, 4496, 6, used=5),
+            bb.Bag(51, 4499, 12, used=12),
+        )
+        # 2 free slots in the rest of the bank cannot hold 5 items from bag 50.
+        tight = bb.Facts(
+            "Og",
+            money=200_000,
+            bought=2,
+            placed=2,
+            worn=(12,) * 4,
+            placed_bags=placed,
+            spare=(bb.Bag(201, 4499, 12),),
+            bank_free=3,
+        )
+        unread = bb.Facts(
+            "Og",
+            money=200_000,
+            bought=2,
+            placed=2,
+            worn=(12,) * 4,
+            placed_bags=placed,
+            spare=(bb.Bag(201, 4499, 12),),
+            bank_free=None,
+        )
+        self.assertIsNone(bb.step(tight, 12)[0])
+        self.assertIsNone(bb.step(unread, 12)[0])
+
+    def test_facts_from_rows_reads_bank_bag_fill_and_bank_free(self):
+        people = [dict(name="Og", money=200_000, bank_slots=2, bank_base_used=20)]
+        rows = [
+            *[
+                dict(
+                    holder="Og",
+                    item_guid=10 + i,
+                    entry=4499,
+                    slots=12,
+                    bag=0,
+                    slot=19 + i,
+                )
+                for i in range(4)
+            ],
+            dict(
+                holder="Og", item_guid=50, entry=4496, slots=6, used=2, bag=0, slot=67
+            ),
+            dict(
+                holder="Og", item_guid=51, entry=4498, slots=8, used=6, bag=0, slot=68
+            ),
+        ]
+        (f,) = bb.facts_from_rows(people, rows)
+        self.assertEqual(len(f.placed_bags), 2)
+        self.assertEqual([b.used for b in f.placed_bags], [2, 6])
+        # (28 - 20) + (6 - 2) + (8 - 6) = 8 + 4 + 2 = 14
+        self.assertEqual(f.bank_free, 14)
+
+
 if __name__ == "__main__":
     unittest.main()

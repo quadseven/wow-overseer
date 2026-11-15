@@ -1340,6 +1340,7 @@ class BagBuyer:
     stocks: frozenset = frozenset()
     bank: bool = False
     max_slots: int = 0  # 0 leaves worn-bag purchases unrestricted
+    min_slots: int = 0  # 0 leaves bag upgrades/empty fills without a floor
     excluded_entries: frozenset = frozenset()
 
 
@@ -1422,6 +1423,7 @@ def bag_offer_fits(buyer: BagBuyer, offer: BagOffer) -> bool:
     return (
         offer.price > 0
         and offer.slots > 0
+        and offer.slots >= buyer.min_slots
         and (not buyer.max_slots or offer.slots <= buyer.max_slots)
         and offer.entry not in buyer.excluded_entries
     )
