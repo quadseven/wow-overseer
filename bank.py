@@ -1301,7 +1301,7 @@ def _bank_full_of_kept(member, family, totals, storage, guild_room) -> bool:
             continue
         if _wanted_back(holding, member, family, totals, storage):
             return False
-        if relocates and _relocatable_tab(holding, storage, guild_room) is not None:
+        if relocates and _relocatable_tab(holding, storage, guild_room)[0] is not None:
             return False
     return True
 

@@ -549,6 +549,55 @@ class FullBankOfKeptStacks(unittest.TestCase):
         result = bank.plan(members, bank.family_from_skills({}), storage=storage)
         self.assertEqual(result.kept_full, frozenset({"Zug"}))
 
+    def test_depositor_with_relocatable_stack_is_not_kept_full_when_tab_has_room(self):
+        # 28 banked slots on a guild depositor: 27 kept stacks + 1 relocatable stack.
+        rows = [
+            *[
+                row(
+                    holder="Grug",
+                    item_guid=200 + i,
+                    entry=11137,
+                    name="Soul Dust",
+                    slot=39 + i,
+                )
+                for i in range(27)
+            ],
+            row(
+                holder="Grug",
+                item_guid=299,
+                entry=2589,
+                name="Linen Cloth",
+                slot=66,
+            ),
+        ]
+        members = bank.members_from_rows(rows, ["Grug"])
+        storage = bank.Storage(
+            trades={"Grug": frozenset({"enchanting"})},
+            family_trades=frozenset({"enchanting", "tailoring"}),
+            named={11137: frozenset({"enchanting"}), 2589: frozenset({"tailoring"})},
+            guild_depositors=frozenset({"Grug"}),
+            guild_tab_free={0: 2},
+        )
+        # No relocations budget used here: check kept_full before tab room runs out
+        # and also confirm when tab has no room it IS kept_full.
+        has_room = bank.plan(members, bank.family_from_skills({}), storage=storage)
+        self.assertNotIn("Grug", has_room.kept_full)
+        self.assertTrue(
+            any(m.verb == bank.WITHDRAW and m.guid == 299 for m in has_room.moves)
+        )
+
+        no_room_storage = bank.Storage(
+            trades={"Grug": frozenset({"enchanting"})},
+            family_trades=frozenset({"enchanting", "tailoring"}),
+            named={11137: frozenset({"enchanting"}), 2589: frozenset({"tailoring"})},
+            guild_depositors=frozenset({"Grug"}),
+            guild_tab_free={0: 0},
+        )
+        no_room = bank.plan(
+            members, bank.family_from_skills({}), storage=no_room_storage
+        )
+        self.assertIn("Grug", no_room.kept_full)
+
 
 class BankedPolicyGearRelocatesWhenGuildTabHasRoom(unittest.TestCase):
     def test_unbound_rare_placed_for_gear_tab_is_withdrawn_from_personal_bank(self):
