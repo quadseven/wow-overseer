@@ -20,9 +20,10 @@ this pass and not already taken by an earlier start or another party. A
 member seats at most one party a pass, as leader or as helper.
 
 PURE: rows in, party starts out. No MySQL, no clock, no sleeping. The
-bridge runner that walks the two members to the meeting place, forms the
-party and ends it is the next slice; until it lands, a start is a decision
-nothing executes, and the DEATH_ASK switch keeps its own gate in deathask.
+bridge reads the starts this planner emits in its social pass and logs
+each one; the runner that walks the two members to the meeting place,
+forms the party and ends it is the next slice, and the DEATH_ASK switch
+keeps its own gate in deathask.
 No levels, gear or skills are granted here or anywhere in the route: help
 is another member's time.
 """
