@@ -363,7 +363,7 @@ def _quorum_blockers(raiders: list, min_level) -> list:
     have = _eligible_counts(raiders, min_level)
     want = (raidrun.QUORUM_SEATS, raidrun.QUORUM_TANKS, raidrun.QUORUM_HEALERS)
     got = (have["seats"], have["tanks"], have["healers"])
-    if all(h >= w for h, w in zip(got, want)):
+    if all(h >= w for h, w in zip(got, want, strict=True)):
         return []
     return [
         "The module holds a raid at the door unless %d seats, %d tanks and %d "
