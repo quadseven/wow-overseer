@@ -108,3 +108,25 @@ sudo systemctl enable --now metric-watcher.timer
 
 `--api-root` and `--output`, or `METRIC_WATCHER_API_ROOT` and
 `METRIC_WATCHER_OUTPUT`, set the API root and output path.
+
+## First-kill roster for a Molten Core order (#2570)
+
+By default a Molten Core order is refused unless every approved seat is online
+and at level 50 or more. An operator can instead order the members who are
+eligible, for one named guild, with an environment flag on the bridge:
+
+- `RAID_FIRST_KILL_GUILDS`: comma list of approved guild names. Empty (the
+  default) is off and the order behaves exactly as before.
+- `RAID_FIRST_KILL_MIN_SEATS`, `RAID_FIRST_KILL_MIN_TANKS`,
+  `RAID_FIRST_KILL_MIN_HEALERS`: the fewest seats, tanks and healers an order
+  may form with (defaults 14, 2, 3). Below them the order is refused with the
+  counts.
+
+The approved 40-seat lineup is never rewritten: the order's seats are the
+eligible subset, subgroups kept. The bridge logs one WARNING line per order
+naming the roster size and every member left out with the reason. The flag is
+read when an order is written, but an environment change needs a bridge
+restart. The module's own door quorum (`Overseer.Raid.QuorumSeats`,
+`QuorumTanks`, `QuorumHealers`, defaults 36, 3, 8) must be lowered to match in
+the worldserver config, or the raid forms and then holds at the door.
+Nothing here grants levels, gear or skills.

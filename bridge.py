@@ -4148,6 +4148,23 @@ def _write_raid_seats(cur, family: str, keyword: str, seats: list,
     return True
 
 
+def _plan_first_kill_roster(cur, family: str, keyword: str, lineup: dict,
+                            policy, withheld: list | None) -> tuple | None:
+    """The operator's first-kill order (#2570): seat only the approved members
+    who are online and at the raid level, and record who was left out."""
+    names = [m["name"] for g in lineup.get("groups") or [] for m in g["members"]]
+    holes = ", ".join(["%s"] * len(names))
+    cur.execute(raidrun.ELIGIBILITY_SQL.format(holes=holes), tuple(names))  # noqa: S608
+    result = raidrun.first_kill_roster(
+        keyword, lineup, [dict(row) for row in cur.fetchall()], policy)
+    if result.refusal:
+        log.info("raid: %s", result.refusal)
+        _withheld(withheld, result.refusal)
+        return None
+    log.warning("raid: %s: %s", campaignqueue._family(family), result.line)
+    return result.lineup, raidrun.seat_rows(family, keyword, result.lineup)
+
+
 def _plan_raid_seats(cur, keyword: str, family: str, names: list,
                      withheld: list | None) -> tuple | None:
     """Read the guild lineup and refuse a raid whose selected seats cannot form."""
@@ -4165,6 +4182,9 @@ def _plan_raid_seats(cur, keyword: str, family: str, names: list,
                     campaignqueue._family(family), keyword)
         _withheld(withheld, "nobody could be placed in the raid")
         return None
+    policy = raidrun.first_kill_policy(os.environ)
+    if policy.applies(keyword, lineup):
+        return _plan_first_kill_roster(cur, family, keyword, lineup, policy, withheld)
     refusal = _raid_seat_eligibility(cur, keyword, lineup, seats)
     if refusal:
         log.info("raid: %s", refusal)

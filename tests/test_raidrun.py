@@ -403,6 +403,7 @@ def _load_drive_raid(
         warning = exception = info
 
     namespace = {
+        "os": types.SimpleNamespace(environ={}),
         "jobs": jobs,
         "raidrun": raidrun,
         "raidlineup": raidlineup,

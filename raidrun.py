@@ -22,6 +22,7 @@ nothing that talks to MySQL. bridge.py runs the statements named here.
 from __future__ import annotations
 
 import math
+from typing import NamedTuple
 
 import jobs
 import raidroles
@@ -377,6 +378,158 @@ def seat_eligibility_refusal(keyword: str, lineup: dict, current_rows: list) -> 
         len(selected),
         "; ".join(unavailable),
     )
+
+
+# --- the first-kill roster ------------------------------------------------------
+#
+# AN OPERATOR CHOICE, OFF BY DEFAULT (#2570). The default order refuses unless
+# every one of the approved seats is online and at the raid's level. A
+# first-kill roster instead seats the approved members who ARE eligible, for
+# that one order, so a first pull can happen before the whole lineup has levelled.
+# The approved lineup itself is never rewritten or reordered: the subset is a
+# filtered copy, subgroups kept, and the seats written for the order are the
+# only thing that shrinks. Nothing here grants a level, an item or a skill.
+#
+# Turned on per guild by the bridge's environment, read at order time:
+#   RAID_FIRST_KILL_GUILDS       comma list of approved guild names; empty is off
+#   RAID_FIRST_KILL_MIN_SEATS    fewest seats an order may form with (default 14)
+#   RAID_FIRST_KILL_MIN_TANKS    fewest tanks (default 2)
+#   RAID_FIRST_KILL_MIN_HEALERS  fewest healers (default 3)
+# The module's door quorum (Overseer.Raid.QuorumSeats, QuorumTanks,
+# QuorumHealers, defaults 36, 3 and 8) is its own config and must be lowered to
+# match, or the raid forms and then holds at the door.
+
+FIRST_KILL_GUILDS_ENV = "RAID_FIRST_KILL_GUILDS"
+FIRST_KILL_DEFAULT_MINIMUMS = (14, 2, 3)
+_FIRST_KILL_MIN_ENV = (
+    "RAID_FIRST_KILL_MIN_SEATS",
+    "RAID_FIRST_KILL_MIN_TANKS",
+    "RAID_FIRST_KILL_MIN_HEALERS",
+)
+
+
+class FirstKillPolicy(NamedTuple):
+    guilds: frozenset  # casefolded approved guild names; empty is OFF
+    seats: int
+    tanks: int
+    healers: int
+
+    def applies(self, keyword: str, lineup: dict) -> bool:
+        """Whether this order is a first-kill roster order: Molten Core, an
+        approved lineup, and a guild the operator named."""
+        if not self.guilds or keyword != MOLTEN_CORE:
+            return False
+        return str(lineup.get("approved") or "").casefold() in self.guilds
+
+
+def _minimum(raw, default: int) -> int:
+    try:
+        return max(0, int(str(raw).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+def first_kill_policy(environ) -> FirstKillPolicy:
+    """The operator's first-kill choice from `environ`. A bad number falls back
+    to its default; no guild named is OFF."""
+    guilds = frozenset(
+        part.strip().casefold()
+        for part in str(environ.get(FIRST_KILL_GUILDS_ENV, "") or "").split(",")
+        if part.strip()
+    )
+    seats, tanks, healers = (
+        _minimum(environ.get(key), default)
+        for key, default in zip(_FIRST_KILL_MIN_ENV, FIRST_KILL_DEFAULT_MINIMUMS)
+    )
+    return FirstKillPolicy(guilds, seats, tanks, healers)
+
+
+class FirstKill(NamedTuple):
+    lineup: dict  # the subset, in the approved lineup's own shape
+    left_out: list  # [{name, role, why}] for every approved seat not ordered
+    refusal: str  # non-empty when the minimum is not met
+    line: str  # the sentence the order records
+
+
+def _unavailable_why(row, floor: int) -> str:
+    if row is None:
+        return "no current character row"
+    reasons = []
+    level = int(row.get("level") or 0)
+    if level < floor:
+        reasons.append("level %d; needs %d" % (level, floor))
+    if int(row.get("online") or 0) != 1:
+        reasons.append("offline")
+    return ", ".join(reasons)
+
+
+def first_kill_roster(
+    keyword: str, lineup: dict, current_rows: list, policy: FirstKillPolicy
+) -> FirstKill:
+    """The approved seats that are online and at the raid's level, as a roster.
+
+    `lineup` is the approved selection and is not modified. `current_rows` are
+    ELIGIBILITY_SQL's rows. The roster is refused (`refusal` set) when it has
+    fewer seats, tanks or healers than the policy's minimums.
+    """
+    floor = MIN_LEVEL.get(keyword, 0)
+    by_name = {str(r.get("name") or "").casefold(): r for r in current_rows or []}
+    groups, left_out, total = [], [], 0
+    for index, group in enumerate(lineup.get("groups") or []):
+        kept = []
+        for member in group.get("members") or []:
+            total += 1
+            why = _unavailable_why(by_name.get(str(member["name"]).casefold()), floor)
+            if why:
+                left_out.append(
+                    {
+                        "name": str(member["name"]),
+                        "role": str(member.get("role") or ""),
+                        "why": why,
+                    }
+                )
+            else:
+                kept.append(member)
+        if kept:
+            groups.append(dict(group, members=kept))
+    placed = [m for g in groups for m in g["members"]]
+    tanks = len([m for m in placed if m.get("role") == "tank"])
+    healers = len([m for m in placed if m.get("role") == "healer"])
+    counts = "%d of %d approved seats (%d tanks, %d healers)" % (
+        len(placed),
+        total,
+        tanks,
+        healers,
+    )
+    short = []
+    if len(placed) < policy.seats:
+        short.append("%d seats, needs %d" % (len(placed), policy.seats))
+    if tanks < policy.tanks:
+        short.append("%d tanks, needs %d" % (tanks, policy.tanks))
+    if healers < policy.healers:
+        short.append("%d healers, needs %d" % (healers, policy.healers))
+    refusal = (
+        "%s first-kill roster refused: only %s eligible"
+        % (place(keyword), "; ".join(short))
+        if short
+        else ""
+    )
+    line = "%s first-kill roster: %s ordered; left out %d: %s" % (
+        place(keyword),
+        counts,
+        len(left_out),
+        "; ".join("%s (%s)" % (e["name"], e["why"]) for e in left_out) or "nobody",
+    )
+    subset = dict(
+        lineup,
+        groups=groups,
+        first_kill={
+            "ordered": len(placed),
+            "approved": total,
+            "left_out": list(left_out),
+        },
+    )
+    return FirstKill(subset, left_out, refusal, line)
 
 
 # --- the attunement ------------------------------------------------------------
