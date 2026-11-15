@@ -12,7 +12,10 @@ import json
 import pathlib
 import re
 
-DEFAULT_PATH = pathlib.Path(__file__).resolve().parent / "data" / "acore_schema.json"
+# The package ships its own snapshot (it is built into a separate image), so the
+# path stays beside the code rather than under the bridge's shared data root.
+SNAPSHOT_NAME = "acore_schema.json"
+DEFAULT_PATH = pathlib.Path(__file__).resolve().parent / "data" / SNAPSHOT_NAME
 DEFAULT_DB = "acore_characters"
 GAME_DBS = ("acore_characters", "acore_world", "acore_playerbots")
 
