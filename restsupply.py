@@ -203,6 +203,21 @@ def _pick(level, rows, category, copper, stacks=1):
     return ()
 
 
+def _interleave(picked, room) -> tuple:
+    """The Buys of every kind in stack order: the first stack of each kind,
+    then the second of each, cut to `room` slots when it is known, so a room
+    that runs out takes the later stacks and never a whole kind."""
+    longest = max((len(p) for p in picked), default=0)
+    buys = tuple(p[i] for i in range(longest) for p in picked if i < len(p))
+    return buys if room is None else buys[: max(0, _int(room))]
+
+
+def _at_vendor(member, stock, kinds, each, shares, room):
+    """(kinds met, buys) at one vendor's `stock`."""
+    picked = [_pick(member.level, stock, k, each, shares.get(k, 1)) for k in kinds]
+    return sum(1 for p in picked if p), _interleave(picked, room)
+
+
 def plan(member, rows, junk=0, room=None) -> tuple:
     """(buys, why not) for one member: the Buys at one vendor in reach, or ()
     and the reason when nothing is bought. `rows` are the friendly vendors'
@@ -222,34 +237,18 @@ def plan(member, rows, junk=0, room=None) -> tuple:
         vendors.setdefault(_int(r.get("vendor")), []).append(r)
     best = None
     for vendor, stock in vendors.items():
-        picked = [_pick(member.level, stock, k, each, shares.get(k, 1)) for k in kinds]
-        kinds_met = sum(1 for p in picked if p)
-        if not kinds_met:
+        met, buys = _at_vendor(member, stock, kinds, each, shares, room)
+        if not met:
             continue
-        # One stack of each kind first, then the second of each: a room that
-        # runs out takes the later stacks, never a whole kind.
-        buys = tuple(
-            p[i]
-            for i in range(max(len(p) for p in picked))
-            for p in picked
-            if i < len(p)
-        )
-        if room is not None:
-            buys = buys[: max(0, _int(room))]
         yards = min(float(r.get("yards") or 0.0) for r in stock)
-        key = (-kinds_met, yards, vendor)
+        key = (-met, yards, vendor)
         if best is None or key < best[0]:
             best = (key, buys)
     if best is None:
         return (
             (),
             "%s cannot afford %d of the %s a vendor in reach sells (%d copper)"
-            % (
-                member.name,
-                MIN_UNITS,
-                words,
-                budget(member, junk),
-            ),
+            % (member.name, MIN_UNITS, words, budget(member, junk)),
         )
     return best[1], ""
 
