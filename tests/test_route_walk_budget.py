@@ -36,7 +36,8 @@ class _Log:
                 prefix = log.args[0][:-1] if log.args else ""
                 mail_only = "kind = 'mail'" in sql or "mail" in log.args[1:]
                 n = sum(
-                    1 for kind, source in log.rows
+                    1
+                    for kind, source in log.rows
                     if source.startswith(prefix) and (not mail_only or kind == "mail")
                 )
                 return {"n": n}
@@ -75,8 +76,11 @@ class TheWalkBudgetIsNotSpentByHearthstones(unittest.TestCase):
         self.assertEqual(3, self.count(rows))
 
     def test_the_budget_is_not_spent_by_hearths(self):
-        spent = guildroute.runs_today([], 0.0, posted=self.count(
-            [("hearth", guildroute.GROUND_HEARTH_SOURCE)] * 52))
+        spent = guildroute.runs_today(
+            [],
+            0.0,
+            posted=self.count([("hearth", guildroute.GROUND_HEARTH_SOURCE)] * 52),
+        )
         plan_budget = max(0, 30 - spent)
         self.assertEqual(30, plan_budget)
 
