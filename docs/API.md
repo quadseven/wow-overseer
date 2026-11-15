@@ -458,6 +458,12 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Answers: how far behind each pinned dependency is.
 - Example: `overseer get /api/v2/upstream`
 
+## `GET /api/v2/whats-live`
+
+- Query: none
+- Answers: the running bridge commit, digest, and roll time from the follower ConfigMap, the running realm and mod-overseer commit, and merged PRs from the last 48 hours classified as `merged`, `deployed`, `live-proven`, or `unknown`.
+- Example: `overseer get /api/v2/whats-live`
+
 ## `GET /api/v2/zone-danger`
 
 - Query: none
