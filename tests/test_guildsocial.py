@@ -478,20 +478,20 @@ class WhoAnswers(unittest.TestCase):
         out = plan([mate("Auren", 20, ROGUE), low], asks=[ask(7, "Auren")])
         self.assertEqual(out.replies, ())
 
-    def test_a_member_far_above_the_door_answers_as_a_carry(self):
+    def test_a_member_far_above_the_door_is_refused_because_its_kills_are_gray(self):
+        # Level-matched seats (guildrun.gray_cutoff): a level 40 in the Deadmines
+        # (mobs 17 to 26) makes every kill gray and halves the group's experience.
         out = plan(
             [mate("Auren", 26, ROGUE), mate("Ancient", 40, MAGE)],
             asks=[ask(7, "Auren")],
         )
-        self.assertEqual(
-            [(r.member, r.stance) for r in out.replies], [("Ancient", "carry")]
-        )
+        self.assertEqual(out.replies, ())
+        # The carry's worth is unchanged; the seat rule is what refuses it.
         self.assertEqual(
             gs.worth(mate("Ancient", 40, MAGE), DEADMINES, gs.CARRY, ENTRANCES), 1.0
         )
-        self.assertIn("carry", out.replies[0].said)
 
-    def test_at_most_one_far_member_carries_an_ask(self):
+    def test_nobody_far_above_the_door_carries_an_ask(self):
         out = plan(
             [
                 mate("Auren", 26, ROGUE),
@@ -500,28 +500,29 @@ class WhoAnswers(unittest.TestCase):
             ],
             asks=[ask(7, "Auren")],
         )
-        self.assertEqual(
-            [(r.member, r.stance) for r in out.replies if r.stance == "carry"],
-            [("Ancient", "carry")],
-        )
+        self.assertEqual([r for r in out.replies if r.stance == "carry"], [])
 
-    def test_helpers_up_to_ten_levels_above_at_most_two(self):
-        crowd = [mate("Auren", 20, ROGUE)] + [
-            mate("Old%s" % c, DEADMINES.ceiling + 5, MAGE, zone_id=STORMWIND, at=NEAR)
-            for c in "abc"
+    def test_helpers_just_above_a_narrow_door_at_most_two(self):
+        # The Scarlet Library's mobs run 33 to 38: a level 40 is not yet gray to
+        # them (cutoff 31), a level 43 is (cutoff 34).
+        crowd = [mate("Auren", 35, ROGUE)] + [
+            mate("Old%s" % c, 40, MAGE, zone_id=STORMWIND, at=NEAR) for c in "abc"
         ]
-        out = plan(crowd, asks=[ask(7, "Auren")])
+        library = ask(7, "Auren", target="scarlet-library")
+        out = plan(crowd, asks=[library])
         self.assertEqual(len(out.replies), 2)
         self.assertEqual({r.stance for r in out.replies}, {"help"})
         more = plan(
             crowd,
-            asks=[ask(7, "Auren")],
+            asks=[library],
             answers=[
                 yes(1, 7, "Olda", "dps", "help"),
                 yes(2, 7, "Oldb", "dps", "help"),
             ],
         )
         self.assertEqual(more.replies, ())
+        gray = plan([mate("Auren", 35, ROGUE), mate("Tall", 43, MAGE)], asks=[library])
+        self.assertEqual(gray.replies, ())
 
     def test_an_upgrade_there_is_said_in_the_answer(self):
         # Idle in Darnassus, across the sea: the finder brings it in, and an
