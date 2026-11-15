@@ -18321,6 +18321,10 @@ class Bridge(discord.Client):
                     m.name,
                     qid,
                 )
+            for qid in questers.retry_take_refusals(m.name, held, tried):
+                held.pop(qid)
+                log.info("questers: %s asks again for quest %d, whose take was "
+                         "refused and has no refusal left on record", m.name, qid)
             known = questers.known_broken(m.name, held, ledger)
             plan = questers.plan(cat, m, self._quester_clock, now, known, tried,
                                  self._quester_last.get(m.name, 0), crossings)
@@ -37691,6 +37695,14 @@ BANK_LEAVES_SECONDS = 120.0
 _BANK_LEAVES_CACHE: dict = {}
 
 
+def _banked_rows(names: list) -> list:
+    """The bank-side rows of `_fetch_bank_items`, bags and all; blocking."""
+    rows = _fetch_bank_items(names)
+    held = {h.guid for m in bank.members_from_rows(rows, names)
+            for h in m.banked if h.container_slots <= 0}
+    return [r for r in rows if int(r["item_guid"]) in held]
+
+
 def _bank_plan_leaves(names: list) -> tuple:
     """(item guid -> why, unread) for the stacks the item plan sends elsewhere.
 
@@ -37717,7 +37729,10 @@ def _bank_plan_leaves(names: list) -> tuple:
         gear_rows = _fetch_surplus_gear(list(key))
         worn_rows = _fetch_family_equipped(list(key))
         family = key[0]
-        extras = _itemplan_reads(list(key), family, rows, gear_rows, worn_rows)
+        banked_rows = (
+            _banked_rows(list(key)) if itemplan.SELL_VENDOR in routes else [])
+        extras = _itemplan_reads(
+            list(key), family, rows + banked_rows, gear_rows, worn_rows)
         report = itemplan_shadow.shadow(
             list(key), family, rows, free_slots, gear_rows=gear_rows,
             worn_rows=worn_rows, extras=extras)
@@ -37725,6 +37740,12 @@ def _bank_plan_leaves(names: list) -> tuple:
             rows, gear_rows, extras.templates, extras.instance_soulbound)
         leaves = itemplan_shadow.leaving(
             report.plan, list(zip(stacks, rows, strict=True)), routes, key)
+        if banked_rows:
+            # A BANKED STACK THE PLAN SELLS IS FETCHED OUT TO BE SOLD (#2603).
+            banked, pairs = itemplan_shadow.banked_plan(
+                list(key), family, banked_rows, rows, free_slots, extras,
+                gear_rows=gear_rows, worn_rows=worn_rows)
+            leaves.update(itemplan_shadow.sold_from_bank(banked, pairs))
         unread = False
     except Exception:
         log.exception("bank: the item plan could not be read; nothing new is "
