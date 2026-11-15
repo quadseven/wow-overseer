@@ -32151,6 +32151,12 @@ def _itemplan_vendor_sales(names, family, rows, free_slots, gear_rows=(),
             log.info("%s", line)
         for line in itemplan_vendor.release_lines(sales):
             log.info("%s", line)
+        if itemplan_vendor.release_enabled():
+            for line in itemplan_vendor.release_reason_lines(
+                names, free_slots, sellable_counts, report.plan, pairs,
+                sales, keep_names=keep_names,
+            ):
+                log.info("%s", line)
         return sales
     except Exception:
         log.exception(
