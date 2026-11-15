@@ -93,7 +93,10 @@ class TheBagRoomWaitSurvivesARestart(unittest.TestCase):
         self.assertRegex(text, r'_bag_room_since[^\n]*=\s*_ClockMemo\(\s*"bag_room"')
 
     def test_the_memo_round_trips_a_monotonic_start(self):
-        self.assertEqual(bridge._bag_wait_from_memo(bridge._bag_wait_memo(50.0, 1000.0), 1000.0), 50.0)
+        self.assertEqual(
+            bridge._bag_wait_from_memo(bridge._bag_wait_memo(50.0, 1000.0), 1000.0),
+            50.0,
+        )
         self.assertEqual(bridge._bag_wait_clock(50.0), 50.0)
 
 
