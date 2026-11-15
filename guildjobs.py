@@ -8431,6 +8431,18 @@ def class_step(
     return step, doing, note
 
 
+def class_move_spot(m, book, recent, now=0.0):
+    """The Spot class_step would walk `m` to, or None: the move chosen with the
+    walls and avoids the walk uses (_class_move), read-only (no hunts clock). A
+    caller that judges the ground of a walk reads this, not the plain next
+    move."""
+    m = with_recent_takes(m, recent)
+    move, _blocked = _class_move(m, book, recent, None, now)
+    if move is None or move.spot is None:
+        return None
+    return _class_spot(move)
+
+
 def _class_move_step(
     m, move, note, book, recent, cap, hunts, now, far, kept, crafters, master
 ):

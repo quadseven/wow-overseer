@@ -20355,8 +20355,15 @@ class Bridge(discord.Client):
 
     def _start_guild_job_steps(self, plan, now, cap, sale_walks):
         started = 0
+        # An errand can begin after the idle-member snapshot (the plan's awaits):
+        # read it again at the insert, with no await between it and the start.
+        errand = _errand_names()
         for step in plan.steps:
             if step.holder in self._guild_run_names:
+                continue
+            if step.holder in errand:
+                log.info("guild jobs: %s began a town errand since the plan; its "
+                         "%s step waits", step.holder, step.action)
                 continue
             # A sale walk, whichever step asks it (a sale or a class quest's
             # make-room step), waits while the world refuses the walk.
@@ -36233,6 +36240,11 @@ _LIVE_RUN_LEADERS_SQL = (
 )
 
 
+def _errand_names() -> set:
+    """Every name of a family whose town errand is active right now."""
+    return {n for key, st in list(_TOWN_ERRANDS.items()) if st.active for n in key}
+
+
 def _idle_family_members(facts) -> list:
     """The roster family members whose family is between runs (#2336)."""
     return _family_class_state(facts)[0]
@@ -36258,7 +36270,7 @@ def _family_class_state(facts) -> tuple:
         return [], familyclass.not_idle_holds((), members=members, status_read=False)
     inside = {m.name for m in members
               if m.map_id is not None and m.map_id not in guildrun.OPEN_WORLD_MAPS}
-    errand = {n for key, st in list(_TOWN_ERRANDS.items()) if st.active for n in key}
+    errand = _errand_names()
     holds = familyclass.not_idle_holds(
         roster, live, inside, errand, members=members, roster_read=bool(roster))
     idle = familyclass.idle_names(roster, live, inside)
@@ -36276,13 +36288,13 @@ def _family_danger(members, book, recent) -> dict:
         return out
     for m in members:
         try:
-            move, _blocked = classquest.next_move(
-                book, guildjobs.with_recent_takes(m, recent))
-            spot = getattr(move, "spot", None)
-            if spot is None:
+            # The move the walk makes (walls and avoids), and only for a member
+            # that would walk: one in reach, or held for distance, needs no read.
+            spot = guildjobs.class_move_spot(m, book, recent)
+            if spot is None or not familyclass.needs_ground_read(m, spot):
                 continue
             top = _gather_danger(int(spot.map_id), float(spot.x), float(spot.y))
-        except (pymysql.err.MySQLError, TypeError, ValueError):
+        except (pymysql.err.MySQLError, OSError, TypeError, ValueError):
             log.exception("guild jobs: the giver's ground of %s could not be read",
                           m.name)
             continue
