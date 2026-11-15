@@ -42,6 +42,7 @@ import statistics
 import classquest
 import commandwords
 import council
+import guildranks
 import guildrun
 import places
 from apiv2 import _scope, presence
@@ -54,10 +55,10 @@ CONTINENTS = (0, 1, 530, 571)
 MAX_MEMBERS = 1000
 MAX_ROWS = 5000
 
-_GUILD_SQL = "SELECT guildid, name FROM guild WHERE name = %s LIMIT 1"
+_GUILD_SQL = "SELECT guildid, name, motd FROM guild WHERE name = %s LIMIT 1"
 _NOW_SQL = "SELECT UNIX_TIMESTAMP() AS now"
 _MEMBERS_SQL = (
-    "SELECT c.guid, c.name, c.level, c.class, c.race, c.zone FROM characters c "
+    "SELECT c.guid, c.name, c.level, c.class, c.race, c.zone, gm.rank FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid WHERE gm.guildid = %s LIMIT %s"
 )
 _DINGS_SQL = (
@@ -187,6 +188,7 @@ def member_rows(rows: list, readings: dict) -> list:
                 "name": r["name"],
                 "level": int(r["level"] or 0),
                 "class": class_name(r["class"]),
+                "rank": int(r["rank"]) if r.get("rank") is not None else None,
                 "online": bool(reading.get("online")),
                 "ghost": reading.get("life") in ("dead", "ghost"),
             }
@@ -462,6 +464,9 @@ def build(rd, row: dict, zones: dict, maps: dict, families: list) -> dict:
         "deaths": _deaths(rd, names, ghosts, zones, maps),
         "class_quests": _class_quests(rd, gid, names, classes),
         "dungeons": dungeon_rows(guildrun.doors(), faction, _runs(rd, row["name"])),
+        "ranks": guildranks.summarize_ranks(
+            row["name"], members, current_motd=row.get("motd") or ""
+        ),
         "now": now,
     }
 
