@@ -1774,18 +1774,27 @@ def _walk_in_flight(name, recent) -> bool:
     )
 
 
+# The roles the profession plan covers: the approved raid seats and the guild
+# maintenance characters. A summoner and a quester are never in it.
+PLANNED_ROLES = (RAIDER, MAINTENANCE)
+
+
 def assigned_trades(members, crafters=None) -> dict:
     """name -> (skill, skill) for each raid seat in `members`, by
     guildtrades.assign over its guild's approved seats. `crafters` is the
     families' {guild: {skill: [(name, value)]}}, which says what the family
     seats of the guild already hold."""
     out: dict = {}
-    guilds = {m.guild for m in members or () if m.role == RAIDER}
+    guilds = {m.guild for m in members or () if m.role in PLANNED_ROLES}
     for guild in sorted(guilds):
         live = {}
         for m in members:
             if m.guild == guild and m.role in (RAIDER, SUMMONER, MAINTENANCE):
-                live[m.name] = guildtrades.Seen(m.level, frozenset(m.primaries))
+                live[m.name] = guildtrades.Seen(
+                    m.level,
+                    frozenset(m.primaries),
+                    {sk: m.skill(sk)[0] for sk in m.primaries},
+                )
         family: dict = {}
         for skill, rows in ((crafters or {}).get(guild) or {}).items():
             if int(skill) in PRIMARY_SKILLS:
@@ -1794,8 +1803,13 @@ def assigned_trades(members, crafters=None) -> dict:
         for name, held in family.items():
             live.setdefault(name, guildtrades.Seen(RAID_CEILING, frozenset(held)))
         got = guildtrades.assign(guild, live)
+        # A name is planned as the kind of character the lineup names it as: a
+        # seat's name under any other role is not a seat.
+        upkeep = {x.name: x.maintenance for x in guildtrades.members_of(guild, live)}
         for m in members:
-            if m.guild == guild and m.role == RAIDER and m.name in got:
+            if m.guild != guild or m.role not in PLANNED_ROLES or m.name not in got:
+                continue
+            if upkeep.get(m.name) == (m.role == MAINTENANCE):
                 out[m.name] = got[m.name]
     return out
 
@@ -1807,25 +1821,33 @@ def profession_lines(members, plan_result) -> list:
     out = []
     steps = {s.holder for s in plan_result.steps if is_profession_errand(s)}
     for guild in sorted({m.guild for m in members if m.name in plan_result.assigned}):
-        seats = [
-            m for m in members if m.guild == guild and m.name in plan_result.assigned
-        ]
-        whole = sum(
-            1
-            for m in seats
-            if not guildtrades.missing(m.primaries, plan_result.assigned[m.name])
-        )
-        out.append(
-            "%s: profession plan: %d raid seat(s), %d hold their assigned trades, "
-            "%d lack one, %d sent to a trainer this pass"
-            % (
-                guild,
-                len(seats),
-                whole,
-                len(seats) - whole,
-                sum(1 for m in seats if m.name in steps),
+        for role, noun in ((RAIDER, "raid seat(s)"), (MAINTENANCE, "maintenance")):
+            seats = [
+                m
+                for m in members
+                if m.guild == guild
+                and m.role == role
+                and m.name in plan_result.assigned
+            ]
+            if not seats:
+                continue
+            whole = sum(
+                1
+                for m in seats
+                if not guildtrades.missing(m.primaries, plan_result.assigned[m.name])
             )
-        )
+            out.append(
+                "%s: profession plan: %d %s, %d hold their assigned trades, "
+                "%d lack one, %d sent to a trainer this pass"
+                % (
+                    guild,
+                    len(seats),
+                    noun,
+                    whole,
+                    len(seats) - whole,
+                    sum(1 for m in seats if m.name in steps),
+                )
+            )
     return out
 
 
@@ -1833,7 +1855,12 @@ def _lay_assigned_trades(members, crafters, trades) -> dict:
     """The raid seats' assigned pairs (assigned_trades), laid first in each
     seat's planned `trades`; returns the pairs."""
     assigned = assigned_trades(members, crafters)
+    held = {m.name: set(m.primaries) for m in members or ()}
     for name, pair in assigned.items():
+        if not held.get(name, set()) <= set(pair):
+            # A trade it would have to give up first: its planned trades stay
+            # as they are until the drop is made.
+            continue
         trades[name] = tuple(pair) + tuple(
             s for s in trades.get(name, ()) if s not in pair
         )
@@ -1918,10 +1945,14 @@ def _profession_first(m, assigned, pvp, pending, recent, cap):
     """(the trainer walk or None, a note): a raid seat that lacks a trade it was
     assigned walks to its trainer. See THE PROFESSION ERRAND above."""
     want = (assigned or {}).get(m.name)
-    if m.role != RAIDER or not want:
+    if m.role not in PLANNED_ROLES or not want:
         return None, ""
     lacks = guildtrades.missing(m.primaries, want)
     if not lacks or len(m.primaries) >= MAX_PRIMARY:
+        return None, ""
+    if any(sk not in want for sk in m.primaries):
+        # A trade must be given up before this one is learned, and nothing
+        # that gives one up is built for a guild character yet: it waits.
         return None, ""
     if _profession_unfit(m, pvp, pending):
         return None, ""

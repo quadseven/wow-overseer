@@ -238,6 +238,7 @@ class TheFactsRead(unittest.TestCase):
             [],
             [],
             [],
+            [],
         ]
 
         class Cur(FakeCursor):

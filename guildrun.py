@@ -699,6 +699,83 @@ def benched(recent: list) -> set:
     return out
 
 
+# A SEAT IN A BATTLEGROUND QUEUE IS NOT PROPOSED (#2654). The module refuses a
+# run over one named member waiting in a battleground queue, and nothing can
+# leave a queue: mod-overseer has no `bg-leave` verb, and the playerbots
+# `bg leave` action reads a value only its own join sets. A queue the pvp rung
+# opened before levelling came first (#2583) therefore stands until the
+# worldserver restarts, and each seat in one cost a run's whole minute as a
+# refusal while the run was formed again without it. The module's own answers
+# say who is queued: a `bg-queue` row it answered "queued" or "already", newer
+# than the worldserver's start and with no accepted `bg-leave` since.
+#
+# Below the cap a queue is held for as long as the worldserver has been up (a
+# restart empties every queue), at the cap only while the row is fresh: the pvp
+# rung asks again inside QUEUED_FRESH_MINUTES (pvpgear.WAITING_MINUTES).
+QUEUED_FRESH_MINUTES = 45
+QUEUED_LEVEL_CAP = 60
+QUEUED_LOOKBACK_HOURS = 24
+QUEUED_SEATS_SQL = (
+    "SELECT o.target_name AS name, c.level AS level, "
+    "IF(o.command LIKE 'bg-leave %%', 'bg-leave', 'bg-queue') AS verb, "
+    "CASE WHEN o.status = 'error' THEN '' "
+    "WHEN o.result LIKE '%%\"outcome\":\"queued\"%%' THEN 'queued' "
+    "WHEN o.result LIKE '%%\"outcome\":\"already\"%%' THEN 'already' "
+    "WHEN o.result LIKE '%%\"outcome\":\"left\"%%' THEN 'left' "
+    "ELSE '' END AS answer, "
+    "TIMESTAMPDIFF(MINUTE, o.created_at, NOW()) AS age_minutes "
+    "FROM overseer_command o LEFT JOIN characters c ON c.name = o.target_name "
+    "WHERE (o.command LIKE 'bg-queue %%' OR o.command LIKE 'bg-leave %%') "
+    "AND o.created_at > NOW() - INTERVAL %s HOUR ORDER BY o.id DESC"
+)
+UPTIME_SQL = "SELECT UNIX_TIMESTAMP() - MAX(starttime) AS up FROM acore_auth.uptime"
+
+
+def queued_seats(rows, uptime_minutes) -> set:
+    """Names the module's answers say sit in a battleground queue now.
+
+    `rows` are QUEUED_SEATS_SQL's, newest first; the newest accepted answer of
+    a member decides, a refused or failed one says nothing. `uptime_minutes` is
+    the worldserver's age, None when unread (the lookback bounds it then)."""
+    lookback = QUEUED_LOOKBACK_HOURS * 60
+    decided: set = set()
+    held: set = set()
+    for row in sorted(rows or (), key=lambda r: int(r.get("age_minutes") or 0)):
+        name = str(row.get("name") or "")
+        verb, said = str(row.get("verb") or ""), str(row.get("answer") or "")
+        if not name or name in decided:
+            continue
+        if verb == "bg-leave" and said in ("left", "already"):
+            decided.add(name)
+        elif verb == "bg-queue" and said in ("queued", "already"):
+            decided.add(name)
+            age = int(row.get("age_minutes") or 0)
+            level = row.get("level")
+            below = level is not None and int(level) < QUEUED_LEVEL_CAP
+            window = (
+                lookback
+                if uptime_minutes is None
+                else min(lookback, int(uptime_minutes))
+            )
+            if age <= (window if below else QUEUED_FRESH_MINUTES):
+                held.add(name)
+    return held
+
+
+def read_queued_seats(cur) -> set:
+    """queued_seats, read on `cur`; empty when the reads fail, so a broken
+    read never keeps a guild out of its dungeons."""
+    try:
+        cur.execute(UPTIME_SQL)
+        up = (cur.fetchone() or {}).get("up")
+        cur.execute(QUEUED_SEATS_SQL, (QUEUED_LOOKBACK_HOURS,))
+        rows = list(cur.fetchall())
+    except Exception:  # noqa: BLE001 - any read failure holds nobody
+        _log.exception("guild runs: the queued seats are unreadable; none is held")
+        return set()
+    return queued_seats(rows, None if up is None else int(up) // 60)
+
+
 def family_seat_benched(recent: list) -> set:
     """Members in recent runs abandoned for missing live tank/healer roles."""
     return {
@@ -2241,7 +2318,7 @@ def order_facts(cur, cooldown_minutes: int) -> dict:
         "AND ended_at > NOW() - INTERVAL %s MINUTE",
         (QUEUE_BENCH_MINUTES,),
     )
-    benched_now = benched(list(cur.fetchall()))
+    benched_now = benched(list(cur.fetchall())) | read_queued_seats(cur)
     cur.execute(
         "SELECT guild, keyword, band, composition, state, outcome, deaths, ended_at "
         "FROM overseer_guild_run WHERE state = 'ended' ORDER BY id DESC LIMIT 2000"
