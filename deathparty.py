@@ -20,10 +20,13 @@ this pass and not already taken by an earlier start or another party. A
 member seats at most one party a pass, as leader or as helper.
 
 PURE: rows in, party starts out. No MySQL, no clock, no sleeping. The
-bridge reads the starts this planner emits in its social pass and logs
-each one; the runner that walks the two members to the meeting place,
-forms the party and ends it is the next slice, and the DEATH_ASK switch
-keeps its own gate in deathask.
+bridge reads the starts this planner emits in its social pass and seats
+each new one on the StartBook below, which is also the runner's act-time
+gate: a start the book already holds is not seated (or logged) twice,
+and a seated start is acted on only while start_still_valid proves it
+against the newest reads. The runner that walks the two members to the
+meeting place, forms the party and ends it is the next slice, and the
+DEATH_ASK switch keeps its own gate in deathask.
 No levels, gear or skills are granted here or anywhere in the route: help
 is another member's time.
 """
@@ -103,3 +106,40 @@ def plan_starts(asks, answers, loops, free, taken=frozenset()) -> tuple:
         taken.update(start.names())
         starts.append(start)
     return tuple(starts)
+
+
+class StartBook:
+    """The starts seated and not yet finished, one per ask.
+
+    The social pass plans the same filled ask on every pass until the
+    runner consumes it, so seating is by ask id: seat() returns False for
+    an ask already on the book and the caller neither re-seats nor
+    re-logs it. release() frees the ask when its party ends, however it
+    ends, so a later filled ask can seat again.
+    """
+
+    def __init__(self) -> None:
+        self._by_ask: dict = {}
+
+    def seat(self, start) -> bool:
+        if start.ask_id in self._by_ask:
+            return False
+        self._by_ask[start.ask_id] = start
+        return True
+
+    def release(self, ask_id) -> None:
+        self._by_ask.pop(ask_id, None)
+
+    def seated(self) -> tuple:
+        return tuple(self._by_ask[k] for k in sorted(self._by_ask))
+
+
+def start_still_valid(start, loops, free) -> bool:
+    """The act-time re-check: a seated start may be acted on only while
+    its asker still stands in the loop the start was seated from, at the
+    same meeting place, and every member of the start is still free."""
+    loop = (loops or {}).get(start.leader)
+    if loop is None or loop.place != start.place:
+        return False
+    free = set(free or ())
+    return all(name in free for name in start.names())

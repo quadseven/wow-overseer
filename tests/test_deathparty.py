@@ -142,5 +142,49 @@ class DeathPartyStarts(unittest.TestCase):
         self.assertEqual(starts[0].answers, {"Helper": 31})
 
 
+class DeathPartyBook(unittest.TestCase):
+    """The runner's seat book: a seated start is not seated twice, and a
+    start is re-checked at act time against the newest reads."""
+
+    def start(self):
+        return deathparty.PartyStart(
+            ask_id=9, leader="Looper", helpers=("Helper",),
+            place=loop_of().place, answers={"Helper": 31})
+
+    def test_a_start_seats_once_per_ask(self):
+        book = deathparty.StartBook()
+        self.assertTrue(book.seat(self.start()))
+        self.assertFalse(book.seat(self.start()))
+        self.assertEqual([s.ask_id for s in book.seated()], [9])
+
+    def test_a_released_start_seats_again(self):
+        book = deathparty.StartBook()
+        book.seat(self.start())
+        book.release(9)
+        self.assertEqual(book.seated(), ())
+        self.assertTrue(book.seat(self.start()))
+
+    def test_a_start_stays_valid_while_the_asker_stands_in_its_loop(self):
+        start = self.start()
+        self.assertTrue(deathparty.start_still_valid(
+            start, {"Looper": loop_of()}, free={"Looper", "Helper"}))
+
+    def test_a_start_dies_when_the_asker_left_the_loop(self):
+        self.assertFalse(deathparty.start_still_valid(
+            self.start(), {}, free={"Looper", "Helper"}))
+
+    def test_a_start_dies_when_a_member_is_no_longer_free(self):
+        self.assertFalse(deathparty.start_still_valid(
+            self.start(), {"Looper": loop_of()}, free={"Looper"}))
+
+    def test_a_start_dies_when_the_meeting_place_moved(self):
+        import dataclasses
+
+        moved = dataclasses.replace(loop_of(), zone=1)
+        self.assertNotEqual(moved.place, loop_of().place)
+        self.assertFalse(deathparty.start_still_valid(
+            self.start(), {"Looper": moved}, free={"Looper", "Helper"}))
+
+
 if __name__ == "__main__":
     unittest.main()
