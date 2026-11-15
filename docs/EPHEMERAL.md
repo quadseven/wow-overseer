@@ -43,8 +43,12 @@ snapshot of the game databases' table and column names
 - A grant (level, money, skills, spells, items) needs a `ceiling`, and a grant
   above what the ceiling text allows is rejected.
 - At least one precondition and one check, so a vacuous pass is impossible.
-- A fix in the bridge repo needs `world.bridge: "on"`, and with the bridge on
-  the roster is the bridge's: order a job with a `command` of kind `job`.
+- A fix in the bridge repo needs `world.bridge: "on"`.
+- A `roster` step is shorthand for a `command` of kind `job`: it is written as an
+  `overseer_command` row, which the module applies within seconds with or
+  without the bridge. Nothing in a decree writes `overseer_roster` directly (a
+  direct update was measured to have no effect). `ephemeral/acts.py` turns the
+  timeline into those rows.
 - Observation SQL is one read-only SELECT over known tables and columns, using
   only variables the judge defines: `@t0`, `@cast`, `@cast<N>`, `@<Name>`,
   `@<instance alias>`, `@money_start`, `@seed_skill_value`, `@seed_skill_max`,

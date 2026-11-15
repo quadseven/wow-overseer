@@ -755,12 +755,12 @@ def _act_step(lint, path, step, whos, names, bridge_on):
         "needs exactly one of roster or command",
     )
     if "roster" in step:
-        _act_roster(lint, f"{path}.roster", step["roster"], whos, bridge_on)
+        _act_roster(lint, f"{path}.roster", step["roster"], whos)
     if "command" in step:
         _act_command(lint, f"{path}.command", step["command"], whos)
 
 
-def _act_roster(lint, path, r, whos, bridge_on):
+def _act_roster(lint, path, r, whos):
     if lint.keys(path, r, ("who", "job"), ("who", "job")):
         _act_who(lint, f"{path}.who", r["who"], whos)
         lint.ensure(
@@ -769,12 +769,6 @@ def _act_roster(lint, path, r, whos, bridge_on):
             "schema",
             "must be a job such as quest or dungeon:blackrockdepths",
         )
-    lint.ensure(
-        not bridge_on,
-        path,
-        "bridge",
-        "with the bridge on it owns overseer_roster; order the job with a command of kind job",
-    )
 
 
 def _act_command(lint, path, c, whos):
