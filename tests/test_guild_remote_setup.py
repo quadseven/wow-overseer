@@ -65,6 +65,22 @@ class TheBridgeWritesThemBeforeTheWalk(unittest.TestCase):
         claimed = body.index('aimed = await self._claim_town_slot("guild bank"')
         self.assertLess(wrote, claimed)
 
+    def test_grants_are_queued_before_the_mid_run_return(self):
+        """A family mid-run for hours never reached the writer, so the second
+        guild's tab stayed closed to every rank (wow-dev, 2026-11-15)."""
+        body = self.body("    async def _guild_bank_once(")
+        wrote = body.index("_queue_remote_setup(")
+        returned = body.index("if in_run:")
+        self.assertLess(wrote, returned)
+        self.assertNotIn("if await self._mid_run(names):", body)
+
+    def test_the_vault_work_still_waits_for_the_run_to_end(self):
+        body = self.body("    async def _guild_bank_once(")
+        returned = body.index("if in_run:")
+        self.assertLess(
+            returned, body.index('aimed = await self._claim_town_slot("guild bank"')
+        )
+
     def test_the_writer_splits_dedupes_and_hands_back_the_vault_ones(self):
         body = self.body("async def _queue_remote_setup(")
         self.assertIn("guildbank.split_remote(", body)
