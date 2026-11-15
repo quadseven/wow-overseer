@@ -55,8 +55,9 @@ price. The vault's stacks to list leave it by a member's own hand
 (`plan_withdrawals`): a member whose rank may withdraw from the tab stands at
 the vault and takes the stack into an empty bag slot through mod-overseer's
 `bank withdraw-item`, the core's own withdraw with its rank rights and daily
-allowance, and clearance lists it from the bags at the fair price. The gives
-and vendor sales of vault stacks are still only the plan the bridge logs.
+allowance, and clearance lists it from the bags at the fair price. A vendor stack
+leaves the same way for a sale from the bags, and a give is taken by the member
+it is for (`plan_surplus_withdrawals`).
 
 NATURAL ONLY. Nothing here creates or grants anything. A member lists its own
 stack, posts it to a guildmate, or sells it to a vendor: what a player does.
@@ -77,6 +78,7 @@ import disposition
 import guildbank
 import guildjobs
 import guildshare
+import itemplan
 
 # How far ahead the bank keeps. Two weeks of measured eating: long enough to
 # ride out a day the crew is away, short enough that a trade the guild has
@@ -201,6 +203,11 @@ class Decision:
     # What this decision adds to the item's judgement: the price, the vendor
     # comparison, or the member's shortfall.
     note: str = ""
+    # What a vendor pays for the whole stack, and the stack's class and
+    # quality: the facts the vault's vendor withdrawal gates on (#2602).
+    worth: int = 0
+    item_class: int = -1
+    quality: int = 0
 
     @property
     def line(self) -> str:
@@ -730,6 +737,9 @@ def _sell_or_vendor(stack, item, price, price_why, kind, why) -> Decision:
             why,
             note="%s, which does not beat the vendor's %s by %dx"
             % (price_why, money(item.sell_price), beats),
+            worth=item.sell_price * max(1, stack.count),
+            item_class=item.item_class,
+            quality=item.quality,
         )
     return Decision(
         stack,
@@ -1177,8 +1187,8 @@ def read(cur, names) -> Facts:
 # and drags the stack into its bags: mod-overseer's `bank withdraw-item`, the
 # core's own Guild::SwapItemsWithInventory, which enforces the rank's right on
 # the tab and its daily allowance. Clearance then lists the stack from the
-# bags at the fair price. Only SELL decisions are taken: a give to a short
-# member and a vendor sale of a vault stack stay the plan the bridge logs.
+# bags at the fair price. `plan_withdrawals` takes the SELL decisions;
+# `plan_surplus_withdrawals` takes the vendor and give ones.
 
 # Stacks one member takes in one visit to the vault, the keeper rule's visit.
 WITHDRAW_VISIT_STACKS = 8
@@ -1192,6 +1202,12 @@ WITHDRAWN_FOR_SALE_HOURS = 48
 # The core's rank 0 and the tab right a withdrawal needs (Guild.h).
 GUILD_MASTER_RANK = 0
 GUILD_BANK_RIGHT_VIEW_TAB = 0x01
+
+# The `overseer_command.source` of a withdrawal for the house or a vendor, and
+# of one a member makes to keep for its own craft (the forecast's GIVE). The
+# second is not for sale: `WITHDRAWN_SQL` leaves it out.
+WITHDRAW_SOURCE = "guildbank-withdraw"
+GIVE_SOURCE = "guildbank-give"
 
 _WITHDRAW_COMMAND = "bank withdraw-item "
 # The LIKE pattern for those rows in `overseer_command`.
@@ -1217,12 +1233,16 @@ class Withdrawer:
 
 @dataclass(frozen=True)
 class Withdrawal:
-    """One vault stack a member takes out for the house."""
+    """One vault stack a member takes out: for the house (`price`), to a
+    vendor (`price` 0), or into the hands of the member the forecast gives it
+    to (`source` `GIVE_SOURCE`)."""
 
     character: str
     stack: Stack
     item: str
     price: int
+    source: str = WITHDRAW_SOURCE
+    why: str = ""
 
     @property
     def command(self) -> str:
@@ -1232,13 +1252,19 @@ class Withdrawal:
 
     @property
     def line(self) -> str:
-        return "%s takes %s x%d (guid %d) from tab %d to list at %s each" % (
+        if self.source == GIVE_SOURCE:
+            what = "to use, the forecast gives it to %s" % self.character
+        elif self.price > 0:
+            what = "to list at %s each" % money(self.price)
+        else:
+            what = "to sell to a vendor"
+        return "%s takes %s x%d (guid %d) from tab %d %s" % (
             self.character,
             self.item,
             self.stack.count,
             self.stack.guid,
             self.stack.tab,
-            money(self.price),
+            what,
         )
 
 
@@ -1319,6 +1345,102 @@ def plan_withdrawals(
     return tuple(out)
 
 
+def _room_after(order, planned, visit, keep_free):
+    """(room, used) per member once `planned` withdrawals are counted."""
+    room = {w.name: max(0, min(visit, w.free_slots - keep_free)) for w in order}
+    used: dict = {}
+    for w in planned:
+        if w.character in room:
+            room[w.character] = max(0, room[w.character] - 1)
+        key = (w.character, int(w.stack.tab))
+        used[key] = used.get(key, 0) + 1
+    return room, used
+
+
+def _may_vendor(decision) -> bool:
+    """Is a VENDOR decision one the vault may fetch out to be sold (#2602)?
+
+    Never a recipe (a crafter may yet reach it, and recipes have their own
+    route), never quality 3 or better, and never a stack worth the item plan's
+    confirm value (1 gold) or more: those wait for a person's release.
+    """
+    return (
+        decision.action == VENDOR
+        and decision.kind not in (RAID, UNJUDGED, NOW, LATER)
+        and decision.item_class not in (-1, ITEM_CLASS_RECIPE)
+        and decision.quality < 3
+        and 0 < decision.worth < itemplan.CONFIRM_VALUE
+    )
+
+
+def plan_surplus_withdrawals(
+    forecast: Forecast,
+    takers,
+    *,
+    planned=(),
+    pending=frozenset(),
+    visit: int = WITHDRAW_VISIT_STACKS,
+    keep_free: int = WITHDRAW_KEEP_FREE,
+) -> tuple:
+    """The vault stacks the forecast vendors or gives, and who takes each.
+
+    The vault only filled: `plan_withdrawals` took what the house lists and a
+    crafter's reagent, and the forecast's own vendor and give decisions stayed
+    "the plan only". A VENDOR stack (`_may_vendor`) is taken by whichever
+    member the rank order puts first with room, biggest pile first, and sold
+    from the bags: `read_withdrawn` marks it surplus, so clearance hands it to
+    a short guildmate, lists it or sells it. A GIVE stack is taken by the
+    member the forecast names, and only by it, with `GIVE_SOURCE` so it is
+    never mistaken for stock for sale. A KEEP stack is never taken.
+
+    `planned` are withdrawals already chosen this pass (the house's and the
+    crafters'): they count against each member's visit, room and daily
+    allowance, and a stack already named is not named twice. The same visit
+    limit, free-slot floor and `pending` entries apply as for the house.
+    """
+    order = sorted(takers or (), key=lambda w: (w.rank, w.name))
+    by_name = {w.name: w for w in order}
+    room, used = _room_after(order, planned, visit, keep_free)
+    taken = {int(w.stack.guid) for w in planned}
+    out = []
+
+    def take(decision, who, source, price=0):
+        left = who.left(int(decision.stack.tab))
+        key = (who.name, int(decision.stack.tab))
+        spent = used.get(key, 0)
+        if room[who.name] <= 0 or (left is not None and spent >= left):
+            return False
+        room[who.name] -= 1
+        used[key] = spent + 1
+        out.append(
+            Withdrawal(
+                who.name, decision.stack, decision.item, price, source, decision.why
+            )
+        )
+        return True
+
+    candidates = [
+        d
+        for d in forecast.decisions()
+        if int(d.stack.entry) not in pending and int(d.stack.guid) not in taken
+    ]
+    gives = sorted(
+        (d for d in candidates if d.action == GIVE and d.taker in by_name),
+        key=lambda d: (-d.stack.count, d.stack.guid),
+    )
+    for decision in gives:
+        take(decision, by_name[decision.taker], GIVE_SOURCE)
+    vendors = sorted(
+        (d for d in candidates if _may_vendor(d)),
+        key=lambda d: (-d.stack.count, d.stack.guid),
+    )
+    for decision in vendors:
+        for who in order:
+            if take(decision, who, WITHDRAW_SOURCE):
+                break
+    return tuple(out)
+
+
 def withdrawn_guids(commands) -> frozenset:
     """The stack guids named by `bank withdraw-item guid:<n> ...` texts."""
     out = set()
@@ -1347,7 +1469,7 @@ WITHDRAWN_SQL = (
     "SELECT command FROM overseer_command "  # noqa: S608
     "WHERE kind = 'guild' AND status = 'applied' AND command LIKE %%s "
     # A stack a crafter took out for its own craft (reagentplan) is not for sale.
-    "AND source <> 'guildbank-craft' "
+    "AND source NOT IN ('guildbank-craft', 'guildbank-give') "
     "AND target_name IN (%s) AND created_at > NOW() - INTERVAL %%s HOUR"
 )
 
