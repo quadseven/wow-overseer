@@ -129,9 +129,13 @@ class WhenToLook(unittest.TestCase):
         out = pug_plan(guild_four(), [old_ask(minutes=3)], four_yeses())
         self.assertEqual(out.calls, ())
 
-    def test_not_while_a_damage_seat_is_still_open(self):
+    def test_a_damage_seat_still_open_is_called_for_too(self):
+        # Levelling first: a band with few guildmates fills a damage seat from
+        # the server as it fills a tank or healer seat (two pugs at most).
         out = pug_plan(guild_four(), [old_ask()], four_yeses()[:2])
-        self.assertEqual(out.calls, ())
+        self.assertEqual(out.calls[0].seats, ("healer", "dps"))
+        self.assertIn("3/5", out.calls[0].said)
+        self.assertIn("healer and dps", out.calls[0].said)
 
     def test_short_both_the_call_asks_for_both_tank_first(self):
         # The asker and two damage yeses fill the damage seats; no tank said yes.
@@ -572,3 +576,58 @@ class TheSeatsThatCarryStandAtTheBossesLevel(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LevellingGroupsFillFromTheServer(unittest.TestCase):
+    """A raid seat below 60 levels in a full, level-matched five. A pug is a
+    random bot of the side; the finder row takes two of them at most
+    (mod-overseer GUILD_FINDER_MAX_PUGS), so a call asks for two seats at most,
+    tank first, then healer, then damage."""
+
+    def test_two_pugs_at_most_are_called_for(self):
+        # The asker alone: a tank, a healer and two damage seats are open.
+        out = pug_plan(guild_four()[:1], [old_ask()], [])
+        self.assertEqual(out.calls[0].seats, ("tank", "healer"))
+        self.assertIn("1/5", out.calls[0].said)
+
+    def test_a_pug_already_seated_uses_up_one_of_the_two(self):
+        answers = four_yeses()[:1] + [yes(9, 7, "Mercy", "healer", stance="pug")]
+        crowd = guild_four()[:2] + [pug("Mercy")]
+        out = pug_plan(crowd, [old_ask()], answers)
+        # Tank and healer seated, one pug used: one more pug may fill a damage seat.
+        self.assertEqual(out.calls[0].seats, ("dps",))
+
+    def test_a_damage_pug_answers_a_damage_seat(self):
+        bots = [pug("Mercy"), pug("Zapper", class_id=MAGE, talent_spells=None)]
+        out = pug_plan(
+            guild_four(),
+            [old_ask()],
+            four_yeses()[:2],
+            calls={7: call(seats=("healer", "dps"))},
+            pugs=bots,
+        )
+        self.assertEqual(
+            sorted((j.member, j.role) for j in out.joins),
+            [("Mercy", "healer"), ("Zapper", "dps")],
+        )
+
+    def test_a_pug_that_would_make_the_mobs_gray_does_not_answer(self):
+        # Deadmines mobs are level 17 to 26; a level 24 member's gray cutoff is
+        # 17, so it would halve every member's experience.
+        asker24 = [mate("Auren", 24, ROGUE)] + guild_four()[1:]
+        out = pug_plan(
+            asker24,
+            [old_ask()],
+            four_yeses(),
+            calls={7: call()},
+            pugs=[pug("Mercy", level=24)],
+        )
+        self.assertEqual(out.joins, ())
+        out = pug_plan(
+            asker24,
+            [old_ask()],
+            four_yeses(),
+            calls={7: call()},
+            pugs=[pug("Mercy", level=22)],
+        )
+        self.assertEqual([j.member for j in out.joins], ["Mercy"])
