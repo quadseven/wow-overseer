@@ -23,6 +23,7 @@ import unittest
 
 import classquest
 import guildjobs
+import legacy_ladder
 import standstill
 from test_classquest import class_plan, who
 from test_classquest_stall_release import failing, stuck, take_failed
@@ -30,6 +31,10 @@ from test_guildlevel import world
 
 BARRENS = 17
 POST = {"Bigzug": ("take-item mail:7 item:70",)}
+
+
+def setUpModule():
+    legacy_ladder.switch_off()
 
 
 def plan(members, recent=(), **kw):

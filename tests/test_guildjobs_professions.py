@@ -14,6 +14,7 @@ Pure unit tests against guildjobs.plan.
 import unittest
 
 import guildjobs
+import legacy_ladder
 import guildtrades
 import raidteams
 
@@ -22,6 +23,10 @@ BONKERS = "Bonkers"
 SEATS = [s for s in raidteams.seats(BONKERS)][5:]
 FOCUS_DUNGEON = {BONKERS: guildjobs.DUNGEON_FOCUS}
 FOCUS_CRAFT = {BONKERS: guildjobs.CRAFT_FOCUS}
+
+
+def setUpModule():
+    legacy_ladder.switch_off()
 
 
 def member(seat, **over):
