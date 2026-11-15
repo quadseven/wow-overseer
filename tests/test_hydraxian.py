@@ -179,29 +179,31 @@ class HydraxianQuestTests(unittest.TestCase):
         self.assertFalse(hydraxian.enabled({"HYDRAXIAN_STEP": "off"}))
 
 
-class _Pass:
-    def __init__(self, *, mid_run=False):
-        self.mid_run = mid_run
-        self.claims = []
-        self.releases = []
-        self.written = []
-        self._hydraxian_since = {}
-
-    async def _mid_run(self, names):
-        return self.mid_run
-
-    async def _claim_town_slot(self, *args, **kwargs):
-        self.claims.append((args, kwargs))
-        return True
-
-
 class HydraxianBridgeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.bridge = _import_bridge()
 
+    def _host(self, *, mid_run=False):
+        host = object.__new__(self.bridge.Bridge)
+        host._hydraxian_since = {}
+        host.claims = []
+        host.releases = []
+        host.written = []
+
+        async def is_mid_run(_names):
+            return mid_run
+
+        async def claim(*args, **kwargs):
+            host.claims.append((args, kwargs))
+            return True
+
+        host._mid_run = is_mid_run
+        host._claim_town_slot = claim
+        return host
+
     def _run_pass(self, facts, *, host=None, enabled=True, prof_loop=False, skip=()):
-        host = host or _Pass()
+        host = host or self._host()
         family = {"leader": {"name": "MemberA", "job": "quest"}, "names": ["MemberA"]}
         with (
             mock.patch.object(self.bridge.hydraxian, "enabled", return_value=enabled),
@@ -251,7 +253,7 @@ class HydraxianBridgeTests(unittest.TestCase):
             self.assertEqual(held, set())
             read.assert_not_called()
 
-            _host, held = self._run_pass(facts, host=_Pass(mid_run=True))
+            _host, held = self._run_pass(facts, host=self._host(mid_run=True))
             self.assertEqual(held, set())
             read.assert_not_called()
 
@@ -268,7 +270,7 @@ class HydraxianBridgeTests(unittest.TestCase):
         self.assertEqual(host.claims[0][0][:3], ("attunement", "MemberA", "13278"))
 
     def test_an_expired_walk_releases_the_aim_and_gives_the_planner_back(self):
-        host = _Pass()
+        host = self._host()
         host._hydraxian_since["grug"] = (
             time.monotonic() - hydraxian.HOLD_LIMIT_SECONDS - 1
         )
@@ -288,6 +290,28 @@ class HydraxianBridgeTests(unittest.TestCase):
             [("MemberA", "take quest:6821", hydraxian.SOURCE)],
         )
         self.assertEqual(host.releases, [("MemberA", "13278")])
+
+    def test_pass_does_not_swallow_programming_errors(self):
+        host = self._host()
+
+        async def broken_mid_run(_names):
+            raise RuntimeError("bug")
+
+        host._mid_run = broken_mid_run
+        with self.assertRaisesRegex(RuntimeError, "bug"):
+            self._run_pass(_giver_facts(), host=host)
+
+    def test_pass_contains_expected_database_errors(self):
+        host = self._host()
+
+        async def database_down(_names):
+            raise self.bridge.pymysql.err.MySQLError("down")
+
+        host._mid_run = database_down
+        _host, held = self._run_pass(_giver_facts(), host=host)
+
+        self.assertEqual(held, set())
+        self.assertEqual(host.claims, [])
 
 
 if __name__ == "__main__":

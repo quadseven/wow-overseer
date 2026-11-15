@@ -25150,80 +25150,96 @@ class Bridge(discord.Client):
         own = await asyncio.to_thread(_cohort_of, bonds.head_of_family())
         held = set()
         for key, fam in sorted(fams.items()):
-            if key in skip:
-                self._hydraxian_since.pop(key, None)
-                continue
-            names = list(fam.get("names") or ())
-            leader_row = fam.get("leader") or {}
-            leader = str(leader_row.get("name") or "")
-            if not names or not leader:
-                continue
-            looped_by = globals().get("_prof_loop_family")
-            if looped_by is not None and looped_by(key):
-                self._hydraxian_since.pop(key, None)
-                log.info("Hydraxian quest: %s waits for the profession loop",
-                         campaignqueue._family(key))
-                continue
-            try:
-                if await self._mid_run(names):
-                    self._hydraxian_since.pop(key, None)
-                    log.info("Hydraxian quest: %s waits until it is out of the run",
-                             campaignqueue._family(key))
-                    continue
-                level_rows = await asyncio.to_thread(_queue_level_rows, fam)
-                due = bool(
-                    campaignplan.due(
-                        pending.get(key, []), leader_row, level_rows
-                    ).reason
-                )
-                job = str(leader_row.get("job") or "").strip().lower()
-                facts = await asyncio.to_thread(_hydraxian_facts, names)
-                step = hydraxian.step(
-                    facts, allow_walk=due and job in ("", "quest")
-                )
-                if step.hold_planner:
-                    since = self._hydraxian_since.setdefault(key, time.monotonic())
-                    if time.monotonic() - since > hydraxian.HOLD_LIMIT_SECONDS:
-                        self._hydraxian_since.pop(key, None)
-                        log.warning(
-                            "Hydraxian quest: %s gave the planner back after the "
-                            "giver walk exceeded %d minutes",
-                            campaignqueue._family(key),
-                            hydraxian.HOLD_LIMIT_SECONDS // 60,
-                        )
-                        await asyncio.to_thread(
-                            _release_trade_errand, leader, str(step.aim)
-                        )
-                        step = dataclasses.replace(
-                            step, aim=None, hold_planner=False, release=None
-                        )
-                    else:
-                        held.add(key)
-                else:
-                    self._hydraxian_since.pop(key, None)
-                for name, command in step.rows:
-                    written = await asyncio.to_thread(
-                        _insert_hydraxian_row, name, command)
-                    if written:
-                        log.info(
-                            "Hydraxian quest: %s wrote %s for %s (%d)",
-                            campaignqueue._family(key), command, name, written,
-                        )
-                if step.aim:
-                    await self._claim_town_slot(
-                        ATTUNE_CLAIMANT,
-                        leader,
-                        str(step.aim),
-                        cohort=None if own == key else key,
-                    )
-                if step.release:
-                    await asyncio.to_thread(
-                        _release_trade_errand, leader, str(step.release)
-                    )
-            except Exception:
-                log.exception("Hydraxian quest pass failed for %s",
-                              campaignqueue._family(key))
+            if await self._hydraxian_family_pass(
+                key, fam, pending.get(key, []), own, skip=key in skip
+            ):
+                held.add(key)
         return held
+
+    async def _hydraxian_family_pass(
+        self, key: str, fam: dict, pending: list, own: str | None, *, skip: bool
+    ) -> bool:
+        """Plan and carry one family's giver visit, isolating expected I/O faults."""
+        if skip:
+            self._hydraxian_since.pop(key, None)
+            return False
+        names = list(fam.get("names") or ())
+        leader_row = fam.get("leader") or {}
+        leader = str(leader_row.get("name") or "")
+        if not names or not leader:
+            self._hydraxian_since.pop(key, None)
+            return False
+        looped_by = globals().get("_prof_loop_family")
+        if looped_by is not None and looped_by(key):
+            self._hydraxian_since.pop(key, None)
+            log.info("Hydraxian quest: %s waits for the profession loop",
+                     campaignqueue._family(key))
+            return False
+        try:
+            if await self._mid_run(names):
+                self._hydraxian_since.pop(key, None)
+                log.info("Hydraxian quest: %s waits until it is out of the run",
+                         campaignqueue._family(key))
+                return False
+            step = await self._hydraxian_plan_step(fam, pending, leader_row, names)
+            step = await self._hydraxian_hold_step(key, leader, step)
+            await self._hydraxian_carry_out(key, leader, own, step)
+            return step.hold_planner
+        except (pymysql.err.MySQLError, TimeoutError):
+            log.exception("Hydraxian quest pass failed for %s",
+                          campaignqueue._family(key))
+            return False
+
+    async def _hydraxian_plan_step(
+        self, fam: dict, pending: list, leader_row: dict, names: list
+    ) -> hydraxian.Step:
+        """Read the campaign due state and plan one family's next quest action."""
+        level_rows = await asyncio.to_thread(_queue_level_rows, fam)
+        due = bool(campaignplan.due(pending, leader_row, level_rows).reason)
+        job = str(leader_row.get("job") or "").strip().lower()
+        facts = await asyncio.to_thread(_hydraxian_facts, names)
+        return hydraxian.step(facts, allow_walk=due and job in ("", "quest"))
+
+    async def _hydraxian_hold_step(
+        self, key: str, leader: str, step: hydraxian.Step
+    ) -> hydraxian.Step:
+        """Expire an overdue giver walk and return the unheld step."""
+        if not step.hold_planner:
+            self._hydraxian_since.pop(key, None)
+            return step
+        since = self._hydraxian_since.setdefault(key, time.monotonic())
+        if time.monotonic() - since <= hydraxian.HOLD_LIMIT_SECONDS:
+            return step
+        self._hydraxian_since.pop(key, None)
+        log.warning(
+            "Hydraxian quest: %s gave the planner back after the giver walk "
+            "exceeded %d minutes",
+            campaignqueue._family(key),
+            hydraxian.HOLD_LIMIT_SECONDS // 60,
+        )
+        await asyncio.to_thread(_release_trade_errand, leader, str(step.aim))
+        return dataclasses.replace(step, aim=None, hold_planner=False, release=None)
+
+    async def _hydraxian_carry_out(
+        self, key: str, leader: str, own: str | None, step: hydraxian.Step
+    ) -> None:
+        """Write ordinary quest verbs and aim or release the town slot."""
+        for name, command in step.rows:
+            written = await asyncio.to_thread(_insert_hydraxian_row, name, command)
+            if written:
+                log.info(
+                    "Hydraxian quest: %s wrote %s for %s (%d)",
+                    campaignqueue._family(key), command, name, written,
+                )
+        if step.aim:
+            await self._claim_town_slot(
+                ATTUNE_CLAIMANT,
+                leader,
+                str(step.aim),
+                cohort=None if own == key else key,
+            )
+        if step.release:
+            await asyncio.to_thread(_release_trade_errand, leader, str(step.release))
 
     async def _plan_campaign(self, key: str, fam: dict, rows: list) -> bool:
         """Choose, record and queue one family's next dungeon, when it is due.

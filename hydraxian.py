@@ -211,32 +211,40 @@ def facts_from_rows(
     )
 
 
-def step(facts: Facts, *, allow_walk: bool = False) -> Step:
-    """Emit eligible quest verbs, or aim the family at their live giver."""
+def _candidate_action(quest: Quest, member: Member, facts: Facts) -> tuple | None:
+    """Return this member's eligible natural verb at a live quest giver."""
     rewarded = facts.rewarded or {}
     statuses = facts.statuses or {}
+    if quest.quest_id in _done(rewarded, member.name):
+        return None
+    status = int(statuses.get(member.name, {}).get(quest.quest_id, STATUS_NONE))
+    if status == STATUS_COMPLETE and quest.ender and quest.ender in facts.givers:
+        return (quest.quest_id, quest.ender, member, TURN_IN)
+    if (
+        status == STATUS_NONE
+        and quest.starter
+        and quest.starter in facts.givers
+        and eligible(quest, member, rewarded, statuses)
+    ):
+        return (quest.quest_id, quest.starter, member, TAKE)
+    return None
+
+
+def _wanted_actions(facts: Facts) -> list:
+    """Collect each per-member take or turn-in allowed by the live facts."""
     wanted = []
     for quest in sorted(facts.quests, key=lambda row: row.quest_id):
         for member in sorted(facts.members, key=lambda row: row.name):
-            if quest.quest_id in _done(rewarded, member.name):
-                continue
-            status = int(statuses.get(member.name, {}).get(quest.quest_id, STATUS_NONE))
-            if (
-                status == STATUS_COMPLETE
-                and quest.ender
-                and quest.ender in facts.givers
-            ):
-                wanted.append((quest.quest_id, quest.ender, member, TURN_IN))
-            elif (
-                status == STATUS_NONE
-                and quest.starter
-                and quest.starter in facts.givers
-                and eligible(quest, member, rewarded, statuses)
-            ):
-                wanted.append((quest.quest_id, quest.starter, member, TAKE))
+            action = _candidate_action(quest, member, facts)
+            if action is not None:
+                wanted.append(action)
+    return wanted
+
+
+def _step_for_giver(facts: Facts, wanted: list, allow_walk: bool) -> Step:
+    """Choose the first wanted giver, its local rows, and any walk or release."""
     if not wanted:
         return Step()
-
     _quest_id, entry, _member, _verb = wanted[0]
     at_target = [row for row in wanted if row[1] == entry]
     rows = tuple(
@@ -251,6 +259,11 @@ def step(facts: Facts, *, allow_walk: bool = False) -> Step:
     if missing and allow_walk:
         return Step(rows=rows, hold_planner=True, aim=entry)
     return Step(rows=rows, release=entry if not missing else None)
+
+
+def step(facts: Facts, *, allow_walk: bool = False) -> Step:
+    """Emit eligible quest verbs, or aim the family at their live giver."""
+    return _step_for_giver(facts, _wanted_actions(facts), allow_walk)
 
 
 ENV_SWITCH = "HYDRAXIAN_STEP"
