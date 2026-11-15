@@ -592,11 +592,17 @@ class ProfLoopBridgeWiring(unittest.TestCase):
             ],
         )
 
-    def test_held_family_does_not_write_farm_order(self):
+    def test_held_family_still_writes_farm_order(self):
         writes = []
         bridge_obj, _ = self._make_bridge({"grug"}, writes)
         asyncio.run(bridge_obj._prof_loop_for("grug", ["Grug", "Og"]))
-        self.assertEqual(writes, [])
+        self.assertEqual(
+            writes,
+            [
+                ("Grug", "farm:4338", profloop.SOURCE),
+                ("Og", "farm:4338", profloop.SOURCE),
+            ],
+        )
 
     def test_held_family_still_writes_non_farm_job(self):
         writes = []

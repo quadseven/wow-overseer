@@ -11716,10 +11716,6 @@ class Bridge(discord.Client):
             log.warning("profession loop: %s: job %s not written - %s", key,
                         mode, refusal)
             return 0
-        if jobs.farm_order(mode) is not None:
-            held = getattr(self, "_operator_held", None)
-            if held is not None and await held({key}, "farm"):
-                return 0
         written = 0
         for name in names:
             try:
