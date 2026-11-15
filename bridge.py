@@ -38562,7 +38562,7 @@ def _farm_item_creatures(item: int, leader_at, levels) -> list:
     `acore_world.creature`; a spawn whose zone the row does not carry is
     placed by `places.zone_id_at`, and one that has none is dropped.
     """
-    low, high = farmjob.kill_band(levels)
+    low, high = farmjob.kill_band(levels, item)
     if not high or not leader_at or leader_at.get("map_id") is None:
         return []
     here = int(leader_at["map_id"])

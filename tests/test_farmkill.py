@@ -88,6 +88,28 @@ class ACreatureDropIsAField(unittest.TestCase):
         )
         self.assertEqual(33, step.zone_id)
 
+    def test_linen_and_wool_lower_kill_band_floor_while_higher_tiers_keep_it(self):
+        levels = {"Grug": 60}
+        for item, mob_level in ((2589, 12), (2592, 22)):
+            self.assertEqual((1, 63), farmjob.kill_band(levels, item))
+            ok, refused = farmjob.usable_kills(
+                farmjob.Order(job="farm:%d" % item, item=item, name="cloth"),
+                (creature(1000, 0, level=mob_level),),
+                levels,
+            )
+            self.assertEqual("", refused)
+            self.assertEqual(1, len(ok))
+        below = 60 - farmjob.KILL_LEVELS_BELOW - 1
+        for item in (4306, 4338, 14047):
+            self.assertEqual((30, 63), farmjob.kill_band(levels, item))
+            ok, refused = farmjob.usable_kills(
+                farmjob.Order(job="farm:%d" % item, item=item, name="cloth"),
+                (creature(1000, 0, level=below),),
+                levels,
+            )
+            self.assertEqual([], ok)
+            self.assertTrue(refused)
+
 
 class TheLevelBandIsTheWeakestMembers(unittest.TestCase):
     def test_a_creature_above_the_ceiling_is_never_chosen(self):
