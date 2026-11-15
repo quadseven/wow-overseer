@@ -52,6 +52,51 @@ class TheWaitIsBounded(unittest.TestCase):
         self.assertEqual(held, {"Full"})
 
 
+class ALevellingSeatIsNeverHeldForRoom(unittest.TestCase):
+    """The hold was written so a door could be looted (#1568). A raid seat under
+    level 60 is there to level, and on 2026-11-15 about 38 of 81 members per
+    guild sat in the hold at once while 5 to 12 were free to a group."""
+
+    def test_an_exempt_member_is_neither_held_nor_clocked(self):
+        held, clock = guildrun.bag_room_holds(
+            {"Seat": 0, "Other": 0}, {}, 1000.0, exempt={"Seat"}
+        )
+        self.assertEqual(held, {"Other"})
+        self.assertEqual(clock, {"Other": 1000.0})
+
+    def test_the_levelling_seats_are_the_approved_seats_under_sixty(self):
+        rows = [
+            {"name": "SeatLow", "level": 41, "target_tree": "Fury"},
+            {"name": "SeatCap", "level": 60, "target_tree": "Fury"},
+            {"name": "Guildie", "level": 41, "target_tree": ""},
+            {"name": "Unread", "level": None, "target_tree": "Fury"},
+        ]
+        self.assertEqual(guildrun.levelling_seats(rows), {"SeatLow"})
+
+    def test_a_seat_with_full_bags_answers_a_yes_like_one_with_room(self):
+        this = _Self()
+        social = social_pass(this, {"Zappy": 0}, seats={"Zappy"})
+        self.assertIsNotNone(social.form)
+        self.assertIn("Zappy", social.form.composition.names)
+        self.assertNotIn("Zappy", this._bag_room_since)
+
+    def test_a_guildie_who_is_not_a_seat_is_still_held(self):
+        this = _Self()
+        social = social_pass(this, {"Zappy": 0})
+        self.assertIsNone(social.form)
+        self.assertIn("Zappy", this._bag_room_since)
+
+
+class TheBagRoomWaitSurvivesARestart(unittest.TestCase):
+    def test_the_bridge_keeps_the_wait_in_the_memo_store(self):
+        text = open(bridge.__file__, encoding="utf-8").read()
+        self.assertRegex(text, r'_bag_room_since[^\n]*=\s*_ClockMemo\(\s*"bag_room"')
+
+    def test_the_memo_round_trips_a_monotonic_start(self):
+        self.assertEqual(bridge._bag_wait_from_memo(bridge._bag_wait_memo(50.0, 1000.0), 1000.0), 50.0)
+        self.assertEqual(bridge._bag_wait_clock(50.0), 50.0)
+
+
 class TheBagRoomErrand(unittest.TestCase):
     def test_a_member_short_of_room_is_sent_to_sell(self):
         member = bonk(free_slots=guildrun.BAG_ROOM_FREE_SLOTS - 1, bag_slots=16)
@@ -64,12 +109,15 @@ class TheBagRoomErrand(unittest.TestCase):
         self.assertIsNone(guildjobs._full_bags_first(member, None, (), 600.0))
 
 
-def social_pass(this, bag_room):
+def social_pass(this, bag_room, seats=()):
     written = []
 
     def the_facts(bounds):
         out = facts()
         out["bag_room"] = bag_room
+        for r in out["rows"]:
+            if r["name"] in seats:
+                r["target_tree"] = "Fury"
         return out
 
     def write(social):
