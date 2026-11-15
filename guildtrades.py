@@ -130,6 +130,35 @@ def _guild_key(guild):
     return ""
 
 
+def _seats_of(key, live) -> list:
+    """(name, class id, level, held) for each approved seat of the guild."""
+    seats = []
+    for s in raidteams.seats(key):
+        name = next((n for n in (s.name, s.was) if n and n in live), s.name)
+        seen = live.get(name)
+        level = UNSEEN_LEVEL if seen is None else int(seen.level)
+        held = frozenset() if seen is None else frozenset(seen.held)
+        seats.append((name, int(s.class_id), level, held))
+    return seats
+
+
+def _single_pair(trade, class_id, left):
+    """The pair a seat holding only `trade` takes a slot of: the pair whose
+    classes fit it, else a pair that takes any class, else a pair that names
+    other classes; then the pair with the most slots left. The options all
+    contain `trade`, so a class never leaves the trade it already holds."""
+    options = [p for p in PAIRS if trade in p.skills]
+    if not options:
+        return None
+
+    def tier(p):
+        if not p.prefer:
+            return 1
+        return 0 if _fit(p, class_id) < len(p.prefer) else 2
+
+    return min(options, key=lambda p: (tier(p), -left[p.name], PAIRS.index(p)))
+
+
 def assign(guild, live: Mapping | None = None) -> dict:
     """name -> the trades each approved seat of `guild` should hold.
 
@@ -141,61 +170,35 @@ def assign(guild, live: Mapping | None = None) -> dict:
     key = _guild_key(guild)
     if not key:
         return {}
-    live = live or {}
-    seats = []
-    for s in raidteams.seats(key):
-        name = next((n for n in (s.name, s.was) if n and n in live), s.name)
-        seen = live.get(name)
-        level = UNSEEN_LEVEL if seen is None else int(seen.level)
-        held = frozenset(seen.held) if seen is not None else frozenset()
-        seats.append((name, int(s.class_id), level, held))
+    seats = _seats_of(key, live or {})
     left = {p.name: p.seats for p in PAIRS}
     by_skills = {frozenset(p.skills): p for p in PAIRS}
     out: dict = {}
-
-    def take(pair):
-        left[pair.name] -= 1
 
     # 1. Seats that hold a whole pair, or two trades that are no pair.
     for name, _cls, _lvl, held in sorted(seats):
         if len(held) >= 2:
             pair = by_skills.get(frozenset(held))
-            if pair is not None:
-                out[name] = pair.skills
-                take(pair)
-            else:
-                out[name] = tuple(sorted(held))
-    # 2. Seats that hold one trade: the pair that contains it and suits the class.
-    singles = sorted(
-        (s for s in seats if len(s[3]) == 1 and s[0] not in out),
-        key=lambda s: (s[2], s[0]),
-    )
-    for name, cls, _lvl, held in singles:
+            out[name] = pair.skills if pair else tuple(sorted(held))
+            if pair:
+                left[pair.name] -= 1
+    # 2. Seats that hold one trade take a slot of a pair that contains it.
+    singles = [s for s in seats if len(s[3]) == 1 and s[0] not in out]
+    for name, cls, _lvl, held in sorted(singles, key=lambda s: (s[2], s[0])):
         (trade,) = tuple(held)
-        options = [p for p in PAIRS if trade in p.skills]
-        if not options:
-            out[name] = (trade,)
-            continue
-
-        def score(p):
-            tier = 1 if not p.prefer else (0 if _fit(p, cls) < len(p.prefer) else 2)
-            return (tier, -left[p.name], PAIRS.index(p))
-
-        pair = min(options, key=score)
-        out[name] = pair.skills
-        take(pair)
-    # 3. Seats that hold nothing fill what is left, pair by pair.
+        pair = _single_pair(trade, cls, left)
+        out[name] = pair.skills if pair else (trade,)
+        if pair:
+            left[pair.name] -= 1
+    # 3. Seats that hold nothing fill what is left, pair by pair; slots a kept
+    # trade used up elsewhere leave seats over, who take the plain pair.
     free = [s for s in seats if s[0] not in out]
     for pair in PAIRS:
         free.sort(key=lambda s: (_fit(pair, s[1]), s[2], s[0]))
-        while left[pair.name] > 0 and free:
-            name = free.pop(0)[0]
-            out[name] = pair.skills
-            take(pair)
-    # Slots a kept trade used up elsewhere leave seats over: the plain pair.
+        take, free = free[: left[pair.name]], free[left[pair.name] :]
+        out.update({s[0]: pair.skills for s in take})
     rest = by_skills[frozenset((HERBALISM, MINING))]
-    for name, _cls, _lvl, _held in free:
-        out[name] = rest.skills
+    out.update({s[0]: rest.skills for s in free})
     return out
 
 

@@ -1747,6 +1747,29 @@ def _lay_assigned_trades(members, crafters, trades) -> dict:
     return assigned
 
 
+def _profession_unfit(m, pvp, pending) -> bool:
+    """Whether this seat is in no state to be walked to a trainer now."""
+    if not m.eligible or not m.online or not m.alive:
+        return True
+    if m.in_combat or m.follows or m.name in (pending or ()):
+        return True
+    if m.map_id not in guildrun.OPEN_WORLD_MAPS or _pvp_inside(m, pvp):
+        return True
+    return m.level < TRAIN_MIN_LEVEL
+
+
+def _profession_pace(m, lacks, recent) -> str:
+    """ "" when the errand may go now, else the note saying it waits for the
+    seat's next town stop (see WHEN above)."""
+    ages = _town_stop_ages(m.name, recent)
+    if ages and TOWN_STOP_MINUTES < min(ages) < DEDICATED_AFTER_MINUTES:
+        return "%s waits for its next town stop to learn %s" % (
+            m.name,
+            " and ".join(SKILL_NAMES.get(s, str(s)) for s in lacks),
+        )
+    return ""
+
+
 def _profession_first(m, assigned, pvp, pending, recent, cap):
     """(the trainer walk or None, a note): a raid seat that lacks a trade it was
     assigned walks to its trainer. See THE PROFESSION ERRAND above."""
@@ -1756,20 +1779,11 @@ def _profession_first(m, assigned, pvp, pending, recent, cap):
     lacks = guildtrades.missing(m.primaries, want)
     if not lacks or len(m.primaries) >= MAX_PRIMARY:
         return None, ""
-    if not m.eligible or not m.online or not m.alive or m.in_combat or m.follows:
+    if _profession_unfit(m, pvp, pending):
         return None, ""
-    if m.map_id not in guildrun.OPEN_WORLD_MAPS or _pvp_inside(m, pvp):
-        return None, ""
-    if m.name in (pending or ()):
-        return None, ""
-    if m.level < TRAIN_MIN_LEVEL:
-        return None, ""
-    ages = _town_stop_ages(m.name, recent)
-    if ages and TOWN_STOP_MINUTES < min(ages) < DEDICATED_AFTER_MINUTES:
-        return None, "%s waits for its next town stop to learn %s" % (
-            m.name,
-            " and ".join(SKILL_NAMES.get(s, str(s)) for s in lacks),
-        )
+    waits = _profession_pace(m, lacks, recent)
+    if waits:
+        return None, waits
     step, why = _train_step(m, {}, cap, recent, held=lacks)
     if step is None:
         return None, why
