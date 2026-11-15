@@ -116,6 +116,12 @@ def _instance_soulbound(cur, rows) -> dict:
     return flags
 
 
+def _failed_listings(cur, rows) -> dict:
+    """(holder, entry) -> applied listings of a stack still carried (#2605)."""
+    history = _fetch(cur, itemplan_data.LISTING_HISTORY_SQL, ())
+    return itemplan_data.failed_listings(history, rows)
+
+
 def _prices(cur, names, entries) -> tuple:
     """(prices, why empty): live buyouts first, then history, no price invented."""
     races = _fetch(
@@ -213,6 +219,11 @@ def _read_cursor_inputs(connect, names, entries, rows):
             )
             got[shadow.AUCTION_PRICES] = reads.attempt(
                 shadow.AUCTION_PRICES, lambda: _prices(cur, names, entries)
+            )
+            # Not a named input: without it no stack has failed to sell, which
+            # is the safe answer (nothing is vendored on a guess).
+            got["listings"] = reads.attempt(
+                "listing history", lambda: _failed_listings(cur, rows)
             )
     except Exception as exc:
         for name in cursor_inputs:
@@ -327,5 +338,6 @@ def read(
         bank_free=bank_free,
         instance_soulbound=got.get(shadow.INSTANCE_SOULBOUND),
         fire_gear=fire_gear,
+        failed_listings=got.get("listings"),
         unread=dict(reads.unread),
     )

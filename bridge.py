@@ -16320,8 +16320,15 @@ class Bridge(discord.Client):
             stack = by_key.get(decision.key)
             source = row_by_key.get(decision.key)
             quote = (extras.market or {}).get(decision.entry)
+            # A RECIPE NOBODY CAN LEARN IS LISTED WITH NO MARKET (#2605): the
+            # house is empty by design, so the price is the plan_sales floor,
+            # four times the vendor price, never a generated one.
+            price = (int(quote[0]) if quote else
+                     stack.sell * 4 if (decision.target
+                                        == itemplan.LIST_AT_VENDOR_QUOTE
+                                        and stack is not None) else 0)
             if (decision.route != itemplan.AUCTION or stack is None
-                    or source is None or not stack.tradable or not quote):
+                    or source is None or not stack.tradable or not price):
                 continue
             candidates.append({
                 "holder": decision.holder,
@@ -16332,7 +16339,7 @@ class Bridge(discord.Client):
                 "binding": "none",
                 "quest_item": False,
                 "sell_price": stack.sell,
-                "market_price": int(quote[0]),
+                "market_price": price,
                 "count": decision.count,
             })
         holder_house = await self._auction_holder_houses(candidates, names)
@@ -18982,7 +18989,7 @@ class Bridge(discord.Client):
                    if candidates else {})
         walks, notes = classtrain.plan(
             trainees, walkers, classtrain.recent_walkers(recent), busy,
-            cap=self._guild_walk_cap())
+            cap=self._guild_walk_cap(), stranded=classtrain.stranded(recent))
         _log_capped("guild training", notes)
         started = 0
         for walk in walks:
@@ -34786,8 +34793,11 @@ def _guild_train_rows() -> list:
             cur, "class trainer walks",
             "SELECT target_name, source, status, detail, result, "
             "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
-            "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY",
-            (classtrain.SOURCE + ":%",))
+            "WHERE source LIKE %s AND (created_at > NOW() - INTERVAL 1 DAY "
+            "OR (status = 'error' AND created_at > NOW() - INTERVAL %s DAY "
+            "AND result LIKE %s))",
+            (classtrain.SOURCE + ":%", classtrain.STRANDED_READ_DAYS,
+             "%" + classtrain.NO_TRAINER_REASON + "%"))
 
 
 # THE GUILD FUND'S LEDGER: every row it ever wrote, which is a handful a day.
