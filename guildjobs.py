@@ -5705,6 +5705,95 @@ def _capacity_first(m, bag, kept, recent, cap, far):
     return _bag_first(m, bag, recent, far) or seat_loop_first(m, kept, recent, cap)
 
 
+def _loop_first(
+    m,
+    loop,
+    risk,
+    leveling,
+    recent,
+    cap,
+    campaign,
+    supply,
+    kept,
+    classes,
+    mates,
+    looping,
+):
+    """A death loop's way out first (death_loop_first), then the prevention
+    intervention for a member at risk of one (death_risk_first, #2591), or
+    None when neither rung starts a step."""
+    found = death_loop_first(
+        m,
+        loop,
+        leveling,
+        recent,
+        cap,
+        campaign,
+        supply,
+        kept,
+        classes,
+        mates=mates,
+        looping=looping,
+    )
+    if found is not None:
+        return found
+    if loop is None and risk is not None and _in_loop_zone(m, risk):
+        return death_risk_first(
+            m,
+            risk,
+            leveling,
+            recent,
+            cap,
+            campaign,
+            supply,
+            kept,
+            classes,
+            mates=mates,
+            looping=looping,
+        )
+    return None
+
+
+def _isle_room_first(
+    m,
+    leveling,
+    recent,
+    cap,
+    level_room,
+    loop,
+    campaign,
+    equip_room,
+    still_for,
+    classes,
+    kept,
+    crafters,
+    master,
+    quest_note,
+):
+    """(a found step or None, the quest note carried on): the boat off the
+    isle for a member that has outgrown it, then room in the bags for an
+    upgrade the world cannot put on without it, keeping its note."""
+    found = isle_crossing_first(m, leveling, recent, cap, level_room, loop, campaign)
+    if found is not None:
+        return (*found[:2], quest_note, ""), quest_note
+    found, room_note = _room_first(
+        m,
+        equip_room,
+        leveling,
+        recent,
+        cap,
+        level_room,
+        still_for,
+        classes,
+        kept,
+        crafters,
+        master,
+    )
+    if found is not None:
+        return found, quest_note
+    return None, _join(quest_note, room_note)
+
+
 def _member_step(
     m,
     offer,
@@ -5781,9 +5870,10 @@ def _member_step(
     A SEAT BELOW THE CAP LEVELS FIRST (levelling_first): of the rungs between
     the class quest and the level walk, only those that block play stay."""
     levelling = levelling_first(m)
-    found = death_loop_first(
+    found = _loop_first(
         m,
         loop,
+        risk,
         leveling,
         recent,
         cap,
@@ -5791,27 +5881,11 @@ def _member_step(
         supply,
         kept,
         classes,
-        mates=mates,
-        looping=looping,
+        mates,
+        looping,
     )
     if found is not None:
         return found
-    if loop is None and risk is not None and _in_loop_zone(m, risk):
-        found = death_risk_first(
-            m,
-            risk,
-            leveling,
-            recent,
-            cap,
-            campaign,
-            supply,
-            kept,
-            classes,
-            mates=mates,
-            looping=looping,
-        )
-        if found is not None:
-            return found
     found, quest_note = _quest_first(
         m,
         classes,
@@ -5830,25 +5904,24 @@ def _member_step(
     )
     if found is not None:
         return found
-    found = isle_crossing_first(m, leveling, recent, cap, level_room, loop, campaign)
-    if found is not None:
-        return (*found[:2], quest_note, "")
-    found, room_note = _room_first(
+    found, quest_note = _isle_room_first(
         m,
-        equip_room,
         leveling,
         recent,
         cap,
         level_room,
+        loop,
+        campaign,
+        equip_room,
         still_for,
         classes,
         kept,
         crafters,
         master,
+        quest_note,
     )
     if found is not None:
         return found
-    quest_note = _join(quest_note, room_note)
     step = _capacity_first(m, bag, kept, recent, cap, far)
     if step is not None:
         return step, step.said, quest_note, ""
@@ -5944,6 +6017,30 @@ def _join_once(*parts) -> str:
     return "; ".join(said)
 
 
+def _level_blocked(m, world, campaign, loop) -> bool:
+    """The level walk starts nowhere: no world read, a member offline or
+    fighting, a member at the level cap, or a roster family member whose
+    family holds a campaign or who is not standing in its death loop's
+    zone (levelroute walks roster members; the loop's escape is the one
+    exception, #1620, and a campaign holds it off, #1873)."""
+    # EVERY MEMBER, NATURAL OR NOT (2026-10-05). The natural reset gates what
+    # a member contributes, not where it walks: on the dev realm 1 of Cave's
+    # 60 and none of Bonkers' 56 held a reset, so a step gated on it walked
+    # nobody, and Cave's level 14-15 priests stayed in their starting zones.
+    if world is None or not m.online or m.in_combat:
+        return True
+    if m.level >= guildlevel.LEVEL_CAP:
+        return True
+    return bool(m.name in world.roster and (campaign or not _in_loop_zone(m, loop)))
+
+
+def _level_avoid(loop, avoid_zones):
+    """The hub zones the level walk never chooses: the death loop's zone,
+    plus the zones a formed loop leaves avoided until a level gain (#2591)."""
+    avoided = {loop.zone} if loop is not None else set()
+    return avoided | {int(z) for z in avoid_zones or ()}
+
+
 def level_step(m, world, recent, cap, loop=None, campaign="", avoid_zones=()):
     """(step or None, what it does, a note): a member that has outgrown
     where it stands (its quests there have run out, or its band) walks to the
@@ -5971,17 +6068,10 @@ def level_step(m, world, recent, cap, loop=None, campaign="", avoid_zones=()):
     from it. levelroute keeps the member, as it keeps every roster member
     outside a death loop.
     """
-    # EVERY MEMBER, NATURAL OR NOT (2026-10-05). The natural reset gates what
-    # a member contributes, not where it walks: on the dev realm 1 of Cave's
-    # 60 and none of Bonkers' 56 held a reset, so a step gated on it walked
-    # nobody, and Cave's level 14-15 priests stayed in their starting zones.
-    if world is None or not m.online or m.in_combat:
-        return None, "", ""
-    if m.level >= guildlevel.LEVEL_CAP:
-        return None, "", ""
-    # The roster refusal, with the death loop's escape ahead of it (#1620)
-    # unless the family holds a campaign (#1873).
-    if m.name in world.roster and (campaign or not _in_loop_zone(m, loop)):
+    # The opening refusals (no world, offline or fighting, at the cap, and
+    # the roster refusal with the death loop's escape ahead of it) are
+    # _level_blocked's read.
+    if _level_blocked(m, world, campaign, loop):
         return None, "", ""
     bands = world.bands.get(guildlevel.side_of(m.race), {})
     # A ZONE IS LEFT WHEN ITS QUESTS RUN OUT (2026-10-10): its open quests for
@@ -6008,8 +6098,7 @@ def level_step(m, world, recent, cap, loop=None, campaign="", avoid_zones=()):
         orbs=getattr(world, "orbs", None),
         opens=opens,
         nodes=m.taxi_nodes,
-        avoid=({loop.zone} if loop is not None else set())
-        | {int(z) for z in avoid_zones or ()},
+        avoid=_level_avoid(loop, avoid_zones),
     )
     if choice.refused:
         return None, "", guildlevel.refused_note(m.name, m.level, why, choice)

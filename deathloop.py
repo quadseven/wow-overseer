@@ -217,26 +217,22 @@ def _risk_at(name, window, trigger) -> Risk:
     )
 
 
-def _window_risk(name, deaths, level_now) -> Risk | None:
-    """The risk in the window anchored at deaths[0] (newest first), or None.
+def _anchored_window(deaths, span):
+    """The deaths within `span` seconds of the newest one (deaths[0])."""
+    return [d for d in deaths if d.age - deaths[0].age <= span]
 
-    A window counts only when every death in it is at one level and the
-    member's level now is still that level: a level gained since the first
-    of those deaths clears the risk, as it clears a loop."""
-    for span, minimum in ((WINDOW_SECONDS, RISK_DEATHS),):
-        window = [d for d in deaths if d.age - deaths[0].age <= span]
-        if len(window) < minimum:
-            continue
-        if len({d.level for d in window}) != 1:
-            continue
-        if level_now is not None and int(level_now) != window[0].level:
-            continue
-        return _risk_at(name, window, "died %d times within an hour" % len(window))
-    window = [d for d in deaths if d.age - deaths[0].age <= RISK_WINDOW_SECONDS]
-    if len(window) < 2 or len({d.level for d in window}) != 1:
-        return None
-    if level_now is not None and int(level_now) != window[0].level:
-        return None
+
+def _level_flat(window, level_now) -> bool:
+    """Every death in the window is at one level, and the member's level
+    now is still that level: a level gained since the first of those
+    deaths clears the risk, as it clears a loop."""
+    return len({d.level for d in window}) == 1 and (
+        level_now is None or int(level_now) == window[0].level
+    )
+
+
+def _same_killer_risk(name, window) -> Risk | None:
+    """The risk when one killer killed the member twice in the window."""
     killers = Counter(d.killer for d in window if d.killer)
     if killers and max(killers.values()) >= 2:
         group = [d for d in window if d.killer == _top_killer(window)]
@@ -245,6 +241,11 @@ def _window_risk(name, deaths, level_now) -> Risk | None:
             group,
             "died %d times to the same killer within 30 minutes" % len(group),
         )
+    return None
+
+
+def _same_zone_risk(name, window) -> Risk | None:
+    """The risk when one zone saw the member die twice in the window."""
     zones = Counter(d.zone for d in window if d.zone)
     if zones and max(zones.values()) >= 2:
         zone = max(zones, key=lambda z: zones[z])
@@ -253,6 +254,21 @@ def _window_risk(name, deaths, level_now) -> Risk | None:
             name, group, "died %d times in the same zone within 30 minutes" % len(group)
         )
     return None
+
+
+def _window_risk(name, deaths, level_now) -> Risk | None:
+    """The risk in the window anchored at deaths[0] (newest first), or None.
+
+    A window counts only when every death in it is at one level and the
+    member's level now is still that level: a level gained since the first
+    of those deaths clears the risk, as it clears a loop."""
+    window = _anchored_window(deaths, WINDOW_SECONDS)
+    if len(window) >= RISK_DEATHS and _level_flat(window, level_now):
+        return _risk_at(name, window, "died %d times within an hour" % len(window))
+    window = _anchored_window(deaths, RISK_WINDOW_SECONDS)
+    if len(window) < 2 or not _level_flat(window, level_now):
+        return None
+    return _same_killer_risk(name, window) or _same_zone_risk(name, window)
 
 
 def risks(rows, levels=None) -> dict:
