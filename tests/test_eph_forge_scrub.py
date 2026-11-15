@@ -9,6 +9,10 @@ parses as MySQL when sqlglot is installed (CI has it).
 Every credential-looking value in these fixtures is made up.
 """
 
+# ruff: noqa: S608
+# S608 is a false positive: the f-string SQL in these tests interpolates only
+# literal table names written in this file, against throwaway in-memory databases.
+
 from __future__ import annotations
 
 import re
