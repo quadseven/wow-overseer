@@ -7,10 +7,6 @@ is shorthand for a command of kind `job`; nothing in a decree ever compiles to
 a write to `overseer_roster`.
 """
 
-import re
-
-_CAST_REF = re.compile(r"^cast\[(\d+)\]$")
-
 
 def act_commands(decree):
     """Each act step as {"at"|"when": ..., "who": ..., "kind": ..., "text": ...}.
@@ -28,9 +24,3 @@ def act_commands(decree):
             c = step["command"]
             out.append({**when, "who": c["who"], "kind": c["kind"], "text": c["text"]})
     return out
-
-
-def cast_index(who):
-    """N for `cast[N]`, else None."""
-    m = _CAST_REF.match(who) if isinstance(who, str) else None
-    return int(m.group(1)) if m else None

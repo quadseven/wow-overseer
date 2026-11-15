@@ -38,6 +38,16 @@ def _lint(args):
     return 1 if failed else 0
 
 
+def _acts(args):
+    import json
+
+    from . import acts
+
+    decree = loads(pathlib.Path(args.decree).read_text(encoding="utf-8"))
+    print(json.dumps(acts.act_commands(decree), indent=2))
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="eph")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -47,6 +57,11 @@ def main(argv=None):
     p.add_argument("--schema", help="schema snapshot JSON (default: the bundled one)")
     p.add_argument("--strict", action="store_true", help="warnings fail too")
     p.set_defaults(func=_lint)
+    a = sub.add_parser(
+        "acts", help="print a decree's act timeline as the command rows it becomes"
+    )
+    a.add_argument("decree")
+    a.set_defaults(func=_acts)
     args = parser.parse_args(argv)
     return args.func(args)
 
