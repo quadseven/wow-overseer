@@ -8,6 +8,7 @@ discipline as the other town purchases.
 from dataclasses import dataclass
 
 import bag_pressure
+import equipscore
 
 
 SLOT_TYPES = {
@@ -470,6 +471,7 @@ def vendor_command(buy) -> str:
 def _listing_order(row):
     return (
         -int(_get(row, "ItemLevel", "item_level", default=0) or 0),
+        -_armor_rank(row),
         int(_get(row, "buyout", default=0) or 0),
         int(_get(row, "id", "listing_id", "auction_id", default=0) or 0),
     )
@@ -642,14 +644,68 @@ def _quality_drop(worn, item) -> bool:
     if not isinstance(worn, dict):
         return False
     wq = worn.get("quality")
+    if wq is None:
+        wq = worn.get("item_quality")
     oq = _get(item, "Quality", "quality", default=None)
     if wq is None or oq is None:
         return False
     return int(oq) < int(wq)
 
 
+_STAT_KEYS = frozenset(
+    {
+        *(f"stat_type{i}" for i in range(1, 11)),
+        *(f"StatType{i}" for i in range(1, 11)),
+        "spellid_1",
+        "dmg_min1",
+    }
+)
+
+
+def _has_score_inputs(row) -> bool:
+    if not isinstance(row, dict):
+        return False
+    if row.get("score") is not None:
+        return True
+    return any(k in row for k in _STAT_KEYS)
+
+
+def _score_value(row, wearer) -> float | None:
+    explicit = _get(row, "score", default=None)
+    if explicit is not None:
+        return float(explicit)
+    if wearer is None:
+        return None
+    gs, role, _tier = equipscore.value(row, wearer)
+    return gs if gs >= equipscore.SCORE_FLOOR else role
+
+
+def _tier_upgrade_blocked(
+    worn, item, worn_rank: int, item_rank: int, wearer=None
+) -> bool:
+    """True when a heavier armor offer loses to `worn` under quality or bounded score."""
+    if _quality_drop(worn, item):
+        return True
+    if not (_has_score_inputs(worn) and _has_score_inputs(item)):
+        return False
+    w_score = _score_value(worn, wearer)
+    i_score = _score_value(item, wearer)
+    if w_score is None or i_score is None:
+        return False
+    b_old = equipscore._bonused(w_score, worn_rank)
+    b_new = equipscore._bonused(i_score, item_rank)
+    return b_new <= b_old + equipscore.EPSILON
+
+
 def _worn_is_better(
-    slot, equipped, item, level, tank=False, equipped_types=None, class_id=0
+    slot,
+    equipped,
+    item,
+    level,
+    tank=False,
+    equipped_types=None,
+    class_id=0,
+    wearer=None,
 ):
     """Keep worn gear unless the auction item is meaningfully better."""
     if slot not in equipped:
@@ -674,9 +730,15 @@ def _worn_is_better(
         and pref
         and 0 < worn_rank < item_rank <= pref
         and item_level >= worn_level
-        and not _quality_drop(worn, item)
     ):
-        return False
+        scorer = wearer or (
+            equipscore.wearer_from_row(
+                {"name": "member", "class_id": class_id, "level": level}
+            )
+            if class_id
+            else None
+        )
+        return _tier_upgrade_blocked(worn, item, worn_rank, item_rank, scorer)
     if item_level <= worn_level:
         return True
     if _below_quality_floor(slot, worn, item):
@@ -708,6 +770,7 @@ def _candidate_slots(
     dual_wields=True,
     equipped_types=None,
     class_id=0,
+    wearer=None,
 ):
     inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
     item_level = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
@@ -722,7 +785,14 @@ def _candidate_slots(
         if slot == "offhand" and inv == 13 and not dual_wields:
             continue
         if _worn_is_better(
-            slot, equipped, item, level, tank, equipped_types, class_id=class_id
+            slot,
+            equipped,
+            item,
+            level,
+            tank,
+            equipped_types,
+            class_id=class_id,
+            wearer=wearer,
         ):
             continue
         yield slot, item_level
@@ -744,53 +814,6 @@ def _can_take(item, character, tank):
     return _allowed(character, item)
 
 
-def _best_affordable_candidates(plan, listings) -> dict:
-    """slot -> list of (tier, item_level, quality) among affordable eligible listings."""
-    if not bag_pressure.preferred_armor_subclass(plan.class_id, plan.level):
-        return {}
-    by_slot: dict = {}
-    for item in listings:
-        inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
-        if inv not in bag_pressure.ARMOR_MATERIAL_INVTYPES:
-            continue
-        price = int(_get(item, "buyout", default=0) or 0)
-        listing_id = int(_get(item, "id", "listing_id", "auction_id", default=0) or 0)
-        if price <= 0 or listing_id in plan.used:
-            continue
-        if not _can_take(item, plan.character, plan.tank):
-            continue
-        if not _fits_budget(price, plan.purse, plan.available, 0, False):
-            continue
-        entry = (
-            _armor_tier_for_item(item, plan.class_id, plan.level),
-            int(_get(item, "ItemLevel", "item_level", default=0) or 0),
-            int(_get(item, "Quality", "quality", default=0) or 0),
-        )
-        for slot in SLOT_TYPES.get(inv, ()):
-            if slot in ARMOR_SLOTS:
-                by_slot.setdefault(slot, []).append(entry)
-    return by_slot
-
-
-def _outclassed_in_slot(item, plan, candidates: dict) -> bool:
-    inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
-    if inv not in bag_pressure.ARMOR_MATERIAL_INVTYPES:
-        return False
-    slot = SLOT_TYPES.get(inv, ("",))[0]
-    peers = candidates.get(slot)
-    if not peers:
-        return False
-    tier = _armor_tier_for_item(item, plan.class_id, plan.level)
-    ilvl = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
-    qual = int(_get(item, "Quality", "quality", default=0) or 0)
-    return any(
-        (t > tier and peer_ilvl >= ilvl and q >= qual)
-        or (t == tier and peer_ilvl > ilvl and q >= qual)
-        or (peer_ilvl >= ilvl + AUCTION_MIN_UPGRADE_LEVELS and q >= qual)
-        for t, peer_ilvl, q in peers
-    )
-
-
 def _plan_character(name, character, listings, budget, taken=frozenset()):
     """The buys for one character, the main hand first.
 
@@ -806,10 +829,7 @@ def _plan_character(name, character, listings, budget, taken=frozenset()):
         for item in listings:
             if plan.consider(item, weapon_first=True):
                 break
-    candidates = _best_affordable_candidates(plan, listings)
     for item in listings:
-        if _outclassed_in_slot(item, plan, candidates):
-            continue
         plan.consider(item, weapon_first=False)
     return plan.buys
 
@@ -822,17 +842,28 @@ class _Plan:
         self.character = character
         self.class_id = _class_id(character)
         self.level = int(_get(character, "level", default=0) or 0)
+        self.wearer = (
+            equipscore.wearer_from_row(
+                {
+                    "name": name or "member",
+                    "class_id": self.class_id,
+                    "level": self.level,
+                }
+            )
+            if self.class_id
+            else None
+        )
         self.equipped = _get(character, "equipped", "slots", default={}) or {}
         self.equipped_types = _get(character, "equipped_types", default={}) or {}
         self.tank = bool(_get(character, "shield_tank", "tank", default=False))
         self.purse, self.available = budget
         self.chosen, self.used, self.buys = set(), used, []
-        if _get(character, "shield_carried", default=False):
-            self.chosen.add("offhand")
         if tank_two_hander(character):
             # The two-hander goes when a one-hander comes, and a shield already
             # carried goes on then: none is bought for the off hand.
             self.equipped = {s: v for s, v in self.equipped.items() if s != "mainhand"}
+            if _get(character, "shield_carried", default=False):
+                self.chosen.add("offhand")
 
     def consider(self, item, weapon_first):
         """Buy `item` for the first open slot it suits and the budget allows."""
@@ -854,6 +885,7 @@ class _Plan:
             _dual_wields(self.character),
             self.equipped_types,
             class_id=self.class_id,
+            wearer=self.wearer,
         ):
             if weapon_first and slot != "mainhand":
                 continue

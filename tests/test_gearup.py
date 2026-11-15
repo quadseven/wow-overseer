@@ -544,14 +544,63 @@ class GearupTests(unittest.TestCase):
             gearup._worn_is_better("chest", equipped, white_plate, 45, class_id=1)
         )
 
-    def test_low_ilvl_plate_listing_never_blocks_higher_ilvl_mail_buy(self):
-        warrior = {"class": "warrior", "level": 45, "purse": 50000, "equipped": {}}
-        junk_plate = item(
-            5, subclass=4, id=14, entry=401, ilvl=20, price=100, quality=1
+    def test_equal_ilvl_heavier_armor_respects_bounded_score_rule(self):
+        # Unequal scores at equal item level: low-scored Plate loses to strong Mail,
+        # while a comparable Plate piece inside the 5% per-tier bonus replaces it.
+        strong_mail = {
+            "item_level": 45,
+            "item_class": 4,
+            "item_subclass": 3,
+            "quality": 2,
+            "score": 40.0,
+        }
+        weak_plate = item(
+            5, subclass=4, id=14, entry=401, ilvl=45, price=100, quality=2, score=12.0
         )
-        good_mail = item(5, subclass=3, id=15, entry=402, ilvl=45, price=200, quality=2)
-        buys = gearup.plan_buys({"Thokk": warrior}, [junk_plate, good_mail])
-        self.assertEqual([("chest", 402)], [(b.slot, b.entry) for b in buys])
+        below_band_plate = item(
+            5, subclass=4, id=17, entry=404, ilvl=45, price=100, quality=2, score=37.0
+        )
+        near_plate = item(
+            5, subclass=4, id=15, entry=402, ilvl=45, price=100, quality=2, score=39.0
+        )
+        equipped = {"chest": strong_mail}
+        self.assertTrue(
+            gearup._worn_is_better("chest", equipped, weak_plate, 45, class_id=1)
+        )
+        self.assertTrue(
+            gearup._worn_is_better("chest", equipped, below_band_plate, 45, class_id=1)
+        )
+        self.assertFalse(
+            gearup._worn_is_better("chest", equipped, near_plate, 45, class_id=1)
+        )
+
+        # Same bounded rule when item stats (stat_type/stat_value) are supplied.
+        mail_with_stats = {
+            "item_level": 45,
+            "item_class": 4,
+            "item_subclass": 3,
+            "quality": 2,
+            "stat_type1": 4,
+            "stat_value1": 16,
+            "stat_type2": 7,
+            "stat_value2": 12,
+        }
+        spirit_plate = item(
+            5,
+            subclass=4,
+            id=16,
+            entry=403,
+            ilvl=45,
+            price=100,
+            quality=2,
+            stat_type1=6,
+            stat_value1=4,
+        )
+        self.assertTrue(
+            gearup._worn_is_better(
+                "chest", {"chest": mail_with_stats}, spirit_plate, 45, class_id=1
+            )
+        )
 
 
 if __name__ == "__main__":
