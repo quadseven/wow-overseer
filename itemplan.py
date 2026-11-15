@@ -83,6 +83,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Iterable, Mapping
 
+import bag_pressure
 import craft
 import craft_rhythm
 import craft_supply
@@ -701,6 +702,16 @@ def _rule_quest(w: _World, s: Stack, me: Member):
                 _opt(KEEP_CARRY, ATTUNEMENT, "attunement item", "R3", carry_forced=True)
             ]
         return None
+    if s.entry in bag_pressure.DARKMOON_ENTRIES:
+        return [
+            _opt(
+                KEEP_CARRY,
+                QUEST,
+                "a Darkmoon deck card: kept whole for the deck quest",
+                "R3",
+                carry_forced=True,
+            )
+        ]
     known = w.ctx.open_quest_items
     if known is not None and s.entry in known.get(s.holder, frozenset()):
         return [

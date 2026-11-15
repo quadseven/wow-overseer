@@ -264,9 +264,11 @@ class TheQuestRule(unittest.TestCase):
         flags = _quest_flags()
         protected = {name for name, f in flags.items() if f == {True}}
         # Jaron's Pick is the item quest 5245 (in her log) hands out; the
-        # other three start quests she has not turned in.
+        # other three start quests she has not turned in. Three of Portals is
+        # a Darkmoon deck card, kept whole for the deck quest (#2634).
         self.assertEqual(
             {
+                "Three of Portals",
                 "Jaron's Pick",
                 "Riding Training Pamphlet",
                 "Gold Pickup Schedule",

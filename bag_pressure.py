@@ -67,8 +67,22 @@ _INSTANCE_SOULBOUND = 0x1
 # The same test for a stack of any class: does an open quest name it, or does
 # it start a quest not yet rewarded? QUEST_NEEDED_SQL gates it to class 12;
 # the guild sale also asks it of a consumable (#1592), which a quest may name.
+# DARKMOON DECK CARDS ARE KEPT, WHOLE (#2634). The Ace, Two to Eight and the
+# deck of the four suits that have a deck quest on this core: Beasts, Warlords,
+# Elementals, Portals. A card starts no quest, so without this a card was a
+# leftover to sell (a copper price each) the moment the quest log was read. The
+# deck quest hands out a level 60 trinket. One list: the bag SQL below, the
+# bank policy's copy and the item plan all read it.
+DARKMOON_ENTRIES = frozenset(
+    set(range(19227, 19237)) - {19229}  # Beasts: Ace, deck, Two to Eight
+    | set(range(19257, 19266))  # Warlords: deck, Ace, Two to Eight
+    | set(range(19267, 19285)) - {19266}  # Elementals and Portals
+)
+DARKMOON_ENTRIES_SQL = ", ".join(str(e) for e in sorted(DARKMOON_ENTRIES))
+
 STACK_QUEST_NEEDED_SQL = (
-    "((it.startquest > 0 AND NOT EXISTS ("
+    "(ii.itemEntry IN (" + DARKMOON_ENTRIES_SQL + ") OR "
+    "(it.startquest > 0 AND NOT EXISTS ("
     "SELECT 1 FROM character_queststatus_rewarded qr "
     "WHERE qr.guid = ci.guid AND qr.quest = it.startquest)) OR EXISTS ("
     "SELECT 1 FROM character_queststatus qs "
