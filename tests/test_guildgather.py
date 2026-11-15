@@ -97,7 +97,7 @@ class Seats(unittest.TestCase):
     def test_the_seats_are_the_approved_raid_seats_without_the_families(self):
         names = gg.seat_names()
         self.assertEqual(70, len(names))
-        for guild, groups in raidteams.GROUPS.items():
+        for groups in raidteams.GROUPS.values():
             for s in groups[0]:
                 self.assertNotIn(s.name, names)
             for group in groups[1:]:
