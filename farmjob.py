@@ -259,6 +259,11 @@ class Reads:
     # Creature spawns that drop the ordered item (#2524), read only for an
     # item with no node spawn at all. Empty for every other order.
     creatures: tuple = ()
+    # Deaths across renewed orders of the same farm job (#2562), read by
+    # `safe_fields` (`struck_zones`) so a zone that killed the family before a
+    # renewal stays struck while `deaths` stays scoped to the current order's
+    # `TOTAL_DEATHS` ceiling. None falls back to `deaths`.
+    zone_deaths: tuple | None = None
 
 
 @dataclass(frozen=True)
@@ -514,7 +519,8 @@ def _judge(zone, top, struck, ceiling):
 
 def safe_fields(candidates, reads):
     """([(yards, zone, nodes, nearest spawn, top level)], [reasons refused])."""
-    struck = struck_zones(reads.deaths)
+    deaths = reads.deaths if reads.zone_deaths is None else reads.zone_deaths
+    struck = struck_zones(deaths)
     lowest = min((int(v) for v in (reads.levels or {}).values()), default=0)
     ceiling = lowest + LEVEL_MARGIN if lowest else 0
     safe, said = [], []

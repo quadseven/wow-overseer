@@ -4978,7 +4978,8 @@ def _spire_family(family: str, fam: dict, rows: list) -> bool:
                              done["status"] == "cancelled")
     slot = spirerun.order_slot(rows, last, time.time())
     if slot is None:
-        _spire_say(family, "waits out its last run or a stop")
+        _spire_say(family, spirerun.wait_line(last, time.time())
+                   if last is not None else "waits out its last run or a stop")
         return False
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(spirerun.ORDER_SQL,
@@ -4988,9 +4989,11 @@ def _spire_family(family: str, fam: dict, rows: list) -> bool:
             return False
         for queue_id in slot.shift:
             cur.execute(spirerun.SHIFT_SQL, (queue_id,))
+    ahead = spirerun.behind_line(rows, slot)
     log.warning("spire: %s has ten seats at level %d; the Upper Spire run is "
-                "ordered at position %d", campaignqueue._family(family),
-                spirerun.FLOOR, slot.position)
+                "ordered at position %d%s", campaignqueue._family(family),
+                spirerun.FLOOR, slot.position,
+                " behind " + ahead if ahead else "")
     return True
 
 
@@ -24198,6 +24201,9 @@ class Bridge(discord.Client):
             stood = await operator_held(set(fams) | set(pending), "queue")
             pending = {k: v for k, v in pending.items() if k not in stood}
             fams = {k: v for k, v in fams.items() if k not in stood}
+            say_held = getattr(self, "_say_spire_held", None)
+            if say_held is not None:
+                say_held(stood)
         # THE STAND-IN BEFORE ANYTHING DRIVES THE FAMILY (standin.py): a member
         # sitting out to craft leaves every family's names here, so no hold,
         # gate or job write below reaches it.
@@ -24376,6 +24382,14 @@ class Bridge(discord.Client):
         log.info("trade turn: %s starts for %d seconds - %s", label, setting,
                  said.reason)
         return True
+
+    def _say_spire_held(self, stood: set) -> None:
+        """Say once per change why a held family gets no Upper Spire order: the
+        hold removes it before the pass, so the pass could not say it itself."""
+        holds = getattr(self, "_operator_holds", {}) or {}
+        for key in sorted(stood, key=str):
+            hold = holds.get(campaignqueue._family(key).lower()) or holds.get("*")
+            _spire_say(key, spirerun.held_line(str(getattr(hold, "reason", "") or "")))
 
     async def _spire_pass(self, pending: dict, fams: dict) -> bool:
         """Each family's Upper Spire pass; True when any queue moved. A failed
@@ -26519,8 +26533,10 @@ class Bridge(discord.Client):
                      "aimed", who)
             return
         state = await self._farm_state_for(cohort, job, leader)
-        got = await asyncio.to_thread(_farm_reads, names, leader, item, skill,
-                                      state["started"])
+        got = await asyncio.to_thread(
+            _farm_reads, names, leader, item, skill,
+            state["started"], state.get("deaths_since", state["started"]),
+        )
         gathered = await self._farm_count(cohort, state, got, who)
         step = farmjob.decide(_farm_order(job, item, skill, got["name"], state),
                               _farm_reads_for(state, got, gathered))
@@ -26650,17 +26666,27 @@ class Bridge(discord.Client):
                 return None
             log.info("farm: %s was told job=%s again after its last order ended, "
                      "so this is a new order", who, farming[0])
-            self._farm_state.pop(key or "", None)
         return farming[0], sorted(standing), who
 
     async def _farm_state_for(self, cohort, job: str, leader: str) -> dict:
         """This family's farm state for `job`, begun from the job row if new."""
         slot = getattr(cohort, "key", None) or ""
         state = self._farm_state.get(slot)
-        if state is None or state.get("job") != job:
+        if state is None or state.get("job") != job or state.get("ended"):
             started = await asyncio.to_thread(_farm_started, leader, job)
-            state = {"job": job, "started": started or time.time(), "baseline": None,
-                     "held": None, "visited": {}, "aim": "", "walking": None}
+            begun = started or time.time()
+            same_renewed = (
+                state is not None
+                and state.get("job") == job
+                and bool(state.get("ended"))
+            )
+            deaths_since = (
+                (state.get("deaths_since") or state.get("started") or begun)
+                if same_renewed else begun
+            )
+            state = {"job": job, "started": begun, "deaths_since": deaths_since,
+                     "baseline": None, "held": None, "visited": {}, "aim": "",
+                     "walking": None}
             self._farm_state[slot] = state
         return state
 
@@ -38648,13 +38674,16 @@ def _farm_reads_for(state: dict, got: dict, gathered: int):
     return farmjob.Reads(
         skills=got["skills"], levels=got["levels"], leader_at=got["leader_at"],
         spawns=tuple(got["spawns"]), zone_levels=got["zone_levels"],
-        deaths=tuple(got["deaths"]), free_slots=got["free"], gathered=gathered,
+        deaths=tuple(got["deaths"]),
+        zone_deaths=tuple(got.get("zone_deaths", got["deaths"])),
+        free_slots=got["free"], gathered=gathered,
         creatures=tuple(got.get("creatures", ())),
         walking=walking, visited=state["visited"], now=time.time(),
         stood_since=state["stand"][1])
 
 
-def _farm_reads(names: list, leader: str, item: int, skill: str, since: float) -> dict:
+def _farm_reads(names: list, leader: str, item: int, skill: str, since: float,
+                zone_since: float | None = None) -> dict:
     """Everything farmjob.decide needs for one family, in one thread.
 
     The danger reading is the slow one (a creature scan per point), so only
@@ -38689,6 +38718,11 @@ def _farm_reads(names: list, leader: str, item: int, skill: str, since: float) -
         top = _gather_danger(near.map_id, near.x, near.y)
         if top is not None:
             zone_levels[zone] = top
+    deaths = _farm_deaths(names, since)
+    zone_deaths = (
+        deaths if zone_since is None or float(zone_since) == float(since)
+        else _farm_deaths(names, zone_since)
+    )
     return {
         "skills": skills,
         "levels": levels,
@@ -38696,7 +38730,8 @@ def _farm_reads(names: list, leader: str, item: int, skill: str, since: float) -
         "spawns": spawns,
         "creatures": creatures,
         "zone_levels": zone_levels,
-        "deaths": _farm_deaths(names, since),
+        "deaths": deaths,
+        "zone_deaths": zone_deaths,
         "free": _fetch_free_slots(names),
         "held": int(held),
         "name": name,
