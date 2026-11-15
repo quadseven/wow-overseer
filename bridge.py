@@ -19733,8 +19733,14 @@ class Bridge(discord.Client):
         # A member in a death loop is read first (guildjobs.supply_reads).
         supply = await self._job_supply_offers(
             members, facts["recent"], facts.get("death_loops"))
-        class_reagents = await self._job_class_reagent_offers(
-            members, facts["recent"], facts.get("spell_reagents"))
+        class_reagent_fn = getattr(self, "_job_class_reagent_offers", None)
+        class_reagents = (
+            await class_reagent_fn(
+                members, facts["recent"], facts.get("spell_reagents")
+            )
+            if class_reagent_fn is not None
+            else {}
+        )
         bags = (await self._job_bag_steps(members, facts["recent"], busy, cap)
                 if spawn_walks else {})
         # A hunter's first pet (hunterpet.py): the beasts around each hunter
