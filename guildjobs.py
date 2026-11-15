@@ -1423,15 +1423,13 @@ def ranks_due(level: int, money: int, skills, wanted=()) -> tuple:
 
 # The purse a recipe purchase never spends below, in copper: mod-overseer's
 # RECIPE_PURSE_FLOOR_COPPER, so an errand written here is one the trainer
-# visit can complete. It is the floor at level 1; `recipe_purse_floor` grows
-# it with level, as mod-overseer's RecipePurseFloor does.
-RECIPE_PURSE_FLOOR = 100
+# visit can complete. Canonical definition lives in purse.py to avoid import
+# cycles with raidsupply.
+RECIPE_PURSE_FLOOR = purse.RECIPE_PURSE_FLOOR
 
 # THE REPAIR RESERVE, in copper per level squared: 40 silver at 20 and 3g 60s
-# at 60. A repair bill grows with the item level of what is worn, and one
-# silver (the floor alone) does not pay for a level 60 member's repair after a
-# death. mod-overseer's RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ, the same number.
-RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ = 10
+# at 60. mod-overseer's RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ, the same number.
+RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ = purse.RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ
 
 # A trainer visit for a trade that bought no due recipe is not repeated inside
 # this window. mod-overseer records each visit ('trainer-visit', the trade's
@@ -1443,10 +1441,7 @@ RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ = 10
 RECIPE_VISIT_RETRY_HOURS = 6
 
 
-def recipe_purse_floor(level: int) -> int:
-    """The copper a recipe purchase leaves in the purse at `level`."""
-    level = max(0, int(level or 0))
-    return max(RECIPE_PURSE_FLOOR, RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ * level * level)
+recipe_purse_floor = purse.recipe_purse_floor
 
 
 def _rungs_ahead(skill: int, value: int) -> tuple:
@@ -1479,6 +1474,12 @@ def _rungs_ahead(skill: int, value: int) -> tuple:
     return tuple(out)
 
 
+# Secondary trades whose craft ladders qualify for trainer recipe visits
+# regardless of the roster's `professions` column (#2264). Fishing has no
+# crafting ladder and stays excluded.
+SECONDARY_RECIPE_SKILLS = frozenset({FIRST_AID, COOKING})
+
+
 def recipes_due(level: int, money: int, skills, known, wanted=(), visited=()) -> tuple:
     """The held trades whose next trainer recipe this character may buy now.
 
@@ -1495,10 +1496,11 @@ def recipes_due(level: int, money: int, skills, known, wanted=(), visited=()) ->
     `recipe_purse_floor(level)`. `known` is every recipe the bridge can show
     the member holds: character_spell, and the worldserver's own 'learn',
     'craft' and 'recipe-known' events. `skills` is {skill id: (value, max)};
-    a held primary the roster names in `wanted` is asked, and First Aid
-    always, as `ranks_due` asks it, since it takes no primary slot. A trade in
-    `visited` (a trainer visit for it inside RECIPE_VISIT_RETRY_HOURS) is not
-    due again yet. Cheapest first.
+    a held primary the roster names in `wanted` is asked, and First Aid and
+    Cooking always (`SECONDARY_RECIPE_SKILLS`, #2264), since secondary trades
+    take no primary slot. Fishing stays out. A trade in `visited` (a trainer
+    visit for it inside RECIPE_VISIT_RETRY_HOURS) is not due again yet.
+    Cheapest first.
     """
     known = frozenset(int(s) for s in known or ())
     wanted = tuple(int(s) for s in wanted or ())
@@ -1509,7 +1511,7 @@ def recipes_due(level: int, money: int, skills, known, wanted=(), visited=()) ->
         skill, value, ceiling = int(skill), int(value or 0), int(ceiling or 0)
         if ceiling <= 0 or skill in visited:
             continue
-        if skill != FIRST_AID and skill not in wanted:
+        if skill not in SECONDARY_RECIPE_SKILLS and skill not in wanted:
             continue
         cost = _recipe_cost_due(skill, value, int(money or 0), known, floor)
         if cost is not None:
