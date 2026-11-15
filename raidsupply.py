@@ -1876,20 +1876,11 @@ def plan_guild(
         steps.extend(taken)
         letters += sum(1 for s in taken if s.action == "supply")
         notes.extend(said)
-    seat_reagents = facts.seat_reagents
-    if seat_reagents is None:
-        seat_reagents = {
-            m.name: {int(h.entry): int(h.count) for h in m.carried}
-            for m in facts.members
-        }
-    known_spells = facts.known_spells
-    if known_spells is None:
-        known_spells = {m.name: m.known for m in facts.members}
     reagent_lines = tuple(
         seat_reagent_lines(
             facts.raiders,
-            seat_reagents,
-            known_spells=known_spells,
+            facts.seat_reagents,
+            known_spells=facts.known_spells,
             guild_bank_reagents=facts.guild_bank_reagents,
             spell_reagents=facts.spell_reagents,
         )
@@ -2243,11 +2234,10 @@ REAGENT_PORTAL_CASTS = classreagents.TARGET_STOCK
 # via classreagents.load_spell_reagents(), never typed by hand.
 BUFFER_SPELLS: dict[int, tuple[tuple[tuple[int, ...], int], ...]] = {
     PALADIN: (
-        ((25782,), REAGENT_BUFF_CASTS),  # Greater Blessing of Might
-        ((25894,), REAGENT_BUFF_CASTS),  # Greater Blessing of Wisdom
+        ((25782, 25916), REAGENT_BUFF_CASTS),  # Greater Blessing of Might (R1, R2)
+        ((25894, 25918), REAGENT_BUFF_CASTS),  # Greater Blessing of Wisdom (R1, R2)
         ((25898,), REAGENT_BUFF_CASTS),  # Greater Blessing of Kings
         ((25899,), REAGENT_BUFF_CASTS),  # Greater Blessing of Sanctuary
-        ((25918,), REAGENT_BUFF_CASTS),  # Greater Blessing of Salvation
     ),
     PRIEST: (
         ((21562, 21564), REAGENT_BUFF_CASTS),  # Prayer of Fortitude (R1, R2)

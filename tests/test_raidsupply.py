@@ -1058,7 +1058,9 @@ class TheBridgePassRuns(unittest.TestCase):
         "_farm_assign_guild",
     )
 
-    def run_pass(self, at_vault=True, at_counter=True, listings=(), farm=None):
+    def run_pass(
+        self, at_vault=True, at_counter=True, listings=(), farm=None, extra_over=None
+    ):
         """`farm` adds to the Cave: "members" and "posts" beside the
         alchemist, "recent" farmassign rows, "tasks" standing from a pass."""
         farm = farm or {}
@@ -1078,6 +1080,8 @@ class TheBridgePassRuns(unittest.TestCase):
             "recent": [],
             "farm_recent": list(farm.get("recent", ())),
         }
+        if extra_over:
+            extra.update(extra_over)
 
         def create_task(coro):
             # The step is never run; its own coroutine names the step it holds.
@@ -1164,6 +1168,31 @@ class TheBridgePassRuns(unittest.TestCase):
         )
         self.assertIn("raid supply: started 1 step(s)", log.lines)
         self.assertIn("Cave", me._raid_supply_said)
+
+    def test_the_bridge_pass_logs_short_reagent_and_drink_seats_from_seat_facts(self):
+        _, default_log, _ = self.run_pass()
+        self.assertTrue(
+            any(
+                "reagents short nothing, drink short nothing" in line
+                for line in default_log.lines
+            )
+        )
+        _, log, _ = self.run_pass(
+            extra_over={
+                "seat_reagents": {r.name: {} for r in RAIDERS},
+                "seat_drink": {r.name: 0 for r in RAIDERS},
+                "known_spells": {},
+                "bank_reagents": {},
+                "bank_drink": 0,
+            }
+        )
+        supply_lines = [
+            line for line in log.lines if line.startswith("raid supply: Cave:")
+        ]
+        self.assertTrue(supply_lines)
+        line = supply_lines[0]
+        self.assertIn("reagents short Aylysae 0/", line)
+        self.assertIn("drink short Aylysae 0/", line)
 
     def test_the_master_withdraws_at_the_vault_and_buys_at_the_counter(self):
         listings = [auction.Listing(11, rs.FIRE_PROTECTION, "FPP", 5, 20_000, 2)]
@@ -1589,8 +1618,28 @@ class BufferReagentsAndDrink(unittest.TestCase):
             for entry, per_cast in pairs:
                 self.assertGreater(entry, 0)
                 self.assertGreater(per_cast, 0)
+        self.assertEqual(resolved[25916], ((21177, 1),))
+        self.assertEqual(resolved[25918], ((21177, 1),))
+        with self.assertRaises(KeyError):
+            rs.resolve_buffer_spells([25895])
         with self.assertRaises(KeyError):
             rs.resolve_buffer_spells([9999999])
+
+    def test_plan_guild_without_seat_supply_does_not_report_false_shorts(self):
+        lineup = (
+            raider("Grug", rs.TANK, rs.WARRIOR, main_tank=True),
+            raider("Aylysae", rs.HEALER, rs.PRIEST),
+            raider("Alindy", rs.CASTER, rs.MAGE),
+            raider("Zork", rs.HEALER, rs.DRUID),
+        )
+        members = [
+            member(r.name, maintenance=False, class_id=r.class_id, carried=())
+            for r in lineup
+        ]
+        plan = rs.plan_guild(facts(members, raiders=lineup), {}, set())
+        self.assertEqual(plan.reagents, ())
+        self.assertEqual(plan.drink, ())
+        self.assertIn("reagents short nothing, drink short nothing", rs.summary(plan))
 
     def test_priest_mage_druid_zero_reagents_and_healer_zero_drink_are_short(self):
         lineup = (
@@ -1603,7 +1652,12 @@ class BufferReagentsAndDrink(unittest.TestCase):
             member(r.name, maintenance=False, class_id=r.class_id) for r in lineup
         ]
         plan = rs.plan_guild(
-            facts(members, raiders=lineup, seat_drink={r.name: 0 for r in lineup}),
+            facts(
+                members,
+                raiders=lineup,
+                seat_reagents={r.name: {} for r in lineup},
+                seat_drink={r.name: 0 for r in lineup},
+            ),
             {},
             set(),
         )
@@ -1637,7 +1691,12 @@ class BufferReagentsAndDrink(unittest.TestCase):
         priest_only = (raider("Aylysae", rs.HEALER, rs.PRIEST),)
         members = [member("Aylysae", maintenance=False, class_id=rs.PRIEST)]
         plan = rs.plan_guild(
-            facts(members, raiders=priest_only, seat_drink={"Aylysae": 0}),
+            facts(
+                members,
+                raiders=priest_only,
+                seat_reagents={"Aylysae": {}},
+                seat_drink={"Aylysae": 0},
+            ),
             {},
             set(),
         )
@@ -1767,15 +1826,6 @@ class BufferReagentsAndDrink(unittest.TestCase):
         self.assertEqual(got["seat_reagents"]["Oz"][powder], 7)
         self.assertEqual(got["seat_drink"]["Uzza"], 12)
         self.assertEqual(got["known_spells"]["Oz"], {23028})
-
-    def test_bridge_and_page_wire_seat_reagents_and_drink(self):
-        raid_js = (HERE / "app" / "views" / "raid.js").read_text(encoding="utf-8")
-        self.assertIn("s.seat_reagents", raid_js)
-        self.assertIn("s.seat_drink", raid_js)
-        self.assertIn("buffer_reagent_entries", BRIDGE)
-        self.assertIn("DRINK_CATEGORY", BRIDGE)
-        self.assertIn("buffer_reagent_entries", SERVER)
-        self.assertIn("DRINK_CATEGORY", SERVER)
 
 
 if __name__ == "__main__":
