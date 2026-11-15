@@ -42,6 +42,13 @@ MAPS = {MOLTEN_CORE: MOLTEN_CORE_MAP, UPPER_SPIRE: UPPER_SPIRE_MAP}
 # The Upper Spire's is LFGDungeons.dbc row 44's minimum; see spirerun.py.
 MIN_LEVEL = {MOLTEN_CORE: 50, UPPER_SPIRE: 56}
 
+# THE MODULE'S DOOR QUORUM DEFAULTS (Overseer.Raid.QuorumSeats, QuorumTanks,
+# QuorumHealers in mod-overseer's dist config). A copy: the module is another
+# repository, and a realm may override these in its worldserver config.
+QUORUM_SEATS = 36
+QUORUM_TANKS = 3
+QUORUM_HEALERS = 8
+
 # ONE NIGHT PER ORDER. The queue counts an entry done off the leader's
 # `dungeon_runs_done`, which only the dungeon coordinator writes, so a raid
 # entry stays active until the operator clears the queue. An order for "3"
