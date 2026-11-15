@@ -35459,14 +35459,16 @@ _CORPS_BAGS_SQL = (
 )
 # `cr.id`, not `cr.id1`, for the reason _VENDOR_SPAWN_SQL gives.
 _CORPS_TRAINABLE_SQL = (
-    "SELECT DISTINCT cr.map AS map_id, ts.SpellId AS spell "
+    "SELECT DISTINCT cr.map AS map_id, cr.zoneId AS zone_id, "
+    "cr.position_x AS x, cr.position_y AS y, ts.SpellId AS spell "
     "FROM acore_world.creature cr "
     "JOIN acore_world.creature_default_trainer t ON t.CreatureId = cr.id "
     "JOIN acore_world.trainer_spell ts ON ts.TrainerId = t.TrainerId "
     "WHERE ts.SpellId IN ({spells})"
 )
 _CORPS_VENDORS_SQL = (
-    "SELECT DISTINCT cr.map AS map_id, v.item "
+    "SELECT DISTINCT cr.map AS map_id, cr.zoneId AS zone_id, "
+    "cr.position_x AS x, cr.position_y AS y, v.item "
     "FROM acore_world.creature cr JOIN acore_world.npc_vendor v ON v.entry = cr.id "
     "WHERE v.item IN ({entries})"
 )
