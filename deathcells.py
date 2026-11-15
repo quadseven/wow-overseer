@@ -14,8 +14,13 @@ typed by hand: a disc exists because deaths exist, and ages out with them.
 WHAT IT DOES NOT DO. It knows lines, not routes: the worldserver still picks
 the path between the two ends, so a refusal here means "do not ask for this
 walk", and the module's own avoidance (a separate change that needs a
-worldserver roll) is what would route around a disc. Drowning is left out on
-purpose: water deaths sit in every lake and would void whole coasts.
+worldserver roll) is what would route around a disc. The one step past a
+refusal it can take is `detour`: given surveyed points (spawns the world
+itself placed, read by the caller), it names the one whose two straight legs
+both clear every disc, so the bridge can write the walk as two aims instead
+of stranding it. The legs are still lines, with the same disagreement in
+both directions. Drowning is left out on purpose: water deaths sit in every
+lake and would void whole coasts.
 
 PURE. Every function takes rows and points and returns plain values.
 """
@@ -191,6 +196,27 @@ def _to_segment(disc, a, b) -> float:
     return math.hypot(disc.x - a[1] - t * dx, disc.y - a[2] - t * dy)
 
 
+def crossings(all_discs, start, goal) -> list:
+    """Every disc the line start -> goal passes through, in disc order.
+
+    The judgement `crossing` makes, kept whole: a disc the walker already
+    stands in is ignored (it must be able to leave), a goal inside a disc is
+    caught, and a point that cannot be read crosses nothing.
+    """
+    a, b = _point(start), _point(goal)
+    if a is None or b is None or a[0] != b[0]:
+        return []
+    out = []
+    for disc in all_discs or ():
+        if disc.map_id != a[0]:
+            continue
+        if math.hypot(disc.x - a[1], disc.y - a[2]) <= disc.radius:
+            continue
+        if _to_segment(disc, a, b) <= disc.radius:
+            out.append(disc)
+    return out
+
+
 def crossing(all_discs, start, goal):
     """The first disc the line start -> goal passes through, or None.
 
@@ -198,17 +224,52 @@ def crossing(all_discs, start, goal):
     a goal inside a disc is caught, and a point that cannot be read refuses
     nothing: the check is advisory.
     """
+    hits = crossings(all_discs, start, goal)
+    return hits[0] if hits else None
+
+
+def detour(all_discs, start, goal, candidates):
+    """The surveyed point to walk by way of, so the walk crosses no disc.
+
+    `candidates` are points the world itself surveyed ({map_id, x, y, ...}:
+    spawns the caller read out of the world database); nothing here invents
+    a coordinate. A candidate serves when it stands outside every disc and
+    both straight legs, start -> candidate and candidate -> goal, clear
+    every disc; of those, the shortest total walk wins. The outside-every-
+    disc test is its own on purpose: `crossing` never judges ground the
+    walker already stands in, so a walker standing in a disc could otherwise
+    be routed by way of a point inside that same disc. None when the
+    straight line already clears (nothing to route around), when no
+    candidate serves, or when an end cannot be read. The candidate is
+    returned as given, so the caller keeps the surveyed height it carried.
+    """
     a, b = _point(start), _point(goal)
     if a is None or b is None or a[0] != b[0]:
         return None
-    for disc in all_discs or ():
-        if disc.map_id != a[0]:
+    if crossing(all_discs, start, goal) is None:
+        return None
+    best, best_key = None, None
+    for cand in candidates or ():
+        c = _point(cand)
+        if c is None or c[0] != a[0]:
             continue
-        if math.hypot(disc.x - a[1], disc.y - a[2]) <= disc.radius:
+        if any(
+            d.map_id == c[0] and math.hypot(d.x - c[1], d.y - c[2]) <= d.radius
+            for d in all_discs or ()
+        ):
             continue
-        if _to_segment(disc, a, b) <= disc.radius:
-            return disc
-    return None
+        if crossing(all_discs, start, cand) is not None:
+            continue
+        if crossing(all_discs, cand, goal) is not None:
+            continue
+        key = (
+            math.hypot(c[1] - a[1], c[2] - a[2]) + math.hypot(b[1] - c[1], b[2] - c[2]),
+            c[1],
+            c[2],
+        )
+        if best_key is None or key < best_key:
+            best, best_key = cand, key
+    return best
 
 
 def aim_refusal(all_discs, here, aim, spawn=None) -> str:

@@ -10722,9 +10722,35 @@ class Bridge(discord.Client):
         if refuse:
             refusal = await asyncio.to_thread(refuse, leader, aim)
             if refusal:
-                log.warning("town slot: %s asked for %s and was refused: %s",
-                            claimant, aim, refusal)
-                return False
+                # A REFUSAL STRANDS THE WALK; A DETOUR DOES NOT (#2540): a
+                # ground aim whose straight line crosses a disc is offered
+                # a waypoint on surveyed ground, and the walk is written to
+                # the waypoint instead. The pass that owns the errand
+                # re-asks for its own aim every cycle, so the second leg is
+                # written by this same door once the leader stands where
+                # the line to the aim clears. `distance` was measured to
+                # the refused aim, so it is dropped: the slot's stall watch
+                # must not judge a walk to the waypoint by its closing on a
+                # different point.
+                detour = globals().get("_death_disc_detour")
+                waypoint, crossed = "", ()
+                if detour:
+                    waypoint, crossed = await asyncio.to_thread(
+                        detour, leader, aim)
+                if not waypoint:
+                    if len(crossed) > 1:
+                        refusal = "%s; the line also crosses %s" % (
+                            refusal,
+                            "; ".join(d.said() for d in crossed[1:]),
+                        )
+                    log.warning("town slot: %s asked for %s and was refused: %s",
+                                claimant, aim, refusal)
+                    return False
+                log.warning(
+                    "town slot: %s asked for %s; %s, so the walk goes by "
+                    "way of %s first", claimant, aim, refusal, waypoint)
+                aim = waypoint
+                distance = None
         column = await asyncio.to_thread(_current_travel_npc, leader)
         now = time.monotonic()
         trainer_route = (
@@ -42170,6 +42196,81 @@ def _death_disc_refusal(leader: str, aim: str) -> str:
             "y": row.get("pos_y")}
     spawn = None if ground else _nearest_keyword_spawn(leader, aim)
     return deathcells.aim_refusal(discs, here, aim, spawn=spawn)
+
+
+# How far past a death disc's edge the detour looks for surveyed ground to
+# stand on (#2540), and how many of the nearest spawns it weighs. The picker
+# in deathcells takes the shortest clear route among them, so a wide reach
+# costs rows read, never a longer walk.
+_DETOUR_REACH_YARDS = 900.0
+_DETOUR_CANDIDATE_LIMIT = 500
+
+_DETOUR_SPAWN_SQL = (
+    "SELECT cr.map AS map_id, cr.position_x AS x, cr.position_y AS y, "
+    "cr.position_z AS z "
+    "FROM acore_world.creature cr "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "WHERE cr.map = %s AND " + towntrip.REAL_SPAWN_SQL + " "
+    "AND POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2) > %s "
+    "AND POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2) <= %s "
+    "ORDER BY POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2) "
+    "LIMIT %s"
+)
+
+
+def _death_disc_detour(leader: str, aim: str) -> tuple:
+    """(waypoint aim, discs in the way) for a refused ground aim (#2540).
+
+    The waypoint aim is "" when no surveyed point serves. The candidates are
+    creature spawns out of the world database, in the ring around the first
+    disc the straight walk crosses: surveyed ground this process already
+    reads for the keyword holders and the quest ends, never a coordinate it
+    invents. `deathcells.detour` picks among them, and the aim written for
+    the winner is `travel.ground_aim` of the spawn's own surveyed position;
+    a spawn whose aim would not fit the column is no waypoint at all.
+    Ground aims only: a role keyword names no ground of its own and keeps
+    refusing as before. ADVISORY, like the refusal it answers: a spawn
+    table this world image does not carry means no detour, and the refusal
+    stands.
+    """
+    ground = places.parse_ground_aim(aim)
+    if not ground:
+        return "", ()
+    discs = _fetch_death_discs()
+    if not discs:
+        return "", ()
+    row = _fetch_positions([leader]).get(leader)
+    if not row:
+        return "", ()
+    here = {"map_id": row.get("map_id"), "x": row.get("pos_x"),
+            "y": row.get("pos_y")}
+    goal = {"map_id": ground[0], "x": ground[1], "y": ground[2]}
+    crossed = deathcells.crossings(discs, here, goal)
+    if not crossed:
+        return "", ()
+    disc = crossed[0]
+    reach = disc.radius + _DETOUR_REACH_YARDS
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_DETOUR_SPAWN_SQL, (
+                disc.map_id, disc.x, disc.y, disc.radius ** 2,
+                disc.x, disc.y, reach ** 2,
+                disc.x, disc.y, _DETOUR_CANDIDATE_LIMIT,
+            ))
+            candidates = [dict(r) for r in cur.fetchall()]
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            log.warning("death discs: the surveyed spawns around a disc "
+                        "could not be read (%s); the walk is refused as "
+                        "before", exc.args[:1])
+            return "", tuple(crossed)
+        raise
+    pick = deathcells.detour(discs, here, goal, candidates)
+    if pick is None:
+        return "", tuple(crossed)
+    waypoint = travel.ground_aim(pick.get("map_id"), pick.get("x"),
+                                 pick.get("y"), pick.get("z"))
+    return waypoint or "", tuple(crossed)
 
 
 def _fetch_recent_deaths(names: list):
