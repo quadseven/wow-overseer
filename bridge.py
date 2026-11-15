@@ -34106,8 +34106,12 @@ _FAMILY_ENCHANTERS_SQL = (
     "SELECT r.name AS name, s.value AS skill FROM overseer_roster r "
     "JOIN characters c ON c.name = r.name "
     "JOIN character_skills s ON s.guid = c.guid AND s.skill = 333 "
-    "WHERE r.enabled = 1 AND r.family IS NOT NULL AND r.family <> '' "
-    "AND r.family = (SELECT r2.family FROM overseer_roster r2 WHERE r2.name = %s)"
+    "WHERE r.enabled = 1 AND ("
+    "(r.family IS NOT NULL AND r.family <> '' "
+    "AND r.family = (SELECT r2.family FROM overseer_roster r2 WHERE r2.name = %s)) "
+    "OR c.guid IN (SELECT gm.guid FROM guild_member gm WHERE gm.guildid = "
+    "(SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters h ON h.guid = gm2.guid WHERE h.name = %s)))"
 )
 _DISENCHANT_ROUTED_SQL = (
     "SELECT COUNT(*) AS n FROM overseer_command "
@@ -34135,9 +34139,10 @@ def _disenchant_facts(item_guid: int):
 
 
 def _family_enchanters(holder: str) -> dict:
-    """{name: Enchanting skill} for the enabled enchanters of the holder's family."""
+    """{name: Enchanting skill} for the enabled enchanters of the holder's
+    family or guild, so a guild member with no family feeds them too."""
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(_FAMILY_ENCHANTERS_SQL, (holder,))
+        cur.execute(_FAMILY_ENCHANTERS_SQL, (holder, holder))
         return {str(r["name"]): int(r["skill"] or 0) for r in cur.fetchall()}
 
 
