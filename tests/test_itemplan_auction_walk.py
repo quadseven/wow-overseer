@@ -59,6 +59,9 @@ class TheExecutorSendsAHolderToTheCounter(unittest.IsolatedAsyncioTestCase):
         )
         queued = []
         bridge = import_bridge()
+        executor._itemplan_auction_walk = lambda *args: (
+            bridge.Bridge._itemplan_auction_walk(executor, *args)
+        )
         shadow.reset()
 
         def insert(holder, command):

@@ -16354,12 +16354,8 @@ class Bridge(discord.Client):
         # are written only for a holder already standing at an auctioneer, and
         # nothing else sent one there: a day of AUCTION decisions wrote no row.
         # The walk is the pass's own, asked only for stacks the plan prices.
-        stranded = [candidate for candidate in candidates
-                    if candidate["holder"] not in holder_house]
-        walk_sales = auction.plan_sales(stranded)
-        if walk_sales:
-            await self._auction_list_walk(
-                stranded, names, family, cohort, sales=walk_sales)
+        await self._itemplan_auction_walk(
+            candidates, holder_house, names, family, cohort)
         candidates = [candidate for candidate in candidates
                       if candidate["holder"] in holder_house]
         sales = auction.plan_sales(candidates)
@@ -16377,6 +16373,20 @@ class Bridge(discord.Client):
                          sale.candidate.label)
         if queued:
             await self._keep_at_auctioneer(family, cohort)
+
+    async def _itemplan_auction_walk(self, candidates: list, holder_house: dict,
+                                     names: list, leader: str, cohort) -> None:
+        """Ask the auction pass's walk for the planned stacks nobody can list yet.
+
+        Only stacks `auction.plan_sales` accepts at the plan's own price count,
+        so the walk is never taken for a listing that would be refused.
+        """
+        stranded = [candidate for candidate in candidates
+                    if candidate["holder"] not in holder_house]
+        sales = auction.plan_sales(stranded)
+        if sales:
+            await self._auction_list_walk(
+                stranded, names, leader, cohort, sales=sales)
 
     async def _clearance_plan(self, names: list, leader: str,
                               auction_open: bool = False) -> tuple:
