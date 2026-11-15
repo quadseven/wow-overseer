@@ -724,5 +724,254 @@ class TheSellPassesSkipWhatThePolicyKeeps(unittest.TestCase):
         self.assertIn("asyncio.to_thread(_bank_policy_lines_or_none, names)", body)
 
 
+class SecondSetRequiresASeatThatCanPlayTheRole(unittest.TestCase):
+    def _healing_plate(self, guid=10, holder="Grog", **kw):
+        return piece(
+            guid,
+            "Healer's Plate",
+            holder=holder,
+            quality=3,
+            stats=(("intellect", 15), ("spell_power", 30)),
+            scored=(("intellect", 15), ("spell_power", 30)),
+            **kw,
+        )
+
+    def _tank_shield(self, guid=11, holder="Grog", **kw):
+        return piece(
+            guid,
+            "Bulwark Shield",
+            holder=holder,
+            quality=3,
+            armor=1500,
+            stats=(("defense_rating", 12), ("block_rating", 10), ("stamina", 15)),
+            scored=(("defense_rating", 12), ("block_rating", 10), ("stamina", 15)),
+            **kw,
+        )
+
+    def _damage_axe(self, guid=12, holder="Grug", **kw):
+        return piece(
+            guid,
+            "Rending Axe",
+            holder=holder,
+            item_class=bankpolicy.WEAPON,
+            quality=3,
+            stats=(("strength", 18), ("critical_strike_rating", 14)),
+            scored=(("strength", 18), ("critical_strike_rating", 14)),
+            **kw,
+        )
+
+    def test_locked_single_role_seats_keep_no_off_role_second_set(self):
+        paladin_locked = bankpolicy.Keeper(
+            "Grog",
+            PALADIN,
+            60,
+            bankpolicy.PARTY_DAMAGE,
+            frozenset(),
+            locked=True,
+        )
+        shield = self._tank_shield(11, holder="Grog")
+        heal = self._healing_plate(10, holder="Grog")
+        healer_locked = bankpolicy.Keeper(
+            "Ugga",
+            PALADIN,
+            60,
+            bankpolicy.PARTY_HEALER,
+            frozenset(),
+            locked=True,
+        )
+        healer_shield = self._tank_shield(13, holder="Ugga")
+        warrior_locked = bankpolicy.Keeper(
+            "Grug",
+            WARRIOR,
+            60,
+            bankpolicy.PARTY_TANK,
+            frozenset(),
+            locked=True,
+        )
+        axe = self._damage_axe(12, holder="Grug")
+        facts = bankpolicy.Facts(
+            pieces=(shield, heal, healer_shield, axe),
+            family=(paladin_locked, healer_locked, warrior_locked),
+            reach={
+                11: reach("Grog", role="damage", cls=PALADIN),
+                10: reach("Grog", role="damage", cls=PALADIN),
+                13: reach("Ugga", role="healer", cls=PALADIN),
+                12: reach("Grug", role="tank", cls=WARRIOR),
+            },
+        )
+        self.assertEqual({}, bankpolicy.place(facts))
+
+    def test_locked_seat_still_keeps_fire_resistance_pvp_and_grow_into_sets(self):
+        locked = bankpolicy.Keeper(
+            "Grog",
+            PALADIN,
+            60,
+            bankpolicy.PARTY_DAMAGE,
+            frozenset(),
+            locked=True,
+        )
+        low_locked = bankpolicy.Keeper(
+            "Grog",
+            PALADIN,
+            40,
+            bankpolicy.PARTY_DAMAGE,
+            frozenset(),
+            locked=True,
+        )
+        fire = piece(21, "Cinder Pauldrons", fire_res=20)
+        pvp = piece(22, "Marshal Greaves", pvp=True)
+        grows = piece(23, "Future Helm", quality=3, required_level=50, bound=True)
+        facts = bankpolicy.Facts(
+            pieces=(fire, pvp),
+            family=(locked,),
+            reach={21: reach(), 22: reach()},
+        )
+        placed = bankpolicy.place(facts)
+        self.assertEqual(bankpolicy.FIRE_SET, placed[21].kind)
+        self.assertEqual(bankpolicy.PVP_SET, placed[22].kind)
+        later_facts = bankpolicy.Facts(
+            pieces=(grows,), family=(low_locked,), reach={23: reach()}
+        )
+        self.assertEqual(bankpolicy.GROWS_INTO, bankpolicy.place(later_facts)[23].kind)
+
+    def test_unseated_member_keeps_its_best_second_role_set(self):
+        unlocked = bankpolicy.Keeper(
+            "Alaric",
+            PALADIN,
+            60,
+            bankpolicy.PARTY_DAMAGE,
+            frozenset(),
+            locked=False,
+        )
+        shield = self._tank_shield(31, holder="Alaric")
+        facts = bankpolicy.Facts(
+            pieces=(shield,),
+            family=(unlocked,),
+            reach={31: reach("Alaric", role="damage", cls=PALADIN)},
+        )
+        placed = bankpolicy.place(facts)
+        self.assertEqual([31], sorted(placed))
+        self.assertEqual("tank set", placed[31].kind)
+
+    def test_facts_from_rows_locks_approved_raid_seats(self):
+        worn_rows = [
+            {
+                "name": "Grug",
+                "class_id": WARRIOR,
+                "level": 60,
+                "inventory_type": 5,
+                "item_level": 60,
+            },
+            {
+                "name": "Grug",
+                "class_id": WARRIOR,
+                "level": 60,
+                "inventory_type": 17,
+                "item_level": 70,
+            },
+            {
+                "name": "Grog",
+                "class_id": PALADIN,
+                "level": 60,
+                "inventory_type": 5,
+                "item_level": 60,
+            },
+        ]
+        item_rows = [
+            {
+                "holder": "Grug",
+                "item_guid": 41,
+                "entry": 111,
+                "name": "Angerforge's Battle Axe",
+                "quality": 3,
+                "item_class": bankpolicy.WEAPON,
+                "item_subclass": 1,
+                "inventory_type": 17,
+                "allowable_class": -1,
+                "required_level": 52,
+                "item_level": 57,
+                "instance_flags": 1,
+                "bonding": 1,
+                "bag": 0,
+                "slot": 23,
+                "stat_type1": 4,
+                "stat_value1": 15,
+                "stat_type2": 32,
+                "stat_value2": 14,
+            },
+            {
+                "holder": "Grog",
+                "item_guid": 42,
+                "entry": 112,
+                "name": "Healer's Plate",
+                "quality": 3,
+                "item_class": bankpolicy.ARMOR,
+                "item_subclass": 4,
+                "inventory_type": 5,
+                "allowable_class": -1,
+                "required_level": 55,
+                "item_level": 60,
+                "instance_flags": 1,
+                "bonding": 1,
+                "bag": 0,
+                "slot": 23,
+                "stat_type1": 45,
+                "stat_value1": 35,
+                "stat_type2": 5,
+                "stat_value2": 15,
+            },
+        ]
+        facts = bankpolicy.facts_from_rows(["Grug", "Grog"], item_rows, worn_rows, [])
+        by_name = {k.name: k for k in facts.family}
+        self.assertTrue(by_name["Grug"].locked)
+        self.assertTrue(by_name["Grog"].locked)
+        self.assertEqual(frozenset({41, 42}), bankpolicy.dropped_second_sets(facts))
+        self.assertEqual({}, bankpolicy.place(facts))
+
+    def test_banked_dropped_second_set_moves_to_gear_for_later_only_when_dropped(
+        self,
+    ):
+        locked = bankpolicy.Keeper(
+            "Grog",
+            PALADIN,
+            60,
+            bankpolicy.PARTY_DAMAGE,
+            frozenset(),
+            locked=True,
+        )
+        dropped_tradable = self._healing_plate(
+            51, holder="Grog", bound=False, place="bank"
+        )
+        non_second_set_tradable = piece(
+            52,
+            "Bracers of Mightier Hits",
+            holder="Grog",
+            quality=3,
+            bound=False,
+            place="bank",
+            stats=(("attack_power", 30),),
+            scored=(("attack_power", 30),),
+        )
+        facts = bankpolicy.Facts(
+            pieces=(dropped_tradable, non_second_set_tradable),
+            family=(locked,),
+            reach={
+                51: reach("Grog", role="damage", cls=PALADIN, guild=("Ugga",)),
+                52: reach(
+                    "Grog",
+                    bucket="wrist",
+                    role="damage",
+                    cls=PALADIN,
+                    guild=("Ugga",),
+                ),
+            },
+        )
+        placed = bankpolicy.place(facts)
+        self.assertEqual([51], sorted(placed))
+        self.assertEqual(
+            (bankpolicy.GUILD, bankpolicy.GEAR_TAB), (placed[51].to, placed[51].tab)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

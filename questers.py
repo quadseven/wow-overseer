@@ -42,7 +42,9 @@ WHAT A QUESTER DOES NEXT (`next_move`), one move a pass, in this order:
   2. hand in a complete quest, the nearest turn-in NPC first;
   3. take a quest in reach while the log has a free slot (questlog.LOG_SLOTS),
      the nearest quest giver first;
-  4. work a quest it holds: walk to the nearest objective spawn at most
+  4. work a quest it holds: open the nearest chest that holds an item it still
+     lacks (`chest_spots`, the module's `use-gameobject` row), or walk to the
+     nearest objective spawn at most
      classquest.OVERLEVEL_MAX levels over it and hunt its creature there with
      the module's `hunt-spawn` row, as a class hunt does (`step_for`);
   5. with nothing left in reach, go to the next zone (`next_zone`): the zone
@@ -137,6 +139,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field, replace
+from dataclasses import fields as dataclass_fields
 
 import classhunt
 import classic
@@ -237,9 +240,6 @@ GIVER_MISSING = "the quest giver is not in the world"
 # to satisfy these objectives.
 UNSUPPORTED_OBJECTIVE = "it requires speaking to an NPC, which questers cannot do"
 CRAFTED_CRAB_CAKES = "requires crafted Crab Cakes (item 2683); questers cannot cook"
-FORGOTTEN_HEIRLOOM = (
-    "The Forgotten Heirloom (quest 64) requires an item no spawned creature drops"
-)
 FARGODEEP_EXPLORATION = (
     "requires exploring Fargodeep Mine; questers cannot earn exploration credit"
 )
@@ -459,7 +459,13 @@ def ledger_state(state, reason) -> str:
     """The quester pass's reading of one ledger row: LEDGER_STALLED for a
     broken row whose reason is a stall, else the row's own state."""
     state = str(state or "")
-    if state == LEDGER_BROKEN and str(reason or "").startswith(STALLED):
+    reason = str(reason or "")
+    # A stall and a refused take are each one quester's hour, not a fact about
+    # the quest: a full bag or a level too low refuses a take that a later pass
+    # may win, so neither holds the quest broken for good
+    # (quest 298, refused "not eligible" while its start item had no
+    # bag room, stayed broken for weeks).
+    if state == LEDGER_BROKEN and reason.startswith((STALLED, REFUSED_TAKE)):
         return LEDGER_STALLED
     return state
 
@@ -669,7 +675,15 @@ def _int(value, default=0) -> int:
 
 
 def catalogue(
-    quest_rows, giver_rows, spawn_rows, loot_rows, start_rows, ender_rows, link_rows=()
+    quest_rows,
+    giver_rows,
+    spawn_rows,
+    loot_rows,
+    start_rows,
+    ender_rows,
+    link_rows=(),
+    chest_rows=(),
+    object_rows=(),
 ):
     """The Catalogue from the world's rows: QUESTS_SQL's, classquest's
     GIVERS_SQL, SPAWNS_SQL and LOOT_SQL rows for these quests, STARTERS_SQL's,
@@ -677,10 +691,21 @@ def catalogue(
 
     Only the classic world: a quest is kept when its zone holds a quest whose
     giver is spawned on a classic continent, or is one of the starting lands.
+
+    `chest_rows` (classquest.CHEST_SQL's) and `object_rows` (OBJECT_SPAWNS_SQL's)
+    name the chests that hold a required item no creature drops and where they
+    stand: each such quest carries a USE_OBJECT use (`chest_spots`).
     """
     rows = list(quest_rows or ())
     book = classquest.build(
-        rows, giver_rows, spawn_rows, loot_rows, start_rows=start_rows, every=True
+        rows,
+        giver_rows,
+        spawn_rows,
+        loot_rows,
+        chest_rows=chest_rows,
+        object_rows=object_rows,
+        start_rows=start_rows,
+        every=True,
     )
     named, npc_enders, object_enders = _named(start_rows, ender_rows)
     object_spots = _object_ender_spots(ender_rows)
@@ -1078,6 +1103,19 @@ def refusals(name, tried) -> dict:
     return out
 
 
+def retry_take_refusals(name, held, tried) -> frozenset:
+    """The held quests whose take the world refused, with no refusal left in the
+    rows this pass reads: the quester asks again (a refusal is judged from the
+    last day's rows, `refusals`)."""
+    now = refusals(name, tried)
+    return frozenset(
+        int(qid)
+        for qid, reason in held.items()
+        if str(reason).startswith(REFUSED_TAKE)
+        and now.get(("take", int(qid)), (0, ""))[0] < FAILS_BEFORE_BROKEN
+    )
+
+
 def bag_room_refused(name, tried) -> frozenset:
     """The quest ids whose take this quester's world refused for bag room
     (BAG_ROOM_REFUSAL) inside SELL_COOLDOWN_MINUTES: the sale goes first, and
@@ -1334,7 +1372,9 @@ def in_reach(cat: Catalogue, member, zone, broken=frozenset()) -> list:
     ]
 
 
-def _working(cat: Catalogue, member, last_quest=0, left=frozenset()) -> set:
+def _working(
+    cat: Catalogue, member, last_quest=0, left=frozenset(), object_left=frozenset()
+) -> set:
     """The quests whose stall clock runs now: the quest the quester's last move
     was for, and each quest of its log of the zone it stands in that it has
     no objective spawn to hunt (`_unhuntable`).
@@ -1355,7 +1395,7 @@ def _working(cat: Catalogue, member, last_quest=0, left=frozenset()) -> set:
         if (
             cat.facts.get(qid) is not None
             and cat.facts[qid].zone == member.zone
-            and _unhuntable(cat, member, qid, left)
+            and _unhuntable(cat, member, qid, left, object_left)
         )
     }
     if last_quest and int(last_quest) in member.quest_log:
@@ -1363,14 +1403,18 @@ def _working(cat: Catalogue, member, last_quest=0, left=frozenset()) -> set:
     return out
 
 
-def _unhuntable(cat: Catalogue, member, qid, left=frozenset()) -> bool:
+def _unhuntable(
+    cat: Catalogue, member, qid, left=frozenset(), object_left=frozenset()
+) -> bool:
     """True when the quester has no objective spawn of this quest to hunt
     (`_hunt`'s own choice: a solo field within its level, on its map, not one
     it leaves for now, or on the other classic continent, which `_hunt`
-    crosses to)."""
+    crosses to) and no chest to open for an item of it (`chest_spots`)."""
     quest = cat.quest(qid)
     if quest is None:
         return True
+    if _nearest_chest(member, qid, quest, object_left) is not None:
+        return False
     fields = classquest.within_level(member, classquest.solo_fields(quest))
     if _nearest(member, fields, left) is not None:
         return False
@@ -1378,6 +1422,58 @@ def _unhuntable(cat: Catalogue, member, qid, left=frozenset()) -> bool:
         routable = tuple(s for s in fields if s.guid not in left)
         return classquest.far_map(member, routable) < 0
     return True
+
+
+def _chested(quest) -> bool:
+    """True when a chest holds an item the quest asks for (a USE_OBJECT use)."""
+    return any(u.verb == classquest.USE_OBJECT and u.item for u in quest.uses)
+
+
+def chest_spots(member, qid: int, quest: classquest.Quest) -> tuple:
+    """(Use, gameobject spawn) of every chest that holds an item of the quest the
+    quester has not yet got in full: its own counter for that item is short.
+
+    AN ITEM ONLY A CHEST HOLDS WAS NEVER WORKED (2026-11-15). Furlbrow's Pocket
+    Watch (quest 64) is looted from a wardrobe, the Hinterlands Honey Ripple (77)
+    from a supply crate and each Fragment of Uncovering the Past (299) from a
+    buried relic: no creature drops any of them, so the quest had no objective
+    spawn to hunt and every quester that took one stood still for two hours and
+    filed it broken. The class quests already click a chest for such an item
+    (`use-gameobject`, classquest.USE_OBJECT); the questers now do the same."""
+    progress = member.quest_item_objectives.get(qid, {})
+    wanted = dict(quest.items)
+    out = []
+    for use in quest.uses:
+        if use.verb != classquest.USE_OBJECT or not use.item:
+            continue
+        if int(progress.get(use.item, 0)) >= wanted.get(use.item, use.count):
+            continue
+        out.extend((use, _object_spawn(s)) for s in use.spots)
+    return tuple(out)
+
+
+def _object_spawn(spot) -> ObjectSpawn:
+    return (
+        spot
+        if isinstance(spot, ObjectSpawn)
+        else ObjectSpawn(
+            **{f.name: getattr(spot, f.name) for f in dataclass_fields(spot)}
+        )
+    )
+
+
+def _nearest_chest(member, qid, quest, object_left=frozenset()):
+    """(Use, spawn) of the nearest chest the quester can walk to, or None."""
+    here = [
+        (use, spot)
+        for use, spot in chest_spots(member, qid, quest)
+        if spot.guid not in object_left
+        and member.placed
+        and int(spot.map_id) == int(member.map_id)
+    ]
+    if not here:
+        return None
+    return min(here, key=lambda o: (_yards(member, o[1]), o[1].guid))
 
 
 def _fields_gone(quest, gone) -> bool:
@@ -1418,8 +1514,18 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
     object_gone = gone_spawns(member.name, tried, OBJECT_KIND)
     refused = refusals(member.name, tried)
     final = cannot_turn_in(member.name, tried)
-    working = _working(cat, member, last_quest, left_spawns(member.name, tried))
-    playing = bool(member.online and member.alive)
+    working = _working(
+        cat,
+        member,
+        last_quest,
+        left_spawns(member.name, tried),
+        left_spawns(member.name, tried, OBJECT_KIND),
+    )
+    # A quester whose hunts are refused for bag room is not working a quest:
+    # its clock waits for the sale (`needs_sale`).
+    playing = bool(member.online and member.alive) and not bags_full_hunt(
+        member.name, tried
+    )
     out = []
     for qid in sorted(member.quest_log):
         status = int(member.quest_log[qid])
@@ -1458,8 +1564,6 @@ def _broken_reason(
         return UNSUPPORTED_OBJECTIVE
     if quest.id == 93 and status == STATUS_INCOMPLETE and (2683, 6) in quest.items:
         return CRAFTED_CRAB_CAKES
-    if quest.id == 64 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
-        return FORGOTTEN_HEIRLOOM
     if quest.id == 62 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return FARGODEEP_EXPLORATION
     if quest.id == 127 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
@@ -1496,7 +1600,10 @@ def _broken_reason(
         return _refused_words(REFUSED_TURN_IN, words)
     if played < STALL_SECONDS or complete:
         return ""
-    unsourced = (quest.kills or quest.items) and not quest.fields
+    # A chest that holds the item is a source: its quest is worked, not unsourced.
+    unsourced = (
+        (quest.kills or quest.items) and not quest.fields and not _chested(quest)
+    )
     return STALLED_UNSOURCED if unsourced else STALLED
 
 
@@ -1745,7 +1852,7 @@ def next_move(
             never_held,
         )
     # 4. A quest it holds: the nearest objective spawn within its level.
-    move = _hunt(cat, member, skip, left)
+    move = _hunt(cat, member, skip, left, object_left)
     crossing_wait = ""
     if move is not None and move.kind == classquest.CROSS:
         crossing_wait = crossing_held(member.name, move, crossings)
@@ -1859,15 +1966,21 @@ def _takes(cat: Catalogue, member, skip, left, tried) -> tuple:
     return takes, never_held
 
 
-def _hunt(cat: Catalogue, member, skip, left):
+def _hunt(cat: Catalogue, member, skip, left, object_left=frozenset()):
     """The hunt at the nearest objective spawn within the quester's level of
     an incomplete quest it holds, or a crossing to one on the other classic
-    continent. A nearby hunt always takes priority over a crossing."""
+    continent. A nearby hunt always takes priority over a crossing. A chest
+    that holds an item it still lacks is a USE move at the chest, and the
+    nearest of the hunts and the chests is the move."""
     hunts = []
     crossings = []
+    chests = []
     for qid, quest in _held(cat, member, STATUS_INCOMPLETE, skip):
         if _quest_complete(quest, STATUS_INCOMPLETE, member.quest_progress.get(qid, 0)):
             continue
+        chest = _nearest_chest(member, qid, quest, object_left)
+        if chest is not None:
+            chests.append((_yards(member, chest[1]), qid, quest, chest))
         fields = tuple(
             spot
             for spot in _held_objective_fields(member, qid, quest)
@@ -1884,6 +1997,17 @@ def _hunt(cat: Catalogue, member, skip, left):
         to_map = classquest.far_map(member, fields)
         if to_map >= 0:
             crossings.append((qid, quest, to_map))
+    if chests and (
+        not hunts or min(chests, key=_by_yards)[0] <= min(hunts, key=_by_yards)[0]
+    ):
+        _d, _q, quest, (use, spot) = min(chests, key=_by_yards)
+        said = "%s opens %s for %s" % (
+            member.name,
+            spot.name or "a chest",
+            quest.title,
+        )
+        move = _move(classquest.USE, member, quest, spot, said)
+        return replace(move, use=use)
     if not hunts:
         if not crossings:
             return None
@@ -1914,6 +2038,7 @@ def stalled_holds_with_actionable_objectives(
     if not member.placed:
         return frozenset()
     left = left_spawns(member.name, tried)
+    object_left = left_spawns(member.name, tried, OBJECT_KIND)
     retry = set()
     for qid, reason in held.items():
         if not str(reason).startswith(STALLED):
@@ -1930,7 +2055,10 @@ def stalled_holds_with_actionable_objectives(
             for spot in _held_objective_fields(member, qid, quest)
             if spot.guid not in left
         )
-        if _nearest(member, fields, left) is not None:
+        if (
+            _nearest(member, fields, left) is not None
+            or _nearest_chest(member, qid, quest, object_left) is not None
+        ):
             retry.add(qid)
             continue
         to_map = classquest.far_map(member, fields)
@@ -1991,6 +2119,23 @@ def step_for(member, move, cap, quest=None, hunt=True, item_form=True):
     alone, as it was, and nothing within classquest.HUNT_REACH."""
     source = guildjobs.source_for(ACTION, member.name)
     walk = _walk_row(member, move, cap)
+    if move.kind == classquest.USE:
+        # A chest: the walk to it, then the module's `use-gameobject` row, which
+        # opens it with the spell its lock names (the bridge follows the answer).
+        row = guildcorps.Row(
+            "quest", classquest.use_command(move.use, move.spot), "", source
+        )
+        if _yards(member, move.spot) <= classquest.USE_NEAR:
+            walk = None
+        return guildcorps.Step(
+            member.name,
+            ACTION,
+            int(move.quest),
+            move.said,
+            rows=(row,),
+            walk=walk,
+            goal=move.spot.name,
+        )
     if move.kind == classquest.HUNT:
         item_progress = member.quest_item_objectives.get(int(move.quest), {})
         row = (
@@ -2128,6 +2273,8 @@ def _walk_row(member, move, cap):
         float(move.spot.y),
         near=QUESTER_NPC_NEAR
         if move.kind in (classquest.TAKE, classquest.TURN_IN)
+        else int(classquest.USE_NEAR)
+        if move.kind == classquest.USE
         else QUESTER_HUNT_NEAR,
     )
     return guildcorps.Row(

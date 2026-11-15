@@ -32,7 +32,7 @@ class TheSqlIsUnchanged(unittest.TestCase):
         self.assertEqual(_h(grr.GEAR.format(holes=HOLES)), "e1ec7bacc0c2795b")
 
     def test_bank(self):
-        self.assertEqual(_h(grr.BANK.format(holes=HOLES)), "76da056fc8509f81")
+        self.assertEqual(_h(grr.BANK.format(holes=HOLES)), "27ea7be699ce7737")
 
     def test_the_read_carries_the_binding_facts(self):
         """A routing read without the template's bonding and the instance's
@@ -70,7 +70,7 @@ class TheReadOrder(unittest.TestCase):
         self.assertFalse(rd.calls[1][2])
         self.assertEqual(rd.calls[0][0], "47d105cacc7fea51")
         self.assertEqual(rd.calls[1][0], "e1ec7bacc0c2795b")
-        self.assertEqual(rd.calls[2][0], "76da056fc8509f81")
+        self.assertEqual(rd.calls[2][0], "27ea7be699ce7737")
         self.assertEqual(wearers, [{"what": "routing wearers"}])
         self.assertEqual(bank, [{"what": "guild_bank_item routing"}])
 
