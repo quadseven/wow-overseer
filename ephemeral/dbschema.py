@@ -110,13 +110,20 @@ def check_select(sql, schema, known_vars=None):
     table exists, every column exists in a table the query names, and (when
     `known_vars` is given) every @variable is one the judge defines.
     """
-    problems = []
     body = sql.strip()
     if body.endswith(";"):
         body = body[:-1].rstrip()
     if not re.match(r"(?is)^select\b", body):
         return ["SQL must be a single SELECT statement"]
     toks = _tokens(body)
+    problems = _syntax_problems(body, toks, known_vars)
+    aliases, opaque = _collect_tables(toks, schema, problems)
+    problems.extend(_column_problems(toks, schema, aliases, opaque))
+    return sorted(set(problems))
+
+
+def _syntax_problems(body, toks, known_vars):
+    problems = []
     non_str = "".join(t[1] if t[0] != "str" else "''" for t in toks)
     if ";" in non_str:
         problems.append("SQL must be a single statement (found ';')")
@@ -126,89 +133,100 @@ def check_select(sql, schema, known_vars=None):
     for kind, text, quoted in toks:
         if kind == "id" and not quoted and text.lower() in _FORBIDDEN:
             problems.append(f"keyword {text.upper()} is not allowed in an observation")
-    if known_vars is not None:
-        for kind, text, _ in toks:
-            if kind == "var" and not known_vars(text[1:]):
-                problems.append(f"unknown variable {text}")
+        if kind == "var" and known_vars is not None and not known_vars(text[1:]):
+            problems.append(f"unknown variable {text}")
+    return problems
 
-    # Table references and aliases.
-    aliases = {}  # alias or table -> (db, table)
+
+def _is_word(tok, *words):
+    return tok[0] == "id" and not tok[2] and tok[1].lower() in words
+
+
+def _collect_tables(toks, schema, problems):
+    """Every table the query names: ({alias or table: (db, table)}, saw a derived table)."""
+    aliases = {}
     opaque = False
-    i = 0
     in_from = False
+    i = 0
     while i < len(toks):
-        kind, text, quoted = toks[i]
-        low = text.lower()
-        if kind == "id" and not quoted and low in ("from", "join"):
+        tok = toks[i]
+        starts_ref = _is_word(tok, "from", "join") or (
+            in_from and tok[0] == "op" and tok[1] == ","
+        )
+        if starts_ref:
             in_from = True
-            i += 1
-            i, opaque_ref = _table_ref(toks, i, schema, aliases, problems)
-            opaque = opaque or opaque_ref
+            i, derived = _table_ref(toks, i + 1, schema, aliases, problems)
+            opaque = opaque or derived
             continue
-        if in_from and kind == "op" and text == ",":
-            i += 1
-            i, opaque_ref = _table_ref(toks, i, schema, aliases, problems)
-            opaque = opaque or opaque_ref
-            continue
-        if kind == "id" and not quoted and low in _FROM_ENDERS:
-            in_from = False
-        if kind == "op" and text == ")":
+        if _is_word(tok, *_FROM_ENDERS) or (tok[0] == "op" and tok[1] == ")"):
             in_from = False
         i += 1
+    return aliases, opaque
 
-    select_aliases = set()
-    for j, (kind, text, quoted) in enumerate(toks):
-        if kind == "id" and not quoted and text.lower() == "as" and j + 1 < len(toks):
-            select_aliases.add(toks[j + 1][1].lower())
 
-    # Column references.
+def _select_aliases(toks):
+    return {
+        toks[j + 1][1].lower() for j in range(len(toks) - 1) if _is_word(toks[j], "as")
+    }
+
+
+def _column_problems(toks, schema, aliases, opaque):
+    problems = []
+    select_aliases = _select_aliases(toks)
     all_cols = set()
     for db, table in aliases.values():
         all_cols.update(schema.columns(table, db) or [])
     j = 0
     while j < len(toks):
-        kind, text, quoted = toks[j]
-        if kind != "id":
-            j += 1
-            continue
-        nxt = toks[j + 1] if j + 1 < len(toks) else None
-        prev = toks[j - 1] if j > 0 else None
-        if prev and prev[1] == "." and prev[0] == "op":
-            j += 1
-            continue
-        if nxt and nxt[1] == "(" and nxt[0] == "op":
-            j += 1
-            continue
-        if nxt and nxt[1] == "." and nxt[0] == "op" and j + 2 < len(toks):
-            # qualifier.column, or db.table (already handled in table refs)
-            col = toks[j + 2][1]
-            if text in aliases:
-                db, table = aliases[text]
-                if col != "*" and not schema.has_column(table, col, db):
-                    problems.append(f"table {db}.{table} has no column {col!r}")
-            elif text not in GAME_DBS:
-                problems.append(f"unknown table or alias {text!r}")
-            j += 3
-            continue
-        low = text.lower()
-        if not quoted and (low in _KEYWORDS or low in _FORBIDDEN):
-            j += 1
-            continue
-        if prev and prev[0] == "id" and prev[1].lower() == "as":
-            j += 1
-            continue
-        if low in select_aliases or text in aliases:
-            j += 1
-            continue
-        if prev and prev[0] == "id" and prev[1].lower() in ("from", "join"):
-            j += 1
-            continue
-        if not opaque and aliases and text not in all_cols:
-            problems.append(f"no referenced table has a column {text!r}")
-        elif not aliases and not opaque and not quoted:
-            problems.append(f"{text!r} is not a column of any table (no FROM clause)")
-        j += 1
-    return sorted(set(problems))
+        step, problem = _column_ref(
+            toks, j, schema, aliases, all_cols, select_aliases, opaque
+        )
+        if problem:
+            problems.append(problem)
+        j += step
+    return problems
+
+
+def _column_ref(toks, j, schema, aliases, all_cols, select_aliases, opaque):
+    """Check the token at j. Returns (tokens consumed, problem or None)."""
+    kind, text, quoted = toks[j]
+    if kind != "id":
+        return 1, None
+    nxt = toks[j + 1] if j + 1 < len(toks) else None
+    prev = toks[j - 1] if j > 0 else None
+    if prev and prev[0] == "op" and prev[1] == ".":
+        return 1, None
+    if nxt and nxt[0] == "op" and nxt[1] == "(":
+        return 1, None  # a function call
+    if nxt and nxt[0] == "op" and nxt[1] == "." and j + 2 < len(toks):
+        return 3, _qualified_problem(text, toks[j + 2][1], schema, aliases)
+    low = text.lower()
+    if not quoted and (low in _KEYWORDS or low in _FORBIDDEN):
+        return 1, None
+    if (
+        (prev and _is_word(prev, "as", "from", "join"))
+        or low in select_aliases
+        or text in aliases
+    ):
+        return 1, None
+    if opaque or text in all_cols:
+        return 1, None
+    if aliases:
+        return 1, f"no referenced table has a column {text!r}"
+    if not quoted:
+        return 1, f"{text!r} is not a column of any table (no FROM clause)"
+    return 1, None
+
+
+def _qualified_problem(qualifier, col, schema, aliases):
+    if qualifier in aliases:
+        db, table = aliases[qualifier]
+        if col != "*" and not schema.has_column(table, col, db):
+            return f"table {db}.{table} has no column {col!r}"
+        return None
+    if qualifier not in GAME_DBS:
+        return f"unknown table or alias {qualifier!r}"
+    return None
 
 
 def _table_ref(toks, i, schema, aliases, problems):

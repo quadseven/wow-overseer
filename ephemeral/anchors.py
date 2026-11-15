@@ -46,45 +46,58 @@ class Anchors:
 
 def validate(doc):
     """Problems with an anchors document, as a list of strings."""
-    problems = []
     if not isinstance(doc, dict) or set(doc) != {"anchors"}:
         return ["anchors.yaml must hold exactly one top-level key: anchors"]
     entries = doc["anchors"] or {}
     if not isinstance(entries, dict):
         return ["anchors must be a mapping"]
+    problems = []
     for key, e in entries.items():
         where = f"anchors.{key}"
         if not _KEY.match(str(key)):
             problems.append(f"{where}: key must be kebab-case")
         if not isinstance(e, dict):
             problems.append(f"{where}: must be a mapping")
-            continue
-        if e.get("pending") is True:
-            extra = set(e) - {"pending", "todo"}
-            if extra:
-                problems.append(
-                    f"{where}: a pending anchor holds no position ({sorted(extra)})"
-                )
-            if not e.get("todo"):
-                problems.append(
-                    f"{where}: a pending anchor needs `todo` naming the source row to copy"
-                )
-            continue
-        allowed = {"map", "zone", "x", "y", "z", "o", "provenance"}
-        for k in sorted(set(e) - allowed):
-            problems.append(f"{where}: unknown field {k!r}")
-        for k in ("map", "x", "y", "z", "o"):
-            if not isinstance(e.get(k), _NUM) or isinstance(e.get(k), bool):
-                problems.append(f"{where}: {k} must be a number")
-        prov = e.get("provenance")
-        if not isinstance(prov, dict):
-            problems.append(
-                f"{where}: provenance is required (where a real character stood)"
-            )
+        elif e.get("pending") is True:
+            problems.extend(_pending_problems(where, e))
         else:
-            for k in _PROVENANCE:
-                if not prov.get(k):
-                    problems.append(f"{where}: provenance.{k} is required")
-            for k in sorted(set(prov) - set(_PROVENANCE) - {"note"}):
-                problems.append(f"{where}: unknown provenance field {k!r}")
+            problems.extend(_captured_problems(where, e))
+    return problems
+
+
+def _pending_problems(where, e):
+    problems = []
+    extra = set(e) - {"pending", "todo"}
+    if extra:
+        problems.append(
+            f"{where}: a pending anchor holds no position ({sorted(extra)})"
+        )
+    if not e.get("todo"):
+        problems.append(
+            f"{where}: a pending anchor needs `todo` naming the source row to copy"
+        )
+    return problems
+
+
+def _captured_problems(where, e):
+    problems = [
+        f"{where}: unknown field {k!r}"
+        for k in sorted(set(e) - {"map", "zone", "x", "y", "z", "o", "provenance"})
+    ]
+    for k in ("map", "x", "y", "z", "o"):
+        if not isinstance(e.get(k), _NUM) or isinstance(e.get(k), bool):
+            problems.append(f"{where}: {k} must be a number")
+    prov = e.get("provenance")
+    if not isinstance(prov, dict):
+        problems.append(
+            f"{where}: provenance is required (where a real character stood)"
+        )
+        return problems
+    problems += [
+        f"{where}: provenance.{k} is required" for k in _PROVENANCE if not prov.get(k)
+    ]
+    problems += [
+        f"{where}: unknown provenance field {k!r}"
+        for k in sorted(set(prov) - set(_PROVENANCE) - {"note"})
+    ]
     return problems
