@@ -132,5 +132,44 @@ class TheSaleAsksTheRouteLast(unittest.TestCase):
         self.assertLess(body.index("_DISENCHANT_ROUTED_SQL"), body.index("INSERT INTO"))
 
 
+class TheEnchantersAreTheGuildsToo(unittest.TestCase):
+    """The materials come from the whole guild, not the ten family members.
+
+    On 2026-11-15 the guilds' tradable skill-1 and skill-25 greens sat in the
+    bags of non-roster members (28 to 35 holders a guild) while the enchanter
+    read was keyed on the holder's roster family, so a member with no family
+    could never route a stack to Og or Oz (#2411).
+    """
+
+    def setUp(self):
+        self.sql = BRIDGE[BRIDGE.index("_FAMILY_ENCHANTERS_SQL = (") :]
+        self.sql = self.sql[: self.sql.index("\n)\n") + 3]
+        self.body = function_text("_family_enchanters")
+
+    def test_a_guildmate_with_enchanting_is_an_enchanter(self):
+        self.assertIn("guild_member", self.sql)
+        self.assertIn("gm.guildid", self.sql)
+
+    def test_the_family_rule_still_holds(self):
+        self.assertIn("r.family = (SELECT r2.family", self.sql)
+
+    def test_only_an_enabled_roster_member_is_asked_to_disenchant(self):
+        """The module's disenchant queue reads the roster; a non-roster
+        enchanter could be handed an item and never break it down."""
+        self.assertIn("r.enabled = 1", self.sql)
+        self.assertIn("FROM overseer_roster r", self.sql)
+
+    def test_the_holder_is_bound_once_per_placeholder(self):
+        marks = self.sql.count("%s")
+        self.assertEqual(2, marks)
+        self.assertIn("(holder, holder)", self.body)
+
+    def test_a_guild_member_with_no_family_routes_a_give_to_the_enchanter(self):
+        self.assertEqual(
+            (bag_pressure.GIVE_TO_ENCHANTER, "Oz"),
+            bag_pressure.disenchant_route("Zarnok", facts(), {"Oz": 13, "Groovy": 0}),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
