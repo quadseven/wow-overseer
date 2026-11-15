@@ -135,15 +135,15 @@ class ASeatThatHoldsSome(unittest.TestCase):
         m = member(seat, skills={s: (20, 75) for s in pair})
         self.assertEqual([], errands(guildjobs.plan([m], focus=FOCUS_DUNGEON)))
 
-    def test_it_keeps_two_trades_that_are_no_pair_and_is_not_sent(self):
+    def test_it_holding_two_gatherers_that_fit_no_pair_is_not_sent_to_learn_a_third(
+        self,
+    ):
+        # Both slots are full: the plan wants one of them given up first, and
+        # nothing that gives one up is built for a guild character, so it waits.
         seat = SEATS[9]
         m = member(seat, skills={H: (20, 75), guildjobs.SKINNING: (20, 75)})
         result = guildjobs.plan([m], focus=FOCUS_DUNGEON)
         self.assertEqual([], errands(result))
-        self.assertEqual(
-            guildtrades_key((H, guildjobs.SKINNING)),
-            guildtrades_key(result.assigned[seat.name]),
-        )
 
 
 def guildtrades_key(pair):

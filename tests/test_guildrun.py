@@ -445,7 +445,11 @@ class OnlyAMemberWhoCanGoIsPicked(unittest.TestCase):
         with mock.patch.object(bridge, "_connect", Conn):
             facts = bridge._fetch_guild_run_facts(guildrun.limits({}))
         self.assertEqual({"Auren"}, facts["benched"])
-        bench_args = [args for sql, args in ran if "AS age_minutes" in sql]
+        bench_args = [
+            args
+            for sql, args in ran
+            if "AS age_minutes" in sql and "FROM overseer_guild_run" in sql
+        ]
         self.assertEqual([(guildrun.QUEUE_BENCH_MINUTES,)], bench_args)
 
     def test_a_refusal_over_one_member_is_formed_again_at_once(self):

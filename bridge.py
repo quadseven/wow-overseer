@@ -30608,6 +30608,11 @@ def _fetch_guild_run_facts(bounds) -> dict:
             (guildrun.QUEUE_BENCH_MINUTES,),
         )
         benched = guildrun.benched(list(cur.fetchall()))
+        queued = guildrun.read_queued_seats(cur)
+        if queued:
+            log.info("guild runs: %d seat(s) sit in a battleground queue and are not "
+                     "proposed: %s", len(queued), ", ".join(sorted(queued)))
+        benched = benched | queued
         cur.execute(
             "SELECT members, outcome, why, bosses_done "
             "FROM overseer_guild_run WHERE state = 'ended' "
