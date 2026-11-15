@@ -180,7 +180,7 @@ class BuilderTest(unittest.TestCase):
                 self.b.update(table, {"job": "quest"}, {"name": "Grug"})
             with self.assertRaises(SeedError):
                 verify_statement(
-                    f"UPDATE `acore_characters`.`{table}` SET `job` = 'quest' WHERE `name` = 'Grug'",
+                    f"UPDATE `acore_characters`.`{table}` SET `job` = 'quest' WHERE `name` = 'Grug'",  # noqa: S608 - a statement the verifier must refuse
                     SCHEMA,
                 )
 
@@ -226,7 +226,7 @@ class VerifyStatementTest(unittest.TestCase):
     def test_stacked_commented_and_variable_refused(self):
         base = "UPDATE `acore_characters`.`characters` SET `level` = 5 WHERE `guid` = 1"
         self.refused(
-            base + "; DELETE FROM `acore_characters`.`characters` WHERE `guid` = 2"
+            base + "; DELETE FROM `acore_characters`.`characters` WHERE `guid` = 2"  # noqa: S608 - a stacked statement the verifier must refuse
         )
         self.refused(base + " -- x")
         self.refused(base + " /* x */")
@@ -328,7 +328,7 @@ class GuardTest(unittest.TestCase):
             "mysql.wow-dev.svc",
             "192.0.2.5",
             "127.0.0.2",
-            "0.0.0.0",
+            "0.0.0.0",  # noqa: S104 - a host the guard must refuse
             "::1",
             "",
             "127.0.0.1 ",
@@ -337,10 +337,23 @@ class GuardTest(unittest.TestCase):
             with self.assertRaises(guard.GuardError, msg=host):
                 guard.open_guarded(
                     guard.GuardInputs(host, "ephemeral", "grants: enabled"),
-                    lambda **kw: called.append(kw),
+                    lambda *, _c=called, **kw: _c.append(kw),
                     SCHEMA,
                 )
             self.assertEqual(called, [], host)
+
+    def test_any_other_local_port_is_refused(self):
+        for port in (3307, 33060, 0, 8085):
+            called = []
+            with self.assertRaises(guard.GuardError, msg=port):
+                guard.open_guarded(
+                    guard.GuardInputs(
+                        "127.0.0.1", "ephemeral", "grants: enabled", port
+                    ),
+                    lambda *, _c=called, **kw: _c.append(kw),
+                    SCHEMA,
+                )
+            self.assertEqual(called, [], port)
 
     def test_wrong_namespace_label_refused(self):
         for label in ("rehearsal", "", "dev"):
@@ -370,7 +383,9 @@ class GuardTest(unittest.TestCase):
         for rows in (0, 2):
             conn = FakeConn(rows)
             with self.assertRaises(guard.GuardError):
-                guard.open_guarded(GOOD_INPUTS, lambda **kw: conn, SCHEMA)
+                guard.open_guarded(
+                    GOOD_INPUTS, lambda *, _conn=conn, **kw: _conn, SCHEMA
+                )
             self.assertTrue(conn.closed)
 
     def test_a_connection_cannot_be_built_by_hand(self):

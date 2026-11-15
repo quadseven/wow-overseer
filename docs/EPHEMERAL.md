@@ -89,8 +89,8 @@ in one transaction. Settings come from the pod environment, never the decree:
 The guard (`ephemeral/guard.py`) makes the SQL unable to reach anything else:
 
 - the MySQL host must be the literal loopback address (no DNS name, no
-  `localhost`), and the connection is made to that constant, not to the caller's
-  string;
+  `localhost`) on the world's own MySQL port (3306), and the connection is made
+  to those constants, not to the caller's strings;
 - the namespace's world label must be `ephemeral`, the harness must say grants
   are enabled, and the marker table must hold exactly one row (only a template
   build writes it);

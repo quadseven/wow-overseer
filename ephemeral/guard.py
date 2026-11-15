@@ -24,6 +24,9 @@ from dataclasses import dataclass
 from .sqlgen import SeedError, verify_statement
 
 LOOPBACK = "127.0.0.1"
+WORLD_PORT = (
+    3306  # the world pod's own MySQL; any other local port could be a different service
+)
 WORLD_LABEL_VALUE = "ephemeral"
 GRANTS_ENABLED = "grants: enabled"
 MARKER_TABLE = "ephemeral_world"
@@ -51,6 +54,8 @@ def check_inputs(inputs):
         why.append(
             f"namespace world label must be {WORLD_LABEL_VALUE!r}, got {inputs.world_label!r}"
         )
+    if inputs.mysql_port != WORLD_PORT:
+        why.append(f"MySQL port must be {WORLD_PORT}, got {inputs.mysql_port!r}")
     if (inputs.harness_grants or "").strip() != GRANTS_ENABLED:
         why.append(f"harness must say {GRANTS_ENABLED!r}")
     return why

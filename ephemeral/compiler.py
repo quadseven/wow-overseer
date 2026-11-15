@@ -176,7 +176,7 @@ class Compiler:
         general = ("family:", "guild:")
         named = {
             ms[0].name
-            for ms, e in zip(by_entry, cast)
+            for ms, e in zip(by_entry, cast, strict=True)
             if not e["who"].startswith(general)
         }
         for i, entry in enumerate(cast):

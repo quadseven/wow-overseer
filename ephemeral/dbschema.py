@@ -190,35 +190,55 @@ def _column_problems(toks, schema, aliases, opaque):
     return problems
 
 
+def _is_op(tok, text):
+    return tok is not None and tok[0] == "op" and tok[1] == text
+
+
 def _column_ref(toks, j, schema, aliases, all_cols, select_aliases, opaque):
     """Check the token at j. Returns (tokens consumed, problem or None)."""
     kind, text, quoted = toks[j]
-    if kind != "id":
-        return 1, None
     nxt = toks[j + 1] if j + 1 < len(toks) else None
     prev = toks[j - 1] if j > 0 else None
-    if prev and prev[0] == "op" and prev[1] == ".":
-        return 1, None
-    if nxt and nxt[0] == "op" and nxt[1] == "(":
-        return 1, None  # a function call
-    if nxt and nxt[0] == "op" and nxt[1] == "." and j + 2 < len(toks):
-        return 3, _qualified_problem(text, toks[j + 2][1], schema, aliases)
+    if kind != "id" or _is_op(prev, ".") or _is_op(nxt, "("):
+        return 1, None  # not a name, the tail of a qualified name, or a function call
+    if _is_op(nxt, ".") and j + 2 < len(toks):
+        return _qualified_ref(toks, j, schema, aliases)
+    problem = _bare_problem(
+        text, quoted, prev, aliases, all_cols, select_aliases, opaque
+    )
+    return 1, problem
+
+
+def _bare_problem(text, quoted, prev, aliases, all_cols, select_aliases, opaque):
     low = text.lower()
     if not quoted and (low in _KEYWORDS or low in _FORBIDDEN):
-        return 1, None
-    if (
-        (prev and _is_word(prev, "as", "from", "join"))
-        or low in select_aliases
-        or text in aliases
-    ):
-        return 1, None
-    if opaque or text in all_cols:
-        return 1, None
+        return None
+    if prev and _is_word(prev, "as", "from", "join"):
+        return None
+    if low in select_aliases or text in aliases or opaque or text in all_cols:
+        return None
     if aliases:
-        return 1, f"no referenced table has a column {text!r}"
+        return f"no referenced table has a column {text!r}"
     if not quoted:
-        return 1, f"{text!r} is not a column of any table (no FROM clause)"
-    return 1, None
+        return f"{text!r} is not a column of any table (no FROM clause)"
+    return None
+
+
+def _qualified_ref(toks, j, schema, aliases):
+    """`alias.column`, `db.table` (a FROM entry) or `db.table.column`."""
+    qualifier, second = toks[j][1], toks[j + 2][1]
+    three = j + 4 < len(toks) and _is_op(toks[j + 3], ".")
+    if qualifier in GAME_DBS and three:
+        return 5, _three_part_problem(qualifier, second, toks[j + 4][1], schema)
+    return 3, _qualified_problem(qualifier, second, schema, aliases)
+
+
+def _three_part_problem(db, table, col, schema):
+    if not schema.has_table(table, db):
+        return f"unknown table {db}.{table}"
+    if col != "*" and not schema.has_column(table, col, db):
+        return f"table {db}.{table} has no column {col!r}"
+    return None
 
 
 def _qualified_problem(qualifier, col, schema, aliases):

@@ -52,9 +52,29 @@ class ActCommandsTest(unittest.TestCase):
             },
         )
 
-    def test_cast_index(self):
-        self.assertEqual(acts.cast_index("cast[2]"), 2)
-        self.assertIsNone(acts.cast_index("Grug"))
+    def test_the_acts_command_prints_the_rows(self):
+        import contextlib
+        import io
+        import json
+
+        from ephemeral.__main__ import main
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = main(
+                ["acts", str(DECREES / "brd-guzzler-exit-zero-patron-deaths.yaml")]
+            )
+        self.assertEqual(rc, 0)
+        rows = json.loads(buf.getvalue())
+        self.assertEqual(
+            rows[0],
+            {
+                "at": "0s",
+                "who": "family:grug",
+                "kind": "job",
+                "text": "dungeon:blackrockdepths",
+            },
+        )
 
 
 if __name__ == "__main__":

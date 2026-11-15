@@ -127,11 +127,11 @@ class Builder:
     def update(self, table, values, where):
         self._check_cols(table, values)
         sets = ", ".join(f"`{c}` = {quote(v)}" for c, v in values.items())
-        sql = f"UPDATE `{WRITE_DB}`.`{table}` SET {sets}{self._where(table, where)}"
+        sql = f"UPDATE `{WRITE_DB}`.`{table}` SET {sets}{self._where(table, where)}"  # noqa: S608 - names are schema-checked, values go through quote(), and _finish re-verifies
         return self._finish("update", table, sql)
 
     def delete(self, table, where):
-        sql = f"DELETE FROM `{WRITE_DB}`.`{table}`{self._where(table, where)}"
+        sql = f"DELETE FROM `{WRITE_DB}`.`{table}`{self._where(table, where)}"  # noqa: S608 - names are schema-checked, values go through quote(), and _finish re-verifies
         return self._finish("delete", table, sql)
 
 

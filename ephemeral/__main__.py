@@ -1,12 +1,12 @@
-"""`python3 -m ephemeral lint <decree>...`: the `eph` command line ."""
+"""`python3 -m ephemeral <lint|acts|seed> ...`: the `eph` command line."""
 
 import argparse
+import json
 import os
 import pathlib
 import sys
 
-from . import anchors as anchors_mod
-from . import dbschema, lint
+from . import acts, anchors as anchors_mod, dbschema, lint
 from .miniyaml import YamlError, loads
 
 
@@ -39,6 +39,12 @@ def _lint(args):
     return 1 if failed else 0
 
 
+def _acts(args):
+    decree = loads(pathlib.Path(args.decree).read_text(encoding="utf-8"))
+    print(json.dumps(acts.act_commands(decree), indent=2))
+    return 0
+
+
 def _seed(args):
     from . import seedrun
 
@@ -56,6 +62,11 @@ def main(argv=None):
     p.add_argument("--schema", help="schema snapshot JSON (default: the bundled one)")
     p.add_argument("--strict", action="store_true", help="warnings fail too")
     p.set_defaults(func=_lint)
+    a = sub.add_parser(
+        "acts", help="print a decree's act timeline as the command rows it becomes"
+    )
+    a.add_argument("decree")
+    a.set_defaults(func=_acts)
     q = sub.add_parser(
         "seed",
         help="in a world pod: guard, compile and apply a decree's cast and arrange",

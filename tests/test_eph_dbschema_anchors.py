@@ -67,6 +67,15 @@ class CheckSelectTest(unittest.TestCase):
             self.check("SELECT guid FROM (SELECT guid FROM characters) q"), []
         )
 
+    def test_a_three_part_name_is_checked_down_to_the_column(self):
+        self.assertTrue(self.check("SELECT acore_world.not_a_table.some_column"))
+        self.assertTrue(
+            self.check("SELECT acore_world.creature.nothing FROM acore_world.creature")
+        )
+        self.assertEqual(
+            self.check("SELECT acore_world.creature.guid FROM acore_world.creature"), []
+        )
+
     def test_variable_vocabulary(self):
         self.assertTrue(
             self.check(

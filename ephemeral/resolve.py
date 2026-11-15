@@ -117,7 +117,7 @@ class SqlResolver(Resolver):
 
     @staticmethod
     def _spawn(row):
-        return dict(zip(("guid", "map", "zone", "x", "y", "z", "o"), row))
+        return dict(zip(("guid", "map", "zone", "x", "y", "z", "o"), row, strict=True))
 
     def characters(self, name):
         return [tuple(r) for r in self._q("characters", name)]
@@ -136,15 +136,19 @@ class SqlResolver(Resolver):
 
     def areatrigger(self, trigger_id):
         rows = self._q("areatrigger", trigger_id)
-        return dict(zip(("map", "x", "y", "z", "o"), rows[0])) if rows else None
+        return (
+            dict(zip(("map", "x", "y", "z", "o"), rows[0], strict=True))
+            if rows
+            else None
+        )
 
     def graveyard(self, graveyard_id):
         rows = self._q("graveyard", graveyard_id)
-        return dict(zip(("map", "x", "y", "z"), rows[0])) if rows else None
+        return dict(zip(("map", "x", "y", "z"), rows[0], strict=True)) if rows else None
 
     def graveyards_on_map(self, map_id):
         return [
-            dict(zip(("id", "x", "y", "z"), r))
+            dict(zip(("id", "x", "y", "z"), r, strict=True))
             for r in self._q("graveyards_on_map", map_id)
         ]
 
