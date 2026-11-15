@@ -894,6 +894,9 @@ PASSING_TRAIN_REASONS = frozenset(
         "left the world on the way to the trainer",
         "a walk is already under way for this character",
         "character is held by another verb",
+        # The realm's far-walk budget is full this moment: the road and the
+        # trainer were never judged (classquest.REALM_FULL_REASON).
+        classquest.REALM_FULL_REASON,
     }
 )
 
@@ -967,7 +970,7 @@ def _walk_passed(name, recent, action, reasons) -> bool:
     )
 
 
-def _step_row_wait(r, minutes: int) -> int:
+def _step_row_wait(r, minutes: int, passing_wait: int | None = None) -> int:
     """Keep long waits for completed walks and persistent failures.
 
     A temporary level-walk refusal learned nothing about the destination;
@@ -981,7 +984,10 @@ def _step_row_wait(r, minutes: int) -> int:
     ):
         return min(minutes, LEVEL_TRANSIENT_RETRY_MINUTES)
     if r.action == "train" and passing_train_row(r):
-        return min(minutes, COOLDOWN_MINUTES["train"])
+        # A profession errand asks again on the next pass (passing_wait); any
+        # other trainer walk waits the base hour.
+        base = COOLDOWN_MINUTES["train"] if passing_wait is None else passing_wait
+        return min(minutes, base)
     return minutes
 
 
@@ -1013,7 +1019,9 @@ def train_cooldown(name: str, recent, skill_id: int | None = None) -> int:
     return min(base * 2**failed, max(base, TRAIN_BACKOFF_CAP_MINUTES))
 
 
-def _training_cooling(name: str, skill_id: int, recent) -> bool:
+def _training_cooling(
+    name: str, skill_id: int, recent, passing_wait: int | None = None
+) -> bool:
     rows = tuple(
         r
         for r in recent or ()
@@ -1022,7 +1030,9 @@ def _training_cooling(name: str, skill_id: int, recent) -> bool:
         and (r.skill_id is None or r.skill_id == skill_id)
     )
     minutes = train_cooldown(name, rows, skill_id)
-    return any(int(r.age_minutes) < _step_row_wait(r, minutes) for r in rows)
+    return any(
+        int(r.age_minutes) < _step_row_wait(r, minutes, passing_wait) for r in rows
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1485,7 +1495,7 @@ def _recipe_cost_due(
 # THE STEPS.
 
 
-def _train_step(member, trades, cap, recent=(), held=None):
+def _train_step(member, trades, cap, recent=(), held=None, passing_wait=None):
     """Buy the next rank of one of its trades, the cheapest first.
 
     `held` names the trades to ask about instead of the member's planned ones
@@ -1504,7 +1514,7 @@ def _train_step(member, trades, cap, recent=(), held=None):
         if rank is not None:
             if _stranded_by_no_trainer(member.name, skill, member.map_id, recent):
                 stranded.append(skill)
-            elif _training_cooling(member.name, skill, recent):
+            elif _training_cooling(member.name, skill, recent, passing_wait):
                 cooling.append(skill)
             else:
                 wants.append((rank.cost, skill, rank))
@@ -1642,9 +1652,13 @@ def _tier_cap_first(m, pvp, pending, recent, cap):
 # module's own `walk-to-trainer skill:` row: no aim, no grant. The bridge asks
 # the death discs before it walks (is_profession_errand).
 #
-# WHEN: on a town stop the seat already makes (a town action of its own inside
-# TOWN_STOP_MINUTES), else as a short dedicated errand once it has made none
-# for DEDICATED_AFTER_MINUTES; between the two it waits for its next stop.
+# WHEN: at once for a seat at the cap; for a seat below it, on a stop it
+# already made (a town action, a settled hearth home or a trainer walk that
+# taught something, inside TOWN_STOP_MINUTES) or while it stands in a capital,
+# else as the backstop, a short dedicated errand once it has made no stop for
+# DEDICATED_AFTER_MINUTES and has no walk in flight. A refusal for a passing
+# reason is asked again on the next pass (LEVEL_TRANSIENT_RETRY_MINUTES), and
+# the errand has an allowance of its own (PROFESSION_STEPS_PER_GUILD).
 # TOWN STOPS (slice 3). The same town stop carries a raid seat's rank-ups and
 # its casts. The order, top to bottom, for a seat under level 60: class quest,
 # room, bags, upkeep, the early post, the at-ceiling rank walk, the profession
@@ -1672,6 +1686,22 @@ TOWN_STOP_ACTIONS = frozenset(
 )
 TOWN_STOP_MINUTES = 60
 DEDICATED_AFTER_MINUTES = 6 * 60
+# A hearth home and a trainer walk that taught something also put a seat in a
+# town (measured 2026-11-15: seats hearthed about six times an hour while few
+# made any other stop), so the errand rides them too. Only a settled row
+# counts: a hearth or walk still in flight has not arrived.
+ARRIVAL_ACTIONS = frozenset({"hearth", "train"})
+ARRIVED_STATUSES = frozenset({"applied", "delivered"})
+# The six classic capitals, each with a trainer for every trade: a seat standing
+# in one needs no stop of its own to be there.
+CAPITAL_ZONES = frozenset({1519, 1537, 1497, 1637, 1638, 1657})
+# How long a row still going keeps a seat from a dedicated errand, and the
+# statuses that mean a walk has not ended.
+WALK_IN_FLIGHT_MINUTES = 30
+IN_FLIGHT_STATUSES = frozenset({"pending", "claimed", "verifying"})
+# The profession errand's own allowance per guild per pass: the rank walks and
+# the other trainer walks (TRAIN_STEPS_PER_GUILD) no longer take its slots.
+PROFESSION_STEPS_PER_GUILD = 10
 
 
 def is_profession_errand(step) -> bool:
@@ -1688,10 +1718,29 @@ def _town_stop_ages(name, recent) -> list:
         int(r.age_minutes)
         for r in recent or ()
         if r.name == name
-        and r.action in TOWN_STOP_ACTIONS
         and r.status not in TRAIN_FAILED
         and r.status != ""
+        and (
+            r.action in TOWN_STOP_ACTIONS
+            or (r.action in ARRIVAL_ACTIONS and r.status in ARRIVED_STATUSES)
+        )
     ]
+
+
+def _in_capital(m) -> bool:
+    """Whether the member stands in one of the six classic capitals."""
+    return m.zone_id in CAPITAL_ZONES
+
+
+def _walk_in_flight(name, recent) -> bool:
+    """Whether a row of this member is still going: such a seat is not cut
+    across by a dedicated errand."""
+    return any(
+        r.name == name
+        and r.status in IN_FLIGHT_STATUSES
+        and int(r.age_minutes) < WALK_IN_FLIGHT_MINUTES
+        for r in recent or ()
+    )
 
 
 def assigned_trades(members, crafters=None) -> dict:
@@ -1812,15 +1861,26 @@ def _profession_unfit(m, pvp, pending) -> bool:
 
 
 def _profession_pace(m, lacks, recent) -> str:
-    """ "" when the errand may go now, else the note saying it waits for the
-    seat's next town stop (see WHEN above)."""
+    """The empty string when the errand may go now, else the note saying it
+    waits.
+
+    A seat at the cap has no levelling to protect and goes now. A seat below it
+    goes on a stop it just made (a town action, a hearth, a trainer walk that
+    taught something) or while it stands in a capital; failing those, only
+    once it has made no stop for DEDICATED_AFTER_MINUTES and has no walk in
+    flight (the backstop). Between the two it waits for its next stop."""
+    if int(m.level) >= RAID_CEILING or _in_capital(m):
+        return ""
     ages = _town_stop_ages(m.name, recent)
-    if ages and TOWN_STOP_MINUTES < min(ages) < DEDICATED_AFTER_MINUTES:
-        return "%s waits for its next town stop to learn %s" % (
-            m.name,
-            " and ".join(SKILL_NAMES.get(s, str(s)) for s in lacks),
-        )
-    return ""
+    if ages and min(ages) <= TOWN_STOP_MINUTES:
+        return ""
+    idle = not ages or min(ages) >= DEDICATED_AFTER_MINUTES
+    if idle and not _walk_in_flight(m.name, recent):
+        return ""
+    return "%s waits for its next town stop to learn %s" % (
+        m.name,
+        " and ".join(SKILL_NAMES.get(s, str(s)) for s in lacks),
+    )
 
 
 def _profession_first(m, assigned, pvp, pending, recent, cap):
@@ -1837,7 +1897,14 @@ def _profession_first(m, assigned, pvp, pending, recent, cap):
     waits = _profession_pace(m, lacks, recent)
     if waits:
         return None, waits
-    step, why = _train_step(m, {}, cap, recent, held=lacks)
+    step, why = _train_step(
+        m,
+        {},
+        cap,
+        recent,
+        held=lacks,
+        passing_wait=LEVEL_TRANSIENT_RETRY_MINUTES,
+    )
     if step is None:
         return None, why
     return replace(step, goal=PROFESSION_GOAL), ""
@@ -4364,6 +4431,7 @@ def _plan_counters():
             "jobs",
             "gear",
             "train",
+            "profession",
             "pvp",
             "level",
             "cross",
@@ -4966,6 +5034,8 @@ def _allowance(step, counters, per_guild):
         return counters["level"], guildlevel.STEPS_PER_GUILD
     if step.action in ("gear", "hearth", WEAPON_ACTION):
         return counters["gear"], GEAR_STEPS_PER_GUILD
+    if is_profession_errand(step):
+        return counters["profession"], PROFESSION_STEPS_PER_GUILD
     if step.action == "train":
         return counters["train"], TRAIN_STEPS_PER_GUILD
     return counters["jobs"], per_guild
@@ -5184,7 +5254,7 @@ def _on_a_town_stop(m, recent) -> bool:
     """A town action of this member inside TOWN_STOP_MINUTES: it is in town
     now, so a trainer visit costs it no walk of its own."""
     ages = _town_stop_ages(m.name, recent)
-    return bool(ages) and min(ages) <= TOWN_STOP_MINUTES
+    return _in_capital(m) or (bool(ages) and min(ages) <= TOWN_STOP_MINUTES)
 
 
 def _trade_errands(m, levelling, ctx, supply_note, gear_note):
@@ -5197,11 +5267,11 @@ def _trade_errands(m, levelling, ctx, supply_note, gear_note):
         step = crafter_post_first(m, crafters, master, kept, recent, cap, crafting)
         if step is not None:
             return (step, step.said, supply_note, gear_note), ""
-    if levelling and not _on_a_town_stop(m, recent):
-        return None, ""
-    step, cap_note = _tier_cap_first(m, pvp, pending, recent, cap)
-    if step is not None:
-        return (step, step.said, supply_note, gear_note), cap_note
+    cap_note = ""
+    if not levelling or _on_a_town_stop(m, recent):
+        step, cap_note = _tier_cap_first(m, pvp, pending, recent, cap)
+        if step is not None:
+            return (step, step.said, supply_note, gear_note), cap_note
     step, learn_note = _profession_first(m, assigned, pvp, pending, recent, cap)
     if step is not None:
         return (step, step.said, supply_note, gear_note), cap_note
