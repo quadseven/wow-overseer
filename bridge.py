@@ -26633,6 +26633,55 @@ class Bridge(discord.Client):
                               _farm_reads_for(state, got, gathered))
         log.info("farm: %s %s: %s", who, step.action, step.line)
         await self._farm_act(cohort, leader, state, step, got["levels"], job)
+        # GROUP UP ONLY WHEN THE STEP NEEDS AN INSTANCE (#2498). The order is
+        # ended first: ending writes the member's default job, and the queue
+        # must write last or that write would knock the member off the run.
+        if (step.action == farmjob.END and getattr(cohort, "solo", False)
+                and item and not step.renew):
+            await self._farm_group_up(cohort, item, got)
+
+    async def _farm_group_up(self, cohort, item: int, got: dict) -> bool:
+        """Queue the dungeon a member's material needs; True when it did.
+
+        For a member whose `farm:<item>` order ended because nothing outdoors
+        gives the item, but a dungeon's creatures do (`farmjob.instance_door`).
+        The family is queued for that door a few runs (`farmjob.INSTANCE_RUNS`)
+        through the ordinary campaign queue, so every gate it has (level,
+        withheld doors, bags) applies and the family is one party only for
+        the run. Writes nothing for a queue already pending or a door the
+        family is refused.
+        """
+        if not item or got["spawns"] or got["creatures"]:
+            return False
+        drops = await asyncio.to_thread(_farm_item_drops, item)
+        keyword = farmjob.instance_door(item, got["spawns"], got["creatures"],
+                                        drops, council.front_door)
+        if not keyword:
+            return False
+        family = getattr(cohort, "family", "") or ""
+        if await asyncio.to_thread(_queue_owns_job, family):
+            log.info("farm: family %s already has a campaign queue, so %s is "
+                     "not queued for item %d", family, keyword, item)
+            return False
+        fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
+        fam = fams.get(family)
+        if fam is None:
+            log.info("farm: family %s is not on the roster, so %s is not queued",
+                     family, keyword)
+            return False
+        level_rows = await asyncio.to_thread(_queue_level_rows, fam)
+        plan = campaignqueue.plan(
+            family, (campaignqueue.Entry(keyword, farmjob.INSTANCE_RUNS),),
+            level_rows)
+        if plan.refusal:
+            log.info("farm: item %d needs %s but it is not queued: %s", item,
+                     keyword, plan.refusal)
+            return False
+        await asyncio.to_thread(_write_queue, plan, FARM_SOURCE)
+        log.info("farm: item %d is only dropped inside %s, so family %s is "
+                 "queued for it: %s", item, keyword, family, plan.says)
+        await self._campaign_queue_once()
+        return True
 
     async def _farm_individual(self, cohort) -> bool:
         """Farm per member for an individual family; True when it did (#2498).
@@ -32102,6 +32151,12 @@ def _itemplan_vendor_sales(names, family, rows, free_slots, gear_rows=(),
             log.info("%s", line)
         for line in itemplan_vendor.release_lines(sales):
             log.info("%s", line)
+        if itemplan_vendor.release_enabled():
+            for line in itemplan_vendor.release_reason_lines(
+                names, free_slots, sellable_counts, report.plan, pairs,
+                sales, keep_names=keep_names,
+            ):
+                log.info("%s", line)
         return sales
     except Exception:
         log.exception(
@@ -38868,6 +38923,28 @@ def _farm_item_spawns(item: int) -> list:
             lock_id=int(row["lock_id"]), name=str(row["name"] or ""),
             guid=int(row["guid"]))
             for row in cur.fetchall()]
+
+
+# WHERE A MATERIAL DROPS AT ALL (#2498): the best creature drop chance per map,
+# any rank, so a dungeon boss counts. Read only for a member's item order that
+# has no outdoor source on hand; `farmjob.instance_door` decides from it.
+_FARM_ITEM_DROP_MAPS_SQL = (
+    "SELECT c.map AS map_id, MAX(lt.Chance) AS chance "
+    "FROM acore_world.creature_loot_template lt "
+    "JOIN acore_world.creature_template ct ON ct.lootid = lt.Entry "
+    "JOIN acore_world.creature c ON c.id = ct.entry "
+    "WHERE lt.Item = %s AND lt.Reference = 0 AND lt.Chance >= %s "
+    "GROUP BY c.map"
+)
+
+
+def _farm_item_drops(item: int) -> list:
+    """[(map id, best drop chance)] over every creature that drops `item`."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_FARM_ITEM_DROP_MAPS_SQL,
+                    (int(item), farmjob.INSTANCE_MIN_CHANCE))
+        return [(int(row["map_id"]), float(row["chance"] or 0.0))
+                for row in cur.fetchall()]
 
 
 def _farm_item_creatures(item: int, leader_at, levels) -> list:
