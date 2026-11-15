@@ -176,7 +176,7 @@ class VerdictTest(unittest.TestCase):
                 "name": "started-alive",
                 "role": "precondition",
                 "when": "start",
-                "sql": "SELECT COUNT(*) FROM corpse WHERE guid = @Grug",
+                "sql": "SELECT COUNT(*) FROM corpse WHERE guid = @cast0",
                 "expect": {"scalar": "= 0"},
             }
         )
@@ -546,6 +546,14 @@ class GuardedWorldDbTest(unittest.TestCase):
             judge.GuardedWorldDb(g, SCHEMA).select("SELECT COUNT(*) FROM characters")
 
 
+try:  # the world image carries pymysql; the unit suite may not
+    from pymysql.err import OperationalError
+except ImportError:  # same shape: an Exception whose args are (code, message)
+
+    class OperationalError(Exception):
+        pass
+
+
 class ScriptedConn:
     def __init__(self):
         self.writes = []
@@ -579,7 +587,7 @@ class ScriptedCursor:
             self.conn.writes.append((sql, params))
         elif sql.startswith("SELECT"):
             if self.conn.fail_select:
-                raise RuntimeError(*self.conn.fail_select)
+                raise OperationalError(*self.conn.fail_select)
             self.rows = [(1,)]
 
     def fetchone(self):
@@ -642,6 +650,23 @@ class RunEntryTest(unittest.TestCase):
         )
         self.assertEqual(stored[0]["data"]["verdict"], "INVALID")
         self.assertIn("guard refused", text)
+
+    def test_an_unreadable_decree_path_still_writes_an_invalid_result(self):
+        stored = []
+
+        class Store:
+            def write(self, cm):
+                stored.append(cm)
+
+        rc = judge.run(
+            str(ROOT / "decrees" / "no-such-decree.yaml"),
+            self.ENV,
+            connect=lambda **kw: ScriptedConn(),
+            store=Store(),
+            out=lambda _line: None,
+            clock=Clock(),
+        )
+        self.assertEqual((rc, stored[0]["data"]["verdict"]), (0, "INVALID"))
 
     def test_a_missing_handoff_writes_an_invalid_result(self):
         rc, _, stored, _ = self.run_entry(self.ENV, with_handoff=False)

@@ -240,6 +240,25 @@ class Judge:
 
     # -- setup --
     def _execute(self, t0, started):
+        duration, steps = self._prepare(t0)
+        # start observations, once, before any order is given
+        for name, o in self.observes.items():
+            if o.get("when") == "start":
+                self._observe(name, started)
+        if any(self._unheld_precondition(r) for r in self.records.values()):
+            return self._invalid_reasons()
+        self._window(steps, duration, started)
+        for name, o in self.observes.items():
+            if o.get("when") == "end" or "log" in o:
+                self._observe(name, started)
+        return self._invalid_reasons()
+
+    @staticmethod
+    def _unheld_precondition(r):
+        return r["role"] == "precondition" and r["status"] != "held"
+
+    def _prepare(self, t0):
+        """Validate and render everything before the first order is given."""
         if not isinstance(self.handoff, dict) or "variables" not in self.handoff:
             raise JudgeError("the seed handoff is missing, so the cast is unknown")
         variables = {**self.handoff["variables"], "t0": t0}
@@ -257,19 +276,10 @@ class Judge:
                 rendered[name] = sql
         steps = self._plan_acts(observes)
         self.observes, self.rendered = observes, rendered
+        return duration, steps
 
-        # start observations, once, before any order is given
-        for name, o in observes.items():
-            if o.get("when") == "start":
-                self._observe(name, started)
-        bad = [
-            r
-            for r in self.records.values()
-            if r["role"] == "precondition" and r["status"] != "held"
-        ]
-        if bad:
-            return self._invalid_reasons()
-
+    def _window(self, steps, duration, started):
+        """The measured window: fire due acts, sample continuous observations."""
         pending = list(steps)
         while True:
             elapsed = self.clock() - started
@@ -277,16 +287,12 @@ class Judge:
                 if self._due(step, elapsed):
                     self._fire(step, elapsed)
                     pending.remove(step)
-            for name, o in observes.items():
+            for name, o in self.observes.items():
                 if o.get("when") == "continuous":
                     self._observe(name, started)
             if elapsed >= duration:
-                break
+                return
             self.sleep(min(self.poll, duration - elapsed))
-        for name, o in observes.items():
-            if o.get("when") == "end" or "log" in o:
-                self._observe(name, started)
-        return self._invalid_reasons()
 
     def _invalid_reasons(self):
         why = []
@@ -571,9 +577,14 @@ def run(
 ):  # fmt: skip
     """Returns 0 once a verdict is written (INVALID included), 2 when the harness broke."""
     clock = clock or _Wall
-    raw = pathlib.Path(decree_path).read_bytes()
-    sha = hashlib.sha256(raw).hexdigest()
-    result = _judge(raw, sha, env, connect, log_path, clock, anchors_path)
+    try:
+        raw = pathlib.Path(decree_path).read_bytes()
+    except OSError as exc:
+        raw, sha = b"", ""
+        result = _invalid("", env, sha, f"decree unreadable: {exc}")
+    else:
+        sha = hashlib.sha256(raw).hexdigest()
+        result = _judge(raw, sha, env, connect, log_path, clock, anchors_path)
     out(
         f"{result['verdict']}: {result['decree'] or decree_path} "
         + "; ".join(result["reasons"])
