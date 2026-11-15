@@ -73,6 +73,7 @@ import campaignqueue
 import classic
 import classask
 import deathask
+import deathparty
 import classtrain
 import taughtspells
 import classparty
@@ -23750,6 +23751,14 @@ class Bridge(discord.Client):
             raise
         if parties:
             self._begin_class_parties(parties)
+        death_starts = deathparty.plan_starts(
+            facts["asks"], facts.get("answers") or (), facts.get("death_loops") or {},
+            free={m.name for m in mates if m.name not in held},
+            taken=seated_names)
+        for start in death_starts:
+            log.info("death party: ask %d seats a start: %s leads, %s helps, "
+                     "meeting at %s", start.ask_id, start.leader,
+                     ", ".join(start.helpers), start.place)
         await _say_class_escalation(escalation)
         await _say_guild_pugs(pug_pass)
         if run_id:
