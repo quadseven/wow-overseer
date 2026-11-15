@@ -16,6 +16,7 @@ from unittest import mock
 import equipscore
 import gearrouting as gr
 import gearroutingexec as gx
+import guildcorps
 import itemplan
 import lootpolicy
 import seatbags
@@ -141,6 +142,92 @@ class AGreenIsBankedByASeat(unittest.TestCase):
         self.assertTrue(wrote)
         self.assertEqual(len(gate.inserts()), 1)
         self.assertIn("bank", gate.inserts()[0][1])
+
+
+class ACorpsMembersGreenIsBankedOnItsTownStop(unittest.TestCase):
+    """A maintenance member is neither a family head nor a raid seat. The
+    loot policy stops its vendor sales, so it takes the seat loop's route: the
+    plan's deposit at the nearest banker, written the moment it would sell."""
+
+    NAME = "Mopp"
+
+    def member(self, **over):
+        import guildjobs
+        from test_guildjobs import member
+
+        base = dict(
+            role=guildjobs.MAINTENANCE,
+            free_slots=2,
+            bag_slots=36,
+            alive=True,
+            level=40,
+        )
+        base.update(over)
+        return member(self.NAME, **base)
+
+    def setUp(self):
+        rows, gear, _worn, _free = vendor_fx.green_cloak()
+        for r in rows + gear:
+            r["holder"] = self.NAME
+        self.rows, self.gear = rows, gear
+        self.guid = rows[0]["item_guid"]
+
+    def relieve(self, members):
+        extras = seat_fx.extras_for(self.rows)
+        extras = extras.__class__(
+            **{
+                **extras.__dict__,
+                "open_quest_items": {self.NAME: frozenset()},
+                "bank_free": {self.NAME: 20},
+            }
+        )
+
+        def read(names):
+            return ("Cave", self.rows, {self.NAME: 2}, extras, self.gear, (), ())
+
+        return seatbags.relieve(
+            members,
+            read,
+            lambda maps: [seat_fx.BANKER],
+            500,
+            0.0,
+            seatbags.Memo(),
+            {"ITEMPLAN_SELL_VENDOR": "on"},
+        )
+
+    def test_a_corps_member_short_of_room_is_planned_but_a_head_is_not(self):
+        import guildjobs
+
+        self.assertTrue(seatbags.needs_plan(self.member()))
+        self.assertFalse(seatbags.needs_plan(self.member(free_slots=30)))
+        head = self.member(role=guildjobs.FAMILY)
+        self.assertFalse(seatbags.needs_plan(head))
+
+    def test_the_green_is_banked_not_sold_and_the_step_deposits_it(self):
+        out, _lines = self.relieve([self.member()])
+        self.assertEqual([c.guid for c in out[0].plan_sales], [])
+        self.assertEqual([c.guid for c in out[0].plan_bank], [self.guid])
+        step = only_step(plan([out[0]]), self.NAME)
+        self.assertEqual(step.action, "seat-bank")
+        self.assertEqual(
+            [(r.kind, r.command) for r in step.rows],
+            [("bank", "deposit guid:%d" % self.guid)],
+        )
+
+    def test_the_bridge_writes_the_deposit_where_it_refuses_the_sale(self):
+        from test_epic_kept import WriterGateTest
+
+        gate = WriterGateTest("test_an_ordinary_sale_is_untouched")
+        gate.setUp()
+        self.addCleanup(gate.doCleanups)
+        gate.facts[self.guid] = piece(item_guid=self.guid, quality=2)
+        gate.wanted[self.guid] = ()
+        sale = guildcorps.Row("sell", "guid:%d" % self.guid, "", "guildjobs:sell:Mopp")
+        self.assertFalse(gate.bridge._insert_corps_row(self.NAME, sale))
+        out, _ = self.relieve([self.member()])
+        step = only_step(plan([out[0]]), self.NAME)
+        self.assertTrue(gate.bridge._insert_corps_row(self.NAME, step.rows[0]))
+        self.assertEqual(len(gate.inserts()), 1)
 
 
 class AFamilyHeadsGreenGoesToTheBankOrTheHouse(unittest.TestCase):
