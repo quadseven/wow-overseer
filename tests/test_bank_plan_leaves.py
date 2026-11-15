@@ -277,13 +277,23 @@ class OnlyARouteSomethingCarriesOutCounts(unittest.TestCase):
         )
         self.assertEqual({}, shadow.leaving(plan_, pairs, {itemplan.SELL_VENDOR}))
 
-    def test_a_gift_counts_for_family_and_guild_takers(self):
+    def test_a_gift_counts_only_for_a_family_taker(self):
+        plan_, pairs = self.pairs(
+            decision(itemplan.GIVE, key=("a",), target="Zug"),
+            decision(itemplan.GIVE, key=("b",), target="Stranger"),
+        )
+        got = shadow.leaving(plan_, pairs, {itemplan.GIVE}, ["Ana", "Zug"])
+        self.assertEqual([100], list(got))
+
+    def test_a_gift_counts_for_guild_takers_when_listed(self):
         plan_, pairs = self.pairs(
             decision(itemplan.GIVE, key=("a",), target="Zug"),
             decision(itemplan.GIVE, key=("b",), target="Glob"),
-            decision(itemplan.GIVE, key=("c",), target=""),
+            decision(itemplan.GIVE, key=("c",), target="Stranger"),
         )
-        got = shadow.leaving(plan_, pairs, {itemplan.GIVE}, ["Ana", "Zug"])
+        got = shadow.leaving(
+            plan_, pairs, {itemplan.GIVE}, ["Ana", "Zug"], guild_names={"Glob"}
+        )
         self.assertEqual([100, 101], list(got))
 
     def test_learnable_carried_class9_stays_out_of_bank(self):

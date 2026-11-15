@@ -471,17 +471,18 @@ def class9_from_bank(plan_, stack_rows, routes) -> dict:
     return out
 
 
-def leaving(plan_, stack_rows, routes, family_names=()) -> dict:
+def leaving(plan_, stack_rows, routes, family_names=(), guild_names=()) -> dict:
     """item guid -> why, for every stack the plan sends somewhere or learns now.
 
     `stack_rows` is (stack, row) pairs in the shape `build_stacks` produces,
     `routes` the routes something carries out (`carried_out_routes`). A
     decision counts only when it is the plan's first choice, placed (no
-    `NO_ROOM`, not stuck), and for GIVE when a taker is named (family or
-    guildmate). Learnable carried class-9 stacks also leave the bank queue so
-    the bank pass does not store them before recipebook learns them.
+    `NO_ROOM`, not stuck), and for GIVE when the taker is in `family_names`
+    or `guild_names`. Learnable carried class-9 stacks also leave the bank
+    queue so the bank pass does not store them before recipebook learns them.
     """
     rows_by_key = {stack.key: (stack, row) for stack, row in stack_rows}
+    takers = set(family_names or ()) | set(guild_names or ())
     out: dict = {}
     for decision in plan_.decisions:
         if decision.stuck or decision.reason.startswith(itemplan.NO_ROOM):
@@ -494,7 +495,7 @@ def leaving(plan_, stack_rows, routes, family_names=()) -> dict:
         )
         if decision.route not in routes and not keep_to_learn:
             continue
-        if decision.route == itemplan.GIVE and not decision.target:
+        if decision.route == itemplan.GIVE and decision.target not in takers:
             continue
         guid = _int((row or {}).get("item_guid"))
         if guid > 0:

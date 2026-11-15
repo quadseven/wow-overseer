@@ -38190,8 +38190,14 @@ def _bank_plan_leaves(names: list) -> tuple:
             worn_rows=worn_rows, extras=extras)
         stacks = itemplan_shadow.build_stacks(
             rows, gear_rows, extras.templates, extras.instance_soulbound)
+        guild_names = (
+            {m[0] for m in (extras.guild_roster or ())}
+            | {m[0] for m in (extras.guild_crafters or ())}
+            | {m[0] for m in (extras.guild_class_members or ())}
+        )
         leaves = itemplan_shadow.leaving(
-            report.plan, list(zip(stacks, rows, strict=True)), routes, key)
+            report.plan, list(zip(stacks, rows, strict=True)), routes, key,
+            guild_names=guild_names)
         if banked_rows:
             # A BANKED STACK THE PLAN SELLS OR ROUTES OUT (#2603, #2418).
             banked, pairs = itemplan_shadow.banked_plan(
