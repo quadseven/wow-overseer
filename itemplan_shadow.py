@@ -233,6 +233,8 @@ def build_stacks(rows, gear_rows=(), templates=None, instance_soulbound=None) ->
                 disenchant_id=t.get("disenchant_id"),
                 disenchant_skill=t.get("disenchant_skill"),
                 soulbound=soulbound,
+                required_skill=_int(t.get("required_skill"), 0),
+                allowable_class=_int(t.get("allowable_class"), -1),
             )
         )
     return out
