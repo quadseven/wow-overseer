@@ -790,12 +790,12 @@ class _Plan:
         self.tank = bool(_get(character, "shield_tank", "tank", default=False))
         self.purse, self.available = budget
         self.chosen, self.used, self.buys = set(), used, []
+        if _get(character, "shield_carried", default=False):
+            self.chosen.add("offhand")
         if tank_two_hander(character):
             # The two-hander goes when a one-hander comes, and a shield already
             # carried goes on then: none is bought for the off hand.
             self.equipped = {s: v for s, v in self.equipped.items() if s != "mainhand"}
-            if _get(character, "shield_carried", default=False):
-                self.chosen.add("offhand")
 
     def consider(self, item, weapon_first):
         """Buy `item` for the first open slot it suits and the budget allows."""

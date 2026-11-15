@@ -191,7 +191,7 @@ class ATankWithoutAShieldBuysOne(unittest.TestCase):
             "finger2 trinket1 trinket2 ranged"
         ).split()
         equipped = {
-            s: {"item_level": 30, "item_class": 4, "item_subclass": 1} for s in slots
+            s: {"item_level": 30, "item_class": 4, "item_subclass": 3} for s in slots
         }
         equipped["mainhand"] = {"item_level": 30, "item_class": 2, "item_subclass": 7}
         member = guildjobs.Member(
