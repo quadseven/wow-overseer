@@ -101,6 +101,15 @@ def _int(value, default=0) -> int:
         return default
 
 
+def drink_target(class_id) -> int:
+    """Drink units wanted for `class_id`, or 0 for non-mana classes."""
+    cid = _int(class_id)
+    if cid not in MANA_CLASS_IDS:
+        return 0
+    stacks = CASTER_DRINK_STACKS if cid in CASTER_CLASS_IDS else DRINK_STACKS
+    return stacks * STACK
+
+
 def wanted(member) -> tuple:
     """The categories this member is short of, drink first for a class that
     drinks; () while its bags are unread."""

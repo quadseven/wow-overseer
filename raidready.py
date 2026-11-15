@@ -502,6 +502,7 @@ def _blockers(
     clears: bool = True,
     gathers: bool = True,
     worn_rows: list = (),
+    seat_blockers: list = (),
 ) -> list:
     """Everything between this guild and its first raid, hard ones first."""
     level_hard, level_soft = _level_blockers(raiders, min_level)
@@ -516,6 +517,7 @@ def _blockers(
         + _thin_role_blockers(lineup)
         + _gear_blockers(raiders, gear, attuned)
         + _support_blockers(lineup, goals)
+        + list(seat_blockers or ())
     )
     return [{"tone": HARD, "text": t} for t in hard] + [
         {"tone": SOFT, "text": t} for t in soft
@@ -905,6 +907,9 @@ def build_guild(
     raiders = _placed_raiders(lineup)
     gear = {m["name"]: m.get("readiness") for m in members}
     attuned = {r["name"] for r in attuned_rows if r.get("name")}
+    supply_card = _supply_card(
+        lineup, members, worn_rows, group, supply, holding_rows=holding_rows
+    )
     blockers = _blockers(
         lineup,
         raiders,
@@ -916,6 +921,7 @@ def build_guild(
         raidrun.CLEARS,
         raidrun.GATHERS,
         worn_rows,
+        seat_blockers=supply_card.get("seat_blockers") or (),
     )
     names = [m["name"] for m in raiders]
     classes = {m["name"]: m.get("class_id") for m in members}
@@ -982,9 +988,7 @@ def build_guild(
         "attunement": raidrun.attunement(
             list(group["family_names"]), attuned, in_log, fragments
         ),
-        "supply": _supply_card(
-            lineup, members, worn_rows, group, supply, holding_rows=holding_rows
-        ),
+        "supply": supply_card,
         "preraid": preraid,
         "gates": _gates(min_level),
     }
@@ -1035,6 +1039,12 @@ def _supply_card(
         snapshots=read.get("snapshots") or (),
         unobtainable=raidcraft.unobtainable_lines(),
         guild=guild,
+        seat_reagents=read.get("seat_reagents"),
+        seat_drink=read.get("seat_drink"),
+        known_spells=read.get("known_spells"),
+        bank_reagents=read.get("bank_reagents"),
+        bank_drink=int(read.get("bank_drink") or 0),
+        spell_reagents=read.get("spell_reagents"),
     )
 
 
