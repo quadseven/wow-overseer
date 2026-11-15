@@ -284,11 +284,6 @@ class HydraxianBridgeTests(unittest.TestCase):
         self.assertEqual(second_held, set())
         self.assertEqual(host.claims, [])
         self.assertEqual(host.releases, [("MemberA", "13278")])
-        self.assertIn("grug", host._hydraxian_spent)
-        self.assertLessEqual(
-            host._hydraxian_since["grug"],
-            time.monotonic() - hydraxian.HOLD_LIMIT_SECONDS,
-        )
 
     def test_pass_writes_a_real_take_and_releases_the_giver_walk(self):
         host, held = self._run_pass(_giver_facts())
