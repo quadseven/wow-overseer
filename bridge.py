@@ -81,6 +81,7 @@ import classparty
 import classhunt
 import classquest
 import steps as classquest_steps
+import classreagents
 import classuse
 import guildbank
 import guildfund
@@ -19732,6 +19733,8 @@ class Bridge(discord.Client):
         # A member in a death loop is read first (guildjobs.supply_reads).
         supply = await self._job_supply_offers(
             members, facts["recent"], facts.get("death_loops"))
+        class_reagents = await self._job_class_reagent_offers(
+            members, facts["recent"], facts.get("spell_reagents"))
         bags = (await self._job_bag_steps(members, facts["recent"], busy, cap)
                 if spawn_walks else {})
         # A hunter's first pet (hunterpet.py): the beasts around each hunter
@@ -19766,7 +19769,10 @@ class Bridge(discord.Client):
             kept=kept,
             recent=facts["recent"], busy=busy, cap=cap,
             unclaimed=facts.get("unclaimed", ()), banks=facts.get("banks"),
-            gear=gear, supply=supply, pets=pets, mail=mail, pvp=pvp,
+            gear=gear, supply=supply,
+            class_reagents=class_reagents,
+            spell_reagents=facts.get("spell_reagents"),
+            pets=pets, mail=mail, pvp=pvp,
             weapons=weapons,
             mounts=mounts,
             bags=bags,
@@ -19987,6 +19993,56 @@ class Bridge(discord.Client):
         for name in chosen:
             offers[name] = await asyncio.to_thread(
                 _fetch_supply_vendors, by_name[name], guildjobs.GUILD_GEAR_VENDOR_YARDS)
+        return offers
+
+    async def _job_class_reagent_offers(
+        self, members, recent, spell_reagents=None
+    ) -> dict:
+        """name -> classreagents.Offer for members short of class reagents for
+        known spells."""
+        if not spell_reagents:
+            return {}
+        needs = {}
+        for m in members:
+            if not (m.online and m.alive and not m.in_combat):
+                continue
+            if m.map_id is None or m.x is None or m.y is None:
+                continue
+            if guildjobs._cooling(m, classreagents.ACTION, recent):
+                continue
+            need = classreagents.wanted(m, spell_reagents, guildjobs.CRAFT_SPELLS)
+            if need:
+                needs[m.name] = need
+        if not needs:
+            return {}
+        all_entries = sorted({e for need in needs.values() for e in need})
+        sold = await asyncio.to_thread(_fetch_sold_reagent_entries, all_entries)
+        offers = {}
+        vendored_names = []
+        for name, need in needs.items():
+            if sold is not None and not any(e in sold for e in need):
+                offers[name] = classreagents.Offer(rows=(), sold=sold)
+            else:
+                vendored_names.append(name)
+        if not vendored_names:
+            return offers
+        chosen, self._class_reagent_read_offset = guildjobs.rotate_reads(
+            vendored_names,
+            getattr(self, "_class_reagent_read_offset", 0),
+            GUILD_SUPPLY_READS_PER_PASS,
+        )
+        by_name = {m.name: m for m in members}
+        for name in chosen:
+            want_entries = sorted(
+                e for e in needs[name] if sold is None or e in sold
+            )
+            rows = await asyncio.to_thread(
+                _fetch_class_reagent_vendors,
+                by_name[name],
+                want_entries,
+                guildjobs.GUILD_GEAR_VENDOR_YARDS,
+            )
+            offers[name] = classreagents.Offer(rows=tuple(rows), sold=sold)
         return offers
 
     async def _job_pet_offers(self, members, recent) -> dict:
@@ -35742,10 +35798,15 @@ def _fetch_job_facts(family_names: list) -> dict:
         skill_rows = _job_read(cur, "skills", _JOB_SKILLS_SQL.format(
             guids=everyone, skills=ids(_JOB_SKILL_IDS)))
         book = _class_book()
+        spell_reagents = _fetch_spell_reagents(cur)
+        reagent_spells = sorted(
+            classreagents.relevant_spells(spell_reagents, guildjobs.CRAFT_SPELLS))
+        reagent_entries = sorted(
+            classreagents.all_reagent_entries(spell_reagents, guildjobs.CRAFT_SPELLS))
         spell_rows = _job_read(cur, "spells", _JOB_SPELLS_SQL.format(
             guids=everyone,
             spells=ids([guildjobs.RITUAL_OF_SUMMONING, *sorted(guildjobs.CRAFT_SPELLS),
-                        *(book.spell_ids() if book else ())])))
+                        *(book.spell_ids() if book else ()), *reagent_spells])))
         log_rows, done_rows = _class_member_reads(cur, book, everyone)
         worn_rows = _job_read(cur, "worn gear", _JOB_WORN_SQL.format(guids=everyone))
         rewarded_rows = _job_read(cur, "rewarded quests",
@@ -35753,7 +35814,8 @@ def _fetch_job_facts(family_names: list) -> dict:
         item_rows = _job_read(cur, "carried items", _JOB_ITEMS_SQL.format(
             guids=everyone, goods=guildjobs.TRADE_GOODS,
             subclasses=ids(sorted(guildjobs.MATERIAL_SUBCLASSES)),
-            entries=ids([*_JOB_ENTRIES, *(book.watch_items() if book else ())])))
+            entries=ids([*_JOB_ENTRIES, *(book.watch_items() if book else ()),
+                         *reagent_entries])))
         supplies = _job_supplies(cur, everyone)
         recent_rows = _job_read(cur, "recent rows", _JOB_RECENT_SQL,
                                 (guildjobs.SOURCE + ":%",))
@@ -35786,6 +35848,7 @@ def _fetch_job_facts(family_names: list) -> dict:
                                  worn=_job_worn(worn_rows),
                                  stranded_rows=stranded_rows)
     facts["class_book"] = book
+    facts["spell_reagents"] = spell_reagents
     facts["quest_asks"] = guildjobs.quest_asks_from_rows(quest_ask_rows)
     facts["death_loops"] = deathloop.loops(
         death_rows, {str(r["name"]): int(r.get("level") or 0) for r in rows})
@@ -37158,6 +37221,101 @@ def _fetch_supply_vendors(here, cap_yards) -> list:
                 (x, y, int(here.map_id), towntrip.NPC_FLAG_VENDOR,
                  restsupply.FOOD_CATEGORY, restsupply.DRINK_CATEGORY,
                  int(here.level), x, cap, y, cap, cap),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+_SPELL_DBC_REAGENTS_SQL = (
+    "SELECT ID AS spell_id, Reagent_1, Reagent_2, Reagent_3, Reagent_4, "
+    "Reagent_5, Reagent_6, Reagent_7, Reagent_8, "
+    "ReagentCount_1, ReagentCount_2, ReagentCount_3, ReagentCount_4, "
+    "ReagentCount_5, ReagentCount_6, ReagentCount_7, ReagentCount_8 "
+    "FROM acore_world.spell_dbc "
+    "WHERE Reagent_1 > 0 OR Reagent_2 > 0 OR Reagent_3 > 0 OR Reagent_4 > 0 "
+    "OR Reagent_5 > 0 OR Reagent_6 > 0 OR Reagent_7 > 0 OR Reagent_8 > 0"
+)
+_SPELL_DBC_SQL_ROWS: list | None = None
+
+_CLASS_REAGENT_SOLD_SQL = (
+    "SELECT DISTINCT nv.item AS entry "
+    "FROM acore_world.npc_vendor nv "
+    "JOIN acore_world.item_template it ON it.entry = nv.item "
+    "WHERE nv.item IN ({entries}) AND nv.maxcount = 0 "
+    "AND (it.Flags & 2) = 0 AND it.BuyPrice > 0"
+)
+
+_CLASS_REAGENT_VENDOR_SQL = (
+    "SELECT cr.id AS vendor, ct.name AS vendor_name, cr.map AS map_id, "
+    "MIN(SQRT(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2))) AS yards, "
+    "it.entry AS entry, it.name AS item_name, it.BuyPrice AS price, "
+    "it.BuyCount AS buy_count, ft.EnemyGroup AS enemy_group "
+    "FROM acore_world.npc_vendor nv "
+    "JOIN acore_world.creature cr ON cr.id = nv.entry "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "JOIN acore_world.item_template it ON it.entry = nv.item "
+    "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
+    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 AND "
+    + towntrip.REAL_SPAWN_SQL + " AND nv.maxcount = 0 "
+    "AND it.entry IN ({entries}) AND (it.Flags & 2) = 0 AND it.BuyPrice > 0 "
+    "AND ABS(cr.position_x - %s) <= %s AND ABS(cr.position_y - %s) <= %s "
+    "GROUP BY cr.id, ct.name, cr.map, it.entry, it.name, it.BuyPrice, "
+    "it.BuyCount, ft.EnemyGroup "
+    "HAVING yards <= %s ORDER BY yards, vendor"
+)
+
+
+def _fetch_spell_reagents(cur) -> dict:
+    """Spell reagent requirements loaded at run time from Spell.dbc +
+    acore_world.spell_dbc (#2622). Static world data, cached once per process."""
+    global _SPELL_DBC_SQL_ROWS
+    if _SPELL_DBC_SQL_ROWS is None:
+        try:
+            cur.execute(_SPELL_DBC_REAGENTS_SQL)
+            _SPELL_DBC_SQL_ROWS = [dict(row) for row in cur.fetchall()]
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                _SPELL_DBC_SQL_ROWS = []
+            else:
+                raise
+    return classreagents.load_spell_reagents(
+        sql_rows=_SPELL_DBC_SQL_ROWS, excluded=guildjobs.CRAFT_SPELLS)
+
+
+def _fetch_sold_reagent_entries(entries) -> frozenset | None:
+    """Subset of `entries` sold by at least one unlimited vendor on the realm,
+    or None if npc_vendor could not be read."""
+    clean = sorted({int(e) for e in entries if int(e) > 0})
+    if not clean:
+        return frozenset()
+    sql = _CLASS_REAGENT_SOLD_SQL.format(entries=",".join(str(e) for e in clean))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+        return frozenset(int(row["entry"]) for row in cur.fetchall())
+
+
+def _fetch_class_reagent_vendors(here, entries, cap_yards) -> list:
+    """Vendor rows in `cap_yards` of `here` selling items in `entries`."""
+    clean = sorted({int(e) for e in entries if int(e) > 0})
+    if not clean:
+        return []
+    cap = float(cap_yards)
+    x, y = float(here.x), float(here.y)
+    sql = _CLASS_REAGENT_VENDOR_SQL.format(entries=",".join(str(e) for e in clean))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                sql,
+                (x, y, int(here.map_id), towntrip.NPC_FLAG_VENDOR,
+                 x, cap, y, cap, cap),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):

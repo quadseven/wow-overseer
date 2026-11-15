@@ -143,6 +143,7 @@ import raidrun
 import raidteams
 import recipebook
 import restsupply
+import classreagents
 import situation
 import standstill
 import vendorsale
@@ -505,6 +506,8 @@ COOLDOWN_MINUTES = {
     # Food and drink bought with its own gold (restsupply.py): bought, the bags
     # show it; refused, the trip waits an hour.
     restsupply.ACTION: 60,
+    # Class reagents bought with its own gold (classreagents.py, #2622).
+    classreagents.ACTION: classreagents.COOLDOWN_MINUTES,
     # A hunter's walk to a beast and its Tame Beast (hunterpet.py).
     hunterpet.ACTION: hunterpet.COOLDOWN_MINUTES,
 }
@@ -735,6 +738,9 @@ class Member:
     banker: object = None  # a Spot
     # Quest-class stacks the plan destroys as certainly useless (#2607).
     plan_destroy: tuple = ()  # Carried
+    # Class reagent item entries used by known spells (classreagents.py, #2622),
+    # kept out of vendor sales alongside SOUL_SHARD.
+    reagent_entries: frozenset = frozenset()
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -1720,6 +1726,7 @@ TOWN_STOP_ACTIONS = frozenset(
         "riding",
         "weapon",
         restsupply.ACTION,
+        classreagents.ACTION,
         mountbuy.ACTION,
         guildlevel.INN_ACTION,
     }
@@ -2581,6 +2588,8 @@ def vendor_judge(member, protected=frozenset()) -> vendorsale.Judge:
     guard = {e for tools in TOOL_ENTRIES.values() for e in tools} | {SOUL_SHARD}
     if member.role == MAINTENANCE:
         guard |= craft_entries(member)
+    if member.reagent_entries:
+        guard |= frozenset(int(e) for e in member.reagent_entries)
     return vendorsale.Judge(
         level=int(member.level),
         worn=member.worn,
@@ -3565,6 +3574,85 @@ def _supply_first(m, offer, recent, cap, kept=None, book=None):
     return step, step.said, ""
 
 
+def class_reagents_step(member, offer, cap, kept=None, spell_reagents=None):
+    """(step or None, note): a member short of class reagents for known
+    spells walks to a friendly vendor in reach, sells its junk there and buys
+    a small stock with its own gold above class spells, riding and food
+    (classreagents.py, #2622)."""
+    if member.map_id is None or not spell_reagents:
+        return None, ""
+    if isinstance(offer, classreagents.Offer):
+        offer_rows, sold = offer.rows, offer.sold
+    else:
+        offer_rows, sold = offer or (), None
+    rows = friendly_vendor_rows(member, offer_rows)
+    junk = junk_value(member, kept)
+    room = (
+        int(member.free_slots) + len(_junk(member, kept))
+        if member.free_slots is not None
+        else None
+    )
+    left = spendable(member, purse.REAGENTS, int(member.money) + junk)
+    buys, why = classreagents.plan(
+        replace(member, money=left),
+        spell_reagents,
+        rows,
+        sold_entries=sold,
+        room=room,
+        craft=CRAFT_SPELLS,
+    )
+    if not buys:
+        if offer_rows and not rows and not why:
+            why = "no vendor in reach will sell %s class reagents" % member.name
+        return None, why
+    nearest = {}
+    for r in rows:
+        entry = int(r.get("entry") or 0)
+        yards = float(r.get("yards") or 0.0)
+        if entry not in nearest or yards < nearest[entry][0]:
+            nearest[entry] = (yards, int(r.get("vendor") or 0))
+    lead = next(
+        (b for b in buys if nearest.get(b.entry, (0, 0))[1] == b.vendor), buys[0]
+    )
+    return (
+        guildcorps.Step(
+            member.name,
+            classreagents.ACTION,
+            lead.entry,
+            classreagents.said(member, buys),
+            rows=junk_sales(member, kept, classreagents.ACTION)
+            + tuple(
+                guildcorps.Row(
+                    "buy", b.command, "", source_for(classreagents.ACTION, member.name)
+                )
+                for b in buys
+            ),
+            walk=guildcorps.Row(
+                "buy",
+                "walk-to-vendor item:%d%s" % (lead.entry, _cap_word(cap)),
+                "",
+                source_for(classreagents.ACTION, member.name),
+            ),
+            sales=junk_notes(member, kept),
+        ),
+        why,
+    )
+
+
+def _class_reagent_first(m, offer, recent, cap, kept=None, spell_reagents=None):
+    """Class reagents bought after riding and food, ahead of vendor gear."""
+    if not offer or not m.online or not m.alive or m.in_combat:
+        return None, "", ""
+    if not spell_reagents or _cooling(m, classreagents.ACTION, recent):
+        return None, "", ""
+    if not classreagents.wanted(m, spell_reagents, CRAFT_SPELLS):
+        return None, "", ""
+    step, why = class_reagents_step(m, offer, cap, kept, spell_reagents)
+    if step is None:
+        return None, "", why
+    return step, step.said, why
+
+
 # A CRAFTER IS POSTED ONLY WHAT IT CAN WORK NOW (#373). Holding a trade is not
 # enough: on wow-dev on 2026-09-27 all ten family members held Cooking at 1,
 # so "the best cook" was a name tiebreak, and Bork was posted 1,190 items of
@@ -4530,6 +4618,8 @@ def plan(
     owing=None,
     still=None,
     supply=None,
+    class_reagents=None,
+    spell_reagents=None,
     pets=None,
     asks=(),
     weapons=None,
@@ -4604,7 +4694,16 @@ def plan(
     # the member so a new craft path staged CORPS reaches only them.
     pigs = guineapig.pick(members)
     members = [
-        replace(m, pig_skills=guineapig.skills_of(pigs, m.guild, m.name))
+        replace(
+            m,
+            pig_skills=guineapig.skills_of(pigs, m.guild, m.name),
+            reagent_entries=(
+                m.reagent_entries
+                | classreagents.entries_for_known(m.known, spell_reagents, CRAFT_SPELLS)
+                if spell_reagents
+                else m.reagent_entries
+            ),
+        )
         for m in members
     ]
     inputs = _PlanInputs(
@@ -4636,6 +4735,8 @@ def plan(
         owing=owing,
         still=still,
         supply=supply,
+        class_reagents=class_reagents,
+        spell_reagents=spell_reagents,
         pets=pets,
         asks=asks,
         weapons=weapons,
@@ -4688,6 +4789,8 @@ class _PlanInputs:
     owing: Any
     still: Any
     supply: Any
+    class_reagents: Any
+    spell_reagents: Any
     pets: Any
     asks: Any
     weapons: Any
@@ -4731,6 +4834,7 @@ def _plan_counters():
             "classquest",
             "room",
             "supply",
+            "classreagents",
             "inn",
             "pet",
         )
@@ -4871,6 +4975,8 @@ def _plan_roster_member(member, inputs, state):
         mates=inputs.members,
         looping=_member_map_keys(inputs.loops),
         assigned=state.assigned,
+        class_reagents=_offer_for(inputs.class_reagents, member.name),
+        spell_reagents=inputs.spell_reagents,
     )
     asked, yielded = class_asking(
         member, inputs.classes, inputs.hunts, inputs.now, inputs.recent, inputs.asks
@@ -5334,6 +5440,8 @@ def _allowance(step, counters, per_guild):
         return counters["room"], ROOM_STEPS_PER_GUILD
     if step.action == restsupply.ACTION:
         return counters["supply"], restsupply.STEPS_PER_GUILD
+    if step.action == classreagents.ACTION:
+        return counters["classreagents"], classreagents.STEPS_PER_GUILD
     if step.action == hunterpet.ACTION:
         return counters["pet"], hunterpet.STEPS_PER_GUILD
     if step.action == guildlevel.INN_ACTION:
@@ -5607,6 +5715,8 @@ def _upkeep_first(
     crafters=None,
     master="",
     levelling=False,
+    class_reagents=None,
+    spell_reagents=None,
 ):
     """(the member's step as _member_step returns it, or None; the supply
     note; the gear note): food for a member with nothing to eat or drink, then
@@ -5646,6 +5756,16 @@ def _upkeep_first(
         step, doing, supply_note = _supply_first(m, supply, recent, cap, kept, book)
         if step is not None:
             return (step, doing, quest_note, ""), supply_note, ""
+    step, doing, reagent_note = _class_reagent_first(
+        m, class_reagents, recent, cap, kept, spell_reagents
+    )
+    if step is not None:
+        return (
+            (step, doing, _join(quest_note, reagent_note), ""),
+            _join(supply_note, riding_note),
+            "",
+        )
+    riding_note = _join(riding_note, reagent_note)
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
     if step is not None:
         return (step, doing, "", ""), supply_note, gear_note
@@ -5735,6 +5855,8 @@ def _member_step(
     mates=(),
     looping=(),
     assigned=None,
+    class_reagents=None,
+    spell_reagents=None,
 ):
     """A death loop's way out of its zone first (death_loop_first, #1464),
     then a class quest, then a hunter's first pet, then a hearth out of a
@@ -5846,6 +5968,8 @@ def _member_step(
         crafters,
         master,
         levelling,
+        class_reagents=class_reagents,
+        spell_reagents=spell_reagents,
     )
     if found is not None:
         return found
