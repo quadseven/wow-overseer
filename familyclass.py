@@ -56,6 +56,10 @@ ENV_SWITCH = "FAMILY_CLASS_STEPS"
 # the way lost to bends: the longest a walk may stretch the gap between runs.
 WALK_MINUTES = 20
 WALK_YARDS = 5000.0
+# A LONE class walk is held shorter: the danger read is of the giver's ground,
+# not of the way, so the longer the walk the more unread ground it crosses. Half
+# of WALK_YARDS, about ten minutes on foot. The riding walk keeps WALK_YARDS.
+LONE_WALK_YARDS = 2500.0
 # One class walk per member per two hours: the chain is four short steps.
 WALK_GAP_MINUTES = 120
 # Within this of the giver a member makes the step where it stands.
@@ -180,7 +184,7 @@ def _walk_hold(m, spot, recent) -> str:
             "%s follows its leader and cannot walk to its giver; a follower makes "
             "only the class step in reach" % m.name
         )
-    if yards > WALK_YARDS:
+    if yards > LONE_WALK_YARDS:
         return "%s's giver is %d yards away: too far for the gap between runs" % (
             m.name,
             int(yards),
@@ -203,6 +207,17 @@ def _gap_hold(m, recent) -> str:
                 WALK_GAP_MINUTES,
             )
     return ""
+
+
+def needs_ground_read(m, spot) -> bool:
+    """Whether the giver's ground is worth a read: the member stands on the
+    giver's map, past reach and within LONE_WALK_YARDS. A member in reach walks
+    nowhere, and one past the cap or on another map is held for that alone."""
+    if m.map_id is None or m.x is None or m.y is None:
+        return False
+    if int(m.map_id) != int(spot.map_id):
+        return False
+    return REACH_YARDS < _yards(m, spot) <= LONE_WALK_YARDS
 
 
 def errand_free(members, errand_names) -> list:
