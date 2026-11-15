@@ -73,6 +73,7 @@ import craft
 import disposition
 import goals
 import guildbank
+import itemplan
 import materials
 import reagentplan
 import recipebook
@@ -609,6 +610,10 @@ class Storage:
     # why, for every stack the plan routes to a vendor, a member or the house
     # and whose executor is switched on (`itemplan_shadow.leaving`). The keeper
     # rule stores none of them: one answer per stack, and it is the plan's.
+    #
+    # A BANKED GUID HERE IS A STACK THE PLAN SELLS TO A VENDOR (#2603): it is
+    # fetched out into the bags (`_plan_withdrawals`), never put back, and only
+    # while the holder keeps `itemplan.BAG_FLOOR` free slots after it.
     plan_leaves: dict = field(default_factory=dict)
     # True when the plan was to be consulted and could not be read. The keeper
     # rule then stores nothing new (`_stored`), because a deposit the plan
@@ -1157,6 +1162,8 @@ def _wanted_back(holding, member, family, totals, storage):
         return "%s's craft errand is short of it in the bags (reagentplan)" % (
             member.name
         )
+    if holding.guid in storage.plan_leaves:
+        return storage.plan_leaves[holding.guid]
     if storage_reason(holding, storage):
         return ""
     if disposition.recipe(holding.item) and _learnable(holding, storage):
@@ -1179,6 +1186,13 @@ def _plan_withdrawals(member, family, totals, storage, space, budget, notes):
             continue
         why = _wanted_back(holding, member, family, totals, storage)
         if not why:
+            continue
+        for_sale = storage is not None and holding.guid in storage.plan_leaves
+        if for_sale and space <= itemplan.BAG_FLOOR:
+            notes.append(
+                "%s keeps %d free slots, so %s stays banked until it is sold"
+                % (member.name, itemplan.BAG_FLOOR, holding.item.name)
+            )
             continue
         if space <= 0:
             notes.append(
