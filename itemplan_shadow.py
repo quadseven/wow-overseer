@@ -201,6 +201,54 @@ def characters_from_worn(worn_rows) -> dict:
     return out
 
 
+# Inventory types a member can wear two of: finger, trinket, one-hand weapon.
+PAIRED_INVENTORY_TYPES = frozenset({11, 12, 13})
+_GEAR_CLASSES = frozenset({2, 4})  # weapon, armor
+
+
+def vet_gifts(gifts, *, carried, templates, recent, free_slots) -> tuple:
+    """Split the plan's GIVE gifts into `(kept, held)`; `held` is `(gift, why)`.
+
+    THE GIVE ROUTE CHURNED (wow-dev, 2026-11-15): 14 of 64 gives errored, and
+    the same pieces moved between the same few members, because the plan is
+    judged per holder on each pass and has no memory of what it just moved.
+    Three rules, each pure and each saying why it held a gift:
+
+    - a guid in `recent` (moved by a guild gift inside the window) stays put;
+    - a member does not get a second copy of gear it already carries, or that
+      an earlier kept gift in this pass already sends it, unless the piece is
+      one a member wears two of (`PAIRED_INVENTORY_TYPES`); stackables never
+      count as a copy;
+    - a family receiver with no free slot left, counting the gifts kept so
+      far, gets nothing. A taker the free-slot map does not name (a guildmate)
+      is not judged on room: its gift travels by post.
+    """
+    holds = {}
+    for row in carried or ():
+        holds.setdefault(str(row.get("holder")), set()).add(_int(row.get("entry")))
+    incoming: dict = {}
+    kept, held = [], []
+    for gift in gifts:
+        taker = str(gift.taker)
+        template = (templates or {}).get(int(gift.entry), {})
+        is_gear = _int(template.get("item_class")) in _GEAR_CLASSES
+        paired = _int(template.get("inventory_type")) in PAIRED_INVENTORY_TYPES
+        if int(gift.guid) in recent:
+            held.append((gift, "moved recently, left where it is"))
+        elif is_gear and not paired and int(gift.entry) in holds.get(taker, set()):
+            held.append((gift, "%s already carries one" % taker))
+        elif taker in (free_slots or {}) and (
+            _int(free_slots[taker]) - incoming.get(taker, 0) <= 0
+        ):
+            held.append((gift, "%s has no room" % taker))
+        else:
+            kept.append(gift)
+            incoming[taker] = incoming.get(taker, 0) + 1
+            if is_gear and not paired:
+                holds.setdefault(taker, set()).add(int(gift.entry))
+    return kept, held
+
+
 def build_stacks(rows, gear_rows=(), templates=None, instance_soulbound=None) -> list:
     """One itemplan.Stack per carried row, in row order within the holder.
 

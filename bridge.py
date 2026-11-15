@@ -21,6 +21,7 @@ import json
 import logging
 import math
 import os
+import re
 import time
 from types import SimpleNamespace
 
@@ -16260,6 +16261,16 @@ class Bridge(discord.Client):
                 need=decision.reason, reason=decision.reason,
             ))
         if gifts:
+            recent = await asyncio.to_thread(
+                _recently_given_guids, GIVE_REPEAT_HOURS)
+            gifts, held = itemplan_shadow.vet_gifts(
+                gifts, carried=rows, templates=extras.templates,
+                recent=recent, free_slots=free_slots)
+            _log_capped("itemplan", [
+                "give held: %s %s -> %s: %s" % (
+                    gift.item, gift.holder, gift.taker, why)
+                for gift, why in held])
+        if gifts:
             await self._write_guild_gifts(gifts)
 
     async def _itemplan_disenchant(self, names: list, family: str, rows: list,
@@ -29010,6 +29021,9 @@ def _fetch_bag_room(names: list) -> dict:
 # reason: a give the worldserver refuses (receiver offline, bags full since
 # measured) must not fill the queue with an identical doomed row every cycle.
 GIVE_RETRY_MINUTES = int(os.environ.get("GIVE_RETRY_MINUTES", "60"))
+# A piece a guild gift already moved stays where it landed this long (the item
+# plan judges per holder and has no memory of its own moves).
+GIVE_REPEAT_HOURS = int(os.environ.get("GIVE_REPEAT_HOURS", "12"))
 # A mid-run drink give that was queued and did not land is asked again after
 # this many minutes (one that landed is not planned again: the taker has it).
 RUN_DRINK_RETRY_MINUTES = int(os.environ.get("RUN_DRINK_RETRY_MINUTES", "4"))
@@ -34264,6 +34278,29 @@ def _recent_guild_gift_keys(minutes: int) -> set:
             (row["target_name"], row["target_arg"], row["command"])
             for row in cur.fetchall()
         }
+
+
+def _recently_given_guids(hours: int) -> frozenset:
+    """Item guids a guild gift gave or posted inside `hours` and did not fail.
+
+    An errored row moved nothing, so its piece is free to try again; a pending
+    or delivered one has moved, or is about to. The guid is in the command
+    (`guid:N` for a give, `send item:N subject:...` for a letter).
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT command FROM overseer_command "
+            "WHERE source = 'guildshare' AND kind IN ('give', 'mail') "
+            "  AND status <> 'error' "
+            "  AND created_at > NOW() - INTERVAL %s HOUR",
+            (int(hours),),
+        )
+        out = set()
+        for row in cur.fetchall():
+            found = re.search(r"(?:guid|item):(\d+)", str(row["command"]))
+            if found:
+                out.add(int(found.group(1)))
+        return frozenset(out)
 
 
 def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
