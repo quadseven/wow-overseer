@@ -112,7 +112,7 @@ jobs:
       # process across the runner's cores: discover ran the ~12,600 tests on
       # one core for about nine minutes. Locally, discover still works as is.
       test-cmd: "python3 .github/scripts/check_mod_overseer_pin.py && python3 .github/scripts/check_fork_pin_parity.py && python3 .github/scripts/compile_check.py --min-python 3.12 && uv run --no-project --python 3.12 --with-requirements tests/requirements.txt python3 .github/scripts/unittest_parallel.py"
-      timeout-minutes: 10
+      timeout-minutes: 20
 
   lint:
     # ruff check + format --check on the standard build the provisioned

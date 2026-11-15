@@ -202,6 +202,67 @@ def tab_cost(tab_id) -> int:
     return TAB_COSTS_COPPER[tab] if 0 <= tab < len(TAB_COSTS_COPPER) else 0
 
 
+def _tab_parts(guild, bought: int) -> tuple:
+    """(one phrase per bought tab, the tabs at capacity)."""
+    items = dict(guild.get("tab_items") or {})
+    given = dict(guild.get("tab_names") or {})
+    parts, full = [], []
+    for tab in range(bought):
+        used = int(items.get(tab, TAB_SLOTS) or 0)
+        name = given.get(tab) or (TAB_BY_ID[tab].name if tab in TAB_BY_ID else "")
+        parts.append(
+            "tab %d %s %d of %d used, %d free"
+            % (tab, name, used, TAB_SLOTS, max(0, TAB_SLOTS - used))
+        )
+        if used >= TAB_SLOTS:
+            full.append(tab)
+    return parts, full
+
+
+def _blocked_depositors(guild, names) -> list:
+    """Members named in the setup whose rank cannot deposit on every tab."""
+    rights = {int(r) for r in guild.get("deposit_rank_ids", ())}
+    ranks = dict(guild.get("member_ranks") or {})
+    return sorted(str(n) for n in names if n in ranks and int(ranks[n]) not in rights)
+
+
+def tab_report(guild, names=()) -> list:
+    """Read-only sentences about a guild's bank tabs: used, free, not bought.
+
+    ONE LINE A READER CAN ACT ON. The item plan said "guild bank tab is full"
+    for a full vault and for a tab nobody had bought alike (wow-dev,
+    2026-11-15: two tabs bought, tab 0 at 98 of 98, tab 1 empty, the third
+    never bought). This names each tab's numbers, the next tab and its price,
+    the members whose rank cannot deposit on every tab, and what would free
+    room. `guild` is the persisted setup read (`purchased_tabs`,
+    `deposit_rank_ids`, `member_ranks`, `tab_items`, `tab_names`); `names`
+    are the members to judge. Nothing is written, bought or moved.
+    """
+    try:
+        bought = int((guild or {}).get("purchased_tabs") or 0)
+    except (TypeError, ValueError):
+        return []
+    if bought <= 0:
+        return []
+    parts, full = _tab_parts(guild, bought)
+    lines = ["guild bank: " + "; ".join(parts)]
+    want = next_tab(bought)
+    if want is not None and want in TAB_BY_ID:
+        lines.append(
+            "tab %d %s is not bought (%d gold)"
+            % (want, TAB_BY_ID[want].name, tab_cost(want) // 10_000)
+        )
+    blocked = _blocked_depositors(guild, names)
+    if blocked:
+        lines.append("cannot deposit on every tab: " + ", ".join(blocked))
+    if full:
+        lines.append(
+            "to free room in tab %s, withdraw or list stacks the plan no "
+            "longer keeps there" % ", ".join(str(t) for t in full)
+        )
+    return lines
+
+
 def next_tab(purchased_tabs, wanted_tabs: int = len(TABS)):
     """The tab the guild buys next, or None when it has every tab it keeps."""
     try:

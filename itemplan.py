@@ -1870,11 +1870,7 @@ def _feasible(
                 return False, "junk does not take the last bank slots"
         return True, ""
     if o.route == GUILD_BANK:
-        key = (w.members[m].family, o.tab)
-        free = w.ctx.guild_free.get(key, 0)
-        if tab_used.get(key, 0) >= free:
-            return False, "guild bank tab is full"
-        return True, ""
+        return _guild_tab_check(w, w.members[m].family, o.tab, tab_used)
     if o.route == BANKER:
         key = ("banker", w.members[m].family)
         if tab_used.get(key, 0) >= w.ctx.banker_free.get(key[1], 0):
@@ -1888,6 +1884,21 @@ def _feasible(
         if room <= GIVE_FLOOR:
             return False, "%s has no room" % r.name
         return True, ""
+    return True, ""
+
+
+def _guild_tab_check(w, family: str, tab: int, tab_used: dict) -> tuple:
+    """Whether the family's guild bank tab can take one more stack.
+
+    A TAB THE GUILD NEVER BOUGHT IS NOT A FULL ONE: the setup read names every
+    bought tab, so a family with tabs read and this one absent has simply not
+    bought it (wow-dev: the third tab, 2026-11-15).
+    """
+    key = (family, tab)
+    if key not in w.ctx.guild_free and any(k[0] == family for k in w.ctx.guild_free):
+        return False, "guild bank tab %d is not bought" % tab
+    if tab_used.get(key, 0) >= w.ctx.guild_free.get(key, 0):
+        return False, "guild bank tab is full"
     return True, ""
 
 
