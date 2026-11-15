@@ -74,6 +74,7 @@ import guildcorps
 import guildroute
 import jev
 import jev_choices
+import purse
 import raidlineup
 import restsupply
 import workorders
@@ -384,7 +385,13 @@ SUPPLIES = (
         "Major Mana Potion",
         (0, 5, 0, 3),
         Make(
-            17580, ALCHEMY, ((DREAMFOIL, 3), (ICECAP, 2)), (CRYSTAL_VIAL,), 13501, 30000
+            17580,
+            ALCHEMY,
+            ((DREAMFOIL, 3), (ICECAP, 2)),
+            (CRYSTAL_VIAL,),
+            13501,
+            30000,
+            recipe_skill=295,
         ),
         "Recipe 13501 is sold by Magnus Frostwake for 3 gold and drops from "
         "Darkmaster Gandling",
@@ -1252,6 +1259,11 @@ def craft_step(crafter, make, name, want, vendors, cap):
             and make.recipe_item in vendors
             and crafter.skill(make.skill)[0] >= make.recipe_skill
         ):
+            if crafter.money is not None and (
+                crafter.money
+                < make.recipe_price + purse.recipe_purse_floor(crafter.level)
+            ):
+                return None
             if not make.recipe_vendors:
                 return _buy_step(
                     crafter,
@@ -1691,6 +1703,13 @@ def _why_not(crafter, make, name, members) -> str:
                 seller.where,
             )
     if make.spell not in crafter.known:
+        if (
+            make.recipe_price
+            and crafter.money is not None
+            and crafter.money
+            < make.recipe_price + purse.recipe_purse_floor(crafter.level)
+        ):
+            return "%s is short of gold for the %s recipe" % (crafter.name, name)
         return "%s does not know %s and carries no recipe for it" % (crafter.name, name)
     lacks = _campfire_lacks(crafter) if make.skill == COOKING else []
     if lacks and _can_make(crafter, make) > 0:

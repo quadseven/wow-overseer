@@ -95,6 +95,16 @@ def money(copper) -> str:
     return " ".join(parts[:2]) or "0c"
 
 
+RECIPE_PURSE_FLOOR = 100
+RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ = 10
+
+
+def recipe_purse_floor(level: int) -> int:
+    """The copper a recipe purchase leaves in the purse at `level`."""
+    level = max(0, int(level or 0))
+    return max(RECIPE_PURSE_FLOOR, RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ * level * level)
+
+
 def riding_due(level, riding_max) -> Rank | None:
     """The riding rank the member may buy now and lacks, None when none.
 
