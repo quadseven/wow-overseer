@@ -565,6 +565,7 @@ class ProfLoopBridgeWiring(unittest.TestCase):
             "_queue_owns_job": lambda key: False,
             "_prof_loop_quiet": lambda *a, **kw: None,
             "_last_job_source": lambda name: "",
+            "_record_production": lambda names, skills: None,
             "_insert_job": lambda name, mode, source: writes.append(
                 (name, mode, source)
             ),
