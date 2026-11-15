@@ -661,9 +661,17 @@ def _opt(route, goal, reason, rule, **kw) -> Option:
     return Option(route, goal, reason, rule, **kw)
 
 
+# The best quality the vendor route may take (item_template.Quality 1: common).
+VENDOR_MAX_QUALITY = 1
+# The least quality whose spare gear goes to the guild bank tab before any sale.
+GEAR_BANK_MIN_QUALITY = 2
+
+
 def _vendor_options(stack: Stack, rule: str, why: str, goal=ROOM) -> list:
     out = []
-    if stack.sell > 0 and stack.quality <= 3:
+    # THE GUILD LOOT POLICY (lootpolicy.py): the vendor takes gray and common
+    # goods only. Uncommon and better is banked, listed, given or broken down.
+    if stack.sell > 0 and stack.quality <= VENDOR_MAX_QUALITY:
         out.append(_opt(SELL_VENDOR, goal, why, rule))
     return out
 
@@ -1244,13 +1252,13 @@ def _gear_surplus(w: _World, s: Stack, me: Member, why: str) -> list:
     de = _disenchant_option(w, s, me)
     if de:
         out.append(de)
-    if s.tradable and s.quality >= 3:
+    if s.tradable and s.quality >= GEAR_BANK_MIN_QUALITY:
         out += _market_options(w, s, "R8")
         out.append(
             _opt(
                 GUILD_BANK,
                 GEAR_LATER,
-                "%s: rare gear for the Gear for Later tab" % why,
+                "%s: uncommon or better gear for the Gear for Later tab" % why,
                 "R8",
                 target="Gear for Later",
                 tab=GUILD_TAB_GEAR,

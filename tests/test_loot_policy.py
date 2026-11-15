@@ -115,6 +115,10 @@ class RuleTwoUsableOrNobody(unittest.TestCase):
         v = lootpolicy.decide(row, EVERY_CLASS, nobody)
         self.assertEqual(v.route, HOLD)
 
+    def test_a_bound_piece_somebody_could_use_stays_with_its_holder(self):
+        v = lootpolicy.decide(piece(instance_flags=1), EVERY_CLASS, nobody)
+        self.assertEqual(v.route, HOLD)
+
     def test_a_soulbound_piece_is_only_ever_its_holders(self):
         """Soulbound to a mage, a plate piece cannot go to a warrior."""
         row = piece(instance_flags=1, holder_class=8, subclass=4)
@@ -173,6 +177,44 @@ class RuleThreeVendorOnlyGrayAndJunk(unittest.TestCase):
         self.assertEqual(lootpolicy.decide(row, EVERY_CLASS, nobody).route, HOLD)
 
 
+class FailClosed(unittest.TestCase):
+    """An unknown is never read as a fact that allows a sale or a shelving."""
+
+    def test_an_empty_class_set_is_unknown_not_nobody(self):
+        """`bridge._guild_classes()` is empty when its read failed."""
+        for quality in (2, 3, 4):
+            with self.subTest(quality=quality):
+                row = piece(quality=quality)
+                for judge in (yes(["Zrog"]), nobody):
+                    v = lootpolicy.decide(row, frozenset(), judge)
+                    self.assertEqual(v.route, HOLD)
+
+    def test_an_empty_class_set_never_disenchants_or_banks_a_wearable_epic(self):
+        v = lootpolicy.decide(piece(quality=4), frozenset(), nobody)
+        self.assertEqual(v.route, HOLD)
+
+    def test_missing_binding_facts_hold_even_gray_and_junk(self):
+        for gone in (("instance_flags",), ("bonding",), ("instance_flags", "bonding")):
+            for row in (
+                piece(quality=0),
+                piece(quality=1, item_class=15, subclass=0, inventory_type=0),
+                piece(quality=4),
+            ):
+                for key in gone:
+                    row.pop(key)
+                with self.subTest(gone=gone, quality=row["quality"]):
+                    v = lootpolicy.decide(row, EVERY_CLASS, nobody)
+                    self.assertEqual(v.route, HOLD)
+
+    def test_a_none_binding_holds_too(self):
+        for key in ("instance_flags", "bonding"):
+            row = piece(quality=0, **{key: None})
+            self.assertEqual(lootpolicy.decide(row, EVERY_CLASS).route, HOLD)
+
+    def test_an_unread_binding_counts_as_bound(self):
+        self.assertTrue(lootpolicy.is_bound({}))
+
+
 class TheGate(unittest.TestCase):
     """The bridge's writers run for real against a fake world."""
 
@@ -221,6 +263,28 @@ class TheGate(unittest.TestCase):
             wrote = self.bridge._insert_sell(self.inner.candidate("Zrog", 5005, 3))
         self.assertEqual(wrote, 77)
         route.assert_called_once_with("Zrog", 5005)
+        self.assertEqual(self.inner.inserts(), [])
+
+    def test_a_failed_class_read_holds_a_wearable_epic(self):
+        self.facts(5010, quality=4)
+        self.inner.wanted[5010] = ()
+        with (
+            mock.patch.object(self.bridge, "_guild_classes", return_value=frozenset()),
+            mock.patch.object(self.bridge, "_disenchant_instead") as route,
+        ):
+            wrote = self.bridge._insert_sell(self.inner.candidate("Zrog", 5010, 4))
+            blocked = self.bridge._epic_blocks("Zrog", "guid:5010", "disenchant")
+        self.assertFalse(wrote)
+        route.assert_not_called()
+        self.assertTrue(blocked)
+        self.assertEqual(self.inner.inserts(), [])
+
+    def test_a_gray_with_no_binding_facts_is_not_sold(self):
+        self.facts(5011, quality=0)
+        del self.inner.facts[5011]["bonding"]
+        self.assertFalse(
+            self.bridge._insert_sell(self.inner.candidate("Zrog", 5011, 0))
+        )
         self.assertEqual(self.inner.inserts(), [])
 
     def test_a_sale_naming_an_item_with_no_facts_is_held(self):

@@ -95,10 +95,11 @@ def is_junk(row: dict) -> bool:
 
 def is_bound(row: dict) -> bool:
     """Soulbound already, or bound the moment it was picked up."""
-    flags = _int(row.get("instance_flags")) or 0
-    if flags & _SOULBOUND:
-        return True
-    return _int(row.get("bonding")) in _BOUND_ON_PICKUP
+    flags = _int(row.get("instance_flags"))
+    bonding = _int(row.get("bonding"))
+    if flags is None or bonding is None:
+        return True  # unread binding: treated as bound, the cautious answer
+    return bool(flags & _SOULBOUND) or bonding in _BOUND_ON_PICKUP
 
 
 def _is_equipment(row: dict) -> bool:
@@ -147,6 +148,10 @@ def decide(row: dict, guild_classes, upgrade=None) -> Verdict:
     quality = _int(row.get("quality"))
     if quality is None:
         return Verdict(HOLD, "its quality could not be read")
+    if _int(row.get("instance_flags")) is None or _int(row.get("bonding")) is None:
+        # Fail closed before ANY verdict, a vendor one included: an item whose
+        # binding was never read is kept (item plan rule R1).
+        return Verdict(HOLD, "its binding could not be read")
     if is_junk(row):
         return Verdict(VENDOR, "gray or junk")
     equipment = _is_equipment(row)
@@ -161,12 +166,16 @@ def decide(row: dict, guild_classes, upgrade=None) -> Verdict:
         or _int(row.get("inventory_type")) is None
     ):
         return Verdict(HOLD, "its gear facts could not be read")
+    if equipment and not bag_pressure._epic_wearer_classes(row, guild_classes):
+        # No class to judge it against: the guild's classes were not read (or
+        # a soulbound piece has no known holder class). Unknown is not "nobody".
+        return Verdict(HOLD, "the guild's classes could not be read")
     if equipment and _wearable(row, guild_classes):
         return _wearable_verdict(row, quality, upgrade)
     if quality == COMMON and equipment:
         return Verdict(VENDOR, "a common piece no guild class can wear")
     if _int(row.get("item_class")) in _GUILD_USED_CLASSES:
-        return _shelve(row, "the guild's trades use it")
+        return _shelve(row, "the guild's trades use it", usable=True)
     return _shelve(row, "no guild member can use it")
 
 
@@ -179,20 +188,19 @@ def _wearable_verdict(row: dict, quality: int, upgrade) -> Verdict:
         return Verdict(UPGRADE, "an upgrade for %s" % ", ".join(wanted), tuple(wanted))
     if quality == COMMON:
         return Verdict(VENDOR, "a common piece nobody would wear over their own")
-    return _shelve(row, "a guild member could use it later")
+    return _shelve(row, "a guild member could use it later", usable=True)
 
 
-def _shelve(row: dict, why: str) -> Verdict:
-    """Bank or auction an item that can leave the bags, disenchant one that
-    cannot; hold what is bound and cannot be broken down."""
+def _shelve(row: dict, why: str, usable: bool = False) -> Verdict:
+    """Bank or auction an item that can leave the bags. A bound piece nobody
+    can use is disenchanted; a bound piece somebody could use stays with its
+    holder; what is bound and cannot be broken down is held."""
     if not is_bound(row):
         return Verdict(BANK_OR_AUCTION, why + "; the guild bank or the auction house")
+    if usable:
+        return Verdict(HOLD, why + "; it is bound and stays with its holder")
     if _can_disenchant(row):
         return Verdict(DISENCHANT, why + "; it is bound, so it is disenchanted")
-    if _int(row.get("item_class")) in _GUILD_USED_CLASSES or _is_equipment(row):
-        # Bound to its holder and wanted by the guild's trades or a later
-        # level: the holder carries it, and no sale path may take it.
-        return Verdict(HOLD, why + "; it is bound and stays with its holder")
     return Verdict(HOLD, why + "; it is bound and cannot be disenchanted")
 
 
