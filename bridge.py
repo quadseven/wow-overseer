@@ -29030,6 +29030,25 @@ _VENDOR_ITEMS_SQL = (
 # whether THIS COPY is already soulbound. `ii.flags` is handed over raw so
 # the bit is read in bag_pressure.item_binding rather than in SQL; the same
 # bag-and-backpack scope as _VENDOR_ITEMS_SQL, so nothing worn is offered.
+_GEAR_RESISTANCE_ONLY_TEMPLATE_EXPR = (
+    "((it.holy_res > 0 OR it.fire_res > 0 OR it.nature_res > 0 "
+    "OR it.frost_res > 0 OR it.shadow_res > 0 OR it.arcane_res > 0) "
+    "AND it.dmg_max1 <= 0 "
+    "AND it.RandomProperty = 0 AND it.RandomSuffix = 0 AND "
+    + " AND ".join(f"it.stat_value{n} = 0" for n in range(1, 11))
+    + " AND "
+    + " AND ".join(f"it.spellid_{n} = 0" for n in range(1, 6))
+    + ")"
+)
+_GEAR_RESISTANCE_ONLY_TEMPLATE_COL = (
+    "COALESCE(" + _GEAR_RESISTANCE_ONLY_TEMPLATE_EXPR + ", 0) AS resistance_only"
+)
+_GEAR_RESISTANCE_ONLY_INSTANCE_EXPR = (
+    "COALESCE("
+    + _GEAR_RESISTANCE_ONLY_TEMPLATE_EXPR
+    + " AND COALESCE(ii.randomPropertyId, 0) = 0, 0) AS resistance_only"
+)
+
 _SURPLUS_GEAR_SQL = (
     "SELECT c.name AS holder, c.level AS level, ii.guid AS item_guid, "
     "ii.itemEntry AS entry, "
@@ -29046,7 +29065,16 @@ _SURPLUS_GEAR_SQL = (
     "it.BagFamily AS bag_family, "
     "it.ItemLevel AS item_level, "
     "it.AllowableClass AS allowable_class, "
-    "it.InventoryType AS inventory_type "
+    "it.InventoryType AS inventory_type, "
+    "COALESCE(((it.holy_res > 0 OR it.fire_res > 0 OR it.nature_res > 0 "
+    "OR it.frost_res > 0 OR it.shadow_res > 0 OR it.arcane_res > 0) "
+    "AND it.dmg_max1 <= 0 AND it.RandomProperty = 0 AND it.RandomSuffix = 0 "
+    "AND it.stat_value1 = 0 AND it.stat_value2 = 0 AND it.stat_value3 = 0 "
+    "AND it.stat_value4 = 0 AND it.stat_value5 = 0 AND it.stat_value6 = 0 "
+    "AND it.stat_value7 = 0 AND it.stat_value8 = 0 AND it.stat_value9 = 0 "
+    "AND it.stat_value10 = 0 AND it.spellid_1 = 0 AND it.spellid_2 = 0 "
+    "AND it.spellid_3 = 0 AND it.spellid_4 = 0 AND it.spellid_5 = 0 "
+    "AND COALESCE(ii.randomPropertyId, 0) = 0), 0) AS resistance_only "
     "FROM character_inventory ci "
     "JOIN characters c ON c.guid = ci.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
@@ -29182,7 +29210,16 @@ _EQUIP_CANDIDATE_GEAR_SQL = (
     "it.BagFamily AS bag_family, "
     "it.ItemLevel AS item_level, "
     "it.AllowableClass AS allowable_class, "
-    "it.InventoryType AS inventory_type "
+    "it.InventoryType AS inventory_type, "
+    "COALESCE(((it.holy_res > 0 OR it.fire_res > 0 OR it.nature_res > 0 "
+    "OR it.frost_res > 0 OR it.shadow_res > 0 OR it.arcane_res > 0) "
+    "AND it.dmg_max1 <= 0 AND it.RandomProperty = 0 AND it.RandomSuffix = 0 "
+    "AND it.stat_value1 = 0 AND it.stat_value2 = 0 AND it.stat_value3 = 0 "
+    "AND it.stat_value4 = 0 AND it.stat_value5 = 0 AND it.stat_value6 = 0 "
+    "AND it.stat_value7 = 0 AND it.stat_value8 = 0 AND it.stat_value9 = 0 "
+    "AND it.stat_value10 = 0 AND it.spellid_1 = 0 AND it.spellid_2 = 0 "
+    "AND it.spellid_3 = 0 AND it.spellid_4 = 0 AND it.spellid_5 = 0 "
+    "AND COALESCE(ii.randomPropertyId, 0) = 0), 0) AS resistance_only "
     "FROM character_inventory ci "
     "JOIN characters c ON c.guid = ci.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
@@ -29326,7 +29363,16 @@ def _fetch_wearers(names: list) -> list:
 _FAMILY_EQUIPPED_SQL = (
     "SELECT c.name AS name, c.class AS class_id, c.level AS level, "
     "ci.slot AS equipment_slot, it.InventoryType AS inventory_type, "
-    "it.ItemLevel AS item_level "
+    "it.ItemLevel AS item_level, "
+    "COALESCE(((it.holy_res > 0 OR it.fire_res > 0 OR it.nature_res > 0 "
+    "OR it.frost_res > 0 OR it.shadow_res > 0 OR it.arcane_res > 0) "
+    "AND it.dmg_max1 <= 0 AND it.RandomProperty = 0 AND it.RandomSuffix = 0 "
+    "AND it.stat_value1 = 0 AND it.stat_value2 = 0 AND it.stat_value3 = 0 "
+    "AND it.stat_value4 = 0 AND it.stat_value5 = 0 AND it.stat_value6 = 0 "
+    "AND it.stat_value7 = 0 AND it.stat_value8 = 0 AND it.stat_value9 = 0 "
+    "AND it.stat_value10 = 0 AND it.spellid_1 = 0 AND it.spellid_2 = 0 "
+    "AND it.spellid_3 = 0 AND it.spellid_4 = 0 AND it.spellid_5 = 0 "
+    "AND COALESCE(ii.randomPropertyId, 0) = 0), 0) AS resistance_only "
     "FROM characters c "
     "LEFT JOIN character_inventory ci ON ci.guid = c.guid "
     "AND ci.bag = 0 AND ci.slot < 19 "
@@ -29343,6 +29389,15 @@ _FAMILY_EQUIPPED_ROLES_SQL = (
     "SELECT c.name AS name, c.class AS class_id, c.level AS level, "
     "ci.slot AS equipment_slot, it.InventoryType AS inventory_type, "
     "it.ItemLevel AS item_level, "
+    "COALESCE(((it.holy_res > 0 OR it.fire_res > 0 OR it.nature_res > 0 "
+    "OR it.frost_res > 0 OR it.shadow_res > 0 OR it.arcane_res > 0) "
+    "AND it.dmg_max1 <= 0 AND it.RandomProperty = 0 AND it.RandomSuffix = 0 "
+    "AND it.stat_value1 = 0 AND it.stat_value2 = 0 AND it.stat_value3 = 0 "
+    "AND it.stat_value4 = 0 AND it.stat_value5 = 0 AND it.stat_value6 = 0 "
+    "AND it.stat_value7 = 0 AND it.stat_value8 = 0 AND it.stat_value9 = 0 "
+    "AND it.stat_value10 = 0 AND it.spellid_1 = 0 AND it.spellid_2 = 0 "
+    "AND it.spellid_3 = 0 AND it.spellid_4 = 0 AND it.spellid_5 = 0 "
+    "AND COALESCE(ii.randomPropertyId, 0) = 0), 0) AS resistance_only, "
     "r.spec_tab AS spec_tab, "
     "(SELECT COUNT(*) FROM overseer_raid_seat s "
     "WHERE s.name = c.name AND s.role = 'tank') AS tank_seat "
@@ -34225,8 +34280,9 @@ _GUILD_HELD_GEAR_SQL = (
     "it.ItemLevel AS item_level, it.AllowableClass AS allowable_class, "
     "it.InventoryType AS inventory_type, "
     "(it.spellid_1 > 0 OR it.spellid_2 > 0 OR it.spellid_3 > 0 "
-    " OR it.spellid_4 > 0 OR it.spellid_5 > 0) AS has_effect "
-    "FROM character_inventory ci "
+    " OR it.spellid_4 > 0 OR it.spellid_5 > 0) AS has_effect, "
+    + _GEAR_RESISTANCE_ONLY_INSTANCE_EXPR
+    + " FROM character_inventory ci "
     "JOIN characters c ON c.guid = ci.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -35786,8 +35842,9 @@ def _job_bag_slots(room) -> dict:
 # when it would not be an upgrade, which is gear.would_wear against these.
 _JOB_WORN_SQL = (
     "SELECT c.name, c.class AS class_id, c.level, ci.slot AS equipment_slot, "
-    "it.InventoryType AS inventory_type, it.ItemLevel AS item_level "
-    "FROM characters c "
+    "it.InventoryType AS inventory_type, it.ItemLevel AS item_level, "
+    + _GEAR_RESISTANCE_ONLY_INSTANCE_EXPR
+    + " FROM characters c "
     "LEFT JOIN character_inventory ci ON ci.guid = c.guid AND ci.bag = 0 AND ci.slot < 19 "
     "LEFT JOIN item_instance ii ON ii.guid = ci.item "
     "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -36941,7 +36998,8 @@ _GEAR_VENDOR_SQL = (
     "it.entry AS entry, it.BuyPrice AS buyout, it.InventoryType AS InventoryType, "
     "it.class AS class, it.subclass AS subclass, it.RequiredLevel AS RequiredLevel, "
     "it.AllowableClass AS AllowableClass, it.ItemLevel AS ItemLevel, "
-    "it.Quality AS Quality, " + _GEAR_ITEM_EFFECT_COLUMNS + "ft.EnemyGroup AS enemy_group "
+    "it.Quality AS Quality, " + _GEAR_ITEM_EFFECT_COLUMNS
+    + _GEAR_RESISTANCE_ONLY_TEMPLATE_COL + ", ft.EnemyGroup AS enemy_group "
     "FROM acore_world.npc_vendor nv "
     "JOIN acore_world.creature cr ON cr.id = nv.entry "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
@@ -36954,7 +37012,7 @@ _GEAR_VENDOR_SQL = (
     "AND ABS(cr.position_x - %s) <= %s AND ABS(cr.position_y - %s) <= %s "
     "GROUP BY cr.id, ct.name, cr.map, it.entry, it.BuyPrice, it.InventoryType, "
     "it.class, it.subclass, it.RequiredLevel, it.AllowableClass, it.ItemLevel, "
-    "it.Quality, has_item_effect, ft.EnemyGroup "
+    "it.Quality, has_item_effect, resistance_only, ft.EnemyGroup "
     "HAVING yards <= %s ORDER BY yards, vendor"
 )
 
@@ -41272,7 +41330,9 @@ def _fetch_auction_listings(entries: list, house: int) -> list:
 _GEARUP_EQUIPPED_SQL = (
     "SELECT c.name, c.class AS class_id, c.level, c.money AS purse, "
     "ci.slot, it.ItemLevel AS item_level, it.class AS item_class, "
-    "it.subclass AS item_subclass, it.Quality AS item_quality FROM characters c "
+    "it.subclass AS item_subclass, it.Quality AS item_quality, "
+    + _GEAR_RESISTANCE_ONLY_INSTANCE_EXPR
+    + " FROM characters c "
     "LEFT JOIN character_inventory ci ON ci.guid=c.guid AND ci.bag=0 AND ci.slot<19 "
     "LEFT JOIN item_instance ii ON ii.guid=ci.item "
     "LEFT JOIN acore_world.item_template it ON it.entry=ii.itemEntry WHERE c.name IN (%s)"
@@ -41355,6 +41415,7 @@ def _fetch_gearup_facts(names: list) -> dict:
                         if row.get("item_quality") is not None
                         else None
                     ),
+                    "resistance_only": bool(row.get("resistance_only")),
                 }
     return result
 
@@ -41372,7 +41433,8 @@ def _fetch_gear_offers(entries: list) -> list:
         cur.execute(
             "SELECT entry, BuyPrice AS buyout, InventoryType, class, subclass, "
             "RequiredLevel, AllowableClass, ItemLevel, Quality, "
-            + _GEAR_ITEM_EFFECT_COLUMNS.rstrip(", ")
+            + _GEAR_ITEM_EFFECT_COLUMNS
+            + _GEAR_RESISTANCE_ONLY_TEMPLATE_COL
             + " FROM acore_world.item_template it WHERE entry IN (%s) "  # noqa: S608 - placeholders from a COUNT
             "AND class IN (2,4) AND InventoryType BETWEEN 1 AND 28 "
             "AND BuyPrice > 0" % marks, [int(e) for e in entries])
@@ -41385,7 +41447,8 @@ def _fetch_gearup_listings(house: int) -> list:
             "SELECT a.id AS listing_id, a.buyoutprice AS buyout, ii.itemEntry AS entry, "
             "it.name, it.InventoryType, it.class, it.subclass, it.RequiredLevel, "
             "it.AllowableClass, it.ItemLevel, it.Quality, "
-            + _GEAR_ITEM_EFFECT_COLUMNS.rstrip(", ")
+            + _GEAR_ITEM_EFFECT_COLUMNS
+            + _GEAR_RESISTANCE_ONLY_INSTANCE_EXPR
             + " FROM auctionhouse a "
             "JOIN item_instance ii ON ii.guid=a.itemguid "
             "JOIN acore_world.item_template it ON it.entry=ii.itemEntry "

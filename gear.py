@@ -62,6 +62,7 @@ import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
+import gearscore
 import weaponskill
 
 # The stuck text names times the way the reader reads them: the operator's
@@ -544,6 +545,10 @@ class Holding:
     # on-equip or a chance-on-hit effect. Item level cannot price one, so a
     # ranking that compares item levels is only a floor for it (#174).
     has_effect: bool = False
+    # True when the item's only bonus beyond base armor/shield block is resistance
+    # (no primary/combat stats, weapon damage, spells, or random properties):
+    # reserved for situational sets, never equipped for everyday wear (#2658).
+    resistance_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -576,8 +581,13 @@ class CharacterState:
     # learned the skill for, from character_skills, or None when that was
     # not read. None keeps the class-only judgement (#393).
     weapon_skills: frozenset | None = None
+    # Slot buckets whose only worn piece is resistance-only, so any real-stat
+    # everyday item for that slot replaces it regardless of item level (#2658).
+    resistance_slots: frozenset = frozenset()
 
     def equipped_level(self, slot: str) -> int:
+        if slot in self.resistance_slots:
+            return 0
         return int(self.equipped.get(slot, 0))
 
     def has_off_hand(self) -> bool:
@@ -754,6 +764,20 @@ def _cannot_wear(holding: Holding, character: CharacterState) -> str:
     return _off_hand_refusal(holding, character)
 
 
+def can_wear(holding: Holding, character: CharacterState) -> tuple:
+    """Whether `character` can physically equip `holding` (class, armour,
+    weapon skill and level), ignoring whether it upgrades everyday wear."""
+    if holding.item_class not in (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR):
+        return (
+            False,
+            "not gear (quest items, reagents and consumables are never considered)",
+        )
+    refusal = _cannot_wear(holding, character)
+    if refusal:
+        return False, refusal
+    return True, ""
+
+
 def would_wear(holding: Holding, character: CharacterState) -> tuple:
     """Would this character actually put this on, ignoring who may own it.
 
@@ -774,14 +798,11 @@ def would_wear(holding: Holding, character: CharacterState) -> tuple:
     Returns (would_wear: bool, reason: str), the same pair `is_upgrade_for`
     returns and for the same reason: a False is logged as often as a True.
     """
-    if holding.item_class not in (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR):
-        return (
-            False,
-            "not gear (quest items, reagents and consumables are never considered)",
-        )
-    refusal = _cannot_wear(holding, character)
-    if refusal:
+    wearable, refusal = can_wear(holding, character)
+    if not wearable:
         return False, refusal
+    if holding.resistance_only:
+        return False, "resistance-only piece for a situational set"
     slot = _slot_for(holding)
 
     # THE ROLE GUARD (the Severing Axe test, #2813). A two-hander is never an
@@ -2945,6 +2966,22 @@ def _worn_slot(row: dict, inventory_type: int) -> tuple[str, str]:
     return slot, kind
 
 
+def _row_is_resistance_only(row: dict) -> bool:
+    unread_spell = (
+        any(int(row.get(f"spellid_{n}", 0) or 0) > 0 for n in range(1, 6))
+        if "spellid_1" in row
+        else bool(int(row.get("has_effect", 0) or 0))
+    )
+    unresolved_random = bool(
+        int(row.get("random_property_id", 0) or 0)
+        or int(row.get("RandomProperty", 0) or 0)
+        or int(row.get("RandomSuffix", 0) or 0)
+    )
+    return gearscore.is_resistance_only(
+        row, unread_spell=unread_spell, unresolved_random=unresolved_random
+    )
+
+
 def characters_from_rows(rows, names, roles=None) -> list:
     """One CharacterState per name, from equipped rows joined to characters.
 
@@ -2970,6 +3007,8 @@ def characters_from_rows(rows, names, roles=None) -> list:
     seen = {}
     off_hands = {}
     skills = {}
+    real_slots: dict[str, set[str]] = {}
+    res_slots: dict[str, set[str]] = {}
     for row in rows:
         try:
             name = str(row["name"])
@@ -2995,6 +3034,12 @@ def characters_from_rows(rows, names, roles=None) -> list:
             # one bucket. The BEST of them is what an upgrade has to beat,
             # because the worst is the one a new piece would displace.
             equipped[slot] = max(equipped.get(slot, 0), item_level)
+            if _row_is_resistance_only(row):
+                if slot not in real_slots.get(name, ()):
+                    res_slots.setdefault(name, set()).add(slot)
+            else:
+                real_slots.setdefault(name, set()).add(slot)
+                res_slots.setdefault(name, set()).discard(slot)
         if kind:
             off_hands[name] = kind
     return [
@@ -3006,6 +3051,7 @@ def characters_from_rows(rows, names, roles=None) -> list:
             role=str(roles.get(name, ROLE_UNKNOWN) or ROLE_UNKNOWN),
             off_hand_kind=off_hands.get(name, OFF_HAND_NONE),
             weapon_skills=skills.get(name),
+            resistance_slots=frozenset(res_slots.get(name, ())),
         )
         for name in names
         if name in seen
@@ -3052,6 +3098,7 @@ def holdings_from_rows(rows) -> list:
                     soulbound=bool(int(row.get("instance_flags", 0) or 0) & 0x1),
                     item_subclass=int(row.get("item_subclass", SUBCLASS_UNSTATED)),
                     has_effect=bool(int(row.get("has_effect", 0) or 0)),
+                    resistance_only=_row_is_resistance_only(row),
                 )
             )
         except (KeyError, TypeError, ValueError):
