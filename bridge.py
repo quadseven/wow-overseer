@@ -36,6 +36,7 @@ import auction
 import bag_market
 import guildbags
 import guildgather
+import lowrung
 import bag_pressure
 import bag_upgrade
 import bank
@@ -20129,6 +20130,12 @@ class Bridge(discord.Client):
                 continue
             if m.name in busy and not (m.role == guildjobs.MAINTENANCE and m.eligible):
                 continue
+            # A starved low rung (lowrung.py) sends the member back to where
+            # it drops, ahead of the field its own level would choose.
+            fed = await self._fed_field(m, m.feed, surveys) if m.feed else None
+            if fed is not None:
+                out[m.name] = fed
+                continue
             skills = _guild_gathering_skills(m)
             spot = (await self._gathering_field(m, skills, surveys)
                     if skills else await self._skinning_field(m))
@@ -20140,12 +20147,25 @@ class Bridge(discord.Client):
                 out[m.name] = spot
         return out
 
-    async def _gathering_field(self, member, skills, surveys):
+    async def _fed_field(self, member, feed, surveys):
+        """The field a low-rung feed (lowrung.py) sends `member` to, or None."""
+        if feed.kind == lowrung.SKIN:
+            return await self._skinning_field(member, feed.band)
+        if feed.kind == lowrung.CLOTH:
+            return await self._cloth_field(member, feed.band)
+        skills = _guild_gathering_skills(member)
+        return await self._gathering_field(member, skills, surveys, feed.locks)
+
+    async def _gathering_field(self, member, skills, surveys, only_locks=None):
         # gatheraim reads {character: {skill: value}}; `skills` is this one
         # member's {skill: value}, so it goes in under the member's name.
         skills = {member.name: skills}
         locks = tuple(sorted({lock for name, best in gatheraim.strongest_gatherers(skills)
                               for lock in gatherband.reachable_locks(name, best)}))
+        if only_locks:
+            locks = tuple(lock for lock in locks if lock in only_locks)
+            if not locks:
+                return None
         key = (int(member.map_id), locks)
         if key not in surveys:
             surveys[key] = await asyncio.to_thread(
@@ -20181,25 +20201,27 @@ class Bridge(discord.Client):
                 zone_levels[candidate.zone_id] = danger
         return zone_levels
 
-    async def _skinning_field(self, member):
+    async def _skinning_field(self, member, band=None):
         skin = member.skill(guildjobs.SKINNING)[0]
         low, high = guildjobs.skin_band(member.level, skin)
+        if band is not None:
+            low, high = band[0], min(band[1], guildjobs.skinnable_level(skin))
         if not member.holds(guildjobs.SKINNING) or high < low:
             return None
         beasts = await asyncio.to_thread(
             _survey_job_beasts, int(member.map_id), float(member.x),
             float(member.y), low, high)
         return guildjobs.skinning_field(
-            beasts, (float(member.x), float(member.y)), member.level, skin)
+            beasts, (float(member.x), float(member.y)), member.level, skin, band)
 
-    async def _cloth_field(self, member):
+    async def _cloth_field(self, member, band=None):
         """The pack of cloth-dropping humanoids a member is sent to, or None."""
-        low, high = guildjobs.cloth_band(member.level)
+        low, high = guildjobs.cloth_band(member.level) if band is None else band
         mobs = await asyncio.to_thread(
             _survey_job_cloth, int(member.map_id), float(member.x),
             float(member.y), low, high)
         return guildjobs.cloth_field(
-            mobs, (float(member.x), float(member.y)), member.level)
+            mobs, (float(member.x), float(member.y)), member.level, band)
 
     async def _run_job_step(self, step, cap: float) -> None:
         """Write one job step's rows in order, each after the last has answered.
@@ -34770,7 +34792,31 @@ def _with_purses_and_reserves(members, masters) -> list:
             order = purse.order(m.name, m.level, m.money, d.copper, d.count,
                                 m.skill(purse.RIDING_SKILL)[1], restsupply.empty(m))
         out.append(dataclasses.replace(m, reserved=reserved.get(m.guild), purse=order))
-    return out
+    return _with_low_rung_feeds(out, masters)
+
+
+def _with_low_rung_feeds(members, masters) -> list:
+    """The members with the low rung each is sent back to farm laid on
+    (lowrung.py); blocking.
+
+    A guild whose bank forecast names a starved cloth, leather or stone sends
+    the members that out-levelled it. Said once per change, with the crafters
+    short of it and the source chosen, so a starved ladder shows in the log.
+    """
+    starved, crafters = {}, {}
+    for guild, master in (masters or {}).items():
+        if not master:
+            continue
+        forecast = _bank_forecast([str(master)])
+        starved[guild] = dict(forecast.starved)
+        for entry, names in forecast.short.items():
+            crafters[entry] = tuple(sorted(set(crafters.get(entry, ())) | set(names)))
+    focus = guildjobs.focus_from_env()
+    feeds = lowrung.plan(members, starved, crafters, focus)
+    _log_changed("low rung feed",
+                 [lowrung.line(f) for f in feeds.values()]
+                 + lowrung.unfed(members, starved, crafters, focus))
+    return [dataclasses.replace(m, feed=feeds.get(m.name)) for m in members]
 
 
 def _fetch_trainees(names: list) -> list:
