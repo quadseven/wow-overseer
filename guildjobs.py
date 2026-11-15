@@ -452,6 +452,11 @@ BAG_ACTION = "bag"
 # the bag floor leaves loot on the corpse every kill until it is relieved.
 SEAT_SELL_ACTION = "seat-sell"
 SEAT_BANK_ACTION = "seat-bank"
+SEAT_DESTROY_ACTION = "seat-destroy"
+# Why the plan destroys a stack, said on the step and so in the log (#2607).
+SEAT_DESTROY_WHY = (
+    "no quest it is on or could take names it, no vendor price, common quality"
+)
 # A seat is relieved while its free carried slots are under this: the item
 # plan's own trigger (itemplan.TRIGGER_FREE), written here because this module
 # does not import the plan; tests/test_guild_seat_bags.py holds the two equal.
@@ -470,6 +475,7 @@ COOLDOWN_MINUTES = {
     "sell": 120,
     SEAT_SELL_ACTION: 20,
     SEAT_BANK_ACTION: 30,
+    SEAT_DESTROY_ACTION: 20,
     # A walk to a riding trainer (riding_step): a rank is bought once.
     "riding": 180,
     # A walk to the race's mount vendor, its buy and the use (mount_step).
@@ -724,6 +730,8 @@ class Member:
     plan_sales: tuple = ()  # Carried
     plan_bank: tuple = ()  # Carried
     banker: object = None  # a Spot
+    # Quest-class stacks the plan destroys as certainly useless (#2607).
+    plan_destroy: tuple = ()  # Carried
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -1685,6 +1693,7 @@ TOWN_STOP_ACTIONS = frozenset(
         "room",
         SEAT_SELL_ACTION,
         SEAT_BANK_ACTION,
+        SEAT_DESTROY_ACTION,
         "riding",
         "weapon",
         restsupply.ACTION,
@@ -3862,6 +3871,38 @@ def _seat_bank_step(m, cap):
     )
 
 
+def _seat_destroy_step(m, kept):
+    """The stacks the plan destroys, through the world's destroy verb (a sell
+    row, as the family's destroy pass writes it): no walk, no vendor. The world
+    re-checks the holder's quest log before it destroys anything. Each stack is
+    named in the step with the reason."""
+    stacks = [c for c in m.plan_destroy or () if not _kept(m.name, c, kept)]
+    stacks = stacks[:MAX_SALES]
+    if not stacks:
+        return None
+    return guildcorps.Step(
+        m.name,
+        SEAT_DESTROY_ACTION,
+        len(stacks),
+        "%s destroys %d stack(s) (%s): %s"
+        % (
+            m.name,
+            len(stacks),
+            SEAT_DESTROY_WHY,
+            ", ".join("%s x%d" % (c.name or c.entry, int(c.count)) for c in stacks),
+        ),
+        rows=tuple(
+            guildcorps.Row(
+                "sell",
+                "destroy guid:%d count:%d" % (int(c.guid), int(c.count)),
+                "",
+                source_for(SEAT_DESTROY_ACTION, m.name),
+            )
+            for c in stacks
+        ),
+    )
+
+
 def seat_loop_first(m, kept, recent, cap):
     """A raid seat's bag loop (#2609): at the item plan's trigger it sells what
     the plan sells, and when that is done or cooling it banks what the plan
@@ -3869,8 +3910,12 @@ def seat_loop_first(m, kept, recent, cap):
     stacks a vendor buys, the sale rung asked at a quarter of the bags free,
     and no pass planned a deposit for a seat at all. Never a give, never a
     grant: the loop only moves what the seat already carries."""
-    if not (m.plan_sales or m.plan_bank) or not _seat_ready(m):
+    if not (m.plan_sales or m.plan_bank or m.plan_destroy) or not _seat_ready(m):
         return None
+    if not _cooling(m, SEAT_DESTROY_ACTION, recent):
+        step = _seat_destroy_step(m, kept)
+        if step is not None:
+            return step
     if not _cooling(m, SEAT_SELL_ACTION, recent):
         step = _seat_sell_step(m, kept, cap)
         if step is not None:

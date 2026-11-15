@@ -94,6 +94,7 @@ def needs_plan(member) -> bool:
 class SeatPlan:
     sales: dict = field(default_factory=dict)  # name -> Carried to sell
     banks: dict = field(default_factory=dict)  # name -> Carried to bank
+    destroys: dict = field(default_factory=dict)  # name -> Carried to destroy
     lines: tuple = ()  # one log line per seat that got a plan
 
 
@@ -169,29 +170,36 @@ def plan_for(
         if row is not None:
             sold.setdefault(sale.holder, []).append(carried_of(row))
     banked: dict = {}
+    destroyed: dict = {}
     for d in report.plan.decisions:
-        if d.route != itemplan.BANK_PERSONAL or d.from_loc not in itemplan.CARRIED:
+        if d.route not in (itemplan.BANK_PERSONAL, itemplan.DESTROY):
+            continue
+        if d.from_loc not in itemplan.CARRIED:
             continue
         if d.stuck or d.reason.startswith(itemplan.NO_ROOM):
             continue
         row = row_of.get(d.key)
-        if row is not None:
-            banked.setdefault(d.holder, []).append(carried_of(row))
+        if row is None:
+            continue
+        into = banked if d.route == itemplan.BANK_PERSONAL else destroyed
+        into.setdefault(d.holder, []).append(carried_of(row))
     lines = tuple(
-        "%s %s: %d free slot(s), the plan sells %d stack(s) and banks %d"
+        "%s %s: %d free slot(s), the plan sells %d stack(s), banks %d and destroys %d"
         % (
             PREFIX,
             name,
             _int((free_slots or {}).get(name)),
             len(sold.get(name, ())),
             len(banked.get(name, ())),
+            len(destroyed.get(name, ())),
         )
         for name in names
-        if sold.get(name) or banked.get(name)
+        if sold.get(name) or banked.get(name) or destroyed.get(name)
     )
     return SeatPlan(
         {k: tuple(v) for k, v in sold.items()},
         {k: tuple(v) for k, v in banked.items()},
+        {k: tuple(v) for k, v in destroyed.items()},
         lines,
     )
 
@@ -216,7 +224,8 @@ def attach(members, seat_plan, bankers, cap, bank=True) -> list:
     for m in members:
         sales = seat_plan.sales.get(m.name, ())
         banks = seat_plan.banks.get(m.name, ()) if bank else ()
-        if not sales and not banks:
+        destroys = seat_plan.destroys.get(m.name, ())
+        if not sales and not banks and not destroys:
             out.append(m)
             continue
         out.append(
@@ -224,6 +233,7 @@ def attach(members, seat_plan, bankers, cap, bank=True) -> list:
                 m,
                 plan_sales=tuple(sales),
                 plan_bank=tuple(banks),
+                plan_destroy=tuple(destroys),
                 banker=nearest_banker(m, bankers, cap) if banks else None,
             )
         )
@@ -247,13 +257,15 @@ class Memo:
             self._plan[name] = (
                 seat_plan.sales.get(name, ()),
                 seat_plan.banks.get(name, ()),
+                seat_plan.destroys.get(name, ()),
             )
 
     def merged(self, names, seat_plan) -> SeatPlan:
         sales = dict(seat_plan.sales)
         banks = dict(seat_plan.banks)
+        destroys = dict(seat_plan.destroys)
         for name in names:
-            if name in sales or name in banks:
+            if name in sales or name in banks or name in destroys:
                 continue
             old = self._plan.get(name)
             if old is None:
@@ -262,7 +274,9 @@ class Memo:
                 sales[name] = old[0]
             if old[1]:
                 banks[name] = old[1]
-        return SeatPlan(sales, banks, seat_plan.lines)
+            if old[2]:
+                destroys[name] = old[2]
+        return SeatPlan(sales, banks, destroys, seat_plan.lines)
 
 
 def relieve(members, read, bankers_for, cap, now, memo, environ=None):
