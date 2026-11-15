@@ -187,7 +187,7 @@ class EquipscoreResistanceOnlyTest(unittest.TestCase):
         ember = _emberplate()
         noxx = _noxxion()
 
-        self.assertEqual((0.0, 0.0), equipscore.value(ember, ret))
+        self.assertEqual((0.0, 0.0, 0), equipscore.value(ember, ret))
         self.assertEqual((), equipscore.choose(ret, [], [ember]))
         self.assertEqual(
             (),
@@ -219,7 +219,7 @@ class EquipscoreResistanceOnlyTest(unittest.TestCase):
         alabaster = _alabaster()
 
         for wearer in (prot_pal, prot_war):
-            self.assertEqual((0.0, 0.0), equipscore.value(ember, wearer))
+            self.assertEqual((0.0, 0.0, 0), equipscore.value(ember, wearer))
             self.assertEqual((), equipscore.choose(wearer, [], [ember]))
             self.assertEqual(
                 (),
