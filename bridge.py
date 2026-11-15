@@ -39600,7 +39600,7 @@ def _team_candidates(guild: str) -> list:
     race one of `guild`'s open seats wants, each with its account's
     playerbot account type (None for an account that is not a bot's), so
     teamsync recruits only a character the realm logs in by itself."""
-    seats = [s for s in raidteams.seats(guild) if not s.was] + list(raidteams.QUESTERS.get(guild, ()))
+    seats = [s for s in raidteams.seats(guild) if not s.was] + list(raidteams.QUESTERS.get(guild, ())) + list(raidteams.BANKERS.get(guild, ()))
     wanted = {(s.class_id, teamsync.RACE_IDS[s.race]) for s in seats}
     if not wanted:
         return []
