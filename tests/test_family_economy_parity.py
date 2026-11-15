@@ -120,6 +120,10 @@ class TheSelf:
             forget=lambda claimant: self.forgotten_claims.append(claimant)
         )
 
+    def _gear_bank_for(self, names):
+        """No routed gear piece waits in the vault here (#2504)."""
+        return ()
+
     def _guild_walk_cap(self):
         # The near cap, which is what these fixtures' mailboxes are inside.
         return 600.0
