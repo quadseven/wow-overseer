@@ -400,6 +400,89 @@ def parse_watch(text: str) -> Spec | SpecError:
     return SpecError(f"I do not know how to watch '{text.strip()}'. {USAGE}")
 
 
+# ------------------------------------------------------------ the page's order --
+
+# The dashboard's Watch button sends a run id and nothing else. It never sends
+# a sentence for the grammar above to interpret, and it shares one camera with
+# whoever else is looking: a click on a DIFFERENT group inside this many seconds
+# of the last order is refused with the wait, so two viewers cannot flip the
+# picture back and forth under each other. The same group renews at once.
+SPECTATE_DWELL = 90.0
+_MAX_RUN_ID = 999_999_999  # what _arg_run's nine digits can carry
+
+
+def spectate_spec(run) -> Spec | SpecError:
+    """`run <id>` for an integer id; anything else, a string included, is refused."""
+    if isinstance(run, bool) or not isinstance(run, int) or not 1 <= run <= _MAX_RUN_ID:
+        return SpecError("the run to watch must be a positive whole number")
+    return parse_watch(f"run {run}")
+
+
+def order_run(spec: str) -> int | None:
+    """The run id an order names, or None when it names anything else."""
+    parsed = parse_watch(spec or "")
+    if isinstance(parsed, SpecError) or parsed.kind != "run":
+        return None
+    return int(parsed.arg)
+
+
+@dataclass(frozen=True)
+class Verdict:
+    allowed: bool
+    switch_in: int = 0
+    reason: str = ""
+
+
+def _order_age(row: Mapping) -> float:
+    """Seconds since the order was given. Each order lives MANDATE_TTL seconds
+    from the moment it is written, so the time left says how old it is."""
+    return max(0.0, MANDATE_TTL - float(row.get("ttl") or 0))
+
+
+def spectate_verdict(row: Mapping | None, spec_text: str) -> Verdict:
+    """May this order replace the one the camera is on?"""
+    if not mandate_active(row):
+        return Verdict(True)
+    if str(row.get("spec") or "") == spec_text:
+        return Verdict(True)
+    age = _order_age(row)
+    if age >= SPECTATE_DWELL:
+        return Verdict(True)
+    wait = max(1, math.ceil(SPECTATE_DWELL - age))
+    on = str(row.get("spec") or "something else")
+    return Verdict(
+        False,
+        wait,
+        f"The camera is on {on}, pointed there {int(age)} seconds ago. "
+        f"It can be switched in {wait} seconds.",
+    )
+
+
+def spectate_state(row: Mapping | None) -> dict:
+    """What the page draws its "now watching" state from."""
+    if not mandate_active(row):
+        return {
+            "active": False,
+            "run": None,
+            "spec": "",
+            "target": "",
+            "note": str(row.get("note") or "") if row else "",
+            "expires_in": 0,
+            "switch_in": 0,
+        }
+    spec = str(row.get("spec") or "")
+    wait = max(0, math.ceil(SPECTATE_DWELL - _order_age(row)))
+    return {
+        "active": True,
+        "run": order_run(spec),
+        "spec": spec,
+        "target": str(row.get("target") or ""),
+        "note": str(row.get("note") or ""),
+        "expires_in": int(row.get("ttl") or 0),
+        "switch_in": wait,
+    }
+
+
 def parse_watch_message(text: str):
     """A Discord line that starts with `watch`, or None for anything else."""
     stripped = (text or "").strip()
