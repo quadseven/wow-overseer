@@ -3574,6 +3574,24 @@ def _supply_first(m, offer, recent, cap, kept=None, book=None):
     return step, step.said, ""
 
 
+def _unpack_reagent_offer(offer):
+    if isinstance(offer, classreagents.Offer):
+        return offer.rows, offer.sold
+    return offer or (), None
+
+
+def _lead_reagent_buy(rows, buys):
+    nearest = {}
+    for r in rows:
+        entry = int(r.get("entry") or 0)
+        yards = float(r.get("yards") or 0.0)
+        if entry not in nearest or yards < nearest[entry][0]:
+            nearest[entry] = (yards, int(r.get("vendor") or 0))
+    return next(
+        (b for b in buys if nearest.get(b.entry, (0, 0))[1] == b.vendor), buys[0]
+    )
+
+
 def class_reagents_step(member, offer, cap, kept=None, spell_reagents=None):
     """(step or None, note): a member short of class reagents for known
     spells walks to a friendly vendor in reach, sells its junk there and buys
@@ -3581,10 +3599,7 @@ def class_reagents_step(member, offer, cap, kept=None, spell_reagents=None):
     (classreagents.py, #2622)."""
     if member.map_id is None or not spell_reagents:
         return None, ""
-    if isinstance(offer, classreagents.Offer):
-        offer_rows, sold = offer.rows, offer.sold
-    else:
-        offer_rows, sold = offer or (), None
+    offer_rows, sold = _unpack_reagent_offer(offer)
     rows = friendly_vendor_rows(member, offer_rows)
     junk = junk_value(member, kept)
     room = (
@@ -3605,15 +3620,7 @@ def class_reagents_step(member, offer, cap, kept=None, spell_reagents=None):
         if offer_rows and not rows and not why:
             why = "no vendor in reach will sell %s class reagents" % member.name
         return None, why
-    nearest = {}
-    for r in rows:
-        entry = int(r.get("entry") or 0)
-        yards = float(r.get("yards") or 0.0)
-        if entry not in nearest or yards < nearest[entry][0]:
-            nearest[entry] = (yards, int(r.get("vendor") or 0))
-    lead = next(
-        (b for b in buys if nearest.get(b.entry, (0, 0))[1] == b.vendor), buys[0]
-    )
+    lead = _lead_reagent_buy(rows, buys)
     return (
         guildcorps.Step(
             member.name,

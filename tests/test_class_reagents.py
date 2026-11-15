@@ -499,6 +499,43 @@ class ClassReagentsTests(unittest.TestCase):
         )
         self.assertEqual([], guildjobs.vendor_stacks(shaman_ww, keep.Reservations()))
 
+    def test_real_loader_reads_shipped_spellreagents_json_without_dbc(self):
+        import classreagents
+        import world_data
+
+        shipped = world_data.DATA_ROOT / "spellreagents.json"
+        self.assertTrue(shipped.is_file())
+        bridge = _load_bridge()
+        old_rows = bridge._SPELL_DBC_SQL_ROWS
+        bridge._SPELL_DBC_SQL_ROWS = None
+        try:
+
+            class _FakeCursor:
+                def execute(self, _sql):
+                    return 0
+
+                def fetchall(self):
+                    return []
+
+            with mock.patch.dict("os.environ", {"SPELL_DBC_PATH": ""}):
+                loaded = bridge._fetch_spell_reagents(_FakeCursor())
+        finally:
+            bridge._SPELL_DBC_SQL_ROWS = old_rows
+
+        self.assertGreater(len(loaded), 500)
+        self.assertEqual(
+            classreagents.load_spell_reagents(excluded=guildjobs.CRAFT_SPELLS).get(
+                REINCARNATION
+            ),
+            loaded.get(REINCARNATION),
+        )
+        self.assertEqual(((ANKH, 1),), loaded.get(REINCARNATION))
+        self.assertEqual(((SYMBOL_OF_KINGS, 1),), loaded.get(25898))
+        self.assertEqual(((17028, 1),), loaded.get(21562))
+        self.assertEqual(((17020, 1),), loaded.get(23028))
+        self.assertEqual(((SOUL_SHARD, 1),), loaded.get(693))
+        self.assertNotIn(FIRST_AID_SPELL, loaded)
+
     def test_bridge_class_reagent_wiring_and_sold_check(self):
         import classreagents
 

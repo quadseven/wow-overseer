@@ -63,7 +63,7 @@ COPY core.py bridge.py voice.py transform.py world_data.py \
      realmroller.py realmroller_world.py realmroller_plan.py realmroller_act.py \
      zones.json entrances.json shapes.json \
      talents.json items.json icons.json bagicons.json spells.json bagspells.json viewerdisplays.json \
-     craftbook.json taxinodes.json itemextendedcost.json triggers.json \
+     craftbook.json taxinodes.json itemextendedcost.json spellreagents.json triggers.json \
      index.html /app/
 
 # The operations app (index.html above loads it): its modules and styles, and

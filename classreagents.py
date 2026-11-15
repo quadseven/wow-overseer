@@ -37,6 +37,7 @@ _DEFAULT_DBC_PATHS = (Path("/azerothcore/env/dist/data/dbc/Spell.dbc"),)
 
 _CRAFT_SPELLS_CACHE: frozenset[int] | None = None
 _DBC_CACHE: dict[tuple[str, int, int], dict[int, tuple[tuple[int, int], ...]]] = {}
+_JSON_CACHE: dict[tuple[str, int, int], dict[int, tuple[tuple[int, int], ...]]] = {}
 
 
 @dataclass(frozen=True)
@@ -169,6 +170,29 @@ def merge_spell_reagents(
     }
 
 
+def parse_spell_reagents_json(raw: str) -> dict[int, tuple[tuple[int, int], ...]]:
+    """Parse committed `spellreagents.json` text into ``spell_id -> ((entry, per_cast), ...)``."""
+    data = json.loads(raw)
+    spells = data.get("spells") if isinstance(data, dict) else None
+    if not isinstance(spells, dict):
+        return {}
+    out: dict[int, tuple[tuple[int, int], ...]] = {}
+    for sid_text, pairs_raw in spells.items():
+        sid = _int(sid_text, 0)
+        if sid <= 0 or not isinstance(pairs_raw, list):
+            continue
+        pairs = tuple(
+            (int(entry), max(1, int(count)))
+            for pair in pairs_raw
+            if isinstance(pair, list | tuple) and len(pair) == 2
+            for entry, count in ((_int(pair[0], 0), _int(pair[1], 1)),)
+            if entry > 0
+        )
+        if pairs:
+            out[sid] = pairs
+    return out
+
+
 def default_spell_dbc_path() -> Path | None:
     """First readable Spell.dbc path from env, server dist, or data root."""
     candidates = []
@@ -183,23 +207,36 @@ def default_spell_dbc_path() -> Path | None:
     return None
 
 
+def _load_json_reagents(path: Path) -> dict[int, tuple[tuple[int, int], ...]]:
+    stat = path.stat()
+    key = (str(path), int(stat.st_mtime_ns), int(stat.st_size))
+    if key not in _JSON_CACHE:
+        _JSON_CACHE[key] = parse_spell_reagents_json(path.read_text(encoding="utf-8"))
+    return _JSON_CACHE[key]
+
+
 def load_spell_reagents(
     dbc_path: Path | None = None,
     sql_rows=None,
     excluded: frozenset | set | None = None,
 ) -> dict[int, tuple[tuple[int, int], ...]]:
-    """Load runtime spell reagent requirements from Spell.dbc + spell_dbc SQL."""
+    """Load runtime spell reagent requirements from shipped `spellreagents.json`
+    (or Spell.dbc when explicitly present) plus `acore_world.spell_dbc` SQL rows."""
     path = dbc_path if dbc_path is not None else default_spell_dbc_path()
-    dbc_map: dict[int, tuple[tuple[int, int], ...]] = {}
+    base_map: dict[int, tuple[tuple[int, int], ...]] = {}
     if path is not None and path.is_file():
         stat = path.stat()
         key = (str(path), int(stat.st_mtime_ns), int(stat.st_size))
         if key not in _DBC_CACHE:
             _DBC_CACHE[key] = parse_spell_dbc(path.read_bytes())
-        dbc_map = _DBC_CACHE[key]
+        base_map = _DBC_CACHE[key]
+    else:
+        json_path = world_data.DATA_ROOT / "spellreagents.json"
+        if json_path.is_file():
+            base_map = _load_json_reagents(json_path)
     sql_map = spell_reagents_from_rows(sql_rows) if sql_rows else None
     skip = frozenset(excluded or ()) | craft_spells()
-    return merge_spell_reagents(dbc_map, sql_map, excluded=skip)
+    return merge_spell_reagents(base_map, sql_map, excluded=skip)
 
 
 def entries_for_known(
