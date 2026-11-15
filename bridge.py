@@ -18321,6 +18321,10 @@ class Bridge(discord.Client):
                     m.name,
                     qid,
                 )
+            for qid in questers.retry_take_refusals(m.name, held, tried):
+                held.pop(qid)
+                log.info("questers: %s asks again for quest %d, whose take was "
+                         "refused and has no refusal left on record", m.name, qid)
             known = questers.known_broken(m.name, held, ledger)
             plan = questers.plan(cat, m, self._quester_clock, now, known, tried,
                                  self._quester_last.get(m.name, 0), crossings)
@@ -32826,7 +32830,10 @@ def _plan_guild_withdrawals(names: list) -> tuple:
     plans = _craft_plans_of(names)
     crafting = any(s.source == reagentplan.GUILD_BANK
                    for p in plans for s in p.shorts)
-    if not selling and not crafting:
+    # THE VAULT'S VENDOR AND GIVE DECISIONS ARE CARRIED OUT TOO (#2602).
+    clearing = any(d.action in (bankforecast.VENDOR, bankforecast.GIVE)
+                   for d in forecast.decisions())
+    if not selling and not crafting and not clearing:
         return ()
     try:
         free = _fetch_free_slots(names)
@@ -32844,10 +32851,12 @@ def _plan_guild_withdrawals(names: list) -> tuple:
             plans, _fetch_vault_stacks(names, entries), takers)
         for note in notes:
             log.info("guild bank: %s", note)
-    if not selling:
-        return for_craft
     pending = frozenset(int(row["entry"]) for row in _fetch_withdrawn_for_sale(names))
-    return for_craft + bankforecast.plan_withdrawals(forecast, takers, pending=pending)
+    placed = for_craft
+    if selling:
+        placed += bankforecast.plan_withdrawals(forecast, takers, pending=pending)
+    return placed + bankforecast.plan_surplus_withdrawals(
+        forecast, takers, planned=placed, pending=pending)
 
 
 def _clearance_sales(routes) -> tuple:
@@ -37691,6 +37700,14 @@ BANK_LEAVES_SECONDS = 120.0
 _BANK_LEAVES_CACHE: dict = {}
 
 
+def _banked_rows(names: list) -> list:
+    """The bank-side rows of `_fetch_bank_items`, bags and all; blocking."""
+    rows = _fetch_bank_items(names)
+    held = {h.guid for m in bank.members_from_rows(rows, names)
+            for h in m.banked if h.container_slots <= 0}
+    return [r for r in rows if int(r["item_guid"]) in held]
+
+
 def _bank_plan_leaves(names: list) -> tuple:
     """(item guid -> why, unread) for the stacks the item plan sends elsewhere.
 
@@ -37717,7 +37734,10 @@ def _bank_plan_leaves(names: list) -> tuple:
         gear_rows = _fetch_surplus_gear(list(key))
         worn_rows = _fetch_family_equipped(list(key))
         family = key[0]
-        extras = _itemplan_reads(list(key), family, rows, gear_rows, worn_rows)
+        banked_rows = (
+            _banked_rows(list(key)) if itemplan.SELL_VENDOR in routes else [])
+        extras = _itemplan_reads(
+            list(key), family, rows + banked_rows, gear_rows, worn_rows)
         report = itemplan_shadow.shadow(
             list(key), family, rows, free_slots, gear_rows=gear_rows,
             worn_rows=worn_rows, extras=extras)
@@ -37725,6 +37745,12 @@ def _bank_plan_leaves(names: list) -> tuple:
             rows, gear_rows, extras.templates, extras.instance_soulbound)
         leaves = itemplan_shadow.leaving(
             report.plan, list(zip(stacks, rows, strict=True)), routes, key)
+        if banked_rows:
+            # A BANKED STACK THE PLAN SELLS IS FETCHED OUT TO BE SOLD (#2603).
+            banked, pairs = itemplan_shadow.banked_plan(
+                list(key), family, banked_rows, rows, free_slots, extras,
+                gear_rows=gear_rows, worn_rows=worn_rows)
+            leaves.update(itemplan_shadow.sold_from_bank(banked, pairs))
         unread = False
     except Exception:
         log.exception("bank: the item plan could not be read; nothing new is "
@@ -37760,6 +37786,7 @@ def _plan_bank(names: list) -> "bank.Plan":
         over_target=_bank_forecast(names).over_target,
         # A REAGENT THE CRAFTER'S OWN ERRAND IS SHORT OF COMES OUT (#774).
         craft_wants=reagentplan.bank_wants(_craft_plans_of(names)),
+        dropped_second_sets=_bank_dropped_second_sets(names),
         # WHAT THE ITEM PLAN SELLS, GIVES OR LISTS IS NOT BANKED (#2604).
         plan_leaves=plan_leaves, plan_unread=plan_unread,
     )
@@ -37846,33 +37873,43 @@ def _bank_spare(names: list, fresh: bool = False) -> frozenset:
         return frozenset()
 
 
+def _bank_dropped_second_sets(names: list, fresh: bool = False) -> frozenset:
+    """Guids of dropped second-set gear from seat role locking (#2606); blocking."""
+    try:
+        return _bank_policy_read(names, fresh)[2]
+    except Exception:
+        log.exception("bank policy: dropped second sets unreadable; none are named")
+        return frozenset()
+
+
 def _bank_policy_read(names: list, fresh: bool = False) -> tuple:
-    """(guid -> Placement, spare guids) for this family, cached; blocking."""
+    """(guid -> Placement, spare guids, dropped second-set guids), cached."""
     key = tuple(sorted(str(n) for n in names or ()))
     if not key:
-        return {}, frozenset()
+        return {}, frozenset(), frozenset()
     now = time.monotonic()
     hit = _BANK_POLICY_CACHE.get(key)
     if not fresh and hit is not None and now - hit[0] < BANK_POLICY_SECONDS:
-        return hit[1], hit[2]
+        return hit[1], hit[2], hit[3]
     with _connect() as conn, conn.cursor() as cur:
         try:
             facts = bankpolicy.read(
                 cur, list(key), reservations=_keep_reservations(cur, key))
             placed = bankpolicy.place(facts)
             spare = bankpolicy.redundant(facts)
+            dropped = bankpolicy.dropped_second_sets(facts, placed)
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning("bank policy: the facts it reads are missing on "
                             "this world image; it keeps nothing")
-                placed, spare = {}, frozenset()
+                placed, spare, dropped = {}, frozenset(), frozenset()
             else:
                 raise
-    _BANK_POLICY_CACHE[key] = (now, placed, spare)
+    _BANK_POLICY_CACHE[key] = (now, placed, spare, dropped)
     _log_changed("bank policy", ["%s's %s -> %s: %s" % (p.holder, p.item, p.where, p.why)
                                  for p in placed.values()], key)
     _log_changed("bank policy: spare copy", [str(g) for g in sorted(spare)], key)
-    return placed, spare
+    return placed, spare, dropped
 
 
 def _kept_with_bank_policy(cohort=None):
