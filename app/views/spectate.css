@@ -1,0 +1,11 @@
+/* The Watch control on a live group, and the camera's card. */
+.sp-ctl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; position: relative; z-index: 1; }
+.sp-btn { min-height: 44px; gap: 6px; }
+.sp-on { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; font-weight: 500; }
+.sp-hint, .sp-note { font-size: var(--fs-1); overflow-wrap: anywhere; }
+.sp-msg { margin: 0; font-size: var(--fs-1); }
+.sp-msg:empty { display: none; }
+.sp-region { display: grid; gap: 8px; }
+.sp-stage { gap: 8px; min-width: 0; }
+.sp-slot { display: grid; gap: 4px; }
+.sp-video { width: 100%; max-width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: var(--radius-md); }
