@@ -39985,7 +39985,14 @@ def _quester_catalogue():
         starts = _job_read(cur, "quester quest starters", questers.STARTERS_SQL.format(quests=qids))
         ends = _job_read(cur, "quester quest enders", questers.ENDERS_SQL.format(quests=qids))
         links = _job_read(cur, "quester quest links", questers.LINKS_SQL)
-    _QUESTER_CATALOGUE = questers.catalogue(quests, givers, spawns, loot, starts, ends, links)
+        # An item no creature drops may sit in a chest: read the chests that
+        # hold a required item and where they stand, so the questers open them.
+        chests = _class_rows(cur, "quester quest chests", classquest.CHEST_SQL, "items", items)
+        objects = _class_rows(cur, "quester quest chest spawns",
+                              classquest.OBJECT_SPAWNS_SQL, "entries",
+                              {int(r["entry"]) for r in chests})
+    _QUESTER_CATALOGUE = questers.catalogue(quests, givers, spawns, loot, starts, ends,
+                                            links, chests, objects)
     log.info("questers: read %d quest(s) a quester may take from the world database",
              len(_QUESTER_CATALOGUE.facts))
     return _QUESTER_CATALOGUE
