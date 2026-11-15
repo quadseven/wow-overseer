@@ -332,6 +332,53 @@ def recent_walkers(rows, minutes=COOLDOWN_MINUTES) -> set:
     return out
 
 
+# The module's own refusal when no trainer of the member's class stands on the
+# map it stands on (mod-overseer's walk_refusals fixture): not retryable, and
+# true for as long as the member stays on that map (ticket 2624).
+NO_TRAINER_REASON = "no trainer of this character's class on this map"
+# How far back the log is read for such a refusal: a member left on a map with
+# no trainer is not asked again for as long as it stays.
+STRANDED_READ_DAYS = 30
+
+
+def _result_of(row) -> dict:
+    """The module's JSON answer in a log row, {} when it is not one."""
+    result = row.get("result")
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except ValueError:
+            return {}
+    return result if isinstance(result, dict) else {}
+
+
+def stranded(rows) -> dict:
+    """name -> the map each member's newest class trainer walk was refused on,
+    for those whose newest walk was refused for no trainer of their class on
+    that map. A later walk of any other kind frees the member. `rows` carry
+    target_name, source, age (minutes) and result."""
+    newest: dict = {}
+    for row in rows or ():
+        source = str(row.get("source") or "")
+        if not source.startswith(SOURCE + ":"):
+            continue
+        name = str(row.get("target_name") or source.split(":", 1)[1])
+        age = _int(row.get("age"), 10**9)
+        if name not in newest or age < newest[name][0]:
+            newest[name] = (age, _result_of(row))
+    out = {}
+    for name, (_age, result) in newest.items():
+        reason = str(result.get("reason") or "")
+        if (
+            result.get("outcome") == "refused"
+            and result.get("retryable") is False
+            and reason.startswith(NO_TRAINER_REASON)
+            and result.get("map") is not None
+        ):
+            out[name] = _int(result.get("map"))
+    return out
+
+
 def unsupported(rows) -> bool:
     """Whether the worldserver refused the class walk as a malformed row."""
     return any(
@@ -348,13 +395,17 @@ def plan(
     busy,
     per_guild=WALKS_PER_GUILD,
     cap=guildroute.FAR_WALK_YARDS,
+    stranded=None,
 ) -> tuple:
     """(walks, notes): which members walk to their class trainer this pass.
 
     A member walks when it is online, can pay for at least one waiting spell
     from its own purse, was not walked inside COOLDOWN_MINUTES, is not on
     another guild walk, and the walk row can move it. Inside a guild the
-    member with the most spells it can pay for goes first.
+    member with the most spells it can pay for goes first. A member in
+    `stranded` (name -> map, see `stranded`) is not walked while it stands on
+    the map its walk was refused on for want of a trainer of its class: it is
+    named once in the notes and written no row.
     """
     recent = {str(n) for n in recent or ()}
     busy = {str(n) for n in busy or ()}
@@ -378,6 +429,13 @@ def plan(
             continue
         if t.name in busy:
             notes.append("%s is already on a guild walk" % t.name)
+            continue
+        here = getattr((walkers or {}).get(t.name), "map_id", None)
+        if here is not None and (stranded or {}).get(t.name) == _int(here, -1):
+            notes.append(
+                "%s waits on a map change: no class trainer stands on map %d for it"
+                % (t.name, _int(here))
+            )
             continue
         why = walk_refusal((walkers or {}).get(t.name), t.name)
         if why:
@@ -414,6 +472,8 @@ def summary(rows) -> str:
     for row in rows or ():
         if not str(row.get("source") or "").startswith(SOURCE + ":"):
             continue
+        if _int(row.get("age"), 0) > 24 * 60:
+            continue  # read for a strand (stranded), not a walk of the day
         walks += 1
         result = row.get("result")
         if isinstance(result, str):
