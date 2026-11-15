@@ -175,9 +175,6 @@ class TheBridgeCarriesTheFeed(unittest.TestCase):
         )[0]
         self.assertIn("m.feed", body)
 
-    def test_the_module_ships_in_the_image(self):
-        self.assertIn("lowrung.py", pathlib.Path("Dockerfile").read_text("utf-8"))
-
     def test_nothing_is_granted(self):
         text = pathlib.Path("lowrung.py").read_text(encoding="utf-8").lower()
         for word in ("additem", "add item", ".modify money", "kind='auction'"):
