@@ -45,6 +45,10 @@ MAX_RADIUS = 400.0
 MIN_FALL_YARDS = 20.0
 # How far back the rows are read, in days.
 DEATH_DAYS = 7
+# A detour may run at most this many times the direct walk: past it the
+# route by way of the waypoint is a different journey through unsurveyed
+# country, not a step around the disc, and the refusal stands instead.
+MAX_DETOUR_RATIO = 2.0
 
 SQL = (
     "SELECT map AS map_id, pos_x AS x, pos_y AS y, pos_z AS z, killer_type, "
@@ -235,19 +239,22 @@ def detour(all_discs, start, goal, candidates):
     spawns the caller read out of the world database); nothing here invents
     a coordinate. A candidate serves when it stands outside every disc and
     both straight legs, start -> candidate and candidate -> goal, clear
-    every disc; of those, the shortest total walk wins. The outside-every-
-    disc test is its own on purpose: `crossing` never judges ground the
-    walker already stands in, so a walker standing in a disc could otherwise
-    be routed by way of a point inside that same disc. None when the
-    straight line already clears (nothing to route around), when no
-    candidate serves, or when an end cannot be read. The candidate is
-    returned as given, so the caller keeps the surveyed height it carried.
+    every disc; of those, the shortest total walk wins, and no route whose
+    total walk runs past MAX_DETOUR_RATIO times the direct walk serves at
+    all. The outside-every-disc test is its own on purpose: `crossing`
+    never judges ground the walker already stands in, so a walker standing
+    in a disc could otherwise be routed by way of a point inside that same
+    disc. None when the straight line already clears (nothing to route
+    around), when no candidate serves, or when an end cannot be read. The
+    candidate is returned as given, so the caller keeps the surveyed height
+    it carried.
     """
     a, b = _point(start), _point(goal)
     if a is None or b is None or a[0] != b[0]:
         return None
     if crossing(all_discs, start, goal) is None:
         return None
+    ceiling = MAX_DETOUR_RATIO * math.hypot(b[1] - a[1], b[2] - a[2])
     best, best_key = None, None
     for cand in candidates or ():
         c = _point(cand)
@@ -262,11 +269,12 @@ def detour(all_discs, start, goal, candidates):
             continue
         if crossing(all_discs, cand, goal) is not None:
             continue
-        key = (
-            math.hypot(c[1] - a[1], c[2] - a[2]) + math.hypot(b[1] - c[1], b[2] - c[2]),
-            c[1],
-            c[2],
+        total = math.hypot(c[1] - a[1], c[2] - a[2]) + math.hypot(
+            b[1] - c[1], b[2] - c[2]
         )
+        if total > ceiling:
+            continue
+        key = (total, c[1], c[2])
         if best_key is None or key < best_key:
             best, best_key = cand, key
     return best

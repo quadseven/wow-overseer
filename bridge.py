@@ -8634,6 +8634,11 @@ class Bridge(discord.Client):
         # One town slot per OTHER family (#150), keyed by the roster's
         # `family` value. This bridge's own family keeps `self._town_slot`.
         self._cohort_town_slots: dict[str, townslot.Slot] = {}
+        # Routings around a death disc already given to each (leader, aim)
+        # errand (#2540), as (count, window start): the town slot door's
+        # own budget, so one errand is offered only so many waypoints
+        # before the refusal stands.
+        self._detour_counts: dict = {}
         # When each other family's trainee first borrowed its lead for the
         # learn errand it still has (#211), keyed by the roster's `family`.
         # Kept in the memo store (#817), so a deploy does not restart the
@@ -10735,8 +10740,32 @@ class Bridge(discord.Client):
                 detour = globals().get("_death_disc_detour")
                 waypoint, crossed = "", ()
                 if detour:
-                    waypoint, crossed = await asyncio.to_thread(
-                        detour, leader, aim)
+                    # AN ERRAND IS ROUTED AROUND ONLY SO OFTEN (#2540): leg
+                    # two is judged from wherever the leader ends up, so a
+                    # walk can be offered waypoint after waypoint and never
+                    # arrive. The count is this door's own, per (leader,
+                    # aim): `_DETOUR_CAP` routings inside
+                    # `_DETOUR_WINDOW_SECONDS`, refilled by a clean ask
+                    # (the else below) or by the window passing.
+                    counts = getattr(self, "_detour_counts", None)
+                    if counts is None:
+                        counts = self._detour_counts = {}
+                    key = (leader, aim)
+                    count, started = counts.get(key, (0, 0.0))
+                    now = time.monotonic()
+                    if count and now - started > _DETOUR_WINDOW_SECONDS:
+                        count, started = 0, 0.0
+                    if count >= _DETOUR_CAP:
+                        refusal = (
+                            "%s; the walk has already been routed around "
+                            "%d times for this errand, so it is not routed "
+                            "again" % (refusal, count)
+                        )
+                    else:
+                        waypoint, crossed = await asyncio.to_thread(
+                            detour, leader, aim)
+                        if waypoint:
+                            counts[key] = (count + 1, started or now)
                 if not waypoint:
                     if len(crossed) > 1:
                         refusal = "%s; the line also crosses %s" % (
@@ -10751,6 +10780,13 @@ class Bridge(discord.Client):
                     "way of %s first", claimant, aim, refusal, waypoint)
                 aim = waypoint
                 distance = None
+            else:
+                # A CLEAN ASK REFILLS THE DETOUR BUDGET (#2540): the line
+                # to this aim clears from where the leader now stands, so
+                # the errand's routings around discs are done counting.
+                counts = getattr(self, "_detour_counts", None)
+                if counts:
+                    counts.pop((leader, aim), None)
         column = await asyncio.to_thread(_current_travel_npc, leader)
         now = time.monotonic()
         trainer_route = (
@@ -23703,12 +23739,13 @@ class Bridge(discord.Client):
             death_pass = _death_ask_pass(facts, mates, held,
                                          spoken={r.member for r in social.replies},
                                          seated=seated_names)
-            if death_pass.posts or death_pass.expire or death_pass.replies:
+            if death_pass.posts or death_pass.expire or death_pass.replies or death_pass.filled:
                 social = dataclasses.replace(
                     social,
                     posts=social.posts + death_pass.posts,
                     expire=social.expire + death_pass.expire,
                     replies=social.replies + death_pass.replies,
+                    filled=social.filled + death_pass.filled,
                     notes=social.notes + death_pass.notes)
             run_id = await asyncio.to_thread(_write_guild_social, social)
         except BaseException:
@@ -42204,18 +42241,33 @@ def _death_disc_refusal(leader: str, aim: str) -> str:
 # costs rows read, never a longer walk.
 _DETOUR_REACH_YARDS = 900.0
 _DETOUR_CANDIDATE_LIMIT = 500
+# How many times one errand (one leader walking to one aim) may be routed
+# around a disc before the refusal stands (#2540), and the window the count
+# covers: leg two is judged from wherever the leader ends up, so without a
+# cap a walk can be offered waypoint after waypoint and never arrive.
+_DETOUR_CAP = 3
+_DETOUR_WINDOW_SECONDS = 1800.0
 
 _DETOUR_SPAWN_SQL = (
     "SELECT cr.map AS map_id, cr.position_x AS x, cr.position_y AS y, "
-    "cr.position_z AS z "
+    "cr.position_z AS z, ft.EnemyGroup AS enemy_group "
     "FROM acore_world.creature cr "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
-    "WHERE cr.map = %s AND " + towntrip.REAL_SPAWN_SQL + " "
+    "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
+    "WHERE cr.map = %s AND ct.`rank` = 0 AND ft.EnemyGroup IS NOT NULL "
+    "AND (ft.EnemyGroup & %s) = 0 AND (ft.EnemyGroup & %s) = 0 AND "
+    + towntrip.REAL_SPAWN_SQL + " "
     "AND POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2) > %s "
     "AND POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2) <= %s "
     "ORDER BY POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2) "
     "LIMIT %s"
 )
+
+# The walker's own race, read for the side its family fights on: a waypoint
+# is a spawn's own ground, so the creature standing on it must be one that
+# does not attack that side (situation.hostile, on the EnemyGroup the spawn
+# query above reads beside the spawn).
+_DETOUR_RACE_SQL = "SELECT race FROM characters WHERE name = %s"
 
 
 def _death_disc_detour(leader: str, aim: str) -> tuple:
@@ -42225,13 +42277,25 @@ def _death_disc_detour(leader: str, aim: str) -> tuple:
     creature spawns out of the world database, in the ring around the first
     disc the straight walk crosses: surveyed ground this process already
     reads for the keyword holders and the quest ends, never a coordinate it
-    invents. `deathcells.detour` picks among them, and the aim written for
-    the winner is `travel.ground_aim` of the spawn's own surveyed position;
-    a spawn whose aim would not fit the column is no waypoint at all.
-    Ground aims only: a role keyword names no ground of its own and keeps
-    refusing as before. ADVISORY, like the refusal it answers: a spawn
-    table this world image does not carry means no detour, and the refusal
-    stands.
+    invents. A spawn is where a creature stands, not ground proven walkable,
+    so a candidate must be a normal-rank spawn (`rank` 0, the cloth field's
+    own filter) whose faction does not attack the walker's side: a spawn
+    that would attack the walker, or whose faction template this world
+    image does not carry, is not a waypoint, and neither is any spawn when
+    the walker's own side cannot be read. The faction test runs in the
+    query itself, ahead of the nearest-spawns limit, and again on the rows
+    it returns: a filter applied only after the limit would never see a
+    safe spawn standing past a few hundred hostile ones. One gap is named
+    rather than papered over: nothing in this repo reads a flying or water
+    flag on a template, so no such filter is applied here, and a flying or
+    swimming creature of a friendly faction and normal rank can still be
+    the winner. `deathcells.detour` picks among
+    the survivors, and the aim written for the winner is `travel.ground_aim`
+    of the spawn's own surveyed position; a spawn whose aim would not fit
+    the column is no waypoint at all. Ground aims only: a role keyword
+    names no ground of its own and keeps refusing as before. ADVISORY, like
+    the refusal it answers: a spawn table this world image does not carry
+    means no detour, and the refusal stands.
     """
     ground = places.parse_ground_aim(aim)
     if not ground:
@@ -42252,12 +42316,25 @@ def _death_disc_detour(leader: str, aim: str) -> tuple:
     reach = disc.radius + _DETOUR_REACH_YARDS
     try:
         with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_DETOUR_RACE_SQL, (leader,))
+            race_row = cur.fetchone()
+            side = situation.side_mask(
+                [race_row.get("race")] if race_row else [])
+            if not side:
+                log.warning("death discs: %s's side could not be read, so "
+                            "no surveyed spawn is proven friendly to it; "
+                            "the walk is refused as before", leader)
+                return "", tuple(crossed)
             cur.execute(_DETOUR_SPAWN_SQL, (
-                disc.map_id, disc.x, disc.y, disc.radius ** 2,
+                disc.map_id, situation.PLAYER_MASK, side,
+                disc.x, disc.y, disc.radius ** 2,
                 disc.x, disc.y, reach ** 2,
                 disc.x, disc.y, _DETOUR_CANDIDATE_LIMIT,
             ))
-            candidates = [dict(r) for r in cur.fetchall()]
+            candidates = [
+                dict(r) for r in cur.fetchall()
+                if situation.hostile(r.get("enemy_group"), side) is False
+            ]
     except pymysql.err.MySQLError as exc:
         if exc.args and exc.args[0] in (1054, 1146):
             log.warning("death discs: the surveyed spawns around a disc "
