@@ -290,7 +290,7 @@ GATHERED: dict[int, tuple[Reagent, ...]] = {
     3397: (Reagent(3730, "Big Bear Meat", 1),),
     15855: (Reagent(12184, "Raptor Flesh", 1),),
     18243: (Reagent(13759, "Raw Nightfin Snapper", 1),),
-    24801: (Reagent(20401, "Sandworm Meat", 1),),
+    24801: (Reagent(20424, "Sandworm Meat", 1),),
     # TAILORING - the bolt family. Cloth is a humanoid kill drop, which is why
     # Og needs no gathering PROFESSION at all to restock: he needs to be out
     # in the world killing things, which is exactly what MODE_GATHER is.
