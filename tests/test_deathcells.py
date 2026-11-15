@@ -191,6 +191,48 @@ class PickingAQuest(unittest.TestCase):
         )
 
 
+class PickingAQuestPastAHeavyDisc(unittest.TestCase):
+    """The straight line misses a disc the real road runs through."""
+
+    HOME = {"map_id": 0, "x": -8659.0, "y": 661.0}
+    ENDS = {
+        9128: [{"map_id": 0, "x": 2296.0, "y": -5341.0}],
+        60: [{"map_id": 0, "x": -8700.0, "y": 700.0}],
+    }
+
+    def disc(self, x=-7888.5, y=-1259.1, deaths=158):
+        return dc.Disc(0, x, y, 400.0, "fall/lava", deaths)
+
+    def test_a_heavy_disc_beside_the_line_gives_way_to_the_next(self):
+        self.assertIsNone(dc.crossing([self.disc()], self.HOME, self.ENDS[9128][0]))
+        picked, notes = dc.pick_quest([self.disc()], self.HOME, [9128, 60], self.ENDS)
+        self.assertEqual(picked, 60)
+        self.assertEqual(len(notes), 1)
+        self.assertIn("9128", notes[0])
+
+    def test_a_light_disc_in_the_same_corridor_does_not_block(self):
+        picked, notes = dc.pick_quest(
+            [self.disc(deaths=3)], self.HOME, [9128, 60], self.ENDS
+        )
+        self.assertEqual((picked, notes), (9128, []))
+
+    def test_a_heavy_disc_far_from_the_line_does_not_block(self):
+        picked, notes = dc.pick_quest(
+            [self.disc(x=-7888.5, y=4000.0)], self.HOME, [9128, 60], self.ENDS
+        )
+        self.assertEqual((picked, notes), (9128, []))
+
+    def test_a_heavy_disc_on_another_map_does_not_block(self):
+        far = dc.Disc(1, -7888.5, -1259.1, 400.0, "lava", 158)
+        picked, notes = dc.pick_quest([far], self.HOME, [9128, 60], self.ENDS)
+        self.assertEqual((picked, notes), (9128, []))
+
+    def test_a_walker_standing_in_the_heavy_disc_may_leave(self):
+        inside = {"map_id": 0, "x": -7888.0, "y": -1259.0}
+        picked, notes = dc.pick_quest([self.disc()], inside, [9128, 60], self.ENDS)
+        self.assertEqual(picked, 9128)
+
+
 class TheBridgeUsesIt(unittest.TestCase):
     def test_the_town_slot_door_asks_before_writing_a_ground_aim(self):
         door = BRIDGE.split("async def _claim_town_slot", 1)[1].split(

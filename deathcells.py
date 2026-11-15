@@ -38,6 +38,12 @@ MIN_RADIUS = 100.0
 MAX_RADIUS = 400.0
 # A descent at least this long ending in a self death is a fall.
 MIN_FALL_YARDS = 20.0
+# A disc with this many deaths is a killing ground, not a stray accident.
+HEAVY_DEATHS = 50
+# A quest choice also passes over a quest whose straight line runs within this
+# many yards of a heavy disc's centre: the worldserver picks the road, and the
+# road around the world's walls bends through such ground.
+CORRIDOR_YARDS = 1500.0
 # How far back the rows are read, in days.
 DEATH_DAYS = 7
 
@@ -329,6 +335,28 @@ def standing_aim_refusal(all_discs, deaths, here, aim, spawn=None) -> str:
     )
 
 
+def _heavy_corridor(all_discs, a, goal):
+    """The first heavy disc within CORRIDOR_YARDS of the line a -> goal, or
+    None. Distance is to the disc's centre, so a disc is judged by where the
+    deaths are, not by its radius. A walker already inside a disc may leave."""
+    b = _point(goal)
+    if b is None or a[0] != b[0]:
+        return None
+    for disc in all_discs or ():
+        if disc.map_id != a[0] or disc.deaths < HEAVY_DEATHS:
+            continue
+        if math.hypot(disc.x - a[1], disc.y - a[2]) <= disc.radius:
+            continue
+        if (
+            _to_segment(
+                Disc(disc.map_id, disc.x, disc.y, 0.0, disc.kind, disc.deaths), a, b
+            )
+            <= CORRIDOR_YARDS
+        ):
+            return disc
+    return None
+
+
 def pick_quest(all_discs, here, order, ends) -> tuple:
     """(quest id or 0, one note per quest passed over).
 
@@ -349,7 +377,7 @@ def pick_quest(all_discs, here, order, ends) -> tuple:
         goal = min(
             same, key=lambda s: math.hypot(_point(s)[1] - a[1], _point(s)[2] - a[2])
         )
-        hit = crossing(all_discs, here, goal)
+        hit = crossing(all_discs, here, goal) or _heavy_corridor(all_discs, a, goal)
         if hit is None:
             return quest, notes
         notes.append(
