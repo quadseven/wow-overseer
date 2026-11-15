@@ -674,6 +674,11 @@ def stance_of(mate: Mate, door, asker_level: int, faction: str, needs: list) -> 
     """(stance, value, need) for this member and this door, or ("", 0, None)."""
     level = int(mate.member.level)
     if level > door.ceiling:
+        # LEVEL-MATCHED (guildrun.gray_cutoff): a member over the door's band who
+        # would make its mobs gray costs the group its experience, so it neither
+        # helps nor carries there.
+        if guildrun.kills_gray(level, door):
+            return "", 0.0, None
         if level <= door.ceiling + HELPER_LEVELS:
             return HELPS, HELP, None
         if guildrun.fitting_doors([asker_level], [door], faction):

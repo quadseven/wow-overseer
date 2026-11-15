@@ -17,12 +17,17 @@ import json
 import unittest
 
 import guildjobs
+import legacy_ladder
 import modsource
 import pvpgear
 
 H, M, S = guildjobs.HERBALISM, guildjobs.MINING, guildjobs.SKINNING
 FA = guildjobs.FIRST_AID
 ROGUE = 4
+
+
+def setUpModule():
+    legacy_ladder.switch_off()
 
 
 def member(name="Funkymon", role=guildjobs.RAIDER, **over):

@@ -15,8 +15,9 @@ WHAT A PLAYER DOES. Buys a stack of the best food and water its level may use
 at the inn or the food vendor, with its own gold, and eats and drinks between
 pulls. This is that errand for one guild member: when it carries fewer than
 LOW_UNITS of food, or of drink for a class that drinks, it walks to a friendly
-vendor in reach, sells its junk there, and buys a handful of each, spending at
-most half of its purse and the junk's price. Nothing is granted: the gold is
+vendor in reach, sells its junk there, and buys food and drink for the next
+stretch (up to FOOD_STACKS and DRINK_STACKS stacks, as the free bag slots
+allow), spending at most half of its purse and the junk's price. Nothing is granted: the gold is
 the member's own and the vendor is the world's.
 
 WHICH VENDOR AND WHICH TIER (`plan`). The vendor that sells the most of what
@@ -55,6 +56,19 @@ MIN_UNITS = 5
 STACK = 20
 # At most this share of the purse and the junk's price goes on food and drink.
 PURSE_SHARE = (1, 2)
+
+# HOW MANY STACKS A TRIP BUYS (ticket 2621). Read on the dev realm on
+# 2026-11-15: 213 supply buys were applied in 24 hours and 36 of the 38 seats
+# that bought were empty again, because one stack of 20 is gone in a handful of
+# pulls for a seat that fights alone. A wild bot carries two stacks of each
+# kind, so a trip aims for two, and three of drink for the classes that cast
+# the most (priest, mage), as far as the free bag slots, the half share of the
+# purse and the vendor's stock allow. A seat that cannot afford more, or whose
+# bags are unread, buys the one stack it always bought.
+FOOD_STACKS = 2
+DRINK_STACKS = 2
+CASTER_DRINK_STACKS = 3
+CASTER_CLASS_IDS = frozenset({5, 8})  # priest, mage
 
 # New supply steps one guild starts in one pass.
 STEPS_PER_GUILD = 6
@@ -124,8 +138,34 @@ def budget(member, junk) -> int:
     return total * numerator // denominator
 
 
-def _pick(level, rows, category, copper):
-    """The Buy of one kind from one vendor's `rows` for `copper`, or None."""
+def targets(member, kinds) -> dict:
+    """The stacks of each wanted kind a trip aims for."""
+    drink = (
+        CASTER_DRINK_STACKS
+        if _int(member.class_id) in CASTER_CLASS_IDS
+        else DRINK_STACKS
+    )
+    aims = {DRINK_CATEGORY: drink, FOOD_CATEGORY: FOOD_STACKS}
+    return {k: aims[k] for k in kinds}
+
+
+def allot(member, kinds, room) -> dict:
+    """The stacks of each wanted kind that fit `room` bag slots: one for each
+    kind first, then the second of each, so a small room is shared and never
+    taken whole by drink. Unread room (None) is one stack of each kind."""
+    if room is None:
+        return {k: 1 for k in kinds}
+    aims = targets(member, kinds)
+    order = [
+        k for i in range(max(aims.values(), default=0)) for k in kinds if i < aims[k]
+    ]
+    taken = order[: max(0, _int(room))]
+    return {k: taken.count(k) for k in kinds if k in taken}
+
+
+def _pick(level, rows, category, copper, stacks=1):
+    """The Buys of one kind from one vendor's `rows` for `copper`, at most
+    `stacks` of them, one row per stack; () when not even the minimum buys."""
     fits = [
         r
         for r in rows
@@ -137,29 +177,53 @@ def _pick(level, rows, category, copper):
     fits.sort(key=lambda r: (-_int(r.get("required_level")), _int(r.get("price"))))
     for r in fits:
         price, lot = _int(r.get("price")), _int(r.get("buy_count"), 1)
-        lots = min(copper // price, -(-STACK // lot))
-        while lots > 0 and lots * lot > STACK:
-            lots -= 1
+        per_stack = max(1, STACK // lot)
+        lots = min(copper // price, per_stack * max(1, stacks))
         if lots * lot < MIN_UNITS:
             continue
-        return Buy(
-            vendor=_int(r.get("vendor")),
-            vendor_name=str(r.get("vendor_name") or ""),
-            entry=_int(r.get("entry")),
-            name=str(r.get("item_name") or ""),
-            category=category,
-            count=lots,
-            units=lots * lot,
-            ceiling=lots * price,
-        )
-    return None
+        out = []
+        while lots > 0 and len(out) < max(1, stacks):
+            here = min(lots, per_stack)
+            lots -= here
+            if out and here * lot < MIN_UNITS:
+                break
+            out.append(
+                Buy(
+                    vendor=_int(r.get("vendor")),
+                    vendor_name=str(r.get("vendor_name") or ""),
+                    entry=_int(r.get("entry")),
+                    name=str(r.get("item_name") or ""),
+                    category=category,
+                    count=here,
+                    units=here * lot,
+                    ceiling=here * price,
+                )
+            )
+        return tuple(out)
+    return ()
 
 
-def plan(member, rows, junk=0) -> tuple:
+def _interleave(picked, room) -> tuple:
+    """The Buys of every kind in stack order: the first stack of each kind,
+    then the second of each, cut to `room` slots when it is known, so a room
+    that runs out takes the later stacks and never a whole kind."""
+    longest = max((len(p) for p in picked), default=0)
+    buys = tuple(p[i] for i in range(longest) for p in picked if i < len(p))
+    return buys if room is None else buys[: max(0, _int(room))]
+
+
+def _at_vendor(member, stock, kinds, each, shares, room):
+    """(kinds met, buys) at one vendor's `stock`."""
+    picked = [_pick(member.level, stock, k, each, shares.get(k, 1)) for k in kinds]
+    return sum(1 for p in picked if p), _interleave(picked, room)
+
+
+def plan(member, rows, junk=0, room=None) -> tuple:
     """(buys, why not) for one member: the Buys at one vendor in reach, or ()
     and the reason when nothing is bought. `rows` are the friendly vendors'
     food and drink in reach (bridge._SUPPLY_VENDOR_SQL); `junk` the copper its
-    junk sells for at the counter."""
+    junk sells for at the counter. `room` is the bag slots the buys may fill
+    (None when the bags are unread: one stack of each kind)."""
     kinds = wanted(member)
     if not kinds:
         return (), ""
@@ -167,45 +231,45 @@ def plan(member, rows, junk=0) -> tuple:
     if not rows:
         return (), "no vendor in reach sells %s %s" % (member.name, words)
     each = budget(member, junk) // len(kinds)
+    shares = allot(member, kinds, room)
     vendors = {}
     for r in rows:
         vendors.setdefault(_int(r.get("vendor")), []).append(r)
     best = None
     for vendor, stock in vendors.items():
-        buys = tuple(
-            b for b in (_pick(member.level, stock, k, each) for k in kinds) if b
-        )
-        if not buys:
+        met, buys = _at_vendor(member, stock, kinds, each, shares, room)
+        if not met:
             continue
         yards = min(float(r.get("yards") or 0.0) for r in stock)
-        key = (-len(buys), yards, vendor)
+        key = (-met, yards, vendor)
         if best is None or key < best[0]:
             best = (key, buys)
     if best is None:
         return (
             (),
             "%s cannot afford %d of the %s a vendor in reach sells (%d copper)"
-            % (
-                member.name,
-                MIN_UNITS,
-                words,
-                budget(member, junk),
-            ),
+            % (member.name, MIN_UNITS, words, budget(member, junk)),
         )
     return best[1], ""
 
 
 def said(member, buys) -> str:
     """The sentence the pass logs for a supply walk."""
-    kinds = " and ".join(KIND_WORDS[b.category] for b in buys)
-    if len(buys) == 2:
-        kinds = "food and drink"
+    kinds = "food and drink"
+    if len({b.category for b in buys}) == 1:
+        kinds = KIND_WORDS[buys[0].category]
+    units = {}
+    for b in buys:
+        units[b.entry] = (b.name, units.get(b.entry, (b.name, 0))[1] + b.units)
     return (
         "%s walks to %s to buy %s with its own gold, so it rests between fights: %s"
         % (
             member.name,
             buys[0].vendor_name or "a vendor",
             kinds,
-            ", ".join("%d %s" % (b.units, b.name or "item %d" % b.entry) for b in buys),
+            ", ".join(
+                "%d %s" % (n, name or "item %d" % entry)
+                for entry, (name, n) in units.items()
+            ),
         )
     )
