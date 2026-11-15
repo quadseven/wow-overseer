@@ -249,10 +249,10 @@ class BridgeAndActTest(unittest.TestCase):
         d["fix"]["repo"] = "quadseven/wow-overseer"
         self.assertIn("bridge", rules(d))
 
-    def test_roster_write_with_the_bridge_on_is_rejected(self):
+    def test_roster_step_with_the_bridge_on_is_fine_because_it_is_a_job_command(self):
         d = doc()
         d["world"]["bridge"] = "on"
-        self.assertIn("bridge", rules(d))
+        self.assertEqual(errors(d), [])
 
     def test_command_with_the_bridge_on_is_fine(self):
         d = doc()
