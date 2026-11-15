@@ -26500,14 +26500,9 @@ class Bridge(discord.Client):
         if found is None:
             return
         job, names, who = found
-        key = getattr(cohort, "key", None)
-        if not key:
-            key = await asyncio.to_thread(
-                lambda: _cohort_of(bonds.head_of_family())
-            ) or who
-        operator_held = getattr(self, "_operator_held", None)
-        if operator_held is not None and await operator_held({key}, "farm"):
-            return
+        # NO OPERATOR HOLD HERE: a hold stops quest drives and dungeon lending,
+        # and the hold row names nothing it allows, so farming (gathering) is
+        # never stood down by one.
         item, skill = farmjob.order_of(job)
         if not (item or skill):
             log.info("farm: %s end: job=%s names no material", who, job)
@@ -26544,9 +26539,9 @@ class Bridge(discord.Client):
         traveller, a slot of its own for the rest), so there is still one
         writer for a member's travel aim.
 
-        STANDS DOWN, WRITING NOTHING, for an operator hold, a campaign queue
-        that owns the family's job and a family inside a dungeon run: the same
-        three the other per-member drives stand down for.
+        STANDS DOWN, WRITING NOTHING, for a campaign queue that owns the
+        family's job and a family inside a dungeon run. An operator hold does
+        not stop it: a hold stops quest drives and lending, not gathering.
         """
         key = getattr(cohort, "key", None)
         family = await asyncio.to_thread(_individual_family, cohort)
@@ -26561,8 +26556,6 @@ class Bridge(discord.Client):
             if name not in farmers:
                 self._farm_state.pop("solo:" + name, None)
         if not farmers:
-            return True
-        if await self._operator_held({family}, "farm"):
             return True
         if await asyncio.to_thread(_queue_owns_job, family) or await self._mid_run(
                 sorted(rows)):

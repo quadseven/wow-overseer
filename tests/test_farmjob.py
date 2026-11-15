@@ -553,38 +553,62 @@ def _load_bridge_farm_methods(ns: dict) -> dict:
     return ns
 
 
-class FamilyWideFarmRespectsOperatorHold(unittest.IsolatedAsyncioTestCase):
-    async def test_held_family_skips_farm_reads_and_act(self):
+class FamilyWideFarmIgnoresOperatorHold(unittest.IsolatedAsyncioTestCase):
+    """An operator hold stops quest drives and dungeon lending, not gathering.
+
+    The hold table has no field that says what a hold forbids, so the farm
+    pass never consults it: a held family still farms.
+    """
+
+    def _ns(self, extra=None):
         import asyncio
+        from unittest import mock
+
+        base = {
+            "asyncio": asyncio,
+            "individual": mock.MagicMock(families=mock.MagicMock(return_value=())),
+            "bonds": mock.MagicMock(head_of_family=mock.MagicMock(return_value="Grug")),
+            "farmjob": mock.MagicMock(
+                order_of=mock.MagicMock(return_value=(4306, "")),
+                decide=mock.MagicMock(
+                    return_value=mock.MagicMock(action="walk", line="to the node")
+                ),
+            ),
+            "log": mock.MagicMock(),
+            "_cohort_of": mock.MagicMock(return_value="grug_clan"),
+            "_family_leader": mock.MagicMock(return_value="Grug"),
+            "_farm_reads": mock.MagicMock(
+                return_value={"name": "Silk Cloth", "levels": {"Grug": 60}}
+            ),
+            "_farm_reads_for": mock.MagicMock(),
+            "_farm_order": mock.MagicMock(),
+        }
+        base.update(extra or {})
+        return _load_bridge_farm_methods(base)
+
+    async def test_held_family_still_reads_decides_and_acts(self):
         import types
         from unittest import mock
 
-        ns = _load_bridge_farm_methods(
-            {
-                "asyncio": asyncio,
-                "individual": mock.MagicMock(families=mock.MagicMock(return_value=())),
-                "bonds": mock.MagicMock(),
-                "farmjob": farmjob,
-                "log": mock.MagicMock(),
-            }
-        )
+        ns = self._ns()
         cohort = types.SimpleNamespace(key="family_a", solo=False)
         fake = types.SimpleNamespace(
-            _operator_hold_notice=farmjob.jobs and None,
             _farm_individual=mock.AsyncMock(return_value=False),
             _farm_job_now=mock.AsyncMock(
                 return_value=("farm:4306", ["Mizu"], "family_a")
             ),
             _operator_held=mock.AsyncMock(return_value={"family_a"}),
             _end_farm=mock.AsyncMock(),
-            _farm_state_for=mock.AsyncMock(),
+            _farm_state_for=mock.AsyncMock(return_value={"started": 1.0}),
+            _farm_count=mock.AsyncMock(return_value=0),
+            _farm_act=mock.AsyncMock(),
         )
         await ns["_farm_once"](fake, cohort)
-        fake._operator_held.assert_awaited_once_with({"family_a"}, "farm")
-        fake._farm_state_for.assert_not_called()
+        fake._operator_held.assert_not_awaited()
+        fake._farm_state_for.assert_awaited_once()
+        fake._farm_act.assert_awaited_once()
 
-    async def test_no_cohort_own_family_honors_real_operator_hold_row(self):
-        import asyncio
+    async def test_no_cohort_family_with_a_real_hold_row_still_farms(self):
         import time
         import types
         from unittest import mock
@@ -594,30 +618,17 @@ class FamilyWideFarmRespectsOperatorHold(unittest.IsolatedAsyncioTestCase):
         hold_rows = [
             {
                 "family": "grug_clan",
-                "reason": "burning steppes",
+                "reason": "gather and craft only",
                 "source": "operator",
                 "expires_at": None,
             }
         ]
-        ns = _load_bridge_farm_methods(
+        ns = self._ns(
             {
-                "asyncio": asyncio,
                 "time": time,
                 "campaignqueue": campaignqueue,
-                "individual": mock.MagicMock(families=mock.MagicMock(return_value=())),
-                "bonds": mock.MagicMock(
-                    head_of_family=mock.MagicMock(return_value="Grug")
-                ),
-                "farmjob": farmjob,
                 "operatorhold": operatorhold,
-                "log": mock.MagicMock(),
-                "_cohort_of": mock.MagicMock(return_value="grug_clan"),
                 "_fetch_operator_holds": mock.MagicMock(return_value=hold_rows),
-                "_family_leader": mock.MagicMock(return_value="Grug"),
-                "_farm_reads": mock.MagicMock(
-                    return_value={"name": "Silk Cloth", "levels": {"Grug": 60}}
-                ),
-                "_farm_reads_for": mock.MagicMock(),
             }
         )
         fake = types.SimpleNamespace(
@@ -627,13 +638,14 @@ class FamilyWideFarmRespectsOperatorHold(unittest.IsolatedAsyncioTestCase):
                 return_value=("farm:4306", ["Grug"], "this family")
             ),
             _end_farm=mock.AsyncMock(),
-            _farm_state_for=mock.AsyncMock(),
+            _farm_state_for=mock.AsyncMock(return_value={"started": 1.0}),
+            _farm_count=mock.AsyncMock(return_value=0),
             _farm_act=mock.AsyncMock(),
         )
         fake._operator_held = types.MethodType(ns["_operator_held"], fake)
         await ns["_farm_once"](fake, None)
-        fake._farm_state_for.assert_not_called()
-        fake._farm_act.assert_not_called()
+        fake._farm_state_for.assert_awaited_once()
+        fake._farm_act.assert_awaited_once()
 
 
 if __name__ == "__main__":
