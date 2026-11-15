@@ -73,11 +73,16 @@ def _get(path: str) -> dict:
     with open(SA + "/token") as fh:
         token = fh.read().strip()
     context = ssl.create_default_context(cafile=SA + "/ca.crt")
-    req = urllib.request.Request(
+    # The scheme is the literal "https" and the host is the pod's own cluster
+    # address from the environment, so S310's file: and custom-scheme worry
+    # does not apply.
+    req = urllib.request.Request(  # noqa: S310
         "https://%s:%s%s" % (host, port, path),
         headers={"Authorization": "Bearer " + token, "Accept": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=TIMEOUT, context=context) as resp:
+    with urllib.request.urlopen(  # noqa: S310 - https only, see above
+        req, timeout=TIMEOUT, context=context
+    ) as resp:
         return json.load(resp)
 
 
@@ -173,6 +178,39 @@ def _summary(
     return "Realm is up."
 
 
+def _dig(obj, *keys):
+    """obj[k1][k2]... where any missing or null step reads as None."""
+    for key in keys:
+        obj = obj.get(key) if isinstance(obj, dict) else None
+    return obj
+
+
+def _up_state(started, notice, last, now, window) -> tuple[str, str | None]:
+    """(UP or RESTARTED, the reason for the restart if a notice explains it)."""
+    if not started or (now - started) > timedelta(seconds=window):
+        return "UP", None
+    if notice:
+        return "RESTARTED", notice["reason"]
+    ended = realmmaint.parse_time(last.get("ended_at")) if last else None
+    if ended and ended >= started:
+        return "RESTARTED", last["reason"]
+    return "RESTARTED", None
+
+
+def _down_state(pod, desired, notice, now) -> tuple[str, int]:
+    """(state, seconds past the ETA) for a worldserver that is not ready."""
+    if notice:
+        back = realmmaint.parse_time(notice["expected_back"])
+        if now <= back:
+            return "MAINTENANCE", 0
+        return "OVERRUN", int((now - back).total_seconds())
+    born = _time(_dig(pod, "metadata", "creationTimestamp"))
+    young = born is not None and (now - born).total_seconds() < STARTUP_GRACE
+    if desired >= 1 and (pod is None or young):
+        return "STARTING", 0
+    return "DOWN_UNEXPLAINED", 0
+
+
 def build_status(
     deployment: dict,
     pods: list,
@@ -180,42 +218,20 @@ def build_status(
     restart_window: int = DEFAULT_RESTART_WINDOW,
 ) -> dict:
     """Cluster objects in, the route's JSON out. Pure."""
-    annotations = (deployment.get("metadata") or {}).get("annotations") or {}
+    annotations = _dig(deployment, "metadata", "annotations") or {}
     notice = realmmaint.parse_notice(annotations.get(realmmaint.NOTICE_KEY))
     last = realmmaint.parse_notice(annotations.get(realmmaint.LAST_KEY))
-    desired = int((deployment.get("spec") or {}).get("replicas") or 0)
+    desired = int(_dig(deployment, "spec", "replicas") or 0)
     pod = _live_pod(pods)
     up = _ready(pod)
     started = _started(pod) if up else None
     overrun = 0
     reason = None
-
     if up:
-        within = started and (now - started) <= timedelta(seconds=restart_window)
-        state = "RESTARTED" if within else "UP"
-        if within:
-            if notice:
-                reason = notice["reason"]
-            elif last and started:
-                ended = realmmaint.parse_time(last.get("ended_at"))
-                if ended and ended >= started:
-                    reason = last["reason"]
-    elif notice:
-        back = realmmaint.parse_time(notice["expected_back"])
-        if now <= back:
-            state = "MAINTENANCE"
-        else:
-            state = "OVERRUN"
-            overrun = int((now - back).total_seconds())
+        state, reason = _up_state(started, notice, last, now, restart_window)
     else:
-        born = _time(((pod or {}).get("metadata") or {}).get("creationTimestamp"))
-        booting = desired >= 1 and (
-            pod is None or (born and (now - born).total_seconds() < STARTUP_GRACE)
-        )
-        state = "STARTING" if booting else "DOWN_UNEXPLAINED"
-
-    ready_replicas = int((deployment.get("status") or {}).get("readyReplicas") or 0)
-    statuses = ((pod or {}).get("status") or {}).get("containerStatuses") or []
+        state, overrun = _down_state(pod, desired, notice, now)
+    statuses = _dig(pod, "status", "containerStatuses") or []
     return {
         "checked_at": realmmaint.iso(now),
         "state": state,
@@ -224,7 +240,7 @@ def build_status(
         "worldserver": {
             "up": up,
             "desired_replicas": desired,
-            "ready_replicas": ready_replicas,
+            "ready_replicas": int(_dig(deployment, "status", "readyReplicas") or 0),
             "started_at": realmmaint.iso(started) if started else None,
             "image_digest": _digest(pod, deployment),
             "restart_count": sum(int(s.get("restartCount") or 0) for s in statuses),
