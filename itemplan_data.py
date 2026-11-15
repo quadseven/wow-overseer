@@ -49,6 +49,7 @@ ITEM_TEMPLATE_SQL = (
     "it.RequiredSkill AS required_skill, "
     "it.RequiredSkillRank AS required_skill_rank, "
     "it.AllowableClass AS allowable_class, "
+    "it.spellid_2 AS spell_id, "
     "it.ContainerSlots AS container_slots, "
     "it.DisenchantID AS disenchant_id, "
     "it.RequiredDisenchantSkill AS disenchant_skill, "
@@ -86,6 +87,7 @@ _TEMPLATE_FIELDS = (
 _OPTIONAL_TEMPLATE_FIELDS = (
     "required_skill",
     "allowable_class",
+    "spell_id",
 )
 
 ITEM_INSTANCE_SQL = (
@@ -526,6 +528,7 @@ __all__ = [
     "EQUIPPED_SQL",
     "ITEM_INSTANCE_SQL",
     "ITEM_TEMPLATE_SQL",
+    "KNOWN_SPELLS_SQL",
     "LISTINGS_SQL",
     "NO_PRICE_SOURCE",
     "QUEST_LOG_SQL",
@@ -534,12 +537,40 @@ __all__ = [
     "auction_prices",
     "equipped",
     "item_templates",
+    "known_spells_by_member",
     "open_quest_items",
     "quest_needs",
     "upgrade_verdicts",
     "verdict_rows",
     "worn_entries",
 ]
+
+
+KNOWN_SPELLS_SQL = (
+    "SELECT DISTINCT c.name AS member, cs.spell AS spell "
+    "FROM characters c "
+    "JOIN character_spell cs ON cs.guid = c.guid "
+    "LEFT JOIN guild_member gm ON gm.guid = c.guid "
+    "WHERE cs.spell IN (%s) "
+    "AND (c.name IN (%s) OR gm.guildid IN ("
+    "SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN (%s)))"
+)
+
+
+def known_spells_by_member(rows) -> dict:
+    """{member: frozenset[spell_id]} from `KNOWN_SPELLS_SQL` rows."""
+    out: dict = {}
+    for row in rows or ():
+        try:
+            member = str(row["member"])
+            spell = _int(row["spell"])
+        except (KeyError, TypeError, AttributeError):
+            continue
+        if not member or spell is None or spell <= 0:
+            continue
+        out.setdefault(member, set()).add(spell)
+    return {member: frozenset(spells) for member, spells in out.items()}
 
 
 # Listings of one item instance that were written and applied (#2605): an item

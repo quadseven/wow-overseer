@@ -756,6 +756,90 @@ class ClassNineTriage(unittest.TestCase):
         d_lib = one([libram], [grug], libram, ctx)
         self.assertEqual(d_lib.route, GUILD_BANK)
 
+    def test_class_book_routes_to_guildmate_when_known_or_absent_in_family(self):
+        # Druid bit = 1024; Glob is an outside guildmate Druid lvl 53.
+        book = stack(
+            holder="Grug",
+            entry=17682,
+            name="Book: Gift of the Wild",
+            item_class=itemplan.C_RECIPE,
+            subclass=0,
+            quality=2,
+            sell=2500,
+            req_level=50,
+            required_skill_rank=0,
+            required_skill=0,
+            allowable_class=1024,
+            spell_id=21849,
+        )
+        grug = member("Grug", cls=itemplan.WARRIOR, level=60)
+        bork = member("Bork", cls=itemplan.DRUID, level=60)
+        # Holder/sibling already knows spell_id 21849 -> goes to outside guildmate Glob.
+        ctx = itemplan.Context(
+            guild_class_members=(("Glob", itemplan.DRUID, 53, False),),
+            known_spells={
+                "Bork": frozenset({21849}),
+                "Glob": frozenset(),
+            },
+        )
+        d_guild = one([book], [grug, bork], book, ctx)
+        self.assertEqual(d_guild.route, GIVE)
+        self.assertEqual(d_guild.target, "Glob")
+
+        # Matching holder who already knows the book gives it to an unknown guildmate.
+        held = stack(
+            holder="Bork",
+            entry=17682,
+            name="Book: Gift of the Wild",
+            item_class=itemplan.C_RECIPE,
+            subclass=0,
+            quality=2,
+            sell=2500,
+            req_level=50,
+            required_skill_rank=0,
+            required_skill=0,
+            allowable_class=1024,
+            spell_id=21849,
+        )
+        d_self_known = one([held], [bork], held, ctx)
+        self.assertEqual(d_self_known.route, GIVE)
+        self.assertEqual(d_self_known.target, "Glob")
+
+        # When every matching family/guild member already knows it, sell/auction surplus.
+        ctx_all = itemplan.Context(
+            guild_class_members=(("Glob", itemplan.DRUID, 53, False),),
+            known_spells={
+                "Bork": frozenset({21849}),
+                "Glob": frozenset({21849}),
+            },
+        )
+        d_surplus = one([held], [bork], held, ctx_all)
+        self.assertEqual(d_surplus.route, AUCTION)
+
+    def test_already_known_trade_recipe_skips_holder_and_known_learners(self):
+        recipe = stack(
+            holder="Oz",
+            entry=16245,
+            name="Formula: Enchant Boots - Greater Agility",
+            item_class=itemplan.C_RECIPE,
+            subclass=8,
+            quality=2,
+            sell=500,
+            required_skill_rank=295,
+            required_skill=333,
+            spell_id=20023,
+        )
+        ench = itemplan.guildshare.SKILL_LINES["enchanting"]
+        oz = member("Oz", skills=((ench, 300, 300),))
+        ugga = member("Ugga", skills=((ench, 300, 300),))
+        ctx = itemplan.Context(
+            known_spells={"Oz": frozenset({20023}), "Ugga": frozenset({20023})},
+            guild_crafters=(("Gnar", "enchanting", 300),),
+        )
+        d = one([recipe], [oz, ugga], recipe, ctx)
+        self.assertEqual(d.route, GIVE)
+        self.assertEqual(d.target, "Gnar")
+
 
 if __name__ == "__main__":
     unittest.main()

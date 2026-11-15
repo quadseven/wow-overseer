@@ -236,7 +236,7 @@ def import_bridge():
     return fresh_import("bridge", discord=discord, pymysql=PYMYSQL)
 
 
-class TheBridgeFetchesOnlyWhenTheVendorRouteIsOn(unittest.TestCase):
+class TheBridgeFetchesWhenRoutesAreOn(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.bridge = import_bridge()
@@ -244,19 +244,177 @@ class TheBridgeFetchesOnlyWhenTheVendorRouteIsOn(unittest.TestCase):
     def setUp(self):
         self.bridge._BANK_LEAVES_CACHE.clear()
 
-    def test_without_the_vendor_route_the_bank_rows_are_not_read(self):
+    def test_without_any_route_the_bank_rows_are_not_read(self):
         b = self.bridge
         with (
-            mock.patch.dict("os.environ", {"ITEMPLAN_GIVE": "on"}, clear=True),
+            mock.patch.dict("os.environ", {}, clear=True),
             mock.patch.object(b, "_banked_rows", side_effect=AssertionError("read")),
-            mock.patch.object(b, "_fetch_vendor_items", return_value=[]),
-            mock.patch.object(b, "_fetch_free_slots", return_value={}),
-            mock.patch.object(b, "_fetch_surplus_gear", return_value=[]),
-            mock.patch.object(b, "_fetch_family_equipped", return_value=[]),
-            mock.patch.object(b, "_itemplan_reads", return_value=shadow.Extras()),
         ):
             leaves, unread = b._bank_plan_leaves(["Ugga"])
         self.assertEqual(({}, False), (leaves, unread))
+
+    def test_banked_class9_for_give_and_learnable_joins_leaves(self):
+        b = self.bridge
+        bank_rows = [
+            row(
+                holder="Og",
+                item_guid=41,
+                name="Book: Gift of the Wild",
+                entry=17682,
+                item_class=9,
+                quality=2,
+                sell_price=2500,
+                slot=40,
+            ),
+            row(
+                holder="Og",
+                item_guid=42,
+                name="Codex: Prayer of Fortitude II",
+                entry=17414,
+                item_class=9,
+                quality=2,
+                sell_price=2000,
+                slot=41,
+            ),
+        ]
+        ex = shadow.Extras(
+            open_quest_items={"Og": frozenset()},
+            templates={
+                17682: {
+                    "item_class": 9,
+                    "subclass": 0,
+                    "bonding": 0,
+                    "inventory_type": 0,
+                    "item_level": 50,
+                    "req_level": 50,
+                    "required_skill": 0,
+                    "required_skill_rank": 0,
+                    "allowable_class": 1024,
+                    "spell_id": 21849,
+                    "container_slots": 0,
+                    "fire_res": 0,
+                    "stats": {},
+                },
+                17414: {
+                    "item_class": 9,
+                    "subclass": 0,
+                    "bonding": 0,
+                    "inventory_type": 0,
+                    "item_level": 60,
+                    "req_level": 60,
+                    "required_skill": 0,
+                    "required_skill_rank": 0,
+                    "allowable_class": 16,
+                    "spell_id": 21564,
+                    "container_slots": 0,
+                    "fire_res": 0,
+                    "stats": {},
+                },
+            },
+            instance_soulbound={41: False, 42: False},
+            fire_gear=frozenset(),
+            bank_free={"Og": 20},
+            guild_class_members=(("Glob", 11, 53, False),),
+            known_spells={},
+        )
+        with (
+            mock.patch.dict("os.environ", {"ITEMPLAN_GIVE": "on"}, clear=True),
+            mock.patch.object(b, "_fetch_bank_items", return_value=bank_rows),
+            mock.patch.object(b, "_fetch_vendor_items", return_value=[]),
+            mock.patch.object(b, "_fetch_free_slots", return_value={"Og": 16}),
+            mock.patch.object(b, "_fetch_surplus_gear", return_value=[]),
+            mock.patch.object(
+                b,
+                "_fetch_family_equipped",
+                return_value=[{"name": "Og", "class_id": 5, "level": 60}],
+            ),
+            mock.patch.object(b, "_itemplan_reads", return_value=ex),
+        ):
+            leaves, unread = b._bank_plan_leaves(["Og"])
+        self.assertFalse(unread)
+        self.assertEqual([41, 42], sorted(leaves))
+
+    def test_banked_trade_recipe_for_holder_and_auction_joins_leaves(self):
+        b = self.bridge
+        ench = itemplan.guildshare.SKILL_LINES["enchanting"]
+        bank_rows = [
+            row(
+                holder="Oz",
+                item_guid=43,
+                name="Formula: Enchant Bracer - Minor Health",
+                entry=6342,
+                item_class=9,
+                quality=1,
+                sell_price=100,
+                slot=42,
+            ),
+            row(
+                holder="Oz",
+                item_guid=44,
+                name="Recipe: Roast Raptor",
+                entry=12228,
+                item_class=9,
+                quality=1,
+                sell_price=200,
+                slot=43,
+            ),
+        ]
+        ex = shadow.Extras(
+            open_quest_items={"Oz": frozenset()},
+            family_skills={"Oz": ((ench, 75, 75),)},
+            known_spells={},
+            templates={
+                6342: {
+                    "item_class": 9,
+                    "subclass": 8,
+                    "bonding": 0,
+                    "inventory_type": 0,
+                    "item_level": 10,
+                    "req_level": 0,
+                    "required_skill": 333,
+                    "required_skill_rank": 50,
+                    "allowable_class": -1,
+                    "spell_id": 7418,
+                    "container_slots": 0,
+                    "fire_res": 0,
+                    "stats": {},
+                },
+                12228: {
+                    "item_class": 9,
+                    "subclass": 5,
+                    "bonding": 0,
+                    "inventory_type": 0,
+                    "item_level": 35,
+                    "req_level": 0,
+                    "required_skill": 185,
+                    "required_skill_rank": 175,
+                    "allowable_class": -1,
+                    "spell_id": 15855,
+                    "container_slots": 0,
+                    "fire_res": 0,
+                    "stats": {},
+                },
+            },
+            instance_soulbound={43: False, 44: False},
+            fire_gear=frozenset(),
+            bank_free={"Oz": 20},
+        )
+        with (
+            mock.patch.dict("os.environ", {"ITEMPLAN_AUCTION": "on"}, clear=True),
+            mock.patch.object(b, "_fetch_bank_items", return_value=bank_rows),
+            mock.patch.object(b, "_fetch_vendor_items", return_value=[]),
+            mock.patch.object(b, "_fetch_free_slots", return_value={"Oz": 16}),
+            mock.patch.object(b, "_fetch_surplus_gear", return_value=[]),
+            mock.patch.object(
+                b,
+                "_fetch_family_equipped",
+                return_value=[{"name": "Oz", "class_id": 8, "level": 60}],
+            ),
+            mock.patch.object(b, "_itemplan_reads", return_value=ex),
+        ):
+            leaves, unread = b._bank_plan_leaves(["Oz"])
+        self.assertFalse(unread)
+        self.assertEqual([43, 44], sorted(leaves))
 
     def test_the_banked_sale_joins_the_leaves(self):
         b = self.bridge

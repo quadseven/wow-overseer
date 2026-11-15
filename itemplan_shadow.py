@@ -164,6 +164,8 @@ class Extras:
     banker_free: Mapping[str, int] | None = None
     guild_crafters: tuple | None = None
     guild_roster: tuple | None = None
+    family_skills: Mapping[str, tuple] | None = None
+    guild_class_members: tuple | None = None
     templates: Mapping[int, dict] | None = None
     bank_free: Mapping[str, int] | None = None
     instance_soulbound: Mapping[int, bool] | None = None
@@ -171,6 +173,7 @@ class Extras:
     # (holder, entry) -> applied listings of a stack still carried (#2605);
     # None is unread, which vendors nothing.
     failed_listings: Mapping[tuple, int] | None = None
+    known_spells: Mapping[str, frozenset] | None = None
     unread: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -313,6 +316,7 @@ def build_stacks(
                 soulbound=soulbound,
                 required_skill=_int(t.get("required_skill"), 0),
                 allowable_class=_int(t.get("allowable_class"), -1),
+                spell_id=_int(t.get("spell_id"), 0),
                 quest_needed=(bool(row["quest_item"]) if "quest_item" in row else None),
             )
         )
@@ -326,8 +330,10 @@ def _context(extras: Extras, verdicts) -> itemplan.Context:
         market=extras.market or {},
         guild_free=extras.guild_free or {},
         guild_crafters=extras.guild_crafters or (),
+        guild_class_members=extras.guild_class_members or (),
         fire_gear=extras.fire_gear,
         failed_listings=extras.failed_listings or {},
+        known_spells=extras.known_spells,
         banker_free=extras.banker_free or {},
     )
 
@@ -375,6 +381,7 @@ def banked_plan(
         free_slots,
         characters,
         room if extras.bank_free is not None else None,
+        skills=extras.family_skills,
     )
     ctx = _context(extras, _verdicts(extras, stacks, characters))
     plan_ = itemplan.plan(stacks, members, ctx)
@@ -418,29 +425,77 @@ def sold_from_bank(plan_, stack_rows) -> dict:
     return out
 
 
+def _learnable_class9(decision, stack) -> bool:
+    return (
+        stack is not None
+        and stack.item_class == itemplan.C_RECIPE
+        and (
+            decision.goal == itemplan.TRADE_NOW
+            or decision.reason.startswith("class book for ")
+        )
+    )
+
+
+def class9_from_bank(plan_, stack_rows, routes) -> dict:
+    """item guid -> why, for banked class-9 stacks the plan routes or learns now."""
+    by_key = {stack.key: (stack, row) for stack, row in stack_rows}
+    out: dict = {}
+    for decision in plan_.decisions:
+        if decision.stuck or decision.reason.startswith(itemplan.NO_ROOM):
+            continue
+        if not itemplan_vendor.chosen_first(decision):
+            continue
+        stack, row = by_key.get(decision.key, (None, None))
+        if stack is None or stack.item_class != itemplan.C_RECIPE:
+            continue
+        learn_now = (
+            decision.route == itemplan.BANK_PERSONAL
+            and decision.reason.endswith("; stays banked")
+            and _learnable_class9(decision, stack)
+        )
+        active_route = decision.route in routes and (
+            decision.route != itemplan.GIVE or bool(decision.target)
+        )
+        if not learn_now and not active_route:
+            continue
+        if decision.route == itemplan.SELL_VENDOR and itemplan_vendor.held_reason(
+            decision, stack, row
+        ):
+            continue
+        guid = _int((row or {}).get("item_guid"))
+        if guid > 0:
+            out[guid] = "the item plan routes %s out of bank (%s)" % (
+                decision.name,
+                decision.reason,
+            )
+    return out
+
+
 def leaving(plan_, stack_rows, routes, family_names=()) -> dict:
-    """item guid -> why, for every stack the plan sends somewhere but a bank.
+    """item guid -> why, for every stack the plan sends somewhere or learns now.
 
     `stack_rows` is (stack, row) pairs in the shape `build_stacks` produces,
     `routes` the routes something carries out (`carried_out_routes`). A
     decision counts only when it is the plan's first choice, placed (no
-    `NO_ROOM`, not stuck), and for GIVE when the taker is one of
-    `family_names`, the only gifts the executor writes. The bank pass reads
-    this so a stack the plan sells, gives or lists is not also banked.
+    `NO_ROOM`, not stuck), and for GIVE when a taker is named (family or
+    guildmate). Learnable carried class-9 stacks also leave the bank queue so
+    the bank pass does not store them before recipebook learns them.
     """
-    rows_by_key = {stack.key: row for stack, row in stack_rows}
-    family = set(family_names or ())
+    rows_by_key = {stack.key: (stack, row) for stack, row in stack_rows}
     out: dict = {}
     for decision in plan_.decisions:
-        if decision.route not in routes or decision.stuck:
-            continue
-        if decision.reason.startswith(itemplan.NO_ROOM):
+        if decision.stuck or decision.reason.startswith(itemplan.NO_ROOM):
             continue
         if not itemplan_vendor.chosen_first(decision):
             continue
-        if decision.route == itemplan.GIVE and decision.target not in family:
+        stack, row = rows_by_key.get(decision.key, (None, None))
+        keep_to_learn = decision.route == itemplan.KEEP_CARRY and _learnable_class9(
+            decision, stack
+        )
+        if decision.route not in routes and not keep_to_learn:
             continue
-        row = rows_by_key.get(decision.key)
+        if decision.route == itemplan.GIVE and not decision.target:
+            continue
         guid = _int((row or {}).get("item_guid"))
         if guid > 0:
             out[guid] = "the item plan routes %s to %s (%s)" % (
@@ -452,7 +507,7 @@ def leaving(plan_, stack_rows, routes, family_names=()) -> dict:
 
 
 def build_members(
-    names, family, stacks, free_slots, characters, bank_free=None
+    names, family, stacks, free_slots, characters, bank_free=None, skills=None
 ) -> list:
     """One itemplan.Member per name. Carried slots are free plus carried.
 
@@ -478,6 +533,7 @@ def build_members(
                 family=family,
                 level=level,
                 class_id=class_id,
+                skills=tuple((skills or {}).get(name, ())),
                 carried_slots=max(1, carried + max(0, free)),
                 **bank,
             )
@@ -671,7 +727,13 @@ def shadow(
     )
     characters = characters_from_worn(worn_rows)
     members = build_members(
-        names, family, stacks, free_slots, characters, extras.bank_free
+        names,
+        family,
+        stacks,
+        free_slots,
+        characters,
+        extras.bank_free,
+        skills=extras.family_skills,
     )
     verdicts = _verdicts(extras, stacks, characters)
     ctx = _context(extras, verdicts)
