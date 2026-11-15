@@ -62,6 +62,7 @@ import fanout
 import fireplan
 import flightlearn
 import followhold
+import recipehunt
 import goals
 import individual
 import guildcover
@@ -10526,6 +10527,7 @@ class Bridge(discord.Client):
             return
 
         await self._dark_iron_once(names, cohort)
+        await self._recipe_hunt_once(names, cohort)
 
         job_rows = await asyncio.to_thread(
             _standing_jobs, getattr(cohort, "key", None))
@@ -11039,6 +11041,101 @@ class Bridge(discord.Client):
                 queued += 1
         if needs:
             await self._walk_for_reagents(needs, cohort)
+        return queued
+
+    async def _recipe_hunt_once(self, names: list, cohort=None) -> int:
+        """Family vendor recipes + Cenarion/Timbermaw reputation turn-ins (#2423)."""
+        skills_by = await asyncio.to_thread(_fetch_recipehunt_skills, list(names))
+        crafters = sorted(skills_by)
+        if not crafters:
+            return 0
+        known_rows = await asyncio.to_thread(
+            _fetch_crafter_known, crafters, list(recipehunt.VENDOR_RECIPE_SPELLS)
+        )
+        facts = await asyncio.to_thread(_fetch_recipehunt_facts, crafters)
+        purses = await asyncio.to_thread(_fetch_purses, crafters)
+        rep_tm = await asyncio.to_thread(
+            _fetch_standing, crafters, recipehunt.FACTION_TIMBERMAW
+        )
+        rep_cc = await asyncio.to_thread(
+            _fetch_standing, crafters, recipehunt.FACTION_CENARION
+        )
+        in_log = await asyncio.to_thread(
+            _fetch_quest_log, crafters, sorted(recipehunt.REP_QUEST_IDS)
+        )
+        blocked = await asyncio.to_thread(
+            _recipehunt_rows_blocked, recipehunt.REFUSED_RETRY_MINUTES
+        )
+        positions = await asyncio.to_thread(_fetch_positions, crafters)
+        npc_spawns = await asyncio.to_thread(
+            _fetch_recipehunt_npc_spawns, sorted(recipehunt.REP_NPC_ENTRIES)
+        )
+        queued = 0
+        needs: list = []
+        npc_walk = 0
+        walker = ""
+        for name in crafters:
+            f = facts.get(name) or {}
+            town = await asyncio.to_thread(_fetch_town, name)
+            near = _nearby_npc_spawns(
+                positions.get(name), npc_spawns, attunestep.REACH_YARDS
+            )
+            skill_map = skills_by.get(name) or {}
+            crafter = recipehunt.Crafter(
+                name=name,
+                level=int((purses.get(name) or (60, 0))[0] or 60),
+                race=int(f.get("race") or 0),
+                map_id=int(f.get("map_id") or 0),
+                alchemy=int(skill_map.get(recipehunt.ALCHEMY, 0)),
+                enchanting=int(skill_map.get(recipehunt.ENCHANTING, 0)),
+                learned=frozenset(
+                    r["spell"] for r in known_rows if r["name"] == name
+                ),
+                held=tuple(f.get("held") or ()),
+                item_counts=tuple(f.get("item_counts") or ()),
+                in_log=frozenset(q for n, q in in_log if n == name),
+                rewarded=frozenset(f.get("rewarded") or ()),
+                standing=(
+                    (recipehunt.FACTION_TIMBERMAW, int(rep_tm.get(name, 0))),
+                    (recipehunt.FACTION_CENARION, int(rep_cc.get(name, 0))),
+                ),
+                money=int((purses.get(name) or (60, 0))[1] or 0),
+                free_slots=int(f.get("free_slots") or 0),
+                stocks=frozenset(town.stocks),
+                family=True,
+            )
+            turn = recipehunt.plan_family_crafter(
+                crafter, nearby_spawns=near, blocked=blocked or frozenset()
+            )
+            if turn.note:
+                log.info("recipe hunt: %s", turn.note)
+            if turn.walk_vendor_item:
+                needs.append(
+                    craft_supply.Need(name, turn.walk_vendor_item, "recipe vendor")
+                )
+            if turn.walk_npc_entry and not npc_walk:
+                npc_walk = turn.walk_npc_entry
+                walker = name
+            if turn.errand is None:
+                continue
+            if blocked is None:
+                log.info(
+                    "recipe hunt: cannot read pending rows, so %s for %s waits",
+                    turn.errand.command,
+                    name,
+                )
+                continue
+            if await asyncio.to_thread(_insert_recipehunt_errand, turn.errand):
+                queued += 1
+        if needs:
+            await self._walk_for_reagents(needs, cohort)
+        elif npc_walk and walker:
+            await self._claim_town_slot(
+                recipehunt.TOWN_CLAIMANT,
+                walker,
+                str(npc_walk),
+                cohort=getattr(cohort, "key", None),
+            )
         return queued
 
     async def _walk_for_hammers(self, needs: list, cohort=None) -> None:
@@ -19296,6 +19393,7 @@ class Bridge(discord.Client):
         # traceback after the corps' own steps have already started.
         busy |= {step.holder for step in plan.steps}
         await self._raid_supply_once(facts, plan.corps, busy, cap)
+        await self._guild_recipe_hunt_once(facts, busy, cap)
 
     async def _raid_supply_once(self, facts, corps, busy, cap) -> None:
         """One pass of the raid's supply (#275): Molten Core consumables and
@@ -19324,6 +19422,75 @@ class Bridge(discord.Client):
         # shortfall, and a slow store must not stall every other pass.
         await asyncio.to_thread(_request_fire_potion_order, night)
         log.info("raid supply: started %d step(s)", started)
+
+    async def _guild_recipe_hunt_once(self, facts, busy, cap) -> int:
+        """Guild maintenance crafters: #2423 vendor recipes and rep turn-ins."""
+        members = facts.get("members") or []
+        eligible = [
+            m for m in members
+            if not m.family and m.online and m.name not in busy
+            and (
+                m.skill(recipehunt.ALCHEMY)[0] >= 165
+                or m.skill(recipehunt.ENCHANTING)[0] >= 275
+            )
+        ]
+        names = [m.name for m in eligible]
+        if not names:
+            return 0
+        extra = await asyncio.to_thread(_fetch_guild_recipehunt_facts, names)
+        vendors = facts.get("vendors") or {}
+        crafters = []
+        for m in eligible:
+            f = extra["facts"].get(m.name) or {}
+            if f.get("money") is None and m.money is None:
+                continue
+            money = int(m.money if m.money is not None else f["money"])
+            crafters.append(
+                recipehunt.Crafter(
+                    name=m.name,
+                    guild=m.guild,
+                    level=int(m.level or 60),
+                    race=int(m.race or 0),
+                    map_id=int(m.map_id),
+                    alchemy=int(m.skill(recipehunt.ALCHEMY)[0]),
+                    enchanting=int(m.skill(recipehunt.ENCHANTING)[0]),
+                    learned=m.known | frozenset(extra["known"].get(m.name, ())),
+                    held=tuple((h.entry, h.guid) for h in m.carried),
+                    item_counts=tuple(f.get("item_counts") or ()),
+                    in_log=frozenset(extra["in_log"].get(m.name, ())),
+                    rewarded=frozenset(f.get("rewarded") or ()),
+                    standing=(
+                        (
+                            recipehunt.FACTION_TIMBERMAW,
+                            int(extra["tm"].get(m.name, 0)),
+                        ),
+                        (
+                            recipehunt.FACTION_CENARION,
+                            int(extra["cc"].get(m.name, 0)),
+                        ),
+                    ),
+                    money=money,
+                    free_slots=int(f.get("free_slots") or 0),
+                    stocks=frozenset(vendors.get(m.map_id, ())),
+                    family=False,
+                    online=True,
+                )
+            )
+        steps, notes = recipehunt.plan_guild_steps(
+            crafters,
+            busy,
+            extra["recent"],
+            npc_spawns=extra["spawns"],
+            cap=cap,
+        )
+        _log_capped("recipe hunt", notes)
+        now = time.monotonic()
+        for step in steps:
+            self._corps_steps[step.holder] = now
+            task = asyncio.create_task(self._run_corps_step(step, cap))
+            self._mail_walk_tasks.add(task)
+            task.add_done_callback(self._mail_walk_task_done)
+        return len(steps)
 
     async def _raid_supply_guild(self, guild_facts, extra, recent, busy, cap,
                                  night=None) -> int:
@@ -43192,6 +43359,44 @@ def _fetch_quest_log(names: list, quests: list) -> set:
         return {(row["name"], int(row["quest"])) for row in cur.fetchall()}
 
 
+def _source_rows_blocked(source: str, minutes: int):
+    """(character, command) of rows still pending/claimed or refused inside window."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, command FROM overseer_command "
+                "WHERE source = %s AND (status IN ('pending', 'claimed', 'verifying') "
+                "OR (status = 'error' "
+                "AND created_at > NOW() - INTERVAL %s MINUTE))",
+                (source, int(minutes)),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                log.warning("%s: overseer_command cannot be read here", source)
+                return None
+            raise
+        return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
+
+def _insert_source_errand(errand, source: str) -> int:
+    """Insert one buy/quest/cast row under `source`; 0 when table refuses."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (errand.member, errand.command, errand.kind, errand.taker, source),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                log.warning("%s: overseer_command cannot take a %r row for %s here",
+                            source, errand.kind, errand.member)
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
 def _iron_rows_blocked(minutes: int):
     """(character, command) of Dark Iron rows still pending or claimed, or
     refused (status 'error') inside the window - the `_out_of_reach_buys`
@@ -43233,6 +43438,201 @@ def _insert_iron_errand(errand) -> int:
                 return 0
             raise
         return cur.lastrowid or 0
+
+
+def _recipehunt_rows_blocked(minutes: int):
+    """(character, command) of recipe-hunt rows pending/claimed or recently refused."""
+    return _source_rows_blocked(recipehunt.SOURCE, minutes)
+
+
+def _insert_recipehunt_errand(errand) -> int:
+    """One recipe-hunt buy, cast, or quest row."""
+    return _insert_source_errand(errand, recipehunt.SOURCE)
+
+
+def _fetch_recipehunt_skills(names: list) -> dict:
+    """name -> {skill_id: value} for characters holding Alchemy or Enchanting."""
+    if not names:
+        return {}
+    marks = ",".join(["%s"] * len(names))
+    skills = sorted(recipehunt.TRADE_SKILLS)
+    skill_marks = ",".join(["%s"] * len(skills))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT c.name AS name, cs.skill AS skill, cs.value AS val "  # noqa: S608 - placeholders from a COUNT
+                "FROM characters c JOIN character_skills cs ON cs.guid = c.guid "
+                f"WHERE c.name IN ({marks}) AND cs.skill IN ({skill_marks})",
+                (*names, *skills),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return {}
+            raise
+        out: dict = {}
+        for row in cur.fetchall():
+            out.setdefault(str(row["name"]), {})[int(row["skill"])] = int(row["val"])
+        return out
+
+
+def _fetch_recipehunt_facts(names: list) -> dict:
+    """name -> race, map_id, free_slots, held recipes, item_counts, rewarded quests."""
+    if not names:
+        return {}
+    marks = ",".join(["%s"] * len(names))
+    item_entries = sorted(
+        recipehunt.VENDOR_RECIPE_ITEMS | recipehunt.REP_ITEM_ENTRIES
+    )
+    entry_marks = ",".join(["%s"] * len(item_entries))
+    quest_ids = sorted(recipehunt.REP_QUEST_IDS)
+    quest_marks = ",".join(["%s"] * len(quest_ids))
+    free = _fetch_free_slots(names)
+    out: dict = {}
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT name, race, map AS map_id FROM characters "  # noqa: S608 - placeholders from a COUNT
+                f"WHERE name IN ({marks})",
+                tuple(names),
+            )
+            for row in cur.fetchall():
+                n = str(row["name"])
+                out[n] = {
+                    "race": int(row["race"] or 0),
+                    "map_id": int(row["map_id"] or 0),
+                    "free_slots": int(free.get(n, 0)),
+                    "held": [],
+                    "item_counts": {},
+                    "rewarded": set(),
+                }
+            cur.execute(
+                "SELECT c.name AS name, ii.itemEntry AS entry, ii.guid AS item_guid, "  # noqa: S608 - placeholders from a COUNT
+                "ii.count AS cnt "
+                "FROM characters c "
+                "JOIN character_inventory ci ON ci.guid = c.guid "
+                "JOIN item_instance ii ON ii.guid = ci.item "
+                f"WHERE c.name IN ({marks}) AND ii.itemEntry IN ({entry_marks})",
+                (*names, *item_entries),
+            )
+            for row in cur.fetchall():
+                n = str(row["name"])
+                entry = int(row["entry"] or 0)
+                if n not in out:
+                    continue
+                if entry in recipehunt.VENDOR_RECIPE_ITEMS:
+                    out[n]["held"].append((entry, int(row["item_guid"] or 0)))
+                out[n]["item_counts"][entry] = (
+                    out[n]["item_counts"].get(entry, 0) + int(row["cnt"] or 0)
+                )
+            cur.execute(
+                "SELECT c.name AS name, qr.quest AS quest "  # noqa: S608 - placeholders from a COUNT
+                "FROM characters c "
+                "JOIN character_queststatus_rewarded qr ON qr.guid = c.guid "
+                f"WHERE c.name IN ({marks}) AND qr.quest IN ({quest_marks})",
+                (*names, *quest_ids),
+            )
+            for row in cur.fetchall():
+                n = str(row["name"])
+                if n in out:
+                    out[n]["rewarded"].add(int(row["quest"] or 0))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return {}
+            raise
+    for n, data in out.items():
+        data["held"] = tuple(data["held"])
+        data["item_counts"] = tuple(sorted(data["item_counts"].items()))
+        data["rewarded"] = frozenset(data["rewarded"])
+    return out
+
+
+def _fetch_recipehunt_npc_spawns(npc_entries: list) -> dict:
+    """npc_entry -> [(guid, map_id, x, y), ...] from real acore_world.creature spawns."""
+    if not npc_entries:
+        return {}
+    marks = ",".join(["%s"] * len(npc_entries))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT cr.id AS entry, cr.guid AS spawn_guid, "  # noqa: S608 - placeholders from a COUNT
+                "cr.map AS map_id, cr.position_x AS x, cr.position_y AS y "
+                "FROM acore_world.creature cr "
+                f"WHERE cr.id IN ({marks}) AND " + towntrip.REAL_SPAWN_SQL,
+                tuple(int(e) for e in npc_entries),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return {}
+            raise
+        out: dict = {}
+        for row in cur.fetchall():
+            out.setdefault(int(row["entry"]), []).append(
+                (
+                    int(row["spawn_guid"]),
+                    int(row["map_id"]),
+                    float(row["x"]),
+                    float(row["y"]),
+                )
+            )
+        return out
+
+
+def _nearby_npc_spawns(pos: dict | None, npc_spawns: dict, reach: float) -> dict:
+    """npc_entry -> spawn_guid for each spawn within `reach` yards of `pos`."""
+    if not pos:
+        return {}
+    map_id = int(pos.get("map_id") or 0)
+    px = float(pos.get("pos_x") or 0.0)
+    py = float(pos.get("pos_y") or 0.0)
+    near: dict = {}
+    for entry, rows in (npc_spawns or {}).items():
+        for guid, s_map, sx, sy in rows:
+            if s_map == map_id and ((px - sx) ** 2 + (py - sy) ** 2) ** 0.5 <= reach:
+                near[entry] = guid
+                break
+    return near
+
+
+def _fetch_guild_recipehunt_facts(names: list) -> dict:
+    """Guild-side recipe-hunt facts: skills, known, rep, logs, recent steps, spawns."""
+    facts = _fetch_recipehunt_facts(names)
+    known_rows = _fetch_crafter_known(names, list(recipehunt.VENDOR_RECIPE_SPELLS))
+    known: dict = {}
+    for row in known_rows:
+        known.setdefault(str(row["name"]), set()).add(int(row["spell"]))
+    in_log_set = _fetch_quest_log(names, sorted(recipehunt.REP_QUEST_IDS))
+    in_log: dict = {}
+    for n, q in in_log_set:
+        in_log.setdefault(n, set()).add(q)
+    tm = _fetch_standing(names, recipehunt.FACTION_TIMBERMAW)
+    cc = _fetch_standing(names, recipehunt.FACTION_CENARION)
+    purses = _fetch_purses(names)
+    for n in names:
+        if n in facts and n in purses:
+            facts[n]["money"] = int(purses[n][1])
+    with _connect() as conn, conn.cursor() as cur:
+        recent_rows = _corps_read(
+            cur,
+            "recipe hunt rows",
+            _RAID_SUPPLY_ROWS_SQL,
+            (recipehunt.CORPS_SOURCE + ":%",),
+        )
+    recent = guildcorps.recent_from_rows(recent_rows, prefix=recipehunt.CORPS_SOURCE)
+    raw_spawns = _fetch_recipehunt_npc_spawns(sorted(recipehunt.REP_NPC_ENTRIES))
+    spawns = {
+        entry: rows[0][0]
+        for entry, rows in raw_spawns.items()
+        if rows
+    }
+    return {
+        "facts": facts,
+        "known": known,
+        "in_log": in_log,
+        "tm": tm,
+        "cc": cc,
+        "recent": recent,
+        "spawns": spawns,
+    }
 
 
 def _hammer_purchase(cur, errand, recipe: int) -> tuple:
