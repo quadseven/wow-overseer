@@ -206,6 +206,9 @@ class ThePlanIsItsOwnSourceOfTruth(unittest.TestCase):
         names = raidgoals.plan_item_names()
         self.assertEqual(len(names), len(set(names)))
 
+    def test_onyxia_scale_cloak_is_not_a_molten_core_goal_item(self):
+        self.assertNotIn("Onyxia Scale Cloak", raidgoals.plan_item_names())
+
     def test_every_craft_spell_is_offered_to_the_reads(self):
         self.assertEqual(
             sorted(raidgoals.craft_spells()), sorted(r.spell for r in raidgoals.RECIPES)

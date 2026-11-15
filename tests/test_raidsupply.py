@@ -914,6 +914,8 @@ class TheRaidTab(unittest.TestCase):
         self.assertTrue(
             any(
                 "Onyxia Scale Cloak is unobtainable on this realm" in line
+                and "not needed for Molten Core" in line
+                and "only relevant to Blackwing Lair" in line
                 and "craft spell 19093" in line
                 and "2026-11-13 realm database read" in line
                 and "no trainer, vendor, loot or quest source" in line
@@ -921,10 +923,22 @@ class TheRaidTab(unittest.TestCase):
             ),
             lines,
         )
+        blockers = [row["text"] for row in card["blockers"]]
+        self.assertFalse(
+            any("Onyxia Scale Cloak" in blocker for blocker in blockers), blockers
+        )
 
     def test_the_page_draws_the_unobtainable_lines(self):
         raid = (HERE / "app" / "views" / "raid.js").read_text(encoding="utf-8")
         self.assertIn("s.unobtainable", raid)
+
+    def test_mc_facts_document_excludes_onyxia_scale_cloak(self):
+        facts = " ".join(
+            (HERE / "docs" / "MC-SPELL-FACTS.md").read_text(encoding="utf-8").split()
+        )
+        self.assertIn("Onyxia Scale Cloak is unobtainable on this realm", facts)
+        self.assertIn("not needed for Molten Core", facts)
+        self.assertIn("Nefarian's Shadow Flame in Blackwing Lair", facts)
 
     def test_the_readiness_card_carries_the_supply_section(self):
         group = {
