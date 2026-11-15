@@ -33970,13 +33970,13 @@ _RARE_WEARERS_READ: dict = {}
 
 
 def _fetch_epic_facts(guids) -> list:
-    """The rare-or-better items among `guids`, with what `epic_kept` reads."""
+    """Every item among `guids` that exists, with what the loot policy reads."""
     ids = [int(guid) for guid in guids]
     if not ids:
         return []
     sql = _EPIC_FACTS_SQL.format(holes=",".join(["%s"] * len(ids)))
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(sql, (*ids, lootpolicy.COMMON))
+        cur.execute(sql, (*ids, lootpolicy.POOR))
         return [dict(row) for row in cur.fetchall()]
 
 
@@ -34069,6 +34069,12 @@ def _loot_policy_blocks(holder: str, command: str, kind: str = "sell"):
     except Exception:
         log.exception("loot policy: cannot read the item in %r for %s, so the "
                       "row is not written", command, holder)
+        return lootpolicy.Verdict(lootpolicy.HOLD, "its facts could not be read")
+    unread = set(int(g) for g in guids) - {int(r["item_guid"]) for r in rows}
+    if unread:
+        # A fact that is missing holds the item; it never blesses a sale.
+        log.info("loot policy: no facts for item %s of %r for %s, so the row "
+                 "is not written", sorted(unread)[0], command, holder)
         return lootpolicy.Verdict(lootpolicy.HOLD, "its facts could not be read")
     classes = _guild_classes() if rows else frozenset()
     for row in rows:

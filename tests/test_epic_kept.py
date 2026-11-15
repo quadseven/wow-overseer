@@ -505,6 +505,7 @@ class WriterGateTest(unittest.TestCase):
         self.assertEqual(self.inserts(), [])
 
     def test_an_ordinary_sale_is_untouched(self):
+        self.facts[4242] = epic(item_guid=4242, quality=0, name="Linen Scrap")
         wrote = self.bridge._insert_sell(self.candidate("Grog", 4242, quality=0))
         self.assertTrue(wrote)
         self.assertEqual(len(self.inserts()), 1)

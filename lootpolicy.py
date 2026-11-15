@@ -161,24 +161,25 @@ def decide(row: dict, guild_classes, upgrade=None) -> Verdict:
         or _int(row.get("inventory_type")) is None
     ):
         return Verdict(HOLD, "its gear facts could not be read")
-
     if equipment and _wearable(row, guild_classes):
-        wanted = upgrade(row) if upgrade is not None else None
-        if wanted is None:
-            return Verdict(HOLD, "the guild's upgrade judge could not answer")
-        if wanted:
-            return Verdict(
-                UPGRADE, "an upgrade for %s" % ", ".join(wanted), tuple(wanted)
-            )
-        if quality == COMMON:
-            return Verdict(VENDOR, "a common piece nobody would wear over their own")
-        return _shelve(row, "a guild member could use it later")
-
+        return _wearable_verdict(row, quality, upgrade)
     if quality == COMMON and equipment:
         return Verdict(VENDOR, "a common piece no guild class can wear")
     if _int(row.get("item_class")) in _GUILD_USED_CLASSES:
         return _shelve(row, "the guild's trades use it")
     return _shelve(row, "no guild member can use it")
+
+
+def _wearable_verdict(row: dict, quality: int, upgrade) -> Verdict:
+    """A piece some guild class could wear: an upgrade for somebody, or kept."""
+    wanted = upgrade(row) if upgrade is not None else None
+    if wanted is None:
+        return Verdict(HOLD, "the guild's upgrade judge could not answer")
+    if wanted:
+        return Verdict(UPGRADE, "an upgrade for %s" % ", ".join(wanted), tuple(wanted))
+    if quality == COMMON:
+        return Verdict(VENDOR, "a common piece nobody would wear over their own")
+    return _shelve(row, "a guild member could use it later")
 
 
 def _shelve(row: dict, why: str) -> Verdict:

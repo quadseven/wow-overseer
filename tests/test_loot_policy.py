@@ -208,6 +208,7 @@ class TheGate(unittest.TestCase):
         self.assertEqual(self.inner.inserts(), [])
 
     def test_gray_still_sells(self):
+        self.facts(5004, quality=0, bonding=0)
         self.assertTrue(self.bridge._insert_sell(self.inner.candidate("Zrog", 5004, 0)))
         self.assertEqual(len(self.inner.inserts()), 1)
 
@@ -220,6 +221,12 @@ class TheGate(unittest.TestCase):
             wrote = self.bridge._insert_sell(self.inner.candidate("Zrog", 5005, 3))
         self.assertEqual(wrote, 77)
         route.assert_called_once_with("Zrog", 5005)
+        self.assertEqual(self.inner.inserts(), [])
+
+    def test_a_sale_naming_an_item_with_no_facts_is_held(self):
+        self.assertFalse(
+            self.bridge._insert_sell(self.inner.candidate("Zrog", 6000, 0))
+        )
         self.assertEqual(self.inner.inserts(), [])
 
     def test_a_disenchant_of_an_upgrade_is_refused(self):
