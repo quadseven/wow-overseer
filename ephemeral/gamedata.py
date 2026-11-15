@@ -1,0 +1,72 @@
+"""Small fixed game facts the decree format names by word.
+
+These are client-side constants that no database table carries (map names live
+in the client's Map.dbc, skill names in SkillLine.dbc), so they are listed here
+once and shared by lint and the seed compiler.
+"""
+
+# Instance map names a decree may use in `arrange: instance:`, to map ids.
+INSTANCE_MAPS = {
+    "Ragefire Chasm": 389,
+    "Wailing Caverns": 43,
+    "The Deadmines": 36,
+    "Shadowfang Keep": 33,
+    "Blackfathom Deeps": 48,
+    "The Stockade": 34,
+    "Gnomeregan": 90,
+    "Razorfen Kraul": 47,
+    "Scarlet Monastery": 189,
+    "Razorfen Downs": 129,
+    "Uldaman": 70,
+    "Zul'Farrak": 209,
+    "Maraudon": 349,
+    "The Temple of Atal'Hakkar": 109,
+    "Blackrock Depths": 230,
+    "Blackrock Spire": 229,
+    "Dire Maul": 429,
+    "Stratholme": 329,
+    "Scholomance": 289,
+    "Onyxia's Lair": 249,
+    "Molten Core": 409,
+    "Zul'Gurub": 309,
+    "Blackwing Lair": 469,
+    "Ruins of Ahn'Qiraj": 509,
+    "Temple of Ahn'Qiraj": 531,
+    "Naxxramas": 533,
+}
+
+# Profession and secondary skill lines a decree may set, to skill ids.
+SKILLS = {
+    "Alchemy": 171,
+    "Blacksmithing": 164,
+    "Enchanting": 333,
+    "Engineering": 202,
+    "Herbalism": 182,
+    "Inscription": 773,
+    "Jewelcrafting": 755,
+    "Leatherworking": 165,
+    "Mining": 186,
+    "Skinning": 393,
+    "Tailoring": 197,
+    "Cooking": 185,
+    "First Aid": 129,
+    "Fishing": 356,
+}
+
+# overseer_command.kind values (the live ENUM). `gm` is listed so lint can name
+# it in its refusal: bot sessions are SEC_PLAYER, so a gm command does nothing.
+COMMAND_KINDS = (
+    "bot chat gm probe give share trade job sell bank auction mail repair buy "
+    "bind hearth summon conjure cast guild quest naturalize disenchant"
+).split()
+
+# Config keys the world baseline owns; a decree must not set them.
+BASELINE_CONFIG_KEYS = {
+    "Overseer.RequireClient",
+    "Overseer.Raid.RequireHeadClient",
+    "Playerbots.MinRandomBots",
+    "Playerbots.MaxRandomBots",
+    "RealmID",
+}
+
+QUEST_STATES = {"incomplete": 3, "complete": 1}  # character_queststatus.status
