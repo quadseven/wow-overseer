@@ -12478,7 +12478,7 @@ class Bridge(discord.Client):
             self._cohort_town_slot(_cohort_key(cohort)).productive("auction")
 
     async def _auction_list_walk(self, candidates: list, names: list,
-                                 leader: str, cohort=None) -> None:
+                                 leader: str, cohort=None, sales=None) -> None:
         """Walk the leader to an auctioneer for what nobody is listing yet.
 
         ONLY A WALK THAT CAN LIST SOMETHING (wow-overseer#478). Priced
@@ -12486,7 +12486,11 @@ class Bridge(discord.Client):
         plans before it arrives; `DoAuction` and the per-house plan at the
         counter still decide.
         """
-        sales = await self._auction_listable_at_home(candidates, leader)
+        # `sales` is given when the caller already holds the listings it will
+        # make at the plan's own prices (the item plan's AUCTION route); the
+        # house's live asks would only overwrite those prices.
+        if sales is None:
+            sales = await self._auction_listable_at_home(candidates, leader)
         _log_changed("auction", [] if sales else [
             "leader=%s carries %d surplus item(s) and none of them can be "
             "listed at the house of its team (a rare, or no live listing "
@@ -14995,7 +14999,8 @@ class Bridge(discord.Client):
 
         await globals().get(
             "_run_itemplan_auction", skip_itemplan_auction
-        )(itemplan_auction, names, leader, rows, free_slots, gear_rows, worn)
+        )(itemplan_auction, names, leader, rows, free_slots, gear_rows, worn,
+          cohort)
 
         # A CAMPAIGN WITHHELD FOR BAG SPACE STILL SELLS (#225); see
         # `_vendor_pass_mode`.
@@ -16295,7 +16300,8 @@ class Bridge(discord.Client):
                           "pass carries on")
 
     async def _itemplan_auction(self, names: list, family: str, rows: list,
-                                free_slots: dict, gear_rows=(), worn_rows=()) -> None:
+                                free_slots: dict, gear_rows=(), worn_rows=(),
+                                cohort=None) -> None:
         """List only planned AUCTION rows when ITEMPLAN_AUCTION is enabled."""
         if not itemplan_shadow.auction_enabled():
             return
@@ -16344,19 +16350,33 @@ class Bridge(discord.Client):
                 "count": decision.count,
             })
         holder_house = await self._auction_holder_houses(candidates, names)
+        # A HOLDER AWAY FROM A COUNTER IS WALKED TO ONE (#2605). The rows below
+        # are written only for a holder already standing at an auctioneer, and
+        # nothing else sent one there: a day of AUCTION decisions wrote no row.
+        # The walk is the pass's own, asked only for stacks the plan prices.
+        stranded = [candidate for candidate in candidates
+                    if candidate["holder"] not in holder_house]
+        walk_sales = auction.plan_sales(stranded)
+        if walk_sales:
+            await self._auction_list_walk(
+                stranded, names, family, cohort, sales=walk_sales)
         candidates = [candidate for candidate in candidates
                       if candidate["holder"] in holder_house]
         sales = auction.plan_sales(candidates)
         if not sales:
             return
         seen = await asyncio.to_thread(_recent_auction_keys, GIVE_RETRY_MINUTES)
+        queued = 0
         for sale in sales:
             key = (sale.candidate.holder, sale.command)
             if key in seen:
                 continue
             if await asyncio.to_thread(_insert_auction, *key):
+                queued += 1
                 log.info("itemplan: auction %s - %s", sale.candidate.holder,
                          sale.candidate.label)
+        if queued:
+            await self._keep_at_auctioneer(family, cohort)
 
     async def _clearance_plan(self, names: list, leader: str,
                               auction_open: bool = False) -> tuple:
@@ -32134,10 +32154,12 @@ async def _run_itemplan_disenchant(itemplan_disenchant_run, names, family, rows,
 
 
 async def _run_itemplan_auction(itemplan_auction, names, family, rows,
-                               free_slots, gear_rows, worn_rows) -> None:
+                               free_slots, gear_rows, worn_rows,
+                               cohort=None) -> None:
     """Call the auction route executor when this economy pass exposes it."""
     if itemplan_auction is not None:
-        await itemplan_auction(names, family, rows, free_slots, gear_rows, worn_rows)
+        await itemplan_auction(names, family, rows, free_slots, gear_rows,
+                               worn_rows, cohort)
 
 
 def _shadow_itemplan(*args, **facts) -> None:
