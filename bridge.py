@@ -13818,6 +13818,11 @@ class Bridge(discord.Client):
         wearers, gear_rows, bank_rows = await asyncio.to_thread(_read_gear_routing, family)
         report = gearrouting.plan(wearers, gear_rows, bank_rows=bank_rows,
                                   keep_names=gearroutingread.KEEPS)
+        # A PIECE IN THE GUILD BANK IS TAKEN OUT BY A MEMBER (#2504): the guild
+        # bank pass, which owns the walk to the vault and its town slot lease,
+        # reads these on its next turn.
+        self._gear_bank_routes = await self._gear_bank_requests(
+            report, bank_rows, wearers)
         if not report.routes:
             log.info("gear routing: no routes this pass")
             return
@@ -13860,6 +13865,33 @@ class Bridge(discord.Client):
         log.info("gear routing: %s", gearroutingexec.summary(result))
         if GEAR_ROUTING_WALKS:
             await self._gear_routing_walks(result, world)
+
+    async def _gear_bank_requests(self, report, bank_rows, wearers) -> tuple:
+        """(clock, ((route, tab, guild), ...), name -> guild) for the report's
+        vault pieces, less those an operator hold stands the wearer's family
+        down for; the guild bank pass takes them out (#2504)."""
+        routes = gearroutingexec.bank_routes(report, bank_rows)
+        guilds = {str(w.get("name") or ""): str(w.get("guild") or "")
+                  for w in wearers}
+        if routes:
+            rows = await asyncio.to_thread(_roster_cohort_rows)
+            family_of = {str(r.get("name") or ""): str(r.get("family") or "")
+                         for r in rows}
+            stood = await self._operator_held(
+                {family_of[r.wearer] for r, _t, _g in routes
+                 if family_of.get(r.wearer)}, "gear routing")
+            routes = tuple(x for x in routes
+                           if family_of.get(x[0].wearer) not in stood)
+        return (time.monotonic(), routes, guilds)
+
+    def _gear_bank_for(self, names) -> tuple:
+        """The fresh vault routes of the guild `names` belong to: the routing
+        pass's last read, no older than GEAR_BANK_ROUTES_SECONDS."""
+        stamp, routes, guilds = getattr(self, "_gear_bank_routes", (0.0, (), {}))
+        if time.monotonic() - stamp > GEAR_BANK_ROUTES_SECONDS:
+            return ()
+        mine = {guilds.get(str(n)) for n in names} - {None, ""}
+        return tuple(x for x in routes if x[2] in mine)
 
     async def _gear_routing_walks(self, result, world) -> None:
         """Walk the holders of waiting routes to a mailbox (#2503).
@@ -17770,7 +17802,8 @@ class Bridge(discord.Client):
         # stacks of linen the forecast lists; nothing could take them out, so
         # every new keeper went to a personal bank instead. They ride the same
         # walk and the same per-member range gate as the deposits.
-        withdrawals = await asyncio.to_thread(_plan_guild_withdrawals, names)
+        withdrawals = await asyncio.to_thread(
+            _plan_guild_withdrawals, names, self._gear_bank_for(names))
         # THE GUILD FUND NEEDS THE VAULT TOO (guildfund.py): the master walks
         # there to withdraw what it posts to the members.
         fund = sum(getattr(self, "_fund_wants", {}).get(n, 0) for n in names)
@@ -32815,7 +32848,7 @@ def _withdrawn_for_sale_routes(names: list) -> dict:
             for row in _fetch_withdrawn_for_sale(names)}
 
 
-def _plan_guild_withdrawals(names: list) -> tuple:
+def _plan_guild_withdrawals(names: list, gear_routes=()) -> tuple:
     """bankforecast.plan_withdrawals over the guild's live facts; blocking.
 
     Who may take what from which tab is the members' ranks' (guild_bank_right
@@ -32833,7 +32866,7 @@ def _plan_guild_withdrawals(names: list) -> tuple:
     # THE VAULT'S VENDOR AND GIVE DECISIONS ARE CARRIED OUT TOO (#2602).
     clearing = any(d.action in (bankforecast.VENDOR, bankforecast.GIVE)
                    for d in forecast.decisions())
-    if not selling and not crafting and not clearing:
+    if not selling and not crafting and not clearing and not gear_routes:
         return ()
     try:
         free = _fetch_free_slots(names)
@@ -32853,8 +32886,17 @@ def _plan_guild_withdrawals(names: list) -> tuple:
             log.info("guild bank: %s", note)
     pending = frozenset(int(row["entry"]) for row in _fetch_withdrawn_for_sale(names))
     placed = for_craft
+    if gear_routes:
+        # A routed gear piece leaves the vault first (#2504): it is somebody's
+        # upgrade, not surplus. A held family is already out of the routes.
+        for_gear, notes = gearroutingexec.bank_withdrawals(
+            gear_routes, takers, kept=_KEEP.now(), planned=placed)
+        for note in notes:
+            log.info("guild bank: %s", note)
+        placed += for_gear
     if selling:
-        placed += bankforecast.plan_withdrawals(forecast, takers, pending=pending)
+        placed += bankforecast.plan_withdrawals(
+            forecast, takers, pending=pending, planned=placed)
     return placed + bankforecast.plan_surplus_withdrawals(
         forecast, takers, planned=placed, pending=pending)
 
@@ -34352,6 +34394,9 @@ GUILD_ROUTE_MAILBOX_CHECKS = int(os.environ.get("GUILD_ROUTE_MAILBOX_CHECKS", "2
 # The most hand-over rows the gear routing pass writes in one cycle (#2136);
 # 0 writes none, and every route is still decided and logged.
 GEAR_ROUTING_PER_PASS = int(os.environ.get("GEAR_ROUTING_PER_PASS", "10"))
+# How old the routing pass's vault routes may be when the guild bank pass
+# reads them (#2504): a few routing cycles, so a piece already gone is not asked for.
+GEAR_BANK_ROUTES_SECONDS = 1800.0
 # THE WALKS A WAITING GEAR ROUTE ASKS FOR (#2503). Its own budget, because the
 # guild route pass spends guildroute.MAIL_RUNS_PER_DAY (6) and a 341-route
 # report would use all of it. Off switch: GEAR_ROUTING_WALKS=0.
