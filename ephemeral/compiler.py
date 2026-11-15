@@ -11,7 +11,6 @@ plays the scenario as intended is what the first end-to-end run shows, and a
 precondition that fails makes that run INVALID rather than a pass.
 """
 
-import re
 from dataclasses import dataclass, field
 
 from . import gamedata, lint
@@ -61,27 +60,13 @@ class Compiler:
 
     # -- resolution -------------------------------------------------------
     def members_of(self, who, cast_index=None):
-        if re.match(r"^family:", who):
+        if who.startswith("family:"):
             rows = self.r.family(who.split(":", 1)[1])
             if not rows:
                 raise SeedError(f"{who} resolves to no enabled roster member")
             pairs = [(g, n) for g, n, _ in rows]
         elif who.startswith("guild:"):
-            _, guild, role = who.split(":", 2)
-            skill = gamedata.SKILLS.get(gamedata.ROLE_SKILLS.get(role, ""))
-            if skill is None:
-                raise SeedError(
-                    f"{who}: role {role!r} is not a profession this compiler knows"
-                )
-            rows = self.r.guild_role(guild, skill)
-            if not rows:
-                raise SeedError(f"{who} resolves to no guild member with that skill")
-            pairs = [
-                tuple(rows[0])
-            ]  # best skill first, then lowest guid: deterministic
-            self.plan.notes.append(
-                f"{who} resolved to {rows[0][1]} (best skill, then lowest guid)"
-            )
+            pairs = [self._guild_member(who)]
         else:
             rows = self.r.characters(who)
             if len(rows) != 1:
@@ -90,6 +75,21 @@ class Compiler:
                 )
             pairs = [tuple(rows[0])]
         return [Member(cast_index, who, g, n) for g, n in pairs]
+
+    def _guild_member(self, who):
+        _, guild, role = who.split(":", 2)
+        skill = gamedata.SKILLS.get(gamedata.ROLE_SKILLS.get(role, ""))
+        if skill is None:
+            raise SeedError(
+                f"{who}: role {role!r} is not a profession this compiler knows"
+            )
+        rows = self.r.guild_role(guild, skill)
+        if not rows:
+            raise SeedError(f"{who} resolves to no guild member with that skill")
+        self.plan.notes.append(
+            f"{who} resolved to {rows[0][1]} (best skill, then lowest guid)"
+        )
+        return tuple(rows[0])  # best skill first, then lowest guid: deterministic
 
     def one(self, rows, what):
         if len(rows) != 1:
@@ -113,31 +113,9 @@ class Compiler:
                 raise SeedError(f"areatrigger {val} not found")
             return (t["map"], 0, t["x"], t["y"], t["z"], t["o"])
         if kind == "graveyard":
-            if val == GRAVEYARD_NEAREST:
-                if corpse is None:
-                    raise SeedError("graveyard: nearest needs a corpse position")
-                cmap, _, cx, cy, _, _ = corpse
-                yards = self.r.graveyards_on_map(cmap)
-                if not yards:
-                    raise SeedError(f"no graveyard on map {cmap}")
-                g = min(
-                    yards,
-                    key=lambda y: ((y["x"] - cx) ** 2 + (y["y"] - cy) ** 2, y["id"]),
-                )
-                return (cmap, 0, g["x"], g["y"], g["z"], 0.0)
-            g = self.r.graveyard(val)
-            if g is None:
-                raise SeedError(f"graveyard {val} not found")
-            return (g["map"], 0, g["x"], g["y"], g["z"], 0.0)
+            return self._graveyard(val, corpse)
         if kind == "captured":
-            if not self.anchors.has(val):
-                raise SeedError(f"captured anchor {val!r} is not in anchors.yaml")
-            pos = self.anchors.position(val)
-            if pos is None:
-                raise SeedError(
-                    f"captured anchor {val!r} is pending: its position was never captured"
-                )
-            return pos
+            return self._captured(val)
         if kind == "with":
             if resolved_with is None or val not in resolved_with:
                 raise SeedError(
@@ -146,53 +124,83 @@ class Compiler:
             return resolved_with[val]
         raise SeedError(f"unknown anchor kind {kind!r}")
 
+    def _captured(self, key):
+        if not self.anchors.has(key):
+            raise SeedError(f"captured anchor {key!r} is not in anchors.yaml")
+        pos = self.anchors.position(key)
+        if pos is None:
+            raise SeedError(
+                f"captured anchor {key!r} is pending: its position was never captured"
+            )
+        return pos
+
+    def _graveyard(self, val, corpse):
+        if val != GRAVEYARD_NEAREST:
+            g = self.r.graveyard(val)
+            if g is None:
+                raise SeedError(f"graveyard {val} not found")
+            return (g["map"], 0, g["x"], g["y"], g["z"], 0.0)
+        if corpse is None:
+            raise SeedError("graveyard: nearest needs a corpse position")
+        cmap, _, cx, cy, _, _ = corpse
+        yards = self.r.graveyards_on_map(cmap)
+        if not yards:
+            raise SeedError(f"no graveyard on map {cmap}")
+        g = min(yards, key=lambda y: ((y["x"] - cx) ** 2 + (y["y"] - cy) ** 2, y["id"]))
+        return (cmap, 0, g["x"], g["y"], g["z"], 0.0)
+
     # -- compile ----------------------------------------------------------
     def run(self):
         cast = self.decree["cast"]
-        by_entry = []
-        for i, entry in enumerate(cast):
-            by_entry.append(self.members_of(entry["who"], i))
+        by_entry = self._resolve_cast(cast)
+        self.plan.members = [m for ms in by_entry for m in ms]
+        self._variables(by_entry)
+        arrange = [
+            next(iter(item.items())) for item in self.decree.get("arrange") or []
+        ]
+        for kind, spec in arrange:
+            if kind == "instance":
+                self._instance(spec, by_entry)
+        for kind, spec in arrange:
+            if kind == "group":
+                self._group(spec, by_entry)
+            elif kind == "creature":
+                self._creature_dead(spec)
+        self._cast_rows(cast, by_entry)
+        return self.plan
+
+    def _resolve_cast(self, cast):
+        by_entry = [self.members_of(entry["who"], i) for i, entry in enumerate(cast)]
         # A character named on its own overrides the same character inside a
         # family or guild entry: the specific entry beats the general one.
+        general = ("family:", "guild:")
         named = {
             ms[0].name
             for ms, e in zip(by_entry, cast)
-            if not e["who"].startswith(("family:", "guild:"))
+            if not e["who"].startswith(general)
         }
         for i, entry in enumerate(cast):
-            if entry["who"].startswith(("family:", "guild:")):
+            if entry["who"].startswith(general):
                 by_entry[i] = [m for m in by_entry[i] if m.name not in named]
                 if not by_entry[i]:
                     raise SeedError(
                         f"{entry['who']} has no member left once the named characters are taken out"
                     )
-        self.plan.members = [m for ms in by_entry for m in ms]
-        seen = {}
-        for m in self.plan.members:
+        seen = set()
+        for m in (m for ms in by_entry for m in ms):
             if m.guid in seen:
                 raise SeedError(f"{m.name} appears twice in the cast")
-            seen[m.guid] = m
-        self._variables(by_entry)
+            seen.add(m.guid)
+        return by_entry
 
-        for item in self.decree.get("arrange") or []:
-            kind, spec = next(iter(item.items()))
-            if kind == "instance":
-                self._instance(spec, by_entry)
-        for item in self.decree.get("arrange") or []:
-            kind, spec = next(iter(item.items()))
-            if kind == "group":
-                self._group(spec, by_entry)
-            elif kind == "creature":
-                self._creature_dead(spec)
-
+    def _cast_rows(self, cast, by_entry):
         # Positions first (a `with` anchor reads another member's), then rows.
         resolved = {}
-        for i, entry in enumerate(cast):
+        for entry in cast:
             s = entry["set"]
-            corpse = self.place(s["corpse_at"]) if "corpse_at" in s else None
             if "at" in s and "with" not in s["at"]:
-                pos = self.place(s["at"], corpse)
-                resolved[entry["who"]] = pos
+                corpse = self.place(s["corpse_at"]) if "corpse_at" in s else None
+                resolved[entry["who"]] = self.place(s["at"], corpse)
         for i, entry in enumerate(cast):
             s = entry["set"]
             corpse = self.place(s["corpse_at"]) if "corpse_at" in s else None
@@ -204,7 +212,6 @@ class Compiler:
             )
             for m in by_entry[i]:
                 self._member(m, s, at, corpse, home)
-        return self.plan
 
     def _variables(self, by_entry):
         v = self.plan.variables
@@ -331,9 +338,32 @@ class Compiler:
         return 0
 
     def _member(self, m, s, at, corpse, home):
-        st = self.plan.statements
-        b = self.b
-        guid = m.guid
+        cols = self._character_columns(m, s, at)
+        if cols:
+            self.plan.statements.append(
+                self.b.update("characters", cols, {"guid": m.guid})
+            )
+        if s.get("alive") is False and corpse is not None:
+            self._corpse(m, corpse)
+        self._skills_and_spells(m, s)
+        self._items(m, s.get("items") or [])
+        for quest, state in (s.get("quests") or {}).items():
+            self._quest(m, quest, state)
+        if home is not None:
+            hmap, hzone, hx, hy, hz, _ = home
+            row = {
+                "guid": m.guid,
+                "mapId": hmap,
+                "zoneId": hzone,
+                "posX": hx,
+                "posY": hy,
+                "posZ": hz,
+            }
+            self.plan.statements.append(
+                self.b.insert("character_homebind", row, replace=True)
+            )
+
+    def _character_columns(self, m, s, at):
         cols = {}
         if "level" in s:
             cols.update(level=s["level"], xp=0)
@@ -341,82 +371,68 @@ class Compiler:
             cols["money"] = s["money"]
         if at is not None:
             mp, zone, x, y, z, o = at
-            cols.update(map=mp, instance_id=self._instance_for(mp), position_x=x, position_y=y, position_z=z, orientation=o,
-                        taxi_path="", transguid=0)  # fmt: skip
+            cols.update(
+                map=mp, instance_id=self._instance_for(mp), position_x=x, position_y=y, position_z=z,
+                orientation=o, taxi_path="", transguid=0,
+            )  # fmt: skip
             if zone:
                 cols["zone"] = zone
-        flags = (self.r.character(guid) or {}).get("player_flags", 0)
+        cols.update(self._life_columns(m, s))
+        return cols
+
+    def _life_columns(self, m, s):
+        flags = (self.r.character(m.guid) or {}).get("player_flags", 0)
         if s.get("alive") is False:
-            cols.update(health=0, playerFlags=flags | PLAYER_FLAG_GHOST)
-        elif s.get("alive") is True or "health_pct" in s:
-            maxhealth = self.r.maxhealth(guid)
+            return {"health": 0, "playerFlags": flags | PLAYER_FLAG_GHOST}
+        if s.get("alive") is True or "health_pct" in s:
+            maxhealth = self.r.maxhealth(m.guid)
             if maxhealth <= 0:
                 raise SeedError(
                     f"{m.name} has no character_stats row, so health cannot be set"
                 )
-            pct = s.get("health_pct", 100)
-            cols.update(
-                health=max(1, maxhealth * pct // 100),
-                playerFlags=flags & ~PLAYER_FLAG_GHOST,
-                death_expire_time=0,
-            )
-        if cols:
-            st.append(b.update("characters", cols, {"guid": guid}))
-        if s.get("alive") is False and corpse is not None:
-            cmap, _, cx, cy, cz, co = corpse
-            st.append(b.delete("corpse", {"guid": guid}))
-            st.append(
-                b.insert(
-                    "corpse",
-                    {"guid": guid, "posX": cx, "posY": cy, "posZ": cz, "orientation": co, "mapId": cmap, "phaseMask": 1,
-                     "displayId": 0, "itemCache": "", "bytes1": 0, "bytes2": 0, "guildId": 0, "flags": 0, "dynFlags": 0,
-                     "time": NowPlus(0), "corpseType": 1, "instanceId": self._instance_for(cmap)},
-                )
-            )  # fmt: skip
+            health = max(1, maxhealth * s.get("health_pct", 100) // 100)
+            return {
+                "health": health,
+                "playerFlags": flags & ~PLAYER_FLAG_GHOST,
+                "death_expire_time": 0,
+            }
+        return {}
+
+    def _corpse(self, m, corpse):
+        cmap, _, cx, cy, cz, co = corpse
+        st = self.plan.statements
+        st.append(self.b.delete("corpse", {"guid": m.guid}))
+        row = {
+            "guid": m.guid, "posX": cx, "posY": cy, "posZ": cz, "orientation": co, "mapId": cmap,
+            "phaseMask": 1, "displayId": 0, "itemCache": "", "bytes1": 0, "bytes2": 0, "guildId": 0,
+            "flags": 0, "dynFlags": 0, "time": NowPlus(0), "corpseType": 1,
+            "instanceId": self._instance_for(cmap),
+        }  # fmt: skip
+        st.append(self.b.insert("corpse", row))
+
+    def _skills_and_spells(self, m, s):
+        st = self.plan.statements
+        b = self.b
         for name, spec in (s.get("skills") or {}).items():
             value = spec["value"] if isinstance(spec, dict) else spec
             mx = spec.get("max", value) if isinstance(spec, dict) else spec
-            st.append(
-                b.insert(
-                    "character_skills",
-                    {
-                        "guid": guid,
-                        "skill": gamedata.SKILLS[name],
-                        "value": value,
-                        "max": mx,
-                    },
-                    replace=True,
-                )
-            )
+            row = {
+                "guid": m.guid,
+                "skill": gamedata.SKILLS[name],
+                "value": value,
+                "max": mx,
+            }
+            st.append(b.insert("character_skills", row, replace=True))
         for spell in s.get("spells_add") or []:
             st.append(
                 b.insert(
                     "character_spell",
-                    {"guid": guid, "spell": spell, "specMask": 255},
+                    {"guid": m.guid, "spell": spell, "specMask": 255},
                     replace=True,
                 )
             )
         for spell in s.get("spells_remove") or []:
-            st.append(b.delete("character_spell", {"guid": guid, "spell": spell}))
-        self._items(m, s.get("items") or [])
-        for quest, state in (s.get("quests") or {}).items():
-            self._quest(m, quest, state)
-        if home is not None:
-            hmap, hzone, hx, hy, hz, _ = home
-            st.append(
-                b.insert(
-                    "character_homebind",
-                    {
-                        "guid": guid,
-                        "mapId": hmap,
-                        "zoneId": hzone,
-                        "posX": hx,
-                        "posY": hy,
-                        "posZ": hz,
-                    },
-                    replace=True,
-                )
-            )
+            st.append(b.delete("character_spell", {"guid": m.guid, "spell": spell}))
 
     def _items(self, m, items):
         if not items:

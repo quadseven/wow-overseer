@@ -146,22 +146,38 @@ def verify_statement(sql, schema):
     cols = schema.columns(table, WRITE_DB)
     if cols is None:
         raise SeedError(f"unknown table {WRITE_DB}.{table}")
-    rest = sql[m.end() :]
-    bare = _STRING.sub("''", rest)
-    if "'" in bare.replace("''", ""):
-        raise SeedError("unbalanced quote")
-    for bad in (";", "@", "--", "/*", "*/", "#", "\\", '"'):
-        if bad in bare:
-            raise SeedError(f"statement contains {bad!r}")
-    for ident in _BACKTICKED.findall(bare):
-        if ident not in cols:
-            raise SeedError(f"table {table} has no column {ident!r}")
-    bare = _BACKTICKED.sub("", bare)
-    for word in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", bare):
-        if word.upper() not in _ALLOWED_WORDS:
-            raise SeedError(f"word {word!r} is not allowed in a seed statement")
+    bare = _without_strings(sql[m.end() :])
+    _check_characters(bare)
+    bare = _check_columns(bare, table, cols)
+    _check_words(bare)
     if op.startswith(("UPDATE", "DELETE")) and " WHERE " not in " " + bare + " ":
         raise SeedError("UPDATE and DELETE need a WHERE")
     if re.search(r"[^0-9A-Za-z_ ,()=.+\-']", bare):
         raise SeedError("statement contains a character a seed may not write")
     return True
+
+
+def _without_strings(rest):
+    bare = _STRING.sub("''", rest)
+    if "'" in bare.replace("''", ""):
+        raise SeedError("unbalanced quote")
+    return bare
+
+
+def _check_characters(bare):
+    for bad in (";", "@", "--", "/*", "*/", "#", "\\", '"'):
+        if bad in bare:
+            raise SeedError(f"statement contains {bad!r}")
+
+
+def _check_columns(bare, table, cols):
+    for ident in _BACKTICKED.findall(bare):
+        if ident not in cols:
+            raise SeedError(f"table {table} has no column {ident!r}")
+    return _BACKTICKED.sub("", bare)
+
+
+def _check_words(bare):
+    for word in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", bare):
+        if word.upper() not in _ALLOWED_WORDS:
+            raise SeedError(f"word {word!r} is not allowed in a seed statement")
