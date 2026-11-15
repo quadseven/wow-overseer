@@ -187,6 +187,19 @@ def _held_reason(decision, stack, row) -> str:
     return ""
 
 
+def chosen_first(decision) -> bool:
+    """Was this decision's route the plan's first choice, not a fallback?
+
+    True when the route heads the options the plan weighed, or when every
+    option ahead of it failed only on a full capped share of stock. The bank
+    pass reads it too (`itemplan_shadow.leaving`): a stack the plan only
+    reached by falling back is not one the bank may give up on.
+    """
+    if not decision.options or decision.options[0] == decision.route:
+        return True
+    return _surplus_past_a_share(decision)
+
+
 def _surplus_past_a_share(decision) -> bool:
     """Did every option ahead of the sale fail only on a full capped share?
 

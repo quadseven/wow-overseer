@@ -37683,6 +37683,56 @@ def _bank_role_routes(names: list) -> dict:
     )
 
 
+# WHAT THE ITEM PLAN SENDS AWAY IS NOT BANKED (#2604), READ ONCE A MINUTE OR
+# TWO PER FAMILY: two passes ask (the banker's and the vault's), and the plan
+# moves only as bags do.
+BANK_LEAVES_SECONDS = 120.0
+_BANK_LEAVES_CACHE: dict = {}
+
+
+def _bank_plan_leaves(names: list) -> tuple:
+    """(item guid -> why, unread) for the stacks the item plan sends elsewhere.
+
+    The bank pass and the item plan used to answer "does this stack belong in
+    a bank" separately and disagree (306 recipe and book stacks, 29 gem stacks
+    and about 70 gear stacks sat in banks on the keeper rule's word while the
+    plan sold, gave or listed them). The plan is the one answer. Only the
+    routes something carries out count (`itemplan_shadow.carried_out_routes`),
+    so with every executor off this returns ({}, False) and the keeper rule
+    stands as before. A read or plan that fails returns ({}, True): the bank
+    stores nothing new on the keeper rule's word. Blocking.
+    """
+    routes = itemplan_shadow.carried_out_routes()
+    key = tuple(sorted(str(n) for n in names or ()))
+    if not routes or not key:
+        return {}, False
+    now = time.monotonic()
+    hit = _BANK_LEAVES_CACHE.get(key)
+    if hit is not None and now - hit[0] < BANK_LEAVES_SECONDS and hit[1] == routes:
+        return hit[2], hit[3]
+    try:
+        rows = _fetch_vendor_items(list(key))
+        free_slots = _fetch_free_slots(list(key))
+        gear_rows = _fetch_surplus_gear(list(key))
+        worn_rows = _fetch_family_equipped(list(key))
+        family = key[0]
+        extras = _itemplan_reads(list(key), family, rows, gear_rows, worn_rows)
+        report = itemplan_shadow.shadow(
+            list(key), family, rows, free_slots, gear_rows=gear_rows,
+            worn_rows=worn_rows, extras=extras)
+        stacks = itemplan_shadow.build_stacks(
+            rows, gear_rows, extras.templates, extras.instance_soulbound)
+        leaves = itemplan_shadow.leaving(
+            report.plan, list(zip(stacks, rows, strict=True)), routes, key)
+        unread = False
+    except Exception:
+        log.exception("bank: the item plan could not be read; nothing new is "
+                      "stored on the keeper rule's word this pass")
+        leaves, unread = {}, True
+    _BANK_LEAVES_CACHE[key] = (now, routes, leaves, unread)
+    return leaves, unread
+
+
 def _plan_bank(names: list) -> "bank.Plan":
     """bank.plan over the family's rows, with the keeper rule switched on.
 
@@ -37694,6 +37744,7 @@ def _plan_bank(names: list) -> "bank.Plan":
     """
     rows = _fetch_bank_items(names)
     held = _fetch_trade_skills(names)
+    plan_leaves, plan_unread = _bank_plan_leaves(names)
     # A recipe the designated crafters route to somebody stays in the bags
     # for the hand-off, and comes back out of the bank for it (#248).
     storage = bank.storage_from(
@@ -37708,6 +37759,8 @@ def _plan_bank(names: list) -> "bank.Plan":
         over_target=_bank_forecast(names).over_target,
         # A REAGENT THE CRAFTER'S OWN ERRAND IS SHORT OF COMES OUT (#774).
         craft_wants=reagentplan.bank_wants(_craft_plans_of(names)),
+        # WHAT THE ITEM PLAN SELLS, GIVES OR LISTS IS NOT BANKED (#2604).
+        plan_leaves=plan_leaves, plan_unread=plan_unread,
     )
     # WHILE A CAMPAIGN WAITS, BAGS ARE KEPT AT RUN ROOM: a member short of
     # the resume floor puts its trade goods down, and nothing is fetched back
