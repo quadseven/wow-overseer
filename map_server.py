@@ -5860,6 +5860,23 @@ class Handler(BaseHTTPRequestHandler):
     # apple-touch-icon). Same bytes on every realm, like the files above: the
     # manifest's URLs are relative, so each realm's copy resolves against the
     # path it was fetched under and opens that realm, not the root.
+    def _sw_file(self, _query: dict) -> None:
+        # Served at the mount with the mount's scope so every precached URL and
+        # the worker's own registration stay inside this realm's prefix (#2314).
+        def _render(body: bytes) -> bytes:
+            with open(os.path.join(HERE, "index.html"), "rb") as f:
+                index_html = f.read()
+            return appbuild.stamp_worker(
+                basepath.apply(body, BASE_PATH), appbuild.fingerprint(HERE), index_html
+            )
+
+        self._send_file(
+            "app/sw.js",
+            "text/javascript; charset=utf-8",
+            transform=_render,
+            extra_headers=(("Service-Worker-Allowed", (BASE_PATH or "") + "/"),),
+        )
+
     def _manifest_file(self, _query: dict) -> None:
         self._send_file("manifest.webmanifest", "application/manifest+json")
 
@@ -7327,7 +7344,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send_file(self, name: str, ctype: str, transform=None, path: str = "",
                    cache_control: str = "no-store", *,
-                   revalidate: bool = True) -> None:
+                   revalidate: bool = True,
+                   extra_headers: tuple[tuple[str, str], ...] = ()) -> None:
         # A file missing from the image must be a readable 500, not a bare
         # connection reset - the page keys its error banner off r.ok.
         #
@@ -7348,14 +7366,16 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("static file %s cannot be served", name)
             self._send(500, "text/plain", b"static file missing from image")
             return
+        kw = {"extra_headers": extra_headers} if extra_headers else {}
         if revalidate:
-            self._send(200, ctype, body, cache_control)
+            self._send(200, ctype, body, cache_control, **kw)
         else:
-            self._send(200, ctype, body, cache_control, revalidate=False)
+            self._send(200, ctype, body, cache_control, revalidate=False, **kw)
 
     def _send(self, code: int, ctype: str, body: bytes,
               cache_control: str = "no-store", *,
-              revalidate: bool = True) -> None:
+              revalidate: bool = True,
+              extra_headers: tuple[tuple[str, str], ...] = ()) -> None:
         # A successful GET is revalidated rather than refetched: it carries
         # an ETag of its bytes and `no-cache`, so the app's poll of an
         # unchanged answer costs a 304 and no body. The model-viewer files
@@ -7382,6 +7402,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("ETag", tag)
                 self.send_header("Cache-Control", cache_control)
                 self.send_header("Vary", "Accept-Encoding")
+                for hkey, hval in extra_headers:
+                    self.send_header(hkey, hval)
                 self.end_headers()
                 return
         self.send_response(code)
@@ -7395,6 +7417,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", cache_control)
         if tag:
             self.send_header("ETag", tag)
+        for hkey, hval in extra_headers:
+            self.send_header(hkey, hval)
         self.end_headers()
         self.wfile.write(body)
 
@@ -7556,6 +7580,7 @@ class Handler(BaseHTTPRequestHandler):
         "/shapes.json": _shapes_file,
         "/jquery.min.js": _jquery_file,
         "/manifest.webmanifest": _manifest_file,
+        "/sw.js": _sw_file,
         "/apple-touch-icon.png": _touch_icon,
         "/icon-192.png": _icon_192,
         "/icon-512.png": _icon_512,
