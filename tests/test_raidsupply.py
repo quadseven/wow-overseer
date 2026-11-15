@@ -904,6 +904,24 @@ class TheRaidTab(unittest.TestCase):
             lines,
         )
 
+    def test_the_supply_section_names_onyxia_scale_cloak_as_unobtainable(self):
+        group = {"guild": "Cave", "family": "Grug", "family_names": ["Grug"]}
+        group["rows"] = [{"name": "Grug", "level": 60, "class_id": 1}]
+        chars = [{"name": "Grug", "level": 60, "class": 1}]
+        supply = {"have": {}, "knowers": {}, "bank": 0}
+        card = raidready.build_guild(group, chars, [], [], 55, {}, supply=supply)
+        lines = card["supply"]["unobtainable"]
+        self.assertTrue(
+            any(
+                "Onyxia Scale Cloak is unobtainable on this realm" in line
+                and "craft spell 19093" in line
+                and "2026-11-13 realm database read" in line
+                and "no trainer, vendor, loot or quest source" in line
+                for line in lines
+            ),
+            lines,
+        )
+
     def test_the_page_draws_the_unobtainable_lines(self):
         raid = (HERE / "app" / "views" / "raid.js").read_text(encoding="utf-8")
         self.assertIn("s.unobtainable", raid)
