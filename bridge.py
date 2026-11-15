@@ -37257,7 +37257,7 @@ _CLASS_REAGENT_SOLD_SQL = (
     "AND (it.Flags & 2) = 0 AND it.BuyPrice > 0"
 )
 
-_CLASS_REAGENT_VENDOR_SQL = (
+_CLASS_REAGENT_SHOP_SQL = (
     "SELECT cr.id AS vendor, ct.name AS vendor_name, cr.map AS map_id, "
     "MIN(SQRT(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2))) AS yards, "
     "it.entry AS entry, it.name AS item_name, it.BuyPrice AS price, "
@@ -37318,7 +37318,7 @@ def _fetch_class_reagent_vendors(here, entries, cap_yards) -> list:
         return []
     cap = float(cap_yards)
     x, y = float(here.x), float(here.y)
-    sql = _CLASS_REAGENT_VENDOR_SQL.format(entries=",".join(str(e) for e in clean))
+    sql = _CLASS_REAGENT_SHOP_SQL.format(entries=",".join(str(e) for e in clean))
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
