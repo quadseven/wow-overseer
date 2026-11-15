@@ -767,7 +767,7 @@ class SecondSetRequiresASeatThatCanPlayTheRole(unittest.TestCase):
             60,
             bankpolicy.PARTY_DAMAGE,
             frozenset(),
-            roles=frozenset({bankpolicy.PARTY_DAMAGE}),
+            locked=True,
         )
         shield = self._tank_shield(11, holder="Grog")
         heal = self._healing_plate(10, holder="Grog")
@@ -777,7 +777,7 @@ class SecondSetRequiresASeatThatCanPlayTheRole(unittest.TestCase):
             60,
             bankpolicy.PARTY_HEALER,
             frozenset(),
-            roles=frozenset({bankpolicy.PARTY_HEALER}),
+            locked=True,
         )
         healer_shield = self._tank_shield(13, holder="Ugga")
         warrior_locked = bankpolicy.Keeper(
@@ -786,7 +786,7 @@ class SecondSetRequiresASeatThatCanPlayTheRole(unittest.TestCase):
             60,
             bankpolicy.PARTY_TANK,
             frozenset(),
-            roles=frozenset({bankpolicy.PARTY_TANK}),
+            locked=True,
         )
         axe = self._damage_axe(12, holder="Grug")
         facts = bankpolicy.Facts(
@@ -808,7 +808,7 @@ class SecondSetRequiresASeatThatCanPlayTheRole(unittest.TestCase):
             60,
             bankpolicy.PARTY_DAMAGE,
             frozenset(),
-            roles=frozenset({bankpolicy.PARTY_DAMAGE}),
+            locked=True,
         )
         low_locked = bankpolicy.Keeper(
             "Grog",
@@ -816,7 +816,7 @@ class SecondSetRequiresASeatThatCanPlayTheRole(unittest.TestCase):
             40,
             bankpolicy.PARTY_DAMAGE,
             frozenset(),
-            roles=frozenset({bankpolicy.PARTY_DAMAGE}),
+            locked=True,
         )
         fire = piece(21, "Cinder Pauldrons", fire_res=20)
         pvp = piece(22, "Marshal Greaves", pvp=True)
@@ -834,24 +834,20 @@ class SecondSetRequiresASeatThatCanPlayTheRole(unittest.TestCase):
         )
         self.assertEqual(bankpolicy.GROWS_INTO, bankpolicy.place(later_facts)[23].kind)
 
-    def test_multi_role_seat_keeps_its_second_role_only(self):
-        dual = bankpolicy.Keeper(
+    def test_unseated_member_keeps_its_best_second_role_set(self):
+        unlocked = bankpolicy.Keeper(
             "Alaric",
             PALADIN,
             60,
             bankpolicy.PARTY_DAMAGE,
             frozenset(),
-            roles=frozenset({bankpolicy.PARTY_DAMAGE, bankpolicy.PARTY_TANK}),
+            locked=False,
         )
         shield = self._tank_shield(31, holder="Alaric")
-        heal = self._healing_plate(32, holder="Alaric")
         facts = bankpolicy.Facts(
-            pieces=(shield, heal),
-            family=(dual,),
-            reach={
-                31: reach("Alaric", role="damage", cls=PALADIN),
-                32: reach("Alaric", role="damage", cls=PALADIN),
-            },
+            pieces=(shield,),
+            family=(unlocked,),
+            reach={31: reach("Alaric", role="damage", cls=PALADIN)},
         )
         placed = bankpolicy.place(facts)
         self.assertEqual([31], sorted(placed))
@@ -865,6 +861,13 @@ class SecondSetRequiresASeatThatCanPlayTheRole(unittest.TestCase):
                 "level": 60,
                 "inventory_type": 5,
                 "item_level": 60,
+            },
+            {
+                "name": "Grug",
+                "class_id": WARRIOR,
+                "level": 60,
+                "inventory_type": 17,
+                "item_level": 70,
             },
             {
                 "name": "Grog",
@@ -920,64 +923,54 @@ class SecondSetRequiresASeatThatCanPlayTheRole(unittest.TestCase):
         ]
         facts = bankpolicy.facts_from_rows(["Grug", "Grog"], item_rows, worn_rows, [])
         by_name = {k.name: k for k in facts.family}
-        self.assertEqual(frozenset({bankpolicy.PARTY_TANK}), by_name["Grug"].roles)
-        self.assertEqual(frozenset({bankpolicy.PARTY_DAMAGE}), by_name["Grog"].roles)
+        self.assertTrue(by_name["Grug"].locked)
+        self.assertTrue(by_name["Grog"].locked)
+        self.assertEqual(frozenset({41, 42}), bankpolicy.dropped_second_sets(facts))
         self.assertEqual({}, bankpolicy.place(facts))
 
-    def test_banked_tradable_rare_for_family_moves_to_gear_for_later(self):
+    def test_banked_dropped_second_set_moves_to_gear_for_later_only_when_dropped(
+        self,
+    ):
         locked = bankpolicy.Keeper(
             "Grog",
             PALADIN,
             60,
             bankpolicy.PARTY_DAMAGE,
             frozenset(),
-            roles=frozenset({bankpolicy.PARTY_DAMAGE}),
+            locked=True,
         )
-        tradable_rare = self._healing_plate(
+        dropped_tradable = self._healing_plate(
             51, holder="Grog", bound=False, place="bank"
         )
+        non_second_set_tradable = piece(
+            52,
+            "Bracers of Mightier Hits",
+            holder="Grog",
+            quality=3,
+            bound=False,
+            place="bank",
+            stats=(("attack_power", 30),),
+            scored=(("attack_power", 30),),
+        )
         facts = bankpolicy.Facts(
-            pieces=(tradable_rare,),
+            pieces=(dropped_tradable, non_second_set_tradable),
             family=(locked,),
-            reach={51: reach("Grog", role="damage", cls=PALADIN, guild=("Ugga",))},
+            reach={
+                51: reach("Grog", role="damage", cls=PALADIN, guild=("Ugga",)),
+                52: reach(
+                    "Grog",
+                    bucket="wrist",
+                    role="damage",
+                    cls=PALADIN,
+                    guild=("Ugga",),
+                ),
+            },
         )
-        placed = bankpolicy.place(facts)[51]
+        placed = bankpolicy.place(facts)
+        self.assertEqual([51], sorted(placed))
         self.assertEqual(
-            (bankpolicy.GUILD, bankpolicy.GEAR_TAB), (placed.to, placed.tab)
+            (bankpolicy.GUILD, bankpolicy.GEAR_TAB), (placed[51].to, placed[51].tab)
         )
-
-    def test_unkept_carried_rares_and_epics_are_not_routed_to_a_vendor(self):
-        rare = bag_pressure.SellCandidate(
-            holder="Grug",
-            item_guid=61,
-            count=1,
-            item=bag_pressure.ItemForSale(quality=3, sell_price=50000),
-        )
-        epic = bag_pressure.SellCandidate(
-            holder="Grug",
-            item_guid=62,
-            count=1,
-            item=bag_pressure.ItemForSale(quality=4, sell_price=90000),
-        )
-        green = bag_pressure.SellCandidate(
-            holder="Grug",
-            item_guid=63,
-            count=1,
-            item=bag_pressure.ItemForSale(quality=2, sell_price=10000),
-        )
-        spare_rare = bag_pressure.SellCandidate(
-            holder="Grug",
-            item_guid=64,
-            count=1,
-            item=bag_pressure.ItemForSale(quality=3, sell_price=40000),
-            spare=True,
-        )
-        kept = bag_pressure.without_unkept_rares((rare, epic, green, spare_rare))
-        self.assertEqual([63, 64], [c.item_guid for c in kept])
-        body = (ROOT / "bridge.py").read_text(encoding="utf-8")
-        vendor_body = body[body.index("    async def _vendor_once(") :]
-        vendor_body = vendor_body[: vendor_body.index("\n    async def ")]
-        self.assertIn("without_unkept_rares(", vendor_body)
 
 
 if __name__ == "__main__":

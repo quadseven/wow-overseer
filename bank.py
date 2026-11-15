@@ -605,6 +605,8 @@ class Storage:
     # slots held back for them: a stack that is not one of these may not take
     # the tab below `len(guild_reagents)` free slots.
     guild_reagents: frozenset = frozenset()
+    # Second-set gear dropped when locking to seat role (#2606): left in personal bank.
+    dropped_second_sets: frozenset = frozenset()
 
 
 def _craft_wanted(holding, storage):
@@ -705,6 +707,7 @@ def storage_from(
     spare=frozenset(),
     over_target=None,
     craft_wants=None,
+    dropped_second_sets=frozenset(),
 ):
     """The Storage this family is today, from what the bridge already reads.
 
@@ -740,6 +743,7 @@ def storage_from(
             for name, entries in (craft_wants or {}).items()
         },
         guild_reagents=vault_reagents(skills, guild) if depositors else frozenset(),
+        dropped_second_sets=frozenset(dropped_second_sets or ()),
     )
 
 
@@ -1127,7 +1131,7 @@ def _wanted_back(holding, member, family, totals, storage):
         return "%s is for %s" % (holding.item.name, storage.routed[holding.guid])
     if holding.guid in storage.spare:
         return "%s is a spare copy, sold from the bags" % holding.item.name
-    if holding.item.item_class in (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR):
+    if holding.guid in storage.dropped_second_sets:
         return ""
     if _craft_wanted(holding, storage):
         return "%s's craft errand is short of it in the bags (reagentplan)" % (

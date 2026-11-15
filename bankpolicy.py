@@ -205,14 +205,15 @@ class Piece:
 @dataclass(frozen=True)
 class Keeper:
     """A family member, as this policy needs them: its class, its party role
-    (raidlineup.party_roles), optional allowed seat roles, and the trades it works."""
+    (raidlineup.party_roles), whether its seat locks that role, and the trades
+    it works."""
 
     name: str
     class_id: int
     level: int
     role: str = ""
     trades: frozenset = frozenset()
-    roles: frozenset = frozenset()
+    locked: bool = False
 
 
 @dataclass(frozen=True)
@@ -333,13 +334,6 @@ def situational_score(piece: Piece, class_id, level, kind=None) -> float:
     return max((gearscore.score(stats, s, _int(level, 60)) for s in specs), default=0.0)
 
 
-def _allowed_off_kinds(keeper: Keeper, mine: str):
-    """Other party roles this seat may hold a second set for, or None if unlocked."""
-    if not keeper.roles:
-        return None
-    return frozenset(_PARTY_KIND[r] for r in keeper.roles if r in _PARTY_KIND) - {mine}
-
-
 def off_kind(piece: Piece, keeper: Keeper) -> str:
     """The kind (tank, healer, damage) this piece is a second set for, by
     gearscore (#540), or '' when it is not one.
@@ -347,15 +341,12 @@ def off_kind(piece: Piece, keeper: Keeper) -> str:
     Decision #532: members keep alternative and situational pieces, scored by
     the same per-spec weights as the upgrade tracker. A piece is another
     role's when the class's specs for that role score it above zero and above
-    every spec of the holder's role today, and the holder's seat allows that
-    role. A class with no gear lists for both roles, or a piece with no
+    every spec of the holder's role today, unless the holder's seat is locked
+    to one role. A class with no gear lists for both roles, or a piece with no
     scored stats, falls back to statweights (`off_role`).
     """
     mine = _PARTY_KIND.get(keeper.role, "")
-    if not mine:
-        return ""
-    allowed = _allowed_off_kinds(keeper, mine)
-    if allowed is not None and not allowed:
+    if not mine or keeper.locked:
         return ""
     by_kind = _specs_by_kind(keeper.class_id)
     if not piece.scored or mine not in by_kind or len(by_kind) < 2:
@@ -367,27 +358,20 @@ def off_kind(piece: Piece, keeper: Keeper) -> str:
     best = max(sorted(others), key=lambda k: others[k])
     if others[best] <= 0 or others[best] <= scores[mine]:
         return ""
-    if allowed is not None and best not in allowed:
-        return ""
     return best
 
 
 def off_role(piece: Piece, keeper: Keeper) -> str:
     """The statweights role this piece is for, when it is not the holder's
-    role today and its class and seat can play it; '' otherwise."""
+    role today and its seat is not locked to one role; '' otherwise."""
     mine = _PARTY_KIND.get(keeper.role, "")
-    if not mine:
-        return ""
-    allowed = _allowed_off_kinds(keeper, mine)
-    if allowed is not None and not allowed:
+    if not mine or keeper.locked:
         return ""
     scores = role_scores(piece, keeper.class_id)
     if not scores:
         return ""
     best = max(sorted(scores), key=lambda r: scores[r])
     if scores[best] <= 0 or _KIND[best] == mine:
-        return ""
-    if allowed is not None and _KIND[best] not in allowed:
         return ""
     # The piece must be for that role and not merely good for everyone: a
     # stamina belt scores for every role and is nobody's second set.
@@ -645,7 +629,7 @@ def _raid_supplies(pieces, family, claimed, taken) -> dict:
     return out
 
 
-def _gear_for_later(pieces, reach, claimed, taken) -> dict:
+def _gear_for_later(pieces, reach, claimed, taken, dropped=frozenset()) -> dict:
     """Rule 4: guid -> Placement for the Gear for Later tab."""
     out = {}
     for piece in pieces:
@@ -657,6 +641,7 @@ def _gear_for_later(pieces, reach, claimed, taken) -> dict:
             or not piece.is_gear
             or piece.bound
             or piece.quality < RARE
+            or (piece.place != "bags" and piece.guid not in dropped)
             or not fit.later_wearers
         ):
             continue
@@ -749,6 +734,31 @@ def _reserved(pieces, reservations, levels) -> dict:
     return out
 
 
+def _dropped_second_sets(pieces, family, reach, claimed, placed) -> frozenset[int]:
+    """Guids dropped from second-set keeps strictly because the seat is locked."""
+    if not any(k.locked for k in family):
+        return frozenset()
+    unlocked = tuple(replace(k, locked=False) for k in family)
+    would_keep = _personal(pieces, unlocked, reach, claimed)
+    return frozenset(
+        guid for guid in would_keep if guid not in placed and guid not in claimed
+    )
+
+
+def dropped_second_sets(facts: Facts, placed: dict | None = None) -> frozenset[int]:
+    """Guids no longer kept as off-role second sets on this family (#2606)."""
+    if not any(k.locked for k in facts.family):
+        return frozenset()
+    held = frozenset(
+        p.guid for p in facts.pieces if any(r.covers(p) for r in facts.reserved)
+    )
+    pieces = tuple(p for p in facts.pieces if not p.quest_needed and p.guid not in held)
+    kept = place(facts) if placed is None else placed
+    return _dropped_second_sets(
+        pieces, facts.family, facts.reach, frozenset(facts.claimed), kept
+    )
+
+
 def place(facts: Facts) -> dict:
     """guid -> Placement for every stack this policy has an answer for.
 
@@ -763,8 +773,9 @@ def place(facts: Facts) -> dict:
     claimed = frozenset(facts.claimed)
     out = dict(_reserved(facts.pieces, facts.reserved, levels))
     out.update(_personal(pieces, facts.family, facts.reach, claimed))
+    dropped = _dropped_second_sets(pieces, facts.family, facts.reach, claimed, out)
     out.update(_raid_supplies(pieces, facts.family, claimed, frozenset(out)))
-    out.update(_gear_for_later(pieces, facts.reach, claimed, frozenset(out)))
+    out.update(_gear_for_later(pieces, facts.reach, claimed, frozenset(out), dropped))
     out.update(_kept_for_family(pieces, facts.reach, claimed, frozenset(out)))
     return out
 
@@ -1026,7 +1037,7 @@ def facts_from_rows(names, item_rows, worn_rows, skill_rows) -> Facts:
                 level=level,
                 role=seat_role or party.get(name, ""),
                 trades=trades.get(name, frozenset()),
-                roles=frozenset({seat_role}) if seat_role else frozenset(),
+                locked=bool(seat_role),
             )
         )
     return Facts(

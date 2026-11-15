@@ -530,7 +530,16 @@ class BankedPolicyGearRelocatesWhenGuildTabHasRoom(unittest.TestCase):
                 tab=bankpolicy.GEAR_TAB,
                 kind="gear for later",
                 why="rare for Oz later",
-            )
+            ),
+            102: bankpolicy.Placement(
+                guid=102,
+                holder="Grug",
+                item="Bulwark Shield",
+                to=bankpolicy.PERSONAL,
+                tab=None,
+                kind=bankpolicy.GROWS_INTO,
+                why="Grug keeps Bulwark Shield until level 55",
+            ),
         }
         storage = bank.Storage(
             guild_depositors=frozenset({"Grug"}),
@@ -542,6 +551,35 @@ class BankedPolicyGearRelocatesWhenGuildTabHasRoom(unittest.TestCase):
             [101], [m.guid for m in planned.moves if m.verb == bank.WITHDRAW]
         )
         self.assertEqual([], [m for m in planned.moves if m.guid == 102])
+
+    def test_non_dropped_banked_gear_still_withdraws_while_dropped_second_set_stays(
+        self,
+    ):
+        rows = [
+            row(
+                item_guid=201,
+                name="Normal Banked Blade",
+                quality=3,
+                item_class=bank.ITEM_CLASS_WEAPON,
+                bonding=1,
+                slot=39,
+                required_level=55,
+            ),
+            row(
+                item_guid=202,
+                name="Dropped Second-Set Axe",
+                quality=3,
+                item_class=bank.ITEM_CLASS_WEAPON,
+                bonding=1,
+                slot=40,
+                required_level=55,
+            ),
+        ]
+        members = bank.members_from_rows(rows, ["Grug"])
+        storage = bank.Storage(dropped_second_sets=frozenset({202}))
+        planned = bank.plan(members, NOBODY, storage=storage)
+        withdrawn = [m.guid for m in planned.moves if m.verb == bank.WITHDRAW]
+        self.assertEqual([201], withdrawn)
 
 
 if __name__ == "__main__":

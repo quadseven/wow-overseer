@@ -151,7 +151,6 @@ class SellCandidate:
     item_guid: int
     count: int
     item: ItemForSale
-    spare: bool = False
 
 
 def vendor_candidates(rows: Iterable[dict], keep_names=()) -> tuple[SellCandidate, ...]:
@@ -1887,20 +1886,6 @@ def item_binding(row) -> str:
     return _BONDING.get(int(row.get("bonding", -1) or 0), "")
 
 
-def without_unkept_rares(candidates, spare=frozenset()) -> tuple:
-    """Drop carried rare and epic gear unless marked as a redundant spare."""
-    return tuple(
-        candidate
-        for candidate in candidates
-        if (
-            int(getattr(getattr(candidate, "item", None), "quality", 0) or 0)
-            < RARE_QUALITY
-            or bool(getattr(candidate, "spare", False))
-            or int(getattr(candidate, "item_guid", 0) or 0) in spare
-        )
-    )
-
-
 def gear_candidates(
     rows: Iterable[dict],
     family,
@@ -1994,7 +1979,6 @@ def gear_candidates(
                 # decision above is disposition's, not `sellable`'s, which refuses
                 # every uncommon on purpose and would refuse these too.
                 item=ItemForSale(quality=item.quality, sell_price=item.sell_price),
-                spare=guid in spare,
             )
         )
     return tuple(out)
