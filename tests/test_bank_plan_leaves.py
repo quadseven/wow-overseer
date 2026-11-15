@@ -285,6 +285,65 @@ class OnlyARouteSomethingCarriesOutCounts(unittest.TestCase):
         got = shadow.leaving(plan_, pairs, {itemplan.GIVE}, ["Ana", "Zug"])
         self.assertEqual([100], list(got))
 
+    def test_a_gift_counts_for_guild_takers_when_listed(self):
+        plan_, pairs = self.pairs(
+            decision(itemplan.GIVE, key=("a",), target="Zug"),
+            decision(itemplan.GIVE, key=("b",), target="Glob"),
+            decision(itemplan.GIVE, key=("c",), target="Stranger"),
+        )
+        got = shadow.leaving(
+            plan_, pairs, {itemplan.GIVE}, ["Ana", "Zug"], guild_names={"Glob"}
+        )
+        self.assertEqual([100, 101], list(got))
+
+    def test_learnable_carried_class9_stays_out_of_bank(self):
+        book_row = {
+            "holder": "Bork",
+            "item_guid": 301,
+            "entry": 17682,
+            "name": "Book: Gift of the Wild",
+            "item_class": itemplan.C_RECIPE,
+            "quality": 2,
+            "count": 1,
+            "sell_price": 2500,
+        }
+        book_stack = itemplan.Stack(
+            holder="Bork",
+            loc=itemplan.CARRIED_BAG,
+            entry=17682,
+            name="Book: Gift of the Wild",
+            item_class=itemplan.C_RECIPE,
+            subclass=0,
+            quality=2,
+            count=1,
+            sell=2500,
+            bind=0,
+            soulbound=False,
+            req_level=50,
+            required_skill=0,
+            required_skill_rank=0,
+            allowable_class=1024,
+        )
+        d = itemplan.Decision(
+            holder="Bork",
+            entry=17682,
+            name="Book: Gift of the Wild",
+            count=1,
+            from_loc=itemplan.CARRIED_BAG,
+            route=itemplan.KEEP_CARRY,
+            goal=itemplan.RECIPE,
+            reason="class book for Bork",
+            rule="R9",
+            key=book_stack.key,
+            options=(itemplan.KEEP_CARRY,),
+        )
+        got = shadow.leaving(
+            types.SimpleNamespace(decisions=[d]),
+            [(book_stack, book_row)],
+            {itemplan.GIVE},
+        )
+        self.assertEqual([301], list(got))
+
     def test_a_bank_route_is_never_a_leaving(self):
         plan_, pairs = self.pairs(
             decision(itemplan.BANK_PERSONAL, key=("a",)),
