@@ -2648,6 +2648,84 @@ def riding_step(m, recent):
     )
 
 
+# A FAMILY MEMBER KEEPS A FLOAT BEYOND THE FEE (ticket 2625). Read on the dev
+# realm on 2026-11-15: 9 of the 10 level 60 family members held no Riding though
+# each carried over 4 gold. A roster family member has no purchase order (purse.py
+# is laid on guild members off the roster), so this step reads the rank from its
+# level and Riding ceiling and the fee from purse.RIDING_RANKS (the trainer's own
+# rows, checked against the dev world on that day), and leaves the member this
+# much over the fee for repairs and food.
+FAMILY_RIDING_FLOAT = 10000
+
+
+def family_riding_step(m, recent):
+    """(step or None, a note) for a roster family member short of the riding
+    rank its level allows: the walk to a riding trainer that guild members make
+    (riding_step), planned for a family member only in the gap between runs.
+
+    The caller offers only members whose family is idle (familyclass.py), so no
+    dungeon, town errand or campaign holds them. Never a follower (the module
+    refuses a follower's walk), nor offline, dead or fighting; bounded to a
+    family class walk's distance (familyclass.WALK_YARDS) and asked again no
+    sooner than the riding cooldown. The member's own gold pays: the module buys
+    the rank through the core's trainer and nothing here teaches."""
+    if m.role != FAMILY or not m.eligible:
+        return None, ""
+    rank = purse.riding_due(m.level, m.skill(purse.RIDING_SKILL)[1])
+    if rank is None:
+        return None, ""
+    if int(m.money or 0) < rank.cost + FAMILY_RIDING_FLOAT:
+        return (
+            None,
+            "%s saves for %s (%s and a float of %s; it holds %s)"
+            % (
+                m.name,
+                rank.name,
+                purse.money(rank.cost),
+                purse.money(FAMILY_RIDING_FLOAT),
+                purse.money(m.money),
+            ),
+        )
+    if not m.online or not m.alive or m.in_combat or getattr(m, "follows", False):
+        return None, ""
+    if m.map_id is None or m.x is None or m.y is None:
+        return None, ""
+    if _stranded_by_no_trainer(m.name, purse.RIDING_SKILL, m.map_id, recent):
+        return (
+            None,
+            "%s waits on the map change before walking to a riding trainer" % m.name,
+        )
+    if _cooling(m, RIDING_ACTION, recent):
+        return None, ""
+    said = "%s walks to a riding trainer to buy %s for %s of its own" % (
+        m.name,
+        rank.name,
+        purse.money(rank.cost),
+    )
+    return (
+        guildcorps.Step(
+            m.name,
+            RIDING_ACTION,
+            purse.RIDING_SKILL,
+            said,
+            rows=(
+                guildcorps.Row(
+                    "cast",
+                    "walk-to-trainer skill:%d learn:%d%s"
+                    % (
+                        purse.RIDING_SKILL,
+                        rank.spell,
+                        _cap_word(familyclass.WALK_YARDS),
+                    ),
+                    str(m.map_id or 0),
+                    source_for(RIDING_ACTION, m.name),
+                ),
+            ),
+        ),
+        "",
+    )
+
+
 def _newest_buy(name, action, recent):
     """The member's newest buy row of `action` (not its walk), or None."""
     buys = [
@@ -4665,6 +4743,7 @@ def _plan_family_class_member(
                 return
         if class_owed(m, classes, recent, now=now) is not None and note:
             class_holds[m.name] = _class_hold_reason(m.name, note)
+        _plan_family_riding(m, recent, counters, busy, per_guild, steps, notes)
         return
     gap_hold = familyclass.holds(m, step.move, recent)
     if gap_hold:
@@ -4681,6 +4760,26 @@ def _plan_family_class_member(
         notes.append(why)
         class_holds[m.name] = _class_hold_reason(m.name, why)
         _release_slots(m.name, far, None)
+        return
+    started[m.guild] = started.get(m.guild, 0) + 1
+    busy.add(m.name)
+    steps.append(step)
+
+
+def _plan_family_riding(m, recent, counters, busy, per_guild, steps, notes) -> None:
+    """Plan an idle family member the riding walk when its class step has
+    nothing for it (family_riding_step, ticket 2625), on the shared allowance."""
+    step, note = family_riding_step(m, recent)
+    if note:
+        notes.append(note)
+    if step is None:
+        return
+    started, allowance = _allowance(step, counters, per_guild)
+    why = _step_refusal(m, busy, started, allowance, step) or job_walk_held(
+        m, step, recent
+    )
+    if why:
+        notes.append(why)
         return
     started[m.guild] = started.get(m.guild, 0) + 1
     busy.add(m.name)
