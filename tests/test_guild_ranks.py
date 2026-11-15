@@ -11,6 +11,7 @@ import apiv2.guild as guild_api
 import apiv2.presence as presence
 import guildranks
 import guildrun
+import modsource
 import raidteams
 import realmread
 
@@ -29,9 +30,7 @@ def _member(name, level, rank, *, online=False):
 
 class RankRuleTests(unittest.TestCase):
     def test_rank_constants_match_mod_overseer_header(self):
-        header = (ROOT / "mod-overseer/src/overseer_decisions.h").read_text(
-            encoding="utf-8"
-        )
+        header = modsource.read(modsource.DECISIONS_H)
         expected = {}
         for name in ("MASTER", "OFFICER", "VETERAN", "MEMBER", "INITIATE"):
             match = re.search(rf"constexpr unsigned GUILD_RANK_{name} = (\d+);", header)
@@ -90,6 +89,17 @@ class MotdAndPlanTests(unittest.TestCase):
         raid_line = guildranks.motd_for_goal("Cave", raid_keyword="mc")
         self.assertIn("mc", raid_line.lower())
         self.assertTrue(raid_line.isascii())
+
+    def test_sanitize_motd_preserves_ordinary_text_and_caps_bytes(self):
+        ordinary = "Clear Deadmines | cff00ff00 tonight (2x)!"
+        self.assertEqual(ordinary, guildranks._sanitize_motd(ordinary))
+        self.assertEqual(
+            f"motd {ordinary}",
+            guildranks.motd_command(f"  {ordinary}  "),
+        )
+        truncated = guildranks._sanitize_motd("a" * (guildranks.MAX_MOTD_BYTES + 20))
+        self.assertEqual(guildranks.MAX_MOTD_BYTES, len(truncated))
+        self.assertTrue(truncated.endswith("..."))
 
     def test_plan_actions_promotes_and_sets_motd_when_master_online(self):
         seats = frozenset(s.name for s in raidteams.seats("Cave"))
