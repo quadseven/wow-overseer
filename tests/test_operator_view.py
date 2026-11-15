@@ -224,8 +224,11 @@ class FormsPostWhereTheHandlersRead(unittest.TestCase):
         # Frame uploads come from the stream agent, and watch lifecycle calls
         # remain available to clients outside this operator page.
         # The cutter routes are called by the capture host, never by a form.
+        # /api/spectate is the Guilds tab's Watch button, which posts a run id.
         cutter = {r for r in routes if r.startswith("/api/clips/")}
-        self.assertEqual(used, routes - {"/api/frame", "/api/watch"} - cutter)
+        self.assertEqual(
+            used, routes - {"/api/frame", "/api/watch", "/api/spectate"} - cutter
+        )
         self.assertIn("/api/frame", self.html)
 
     def test_each_form_posts_its_own_path_with_its_own_names(self):
