@@ -1,9 +1,11 @@
 """`python3 -m ephemeral lint <decree>...`: the `eph` command line (lint only so far)."""
 
 import argparse
+import json
 import pathlib
 import sys
 
+from . import acts
 from . import anchors as anchors_mod
 from . import dbschema, lint
 from .miniyaml import YamlError, loads
@@ -39,12 +41,13 @@ def _lint(args):
 
 
 def _acts(args):
-    import json
-
-    from . import acts
-
-    decree = loads(pathlib.Path(args.decree).read_text(encoding="utf-8"))
-    print(json.dumps(acts.act_commands(decree), indent=2))
+    try:
+        decree = loads(pathlib.Path(args.decree).read_text(encoding="utf-8"))
+        rows = acts.act_commands(decree)
+    except (OSError, YamlError, KeyError, TypeError) as exc:
+        print(f"error: {args.decree}: {exc}")
+        return 2
+    print(json.dumps(rows, indent=2))
     return 0
 
 
