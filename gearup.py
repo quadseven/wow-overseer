@@ -620,13 +620,6 @@ def _below_quality_floor(slot, worn, item):
     return int(worn_quality) <= 1 and int(offer_quality) >= 2
 
 
-def _armor_tier_for_item(item, class_id, level):
-    item_class = int(_get(item, "class", "item_class", default=0) or 0)
-    sub = int(_get(item, "subclass", "item_subclass", default=0) or 0)
-    inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
-    return bag_pressure.armor_material_tier(item_class, sub, inv, class_id, level)
-
-
 def _is_native_armor_buy(character, buy):
     if (
         buy.slot not in ARMOR_SLOTS
