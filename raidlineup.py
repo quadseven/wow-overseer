@@ -398,11 +398,12 @@ def build_lineup(
     if team:
         return _approved_lineup(members, team, guaranteed)
     questers = raidteams.quester_names()
+    bankers = raidteams.banker_names()
     pool = sorted(
         (
             raidroles.with_spec(m)
             for m in members
-            if m.get("name") and m["name"] not in questers
+            if m.get("name") and m["name"] not in questers and m["name"] not in bankers
         ),
         key=lambda m: _sort_key(m, guaranteed),
     )
@@ -624,6 +625,10 @@ def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
     found = (find(q.name) for q in raidteams.QUESTERS.get(team, ()))
     questers = [dict(m, role="quester") for m in found if m is not None]
     used.update(m["name"] for m in questers)
+    # Nor are the bankers: they hold the vault city, not a raid seat.
+    kept = (find(b.name) for b in raidteams.BANKERS.get(team, ()))
+    bankers = [dict(m, role="banker") for m in kept if m is not None]
+    used.update(m["name"] for m in bankers)
     leaving = set(raidteams.LEAVING[team])
     surplus = sorted(
         (m for n, m in by_name.items() if n not in used),
@@ -647,6 +652,7 @@ def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
         "maintenance": upkeep,
         "summoners": summoners,
         "questers": questers,
+        "bankers": bankers,
         "surplus": surplus,
         "wanted": wanted,
         "shortfall": {
@@ -667,6 +673,7 @@ def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
             "maintenance": len(upkeep),
             "summoners": len(summoners),
             "questers": len(questers),
+            "bankers": len(bankers),
             "surplus": len(surplus),
             "considered": len(members),
             "respec": 0,
