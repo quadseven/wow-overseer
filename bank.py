@@ -1175,6 +1175,21 @@ def _plan_withdrawals(member, family, totals, storage, space, budget, notes):
     return withdrawals
 
 
+def _relocatable(holding, storage) -> bool:
+    """Whether a banked stack may come out for a guild tab."""
+    if (
+        holding.container_slots > 0
+        or holding.bound
+        or holding.guid in storage.routed
+        or holding.guid in storage.spare
+    ):
+        return False
+    placed = storage.policy.get(holding.guid)
+    if placed is not None:
+        return placed.to == bankpolicy.GUILD and placed.tab is not None
+    return holding.item.item_class in (ITEM_CLASS_TRADE_GOODS, ITEM_CLASS_GEM)
+
+
 def _plan_relocations(member, storage, guild_room, space, budget, notes):
     """Withdrawals that bring banked shared stock out for the guild bank.
 
@@ -1184,10 +1199,10 @@ def _plan_relocations(member, storage, guild_room, space, budget, notes):
     the tab had some. The guild bank takes a deposit only from the bags, so
     the stack comes out here and the guild pass deposits it. It is planned
     only while the tab has a free slot for it, which that slot is then spoken
-    for, so the stack is not carried out to be put straight back. A stack the
-    holder's own trade uses, a policy placement, and anything bound never
-    come out. Only materials and gems move: a recipe waiting for a family
-    member to learn it, gear and a lockbox stay where the keeper rule put them.
+    for, so the stack is not carried out to be put straight back. Policy gear
+    placed for a guild tab (Gear for Later) also moves once tradable; a stack
+    the holder's own trade uses, personal policy gear, anything bound,
+    recipes, and lockboxes stay put.
     """
     out = []
     if storage is None or member.name not in storage.guild_depositors:
@@ -1195,24 +1210,7 @@ def _plan_relocations(member, storage, guild_room, space, budget, notes):
     for holding in member.banked:
         if len(out) >= budget:
             break
-        placed = storage.policy.get(holding.guid)
-        to_gear_tab = (
-            placed is not None
-            and placed.to == bankpolicy.GUILD
-            and placed.tab is not None
-        )
-        if (
-            holding.container_slots > 0
-            or holding.bound
-            or (placed is not None and not to_gear_tab)
-            or holding.guid in storage.routed
-            or holding.guid in storage.spare
-            or (
-                not to_gear_tab
-                and holding.item.item_class
-                not in (ITEM_CLASS_TRADE_GOODS, ITEM_CLASS_GEM)
-            )
-        ):
+        if not _relocatable(holding, storage):
             continue
         why = storage_reason(holding, storage)
         if not why:
