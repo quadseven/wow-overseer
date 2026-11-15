@@ -163,6 +163,7 @@ A worldserver roll is separate and logs every bot out. [docs/ROLLS.md](docs/ROLL
 - `apiv2/`: the versioned API.
 - `tests/`: the unit suite.
 - `tools/`, `scripts/`: maintenance and local checks. Only the scheduled metric watcher and its audit dependency ship in the image.
+- `forge/`: builds the nightly `lean` and `full` database templates for ephemeral test worlds from the backup share (`python -m forge`). It is a build tool and does not ship in the bridge image.
 - `mod-overseer/`: pinned submodule, read as text by tests only.
 - `patches/`, `UPSTREAM-PINS.env`: test fixtures, not build inputs.
 - `services/strands-decider/`: a separate image.
