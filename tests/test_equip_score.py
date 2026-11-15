@@ -873,7 +873,7 @@ class ArmorTierByClassAndLevel(unittest.TestCase):
             ],
         )
 
-    def test_lighter_armor_never_replaces_heavier_class_armor(self):
+    def test_lighter_armor_stays_within_bounded_band_behind_heavier_armor(self):
         warrior = es.wearer_from_row(
             member("Thokk", WARRIOR, 45, tree="Fury", skills=self.PLATE_SKILLS)
         )
@@ -884,23 +884,23 @@ class ArmorTierByClassAndLevel(unittest.TestCase):
             4,
             level=45,
             req=40,
-            stats=((STR, 8),),
+            stats=((STR, 12), (STA, 8)),
             armor=450,
             slot=4,
             holder="Thokk",
         )
-        leather = piece(
+        near_leather = piece(
             "Leather Chest",
             5,
             4,
             2,
             level=45,
             req=40,
-            stats=((AGI, 14), (STA, 10)),
+            stats=((AGI, 14), (STA, 8)),
             armor=160,
             holder="Thokk",
         )
-        self.assertEqual(es.choose(warrior, [worn_plate], [leather]), ())
+        self.assertEqual(es.choose(warrior, [worn_plate], [near_leather]), ())
 
     def test_cloak_remains_score_compared_without_armor_tier_bias(self):
         warrior = es.wearer_from_row(
@@ -913,3 +913,105 @@ class ArmorTierByClassAndLevel(unittest.TestCase):
             "Cloak B", 16, 4, 1, level=45, stats=((STR, 10),), armor=15, holder="Thokk"
         )
         self.assertEqual(es.choose(warrior, [worn_cloak], [other_cloak]), ())
+
+    def test_low_scored_plate_never_strips_better_mail_at_40_plus(self):
+        warrior = es.wearer_from_row(
+            member("Thokk", WARRIOR, 45, tree="Fury", skills=self.PLATE_SKILLS)
+        )
+        good_mail = piece(
+            "Champion Mail Chest",
+            5,
+            4,
+            3,
+            level=45,
+            req=40,
+            stats=((STR, 16), (STA, 12)),
+            armor=260,
+            slot=4,
+            holder="Thokk",
+        )
+        weak_plate = piece(
+            "Junk Plate Chest",
+            5,
+            4,
+            4,
+            level=45,
+            req=40,
+            stats=((SPI, 4),),
+            armor=420,
+            holder="Thokk",
+        )
+        self.assertEqual(es.choose(warrior, [good_mail], [weak_plate]), ())
+        # Empty slot with both in bags still picks the much better Mail piece.
+        self.assertEqual(
+            ["Champion Mail Chest"],
+            [e.name for e in es.choose(warrior, [], [weak_plate, good_mail])],
+        )
+
+    def test_strong_cloth_kept_over_weaker_leather_for_druid_and_rogue(self):
+        druid = es.wearer_from_row(
+            member("Bramble", 11, 35, tree="Balance", skills="136,414,415")
+        )
+        strong_cloth = piece(
+            "Rich Cloth Robe",
+            5,
+            4,
+            1,
+            level=35,
+            req=30,
+            stats=((INT, 14), (STA, 10)),
+            armor=60,
+            slot=4,
+            holder="Bramble",
+        )
+        weak_leather = piece(
+            "Cracked Leather Tunic",
+            5,
+            4,
+            2,
+            level=35,
+            req=30,
+            stats=((AGI, 3),),
+            armor=95,
+            holder="Bramble",
+        )
+        self.assertEqual(es.choose(druid, [strong_cloth], [weak_leather]), ())
+        self.assertEqual(
+            ["Rich Cloth Robe"],
+            [e.name for e in es.choose(druid, [], [weak_leather, strong_cloth])],
+        )
+        rogue = es.wearer_from_row(
+            member("Stabby", ROGUE, 35, tree="Combat", skills=ROGUE_SKILLS)
+        )
+        strong_rogue_cloth = piece(
+            "Shadowweave Vest",
+            5,
+            4,
+            1,
+            level=35,
+            req=30,
+            stats=((AGI, 14), (STA, 10)),
+            armor=60,
+            slot=4,
+            holder="Stabby",
+        )
+        weak_rogue_leather = dict(weak_leather, holder="Stabby", stats=((AGI, 2),))
+        self.assertEqual(
+            es.choose(rogue, [strong_rogue_cloth], [weak_rogue_leather]), ()
+        )
+        self.assertEqual(
+            ["Shadowweave Vest"],
+            [
+                e.name
+                for e in es.choose(rogue, [], [weak_rogue_leather, strong_rogue_cloth])
+            ],
+        )
+
+    def test_preferred_armor_subclass_delegates_to_heaviest_armor(self):
+        for class_id in (WARRIOR, PALADIN, ROGUE, MAGE, self.SHAMAN, self.HUNTER, 11):
+            for level in (1, 39, 40, 60):
+                self.assertEqual(
+                    gear.preferred_armor_subclass(class_id, level),
+                    gear.heaviest_armor(class_id, level),
+                )
+        self.assertEqual(gear.preferred_armor_subclass(99, 60), 0)

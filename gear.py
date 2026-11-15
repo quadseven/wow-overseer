@@ -221,14 +221,10 @@ ARMOR_MATERIAL_SUBCLASSES = frozenset(
 
 def preferred_armor_subclass(class_id: int, level: int) -> int:
     """Heaviest armor subclass (cloth..plate) `class_id` wears at `level`."""
-    trained = _ARMOR_TRAINED_AT.get(int(class_id or 0))
-    if trained is None:
+    cid = int(class_id or 0)
+    if cid not in _ARMOR_TRAINED_AT:
         return 0
-    best = ARMOR_CLOTH
-    for subclass, unlock in trained:
-        if int(level or 0) >= unlock and subclass > best:
-            best = subclass
-    return best
+    return heaviest_armor(cid, int(level or 0))
 
 
 def armor_material_tier(

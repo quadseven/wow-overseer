@@ -635,6 +635,17 @@ def _is_native_armor_buy(character, buy):
     return pref > 0 and int(buy.item_subclass or 0) == pref
 
 
+def _quality_drop(worn, item) -> bool:
+    """True when `item` states a lower quality than `worn`."""
+    if not isinstance(worn, dict):
+        return False
+    wq = worn.get("quality")
+    oq = _get(item, "Quality", "quality", default=None)
+    if wq is None or oq is None:
+        return False
+    return int(oq) < int(wq)
+
+
 def _worn_is_better(
     slot, equipped, item, level, tank=False, equipped_types=None, class_id=0
 ):
@@ -654,9 +665,14 @@ def _worn_is_better(
     item_level = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
     worn_level = int(worn_level)
     pref = bag_pressure.preferred_armor_subclass(class_id, level) if class_id else 0
-    if slot in ARMOR_SLOTS and pref and 0 < worn_rank < item_rank <= pref:
-        if item_level >= worn_level:
-            return False
+    if (
+        slot in ARMOR_SLOTS
+        and pref
+        and 0 < worn_rank < item_rank <= pref
+        and item_level >= worn_level
+        and not _quality_drop(worn, item)
+    ):
+        return False
     if item_level <= worn_level:
         return True
     if _below_quality_floor(slot, worn, item):
@@ -724,11 +740,11 @@ def _can_take(item, character, tank):
     return _allowed(character, item)
 
 
-def _best_affordable_tiers(plan, listings) -> dict:
-    """slot -> highest armor tier among affordable eligible listings for `plan`."""
+def _best_affordable_candidates(plan, listings) -> dict:
+    """slot -> list of (tier, item_level, quality) among affordable eligible listings."""
     if not bag_pressure.preferred_armor_subclass(plan.class_id, plan.level):
         return {}
-    best: dict = {}
+    by_slot: dict = {}
     for item in listings:
         inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
         if inv not in bag_pressure.ARMOR_MATERIAL_INVTYPES:
@@ -741,11 +757,34 @@ def _best_affordable_tiers(plan, listings) -> dict:
             continue
         if not _fits_budget(price, plan.purse, plan.available, 0, False):
             continue
-        tier = _armor_tier_for_item(item, plan.class_id, plan.level)
+        entry = (
+            _armor_tier_for_item(item, plan.class_id, plan.level),
+            int(_get(item, "ItemLevel", "item_level", default=0) or 0),
+            int(_get(item, "Quality", "quality", default=0) or 0),
+        )
         for slot in SLOT_TYPES.get(inv, ()):
-            if slot in ARMOR_SLOTS and tier > best.get(slot, 0):
-                best[slot] = tier
-    return best
+            if slot in ARMOR_SLOTS:
+                by_slot.setdefault(slot, []).append(entry)
+    return by_slot
+
+
+def _outclassed_in_slot(item, plan, candidates: dict) -> bool:
+    inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
+    if inv not in bag_pressure.ARMOR_MATERIAL_INVTYPES:
+        return False
+    slot = SLOT_TYPES.get(inv, ("",))[0]
+    peers = candidates.get(slot)
+    if not peers:
+        return False
+    tier = _armor_tier_for_item(item, plan.class_id, plan.level)
+    ilvl = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
+    qual = int(_get(item, "Quality", "quality", default=0) or 0)
+    return any(
+        (t > tier and peer_ilvl >= ilvl and q >= qual)
+        or (t == tier and peer_ilvl > ilvl and q >= qual)
+        or (peer_ilvl >= ilvl + AUCTION_MIN_UPGRADE_LEVELS and q >= qual)
+        for t, peer_ilvl, q in peers
+    )
 
 
 def _plan_character(name, character, listings, budget, taken=frozenset()):
@@ -763,15 +802,9 @@ def _plan_character(name, character, listings, budget, taken=frozenset()):
         for item in listings:
             if plan.consider(item, weapon_first=True):
                 break
-    best_tiers = _best_affordable_tiers(plan, listings)
+    candidates = _best_affordable_candidates(plan, listings)
     for item in listings:
-        inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
-        slot = SLOT_TYPES.get(inv, ("",))[0]
-        if (
-            inv in bag_pressure.ARMOR_MATERIAL_INVTYPES
-            and slot in best_tiers
-            and _armor_tier_for_item(item, plan.class_id, plan.level) < best_tiers[slot]
-        ):
+        if _outclassed_in_slot(item, plan, candidates):
             continue
         plan.consider(item, weapon_first=False)
     return plan.buys

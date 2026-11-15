@@ -66,6 +66,9 @@ import weaponskill
 
 # The share of the worn piece's score a carried piece must add to be put on.
 MIN_GAIN = 0.1
+# Bounded per-tier weight inside a score band so equal/near-score heavier class
+# armor breaks ties upward without letting low-scored armor strip stronger wear.
+TIER_BONUS = 0.05
 # A score difference smaller than this is no difference.
 EPSILON = 1e-6
 # Below this gear score on both pieces the spec has no real opinion (a stray
@@ -326,15 +329,24 @@ def _tier(v: tuple) -> int:
     return int(v[2]) if len(v) > 2 else 0
 
 
+def _bonused(score: float, tier: int) -> float:
+    return score * (1.0 + TIER_BONUS * tier)
+
+
 def beats(new: tuple, old: tuple) -> bool:
-    """Does `new` beat `old`: by heavier class armor tier first, then gear score,
-    or by the role score when the spec scores neither."""
+    """Does `new` beat `old` by MIN_GAIN, with armor tier breaking ties and
+    narrowing gains inside a bounded score band."""
+    idx = 0 if _spec_decides(new, old) else 1
+    s_new, s_old = new[idx], old[idx]
     new_tier, old_tier = _tier(new), _tier(old)
     if new_tier > 0 and old_tier > 0 and new_tier != old_tier:
-        return new_tier > old_tier
-    if _spec_decides(new, old):
-        return new[0] - old[0] > EPSILON and new[0] > old[0] * (1.0 + MIN_GAIN)
-    return new[1] - old[1] > EPSILON and new[1] > old[1] * (1.0 + MIN_GAIN)
+        b_new, b_old = _bonused(s_new, new_tier), _bonused(s_old, old_tier)
+        if new_tier > old_tier:
+            if s_old <= EPSILON and s_new <= EPSILON:
+                return True
+            return b_new - b_old > EPSILON
+        return b_new - b_old > EPSILON and b_new > b_old * (1.0 + MIN_GAIN)
+    return s_new - s_old > EPSILON and s_new > s_old * (1.0 + MIN_GAIN)
 
 
 def _spec_decides(new: tuple, old: tuple) -> bool:
@@ -342,10 +354,11 @@ def _spec_decides(new: tuple, old: tuple) -> bool:
 
 
 def _rank(v: tuple, row: dict | None) -> tuple:
+    tier = _tier(v)
     return (
-        _tier(v),
-        round(v[0], 6),
-        round(v[1], 6),
+        round(_bonused(v[0], tier), 6),
+        round(_bonused(v[1], tier), 6),
+        tier,
         _int((row or {}).get("item_level")),
     )
 

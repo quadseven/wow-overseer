@@ -522,6 +522,37 @@ class GearupTests(unittest.TestCase):
         )
         self.assertFalse(gearup.lighter_armor(plate_warrior))
 
+    def test_heavier_tier_does_not_override_higher_quality_equal_ilvl_armor(self):
+        equipped = {
+            "chest": {
+                "item_level": 45,
+                "item_class": 4,
+                "item_subclass": 3,
+                "quality": 3,
+            }
+        }
+        green_plate = item(
+            5, subclass=4, id=12, entry=203, ilvl=45, price=100, quality=2
+        )
+        white_plate = item(
+            5, subclass=4, id=13, entry=204, ilvl=45, price=100, quality=1
+        )
+        self.assertTrue(
+            gearup._worn_is_better("chest", equipped, green_plate, 45, class_id=1)
+        )
+        self.assertTrue(
+            gearup._worn_is_better("chest", equipped, white_plate, 45, class_id=1)
+        )
+
+    def test_low_ilvl_plate_listing_never_blocks_higher_ilvl_mail_buy(self):
+        warrior = {"class": "warrior", "level": 45, "purse": 50000, "equipped": {}}
+        junk_plate = item(
+            5, subclass=4, id=14, entry=401, ilvl=20, price=100, quality=1
+        )
+        good_mail = item(5, subclass=3, id=15, entry=402, ilvl=45, price=200, quality=2)
+        buys = gearup.plan_buys({"Thokk": warrior}, [junk_plate, good_mail])
+        self.assertEqual([("chest", 402)], [(b.slot, b.entry) for b in buys])
+
 
 if __name__ == "__main__":
     unittest.main()
