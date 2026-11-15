@@ -30,6 +30,26 @@ class ScalarsTest(unittest.TestCase):
         self.assertEqual(doc, {"a": 1, "b": "two"})
 
 
+class CommentTest(unittest.TestCase):
+    def test_text_without_a_comment_comes_back_unchanged(self):
+        from ephemeral.miniyaml import _strip_comment
+
+        for text in (
+            "plain words",
+            "a|b",
+            "x: y",
+            "with#hash",
+            "'quoted # kept'",
+            'k: "a #b"',
+        ):
+            self.assertEqual(_strip_comment(text), text)
+
+    def test_a_trailing_comment_is_removed_and_trailing_space_trimmed(self):
+        from ephemeral.miniyaml import _strip_comment
+
+        self.assertEqual(_strip_comment("a: 1   # note"), "a: 1")
+
+
 class StructureTest(unittest.TestCase):
     def test_nested_map_and_seq(self):
         text = "w:\n  class: lean\n  list:\n    - a\n    - 2\nz: 1\n"

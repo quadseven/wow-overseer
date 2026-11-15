@@ -61,6 +61,12 @@ class CheckSelectTest(unittest.TestCase):
     def test_other_database_is_rejected(self):
         self.assertTrue(self.check("SELECT * FROM mysql.user"))
 
+    def test_a_derived_table_does_not_hide_its_inner_query(self):
+        self.assertTrue(self.check("SELECT x FROM (SELECT x FROM missing_table) q"))
+        self.assertEqual(
+            self.check("SELECT guid FROM (SELECT guid FROM characters) q"), []
+        )
+
     def test_variable_vocabulary(self):
         self.assertTrue(
             self.check(

@@ -232,6 +232,11 @@ class PreconditionAndCeilingTest(unittest.TestCase):
         d["cast"][0]["ceiling"] = "levels 56 to 60, own gear"
         self.assertIn("ceiling", rules(d))
 
+    def test_unknown_guild_role_is_rejected(self):
+        d = doc()
+        d["cast"][0]["who"] = "guild:Cave:wizard"
+        self.assertIn("schema", rules(d))
+
     def test_dead_needs_a_corpse(self):
         d = doc()
         d["cast"][0]["set"]["alive"] = False
