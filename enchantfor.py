@@ -294,6 +294,75 @@ def _permanent_id(row: dict) -> int:
     return _int(text[0]) if text else 0
 
 
+def _usable(enchanter: Enchanter, recipes) -> list:
+    """The recipes this enchanter knows and can pay for right now."""
+    return [
+        r
+        for r in recipes
+        if r.spell in enchanter.known
+        and has_reagents(r, enchanter.bags)
+        and has_tools(r, enchanter.bags)
+    ]
+
+
+def _reachable(
+    enchanter: Enchanter, e_member: Member, name: str, members
+) -> Member | None:
+    """The member `name` when the enchanter may enchant them: another person of
+    the same guild, in the world and standing within trade distance."""
+    member = members.get(name)
+    if (
+        member is None
+        or name == enchanter.name
+        or not enchanter.guild
+        or member.guild != enchanter.guild
+        or not together(e_member, member)
+    ):
+        return None
+    return member
+
+
+def _job_for(enchanter, member, wearer, slot, row, recipe, effects, seat_names):
+    """One Job when the recipe fits the worn piece and gains something, else None."""
+    if not fits(recipe, row) or recipe.enchant == _permanent_id(row):
+        return None
+    gain = gain_of(row, effects, recipe, wearer)
+    if gain <= equipscore.EPSILON:
+        return None
+    return Job(
+        enchanter=enchanter.name,
+        member=member.name,
+        member_guid=member.guid,
+        slot=slot,
+        spell=recipe.spell,
+        recipe=recipe.name,
+        enchant=recipe.enchant,
+        item_entry=_int(row.get("entry")),
+        item_name=str(row.get("name") or ""),
+        gain=gain,
+        priority=priority_of(wearer, seat_names),
+        reagents=recipe.reagents,
+    )
+
+
+def _jobs_on(
+    enchanter, member, wearer, pieces, usable, book, own_enchants, seat_names
+) -> list:
+    """Every job one enchanter could do on one member's worn pieces."""
+    out = []
+    for slot, row in pieces.items():
+        effects, ok = _current_effects(row, book, own_enchants)
+        if not ok:
+            continue
+        for recipe in usable:
+            job = _job_for(
+                enchanter, member, wearer, slot, row, recipe, effects, seat_names
+            )
+            if job is not None:
+                out.append(job)
+    return out
+
+
 def candidates(
     enchanters,
     members,
@@ -315,53 +384,20 @@ def candidates(
     out = []
     for enchanter in enchanters:
         e_member = members.get(enchanter.name)
-        if e_member is None or not e_member.online:
-            continue
-        usable = [
-            r
-            for r in recipes
-            if r.spell in enchanter.known
-            and has_reagents(r, enchanter.bags)
-            and has_tools(r, enchanter.bags)
-        ]
-        if not usable:
-            continue
-        for name, wearer in wearers.items():
-            member = members.get(name)
-            if (
-                member is None
-                or name == enchanter.name
-                or not enchanter.guild
-                or member.guild != enchanter.guild
-                or not together(e_member, member)
-            ):
-                continue
-            for slot, row in worn.get(name, {}).items():
-                effects, ok = _current_effects(row, book, own_enchants)
-                if not ok:
-                    continue
-                for recipe in usable:
-                    if not fits(recipe, row) or recipe.enchant == _permanent_id(row):
-                        continue
-                    gain = gain_of(row, effects, recipe, wearer)
-                    if gain <= equipscore.EPSILON:
-                        continue
-                    out.append(
-                        Job(
-                            enchanter=enchanter.name,
-                            member=name,
-                            member_guid=member.guid,
-                            slot=slot,
-                            spell=recipe.spell,
-                            recipe=recipe.name,
-                            enchant=recipe.enchant,
-                            item_entry=_int(row.get("entry")),
-                            item_name=str(row.get("name") or ""),
-                            gain=gain,
-                            priority=priority_of(wearer, seat_names),
-                            reagents=recipe.reagents,
-                        )
-                    )
+        usable = _usable(enchanter, recipes) if e_member and e_member.online else []
+        for name, wearer in wearers.items() if usable else ():
+            member = _reachable(enchanter, e_member, name, members)
+            if member is not None:
+                out += _jobs_on(
+                    enchanter,
+                    member,
+                    wearer,
+                    worn.get(name, {}),
+                    usable,
+                    book,
+                    own_enchants,
+                    seat_names,
+                )
     return out
 
 
