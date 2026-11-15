@@ -983,7 +983,13 @@ def build_guild(
             list(group["family_names"]), attuned, in_log, fragments
         ),
         "supply": _supply_card(
-            lineup, members, worn_rows, group, supply, holding_rows=holding_rows
+            lineup,
+            members,
+            worn_rows,
+            group,
+            supply,
+            faction=faction,
+            holding_rows=holding_rows,
         ),
         "preraid": preraid,
         "gates": _gates(min_level),
@@ -1001,7 +1007,13 @@ def _gates(min_level) -> dict:
 
 
 def _supply_card(
-    lineup, members, worn_rows, group, supply, holding_rows: list = ()
+    lineup,
+    members,
+    worn_rows,
+    group,
+    supply,
+    faction: str = "",
+    holding_rows: list = (),
 ) -> dict:
     """The Molten Core supply section (#275): raidsupply's card for this guild."""
     classes = {m["name"]: m.get("class_id") for m in members}
@@ -1025,6 +1037,14 @@ def _supply_card(
     guild = group.get("guild") or (
         "%s's family" % group["family"] if group.get("family") else ""
     )
+    team = (faction or "").lower()
+    vendor_recipes = {
+        make.recipe_item
+        for item in raidsupply.SUPPLIES
+        if (make := item.make)
+        and make.recipe_item
+        and any(vendor.team == team for vendor in make.recipe_vendors)
+    }
     return raidsupply.card(
         raiders,
         have,
@@ -1035,6 +1055,7 @@ def _supply_card(
         snapshots=read.get("snapshots") or (),
         unobtainable=raidcraft.unobtainable_lines(),
         guild=guild,
+        vendor_recipes=vendor_recipes,
     )
 
 

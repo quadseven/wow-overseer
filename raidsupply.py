@@ -2227,6 +2227,7 @@ def card(
     snapshots=(),
     unobtainable=(),
     guild: str = "",
+    vendor_recipes=(),
 ) -> dict:
     """The supply section of one guild's readiness card; the page decides nothing.
 
@@ -2235,8 +2236,10 @@ def card(
     `crafters` are the guild's family names and `snapshots` the metric
     watcher's records of the last week, for the alchemists' pace.
     `unobtainable` are sentences naming raid crafts this realm cannot teach.
+    `vendor_recipes` are recipe entries sold by a vendor available to this
+    guild's faction.
     """
-    lines = supply_lines(raiders, have, knowers, carriers)
+    lines = supply_lines(raiders, have, knowers, carriers, vendor_recipes)
     fire = fire_lines(raiders)
     short = [line for line in lines if line.short]
     fire_short = [f for f in fire if f.short]
