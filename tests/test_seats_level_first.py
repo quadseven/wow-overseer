@@ -87,27 +87,52 @@ class TheSale(unittest.TestCase):
         return tuple(grey(20 + i, 400) for i in range(10))
 
     def test_a_seat_with_room_in_its_bags_does_not_walk_to_a_vendor_to_sell(self):
-        m = hungry_member(food=20, drink=20, carried=self.junk(), free_slots=12, bag_slots=20)
+        m = hungry_member(
+            food=20, drink=20, carried=self.junk(), free_slots=12, bag_slots=20
+        )
         self.assertEqual(actions(plan([m], supply={}), SEAT), [])
 
     def test_the_same_junk_is_sold_by_a_member_off_the_lineup(self):
-        m = hungry_member(NOT_A_SEAT, food=20, drink=20, carried=self.junk(), free_slots=12, bag_slots=20)
+        m = hungry_member(
+            NOT_A_SEAT,
+            food=20,
+            drink=20,
+            carried=self.junk(),
+            free_slots=12,
+            bag_slots=20,
+        )
         self.assertIn("sell", actions(plan([m], supply={}), NOT_A_SEAT))
 
     def test_a_seat_with_two_free_slots_still_sells(self):
-        m = hungry_member(food=20, drink=20, carried=self.junk(), free_slots=2, bag_slots=20)
+        m = hungry_member(
+            food=20, drink=20, carried=self.junk(), free_slots=2, bag_slots=20
+        )
         self.assertIn("sell", actions(plan([m], supply={}), SEAT))
 
     def test_a_seat_at_the_cap_is_planned_as_before(self):
         # A seat's trainer walk (its raid plan's trades) is the step it had
         # before this change, ahead of the sale; at the cap it still has it.
-        m = hungry_member(level=60, food=20, drink=20, carried=self.junk(), free_slots=12, bag_slots=20)
+        m = hungry_member(
+            level=60,
+            food=20,
+            drink=20,
+            carried=self.junk(),
+            free_slots=12,
+            bag_slots=20,
+        )
         self.assertEqual(actions(plan([m], supply={}), SEAT), ["train"])
 
 
 class TheLevelWalk(unittest.TestCase):
     def test_a_seat_that_has_outgrown_its_zone_gets_the_level_step(self):
-        m = quest_member("Hurk", food=20, drink=20, carried=tuple(grey(20 + i, 400) for i in range(10)), free_slots=12, bag_slots=20)
+        m = quest_member(
+            "Hurk",
+            food=20,
+            drink=20,
+            carried=tuple(grey(20 + i, 400) for i in range(10)),
+            free_slots=12,
+            bag_slots=20,
+        )
         result = guildjobs.plan(
             [m],
             masters={"Cave": "Grug", "Bonkers": "Zug"},
@@ -115,6 +140,48 @@ class TheLevelWalk(unittest.TestCase):
             cap=guildroute.FAR_WALK_YARDS,
         )
         self.assertEqual(actions(result, "Hurk"), [guildlevel.ACTION])
+
+
+class TheProfessionErrand(unittest.TestCase):
+    """A seat below the cap learns its assigned trade on a town stop it already
+    made, never on a walk of its own."""
+
+    def seat(self):
+        from test_guildjobs_professions import SEATS, member as pro_member
+
+        return pro_member(SEATS[10])
+
+    def plan(self, rows):
+        from test_guildjobs_professions import FOCUS_DUNGEON
+
+        return guildjobs.plan([self.seat()], recent=rows, focus=FOCUS_DUNGEON)
+
+    def errands(self, result):
+        from test_guildjobs_professions import errands
+
+        return errands(result)
+
+    def test_a_town_stop_just_made_carries_the_errand(self):
+        from test_guildjobs_professions import SEATS, recent
+
+        rows = (recent(SEATS[10].name, "sell", 20),)
+        self.assertEqual(1, len(self.errands(self.plan(rows))))
+
+    def test_no_town_stop_for_hours_does_not_earn_a_dedicated_errand(self):
+        from test_guildjobs_professions import SEATS, recent
+
+        rows = (recent(SEATS[10].name, "gear", guildjobs.DEDICATED_AFTER_MINUTES + 30),)
+        self.assertEqual([], self.errands(self.plan(rows)))
+
+    def test_no_town_stop_at_all_does_not_either(self):
+        self.assertEqual([], self.errands(self.plan(())))
+
+    def test_with_the_switch_off_the_dedicated_errand_comes_back(self):
+        import os
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {guildjobs.SEATS_LEVEL_FIRST_ENV: "off"}):
+            self.assertEqual(1, len(self.errands(self.plan(()))))
 
 
 if __name__ == "__main__":

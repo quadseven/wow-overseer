@@ -25,6 +25,26 @@ FA = guildjobs.FIRST_AID
 ROGUE = 4
 
 
+def setUpModule():
+    # These tests pin the ladder for a seat that is not levelling first (the
+    # dedicated trainer errand and the rank walk). A seat below the cap now
+    # takes both only on a town stop it already made (SEATS_LEVEL_FIRST,
+    # tests/test_seats_level_first.py), so the legacy order is read with the
+    # switch off.
+    import os
+
+    old = os.environ.get("SEATS_LEVEL_FIRST")
+    os.environ["SEATS_LEVEL_FIRST"] = "off"
+
+    def restore():
+        if old is None:
+            os.environ.pop("SEATS_LEVEL_FIRST", None)
+        else:
+            os.environ["SEATS_LEVEL_FIRST"] = old
+
+    unittest.addModuleCleanup(restore)
+
+
 def member(name="Funkymon", role=guildjobs.RAIDER, **over):
     base = dict(
         name=name,
