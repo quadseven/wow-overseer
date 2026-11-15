@@ -1084,22 +1084,6 @@ def refusals(name, tried) -> dict:
     return out
 
 
-def bags_full_hunt(name, tried) -> bool:
-    """True when a hunt row of this quester was refused for want of a bag slot
-    (classhunt.BAGS_FULL_REASON) inside SELL_COOLDOWN_MINUTES. An item objective
-    needs a free slot to loot into; the module counts slots the bridge's read
-    can miss, so the quester sells first (`needs_sale`) and its stall clock does
-    not run while it cannot hunt (`failures`)."""
-    return any(
-        a.name == name
-        and a.failed
-        and a.command.startswith(classhunt.VERB)
-        and classhunt.BAGS_FULL_REASON in a.reason
-        and a.age_minutes < SELL_COOLDOWN_MINUTES
-        for a in tried or ()
-    )
-
-
 def retry_take_refusals(name, held, tried) -> frozenset:
     """The held quests whose take the world refused, with no refusal left in the
     rows this pass reads: the quester asks again (a refusal is judged from the
@@ -2130,9 +2114,7 @@ def sell_step(member, carried, worn, kept, cat: Catalogue, recent, cap, tried=()
         return None
     source = guildjobs.source_for(SELL_ACTION, member.name)
     free = member.free_slots
-    if bags_full_hunt(member.name, tried):
-        room = "was refused a hunt for %s" % classhunt.BAGS_FULL_REASON
-    elif bag_room_refused(member.name, tried):
+    if bag_room_refused(member.name, tried):
         room = "was refused a quest for %s" % BAG_ROOM_REFUSAL
     elif bags_full_hunt(member.name, tried):
         room = "was refused a hunt for a full bag"
