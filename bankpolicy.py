@@ -55,7 +55,9 @@ import disposition
 import gearscore
 import goals
 import guildbank
+import raidroles
 import raidsupply
+import raidteams
 import statweights
 
 GUILD = "guild"
@@ -99,6 +101,11 @@ _KIND = {
 # raidlineup.party_roles' words, which gear.ROLE_* spells the same way.
 PARTY_TANK, PARTY_HEALER, PARTY_DAMAGE = "tank", "healer", "damage"
 _PARTY_KIND = {PARTY_TANK: "tank", PARTY_HEALER: "healer", PARTY_DAMAGE: "damage"}
+_SEAT_PARTY_ROLE = {
+    raidroles.SEAT_TANK: PARTY_TANK,
+    raidroles.SEAT_HEALER: PARTY_HEALER,
+    raidroles.SEAT_DAMAGE: PARTY_DAMAGE,
+}
 
 # ITEM_MOD_* -> the stat names statweights prices. The same modifiers the
 # Armory draws (armory.BASE_STATS, armory.EQUIP_STATS).
@@ -198,13 +205,15 @@ class Piece:
 @dataclass(frozen=True)
 class Keeper:
     """A family member, as this policy needs them: its class, its party role
-    (raidlineup.party_roles) and the trades it works."""
+    (raidlineup.party_roles), whether its seat locks that role, and the trades
+    it works."""
 
     name: str
     class_id: int
     level: int
     role: str = ""
     trades: frozenset = frozenset()
+    locked: bool = False
 
 
 @dataclass(frozen=True)
@@ -332,12 +341,12 @@ def off_kind(piece: Piece, keeper: Keeper) -> str:
     Decision #532: members keep alternative and situational pieces, scored by
     the same per-spec weights as the upgrade tracker. A piece is another
     role's when the class's specs for that role score it above zero and above
-    every spec of the holder's role today. A class with no gear lists for
-    both roles, or a piece with no scored stats, falls back to statweights
-    (`off_role`).
+    every spec of the holder's role today, unless the holder's seat is locked
+    to one role. A class with no gear lists for both roles, or a piece with no
+    scored stats, falls back to statweights (`off_role`).
     """
     mine = _PARTY_KIND.get(keeper.role, "")
-    if not mine:
+    if not mine or keeper.locked:
         return ""
     by_kind = _specs_by_kind(keeper.class_id)
     if not piece.scored or mine not in by_kind or len(by_kind) < 2:
@@ -354,9 +363,9 @@ def off_kind(piece: Piece, keeper: Keeper) -> str:
 
 def off_role(piece: Piece, keeper: Keeper) -> str:
     """The statweights role this piece is for, when it is not the holder's
-    role today and its class can play it; '' otherwise."""
+    role today and its seat is not locked to one role; '' otherwise."""
     mine = _PARTY_KIND.get(keeper.role, "")
-    if not mine:
+    if not mine or keeper.locked:
         return ""
     scores = role_scores(piece, keeper.class_id)
     if not scores:
@@ -620,7 +629,7 @@ def _raid_supplies(pieces, family, claimed, taken) -> dict:
     return out
 
 
-def _gear_for_later(pieces, reach, claimed, taken) -> dict:
+def _gear_for_later(pieces, reach, claimed, taken, dropped=frozenset()) -> dict:
     """Rule 4: guid -> Placement for the Gear for Later tab."""
     out = {}
     for piece in pieces:
@@ -632,7 +641,7 @@ def _gear_for_later(pieces, reach, claimed, taken) -> dict:
             or not piece.is_gear
             or piece.bound
             or piece.quality < RARE
-            or piece.place != "bags"
+            or (piece.place != "bags" and piece.guid not in dropped)
             or not fit.later_wearers
         ):
             continue
@@ -725,6 +734,31 @@ def _reserved(pieces, reservations, levels) -> dict:
     return out
 
 
+def _dropped_second_sets(pieces, family, reach, claimed, placed) -> frozenset[int]:
+    """Guids dropped from second-set keeps strictly because the seat is locked."""
+    if not any(k.locked for k in family):
+        return frozenset()
+    unlocked = tuple(replace(k, locked=False) for k in family)
+    would_keep = _personal(pieces, unlocked, reach, claimed)
+    return frozenset(
+        guid for guid in would_keep if guid not in placed and guid not in claimed
+    )
+
+
+def dropped_second_sets(facts: Facts, placed: dict | None = None) -> frozenset[int]:
+    """Guids no longer kept as off-role second sets on this family (#2606)."""
+    if not any(k.locked for k in facts.family):
+        return frozenset()
+    held = frozenset(
+        p.guid for p in facts.pieces if any(r.covers(p) for r in facts.reserved)
+    )
+    pieces = tuple(p for p in facts.pieces if not p.quest_needed and p.guid not in held)
+    kept = place(facts) if placed is None else placed
+    return _dropped_second_sets(
+        pieces, facts.family, facts.reach, frozenset(facts.claimed), kept
+    )
+
+
 def place(facts: Facts) -> dict:
     """guid -> Placement for every stack this policy has an answer for.
 
@@ -739,8 +773,9 @@ def place(facts: Facts) -> dict:
     claimed = frozenset(facts.claimed)
     out = dict(_reserved(facts.pieces, facts.reserved, levels))
     out.update(_personal(pieces, facts.family, facts.reach, claimed))
+    dropped = _dropped_second_sets(pieces, facts.family, facts.reach, claimed, out)
     out.update(_raid_supplies(pieces, facts.family, claimed, frozenset(out)))
-    out.update(_gear_for_later(pieces, facts.reach, claimed, frozenset(out)))
+    out.update(_gear_for_later(pieces, facts.reach, claimed, frozenset(out), dropped))
     out.update(_kept_for_family(pieces, facts.reach, claimed, frozenset(out)))
     return out
 
@@ -961,6 +996,20 @@ def trades_from_rows(rows) -> dict:
     return {name: frozenset(t) for name, t in out.items()}
 
 
+def _seat_role(name: str, class_id: int) -> str:
+    """Party role of the member's approved raid seat, if one names it."""
+    if not name:
+        return ""
+    for groups in raidteams.GROUPS.values():
+        for group in groups:
+            for seat in group:
+                if seat.class_id == class_id and (
+                    name == seat.name or (seat.was and name == seat.was)
+                ):
+                    return _SEAT_PARTY_ROLE.get(seat.seat, "")
+    return ""
+
+
 def facts_from_rows(names, item_rows, worn_rows, skill_rows) -> Facts:
     """Facts for one family, from the three reads."""
     import bag_pressure  # local: bag_pressure imports the travel stack
@@ -980,13 +1029,15 @@ def facts_from_rows(names, item_rows, worn_rows, skill_rows) -> Facts:
         if name not in classes:
             continue
         class_id, level = classes[name]
+        seat_role = _seat_role(name, class_id)
         family.append(
             Keeper(
                 name=name,
                 class_id=class_id,
                 level=level,
-                role=party.get(name, ""),
+                role=seat_role or party.get(name, ""),
                 trades=trades.get(name, frozenset()),
+                locked=bool(seat_role),
             )
         )
     return Facts(
