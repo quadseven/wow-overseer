@@ -242,6 +242,12 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Answers: each family's recent dungeon runs, step by step.
 - Example: `overseer get /api/runtimeline`
 
+## `GET /api/spectate`
+
+- Query: none
+- Answers: where the observer camera is, for the Watch buttons.
+- Example: `overseer get /api/spectate`
+
 ## `GET /api/thoughts`
 
 - Query: `name`, `before`, `limit`
