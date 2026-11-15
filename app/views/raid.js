@@ -230,6 +230,11 @@ function raidersFold(card, teams) {
   return html`<details class="card raid-fold"><summary><span class="fold-body"><span class="card-title">Every raider (${rows.length})</span><span class="muted">${card.raiders_line}</span></span></summary>${rows.length ? table(cols, rows, cell) : state("empty", "No raider is placed.")}</details>`;
 }
 
+function herbShortfall(hs) {
+  if (!hs || !(hs.herbs || []).length) return "";
+  return html`<details class="fold"><summary>${hs.line || "Herb shortfall for the night (" + hs.herbs.length + ")"}</summary><div class="raid-lines">${hs.herbs.map((r) => html`<span class="small dim">${itemLine(r.entry, r.name, r.line)}</span>`)}${hs.lotus_note ? html`<span class="small dim">${hs.lotus_note}</span>` : ""}</div></details>`;
+}
+
 function supplyCard(card) {
   const s = card.supply;
   if (!s) return html`<div class="card raid-block"><span class="card-title">Supply for a night in the Core</span>${notMeasured()}</div>`;
@@ -246,7 +251,7 @@ function supplyCard(card) {
   const top = (s.top_recipes || []).length
     ? html`<details class="fold"><summary>TOP raid recipes (${s.top_recipes.filter((r) => r.acquired).length} of ${s.top_recipes.length} acquired)</summary><div class="raid-lines">${s.top_recipes.map((r) => html`<span class="${r.acquired ? "ok" : "warn"}">${r.line}</span>`)}</div></details>`
     : "";
-  return html`<div class="card raid-block"><span class="card-title">Supply for a night in the Core</span>${s.line ? html`<span class="muted">${s.line}</span>` : ""}${s.budget_line ? html`<span class="small dim">${s.budget_line}</span>` : ""}${(s.pace || []).map((p) => html`<span class="small dim">${p.line}</span>`)}${s.level_60_line ? html`<span class="small dim">${s.level_60_line}</span>` : ""}${(s.unobtainable || []).map((u) => html`<span class="small warn">${u}</span>`)}${top}${table(cols, s.supplies || [], cell)}</div>`;
+  return html`<div class="card raid-block"><span class="card-title">Supply for a night in the Core</span>${s.line ? html`<span class="muted">${s.line}</span>` : ""}${s.budget_line ? html`<span class="small dim">${s.budget_line}</span>` : ""}${(s.pace || []).map((p) => html`<span class="small dim">${p.line}</span>`)}${s.level_60_line ? html`<span class="small dim">${s.level_60_line}</span>` : ""}${(s.unobtainable || []).map((u) => html`<span class="small warn">${u}</span>`)}${top}${table(cols, s.supplies || [], cell)}${herbShortfall(s.herb_shortfall)}</div>`;
 }
 
 function fireCard(card, teams) {
@@ -331,14 +336,9 @@ function goalCard(g) {
   return html`<details class="card raid-goal"><summary><span class="goal-top"><span class="goal-name">${g.name}</span><span class="muted">${g.line}</span></span><span class="row">${chips}</span></summary><div class="goal-body">${g.need_line ? html`<span class="muted">${g.need_line}</span>` : ""}${products.map((p) => html`<span>${itemLine(p.entry, p.name, p.line)}</span>`)}${holders.length ? holders.map((m) => html`<span>${m.line}</span>`) : html`<span class="dim">Nobody holds any yet.</span>`}${everyone}${g.recipes_line ? html`<span class="small dim">${g.recipes_line}</span>` : ""}${(g.recipes || []).map((rc) => recipe(rc, products))}</div></details>`;
 }
 
-function herbShortfall(hs) {
-  if (!hs || !(hs.herbs || []).length) return "";
-  return html`<details class="fold"><summary>Herb shortfall for the night (${hs.herbs.length})</summary><div class="raid-lines">${hs.herbs.map((r) => html`<span class="small dim">${itemLine(r.entry, r.name, r.line)}</span>`)}${hs.lotus_note ? html`<span class="small dim">${hs.lotus_note}</span>` : ""}</div></details>`;
-}
-
 function consumablesSection(card) {
   const gl = card.goals || {};
-  return html`<section class="section"><h2 class="raid-h2">Consumables, per guild</h2>${gl.line ? html`<span class="muted">${gl.line}${gl.roster_line ? ", " + gl.roster_line : ""}.</span>` : ""}${gl.order ? html`<span class="small dim">${gl.order}</span>` : ""}<div class="raid-stack">${(gl.goals || []).map(goalCard)}</div>${herbShortfall(gl.herb_shortfall)}${gl.empty_note ? html`<span class="muted">${gl.empty_note}</span>` : ""}</section>`;
+  return html`<section class="section"><h2 class="raid-h2">Consumables, per guild</h2>${gl.line ? html`<span class="muted">${gl.line}${gl.roster_line ? ", " + gl.roster_line : ""}.</span>` : ""}${gl.order ? html`<span class="small dim">${gl.order}</span>` : ""}<div class="raid-stack">${(gl.goals || []).map(goalCard)}</div>${gl.empty_note ? html`<span class="muted">${gl.empty_note}</span>` : ""}</section>`;
 }
 
 function tierSection(card) {
