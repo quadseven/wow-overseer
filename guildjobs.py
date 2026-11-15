@@ -5445,6 +5445,11 @@ def _bag_first(member, recovery, recent, far):
     return recovery.step
 
 
+def _capacity_first(m, bag, kept, recent, cap, far):
+    """A due bag step, else a raid seat's bag loop (#2609)."""
+    return _bag_first(m, bag, recent, far) or seat_loop_first(m, kept, recent, cap)
+
+
 def _member_step(
     m,
     offer,
@@ -5571,10 +5576,7 @@ def _member_step(
     if found is not None:
         return found
     quest_note = _join(quest_note, room_note)
-    step = _bag_first(m, bag, recent, far)
-    if step is not None:
-        return step, step.said, quest_note, ""
-    step = seat_loop_first(m, kept, recent, cap)
+    step = _capacity_first(m, bag, kept, recent, cap, far)
     if step is not None:
         return step, step.said, quest_note, ""
     found, supply_note, gear_note = _upkeep_first(
