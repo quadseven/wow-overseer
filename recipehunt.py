@@ -417,6 +417,50 @@ def _plan_buy_family(
     )
 
 
+def _family_rep_turn(
+    crafter: Crafter, recipe: VendorRecipe, near: dict, blocked: frozenset
+) -> FamilyTurn:
+    turnin, note = _eligible_turnin(
+        crafter, int(recipe.rep_faction), require_same_map=True
+    )
+    if turnin is None:
+        return FamilyTurn(
+            note=note or "%s lacks turn-in items for %s" % (crafter.name, recipe.name)
+        )
+    if turnin.npc_entry not in near:
+        return FamilyTurn(
+            note="%s walks to %s (%s) for quest %d"
+            % (crafter.name, turnin.npc_name, turnin.where, turnin.quest_id),
+            walk_npc_entry=turnin.npc_entry,
+        )
+    verb = "turnin" if turnin.quest_id in crafter.in_log else "take"
+    errand = towntrip.Errand(
+        crafter.name,
+        "quest",
+        "%s quest:%d" % (verb, turnin.quest_id),
+        "reputation for %s" % recipe.name,
+    )
+    return _check_block(errand, blocked)
+
+
+def _family_turn_for_recipe(
+    crafter: Crafter, recipe: VendorRecipe, near: dict, blocked: frozenset
+) -> FamilyTurn | None:
+    seller = _own_vendor(recipe, crafter.race)
+    if seller is None:
+        return FamilyTurn(
+            note="%s's faction side is unread for %s" % (crafter.name, recipe.name)
+        )
+    if not _rep_met(crafter, recipe):
+        return _family_rep_turn(crafter, recipe, near, blocked)
+    turn = _plan_buy_family(crafter, recipe, seller)
+    if turn is None:
+        return None
+    if turn.errand is not None:
+        return _check_block(turn.errand, blocked)
+    return turn
+
+
 def plan_family_crafter(
     crafter: Crafter,
     *,
@@ -435,48 +479,13 @@ def plan_family_crafter(
     first_note = ""
     near = nearby_spawns or {}
     for recipe in _due_recipes(crafter):
-        seller = _own_vendor(recipe, crafter.race)
-        if seller is None:
-            if not first_note:
-                first_note = "%s's faction side is unread for %s" % (
-                    crafter.name,
-                    recipe.name,
-                )
+        turn = _family_turn_for_recipe(crafter, recipe, near, blocked)
+        if turn is None:
             continue
-        if _rep_met(crafter, recipe):
-            turn = _plan_buy_family(crafter, recipe, seller)
-            if turn is not None:
-                if turn.errand is not None:
-                    return _check_block(turn.errand, blocked)
-                if turn.walk_vendor_item:
-                    return turn
-                if not first_note:
-                    first_note = turn.note
-            continue
-        turnin, note = _eligible_turnin(
-            crafter, int(recipe.rep_faction), require_same_map=True
-        )
-        if turnin is None:
-            if not first_note:
-                first_note = note or "%s lacks turn-in items for %s" % (
-                    crafter.name,
-                    recipe.name,
-                )
-            continue
-        verb = "turnin" if turnin.quest_id in crafter.in_log else "take"
-        if turnin.npc_entry not in near:
-            return FamilyTurn(
-                note="%s walks to %s (%s) for quest %d"
-                % (crafter.name, turnin.npc_name, turnin.where, turnin.quest_id),
-                walk_npc_entry=turnin.npc_entry,
-            )
-        errand = towntrip.Errand(
-            crafter.name,
-            "quest",
-            "%s quest:%d" % (verb, turnin.quest_id),
-            "reputation for %s" % recipe.name,
-        )
-        return _check_block(errand, blocked)
+        if turn.errand is not None or turn.walk_vendor_item or turn.walk_npc_entry:
+            return turn
+        if not first_note:
+            first_note = turn.note
 
     return FamilyTurn(note=first_note)
 

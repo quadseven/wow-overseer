@@ -11049,94 +11049,85 @@ class Bridge(discord.Client):
         crafters = sorted(skills_by)
         if not crafters:
             return 0
-        known_rows = await asyncio.to_thread(
-            _fetch_crafter_known, crafters, list(recipehunt.VENDOR_RECIPE_SPELLS)
-        )
-        facts = await asyncio.to_thread(_fetch_recipehunt_facts, crafters)
-        purses = await asyncio.to_thread(_fetch_purses, crafters)
-        rep_tm = await asyncio.to_thread(
-            _fetch_standing, crafters, recipehunt.FACTION_TIMBERMAW
-        )
-        rep_cc = await asyncio.to_thread(
-            _fetch_standing, crafters, recipehunt.FACTION_CENARION
-        )
-        in_log = await asyncio.to_thread(
-            _fetch_quest_log, crafters, sorted(recipehunt.REP_QUEST_IDS)
-        )
-        blocked = await asyncio.to_thread(
-            _recipehunt_rows_blocked, recipehunt.REFUSED_RETRY_MINUTES
-        )
-        positions = await asyncio.to_thread(_fetch_positions, crafters)
-        npc_spawns = await asyncio.to_thread(
-            _fetch_recipehunt_npc_spawns, sorted(recipehunt.REP_NPC_ENTRIES)
-        )
+        state = await self._fetch_family_recipehunt_state(crafters)
         queued = 0
         needs: list = []
-        npc_walk = 0
-        walker = ""
+        npc_walk = (0, "")
         for name in crafters:
-            f = facts.get(name) or {}
             town = await asyncio.to_thread(_fetch_town, name)
+            crafter = _build_family_recipehunt_crafter(name, skills_by, state, town)
             near = _nearby_npc_spawns(
-                positions.get(name), npc_spawns, attunestep.REACH_YARDS
-            )
-            skill_map = skills_by.get(name) or {}
-            crafter = recipehunt.Crafter(
-                name=name,
-                level=int((purses.get(name) or (60, 0))[0] or 60),
-                race=int(f.get("race") or 0),
-                map_id=int(f.get("map_id") or 0),
-                alchemy=int(skill_map.get(recipehunt.ALCHEMY, 0)),
-                enchanting=int(skill_map.get(recipehunt.ENCHANTING, 0)),
-                learned=frozenset(
-                    r["spell"] for r in known_rows if r["name"] == name
-                ),
-                held=tuple(f.get("held") or ()),
-                item_counts=tuple(f.get("item_counts") or ()),
-                in_log=frozenset(q for n, q in in_log if n == name),
-                rewarded=frozenset(f.get("rewarded") or ()),
-                standing=(
-                    (recipehunt.FACTION_TIMBERMAW, int(rep_tm.get(name, 0))),
-                    (recipehunt.FACTION_CENARION, int(rep_cc.get(name, 0))),
-                ),
-                money=int((purses.get(name) or (60, 0))[1] or 0),
-                free_slots=int(f.get("free_slots") or 0),
-                stocks=frozenset(town.stocks),
-                family=True,
+                state["positions"].get(name), state["spawns"], attunestep.REACH_YARDS
             )
             turn = recipehunt.plan_family_crafter(
-                crafter, nearby_spawns=near, blocked=blocked or frozenset()
+                crafter, nearby_spawns=near, blocked=state["blocked"] or frozenset()
             )
-            if turn.note:
-                log.info("recipe hunt: %s", turn.note)
-            if turn.walk_vendor_item:
-                needs.append(
-                    craft_supply.Need(name, turn.walk_vendor_item, "recipe vendor")
-                )
-            if turn.walk_npc_entry and not npc_walk:
-                npc_walk = turn.walk_npc_entry
-                walker = name
-            if turn.errand is None:
-                continue
-            if blocked is None:
-                log.info(
-                    "recipe hunt: cannot read pending rows, so %s for %s waits",
-                    turn.errand.command,
-                    name,
-                )
-                continue
-            if await asyncio.to_thread(_insert_recipehunt_errand, turn.errand):
-                queued += 1
+            queued, npc_walk = await self._apply_family_recipehunt_turn(
+                name, turn, state["blocked"], needs, npc_walk, queued
+            )
+        await self._walk_family_recipehunt(needs, npc_walk, cohort)
+        return queued
+
+    async def _fetch_family_recipehunt_state(self, crafters: list) -> dict:
+        """Read family crafter facts needed by `_recipe_hunt_once`."""
+        return {
+            "known": await asyncio.to_thread(
+                _fetch_crafter_known, crafters, list(recipehunt.VENDOR_RECIPE_SPELLS)
+            ),
+            "facts": await asyncio.to_thread(_fetch_recipehunt_facts, crafters),
+            "purses": await asyncio.to_thread(_fetch_purses, crafters),
+            "tm": await asyncio.to_thread(
+                _fetch_standing, crafters, recipehunt.FACTION_TIMBERMAW
+            ),
+            "cc": await asyncio.to_thread(
+                _fetch_standing, crafters, recipehunt.FACTION_CENARION
+            ),
+            "in_log": await asyncio.to_thread(
+                _fetch_quest_log, crafters, sorted(recipehunt.REP_QUEST_IDS)
+            ),
+            "blocked": await asyncio.to_thread(
+                _recipehunt_rows_blocked, recipehunt.REFUSED_RETRY_MINUTES
+            ),
+            "positions": await asyncio.to_thread(_fetch_positions, crafters),
+            "spawns": await asyncio.to_thread(
+                _fetch_recipehunt_npc_spawns, sorted(recipehunt.REP_NPC_ENTRIES)
+            ),
+        }
+
+    async def _apply_family_recipehunt_turn(
+        self, name: str, turn, blocked, needs: list, npc_walk: tuple, queued: int
+    ) -> tuple:
+        if turn.note:
+            log.info("recipe hunt: %s", turn.note)
+        if turn.walk_vendor_item:
+            needs.append(craft_supply.Need(name, turn.walk_vendor_item, "recipe vendor"))
+        if turn.walk_npc_entry and not npc_walk[0]:
+            npc_walk = (turn.walk_npc_entry, name)
+        if turn.errand is None:
+            return queued, npc_walk
+        if blocked is None:
+            log.info(
+                "recipe hunt: cannot read pending rows, so %s for %s waits",
+                turn.errand.command,
+                name,
+            )
+            return queued, npc_walk
+        if await asyncio.to_thread(_insert_recipehunt_errand, turn.errand):
+            return queued + 1, npc_walk
+        return queued, npc_walk
+
+    async def _walk_family_recipehunt(self, needs: list, npc_walk: tuple, cohort) -> None:
         if needs:
             await self._walk_for_reagents(needs, cohort)
-        elif npc_walk and walker:
+            return
+        npc_entry, walker = npc_walk
+        if npc_entry and walker:
             await self._claim_town_slot(
                 recipehunt.TOWN_CLAIMANT,
                 walker,
-                str(npc_walk),
+                str(npc_entry),
                 cohort=getattr(cohort, "key", None),
             )
-        return queued
 
     async def _walk_for_hammers(self, needs: list, cohort=None) -> None:
         """Walk for a hammer no counter in reach sells, when a pass ends early.
@@ -19425,63 +19416,17 @@ class Bridge(discord.Client):
 
     async def _guild_recipe_hunt_once(self, facts, busy, cap) -> int:
         """Guild maintenance crafters: #2423 vendor recipes and rep turn-ins."""
-        members = facts.get("members") or []
-        eligible = [
-            m for m in members
-            if not m.family and m.online and m.name not in busy
-            and (
-                m.skill(recipehunt.ALCHEMY)[0] >= 165
-                or m.skill(recipehunt.ENCHANTING)[0] >= 275
-            )
-        ]
-        names = [m.name for m in eligible]
-        if not names:
+        eligible = _eligible_guild_recipe_crafters(facts.get("members") or [], busy)
+        if not eligible:
             return 0
-        extra = await asyncio.to_thread(_fetch_guild_recipehunt_facts, names)
-        vendors = facts.get("vendors") or {}
-        crafters = []
-        for m in eligible:
-            f = extra["facts"].get(m.name) or {}
-            if f.get("money") is None and m.money is None:
-                continue
-            money = int(m.money if m.money is not None else f["money"])
-            crafters.append(
-                recipehunt.Crafter(
-                    name=m.name,
-                    guild=m.guild,
-                    level=int(m.level or 60),
-                    race=int(m.race or 0),
-                    map_id=int(m.map_id),
-                    alchemy=int(m.skill(recipehunt.ALCHEMY)[0]),
-                    enchanting=int(m.skill(recipehunt.ENCHANTING)[0]),
-                    learned=m.known | frozenset(extra["known"].get(m.name, ())),
-                    held=tuple((h.entry, h.guid) for h in m.carried),
-                    item_counts=tuple(f.get("item_counts") or ()),
-                    in_log=frozenset(extra["in_log"].get(m.name, ())),
-                    rewarded=frozenset(f.get("rewarded") or ()),
-                    standing=(
-                        (
-                            recipehunt.FACTION_TIMBERMAW,
-                            int(extra["tm"].get(m.name, 0)),
-                        ),
-                        (
-                            recipehunt.FACTION_CENARION,
-                            int(extra["cc"].get(m.name, 0)),
-                        ),
-                    ),
-                    money=money,
-                    free_slots=int(f.get("free_slots") or 0),
-                    stocks=frozenset(vendors.get(m.map_id, ())),
-                    family=False,
-                    online=True,
-                )
-            )
+        extra = await asyncio.to_thread(
+            _fetch_guild_recipehunt_facts, [m.name for m in eligible]
+        )
+        crafters = _build_guild_recipehunt_crafters(
+            eligible, extra, facts.get("vendors") or {}
+        )
         steps, notes = recipehunt.plan_guild_steps(
-            crafters,
-            busy,
-            extra["recent"],
-            npc_spawns=extra["spawns"],
-            cap=cap,
+            crafters, busy, extra["recent"], npc_spawns=extra["spawns"], cap=cap
         )
         _log_capped("recipe hunt", notes)
         now = time.monotonic()
@@ -43591,6 +43536,84 @@ def _nearby_npc_spawns(pos: dict | None, npc_spawns: dict, reach: float) -> dict
                 near[entry] = guid
                 break
     return near
+
+
+def _build_family_recipehunt_crafter(name: str, skills_by: dict, state: dict, town):
+    """Build one `recipehunt.Crafter` snapshot from batched family reads."""
+    f = state["facts"].get(name) or {}
+    skill_map = skills_by.get(name) or {}
+    purse_row = state["purses"].get(name) or (60, 0)
+    return recipehunt.Crafter(
+        name=name,
+        level=int(purse_row[0] or 60),
+        race=int(f.get("race") or 0),
+        map_id=int(f.get("map_id") or 0),
+        alchemy=int(skill_map.get(recipehunt.ALCHEMY, 0)),
+        enchanting=int(skill_map.get(recipehunt.ENCHANTING, 0)),
+        learned=frozenset(
+            r["spell"] for r in state["known"] if r["name"] == name
+        ),
+        held=tuple(f.get("held") or ()),
+        item_counts=tuple(f.get("item_counts") or ()),
+        in_log=frozenset(q for n, q in state["in_log"] if n == name),
+        rewarded=frozenset(f.get("rewarded") or ()),
+        standing=(
+            (recipehunt.FACTION_TIMBERMAW, int(state["tm"].get(name, 0))),
+            (recipehunt.FACTION_CENARION, int(state["cc"].get(name, 0))),
+        ),
+        money=int(purse_row[1] or 0),
+        free_slots=int(f.get("free_slots") or 0),
+        stocks=frozenset(town.stocks),
+        family=True,
+    )
+
+
+def _eligible_guild_recipe_crafters(members: list, busy: set) -> list:
+    """Return online maintenance Alchemy/Enchanting crafters not already busy."""
+    return [
+        m for m in members
+        if not m.family and m.online and m.name not in busy
+        and (
+            m.skill(recipehunt.ALCHEMY)[0] >= 165
+            or m.skill(recipehunt.ENCHANTING)[0] >= 275
+        )
+    ]
+
+
+def _build_guild_recipehunt_crafters(eligible: list, extra: dict, vendors: dict) -> list:
+    """Build `recipehunt.Crafter` records for maintenance guild crafters."""
+    crafters = []
+    for m in eligible:
+        f = extra["facts"].get(m.name) or {}
+        if f.get("money") is None and m.money is None:
+            continue
+        money = int(m.money if m.money is not None else f["money"])
+        crafters.append(
+            recipehunt.Crafter(
+                name=m.name,
+                guild=m.guild,
+                level=int(m.level or 60),
+                race=int(m.race or 0),
+                map_id=int(m.map_id),
+                alchemy=int(m.skill(recipehunt.ALCHEMY)[0]),
+                enchanting=int(m.skill(recipehunt.ENCHANTING)[0]),
+                learned=m.known | frozenset(extra["known"].get(m.name, ())),
+                held=tuple((h.entry, h.guid) for h in m.carried),
+                item_counts=tuple(f.get("item_counts") or ()),
+                in_log=frozenset(extra["in_log"].get(m.name, ())),
+                rewarded=frozenset(f.get("rewarded") or ()),
+                standing=(
+                    (recipehunt.FACTION_TIMBERMAW, int(extra["tm"].get(m.name, 0))),
+                    (recipehunt.FACTION_CENARION, int(extra["cc"].get(m.name, 0))),
+                ),
+                money=money,
+                free_slots=int(f.get("free_slots") or 0),
+                stocks=frozenset(vendors.get(m.map_id, ())),
+                family=False,
+                online=True,
+            )
+        )
+    return crafters
 
 
 def _fetch_guild_recipehunt_facts(names: list) -> dict:
