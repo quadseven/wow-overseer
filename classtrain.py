@@ -429,14 +429,23 @@ def trainer_maps(class_id: int, race_id: int, trainer_spawns) -> frozenset[int]:
     return frozenset(maps)
 
 
+def _portal_exit(team: str, valid_maps, wall_set) -> tuple[int, str] | None:
+    """One-hop Outland exit when its destination holds a trainer and is unwalled."""
+    boat_map = guildlevel.BOAT_EXITS.get(team)
+    if boat_map is None:
+        return None
+    dest = int(boat_map)
+    if dest in valid_maps and dest not in wall_set:
+        return dest, guildlevel.EXITS[team]
+    return None
+
+
 def crossing_for(
     team: str, map_id: int, zone_id: int, valid_maps, walls=()
 ) -> tuple[int, str] | None:
     """Next (target_map, transport_name) toward a valid trainer map, or None."""
-    if not team or map_id is None:
-        return None
-    here = _int(map_id, -1)
-    if here < 0 or here in valid_maps:
+    here = -1 if map_id is None else _int(map_id, -1)
+    if not team or here < 0 or here in valid_maps:
         return None
     wall_set = frozenset(walls or ())
     ground = guildlevel.ground_of(team, here, zone_id)
@@ -448,17 +457,11 @@ def crossing_for(
         if int(far_map) in valid_maps and int(far_map) not in wall_set
     ]
     main = [r for r in rides if r[2] == guildlevel.MAIN_GROUND]
-    pick = main[0] if main else (rides[0] if rides else None)
+    pick = next(iter(main or rides), None)
     if pick is not None:
         return pick[1], pick[0].name
     if here == 530:
-        boat_map = guildlevel.BOAT_EXITS.get(team)
-        if (
-            boat_map is not None
-            and int(boat_map) in valid_maps
-            and int(boat_map) not in wall_set
-        ):
-            return int(boat_map), guildlevel.EXITS[team]
+        return _portal_exit(team, valid_maps, wall_set)
     return None
 
 
@@ -555,6 +558,67 @@ def unsupported(rows) -> bool:
     )
 
 
+def _plan_walk_step(
+    trainee: Trainee,
+    walker,
+    started: dict[str, int],
+    per_guild: int,
+    cap: float,
+) -> tuple[Walk | None, str]:
+    """Plan one trainer walk for a ready trainee, or explain why it waits."""
+    why = walk_refusal(walker, trainee.name)
+    if why:
+        return None, "%s waits: %s" % (trainee.name, why)
+    if started.get(trainee.guild, 0) >= per_guild:
+        return (
+            None,
+            "%s waits: %d trainer walks per guild per pass" % (trainee.name, per_guild),
+        )
+    started[trainee.guild] = started.get(trainee.guild, 0) + 1
+    return (
+        Walk(
+            trainee.name,
+            trainee.guild,
+            trainee.level,
+            trainee.due.count,
+            trainee.due.copper,
+            trainee.money,
+            cap,
+        ),
+        "",
+    )
+
+
+def _step_for_trainee(t: Trainee, state: dict) -> tuple[Walk | Cross | None, str]:
+    """Return (step or None, waiting_note) for one ordered trainee."""
+    if not t.due.count:
+        return None, ""
+    if not t.due.affords(t.money):
+        return (
+            None,
+            "%s saves for its trainer: %d spell(s) wait, the cheapest %dc, "
+            "it carries %dc" % (t.name, t.due.count, t.due.cheapest, t.money),
+        )
+    if not t.online or t.name in state["recent"]:
+        return None, ""
+    if t.name in state["busy"]:
+        return None, "%s is already on a guild walk" % t.name
+    walker = state["walkers"].get(t.name)
+    here = getattr(walker, "map_id", None)
+    if here is not None and state["stranded"].get(t.name) == _int(here, -1):
+        return _plan_stranded_crossing(
+            t,
+            walker,
+            state["trainer_spawns"],
+            state["cross_recent"],
+            state["started_cross"],
+            state["cross_limit"],
+        )
+    return _plan_walk_step(
+        t, walker, state["started"], state["per_guild"], state["cap"]
+    )
+
+
 def plan(
     trainees,
     walkers,
@@ -578,8 +642,6 @@ def plan(
     boat crossing toward a friendly trainer map up to `cross_per_guild` active
     crossings, or is named once in the notes and written no row.
     """
-    recent = {str(n) for n in recent or ()}
-    busy = {str(n) for n in busy or ()}
     known_guilds = dict(guild_of or {})
     for t in trainees or ():
         known_guilds.setdefault(t.name, t.guild)
@@ -588,56 +650,30 @@ def plan(
         if cross_per_guild is None
         else int(cross_per_guild)
     )
-    walks, notes, started = [], [], {}
-    started_cross = _active_crossings_by_guild(cross_recent, known_guilds)
+    state = {
+        "walkers": walkers or {},
+        "recent": {str(n) for n in recent or ()},
+        "busy": {str(n) for n in busy or ()},
+        "stranded": stranded or {},
+        "trainer_spawns": trainer_spawns,
+        "cross_recent": cross_recent,
+        "started": {},
+        "started_cross": _active_crossings_by_guild(cross_recent, known_guilds),
+        "per_guild": per_guild,
+        "cross_limit": cross_limit,
+        "cap": cap,
+    }
+    walks, notes = [], []
 
     def key(t):
         return (-min(t.due.count, _affordable(t)), -t.level, t.name)
 
     for t in sorted(trainees or (), key=key):
-        if not t.due.count:
-            continue
-        if not t.due.affords(t.money):
-            notes.append(
-                "%s saves for its trainer: %d spell(s) wait, the cheapest %dc, "
-                "it carries %dc" % (t.name, t.due.count, t.due.cheapest, t.money)
-            )
-            continue
-        if not t.online:
-            continue
-        if t.name in recent:
-            continue
-        if t.name in busy:
-            notes.append("%s is already on a guild walk" % t.name)
-            continue
-        here = getattr((walkers or {}).get(t.name), "map_id", None)
-        if here is not None and (stranded or {}).get(t.name) == _int(here, -1):
-            cross, note = _plan_stranded_crossing(
-                t,
-                walkers[t.name],
-                trainer_spawns,
-                cross_recent,
-                started_cross,
-                cross_limit,
-            )
-            if cross is not None:
-                walks.append(cross)
-            elif note:
-                notes.append(note)
-            continue
-        why = walk_refusal((walkers or {}).get(t.name), t.name)
-        if why:
-            notes.append("%s waits: %s" % (t.name, why))
-            continue
-        if started.get(t.guild, 0) >= per_guild:
-            notes.append(
-                "%s waits: %d trainer walks per guild per pass" % (t.name, per_guild)
-            )
-            continue
-        started[t.guild] = started.get(t.guild, 0) + 1
-        walks.append(
-            Walk(t.name, t.guild, t.level, t.due.count, t.due.copper, t.money, cap)
-        )
+        step, note = _step_for_trainee(t, state)
+        if step is not None:
+            walks.append(step)
+        elif note:
+            notes.append(note)
     return walks, notes
 
 
