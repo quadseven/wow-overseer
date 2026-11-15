@@ -90,7 +90,8 @@ class TheSale(unittest.TestCase):
         m = hungry_member(
             food=20, drink=20, carried=self.junk(), free_slots=12, bag_slots=20
         )
-        self.assertEqual(actions(plan([m], supply={}), SEAT), [])
+        stop = (guildjobs.Recent(SEAT, "gear", 180, "delivered"),)
+        self.assertEqual(actions(plan([m], supply={}, recent=stop), SEAT), [])
 
     def test_the_same_junk_is_sold_by_a_member_off_the_lineup(self):
         m = hungry_member(
@@ -167,14 +168,18 @@ class TheProfessionErrand(unittest.TestCase):
         rows = (recent(SEATS[10].name, "sell", 20),)
         self.assertEqual(1, len(self.errands(self.plan(rows))))
 
-    def test_no_town_stop_for_hours_does_not_earn_a_dedicated_errand(self):
+    def test_a_stop_a_few_hours_back_does_not_earn_a_dedicated_errand(self):
+        from test_guildjobs_professions import SEATS, recent
+
+        rows = (recent(SEATS[10].name, "gear", guildjobs.DEDICATED_AFTER_MINUTES - 60),)
+        self.assertEqual([], self.errands(self.plan(rows)))
+
+    def test_no_stop_for_six_hours_is_the_backstop(self):
         from test_guildjobs_professions import SEATS, recent
 
         rows = (recent(SEATS[10].name, "gear", guildjobs.DEDICATED_AFTER_MINUTES + 30),)
-        self.assertEqual([], self.errands(self.plan(rows)))
-
-    def test_no_town_stop_at_all_does_not_either(self):
-        self.assertEqual([], self.errands(self.plan(())))
+        self.assertEqual(1, len(self.errands(self.plan(rows))))
+        self.assertEqual(1, len(self.errands(self.plan(()))))
 
     def test_with_the_switch_off_the_dedicated_errand_comes_back(self):
         import os
