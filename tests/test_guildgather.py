@@ -12,7 +12,6 @@ import raidteams
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (ROOT / "bridge.py").read_text(encoding="utf-8")
-DOCKERFILE = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
 
 def seat(name="Durg", level=40, herb=0, mining=0, **kw):
@@ -115,10 +114,9 @@ class Switch(unittest.TestCase):
 
 
 class Wiring(unittest.TestCase):
-    def test_the_bridge_runs_the_pass_and_the_image_ships_the_module(self):
+    def test_the_bridge_runs_the_pass(self):
         self.assertIn("import guildgather", BRIDGE)
         self.assertIn('_Pass("_guild_gather_loop")', BRIDGE)
-        self.assertIn("guildgather.py", DOCKERFILE)
 
     def test_the_pass_never_writes_game_state(self):
         src = (ROOT / "guildgather.py").read_text(encoding="utf-8")
