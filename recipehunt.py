@@ -34,8 +34,13 @@ FACTION_CENARION = 609
 TIMBERMAW_HONORED = 9000
 CENARION_FRIENDLY = 3000
 
-# character_reputation.standing is stored relative to Faction.dbc ReputationBase.
-# Cenarion Circle starts Neutral (0); Timbermaw Hold starts Hostile 2500/3000 (-3500).
+# character_reputation.standing is stored relative to Faction.dbc ReputationBase
+# and added back on load (ReputationMgr::GetReputation; tools/gen_standing.py).
+# Read from live Faction.dbc and character_reputation on the dev realm
+# (2026-11-15): faction 576 (Timbermaw Hold) has ReputationRaceMask=1791,
+# ReputationBase=-3500, ReputationFlags=2 (fresh characters hold standing=0,
+# flags=2 -> Hostile 2500/3000); faction 609 (Cenarion Circle) has
+# ReputationBase=0 for non-Druid (race=1791, class=511).
 BASE_STANDING = {
     FACTION_CENARION: 0,
     FACTION_TIMBERMAW: -3500,
@@ -74,7 +79,7 @@ class VendorRecipe:
 
 @dataclass(frozen=True)
 class RepTurnin:
-    """One repeatable reputation quest for Cenarion Circle or Timbermaw Hold."""
+    """One reputation quest for Cenarion Circle or Timbermaw Hold."""
 
     faction: int
     target_standing: int
@@ -87,6 +92,7 @@ class RepTurnin:
     item_entry: int
     item_count: int
     prereq_quest: int | None = None
+    repeatable: bool = False
 
 
 @dataclass(frozen=True)
@@ -145,8 +151,8 @@ VENDOR_RECIPES: tuple[VendorRecipe, ...] = (
         1500,
         "Recipe: Fire Protection Potion",
         (
-            VendorSpot(2812, "Nandar Branson", "Hillsbrad Foothills", 0, "alliance"),
-            VendorSpot(3413, "Jeeda", "Stonetalon Mountains", 1, "horde"),
+            VendorSpot(2380, "Nandar Branson", "Hillsbrad Foothills", 0, "alliance"),
+            VendorSpot(4083, "Jeeda", "Stonetalon Mountains", 1, "horde"),
         ),
     ),
     VendorRecipe(
@@ -157,8 +163,8 @@ VENDOR_RECIPES: tuple[VendorRecipe, ...] = (
         13000,
         "Recipe: Elixir of Superior Defense",
         (
-            VendorSpot(4226, "Soolie Berryfizz", "Ironforge", 0, "alliance"),
-            VendorSpot(4610, "Kor'geld", "Orgrimmar", 1, "horde"),
+            VendorSpot(5178, "Soolie Berryfizz", "Ironforge", 0, "alliance"),
+            VendorSpot(3348, "Kor'geld", "Orgrimmar", 1, "horde"),
         ),
     ),
     VendorRecipe(
@@ -204,7 +210,7 @@ VENDOR_RECIPES: tuple[VendorRecipe, ...] = (
         25081,
         ENCHANTING,
         300,
-        40000,
+        100000,
         "Formula: Enchant Cloak - Greater Fire Resistance",
         (VendorSpot(15419, "Kania", "Silithus", 1, ""),),
         rep_faction=FACTION_CENARION,
@@ -241,6 +247,7 @@ REP_TURNINS: tuple[RepTurnin, ...] = (
         TWILIGHT_TEXT,
         10,
         prereq_quest=8318,
+        repeatable=True,
     ),
     RepTurnin(
         FACTION_TIMBERMAW,
@@ -254,6 +261,7 @@ REP_TURNINS: tuple[RepTurnin, ...] = (
         DEADWOOD_FEATHER,
         5,
         prereq_quest=8460,
+        repeatable=True,
     ),
     RepTurnin(
         FACTION_TIMBERMAW,
@@ -266,7 +274,8 @@ REP_TURNINS: tuple[RepTurnin, ...] = (
         45,
         DEADWOOD_FEATHER,
         5,
-        prereq_quest=8461,
+        prereq_quest=8460,
+        repeatable=True,
     ),
     RepTurnin(
         FACTION_TIMBERMAW,
@@ -276,10 +285,11 @@ REP_TURNINS: tuple[RepTurnin, ...] = (
         "Salfa",
         "Winterspring",
         1,
-        45,
+        50,
         WINTERFALL_BEADS,
         5,
         prereq_quest=8464,
+        repeatable=True,
     ),
 )
 
@@ -346,7 +356,7 @@ def _eligible_turnin(
                 continue
             return turnin, ""
     for turnin in candidates:
-        if turnin.quest_id in crafter.rewarded:
+        if not turnin.repeatable and turnin.quest_id in crafter.rewarded:
             continue
         if crafter.level < turnin.min_level:
             continue

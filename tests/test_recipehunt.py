@@ -13,6 +13,8 @@ from _stub_modules import PYMYSQL, fresh_import
 
 import guildcorps
 import guildjobs
+import purse
+import raidsupply
 import recipehunt
 
 
@@ -70,32 +72,53 @@ class CatalogTest(unittest.TestCase):
     def test_all_seven_vendor_recipes_match_craftbook_and_gates(self):
         self.assertEqual(7, len(recipehunt.VENDOR_RECIPES))
         by_item = {r.item_entry: r for r in recipehunt.VENDOR_RECIPES}
+        raidsupply_recipes = {
+            s.make.recipe_item: s.make
+            for s in raidsupply.SUPPLIES
+            if s.make and s.make.recipe_item in {6055, 13501}
+        }
+        self.assertEqual({6055, 13501}, set(raidsupply_recipes))
+        for item_entry, make in raidsupply_recipes.items():
+            recipe = by_item[item_entry]
+            self.assertEqual(make.skill, recipe.skill_id)
+            self.assertEqual(make.recipe_skill, recipe.skill_rank)
+            self.assertEqual(make.spell, recipe.spell_id)
+            self.assertEqual(make.recipe_price, recipe.price)
+
         expected = {
-            6055: (171, 165, 7257, 1500, None, 0),
-            13478: (171, 265, 17554, 13000, None, 0),
-            13501: (171, 295, 17580, 30000, None, 0),
-            16221: (333, 275, 20026, 16000, None, 0),
-            16224: (333, 285, 20015, 20000, None, 0),
-            19445: (333, 290, 23800, 30000, recipehunt.FACTION_TIMBERMAW, 9000),
-            20732: (333, 300, 25081, 40000, recipehunt.FACTION_CENARION, 3000),
+            6055: (None, 0),
+            13478: (None, 0),
+            13501: (None, 0),
+            16221: (None, 0),
+            16224: (None, 0),
+            19445: (recipehunt.FACTION_TIMBERMAW, 9000),
+            20732: (recipehunt.FACTION_CENARION, 3000),
         }
         self.assertEqual(set(expected), set(by_item))
-        for item_entry, (
-            skill,
-            rank,
-            spell,
-            price,
-            faction,
-            target,
-        ) in expected.items():
+        for item_entry, (faction, target) in expected.items():
             recipe = by_item[item_entry]
-            self.assertEqual(skill, recipe.skill_id)
-            self.assertEqual(rank, recipe.skill_rank)
-            self.assertEqual(spell, recipe.spell_id)
-            self.assertEqual(price, recipe.price)
             self.assertEqual(faction, recipe.rep_faction)
             self.assertEqual(target, recipe.rep_standing)
-            self.assertIn(str(spell), CRAFTBOOK[str(skill)])
+            self.assertIn(str(recipe.spell_id), CRAFTBOOK[str(recipe.skill_id)])
+
+        # Kania (15419) sells formula 20732 for 10g (100000c) in npc_vendor / item_template.
+        self.assertEqual(10 * 100 * 100, by_item[20732].price)
+        self.assertEqual(
+            {2380: "Nandar Branson", 4083: "Jeeda"},
+            {v.npc_entry: v.name for v in by_item[6055].vendors},
+        )
+        self.assertEqual(
+            {5178: "Soolie Berryfizz", 3348: "Kor'geld"},
+            {v.npc_entry: v.name for v in by_item[13478].vendors},
+        )
+
+    def test_turnin_prerequisites_repeatability_and_min_levels(self):
+        by_quest = {t.quest_id: t for t in recipehunt.REP_TURNINS}
+        self.assertFalse(by_quest[8318].repeatable)
+        for qid in (8319, 8466, 8467, 8469):
+            self.assertTrue(by_quest[qid].repeatable)
+        self.assertEqual(8460, by_quest[8467].prereq_quest)
+        self.assertEqual(50, by_quest[8469].min_level)
 
 
 class EffectiveStandingTest(unittest.TestCase):
@@ -236,17 +259,89 @@ class FamilyPlannerTest(unittest.TestCase):
         t_far = recipehunt.plan_family_crafter(c_rep, nearby_spawns={})
         self.assertIsNone(t_far.errand)
         self.assertEqual(15306, t_far.walk_npc_entry)
-        # Once Friendly (3000) -> buys 20732
+        # Once Friendly (3000) -> 100000c fails the level-60 purse floor,
+        # while 100000c + floor buys 20732.
+        floor = purse.recipe_purse_floor(60)
+        c_short = _crafter(
+            "Og",
+            enchanting=300,
+            learned=known,
+            standing=((recipehunt.FACTION_CENARION, 3000),),
+            item_counts=((20404, 10),),
+            money=100_000,
+            stocks=frozenset({20732}),
+        )
+        t_short = recipehunt.plan_family_crafter(c_short)
+        self.assertIsNone(t_short.errand)
+
         c_friendly = _crafter(
             "Og",
             enchanting=300,
             learned=known,
             standing=((recipehunt.FACTION_CENARION, 3000),),
             item_counts=((20404, 10),),
+            money=100_000 + floor,
             stocks=frozenset({20732}),
         )
         t_buy = recipehunt.plan_family_crafter(c_friendly)
-        self.assertEqual("entry:20732 count:1 max:40000", t_buy.errand.command)
+        self.assertEqual("entry:20732 count:1 max:100000", t_buy.errand.command)
+
+    def test_repeatable_turnins_fire_again_when_already_rewarded(self):
+        known = frozenset({20026, 20015})
+        c_cenarion_again = _crafter(
+            "Og",
+            enchanting=300,
+            learned=known,
+            standing=((recipehunt.FACTION_CENARION, 2000),),
+            item_counts=((20404, 10),),
+            rewarded=frozenset({8318, 8319}),
+        )
+        t_cenarion = recipehunt.plan_family_crafter(
+            c_cenarion_again, nearby_spawns={15306: 91001}
+        )
+        self.assertIsNotNone(t_cenarion.errand)
+        self.assertEqual("take quest:8319", t_cenarion.errand.command)
+
+        c_timbermaw_again = _crafter(
+            "Og",
+            enchanting=290,
+            learned=frozenset({20026, 20015, 25081}),
+            standing=((recipehunt.FACTION_TIMBERMAW, 1985),),
+            item_counts=((21377, 5),),
+            rewarded=frozenset({8460, 8466}),
+        )
+        t_timbermaw = recipehunt.plan_family_crafter(
+            c_timbermaw_again, nearby_spawns={11554: 92001}
+        )
+        self.assertIsNotNone(t_timbermaw.errand)
+        self.assertEqual("take quest:8466", t_timbermaw.errand.command)
+
+    def test_timbermaw_beads_turnin_8469_requires_level_50(self):
+        known = frozenset({20026, 20015, 25081})
+        c_too_low = _crafter(
+            "Og",
+            level=49,
+            enchanting=290,
+            learned=known,
+            standing=((recipehunt.FACTION_TIMBERMAW, 985),),
+            item_counts=((21383, 5),),
+            rewarded=frozenset({8464}),
+        )
+        t_low = recipehunt.plan_family_crafter(c_too_low, nearby_spawns={11556: 92003})
+        self.assertIsNone(t_low.errand)
+
+        c_ready = _crafter(
+            "Og",
+            level=50,
+            enchanting=290,
+            learned=known,
+            standing=((recipehunt.FACTION_TIMBERMAW, 985),),
+            item_counts=((21383, 5),),
+            rewarded=frozenset({8464}),
+        )
+        t_ready = recipehunt.plan_family_crafter(c_ready, nearby_spawns={11556: 92003})
+        self.assertIsNotNone(t_ready.errand)
+        self.assertEqual("take quest:8469", t_ready.errand.command)
 
     def test_timbermaw_honored_gate_and_turnins(self):
         known = frozenset({20026, 20015, 25081})
@@ -262,17 +357,17 @@ class FamilyPlannerTest(unittest.TestCase):
             c_unhonored, nearby_spawns={11554: 92001}
         )
         self.assertEqual("take quest:8466", t_rep.errand.command)
-        # Without prerequisite 8460 rewarded, does not emit broken take quest:8466
+        # Only 8461 rewarded (missing 8460) leaves both 8466 and 8467 locked.
         c_locked = _crafter(
             "Og",
             enchanting=290,
             learned=known,
             standing=((recipehunt.FACTION_TIMBERMAW, 985),),
             item_counts=((21377, 5),),
-            rewarded=frozenset(),
+            rewarded=frozenset({8461}),
         )
         t_locked = recipehunt.plan_family_crafter(
-            c_locked, nearby_spawns={11554: 92001}
+            c_locked, nearby_spawns={11554: 92001, 15395: 92002}
         )
         self.assertIsNone(t_locked.errand)
         self.assertIn("prerequisite", t_locked.note)
