@@ -1871,6 +1871,13 @@ def _feasible(
         return True, ""
     if o.route == GUILD_BANK:
         key = (w.members[m].family, o.tab)
+        # A TAB THE GUILD NEVER BOUGHT IS NOT A FULL ONE: the setup read names
+        # every bought tab, so a family with tabs read and this one absent has
+        # simply not bought it (wow-dev: the third tab, 2026-11-15).
+        if key not in w.ctx.guild_free and any(
+            k[0] == key[0] for k in w.ctx.guild_free
+        ):
+            return False, "guild bank tab %d is not bought" % o.tab
         free = w.ctx.guild_free.get(key, 0)
         if tab_used.get(key, 0) >= free:
             return False, "guild bank tab is full"
