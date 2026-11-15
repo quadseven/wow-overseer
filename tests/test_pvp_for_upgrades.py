@@ -301,6 +301,8 @@ def job_member(**kw):
     base = dict(
         name="Auren", guild="Cave", role=guildjobs.RAIDER, level=60, class_id=ROGUE,
         online=True, map_id=0, x=0.0, y=0.0, money=50000, eligible=True,
+        # Two trades held, so the profession errand has nothing to ask.
+        skills={guildjobs.HERBALISM: (1, 75), guildjobs.MINING: (1, 75)},
     )  # fmt: skip
     base.update(kw)
     return guildjobs.Member(**base)
