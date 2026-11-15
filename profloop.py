@@ -60,8 +60,26 @@ import reagentplan
 
 # Cloth tiers and cooking meats from craft_rhythm.GATHERED that drop directly
 # from creatures rather than herb/ore nodes.
+_KILL_DROP_SPELLS = (
+    # Cooking meats (exclude 18243 Raw Nightfin Snapper, which is fished).
+    2538,
+    2540,
+    8607,
+    2545,
+    3397,
+    15855,
+    24801,
+    # Tailoring bolts (cloth tiers; First Aid spells share the same entries).
+    2963,
+    2964,
+    3839,
+    3865,
+    18401,
+)
 KILL_DROP_ENTRIES = frozenset(
-    {2589, 2592, 4306, 4338, 14047, 769, 2672, 2675, 3173, 3730, 12184, 20401}
+    reagent.entry
+    for spell in _KILL_DROP_SPELLS
+    for reagent in craft_rhythm.GATHERED[spell]
 )
 
 ENV_SWITCH = "PROFESSION_LOOP"

@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import ast
+import asyncio
+import dataclasses
+import logging
 import pathlib
+import time
 import unittest
 from unittest import mock
 
+import craft_rhythm
+import jobs
 import profloop
 import reagentplan
 import townerrand
@@ -279,10 +286,33 @@ class GatherTarget(unittest.TestCase):
             "short",
         )
         plan = reagentplan.Plan("Mizu", 12053, True, 0, (short,))
-        with mock.patch("jobs.can_set", return_value=True):
-            job, why = profloop.gather_job(self.SKILLS, {"Mizu": plan})
+        job, why = profloop.gather_job(self.SKILLS, {"Mizu": plan})
         self.assertEqual("farm:4338", job)
         self.assertIn("Mageweave Cloth", why)
+
+    def test_sandworm_meat_entry_comes_from_gathered(self):
+        self.assertIn(20424, profloop.KILL_DROP_ENTRIES)
+        self.assertNotIn(20401, profloop.KILL_DROP_ENTRIES)
+        short = reagentplan.Short(
+            reagentplan.Reagent(20424, "Sandworm Meat", 1),
+            reagentplan.Stock(),
+            reagentplan.GATHER,
+            "Bork",
+            "short",
+        )
+        plan = reagentplan.Plan("Bork", 24801, True, 0, (short,))
+        job, why = profloop.gather_job(self.SKILLS, {"Bork": plan})
+        self.assertEqual("farm:20424", job)
+        self.assertIn("Sandworm Meat", why)
+
+    def test_kill_drop_entries_match_craft_rhythm_gathered(self):
+        gathered_entries = {
+            r.entry for reagents in craft_rhythm.GATHERED.values() for r in reagents
+        }
+        self.assertTrue(profloop.KILL_DROP_ENTRIES)
+        self.assertTrue(profloop.KILL_DROP_ENTRIES.issubset(gathered_entries))
+        for entry in profloop.KILL_DROP_ENTRIES:
+            self.assertTrue(jobs.can_set("farm:%d" % entry), entry)
 
     def test_town_answered_cloth_shortage_does_not_farm(self):
         short = reagentplan.Short(
@@ -293,8 +323,7 @@ class GatherTarget(unittest.TestCase):
             "in vault",
         )
         plan = reagentplan.Plan("Mizu", 12053, True, 0, (short,))
-        with mock.patch("jobs.can_set", return_value=True):
-            job, _ = profloop.gather_job(self.SKILLS, {"Mizu": plan})
+        job, _ = profloop.gather_job(self.SKILLS, {"Mizu": plan})
         self.assertEqual("farm:mining", job)
 
     def test_node_reagent_shortage_falls_back_to_node_trade(self):
@@ -306,8 +335,7 @@ class GatherTarget(unittest.TestCase):
             "gather",
         )
         plan = reagentplan.Plan("Uzza", 2330, True, 0, (short,))
-        with mock.patch("jobs.can_set", return_value=True):
-            job, _ = profloop.gather_job(self.SKILLS, {"Uzza": plan})
+        job, _ = profloop.gather_job(self.SKILLS, {"Uzza": plan})
         self.assertEqual("farm:mining", job)
 
 
@@ -458,6 +486,124 @@ class CraftAndTrainReach(unittest.TestCase):
             {"Uzza": 2330, "Bork": 3275},
         )
         self.assertEqual(chosen, {"Uzza": 2330, "Og": 2964, "Bork": 3275})
+
+
+class ProfLoopBridgeWiring(unittest.TestCase):
+    @staticmethod
+    def _load_prof_loop_methods(ns):
+        src = pathlib.Path("bridge.py").read_text(encoding="utf-8")
+        tree = ast.parse(src, filename="bridge.py")
+        wanted = {
+            "_prof_loop_for",
+            "_prof_loop_facts",
+            "_prof_loop_say",
+            "_prof_loop_write",
+        }
+        bridge_cls = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "Bridge"
+        )
+        methods = [
+            node
+            for node in bridge_cls.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name in wanted
+        ]
+        mod = ast.Module(
+            body=[ast.ClassDef(name="Bridge", bases=[], keywords=[], body=methods, decorator_list=[])],
+            type_ignores=[],
+        )
+        ast.fix_missing_locations(mod)
+        exec(compile(mod, "bridge.py", "exec"), ns)
+        return ns["Bridge"]
+
+    def _make_bridge(self, held_keys, writes):
+        short = reagentplan.Short(
+            reagentplan.Reagent(4338, "Mageweave Cloth", 8),
+            reagentplan.Stock(),
+            reagentplan.AUCTION,
+            "Og",
+            "short",
+        )
+        plan = reagentplan.Plan("Og", 12053, True, 0, (short,))
+        ns = {
+            "asyncio": asyncio,
+            "dataclasses": dataclasses,
+            "jobs": jobs,
+            "log": logging.getLogger("test_profloop_bridge"),
+            "profloop": profloop,
+            "time": time,
+            "townerrand": townerrand,
+            "_PROF_LOOPS": {},
+            "_PROF_LOOP_SAID": {},
+            "_PROF_LOOP_TOWN": {},
+            "_PROF_LOOP_TOWN_SOURCES": (
+                reagentplan.BANK,
+                reagentplan.MAIL,
+                reagentplan.GUILD_BANK,
+                reagentplan.VENDOR,
+            ),
+            "_RHYTHM_SPELLS": {"Og": 12053},
+            "_TOWN_ERRANDS": {},
+            "_standin_running": lambda names: list(names),
+            "_jobs_of": lambda names: {n: "quest" for n in names},
+            "_fetch_trade_skills": lambda names: {"Grug": {"mining": 150}},
+            "_fetch_standing_crafts": lambda names: {"Og": (12053, 1)},
+            "_plan_craft_reagents": lambda names, spells, skills: {"Og": plan},
+            "_mail_gear_holders": lambda names: {},
+            "_fetch_free_slots": lambda names: {n: 15 for n in names},
+            "_prof_loop_train_due": lambda names: {},
+            "_queue_owns_job": lambda key: False,
+            "_prof_loop_quiet": lambda *a, **kw: None,
+            "_last_job_source": lambda name: "",
+            "_insert_job": lambda name, mode, source: writes.append(
+                (name, mode, source)
+            ),
+        }
+        bridge_cls = self._load_prof_loop_methods(ns)
+
+        class FakeBridge(bridge_cls):
+            async def _mid_run(self, names):
+                return False
+
+            async def _operator_held(self, keys, writer):
+                return set(keys) & held_keys
+
+        return FakeBridge(), ns
+
+    def test_unheld_family_writes_kill_drop_farm_order_through_real_jobs(self):
+        writes = []
+        bridge_obj, _ = self._make_bridge(set(), writes)
+        asyncio.run(bridge_obj._prof_loop_for("grug", ["Grug", "Og"]))
+        self.assertEqual(
+            writes,
+            [
+                ("Grug", "farm:4338", profloop.SOURCE),
+                ("Og", "farm:4338", profloop.SOURCE),
+            ],
+        )
+
+    def test_held_family_does_not_write_farm_order(self):
+        writes = []
+        bridge_obj, _ = self._make_bridge({"grug"}, writes)
+        asyncio.run(bridge_obj._prof_loop_for("grug", ["Grug", "Og"]))
+        self.assertEqual(writes, [])
+
+    def test_held_family_still_writes_non_farm_job(self):
+        writes = []
+        bridge_obj, _ = self._make_bridge({"grug"}, writes)
+        count = asyncio.run(
+            bridge_obj._prof_loop_write("grug", ["Grug", "Og"], "craft")
+        )
+        self.assertEqual(count, 2)
+        self.assertEqual(
+            writes,
+            [
+                ("Grug", "craft", profloop.SOURCE),
+                ("Og", "craft", profloop.SOURCE),
+            ],
+        )
 
 
 if __name__ == "__main__":
