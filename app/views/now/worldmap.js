@@ -125,7 +125,7 @@ function dotSvg(d, px, linked) {
   const ring = d.fallback
     ? `<circle cx="${f1(d.x)}" cy="${f1(d.y)}" r="${f1(d.r)}" fill="none" stroke="${c}" stroke-width="${f1(px(2))}" stroke-dasharray="${f1(px(2))} ${f1(px(2))}"></circle>`
     : `<circle cx="${f1(d.x)}" cy="${f1(d.y)}" r="${f1(d.r * 2.2)}" fill="${c}" fill-opacity=".25"></circle><circle cx="${f1(d.x)}" cy="${f1(d.y)}" r="${f1(d.r)}" fill="${c}" stroke="#1a1208" stroke-width="${f1(px(1.5))}"></circle>`;
-  const hit = `<circle cx="${f1(d.x)}" cy="${f1(d.y)}" r="${f1(px(16))}" fill="transparent"></circle>`;
+  const hit = `<circle cx="${f1(d.x)}" cy="${f1(d.y)}" r="${f1(px(22))}" fill="transparent"></circle>`;
   if (!linked) return `<g class="wm-dot">${ring}</g>`;
   return `<a class="wm-dot" href="#/m/${encodeURIComponent(d.name)}" aria-label="${esc(d.label)}">${hit}${ring}</a>`;
 }

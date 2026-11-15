@@ -171,9 +171,9 @@ class ColumnLeaseRules(unittest.TestCase):
             10.0 + claims.LEASE_SECONDS, claims.column_expiry(holder, 100.0)
         )
 
-    def test_an_orphan_gets_the_longer_lease(self):
+    def test_an_orphan_gets_only_the_short_grace(self):
         orphan = townslot.Holder("", "Grug", "vendor", since=0.0)
-        self.assertEqual(claims.ORPHAN_LEASE_SECONDS, claims.lease_for(orphan))
+        self.assertEqual(townslot.ORPHAN_GROUND_GRACE_SECONDS, claims.lease_for(orphan))
 
 
 class AReleasedHoldKeepsTheQuestWalk(unittest.TestCase):

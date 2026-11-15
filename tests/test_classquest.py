@@ -13,6 +13,7 @@ row because a script summons it.
 import dataclasses
 import pathlib
 import unittest
+from unittest import mock
 
 import classquest
 import guildcorps
@@ -397,6 +398,226 @@ class TheStep(unittest.TestCase):
 
 class ThePriority(unittest.TestCase):
     """The class quest is the first rung: nothing else pre-empts it."""
+
+    def test_a_seat_without_a_lineup_role_still_gets_its_class_quest(self):
+        m = dataclasses.replace(
+            who("Unplaced", quests_done=frozenset({1505}), level=50),
+            role=guildjobs.UNASSIGNED,
+        )
+        result = class_plan([], class_candidates=[m])
+        self.assertEqual([s.holder for s in class_steps(result)], ["Unplaced"])
+
+    def test_an_owed_class_quest_hold_has_a_roster_reason(self):
+        m = dataclasses.replace(
+            who("Held", quests_done=frozenset({1505}), level=50),
+            role=guildjobs.UNASSIGNED,
+        )
+        result = class_plan([], busy={m.name}, class_candidates=[m])
+        self.assertEqual(class_steps(result), [])
+        self.assertIn("already on another guild walk", result.class_holds[m.name])
+        reasons = guildjobs._class_hold_reasons(
+            [m],
+            (),
+            {},
+            result.steps,
+            {},
+            result.notes,
+            result.owed,
+            result.released,
+            {m.name},
+            book(),
+            (),
+            None,
+            0,
+            (),
+        )
+        self.assertIn("another guild walk", reasons[m.name])
+        self.assertIn("another guild walk", result.class_holds[m.name])
+
+    def test_a_roleless_member_already_hunting_is_not_reported_as_waiting(self):
+        m = dataclasses.replace(
+            who(
+                "Hunter",
+                quest_log={1498: 3},
+                quests_done=frozenset({1505}),
+                level=50,
+                x=720.0,
+                y=-4100.0,
+            ),
+            role=guildjobs.UNASSIGNED,
+        )
+        result = class_plan([], class_candidates=[m])
+        self.assertEqual(result.steps, ())
+        self.assertEqual(class_steps(result), [])
+        self.assertIn(classquest.MARK, result.lines[m.name])
+        self.assertNotIn(m.name, result.class_holds)
+
+    def test_a_roleless_member_over_the_class_allowance_gets_the_limit(self):
+        members = [
+            dataclasses.replace(
+                who("Candidate%d" % i, quests_done=frozenset({1505}), level=50),
+                role=guildjobs.UNASSIGNED,
+            )
+            for i in range(guildjobs.CLASSQUEST_STEPS_PER_GUILD + 1)
+        ]
+        result = class_plan([], class_candidates=members)
+        planned = {step.holder for step in class_steps(result)}
+        held = set(m.name for m in members) - planned
+        self.assertEqual(len(planned), guildjobs.CLASSQUEST_STEPS_PER_GUILD)
+        self.assertEqual(len(held), 1)
+        self.assertIn("waits:", result.class_holds[next(iter(held))])
+
+    def test_roleless_seats_over_allowance_get_offers_in_bounded_passes(self):
+        members = [
+            dataclasses.replace(
+                who(
+                    "%s%d" % (guild, i),
+                    guild=guild,
+                    quests_done=frozenset({1505}),
+                    level=50,
+                    tree="Protection"
+                    if i < guildjobs.CLASSQUEST_STEPS_PER_GUILD
+                    else "Arms",
+                ),
+                role=guildjobs.UNASSIGNED,
+            )
+            for guild in ("Bonkers", "Cave")
+            for i in range(2 * guildjobs.CLASSQUEST_STEPS_PER_GUILD + 1)
+        ]
+        never_offered = {member.name for member in members}
+        recent = (
+            guildjobs.Recent(members[0].name, classquest.ACTION, 5, status="error"),
+        )
+        for pass_number in range(guildjobs.CLASSQUEST_STEPS_PER_GUILD + 2):
+            recent = tuple(
+                dataclasses.replace(row, age_minutes=row.age_minutes + 15)
+                for row in recent
+            )
+            result = class_plan([], class_candidates=members, recent=recent)
+            offered = {step.holder for step in class_steps(result)}
+            if not offered:
+                self.assertFalse(never_offered)
+                break
+            if pass_number == 0:
+                self.assertNotIn(members[0].name, offered)
+                self.assertIn(members[1].name, offered)
+            for guild in ("Bonkers", "Cave"):
+                guild_offers = offered & {m.name for m in members if m.guild == guild}
+                self.assertLessEqual(
+                    len(guild_offers), guildjobs.CLASSQUEST_STEPS_PER_GUILD
+                )
+            never_offered -= offered
+            recent += tuple(
+                guildjobs.Recent(name, classquest.ACTION, 0, status="error")
+                for name in offered
+            )
+        self.assertFalse(never_offered)
+
+    def test_a_settled_seat_does_not_jump_ahead_of_an_owed_seat_in_job_order(self):
+        owed = who("Aowed", quests_done=frozenset({1505}))
+        settled = who("Zsettled", quests_done=frozenset({1505, 1498}))
+        recent = (guildjobs.Recent(owed.name, classquest.ACTION, 30),)
+
+        ordered = guildjobs._class_ordered(
+            [owed, settled], book(), recent, class_eligible={owed.name}
+        )
+
+        self.assertEqual([member.name for member in ordered], ["Aowed", "Zsettled"])
+
+    def test_family_class_steps_share_the_fair_class_allowance(self):
+        candidates = [
+            dataclasses.replace(
+                who("Candidate%d" % i, quests_done=frozenset({1505}), level=50),
+                role=guildjobs.UNASSIGNED,
+                tree="Arms",
+            )
+            for i in range(2 * guildjobs.CLASSQUEST_STEPS_PER_GUILD)
+        ]
+        family = dataclasses.replace(
+            who(
+                "Family",
+                quests_done=frozenset({1505}),
+                level=50,
+                x=UZZEK["x"],
+                y=UZZEK["y"],
+            ),
+            role=guildjobs.FAMILY,
+            tree="Protection",
+        )
+
+        never_offered = {m.name for m in candidates} | {family.name}
+        recent = ()
+        for _pass in range(guildjobs.CLASSQUEST_STEPS_PER_GUILD + 2):
+            recent = tuple(
+                dataclasses.replace(row, age_minutes=row.age_minutes + 15)
+                for row in recent
+            )
+            result = class_plan(
+                [],
+                class_candidates=candidates,
+                family_members=[family],
+                family_candidates=[family],
+                family_danger={family.name: 0},
+                recent=recent,
+            )
+
+            offered = {step.holder for step in class_steps(result)}
+            self.assertLessEqual(len(offered), guildjobs.CLASSQUEST_STEPS_PER_GUILD)
+            never_offered -= offered
+            recent += tuple(
+                guildjobs.Recent(name, classquest.ACTION, 0, status="error")
+                for name in offered
+            )
+
+        self.assertFalse(never_offered)
+
+    def test_an_offline_family_seat_has_a_named_class_hold(self):
+        for name, fields, reason in (
+            ("OfflineFamily", {"online": False}, "the member is offline"),
+            ("FightingFamily", {"in_combat": True}, "the member is in combat"),
+        ):
+            family = dataclasses.replace(
+                who(name, quests_done=frozenset({1505}), **fields),
+                role=guildjobs.FAMILY,
+            )
+            result = class_plan(
+                [],
+                family_candidates=[family],
+                family_holds={},
+            )
+            self.assertEqual(result.class_holds[family.name], reason)
+
+    def test_family_hold_synthesis_does_not_hide_an_active_class_step(self):
+        family = dataclasses.replace(
+            who(
+                "WorkingFamily",
+                quests_done=frozenset({1505}),
+                x=186.0,
+                y=-3597.0,
+            ),
+            role=guildjobs.FAMILY,
+        )
+        result = class_plan(
+            [],
+            family_members=[family],
+            family_candidates=[family],
+            family_danger={family.name: 0},
+        )
+
+        self.assertEqual([step.holder for step in class_steps(result)], [family.name])
+        self.assertNotIn(family.name, result.class_holds)
+
+    def test_family_owed_check_uses_its_between_run_planning_policy(self):
+        family = dataclasses.replace(who("Family"), role=guildjobs.FAMILY)
+        sentinel = object()
+
+        with mock.patch.object(guildjobs, "class_owed", return_value=sentinel) as owed:
+            result = guildjobs._planned_class_owed(
+                family, book(), (), classquest.Hunts(), 42.0, (object(),)
+            )
+
+        self.assertIs(result, sentinel)
+        self.assertEqual(owed.call_args.args[3:], (None, 42.0, ()))
 
     def test_it_comes_before_the_level_walk(self):
         # A level 20 warrior standing in a zone it has outgrown would be walked

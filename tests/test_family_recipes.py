@@ -85,10 +85,18 @@ class AFamilyCrafterIsDueATrainerRecipe(unittest.TestCase):
         )
 
     def test_holding_the_rung_is_nothing_due(self):
+        # Woolen Bag (3757) is the rung from 101 and the trainer sells it from
+        # 80, so at 81 it is due on the same trip unless it is held too.
+        self.assertEqual(
+            (TAILORING,),
+            guildjobs.recipes_due(
+                38, 358300, OG_SKILLS, OG_KNOWN | {BOLT_OF_WOOL}, OG_WANTED
+            ),
+        )
         self.assertEqual(
             (),
             guildjobs.recipes_due(
-                38, 358300, OG_SKILLS, OG_KNOWN | {BOLT_OF_WOOL}, OG_WANTED
+                38, 358300, OG_SKILLS, OG_KNOWN | {BOLT_OF_WOOL, 3757}, OG_WANTED
             ),
         )
 
@@ -119,13 +127,16 @@ class AFamilyCrafterIsDueATrainerRecipe(unittest.TestCase):
         )
 
     def test_the_purse_must_cover_the_price_and_the_floor(self):
-        # Healing Potion costs 4000c; mod-overseer never spends below 100c.
+        # Healing Potion costs 4000c; mod-overseer never spends below the
+        # repair reserve for the member's level.
         held = frozenset({LESSER_HEALING})
+        floor = guildjobs.recipe_purse_floor(39)
         self.assertEqual(
-            (), guildjobs.recipes_due(39, 4099, ugga(110), held, UGGA_WANTED)
+            (), guildjobs.recipes_due(39, 3999 + floor, ugga(110), held, UGGA_WANTED)
         )
         self.assertEqual(
-            (ALCHEMY,), guildjobs.recipes_due(39, 4100, ugga(110), held, UGGA_WANTED)
+            (ALCHEMY,),
+            guildjobs.recipes_due(39, 4000 + floor, ugga(110), held, UGGA_WANTED),
         )
 
     def test_a_trade_the_roster_does_not_name_is_left_alone(self):

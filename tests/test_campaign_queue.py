@@ -8,9 +8,11 @@ touches a database.
 import ast
 import asyncio
 import dataclasses
+import os
 import pathlib
 import types
 import unittest
+from unittest import mock
 
 from test_decree_order import FakeConn, FakeCursor
 
@@ -22,6 +24,7 @@ import decree  # noqa: E402
 import jobs  # noqa: E402
 import map_server  # noqa: E402
 import orderrecord  # noqa: E402
+import profloop  # noqa: E402
 import raidrun  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
@@ -667,6 +670,41 @@ class TheQueueAdvancesByItself(unittest.TestCase):
         )
 
         self.assertEqual([("Zug", 0, ())], cleared)
+        self.assertEqual([], quest_writes)
+
+    def test_persistent_quest_goal_cannot_restore_aim_in_a_profession_loop(self):
+        """A family in the profession loop is walked by its own farm aim.
+
+        An old quest goal renewing drive_quest sends the leader toward the
+        quest instead of the node, so the farm walk waits for ever.
+        """
+        cleared, quest_writes = [], []
+        ns = _load(
+            ["_goal_drive_quest"],
+            {
+                "asyncio": asyncio,
+                "campaignqueue": campaignqueue,
+                "profloop": profloop,
+                "_cohort_of": lambda name: "Grug",
+                "_queue_owns_job": lambda family, dungeon: False,
+                "_aim_family_quest": lambda family, quest_id, holders: (
+                    cleared.append((family, quest_id, holders)) or 2
+                ),
+                "_aim_traveller": lambda quest_id: quest_writes.append(quest_id) or 1,
+                "log": _Log(),
+            },
+        )
+
+        with mock.patch.dict(os.environ, {profloop.ENV_SWITCH: "Grug"}):
+            asyncio.run(
+                ns["_goal_drive_quest"](
+                    types.SimpleNamespace(),
+                    {"id": 1},
+                    types.SimpleNamespace(quest_id=9128, beneficiary="Grog"),
+                )
+            )
+
+        self.assertEqual([("Grug", 0, ())], cleared)
         self.assertEqual([], quest_writes)
 
 

@@ -134,6 +134,20 @@ class IntentFreshness(unittest.TestCase):
 
 
 class TheLogTapReadsTheBridgesOwnReasons(unittest.TestCase):
+    def test_a_class_quest_hold_is_a_visible_character_reason(self):
+        s = self.one(
+            "guild class quest: Idler held: the member is already on another guild walk"
+        )
+        self.assertEqual(
+            (s.subject, s.scope, s.kind), ("Idler", "character", "class_quest_held")
+        )
+        self.assertIn("another guild walk", s.waiting)
+        got = line_of(
+            "Idler",
+            [step(s.subject, s.doing, s.waiting, kind=s.kind, first=30, last=0)],
+        )
+        self.assertIn("another guild walk", got["line"])
+
     def test_vendor_bag_room_yield_is_a_visible_waiting_reason(self):
         got = nowstatus.classify(
             "economy: vendor aim yielded; bag room could not be freed within "

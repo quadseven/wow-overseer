@@ -24,7 +24,7 @@ COPY core.py bridge.py voice.py transform.py world_data.py \
      map_core.py map_server.py events.py \
      panel.py family.py families.py goals.py individual.py protect.py fanout.py chat.py \
      kin.py keep.py cast.py bonds.py council.py family_value.py persona.py \
-     bonkers.py retire.py retrygate.py strayfollow.py \
+     bonkers.py retire.py retrygate.py strayfollow.py memberloop.py 
      quests.py overhear.py questbook.py questcatalogue.py questledger.py questtickets.py corpstickets.py \
      questshare.py questers.py travel.py stream.py frames.py \
      professions.py craft.py craft_supply.py auction.py gearup.py weaponskill.py jobs.py trainjob.py \
@@ -43,14 +43,14 @@ COPY core.py bridge.py voice.py transform.py world_data.py \
      guildcraft.py guildcover.py tradespec.py tradeturn.py guildbank.py guildshare.py guildroute.py orders.py guildpost.py guildwork.py workorders.py workorderstore.py guildfund.py classtrain.py classcasts.py racespells.py taughtspells.py purse.py vendorsale.py bankbags.py natural.py guildcorps.py guildjobs.py guineapig.py guildlevel.py classquest.py steps.py classask.py classparty.py classuse.py classhunt.py guildrun.py guildfacts.py guildpug.py familyseat.py familyclass.py seatmeter.py guildsocial.py deathask.py crafters.py recruit.py interview.py clipledger.py clipcutter.py clipserve.py eventclips.py \
      bag_pressure.py bag_upgrade.py bag_economy.py bag_market.py guildbags.py disposition.py bagfate.py tidy.py \
      lockbox.py clearance.py \
-     item_plan.py itemplan.py itemplan_shadow.py itemplan_data.py itemplan_reads.py itemplan_vendor.py \
+     item_plan.py itemplan.py itemplan_shadow.py itemplan_data.py itemplan_reads.py itemplan_vendor.py itemplan_disenchant.py \
      jev.py jev_items.py jev_choices.py jev_recovery.py jev_activity.py jev_keep.py jevview.py \
      lootcouncil.py statweights.py \
      bank.py bankpolicy.py setswap.py bankforecast.py housedemand.py \
      mailrun.py mountbuy.py holdings.py hunterpet.py \
      realm.py realmread.py basepath.py appbuild.py deployinfo.py watchwall.py nowstatus.py realmnav.py classic.py \
      needs.py partystatus.py partyvoice.py lootcard.py lootstory.py towntrip.py \
-     townerrand.py profloop.py townslot.py claims.py tradechoice.py \
+     townerrand.py deathcells.py profloop.py townslot.py claims.py tradechoice.py \
      enroll.py \
      tabard.py crossing.py \
      vendor_stall.py \

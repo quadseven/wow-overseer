@@ -240,6 +240,20 @@ def disenchant_skill(item_level: int) -> int:
     return max(1, 5 * (int(item_level) - 21)) if item_level > 25 else 1
 
 
+def disenchant_need(s) -> int | None:
+    """The Enchanting skill the core asks to break `s` down, None for never.
+
+    The core's own RequiredDisenchantSkill when it was read, no breakdown at
+    all when the item has no DisenchantID or the skill reads -1; the
+    convention above only when the core was not read.
+    """
+    if s.disenchant_id is not None and s.disenchant_id <= 0:
+        return None
+    if s.disenchant_skill is not None:
+        return s.disenchant_skill if s.disenchant_skill >= 0 else None
+    return disenchant_skill(s.item_level)
+
+
 # Armor each class wears, by item level of the member (classic proficiencies).
 CLOTH, LEATHER, MAIL, PLATE, SHIELD = 1, 2, 3, 4, 6
 WARRIOR, PALADIN, HUNTER, ROGUE, PRIEST, SHAMAN, MAGE, WARLOCK, DRUID = (
@@ -318,6 +332,10 @@ class Stack:
     container_slots: int | None = None
     fire_res: int | None = None
     soulbound: bool | None = None
+    # The core's own breakdown facts (#1978): item_template.DisenchantID and
+    # RequiredDisenchantSkill (-1 means never). None is unread.
+    disenchant_id: int | None = None
+    disenchant_skill: int | None = None
 
     @property
     def key(self) -> tuple:
@@ -1148,7 +1166,9 @@ def _gear_surplus(w: _World, s: Stack, me: Member, why: str) -> list:
 def _disenchant_option(w: _World, s: Stack, me: Member):
     if s.quality < 2 or s.quality > 4 or not s.gear:
         return None
-    need = disenchant_skill(s.item_level)
+    need = disenchant_need(s)
+    if need is None:
+        return None
     if me.skill("enchanting") >= need and s.value < DE_VENDOR_CEILING:
         return _opt(
             DISENCHANT,

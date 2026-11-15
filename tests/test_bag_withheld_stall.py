@@ -493,12 +493,13 @@ class TheBagTripKeepsTheTraveller(unittest.TestCase):
         self.assertTrue(slot.reserved_by("bags", 946.0))
 
     def test_without_a_campaign_the_ordinary_turn_is_unchanged(self):
-        """No reservation and no urgency: the orphan's long lease stands, so
-        the bag trip waits exactly as it did before."""
+        """No reservation and no urgency: the orphan holds only its short
+        grace (it was seen 946 seconds ago), so the ordinary turn takes the
+        column and no reservation is made."""
         world = FakeWorld(queued=False)
         took, slot, lines = self.run_live_sequence(world)
         self.assertIsNone(slot.reservation)
-        self.assertEqual("3487", world.column["Zug"], lines)
+        self.assertEqual("at:1:-443.7,-2649.1,95.8", world.column["Zug"], lines)
 
     def test_the_hold_ends_when_the_campaign_is_no_longer_withheld(self):
         world = FakeWorld(queued=True)

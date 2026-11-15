@@ -135,6 +135,7 @@ PURE MODULE: rows in, a Move out. No MySQL, no clock.
 from __future__ import annotations
 
 import math
+import zlib
 from dataclasses import dataclass, field, replace
 
 # The class a class QuestSortID names, and the class bit AllowableClasses holds.
@@ -379,9 +380,28 @@ CROSS_ACTION = ACTION + "-cross"
 # crossing is in flight per member and a crossing back and forth never
 # runs faster than one an hour.
 CROSS_COOLDOWN_MINUTES = 35
-# A refusal the module calls retryable (the realm's crossing cap, a fight, a
-# dead character) is asked again sooner.
+# A refusal the module calls retryable (a fight, a dead character) is asked
+# again sooner.
 CROSS_RETRY_MINUTES = 10
+# A cap refusal ("the realm already has as many crossings as it allows") is
+# the realm being full rather than a fault of the seat, so refused seats
+# spread over a shorter retry window instead of returning together (#2184).
+CROSS_AT_ONCE_PREFIX = "the realm already has as many crossings as it allows"
+CROSS_CAP_RETRY_MIN_MINUTES = 4
+CROSS_CAP_RETRY_SPAN_MINUTES = 6
+
+
+def is_cross_cap_refusal(refusal) -> bool:
+    """Whether `refusal` is the realm's concurrent-crossing cap refusal."""
+    return str(refusal or "").startswith(CROSS_AT_ONCE_PREFIX)
+
+
+def cross_cap_retry_minutes(name: str) -> int:
+    """Deterministic spread in [4, 9] minutes for a crossing cap refusal."""
+    offset = zlib.crc32(str(name or "").encode("utf-8")) % CROSS_CAP_RETRY_SPAN_MINUTES
+    return CROSS_CAP_RETRY_MIN_MINUTES + offset
+
+
 # A WALK TO THE BERTH THAT GIVES UP TWICE IS NOT ASKED EVERY TEN MINUTES
 # (#870). The module calls its ground give-up retryable, and it is when a
 # fight or a stuck step ended the walk; but when the road to the berth crosses

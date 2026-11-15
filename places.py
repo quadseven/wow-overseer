@@ -372,6 +372,33 @@ def _zones_holding(map_id: int, x: float, y: float) -> list:
     return [name for _, name in sorted(found)]
 
 
+def zone_id_at(map_id, x, y) -> int:
+    """The zone id (`area_id` in zones.json) of the zone `zone_at` names, or 0.
+
+    Overlapping rectangles are settled the way `zone_at` settles them, so the
+    id and the name always agree. A creature spawn row often carries no zone
+    id, so a kill field is grouped by this.
+    """
+    try:
+        map_id, x, y = int(map_id), float(x), float(y)
+        said = zone_at(map_id, x, y)
+        found = []
+        for _, region in _geometry()._regions_for(map_id):
+            for z in region["zones"]:
+                if (
+                    z.get("area_id")
+                    and z["right"] <= y <= z["left"]
+                    and z["bottom"] <= x <= z["top"]
+                ):
+                    area = (z["left"] - z["right"]) * (z["top"] - z["bottom"])
+                    found.append(
+                        (zone_display(z["name"]) != said, area, int(z["area_id"]))
+                    )
+    except (KeyError, TypeError, ValueError):
+        return 0
+    return min(found)[2] if found else 0
+
+
 def place_at(map_id, x, y) -> str:
     """A ground point as a reader would say it: "the Menethil Harbor docks
     (Wetlands)", "Menethil Harbor (Wetlands)", "Westfall", "The Deadmines"."""

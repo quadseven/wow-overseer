@@ -101,6 +101,54 @@ def idle_names(roster, live_leaders=(), inside=()) -> set:
     return out
 
 
+def not_idle_holds(
+    roster,
+    live_leaders=(),
+    inside=(),
+    errands=(),
+    members=(),
+    enabled=True,
+    status_read=True,
+    roster_read=True,
+) -> dict:
+    """name -> why a family cannot take its between-run class step this pass."""
+    names = {m.name for m in members or ()}
+    if not enabled:
+        return {name: "family class steps are disabled" for name in names}
+    if not status_read:
+        return {name: "live dungeon status could not be read" for name in names}
+    if not roster_read:
+        return {name: "family roster could not be read" for name in names}
+    holds = _run_holds(roster, live_leaders, inside)
+    holds.update(_errand_holds(errands))
+    return holds
+
+
+def _run_holds(roster, live_leaders, inside) -> dict:
+    """The run or instance keeping each family between-run step closed."""
+    families: dict = {}
+    for row in roster or ():
+        name = str(row.get("name") or "")
+        if name:
+            families.setdefault(str(row.get("family") or ""), []).append(name)
+    live, within = set(live_leaders or ()), set(inside or ())
+    holds = {}
+    for leader, names in families.items():
+        if leader in live:
+            reason = "its family has an active dungeon run"
+        elif within.intersection(names):
+            reason = "a family member is still inside an instance"
+        else:
+            continue
+        holds.update({name: reason for name in names})
+    return holds
+
+
+def _errand_holds(errands) -> dict:
+    """The members held by a town errand outside the family run state."""
+    return {name: "the member is on a town errand" for name in set(errands or ())}
+
+
 def _yards(m, spot) -> float:
     return math.hypot(float(m.x) - float(spot.x), float(m.y) - float(spot.y))
 

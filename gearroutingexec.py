@@ -70,6 +70,10 @@ class World:
     kept: keep.Reservations = keep.Reservations()
     # (holder, item guid) already written inside the writer's retry window.
     queued: frozenset | set = frozenset()
+    # Receivers a letter may go to. None reads as `family`. Every guild member
+    # is postable: the guild post pass walks a member off the roster to its
+    # mailbox and takes its post out (guildpost.py, #625).
+    postable: frozenset | set | None = None
 
 
 @dataclass(frozen=True)
@@ -112,7 +116,7 @@ def _percent(gain) -> int:
     return 0 if gain is None else max(0, round(gain * 100))
 
 
-def _as_gear_route(route: gearrouting.Route, family) -> object:
+def _as_gear_route(route: gearrouting.Route, postable) -> object:
     return bag_pressure.guild_route(
         holder=route.holder,
         taker=route.wearer,
@@ -120,7 +124,7 @@ def _as_gear_route(route: gearrouting.Route, family) -> object:
         entry=route.entry,
         name=route.item,
         gain=_percent(route.gain),
-        family=route.wearer in family,
+        family=route.wearer in postable,
         reason=route.reason,
     )
 
@@ -158,7 +162,9 @@ def execute(
     `per_pass` caps how many routes are written (None: every one that can
     be); a route past the cap waits, with the machinery's own words.
     """
-    family = set(world.family or ())
+    postable = (
+        set(world.family or ()) if world.postable is None else set(world.postable)
+    )
     carried = set(world.carried or ())
     queued = set(world.queued or ())
     steps: dict = {}
@@ -188,7 +194,7 @@ def execute(
                 % (route.item, route.holder),
             )
         else:
-            live.append((index, _as_gear_route(route, family)))
+            live.append((index, _as_gear_route(route, postable)))
     ready = bag_pressure.guild_route_deliverable(
         [g for _i, g in live],
         world.positions,
@@ -213,6 +219,61 @@ def execute(
     return Result(
         steps=tuple(steps[i] for i in range(len(report.routes))), dry_run=dry_run
     )
+
+
+# --- walking a waiting holder to a mailbox (#2503) ------------------------------
+
+# How gear.py ends the wait note of a route whose holder is beside none of its
+# receivers and stands at no mailbox: the one wall a walk to a mailbox fixes.
+# A full bag, an absent wearer and a spent pass cap are other walls.
+APART_NO_MAILBOX = ", and at no mailbox"
+
+
+@dataclass(frozen=True)
+class Waiting:
+    """A waiting route in the shape guildroute.plan_mail_runs reads."""
+
+    holder: str
+    taker: str
+    name: str
+    guid: int
+    gain: int
+    family: bool = True
+    alternates: tuple = ()
+
+
+def fetchable(result: Result, postable) -> list:
+    """The routes that wait only for their holder to reach a mailbox, in
+    report order. The guild bank cannot walk; a stale, kept, queued or
+    otherwise walled route is not here."""
+    out = []
+    postable = set(postable or ())
+    for step in result.steps:
+        r = step.route
+        if step.status != WAITING or r.holder == gearrouting.BANK_HOLDER:
+            continue
+        if r.wearer not in postable or not step.why.endswith(APART_NO_MAILBOX):
+            continue
+        out.append(Waiting(r.holder, r.wearer, r.item, int(r.guid), _percent(r.gain)))
+    return out
+
+
+def walkable(waiting, busy=(), held=()) -> tuple:
+    """(routes, notes): at most one route per holder, none whose holder another
+    pass has on a walk or whose family an operator hold stands down."""
+    busy, held = set(busy or ()), set(held or ())
+    kept, notes, seen = [], [], set()
+    for w in waiting:
+        if w.holder in held:
+            notes.append("%s stays with %s: held by operator hold" % (w.name, w.holder))
+        elif w.holder in busy:
+            notes.append(
+                "%s stays with %s: %s is on another walk" % (w.name, w.holder, w.holder)
+            )
+        elif w.holder not in seen:
+            seen.add(w.holder)
+            kept.append(w)
+    return kept, notes
 
 
 def decision_lines(result: Result) -> list:

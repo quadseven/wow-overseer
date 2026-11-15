@@ -119,6 +119,8 @@ HELPER_LEVELS = 10
 NEED_UPGRADE = 3.0
 PRERAID_BONUS = 1.0
 NEED_QUEST = 2.5
+# A passenger for a rare node: over XP_BAND, under NEED_UPGRADE (memberloop.py).
+NEED_NODE = 2.5
 XP_BAND = 2.0
 HELP = 1.5
 CARRY = 2.0
@@ -394,6 +396,9 @@ class Need:
     preraid: bool = False
     slot: str = ""
     quest: int = 0
+    # A rare gathering node at the door (memberloop.py): the member rides along
+    # for it. It scores no gain; NEED_NODE is its worth.
+    node: bool = False
 
     @property
     def rank(self) -> tuple:
@@ -683,6 +688,8 @@ def stance_of(mate: Mate, door, asker_level: int, faction: str, needs: list) -> 
         need = here[0]
         if need.quest:
             return NEED, NEED_QUEST, need
+        if need.node:
+            return NEED, NEED_NODE, need
         return NEED, NEED_UPGRADE + (PRERAID_BONUS if need.preraid else 0.0), need
     return NEED, XP_BAND, None
 
@@ -760,6 +767,10 @@ _ASK_QUEST = (
     "{place} for {item}? Need {roles}.",
     "LF{n}M {place}, need {roles}. Still on {item}.",
 )
+_ASK_NODE = (
+    "Anyone up for {place}? Need {roles}. I'm after the {item} in there.",
+    "LF{n}M {place}, need {roles}. I want to pick {item}.",
+)
 _ASK_CAMPAIGN = (
     "{place} tonight with the family. Wish us luck!",
     "Family's heading into {place}. Shout if you want anything from there.",
@@ -836,7 +847,9 @@ def _fit(text: str, limit: int) -> str:
 def ask_line(asker: str, door, roles, need: Need | None, vary: int = 0) -> str:
     n = len(roles)
     words = roles_words(roles)
-    if need is not None and need.quest:
+    if need is not None and need.node:
+        template = _pick(_ASK_NODE, asker, door.keyword, 0, vary=vary)
+    elif need is not None and need.quest:
         template = _pick(_ASK_QUEST, asker, door.keyword, need.quest, vary=vary)
     else:
         template = _pick(
@@ -859,6 +872,8 @@ def ask_reason(need: Need | None) -> str:
         return ""
     if need.quest:
         return _fit("the quest %s" % need.item, 160)
+    if need.node:
+        return _fit("%s to gather" % need.item, 160)
     if need.preraid:
         return _fit("%s, a pre-raid pick for my %s slot" % (need.item, need.slot), 160)
     return _fit("%s for my %s slot" % (need.item, need.slot or "gear"), 160)
