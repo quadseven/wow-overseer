@@ -1,6 +1,7 @@
-"""`python3 -m ephemeral lint <decree>...`: the `eph` command line (lint only so far)."""
+"""`python3 -m ephemeral lint <decree>...`: the `eph` command line ."""
 
 import argparse
+import os
 import pathlib
 import sys
 
@@ -38,6 +39,14 @@ def _lint(args):
     return 1 if failed else 0
 
 
+def _seed(args):
+    from . import seedrun
+
+    return seedrun.run(
+        args.decree, os.environ, dry_run=args.dry_run, anchors_path=args.anchors
+    )
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="eph")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -47,6 +56,16 @@ def main(argv=None):
     p.add_argument("--schema", help="schema snapshot JSON (default: the bundled one)")
     p.add_argument("--strict", action="store_true", help="warnings fail too")
     p.set_defaults(func=_lint)
+    q = sub.add_parser(
+        "seed",
+        help="in a world pod: guard, compile and apply a decree's cast and arrange",
+    )
+    q.add_argument("decree")
+    q.add_argument("--anchors", help="anchors.yaml (default: decrees/anchors.yaml)")
+    q.add_argument(
+        "--dry-run", action="store_true", help="print the SQL, apply nothing"
+    )
+    q.set_defaults(func=_seed)
     args = parser.parse_args(argv)
     return args.func(args)
 
