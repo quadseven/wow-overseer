@@ -349,6 +349,7 @@ globalThis.document = {
   querySelector: (q) => q.includes("overseer-base") ? { getAttribute: () => "/dev" } : null,
 };
 const { installWorker, registerWorker } = await import("./app/worker.js");
+const { html } = await import("./app/ui.js");
 
 const calls = [];
 const noSwOut = await registerWorker(
@@ -365,14 +366,19 @@ const rejectOut = await registerWorker(
 );
 
 globalThis.window = { isSecureContext: true, requestAnimationFrame: (fn) => fn(), addEventListener() {} };
-installWorker(globalThis.window, globalThis.document, {});
+const rootNode = { innerHTML: "", dataset: {} };
+const drawWithoutSw = (() => {
+  installWorker(globalThis.window, globalThis.document, {});
+  rootNode.innerHTML = String(html`<span>rendered</span>`);
+  return rootNode.innerHTML;
+})();
 installWorker(
   globalThis.window,
   globalThis.document,
   { serviceWorker: { register(url, opts) { calls.push([url, opts]); return Promise.resolve({}); } } }
 );
 
-console.log(JSON.stringify({ noSwOut, httpOut, rejectOut, calls }));
+console.log(JSON.stringify({ noSwOut, httpOut, rejectOut, calls, drawWithoutSw }));
 """
             (root.parent / "test_reg.js").write_text(script, encoding="utf-8")
             out = subprocess.run(
@@ -388,6 +394,7 @@ console.log(JSON.stringify({ noSwOut, httpOut, rejectOut, calls }));
         self.assertIsNone(got["noSwOut"])
         self.assertIsNone(got["httpOut"])
         self.assertIsNone(got["rejectOut"])
+        self.assertEqual(got["drawWithoutSw"], "<span>rendered</span>")
         self.assertEqual(len(got["calls"]), 1)
         self.assertEqual(got["calls"][0][0], "/dev/sw.js")
         self.assertEqual(got["calls"][0][1], {"scope": "/dev/"})

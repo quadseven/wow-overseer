@@ -5861,6 +5861,8 @@ class Handler(BaseHTTPRequestHandler):
     # manifest's URLs are relative, so each realm's copy resolves against the
     # path it was fetched under and opens that realm, not the root.
     def _sw_file(self, _query: dict) -> None:
+        """Serve the mount-scoped service worker and its precache list."""
+
         # Served at the mount with the mount's scope so every precached URL and
         # the worker's own registration stay inside this realm's prefix (#2314).
         def _render(body: bytes) -> bytes:
