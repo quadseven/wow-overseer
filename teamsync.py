@@ -40,11 +40,11 @@ from dataclasses import dataclass
 
 import raidteams
 
-# 40 raiders, 21 summoners, 10 maintenance and 10 questers (one of each race
-# and each class of the faction). The module's own gate,
+# 40 raiders, 21 summoners, 10 maintenance, 10 questers (one of each race
+# and each class of the faction) and 2 bankers. The module's own gate,
 # Overseer.Recruit.TargetSize, refuses an invite past its number, so it must
 # say the same.
-GUILD_SIZE = 81
+GUILD_SIZE = 83
 REMOVES_PER_PASS = 2
 INVITES_PER_PASS = 2
 RENAMES_PER_PASS = 6
@@ -117,14 +117,16 @@ class Action:
 def open_seats(guild: str, member_names) -> list:
     """The approved seats no member of the guild fills yet, by approved or
     current name: the recruits still to come. The raid seats first, then the
-    questers'."""
+    questers' and then the bankers'."""
     names = set(member_names)
     raid = [
         s
         for s in raidteams.seats(guild)
         if s.name not in names and (not s.was or s.was not in names)
     ]
-    return raid + [q for q in raidteams.QUESTERS.get(guild, ()) if q.name not in names]
+    questers = [q for q in raidteams.QUESTERS.get(guild, ()) if q.name not in names]
+    bankers = [b for b in raidteams.BANKERS.get(guild, ()) if b.name not in names]
+    return raid + questers + bankers
 
 
 def refusal_reason(status: str, detail, result) -> str:
@@ -221,7 +223,7 @@ def logs_in_by_itself(candidate: dict) -> bool:
 
 def max_level(seat) -> int:
     """The highest level a recruit for `seat` may have (see the constants)."""
-    if isinstance(seat, raidteams.Quester):
+    if isinstance(seat, (raidteams.Quester, raidteams.Banker)):
         return QUESTER_RECRUIT_MAX_LEVEL
     return RAID_RECRUIT_MAX_LEVEL
 
@@ -285,7 +287,10 @@ def _resets(guild: str, names: set, pending: set, reset_done) -> list:
         return []
     wanted = [
         q
-        for q in raidteams.QUESTERS.get(guild, ())
+        for q in (
+            *raidteams.QUESTERS.get(guild, ()),
+            *raidteams.BANKERS.get(guild, ()),
+        )
         if q.name in names and q.name not in reset_done and q.name not in pending
     ]
     return [_reset(q) for q in wanted[:RESETS_PER_PASS]]
@@ -302,7 +307,8 @@ def _reset(q) -> Action:
     return Action(
         "reset",
         q.name,
-        why="a quester starts at level 1 with nothing",
+        why="a %s starts at level 1 with nothing"
+        % ("banker" if isinstance(q, raidteams.Banker) else "quester"),
         command=RESET_COMMAND,
     )
 

@@ -36,6 +36,7 @@ import auction
 import bag_market
 import guildbags
 import guildgather
+import lowrung
 import bag_pressure
 import bag_upgrade
 import bank
@@ -17875,9 +17876,7 @@ class Bridge(discord.Client):
         if actions:
             seen_setup = await asyncio.to_thread(
                 _recent_guild_setup_keys, GIVE_RETRY_MINUTES)
-            action = next((a for a in actions
-                           if (a.target, a.command) not in seen_setup), None)
-            if action:
+            for action in guildbank.setup_for_arrival(actions, seen_setup):
                 await asyncio.to_thread(_insert_guild, action.target,
                                         action.command, "guildbank-setup")
                 log.info("guild bank setup: queued %s for %s%s",
@@ -20131,6 +20130,12 @@ class Bridge(discord.Client):
                 continue
             if m.name in busy and not (m.role == guildjobs.MAINTENANCE and m.eligible):
                 continue
+            # A starved low rung (lowrung.py) sends the member back to where
+            # it drops, ahead of the field its own level would choose.
+            fed = await self._fed_field(m, m.feed, surveys) if m.feed else None
+            if fed is not None:
+                out[m.name] = fed
+                continue
             skills = _guild_gathering_skills(m)
             spot = (await self._gathering_field(m, skills, surveys)
                     if skills else await self._skinning_field(m))
@@ -20142,12 +20147,25 @@ class Bridge(discord.Client):
                 out[m.name] = spot
         return out
 
-    async def _gathering_field(self, member, skills, surveys):
+    async def _fed_field(self, member, feed, surveys):
+        """The field a low-rung feed (lowrung.py) sends `member` to, or None."""
+        if feed.kind == lowrung.SKIN:
+            return await self._skinning_field(member, feed.band)
+        if feed.kind == lowrung.CLOTH:
+            return await self._cloth_field(member, feed.band)
+        skills = _guild_gathering_skills(member)
+        return await self._gathering_field(member, skills, surveys, feed.locks)
+
+    async def _gathering_field(self, member, skills, surveys, only_locks=None):
         # gatheraim reads {character: {skill: value}}; `skills` is this one
         # member's {skill: value}, so it goes in under the member's name.
         skills = {member.name: skills}
         locks = tuple(sorted({lock for name, best in gatheraim.strongest_gatherers(skills)
                               for lock in gatherband.reachable_locks(name, best)}))
+        if only_locks:
+            locks = tuple(lock for lock in locks if lock in only_locks)
+            if not locks:
+                return None
         key = (int(member.map_id), locks)
         if key not in surveys:
             surveys[key] = await asyncio.to_thread(
@@ -20183,25 +20201,27 @@ class Bridge(discord.Client):
                 zone_levels[candidate.zone_id] = danger
         return zone_levels
 
-    async def _skinning_field(self, member):
+    async def _skinning_field(self, member, band=None):
         skin = member.skill(guildjobs.SKINNING)[0]
         low, high = guildjobs.skin_band(member.level, skin)
+        if band is not None:
+            low, high = band[0], min(band[1], guildjobs.skinnable_level(skin))
         if not member.holds(guildjobs.SKINNING) or high < low:
             return None
         beasts = await asyncio.to_thread(
             _survey_job_beasts, int(member.map_id), float(member.x),
             float(member.y), low, high)
         return guildjobs.skinning_field(
-            beasts, (float(member.x), float(member.y)), member.level, skin)
+            beasts, (float(member.x), float(member.y)), member.level, skin, band)
 
-    async def _cloth_field(self, member):
+    async def _cloth_field(self, member, band=None):
         """The pack of cloth-dropping humanoids a member is sent to, or None."""
-        low, high = guildjobs.cloth_band(member.level)
+        low, high = guildjobs.cloth_band(member.level) if band is None else band
         mobs = await asyncio.to_thread(
             _survey_job_cloth, int(member.map_id), float(member.x),
             float(member.y), low, high)
         return guildjobs.cloth_field(
-            mobs, (float(member.x), float(member.y)), member.level)
+            mobs, (float(member.x), float(member.y)), member.level, band)
 
     async def _run_job_step(self, step, cap: float) -> None:
         """Write one job step's rows in order, each after the last has answered.
@@ -21911,15 +21931,30 @@ class Bridge(discord.Client):
                 log.info("town errand: %s%s passes over %s: %d deaths of the "
                          "family in the last day lie along the walk to it",
                          why, label, stop.get("place", "a vendor"), count)
+            # A COUNTER THE TOWN SLOT WOULD REFUSE IS NOT A COUNTER
+            # (wow-overseer#2619): the same death discs the slot judges every
+            # walk by, read once here, so a hub or a vendor inside one gives
+            # way instead of holding the traveller for the errand's whole
+            # ceiling while every ask is refused.
+            disc_of = globals().get("_fetch_death_discs")
+            discs = (await asyncio.to_thread(disc_of) if disc_of else [])
+
+            def walled(spot, _discs=discs, _here=here):
+                return bool(_discs) and bool(deathcells.crossing(_discs, _here, {
+                    "map_id": spot.get("map_id"), "x": spot.get("x"),
+                    "y": spot.get("y")}))
+
             chosen = townerrand.choose_aim(
                 hub, stops, standing, why, released, now, deaths=deaths,
-                hearth_reaches=leader in casts)
+                hearth_reaches=leader in casts, walled=walled)
             if chosen != hub:
                 log.info("town errand: %s%s aims at %s instead of %s (%s)",
                          why, label, chosen.get("place", "a vendor"),
                          hub.get("place", "no hub") if hub else "no hub",
                          "released unlanded earlier" if hub and
                          townerrand._was_released(hub, released, now)
+                         else "the walk to the hub crosses ground the family "
+                         "died on" if hub and walled(hub)
                          else "the hub is a long walk off")
                 hub = chosen
         if not hub:
@@ -26635,6 +26670,55 @@ class Bridge(discord.Client):
                               _farm_reads_for(state, got, gathered))
         log.info("farm: %s %s: %s", who, step.action, step.line)
         await self._farm_act(cohort, leader, state, step, got["levels"], job)
+        # GROUP UP ONLY WHEN THE STEP NEEDS AN INSTANCE (#2498). The order is
+        # ended first: ending writes the member's default job, and the queue
+        # must write last or that write would knock the member off the run.
+        if (step.action == farmjob.END and getattr(cohort, "solo", False)
+                and item and not step.renew):
+            await self._farm_group_up(cohort, item, got)
+
+    async def _farm_group_up(self, cohort, item: int, got: dict) -> bool:
+        """Queue the dungeon a member's material needs; True when it did.
+
+        For a member whose `farm:<item>` order ended because nothing outdoors
+        gives the item, but a dungeon's creatures do (`farmjob.instance_door`).
+        The family is queued for that door a few runs (`farmjob.INSTANCE_RUNS`)
+        through the ordinary campaign queue, so every gate it has (level,
+        withheld doors, bags) applies and the family is one party only for
+        the run. Writes nothing for a queue already pending or a door the
+        family is refused.
+        """
+        if not item or got["spawns"] or got["creatures"]:
+            return False
+        drops = await asyncio.to_thread(_farm_item_drops, item)
+        keyword = farmjob.instance_door(item, got["spawns"], got["creatures"],
+                                        drops, council.front_door)
+        if not keyword:
+            return False
+        family = getattr(cohort, "family", "") or ""
+        if await asyncio.to_thread(_queue_owns_job, family):
+            log.info("farm: family %s already has a campaign queue, so %s is "
+                     "not queued for item %d", family, keyword, item)
+            return False
+        fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
+        fam = fams.get(family)
+        if fam is None:
+            log.info("farm: family %s is not on the roster, so %s is not queued",
+                     family, keyword)
+            return False
+        level_rows = await asyncio.to_thread(_queue_level_rows, fam)
+        plan = campaignqueue.plan(
+            family, (campaignqueue.Entry(keyword, farmjob.INSTANCE_RUNS),),
+            level_rows)
+        if plan.refusal:
+            log.info("farm: item %d needs %s but it is not queued: %s", item,
+                     keyword, plan.refusal)
+            return False
+        await asyncio.to_thread(_write_queue, plan, FARM_SOURCE)
+        log.info("farm: item %d is only dropped inside %s, so family %s is "
+                 "queued for it: %s", item, keyword, family, plan.says)
+        await self._campaign_queue_once()
+        return True
 
     async def _farm_individual(self, cohort) -> bool:
         """Farm per member for an individual family; True when it did (#2498).
@@ -30610,6 +30694,11 @@ def _fetch_guild_run_facts(bounds) -> dict:
             (guildrun.QUEUE_BENCH_MINUTES,),
         )
         benched = guildrun.benched(list(cur.fetchall()))
+        queued = guildrun.read_queued_seats(cur)
+        if queued:
+            log.info("guild runs: %d seat(s) sit in a battleground queue and are not "
+                     "proposed: %s", len(queued), ", ".join(sorted(queued)))
+        benched = benched | queued
         cur.execute(
             "SELECT members, outcome, why, bosses_done "
             "FROM overseer_guild_run WHERE state = 'ended' "
@@ -32099,6 +32188,12 @@ def _itemplan_vendor_sales(names, family, rows, free_slots, gear_rows=(),
             log.info("%s", line)
         for line in itemplan_vendor.release_lines(sales):
             log.info("%s", line)
+        if itemplan_vendor.release_enabled():
+            for line in itemplan_vendor.release_reason_lines(
+                names, free_slots, sellable_counts, report.plan, pairs,
+                sales, keep_names=keep_names,
+            ):
+                log.info("%s", line)
         return sales
     except Exception:
         log.exception(
@@ -34767,7 +34862,61 @@ def _with_purses_and_reserves(members, masters) -> list:
             order = purse.order(m.name, m.level, m.money, d.copper, d.count,
                                 m.skill(purse.RIDING_SKILL)[1], restsupply.empty(m))
         out.append(dataclasses.replace(m, reserved=reserved.get(m.guild), purse=order))
-    return out
+    return _with_low_rung_feeds(out, masters)
+
+
+def _low_rung_room(guild, master, crafter_names) -> "lowrung.Room":
+    """The free stacks a low-rung feed's loot can land in for `guild`: the
+    vault's free slots on every purchased tab, its bankers' bags and banks and
+    the short crafters' own; blocking. An unreadable part counts for none."""
+    try:
+        setup = _fetch_guild_bank_setup([master])
+        _depositors, tabs = bank._guild_tabs(setup)
+        vault = sum(tabs.values())
+        bankers = sorted(raidteams.banker_names(guild))
+        who = sorted(set(bankers) | set(crafter_names))
+        members = {m.name: m for m in bank.members_from_rows(
+            _fetch_bank_items(who), who)} if who else {}
+        return lowrung.room_of(
+            vault,
+            [members[n] for n in bankers if n in members],
+            [members[n] for n in crafter_names if n in members])
+    except (pymysql.err.MySQLError, OSError):
+        log.exception("low rung feed: %s's room is unreadable; it is fed nothing", guild)
+        return lowrung.Room()
+
+
+def _with_low_rung_feeds(members, masters) -> list:
+    """The members with the low rung each is sent back to farm laid on
+    (lowrung.py); blocking.
+
+    A guild whose bank forecast names a starved cloth, leather or stone sends
+    the members that out-levelled it. Said once per change, with the crafters
+    short of it and the source chosen, so a starved ladder shows in the log.
+    """
+    starved, crafters, by_guild = {}, {}, {}
+    for guild, master in (masters or {}).items():
+        if not master:
+            continue
+        forecast = _bank_forecast([str(master)])
+        starved[guild] = dict(forecast.starved)
+        names = set()
+        for entry, who in forecast.short.items():
+            crafters[entry] = tuple(sorted(set(crafters.get(entry, ())) | set(who)))
+            names |= set(who)
+        by_guild[guild] = (str(master), sorted(names))
+    # A FEED IS SENT ONLY WHERE ITS LOOT CAN LAND: the vault, a banker or the
+    # crafters must have room (lowrung.Room). A read that fails is no room.
+    room = {}
+    for guild, (master, names) in by_guild.items():
+        if starved.get(guild):
+            room[guild] = _low_rung_room(guild, master, names)
+    focus = guildjobs.focus_from_env()
+    feeds = lowrung.plan(members, starved, crafters, focus, room)
+    _log_changed("low rung feed",
+                 [lowrung.line(f) for f in feeds.values()]
+                 + lowrung.unfed(members, starved, crafters, focus, room))
+    return [dataclasses.replace(m, feed=feeds.get(m.name)) for m in members]
 
 
 def _fetch_trainees(names: list) -> list:
@@ -38867,6 +39016,28 @@ def _farm_item_spawns(item: int) -> list:
             for row in cur.fetchall()]
 
 
+# WHERE A MATERIAL DROPS AT ALL (#2498): the best creature drop chance per map,
+# any rank, so a dungeon boss counts. Read only for a member's item order that
+# has no outdoor source on hand; `farmjob.instance_door` decides from it.
+_FARM_ITEM_DROP_MAPS_SQL = (
+    "SELECT c.map AS map_id, MAX(lt.Chance) AS chance "
+    "FROM acore_world.creature_loot_template lt "
+    "JOIN acore_world.creature_template ct ON ct.lootid = lt.Entry "
+    "JOIN acore_world.creature c ON c.id = ct.entry "
+    "WHERE lt.Item = %s AND lt.Reference = 0 AND lt.Chance >= %s "
+    "GROUP BY c.map"
+)
+
+
+def _farm_item_drops(item: int) -> list:
+    """[(map id, best drop chance)] over every creature that drops `item`."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_FARM_ITEM_DROP_MAPS_SQL,
+                    (int(item), farmjob.INSTANCE_MIN_CHANCE))
+        return [(int(row["map_id"]), float(row["chance"] or 0.0))
+                for row in cur.fetchall()]
+
+
 def _farm_item_creatures(item: int, leader_at, levels) -> list:
     """The creature spawns on the leader's map that drop `item`, as
     farmjob.Creature rows, inside the level band `levels` allows.
@@ -39600,7 +39771,7 @@ def _team_candidates(guild: str) -> list:
     race one of `guild`'s open seats wants, each with its account's
     playerbot account type (None for an account that is not a bot's), so
     teamsync recruits only a character the realm logs in by itself."""
-    seats = [s for s in raidteams.seats(guild) if not s.was] + list(raidteams.QUESTERS.get(guild, ()))
+    seats = [s for s in raidteams.seats(guild) if not s.was] + list(raidteams.QUESTERS.get(guild, ())) + list(raidteams.BANKERS.get(guild, ()))
     wanted = {(s.class_id, teamsync.RACE_IDS[s.race]) for s in seats}
     if not wanted:
         return []
@@ -41103,14 +41274,16 @@ def _fetch_reagent_vendors(spot: dict, entries: list) -> dict:
 # wrong house.
 _AUCTIONEER_IN_REACH_SQL = (
     "SELECT ct.entry AS entry, ct.name AS name, ct.faction AS faction, "
-    "SQRT(POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2)) AS yards "
+    "SQRT(POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2) "
+    "+ POW(cr.position_z - s.pos_z, 2)) AS yards "
     "FROM overseer_snapshot s "
     "JOIN acore_world.creature cr ON cr.map = s.map_id "
     "AND ABS(cr.position_x - s.pos_x) <= %s AND ABS(cr.position_y - s.pos_y) <= %s "
+    "AND ABS(cr.position_z - s.pos_z) <= %s "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
-    "AND (ct.npcflag & %s) <> 0 "
-    "ORDER BY yards LIMIT 1"
+    "AND (ct.npcflag & %s) <> 0 AND " + towntrip.REAL_SPAWN_SQL + " "
+    "HAVING yards <= %s ORDER BY yards LIMIT 1"
 )
 
 # UNIT_NPC_FLAG_AUCTIONEER. Named here rather than written as a bare 2097152 in
@@ -41181,12 +41354,12 @@ def _fetch_auctioneer(name: str) -> dict | None:
     is the same "nothing is planned until they have arrived" discipline
     `_towntrip_once` states and the reason this pass needs no state of its own.
     """
+    reach = auction.COUNTER_REACH_YARDS
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
                 _AUCTIONEER_IN_REACH_SQL,
-                (TOWN_COUNTER_YARDS, TOWN_COUNTER_YARDS, name,
-                 NPC_FLAG_AUCTIONEER),
+                (reach, reach, reach, name, NPC_FLAG_AUCTIONEER, reach),
             )
             row = cur.fetchone()
         except pymysql.err.MySQLError as exc:
@@ -41599,8 +41772,9 @@ def _recent_auction_keys(minutes: int) -> set:
             cur.execute(
                 "SELECT target_name, command FROM overseer_command "
                 "WHERE kind = 'auction' AND source = 'auction' "
+                "AND NOT (status = 'error' AND COALESCE(detail, '') = %s) "
                 "AND created_at > NOW() - INTERVAL %s MINUTE",
-                (int(minutes),),
+                (auction.OUT_OF_REACH, int(minutes)),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146, 1265):
@@ -41996,8 +42170,10 @@ def _recent_recipe_keys(minutes: int) -> set:
             cur.execute(
                 "SELECT target_name, command FROM overseer_command "
                 "WHERE kind IN (%s, 'auction') AND source = %s "
+                "AND NOT (status = 'error' AND COALESCE(detail, '') = %s) "
                 "AND created_at > NOW() - INTERVAL %s MINUTE",
-                (recipebook.LEARN_KIND, recipebook.LEARN_SOURCE, int(minutes)),
+                (recipebook.LEARN_KIND, recipebook.LEARN_SOURCE,
+                 auction.OUT_OF_REACH, int(minutes)),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146, 1265):
