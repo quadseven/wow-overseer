@@ -510,6 +510,41 @@ class EveryGearHoldSaysWhy(unittest.TestCase):
         plan = guildjobs.plan([_member()], gear={"Aurevil": (_character(), ROWS)})
         self.assertEqual((), plan.gear_holds)
 
+    def test_guild_member_at_40_shops_for_plate_over_mail(self):
+        slots = (
+            "head",
+            "chest",
+            "legs",
+            "feet",
+            "hands",
+            "wrist",
+            "waist",
+            "shoulder",
+            "back",
+            "neck",
+            "finger1",
+            "finger2",
+            "trinket1",
+            "trinket2",
+            "ranged",
+        )
+        mail_full = {
+            s: {"item_level": 40, "item_class": 4, "item_subclass": 3} for s in slots
+        }
+        mail_full["mainhand"] = {"item_level": 40, "item_class": 2, "item_subclass": 7}
+        char = {
+            "class": "warrior",
+            "level": 40,
+            "purse": 50000,
+            "equipped": mail_full,
+            "skills": {"weapons": {7}},
+        }
+        plate_rows = [_row(501, 5, sub=4, ilvl=40, price=500)]
+        step, why = guildjobs.gear_step(_member(level=40), char, plate_rows, 600.0)
+        self.assertEqual("", why)
+        self.assertEqual("gear", step.action)
+        self.assertIn("entry:501", step.rows[-1].command)
+
 
 if __name__ == "__main__":
     unittest.main()

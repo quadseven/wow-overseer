@@ -2498,6 +2498,7 @@ def _gear_wanted(character) -> bool:
         gearup.gear_short(character)
         or gearup.stale_gear(character)
         or gearup.shield_short(character)
+        or gearup.lighter_armor(character)
     )
 
 

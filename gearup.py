@@ -7,6 +7,8 @@ discipline as the other town purchases.
 
 from dataclasses import dataclass
 
+import bag_pressure
+
 
 SLOT_TYPES = {
     1: ("head",),
@@ -129,6 +131,9 @@ SHIELD_CLASSES = {1, 2, 7}
 # no stats, so they neither count as empty nor get bought.
 GEAR_SLOT_COUNT = 17
 COSMETIC_SLOTS = {3, 18}
+ARMOR_SLOTS = frozenset(
+    {"head", "shoulder", "chest", "waist", "legs", "feet", "wrist", "hands"}
+)
 
 # CLASSIC ARMOR RULES, by item_template.subclass for class 4 (armor):
 # 0 miscellaneous (rings, necks, trinkets, held items), 1 cloth, 2 leather,
@@ -375,7 +380,9 @@ def vendor_trip(
     short = {
         name: c
         for name, c in (characters or {}).items()
-        if gear_short(c) or shield_short(c) or (replace_stale and stale_gear(c))
+        if gear_short(c)
+        or shield_short(c)
+        or (replace_stale and (stale_gear(c) or lighter_armor(c)))
     }
     if not short:
         return VendorTrip(
@@ -392,7 +399,8 @@ def vendor_trip(
         )
         if buys:
             weapons = sum(1 for b in buys if b.slot == "mainhand")
-            key = (-weapons, -len(buys), yards, vendor)
+            native = sum(1 for b in buys if _is_native_armor_buy(short[b.character], b))
+            key = (-weapons, -native, -len(buys), yards, vendor)
             ranked.append((key, vendor, name, yards, buys))
     if not ranked:
         return VendorTrip(
@@ -608,7 +616,28 @@ def _below_quality_floor(slot, worn, item):
     return int(worn_quality) <= 1 and int(offer_quality) >= 2
 
 
-def _worn_is_better(slot, equipped, item, level, tank=False, equipped_types=None):
+def _armor_tier_for_item(item, class_id, level):
+    item_class = int(_get(item, "class", "item_class", default=0) or 0)
+    sub = int(_get(item, "subclass", "item_subclass", default=0) or 0)
+    inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
+    return bag_pressure.armor_material_tier(item_class, sub, inv, class_id, level)
+
+
+def _is_native_armor_buy(character, buy):
+    if (
+        buy.slot not in ARMOR_SLOTS
+        or int(buy.item_class or 0) != bag_pressure.ITEM_CLASS_ARMOR
+    ):
+        return False
+    cls_id = _class_id(character)
+    level = int(_get(character, "level", default=0) or 0)
+    pref = bag_pressure.preferred_armor_subclass(cls_id, level)
+    return pref > 0 and int(buy.item_subclass or 0) == pref
+
+
+def _worn_is_better(
+    slot, equipped, item, level, tank=False, equipped_types=None, class_id=0
+):
     """Keep worn gear unless the auction item is meaningfully better."""
     if slot not in equipped:
         return False
@@ -619,10 +648,15 @@ def _worn_is_better(slot, equipped, item, level, tank=False, equipped_types=None
     worn_rank = _armor_rank(worn)
     if not worn_rank:
         worn_rank = _armor_rank((equipped_types or {}).get(slot))
-    if tank and worn_rank > _armor_rank(item) > 0:
+    item_rank = _armor_rank(item)
+    if (tank or slot in ARMOR_SLOTS) and worn_rank > item_rank > 0:
         return True
     item_level = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
     worn_level = int(worn_level)
+    pref = bag_pressure.preferred_armor_subclass(class_id, level) if class_id else 0
+    if slot in ARMOR_SLOTS and pref and 0 < worn_rank < item_rank <= pref:
+        if item_level >= worn_level:
+            return False
     if item_level <= worn_level:
         return True
     if _below_quality_floor(slot, worn, item):
@@ -646,7 +680,14 @@ def _dual_wields(character) -> bool:
 
 
 def _candidate_slots(
-    item, equipped, chosen, tank, level, dual_wields=True, equipped_types=None
+    item,
+    equipped,
+    chosen,
+    tank,
+    level,
+    dual_wields=True,
+    equipped_types=None,
+    class_id=0,
 ):
     inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
     item_level = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
@@ -660,7 +701,9 @@ def _candidate_slots(
             continue
         if slot == "offhand" and inv == 13 and not dual_wields:
             continue
-        if _worn_is_better(slot, equipped, item, level, tank, equipped_types):
+        if _worn_is_better(
+            slot, equipped, item, level, tank, equipped_types, class_id=class_id
+        ):
             continue
         yield slot, item_level
 
@@ -681,6 +724,30 @@ def _can_take(item, character, tank):
     return _allowed(character, item)
 
 
+def _best_affordable_tiers(plan, listings) -> dict:
+    """slot -> highest armor tier among affordable eligible listings for `plan`."""
+    if not bag_pressure.preferred_armor_subclass(plan.class_id, plan.level):
+        return {}
+    best: dict = {}
+    for item in listings:
+        inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
+        if inv not in bag_pressure.ARMOR_MATERIAL_INVTYPES:
+            continue
+        price = int(_get(item, "buyout", default=0) or 0)
+        listing_id = int(_get(item, "id", "listing_id", "auction_id", default=0) or 0)
+        if price <= 0 or listing_id in plan.used:
+            continue
+        if not _can_take(item, plan.character, plan.tank):
+            continue
+        if not _fits_budget(price, plan.purse, plan.available, 0, False):
+            continue
+        tier = _armor_tier_for_item(item, plan.class_id, plan.level)
+        for slot in SLOT_TYPES.get(inv, ()):
+            if slot in ARMOR_SLOTS and tier > best.get(slot, 0):
+                best[slot] = tier
+    return best
+
+
 def _plan_character(name, character, listings, budget, taken=frozenset()):
     """The buys for one character, the main hand first.
 
@@ -696,7 +763,16 @@ def _plan_character(name, character, listings, budget, taken=frozenset()):
         for item in listings:
             if plan.consider(item, weapon_first=True):
                 break
+    best_tiers = _best_affordable_tiers(plan, listings)
     for item in listings:
+        inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
+        slot = SLOT_TYPES.get(inv, ("",))[0]
+        if (
+            inv in bag_pressure.ARMOR_MATERIAL_INVTYPES
+            and slot in best_tiers
+            and _armor_tier_for_item(item, plan.class_id, plan.level) < best_tiers[slot]
+        ):
+            continue
         plan.consider(item, weapon_first=False)
     return plan.buys
 
@@ -707,6 +783,7 @@ class _Plan:
     def __init__(self, name, character, budget, used):
         self.name = name
         self.character = character
+        self.class_id = _class_id(character)
         self.level = int(_get(character, "level", default=0) or 0)
         self.equipped = _get(character, "equipped", "slots", default={}) or {}
         self.equipped_types = _get(character, "equipped_types", default={}) or {}
@@ -739,6 +816,7 @@ class _Plan:
             self.level,
             _dual_wields(self.character),
             self.equipped_types,
+            class_id=self.class_id,
         ):
             if weapon_first and slot != "mainhand":
                 continue
@@ -810,6 +888,23 @@ def stale_gear(character) -> bool:
         return False
     level = int(_get(character, "level", default=0) or 0)
     return sum(levels) / len(levels) < level - STALE_GEAR_GAP
+
+
+def lighter_armor(character) -> bool:
+    """Any armor slot wearing a lighter type than `character` wears at its level."""
+    cls_id = _class_id(character)
+    level = int(_get(character, "level", default=0) or 0)
+    pref = bag_pressure.preferred_armor_subclass(cls_id, level)
+    if pref <= bag_pressure.ARMOR_CLOTH:
+        return False
+    equipped = _get(character, "equipped", "slots", default={}) or {}
+    for slot, worn in equipped.items():
+        if slot not in ARMOR_SLOTS:
+            continue
+        rank = _armor_rank(worn)
+        if 0 < rank < pref:
+            return True
+    return False
 
 
 def gear_short(character) -> bool:

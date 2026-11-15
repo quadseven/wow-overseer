@@ -451,6 +451,77 @@ class GearupTests(unittest.TestCase):
                     1, len(gearup.plan_buys({"T": character}, [item(1, id=1)]))
                 )
 
+    def test_plan_buys_prefers_heavier_class_armor_over_cheaper_cloth_or_leather(self):
+        warrior = {"class": "warrior", "level": 45, "purse": 50000, "equipped": {}}
+        listings = [
+            item(5, subclass=1, id=1, entry=101, ilvl=45, price=50),
+            item(5, subclass=2, id=2, entry=102, ilvl=45, price=60),
+            item(5, subclass=3, id=3, entry=103, ilvl=45, price=70),
+            item(5, subclass=4, id=4, entry=104, ilvl=45, price=90),
+        ]
+        buys = gearup.plan_buys({"Thokk": warrior}, listings)
+        self.assertEqual([104], [b.entry for b in buys])
+
+        shaman = {"class": "shaman", "level": 40, "purse": 50000, "equipped": {}}
+        self.assertEqual(
+            [103], [b.entry for b in gearup.plan_buys({"Thrall": shaman}, listings)]
+        )
+        shaman39 = {"class": "shaman", "level": 39, "purse": 50000, "equipped": {}}
+        self.assertEqual(
+            [102], [b.entry for b in gearup.plan_buys({"Thrall": shaman39}, listings)]
+        )
+
+    def test_auction_and_vendor_replace_lighter_armor_and_never_downgrade_tier(self):
+        warrior = {
+            "class": "warrior",
+            "level": 42,
+            "purse": 50000,
+            "equipped": {
+                "chest": {"item_level": 42, "item_class": 4, "item_subclass": 3},
+                "legs": {"item_level": 40, "item_class": 4, "item_subclass": 4},
+            },
+        }
+        plate_chest = item(5, subclass=4, id=10, entry=201, ilvl=42, price=100)
+        leather_legs = item(7, subclass=2, id=11, entry=202, ilvl=50, price=100)
+        buys = gearup.plan_buys({"Thokk": warrior}, [plate_chest, leather_legs])
+        self.assertEqual([("chest", 201)], [(b.slot, b.entry) for b in buys])
+        vbuys = gearup.plan_vendor_buys(
+            {"Thokk": warrior},
+            {"Thokk": [plate_chest, leather_legs]},
+            replace_stale=True,
+        )
+        self.assertEqual([("chest", 201)], [(b.slot, b.entry) for b in vbuys])
+
+    def test_vendor_trip_prefers_plate_merchant_over_nearer_cloth_merchant_at_40(self):
+        warrior = {"class": "warrior", "level": 42, "purse": 100000, "equipped": {}}
+        cloth = item(5, subclass=1, entry=301, ilvl=42, price=500)
+        plate = item(5, subclass=4, entry=302, ilvl=42, price=900)
+        rows = self._stock(7, 40.0, cloth) + self._stock(9, 120.0, plate)
+        trip = gearup.vendor_trip({"Thokk": warrior}, rows, map_id=0)
+        self.assertEqual(9, trip.vendor)
+
+    def test_lighter_armor_flags_level_40_transition_and_ignores_cloaks(self):
+        mail_warrior = {
+            "class": "warrior",
+            "level": 40,
+            "purse": 10000,
+            "equipped": {
+                "chest": {"item_level": 40, "item_class": 4, "item_subclass": 3},
+                "back": {"item_level": 40, "item_class": 4, "item_subclass": 1},
+            },
+        }
+        self.assertTrue(gearup.lighter_armor(mail_warrior))
+        mail_warrior39 = dict(mail_warrior, level=39)
+        self.assertFalse(gearup.lighter_armor(mail_warrior39))
+        plate_warrior = dict(
+            mail_warrior,
+            equipped={
+                "chest": {"item_level": 40, "item_class": 4, "item_subclass": 4},
+                "back": {"item_level": 40, "item_class": 4, "item_subclass": 1},
+            },
+        )
+        self.assertFalse(gearup.lighter_armor(plate_warrior))
+
 
 if __name__ == "__main__":
     unittest.main()

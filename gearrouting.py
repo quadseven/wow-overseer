@@ -150,8 +150,8 @@ def _worn_in_group(worn, group: str) -> list:
 
 def _total(values) -> tuple:
     out = (0.0, 0.0)
-    for gs, rs in values:
-        out = (out[0] + gs, out[1] + rs)
+    for v in values:
+        out = (out[0] + v[0], out[1] + v[1])
     return out
 
 

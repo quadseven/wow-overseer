@@ -717,3 +717,199 @@ class AnEquipSpellIsScoredLikeAStat(unittest.TestCase):
         sql = src[src.index("_SCORED_GEAR_SQL = (") : src.index("_WEARERS_SQL = (")]
         self.assertIn("it.spellid_{n}, it.spelltrigger_{n}", sql)
         self.assertIn("range(1, 6)", sql)
+
+
+class ArmorTierByClassAndLevel(unittest.TestCase):
+    PLATE_SKILLS = WARRIOR_SKILLS + ",293"
+    SHAMAN_HUNTER_L40_SKILLS = "413,414,415"
+    SHAMAN_HUNTER_LOW_SKILLS = "414,415"
+    SHAMAN, HUNTER = 7, 3
+
+    def test_plate_of_equal_item_level_beats_mail_for_warrior_at_40_or_above(self):
+        warrior = es.wearer_from_row(
+            member("Thokk", WARRIOR, 40, tree="Fury", skills=self.PLATE_SKILLS)
+        )
+        worn_mail = piece(
+            "Mail Chest",
+            5,
+            4,
+            3,
+            level=40,
+            req=40,
+            stats=((STR, 10), (STA, 8)),
+            armor=280,
+            slot=4,
+            holder="Thokk",
+        )
+        plate = piece(
+            "Plate Chest",
+            5,
+            4,
+            4,
+            level=40,
+            req=40,
+            stats=((STR, 10), (STA, 8)),
+            armor=420,
+            holder="Thokk",
+        )
+        self.assertTrue(
+            es.beats(es.value(plate, warrior), es.value(worn_mail, warrior))
+        )
+        self.assertEqual(
+            ["Plate Chest"],
+            [e.name for e in es.choose(warrior, [worn_mail], [plate])],
+        )
+
+    def test_level_40_armor_type_transitions_by_class(self):
+        paladin40 = es.wearer_from_row(
+            member("Uther", PALADIN, 40, tree="Retribution", skills=self.PLATE_SKILLS)
+        )
+        warrior39 = es.wearer_from_row(
+            member("Thokk", WARRIOR, 39, tree="Fury", skills=WARRIOR_SKILLS)
+        )
+        shaman39 = es.wearer_from_row(
+            member(
+                "Thrall",
+                self.SHAMAN,
+                39,
+                tree="Enhancement",
+                skills=self.SHAMAN_HUNTER_LOW_SKILLS,
+            )
+        )
+        shaman40 = es.wearer_from_row(
+            member(
+                "Thrall",
+                self.SHAMAN,
+                40,
+                tree="Enhancement",
+                skills=self.SHAMAN_HUNTER_L40_SKILLS,
+            )
+        )
+        hunter40 = es.wearer_from_row(
+            member(
+                "Rexxar",
+                self.HUNTER,
+                40,
+                skills=self.SHAMAN_HUNTER_L40_SKILLS,
+            )
+        )
+
+        # Warrior at 39 prefers mail over leather of equal item level; plate refused.
+        leather = piece(
+            "Leather Chest", 5, 4, 2, level=38, req=33, stats=((STR, 8),), slot=4
+        )
+        mail = piece("Mail Chest", 5, 4, 3, level=38, req=33, stats=((STR, 8),))
+        plate40 = piece("Plate Chest", 5, 4, 4, level=40, req=40, stats=((STR, 10),))
+        self.assertEqual(
+            ["Mail Chest"],
+            [
+                e.name
+                for e in es.choose(
+                    warrior39,
+                    [dict(leather, holder="Thokk")],
+                    [dict(mail, holder="Thokk"), dict(plate40, holder="Thokk")],
+                )
+            ],
+        )
+
+        # Paladin at 40 upgrades cloth or mail to equal-ilvl plate.
+        cloth60 = piece(
+            "Cloth Chest", 5, 4, 1, level=40, req=35, stats=((INT, 8),), slot=4
+        )
+        self.assertEqual(
+            ["Plate Chest"],
+            [
+                e.name
+                for e in es.choose(
+                    paladin40,
+                    [dict(cloth60, holder="Uther")],
+                    [dict(plate40, holder="Uther")],
+                )
+            ],
+        )
+
+        # Shaman at 39 prefers leather over cloth; at 40 upgrades leather to equal-ilvl mail.
+        cloth = piece(
+            "Cloth Belt", 6, 4, 1, level=38, req=33, stats=((INT, 6),), slot=5
+        )
+        lthr_belt = piece("Leather Belt", 6, 4, 2, level=38, req=33, stats=((AGI, 6),))
+        mail_belt = piece("Mail Belt", 6, 4, 3, level=40, req=40, stats=((AGI, 8),))
+        self.assertEqual(
+            ["Leather Belt"],
+            [
+                e.name
+                for e in es.choose(
+                    shaman39,
+                    [dict(cloth, holder="Thrall")],
+                    [
+                        dict(lthr_belt, holder="Thrall"),
+                        dict(mail_belt, holder="Thrall"),
+                    ],
+                )
+            ],
+        )
+        worn_lthr_40 = dict(
+            lthr_belt, level=40, req=40, stats=((AGI, 8),), slot=5, holder="Thrall"
+        )
+        self.assertEqual(
+            ["Mail Belt"],
+            [
+                e.name
+                for e in es.choose(
+                    shaman40, [worn_lthr_40], [dict(mail_belt, holder="Thrall")]
+                )
+            ],
+        )
+        # Hunter at 40 also upgrades leather to equal-ilvl mail.
+        self.assertEqual(
+            ["Mail Belt"],
+            [
+                e.name
+                for e in es.choose(
+                    hunter40,
+                    [dict(worn_lthr_40, holder="Rexxar")],
+                    [dict(mail_belt, holder="Rexxar")],
+                )
+            ],
+        )
+
+    def test_lighter_armor_never_replaces_heavier_class_armor(self):
+        warrior = es.wearer_from_row(
+            member("Thokk", WARRIOR, 45, tree="Fury", skills=self.PLATE_SKILLS)
+        )
+        worn_plate = piece(
+            "Plate Chest",
+            5,
+            4,
+            4,
+            level=45,
+            req=40,
+            stats=((STR, 8),),
+            armor=450,
+            slot=4,
+            holder="Thokk",
+        )
+        leather = piece(
+            "Leather Chest",
+            5,
+            4,
+            2,
+            level=45,
+            req=40,
+            stats=((AGI, 14), (STA, 10)),
+            armor=160,
+            holder="Thokk",
+        )
+        self.assertEqual(es.choose(warrior, [worn_plate], [leather]), ())
+
+    def test_cloak_remains_score_compared_without_armor_tier_bias(self):
+        warrior = es.wearer_from_row(
+            member("Thokk", WARRIOR, 45, tree="Fury", skills=self.PLATE_SKILLS)
+        )
+        worn_cloak = piece(
+            "Cloak A", 16, 4, 1, level=40, stats=((STR, 10),), slot=14, holder="Thokk"
+        )
+        other_cloak = piece(
+            "Cloak B", 16, 4, 1, level=45, stats=((STR, 10),), armor=15, holder="Thokk"
+        )
+        self.assertEqual(es.choose(warrior, [worn_cloak], [other_cloak]), ())

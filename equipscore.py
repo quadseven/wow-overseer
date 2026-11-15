@@ -296,22 +296,42 @@ def role_score(stats: dict, role: str) -> float:
     return total
 
 
-def value(row: dict, wearer: Wearer, key: str = "", book=None) -> tuple:
-    """(gear score, role score) of one piece for this member, in hand `key`."""
+def armor_tier(row: dict | None, wearer: Wearer) -> int:
+    """Material tier (1..4) for body armor slots, else 0 (cloaks, jewelry, weapons)."""
     if row is None:
-        return (0.0, 0.0)
+        return 0
+    return bag_pressure.armor_material_tier(
+        _int(row.get("item_class")),
+        _int(row.get("item_subclass")),
+        _int(row.get("inventory_type")),
+        wearer.class_id,
+        wearer.level,
+    )
+
+
+def value(row: dict, wearer: Wearer, key: str = "", book=None) -> tuple:
+    """(gear score, role score, armor tier) of one piece for this member, in hand `key`."""
+    if row is None:
+        return (0.0, 0.0, 0)
     stats = stats_of(row, book)
     gs = gearscore.score(stats, wearer.spec, wearer.level, key) if wearer.spec else 0.0
-    return (gs, role_score(stats, wearer.role))
+    return (gs, role_score(stats, wearer.role), armor_tier(row, wearer))
 
 
 def _add(a: tuple, b: tuple) -> tuple:
-    return (a[0] + b[0], a[1] + b[1])
+    return (a[0] + b[0], a[1] + b[1], 0)
+
+
+def _tier(v: tuple) -> int:
+    return int(v[2]) if len(v) > 2 else 0
 
 
 def beats(new: tuple, old: tuple) -> bool:
-    """Does `new` beat `old` by MIN_GAIN: by gear score, or by the role score
-    when the spec scores neither."""
+    """Does `new` beat `old`: by heavier class armor tier first, then gear score,
+    or by the role score when the spec scores neither."""
+    new_tier, old_tier = _tier(new), _tier(old)
+    if new_tier > 0 and old_tier > 0 and new_tier != old_tier:
+        return new_tier > old_tier
     if _spec_decides(new, old):
         return new[0] - old[0] > EPSILON and new[0] > old[0] * (1.0 + MIN_GAIN)
     return new[1] - old[1] > EPSILON and new[1] > old[1] * (1.0 + MIN_GAIN)
@@ -322,7 +342,12 @@ def _spec_decides(new: tuple, old: tuple) -> bool:
 
 
 def _rank(v: tuple, row: dict | None) -> tuple:
-    return (round(v[0], 6), round(v[1], 6), _int((row or {}).get("item_level")))
+    return (
+        _tier(v),
+        round(v[0], 6),
+        round(v[1], 6),
+        _int((row or {}).get("item_level")),
+    )
 
 
 # --- can it be put on now ----------------------------------------------------
@@ -473,6 +498,13 @@ def _equip(row: dict, wearer: Wearer, slot: str, worn_level: int, reason: str):
 
 
 def _said(new: tuple, old: tuple, wearer: Wearer) -> str:
+    new_tier, old_tier = _tier(new), _tier(old)
+    if new_tier > old_tier > 0:
+        return "armor tier %d over %d for %s" % (
+            new_tier,
+            old_tier,
+            wearer.spec or "unknown",
+        )
     if _spec_decides(new, old):
         return "gear score %.1f over %.1f for %s" % (new[0], old[0], wearer.spec)
     return "%s role score %.1f over %.1f (the %s spec scores neither)" % (
