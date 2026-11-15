@@ -129,9 +129,9 @@ ENV_SWITCH = "PVP_FOR_UPGRADES"
 LEVEL_CAP = 60
 # LEVELLING COMES BEFORE PVP. A battleground queue that does not pop held a
 # member under this level for hours, out of every dungeon and quest, while its
-# raid seat stood still (7 of 42 seats below 50 ran no dungeon in a day). Below
+# raid seat stood still (7 of 42 seats below 60 ran no dungeon in a day). Below
 # it a member neither seeks a PvP upgrade nor is drafted as a cohort filler.
-LEVELLING_FIRST_LEVEL = 50
+LEVELLING_FIRST_LEVEL = LEVEL_CAP
 # Below the cap, a PvP upgrade must add this share of the worn piece's score.
 STRONG_BELOW_CAP = 0.3
 # The PvP cooldown: a queue row this fresh is not asked again (guildjobs).

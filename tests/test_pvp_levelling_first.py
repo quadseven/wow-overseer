@@ -9,27 +9,27 @@ from test_pvp_cohort import ALLIANCE, filler, run, wanter
 
 
 class LevellingFirst(unittest.TestCase):
-    def test_the_floor_is_fifty(self):
-        self.assertEqual(pvpgear.LEVELLING_FIRST_LEVEL, 50)
+    def test_the_floor_is_the_level_cap(self):
+        self.assertEqual(pvpgear.LEVELLING_FIRST_LEVEL, 60)
 
     def test_a_member_under_the_floor_has_no_pvp_aim(self):
-        aims = pvpgear.plan_aims([wanter("Low", level=49)])
+        aims = pvpgear.plan_aims([wanter("Low", level=59)])
         self.assertEqual(aims, {})
 
     def test_a_member_at_the_floor_still_wants_an_upgrade(self):
-        aims = pvpgear.plan_aims([wanter("Even", level=50)])
+        aims = pvpgear.plan_aims([wanter("Even", level=60)])
         self.assertIn("Even", aims)
 
     def test_a_member_under_the_floor_is_not_drafted_as_a_filler(self):
-        seekers = [wanter("W%02d" % i, level=50) for i in range(3)]
-        seekers += [filler("F%02d" % i, level=45) for i in range(4)]
+        seekers = [wanter("W%02d" % i, level=60) for i in range(3)]
+        seekers += [filler("F%02d" % i, level=55) for i in range(4)]
         _aims, _moves, cohorts = run(seekers, minimum=5)
         for c in cohorts:
             self.assertEqual(c.fillers, ())
 
     def test_a_filler_at_the_floor_is_still_drafted(self):
-        seekers = [wanter("W%02d" % i, level=50) for i in range(3)]
-        seekers += [filler("F%02d" % i, level=50) for i in range(4)]
+        seekers = [wanter("W%02d" % i, level=60) for i in range(3)]
+        seekers += [filler("F%02d" % i, level=60) for i in range(4)]
         _aims, _moves, cohorts = run(seekers, minimum=5)
         self.assertEqual(sum(len(c.fillers) for c in cohorts), 2)
 
