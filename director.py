@@ -217,6 +217,7 @@ R_UNRESOLVED = "instance_unresolved"
 R_NO_TARGET = "no_target"
 R_RATE = "rate_limited"
 R_SETTLING = "settling"
+R_AT_REST = "at_rest"
 
 REFUSALS = {
     R_WATCHER_OFFLINE: "the Watcher is not in the world (its client is not logged in)",
@@ -231,6 +232,7 @@ REFUSALS = {
     R_NO_TARGET: "nothing to watch matches that",
     R_RATE: "moves are rate limited",
     R_SETTLING: "the Watcher is still taking up its observer state",
+    R_AT_REST: "the order has ended and the Watcher is out of every instance",
 }
 
 
@@ -650,13 +652,14 @@ def pick_target(
 
 # ----------------------------------------------------------------- the decision --
 
-BOOT, HOLD, FOLLOW, HOP, APPEAR, REFUSE = (
+BOOT, HOLD, FOLLOW, HOP, APPEAR, REFUSE, RETREAT = (
     "boot",
     "hold",
     "follow",
     "hop",
     "appear",
     "refuse",
+    "retreat",
 )
 
 
@@ -769,6 +772,45 @@ def decide(
     return _held(moves, now, new_target) or _route(watcher, target)
 
 
+# How often the loop looks at an idle Watcher, and why it looks at all. The core
+# refuses to reset an instance copy while any player (a GM too) stands in it, and
+# keeps an empty copy loaded for as long as someone does, so an observer left in
+# a dungeon after its order ends blocks the group's next reset.
+REST_CHECK_SECONDS = 30.0
+
+
+def retreat(
+    watcher: Spot | None,
+    *,
+    now: float,
+    moves: Sequence[float] = (),
+    unbound: bool = False,
+) -> Decision:
+    """What an idle Watcher does once its order has ended.
+
+    Inside an instance: hop out (`.instance unbind all` skips the map the GM
+    stands in, so the hop comes first). Outside: drop its instance binds, once.
+    Then nothing, until a new order. A grouped Watcher is still moved out: the
+    hop is the way a stray group stops mattering, so it is not refused here.
+    """
+    if watcher is None:
+        return Decision(
+            HOLD, reason=REFUSALS[R_WATCHER_OFFLINE], code=R_WATCHER_OFFLINE
+        )
+    if _is_instance(watcher):
+        last = max(moves, default=None)
+        if last is not None and now - last < MIN_APPEAR_GAP:
+            return Decision(HOLD, reason=REFUSALS[R_RATE], code=R_RATE)
+        return Decision(
+            RETREAT, (HOP_COMMAND,), "the order ended: leaving the instance"
+        )
+    if not unbound:
+        return Decision(
+            RETREAT, (UNBIND_COMMAND,), "the order ended: dropping instance binds"
+        )
+    return Decision(HOLD, reason=REFUSALS[R_AT_REST], code=R_AT_REST)
+
+
 def commands_ok(commands: Iterable[str]) -> bool:
     return all(observer_allows(c) for c in commands)
 
@@ -819,6 +861,9 @@ class Memory:
     moves: list[float] = field(default_factory=list)
     booted_at: float | None = None
     was_present: bool = False
+    at_rest: bool = False  # the order ended and the retreat is done
+    unbound: bool = False  # the binds were dropped since the order ended
+    rest_at: float = 0.0  # when an idle Watcher was last looked at
 
     def on_presence(self, present: bool) -> None:
         """A fresh login needs the observer lines again: the state is not
@@ -833,6 +878,19 @@ class Memory:
         if changed:
             self.spec, self.target = spec, ""
         return changed
+
+    def order_active(self) -> None:
+        """A live order re-arms the retreat for when it ends."""
+        self.at_rest = False
+        self.unbound = False
+        self.rest_at = 0.0
+
+    def rest_due(self, now: float) -> bool:
+        """Is an idle Watcher worth reading the world for yet?"""
+        return not self.at_rest and now - self.rest_at >= REST_CHECK_SECONDS
+
+    def rest_checked(self, now: float) -> None:
+        self.rest_at = now
 
     def record_move(self, now: float) -> None:
         self.moves = [t for t in self.moves if now - t < APPEAR_BUDGET[1]] + [now]

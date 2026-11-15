@@ -236,7 +236,7 @@ class HowManyAtOnce(unittest.TestCase):
     def test_a_guild_starts_no_more_than_its_trainer_allowance_in_a_pass(self):
         members = [member(s) for s in SEATS]
         result = guildjobs.plan(members, focus=FOCUS_DUNGEON)
-        self.assertEqual(guildjobs.TRAIN_STEPS_PER_GUILD, len(errands(result)))
+        self.assertEqual(guildjobs.PROFESSION_STEPS_PER_GUILD, len(errands(result)))
 
     def test_the_planned_trades_are_the_assigned_pairs(self):
         members = [member(s) for s in SEATS]
@@ -286,7 +286,9 @@ class TheLogLine(unittest.TestCase):
         result = guildjobs.plan(members, focus=FOCUS_DUNGEON)
         (line,) = guildjobs.profession_lines(members, result)
         self.assertIn("Bonkers: profession plan: %d raid seat(s)" % len(SEATS), line)
-        self.assertIn("%d sent to a trainer" % guildjobs.TRAIN_STEPS_PER_GUILD, line)
+        self.assertIn(
+            "%d sent to a trainer" % guildjobs.PROFESSION_STEPS_PER_GUILD, line
+        )
 
 
 if __name__ == "__main__":

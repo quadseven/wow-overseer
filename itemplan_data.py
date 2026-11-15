@@ -493,3 +493,38 @@ __all__ = [
     "verdict_rows",
     "worn_entries",
 ]
+
+
+# Listings of one item instance that were written and applied (#2605): an item
+# still carried after two of them has been listed, expired and come back twice,
+# and may go to a vendor. The `list guid:<n> ...` command names the instance;
+# the core mails an expired listing's item back as the same instance.
+LISTING_HISTORY_SQL = (
+    "SELECT SUBSTRING_INDEX(SUBSTRING_INDEX(command, 'guid:', -1), ' ', 1) "
+    "AS item_guid, COUNT(*) AS listings FROM overseer_command "
+    "WHERE kind = 'auction' AND command LIKE 'list guid:%%' "
+    "AND status IN ('applied', 'delivered') GROUP BY item_guid"
+)
+
+
+def failed_listings(history_rows, carried_rows) -> dict:
+    """(holder, entry) -> how many listings of that carried stack were applied.
+
+    Only instances still carried count: a stack that sold is gone, and one that
+    is still here after a listing was returned by the house unsold."""
+    carried = {}
+    for r in carried_rows:
+        try:
+            carried[int(r.get("item_guid"))] = (str(r["holder"]), int(r["entry"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+    out: dict = {}
+    for h in history_rows:
+        try:
+            key = carried.get(int(h.get("item_guid")))
+            n = int(h.get("listings"))
+        except (TypeError, ValueError):
+            continue
+        if key is not None and n > 0:
+            out[key] = max(out.get(key, 0), n)
+    return out

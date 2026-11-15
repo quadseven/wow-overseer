@@ -147,6 +147,9 @@ class Extras:
     bank_free: Mapping[str, int] | None = None
     instance_soulbound: Mapping[int, bool] | None = None
     fire_gear: frozenset | None = None
+    # (holder, entry) -> applied listings of a stack still carried (#2605);
+    # None is unread, which vendors nothing.
+    failed_listings: Mapping[tuple, int] | None = None
     unread: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -235,6 +238,7 @@ def build_stacks(rows, gear_rows=(), templates=None, instance_soulbound=None) ->
                 soulbound=soulbound,
                 required_skill=_int(t.get("required_skill"), 0),
                 allowable_class=_int(t.get("allowable_class"), -1),
+                quest_needed=(bool(row["quest_item"]) if "quest_item" in row else None),
             )
         )
     return out
@@ -471,6 +475,7 @@ def shadow(
         guild_free=extras.guild_free or {},
         guild_crafters=extras.guild_crafters or (),
         fire_gear=extras.fire_gear,
+        failed_listings=extras.failed_listings or {},
     )
     plan_ = itemplan.plan(stacks, members, ctx)
     rows_by_key = {s.key: r for s, r in zip(stacks, rows, strict=True)}

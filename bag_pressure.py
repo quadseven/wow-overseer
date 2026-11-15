@@ -76,9 +76,43 @@ STACK_QUEST_NEEDED_SQL = (
     "WHERE qs.guid = ci.guid AND qs.status <> 0 AND ii.itemEntry IN ("
     "qt.RequiredItemId1, qt.RequiredItemId2, qt.RequiredItemId3, "
     "qt.RequiredItemId4, qt.RequiredItemId5, qt.RequiredItemId6, "
-    "qt.ItemDrop1, qt.ItemDrop2, qt.ItemDrop3, qt.ItemDrop4, qt.StartItem)))"
+    "qt.ItemDrop1, qt.ItemDrop2, qt.ItemDrop3, qt.ItemDrop4, qt.StartItem))"
+    # A QUEST THE HOLDER HAS NOT TAKEN YET (#2607): the item belongs to a quest
+    # it could still do, so the answer is to go and finish it, not to sell or
+    # destroy the item. Counts a quest not rewarded whose race gate lets the
+    # holder's race take it (AllowableRaces 0 is every race), at any level.
+    " OR EXISTS ("
+    "SELECT 1 FROM acore_world.quest_template qt2 "
+    "WHERE ii.itemEntry IN ("
+    "qt2.RequiredItemId1, qt2.RequiredItemId2, qt2.RequiredItemId3, "
+    "qt2.RequiredItemId4, qt2.RequiredItemId5, qt2.RequiredItemId6, "
+    "qt2.ItemDrop1, qt2.ItemDrop2, qt2.ItemDrop3, qt2.ItemDrop4, qt2.StartItem) "
+    "AND NOT EXISTS (SELECT 1 FROM character_queststatus_rewarded qr2 "
+    "WHERE qr2.guid = ci.guid AND qr2.quest = qt2.ID) "
+    "AND (qt2.AllowableRaces = 0 OR (qt2.AllowableRaces & (1 << ("
+    "(SELECT ch.race FROM characters ch WHERE ch.guid = ci.guid) - 1))) <> 0)))"
 )
 QUEST_NEEDED_SQL = "(it.class = 12 AND " + STACK_QUEST_NEEDED_SQL + ")"
+
+
+# THE DARKMOON DECK CARDS (#2607). A card is "<Ace to Eight> of <Beasts,
+# Elementals, Portals or Warlords>", a deck is "<suit> Deck", and a finished
+# deck turns in for a "Darkmoon Card:" trinket. The operator means to complete
+# the decks, so none is ever sold, listed or destroyed, whatever the plan or
+# the quest test says of it.
+_DARKMOON_RANKS = ("Ace", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight")
+_DARKMOON_SUITS = ("Beasts", "Elementals", "Portals", "Warlords")
+_DARKMOON_NAMES = frozenset(
+    {"%s of %s" % (r, s) for r in _DARKMOON_RANKS for s in _DARKMOON_SUITS}
+    | {"%s Deck" % s for s in _DARKMOON_SUITS}
+)
+KEPT_DARKMOON = "a Darkmoon deck card, kept for the deck"
+
+
+def is_darkmoon(name) -> bool:
+    """A Darkmoon card, deck or deck trinket by its name."""
+    text = str(name or "").strip()
+    return text in _DARKMOON_NAMES or text.startswith("Darkmoon Card:")
 
 
 def owner_keeps(name: str, keep_names) -> bool:
@@ -164,6 +198,8 @@ def _vendor_reading(row: dict, keep_names=()) -> tuple:
         return None, KEPT_UNREAD
     if owner_keeps(row.get("name", ""), keep_names):
         return None, KEPT_BY_OWNER
+    if is_darkmoon(row.get("name", "")):
+        return None, KEPT_DARKMOON
     try:
         item = ItemForSale(
             quality=int(row["quality"]),
@@ -322,7 +358,9 @@ def destroy_candidates(
     """
     out = []
     for row in rows:
-        if owner_keeps(row.get("name", ""), keep_names):
+        if owner_keeps(row.get("name", ""), keep_names) or is_darkmoon(
+            row.get("name", "")
+        ):
             continue
         try:
             if int(row["item_class"]) != QUEST_CLASS:

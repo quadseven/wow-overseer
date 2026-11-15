@@ -497,8 +497,9 @@ class TheRouteTable(unittest.TestCase):
     """The route of each side and continent against the fixed quest set: the
     hub, the level it is chosen at and the quests open for the member there,
     and each zeppelin or boat taken. Every big quest zone of a side is
-    chosen, and Stranglethorn, the Badlands and the Swamp of Sorrows are never
-    walked to from the Horde's north."""
+    chosen, except that Stranglethorn, the Badlands and the Swamp of Sorrows
+    are never walked to from the Horde's north and Dustwallow Marsh never from
+    the rest of the Alliance's Kalimdor."""
 
     def test_horde_on_the_eastern_kingdoms(self):
         self.assertEqual(
@@ -554,8 +555,11 @@ class TheRouteTable(unittest.TestCase):
                 ("stonetalon-a", 21, 18),
                 ("ashenvale-a", 27, 18),
                 ("desolace-a", 30, 8),
-                ("dustwallow-a", 39, 16),
-                ("feralas-a", 45, 18),
+                # Dustwallow Marsh is a pocket past the Barrens for the
+                # Alliance (guildlevel.POCKETS): never walked to from the rest
+                # of Kalimdor, where Horde guards killed Cave's Draenei 72
+                # times in a day (2026-11-15).
+                ("feralas-a", 39, 6),
                 ("azshara-a", 50, 18),
                 ("ungoro-a", 55, 12),
                 ("winterspring-a", 56, 14),
