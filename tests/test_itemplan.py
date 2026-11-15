@@ -131,6 +131,30 @@ class TradeStock(unittest.TestCase):
         self.assertEqual(d.route, SELL_VENDOR)
 
 
+class SkippedReasons(unittest.TestCase):
+    def test_a_decision_records_why_its_earlier_options_failed(self):
+        food = [
+            stack(
+                entry=100 + n,
+                name="Moist Cornbread %d" % n,
+                item_class=0,
+                subclass=5,
+                sell=25,
+                count=10 + n,
+            )
+            for n in range(5)
+        ]
+        by_key, _ = decide(food, [member()])
+        sold = [d for d in by_key.values() if d.route == SELL_VENDOR]
+        self.assertEqual(len(sold), 2)
+        for d in sold:
+            self.assertEqual(d.options[0], KEEP_CARRY)
+            self.assertEqual(len(d.skipped), 1)
+            self.assertIn("its share of food is full", d.skipped[0])
+        kept = [d for d in by_key.values() if d.route == KEEP_CARRY]
+        self.assertTrue(all(d.skipped == () for d in kept))
+
+
 class VaultAdmission(unittest.TestCase):
     """The vault takes a surplus material only when a crafter can use it.
 

@@ -395,6 +395,7 @@ class Wiring(unittest.TestCase):
             "_family_lead_since",
             "_material_requests",
             "_tool_requests",
+            "_bag_room_since",
         ):
             self.assertIn(f'"{attribute}"', text)
 
@@ -408,6 +409,7 @@ class Wiring(unittest.TestCase):
                 "lead_borrow",
                 "material_request",
                 "tool_request",
+                "bag_room",
             },
             set(kinds),
         )

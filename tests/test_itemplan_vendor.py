@@ -8,6 +8,7 @@ is the one `itemplan_shadow.shadow` builds from them.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import os
 import pathlib
 import sys
@@ -230,6 +231,68 @@ class FallbackSaleTest(unittest.TestCase):
                 % vendor.HELD_FALLBACK,
             ),
         )
+
+
+class SurplusPastAShareTest(unittest.TestCase):
+    """A stack past a capped share is surplus, not a fallback.
+
+    The plan's first choice for a fourth stack of food is `KEEP_CARRY` in a
+    group that keeps three, and it fails with "its share of food is full".
+    That is not a destination with no room: the plan has called the stack
+    surplus. It sells like any other first-choice sale. A full bank, a full
+    guild tab or a full recipient is still a fallback and stays held.
+    """
+
+    def _held(self, skipped):
+        plan_, prs, _ = fallback_fixture((itemplan.KEEP_CARRY, itemplan.SELL_VENDOR))
+        plan_.decisions = (dataclasses.replace(plan_.decisions[0], skipped=skipped),)
+        held = []
+        sales = vendor.sales_for(plan_, prs, held=held)
+        return sales, held
+
+    def test_a_stack_past_its_share_is_an_ordinary_sale(self):
+        sales, held = self._held(("KEEP_CARRY: its share of food is full",))
+        self.assertEqual(len(sales), 1)
+        self.assertEqual(held, [])
+
+    def test_a_sale_after_a_full_bank_or_tab_is_still_held(self):
+        for why in (
+            "BANK_PERSONAL: personal bank is full",
+            "GUILD_BANK: guild bank tab is full",
+            "GIVE: Bo has no room",
+            "KEEP_CARRY: carried bags are at their budget",
+        ):
+            with self.subTest(why=why):
+                sales, held = self._held((why,))
+                self.assertEqual(sales, ())
+                self.assertEqual([w for _d, w in held], [vendor.HELD_FALLBACK])
+
+    def test_a_mixed_failure_is_still_held(self):
+        sales, held = self._held(
+            (
+                "KEEP_CARRY: its share of food is full",
+                "GUILD_BANK: guild bank tab is full",
+            )
+        )
+        self.assertEqual(sales, ())
+        self.assertEqual([w for _d, w in held], [vendor.HELD_FALLBACK])
+
+    def test_a_decision_with_no_recorded_reasons_is_held_as_before(self):
+        sales, held = self._held(())
+        self.assertEqual(sales, ())
+        self.assertEqual([w for _d, w in held], [vendor.HELD_FALLBACK])
+
+    def test_a_valuable_stack_past_its_share_still_waits_for_a_release(self):
+        plan_, prs, _ = fallback_fixture(
+            (itemplan.KEEP_CARRY, itemplan.SELL_VENDOR), value=900000
+        )
+        decision = dataclasses.replace(
+            plan_.decisions[0],
+            confirm=True,
+            skipped=("KEEP_CARRY: its share of food is full",),
+        )
+        plan_.decisions = (decision,)
+        self.assertEqual(vendor.sales_for(plan_, prs), ())
 
 
 def held_fixture(*specs):

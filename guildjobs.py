@@ -140,6 +140,7 @@ import purse
 import pvpgear
 import raidroles
 import raidrun
+import raidteams
 import recipebook
 import restsupply
 import situation
@@ -2647,6 +2648,84 @@ def riding_step(m, recent):
     )
 
 
+# A FAMILY MEMBER KEEPS A FLOAT BEYOND THE FEE (ticket 2625). Read on the dev
+# realm on 2026-11-15: 9 of the 10 level 60 family members held no Riding though
+# each carried over 4 gold. A roster family member has no purchase order (purse.py
+# is laid on guild members off the roster), so this step reads the rank from its
+# level and Riding ceiling and the fee from purse.RIDING_RANKS (the trainer's own
+# rows, checked against the dev world on that day), and leaves the member this
+# much over the fee for repairs and food.
+FAMILY_RIDING_FLOAT = 10000
+
+
+def family_riding_step(m, recent):
+    """(step or None, a note) for a roster family member short of the riding
+    rank its level allows: the walk to a riding trainer that guild members make
+    (riding_step), planned for a family member only in the gap between runs.
+
+    The caller offers only members whose family is idle (familyclass.py), so no
+    dungeon, town errand or campaign holds them. Never a follower (the module
+    refuses a follower's walk), nor offline, dead or fighting; bounded to a
+    family class walk's distance (familyclass.WALK_YARDS) and asked again no
+    sooner than the riding cooldown. The member's own gold pays: the module buys
+    the rank through the core's trainer and nothing here teaches."""
+    if m.role != FAMILY or not m.eligible:
+        return None, ""
+    rank = purse.riding_due(m.level, m.skill(purse.RIDING_SKILL)[1])
+    if rank is None:
+        return None, ""
+    if int(m.money or 0) < rank.cost + FAMILY_RIDING_FLOAT:
+        return (
+            None,
+            "%s saves for %s (%s and a float of %s; it holds %s)"
+            % (
+                m.name,
+                rank.name,
+                purse.money(rank.cost),
+                purse.money(FAMILY_RIDING_FLOAT),
+                purse.money(m.money),
+            ),
+        )
+    if not m.online or not m.alive or m.in_combat or getattr(m, "follows", False):
+        return None, ""
+    if m.map_id is None or m.x is None or m.y is None:
+        return None, ""
+    if _stranded_by_no_trainer(m.name, purse.RIDING_SKILL, m.map_id, recent):
+        return (
+            None,
+            "%s waits on the map change before walking to a riding trainer" % m.name,
+        )
+    if _cooling(m, RIDING_ACTION, recent):
+        return None, ""
+    said = "%s walks to a riding trainer to buy %s for %s of its own" % (
+        m.name,
+        rank.name,
+        purse.money(rank.cost),
+    )
+    return (
+        guildcorps.Step(
+            m.name,
+            RIDING_ACTION,
+            purse.RIDING_SKILL,
+            said,
+            rows=(
+                guildcorps.Row(
+                    "cast",
+                    "walk-to-trainer skill:%d learn:%d%s"
+                    % (
+                        purse.RIDING_SKILL,
+                        rank.spell,
+                        _cap_word(familyclass.WALK_YARDS),
+                    ),
+                    str(m.map_id or 0),
+                    source_for(RIDING_ACTION, m.name),
+                ),
+            ),
+        ),
+        "",
+    )
+
+
 def _newest_buy(name, action, recent):
     """The member's newest buy row of `action` (not its walk), or None."""
     buys = [
@@ -3169,11 +3248,9 @@ def supply_step(member, vendor_rows, cap, kept=None, book=None):
     left = spendable(
         member, purse.FOOD, int(member.money) + junk + vendorsale.worth(spare)
     )
-    buys, why = restsupply.plan(replace(member, money=left), rows, 0)
+    buys, why = restsupply.plan(replace(member, money=left), rows, 0, room)
     if not buys:
         return None, why
-    if room is not None:
-        buys = buys[:room]
     # The walk names the item the chosen vendor is the nearest seller of, so
     # the module's nearest-stockist walk ends at that counter.
     nearest = {}
@@ -4666,6 +4743,7 @@ def _plan_family_class_member(
                 return
         if class_owed(m, classes, recent, now=now) is not None and note:
             class_holds[m.name] = _class_hold_reason(m.name, note)
+        _plan_family_riding(m, recent, counters, busy, per_guild, steps, notes)
         return
     gap_hold = familyclass.holds(m, step.move, recent)
     if gap_hold:
@@ -4682,6 +4760,26 @@ def _plan_family_class_member(
         notes.append(why)
         class_holds[m.name] = _class_hold_reason(m.name, why)
         _release_slots(m.name, far, None)
+        return
+    started[m.guild] = started.get(m.guild, 0) + 1
+    busy.add(m.name)
+    steps.append(step)
+
+
+def _plan_family_riding(m, recent, counters, busy, per_guild, steps, notes) -> None:
+    """Plan an idle family member the riding walk when its class step has
+    nothing for it (family_riding_step, ticket 2625), on the shared allowance."""
+    step, note = family_riding_step(m, recent)
+    if note:
+        notes.append(note)
+    if step is None:
+        return
+    started, allowance = _allowance(step, counters, per_guild)
+    why = _step_refusal(m, busy, started, allowance, step) or job_walk_held(
+        m, step, recent
+    )
+    if why:
+        notes.append(why)
         return
     started[m.guild] = started.get(m.guild, 0) + 1
     busy.add(m.name)
@@ -5131,6 +5229,82 @@ def _quest_first(
     return None, quest_note
 
 
+# A RAID SEAT BELOW THE CAP LEVELS FIRST (SEATS_LEVEL_FIRST, 2026-11-15). The
+# target is every approved seat at the cap, and a full level-matched dungeon
+# party is the fastest way there, so a seat below the cap is given no errand
+# that does not block play: no food walk while it still carries food, no sale
+# while its bags have room, no inn, riding, mount or weapon-master walk, no
+# post, trainer, profession or mail-collection walk. What blocks play stays: the
+# class quest (first, as ever), an empty ration bag, bags below the room floor,
+# a death loop's way out, a bag for loot, an upgrade that waits on room, gear,
+# and the level walk itself. With no level walk to make, the seat is left to its
+# own AI and the guild's dungeon asks. Off: SEATS_LEVEL_FIRST=off.
+SEATS_LEVEL_FIRST_ENV = "SEATS_LEVEL_FIRST"
+SEAT_NAMES = frozenset(
+    seat.name for guild in raidteams.GROUPS for seat in raidteams.seats(guild)
+)
+
+
+def levelling_first(m, environ=None) -> bool:
+    """Whether this member is an approved raid seat still below the level cap,
+    which levels before it runs any errand that does not block play."""
+    env = os.environ if environ is None else environ
+    raw = str(env.get(SEATS_LEVEL_FIRST_ENV, "") or "").strip().lower()
+    if raw in ("off", "0", "false", "no"):
+        return False
+    return m.name in SEAT_NAMES and int(m.level) < guildlevel.LEVEL_CAP
+
+
+def _bags_below_room_floor(m) -> bool:
+    """Free bag slots under guildrun.BAG_ROOM_FREE_SLOTS: the sale that blocks
+    a run, as the dungeon asks hold such a member for it. Unread bags are not."""
+    return m.free_slots is not None and int(m.free_slots) < guildrun.BAG_ROOM_FREE_SLOTS
+
+
+def _levelling_upkeep(m, offer, recent, cap, kept, quest_note, supply_note):
+    """_upkeep_first's answer for a seat levelling first: the bags sold when
+    below the room floor, then gear; the riding, mount, weapon-master and
+    food-in-the-purchase-order walks wait (levelling_first)."""
+    step = None
+    if _bags_below_room_floor(m) and m.online and m.alive and not m.in_combat:
+        if m.eligible and not _cooling(m, "sell", recent):
+            step = _sell_step(m, kept, cap)
+    if step is not None:
+        return (step, step.said, quest_note, ""), supply_note, ""
+    step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
+    if step is not None:
+        return (step, doing, "", ""), supply_note, gear_note
+    return None, supply_note, gear_note
+
+
+def _on_a_town_stop(m, recent) -> bool:
+    """A town action of this member inside TOWN_STOP_MINUTES: it is in town
+    now, so a trainer visit costs it no walk of its own."""
+    ages = _town_stop_ages(m.name, recent)
+    return bool(ages) and min(ages) <= TOWN_STOP_MINUTES
+
+
+def _trade_errands(m, levelling, ctx, supply_note, gear_note):
+    """(a found step as _member_step returns it, or None; the cap note): the
+    post, the at-ceiling rank walk and the profession errand. A seat levelling
+    first takes the rank walk and the profession errand only on a town stop it
+    already made, and posts nothing."""
+    pvp, pending, recent, cap, assigned, crafters, master, kept, crafting = ctx
+    if not levelling:
+        step = crafter_post_first(m, crafters, master, kept, recent, cap, crafting)
+        if step is not None:
+            return (step, step.said, supply_note, gear_note), ""
+    if levelling and not _on_a_town_stop(m, recent):
+        return None, ""
+    step, cap_note = _tier_cap_first(m, pvp, pending, recent, cap)
+    if step is not None:
+        return (step, step.said, supply_note, gear_note), cap_note
+    step, learn_note = _profession_first(m, assigned, pvp, pending, recent, cap)
+    if step is not None:
+        return (step, step.said, supply_note, gear_note), cap_note
+    return None, _join(cap_note, learn_note)
+
+
 def _upkeep_first(
     m,
     offer,
@@ -5145,6 +5319,7 @@ def _upkeep_first(
     book=None,
     crafters=None,
     master="",
+    levelling=False,
 ):
     """(the member's step as _member_step returns it, or None; the supply
     note; the gear note): food for a member with nothing to eat or drink, then
@@ -5167,6 +5342,8 @@ def _upkeep_first(
     )
     if step is not None:
         return (step, step.said, quest_note, ""), supply_note, ""
+    if levelling:
+        return _levelling_upkeep(m, offer, recent, cap, kept, quest_note, supply_note)
     step, riding_note = riding_step(m, recent)
     if step is not None:
         return (step, step.said, quest_note, ""), supply_note, ""
@@ -5302,7 +5479,11 @@ def _member_step(
     is asked (stood_still_step).
 
     The death loop's rung buys food first while the loop is listed, in its
-    zone or in town after the hearth (death_loop_first)."""
+    zone or in town after the hearth (death_loop_first).
+
+    A SEAT BELOW THE CAP LEVELS FIRST (levelling_first): of the rungs between
+    the class quest and the level walk, only those that block play stay."""
+    levelling = levelling_first(m)
     found = death_loop_first(
         m,
         loop,
@@ -5372,19 +5553,19 @@ def _member_step(
         classes,
         crafters,
         master,
+        levelling,
     )
     if found is not None:
         return found
-    step = crafter_post_first(m, crafters, master, kept, recent, cap, crafting)
-    if step is not None:
-        return step, step.said, supply_note, gear_note
-    step, cap_note = _tier_cap_first(m, pvp, pending, recent, cap)
-    if step is not None:
-        return step, step.said, supply_note, gear_note
-    step, learn_note = _profession_first(m, assigned, pvp, pending, recent, cap)
-    if step is not None:
-        return step, step.said, supply_note, gear_note
-    cap_note = _join(cap_note, learn_note)
+    found, cap_note = _trade_errands(
+        m,
+        levelling,
+        (pvp, pending, recent, cap, assigned, crafters, master, kept, crafting),
+        supply_note,
+        gear_note,
+    )
+    if found is not None:
+        return found
     step, doing, held = _pvp_first(
         m,
         pvp,
@@ -5400,12 +5581,22 @@ def _member_step(
         return step, doing, _join(supply_note, cap_note), gear_note
     supply_note = _join(supply_note, cap_note, doing)
     supply_note = _cohort_note(supply_note, pvp)
-    step = _collect_first(m, mail, recent, cap)
-    if step is not None:
-        return step, step.said, supply_note, gear_note
+    if not levelling:
+        step = _collect_first(m, mail, recent, cap)
+        if step is not None:
+            return step, step.said, supply_note, gear_note
     step, doing, level_note = level_step(m, leveling, recent, cap, loop, campaign)
     if step is not None or doing:
         return step, doing, supply_note, gear_note
+    if levelling:
+        # No level walk to make: the seat is left to its own AI and the
+        # guild's dungeon asks, not sent on an ordinary job's walk.
+        return (
+            None,
+            "%s levels first, with its dungeon group" % m.name,
+            _join_once(quest_note, supply_note, level_note),
+            gear_note,
+        )
     step, doing, note = _plan_member(
         m,
         trades,
