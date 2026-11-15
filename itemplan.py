@@ -439,6 +439,8 @@ class Decision:
     stuck: bool = False
     key: tuple = ()
     options: tuple = ()  # the routes considered, best first
+    # Why each option ahead of the chosen one failed, "ROUTE: why", in order.
+    skipped: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -1764,6 +1766,7 @@ def _to_decision(s: Stack, chosen_and_skipped, options: list, ctx: Context) -> D
         stuck=o.rule == "R0",
         key=s.key,
         options=tuple(x.route for x in options),
+        skipped=tuple(skipped),
     )
 
 
