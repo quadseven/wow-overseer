@@ -534,5 +534,107 @@ class AnEndedOrderThatTheLoopWritesAgain(unittest.TestCase):
         self.assertIn("_farm_order_renewed(state, written)", body)
 
 
+def _load_bridge_farm_methods(ns: dict) -> dict:
+    import ast
+
+    text = (ROOT / "bridge.py").read_text(encoding="utf-8")
+    bridge_cls = next(
+        n
+        for n in ast.parse(text).body
+        if isinstance(n, ast.ClassDef) and n.name == "Bridge"
+    )
+    want = {"_farm_once", "_operator_held"}
+    nodes = [
+        n
+        for n in bridge_cls.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in want
+    ]
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+    return ns
+
+
+class FamilyWideFarmRespectsOperatorHold(unittest.IsolatedAsyncioTestCase):
+    async def test_held_family_skips_farm_reads_and_act(self):
+        import asyncio
+        import types
+        from unittest import mock
+
+        ns = _load_bridge_farm_methods(
+            {
+                "asyncio": asyncio,
+                "individual": mock.MagicMock(families=mock.MagicMock(return_value=())),
+                "bonds": mock.MagicMock(),
+                "farmjob": farmjob,
+                "log": mock.MagicMock(),
+            }
+        )
+        cohort = types.SimpleNamespace(key="family_a", solo=False)
+        fake = types.SimpleNamespace(
+            _operator_hold_notice=farmjob.jobs and None,
+            _farm_individual=mock.AsyncMock(return_value=False),
+            _farm_job_now=mock.AsyncMock(
+                return_value=("farm:4306", ["Mizu"], "family_a")
+            ),
+            _operator_held=mock.AsyncMock(return_value={"family_a"}),
+            _end_farm=mock.AsyncMock(),
+            _farm_state_for=mock.AsyncMock(),
+        )
+        await ns["_farm_once"](fake, cohort)
+        fake._operator_held.assert_awaited_once_with({"family_a"}, "farm")
+        fake._farm_state_for.assert_not_called()
+
+    async def test_no_cohort_own_family_honors_real_operator_hold_row(self):
+        import asyncio
+        import time
+        import types
+        from unittest import mock
+        import campaignqueue
+        import operatorhold
+
+        hold_rows = [
+            {
+                "family": "grug_clan",
+                "reason": "burning steppes",
+                "source": "operator",
+                "expires_at": None,
+            }
+        ]
+        ns = _load_bridge_farm_methods(
+            {
+                "asyncio": asyncio,
+                "time": time,
+                "campaignqueue": campaignqueue,
+                "individual": mock.MagicMock(families=mock.MagicMock(return_value=())),
+                "bonds": mock.MagicMock(
+                    head_of_family=mock.MagicMock(return_value="Grug")
+                ),
+                "farmjob": farmjob,
+                "operatorhold": operatorhold,
+                "log": mock.MagicMock(),
+                "_cohort_of": mock.MagicMock(return_value="grug_clan"),
+                "_fetch_operator_holds": mock.MagicMock(return_value=hold_rows),
+                "_family_leader": mock.MagicMock(return_value="Grug"),
+                "_farm_reads": mock.MagicMock(
+                    return_value={"name": "Silk Cloth", "levels": {"Grug": 60}}
+                ),
+                "_farm_reads_for": mock.MagicMock(),
+            }
+        )
+        fake = types.SimpleNamespace(
+            _operator_hold_notice=operatorhold.Notice(),
+            _farm_individual=mock.AsyncMock(return_value=False),
+            _farm_job_now=mock.AsyncMock(
+                return_value=("farm:4306", ["Grug"], "this family")
+            ),
+            _end_farm=mock.AsyncMock(),
+            _farm_state_for=mock.AsyncMock(),
+            _farm_act=mock.AsyncMock(),
+        )
+        fake._operator_held = types.MethodType(ns["_operator_held"], fake)
+        await ns["_farm_once"](fake, None)
+        fake._farm_state_for.assert_not_called()
+        fake._farm_act.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
