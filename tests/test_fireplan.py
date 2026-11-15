@@ -29,6 +29,7 @@ WILDFIRE_CAPE = 12905  # 20 fire resistance, Blackrock Spire
 EMBERPLATE_ARMGUARDS = 11767  # 10, Blackrock Depths, the warrior set's wrist
 CINDERHIDE_ARMSPLINTS = 11764  # 10, Blackrock Depths, the druid set's wrist
 BACK, WRIST = 14, 8
+ONYXIA_SCALE_CLOAK = 15138
 
 
 def raider(name, role, class_id, worn=(), **over):
@@ -81,6 +82,24 @@ class TheSetsAreRead(unittest.TestCase):
         shaman = {p.entry for p in fireplan.slot_pieces(fireplan.SHAMAN)}
         plate = {i for i, r in by_id.items() if r["item_subclass"] == fireplan.PLATE}
         self.assertFalse(shaman & plate)
+
+    def test_the_onyxia_scale_cloak_is_not_a_molten_core_fire_plan_piece(self):
+        # The realm has no source for this cloak's pattern, and it belongs to
+        # Blackwing Lair rather than the Molten Core readiness plan.
+        plan = fireplan.plan(
+            "Sample",
+            fireplan.HEALER,
+            fireplan.PRIEST,
+            ((1, 15), (8, 10), (4, 3), (6, 1), (12, 15), (13, 15)),
+            level=55,
+        )
+        self.assertEqual(plan.worn, 59)
+        self.assertNotIn(
+            ONYXIA_SCALE_CLOAK,
+            fireplan.planned_entries(fireplan.HEALER, fireplan.PRIEST),
+        )
+        self.assertIsNotNone(plan.next)
+        self.assertNotEqual(plan.next.piece.entry, ONYXIA_SCALE_CLOAK, plan.line)
 
 
 class EverySeatHasAPlan(unittest.TestCase):

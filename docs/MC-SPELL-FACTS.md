@@ -1,5 +1,12 @@
 # Molten Core capability facts
 
+## Supply exclusion
+
+Onyxia Scale Cloak is unobtainable on this realm (craft spell 19093 has no
+trainer, vendor, loot or quest source in the 2026-11-13 world-database read); it
+is not needed for Molten Core and only applies to Nefarian's Shadow Flame in
+Blackwing Lair.
+
 `data/mc-spells.json` records the first trainer ranks used by `mcencounters.py`
 and the dispel types of its seven cited boss spells. These are learn-level
 requirements, not a claim that a member has purchased or currently can cast

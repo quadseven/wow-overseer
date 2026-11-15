@@ -155,6 +155,81 @@ class SkippedReasons(unittest.TestCase):
         self.assertTrue(all(d.skipped == () for d in kept))
 
 
+class VaultAdmission(unittest.TestCase):
+    """The vault takes a surplus material only when a crafter can use it.
+
+    Measured on the dev realm: both guild vaults sat at 98 of 98 with about
+    three quarters of the slots holding materials, recipes and gems that no
+    crafter in the guild could ever use, so the plan's first choice for the
+    next surplus stack was always a full tab and its sale was held for good.
+    """
+
+    VAULT = {("Fam", itemplan.GUILD_TAB_MATERIALS): 5}
+
+    def test_a_material_no_crafter_uses_goes_to_the_vendor_not_the_vault(self):
+        # Flask of Mojo: a trade good no recipe in the tables eats and no
+        # trade in guildshare.FEEDS names.
+        mojo = stack(
+            entry=8956,
+            name="Flask of Mojo",
+            item_class=7,
+            subclass=11,
+            sell=12,
+            count=20,
+        )
+        d = one([mojo], [member(cls=PALADIN)], mojo, Context(guild_free=self.VAULT))
+        self.assertEqual(d.route, SELL_VENDOR)
+        self.assertNotIn(GUILD_BANK, d.options)
+
+    def test_a_material_a_crafter_could_use_may_still_take_a_vault_slot(self):
+        # Surplus Silk Cloth with only a guildmate tailor in reach: the gift
+        # comes first, and the vault stays a choice behind it.
+        cloth = stack(
+            holder="Bo",
+            entry=4306,
+            name="Silk Cloth",
+            item_class=7,
+            subclass=5,
+            sell=60,
+            count=20,
+        )
+        ctx = Context(guild_free=self.VAULT, guild_crafters=(("Cy", "tailoring", 150),))
+        d = one([cloth], [member("Bo", cls=DRUID)], cloth, ctx)
+        self.assertEqual((d.route, d.target), (GIVE, "Cy"))
+        self.assertIn(GUILD_BANK, d.options)
+
+    def test_a_trade_worked_in_the_family_keeps_the_vault_option(self):
+        # A third stack of dye past a working tailor's need: the dye feeds a
+        # recipe the tailor casts, so the vault is a sensible place for it.
+        dye = [
+            stack(
+                entry=6260,
+                name="Blue Dye",
+                item_class=7,
+                subclass=11,
+                sell=12,
+                count=20,
+            )
+            for _ in range(3)
+        ]
+        tailor = member(skills=[(TAILORING, 145, 225)])
+        by_key, _ = decide(dye, [tailor], Context(guild_free=self.VAULT))
+        self.assertIn(GUILD_BANK, {d.route for d in by_key.values()})
+
+    def test_a_gem_nobody_cuts_does_not_take_a_vault_slot(self):
+        gem = stack(
+            entry=1705,
+            name="Lesser Moonstone",
+            item_class=itemplan.C_GEM,
+            subclass=7,
+            quality=2,
+            sell=600,
+            count=1,
+        )
+        d = one([gem], [member(cls=PALADIN)], gem, Context(guild_free=self.VAULT))
+        self.assertNotIn(GUILD_BANK, d.options)
+
+
 class Capacity(unittest.TestCase):
     def test_full_bag_evicts_lowest_value_per_slot_first(self):
         thread = stack(

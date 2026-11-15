@@ -1066,6 +1066,29 @@ def _bank_if_worth(s: Stack, rule: str, goal=SURPLUS) -> list:
     return []
 
 
+def _crafter_can_use(w: _World, s: Stack) -> bool:
+    """Could a crafter in the family or the guild ever use this material?
+
+    The vault is for stock a crafter will eat. A trade good or gem that no
+    member's recipes use and that feeds no trade anyone works only fills a
+    tab (measured on the dev realm: both vaults at 98 of 98, about three
+    quarters of it stock no crafter could use), so it goes on to the market,
+    the bank when it is worth one, and the vendor. Other kinds of item are
+    not judged here and keep the old route.
+    """
+    if s.item_class == C_GEM:
+        trades: tuple = ("jewelcrafting",)
+    elif s.item_class == C_TRADE:
+        trades = guildshare.FEEDS.get(s.subclass, ())
+    else:
+        return True
+    if any(s.entry in w.needs[m.name] for m in w.members.values()):
+        return True
+    if any(m.skill(t) > 0 for m in w.members.values() for t in trades):
+        return True
+    return any(trade in trades for _name, trade, _skill in w.ctx.guild_crafters)
+
+
 def _surplus_material(w: _World, s: Stack, me: Member) -> list:
     out = []
     if s.tradable and w.worker_of(s.holder, s):
@@ -1087,16 +1110,17 @@ def _surplus_material(w: _World, s: Stack, me: Member) -> list:
             )
         )
     if s.tradable:
-        out.append(
-            _opt(
-                GUILD_BANK,
-                SURPLUS,
-                "surplus material for the Materials tab",
-                "R10",
-                target="Materials",
-                tab=GUILD_TAB_MATERIALS,
+        if _crafter_can_use(w, s):
+            out.append(
+                _opt(
+                    GUILD_BANK,
+                    SURPLUS,
+                    "surplus material for the Materials tab",
+                    "R10",
+                    target="Materials",
+                    tab=GUILD_TAB_MATERIALS,
+                )
             )
-        )
         out += _market_options(w, s, "R11")
     out += _bank_if_worth(s, "R10")
     out += _vendor_options(s, "R10", "surplus past every trade's need")

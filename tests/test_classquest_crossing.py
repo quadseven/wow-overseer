@@ -17,8 +17,10 @@ import unittest
 
 import classquest
 import guildjobs
+import guildlevel
 import pvpgear
 from test_classquest import EASTERN, KALIMDOR, UNDEAD, book, class_plan, who
+from test_guildlevel import world as level_world
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
@@ -26,6 +28,10 @@ BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 OFF = "crossing is off (Overseer.Cross.Enable)"
 NO_ROUTE = (
     "no transport the module knows sails from this map to that map for this faction"
+)
+HOSTILE_BERTH = (
+    "the berth on map 1 stands in hostile ground, up to level 46, and a destination "
+    "the party cannot survive is not a destination however correct its coordinates are"
 )
 
 
@@ -238,6 +244,29 @@ class TheWalls(unittest.TestCase):
         for why in ("the character is in combat", "the character is dead"):
             row = crossing_row("Bigzug", 20, "error", reason=why, retry=True)
             self.assertEqual(guildjobs.class_walls("Bigzug", (row,)), {})
+
+    def test_a_hostile_berth_refusal_is_a_crossing_wall(self):
+        self.assertTrue(classquest.is_cross_wall(HOSTILE_BERTH))
+        row = crossing_row(
+            "Drogg", 20, "error", dest=EASTERN, reason=HOSTILE_BERTH, retry=False
+        )
+        self.assertEqual(
+            guildjobs.class_walls("Drogg", (row,)), {EASTERN: HOSTILE_BERTH}
+        )
+
+    def test_a_hostile_berth_wall_lets_an_outgrown_member_walk_to_level(self):
+        row = crossing_row(
+            "Bigzug", 20, "error", dest=KALIMDOR, reason=HOSTILE_BERTH, retry=False
+        )
+        result = class_plan(
+            [eastern(level=18, zone_id=85)], recent=(row,), leveling=level_world()
+        )
+        self.assertEqual(cross_steps(result), [])
+        self.assertEqual(
+            [s.action for s in result.steps if s.holder == "Bigzug"],
+            [guildlevel.ACTION],
+        )
+        self.assertEqual(guildjobs.class_held(result.lines), set())
 
     def test_a_walk_row_is_no_crossing_row(self):
         walk = guildjobs.recent_from_rows(

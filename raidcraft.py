@@ -741,7 +741,8 @@ UNOBTAINABLE_RECIPES = {
     19093: (
         "Onyxia Scale Cloak",
         "craft spell 19093 has no trainer, vendor, loot or quest source in the "
-        "2026-11-13 realm database read",
+        "2026-11-13 realm database read; not needed for Molten Core, only "
+        "relevant to Blackwing Lair",
     ),
 }
 
