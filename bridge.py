@@ -164,6 +164,7 @@ import preraid
 import priorities
 import professions
 import profloop
+import production
 import protect
 import questbook
 import questcatalogue
@@ -11649,6 +11650,7 @@ class Bridge(discord.Client):
         await self._prof_loop_say(key, step, on_job, gather_why)
         if step.job:
             await self._prof_loop_write(key, running, step.job)
+        await asyncio.to_thread(_record_production, names, skills)
 
     async def _prof_loop_facts(self, key: str, names: list, skills: dict,
                                errand) -> profloop.Facts:
@@ -37990,6 +37992,26 @@ TOWN_ERRAND_SETTLE_SECONDS = 60.0
 TOWN_ERRAND_VENDOR_YARDS = 250.0
 # family key -> townerrand.State, and family key -> {step: first run}.
 _TOWN_ERRANDS: dict = {}
+
+def _record_production(names: list, skills: dict) -> None:
+    """Keep, per member, when a trade skill last rose (production.py).
+
+    One memo row per member, written only when the record changed, so a quiet
+    cycle writes nothing. The memo store logs its own failures; a pass that
+    cannot record must not stop the loop that called it.
+    """
+    now = time.time()
+    try:
+        kept = _memo_read(production.MEMO_KIND)
+        for name in names:
+            before = kept.get(name, (None, 0.0))[0]
+            after = production.observe(before, skills.get(name) or {}, now)
+            if after != before:
+                _memo_upsert(production.MEMO_KIND, name, after, now,
+                             now + production.KEEP_SECONDS)
+    except Exception:
+        log.exception("production: could not record the skill record")
+
 
 # --- the profession loop (profloop.py, #2419) ---------------------------------
 # Family key -> profloop.State. In memory: a restart joins each family at the
