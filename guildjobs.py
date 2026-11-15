@@ -6988,7 +6988,7 @@ def class_walls(name, recent) -> dict:
     return {
         d: r.refusal
         for d, r in newest.items()
-        if r.refusal in classquest.CROSS_WALLS
+        if classquest.is_cross_wall(r.refusal)
         and int(r.age_minutes) < classquest.CROSS_WALL_MINUTES
     }
 
@@ -7608,7 +7608,7 @@ def island_boat_step(
             hunts.pause(m.name, move.quest, now)
         return (
             None,
-            move.said,
+            "",
             "%s: across the water; no boat step available (the module refused it: %s)"
             % (m.name, wall),
         )
