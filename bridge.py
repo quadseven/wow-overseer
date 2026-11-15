@@ -17439,8 +17439,8 @@ class Bridge(discord.Client):
         # slot or takes a bag, and the quick look never claims the column, so
         # a member that could afford a slot logged "it waits for a banker"
         # every pass and was never walked to one.
-        bag_facts, bag_steps = await self._bank_bag_pending(names, seen,
-                                                            watched)
+        bag_facts, bag_steps = await self._bank_bag_pending(
+            names, seen, watched, kept_full=bank_plan.kept_full)
         # THE SPLIT RULE GOVERNS THE FAMILY'S WALK, NOT A MEMBER'S OWN MOVES:
         # the reach read is per mover, so a deferral counts only the moves
         # whose holder has no banker within reach. The move loop reuses it.
@@ -17528,14 +17528,15 @@ class Bridge(discord.Client):
         return fresh, walking
 
     async def _bank_bag_pending(self, names: list, seen: set,
-                                watched) -> tuple:
+                                watched, kept_full=frozenset()) -> tuple:
         """(facts, steps): the bank bag read, and the steps a banker trip is for.
 
         A step already asked inside the retry window is not, and neither is
         one whose holder the world cannot see: the same two filters
         `_bank_once` puts on the item moves.
         """
-        facts = await asyncio.to_thread(_fetch_bank_bag_facts, names)
+        facts = bankbags.with_kept_full(
+            await asyncio.to_thread(_fetch_bank_bag_facts, names), kept_full)
         steps = [
             s for s in bankbags.pending_steps(facts, bankbags.family_floor(facts))
             if (s.name, s.command) not in seen and s.name in watched
@@ -40656,7 +40657,8 @@ def _recent_bank_keys(minutes: int) -> set:
 # (`bag` is the holding bag's item guid, 0 for its own slots), and who holds
 # tailoring (bankbags: a crafter's ladder bags are the guild's).
 _BANK_BAG_PEOPLE_SQL = (
-    "SELECT name, money, bankSlots AS bank_slots FROM characters WHERE name IN (%s)"
+    "SELECT name, level, money, bankSlots AS bank_slots "
+    "FROM characters WHERE name IN (%s)"
 )
 _BANK_BAG_ROWS_SQL = (
     "SELECT c.name AS holder, ci.item AS item_guid, ii.itemEntry AS entry, "
@@ -40671,6 +40673,42 @@ _BANK_BAG_CRAFTERS_SQL = (
     "SELECT c.name FROM character_skills cs JOIN characters c ON c.guid = cs.guid "
     "WHERE cs.skill = 197 AND cs.value > 0 AND c.name IN (%s)"
 )
+_BANK_BAG_RIDING_SQL = (
+    "SELECT c.name, cs.max AS riding_max FROM character_skills cs "
+    "JOIN characters c ON c.guid = cs.guid "
+    "WHERE cs.skill = %d AND c.name IN (%%s)" % purse.RIDING_SKILL
+)
+
+
+def _bank_bag_orders(cur, names: list, people) -> dict:
+    """`purse.Order` per member so bank slot buys honor spells, riding, and food."""
+    marks = ",".join(["%s"] * len(names))
+    riding = {}
+    try:
+        cur.execute(_BANK_BAG_RIDING_SQL % marks, list(names))
+        riding = {
+            str(r["name"]): int(r.get("riding_max") or 0) for r in cur.fetchall()
+        }
+    except pymysql.err.MySQLError:
+        log.warning("bankbags: riding skills unread; riding reserve omitted")
+    try:
+        due = _class_training_due(list(names), casts_only=True)
+    except pymysql.err.MySQLError:
+        log.warning("bankbags: class spells unread; spell reserve omitted")
+        due = {}
+    orders = {}
+    for p in people or ():
+        name = str(p["name"])
+        d = due.get(name)
+        orders[name] = purse.order(
+            name,
+            int(p.get("level") or 0),
+            int(p.get("money") or 0),
+            int(getattr(d, "copper", 0) or 0),
+            int(getattr(d, "count", 0) or 0),
+            riding.get(name, 0),
+        )
+    return orders
 
 
 def _fetch_bank_bag_facts(names: list) -> list:
@@ -40685,7 +40723,10 @@ def _fetch_bank_bag_facts(names: list) -> list:
         bags = cur.fetchall()
         cur.execute(_BANK_BAG_CRAFTERS_SQL % marks, list(names))
         crafters = {str(r["name"]) for r in cur.fetchall()}
-    return bankbags.facts_from_rows(people, bags, crafters)
+        orders = _bank_bag_orders(cur, names, people)
+    return bankbags.with_purse_orders(
+        bankbags.facts_from_rows(people, bags, crafters), orders
+    )
 
 
 def _insert_bank(move, command: str) -> int:
