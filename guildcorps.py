@@ -61,6 +61,7 @@ import classic
 import craft
 import craft_supply
 import guildroute
+import transform
 
 TAILORING = 197
 SKINNING = 393
@@ -1780,17 +1781,34 @@ def members_from_rows(
     return out
 
 
-def places_from_rows(rows, column) -> dict:
+def _row_zone_id(row, map_id, zone_lookup):
+    """Resolve map 530 spawn zone from coordinates when creature.zoneId is 0."""
+    zone_id = row.get("zone_id")
+    if zone_id is not None and _int(zone_id) != 0:
+        return _int(zone_id)
+    if map_id is None or _int(map_id) != classic.OUTLAND_MAP:
+        return zone_id
+    x, y = row.get("x"), row.get("y")
+    if x is None or y is None:
+        return None
+    return zone_lookup(classic.OUTLAND_MAP, float(x), float(y))
+
+
+def places_from_rows(rows, column, *, zone_lookup=transform.zone_id_at) -> dict:
     """map id -> frozenset of `column` values, from (map_id, column) rows.
 
     Outland and Northrend rows are dropped: no trainer or vendor there is on
-    the classic ruleset's map.
+    the classic ruleset's map. Map 530 rows whose world spawn has `zone_id` 0
+    or absent resolve their zone from `(x, y)` via WorldMapArea bounds so the
+    Blood Elf and Draenei starting lands are kept while Outland proper drops.
     """
     out = {}
     for row in rows or ():
-        if classic.outside_at(row.get("map_id"), row.get("zone_id")):
+        map_id = row.get("map_id")
+        zone_id = _row_zone_id(row, map_id, zone_lookup)
+        if classic.outside_at(map_id, zone_id):
             continue
-        out.setdefault(_int(row.get("map_id")), set()).add(_int(row.get(column)))
+        out.setdefault(_int(map_id), set()).add(_int(row.get(column)))
     return {k: frozenset(v) for k, v in out.items()}
 
 
