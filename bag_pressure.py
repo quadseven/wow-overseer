@@ -2967,7 +2967,7 @@ class GearReach:
 def _wears_at(holding, character, level) -> bool:
     """Class, armour, weapon skill and level at `level`; never an upgrade test."""
     bare = replace(character, equipped={}, level=level)
-    return bool(gear.would_wear(holding, bare)[0])
+    return bool(gear.can_wear(holding, bare)[0])
 
 
 def gear_reach(gear_rows, equipped_rows, family_names) -> dict:

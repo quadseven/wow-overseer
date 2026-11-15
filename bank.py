@@ -606,6 +606,8 @@ class Storage:
     # slots held back for them: a stack that is not one of these may not take
     # the tab below `len(guild_reagents)` free slots.
     guild_reagents: frozenset = frozenset()
+    # Second-set gear dropped when locking to seat role (#2606): left in personal bank.
+    dropped_second_sets: frozenset = frozenset()
     # THE ITEM PLAN'S WORD ON A STACK THAT LEAVES FOR GOOD (#2604). item guid ->
     # why, for every stack the plan routes to a vendor, a member or the house
     # and whose executor is switched on (`itemplan_shadow.leaving`). The keeper
@@ -719,6 +721,7 @@ def storage_from(
     spare=frozenset(),
     over_target=None,
     craft_wants=None,
+    dropped_second_sets=frozenset(),
     plan_leaves=None,
     plan_unread=False,
 ):
@@ -756,6 +759,7 @@ def storage_from(
             for name, entries in (craft_wants or {}).items()
         },
         guild_reagents=vault_reagents(skills, guild) if depositors else frozenset(),
+        dropped_second_sets=frozenset(dropped_second_sets or ()),
         plan_leaves=dict(plan_leaves or {}),
         plan_unread=bool(plan_unread),
     )
@@ -1158,6 +1162,8 @@ def _wanted_back(holding, member, family, totals, storage):
         return "%s is for %s" % (holding.item.name, storage.routed[holding.guid])
     if holding.guid in storage.spare:
         return "%s is a spare copy, sold from the bags" % holding.item.name
+    if holding.guid in storage.dropped_second_sets:
+        return ""
     if _craft_wanted(holding, storage):
         return "%s's craft errand is short of it in the bags (reagentplan)" % (
             member.name
@@ -1213,6 +1219,21 @@ def _plan_withdrawals(member, family, totals, storage, space, budget, notes):
     return withdrawals
 
 
+def _relocatable(holding, storage) -> bool:
+    """Whether a banked stack may come out for a guild tab."""
+    if (
+        holding.container_slots > 0
+        or holding.bound
+        or holding.guid in storage.routed
+        or holding.guid in storage.spare
+    ):
+        return False
+    placed = storage.policy.get(holding.guid)
+    if placed is not None:
+        return placed.to == bankpolicy.GUILD and placed.tab is not None
+    return holding.item.item_class in (ITEM_CLASS_TRADE_GOODS, ITEM_CLASS_GEM)
+
+
 def _plan_relocations(member, storage, guild_room, space, budget, notes):
     """Withdrawals that bring banked shared stock out for the guild bank.
 
@@ -1222,10 +1243,10 @@ def _plan_relocations(member, storage, guild_room, space, budget, notes):
     the tab had some. The guild bank takes a deposit only from the bags, so
     the stack comes out here and the guild pass deposits it. It is planned
     only while the tab has a free slot for it, which that slot is then spoken
-    for, so the stack is not carried out to be put straight back. A stack the
-    holder's own trade uses, a policy placement, and anything bound never
-    come out. Only materials and gems move: a recipe waiting for a family
-    member to learn it, gear and a lockbox stay where the keeper rule put them.
+    for, so the stack is not carried out to be put straight back. Policy gear
+    placed for a guild tab (Gear for Later) also moves once tradable; a stack
+    the holder's own trade uses, personal policy gear, anything bound,
+    recipes, and lockboxes stay put.
     """
     out = []
     if storage is None or member.name not in storage.guild_depositors:
@@ -1233,14 +1254,7 @@ def _plan_relocations(member, storage, guild_room, space, budget, notes):
     for holding in member.banked:
         if len(out) >= budget:
             break
-        if (
-            holding.container_slots > 0
-            or holding.bound
-            or holding.guid in storage.policy
-            or holding.guid in storage.routed
-            or holding.guid in storage.spare
-            or holding.item.item_class not in (ITEM_CLASS_TRADE_GOODS, ITEM_CLASS_GEM)
-        ):
+        if not _relocatable(holding, storage):
             continue
         why = storage_reason(holding, storage)
         if not why:

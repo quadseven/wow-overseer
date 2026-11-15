@@ -312,9 +312,28 @@ def armor_tier(row: dict | None, wearer: Wearer) -> int:
     )
 
 
+def resistance_only(row: dict, book=None) -> bool:
+    """True when `row` gives only resistance(s) (and base armor/shield block)
+    so it belongs in a situational set rather than everyday wear."""
+    if row is None:
+        return False
+    stats = stats_of(row, book)
+    _spells, unread = _drive_spells(row, book)
+    _rolled, unresolved = _drive_property(row, book)
+    if (
+        not unresolved
+        and "random_property_id" not in row
+        and (_int(row.get("RandomProperty")) or _int(row.get("RandomSuffix")))
+    ):
+        unresolved = True
+    return gearscore.is_resistance_only(
+        row, stats, unread_spell=unread, unresolved_random=unresolved
+    )
+
+
 def value(row: dict, wearer: Wearer, key: str = "", book=None) -> tuple:
     """(gear score, role score, armor tier) of one piece for this member, in hand `key`."""
-    if row is None:
+    if row is None or resistance_only(row, book):
         return (0.0, 0.0, 0)
     stats = stats_of(row, book)
     gs = gearscore.score(stats, wearer.spec, wearer.level, key) if wearer.spec else 0.0
@@ -1005,7 +1024,7 @@ def drive_score(row: dict, role: str, book=None) -> tuple:
     """(score, floor): what the module's GearScore gives this piece for this
     role, and whether that number is only a floor. An unknown role scores
     (0.0, True): no opinion the comparison may act on."""
-    if row is None:
+    if row is None or resistance_only(row, book):
         return 0.0, False
     weights = statweights.stat_weights(role)
     if not weights:
@@ -1108,6 +1127,8 @@ def drive_verdict(row: dict, wearer: Wearer, worn, book=None) -> tuple:
     refused = _drive_refusal(row, wearer, off_hand)
     if refused or slot is None:
         return DRIVE_REFUSED, refused or "no slot it can go in"
+    if resistance_only(row, book):
+        return DRIVE_REFUSED, "resistance-only piece for a situational set"
     refused = _drive_slot_refusal(row, by_slot, off_hand)
     if refused:
         return DRIVE_REFUSED, refused

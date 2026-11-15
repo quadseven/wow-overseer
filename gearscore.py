@@ -504,6 +504,101 @@ def is_upgrade(
     return new > old + min_gain
 
 
+RESISTANCE_STATS = frozenset(_RESISTANCES.values()) | {"holy_resistance"}
+
+
+def _has_unread_or_random(
+    row: dict,
+    stats: dict | None,
+    *,
+    unread_spell: bool,
+    unresolved_random: bool,
+) -> bool:
+    """True when `row` carries an unread spell or unresolved random property."""
+    if unread_spell or unresolved_random:
+        return True
+    if "spellid_1" not in row and _int(row.get("has_effect")):
+        return True
+    if stats is not None:
+        return False
+    if any(_int(row.get(f"spellid_{n}")) > 0 for n in range(1, 6)):
+        return True
+    return bool(
+        _int(row.get("random_property_id"))
+        or _int(row.get("RandomProperty"))
+        or _int(row.get("RandomSuffix"))
+    )
+
+
+def _resolved_resistance_stats(row: dict, stats: dict | None) -> tuple[bool, dict]:
+    """Return `(precomputed_only, stats_dict)` for `is_resistance_only`."""
+    if stats is not None:
+        return False, stats
+    stat_cols = (
+        "armor",
+        "block",
+        "fire_res",
+        "frost_res",
+        "nature_res",
+        "shadow_res",
+        "arcane_res",
+        "holy_res",
+        "stat_type1",
+    )
+    if "resistance_only" in row and not any(k in row for k in stat_cols):
+        return True, {}
+    return False, stats_from_row(row)
+
+
+def _allowed_nonstat_key(key: str, val: float, base_block: int) -> bool:
+    """True for base armor, resistances, or unmodified shield block value."""
+    if key == "armor" or key in RESISTANCE_STATS:
+        return True
+    return (
+        key == "block_value" and base_block > 0 and abs(float(val) - base_block) < 1e-9
+    )
+
+
+def _has_other_item_bonus(row: dict, resolved: dict) -> bool:
+    """True when `row` or `resolved` grants weapon damage or non-res stats."""
+    if _flt(row.get("dmg_max1")) > 0 or _flt(resolved.get("weapon_dps")) > 0:
+        return True
+    if any(
+        _int(row.get(f"stat_type{n}")) > 0 and _int(row.get(f"stat_value{n}")) != 0
+        for n in range(1, 11)
+    ):
+        return True
+    base_block = _int(row.get("block"))
+    return any(
+        _flt(val) != 0.0 and not _allowed_nonstat_key(key, val, base_block)
+        for key, val in resolved.items()
+    )
+
+
+def is_resistance_only(
+    row: dict,
+    stats: dict | None = None,
+    *,
+    unread_spell: bool = False,
+    unresolved_random: bool = False,
+) -> bool:
+    """True when `row` grants only resistance(s) (plus base armor or shield
+    block) with no primary/combat stats, weapon damage, spells, or random
+    properties."""
+    if not row or _has_unread_or_random(
+        row, stats, unread_spell=unread_spell, unresolved_random=unresolved_random
+    ):
+        return False
+    precomputed, resolved = _resolved_resistance_stats(row, stats)
+    if precomputed:
+        return bool(_int(row["resistance_only"]))
+    has_res = (
+        any(_flt(resolved.get(k)) > 0 for k in RESISTANCE_STATS)
+        or _int(row.get("holy_res")) > 0
+    )
+    return has_res and not _has_other_item_bonus(row, resolved)
+
+
 def next_target(
     spec: str, slot: str, worn: dict | None, stats_by_id: dict, level: int = 60
 ) -> tuple | None:

@@ -201,6 +201,8 @@ def _allowed(character, item):
     inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
     if inv == 23 and not _get(item, "has_item_effect", default=False):
         return False
+    if _get(item, "resistance_only", default=False):
+        return False
     if kind == 4:
         return _armor_ok(cls_id, sub, inv, level)
     if kind == 2:
@@ -653,6 +655,8 @@ def _worn_is_better(
     if slot not in equipped:
         return False
     worn = equipped.get(slot)
+    if isinstance(worn, dict) and worn.get("resistance_only"):
+        return False
     worn_level = worn.get("item_level") if isinstance(worn, dict) else worn
     if worn_level is None:
         return True
