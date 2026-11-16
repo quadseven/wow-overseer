@@ -34854,15 +34854,18 @@ def _recently_given_guids(hours: int) -> frozenset:
 # letter), whatever the taker; and the statement runs under one process lock,
 # because under autocommit two concurrent copies of it could still both read
 # "none" before either row is visible. The schema is the module's, so there is
-# no unique key to lean on here.
+# no unique key to lean on here. MySQL refuses to select the insert target in a
+# plain subquery (error 1093), so the pending-row check sits in a derived table
+# (the LIMIT keeps the optimizer from merging it back into the insert).
 _GIVE_WRITE_LOCK = threading.Lock()
 _INSERT_GIVE_ONCE_SQL = (
     "INSERT INTO overseer_command "
     "(target_name, command, kind, target_arg, source) "
     "SELECT %s, %s, %s, %s, %s FROM (SELECT 1) AS one WHERE NOT EXISTS ("
-    "SELECT 1 FROM overseer_command "
+    "SELECT 1 FROM (SELECT id FROM overseer_command "
     "WHERE kind IN ('give', 'mail') AND status IN ('pending', 'claimed') "
-    "AND (command = %s OR command LIKE %s OR command LIKE %s))"
+    "AND (command = %s OR command LIKE %s OR command LIKE %s) LIMIT 1) "
+    "AS pending)"
 )
 
 
