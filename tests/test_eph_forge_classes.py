@@ -1,7 +1,7 @@
 """Every table in the characters schema has a forge class.
 
 The forge builds an ephemeral world's database from the nightly backup and
-cleans it with one file, `forge/table-classes.yaml`. A table with no class in
+cleans it with one file, `data/forge/table-classes.yaml`. A table with no class in
 that file would copy its stale runtime state into every future world without
 anyone choosing it, so this test fails when the schema fixture holds a table
 the file does not classify (and when the file names a table that is gone).

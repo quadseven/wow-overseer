@@ -1,6 +1,6 @@
 """Table classes: how the forge treats each table of the characters schema.
 
-The classes live in `forge/table-classes.yaml`, one line per table. The file
+The classes live in `data/forge/table-classes.yaml`, one line per table. The file
 uses a tiny subset of YAML (`name: class [spec]`, `#` comments) so the forge
 needs no YAML library.
 
@@ -18,7 +18,13 @@ import re
 from dataclasses import dataclass
 
 KINDS = ("keep", "truncate", "scrub", "per-character")
-DEFAULT_PATH = pathlib.Path(__file__).with_name("table-classes.yaml")
+# The class map is data and lives under data/, which the CI path filters cover.
+DEFAULT_PATH = (
+    pathlib.Path(__file__).resolve().parent.parent
+    / "data"
+    / "forge"
+    / "table-classes.yaml"
+)
 
 _IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
 _LINE = re.compile(

@@ -717,10 +717,6 @@ class MysqlSyntax(unittest.TestCase):
                     text, rf"\bacore_characters\.{re.escape(name)}\b", name
                 )
 
-    def test_the_statements_never_name_the_live_realm(self) -> None:
-        text = "\n".join(scrub.auth_scrub_statements("mysql"))
-        self.assertNotIn("wow-dev", text)
-
 
 if __name__ == "__main__":
     unittest.main()

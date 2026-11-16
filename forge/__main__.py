@@ -29,11 +29,19 @@ def _check_classes(args: argparse.Namespace) -> int:
 
 def _build(args: argparse.Namespace) -> int:
     registry = os.environ.get("FORGE_REGISTRY", "")
+    prefix = os.environ.get("FORGE_BACKUP_PREFIX", "")
+    if not prefix:
+        print(
+            "FORGE_BACKUP_PREFIX is not set; see data/forge/config.example.env",
+            file=sys.stderr,
+        )
+        return 2
     cfg = build.Config(
         template_class=args.template_class,
         backup_dir=pathlib.Path(args.backup_dir),
         workdir=pathlib.Path(args.workdir),
         registry=registry,
+        backup_prefix=prefix,
         db_import_cmd=tuple(shlex.split(args.db_import_cmd)),
         auth_dump=pathlib.Path(args.auth_dump) if args.auth_dump else None,
     )

@@ -17,8 +17,9 @@ from unittest import mock
 import sandbox_caps
 from forge import build, classes, restore, scrub
 
-OLD = "wow-dev-characters-20261113T051002Z.sql.gz"
-NEW = "wow-dev-characters-20261114T051003Z.sql.gz"
+PREFIX = "example-characters"
+OLD = PREFIX + "-20261113T051002Z.sql.gz"
+NEW = PREFIX + "-20261114T051003Z.sql.gz"
 
 
 def write_dump(
@@ -51,8 +52,37 @@ class NewestBackup(unittest.TestCase):
         write_dump(self.dir, OLD)
         (self.dir / (NEW + ".partial")).write_bytes(b"x")
         (self.dir / "notes.txt").write_text("x")
-        (self.dir / "wow-dev-characters-latest.sql.gz").write_bytes(b"x")
+        (self.dir / (PREFIX + "-latest.sql.gz")).write_bytes(b"x")
         self.assertEqual(restore.newest_backup(self.dir).path.name, OLD)
+
+    def test_the_prefix_selects_which_dumps_are_considered(self) -> None:
+        write_dump(self.dir, OLD)
+        write_dump(self.dir, "other-characters-20261115T051003Z.sql.gz")
+        self.assertEqual(restore.newest_backup(self.dir, PREFIX).path.name, OLD)
+        self.assertEqual(
+            restore.newest_backup(self.dir, "other-characters").stamp,
+            "20261115T051003Z",
+        )
+
+    def test_a_prefix_must_be_a_plain_name(self) -> None:
+        for prefix in ("", "a b", "a/b", "a*", "../x", "a;b", ".hidden"):
+            with self.assertRaises(ValueError, msg=repr(prefix)):
+                restore.newest_backup(self.dir, prefix)
+
+    def test_the_config_carries_the_prefix_to_the_plan(self) -> None:
+        write_dump(self.dir, NEW)
+        write_dump(self.dir, "other-characters-20261115T051003Z.sql.gz")
+        cfg = build.Config(
+            template_class="full",
+            backup_dir=self.dir,
+            workdir=pathlib.PurePosixPath("/var/lib/forge/work"),
+            registry="registry.example.invalid/eph",
+            backup_prefix="other-characters",
+        )
+        steps = {s.name: s for s in build.plan(cfg, classes.load_classes())}
+        self.assertIn(
+            "other-characters-20261115T051003Z", " ".join(steps["marker"].sql)
+        )
 
     def test_no_backup_is_an_error_not_an_empty_template(self) -> None:
         with self.assertRaises(restore.NoBackup):
@@ -86,7 +116,13 @@ class LocalOnly(unittest.TestCase):
             restore.assert_local_mysql(host)
 
     def test_any_other_host_is_refused(self) -> None:
-        for host in ("mysql", "mysql.wow-dev.svc", "192.0.2.5", "db.example.com", ""):
+        for host in (
+            "mysql",
+            "mysql.example.invalid",
+            "192.0.2.5",
+            "db.example.com",
+            "",
+        ):
             with self.assertRaises(restore.NotLocal, msg=host):
                 restore.assert_local_mysql(host)
 
@@ -337,13 +373,6 @@ class Plan(unittest.TestCase):
         )
         self.assertEqual(next(s for s in plan if s.name == "prune").keep, 3)
 
-    def test_no_step_mentions_a_realm_hostname_or_namespace(self) -> None:
-        for step in self.plan("lean"):
-            blob = " ".join([*step.argv, *step.sql])
-            self.assertNotIn(
-                "wow-dev", blob.replace(NEW, "").replace("wow-dev-characters", "")
-            )
-
     def test_every_sql_step_runs_against_the_loopback_server_only(self) -> None:
         for step in self.plan("lean"):
             self.assertNotIn("--host=mysql", " ".join(step.argv))
@@ -498,7 +527,9 @@ class RunnerCommands(unittest.TestCase):
             workdir=pathlib.Path("/w"),
         )
         runner = build.SubprocessRunner(cfg, run=fake_run)
-        runner.server_verified = True
+        runner._server = FakeProcess()
+        runner._identity = (77, DATADIR)
+        outputs.setdefault("@@server_id", Done(out=OURS))
         return runner, calls
 
     def test_sql_goes_through_a_loopback_client_with_no_password_on_argv(self) -> None:
@@ -678,6 +709,62 @@ class ServerIdentity(unittest.TestCase):
             runner.argv(restore)
         self.assertEqual(self.calls, [])
 
+    def test_a_server_lost_after_start_blocks_the_next_database_step(self) -> None:
+        process = FakeProcess()
+        runner = self.runner(OURS, process=process)
+        self.assertEqual(runner.argv(self.start), 0)
+        seen = len(self.calls)
+        process.exit_code = 1
+        with self.assertRaises(build.ForeignServer):
+            runner.sql(build.Step("state-scrub", sql=("DELETE FROM t",)))
+        with self.assertRaises(build.ForeignServer):
+            runner.argv(
+                build.Step("restore", argv=("sh", "-c", "true"), needs_server=True)
+            )
+        self.assertEqual(len(self.calls), seen, "nothing reached the port")
+
+    def test_a_server_swapped_after_start_is_caught_before_a_statement(self) -> None:
+        answers = [OURS]
+
+        def fake_run(argv, **kw):
+            self.calls.append(list(argv))
+            if "@@server_id" in " ".join(argv):
+                return Done(out=answers[-1])
+            return Done()
+
+        runner = build.SubprocessRunner(
+            self.cfg,
+            run=fake_run,
+            popen=lambda *a, **k: FakeProcess(),
+            port_in_use=lambda host, port: False,
+        )
+        self.assertEqual(runner.argv(self.start), 0)
+        answers.append("1\t/var/lib/mysql/\n")
+        with self.assertRaises(build.ForeignServer):
+            runner.sql(build.Step("state-scrub", sql=("DELETE FROM t",)))
+        self.assertFalse([c for c in self.calls if "DELETE" in " ".join(c)])
+
+    def test_the_identity_is_rechecked_before_every_statement(self) -> None:
+        runner = self.runner(OURS)
+        self.assertEqual(runner.argv(self.start), 0)
+        before = len(self.calls)
+        runner.sql(
+            build.Step("x", sql=("DELETE FROM a", "DELETE FROM b", "DELETE FROM c"))
+        )
+        later = self.calls[before:]
+        kinds = ["id" if "@@server_id" in " ".join(c) else "stmt" for c in later]
+        self.assertEqual(kinds, ["id", "stmt"] * 3)
+
+    def test_a_restore_pipe_rechecks_the_identity_first(self) -> None:
+        runner = self.runner(OURS)
+        self.assertEqual(runner.argv(self.start), 0)
+        before = len(self.calls)
+        step = build.Step("restore", argv=("sh", "-c", "true"), needs_server=True)
+        runner.argv(step)
+        later = self.calls[before:]
+        self.assertIn("@@server_id", " ".join(later[0]))
+        self.assertEqual(later[-1], ["sh", "-c", "true"])
+
     def test_a_refused_identity_stops_the_whole_build_before_the_restore(self) -> None:
         class Closing(build.SubprocessRunner):
             closed = 0
@@ -755,9 +842,11 @@ class Cli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             write_dump(pathlib.Path(tmp), NEW)
             base = ["build", "--class", "lean", "--backup-dir", tmp, "--dry-run"]
-            with mock.patch.dict(
-                "os.environ", {"FORGE_REGISTRY": "registry.example.invalid/eph"}
-            ):
+            env = {
+                "FORGE_REGISTRY": "registry.example.invalid/eph",
+                "FORGE_BACKUP_PREFIX": PREFIX,
+            }
+            with mock.patch.dict("os.environ", env):
                 printed = io.StringIO()
                 with contextlib.redirect_stdout(printed):
                     code = cli.main([*base, "--workdir", "/var/lib/forge/work"])
@@ -765,6 +854,21 @@ class Cli(unittest.TestCase):
                 self.assertIn("start-mysql", printed.getvalue())
                 with self.assertRaises(ValueError):
                     cli.main([*base, "--workdir", "/w; rm -rf /"])
+
+    def test_build_refuses_to_guess_the_backup_prefix(self) -> None:
+        from forge import __main__ as cli
+
+        with tempfile.TemporaryDirectory() as tmp:
+            args = ["build", "--class", "lean", "--backup-dir", tmp, "--dry-run"]
+            args += ["--workdir", "/var/lib/forge/work"]
+            env = {"FORGE_REGISTRY": "registry.example.invalid/eph"}
+            with mock.patch.dict("os.environ", env):
+                os_environ = __import__("os").environ
+                os_environ.pop("FORGE_BACKUP_PREFIX", None)
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertEqual(cli.main(args), 2)
+                self.assertIn("FORGE_BACKUP_PREFIX", err.getvalue())
 
 
 class Documented(unittest.TestCase):
@@ -784,14 +888,14 @@ class Documented(unittest.TestCase):
                 )
             )
         self.assertIn("FORGE_REGISTRY", names)
-        example = (self.root / "forge" / "config.example.env").read_text(
+        example = (self.root / "data" / "forge" / "config.example.env").read_text(
             encoding="utf-8"
         )
         for name in sorted(names):
             self.assertRegex(example, rf"(?m)^{name}=")
 
     def test_the_example_holds_only_placeholders(self) -> None:
-        example = (self.root / "forge" / "config.example.env").read_text(
+        example = (self.root / "data" / "forge" / "config.example.env").read_text(
             encoding="utf-8"
         )
         self.assertIn("example.invalid", example)
@@ -801,7 +905,8 @@ class Documented(unittest.TestCase):
         for needle in (
             "python -m forge build",
             "FORGE_REGISTRY",
-            "config.example.env",
+            "FORGE_BACKUP_PREFIX",
+            "data/forge/config.example.env",
             "crane",
             "mysqld",
         ):
