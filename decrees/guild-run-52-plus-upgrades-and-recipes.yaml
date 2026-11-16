@@ -1,0 +1,42 @@
+# A guild run at level 52 or more formed by the social pass names each seated raider's chosen upgrade
+# (wow-overseer issue 760) and prefers a dungeon that drops a raid recipe nobody in the guild knows (issue
+# 893). Evidence is the guild-run row for a 52+ dungeon plus the guild-ask rows, not a log quote.
+# Fixes: wow-overseer pulls 1418 (upgrades) and 910 (recipe preference); the commit is 1418.
+decree: v1
+id: guild-run-52-plus-upgrades-and-recipes
+proves:
+  - {repo: quadseven/wow-overseer, issue: 760, criterion: "a guild run at 52 and up logs 'drops upgrades for' naming each seated raider's chosen upgrade"}
+  - {repo: quadseven/wow-overseer, issue: 893, criterion: "a 52+ guild run names a dungeon for a raid recipe nobody in the guild knows"}
+fix: {repo: quadseven/wow-overseer, commit: "00cfd37b09a9b1f8affb0c5f3766418fbd44301d"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 3h
+cast:
+  - who: guild:Cave:blacksmith
+    set: {alive: true, at: {areatrigger: 1466}}
+    ceiling: "nothing granted but position"
+  - who: guild:Cave:alchemist
+    set: {alive: true, at: {areatrigger: 1466}}
+    ceiling: "nothing granted but position"
+act:
+  - at: 0s
+    command: {who: "cast[0]", kind: guild, text: "run blackrock-depths"}
+observe:
+  - name: guild-members-are-level-52-or-more
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid IN (@cast) AND level >= 52
+    expect: {scalar: ">= 1"}
+  - name: a-52-plus-guild-run-formed
+    role: check
+    when: end
+    sql: |
+      SELECT id, keyword FROM overseer_guild_run WHERE created_at >= @t0 AND keyword IN ('blackrock-depths', 'lower-blackrock-spire', 'scholomance', 'stratholme-live')
+    expect: {rows: ">= 1"}
+  - name: a-guild-ask-names-a-recipe-reason
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_guild_ask WHERE created_at >= @t0 AND reason LIKE '%Recipe%'
+    expect: {scalar: ">= 1"}
