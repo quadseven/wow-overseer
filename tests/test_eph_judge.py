@@ -7,6 +7,7 @@ never closes anything, so every way of not reaching it has a test here.
 import copy
 import json
 import pathlib
+import secrets
 import tempfile
 import unittest
 
@@ -755,10 +756,18 @@ class FakeHttp:
         return self.status, b"{}"
 
 
+def fresh_secret():
+    """A throwaway value made at run time, so no credential-shaped literal sits in the file."""
+    return secrets.token_hex(16)
+
+
 class ConfigMapStoreTest(unittest.TestCase):
+    def setUp(self):
+        self.secret = fresh_secret()
+
     def store(self, http):
         return judge.ConfigMapStore(
-            "https://api.example.invalid", "tok", "eph-ns", http
+            "https://api.example.invalid", self.secret, "eph-ns", http
         )
 
     def cm(self, name="eph-result-run-1"):
@@ -777,7 +786,8 @@ class ConfigMapStoreTest(unittest.TestCase):
         self.assertEqual(
             url, "https://api.example.invalid/api/v1/namespaces/eph-ns/configmaps"
         )
-        self.assertEqual(headers["Authorization"], "Bearer tok")
+        # built from whatever the store was given, and nothing else
+        self.assertEqual(headers["Authorization"], "Bearer " + self.secret)
         self.assertEqual(json.loads(body)["metadata"]["name"], "eph-result-run-1")
 
     def test_refuses_any_other_name_or_namespace(self):
@@ -797,12 +807,21 @@ class ConfigMapStoreTest(unittest.TestCase):
         with self.assertRaises(judge.JudgeError):
             self.store(FakeHttp(status=403)).write(self.cm())
 
+    def test_the_secret_never_reaches_an_error_or_the_body(self):
+        http = FakeHttp(status=403)
+        with self.assertRaises(judge.JudgeError) as cm:
+            self.store(http).write(self.cm())
+        self.assertNotIn(self.secret, str(cm.exception))
+        self.assertNotIn(self.secret, http.calls[0][3].decode("utf-8"))
+        self.assertNotIn(self.secret, repr(self.store(http).namespace))
+
 
 class InClusterTest(unittest.TestCase):
     def test_the_api_server_address_comes_from_the_pod_environment(self):
         with tempfile.TemporaryDirectory() as tmp:
             d = pathlib.Path(tmp)
-            (d / "token").write_text("tok", encoding="utf-8")
+            secret = fresh_secret()
+            (d / "token").write_text(secret + chr(10), encoding="utf-8")
             store = judge.ConfigMapStore.in_cluster(
                 "eph-ns",
                 {
@@ -812,11 +831,12 @@ class InClusterTest(unittest.TestCase):
                 sa_dir=d,
             )
         self.assertEqual(store.base_url, "https://192.0.2.1:443")
+        self.assertEqual(store.token, secret)  # read from the token file, trimmed
 
     def test_an_ipv6_host_is_bracketed(self):
         with tempfile.TemporaryDirectory() as tmp:
             d = pathlib.Path(tmp)
-            (d / "token").write_text("tok", encoding="utf-8")
+            (d / "token").write_text(fresh_secret(), encoding="utf-8")
             store = judge.ConfigMapStore.in_cluster(
                 "n",
                 {
