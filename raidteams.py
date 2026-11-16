@@ -80,9 +80,9 @@ GROUPS = {
         ),
         (  # group 4
             Seat("Durg", "Krebraco", 1, "Protection", "tank", "Gnome", False),
-            Seat("Drogg", "Aurevil", 2, "Retribution", "dps", "Draenei", True),
+            Seat("Diggo", "Balressian", 3, "Marksmanship", "dps", "Night Elf", False),
             Seat("Dunga", "Bramitho", 5, "Holy", "healer", "Dwarf", False),
-            Seat("Dakk", "Beerix", 7, "Enhancement", "dps", "Draenei", False),
+            Seat("Dakk", "Beerix", 7, "Enhancement", "dps", "Draenei", True),
             Seat("Dug", "Ariaad", 3, "Survival", "dps", "Draenei", False),
         ),
         (  # group 5
@@ -90,13 +90,13 @@ GROUPS = {
             Seat("Embo", "Ahgeathou", 2, "Retribution", "dps", "Dwarf", True),
             Seat("Ekka", "Actehuurn", 5, "Holy", "healer", "Draenei", False),
             Seat("Ezzo", "", 7, "Restoration", "healer", "Draenei", False),
-            Seat("Eggrok", "Derred", 8, "Frost", "dps", "Draenei", False),
+            Seat("Rubba", "Baldam", 8, "Fire", "dps", "Human", False),
         ),
         (  # group 6
             Seat("Flintt", "Selie", 1, "Protection", "tank", "Human", False),
             Seat("Frakk", "Anneve", 2, "Retribution", "dps", "Human", True),
             Seat("Fumma", "Aurerim", 5, "Holy", "healer", "Draenei", False),
-            Seat("Fizzog", "", 7, "Restoration", "healer", "Draenei", False),
+            Seat("Tugga", "Auremir", 7, "Restoration", "healer", "Draenei", False),
             Seat("Fuggo", "", 9, "Affliction", "dps", "Gnome", False),
         ),
         (  # group 7
@@ -174,6 +174,17 @@ GROUPS = {
     ),
 }
 
+# SEATS PROMOTED FROM THE GUILD'S UPKEEP (first-kill lineup, 2026-11): they keep
+# the name the operator already gave them, so the letter-per-group naming rule
+# does not apply to them. Rubba (a level 60 mage) and Diggo (a level 59 hunter)
+# take the seats of two looping damage characters; Tugga (a level 37 resto
+# shaman, the healer nearest to 50 outside the lineup) takes the healer's.
+# The three displaced characters take the three maintenance places this freed.
+# Crag keeps the tank seat: no unseated level 60 tank-capable character exists
+# (every level 60 warrior and paladin is seated, and Corvane, the only other
+# death knight, is the questers' only one), so nobody is nearer to 60 for it.
+PROMOTED = {"Cave": ("Diggo", "Rubba", "Tugga")}
+
 # (name now, approved name) for the 21 warlock summoners.
 SUMMONERS = {
     "Cave": (
@@ -228,15 +239,15 @@ SUMMONERS = {
 MAINTENANCE = {
     "Cave": (
         ("Baall", "Chopp"),
-        ("Balressian", "Diggo"),
+        ("Derred", "Eggrok"),
         ("Arran", "Pokka"),
-        ("Baldam", "Rubba"),
+        ("Aurevil", "Drogg"),
         ("Aehuurn", "Skinna"),
         ("Behodiir", "Stakk"),
         ("Bakurn", "Totta"),
         ("Atherene", "Whakk"),
         ("Alemid", "Snipp"),
-        ("Auremir", "Tugga"),
+        ("Fizzog", "Fizzog"),
     ),
     "Bonkers": (
         ("Argam", "Grunty"),
