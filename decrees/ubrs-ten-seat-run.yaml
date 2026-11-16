@@ -1,0 +1,48 @@
+# Upper Blackrock Spire raid door: one guild's ten seats clear it (mod-overseer issue 1187). The family
+# is placed at the Spire approach and an order for the 'ubrs' raid keyword starts the run; the first
+# precondition witnesses the ten seats. The family must be level 56 or more, which both families are in
+# the template, so nothing is granted.
+# Fix: mod-overseer pull 1310.
+decree: v1
+id: ubrs-ten-seat-run
+proves:
+  - {repo: quadseven/mod-overseer, issue: 1187, criterion: "the order forms ten seats, walks the approach and enters; 'dc on ubrs' is accepted for the raid and the run ends with a clear or a named reason, with no ASSERTION FAILED"}
+fix: {repo: quadseven/mod-overseer, commit: "6ed78a52f5ca6e6b73167b60fbf11e571bd70c22"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 2h
+cast:
+  - who: family:grug
+    set: {alive: true, at: {creature: "Pyroguard Emberseer"}}
+    ceiling: "nothing granted but position"
+  - who: family:zug
+    set: {alive: true, at: {areatrigger: 1468}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+  - group: {members: family:zug, leader: Zug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "raid:ubrs"}
+observe:
+  - name: ten-seats-were-written
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_raid_seat WHERE keyword = 'ubrs'
+    expect: {scalar: "= 10"}
+  - name: raid-entered-the-spire
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run WHERE map_id = 229 AND started_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: run-ended-with-a-named-reason
+    role: check
+    when: end
+    sql: |
+      SELECT id, ended_reason FROM overseer_dungeon_run WHERE map_id = 229 AND started_at >= @t0 AND state = 'ended' AND ended_reason = ''
+    expect: {rows: 0}
+  - name: no-assertion-failure
+    role: check
+    log: {pattern: "ASSERTION FAILED", expect: {count: 0}}

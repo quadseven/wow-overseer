@@ -1,0 +1,64 @@
+# Scope note: only the ten roster characters can be cast by name, so this decree runs the raid with
+# ten seats. The 40-seat case in the issue is not representable here; the check is the per-seat behaviour.
+# The seats come from overseer_raid_seat, which the bridge writes from an operator order, so the first
+# precondition witnesses them: a world with no seats is INVALID, never a pass.
+# A seat is left at Ratchet on Kalimdor while the rest stand at the Molten Core door. A warlock of the guild
+# stands at the Blackrock Mountain meeting stone. The run must summon the straggler (mod-overseer issue 922)
+# and, where the leader cannot reach the door, a guild warlock must click the ritual and spend the reagent
+# (issue 702).
+# Fixes: mod-overseer pulls 929 (straggler summon) and 698 (ritual rung); the commit is 929.
+decree: v1
+id: raid-straggler-summon-at-stone
+proves:
+  - {repo: quadseven/mod-overseer, issue: 922, criterion: "log names the straggler summon at the Blackrock Mountain stone and reads back the straggler position at the door"}
+  - {repo: quadseven/mod-overseer, issue: 702, criterion: "the ritual portal click and read-back run through the cast path with reagent consumption"}
+fix: {repo: quadseven/mod-overseer, commit: "7960824c4e42b2872189a634e084c7351fd0554f"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 1h
+cast:
+  - who: family:grug
+    set: {alive: true, at: {areatrigger: 2886}}
+    ceiling: "nothing granted but position"
+  - who: Zug
+    set: {alive: true, at: {creature: "Gazlowe"}}
+    ceiling: "nothing granted but position"
+  - who: Workwork
+    set: {alive: true, at: {captured: brm-meeting-stone}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "raid:moltencore"}
+observe:
+  - name: seats-were-written
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_raid_seat WHERE family IN ('Grug', 'Zug')
+    expect: {scalar: ">= 5"}
+  - name: straggler-starts-on-kalimdor
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid = @Zug AND map = 1
+    expect: {scalar: "= 1"}
+  - name: summon-row-applied-for-the-straggler
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE kind = 'summon' AND created_at >= @t0 AND status = 'applied'
+    expect: {scalar: ">= 1"}
+  - name: straggler-reached-the-door-map
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid = @Zug AND map IN (230, 409)
+    expect: {scalar: "= 1"}
+  - name: no-summon-refused
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE kind = 'summon' AND created_at >= @t0 AND status = 'error'
+    expect: {scalar: "= 0"}

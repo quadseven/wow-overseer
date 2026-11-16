@@ -1,0 +1,41 @@
+# A raid order for a family with a saved Molten Core lockout is refused in chat, with the lockout read
+# from the database (mod-overseer issue 963). Grug is bound to a Molten Core instance the arrange step
+# creates; the order then names the same raid.
+# Fix: mod-overseer pull 1466 (raid door names seats saved to another Molten Core).
+decree: v1
+id: raid-saved-lockout-refusal
+proves:
+  - {repo: quadseven/mod-overseer, issue: 963, criterion: "a run proposed to a family with a saved lockout is refused in chat and the lockout is read from the database"}
+fix: {repo: quadseven/mod-overseer, commit: "979846f5aa1269b4ff3d1ed5ca129d1fec66e95e"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 15m
+cast:
+  - who: family:grug
+    set: {alive: true, at: {areatrigger: 2886}}
+    ceiling: "nothing granted but position"
+arrange:
+  - instance: {map: "Molten Core", as: mc, bind: family:grug}
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "raid:moltencore"}
+observe:
+  - name: family-is-saved-to-molten-core
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_instance WHERE guid IN (@cast) AND instance = @mc
+    expect: {scalar: ">= 1"}
+  - name: no-run-entered-the-saved-instance-again
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run WHERE map_id = 409 AND started_at >= @t0
+    expect: {scalar: "= 0"}
+  - name: a-refusal-was-spoken
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_chat WHERE created_at >= @t0 AND text LIKE '%lockout%'
+    expect: {scalar: ">= 1"}

@@ -1,0 +1,39 @@
+# A family set to job 'raid prep' runs a full gather, craft, mail and guild-bank cycle (wow-overseer
+# issue 1307). The cycle's evidence is the command log: mail rows and bank deposit rows while the mode is
+# active. No merged fix pull references this issue, so the fix commit is TODO.
+decree: v1
+id: raid-prep-mail-and-bank-cycle
+proves:
+  - {repo: quadseven/wow-overseer, issue: 1307, criterion: "job raid prep shows active _drive_raid_prep lines, kind mail rows and bank deposit-item rows during the mode"}
+fix: {repo: quadseven/wow-overseer, commit: "TODO"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 2h
+cast:
+  - who: family:grug
+    set: {alive: true, at: {creature: "Stephen Ryback"}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "raid prep"}
+observe:
+  - name: family-is-on-raid-prep
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_roster WHERE family = 'Grug' AND job = 'raid prep'
+    expect: {scalar: "= 5"}
+  - name: mail-rows-written-during-the-mode
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE kind = 'mail' AND created_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: bank-deposits-written-during-the-mode
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE kind = 'bank' AND command LIKE 'deposit-item%' AND created_at >= @t0
+    expect: {scalar: ">= 1"}

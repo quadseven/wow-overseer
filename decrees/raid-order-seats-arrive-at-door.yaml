@@ -1,0 +1,65 @@
+# Scope note: only the ten roster characters can be cast by name, so this decree runs the raid with
+# ten seats. The 40-seat case in the issue is not representable here; the check is the per-seat behaviour.
+# The seats come from overseer_raid_seat, which the bridge writes from an operator order, so the first
+# precondition witnesses them: a world with no seats is INVALID, never a pass.
+# Half the seats start on Kalimdor, half on the Eastern Kingdoms. The order names how each raider not at
+# Blackrock Mountain arrives (summon or walk) in the bridge log (issue 762), the summoner waits on call at
+# the meeting stone of the door (issue 890), and every seated raider reaches the door before ENTER (issue 765).
+# Fix: wow-overseer pull 902 (summoner waits on call at the stone).
+decree: v1
+id: raid-order-seats-arrive-at-door
+proves:
+  - {repo: quadseven/wow-overseer, issue: 762, criterion: "a raid order names how each raider not at Blackrock Mountain arrives and a live summon moves a raider there by position"}
+  - {repo: quadseven/wow-overseer, issue: 765, criterion: "every seated raider is within 40 yards of the door before ENTER and the ENTER count is on the raid timeline"}
+  - {repo: quadseven/wow-overseer, issue: 890, criterion: "a summoner waits on call at the meeting stone, then a run-recovery summon row is applied with no refusals"}
+fix: {repo: quadseven/wow-overseer, commit: "17ee5b80848910b3142434cf71648c6270363275"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 1h
+cast:
+  - who: family:grug
+    set: {alive: true, at: {areatrigger: 2886}}
+    ceiling: "nothing granted but position"
+  - who: family:zug
+    set: {alive: true, at: {creature: "Gazlowe"}}
+    ceiling: "nothing granted but position"
+  - who: Swoleblood
+    set: {alive: true, at: {captured: brm-meeting-stone}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+  - group: {members: family:zug, leader: Zug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "raid:moltencore"}
+observe:
+  - name: seats-were-written
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_raid_seat WHERE family IN ('Grug', 'Zug')
+    expect: {scalar: ">= 5"}
+  - name: half-the-seats-start-on-kalimdor
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid IN (@cast) AND map = 1
+    expect: {scalar: ">= 5"}
+  - name: summon-applied-for-run-recovery
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE kind = 'summon' AND created_at >= @t0 AND status = 'applied'
+    expect: {scalar: ">= 1"}
+  - name: no-no-meeting-stone-refusal
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE kind = 'summon' AND created_at >= @t0 AND detail LIKE '%no meeting stone%'
+    expect: {scalar: "= 0"}
+  - name: seated-raiders-reached-the-door-map
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid IN (@cast) AND map IN (230, 409)
+    expect: {scalar: ">= 8"}

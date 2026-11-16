@@ -337,8 +337,16 @@ class TodoTest(unittest.TestCase):
 
 
 class ShippedDecreesTest(unittest.TestCase):
-    def test_there_are_three_examples(self):
-        self.assertEqual(len(DECREES), 3)
+    def test_the_three_worked_examples_are_shipped(self):
+        names = {p.stem for p in DECREES}
+        self.assertTrue(
+            {
+                "brd-guzzler-exit-zero-patron-deaths",
+                "profession-rank-up-at-75",
+                "void-death-recovers",
+            }
+            <= names
+        )
 
     def test_every_shipped_decree_lints_without_errors(self):
         anchors = anchors_mod.Anchors.load()
@@ -379,7 +387,7 @@ class CliTest(unittest.TestCase):
     def test_exit_codes(self):
         from ephemeral.__main__ import main
 
-        good = str(DECREES[0])
+        good = str(ROOT / "decrees" / "brd-guzzler-exit-zero-patron-deaths.yaml")
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main(["lint", good]), 0)
             self.assertEqual(
