@@ -205,6 +205,30 @@ main.main {
   main.main { padding: 14px 12px 20px; gap: 16px; }
 }
 
+.stage { display: none; }
+.stage-switch[hidden], .stage-retry[hidden] { display: none; }
+.stage-strip {
+  display: flex; align-items: center; gap: 10px; height: 48px; min-height: 48px; padding: 0 12px;
+  font-size: var(--fs-2); color: var(--color-neutral-300);
+}
+.stage-strip-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-neutral-500); flex: none; }
+.stage-msg { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stage-retry {
+  flex: none; min-height: 36px; padding: 0 12px; border: 1px solid var(--color-divider); border-radius: 8px;
+  background: var(--color-surface); color: var(--color-text); font: inherit; font-size: var(--fs-1); font-weight: 500; cursor: pointer;
+}
+.stage-retry:hover { background: var(--color-neutral-900); }
+.stage[data-compact] .stage-slot, .stage[data-compact] .stage-switch { display: none; }
+.stage:not([data-compact]) .stage-strip { display: none; }
+@media (max-width: 759.98px) {
+  .stage:not([hidden]) {
+    display: block; position: sticky; top: 0; z-index: 7; min-height: 48px;
+    padding-top: env(safe-area-inset-top); background: var(--color-bg);
+    box-shadow: 0 1px 0 var(--color-divider);
+  }
+  .stage:not([hidden]) + .topbar { position: static; padding-top: 8px; }
+}
+
 /* Floating Cave/Bonkers switch above the tab bar on phone. */
 .thumb {
   position: sticky; bottom: calc(var(--tabbar-h) + 4px); z-index: 5; display: flex;

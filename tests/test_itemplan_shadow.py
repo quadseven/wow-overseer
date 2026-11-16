@@ -236,9 +236,8 @@ class RunTest(unittest.TestCase):
             for x in cap.lines
             if x.startswith("itemplan: disagree ") and "Plain Green Cloak" in x
         ]
-        self.assertEqual(len(hits), 1, cap.lines)
-        self.assertIn("sale pass keeps (uncommon or better)", hits[0])
-        self.assertIn("plan SELL_VENDOR", hits[0])
+        # The plan no longer sells an uncommon: it agrees with the sale pass.
+        self.assertEqual(hits, [], cap.lines)
         self.assertEqual(
             len(report.disagreements),
             len([x for x in cap.lines if x.startswith("itemplan: disagree ")]),
