@@ -344,6 +344,104 @@ class PriorityTest(unittest.TestCase):
         self.assertEqual(["Rest"], [j.member for j in jobs])
 
 
+FIRE_CLOAK = 13657  # Enchant Cloak - Fire Resistance, +7 fire resistance, enchant 2463
+FIRE_ENCHANT = 2463
+GREATER_DEFENSE = 13746  # Enchant Cloak - Greater Defense, +50 armor
+BACK, CLOAK = 14, 16  # equipment slot, inventory type
+
+# 1 Lesser Mystic Essence and 1 Elemental Fire (Fire Resistance); 3 Vision Dust
+# and a Runed Truesilver Rod (Greater Defense).
+CLOAK_BAGS = {11134: 1, 7068: 1, 11137: 3, 11145: 1}
+
+
+def cloak(holder, *, fire=0, enchantments="", guid=3):
+    row = bracer(holder, enchantments=enchantments, guid=guid, stats=((STA, 6),))
+    row.update(
+        equipment_slot=BACK,
+        inventory_type=CLOAK,
+        item_subclass=1,
+        armor=40,
+        name="Cloak of %s" % holder,
+        fire_res=fire,
+    )
+    return row
+
+
+class FireResistanceCloakTest(unittest.TestCase):
+    """#481: the +7 Fire Resistance cloak, for the seats Molten Core asks fire
+    resistance of, end to end through the planner to the row's command."""
+
+    def setUp(self):
+        self.aeda = member("Aeda", 1)
+        self.brom = member("Brom", 2)
+        self.tank = wearer("Brom", WARRIOR, "Protection")
+        self.known = (FIRE_CLOAK, GREATER_DEFENSE)
+
+    def run_plan(self, worn, targets, known=None, **kw):
+        return enchantfor.plan(
+            [enchanter(known=known or self.known, bags=CLOAK_BAGS)],
+            {"Aeda": self.aeda, "Brom": self.brom},
+            [self.tank],
+            [worn],
+            book=kw.pop("book", Book()),
+            fire_targets=targets,
+            **kw,
+        )
+
+    def test_the_main_tank_gets_the_fire_cloak_over_a_better_scoring_armor_enchant(
+        self,
+    ):
+        (job,) = self.run_plan(cloak("Brom"), {"Brom": 200})
+        self.assertEqual(FIRE_CLOAK, job.spell)
+        self.assertEqual(FIRE_ENCHANT, job.enchant)
+        self.assertEqual(BACK, job.slot)
+        self.assertEqual(
+            "enchant-for target:2 slot:14 spell:13657", enchantfor.command(job)
+        )
+
+    def test_the_credit_is_what_the_seat_is_short_of_its_target(self):
+        (job,) = self.run_plan(
+            cloak("Brom", fire=197), {"Brom": 200}, known=(FIRE_CLOAK,)
+        )
+        self.assertAlmostEqual(3 * enchantfor.MC_FIRE_WEIGHT, job.gain)
+
+    def test_a_seat_at_its_target_is_not_given_more_fire_resistance(self):
+        self.assertEqual(
+            (),
+            self.run_plan(cloak("Brom", fire=200), {"Brom": 200}, known=(FIRE_CLOAK,)),
+        )
+
+    def test_a_member_with_no_fire_target_is_not_given_it(self):
+        self.assertEqual((), self.run_plan(cloak("Brom"), {}, known=(FIRE_CLOAK,)))
+
+    def test_a_stronger_fire_enchant_replaces_a_weaker_one_when_short(self):
+        class FireBook:
+            enchants = {256: ["+5 Fire Resistance", [[4, 5, 2]]]}
+
+        (job,) = self.run_plan(
+            cloak("Brom", enchantments="256 0 0"),
+            {"Brom": 200},
+            known=(FIRE_CLOAK,),
+            book=FireBook(),
+        )
+        self.assertEqual(FIRE_CLOAK, job.spell)
+        self.assertAlmostEqual(2 * enchantfor.MC_FIRE_WEIGHT, job.gain)
+
+    def test_the_fire_cloak_is_only_a_cloak_recipe(self):
+        recipe = next(r for r in enchantfor.catalogue() if r.spell == FIRE_CLOAK)
+        self.assertEqual(((4, 7, 2),), recipe.effects)
+        self.assertTrue(enchantfor.fits(recipe, cloak("Brom")))
+        self.assertFalse(enchantfor.fits(recipe, bracer("Brom")))
+
+    def test_the_targets_come_from_the_molten_core_plan(self):
+        targets = enchantfor.fire_targets({"Cave"})
+        self.assertEqual(200, targets["Grug"])  # the main tank
+        self.assertEqual(60, targets["Ugga"])  # a healer
+        self.assertEqual(120, targets["Brug"])  # the second tank
+        self.assertNotIn("Grog", targets)  # a damage seat is asked for none
+        self.assertEqual({}, enchantfor.fire_targets({"Nowhere"}))
+
+
 class BridgeSeamTest(unittest.TestCase):
     """The bridge writes the row, once, and only behind the module's own fact."""
 
@@ -417,6 +515,47 @@ class BridgeSeamTest(unittest.TestCase):
             body.index("_fetch_enchant_for_facts"),
         )
         self.assertIn("self._enchant_for_once", text)
+
+    def test_the_member_read_uses_the_snapshots_own_map_and_position(self):
+        sql = self.bridge._ENCHANT_FOR_MEMBERS_SQL
+        for column in ("s.map_id", "s.pos_x", "s.pos_y", "s.pos_z"):
+            self.assertIn(column, sql)
+        for stale in ("c.map ", "c.position_x", "c.position_y", "c.position_z"):
+            self.assertNotIn(stale, sql)
+        self.assertIn("s.updated_at", sql)
+
+    def test_the_member_read_hands_the_snapshot_position_to_the_planner(self):
+        b = self.bridge
+        snapshot = {
+            "guid": 2,
+            "name": "Brom",
+            "guild": "Cave",
+            "map_id": 1,
+            "x": 10.5,
+            "y": -3.0,
+            "z": 40.0,
+        }
+        cursor = self.mock.MagicMock()
+        cursor.fetchall.side_effect = [[snapshot], []]
+        conn = self.mock.MagicMock()
+        conn.__enter__.return_value = conn
+        conn.cursor.return_value.__enter__.return_value = cursor
+        with self.mock.patch.object(b, "_connect", return_value=conn):
+            members, enchanters = b._fetch_enchant_for_facts(["Aeda"])
+        self.assertEqual([], enchanters)
+        brom = members["Brom"]
+        self.assertEqual((1, 10.5, -3.0, 40.0), (brom.map_id, brom.x, brom.y, brom.z))
+        self.assertEqual(2, brom.guid)
+        near = enchantfor.Member("Aeda", 1, "Cave", True, 1, 12.0, -3.0, 40.0)
+        self.assertTrue(enchantfor.together(near, brom))
+        elsewhere = enchantfor.Member("Aeda", 1, "Cave", True, 0, 12.0, -3.0, 40.0)
+        self.assertFalse(enchantfor.together(elsewhere, brom))
+
+    def test_the_pass_hands_the_fire_targets_to_the_planner(self):
+        text = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("fire_targets=enchantfor.fire_targets(", text)
 
     def test_the_fact_name_is_the_one_the_module_reports(self):
         self.assertEqual("enchant_for", enchantfor.CAPABILITY_FACT)

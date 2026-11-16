@@ -46,7 +46,10 @@ import os
 from typing import NamedTuple
 
 import equipscore
+import fireplan
 import gearscore
+import raidroles
+import raidteams
 import statweights
 import world_data
 
@@ -241,7 +244,55 @@ def _worth(stats: dict, wearer, key: str) -> tuple:
     return gs, equipscore.role_score(stats, wearer.role)
 
 
-def gain_of(row: dict, current_effects, recipe: Recipe, wearer) -> float:
+KIND_RESIST_FIRE_ARG = 2
+# What one point of fire resistance a seat is SHORT of its Molten Core target
+# is worth, in gear score points. The spec weights price fire resistance at
+# about a half point, which is nothing beside +7 strength; for a seat the raid
+# asks fire resistance of (fireplan.FIRE_TARGET) the shortfall is the point of
+# the night, so it is priced like the best stat a point of tanking buys.
+MC_FIRE_WEIGHT = 2.0
+
+
+def fire_targets(guilds) -> dict:
+    """name -> the fire resistance the Molten Core plan asks of that seat.
+
+    The first tank seat of a guild's first group is its main tank
+    (fireplan.FIRE_TARGET's 200), another tank takes 120, a healer 60 and a
+    damage seat none (raidsupply.fire_target's own numbers, read from
+    fireplan). Only the approved raid seats are named: the guild's plan is the
+    Molten Core lineup, the one raid this realm models."""
+    out: dict = {}
+    for guild in guilds:
+        main_taken = False
+        for seat in raidteams.seats(guild):
+            if seat.seat == raidroles.SEAT_TANK:
+                key = fireplan.TANK if main_taken else fireplan.MAIN_TANK
+                main_taken = True
+            elif seat.seat == raidroles.SEAT_HEALER:
+                key = fireplan.HEALER
+            else:
+                continue
+            out[seat.name] = fireplan.FIRE_TARGET[key]
+    return out
+
+
+def _fire_of(effects) -> int:
+    return sum(
+        int(amount)
+        for kind, amount, arg in effects
+        if kind == KIND_RESIST and arg == KIND_RESIST_FIRE_ARG
+    )
+
+
+def fire_credit(effects, shortfall: int) -> int:
+    """The fire resistance an enchant adds that the seat still needs: what it
+    gives, never more than the points the seat is short of its target."""
+    return min(_fire_of(effects), max(0, int(shortfall)))
+
+
+def gain_of(
+    row: dict, current_effects, recipe: Recipe, wearer, fire_short: int = 0
+) -> float:
     """What the recipe's enchant adds over the current one, in the member's
     own judge's units: gear score where the spec has an opinion of either
     piece, else the role score. Zero or less means not worth a cast."""
@@ -252,8 +303,13 @@ def gain_of(row: dict, current_effects, recipe: Recipe, wearer) -> float:
     old_gs, old_role = _worth(old, wearer, key)
     new_gs, new_role = _worth(new, wearer, key)
     if max(old_gs, new_gs) >= equipscore.SCORE_FLOOR:
-        return new_gs - old_gs
-    return new_role - old_role
+        gain = new_gs - old_gs
+    else:
+        gain = new_role - old_role
+    credit = fire_credit(recipe.effects, fire_short) - fire_credit(
+        current_effects, fire_short
+    )
+    return gain + credit * MC_FIRE_WEIGHT
 
 
 def priority_of(wearer, seat_names) -> int:
@@ -322,11 +378,13 @@ def _reachable(
     return member
 
 
-def _job_for(enchanter, member, wearer, slot, row, recipe, effects, seat_names):
+def _job_for(
+    enchanter, member, wearer, slot, row, recipe, effects, seat_names, fire_short=0
+):
     """One Job when the recipe fits the worn piece and gains something, else None."""
     if not fits(recipe, row) or recipe.enchant == _permanent_id(row):
         return None
-    gain = gain_of(row, effects, recipe, wearer)
+    gain = gain_of(row, effects, recipe, wearer, fire_short)
     if gain <= equipscore.EPSILON:
         return None
     return Job(
@@ -345,10 +403,25 @@ def _job_for(enchanter, member, wearer, slot, row, recipe, effects, seat_names):
     )
 
 
+def _fire_short(pieces: dict, target: int) -> int:
+    """How far the worn pieces' own fire resistance is below the seat's target."""
+    worn = sum(_int(row.get("fire_res")) for row in pieces.values())
+    return max(0, int(target) - worn)
+
+
 def _jobs_on(
-    enchanter, member, wearer, pieces, usable, book, own_enchants, seat_names
+    enchanter,
+    member,
+    wearer,
+    pieces,
+    usable,
+    book,
+    own_enchants,
+    seat_names,
+    fire_target=0,
 ) -> list:
     """Every job one enchanter could do on one member's worn pieces."""
+    fire_short = _fire_short(pieces, fire_target)
     out = []
     for slot, row in pieces.items():
         effects, ok = _current_effects(row, book, own_enchants)
@@ -356,7 +429,15 @@ def _jobs_on(
             continue
         for recipe in usable:
             job = _job_for(
-                enchanter, member, wearer, slot, row, recipe, effects, seat_names
+                enchanter,
+                member,
+                wearer,
+                slot,
+                row,
+                recipe,
+                effects,
+                seat_names,
+                fire_short,
             )
             if job is not None:
                 out.append(job)
@@ -373,6 +454,7 @@ def candidates(
     seat_names=frozenset(),
     tanks=(),
     recipes=None,
+    fire_targets=None,
 ) -> list:
     """Every (job) worth asking for this pass, before one-per-person is applied."""
     recipes = tuple(recipes if recipes is not None else catalogue())
@@ -397,6 +479,7 @@ def candidates(
                     book,
                     own_enchants,
                     seat_names,
+                    (fire_targets or {}).get(name, 0),
                 )
     return out
 
@@ -411,6 +494,7 @@ def plan(
     seat_names=frozenset(),
     tanks=(),
     recipes=None,
+    fire_targets=None,
 ) -> tuple:
     """The jobs to write, best first: seats, then tanks and healers, then the
     rest, the biggest gain first inside a rank, one per enchanter and per
@@ -424,6 +508,7 @@ def plan(
         seat_names=seat_names,
         tanks=tanks,
         recipes=recipes,
+        fire_targets=fire_targets,
     )
     pool.sort(
         key=lambda j: (j.priority, -j.gain, j.member, j.enchanter, j.slot, j.spell)

@@ -15880,7 +15880,9 @@ class Bridge(discord.Client):
                      for s in raidteams.seats(g)}
             jobs = enchantfor.plan(
                 enchanters, members, wearers, worn, book=_jev_item_book(),
-                seat_names=frozenset(seats), tanks=tanks)
+                seat_names=frozenset(seats), tanks=tanks,
+                fire_targets=enchantfor.fire_targets(
+                    {m.guild for m in members.values()}))
             if not jobs:
                 return
             wrote = await asyncio.to_thread(_carry_out_enchant_for, jobs)
@@ -34293,10 +34295,12 @@ _ENCHANT_FOR_CAPABILITY_SQL = (
     "SELECT value FROM overseer_build WHERE name = '%s'" % enchantfor.CAPABILITY_FACT
 )
 # Everyone in the world (a fresh snapshot row, never `characters.online`, which
-# reads 0 for bots) in a guild any of `names` belongs to, and where they stand.
+# reads 0 for bots) in a guild any of `names` belongs to, and where they stand:
+# the snapshot's own map and coordinates, which are as fresh as the presence
+# test, and not the persisted `characters` position, which lags by minutes.
 _ENCHANT_FOR_MEMBERS_SQL = (
-    "SELECT c.guid AS guid, c.name AS name, g.name AS guild, c.map AS map_id, "
-    "c.position_x AS x, c.position_y AS y, c.position_z AS z "
+    "SELECT c.guid AS guid, c.name AS name, g.name AS guild, s.map_id AS map_id, "
+    "s.pos_x AS x, s.pos_y AS y, s.pos_z AS z "
     "FROM guild_member gm JOIN guild g ON g.guildid = gm.guildid "
     "JOIN characters c ON c.guid = gm.guid "
     "JOIN overseer_snapshot s ON s.name = c.name "
