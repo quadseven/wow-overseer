@@ -140,6 +140,7 @@ import craft_supply
 import dungeonpace
 import dungeonprogression
 import dungeonstall
+import enchantfor
 import equipscore
 import item_plan
 import jev
@@ -14322,6 +14323,11 @@ class Bridge(discord.Client):
             except Exception:
                 log.exception("guild equip pass failed; retrying next cycle")
             await self._for_other_families("guild equip", self._guild_equip_once)
+            try:
+                await self._enchant_for_once()
+            except Exception:
+                log.exception("enchant-for pass failed; retrying next cycle")
+            await self._for_other_families("enchant-for", self._enchant_for_once)
             await self._for_other_families("guild share", self._guild_share_once)
             try:
                 await self._gear_routing_once()
@@ -15840,6 +15846,53 @@ class Bridge(discord.Client):
         current = bag_pressure.since_level_change(history, changed)
         await self._write_equips(wanted, current, label="guild ", holders=members,
                                  online=set(members))
+
+    async def _enchant_for_once(self, cohort=None) -> None:
+        """Ask the guild's enchanters to enchant a member's worn piece (enchantfor.py).
+
+        Inert until the module says it answers the verb (its `enchant_for`
+        build fact), and off with ENCHANT_FOR=off. Both parties must be online,
+        in one guild and standing together; the module checks it all again.
+        """
+        if not enchantfor.enabled():
+            return
+        names = await asyncio.to_thread(_names_of, cohort)
+        if not names:
+            return
+        try:
+            if await asyncio.to_thread(_fetch_module_enchant_for) != enchantfor.CAPABILITY:
+                return
+            members, enchanters = await asyncio.to_thread(
+                _fetch_enchant_for_facts, list(names))
+            if not enchanters:
+                return
+            near = sorted({
+                m.name for m in members.values()
+                for e in enchanters
+                if m.name != e.name and m.guild == e.guild
+                and enchantfor.together(members[e.name], m)
+            })
+            if not near:
+                return
+            wearers = await asyncio.to_thread(_fetch_wearers, near)
+            worn = await asyncio.to_thread(_fetch_scored_gear, near)
+            tanks = await asyncio.to_thread(_fetch_shield_tanks, near)
+            seats = {n for g in {m.guild for m in members.values()}
+                     for s in raidteams.seats(g) for n in (s.name, s.was) if n}
+            jobs = enchantfor.plan(
+                enchanters, members, wearers, worn, book=_jev_item_book(),
+                seat_names=frozenset(seats), tanks=tanks,
+                fire_targets=enchantfor.fire_targets(
+                    {m.guild for m in members.values()}))
+            if not jobs:
+                return
+            wrote = await asyncio.to_thread(_carry_out_enchant_for, jobs)
+            for line in enchantfor.lines(jobs):
+                log.info("%s", line)
+            log.info("%s %d of %d queued", enchantfor.PREFIX, wrote, len(jobs))
+        except (OSError, pymysql.err.MySQLError):
+            log.exception("enchant-for: the pass could not read the world; "
+                          "retrying next cycle")
 
     async def _jev_items_plan(self, gear_rows: list, worn: list, names: list):
         """This family's Jev pass, and what it changes this cycle (#95).
@@ -34254,6 +34307,144 @@ def _carry_out_itemplan_disenchant(jobs) -> int:
         except (pymysql.err.MySQLError, OSError):
             log.exception("itemplan disenchant: cannot queue %s's item %d",
                           job.holder, int(job.item_guid))
+    return wrote
+
+
+# THE TRADE-WINDOW ENCHANT'S CALLER (enchantfor.py). The module answers the
+# `enchant-for` row on kind='trade' only when its build report says so, so the
+# pass reads that fact first and writes nothing without it: against a world
+# that lacks the verb the row would be answered as a malformed trade.
+_ENCHANT_FOR_CAPABILITY_SQL = (
+    "SELECT value FROM overseer_build WHERE name = '%s'" % enchantfor.CAPABILITY_FACT
+)
+# Everyone in the world (a fresh snapshot row, never `characters.online`, which
+# reads 0 for bots) in a guild any of `names` belongs to, and where they stand:
+# the snapshot's own map and coordinates, which are as fresh as the presence
+# test, and not the persisted `characters` position, which lags by minutes.
+_ENCHANT_FOR_MEMBERS_SQL = (
+    "SELECT c.guid AS guid, c.name AS name, g.name AS guild, s.map_id AS map_id, "
+    "s.pos_x AS x, s.pos_y AS y, s.pos_z AS z "
+    "FROM guild_member gm JOIN guild g ON g.guildid = gm.guildid "
+    "JOIN characters c ON c.guid = gm.guid "
+    "JOIN overseer_snapshot s ON s.name = c.name "
+    "AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+    "WHERE gm.guildid IN ("
+    "SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN (%s))"
+)
+_ENCHANT_FOR_SKILLED_SQL = (
+    "SELECT c.name AS name FROM characters c "
+    "JOIN character_skills s ON s.guid = c.guid AND s.skill = 333 AND s.value > 0 "
+    "WHERE c.name IN (%s)"
+)
+# A `character_spell` row is positive evidence a recipe is known; its absence
+# proves nothing (see craft.py), so an absent row is simply not asked for.
+_ENCHANT_FOR_SPELLS_SQL = (
+    "SELECT c.name AS name, sp.spell AS spell FROM character_spell sp "
+    "JOIN characters c ON c.guid = sp.guid WHERE c.name IN (%s) AND sp.spell IN (%s)"
+)
+_ENCHANT_FOR_BAGS_SQL = (
+    "SELECT c.name AS name, ii.itemEntry AS entry, SUM(ii.count) AS n "
+    "FROM character_inventory ci JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE c.name IN (%s) AND ii.itemEntry IN (%s) "
+    "AND ((ci.bag = 0 AND ci.slot BETWEEN 19 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "GROUP BY c.name, ii.itemEntry"
+)
+# The same ask written in the last hours, or still open, is its answer: a row
+# the module refused is not written again every pass.
+ENCHANT_FOR_HOLD_HOURS = 6
+_ENCHANT_FOR_ROUTED_SQL = (
+    "SELECT COUNT(*) AS n FROM overseer_command WHERE kind = 'trade' AND source = %s "
+    "AND ((target_name = %s AND status IN ('pending', 'claimed', 'verifying')) "
+    "OR (target_name = %s AND command = %s "
+    "AND created_at > NOW() - INTERVAL %s HOUR))"
+)
+
+
+def _fetch_module_enchant_for() -> str:
+    """The module's `enchant_for` build fact, or "" with no row or no table."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_ENCHANT_FOR_CAPABILITY_SQL)
+            row = cur.fetchone()
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return ""
+        raise
+    return str((row or {}).get("value") or "")
+
+
+def _fetch_enchant_for_facts(names: list) -> tuple:
+    """(members {name: enchantfor.Member}, enchanters [enchantfor.Enchanter])
+    for the guilds `names` belong to. Blocking. No enchanter: no jobs."""
+    marks = ",".join(["%s"] * len(names))
+    recipes = enchantfor.catalogue()
+    spells = sorted({r.spell for r in recipes})
+    items = sorted({i for r in recipes for i, _ in r.reagents} | set(enchantfor.ROD_ITEMS))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_ENCHANT_FOR_MEMBERS_SQL % marks, list(names))
+        members = {
+            str(r["name"]): enchantfor.Member(
+                str(r["name"]), int(r["guid"]), str(r["guild"] or ""), True,
+                int(r["map_id"] or 0), float(r["x"] or 0), float(r["y"] or 0),
+                float(r["z"] or 0))
+            for r in cur.fetchall()
+        }
+        if not members:
+            return {}, []
+        called = sorted(members)
+        cmarks = ",".join(["%s"] * len(called))
+        cur.execute(_ENCHANT_FOR_SKILLED_SQL % cmarks, called)
+        skilled = [str(r["name"]) for r in cur.fetchall()]
+        if not skilled:
+            return members, []
+        smarks = ",".join(["%s"] * len(skilled))
+        known: dict = {}
+        cur.execute(_ENCHANT_FOR_SPELLS_SQL % (
+            smarks, ",".join(["%s"] * len(spells))), skilled + spells)
+        for r in cur.fetchall():
+            known.setdefault(str(r["name"]), set()).add(int(r["spell"]))
+        bags: dict = {}
+        cur.execute(_ENCHANT_FOR_BAGS_SQL % (
+            smarks, ",".join(["%s"] * len(items))), skilled + items)
+        for r in cur.fetchall():
+            bags.setdefault(str(r["name"]), {})[int(r["entry"])] = int(r["n"] or 0)
+    enchanters = [
+        enchantfor.Enchanter(n, members[n].guild, frozenset(known.get(n, ())),
+                             bags.get(n, {}))
+        for n in skilled if known.get(n)
+    ]
+    return members, enchanters
+
+
+def _carry_out_enchant_for(jobs) -> int:
+    """Write one `enchant-for` row per job (the count). Blocking. A row for the
+    same ask standing, or written in the last ENCHANT_FOR_HOLD_HOURS, or any
+    row still open for the same enchanter, is the answer; a database fault
+    skips the job and is logged."""
+    wrote = 0
+    for job in jobs:
+        command = enchantfor.command(job)
+        if _KEEP.blocks(job.member, command):
+            continue
+        try:
+            with _connect() as conn, conn.cursor() as cur:
+                cur.execute(_ENCHANT_FOR_ROUTED_SQL, (
+                    enchantfor.SOURCE, job.enchanter, job.enchanter, command,
+                    ENCHANT_FOR_HOLD_HOURS))
+                if int((cur.fetchone() or {}).get("n") or 0):
+                    continue
+                cur.execute(
+                    "INSERT INTO overseer_command "
+                    "(target_name, command, kind, target_arg, source) "
+                    "VALUES (%s, %s, 'trade', %s, %s)",
+                    (job.enchanter, command, job.member, enchantfor.SOURCE))
+                wrote += 1
+        except (pymysql.err.MySQLError, OSError):
+            log.exception("enchant-for: cannot queue %s for %s", job.enchanter, job.member)
     return wrote
 
 
