@@ -105,19 +105,32 @@ class _Lint:
         return bool(cond)
 
     def keys(self, path, obj, allowed, required=()):
+        """True only when `obj` is a mapping holding every required key.
+
+        Unknown and missing keys are recorded as findings. A caller indexes the
+        required keys after a True, so a mapping that lacks one returns False.
+        """
         if not isinstance(obj, dict):
             self.err(path, "schema", "must be a mapping")
             return False
-        for k in sorted(set(obj) - set(allowed)):
+        for k in sorted(set(obj) - set(allowed), key=str):
             self.err(f"{path}.{k}", "schema", "unknown key")
-        for k in required:
-            if k not in obj:
-                self.err(f"{path}.{k}", "schema", "required")
-        return True
+        missing = [k for k in required if k not in obj]
+        for k in missing:
+            self.err(f"{path}.{k}", "schema", "required")
+        return not missing
 
 
 def _is_int(v):
     return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _has(container, v):
+    """`v in container`, false (not a crash) for an unhashable junk value."""
+    try:
+        return v in container
+    except TypeError:
+        return False
 
 
 def _is_repo(v):
@@ -631,13 +644,19 @@ def _arrange_instance(lint, path, v, whos, aliases):
     if not lint.keys(path, v, ("map", "as", "bind"), ("map", "as")):
         return
     lint.ensure(
-        v["map"] in gamedata.INSTANCE_MAPS,
+        _has(gamedata.INSTANCE_MAPS, v["map"]),
         f"{path}.map",
         "schema",
         f"unknown instance map; known: {sorted(gamedata.INSTANCE_MAPS)}",
     )
     alias = v["as"]
     if isinstance(alias, str) and _ALIAS.match(alias):
+        lint.ensure(
+            alias not in aliases,
+            f"{path}.as",
+            "schema",
+            f"duplicate instance alias {alias!r}",
+        )
         aliases.add(alias)
     else:
         lint.err(
@@ -680,7 +699,7 @@ def _arrange_creature(lint, path, v, aliases):
         v["state"] == "dead", f"{path}.state", "schema", "only dead is supported"
     )
     lint.ensure(
-        v["in"] in aliases,
+        _has(aliases, v["in"]),
         f"{path}.in",
         "schema",
         "must name an earlier instance alias",
@@ -743,7 +762,7 @@ def _act_step(lint, path, step, whos, names, bridge_on):
         )
     if "when" in step:
         lint.ensure(
-            step["when"] in names,
+            _has(names, step["when"]),
             f"{path}.when",
             "schema",
             "must name an observation in observe",
@@ -881,7 +900,8 @@ def _observe_one(lint, path, o, seen, known_var):
         lint.err(f"{path}.name", "schema", "must be kebab-case")
     elif name in seen:
         lint.err(f"{path}.name", "schema", "duplicate observation name")
-    seen.add(name)
+    if isinstance(name, str):
+        seen.add(name)
     lint.ensure(
         o.get("role") in ("precondition", "check"),
         f"{path}.role",
