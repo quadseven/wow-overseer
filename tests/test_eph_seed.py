@@ -2,6 +2,7 @@
 
 import copy
 import pathlib
+import re
 import unittest
 
 from ephemeral import anchors as anchors_mod
@@ -325,7 +326,7 @@ class GuardTest(unittest.TestCase):
         for host in (
             "localhost",
             "mysql",
-            "mysql.wow-dev.svc",
+            "mysql.example.invalid",
             "192.0.2.5",
             "127.0.0.2",
             "0.0.0.0",  # noqa: S104 - a host the guard must refuse
@@ -387,6 +388,54 @@ class GuardTest(unittest.TestCase):
                     GOOD_INPUTS, lambda *, _conn=conn, **kw: _conn, SCHEMA
                 )
             self.assertTrue(conn.closed)
+
+    def test_a_cursor_close_failure_cannot_report_failure_after_a_commit(self):
+        class CloseBoom(FakeConn):
+            armed = False
+
+            def cursor(self):
+                cur = super().cursor()
+
+                def close():
+                    if self.armed:
+                        raise OSError("close failed")
+
+                cur.close = close
+                return cur
+
+        conn = CloseBoom()
+        g = guard.open_guarded(GOOD_INPUTS, lambda **kw: conn, SCHEMA)
+        conn.armed = True
+        conn.committed = False
+        with self.assertRaises(OSError):
+            g.run([Builder(SCHEMA).update("characters", {"level": 5}, {"guid": 1})])
+        self.assertFalse(
+            conn.committed, "a failure to close must come before any commit"
+        )
+        self.assertTrue(conn.rolled_back)
+
+    def test_a_rollback_failure_does_not_mask_the_original_error(self):
+        class RollbackBoom(FakeConn):
+            def rollback(self):
+                raise OSError("rollback failed")
+
+        conn = RollbackBoom()
+        g = guard.open_guarded(GOOD_INPUTS, lambda **kw: conn, SCHEMA)
+        evil = sqlgen.Stmt(
+            "update",
+            "characters",
+            "UPDATE `acore_characters`.`characters` SET `level` = 5 WHERE `guid` = 1",
+        )
+        conn.cursor = lambda: type(
+            "C",
+            (),
+            {
+                "execute": lambda s, q, p=(): (_ for _ in ()).throw(ValueError("boom")),
+                "close": lambda s: None,
+            },
+        )()
+        with self.assertRaises(ValueError):
+            g.run([evil])
 
     def test_the_old_exposed_token_is_gone(self):
         self.assertFalse(hasattr(guard.GuardedConnection, "_token"))
@@ -1021,6 +1070,64 @@ class SeedRunTest(unittest.TestCase):
         self.assertEqual(conn.commits, 0)
         self.assertIn("OSError", chr(10).join(out))
 
+    def run_with(self, conn):
+        import tempfile
+
+        from ephemeral import seedrun
+
+        out = []
+        with tempfile.TemporaryDirectory() as tmp:
+            decree, anchors = self.files(tmp)
+            rc = seedrun.run(
+                decree,
+                self.ENV,
+                anchors_path=anchors,
+                connect=lambda **kw: conn,
+                out=out.append,
+            )
+        return rc, chr(10).join(out)
+
+    def test_a_close_failure_after_a_clean_run_is_invalid_not_a_traceback(self):
+        class CloseBoom(ScriptedConn):
+            def close(self):
+                raise OSError("close failed")
+
+        rc, text = self.run_with(CloseBoom())
+        self.assertEqual(rc, 3)
+        self.assertIn("OSError", text)
+        self.assertNotIn("Traceback", text)
+
+    def test_a_close_failure_after_a_refusal_is_still_invalid(self):
+        class CloseBoom(ScriptedConn):
+            def close(self):
+                raise OSError("close failed")
+
+        rc, text = self.run_with(CloseBoom())
+        self.assertEqual(rc, 3)
+
+    def test_a_rollback_failure_mid_seed_is_invalid_and_commits_nothing(self):
+        class Boom(ScriptedConn):
+            def cursor(self):
+                cur = super().cursor()
+                real = cur.execute
+
+                def execute(sql, params=()):
+                    if sql.startswith("UPDATE"):
+                        raise OSError("lost connection")
+                    return real(sql, params)
+
+                cur.execute = execute
+                return cur
+
+            def rollback(self):
+                raise OSError("rollback failed")
+
+        conn = Boom()
+        rc, text = self.run_with(conn)
+        self.assertEqual(rc, 3)
+        self.assertEqual(conn.commits, 0)
+        self.assertIn("OSError", text)
+
     def test_a_junk_port_is_invalid_not_a_crash(self):
         rc, _, calls, text = self.run_seed({**self.ENV, "EPH_MYSQL_PORT": "not-a-port"})
         self.assertEqual((rc, calls), (3, []))
@@ -1030,3 +1137,17 @@ class SeedRunTest(unittest.TestCase):
         env = {k: v for k, v in self.ENV.items() if k != "EPH_WORLD_LABEL"}
         rc, _, calls, _ = self.run_seed(env)
         self.assertEqual((rc, calls), (3, []))
+
+
+class NoDeploymentNamesTest(unittest.TestCase):
+    def test_no_internal_hostname_in_the_package_example_or_tests(self):
+        words = ["wow" + "-dev", "\." + "svc\b", "e" + "humps", "cluster" + "\.local"]
+        bad = re.compile("|".join(words))
+        files = [
+            *(ROOT / "ephemeral").glob("*.py"),
+            *(ROOT / "tests").glob("test_eph_*.py"),
+        ]
+        files.append(ROOT / "data" / "ephemeral" / "config.example.env")
+        files.append(ROOT / "docs" / "EPHEMERAL.md")
+        for path in files:
+            self.assertIsNone(bad.search(path.read_text(encoding="utf-8")), path.name)
