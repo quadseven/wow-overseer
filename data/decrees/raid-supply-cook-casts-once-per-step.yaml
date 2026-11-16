@@ -30,12 +30,12 @@ observe:
     when: end
     sql: |
       SELECT COUNT(*) FROM overseer_command c JOIN characters ch ON ch.name = c.target_name
-      WHERE ch.guid IN (@cast) AND c.kind = 'cast' AND c.source LIKE 'raidsupply:cook%' AND c.created_at >= @t0
+      WHERE ch.guid = @cast0 AND c.kind = 'cast' AND c.source LIKE 'raidsupply:cook%' AND c.created_at >= @t0
     expect: {scalar: ">= 1"}
   - name: one-cast-per-step-not-a-flood
     role: check
     when: end
     sql: |
       SELECT COUNT(*) FROM overseer_command c JOIN characters ch ON ch.name = c.target_name
-      WHERE ch.guid IN (@cast) AND c.kind = 'cast' AND c.source LIKE 'raidsupply:cook%' AND c.created_at >= @t0
+      WHERE ch.guid = @cast0 AND c.kind = 'cast' AND c.source LIKE 'raidsupply:cook%' AND c.created_at >= @t0
     expect: {scalar: "<= 60"}
