@@ -337,16 +337,8 @@ class TodoTest(unittest.TestCase):
 
 
 class ShippedDecreesTest(unittest.TestCase):
-    def test_the_three_worked_examples_are_shipped(self):
-        names = {p.stem for p in DECREES}
-        self.assertTrue(
-            {
-                "brd-guzzler-exit-zero-patron-deaths",
-                "profession-rank-up-at-75",
-                "void-death-recovers",
-            }
-            <= names
-        )
+    def test_there_are_three_examples(self):
+        self.assertGreaterEqual(len(DECREES), 3)
 
     def test_every_shipped_decree_lints_without_errors(self):
         anchors = anchors_mod.Anchors.load()

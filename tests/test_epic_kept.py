@@ -367,6 +367,7 @@ class FakeCursor:
     def __init__(self, sink):
         self.sink = sink
         self.lastrowid = 0
+        self.rowcount = 0
 
     def __enter__(self):
         return self
@@ -378,6 +379,7 @@ class FakeCursor:
         self.sink.append((sql, params))
         if "INSERT INTO overseer_command" in sql:
             self.lastrowid = len(self.sink)
+            self.rowcount = 1
 
     def fetchone(self):
         return None
