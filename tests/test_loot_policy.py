@@ -429,5 +429,88 @@ class TheGateHoldsAQuestItem(unittest.TestCase):
         self.assertFalse(self.bridge._epic_blocks("Grug", "guid:5031", "sell"))
 
 
+class TheMoversHoldAQuestItem(unittest.TestCase):
+    """The guild gift (give and mail), the personal bank and the guild bank
+    deposit never move an item a quest in the holder's log names."""
+
+    def setUp(self):
+        self.inner = base.WriterGateTest("test_an_ordinary_sale_is_untouched")
+        self.inner.setUp()
+        self.addCleanup(self.inner.doCleanups)
+        self.bridge = self.inner.bridge
+
+    def named(self, guid, needed):
+        self.inner.facts[guid] = trade_good(item_guid=guid, quest_needed=needed)
+
+    def gift(self, guid):
+        import guildshare
+
+        return guildshare.Gift(
+            holder="Grug",
+            taker="Fizzog",
+            item="Runecloth",
+            entry=14047,
+            count=19,
+            guid=guid,
+            need="a quest",
+            reason="surplus",
+        )
+
+    def move(self, guid, verb="deposit"):
+        import bank
+
+        return bank.Move(
+            character="Grug",
+            verb=verb,
+            guid=guid,
+            item="Runecloth",
+            count=19,
+            why="room",
+        )
+
+    def test_a_guild_gift_by_mail_of_a_quest_item_is_not_written(self):
+        self.named(5040, True)
+        wrote = self.bridge._insert_guild_gift(self.gift(5040), "mail")
+        self.assertEqual(wrote, 0)
+        self.assertEqual(self.inner.inserts(), [])
+
+    def test_a_guild_gift_by_give_of_a_quest_item_is_not_written(self):
+        self.named(5041, True)
+        self.assertEqual(self.bridge._insert_guild_gift(self.gift(5041)), 0)
+        self.assertEqual(self.inner.inserts(), [])
+
+    def test_a_guild_gift_of_a_free_item_is_written(self):
+        self.named(5042, False)
+        self.assertTrue(self.bridge._insert_guild_gift(self.gift(5042), "mail"))
+
+    def test_an_unreadable_gift_fact_is_not_written(self):
+        self.assertEqual(self.bridge._insert_guild_gift(self.gift(5043)), 0)
+        self.assertEqual(self.inner.inserts(), [])
+
+    def test_a_personal_bank_deposit_of_a_quest_item_is_not_written(self):
+        self.named(5044, True)
+        move = self.move(5044)
+        self.assertEqual(self.bridge._insert_bank(move, "deposit guid:5044"), 0)
+        self.assertEqual(self.inner.inserts(), [])
+
+    def test_a_personal_bank_deposit_of_a_free_item_is_written(self):
+        self.named(5045, False)
+        move = self.move(5045)
+        self.assertTrue(self.bridge._insert_bank(move, "deposit guid:5045"))
+
+    def test_a_withdraw_of_a_quest_item_is_never_held(self):
+        self.named(5046, True)
+        move = self.move(5046, "withdraw")
+        self.assertTrue(self.bridge._insert_bank(move, "withdraw guid:5046"))
+
+    def test_a_guild_bank_deposit_of_a_quest_item_is_not_written(self):
+        self.named(5047, True)
+        wrote = self.bridge._insert_guild(
+            "Grug", "bank deposit-item guid:5047", "guildbank"
+        )
+        self.assertEqual(wrote, 0)
+        self.assertEqual(self.inner.inserts(), [])
+
+
 if __name__ == "__main__":
     unittest.main()
