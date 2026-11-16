@@ -1,0 +1,53 @@
+# A use-portal row for the leader next to a mage portal walks to the portal, clicks it and reports the
+# map before and after, or a named refusal (mod-overseer issue 410). Oz, the Zug family mage, casts a
+# portal with the cast verb and Zug stands beside it on Kalimdor.
+# Fix: mod-overseer pull 1057.
+# Scope: the map before and after the click is read from the character table. A crossing means the row is
+# applied AND the leader no longer stands on the start map; a refusal means an error row that carries a reason.
+# An unchanged row, or a bare applied row with no crossing, no longer passes.
+decree: v1
+id: portal-click-by-the-leader
+proves:
+  - {repo: quadseven/mod-overseer, issue: 410, criterion: "a use-portal row for the leader walks to the mage's portal, clicks it and reports the crossing or a named refusal"}
+fix: {repo: quadseven/mod-overseer, commit: "50046831eec63792af9270b77d33e8012e083bed"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 20m
+cast:
+  - who: family:zug
+    set: {alive: true, at: {creature: "Gazlowe"}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:zug, leader: Zug}
+act:
+  - at: 0s
+    command: {who: Oz, kind: cast, text: "portal"}
+  - at: 2m
+    command: {who: Zug, kind: quest, text: "use-portal"}
+observe:
+  - name: leader-starts-on-map-1
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE name = 'Zug' AND map_id = 1
+    expect: {scalar: "= 1"}
+  - name: the-mage-cast-a-portal
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Oz' AND kind = 'cast' AND created_at >= @t0 AND status IN ('applied', 'delivered')
+    expect: {scalar: ">= 1"}
+  - name: use-portal-row-exists
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Zug' AND kind = 'quest' AND command LIKE 'use-portal%' AND created_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: leader-crossed-or-was-refused-by-name
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command c JOIN characters ch ON ch.name = c.target_name
+      WHERE c.target_name = 'Zug' AND c.kind = 'quest' AND c.command LIKE 'use-portal%' AND c.created_at >= @t0
+        AND ((c.status = 'applied' AND ch.map <> 1) OR (c.status = 'error' AND c.detail <> ''))
+    expect: {scalar: ">= 1"}

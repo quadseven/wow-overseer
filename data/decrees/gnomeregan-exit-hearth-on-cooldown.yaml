@@ -1,0 +1,65 @@
+# A family leaving Gnomeregan with the hearthstone on cooldown reaches Stormwind without crossing Burning
+# Steppes (mod-overseer issue 836): the road check refuses the lethal road, waits for the stone or hearths
+# to its bind. The family starts at the last boss, on job town run.
+# The cooldown is a state a decree cannot set; the hearth command in act spends the stone first, so the
+# cooldown is real when the town run starts.
+# Fix: mod-overseer pull 1216 (the road check judges followers and spawn aims).
+# Scope: the road-refusal or 'hearths to its bind' line is bridge log text a decree can only forbid, so it is
+# not asserted. Instead the family must END in Stormwind (a trip that is still crossing Burning Steppes at the
+# end fails), and no event is recorded in zone 46 or by a death in the window.
+decree: v1
+id: gnomeregan-exit-hearth-on-cooldown
+proves:
+  - {repo: quadseven/mod-overseer, issue: 836, criterion: "a Gnomeregan exit with the hearthstone on cooldown ends in Stormwind with no zone 46 event or death (the road-refusal and hearth-to-bind lines are not asserted here)"}
+fix: {repo: quadseven/mod-overseer, commit: "c4aea4076a6ca25ce86112cd7d2b444ba77ad421"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 1h
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 100, at: {creature: "Mekgineer Thermaplugg"}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    command: {who: family:grug, kind: hearth, text: "hearth"}
+  - at: 5m
+    roster: {who: family:grug, job: "town run"}
+observe:
+  - name: family-started-in-gnomeregan
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND map_id = 90
+    expect: {scalar: "= 5"}
+  - name: hearth-was-spent
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE kind = 'hearth' AND created_at >= @t0 AND status IN ('applied', 'delivered')
+    expect: {scalar: ">= 1"}
+  - name: whole-family-ended-in-stormwind
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND map_id = 0 AND zone_id = 1519
+    expect: {scalar: "= 5"}
+  - name: no-event-was-recorded-in-burning-steppes
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_event WHERE last_seen >= @t0 AND zone = 46
+    expect: {scalar: "= 0"}
+  - name: no-death-in-burning-steppes
+    role: check
+    when: end
+    sql: |
+      SELECT character_name, created_at FROM overseer_death WHERE created_at >= @t0 AND zone = 46
+    expect: {rows: 0}
+  - name: no-death-on-the-road
+    role: check
+    when: end
+    sql: |
+      SELECT character_name, created_at FROM overseer_death WHERE created_at >= @t0
+    expect: {rows: 0}
