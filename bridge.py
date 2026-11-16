@@ -15876,8 +15876,8 @@ class Bridge(discord.Client):
             wearers = await asyncio.to_thread(_fetch_wearers, near)
             worn = await asyncio.to_thread(_fetch_scored_gear, near)
             tanks = await asyncio.to_thread(_fetch_shield_tanks, near)
-            seats = {s.name for g in {m.guild for m in members.values()}
-                     for s in raidteams.seats(g)}
+            seats = {n for g in {m.guild for m in members.values()}
+                     for s in raidteams.seats(g) for n in (s.name, s.was) if n}
             jobs = enchantfor.plan(
                 enchanters, members, wearers, worn, book=_jev_item_book(),
                 seat_names=frozenset(seats), tanks=tanks,

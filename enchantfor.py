@@ -272,7 +272,11 @@ def fire_targets(guilds) -> dict:
                 key = fireplan.HEALER
             else:
                 continue
-            out[seat.name] = fireplan.FIRE_TARGET[key]
+            # `was` is the character's current name until its rename lands, and
+            # the planner looks members up by their live name.
+            for name in (seat.name, seat.was):
+                if name:
+                    out[name] = fireplan.FIRE_TARGET[key]
     return out
 
 

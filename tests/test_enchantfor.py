@@ -441,6 +441,29 @@ class FireResistanceCloakTest(unittest.TestCase):
         self.assertNotIn("Grog", targets)  # a damage seat is asked for none
         self.assertEqual({}, enchantfor.fire_targets({"Nowhere"}))
 
+    def test_an_unrenamed_seat_is_keyed_under_its_current_name_too(self):
+        targets = enchantfor.fire_targets({"Cave"})
+        # Brug is the approved name; Aalall is the character until the rename.
+        self.assertEqual(120, targets["Brug"])
+        self.assertEqual(120, targets["Aalall"])
+
+    def test_an_unrenamed_seat_still_gets_the_fire_cloak(self):
+        targets = enchantfor.fire_targets({"Cave"})
+        live = wearer("Aalall", WARRIOR, "Protection")
+        members = {"Aeda": member("Aeda", 1), "Aalall": member("Aalall", 7)}
+        (job,) = enchantfor.plan(
+            [enchanter(known=(FIRE_CLOAK,), bags=CLOAK_BAGS)],
+            members,
+            [live],
+            [cloak("Aalall")],
+            book=Book(),
+            fire_targets=targets,
+        )
+        self.assertEqual(
+            "enchant-for target:7 slot:14 spell:13657", enchantfor.command(job)
+        )
+        self.assertGreater(job.gain, 0)
+
 
 class BridgeSeamTest(unittest.TestCase):
     """The bridge writes the row, once, and only behind the module's own fact."""
