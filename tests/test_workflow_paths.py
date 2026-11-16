@@ -159,6 +159,12 @@ class CheckPathsTest(unittest.TestCase):
         self.assertIn("data/forge/config.example.env", tracked)
         self._assert_covered(tracked)
 
+    def test_ephemeral_config_example_triggers_check(self):
+        # The drift test reads it; a config-only change must run that test.
+        example = ["data/ephemeral/config.example.env"]
+        self.assertEqual(_tracked(*example), example)
+        self._assert_covered(example)
+
     def test_every_app_and_docs_file_triggers_check(self):
         tracked = _tracked("app", "docs", "*.html", "*.css", "*.js")
         self.assertTrue(tracked, "git ls-files found nothing to check")

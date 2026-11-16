@@ -15,13 +15,15 @@ Shipped in this repository now:
 - `data/decrees/anchors.yaml`, the only place coordinates may live;
 - `python3 -m ephemeral acts`, which prints a decree's `act` timeline as the
   command rows it becomes;
+- `python3 -m ephemeral seed`, which compiles `cast` and `arrange` to SQL behind a
+  loopback-only guard (see Seed below);
 - three worked example decrees in `data/decrees/`.
 
 Not shipped: the world itself. There is no runner, no judge that samples a
 world and gives a verdict, no template build and no cluster objects in this
 repository yet. Nothing here starts a world or produces a PASS, FAIL or INVALID.
-The seed compiler (turning `cast` and `arrange` into SQL) is a separate change
-and is not described as available until it merges.
+The seed step has only been run against a fake connection in unit tests, never
+against a real database.
 
 ## Requesting a proving run
 
@@ -141,9 +143,8 @@ SQL are checked against a snapshot of the game databases
 `data/decrees/anchors.yaml` is the only file that may hold coordinates. Each entry is
 a position a real character stood at, copied from a row the game wrote, with
 `provenance: {source, ref, observed}`. Never type a position by hand. An entry
-whose row has not been copied is `pending`: lint warns when a decree uses it.
-Refusing a pending anchor at seed time belongs to the seed compiler, which is
-not part of this change.
+whose row has not been copied is `pending`: lint warns when a decree uses it, and
+the seed compiler refuses it.
 
 ## Killing a creature whose death has a script
 
@@ -157,3 +158,38 @@ Decrees and `anchors.yaml` are under `data/decrees/`, a path `check.yml` already
 watches (`data/**`), so a pull request that changes only a decree still runs the
 unit tests that lint every shipped decree. Keep new decrees there; a decree
 elsewhere would not start the tests.
+
+## Seed: cast and arrange to SQL
+
+    python3 -m ephemeral seed [--dry-run] data/decrees/<name>.yaml
+
+Meant to run inside the world pod before the worldserver starts (no pod runs it yet).
+It lints the decree, passes the guard, resolves every name and anchor in the world's own database
+(zero or several matches is INVALID), compiles the statements and applies them
+in one transaction. Settings come from the pod environment, never the decree:
+`EPH_MYSQL_HOST`, `EPH_MYSQL_PORT`, `EPH_MYSQL_USER`, `EPH_MYSQL_PASSWORD`,
+`EPH_WORLD_LABEL`, `EPH_HARNESS_GRANTS` (placeholders in
+`data/ephemeral/config.example.env`). Exit 3 is INVALID. Exit 0 means the
+plan compiled, and also that it was applied unless `--dry-run` was given, which
+prints the SQL and applies nothing.
+
+The guard (`ephemeral/guard.py`) makes the SQL unable to reach anything else:
+
+- the MySQL host must be the literal loopback address (no DNS name, no
+  `localhost`) on the world's own MySQL port (3306), and the connection is made
+  to those constants, not to the caller's strings;
+- the namespace's world label must be `ephemeral`, the harness must say grants
+  are enabled, and the marker table must hold exactly one row (only a template
+  build writes it);
+- every statement is built by `ephemeral/sqlgen.py` (four shapes, one table of
+  the world's own character database, literal values only, table and column
+  names checked against the schema) and re-verified at execution time;
+- `apply_plan` accepts only a connection that came out of the guard.
+
+Table and column names are checked against the live schema inside the world
+(the snapshot is the fallback for lint and tests). A character named on its own
+in `cast` overrides the same character inside a `family:` entry.
+
+What the seed writes follows how the core stores each thing. Whether the core
+then plays the scenario as intended is shown by the first end-to-end run, and a
+failed precondition makes that run INVALID, never a pass.
