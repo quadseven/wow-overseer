@@ -50,6 +50,21 @@ class CommentTest(unittest.TestCase):
         self.assertEqual(_strip_comment("a: 1   # note"), "a: 1")
 
 
+class PlainScalarQuoteTest(unittest.TestCase):
+    def test_a_quote_inside_plain_text_does_not_open_a_string(self):
+        doc = loads('note: He said "hello # tail"' + chr(10))
+        self.assertEqual(doc, {"note": 'He said "hello'})
+
+    def test_a_quoted_scalar_still_keeps_its_hash(self):
+        self.assertEqual(loads('note: "a # b" # tail' + chr(10)), {"note": "a # b"})
+
+    def test_quotes_after_flow_punctuation_still_open(self):
+        self.assertEqual(
+            loads('a: ["x # y", {k: "v # w"}] # c' + chr(10)),
+            {"a": ["x # y", {"k": "v # w"}]},
+        )
+
+
 class StructureTest(unittest.TestCase):
     def test_nested_map_and_seq(self):
         text = "w:\n  class: lean\n  list:\n    - a\n    - 2\nz: 1\n"
