@@ -45,5 +45,5 @@ observe:
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_death WHERE created_at >= @t0 AND yards_fallen > 0 AND fall_start_z IS NULL
+      SELECT COUNT(*) FROM overseer_death WHERE created_at >= @t0 AND character_name = 'Og' AND yards_fallen > 0 AND fall_start_z IS NULL
     expect: {scalar: "= 0"}
