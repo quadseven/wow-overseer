@@ -661,9 +661,17 @@ def _opt(route, goal, reason, rule, **kw) -> Option:
     return Option(route, goal, reason, rule, **kw)
 
 
+# The best quality the vendor route may take (item_template.Quality 1: common).
+VENDOR_MAX_QUALITY = 1
+# The least quality whose spare gear goes to the guild bank tab before any sale.
+GEAR_BANK_MIN_QUALITY = 2
+
+
 def _vendor_options(stack: Stack, rule: str, why: str, goal=ROOM) -> list:
     out = []
-    if stack.sell > 0 and stack.quality <= 3:
+    # THE GUILD LOOT POLICY (lootpolicy.py): the vendor takes gray and common
+    # goods only. Uncommon and better is banked, listed, given or broken down.
+    if stack.sell > 0 and stack.quality <= VENDOR_MAX_QUALITY:
         out.append(_opt(SELL_VENDOR, goal, why, rule))
     return out
 
@@ -1244,13 +1252,13 @@ def _gear_surplus(w: _World, s: Stack, me: Member, why: str) -> list:
     de = _disenchant_option(w, s, me)
     if de:
         out.append(de)
-    if s.tradable and s.quality >= 3:
+    if s.tradable and s.quality >= GEAR_BANK_MIN_QUALITY:
         out += _market_options(w, s, "R8")
         out.append(
             _opt(
                 GUILD_BANK,
                 GEAR_LATER,
-                "%s: rare gear for the Gear for Later tab" % why,
+                "%s: uncommon or better gear for the Gear for Later tab" % why,
                 "R8",
                 target="Gear for Later",
                 tab=GUILD_TAB_GEAR,
@@ -1457,9 +1465,19 @@ def _recipe_exit_options(w: _World, s: Stack, rule: str = "R9") -> list:
         return []
     failed = w.ctx.failed_listings.get((s.holder, s.entry), 0)
     if failed >= FAILED_LISTINGS_BEFORE_VENDOR:
-        return _vendor_options(
-            s, rule, "unsold after %d listings: the vendor may have it" % failed, RECIPE
-        )
+        # THE GUILD LOOT POLICY: a recipe is never vendored (lootpolicy files
+        # it as bank-or-auction), so one that fails to list goes to the guild
+        # bank for a member who may yet learn it.
+        return [
+            _opt(
+                GUILD_BANK,
+                RECIPE,
+                "unsold after %d listings: kept in the guild bank" % failed,
+                rule,
+                target="Materials",
+                tab=GUILD_TAB_MATERIALS,
+            )
+        ]
     if s.quality > 2:
         return []
     out = _market_options(w, s, "R11")
@@ -1532,10 +1550,6 @@ def _class_book_options(w: _World, s: Stack, me: Member):
             )
         ]
     if not s.tradable:
-        if _member_knows(w, me.name, s) and s.sell > 0:
-            return _vendor_options(
-                s, "R9", "class book already known by %s" % me.name, RECIPE
-            )
         return [_opt(BANK_PERSONAL, RECIPE, "class book, bound", "R9")]
     future_taker = False
     for sib in w.siblings(s.holder):
