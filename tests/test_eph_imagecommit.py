@@ -9,7 +9,9 @@ from ephemeral import imagecommit
 
 COMMIT = "a" * 40
 PATH = "quadseven/wow-overseer"
-CONFIG = json.dumps({"config": {"Env": ["PATH=/bin", f"OVERSEER_COMMIT={COMMIT}"]}}).encode()
+CONFIG = json.dumps(
+    {"config": {"Env": ["PATH=/bin", f"OVERSEER_COMMIT={COMMIT}"]}}
+).encode()
 CONFIG_DIGEST = "sha256:" + hashlib.sha256(CONFIG).hexdigest()
 MANIFEST = json.dumps({"config": {"digest": CONFIG_DIGEST}}).encode()
 MANIFEST_DIGEST = "sha256:" + hashlib.sha256(MANIFEST).hexdigest()
@@ -95,7 +97,9 @@ class ImageEnvTest(unittest.TestCase):
     def test_a_missing_manifest_is_an_error_not_a_guess(self):
         with self.assertRaises(imagecommit.RegistryError):
             imagecommit.image_env(
-                self.ref("sha256:" + "7" * 64), CREDS, Registry(MANIFEST_DIGEST, MANIFEST)
+                self.ref("sha256:" + "7" * 64),
+                CREDS,
+                Registry(MANIFEST_DIGEST, MANIFEST),
             )
 
 
@@ -106,7 +110,9 @@ class CredentialsTest(unittest.TestCase):
 
     def test_user_and_password_from_the_auth_field(self):
         auth = base64.b64encode(b"u:p:with:colons").decode()
-        got = imagecommit.credentials(self.secret({"ghcr.io": {"auth": auth}}), "ghcr.io")
+        got = imagecommit.credentials(
+            self.secret({"ghcr.io": {"auth": auth}}), "ghcr.io"
+        )
         self.assertEqual(got, ("u", "p:with:colons"))
 
     def test_user_and_password_fields(self):
@@ -117,7 +123,9 @@ class CredentialsTest(unittest.TestCase):
 
     def test_no_entry_for_the_host_means_no_credential(self):
         self.assertIsNone(
-            imagecommit.credentials(self.secret({"other.io": {"auth": "eDp5"}}), "ghcr.io")
+            imagecommit.credentials(
+                self.secret({"other.io": {"auth": "eDp5"}}), "ghcr.io"
+            )
         )
         self.assertIsNone(imagecommit.credentials(None, "ghcr.io"))
 

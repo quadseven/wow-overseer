@@ -266,7 +266,7 @@ def default_image_env(cfg, kube):
     def image_env(ref, name):
         try:
             host = imagecommit.parse_ref(ref)[0]
-            secret = kube.get("secrets", BRIDGE_PULL_SECRET, missing_ok=True)
+            secret = kube.get("secrets", BRIDGE_PULL_NAME, missing_ok=True)
             env = imagecommit.image_env(ref, imagecommit.credentials(secret, host))
         except (imagecommit.RegistryError, KubeError, KeyError, TypeError, ValueError):
             return None
@@ -304,7 +304,8 @@ def submit(
     files, deltas = _config_for(world, base_files, bridge_on)
     arms = ["control", "treatment"] if arm_arg == "both" else [arm_arg]
     arm_bridge = {
-        arm: _images_for(arm, live_images, args, live_bridge).get("bridge") for arm in arms
+        arm: _images_for(arm, live_images, args, live_bridge).get("bridge")
+        for arm in arms
     }
     image_env = image_env or default_image_env(cfg, kube)
     presence = _presence(cfg, gh, decree, arms, args, pins, arm_bridge, image_env)
@@ -402,7 +403,11 @@ def _presence(cfg, gh, decree, arms, args, pins, arm_bridge=None, image_env=None
         if arm == "control":
             pin = args.get("control_pin") or read
         else:
-            pin = args.get("treatment_pin") or read or (None if from_image else pins.get(pin_var))
+            pin = (
+                args.get("treatment_pin")
+                or read
+                or (None if from_image else pins.get(pin_var))
+            )
         state = fix_presence(gh, decree["fix"], pin)
         presence[arm] = {"pin": pin or "", "state": state}
         want = "present" if arm == "treatment" else "absent"

@@ -82,7 +82,11 @@ def urlfetch(url, headers):
     req = urllib.request.Request(url, headers=headers)
     try:
         with opener.open(req, timeout=20) as resp:
-            return resp.status, {k.lower(): v for k, v in resp.headers.items()}, resp.read(MAX_BYTES + 1)
+            return (
+                resp.status,
+                {k.lower(): v for k, v in resp.headers.items()},
+                resp.read(MAX_BYTES + 1),
+            )
     except urllib.error.HTTPError as exc:
         return exc.code, {k.lower(): v for k, v in exc.headers.items()}, b""
     except (urllib.error.URLError, OSError) as exc:
@@ -92,7 +96,9 @@ def urlfetch(url, headers):
 def _get(fetch, url, headers):
     for _ in range(MAX_REDIRECTS + 1):
         status, resp_headers, body = fetch(url, headers)
-        if status in (301, 302, 303, 307, 308) and resp_headers.get("location", "").startswith("https://"):
+        if status in (301, 302, 303, 307, 308) and resp_headers.get(
+            "location", ""
+        ).startswith("https://"):
             url = resp_headers["location"]
             headers = {k: v for k, v in headers.items() if k != "Authorization"}
             continue
@@ -118,10 +124,14 @@ def image_env(ref, creds, fetch=None):
     """The image config's Env as a dict. `creds` is (user, password) or None (anonymous)."""
     fetch = fetch or urlfetch
     host, path, digest = parse_ref(ref)
-    q = urllib.parse.urlencode({"service": host, "scope": f"repository:{path}:pull"}, safe=":/")
+    q = urllib.parse.urlencode(
+        {"service": host, "scope": f"repository:{path}:pull"}, safe=":/"
+    )
     auth = {}
     if creds:
-        auth["Authorization"] = "Basic " + base64.b64encode(f"{creds[0]}:{creds[1]}".encode()).decode()
+        auth["Authorization"] = (
+            "Basic " + base64.b64encode(f"{creds[0]}:{creds[1]}".encode()).decode()
+        )
     try:
         token = json.loads(_get(fetch, f"https://{host}/token?{q}", auth))["token"]
     except (ValueError, KeyError, TypeError) as exc:
@@ -140,7 +150,9 @@ def image_env(ref, creds, fetch=None):
         )  # fmt: skip
         if not pick or not _DIGEST.match(str(pick.get("digest"))):
             raise RegistryError("no linux/amd64 entry in the image index")
-        doc = _verified(fetch, f"{base}/manifests/{pick['digest']}", headers, pick["digest"])
+        doc = _verified(
+            fetch, f"{base}/manifests/{pick['digest']}", headers, pick["digest"]
+        )
     try:
         cfg_digest = doc["config"]["digest"]
     except (KeyError, TypeError) as exc:
